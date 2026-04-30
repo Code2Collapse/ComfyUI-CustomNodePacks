@@ -67,6 +67,13 @@ class SamMultiMaskPickerMEC:
     FUNCTION = "pick_mask"
     RETURN_TYPES = ("MASK", "MASK", "INT", "STRING", "STRING")
     RETURN_NAMES = ("selected_mask", "all_masks", "selected_index", "scores", "info")
+    OUTPUT_TOOLTIPS = (
+        "Mask chosen by the user (or selected_index input).",
+        "Stack of all 3 SAM candidate masks.",
+        "Index of the currently picked mask.",
+        "Comma-separated SAM confidence scores for each candidate.",
+        "JSON summary of prompts, scores, and selection.",
+    )
     DESCRIPTION = (
         "Run SAM inference to get 3 candidate masks with confidence scores. "
         "Pick interactively via the JS widget (click thumbnail or press 1/2/3). "

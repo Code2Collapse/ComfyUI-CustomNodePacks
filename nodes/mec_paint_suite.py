@@ -18,7 +18,9 @@ then runs the full Nuke-style mask pipeline (hardness → expansion → blur).
 from __future__ import annotations
 
 import base64
+import binascii
 import io
+import logging
 import math
 import re
 from typing import List, Tuple, Optional
@@ -26,6 +28,8 @@ from typing import List, Tuple, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+logger = logging.getLogger("MEC.Paint")
 
 try:
     import cv2  # type: ignore
@@ -162,29 +166,37 @@ class MECAdvancedPaintCanvas:
     """
 
     CATEGORY = "MEC/Paint"
+    DESCRIPTION = (
+        "Interactive paint canvas with procedural mask math: hardness, expansion, and blur stages "
+        "are applied in order to the alpha channel of painted strokes."
+    )
     RETURN_TYPES = ("IMAGE", "MASK")
     RETURN_NAMES = ("painted_image", "processed_mask")
+    OUTPUT_TOOLTIPS = (
+        "Painted RGB image (composited over reference_image when supplied).",
+        "Processed mask after hardness, expansion, and blur stages.",
+    )
     FUNCTION = "execute"
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "canvas_width":  ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8}),
-                "canvas_height": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8}),
-                "brush_type":     (["paint", "mask_only"], {"default": "paint"}),
-                "brush_color":    ("STRING", {"default": "#000000"}),
-                "brush_opacity":  ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "brush_hardness": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "brush_size":     ("INT",   {"default": 20,  "min": 1,   "max": 500, "step": 1}),
-                "mask_hardness":     ("FLOAT", {"default": 0.5, "min": 0.0,    "max": 1.0,   "step": 0.01}),
-                "mask_expansion":    ("INT",   {"default": 0,   "min": -100,   "max": 100,   "step": 1}),
-                "mask_blur_radius":  ("FLOAT", {"default": 0.0, "min": 0.0,    "max": 100.0, "step": 0.1}),
-                "mask_blur_strength":("FLOAT", {"default": 1.0, "min": 0.0,    "max": 1.0,   "step": 0.01}),
-                "canvas_data":    ("STRING", {"multiline": False, "default": ""}),
+                "canvas_width":  ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8, "tooltip": "Canvas width in pixels."}),
+                "canvas_height": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8, "tooltip": "Canvas height in pixels."}),
+                "brush_type":     (["paint", "mask_only"], {"default": "paint", "tooltip": "paint: composite color strokes onto the image. mask_only: build the mask without coloring."}),
+                "brush_color":    ("STRING", {"default": "#000000", "tooltip": "Hex color used by the paint brush (ignored in mask_only mode)."}),
+                "brush_opacity":  ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Brush stroke opacity (0 = invisible, 1 = fully opaque)."}),
+                "brush_hardness": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Brush profile hardness (0 = soft, 1 = hard edge)."}),
+                "brush_size":     ("INT",   {"default": 20,  "min": 1,   "max": 500, "step": 1, "tooltip": "Brush diameter in pixels."}),
+                "mask_hardness":     ("FLOAT", {"default": 0.5, "min": 0.0,    "max": 1.0,   "step": 0.01, "tooltip": "Threshold for the solid inner core: pixels brighter than (1 - hardness) clamp to 1.0."}),
+                "mask_expansion":    ("INT",   {"default": 0,   "min": -100,   "max": 100,   "step": 1, "tooltip": "Morphological dilate (positive) / erode (negative) in pixels."}),
+                "mask_blur_radius":  ("FLOAT", {"default": 0.0, "min": 0.0,    "max": 100.0, "step": 0.1, "tooltip": "Gaussian blur radius applied to the mask edge in pixels."}),
+                "mask_blur_strength":("FLOAT", {"default": 1.0, "min": 0.0,    "max": 1.0,   "step": 0.01, "tooltip": "Blend factor between the hard mask (0) and the fully-blurred mask (1)."}),
+                "canvas_data":    ("STRING", {"multiline": False, "default": "", "tooltip": "Internal base64 PNG payload from the JS canvas widget. Do not edit manually."}),
             },
             "optional": {
-                "reference_image": ("IMAGE",),
+                "reference_image": ("IMAGE", {"tooltip": "Optional background image; painted strokes are composited over it when supplied."}),
             },
         }
 
@@ -200,18 +212,29 @@ class MECAdvancedPaintCanvas:
         empty = np.zeros((h, w, 4), dtype=np.float32)
         if not data:
             return empty
+        # MANUAL bug-fix (Apr 2026): PIL is required for this node. Silently
+        # returning an empty canvas hid setup errors. Fail loudly with an
+        # actionable message so the user knows to install Pillow.
+        if not _HAS_PIL:
+            raise RuntimeError(
+                "MECAdvancedPaintCanvas requires Pillow (PIL) to decode the "
+                "painted canvas. Install it with `pip install Pillow` in your "
+                "ComfyUI environment, then restart ComfyUI."
+            )
         try:
             payload = data.split(",", 1)[1] if data.startswith("data:") else data
             raw = base64.b64decode(payload)
-            if not _HAS_PIL:
-                return empty
             with Image.open(io.BytesIO(raw)) as im:
                 im = im.convert("RGBA")
                 if im.size != (w, h):
                     im = im.resize((w, h), Image.BILINEAR)
                 arr = np.asarray(im, dtype=np.float32) / 255.0
             return arr
-        except Exception:
+        except (binascii.Error, ValueError, OSError) as exc:
+            # MANUAL bug-fix (Apr 2026): narrowed from broad Exception.
+            # Covers base64 decode errors, PIL UnidentifiedImageError
+            # (subclass of OSError), and corrupt-PNG IO errors.
+            logger.warning("[MECAdvancedPaintCanvas] canvas decode failed: %s", exc)
             return empty
 
     # ----- mask pipeline (Nuke-style) --------------------------------
@@ -357,28 +380,55 @@ class MECContextInpainter:
     """
 
     CATEGORY = "MEC/Paint"
+    DESCRIPTION = (
+        "Smart-blend an inpainted region back over the original image with crop padding, "
+        "feathered blend mask, optional color correction, lightness rescue, and differential diffusion."
+    )
     RETURN_TYPES = ("IMAGE", "MASK")
     RETURN_NAMES = ("blended_image", "debug_mask")
+    OUTPUT_TOOLTIPS = (
+        "Final composited image with the inpainted region blended back into the original.",
+        "Debug mask used for the blend (after expansion and blur).",
+    )
     FUNCTION = "execute"
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "original_image":   ("IMAGE",),
-                "mask":             ("MASK",),
-                "inpainted_image":  ("IMAGE",),
-                "crop_padding":     ("FLOAT",  {"default": 1.2, "min": 1.0, "max": 2.0, "step": 0.01}),
-                "blend_softness":   ("FLOAT",  {"default": 8.0, "min": 0.0, "max": 200.0, "step": 0.5}),
-                "mask_expansion_blend": ("INT",  {"default": 0, "min": -100, "max": 100, "step": 1}),
-                "enable_color_correction":     ("BOOLEAN", {"default": True}),
-                "enable_lightness_rescue":     ("BOOLEAN", {"default": True}),
-                "enable_differential_diffusion":("BOOLEAN", {"default": False}),
-                "sampling_mask_blur_size":     ("INT",   {"default": 21, "min": 0, "max": 201, "step": 1}),
-                "sampling_mask_blur_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "face_positive_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "face_negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-            }
+                "original_image":   ("IMAGE", {"tooltip": "Original (un-inpainted) image used as the blend base."}),
+                "mask":             ("MASK", {"tooltip": "Mask defining the inpainted region."}),
+                "inpainted_image":  ("IMAGE", {"tooltip": "Inpainted image to blend back over the original."}),
+                "crop_padding":     ("FLOAT",  {"default": 1.2, "min": 1.0, "max": 2.0, "step": 0.01, "tooltip": "Multiplier extending the masked bbox so the inpaint sees more context."}),
+                "blend_softness":   ("FLOAT",  {"default": 8.0, "min": 0.0, "max": 200.0, "step": 0.5, "tooltip": "Gaussian feather radius applied to the blend mask in pixels."}),
+                "mask_expansion_blend": ("INT",  {"default": 0, "min": -100, "max": 100, "step": 1, "tooltip": "Per-blend dilate (positive) / erode (negative) of the blend mask in pixels."}),
+                "enable_color_correction":     ("BOOLEAN", {"default": True, "tooltip": "Reinhard mean/std color match between original and inpainted regions."}),
+                "enable_lightness_rescue":     ("BOOLEAN", {"default": True, "tooltip": "Lift CIE LAB L-channel of the inpaint when it is more than ~5% darker."}),
+                "enable_differential_diffusion":("BOOLEAN", {"default": False, "tooltip": "Use |orig - inpaint| as a soft preservation weight to keep unchanged pixels."}),
+                "sampling_mask_blur_size":     ("INT",   {"default": 21, "min": 0, "max": 201, "step": 1, "tooltip": "Kernel size (odd) for the additional blur on the output debug mask."}),
+                "sampling_mask_blur_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend factor for the sampling mask blur applied to debug_mask."}),
+            },
+            # face_positive_prompt / face_negative_prompt are
+            # *informational only* in this node -- they are parsed for
+            # wildcards and logged so downstream FaceInpaint nodes can
+            # consume them, but this node never samples. Demoted from
+            # required to optional + tooltipped so users aren't
+            # surprised they have no visible effect here.
+            "optional": {
+                "face_positive_prompt": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": (
+                        "Optional region-attached positive prompt; parsed for "
+                        "`{a|b|c}` wildcards per detected mask region and "
+                        "logged. Does NOT sample here -- pair with a "
+                        "FaceInpaint/KSampler downstream."
+                    ),
+                }),
+                "face_negative_prompt": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": "Same as face_positive_prompt but for negatives.",
+                }),
+            },
         }
 
     # ---- core math ------------------------------------------------
@@ -441,7 +491,16 @@ class MECContextInpainter:
                 enable_color_correction, enable_lightness_rescue,
                 enable_differential_diffusion,
                 sampling_mask_blur_size, sampling_mask_blur_strength,
-                face_positive_prompt, face_negative_prompt):
+                face_positive_prompt="", face_negative_prompt=""):
+        # MANUAL bug-fix (Apr 2026): hard-clamp crop_padding into the
+        # documented [1.0, 2.0] range so a stray IPU/widget can't blow
+        # up the bbox math. min/max widget bounds are advisory; a JSON
+        # import or wildcard could deliver any float.
+        try:
+            crop_padding = float(crop_padding)
+        except (TypeError, ValueError):
+            crop_padding = 1.2
+        crop_padding = max(1.0, min(2.0, crop_padding))
         orig = _to_bhwc(original_image)[0].cpu().numpy()
         fake = _to_bhwc(inpainted_image)[0].cpu().numpy()
         H, W = orig.shape[:2]
@@ -483,9 +542,15 @@ class MECContextInpainter:
         # We don't actually run a sampler here; we expose the parsed prompts
         # via the node's print output (deterministic, observable in console).
         if n_reg > 0:
-            print(f"[MEC ContextInpainter] {n_reg} mask regions detected.")
+            # MANUAL bug-fix (Apr 2026): use logger instead of print so
+            # output is consistent with the rest of the suite and can
+            # be filtered by users.
+            logger.info("[MECContextInpainter] %d mask regions detected.", n_reg)
             for i in range(n_reg):
-                print(f"  region {i}: + {pos_prompts[i]!r}  − {neg_prompts[i]!r}")
+                logger.info(
+                    "  region %d: + %r  - %r",
+                    i, pos_prompts[i], neg_prompts[i],
+                )
 
         # ---- colour correction & lightness rescue ------------------------
         out = fake
@@ -547,27 +612,49 @@ class MECToneRefiner:
     """
 
     CATEGORY = "MEC/Paint"
+    DESCRIPTION = (
+        "Auto-correct tone (black/white-point + gray-world), optionally upscale, "
+        "and apply a fake center-focus depth-of-field blur."
+    )
     RETURN_TYPES = ("IMAGE", "LATENT")
     RETURN_NAMES = ("refined_image", "refined_latent")
+    OUTPUT_TOOLTIPS = (
+        "Tone- and color-corrected image (optionally upscaled and DOF-blurred).",
+        "VAE-encoded latent of the refined image (zero placeholder when auto_upscale is False).",
+    )
     FUNCTION = "execute"
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image":             ("IMAGE",),
-                "neural_corrector":  ("BOOLEAN", {"default": True}),
-                "corrector_tone":    ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "corrector_color":   ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "enable_upscale":    ("BOOLEAN", {"default": False}),
-                "upscale_factor":    ("FLOAT", {"default": 1.5, "min": 1.0, "max": 4.0, "step": 0.05}),
-                "ai_enable_dof":     ("BOOLEAN", {"default": False}),
-                "ai_dof_strength":   ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05}),
-                "ai_dof_focus_depth":("FLOAT", {"default": 0.7, "min": 0.5, "max": 0.99, "step": 0.01}),
+                "image":             ("IMAGE", {"tooltip": "Image to refine."}),
+                "neural_corrector":  ("BOOLEAN", {"default": True, "tooltip": "Enable deterministic tone + gray-world correction (not a learned model)."}),
+                "corrector_tone":    ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend amount toward the tone-corrected image (0 = original, 1 = full correction)."}),
+                "corrector_color":   ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend amount toward the gray-world color-corrected image."}),
+                "enable_upscale":    ("BOOLEAN", {"default": False, "tooltip": "Bicubic upscale by upscale_factor before returning."}),
+                "upscale_factor":    ("FLOAT", {"default": 1.5, "min": 1.0, "max": 4.0, "step": 0.05, "tooltip": "Upscale multiplier applied when enable_upscale is True."}),
+                "ai_enable_dof":     ("BOOLEAN", {"default": False, "tooltip": "Apply a fake center-focus depth-of-field blur."}),
+                "ai_dof_strength":   ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05, "tooltip": "Strength of the DOF blur (also scales the maximum blur radius)."}),
+                "ai_dof_focus_depth":("FLOAT", {"default": 0.7, "min": 0.5, "max": 0.99, "step": 0.01, "tooltip": "DOF focus tightness: 0.5 = wide, 1.0 = strong center-only focus."}),
             },
             "optional": {
-                "latent": ("LATENT",),
-                "vae":    ("VAE",),
+                "latent": ("LATENT", {"tooltip": "Optional pre-existing latent; passed through when supplied (skips VAE encode)."}),
+                "vae":    ("VAE", {"tooltip": "VAE used to encode the refined image into refined_latent (when auto_upscale is True)."}),
+                # MANUAL bug-fix (Apr 2026): explicit auto_upscale toggle.
+                # When False (and no `latent` is supplied), VAE-encode is
+                # skipped entirely and a zero-latent placeholder is
+                # returned -- avoids surprise GPU spikes when users wire
+                # a VAE but only want the IMAGE output.
+                "auto_upscale": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "When True (default, back-compat), encode the "
+                        "refined image through the supplied VAE to "
+                        "produce `refined_latent`. Set False to skip "
+                        "the VAE-encode and return a zero placeholder."
+                    ),
+                }),
             },
         }
 
@@ -611,7 +698,8 @@ class MECToneRefiner:
 
     def execute(self, image, neural_corrector, corrector_tone, corrector_color,
                 enable_upscale, upscale_factor, ai_enable_dof,
-                ai_dof_strength, ai_dof_focus_depth, latent=None, vae=None):
+                ai_dof_strength, ai_dof_focus_depth,
+                latent=None, vae=None, auto_upscale=True):
         img = _to_bhwc(image)[0].cpu().numpy()
         out = img
 
@@ -637,16 +725,29 @@ class MECToneRefiner:
         # Latent passthrough or re-encode
         if latent is not None:
             out_lat = latent
-        elif vae is not None:
+        elif vae is not None and auto_upscale:
+            # MANUAL bug-fix (Apr 2026): narrowed from broad Exception so
+            # genuine VAE bugs surface. Only OOM and shape mismatches are
+            # caught; everything else propagates with a clear traceback.
             try:
                 samples = vae.encode(out_img[:, :, :, :3])
                 out_lat = {"samples": samples}
-            except Exception:
-                out_lat = {"samples": torch.zeros(1, 4, max(out_img.shape[1] // 8, 1),
-                                                       max(out_img.shape[2] // 8, 1))}
+            except (RuntimeError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "[MECToneRefiner] VAE.encode failed (%s: %s); returning zero-latent placeholder.",
+                    type(exc).__name__, exc,
+                )
+                out_lat = {"samples": torch.zeros(
+                    1, 4,
+                    max(out_img.shape[1] // 8, 1),
+                    max(out_img.shape[2] // 8, 1),
+                )}
         else:
-            out_lat = {"samples": torch.zeros(1, 4, max(out_img.shape[1] // 8, 1),
-                                                   max(out_img.shape[2] // 8, 1))}
+            out_lat = {"samples": torch.zeros(
+                1, 4,
+                max(out_img.shape[1] // 8, 1),
+                max(out_img.shape[2] // 8, 1),
+            )}
         return (out_img, out_lat)
 
 
@@ -725,8 +826,16 @@ class MECBuilderSampler:
     """
 
     CATEGORY = "MEC/Paint"
+    DESCRIPTION = (
+        "KSampler with adaptive CFG curves (Constant, Linear, Ease Down) plus an optional "
+        "self-correction polish pass and resolution presets."
+    )
     RETURN_TYPES = ("LATENT", "IMAGE")
     RETURN_NAMES = ("latent", "preview_image")
+    OUTPUT_TOOLTIPS = (
+        "Sampled latent (with optional polish pass applied).",
+        "VAE-decoded preview image when a VAE is provided (zero image otherwise).",
+    )
     FUNCTION = "execute"
 
     RESOLUTION_PRESETS = {
@@ -746,26 +855,26 @@ class MECBuilderSampler:
             schedulers = ["normal", "karras"]
         return {
             "required": {
-                "model":    ("MODEL",),
-                "positive": ("CONDITIONING",),
-                "negative": ("CONDITIONING",),
-                "steps":    ("INT",   {"default": 20, "min": 1, "max": 200}),
-                "cfg":      ("FLOAT", {"default": 8.0, "min": 0.0, "max": 30.0, "step": 0.1}),
-                "sampler_name": (samplers,),
-                "scheduler":    (schedulers,),
-                "denoise":  ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "cfg_mode":   (["Constant", "Linear", "Ease Down"], {"default": "Constant"}),
-                "cfg_finish": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 30.0, "step": 0.1}),
-                "cfg_pivot":  ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.1}),
-                "self_correction": ("BOOLEAN", {"default": False}),
-                "resolution_preset": (list(cls.RESOLUTION_PRESETS.keys()), {"default": "SD1.5 (512x512)"}),
-                "custom_width":  ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8}),
-                "custom_height": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
+                "model":    ("MODEL", {"tooltip": "Diffusion model to sample with."}),
+                "positive": ("CONDITIONING", {"tooltip": "Positive conditioning."}),
+                "negative": ("CONDITIONING", {"tooltip": "Negative conditioning."}),
+                "steps":    ("INT",   {"default": 20, "min": 1, "max": 200, "tooltip": "Number of sampling steps."}),
+                "cfg":      ("FLOAT", {"default": 8.0, "min": 0.0, "max": 30.0, "step": 0.1, "tooltip": "Starting CFG scale (also constant CFG when cfg_mode is Constant)."}),
+                "sampler_name": (samplers, {"tooltip": "Sampler algorithm."}),
+                "scheduler":    (schedulers, {"tooltip": "Sigma schedule."}),
+                "denoise":  ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Denoise strength (1.0 = full sampling, lower = partial img2img)."}),
+                "cfg_mode":   (["Constant", "Linear", "Ease Down"], {"default": "Constant", "tooltip": "Adaptive CFG curve shape across steps."}),
+                "cfg_finish": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 30.0, "step": 0.1, "tooltip": "Final CFG value at the end of the schedule (used by Linear / Ease Down)."}),
+                "cfg_pivot":  ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.1, "tooltip": "Pivot CFG value used by Ease Down to control the curve knee."}),
+                "self_correction": ("BOOLEAN", {"default": False, "tooltip": "Run a 2-step polish pass after the main sampling."}),
+                "resolution_preset": (list(cls.RESOLUTION_PRESETS.keys()), {"default": "SD1.5 (512x512)", "tooltip": "Preset resolution; choose Custom to use custom_width/custom_height."}),
+                "custom_width":  ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8, "tooltip": "Custom output width in pixels (used when preset is Custom)."}),
+                "custom_height": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8, "tooltip": "Custom output height in pixels (used when preset is Custom)."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Random seed."}),
             },
             "optional": {
-                "vae":          ("VAE",),
-                "latent_image": ("LATENT",),
+                "vae":          ("VAE", {"tooltip": "Optional VAE; when provided, decodes the latent into preview_image."}),
+                "latent_image": ("LATENT", {"tooltip": "Optional input latent (img2img). When omitted, an empty latent is created."}),
             },
         }
 

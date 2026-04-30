@@ -151,6 +151,13 @@ class SeCMatAnyonePipelineMEC:
 
     RETURN_TYPES = ("IMAGE", "MASK", "MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("rgb", "alpha_mask", "coarse_mask", "preview", "info")
+    OUTPUT_TOOLTIPS = (
+        "Original RGB frames passed through for downstream nodes.",
+        "Compositing-grade alpha mask after MatAnyone2 + optional refinement.",
+        "Coarse segmentation mask before alpha matting.",
+        "Side-by-side preview of input frames and final alpha overlay.",
+        "JSON summary of stages, models, and per-stage timings.",
+    )
     FUNCTION = "process"
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (

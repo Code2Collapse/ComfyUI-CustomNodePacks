@@ -262,9 +262,22 @@ class FolderIncrementer:
     RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES  = ("version_string", "version_number", "folder_name",
                      "subfolder_path", "filename_prefix", "output_filename")
+    OUTPUT_TOOLTIPS = (
+        "Zero-padded version string, e.g. `v001`.",
+        "Raw integer version number.",
+        "Sanitized folder name derived from the input source (or label).",
+        "Full subfolder path: `<base>/<folder>/<date>/<version>`.",
+        "Filename prefix combining folder + version (for SaveImage).",
+        "Final output filename including extension.",
+    )
     FUNCTION = "increment"
     CATEGORY = "utils"
     OUTPUT_NODE = True   # ensure the node always executes
+    DESCRIPTION = (
+        "Auto-incrementing per-label / per-date version counter. Scans the output "
+        "directory for existing `vNNN` subfolders and emits the next one, plus "
+        "folder name, subfolder path, filename prefix, and full output filename."
+    )
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -393,14 +406,19 @@ class FolderIncrementerReset:
                 }),
             },
             "optional": {
-                "trigger": ("*", {}),
+                "trigger": ("*", {"tooltip": "Optional any-type trigger input. Connect any upstream output here to force this node to re-run after that node finishes (e.g. wire it to a SaveImage filename to recheck the version state after a save)."}),
                 "base_path": ("STRING", {"default": "",
                     "tooltip": "Override base directory.  Leave empty → ComfyUI output dir."}),
             },
         }
 
+    DESCRIPTION = "Report the current version state for a label/date folder. Scans <base>/<label>/<MM-DD-YYYY>/ and returns how many vNNN folders already exist plus the highest version number. To truly 'reset' a label, delete its date subfolder from disk."
     RETURN_TYPES  = ("STRING", "INT")
     RETURN_NAMES  = ("status", "current_version")
+    OUTPUT_TOOLTIPS = (
+        "Human-readable status describing how many versions exist for this label/date.",
+        "Highest existing version number (0 if none yet).",
+    )
     FUNCTION = "check"
     CATEGORY = "utils"
     OUTPUT_NODE = True
@@ -442,10 +460,10 @@ class FolderIncrementerSet:
                     "tooltip": "Create placeholder dirs up to this version number"}),
             },
             "optional": {
-                "trigger": ("*", {}),
-                "prefix": ("STRING", {"default": "v"}),
-                "padding": ("INT", {"default": 3, "min": 1, "max": 10}),
-                "base_path": ("STRING", {"default": ""}),
+                "trigger": ("*", {"tooltip": "Optional any-type trigger input. Wire any upstream output here to control when this node runs in the graph."}),
+                "prefix": ("STRING", {"default": "v", "tooltip": "Version-folder prefix. Default 'v' produces v001, v002, ... Must match what FolderIncrementer is using."}),
+                "padding": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Zero-pad width for the version number (3 → v001, 4 → v0001). Must match what FolderIncrementer is using."}),
+                "base_path": ("STRING", {"default": "", "tooltip": "Override base directory. Leave empty → ComfyUI output dir."}),
                 "date_format": (DATE_FORMAT_CHOICES, {
                     "default": "MM-DD-YYYY",
                     "tooltip": "Date format (must match what FolderIncrementer uses)",
@@ -453,8 +471,13 @@ class FolderIncrementerSet:
             },
         }
 
+    DESCRIPTION = "Reserve version slots by creating empty placeholder directories under <base>/<label>/<MM-DD-YYYY>/. Creates v001 ... v{value} so the next FolderIncrementer run will produce v{value+1}. Useful for skipping ahead or reserving a known version range."
     RETURN_TYPES  = ("STRING", "INT")
     RETURN_NAMES  = ("status", "next_version")
+    OUTPUT_TOOLTIPS = (
+        "Status message confirming how many placeholder version dirs were created.",
+        "The version number the *next* FolderIncrementer run will produce (value+1).",
+    )
     FUNCTION = "set_version"
     CATEGORY = "utils"
     OUTPUT_NODE = True

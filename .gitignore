@@ -220,3 +220,5 @@ __marimo__/
 # Local DB scratch  
 *.db  
 param_history.db 
+_deprecated/
+

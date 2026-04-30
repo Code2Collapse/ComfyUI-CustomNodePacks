@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Force a specific bump (auto|patch|minor|major)"
+        description: "Force a specific bump (auto|patch|minor|major|none)"
         required: false
         default: "auto"
         type: choice
-        options: [auto, patch, minor, major]
+        options: [auto, patch, minor, major, none]
 
 concurrency:
   group: version-bump-${{ github.ref }}
@@ -17,6 +17,10 @@ concurrency:
 
 permissions:
   contents: write
+
+env:
+  # Opt into Node.js 24 for actions to silence the Node 20 deprecation warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   bump:
@@ -43,83 +47,131 @@ jobs:
       - name: Determine bump type
         id: classify
         shell: bash
+        # NOTE: intentionally NOT using `set -e`. The grep pipelines below are
+        # expected to return non-zero when no match is found, which is normal
+        # control flow — letting `-e` kill the step caused historical false
+        # failures. Errors that matter are reported explicitly.
         run: |
-          set -e
-          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$last_tag" ]; then range="${last_tag}..HEAD"; else range="HEAD"; fi
-          msgs=$(git log --pretty=%s "$range")
+          set +e
+          # ----------------------------------------------------------------
+          # Resolve commit range since the last semver tag (or full history).
+          # ----------------------------------------------------------------
+          last_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$last_tag" ]; then
+            range="${last_tag}..HEAD"
+          else
+            range="HEAD"
+          fi
+          msgs="$(git log --pretty=%s "$range" 2>/dev/null || true)"
+
+          # ----------------------------------------------------------------
+          # Honour an explicit input from workflow_dispatch.
+          # ----------------------------------------------------------------
           forced="${{ github.event.inputs.bump }}"
           if [ -n "$forced" ] && [ "$forced" != "auto" ]; then
-            echo "bump=$forced" >> "$GITHUB_OUTPUT"
-            echo "explicit_version=" >> "$GITHUB_OUTPUT"
+            echo "bump=$forced"             >> "$GITHUB_OUTPUT"
+            echo "explicit_version="        >> "$GITHUB_OUTPUT"
+            echo "Forced bump: $forced"
             exit 0
           fi
-          # Detect explicit "chore: bump v1.2.3" / "chore(release): v1.2.3" /
-          # "release v1.2.3" style messages so manual bumps still get tagged.
-          explicit=$(echo "$msgs" | grep -oiE '\bv[0-9]+\.[0-9]+\.[0-9]+\b' | head -n1 | sed 's/^[vV]//')
+
+          # ----------------------------------------------------------------
+          # Look for an explicit "v1.2.3"-style tag in any commit message so
+          # manual releases still get tagged.
+          # ----------------------------------------------------------------
+          explicit="$(printf '%s\n' "$msgs" | grep -oiE '\bv[0-9]+\.[0-9]+\.[0-9]+\b' | head -n1 | sed 's/^[vV]//' || true)"
+
+          # ----------------------------------------------------------------
+          # Conventional Commits classification.
+          # ----------------------------------------------------------------
           bump=none
-          while IFS= read -r m; do
-            if echo "$m" | grep -qiE '^(feat|fix|refactor|perf)(\(.+\))?!:|BREAKING CHANGE'; then
-              bump=major; break
-            elif echo "$m" | grep -qiE '^feat(\(.+\))?:'; then
+          if [ -n "$msgs" ]; then
+            while IFS= read -r m; do
+              [ -z "$m" ] && continue
+              if printf '%s' "$m" | grep -qiE '^(feat|fix|refactor|perf)(\(.+\))?!:|BREAKING CHANGE'; then
+                bump=major
+                break
+              elif printf '%s' "$m" | grep -qiE '^feat(\(.+\))?:'; then
+                bump=minor
+              elif [ "$bump" != "minor" ] && printf '%s' "$m" | grep -qiE '^fix(\(.+\))?:'; then
+                bump=patch
+              fi
+            done <<< "$msgs"
+          fi
+
+          # ----------------------------------------------------------------
+          # Loose-keyword fallback for repos that don't use Conventional Commits.
+          # ----------------------------------------------------------------
+          if [ "$bump" = "none" ]; then
+            if   printf '%s' "$msgs" | grep -qiE 'feature|added|implement'; then
               bump=minor
-            elif echo "$m" | grep -qiE '^fix(\(.+\))?:' && [ "$bump" != "minor" ]; then
+            elif printf '%s' "$msgs" | grep -qiE 'fix|bug|error|crash'; then
+              bump=patch
+            elif [ -n "$explicit" ]; then
+              bump=patch
+            elif printf '%s' "$msgs" | grep -qiE '\b(bump|release|publish|version)\b'; then
               bump=patch
             fi
-          done <<< "$msgs"
-          if [ "$bump" = "none" ]; then
-            if echo "$msgs" | grep -qiE 'feature|added|implement'; then bump=minor
-            elif echo "$msgs" | grep -qiE 'fix|bug|error|crash'; then bump=patch
-            elif [ -n "$explicit" ] || echo "$msgs" | grep -qiE '\b(bump|release|publish|version)\b'; then bump=patch
-            fi
           fi
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
-          echo "explicit_version=$explicit" >> "$GITHUB_OUTPUT"
+
+          echo "bump=$bump"                      >> "$GITHUB_OUTPUT"
+          echo "explicit_version=$explicit"     >> "$GITHUB_OUTPUT"
           echo "Detected bump: $bump (explicit: ${explicit:-none})"
+          exit 0
 
       - name: Bump pyproject version
         id: bump
         if: steps.classify.outputs.bump != 'none' || steps.classify.outputs.explicit_version != ''
         shell: bash
         run: |
+          set -e
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import re, pathlib
-          bump = "${{ steps.classify.outputs.bump }}"
+          import re, pathlib, sys
+          bump     = "${{ steps.classify.outputs.bump }}"
           explicit = "${{ steps.classify.outputs.explicit_version }}"
           p = pathlib.Path("pyproject.toml")
+          if not p.exists():
+              print("bumped=false")
+              sys.exit(0)
           txt = p.read_text(encoding="utf-8")
           m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', txt)
           if not m:
               print("bumped=false")
-              raise SystemExit(0)
+              sys.exit(0)
           current = m.group(1)
           if explicit:
               new = explicit
           else:
-              maj, mn, pt = (int(x) for x in current.split("."))
-              if bump == "major":
-                  maj, mn, pt = maj + 1, 0, 0
-              elif bump == "minor":
-                  mn, pt = mn + 1, 0
-              elif bump == "patch":
-                  pt = pt + 1
+              try:
+                  maj, mn, pt = (int(x) for x in current.split("."))
+              except Exception:
+                  print("bumped=false")
+                  sys.exit(0)
+              if   bump == "major": maj, mn, pt = maj + 1, 0, 0
+              elif bump == "minor": mn,  pt     = mn  + 1, 0
+              elif bump == "patch": pt          = pt  + 1
+              else:                 new = current; print(f"new_version={new}"); print("bumped=false"); sys.exit(0)
               new = f"{maj}.{mn}.{pt}"
           if new != current:
               p.write_text(
                   re.sub(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{new}"', txt),
                   encoding="utf-8",
               )
-          print(f"new_version={new}")
-          print("bumped=true")
+              print(f"new_version={new}")
+              print("bumped=true")
+          else:
+              print(f"new_version={new}")
+              print("bumped=false")
           PY
 
       - name: Commit, tag, push
         if: steps.bump.outputs.bumped == 'true'
         env:
           NEW: ${{ steps.bump.outputs.new_version }}
+        shell: bash
         run: |
           set -e
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Skip entirely if the tag already exists (manual tag or prior run).
           if git rev-parse "v${NEW}" >/dev/null 2>&1 || \
@@ -128,7 +180,6 @@ jobs:
             exit 0
           fi
           git add pyproject.toml
-          # Only commit if pyproject changed (manual bumps already committed).
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): v${NEW}"
           fi

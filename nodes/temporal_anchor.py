@@ -480,6 +480,11 @@ class TemporalAnchorMEC:
 
     RETURN_TYPES = ("MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("full_masks", "confidence", "info")
+    OUTPUT_TOOLTIPS = (
+        "Full per-frame mask sequence (total_frames, H, W) interpolated between anchors.",
+        "Per-frame confidence score (1.0 at anchor frames, falling off in between).",
+        "JSON summary of anchor frames, easing, SDF iterations, and timings.",
+    )
     FUNCTION = "execute"
     CATEGORY = "MaskEditControl/Temporal"
     DESCRIPTION = (

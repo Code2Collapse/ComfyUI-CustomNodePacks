@@ -280,6 +280,11 @@ app.registerExtension({
             if (!dataW) {
                 dataW = this.addWidget("text", "canvas_data", "", () => {}, { multiline: false });
             }
+            // MANUAL bug-fix (Apr 2026): some frontend code paths read
+            // `widget.options.xxx` unconditionally. Ensure every widget on
+            // this node has an options object so they don't throw
+            // "Cannot read properties of undefined (reading 'options')".
+            if (dataW && !dataW.options) dataW.options = { multiline: false };
             // Hide the textbox visually
             if (dataW.element) dataW.element.style.display = "none";
             dataW.serializeValue = () => dataW.value || "";
@@ -287,7 +292,9 @@ app.registerExtension({
             dataW.type = "hidden";
 
             // Clear button
-            this.addWidget("button", "Clear Canvas", null, () => ctrl.clear());
+            // MANUAL bug-fix (Apr 2026): pass an explicit options object so
+            // downstream widget-iteration code never sees `undefined`.
+            this.addWidget("button", "Clear Canvas", null, () => ctrl.clear(), {});
 
             // DOM widget mount
             this.addDOMWidget("paint_canvas", "canvas", ctrl.root, {
@@ -303,8 +310,10 @@ app.registerExtension({
             };
             const wW = getWidget(this, "canvas_width");
             const hW = getWidget(this, "canvas_height");
-            if (wW) { const cb = wW.callback; wW.callback = (v) => { cb?.(v); sync(); }; }
-            if (hW) { const cb = hW.callback; hW.callback = (v) => { cb?.(v); sync(); }; }
+            // MANUAL bug-fix (Apr 2026): preserve `this` so the original
+            // widget callback can still read `this.options` (min/max/etc.).
+            if (wW) { const cb = wW.callback; wW.callback = function (v) { cb?.call(this, v); sync(); }; }
+            if (hW) { const cb = hW.callback; hW.callback = function (v) { cb?.call(this, v); sync(); }; }
             setTimeout(sync, 0);
 
             // Restore previous serialised image if the node was loaded from a saved workflow

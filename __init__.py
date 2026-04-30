@@ -23,23 +23,15 @@ from .nodes import model_manager as _model_manager  # noqa: F401
 
 # ── MaskEditControl nodes ─────────────────────────────────────────────
 from .nodes.mask_transform_xy import MaskTransformXY
-from .nodes.mask_draw_frame import MaskDrawFrame
+from .nodes.mask_draw_frame import MaskDrawFrame, DrawShapeMEC
 from .nodes.mask_propagate_video import MaskPropagateVideo
-from .nodes.mask_composite import MaskCompositeAdvanced
-from .nodes.mask_preview import MaskPreviewOverlay
 from .nodes.points_mask_editor import PointsMaskEditor
 from .nodes.sam_model_loader import SAMModelLoaderMEC
 from .nodes.sam_mask_generator import SAMMaskGeneratorMEC
-from .nodes.mask_batch_manager import MaskBatchManager
-from .nodes.mask_math import MaskMath
-from .nodes.bbox_nodes import BBoxCreate, BBoxFromMask, BBoxToMask, BBoxPad, BBoxCrop, BBoxSmooth
+from .nodes.bbox_nodes import BBoxSmooth
 from .nodes.vitmatte_refiner import ViTMatteRefinerMEC
 from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
 from .nodes.trimap_generator import TrimapGeneratorMEC
-from .nodes.video_frame_extractor import VideoFrameExtractorMEC
-from .nodes.unified_segmentation_node import UnifiedSegmentationNode
-from .nodes.matting_node import MattingNode
-from .nodes.universal_reroute import UniversalRerouteMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
 from .nodes.sec_matanyone_pipeline import SeCMatAnyonePipelineMEC
 from .nodes.background_remover import BackgroundRemoverMEC
@@ -48,14 +40,12 @@ from .nodes.luminance_keyer import LuminanceKeyerMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 from .nodes.temporal_anchor import TemporalAnchorMEC
 from .nodes.sam_multi_mask_picker import SamMultiMaskPickerMEC
-from .nodes.inpaint_suite import InpaintCropProMEC, InpaintStitchProMEC, InpaintMaskPrepareMEC, InpaintPasteBackMEC
+from .nodes.inpaint_suite import InpaintCropProMEC, InpaintStitchProMEC, InpaintPasteBackMEC
 from .nodes.image_comparer import ImageComparerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
-from .nodes.mask_draw_frame import DrawShapeMEC, DrawCircleMEC, DrawRectangleMEC, DrawEllipseMEC, DrawPolygonMEC, DrawLineMEC
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
-from .nodes.exr_metadata_reader import EXRMetadataReaderMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.temporal_consistency_checker import TemporalConsistencyCheckerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
@@ -66,31 +56,10 @@ from .nodes.mec_paint_suite import (
     NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
 )
 
-# ── Phase 4: VFX suite ────────────────────────────────────────────────
-from .nodes.color_science import (
-    NODE_CLASS_MAPPINGS as _COLOR_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _COLOR_DISPLAY,
-)
-from .nodes.exr_io import (
-    NODE_CLASS_MAPPINGS as _EXRIO_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _EXRIO_DISPLAY,
-)
-from .nodes.render_pass import (
-    NODE_CLASS_MAPPINGS as _RP_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _RP_DISPLAY,
-)
-from .nodes.plate_tools import (
-    NODE_CLASS_MAPPINGS as _PT_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _PT_DISPLAY,
-)
-from .nodes.geometry_nodes import (
-    NODE_CLASS_MAPPINGS as _GEO_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _GEO_DISPLAY,
-)
-from .nodes.metadata_nodes import (
-    NODE_CLASS_MAPPINGS as _META_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _META_DISPLAY,
-)
+# ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────
+# (color_science, exr_io, render_pass, plate_tools, geometry_nodes,
+#  metadata_nodes, exr_metadata_reader, universal_reroute)
+# Model analysis stays here:
 from .nodes.model_analysis import (
     NODE_CLASS_MAPPINGS as _MA_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MA_DISPLAY,
@@ -100,26 +69,13 @@ _MEC_MAPPINGS = {
     "MaskTransformXY": MaskTransformXY,
     "MaskDrawFrame": MaskDrawFrame,
     "MaskPropagateVideo": MaskPropagateVideo,
-    "MaskCompositeAdvanced": MaskCompositeAdvanced,
-    "MaskPreviewOverlay": MaskPreviewOverlay,
     "PointsMaskEditor": PointsMaskEditor,
     "SAMModelLoaderMEC": SAMModelLoaderMEC,
     "SAMMaskGeneratorMEC": SAMMaskGeneratorMEC,
-    "MaskBatchManager": MaskBatchManager,
-    "MaskMath": MaskMath,
-    "BBoxCreate": BBoxCreate,
-    "BBoxFromMask": BBoxFromMask,
-    "BBoxToMask": BBoxToMask,
-    "BBoxPad": BBoxPad,
-    "BBoxCrop": BBoxCrop,
     "BBoxSmooth": BBoxSmooth,
     "ViTMatteRefinerMEC": ViTMatteRefinerMEC,
     "SAMViTMattePipelineMEC": SAMViTMattePipelineMEC,
     "TrimapGeneratorMEC": TrimapGeneratorMEC,
-    "VideoFrameExtractorMEC": VideoFrameExtractorMEC,
-    "UnifiedSegmentationNode": UnifiedSegmentationNode,
-    "MattingNode": MattingNode,
-    "UniversalRerouteMEC": UniversalRerouteMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
     "BackgroundRemoverMEC": BackgroundRemoverMEC,
@@ -130,20 +86,13 @@ _MEC_MAPPINGS = {
     "SamMultiMaskPickerMEC": SamMultiMaskPickerMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
-    "InpaintMaskPrepareMEC": InpaintMaskPrepareMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
     "ImageComparerMEC": ImageComparerMEC,
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
     "DrawShapeMEC": DrawShapeMEC,
-    "DrawCircleMEC": DrawCircleMEC,
-    "DrawRectangleMEC": DrawRectangleMEC,
-    "DrawEllipseMEC": DrawEllipseMEC,
-    "DrawPolygonMEC": DrawPolygonMEC,
-    "DrawLineMEC": DrawLineMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
-    "EXRMetadataReaderMEC": EXRMetadataReaderMEC,
     "BatchVersionManagerMEC": BatchVersionManagerMEC,
     "TemporalConsistencyCheckerMEC": TemporalConsistencyCheckerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
@@ -153,26 +102,13 @@ _MEC_DISPLAY = {
     "MaskTransformXY": "Mask Transform XY (MEC)",
     "MaskDrawFrame": "Mask Draw Frame (MEC)",
     "MaskPropagateVideo": "Mask Propagate Video (MEC)",
-    "MaskCompositeAdvanced": "Mask Composite Advanced (MEC)",
-    "MaskPreviewOverlay": "Mask Preview Overlay (MEC)",
     "PointsMaskEditor": "Points Mask Editor (MEC)",
     "SAMModelLoaderMEC": "SAM Model Loader (MEC)",
     "SAMMaskGeneratorMEC": "SAM Mask Generator (MEC)",
-    "MaskBatchManager": "Mask Batch Manager (MEC)",
-    "MaskMath": "Mask Math (MEC)",
-    "BBoxCreate": "BBox Create (MEC)",
-    "BBoxFromMask": "BBox From Mask (MEC)",
-    "BBoxToMask": "BBox To Mask (MEC)",
-    "BBoxPad": "BBox Pad (MEC)",
-    "BBoxCrop": "BBox Crop (MEC)",
     "BBoxSmooth": "BBox Smooth Temporal (MEC)",
     "ViTMatteRefinerMEC": "ViTMatte Edge Refiner (MEC)",
     "SAMViTMattePipelineMEC": "SAM + ViTMatte Pipeline (MEC)",
     "TrimapGeneratorMEC": "Trimap Generator (MEC)",
-    "VideoFrameExtractorMEC": "Video Frame Extractor (MEC)",
-    "UnifiedSegmentationNode": "Unified Segmentation (MEC)",
-    "MattingNode": "Matting Node (MEC)",
-    "UniversalRerouteMEC": "Universal Reroute / Dot (MEC)",
     "ParameterHistoryMEC": "Parameter History (MEC)",
     "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (MEC)",
     "BackgroundRemoverMEC": "Background Remover (MEC)",
@@ -183,20 +119,13 @@ _MEC_DISPLAY = {
     "SamMultiMaskPickerMEC": "SAM Multi-Mask Picker (MEC)",
     "InpaintCropProMEC": "Inpaint Crop Pro (MEC)",
     "InpaintStitchProMEC": "Inpaint Stitch Pro (MEC)",
-    "InpaintMaskPrepareMEC": "Inpaint Mask Prepare (MEC)",
     "InpaintPasteBackMEC": "Inpaint Paste Back (MEC)",
     "ImageComparerMEC": "Image Comparer (MEC)",
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",
-    "DrawCircleMEC": "Draw Circle (MEC)",
-    "DrawRectangleMEC": "Draw Rectangle (MEC)",
-    "DrawEllipseMEC": "Draw Ellipse (MEC)",
-    "DrawPolygonMEC": "Draw Polygon (MEC)",
-    "DrawLineMEC": "Draw Line (MEC)",
     "VAEMergeMEC": "VAE Merge (MEC)",
     "VAELatentInspectorMEC": "VAE Latent Inspector (MEC)",
-    "EXRMetadataReaderMEC": "EXR Metadata Reader (MEC)",
     "BatchVersionManagerMEC": "Batch Version Manager (MEC)",
     "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker (MEC)",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor (MEC)",
@@ -206,15 +135,13 @@ _MEC_DISPLAY = {
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
     **_MEC_MAPPINGS,
-    **_COLOR_MAPPINGS, **_EXRIO_MAPPINGS, **_RP_MAPPINGS,
-    **_PT_MAPPINGS, **_GEO_MAPPINGS, **_META_MAPPINGS, **_MA_MAPPINGS,
+    **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
     **_MEC_DISPLAY,
-    **_COLOR_DISPLAY, **_EXRIO_DISPLAY, **_RP_DISPLAY,
-    **_PT_DISPLAY, **_GEO_DISPLAY, **_META_DISPLAY, **_MA_DISPLAY,
+    **_MA_DISPLAY,
     **_PAINT_DISPLAY,
 }
 

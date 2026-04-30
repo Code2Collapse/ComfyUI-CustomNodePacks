@@ -64,8 +64,8 @@ class SAMViTMattePipelineMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "sam_model": ("SAM_MODEL",),
-                "image": ("IMAGE",),
+                "sam_model": ("SAM_MODEL", {"tooltip": "Loaded SAM model from SAM Model Loader"}),
+                "image": ("IMAGE", {"tooltip": "Input image to segment and matte (first frame used)"}),
                 "points_json": ("STRING", {
                     "default": "[]",
                     "multiline": True,
@@ -115,9 +115,9 @@ class SAMViTMattePipelineMEC:
                     "default": 64, "min": 0, "max": 10000, "step": 1,
                     "tooltip": "Remove isolated mask regions smaller than N pixels (0=disabled)",
                 }),
-                "multimask_output": ("BOOLEAN", {"default": True}),
-                "mask_index": ("INT", {"default": 0, "min": 0, "max": 2}),
-                "score_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "multimask_output": ("BOOLEAN", {"default": True, "tooltip": "Return 3 candidate masks from SAM (vs single best)"}),
+                "mask_index": ("INT", {"default": 0, "min": 0, "max": 2, "tooltip": "Which SAM candidate mask to keep when multimask_output is True"}),
+                "score_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Discard SAM masks below this confidence score"}),
             },
             "optional": {
                 "bbox": ("BBOX", {"tooltip": "Bounding box from BBox node (overrides bbox_json)"}),
@@ -129,6 +129,15 @@ class SAMViTMattePipelineMEC:
     RETURN_TYPES = ("MASK", "MASK", "MASK", "IMAGE", "BBOX", "FLOAT", "STRING",)
     RETURN_NAMES = ("refined_mask", "coarse_mask", "edge_mask",
                     "preview", "detected_bbox", "score", "info",)
+    OUTPUT_TOOLTIPS = (
+        "Final compositing-grade alpha matte after SAM + matting refinement.",
+        "SAM coarse mask before edge refinement and cleanup.",
+        "Edge-band mask highlighting where matting changed the boundary.",
+        "Side-by-side preview of input image and refined mask overlay.",
+        "Bounding box derived from the refined mask.",
+        "Best SAM confidence score from iterative refinement.",
+        "JSON summary of stages, parameters, and timings.",
+    )
     FUNCTION = "execute"
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (

@@ -73,6 +73,11 @@ class TrimapGeneratorMEC:
 
     RETURN_TYPES = ("MASK", "MASK", "MASK",)
     RETURN_NAMES = ("trimap", "foreground", "unknown",)
+    OUTPUT_TOOLTIPS = (
+        "3-region trimap: 1.0 foreground, 0.0 background, 0.5 unknown.",
+        "Hard foreground region of the trimap.",
+        "Unknown boundary band of the trimap.",
+    )
     FUNCTION = "generate"
     CATEGORY = "MaskEditControl/Trimap"
     DESCRIPTION = (

@@ -36,8 +36,8 @@ class SAMMaskGeneratorMEC:
                 gdino_models.append(name)
         return {
             "required": {
-                "sam_model": ("SAM_MODEL",),
-                "image": ("IMAGE",),
+                "sam_model": ("SAM_MODEL", {"tooltip": "Loaded SAM model from SAM Model Loader"}),
+                "image": ("IMAGE", {"tooltip": "Input image to segment (first frame is used)"}),
                 "points_json": ("STRING", {
                     "default": "[]",
                     "multiline": True,
@@ -120,6 +120,13 @@ class SAMMaskGeneratorMEC:
 
     RETURN_TYPES = ("MASK", "MASK", "BBOX", "FLOAT", "STRING",)
     RETURN_NAMES = ("mask", "all_masks", "detected_bbox", "score", "info",)
+    OUTPUT_TOOLTIPS = (
+        "Selected mask for the chosen mask_index.",
+        "All candidate masks returned by SAM (when multimask_output is True).",
+        "Bounding box derived from the selected mask.",
+        "SAM confidence score of the selected mask.",
+        "JSON summary of prompts, scores, and refinement steps.",
+    )
     FUNCTION = "generate"
     CATEGORY = "MaskEditControl/SAM"
     DESCRIPTION = (

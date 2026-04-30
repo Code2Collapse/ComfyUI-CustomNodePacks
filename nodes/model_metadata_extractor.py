@@ -103,10 +103,14 @@ def _read_torch_zip(path: str) -> dict:
                 # Disassemble to a bounded text trace
                 import io as _io
                 buf = _io.StringIO()
+                # MANUAL bug-fix (Apr 2026): narrowed from broad Exception to
+                # the actual error types pickletools.dis raises (ValueError,
+                # IndexError, OSError, struct.error, EOFError). Truly
+                # unexpected exceptions now propagate.
                 try:
                     pickletools.dis(data, buf)
                     info["pickle_disassembly_excerpt"] = buf.getvalue()[:8000]
-                except Exception as exc:  # noqa: BLE001
+                except (ValueError, IndexError, OSError, EOFError, struct.error) as exc:
                     info["pickle_disassembly_excerpt"] = f"<dis failed: {exc}>"
                 break
             except KeyError:
@@ -124,7 +128,8 @@ def _read_legacy_pickle(path: str) -> dict:
     buf = _io.StringIO()
     try:
         pickletools.dis(data, buf)
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, IndexError, OSError, EOFError, struct.error) as exc:
+        # MANUAL bug-fix (Apr 2026): narrowed from broad Exception.
         return {"format": "legacy_pickle_unreadable", "error": str(exc)}
     return {
         "format": "legacy_pickle",
@@ -151,6 +156,96 @@ def _detect_model_kind(meta: dict) -> str:
     return "unknown"
 
 
+# Phase 3b v2 - Feature A: license + lineage detection.
+# Civitai / kohya / sd-scripts / a1111 store training metadata under
+# well-known prefixes inside the safetensors __metadata__ block.
+_LINEAGE_KEYS = (
+    "modelspec.license",
+    "modelspec.architecture",
+    "modelspec.title",
+    "modelspec.description",
+    "modelspec.author",
+    "modelspec.usage_hint",
+    "modelspec.tags",
+    "modelspec.implementation",
+    "modelspec.prediction_type",
+    "modelspec.resolution",
+    "modelspec.date",
+    "modelspec.hash_sha256",
+    "ss_base_model_version",
+    "ss_sd_model_name",
+    "ss_sd_model_hash",
+    "ss_new_sd_model_hash",
+    "ss_network_module",
+    "ss_network_dim",
+    "ss_network_alpha",
+    "ss_dataset_dirs",
+    "ss_tag_frequency",
+    "ss_steps",
+    "ss_epoch",
+    "ss_learning_rate",
+    "ss_unet_lr",
+    "ss_text_encoder_lr",
+    "ss_optimizer",
+    "ss_lr_scheduler",
+    "ss_seed",
+    "ss_clip_skip",
+    "ss_mixed_precision",
+    "ss_full_fp16",
+    "ss_v2",
+    "ss_resolution",
+    "ss_training_started_at",
+    "ss_training_finished_at",
+)
+
+
+def _extract_lineage(meta: dict) -> dict:
+    """Pull license/training metadata out of safetensors __metadata__ block."""
+    custom = meta.get("metadata") or {}
+    lineage: dict = {
+        "license": None,
+        "author": None,
+        "base_model": None,
+        "architecture": None,
+        "prediction_type": None,
+        "resolution": None,
+        "trained_steps": None,
+        "trained_epochs": None,
+        "network_module": None,
+        "network_dim": None,
+        "network_alpha": None,
+        "clip_skip": None,
+        "v2_model": None,
+        "raw": {},
+    }
+    if not isinstance(custom, dict):
+        return lineage
+    for key in _LINEAGE_KEYS:
+        if key in custom:
+            lineage["raw"][key] = custom[key]
+    # Friendly aliases
+    lineage["license"] = custom.get("modelspec.license")
+    lineage["author"] = custom.get("modelspec.author")
+    lineage["architecture"] = custom.get("modelspec.architecture")
+    lineage["prediction_type"] = custom.get("modelspec.prediction_type")
+    lineage["resolution"] = (
+        custom.get("modelspec.resolution") or custom.get("ss_resolution")
+    )
+    lineage["base_model"] = (
+        custom.get("ss_base_model_version")
+        or custom.get("ss_sd_model_name")
+        or custom.get("modelspec.architecture")
+    )
+    lineage["trained_steps"] = custom.get("ss_steps")
+    lineage["trained_epochs"] = custom.get("ss_epoch")
+    lineage["network_module"] = custom.get("ss_network_module")
+    lineage["network_dim"] = custom.get("ss_network_dim")
+    lineage["network_alpha"] = custom.get("ss_network_alpha")
+    lineage["clip_skip"] = custom.get("ss_clip_skip")
+    lineage["v2_model"] = custom.get("ss_v2")
+    return lineage
+
+
 class ModelMetadataExtractorMEC:
     """Read .safetensors / .pt / .pth / .ckpt metadata without loading weights."""
 
@@ -174,8 +269,21 @@ class ModelMetadataExtractorMEC:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING")
-    RETURN_NAMES = ("metadata_json", "model_kind", "total_params", "fingerprint")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "STRING")
+    RETURN_NAMES = (
+        "metadata_json",
+        "model_kind",
+        "total_params",
+        "fingerprint",
+        "lineage_json",
+    )
+    OUTPUT_TOOLTIPS = (
+        "Full metadata as JSON (header fields, training tags, format).",
+        "Detected model kind (e.g. checkpoint, lora, vae, controlnet, unknown).",
+        "Total parameter count summed across all tensors.",
+        "SHA256 fingerprint over (size, first 1 MB, last 1 MB) when enabled.",
+        "License + lineage information as JSON when present in metadata.",
+    )
     FUNCTION = "extract"
     CATEGORY = "MaskEditControl/Diagnostics"
     DESCRIPTION = (
@@ -200,7 +308,10 @@ class ModelMetadataExtractorMEC:
                     meta = _read_torch_zip(file_path)
                 else:
                     meta = _read_legacy_pickle(file_path)
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError, json.JSONDecodeError, zipfile.BadZipFile,
+                struct.error, EOFError) as exc:
+            # MANUAL bug-fix (Apr 2026): narrowed from broad Exception so genuine
+            # bugs surface; only known-safe parse/IO failures are caught.
             logger.warning("[MEC] Metadata extraction failed: %s", exc)
             meta = {"format": "error", "error": str(exc)}
 
@@ -208,11 +319,20 @@ class ModelMetadataExtractorMEC:
         meta["bytes"] = size
         kind = _detect_model_kind(meta)
         meta["detected_kind"] = kind
+        # Phase 3b v2 - Feature A: license + lineage detection.
+        lineage = _extract_lineage(meta)
+        meta["lineage"] = lineage
         total_params = int(meta.get("total_params", 0))
         fp = _quick_fingerprint(file_path) if compute_fingerprint else ""
         meta["fingerprint_sha256"] = fp
 
-        return (json.dumps(meta, indent=2, default=str), kind, total_params, fp)
+        return (
+            json.dumps(meta, indent=2, default=str),
+            kind,
+            total_params,
+            fp,
+            json.dumps(lineage, indent=2, default=str),
+        )
 
 
 NODE_CLASS_MAPPINGS = {"ModelMetadataExtractorMEC": ModelMetadataExtractorMEC}

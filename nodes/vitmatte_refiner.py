@@ -52,8 +52,8 @@ class ViTMatteRefinerMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "mask": ("MASK",),
+                "image": ("IMAGE", {"tooltip": "Reference image used as guidance for matting refinement"}),
+                "mask": ("MASK", {"tooltip": "Coarse mask whose edges should be refined"}),
                 "method": (["auto", "vitmatte", "multi_scale_guided", "color_aware",
                             "guided_filter", "laplacian_blend", "gaussian_blur"], {
                     "default": "auto",
@@ -102,6 +102,11 @@ class ViTMatteRefinerMEC:
 
     RETURN_TYPES = ("MASK", "MASK", "IMAGE",)
     RETURN_NAMES = ("refined_mask", "edge_mask", "preview",)
+    OUTPUT_TOOLTIPS = (
+        "Refined alpha mask with image-guided edge detail.",
+        "Difference between refined mask and binary input, highlighting edge changes.",
+        "RGB preview overlaying the refined mask on the source image.",
+    )
     FUNCTION = "refine"
     CATEGORY = "MaskEditControl/Refinement"
     DESCRIPTION = (

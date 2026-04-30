@@ -1271,6 +1271,28 @@ MIT
 
 ---
 
+## Use in image/video generation pipelines (Flux / Qwen-Image / Wan / Z-Image / ERNIE-VL)
+
+This umbrella pack aggregates ~72 nodes across four sub-namespaces — Folder Incrementer (`_FOLDER_MAPPINGS`, 3 nodes), MEC tools (`_MEC_MAPPINGS`, 30 nodes covering masking, SAM/ViT-Matte segmentation, inpaint crop/stitch/paste-back, spline editors, motion mask trackers, draw shapes, VAE merge/inspect, batch version manager, temporal consistency, model metadata, image comparer, parameter history, semantic segment, luminance keyer, mask failure explainer, temporal anchor, SAM multi-mask picker), Paint nodes (`_PAINT_MAPPINGS`), and MA nodes (`_MA_MAPPINGS`). The nodes are model-agnostic — they speak ComfyUI's native `IMAGE`, `MASK`, `LATENT`, `VAE`, and `MODEL` types — so they slot into any sampler graph regardless of which diffusion family produces the pixels.
+
+| Model family | Recommended bridges |
+|---|---|
+| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `SAMViTMattePipelineMEC` and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` / `VAELatentInspectorMEC` are useful when comparing Flux VAE variants. |
+| **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskTransformXY` and `MaskPropagateVideo` are useful when reusing a single Qwen-Image generated mask across a small sequence. `ImageComparerMEC` for A/B sweeps over guidance / sampler choices. |
+| **Wan 2.x (video)** | `MotionMaskTrackerMEC`, `MaskPropagateVideo`, `TemporalAnchorMEC`, `SeCMatAnyonePipelineMEC` and `TemporalConsistencyCheckerMEC` are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
+| **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |
+| **GLM-Image** | The IMAGE outputs feed cleanly into the GLM-Image I2I path (via the sampler's optional `image` input + `denoise_strength`). `BackgroundRemoverMEC` + `SAMMaskGeneratorMEC` provide the alpha pre-stage. |
+| **ERNIE-VL** | Not applicable for sampling (ERNIE-VL is a multimodal LLM). The `ModelMetadataExtractorMEC` and `ParameterHistoryMEC` nodes can still be useful for cataloguing assets that ERNIE-VL has captioned. |
+
+Two general patterns recur across all sampler families:
+
+1. **Inpaint trio** — `InpaintCropProMEC` → diffusion sampler (any family) → `InpaintPasteBackMEC` (or `InpaintStitchProMEC` for soft seams). Allows full-resolution refinement at a fraction of the VRAM, regardless of which model is loaded.
+2. **Versioned saves** — wire `BatchVersionManagerMEC` (or the standalone `FolderIncrementer`) `version_string` into the sampler's `Save Image.filename_prefix` so every queued prompt produces a clean, ordered file series.
+
+The `UniversalRerouteMEC`-equivalent typed reroutes (and the SAM / ViT-Matte loaders) keep the graph readable as it scales from a single Flux T2I bench into a multi-model Wan + Qwen-refine + Flux-detail composite.
+
+---
+
 <p align="center">
   Made with ❤️ for the ComfyUI community
 </p>

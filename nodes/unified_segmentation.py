@@ -310,6 +310,11 @@ class UnifiedSegmentation:
 
     RETURN_TYPES = ("MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("masks", "best_score", "info")
+    OUTPUT_TOOLTIPS = (
+        "Per-frame segmentation mask batch (single mask if image is single-frame).",
+        "Best mask confidence score across the chosen candidates.",
+        "JSON summary of model, prompts, and per-frame metadata.",
+    )
     FUNCTION = "segment"
     CATEGORY = "MaskEditControl/Segmentation"
     DESCRIPTION = (

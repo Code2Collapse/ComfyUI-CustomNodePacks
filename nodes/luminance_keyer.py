@@ -134,6 +134,10 @@ class LuminanceKeyerMEC:
 
     RETURN_TYPES = ("MASK", "STRING")
     RETURN_NAMES = ("mask", "info")
+    OUTPUT_TOOLTIPS = (
+        "Luminance-based matte for the chosen brightness range.",
+        "JSON summary of effective mode and thresholds used.",
+    )
     FUNCTION = "key_luminance"
     CATEGORY = "MaskEditControl/Keying"
     DESCRIPTION = (

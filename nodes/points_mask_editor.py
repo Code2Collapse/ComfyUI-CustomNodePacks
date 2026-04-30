@@ -44,8 +44,8 @@ class PointsMaskEditor:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "width": ("INT", {"default": 512, "min": 1, "max": 16384}),
-                "height": ("INT", {"default": 512, "min": 1, "max": 16384}),
+                "width": ("INT", {"default": 512, "min": 1, "max": 16384, "tooltip": "Canvas width in pixels"}),
+                "height": ("INT", {"default": 512, "min": 1, "max": 16384, "tooltip": "Canvas height in pixels"}),
                 "editor_data": ("STRING", {
                     "default": '{"points":[],"bboxes":[]}',
                     "multiline": True,
@@ -72,6 +72,16 @@ class PointsMaskEditor:
     RETURN_TYPES = ("MASK", "STRING", "STRING", "BBOX", "BBOX", "STRING", "STRING", "BBOX",)
     RETURN_NAMES = ("mask", "positive_coords", "negative_coords", "bboxes", "neg_bboxes",
                     "points_json", "bbox_json", "primary_bbox",)
+    OUTPUT_TOOLTIPS = (
+        "Rendered mask combining points and bounding-box regions.",
+        "Positive points as JSON list of {x, y} for SAM-family nodes.",
+        "Negative points as JSON list of {x, y} for SAM-family nodes.",
+        "Positive bounding boxes for SAM2/2.1/SAM3/SeC.",
+        "Negative bounding boxes (SAM3 supports these).",
+        "All points as JSON with labels for SAMMaskGeneratorMEC.",
+        "All bounding boxes as JSON for SAMMaskGeneratorMEC.",
+        "First positive bbox as [x, y, w, h] for BBox pipeline nodes.",
+    )
     FUNCTION = "generate"
     CATEGORY = "MaskEditControl/Editor"
     DESCRIPTION = (

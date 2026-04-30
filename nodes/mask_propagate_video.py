@@ -29,7 +29,7 @@ class MaskPropagateVideo:
                 "mask": ("MASK", {"tooltip": "Source mask (single frame or batch)"}),
                 "source_frame": ("INT", {"default": 0, "min": 0, "max": 99999,
                                           "tooltip": "Frame index where the mask was drawn"}),
-                "mode": (cls.PROPAGATION_MODES, {"default": "static"}),
+                "mode": (cls.PROPAGATION_MODES, {"default": "static", "tooltip": "Propagation method across frames"}),
                 "flow_threshold": ("FLOAT", {"default": 2.0, "min": 0.0, "max": 50.0, "step": 0.5,
                                               "tooltip": "Optical flow magnitude threshold for mask warping"}),
                 "fade_start": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
@@ -48,6 +48,10 @@ class MaskPropagateVideo:
 
     RETURN_TYPES = ("MASK", "IMAGE",)
     RETURN_NAMES = ("masks", "preview",)
+    OUTPUT_TOOLTIPS = (
+        "Per-frame mask batch propagated across the video sequence.",
+        "RGB preview with the mask overlaid on each frame.",
+    )
     FUNCTION = "propagate"
     CATEGORY = "MaskEditControl/Video"
     DESCRIPTION = "Propagate a single-frame mask across all video frames using static copy, optical flow, SAM2 video, or fade modes."

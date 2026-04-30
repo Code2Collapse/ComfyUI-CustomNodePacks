@@ -479,6 +479,11 @@ class MotionMaskTrackerMEC:
 
     RETURN_TYPES = ("MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("motion_mask", "motion_intensity", "info")
+    OUTPUT_TOOLTIPS = (
+        "Per-frame motion mask batch (frame 0 is zeros).",
+        "Per-frame motion intensity scalar useful for routing thresholds.",
+        "JSON summary of methods used, thresholds, and per-frame stats.",
+    )
     FUNCTION = "execute"
     CATEGORY = "MaskEditControl/Video"
     DESCRIPTION = (

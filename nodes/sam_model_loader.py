@@ -195,7 +195,7 @@ class SAMModelLoaderMEC:
                         "sam3:   SAM3 (uses SAM2 infrastructure)"
                     ),
                 }),
-                "device": (["auto", "cuda", "cpu"], {"default": "auto"}),
+                "device": (["auto", "cuda", "cpu"], {"default": "auto", "tooltip": "Device to load the model on. 'auto' picks CUDA when available."}),
                 "offload_to_cpu": ("BOOLEAN", {
                     "default": False,
                     "tooltip": (
@@ -233,6 +233,9 @@ class SAMModelLoaderMEC:
 
     RETURN_TYPES = ("SAM_MODEL",)
     RETURN_NAMES = ("sam_model",)
+    OUTPUT_TOOLTIPS = (
+        "Loaded SAM model wrapper for downstream SAM nodes.",
+    )
     FUNCTION = "load"
     CATEGORY = "MaskEditControl/SAM"
     DESCRIPTION = (

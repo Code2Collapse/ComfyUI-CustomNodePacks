@@ -75,6 +75,13 @@ class VAELatentInspectorMEC:
 
     RETURN_TYPES = ("LATENT", "STRING", "STRING", "INT", "INT")
     RETURN_NAMES = ("latent_passthrough", "info_json", "verdict", "nan_count", "inf_count")
+    OUTPUT_TOOLTIPS = (
+        "Pass-through of the original LATENT input (unchanged).",
+        "JSON with shape, dtype, device, per-channel stats, range, and verdict.",
+        "One-word verdict: healthy / low_contrast / saturated / corrupt.",
+        "Total NaN element count in latent['samples'].",
+        "Total Inf element count in latent['samples'].",
+    )
     FUNCTION = "inspect"
     CATEGORY = "MaskEditControl/Diagnostics"
     DESCRIPTION = (

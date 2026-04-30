@@ -26,9 +26,15 @@ app.registerExtension({
             const el = document.createElement("div");
             el.style.cssText =
                 "position:relative;width:100%;min-height:200px;background:#111;border-radius:4px;overflow:hidden;";
+            // MANUAL bug-fix (Apr 2026): a11y -- screen-reader / keyboard support.
+            el.setAttribute("role", "group");
+            el.setAttribute("aria-label", "Image A/B comparer (drag horizontally to wipe between images)");
 
             const cvs = document.createElement("canvas");
             cvs.style.cssText = "display:block;width:100%;cursor:col-resize;";
+            cvs.setAttribute("role", "img");
+            cvs.setAttribute("tabindex", "0");
+            cvs.setAttribute("aria-label", "Comparison canvas. Use left/right arrows to move the divider.");
             el.appendChild(cvs);
 
             const S = {
@@ -114,6 +120,27 @@ app.registerExtension({
             };
             cvs.addEventListener("pointerup", up);
             cvs.addEventListener("pointercancel", up);
+
+            // MANUAL bug-fix (Apr 2026): keyboard support for a11y. Arrow keys
+            // move the divider/alpha; Home/End jump to extremes.
+            cvs.addEventListener("keydown", (e) => {
+                const STEP = e.shiftKey ? 0.05 : 0.01;
+                let handled = true;
+                if (S.mode === 0) {
+                    if (e.key === "ArrowLeft")       S.divPos = Math.max(0.01, S.divPos - STEP);
+                    else if (e.key === "ArrowRight") S.divPos = Math.min(0.99, S.divPos + STEP);
+                    else if (e.key === "Home")       S.divPos = 0.01;
+                    else if (e.key === "End")        S.divPos = 0.99;
+                    else handled = false;
+                } else if (S.mode === 1) {
+                    if (e.key === "ArrowLeft")       S.alpha = Math.max(0, S.alpha - STEP);
+                    else if (e.key === "ArrowRight") S.alpha = Math.min(1, S.alpha + STEP);
+                    else if (e.key === "Home")       S.alpha = 0;
+                    else if (e.key === "End")        S.alpha = 1;
+                    else handled = false;
+                } else handled = false;
+                if (handled) { e.preventDefault(); node._render(); }
+            });
 
             node.addDOMWidget("comparer_view", "COMPARER", el, {
                 serialize: false,

@@ -246,6 +246,7 @@ class ParameterHistoryMEC:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("history_report",)
+    OUTPUT_TOOLTIPS = ("Human-readable parameter history report for the chosen mode.",)
     OUTPUT_NODE = True
     FUNCTION = "query"
     CATEGORY = "MaskEditControl/Utils"

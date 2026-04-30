@@ -601,6 +601,11 @@ class SplineMaskEditorMEC:
 
     RETURN_TYPES = ("MASK", "STRING", "SPLINE_DATA")
     RETURN_NAMES = ("mask", "coords_json", "spline_data_out")
+    OUTPUT_TOOLTIPS = (
+        "Rasterized spline mask matching the image (or width/height override).",
+        "SAM-compatible point coordinates sampled along the spline path.",
+        "Structured spline data for downstream shape/motion nodes.",
+    )
     FUNCTION = "execute"
     CATEGORY = "MaskEditControl/Spline"
     DESCRIPTION = (

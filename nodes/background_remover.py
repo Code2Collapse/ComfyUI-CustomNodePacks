@@ -79,6 +79,11 @@ class BackgroundRemoverMEC:
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("foreground", "mask", "info")
+    OUTPUT_TOOLTIPS = (
+        "Foreground RGB image with background removed (premultiplied by alpha).",
+        "High-quality alpha mask for the foreground subject.",
+        "JSON summary of the parameters used for this run.",
+    )
     FUNCTION = "remove_bg"
     CATEGORY = "MaskEditControl/Matting"
     DESCRIPTION = (

@@ -96,12 +96,19 @@ class TemporalConsistencyCheckerMEC:
                 }),
                 "binarize_threshold": ("FLOAT", {
                     "default": 0.5, "min": 0.01, "max": 0.99, "step": 0.01,
+                    "tooltip": "Threshold to binarize mask values when computing mask_iou",
                 }),
             },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("image_passthrough", "mask_passthrough", "flicker_score", "report_json")
+    OUTPUT_TOOLTIPS = (
+        "Input image batch passed through unchanged.",
+        "Input mask batch passed through unchanged.",
+        "Aggregate flicker score in [0, 1] (lower is more stable).",
+        "JSON report with per-pair scores, min/max/mean, and metadata.",
+    )
     FUNCTION = "check"
     CATEGORY = "MaskEditControl/Diagnostics"
     DESCRIPTION = (

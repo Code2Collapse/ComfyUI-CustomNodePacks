@@ -21,6 +21,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
+import getpass
+import hashlib
+import datetime
 from pathlib import Path
 
 logger = logging.getLogger("MEC.BatchVersionManager")
@@ -64,9 +68,9 @@ class BatchVersionManagerMEC:
                     "default": "",
                     "tooltip": "Absolute output root (e.g. D:/projects/renders).",
                 }),
-                "show": ("STRING", {"default": "show"}),
-                "shot": ("STRING", {"default": "sh010"}),
-                "task": ("STRING", {"default": "comp"}),
+                "show": ("STRING", {"default": "show", "tooltip": "Show / project name (top-level folder under root)"}),
+                "shot": ("STRING", {"default": "sh010", "tooltip": "Shot identifier (folder under show)"}),
+                "task": ("STRING", {"default": "comp", "tooltip": "Task name (folder under shot, e.g. comp, matte, render)"}),
             },
             "optional": {
                 "reserve": ("BOOLEAN", {
@@ -88,11 +92,40 @@ class BatchVersionManagerMEC:
                     "default": 1, "min": 1, "max": 999999,
                     "tooltip": "Floor for the first version when no v### exists yet.",
                 }),
+                "forward_slash": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "When True (default), output paths use forward slashes "
+                        "for cross-platform compatibility. Set False to keep "
+                        "native (Windows backslash) separators."
+                    ),
+                }),
+                # Phase 3b v2 - Feature A: write a version_manifest.json
+                # sidecar inside the reserved folder for full traceability.
+                "write_manifest": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "When `reserve=True`, also write `version_manifest.json` "
+                        "alongside the .lock containing workflow_hash + user + "
+                        "host + timestamp + show/shot/task triple. Provides full "
+                        "audit trail. Ignored when reserve=False."
+                    ),
+                }),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
 
     RETURN_TYPES = ("STRING", "INT", "STRING", "STRING")
     RETURN_NAMES = ("version_path", "version_int", "version_label", "info_json")
+    OUTPUT_TOOLTIPS = (
+        "Full path to the next-version directory (forward-slash by default).",
+        "Integer version number that was allocated.",
+        "Padded version label such as v001.",
+        "JSON metadata: show, shot, task, user, host, timestamp, reservation status.",
+    )
     FUNCTION = "allocate"
     CATEGORY = "MaskEditControl/IO"
     DESCRIPTION = (
@@ -110,6 +143,10 @@ class BatchVersionManagerMEC:
         padding: int = 3,
         max_retries: int = 5,
         min_version: int = 1,
+        forward_slash: bool = True,
+        write_manifest: bool = True,
+        prompt=None,
+        extra_pnginfo=None,
     ):
         if not root or not root.strip():
             raise ValueError("root path is required.")
@@ -149,14 +186,25 @@ class BatchVersionManagerMEC:
                         f"Failed to reserve version under {task_dir}: {exc}"
                     ) from exc
             else:
-                raise RuntimeError(
-                    f"Could not reserve a version after {max_retries} retries; "
-                    f"last attempted v{next_v}."
+                # MANUAL bug-fix (Apr 2026): make exhaustion message actionable.
+                raise OSError(
+                    f"BatchVersionManagerMEC: {max_retries} retries failed for "
+                    f"v{next_v} under {task_dir.as_posix()}. Another process is "
+                    f"likely racing for the same task directory. Try increasing "
+                    f"max_retries, or pick a unique show/shot/task triple."
                 )
 
         label = f"v{next_v:0{padding}d}"
+        # MANUAL bug-fix (Apr 2026): forward_slash toggle (default True for
+        # back-compat). When False, paths come back with native separators.
+        if forward_slash:
+            path_out = target.as_posix()
+            root_out = str(root_p).replace("\\", "/")
+        else:
+            path_out = str(target)
+            root_out = str(root_p)
         info = {
-            "root": str(root_p).replace("\\", "/"),
+            "root": root_out,
             "show": show_s,
             "shot": shot_s,
             "task": task_s,
@@ -164,13 +212,50 @@ class BatchVersionManagerMEC:
             "label": label,
             "reserved": reserved,
             "attempts": attempts + 1 if reserve else 0,
-            "path": target.as_posix(),
+            "path": path_out,
         }
+        # Phase 3b v2 - Feature A: write version_manifest.json sidecar.
+        # Captured BEFORE the return so any IO problem gets logged but does
+        # not poison the output payload.
+        if reserve and reserved and write_manifest:
+            try:
+                wf_hash = ""
+                if prompt is not None:
+                    try:
+                        canon = json.dumps(prompt, sort_keys=True, default=str).encode("utf-8")
+                        wf_hash = hashlib.sha256(canon).hexdigest()
+                    except (TypeError, ValueError) as exc:
+                        logger.warning(
+                            "[MEC] Workflow hash skipped (%s).", exc,
+                        )
+                manifest = {
+                    "version": next_v,
+                    "label": label,
+                    "path": path_out,
+                    "show": show_s,
+                    "shot": shot_s,
+                    "task": task_s,
+                    "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "hostname": socket.gethostname(),
+                    "user": getpass.getuser(),
+                    "workflow_sha256": wf_hash,
+                    "forward_slash": forward_slash,
+                }
+                manifest_path = target / "version_manifest.json"
+                with open(manifest_path, "w", encoding="utf-8") as fh:
+                    json.dump(manifest, fh, indent=2)
+                info["manifest"] = (
+                    manifest_path.as_posix() if forward_slash else str(manifest_path)
+                )
+                info["workflow_sha256"] = wf_hash
+            except OSError as exc:
+                logger.warning("[MEC] version_manifest.json write failed: %s", exc)
+                info["manifest_error"] = str(exc)
         logger.info(
-            "[MEC] BatchVersionManager %s/%s/%s → %s (reserved=%s)",
+            "[MEC] BatchVersionManager %s/%s/%s -> %s (reserved=%s)",
             show_s, shot_s, task_s, label, reserved,
         )
-        return (target.as_posix(), next_v, label, json.dumps(info, indent=2))
+        return (path_out, next_v, label, json.dumps(info, indent=2))
 
 
 NODE_CLASS_MAPPINGS = {"BatchVersionManagerMEC": BatchVersionManagerMEC}

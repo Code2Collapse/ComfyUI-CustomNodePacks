@@ -109,6 +109,10 @@ class SemanticSegmentMEC:
 
     RETURN_TYPES = ("MASK", "STRING")
     RETURN_NAMES = ("mask", "info")
+    OUTPUT_TOOLTIPS = (
+        "Combined binary mask covering all selected semantic classes.",
+        "JSON summary of model, classes used, and per-class pixel counts.",
+    )
     FUNCTION = "parse"
     CATEGORY = "MaskEditControl/Segmentation"
     DESCRIPTION = (
@@ -128,7 +132,13 @@ class SemanticSegmentMEC:
         keep_model_loaded: bool = True,
     ):
         B, H, W, C = image.shape
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # MANUAL bug-fix (Apr 2026): full device autodetect (cuda > mps > cpu).
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
 
         loaded = get_or_load_model(model_name, precision="fp32", device=device)
         model = loaded["model"]
@@ -200,6 +210,23 @@ class SemanticSegmentMEC:
                     combined = torch.maximum(combined, probs[ci])
 
             mask = (combined > threshold).float().cpu()
+            # MANUAL bug-fix (Apr 2026): edge-refine after upsample. Apply a
+            # cheap guided-filter-style refinement using the source image
+            # luminance: align the mask boundary with strong image gradients
+            # so the bilinear-upsampled segmentation snaps back to true edges.
+            try:
+                src_lum = image[i, ..., :3].mean(dim=-1).cpu().numpy().astype(np.float32)
+                m_np = mask.numpy().astype(np.float32)
+                # Joint bilateral via cv2 if available; falls back silently.
+                import cv2 as _cv2  # noqa: F401
+                refined = _cv2.ximgproc.guidedFilter(
+                    guide=src_lum, src=m_np, radius=4, eps=1e-3
+                ) if hasattr(_cv2, "ximgproc") else _cv2.bilateralFilter(
+                    m_np, d=5, sigmaColor=0.1, sigmaSpace=4
+                )
+                mask = torch.from_numpy(np.clip(refined, 0.0, 1.0))
+            except Exception:
+                pass
             masks.append(mask)
 
         result = torch.stack(masks).clamp(0.0, 1.0)

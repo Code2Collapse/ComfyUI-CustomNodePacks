@@ -322,12 +322,20 @@ app.registerExtension({
       const wName = w.name;
       let lastVal = w.value;
 
+      // MANUAL bug-fix (Apr 2026): external callers (e.g. width/height
+      // sync wrappers in mec_advanced_paint.js, programmatic widget
+      // updates) often invoke `w.callback(value)` without preserving
+      // `this`. The original ComfyUI widget callbacks read
+      // `this.options` (min/max/step), so a missing `this` throws
+      // "Cannot read properties of undefined (reading 'options')".
+      // Capture the widget reference and rebind explicitly.
+      const widgetRef = w;
       w.callback = function (value) {
         if (value !== lastVal) {
           _recordChange(node, wName, lastVal, value);
           lastVal = value;
         }
-        if (origCb) return origCb.call(this, value);
+        if (origCb) return origCb.call(this || widgetRef, value);
       };
 
       const desc = Object.getOwnPropertyDescriptor(w, "value");

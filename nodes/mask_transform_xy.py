@@ -16,7 +16,7 @@ class MaskTransformXY:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mask": ("MASK",),
+                "mask": ("MASK", {"tooltip": "Input mask to transform"}),
                 "expand_x": ("INT", {"default": 0, "min": -512, "max": 512, "step": 1,
                                       "tooltip": "Positive = dilate horizontally, Negative = erode horizontally"}),
                 "expand_y": ("INT", {"default": 0, "min": -512, "max": 512, "step": 1,
@@ -38,9 +38,11 @@ class MaskTransformXY:
         }
 
     RETURN_TYPES = ("MASK",)
+    OUTPUT_TOOLTIPS = ("Transformed mask after morphology, blur, offset, feather, and threshold.",)
     FUNCTION = "transform"
     CATEGORY = "MaskEditControl/Transform"
     DESCRIPTION = "Erode/expand mask independently on X & Y with blur, offset, feather, and threshold."
+
 
     # ── helpers ──────────────────────────────────────────────────────────
 

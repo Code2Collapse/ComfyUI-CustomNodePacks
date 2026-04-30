@@ -19,6 +19,10 @@ permissions:
   contents: write
   issues: write
 
+env:
+  # Opt into Node.js 24 for actions to silence the Node 20 deprecation warning.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   publish:
     name: Publish to Comfy Registry

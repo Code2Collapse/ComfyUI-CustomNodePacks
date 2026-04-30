@@ -40,6 +40,14 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
+    # MANUAL bug-fix (Apr 2026): surface the dependency at import time so
+    # users running InpaintCropProMEC don't silently fall back to a slower
+    # path. Single one-time warning -- no flood on every node call.
+    import logging as _logging
+    _logging.getLogger("MEC.inpaint").warning(
+        "[InpaintCropProMEC] scipy not installed -- mask hole-filling will use "
+        "a slower torch-only fallback. `pip install scipy` to restore full speed."
+    )
 
 from .stabilization_utils import (
     compensate_camera_motion,
@@ -772,6 +780,15 @@ class InpaintCropProMEC:
 
     RETURN_TYPES = ("STITCH_DATA", "IMAGE", "IMAGE", "MASK", "MASK", "MASK", "STRING")
     RETURN_NAMES = ("stitch_data", "cropped_image", "cropped_composite", "inpaint_mask", "stitch_blend_mask", "crop_mask", "info")
+    OUTPUT_TOOLTIPS = (
+        "Stitch metadata bundle to feed into InpaintStitchPro / InpaintPasteBack.",
+        "Cropped image patch (downscaled and padded according to settings).",
+        "Cropped composite (image with masked area filled per fill_masked_area mode).",
+        "Per-mode mask the inpaint model should see inside the crop.",
+        "Feathered/blended mask used when stitching the result back.",
+        "Binary crop region mask in the original-image coordinate space.",
+        "JSON / text info string describing crop bounds, sizes, and modes.",
+    )
     FUNCTION = "crop_for_inpaint"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = "Crop image around mask with separate inpaint and stitch blend masks. Supports edge-aware, Laplacian, frequency blend, downscale, mask processing, and aspect ratio presets."
@@ -1151,6 +1168,11 @@ class InpaintStitchProMEC:
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "blend_mask_used", "info")
+    OUTPUT_TOOLTIPS = (
+        "Final stitched image with the inpainted region blended back into the original.",
+        "Actual blend mask used (after override and resize back to original space).",
+        "Info string describing blend mode, color match, and timings.",
+    )
     FUNCTION = "stitch"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = "Composite inpainted image back using stitch_data. Supports edge-aware, Laplacian pyramid, and frequency domain blending."
@@ -1276,7 +1298,17 @@ class InpaintStitchProMEC:
 
     def _stitch_v1(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    blend_mode_override: str, color_match: bool):
-        """V1 stitch: legacy format with direct crop coordinates."""
+        """V1 stitch: legacy format with direct crop coordinates.
+
+        DEPRECATED (Apr 2026 cleanup): v2 (canvas-based) is the preferred path.
+        Kept for back-compat with workflows produced by InpaintCropProMEC v1.x.
+        Will be removed in a future major version. New crops always emit v2.
+        """
+        import logging as _logging
+        _logging.getLogger("MEC.inpaint").warning(
+            "[InpaintStitchProMEC] stitch_data v1 is deprecated; please re-run "
+            "the InpaintCropProMEC node which now emits v2."
+        )
         original_image = stitch_data["original_image"]
         crop_x = stitch_data["crop_x"]
         crop_y = stitch_data["crop_y"]
@@ -1344,153 +1376,12 @@ class InpaintStitchProMEC:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 3: InpaintMaskPrepareMEC
+#  NODE 3: InpaintMaskPrepareMEC  (REMOVED — Apr 2026 cleanup)
 # ══════════════════════════════════════════════════════════════════════
-
-class InpaintMaskPrepareMEC:
-    """Standalone mask preparation: clean up, grow, produce dual inpaint + stitch masks.
-
-    Separates inpaint_mask (what model sees) from stitch_blend_mask (what composite uses).
-    Optional temporal smoothing for video batch consistency.
-    """
-
-    VRAM_TIER = 1
-    INPAINT_EDGE_MODES = ["hard_binary", "slight_feather"]
-    STITCH_EDGE_MODES = ["gaussian", "edge_aware"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "mask": ("MASK", {"tooltip": "Raw input mask (B,H,W)"}),
-                "fill_holes": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Fill interior holes in the mask"}),
-                "remove_small_regions": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Remove small disconnected blobs"}),
-                "min_region_area": ("INT", {
-                    "default": 100, "min": 0, "max": 100000, "step": 10,
-                    "tooltip": "Minimum region area in pixels to keep"}),
-                "grow_pixels": ("INT", {
-                    "default": 4, "min": 0, "max": 256, "step": 1,
-                    "tooltip": "Dilate mask by this many pixels"}),
-                "inpaint_edge_mode": (cls.INPAINT_EDGE_MODES, {
-                    "default": "hard_binary",
-                    "tooltip": "Edge style for inpaint mask: hard_binary or slight_feather"}),
-                "stitch_edge_mode": (cls.STITCH_EDGE_MODES, {
-                    "default": "gaussian",
-                    "tooltip": "Edge style for stitch blend mask: gaussian or edge_aware"}),
-                "stitch_feather_radius": ("INT", {
-                    "default": 16, "min": 1, "max": 128, "step": 1,
-                    "tooltip": "Feather radius for the stitch blend mask"}),
-                "temporal_smooth": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Apply Gaussian temporal smoothing along batch dimension (for video)"}),
-                "temporal_sigma": ("FLOAT", {
-                    "default": 1.5, "min": 0.1, "max": 10.0, "step": 0.1,
-                    "tooltip": "Temporal Gaussian sigma in frames"}),
-            },
-            "optional": {
-                "reference_image": ("IMAGE", {
-                    "tooltip": "Reference image for edge-aware stitch blend mask (required for edge_aware mode)"}),
-            },
-        }
-
-    RETURN_TYPES = ("MASK", "MASK", "IMAGE", "STRING")
-    RETURN_NAMES = ("inpaint_mask", "stitch_blend_mask", "debug_preview", "info")
-    FUNCTION = "prepare_mask"
-    CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite."
-
-    def prepare_mask(self, mask: torch.Tensor, fill_holes: bool,
-                     remove_small_regions: bool, min_region_area: int,
-                     grow_pixels: int, inpaint_edge_mode: str,
-                     stitch_edge_mode: str, stitch_feather_radius: int,
-                     temporal_smooth: bool, temporal_sigma: float,
-                     reference_image: Optional[torch.Tensor] = None):
-        device = _get_device(mask)
-
-        if mask.dim() == 2:
-            mask = mask.unsqueeze(0)
-        B, H, W = mask.shape
-        working = mask.clone()
-
-        holes_filled = 0
-        regions_removed = 0
-
-        # Step 1: Fill holes
-        if fill_holes:
-            before_sum = (working > 0.5).float().sum().item()
-            working = _fill_holes_torch(working)
-            after_sum = (working > 0.5).float().sum().item()
-            holes_filled = int(after_sum - before_sum)
-
-        # Step 2: Remove small regions
-        if remove_small_regions and min_region_area > 0:
-            before_sum = (working > 0.5).float().sum().item()
-            working = _remove_small_regions_torch(working, min_region_area)
-            after_sum = (working > 0.5).float().sum().item()
-            regions_removed = int(before_sum - after_sum)
-
-        # Step 3: Grow mask
-        if grow_pixels > 0:
-            k = 2 * grow_pixels + 1
-            m4 = working.unsqueeze(1)
-            working = F.max_pool2d(m4, kernel_size=k, stride=1, padding=grow_pixels).squeeze(1)
-            working = working.clamp(0.0, 1.0)
-
-        # Step 4: Generate inpaint mask
-        inpaint_mask = _apply_inpaint_mask_mode(working, inpaint_edge_mode)
-
-        # Step 5: Generate stitch blend mask
-        if stitch_edge_mode == "edge_aware" and reference_image is not None:
-            ref = reference_image
-            if ref.shape[0] == 1 and B > 1:
-                ref = ref.expand(B, -1, -1, -1)
-            if ref.shape[1] != H or ref.shape[2] != W:
-                ref = _resize_image(ref, H, W)
-            stitch_blend_mask = _edge_aware_blend_mask(ref, working, stitch_feather_radius)
-        else:
-            binary = (working > 0.5).float()
-            stitch_blend_mask = _gaussian_blur_mask(binary, sigma=stitch_feather_radius * 0.4)
-
-        # Step 6: Temporal smoothing
-        temporal_variance_before = 0.0
-        temporal_variance_after = 0.0
-        if temporal_smooth and B > 1:
-            temporal_variance_before = stitch_blend_mask.var(dim=0).mean().item()
-            stitch_blend_mask = _temporal_gaussian_smooth(stitch_blend_mask, temporal_sigma)
-            temporal_variance_after = stitch_blend_mask.var(dim=0).mean().item()
-
-        # Step 7: Build debug preview
-        debug_r = inpaint_mask.unsqueeze(-1)
-        debug_g = stitch_blend_mask.unsqueeze(-1)
-        debug_b = torch.zeros(B, H, W, 1, device=device, dtype=mask.dtype)
-        debug_preview = torch.cat([debug_r, debug_g, debug_b], dim=-1)
-
-        # Step 8: Build info string
-        info_lines = [
-            f"InpaintMaskPrepareMEC:",
-            f"  input: {B}x{H}x{W}",
-            f"  fill_holes: {fill_holes} (pixels filled: {holes_filled})",
-            f"  remove_small_regions: {remove_small_regions} (pixels removed: {regions_removed})",
-            f"  grow_pixels: {grow_pixels}",
-            f"  inpaint_edge_mode: {inpaint_edge_mode}",
-            f"  stitch_edge_mode: {stitch_edge_mode}, radius={stitch_feather_radius}",
-            f"  inpaint_mask range: [{inpaint_mask.min().item():.4f}, {inpaint_mask.max().item():.4f}]",
-            f"  stitch_blend_mask range: [{stitch_blend_mask.min().item():.4f}, {stitch_blend_mask.max().item():.4f}]",
-        ]
-        if temporal_smooth and B > 1:
-            info_lines.append(
-                f"  temporal_smooth: sigma={temporal_sigma:.1f}, "
-                f"variance {temporal_variance_before:.6f} → {temporal_variance_after:.6f}"
-            )
-        info = "\n".join(info_lines)
-
-        return (inpaint_mask, stitch_blend_mask, debug_preview, info)
-
-
+# Functionality is duplicated by Impact Pack `MaskFix` and KJNodes
+# `GrowMaskWithBlur`. Snapshot retained at
+# ``_deprecated/inpaint_suite.snapshot.py``.
+# ══════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════
 #  NODE 4: InpaintPasteBackMEC
 # ══════════════════════════════════════════════════════════════════════
@@ -1526,12 +1417,24 @@ class InpaintPasteBackMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
+    OUTPUT_TOOLTIPS = (
+        "Original image with the inpainted crop pasted back (optionally feathered).",
+        "Info string describing paste bounds, resize method, and feather settings.",
+    )
     FUNCTION = "paste_back"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = "Paste inpainted crop back onto original image using stitch_data with optional feathered edges."
 
     def paste_back(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
+        # MANUAL bug-fix (Apr 2026): unify feather_edges + feather_radius.
+        # feather_radius == 0 now ALWAYS disables feathering, regardless of
+        # the legacy ``feather_edges`` toggle. This makes radius the single
+        # source of truth and lets workflows just zero the int instead of
+        # juggling both widgets. ``feather_edges=False`` still disables for
+        # back-compat with old workflows that left radius=16 but turned the
+        # bool off.
+        feather_active = bool(feather_edges) and int(feather_radius) > 0
         if not isinstance(stitch_data, dict) or not stitch_data:
             raise ValueError(
                 "InpaintPasteBackMEC: 'stitch_data' is missing or empty. "
@@ -1565,7 +1468,7 @@ class InpaintPasteBackMEC:
             inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
             canvas = canvas_image.clone()
 
-            if feather_edges and feather_radius > 0:
+            if feather_active:
                 paste_mask = torch.ones(1, 1, ctc_h, ctc_w, device=device, dtype=torch.float32)
                 paste_mask = _gaussian_blur_2d(paste_mask, sigma=feather_radius)
                 pm3 = paste_mask.squeeze(0).squeeze(0).unsqueeze(-1)
@@ -1598,7 +1501,7 @@ class InpaintPasteBackMEC:
         inp_resized = _resize_image(inpainted_image, crop_h, crop_w, mode=upscale_method)
         canvas = original_image.clone()
 
-        if feather_edges and feather_radius > 0:
+        if feather_active:
             paste_mask = torch.ones(1, 1, crop_h, crop_w, device=device, dtype=torch.float32)
             paste_mask = _gaussian_blur_2d(paste_mask, sigma=feather_radius)
             paste_mask_3d = paste_mask.squeeze(0).squeeze(0).unsqueeze(-1)

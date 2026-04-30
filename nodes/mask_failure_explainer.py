@@ -296,6 +296,17 @@ def _build_problem_heatmap(
 #  Severity scoring
 # ══════════════════════════════════════════════════════════════════════
 
+# MANUAL bug-fix (Apr 2026): severity-score component weights extracted as
+# named constants so they can be calibrated against a labeled set without
+# editing function bodies. Each weight is the maximum penalty contribution
+# for its metric (full 100 = bad image+bad mask combination).
+_SEV_W_DARK     = 20.0
+_SEV_W_BLUR     = 20.0
+_SEV_W_CONTRAST = 20.0
+_SEV_W_COLOR    = 20.0
+_SEV_W_BG       = 20.0
+
+
 def _compute_severity(
     brightness: torch.Tensor,
     blur: torch.Tensor,
@@ -305,12 +316,9 @@ def _compute_severity(
 ) -> float:
     """Compute a 0-100 severity score (mean across batch).
 
-    Each metric contributes 0-20 points of severity:
-      - Brightness: 20 * (1 - clamp(mean_brightness / 0.15, 0, 1)) when dark
-      - Blur: 20 * (1 - clamp(mean_blur / 50, 0, 1))
-      - Boundary contrast: 20 * (1 - clamp(mean_contrast / 0.05, 0, 1))
-      - Color confusion: 20 * (1 - clamp(mean_confusion / 0.1, 0, 1))
-      - BG complexity: 20 * clamp(mean_bg_complexity / 0.3, 0, 1)
+    Each metric contributes up to its named weight (see ``_SEV_W_*`` above).
+    The thresholds (0.15, 50.0, 0.05, 0.1, 0.3) match ``_THRESHOLD_*``
+    used in the explanation builder, keeping numerics consistent.
     """
     # Average across batch
     b = brightness.mean().item()
@@ -321,15 +329,15 @@ def _compute_severity(
 
     score = 0.0
     # Dark scene penalty (only if dark)
-    score += 20.0 * max(0.0, 1.0 - min(b / 0.15, 1.0))
+    score += _SEV_W_DARK     * max(0.0, 1.0 - min(b / 0.15, 1.0))
     # Blur penalty
-    score += 20.0 * max(0.0, 1.0 - min(bl / 50.0, 1.0))
+    score += _SEV_W_BLUR     * max(0.0, 1.0 - min(bl / 50.0, 1.0))
     # Low boundary contrast penalty
-    score += 20.0 * max(0.0, 1.0 - min(bc / 0.05, 1.0))
+    score += _SEV_W_CONTRAST * max(0.0, 1.0 - min(bc / 0.05, 1.0))
     # Color confusion penalty
-    score += 20.0 * max(0.0, 1.0 - min(cc / 0.1, 1.0))
+    score += _SEV_W_COLOR    * max(0.0, 1.0 - min(cc / 0.1, 1.0))
     # Background complexity penalty
-    score += 20.0 * min(bg / 0.3, 1.0)
+    score += _SEV_W_BG       * min(bg / 0.3, 1.0)
 
     return round(min(max(score, 0.0), 100.0), 2)
 
@@ -509,6 +517,12 @@ class MaskFailureExplainerMEC:
 
     RETURN_TYPES = ("STRING", "MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("explanation", "problem_regions_mask", "severity_score", "suggested_method")
+    OUTPUT_TOOLTIPS = (
+        "Human-readable diagnosis explaining likely failure causes.",
+        "Heatmap mask highlighting regions most likely to be problematic.",
+        "Overall severity score in [0, 1] (higher means more issues).",
+        "Suggested masking method or refinement to try next.",
+    )
     FUNCTION = "analyze"
     CATEGORY = "MaskEditControl/Diagnostics"
     DESCRIPTION = (

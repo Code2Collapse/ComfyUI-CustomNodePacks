@@ -93,9 +93,9 @@ class MaskDrawFrame:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "width": ("INT", {"default": 512, "min": 1, "max": 16384}),
-                "height": ("INT", {"default": 512, "min": 1, "max": 16384}),
-                "shape": (cls.SHAPES, {"default": "circle"}),
+                "width": ("INT", {"default": 512, "min": 1, "max": 16384, "tooltip": "Canvas width in pixels"}),
+                "height": ("INT", {"default": 512, "min": 1, "max": 16384, "tooltip": "Canvas height in pixels"}),
+                "shape": (cls.SHAPES, {"default": "circle", "tooltip": "Geometric shape to draw"}),
                 "shape_params_json": ("STRING", {
                     "default": '{"cx": 256, "cy": 256, "radius": 50}',
                     "multiline": True,
@@ -125,12 +125,13 @@ class MaskDrawFrame:
                                "tooltip": "How to combine with existing mask"}),
             },
             "optional": {
-                "existing_mask": ("MASK",),
-                "reference_image": ("IMAGE",),
+                "existing_mask": ("MASK", {"tooltip": "Existing mask to draw onto using the chosen blend operation"}),
+                "reference_image": ("IMAGE", {"tooltip": "Optional reference image; canvas size will match it when supplied"}),
             },
         }
 
     RETURN_TYPES = ("MASK",)
+    OUTPUT_TOOLTIPS = ("Mask with the drawn shape blended into the optional input mask.",)
     FUNCTION = "draw"
     CATEGORY = "MaskEditControl/Draw"
     DESCRIPTION = "Draw precise geometric shapes onto a mask with feathering, rotation, and blend operations."
@@ -795,12 +796,13 @@ class DrawShapeMEC:
                 "coords_json": ("STRING", {"default": "",
                     "tooltip": "Per-frame position override from Points Mask Editor. "
                                "JSON dict or list of dicts with shape-specific keys."}),
-                "existing_mask": ("MASK",),
-                "reference_image": ("IMAGE",),
+                "existing_mask": ("MASK", {"tooltip": "Existing mask to draw onto using the chosen blend operation"}),
+                "reference_image": ("IMAGE", {"tooltip": "Optional reference image; canvas size will match it when supplied"}),
             },
         }
 
     RETURN_TYPES = ("MASK",)
+    OUTPUT_TOOLTIPS = ("Generated mask batch containing the drawn shape(s).",)
     FUNCTION = "draw"
     CATEGORY = "MaskEditControl/Draw"
     DESCRIPTION = (
