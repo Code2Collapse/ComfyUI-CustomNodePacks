@@ -65,7 +65,7 @@ All nodes are prefixed with **(MEC)** in the ComfyUI node menu for easy discover
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/Likhith-24/ComfyUI-CustomNodePacks.git
+git clone https://github.com/Code2Collapse/ComfyUI-CustomNodePacks.git
 ```
 
 Or install via **ComfyUI Manager** → search "CustomNodePacks".

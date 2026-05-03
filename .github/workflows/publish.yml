@@ -27,7 +27,7 @@ jobs:
   publish:
     name: Publish to Comfy Registry
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'Likhith-24'
+    if: github.repository_owner == 'Code2Collapse'
     steps:
       - name: Checkout
         uses: actions/checkout@v4

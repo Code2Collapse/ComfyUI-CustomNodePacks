@@ -1,6 +1,6 @@
 # NOTICE — ComfyUI-CustomNodePacks
 
-Copyright (c) 2025-2026 Likhith-24  
+Copyright (c) 2025-2026 Code2Collapse  
 License: MIT (see MIT-License)
 
 This project integrates code and pretrained models from multiple third-party
@@ -182,6 +182,6 @@ Model weights downloaded from `hustvl/vitmatte-small-distinctions-646` and
 
 ## Code Attribution
 
-All Python source files in `nodes/` are original work by Likhith-24, written
+All Python source files in `nodes/` are original work by Code2Collapse, written
 as ComfyUI node wrappers that call into the above upstream models and
 libraries. No source code was copied verbatim from any of the above projects.
