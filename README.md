@@ -22,6 +22,17 @@
 
 ---
 
+> ⚠️ **Non-Commercial Model Notice**: The **RMBG-2.0** model weights
+> (`briaai/RMBG-2.0`) are subject to the **BRIA AI RMBG License**, which
+> restricts commercial use. If you use the Background Remover node with the
+> `rmbg_2.0` backend for commercial purposes you **must obtain a commercial
+> licence from Bria AI** at <https://bria.ai>. All other models used in this
+> pack (SAM, SAM2, BiRefNet, ViTMatte, SeC, etc.) are Apache-2.0 or MIT
+> licensed and may be used commercially. See [NOTICE.md](NOTICE.md) for
+> full attribution and license details.
+
+---
+
 ## Overview
 
 **ComfyUI-CustomNodePacks** ships **72 nodes** organized into the following packs:
