@@ -1,1115 +1,774 @@
+/**
+ * SplineMaskEditorMEC – interactive spline drawing widget.
+ *
+ * Clean rewrite (May 2026):
+ *   - HTML toolbar (no canvas-painted buttons).
+ *   - Multiple paths supported (one active at a time).
+ *   - spline_data JSON contract preserved:
+ *       [ {points:[{x,y}], type, closed, handles?}, ... ]
+ *
+ * Interaction:
+ *   Left click          add control point to active path
+ *   Drag a point        move it
+ *   Shift+click point   delete it
+ *   Right-click point   delete it
+ *   Alt / Middle drag   pan
+ *   Wheel               zoom (cursor-anchored)
+ *   N                   new path
+ *   C                   toggle closed
+ *   Delete              clear active path
+ *   Ctrl+Z / Ctrl+Y     undo / redo
+ *   F                   fit view
+ */
 import { app } from "../../scripts/app.js";
 
-/**
- * MaskEditControl – Spline Mask Editor v2
- *
- * Complete rewrite following Olm SplineMask patterns for professional UX.
- *
- * Data model:
- *   paths: [{ points: [[nx,ny], ...], closed: bool, mode: "smooth"|"sharp" }]
- *   All coordinates normalized [0,1] relative to canvas dimensions.
- *
- * Interactions:
- *   Left-click canvas        → add point to current path
- *   Left-click first point   → close current path (when ≥3 pts)
- *   Ctrl+click near segment  → insert point on curve
- *   Shift+click point        → delete point
- *   Right-click              → context menu
- *   Click & drag point       → move control point
- *   Middle-drag / Alt+drag   → pan canvas
- *   Scroll                   → zoom (centered on cursor)
- *   N                        → new path
- *   Z                        → undo
- *   Delete / Backspace       → delete hovered point
- *   C                        → toggle closed/open
- *   S                        → toggle smooth/sharp mode
- *   Escape                   → deselect / close context menu
- */
+const NODE_NAME = "SplineMaskEditorMEC";
 
-// ── Visual tuning ────────────────────────────────────────────────────
-const CANVAS_BG       = "#181825";
-const GRID_COLOR      = "#ffffff08";
-const CURVE_COLOR_ACT = "#4488ffcc";
-const CURVE_COLOR_DIM = "#88888866";
-const FILL_ACT        = "#4488ff22";
-const FILL_DIM        = "#88888810";
-const POINT_FILL      = "#22d65a";
-const POINT_HOVER     = "#80ffb0";
-const POINT_SELECTED  = "#ffdd44";
-const POINT_FIRST     = "#ff6644";
-const POINT_DIM       = "#888888";
-const HANDLE_COLOR    = "#ff8844aa";
-const HANDLE_LINE     = "#ff884466";
-const TOOLBAR_BG      = "#1e1e2eee";
-const TOOLBAR_H       = 32;
-const BTN_H           = 24;
-const BTN_PAD         = 4;
-const BTN_COLORS      = {
-    normal:  { bg: "#45475a", fg: "#cdd6f4", hover: "#585b70" },
-    accent:  { bg: "#2a6040", fg: "#80ffb0", hover: "#3a7850" },
-    active:  { bg: "#4a9060", fg: "#ffffff", hover: "#5aaa70" },
-    danger:  { bg: "#6c2030", fg: "#ffb0c0", hover: "#8c2840" },
+const COLOR = {
+    bg: "#181825",
+    border: "#313244",
+    text: "#cdd6f4",
+    sub: "#7f849c",
+    paths: ["#a6e3a1", "#89b4fa", "#f9e2af", "#fab387", "#f5c2e7", "#94e2d5"],
 };
 
-// ── Detection thresholds (normalized) ────────────────────────────────
-const NEAR_POINT_T   = 0.025;
-const NEAR_SEGMENT_T = 0.015;
-const NEAR_FIRST_T   = 0.035;
+const HISTORY_LIMIT = 80;
+const POINT_HIT_PX = 8;
 
-// ── Helpers ──────────────────────────────────────────────────────────
-function _roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-}
-
-function dist2d(a, b) {
-    const dx = a[0] - b[0], dy = a[1] - b[1];
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-function isNear(p1, p2, threshold) {
-    return dist2d(p1, p2) < threshold;
-}
-
-function isNearSegment(pt, a, b, threshold) {
-    const abx = b[0] - a[0], aby = b[1] - a[1];
-    const len2 = abx * abx + aby * aby;
-    if (len2 < 1e-12) return { near: isNear(pt, a, threshold), t: 0 };
-    let t = ((pt[0] - a[0]) * abx + (pt[1] - a[1]) * aby) / len2;
-    t = Math.max(0, Math.min(1, t));
-    const proj = [a[0] + t * abx, a[1] + t * aby];
-    return { near: dist2d(pt, proj) < threshold, t };
-}
-
-function catmullRomSample(points, closed, samplesPerSeg) {
-    const n = points.length;
-    if (n < 2) return points.map(p => [...p]);
-    if (n === 2) {
-        const out = [];
-        for (let i = 0; i <= samplesPerSeg; i++) {
-            const t = i / samplesPerSeg;
-            out.push([
-                points[0][0] + t * (points[1][0] - points[0][0]),
-                points[0][1] + t * (points[1][1] - points[0][1]),
-            ]);
-        }
-        return out;
-    }
-
-    const ext = [];
-    if (closed) {
-        ext.push(points[n - 1]);
-        for (const p of points) ext.push(p);
-        ext.push(points[0], points[1]);
-    } else {
-        ext.push([2 * points[0][0] - points[1][0], 2 * points[0][1] - points[1][1]]);
-        for (const p of points) ext.push(p);
-        ext.push([2 * points[n-1][0] - points[n-2][0], 2 * points[n-1][1] - points[n-2][1]]);
-    }
-
-    const segs = closed ? n : n - 1;
-    const out = [];
-    for (let s = 0; s < segs; s++) {
-        const p0 = ext[s], p1 = ext[s+1], p2 = ext[s+2], p3 = ext[s+3];
-        for (let i = 0; i < samplesPerSeg; i++) {
-            const t = i / samplesPerSeg;
-            const t2 = t * t, t3 = t2 * t;
-            const x = 0.5 * ((2*p1[0]) + (-p0[0]+p2[0])*t +
-                (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*t2 +
-                (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*t3);
-            const y = 0.5 * ((2*p1[1]) + (-p0[1]+p2[1])*t +
-                (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*t2 +
-                (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*t3);
-            out.push([x, y]);
-        }
-    }
-    if (!closed && n > 0) out.push([...points[n-1]]);
-    return out;
-}
-
-function sharpPolyline(points, closed) {
-    const out = points.map(p => [...p]);
-    if (closed && out.length >= 3) out.push([...points[0]]);
-    return out;
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class SplineEditor {
+class Editor {
     constructor(node) {
         this.node = node;
+        this.shapes = []; // {points:[{x,y}], type, closed, handles?}
+        this.active = -1;
 
-        // Path data — normalized [0,1] coordinates
-        this.paths = [{ points: [], closed: true, mode: "smooth" }];
-        this.activePathIdx = 0;
+        this.canvasW = 512;
+        this.canvasH = 512;
 
-        // Canvas dimensions (set from reference image)
-        this._canvasW = 512;
-        this._canvasH = 512;
-        this._hasAutoFitted = false;
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
+        this._fitted = false;
 
-        // Interaction state
-        this.hoveredPointIdx = -1;
-        this.selectedPointIdx = -1;
-        this.isDragging = false;
-        this.dragPointIdx = -1;
-        this.isPanning = false;
-        this.panStart = null;
+        this.refImg = null;
+        this.refUrl = null;
 
-        // Context menu
-        this._contextMenu = null;
+        this.hover = { shape: -1, point: -1 };
+        this.drag = null;
 
-        // Undo
-        this._undoStack = [];
+        this.undoStack = [];
+        this.redoStack = [];
 
-        // Server preview image
-        this._previewImage = null;
-        this._previewLoaded = false;
-        this._cacheKey = null;
+        this.cursor = { x: 0, y: 0, visible: false };
 
-        // Toolbar
-        this._toolbarButtons = [];
-        this._hoveredButton = null;
-
-        // Preview bounds [x, y, w, h] in widget-local coords
-        this._previewBounds = null;
-
-        // Mouse tracking
-        this._mouseLocal = [0, 0];
+        this.splineType = "catmull_rom";
+        this.closedDefault = true;
+        this.samplesPerSegment = 20;
     }
 
-    get activePath() {
-        return this.paths[this.activePathIdx] || null;
+    snapshot() { return JSON.stringify({ s: this.shapes, a: this.active }); }
+    pushUndo() {
+        this.undoStack.push(this.snapshot());
+        if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+        this.redoStack.length = 0;
     }
-
-    // ── Coordinate transforms ────────────────────────────────────────
-    normToScreen(nx, ny) {
-        if (!this._previewBounds) return [0, 0];
-        const [bx, by, bw, bh] = this._previewBounds;
-        return [bx + nx * bw, by + ny * bh];
+    restore(s) {
+        const o = JSON.parse(s);
+        this.shapes = o.s || [];
+        this.active = o.a ?? -1;
     }
-
-    screenToNorm(sx, sy) {
-        if (!this._previewBounds) return [0, 0];
-        const [bx, by, bw, bh] = this._previewBounds;
-        return [(sx - bx) / Math.max(bw, 1), (sy - by) / Math.max(bh, 1)];
-    }
-
-    clampNorm(nx, ny) {
-        return [Math.min(Math.max(nx, 0), 1), Math.min(Math.max(ny, 0), 1)];
-    }
-
-    // ── Hit testing (normalized coords) ──────────────────────────────
-    findPointAt(nx, ny) {
-        const path = this.activePath;
-        if (!path) return -1;
-        for (let i = path.points.length - 1; i >= 0; i--) {
-            if (isNear([nx, ny], path.points[i], NEAR_POINT_T)) return i;
-        }
-        return -1;
-    }
-
-    isNearFirstPoint(nx, ny) {
-        const path = this.activePath;
-        if (!path || path.points.length < 3 || path.closed) return false;
-        return isNear([nx, ny], path.points[0], NEAR_FIRST_T);
-    }
-
-    findSegmentInsert(nx, ny) {
-        const path = this.activePath;
-        if (!path || path.points.length < 2) return null;
-        const samples = this._samplePath(path);
-        if (samples.length < 2) return null;
-
-        const nPts = path.points.length;
-        const samplesPerSeg = path.mode === "smooth" ? 12 : 1;
-        const totalSegs = path.closed ? nPts : nPts - 1;
-
-        for (let i = 0; i < samples.length - 1; i++) {
-            const res = isNearSegment([nx, ny], samples[i], samples[i + 1], NEAR_SEGMENT_T);
-            if (res.near) {
-                const segIdx = Math.min(Math.floor(i / samplesPerSeg), totalSegs - 1);
-                return { segIdx, normPt: this.clampNorm(nx, ny) };
-            }
-        }
-        return null;
-    }
-
-    // ── Undo ─────────────────────────────────────────────────────────
-    _pushUndo() {
-        this._undoStack.push(JSON.stringify(this.paths));
-        if (this._undoStack.length > 60) this._undoStack.shift();
-    }
-
     undo() {
-        if (this._undoStack.length === 0) return;
-        this.paths = JSON.parse(this._undoStack.pop());
-        if (this.activePathIdx >= this.paths.length) {
-            this.activePathIdx = Math.max(0, this.paths.length - 1);
-        }
-        this._serialize();
+        if (!this.undoStack.length) return false;
+        this.redoStack.push(this.snapshot());
+        this.restore(this.undoStack.pop()); return true;
+    }
+    redo() {
+        if (!this.redoStack.length) return false;
+        this.undoStack.push(this.snapshot());
+        this.restore(this.redoStack.pop()); return true;
     }
 
-    // ── Serialize to widget + properties ─────────────────────────────
-    _serialize() {
-        // Write widget value: pixel coords for Python node compatibility
-        const w = this.node.widgets?.find(w => w.name === "spline_data");
-        if (w) {
-            const shapes = this.paths.map(p => ({
-                points: p.points.map(([nx, ny]) => ({
-                    x: nx * this._canvasW,
-                    y: ny * this._canvasH,
-                })),
-                closed: p.closed,
-                type: p.mode === "smooth" ? "catmull_rom" : "polyline",
-                handles: [],
-            }));
-            w.value = JSON.stringify(shapes);
-        }
-
-        // Store normalized data in properties for lossless persistence
-        this.node.properties = this.node.properties || {};
-        const flat = [];
-        const closedFlags = [];
-        const modes = [];
-        for (const p of this.paths) {
-            closedFlags.push(p.closed);
-            modes.push(p.mode);
-            for (const pt of p.points) flat.push([pt[0], pt[1]]);
-            flat.push(null);
-        }
-        this.node.properties.spline_points = flat;
-        this.node.properties.spline_closed_flags = JSON.stringify(closedFlags);
-        this.node.properties.spline_modes = JSON.stringify(modes);
+    viewToCanvas(vx, vy) {
+        return { x: (vx - this.panX) / this.zoom, y: (vy - this.panY) / this.zoom };
     }
-
-    _deserialize() {
-        // Try property-based first (normalized, lossless)
-        const props = this.node.properties || {};
-        if (props.spline_points && Array.isArray(props.spline_points) && props.spline_points.length > 0) {
-            try {
-                const closedFlags = JSON.parse(props.spline_closed_flags || "[]");
-                const modes = JSON.parse(props.spline_modes || "[]");
-                this.paths = this._restoreFromFlat(props.spline_points, closedFlags, modes);
-                if (this.paths.length > 0 && this.paths.some(p => p.points.length > 0)) {
-                    this.activePathIdx = Math.min(this.activePathIdx, this.paths.length - 1);
-                    this._serialize();
-                    return;
-                }
-            } catch (e) { /* fall through */ }
-        }
-
-        // Fallback: widget value (pixel coords → normalize)
-        const w = this.node.widgets?.find(w => w.name === "spline_data");
-        if (!w || !w.value) return;
-        try {
-            const data = JSON.parse(w.value);
-            if (Array.isArray(data) && data.length > 0) {
-                this.paths = data.map(s => ({
-                    points: (s.points || []).map(p => {
-                        if (Array.isArray(p)) return [p[0], p[1]];
-                        const px = p.x ?? 0, py = p.y ?? 0;
-                        if (px > 1 || py > 1) {
-                            return [px / Math.max(this._canvasW, 1), py / Math.max(this._canvasH, 1)];
-                        }
-                        return [px, py];
-                    }),
-                    closed: s.closed !== false,
-                    mode: s.type === "polyline" ? "sharp" : "smooth",
-                }));
-                this.activePathIdx = Math.min(this.activePathIdx, this.paths.length - 1);
-            }
-        } catch (e) { /* ignore */ }
-    }
-
-    _restoreFromFlat(flatData, closedFlags, modes) {
-        const paths = [];
-        let current = [];
-        let pathIdx = 0;
-        for (const item of flatData) {
-            if (item === null) {
-                if (current.length > 0) {
-                    paths.push({
-                        points: current,
-                        closed: closedFlags[pathIdx] !== false,
-                        mode: modes[pathIdx] || "smooth",
-                    });
-                }
-                current = [];
-                pathIdx++;
-            } else if (Array.isArray(item) && item.length >= 2) {
-                current.push([item[0], item[1]]);
-            }
-        }
-        if (current.length > 0) {
-            paths.push({
-                points: current,
-                closed: closedFlags[pathIdx] !== false,
-                mode: modes[pathIdx] || "smooth",
-            });
-        }
-        return paths.length > 0 ? paths : [{ points: [], closed: true, mode: "smooth" }];
-    }
-
-    // ── Path mutations ───────────────────────────────────────────────
-    addPoint(nx, ny) {
-        const path = this.activePath;
-        if (!path) return;
-        this._pushUndo();
-        path.points.push(this.clampNorm(nx, ny));
-        this._serialize();
-    }
-
-    insertPoint(segIdx, nx, ny) {
-        const path = this.activePath;
-        if (!path) return;
-        this._pushUndo();
-        path.points.splice(segIdx + 1, 0, this.clampNorm(nx, ny));
-        this._serialize();
-    }
-
-    deletePoint(idx) {
-        const path = this.activePath;
-        if (!path || idx < 0 || idx >= path.points.length) return;
-        this._pushUndo();
-        path.points.splice(idx, 1);
-        this.selectedPointIdx = -1;
-        this.hoveredPointIdx = -1;
-        this._serialize();
+    fitView(vw, vh) {
+        if (vw <= 0 || vh <= 0) return;
+        const pad = 16;
+        const sx = (vw - pad * 2) / this.canvasW;
+        const sy = (vh - pad * 2) / this.canvasH;
+        this.zoom = Math.max(0.05, Math.min(sx, sy, 8));
+        this.panX = (vw - this.canvasW * this.zoom) / 2;
+        this.panY = (vh - this.canvasH * this.zoom) / 2;
+        this._fitted = true;
     }
 
     newPath() {
-        this._pushUndo();
-        const mode = this.activePath?.mode || "smooth";
-        this.paths.push({ points: [], closed: true, mode });
-        this.activePathIdx = this.paths.length - 1;
-        this._serialize();
+        const closed = this.closedDefault;
+        this.shapes.push({ points: [], type: this.splineType, closed });
+        this.active = this.shapes.length - 1;
     }
 
-    deletePath(idx) {
-        if (this.paths.length <= 1) {
-            this._pushUndo();
-            this.paths[0].points = [];
-            this._serialize();
-            return;
+    findPoint(cx, cy) {
+        const r = POINT_HIT_PX / this.zoom;
+        const r2 = r * r;
+        for (let s = this.shapes.length - 1; s >= 0; s--) {
+            const sh = this.shapes[s];
+            for (let i = sh.points.length - 1; i >= 0; i--) {
+                const p = sh.points[i];
+                const d = (p.x - cx) ** 2 + (p.y - cy) ** 2;
+                if (d < r2) return { shape: s, point: i };
+            }
         }
-        this._pushUndo();
-        this.paths.splice(idx, 1);
-        if (this.activePathIdx >= this.paths.length) {
-            this.activePathIdx = this.paths.length - 1;
-        }
-        this._serialize();
+        return { shape: -1, point: -1 };
     }
 
-    toggleClosed() {
-        const path = this.activePath;
-        if (!path) return;
-        this._pushUndo();
-        path.closed = !path.closed;
-        this._serialize();
+    save() {
+        const w = this.node.widgets?.find(w => w.name === "spline_data");
+        if (!w) return;
+        const data = this.shapes.map(sh => ({
+            points: sh.points.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+            type: sh.type || this.splineType,
+            closed: !!sh.closed,
+            ...(sh.handles ? { handles: sh.handles } : {}),
+        }));
+        w.value = JSON.stringify(data);
+        if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
+    }
+    load() {
+        const w = this.node.widgets?.find(w => w.name === "spline_data");
+        if (!w?.value) return;
+        try {
+            const o = JSON.parse(w.value);
+            if (Array.isArray(o)) {
+                this.shapes = o.map(sh => ({
+                    points: (sh.points || []).map(p => ({ x: +p.x, y: +p.y })),
+                    type: sh.type || this.splineType,
+                    closed: !!sh.closed,
+                    ...(sh.handles ? { handles: sh.handles } : {}),
+                }));
+                this.active = this.shapes.length ? 0 : -1;
+            }
+        } catch (_) {}
     }
 
-    toggleMode() {
-        const path = this.activePath;
-        if (!path) return;
-        this._pushUndo();
-        path.mode = path.mode === "smooth" ? "sharp" : "smooth";
-        this._serialize();
-    }
-
-    clearAll() {
-        this._pushUndo();
-        this.paths = [{ points: [], closed: true, mode: "smooth" }];
-        this.activePathIdx = 0;
-        this._serialize();
-    }
-
-    // ── Curve sampling ───────────────────────────────────────────────
-    _samplePath(path) {
-        if (!path || path.points.length < 2) return [];
-        if (path.mode === "sharp") return sharpPolyline(path.points, path.closed);
-        return catmullRomSample(path.points, path.closed, 12);
-    }
-
-    // ── Server preview image ─────────────────────────────────────────
-    setPreviewImage(dataUrl) {
-        if (!dataUrl) return;
+    setRefImage(url, ow, oh) {
+        if (url === this.refUrl && this.refImg && this.refImg.complete) return;
+        this.refUrl = url;
         const img = new Image();
+        img.crossOrigin = "anonymous";
         img.onload = () => {
-            this._previewImage = img;
-            this._previewLoaded = true;
-            const dimsChanged =
-                img.naturalWidth !== this._canvasW ||
-                img.naturalHeight !== this._canvasH;
-            this._canvasW = img.naturalWidth;
-            this._canvasH = img.naturalHeight;
-            // Only re-fit when the underlying image dimensions actually
-            // changed (e.g. first load, or user swapped to a different
-            // resolution).  Otherwise preserve the user's zoom/pan to
-            // prevent the "auto zoom in / zoom out" jitter on every
-            // graph execution.
-            if (dimsChanged) this._hasAutoFitted = false;
-            this.node.setDirtyCanvas(true);
+            this.refImg = img;
+            const w = ow || img.naturalWidth;
+            const h = oh || img.naturalHeight;
+            if (w > 0 && h > 0) {
+                this.canvasW = w; this.canvasH = h;
+                const wW = this.node.widgets?.find(x => x.name === "width");
+                const hW = this.node.widgets?.find(x => x.name === "height");
+                if (wW && +wW.value !== w) wW.value = w;
+                if (hW && +hW.value !== h) hW.value = h;
+            }
+            this._fitted = false;
+            this.onLoaded?.();
         };
-        img.onerror = () => { this._previewLoaded = false; };
-        img.src = dataUrl;
-    }
-
-    // ── Auto-fit preview bounds ──────────────────────────────────────
-    autoFit(widgetW, widgetH) {
-        const drawH = widgetH - TOOLBAR_H;
-        if (drawH <= 0 || this._canvasW <= 0 || this._canvasH <= 0) return;
-        const aspect = this._canvasW / this._canvasH;
-        const padFrac = 0.95;
-
-        let drawW = widgetW * padFrac;
-        let dh = drawW / aspect;
-        if (dh > drawH * padFrac) {
-            dh = drawH * padFrac;
-            drawW = dh * aspect;
-        }
-
-        this._previewBounds = [
-            (widgetW - drawW) / 2,
-            TOOLBAR_H + (drawH - dh) / 2,
-            drawW,
-            dh,
-        ];
-    }
-
-    // ── Build toolbar ────────────────────────────────────────────────
-    _buildToolbar(widgetW) {
-        const btns = [];
-        let x = BTN_PAD;
-
-        const mkBtn = (label, style, action) => {
-            const bw = Math.max(50, label.length * 7 + 14);
-            btns.push({ x, y: BTN_PAD, w: bw, h: BTN_H, label, style, action });
-            x += bw + BTN_PAD;
-        };
-
-        const path = this.activePath;
-        mkBtn("New Path", "accent", () => this.newPath());
-        mkBtn(path?.closed ? "Closed" : "Open", path?.closed ? "active" : "normal", () => this.toggleClosed());
-        mkBtn(path?.mode === "smooth" ? "Smooth" : "Sharp", path?.mode === "smooth" ? "active" : "normal", () => this.toggleMode());
-        mkBtn("Undo", "normal", () => this.undo());
-        mkBtn("Clear", "danger", () => this.clearAll());
-
-        if (this.paths.length > 1) {
-            mkBtn(`Path ${this.activePathIdx + 1}/${this.paths.length}`, "normal", () => {
-                this.activePathIdx = (this.activePathIdx + 1) % this.paths.length;
-            });
-        }
-
-        this._toolbarButtons = btns;
-    }
-
-    // ── Context menu ─────────────────────────────────────────────────
-    _showContextMenu(localX, localY) {
-        const items = [];
-        const [nx, ny] = this.screenToNorm(localX, localY);
-        const pi = this.findPointAt(nx, ny);
-
-        if (pi >= 0) {
-            items.push({ label: "Delete Point", action: () => this.deletePoint(pi) });
-        }
-
-        const path = this.activePath;
-        if (path) {
-            items.push({ label: path.closed ? "Open Path" : "Close Path", action: () => this.toggleClosed() });
-            items.push({ label: path.mode === "smooth" ? "Switch to Sharp" : "Switch to Smooth", action: () => this.toggleMode() });
-            if (path.points.length > 0) {
-                items.push({ label: "Delete This Path", action: () => this.deletePath(this.activePathIdx) });
-            }
-        }
-
-        items.push({ label: "New Path", action: () => this.newPath() });
-        items.push({ label: "Clear All", action: () => this.clearAll() });
-
-        this._contextMenu = { x: localX, y: localY, items };
-    }
-
-    _hideContextMenu() { this._contextMenu = null; }
-
-    _drawContextMenu(ctx, ox, oy) {
-        const cm = this._contextMenu;
-        if (!cm) return;
-        const itemH = 24;
-        const pad = 6;
-        const maxW = Math.max(...cm.items.map(it => it.label.length * 7 + 20), 120);
-        const totalH = cm.items.length * itemH + pad * 2;
-
-        ctx.fillStyle = "#2a2a3eee";
-        _roundRect(ctx, ox + cm.x, oy + cm.y, maxW, totalH, 6);
-        ctx.fill();
-        ctx.strokeStyle = "#555577";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        ctx.font = "12px sans-serif";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-
-        for (let i = 0; i < cm.items.length; i++) {
-            const iy = cm.y + pad + i * itemH;
-            if (this._mouseLocal[1] >= iy && this._mouseLocal[1] < iy + itemH &&
-                this._mouseLocal[0] >= cm.x && this._mouseLocal[0] < cm.x + maxW) {
-                ctx.fillStyle = "#3a3a55";
-                ctx.fillRect(ox + cm.x + 2, oy + iy, maxW - 4, itemH);
-            }
-            ctx.fillStyle = "#cdd6f4";
-            ctx.fillText(cm.items[i].label, ox + cm.x + 10, oy + iy + itemH / 2);
-        }
-    }
-
-    _hitContextMenu(localX, localY) {
-        const cm = this._contextMenu;
-        if (!cm) return -1;
-        const itemH = 24;
-        const pad = 6;
-        const maxW = Math.max(...cm.items.map(it => it.label.length * 7 + 20), 120);
-        if (localX < cm.x || localX > cm.x + maxW) return -1;
-        const relY = localY - cm.y - pad;
-        if (relY < 0 || relY >= cm.items.length * itemH) return -1;
-        return Math.floor(relY / itemH);
-    }
-
-    // ── Main draw ────────────────────────────────────────────────────
-    draw(ctx, widgetX, widgetY, widgetW, widgetH) {
-        if (!this._hasAutoFitted) {
-            this.autoFit(widgetW, widgetH);
-            this._hasAutoFitted = true;
-            this._deserialize();
-        }
-        // Re-fit the preview bounds if the widget was resized so that
-        // the editor stays inside its container, but keep the user's
-        // current zoom factor.  Without this guard, the bounds were
-        // re-fitted on every draw — causing the user-visible jitter.
-        if (this._previewBounds) {
-            const [bx, by, bw, bh] = this._previewBounds;
-            const drawH = widgetH - TOOLBAR_H;
-            if (bw <= 0 || bh <= 0 || drawH <= 0) {
-                this.autoFit(widgetW, widgetH);
-            }
-        } else {
-            this.autoFit(widgetW, widgetH);
-        }
-
-        ctx.save();
-        ctx.fillStyle = CANVAS_BG;
-        ctx.fillRect(widgetX, widgetY, widgetW, widgetH);
-        ctx.beginPath();
-        ctx.rect(widgetX, widgetY, widgetW, widgetH);
-        ctx.clip();
-
-        const ox = widgetX;
-        const oy = widgetY;
-
-        // ── Toolbar ──────────────────────────────────────────────────
-        ctx.fillStyle = TOOLBAR_BG;
-        ctx.fillRect(ox, oy, widgetW, TOOLBAR_H);
-        this._buildToolbar(widgetW);
-
-        for (const btn of this._toolbarButtons) {
-            const isHover = this._hoveredButton === btn;
-            const c = BTN_COLORS[btn.style] || BTN_COLORS.normal;
-            ctx.fillStyle = isHover ? c.hover : c.bg;
-            _roundRect(ctx, ox + btn.x, oy + btn.y, btn.w, btn.h, 4);
-            ctx.fill();
-            ctx.fillStyle = c.fg;
-            ctx.font = "11px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(btn.label, ox + btn.x + btn.w / 2, oy + btn.y + btn.h / 2);
-        }
-
-        // ── Preview area ─────────────────────────────────────────────
-        const [bx, by, bw, bh] = this._previewBounds || [0, TOOLBAR_H, widgetW, widgetH - TOOLBAR_H];
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(ox + bx - 2, oy + by - 2, bw + 4, bh + 4);
-        ctx.clip();
-
-        // Grid
-        const gridStepPx = 64;
-        ctx.strokeStyle = GRID_COLOR;
-        ctx.lineWidth = 1;
-        for (let gx = 0; gx <= bw; gx += gridStepPx) {
-            ctx.beginPath(); ctx.moveTo(ox + bx + gx, oy + by); ctx.lineTo(ox + bx + gx, oy + by + bh); ctx.stroke();
-        }
-        for (let gy = 0; gy <= bh; gy += gridStepPx) {
-            ctx.beginPath(); ctx.moveTo(ox + bx, oy + by + gy); ctx.lineTo(ox + bx + bw, oy + by + gy); ctx.stroke();
-        }
-
-        // Server preview image (full fidelity: image + mask overlay)
-        if (this._previewImage && this._previewLoaded) {
-            ctx.drawImage(this._previewImage, ox + bx, oy + by, bw, bh);
-        } else {
-            // No preview yet — show hint
-            ctx.fillStyle = "#ffffff44";
-            ctx.font = "13px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("Run graph to see preview", ox + bx + bw / 2, oy + by + bh / 2);
-        }
-
-        // Canvas border
-        ctx.strokeStyle = "#ffffff33";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(ox + bx, oy + by, bw, bh);
-
-        // ── Draw all paths ───────────────────────────────────────────
-        const pointR = Math.max(4, Math.min(8, bw * 0.008));
-
-        for (let pi = 0; pi < this.paths.length; pi++) {
-            const path = this.paths[pi];
-            const isActive = pi === this.activePathIdx;
-            const samples = this._samplePath(path);
-
-            if (samples.length >= 2) {
-                const sPts = samples.map(([nx, ny]) => {
-                    const [sx, sy] = this.normToScreen(nx, ny);
-                    return [ox + sx, oy + sy];
-                });
-
-                // Fill closed regions
-                if (path.closed && sPts.length >= 3) {
-                    ctx.beginPath();
-                    ctx.moveTo(sPts[0][0], sPts[0][1]);
-                    for (let i = 1; i < sPts.length; i++) ctx.lineTo(sPts[i][0], sPts[i][1]);
-                    ctx.closePath();
-                    ctx.fillStyle = isActive ? FILL_ACT : FILL_DIM;
-                    ctx.fill();
-                }
-
-                // Curve stroke
-                ctx.beginPath();
-                ctx.moveTo(sPts[0][0], sPts[0][1]);
-                for (let i = 1; i < sPts.length; i++) ctx.lineTo(sPts[i][0], sPts[i][1]);
-                ctx.strokeStyle = isActive ? CURVE_COLOR_ACT : CURVE_COLOR_DIM;
-                ctx.lineWidth = isActive ? 2 : 1;
-                ctx.stroke();
-            }
-
-            // Control points
-            for (let i = 0; i < path.points.length; i++) {
-                const [nx, ny] = path.points[i];
-                const [sx, sy] = this.normToScreen(nx, ny);
-                const px = ox + sx, py = oy + sy;
-                const isHovered = isActive && i === this.hoveredPointIdx;
-                const isSelected = isActive && i === this.selectedPointIdx;
-                const isFirst = i === 0 && !path.closed && path.points.length >= 3;
-
-                const r = isHovered ? pointR * 1.4 : pointR;
-                ctx.beginPath();
-                ctx.arc(px, py, r, 0, Math.PI * 2);
-                ctx.fillStyle = isFirst ? POINT_FIRST :
-                                isSelected ? POINT_SELECTED :
-                                isHovered ? POINT_HOVER :
-                                isActive ? POINT_FILL : POINT_DIM;
-                ctx.fill();
-                ctx.strokeStyle = "#000000aa";
-                ctx.lineWidth = 1;
-                ctx.stroke();
-
-                if (isActive) {
-                    const fontSize = Math.max(9, Math.min(12, bw * 0.015));
-                    ctx.fillStyle = "#ffffffcc";
-                    ctx.font = `${Math.round(fontSize)}px sans-serif`;
-                    ctx.textAlign = "center";
-                    ctx.textBaseline = "bottom";
-                    ctx.fillText(String(i + 1), px, py - r - 2);
-                }
-            }
-        }
-
-        ctx.restore(); // pop preview clip
-
-        // Context menu
-        this._drawContextMenu(ctx, ox, oy);
-
-        // Status bar
-        const path = this.activePath;
-        const nPts = path ? path.points.length : 0;
-        const status = `Path ${this.activePathIdx + 1}/${this.paths.length} | ${path?.mode || "-"} | ${path?.closed ? "closed" : "open"} | ${nPts} pts` +
-            `  ·  Click:add  Shift+click:delete  Ctrl+click:insert  Right-click:menu`;
-        ctx.fillStyle = "#cdd6f4aa";
-        ctx.font = "10px sans-serif";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "bottom";
-        ctx.fillText(status, ox + 6, oy + widgetH - 4);
-
-        ctx.restore();
-    }
-
-    // ── Event: Mouse Down ────────────────────────────────────────────
-    onMouseDown(localX, localY, e) {
-        // Context menu click
-        if (this._contextMenu) {
-            const hitIdx = this._hitContextMenu(localX, localY);
-            if (hitIdx >= 0) this._contextMenu.items[hitIdx].action();
-            this._hideContextMenu();
-            return true;
-        }
-
-        // Right-click → context menu
-        if (e.button === 2) {
-            this._showContextMenu(localX, localY);
-            return true;
-        }
-
-        // Toolbar
-        if (localY < TOOLBAR_H) {
-            for (const btn of this._toolbarButtons) {
-                if (localX >= btn.x && localX <= btn.x + btn.w &&
-                    localY >= btn.y && localY <= btn.y + btn.h) {
-                    btn.action();
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        // Pan (middle button or Alt+left)
-        if (e.button === 1 || (e.button === 0 && e.altKey)) {
-            this.isPanning = true;
-            this.panStart = {
-                x: localX, y: localY,
-                pbx: this._previewBounds?.[0] || 0,
-                pby: this._previewBounds?.[1] || 0,
-            };
-            return true;
-        }
-
-        const [nx, ny] = this.screenToNorm(localX, localY);
-
-        if (e.button === 0) {
-            // Shift+click = delete
-            if (e.shiftKey) {
-                const pi = this.findPointAt(nx, ny);
-                if (pi >= 0) { this.deletePoint(pi); return true; }
-            }
-
-            // Click near first point → close path
-            if (this.isNearFirstPoint(nx, ny)) {
-                this._pushUndo();
-                this.activePath.closed = true;
-                this._serialize();
-                return true;
-            }
-
-            // Drag existing point
-            const pi = this.findPointAt(nx, ny);
-            if (pi >= 0) {
-                this.isDragging = true;
-                this.dragPointIdx = pi;
-                this.selectedPointIdx = pi;
-                this._pushUndo();
-                return true;
-            }
-
-            // Ctrl+click near segment → insert point
-            if (e.ctrlKey) {
-                const seg = this.findSegmentInsert(nx, ny);
-                if (seg) { this.insertPoint(seg.segIdx, seg.normPt[0], seg.normPt[1]); return true; }
-            }
-
-            // Add point (within or slightly outside canvas)
-            if (nx >= -0.05 && nx <= 1.05 && ny >= -0.05 && ny <= 1.05) {
-                this.addPoint(nx, ny);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    onMouseMove(localX, localY) {
-        this._mouseLocal = [localX, localY];
-
-        // Toolbar hover
-        if (localY < TOOLBAR_H) {
-            this._hoveredButton = null;
-            for (const btn of this._toolbarButtons) {
-                if (localX >= btn.x && localX <= btn.x + btn.w &&
-                    localY >= btn.y && localY <= btn.y + btn.h) {
-                    this._hoveredButton = btn;
-                    break;
-                }
-            }
-            this.hoveredPointIdx = -1;
-            return;
-        }
-        this._hoveredButton = null;
-
-        const [nx, ny] = this.screenToNorm(localX, localY);
-
-        // Panning
-        if (this.isPanning && this.panStart && this._previewBounds) {
-            this._previewBounds[0] = this.panStart.pbx + (localX - this.panStart.x);
-            this._previewBounds[1] = this.panStart.pby + (localY - this.panStart.y);
-            return;
-        }
-
-        // Dragging point
-        if (this.isDragging && this.dragPointIdx >= 0) {
-            const path = this.activePath;
-            if (path && this.dragPointIdx < path.points.length) {
-                path.points[this.dragPointIdx] = this.clampNorm(nx, ny);
-                this._serialize();
-            }
-            return;
-        }
-
-        // Hover
-        this.hoveredPointIdx = this.findPointAt(nx, ny);
-    }
-
-    onMouseUp() {
-        this.isDragging = false;
-        this.dragPointIdx = -1;
-        this.isPanning = false;
-        this.panStart = null;
-    }
-
-    onWheel(localX, localY, deltaY) {
-        if (localY < TOOLBAR_H || !this._previewBounds) return;
-
-        const [bx, by, bw, bh] = this._previewBounds;
-        const factor = deltaY > 0 ? 0.92 : 1.08;
-        // Hard clamps prevent the bounds from collapsing to zero or
-        // exploding past the widget — both states caused the canvas
-        // to "misfit" wildly after a few scroll events.
-        const MIN_PX = 80;
-        const MAX_PX = 8000;
-        const newBw = Math.max(MIN_PX, Math.min(MAX_PX, bw * factor));
-        const newBh = Math.max(MIN_PX, Math.min(MAX_PX, bh * factor));
-
-        const relX = (localX - bx) / Math.max(bw, 1);
-        const relY = (localY - by) / Math.max(bh, 1);
-        this._previewBounds = [
-            localX - relX * newBw,
-            localY - relY * newBh,
-            newBw,
-            newBh,
-        ];
-    }
-
-    onKeyDown(e) {
-        if (e.target?.tagName === "INPUT" || e.target?.tagName === "TEXTAREA") return false;
-
-        if (e.key === "Escape") {
-            if (this._contextMenu) { this._hideContextMenu(); return true; }
-            this.selectedPointIdx = -1;
-            return true;
-        }
-
-        switch (e.key.toLowerCase()) {
-            case "z":
-                if (!e.ctrlKey && !e.metaKey) { this.undo(); return true; }
-                break;
-            case "n":
-                this.newPath(); return true;
-            case "c":
-                this.toggleClosed(); return true;
-            case "s":
-                if (!e.ctrlKey && !e.metaKey) { this.toggleMode(); return true; }
-                break;
-            case "delete":
-            case "backspace":
-                if (this.hoveredPointIdx >= 0) { this.deletePoint(this.hoveredPointIdx); return true; }
-                if (this.selectedPointIdx >= 0) { this.deletePoint(this.selectedPointIdx); return true; }
-                break;
-        }
-        return false;
+        img.src = url;
     }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Register extension
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─────────────────────────────────────────────────────────────────────
+// Spline sampling (Catmull-Rom, polyline) – used only for preview rendering
+// ─────────────────────────────────────────────────────────────────────
+function catmullRom(points, samplesPerSeg, closed) {
+    const n = points.length;
+    if (n < 2) return points.slice();
+    if (n === 2) {
+        const [a, b] = points;
+        const out = [];
+        for (let i = 0; i <= samplesPerSeg; i++) {
+            const t = i / samplesPerSeg;
+            out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+        }
+        return out;
+    }
+    const ext = closed
+        ? [points[n - 1], ...points, points[0], points[1]]
+        : [points[0], ...points, points[n - 1]];
+
+    const out = [];
+    const segs = closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+        const p0 = ext[i], p1 = ext[i + 1], p2 = ext[i + 2], p3 = ext[i + 3];
+        // Centripetal alpha=0.5
+        const a = 0.5;
+        const t01 = Math.pow(Math.hypot(p1.x - p0.x, p1.y - p0.y), a) || 1e-6;
+        const t12 = Math.pow(Math.hypot(p2.x - p1.x, p2.y - p1.y), a) || 1e-6;
+        const t23 = Math.pow(Math.hypot(p3.x - p2.x, p3.y - p2.y), a) || 1e-6;
+        const m1x = (p2.x - p0.x) - (p1.x - p0.x) * t12 / (t01 + t12) + (p2.x - p1.x) * t01 / (t01 + t12);
+        const m1y = (p2.y - p0.y) - (p1.y - p0.y) * t12 / (t01 + t12) + (p2.y - p1.y) * t01 / (t01 + t12);
+        const m2x = (p3.x - p1.x) - (p2.x - p1.x) * t23 / (t12 + t23) + (p3.x - p2.x) * t12 / (t12 + t23);
+        const m2y = (p3.y - p1.y) - (p2.y - p1.y) * t23 / (t12 + t23) + (p3.y - p2.y) * t12 / (t12 + t23);
+        const last = i === segs - 1;
+        const steps = samplesPerSeg + (last ? 1 : 0);
+        for (let s = 0; s < steps; s++) {
+            const t = s / samplesPerSeg;
+            const t2 = t * t, t3 = t2 * t;
+            const h00 = 2 * t3 - 3 * t2 + 1;
+            const h10 = t3 - 2 * t2 + t;
+            const h01 = -2 * t3 + 3 * t2;
+            const h11 = t3 - t2;
+            out.push({
+                x: h00 * p1.x + h10 * m1x * 0.5 + h01 * p2.x + h11 * m2x * 0.5,
+                y: h00 * p1.y + h10 * m1y * 0.5 + h01 * p2.y + h11 * m2y * 0.5,
+            });
+        }
+    }
+    return out;
+}
+
+function sampleShape(sh, samplesPerSeg) {
+    const pts = sh.points;
+    if (pts.length < 2) return pts.slice();
+    if (sh.type === "polyline") return pts.slice();
+    return catmullRom(pts, samplesPerSeg, sh.closed);
+}
+
+function draw(ed, ctx, vw, vh) {
+    ctx.save();
+    ctx.fillStyle = COLOR.bg;
+    ctx.fillRect(0, 0, vw, vh);
+
+    const z = ed.zoom;
+    ctx.translate(ed.panX, ed.panY);
+    ctx.scale(z, z);
+
+    if (ed.refImg && ed.refImg.complete) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (_) {}
+    } else {
+        ctx.fillStyle = "#11111b";
+        ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);
+    }
+    ctx.strokeStyle = "#45475a";
+    ctx.lineWidth = 1 / z;
+    ctx.strokeRect(0, 0, ed.canvasW, ed.canvasH);
+
+    for (let s = 0; s < ed.shapes.length; s++) {
+        const sh = ed.shapes[s];
+        const c = COLOR.paths[s % COLOR.paths.length];
+        const isActive = s === ed.active;
+
+        if (sh.points.length >= 2) {
+            const sampled = sampleShape(sh, ed.samplesPerSegment);
+            ctx.strokeStyle = c;
+            ctx.lineWidth = (isActive ? 2.0 : 1.5) / z;
+            ctx.fillStyle = c + "22";
+            ctx.beginPath();
+            ctx.moveTo(sampled[0].x, sampled[0].y);
+            for (let i = 1; i < sampled.length; i++) ctx.lineTo(sampled[i].x, sampled[i].y);
+            if (sh.closed) {
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.stroke();
+        }
+
+        for (let i = 0; i < sh.points.length; i++) {
+            const p = sh.points[i];
+            const isHov = ed.hover.shape === s && ed.hover.point === i;
+            const r = (isHov ? 6 : 4) / z;
+            ctx.fillStyle = c;
+            ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = "#000a";
+            ctx.lineWidth = 1.5 / z;
+            ctx.stroke();
+            if (isActive && i === 0) {
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 1 / z;
+                ctx.beginPath(); ctx.arc(p.x, p.y, r + 2 / z, 0, Math.PI * 2); ctx.stroke();
+            }
+        }
+    }
+
+    ctx.restore();
+}
+
+function findRefImage(node) {
+    if (!node.inputs) return null;
+    const linkedInput = node.inputs.find(i => i.name === "image" && i.link != null);
+    if (!linkedInput) return null;
+    const link = app.graph.links[linkedInput.link];
+    if (!link) return null;
+
+    const visited = new Set();
+    const queue = [{ id: link.origin_id, depth: 0 }];
+    while (queue.length) {
+        const { id, depth } = queue.shift();
+        if (visited.has(id)) continue;
+        visited.add(id);
+        const n = app.graph.getNodeById(id);
+        if (!n) continue;
+        if (n.imgs?.length) return { url: n.imgs[0].src };
+        const w = n.widgets?.find(w => w.name === "image");
+        if (w?.value && typeof w.value === "string") {
+            const parts = w.value.split("/");
+            const sub = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+            const fn = parts[parts.length - 1];
+            return { url: `/view?filename=${encodeURIComponent(fn)}&subfolder=${encodeURIComponent(sub)}&type=input` };
+        }
+        if (depth < 3 && n.inputs) {
+            for (const inp of n.inputs) {
+                if (inp.link == null) continue;
+                const li = app.graph.links[inp.link];
+                if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
+            }
+        }
+    }
+    return null;
+}
+
+function installEditor(node) {
+    const ed = new Editor(node);
+
+    const hideWidget = (w) => {
+        if (!w) return;
+        w.type = "hidden";
+        w.computeSize = () => [0, -4];
+        w.draw = () => {};
+        const el = w.element;
+        if (el) {
+            el.hidden = true;
+            el.style.display = "none";
+            const wrap = el.parentElement;
+            if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
+        }
+    };
+    hideWidget(node.widgets?.find(w => w.name === "spline_data"));
+
+    const syncFromWidgets = () => {
+        const t = node.widgets?.find(x => x.name === "spline_type");
+        const c = node.widgets?.find(x => x.name === "closed");
+        const sps = node.widgets?.find(x => x.name === "samples_per_segment");
+        const w = node.widgets?.find(x => x.name === "width");
+        const h = node.widgets?.find(x => x.name === "height");
+        if (t) ed.splineType = t.value;
+        if (c) ed.closedDefault = !!c.value;
+        if (sps) ed.samplesPerSegment = +sps.value || 20;
+        if (w && +w.value > 0) ed.canvasW = +w.value;
+        if (h && +h.value > 0) ed.canvasH = +h.value;
+    };
+    syncFromWidgets();
+    ed.load();
+
+    const root = document.createElement("div");
+    root.style.cssText = `
+        display:flex;flex-direction:column;width:100%;height:100%;
+        background:${COLOR.bg};border:1px solid ${COLOR.border};border-radius:6px;
+        overflow:hidden;font-family:Inter,system-ui,sans-serif;color:${COLOR.text};
+        box-sizing:border-box;user-select:none;
+    `;
+
+    const tb = document.createElement("div");
+    tb.style.cssText = `
+        display:flex;align-items:center;gap:4px;padding:4px 6px;
+        background:linear-gradient(#22223a,#1a1a2e);
+        border-bottom:1px solid ${COLOR.border};
+        flex:0 0 auto;font-size:11px;line-height:1;
+    `;
+    root.appendChild(tb);
+
+    const canvasWrap = document.createElement("div");
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;";
+    root.appendChild(canvasWrap);
+
+    const canvas = document.createElement("canvas");
+    canvas.style.cssText = "display:block;width:100%;height:100%;outline:none;";
+    canvas.tabIndex = 0;
+    canvasWrap.appendChild(canvas);
+
+    const status = document.createElement("div");
+    status.style.cssText = `
+        position:absolute;left:6px;bottom:6px;padding:3px 7px;
+        background:#1e1e2ed8;border:1px solid ${COLOR.border};border-radius:4px;
+        font-size:10px;color:${COLOR.sub};pointer-events:none;
+        font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
+    `;
+    canvasWrap.appendChild(status);
+
+    const ctx = canvas.getContext("2d");
+
+    const mkIcon = (label, title, onClick) => {
+        const b = document.createElement("button");
+        b.textContent = label; b.title = title;
+        b.style.cssText = `
+            min-width:26px;height:24px;padding:0 7px;
+            border:1px solid ${COLOR.border};border-radius:4px;
+            background:#313244;color:${COLOR.text};
+            font-size:11px;font-weight:500;cursor:pointer;
+            display:inline-flex;align-items:center;justify-content:center;
+            white-space:nowrap;line-height:1;flex:0 0 auto;
+            transition:background .12s,border-color .12s;
+        `;
+        b.onmouseenter = () => { b.style.background = "#45475a"; b.style.borderColor = "#585b70"; };
+        b.onmouseleave = () => { b.style.background = "#313244"; b.style.borderColor = COLOR.border; };
+        b.onmousedown = (e) => e.stopPropagation();
+        b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(b); render(); };
+        return b;
+    };
+
+    const counter = document.createElement("span");
+    counter.style.cssText = `
+        color:${COLOR.text};font-size:10px;flex:1 1 auto;
+        font-family:ui-monospace,Menlo,monospace;
+        padding:3px 8px;background:#11111b;border:1px solid ${COLOR.border};
+        border-radius:4px;letter-spacing:.3px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    `;
+    tb.appendChild(counter);
+
+    tb.appendChild(mkIcon("+ Path", "Add new path (N)", () => {
+        ed.pushUndo(); ed.newPath(); ed.save();
+    }));
+    const closedBtn = mkIcon("◯", "Toggle closed (C)", () => {
+        if (ed.active < 0) return;
+        ed.pushUndo();
+        ed.shapes[ed.active].closed = !ed.shapes[ed.active].closed;
+        ed.save();
+    });
+    tb.appendChild(closedBtn);
+    tb.appendChild(mkIcon("↶", "Undo (Ctrl+Z)", () => { if (ed.undo()) ed.save(); }));
+    tb.appendChild(mkIcon("↷", "Redo (Ctrl+Y)", () => { if (ed.redo()) ed.save(); }));
+    tb.appendChild(mkIcon("⛶", "Fit view (F)", () => {
+        const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
+    }));
+
+    const menuBtn = mkIcon("≡", "More actions", () => toggleMenu());
+    tb.appendChild(menuBtn);
+
+    const menu = document.createElement("div");
+    menu.style.cssText = `
+        position:absolute;top:34px;right:6px;z-index:50;
+        background:#1e1e2e;border:1px solid ${COLOR.border};border-radius:6px;
+        box-shadow:0 6px 20px #000a;padding:4px;display:none;
+        min-width:200px;font-size:11px;
+    `;
+    root.style.position = "relative";
+    root.appendChild(menu);
+
+    const mkMenuItem = (label, onClick, danger) => {
+        const it = document.createElement("div");
+        it.textContent = label;
+        it.style.cssText = `
+            padding:7px 12px;border-radius:4px;cursor:pointer;
+            color:${danger ? "#f38ba8" : COLOR.text};white-space:nowrap;
+        `;
+        it.onmouseenter = () => it.style.background = "#313244";
+        it.onmouseleave = () => it.style.background = "";
+        it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
+        return it;
+    };
+    const mkMenuSep = () => {
+        const s = document.createElement("div");
+        s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
+        return s;
+    };
+
+    menu.appendChild(mkMenuItem("Reset zoom (100%)", () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; }));
+    menu.appendChild(mkMenuItem("Fit to view", () => {
+        const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
+    }));
+    menu.appendChild(mkMenuSep());
+    menu.appendChild(mkMenuItem("Clear active path", () => {
+        if (ed.active < 0) return;
+        ed.pushUndo(); ed.shapes[ed.active].points = []; ed.save();
+    }, true));
+    menu.appendChild(mkMenuItem("Delete active path", () => {
+        if (ed.active < 0) return;
+        ed.pushUndo();
+        ed.shapes.splice(ed.active, 1);
+        ed.active = ed.shapes.length ? Math.min(ed.active, ed.shapes.length - 1) : -1;
+        ed.save();
+    }, true));
+    menu.appendChild(mkMenuItem("Clear all paths", () => {
+        if (!ed.shapes.length) return;
+        ed.pushUndo(); ed.shapes = []; ed.active = -1; ed.save();
+    }, true));
+
+    function toggleMenu() {
+        const open = menu.style.display === "none" || !menu.style.display;
+        menu.style.display = open ? "block" : "none";
+        if (open) {
+            const off = (e) => {
+                if (!menu.contains(e.target) && e.target !== menuBtn) {
+                    menu.style.display = "none";
+                    document.removeEventListener("mousedown", off, true);
+                }
+            };
+            setTimeout(() => document.addEventListener("mousedown", off, true), 0);
+        }
+    }
+
+    const widgetH = 460;
+    node.addDOMWidget("spline_editor", "canvas", root, {
+        serialize: false,
+        hideOnZoom: false,
+        getMinHeight: () => widgetH,
+        getHeight: () => widgetH,
+    });
+
+    if (!node.size || node.size[0] < 600) {
+        const h = node.size?.[1] || 640;
+        node.setSize?.([600, Math.max(h, 640)]);
+    }
+
+    let lastW = 0, lastH = 0;
+    function syncCanvasPx() {
+        const r = canvasWrap.getBoundingClientRect();
+        const w = Math.max(1, Math.round(r.width));
+        const h = Math.max(1, Math.round(r.height));
+        if (w === lastW && h === lastH) return false;
+        // Scale pan/zoom proportionally so view is stable under container resize.
+        if (lastW > 0 && lastH > 0 && ed._fitted) {
+            const sx = w / lastW;
+            ed.zoom *= sx;
+            ed.panX *= sx;
+            ed.panY *= (h / lastH);
+        }
+        lastW = w; lastH = h;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (!ed._fitted) ed.fitView(w, h);
+        return true;
+    }
+
+    // Reflect "closed" state on the icon button
+    function updateClosedBtn() {
+        const sh = ed.active >= 0 ? ed.shapes[ed.active] : null;
+        const isClosed = sh?.closed;
+        closedBtn.textContent = isClosed ? "◉" : "◯";
+        closedBtn.title = isClosed ? "Active path is CLOSED — click to open (C)"
+                                   : "Active path is OPEN — click to close (C)";
+    }
+
+    let raf = 0;
+    function render() {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+            raf = 0;
+            syncCanvasPx();
+            draw(ed, ctx, lastW, lastH);
+            const totalPts = ed.shapes.reduce((a, s) => a + s.points.length, 0);
+            const activePts = ed.active >= 0 ? ed.shapes[ed.active].points.length : 0;
+            const closed = ed.active >= 0 ? (ed.shapes[ed.active].closed ? "closed" : "open") : "—";
+            counter.textContent = `paths ${ed.shapes.length} · active ${ed.active >= 0 ? ed.active + 1 : "—"}/${ed.shapes.length} · pts ${activePts}/${totalPts} · ${closed}`;
+            status.textContent = `${ed.canvasW}×${ed.canvasH} · zoom ${(ed.zoom * 100).toFixed(0)}% · ${ed.splineType}`;
+            updateClosedBtn();
+        });
+    }
+    ed.onLoaded = () => { ed._fitted = false; render(); };
+
+    const ro = new ResizeObserver(() => render());
+    ro.observe(canvasWrap);
+
+    function eventCanvas(e) {
+        const r = canvas.getBoundingClientRect();
+        return ed.viewToCanvas(e.clientX - r.left, e.clientY - r.top);
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); canvas.focus();
+        canvas.setPointerCapture(e.pointerId);
+        const c = eventCanvas(e);
+
+        if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            ed.drag = { kind: "pan", startX: e.clientX - ed.panX, startY: e.clientY - ed.panY };
+            canvas.style.cursor = "grabbing";
+            return;
+        }
+        const hit = ed.findPoint(c.x, c.y);
+
+        if (e.button === 2) {
+            // right-click → delete pt under cursor
+            if (hit.shape >= 0) {
+                ed.pushUndo();
+                ed.shapes[hit.shape].points.splice(hit.point, 1);
+                if (ed.shapes[hit.shape].points.length === 0) {
+                    ed.shapes.splice(hit.shape, 1);
+                    ed.active = ed.shapes.length ? Math.min(ed.active, ed.shapes.length - 1) : -1;
+                }
+                ed.save(); render();
+            }
+            return;
+        }
+        if (e.shiftKey && hit.shape >= 0) {
+            ed.pushUndo();
+            ed.shapes[hit.shape].points.splice(hit.point, 1);
+            ed.save(); render(); return;
+        }
+        if (hit.shape >= 0) {
+            ed.pushUndo();
+            ed.active = hit.shape;
+            ed.drag = { kind: "point", shape: hit.shape, point: hit.point };
+            return;
+        }
+        // Add new point on click (creates path if none exists)
+        ed.pushUndo();
+        if (ed.active < 0 || ed.active >= ed.shapes.length) ed.newPath();
+        ed.shapes[ed.active].points.push({ x: +c.x.toFixed(2), y: +c.y.toFixed(2) });
+        ed.save(); render();
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+        const c = eventCanvas(e);
+        ed.cursor = { x: c.x, y: c.y, visible: true };
+
+        if (ed.drag?.kind === "pan") {
+            ed.panX = e.clientX - ed.drag.startX;
+            ed.panY = e.clientY - ed.drag.startY;
+            render(); return;
+        }
+        if (ed.drag?.kind === "point") {
+            const sh = ed.shapes[ed.drag.shape];
+            if (sh) {
+                const p = sh.points[ed.drag.point];
+                if (p) { p.x = +c.x.toFixed(2); p.y = +c.y.toFixed(2); render(); }
+            }
+            return;
+        }
+        const hit = ed.findPoint(c.x, c.y);
+        if (hit.shape !== ed.hover.shape || hit.point !== ed.hover.point) {
+            ed.hover = hit;
+            canvas.style.cursor = hit.shape >= 0 ? "pointer" : "crosshair";
+            render();
+        }
+    });
+
+    canvas.addEventListener("pointerup", (e) => {
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (ed.drag?.kind === "pan") {
+            ed.drag = null; canvas.style.cursor = "crosshair"; return;
+        }
+        if (ed.drag?.kind === "point") {
+            ed.drag = null; ed.save(); render(); return;
+        }
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+        ed.cursor.visible = false;
+        ed.hover = { shape: -1, point: -1 };
+        render();
+    });
+
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    canvas.addEventListener("wheel", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const r = canvas.getBoundingClientRect();
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        const f = e.deltaY < 0 ? 1.15 : 0.87;
+        const newZ = Math.max(0.05, Math.min(40, ed.zoom * f));
+        const k = newZ / ed.zoom;
+        ed.panX = mx - (mx - ed.panX) * k;
+        ed.panY = my - (my - ed.panY) * k;
+        ed.zoom = newZ;
+        render();
+    }, { passive: false });
+
+    canvas.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+            e.preventDefault();
+            (e.shiftKey ? ed.redo() : ed.undo()) && ed.save(); render();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+            e.preventDefault(); ed.redo() && ed.save(); render();
+        } else if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            if (ed.hover.shape >= 0) {
+                ed.pushUndo();
+                ed.shapes[ed.hover.shape].points.splice(ed.hover.point, 1);
+                ed.hover = { shape: -1, point: -1 };
+                ed.save(); render();
+            }
+        } else if (e.key.toLowerCase() === "n") {
+            ed.pushUndo(); ed.newPath(); ed.save(); render();
+        } else if (e.key.toLowerCase() === "c") {
+            if (ed.active >= 0) {
+                ed.pushUndo();
+                ed.shapes[ed.active].closed = !ed.shapes[ed.active].closed;
+                ed.save(); render();
+            }
+        } else if (e.key.toLowerCase() === "f") {
+            const r = canvasWrap.getBoundingClientRect();
+            ed.fitView(r.width, r.height); render();
+        }
+    });
+
+    // React to widget edits
+    for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height"]) {
+        const w = node.widgets?.find(x => x.name === wn);
+        if (!w) continue;
+        const orig = w.callback;
+        w.callback = function (v) {
+            orig?.call(this, v);
+            syncFromWidgets();
+            // Apply spline_type / closed change to ALL existing shapes
+            if (wn === "spline_type") {
+                for (const sh of ed.shapes) sh.type = ed.splineType;
+                ed.save();
+            } else if (wn === "closed") {
+                // do not clobber per-shape closed flag automatically; only newly added paths use it
+            } else if (wn === "width" || wn === "height") {
+                ed._fitted = false;
+            }
+            render();
+        };
+    }
+
+    function tryDiscoverRef() {
+        const r = findRefImage(node);
+        if (r?.url && r.url !== ed.refUrl) ed.setRefImage(r.url);
+    }
+    const origConn = node.onConnectionsChange;
+    node.onConnectionsChange = function (...args) {
+        origConn?.apply(this, args);
+        setTimeout(tryDiscoverRef, 200);
+    };
+    const origExec = node.onExecuted;
+    node.onExecuted = function (out) {
+        origExec?.apply(this, arguments);
+        if (out?.preview_b64?.[0]) {
+            ed.setRefImage("data:image/jpeg;base64," + out.preview_b64[0]);
+        } else {
+            tryDiscoverRef();
+        }
+    };
+    const refPoll = setInterval(() => { if (!ed.refImg) tryDiscoverRef(); }, 1500);
+
+    const origRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        origRemoved?.apply(this, arguments);
+        clearInterval(refPoll); ro.disconnect();
+        if (raf) cancelAnimationFrame(raf);
+    };
+
+    setTimeout(render, 50);
+    setTimeout(tryDiscoverRef, 100);
+
+    node._mecEditor = ed;
+    node._mecRender = render;
+}
+
 app.registerExtension({
     name: "Comfy.MEC.SplineMaskEditor",
-
-    beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "SplineMaskEditorMEC") return;
-
-        const origGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
-        nodeType.prototype.getExtraMenuOptions = function (_, options) {
-            origGetExtraMenuOptions?.apply(this, arguments);
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== NODE_NAME) return;
+        const orig = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function (info) {
+            orig?.apply(this, arguments);
+            if (this._mecEditor) { this._mecEditor.load(); this._mecRender?.(); }
         };
     },
-
-    nodeCreated(node) {
-        if (node.comfyClass !== "SplineMaskEditorMEC") return;
-
-        const editor = new SplineEditor(node);
-
-        // Hide internal widgets. Multiline STRING widgets in modern ComfyUI
-        // are backed by a real <textarea> DOM element parented to a
-        // div.dom-widget wrapper; setting widget.type="hidden" alone leaves
-        // both visible on top of the node. Collapse the layout slot AND hide
-        // the DOM wrapper.
-        for (const wName of ["spline_data", "mask_color", "mask_opacity"]) {
-            const w = node.widgets?.find(w => w.name === wName);
-            if (!w) continue;
-            w.type = "hidden";
-            w.computeSize = () => [0, -4];
-            w.draw = () => {};
-            const el = w.element;
-            if (el) {
-                el.hidden = true;
-                el.style.display = "none";
-                const wrapper = el.parentElement;
-                if (wrapper && wrapper.classList?.contains("dom-widget")) {
-                    wrapper.style.display = "none";
-                }
-            }
-        }
-
-        // ── Debounced preview update from server ─────────────────────
-        let _previewTimeout = null;
-        function requestPreviewUpdate() {
-            if (!editor._cacheKey) return;
-            clearTimeout(_previewTimeout);
-            _previewTimeout = setTimeout(async () => {
-                try {
-                    const splineWidget = node.widgets?.find(w => w.name === "spline_data");
-                    const splineData = splineWidget?.value || "[]";
-                    const resp = await fetch("/mec/api/splinemask/preview", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            node_id: editor._cacheKey,
-                            spline_data: splineData,
-                        }),
-                    });
-                    const result = await resp.json();
-                    if (result.status === "ok" && result.image) {
-                        editor.setPreviewImage(result.image);
-                    }
-                } catch (e) {
-                    // Silently fail — preview is non-critical
-                }
-            }, 150);
-        }
-
-        // Hook _serialize to trigger preview updates
-        const origSerialize = editor._serialize.bind(editor);
-        editor._serialize = function () {
-            origSerialize();
-            requestPreviewUpdate();
-        };
-
-        // ── Capture preview from execution results ───────────────────
-        const origOnExecuted = node.onExecuted;
-        node.onExecuted = function (message) {
-            origOnExecuted?.apply(this, arguments);
-            if (message?.cache_key?.[0]) {
-                editor._cacheKey = message.cache_key[0];
-            }
-            if (message?.preview?.[0]) {
-                editor.setPreviewImage(message.preview[0]);
-            }
-        };
-
-        // Interactive editor widget.
-        //
-        // ComfyUI translates ctx to the node's origin BEFORE calling draw(),
-        // so widget-local X must be 0 (NOT node.pos[0] — that absolute graph
-        // coordinate would push the entire canvas outside the node body and
-        // make the editor look "dead" in the UI).
-        const widget = node.addCustomWidget({
-            name: "spline_editor_canvas",
-            type: "custom",
-            value: "",
-            draw(ctx, _node, widgetW, widgetY, widgetH) {
-                const realH = Math.max(300, widgetH || 440);
-                editor.draw(ctx, 0, widgetY, widgetW, realH);
-            },
-            computeSize(_w) {
-                return [_w, 440];
-            },
-            // pos is already widget-local (LiteGraph subtracts widget Y in
-            // processNodeWidgets) so we forward it directly.
-            onMouseDown(e, pos, _node) {
-                if (editor.onMouseDown(pos[0], pos[1], e)) {
-                    _node.setDirtyCanvas(true);
-                    return true;
-                }
-                return false;
-            },
-        });
-
-        // Mouse move
-        const origMouseMove = node.onMouseMove;
-        node.onMouseMove = function (e, pos) {
-            origMouseMove?.apply(this, arguments);
-            const widgetIdx = this.widgets?.indexOf(widget);
-            if (widgetIdx < 0) return;
-            let wy = 0;
-            for (let i = 0; i < widgetIdx; i++) {
-                const ws = this.widgets[i].computeSize?.(this.size[0]);
-                if (ws) wy += ws[1] + 4;
-            }
-            editor.onMouseMove(pos[0], pos[1] - wy);
-            this.setDirtyCanvas(true);
-        };
-
-        // Mouse up
-        const origMouseUp = node.onMouseUp;
-        node.onMouseUp = function (e) {
-            origMouseUp?.apply(this, arguments);
-            editor.onMouseUp();
-        };
-
-        // Wheel (zoom)
-        const origWheel = node.onMouseWheel;
-        node.onMouseWheel = function (e, pos) {
-            origWheel?.apply(this, arguments);
-            const widgetIdx = this.widgets?.indexOf(widget);
-            if (widgetIdx < 0) return;
-            let wy = 0;
-            for (let i = 0; i < widgetIdx; i++) {
-                const ws = this.widgets[i].computeSize?.(this.size[0]);
-                if (ws) wy += ws[1] + 4;
-            }
-            editor.onWheel(pos[0], pos[1] - wy, e.deltaY);
-            this.setDirtyCanvas(true);
-            return true;
-        };
-
-        // Keyboard
-        const origKeyDown = node.onKeyDown;
-        node.onKeyDown = function (e) {
-            origKeyDown?.apply(this, arguments);
-            if (editor.onKeyDown(e)) {
-                this.setDirtyCanvas(true);
-                return true;
-            }
-        };
-
-        // Serialize
-        const origOnSerialize = node.onSerialize;
-        node.onSerialize = function (o) {
-            editor._serialize();
-            origOnSerialize?.apply(this, arguments);
-        };
-
-        // Deserialize
-        const origOnConfigure = node.onConfigure;
-        node.onConfigure = function (data) {
-            origOnConfigure?.apply(this, arguments);
-            setTimeout(() => editor._deserialize(), 100);
-        };
+    async nodeCreated(node) {
+        if (node.comfyClass !== NODE_NAME) return;
+        installEditor(node);
     },
 });

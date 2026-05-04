@@ -1,1112 +1,754 @@
+/**
+ * PointsMaskEditor / SAMMaskGeneratorMEC editor widget.
+ *
+ * Clean rewrite (May 2026):
+ *   - HTML/CSS toolbar (no canvas-painted buttons that get cut off).
+ *   - Canvas is image-only; annotations overlaid.
+ *   - editor_data JSON contract preserved:
+ *       {points:[{x,y,label,radius}], bboxes:[[x1,y1,x2,y2,label]]}
+ *
+ * Interaction model (no mode switch):
+ *   Left click          add positive point
+ *   Right click         add negative point
+ *   Left  drag (empty)  draw positive bbox
+ *   Right drag (empty)  draw negative bbox
+ *   Drag a point        move it
+ *   Shift+click element delete it
+ *   Middle / Alt+drag   pan
+ *   Wheel               adjust point radius
+ *   Ctrl+wheel          zoom (cursor-anchored)
+ *   Ctrl+Z / Ctrl+Y     undo / redo
+ *   Delete / Backspace  delete hovered element
+ *   F                   fit view
+ */
 import { app } from "../../scripts/app.js";
 
-/**
- * MaskEditControl – Unified Points & BBox Editor Widget
- *
- * Interaction model (NO mode switching):
- *   Left-click             → add positive point (label=1)
- *   Right-click            → add negative point (label=0)
- *   CTRL + Left-drag       → draw positive bounding box (green)
- *   CTRL + Right-drag      → draw negative bounding box (red)
- *   Shift + click on point → delete that point
- *   Shift + click on bbox  → delete that bbox
- *   Delete / Backspace     → delete hovered element
- *   Middle-drag            → pan canvas
- *   Scroll                 → adjust point radius (unchanged)
- *   CTRL + Scroll          → zoom canvas (centered on cursor)
- *   CTRL + Z               → undo
- *   CTRL + Shift + Z / Y   → redo
- *   R                      → reset view (zoom & pan)
- */
+const TARGET_NODES = ["PointsMaskEditor", "SAMMaskGeneratorMEC"];
 
-// ── Visual constants ─────────────────────────────────────────────────
-const POINT_COLORS    = { positive: "#22d65a", negative: "#ff4466" };
-const BBOX_COLORS     = { positive: "#22d65a", negative: "#ff4466" };
-const CROSSHAIR_COLOR = "#ffffffaa";
-const GRID_COLOR      = "#ffffff08";
-const CANVAS_BG       = "#181825";
-const TOOLBAR_BG      = "#1e1e2eee";
-const TOOLBAR_H       = 36;
-const BTN_COLORS = {
-    default:  { bg: "#45475a", fg: "#cdd6f4", hover: "#585b70", active: "#6c7086" },
-    danger:   { bg: "#6c2030", fg: "#ffb0c0", hover: "#8c2840", active: "#a03050" },
-    accent:   { bg: "#2a6040", fg: "#80ffb0", hover: "#3a7850", active: "#4a9060" },
+const COLOR = {
+    bg: "#181825",
+    border: "#313244",
+    pos: "#22d65a",
+    neg: "#ff4466",
+    posFill: "rgba(34,214,90,0.12)",
+    negFill: "rgba(255,68,102,0.12)",
+    text: "#cdd6f4",
+    sub: "#7f849c",
 };
 
-// ── Rounded rect helper ──────────────────────────────────────────────
-function _roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-}
+const HISTORY_LIMIT = 80;
+const POINT_HIT_PX = 8;
+const BBOX_EDGE_PX = 6;
+const MIN_BBOX_PX = 4;
+const CLICK_THRESHOLD_PX = 4;
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class PointsBBoxEditor {
+class Editor {
     constructor(node) {
         this.node = node;
         this.points = [];
-        this.bboxes = [];      // [[x1,y1,x2,y2,label], ...]
-        this.currentRadius = 3.0;
-        this.zoom = 1.0;
+        this.bboxes = [];
+        this.canvasW = 512;
+        this.canvasH = 512;
+        this.radius = 3.0;
+
+        this.zoom = 1;
         this.panX = 0;
         this.panY = 0;
-        this.hoveredPoint = -1;
-        this.hoveredBbox  = -1;
+        this._fitted = false;
 
-        // Drag state
-        this.isPanning  = false;
-        this.panStart   = null;
-        this.isBboxDrag = false;
-        this.bboxDragLabel = 1;
-        this.dragStart  = null;
-        this._dragEnd   = null;
+        this.refImg = null;
+        this.refUrl = null;
 
-        // Point drag state
-        this.isDraggingPoint = false;
-        this.dragPointIndex  = -1;
-        this._dragPointOriginal = null;
+        this.hover = { kind: null, idx: -1 };
+        this.drag = null;
 
-        // Reference image
-        this._refImage  = null;
-        this._refLoaded = false;
-        this._lastRefUrl = null;
-        this._containerEl = null;
-        this._canvasW   = 512;
-        this._canvasH   = 512;
-        this._hasAutoFitted = false;  // only auto-fit once
+        this.undoStack = [];
+        this.redoStack = [];
 
-        // Undo/redo
-        this._undoStack = [];
-        this._redoStack = [];
-
-        // Toolbar state
-        this._toolbarButtons = [];
-        this._hoveredButton  = null;
-        this._activeButton   = null;
-
-        // Mouse pos for status bar
-        this._mouseCanvasX = 0;
-        this._mouseCanvasY = 0;
+        this.cursor = { x: 0, y: 0, visible: false };
     }
 
-    // ── Coordinate transforms ────────────────────────────────────────
-    screenToCanvas(sx, sy) {
-        return { x: (sx - this.panX) / this.zoom, y: (sy - this.panY) / this.zoom };
+    snapshot() { return JSON.stringify({ p: this.points, b: this.bboxes }); }
+    pushUndo() {
+        this.undoStack.push(this.snapshot());
+        if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+        this.redoStack.length = 0;
     }
-    canvasToScreen(cx, cy) {
-        return { x: cx * this.zoom + this.panX, y: cy * this.zoom + this.panY };
-    }
-
-    // ── Hit testing ──────────────────────────────────────────────────
-    findPointAt(cx, cy) {
-        const threshold = Math.max(8, 10 / this.zoom);
-        for (let i = this.points.length - 1; i >= 0; i--) {
-            const p = this.points[i];
-            const dx = p.x - cx, dy = p.y - cy;
-            const r  = p.radius || this.currentRadius;
-            if (dx * dx + dy * dy <= (Math.max(r, threshold)) ** 2) return i;
-        }
-        return -1;
-    }
-    findBboxAt(cx, cy) {
-        for (let i = this.bboxes.length - 1; i >= 0; i--) {
-            const b = this.bboxes[i];
-            if (cx >= b[0] && cx <= b[2] && cy >= b[1] && cy <= b[3]) return i;
-        }
-        return -1;
-    }
-
-    // ── Undo / Redo ──────────────────────────────────────────────────
-    saveState() {
-        this._undoStack.push(JSON.stringify({ points: this.points, bboxes: this.bboxes }));
-        if (this._undoStack.length > 50) this._undoStack.shift();
-        this._redoStack = [];
-    }
+    restore(s) { const o = JSON.parse(s); this.points = o.p || []; this.bboxes = o.b || []; }
     undo() {
-        if (!this._undoStack.length) return;
-        this._redoStack.push(JSON.stringify({ points: this.points, bboxes: this.bboxes }));
-        const prev = JSON.parse(this._undoStack.pop());
-        this.points = prev.points;
-        this.bboxes = prev.bboxes;
-        this.updateWidgets();
+        if (!this.undoStack.length) return false;
+        this.redoStack.push(this.snapshot());
+        this.restore(this.undoStack.pop()); return true;
     }
     redo() {
-        if (!this._redoStack.length) return;
-        this._undoStack.push(JSON.stringify({ points: this.points, bboxes: this.bboxes }));
-        const next = JSON.parse(this._redoStack.pop());
-        this.points = next.points;
-        this.bboxes = next.bboxes;
-        this.updateWidgets();
+        if (!this.redoStack.length) return false;
+        this.undoStack.push(this.snapshot());
+        this.restore(this.redoStack.pop()); return true;
     }
 
-    // ── Widget sync ──────────────────────────────────────────────────
-    updateWidgets() {
-        const data = JSON.stringify({
-            points: this.points,
-            bboxes: this.bboxes,
-        });
+    viewToCanvas(vx, vy) {
+        return { x: (vx - this.panX) / this.zoom, y: (vy - this.panY) / this.zoom };
+    }
+
+    fitView(viewW, viewH) {
+        if (viewW <= 0 || viewH <= 0) return;
+        const pad = 16;
+        const sx = (viewW - pad * 2) / this.canvasW;
+        const sy = (viewH - pad * 2) / this.canvasH;
+        this.zoom = Math.max(0.05, Math.min(sx, sy, 8));
+        this.panX = (viewW - this.canvasW * this.zoom) / 2;
+        this.panY = (viewH - this.canvasH * this.zoom) / 2;
+        this._fitted = true;
+    }
+
+    counts() {
+        let pos = 0, neg = 0, bp = 0, bn = 0;
+        for (const p of this.points) p.label === 1 ? pos++ : neg++;
+        for (const b of this.bboxes) b[4] === 1 ? bp++ : bn++;
+        return { pos, neg, bp, bn };
+    }
+
+    findPoint(cx, cy) {
+        const rPx = POINT_HIT_PX / this.zoom;
+        let best = -1, bestD = rPx * rPx;
+        for (let i = this.points.length - 1; i >= 0; i--) {
+            const p = this.points[i];
+            const d = (p.x - cx) ** 2 + (p.y - cy) ** 2;
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+    findBbox(cx, cy) {
+        const tol = BBOX_EDGE_PX / this.zoom;
+        for (let i = this.bboxes.length - 1; i >= 0; i--) {
+            const [x1, y1, x2, y2] = this.bboxes[i];
+            const onV = (Math.abs(cx - x1) < tol || Math.abs(cx - x2) < tol) && cy >= y1 - tol && cy <= y2 + tol;
+            const onH = (Math.abs(cy - y1) < tol || Math.abs(cy - y2) < tol) && cx >= x1 - tol && cx <= x2 + tol;
+            if (onV || onH) return i;
+        }
+        for (let i = this.bboxes.length - 1; i >= 0; i--) {
+            const [x1, y1, x2, y2] = this.bboxes[i];
+            if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) return i;
+        }
+        return -1;
+    }
+
+    save() {
         const w = this.node.widgets?.find(w => w.name === "editor_data");
-        if (w) { w.value = data; w.callback?.(data); }
+        if (!w) return;
+        const data = {
+            points: this.points.map(p => ({
+                x: +p.x.toFixed(2), y: +p.y.toFixed(2),
+                label: p.label | 0,
+                radius: +(+p.radius || this.radius).toFixed(2),
+            })),
+            bboxes: this.bboxes.map(b => [b[0] | 0, b[1] | 0, b[2] | 0, b[3] | 0, b[4] | 0]),
+        };
+        w.value = JSON.stringify(data);
+        if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
     }
 
-    // ── Load reference image ─────────────────────────────────────────
-    loadRefImage(imageUrl, overrideWidth, overrideHeight) {
-        if (!imageUrl) return;
-        const isDataUrl = imageUrl.startsWith("data:");
+    load() {
+        const w = this.node.widgets?.find(w => w.name === "editor_data");
+        if (!w?.value) return;
+        try {
+            const o = JSON.parse(w.value);
+            if (Array.isArray(o)) {
+                this.points = o; this.bboxes = [];
+            } else {
+                this.points = (o.points || []).map(p => ({
+                    x: +p.x, y: +p.y, label: p.label | 0,
+                    radius: +(p.radius || this.radius),
+                }));
+                this.bboxes = (o.bboxes || []).map(b => [+b[0], +b[1], +b[2], +b[3], (b[4] != null ? b[4] | 0 : 1)]);
+            }
+        } catch (_) { /* ignore */ }
+    }
 
-        // For non-data URLs, skip if same URL and already loaded
-        if (!isDataUrl && imageUrl === this._lastRefUrl && this._refLoaded) return;
-
-        this._lastRefUrl = isDataUrl ? "__data_url__" : imageUrl;
+    setRefImage(url, origW, origH) {
+        if (url === this.refUrl && this.refImg && this.refImg.complete) return;
+        this.refUrl = url;
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
-            this._refImage  = img;
-            this._refLoaded = true;
-            const newW = overrideWidth  || img.naturalWidth;
-            const newH = overrideHeight || img.naturalHeight;
-            const dimsChanged = (newW !== this._canvasW || newH !== this._canvasH);
-            this._canvasW = newW;
-            this._canvasH = newH;
-            const wW = this.node.widgets?.find(w => w.name === "width");
-            const hW = this.node.widgets?.find(w => w.name === "height");
-            if (wW) wW.value = this._canvasW;
-            if (hW) hW.value = this._canvasH;
-            // Only resize node when canvas dimensions actually changed
-            if (dimsChanged) {
-                this._onImageLoaded?.();
+            this.refImg = img;
+            const w = origW || img.naturalWidth;
+            const h = origH || img.naturalHeight;
+            if (w > 0 && h > 0 && (w !== this.canvasW || h !== this.canvasH)) {
+                this.canvasW = w; this.canvasH = h;
+                const wW = this.node.widgets?.find(x => x.name === "width");
+                const hW = this.node.widgets?.find(x => x.name === "height");
+                if (wW) wW.value = w;
+                if (hW) hW.value = h;
             }
-            // Auto-fit only on first image load — preserve user's zoom/pan after that.
-            // Single-pass fit deferred two animation frames to let LiteGraph
-            // finish reflow after setSize().  A second pass at 300ms was
-            // causing the visible "auto zoom in / zoom out" jitter when the
-            // first pass measured a stale bounding rect.
-            if (!this._hasAutoFitted) {
-                this._hasAutoFitted = true;
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                    if (this._containerEl) {
-                        const r = this._containerEl.getBoundingClientRect();
-                        if (r.width > 0 && r.height > 0) {
-                            this.fitView(r.width, r.height - TOOLBAR_H);
-                        }
-                    }
-                    this.node._mecRender?.();
-                }));
-            } else {
-                this.node._mecRender?.();
-            }
+            this._fitted = false;
+            this.onLoaded?.();
         };
-        img.onerror = () => console.warn("[MEC] Failed to load ref image:", imageUrl);
-        img.src = imageUrl;
-    }
-
-    fitView(containerW, containerH) {
-        if (this._canvasW <= 0 || this._canvasH <= 0) return;
-        this.zoom = Math.min(containerW / this._canvasW, containerH / this._canvasH) * 0.96;
-        this.panX = (containerW - this._canvasW * this.zoom) / 2;
-        this.panY = (containerH - this._canvasH * this.zoom) / 2;
-    }
-
-    // ── Main draw ────────────────────────────────────────────────────
-    draw(ctx, x, y, w, h) {
-        const toolbarY = y;
-        const canvasY  = y + TOOLBAR_H;
-        const canvasH  = h - TOOLBAR_H;
-
-        // === Canvas area ===
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, canvasY, w, canvasH);
-        ctx.clip();
-
-        ctx.fillStyle = CANVAS_BG;
-        ctx.fillRect(x, canvasY, w, canvasH);
-
-        ctx.save();
-        ctx.translate(x + this.panX, canvasY + this.panY);
-        ctx.scale(this.zoom, this.zoom);
-
-        // Reference image or grid
-        if (this._refLoaded && this._refImage) {
-            ctx.drawImage(this._refImage, 0, 0, this._canvasW, this._canvasH);
-            ctx.fillStyle = "#00000010";
-            ctx.fillRect(0, 0, this._canvasW, this._canvasH);
-        } else {
-            ctx.strokeStyle = GRID_COLOR;
-            ctx.lineWidth = 1 / this.zoom;
-            const step = 64;
-            for (let gx = 0; gx <= this._canvasW; gx += step) {
-                ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, this._canvasH); ctx.stroke();
-            }
-            for (let gy = 0; gy <= this._canvasH; gy += step) {
-                ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(this._canvasW, gy); ctx.stroke();
-            }
-            ctx.strokeStyle = "#585b7040";
-            ctx.lineWidth = 1.5 / this.zoom;
-            ctx.strokeRect(0, 0, this._canvasW, this._canvasH);
-        }
-
-        // ── Bboxes ───────────────────────────────────────────────────
-        for (let i = 0; i < this.bboxes.length; i++) {
-            const b = this.bboxes[i];
-            const isPos = (b[4] ?? 1) === 1;
-            const color = isPos ? BBOX_COLORS.positive : BBOX_COLORS.negative;
-            const hov = (i === this.hoveredBbox);
-            const bw = b[2] - b[0], bh = b[3] - b[1];
-
-            // Fill
-            ctx.fillStyle = color + (hov ? "30" : "18");
-            ctx.fillRect(b[0], b[1], bw, bh);
-
-            // Main border — solid for positive, dashed for negative
-            ctx.strokeStyle = color + (hov ? "ee" : "99");
-            ctx.lineWidth = (hov ? 2.5 : 2) / this.zoom;
-            if (!isPos) ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
-            ctx.strokeRect(b[0], b[1], bw, bh);
-            ctx.setLineDash([]);
-
-            // Corner brackets — L-shaped with filled corner dots
-            const cm = Math.min(14, Math.min(bw, bh) / 3) / this.zoom;
-            const cornerLw = 2.5 / this.zoom;
-            const dotR = 3 / this.zoom;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = cornerLw;
-            for (const [cx, cy, dx, dy] of [
-                [b[0], b[1], 1, 1], [b[2], b[1], -1, 1],
-                [b[0], b[3], 1, -1], [b[2], b[3], -1, -1]
-            ]) {
-                ctx.beginPath();
-                ctx.moveTo(cx + dx * cm, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * cm);
-                ctx.stroke();
-                // Filled corner dot
-                ctx.beginPath();
-                ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
-                ctx.fillStyle = color;
-                ctx.fill();
-            }
-
-            // Label badge
-            const label = isPos ? `+B${i}` : `\u2212B${i}`;
-            const fs = Math.max(9, 11 / this.zoom);
-            ctx.font = `bold ${fs}px Inter, system-ui, sans-serif`;
-            const tw = ctx.measureText(label).width;
-            const badgeH = fs + 4 / this.zoom;
-            ctx.fillStyle = color + "dd";
-            _roundRect(ctx, b[0], b[1] - badgeH - 2 / this.zoom, tw + 8 / this.zoom, badgeH, 3 / this.zoom);
-            ctx.fill();
-            ctx.fillStyle = "#000000dd";
-            ctx.fillText(label, b[0] + 4 / this.zoom, b[1] - 4 / this.zoom);
-        }
-
-        // ── In-progress bbox drag ────────────────────────────────────
-        if (this.isBboxDrag && this.dragStart && this._dragEnd) {
-            const bx1 = Math.min(this.dragStart.x, this._dragEnd.x);
-            const by1 = Math.min(this.dragStart.y, this._dragEnd.y);
-            const bx2 = Math.max(this.dragStart.x, this._dragEnd.x);
-            const by2 = Math.max(this.dragStart.y, this._dragEnd.y);
-            const color = this.bboxDragLabel === 1 ? BBOX_COLORS.positive : BBOX_COLORS.negative;
-
-            ctx.fillStyle = color + "20";
-            ctx.fillRect(bx1, by1, bx2 - bx1, by2 - by1);
-            ctx.strokeStyle = color + "cc";
-            ctx.lineWidth = 2 / this.zoom;
-            ctx.setLineDash([5 / this.zoom, 3 / this.zoom]);
-            ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
-            ctx.setLineDash([]);
-
-            const dimText = `${Math.abs(bx2 - bx1).toFixed(0)}\u00d7${Math.abs(by2 - by1).toFixed(0)}`;
-            const fs2 = Math.max(9, 10 / this.zoom);
-            ctx.font = `${fs2}px Inter, system-ui, sans-serif`;
-            const dtw = ctx.measureText(dimText).width;
-            ctx.fillStyle = "#000000bb";
-            _roundRect(ctx, bx1, by2 + 4 / this.zoom, dtw + 8 / this.zoom, fs2 + 5 / this.zoom, 3 / this.zoom);
-            ctx.fill();
-            ctx.fillStyle = "#ffffffee";
-            ctx.fillText(dimText, bx1 + 4 / this.zoom, by2 + fs2 + 2 / this.zoom);
-        }
-
-        // ── Points ───────────────────────────────────────────────────
-        for (let i = 0; i < this.points.length; i++) {
-            const p = this.points[i];
-            const r = p.radius || this.currentRadius;
-            const hov = (i === this.hoveredPoint);
-            const color = p.label === 1 ? POINT_COLORS.positive : POINT_COLORS.negative;
-
-            // Outer glow ring
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, r + 2 / this.zoom, 0, Math.PI * 2);
-            ctx.strokeStyle = color + (hov ? "77" : "33");
-            ctx.lineWidth = 3 / this.zoom;
-            ctx.stroke();
-
-            // Main radius circle
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-            ctx.fillStyle = color + (hov ? "44" : "22");
-            ctx.fill();
-            ctx.strokeStyle = color + (hov ? "ee" : "aa");
-            ctx.lineWidth = 1.5 / this.zoom;
-            ctx.stroke();
-
-            // Center dot
-            const dotR = Math.max(2.5, 3.5 / this.zoom);
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, dotR + 1 / this.zoom, 0, Math.PI * 2);
-            ctx.strokeStyle = "#ffffffaa";
-            ctx.lineWidth = 0.8 / this.zoom;
-            ctx.stroke();
-
-            // Crosshair on hover
-            if (hov) {
-                ctx.strokeStyle = CROSSHAIR_COLOR;
-                ctx.lineWidth = 0.8 / this.zoom;
-                ctx.setLineDash([3 / this.zoom, 3 / this.zoom]);
-                const ext = r + 8 / this.zoom;
-                ctx.beginPath();
-                ctx.moveTo(p.x - ext, p.y); ctx.lineTo(p.x + ext, p.y);
-                ctx.moveTo(p.x, p.y - ext); ctx.lineTo(p.x, p.y + ext);
-                ctx.stroke();
-                ctx.setLineDash([]);
-            }
-
-            // Index badge
-            const sign = p.label === 1 ? "+" : "\u2212";
-            const idxText = `${sign}${i}`;
-            const fs3 = Math.max(8, 9 / this.zoom);
-            ctx.font = `bold ${fs3}px Inter, system-ui, sans-serif`;
-            const idxW = ctx.measureText(idxText).width;
-            const badgeX = p.x + r + 4 / this.zoom;
-            const badgeY = p.y - fs3 / 2 - 2 / this.zoom;
-            ctx.fillStyle = "#000000bb";
-            _roundRect(ctx, badgeX - 2 / this.zoom, badgeY, idxW + 5 / this.zoom, fs3 + 3 / this.zoom, 2 / this.zoom);
-            ctx.fill();
-            ctx.fillStyle = color;
-            ctx.fillText(idxText, badgeX, badgeY + fs3);
-
-            // Tooltip on hover
-            if (hov) {
-                const text = `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}) r=${r.toFixed(1)}`;
-                const fs4 = Math.max(9, 10 / this.zoom);
-                ctx.font = `${fs4}px Inter, system-ui, sans-serif`;
-                const ttw = ctx.measureText(text).width;
-                const tx = p.x - ttw / 2;
-                const ty = p.y - r - 20 / this.zoom;
-                ctx.fillStyle = "#181825ee";
-                _roundRect(ctx, tx - 6 / this.zoom, ty - 1 / this.zoom, ttw + 12 / this.zoom, fs4 + 6 / this.zoom, 4 / this.zoom);
-                ctx.fill();
-                ctx.strokeStyle = color + "66";
-                ctx.lineWidth = 1 / this.zoom;
-                _roundRect(ctx, tx - 6 / this.zoom, ty - 1 / this.zoom, ttw + 12 / this.zoom, fs4 + 6 / this.zoom, 4 / this.zoom);
-                ctx.stroke();
-                ctx.fillStyle = "#cdd6f4";
-                ctx.fillText(text, tx, ty + fs4);
-            }
-        }
-
-        ctx.restore(); // zoom/pan
-        ctx.restore(); // clip
-
-        // === Toolbar ===
-        this._drawToolbar(ctx, x, toolbarY, w);
-
-        // === Status bar ===
-        ctx.save();
-        ctx.fillStyle = "#11111bcc";
-        ctx.fillRect(x, y + h - 20, w, 20);
-        ctx.fillStyle = "#a6adc8";
-        ctx.font = "10px Inter, system-ui, sans-serif";
-        const statusParts = [
-            `${this._canvasW}\u00d7${this._canvasH}`,
-            `cursor: ${this._mouseCanvasX.toFixed(0)},${this._mouseCanvasY.toFixed(0)}`,
-            `zoom: ${(this.zoom * 100).toFixed(0)}%`,
-        ];
-        ctx.fillText(statusParts.join("  \u2502  "), x + 8, y + h - 6);
-        const helpText = "L=+pt  R=\u2212pt  Drag=move  Ctrl+drag=bbox  Shift=del  Scroll=radius  Ctrl+Scroll=zoom  Del=hovered";
-        const helpW = ctx.measureText(helpText).width;
-        ctx.fillStyle = "#585b70";
-        ctx.fillText(helpText, x + w - helpW - 8, y + h - 6);
-        ctx.restore();
-    }
-
-    // ── Toolbar ──────────────────────────────────────────────────────
-    _drawToolbar(ctx, x, y, w) {
-        ctx.save();
-        ctx.fillStyle = TOOLBAR_BG;
-        ctx.fillRect(x, y, w, TOOLBAR_H);
-        ctx.fillStyle = "#585b70";
-        ctx.fillRect(x, y + TOOLBAR_H - 1, w, 1);
-
-        this._toolbarButtons = [];
-        let bx = x + 8;
-        const by = y + 5;
-        const bh = TOOLBAR_H - 10;
-
-        const posCount = this.points.filter(p => p.label === 1).length;
-        const negCount = this.points.filter(p => p.label === 0).length;
-
-        bx = this._drawPill(ctx, bx, by, bh, `${posCount}`, POINT_COLORS.positive, "+pts");
-        bx = this._drawPill(ctx, bx + 5, by, bh, `${negCount}`, POINT_COLORS.negative, "\u2212pts");
-        bx = this._drawPill(ctx, bx + 5, by, bh, `${this.bboxes.length}`, "#89b4fa", "bbox");
-        bx += 10;
-        ctx.fillStyle = "#585b70"; ctx.fillRect(Math.round(bx), by + 3, 2, bh - 6); bx += 10;
-
-        bx = this._drawPill(ctx, bx, by, bh, `r:${this.currentRadius.toFixed(1)}`, "#cdd6f4", null);
-        bx += 10;
-        ctx.fillStyle = "#585b70"; ctx.fillRect(Math.round(bx), by + 3, 2, bh - 6); bx += 10;
-
-        bx = this._drawButton(ctx, bx, by, bh, "\u2715 Pts", "clearPoints", BTN_COLORS.danger);
-        bx += 5;
-        bx = this._drawButton(ctx, bx, by, bh, "\u2715 BBox", "clearBboxes", BTN_COLORS.danger);
-        bx += 5;
-        bx = this._drawButton(ctx, bx, by, bh, "\u2715 All", "clearAll", BTN_COLORS.danger);
-        bx += 10;
-        ctx.fillStyle = "#585b70"; ctx.fillRect(Math.round(bx), by + 3, 2, bh - 6); bx += 10;
-
-        bx = this._drawButton(ctx, bx, by, bh, "\u21b6 Undo", "undo", BTN_COLORS.default);
-        bx += 5;
-        bx = this._drawButton(ctx, bx, by, bh, "Redo \u21b7", "redo", BTN_COLORS.default);
-        bx += 5;
-        bx = this._drawButton(ctx, bx, by, bh, "\u25a3 Fit", "fitView", BTN_COLORS.accent);
-
-        ctx.restore();
-    }
-
-    _drawPill(ctx, x, y, h, text, color, subLabel) {
-        x = Math.round(x);
-        ctx.font = "bold 11px Inter, system-ui, sans-serif";
-        const tw = ctx.measureText(text).width;
-        let subW = 0;
-        if (subLabel) {
-            ctx.font = "9px Inter, system-ui, sans-serif";
-            subW = ctx.measureText(subLabel).width + 5;
-        }
-        const pw = Math.round(tw + subW + 16);
-        ctx.fillStyle = color + "33";
-        _roundRect(ctx, x, y, pw, h, 5); ctx.fill();
-        ctx.strokeStyle = color + "66"; ctx.lineWidth = 1;
-        _roundRect(ctx, x, y, pw, h, 5); ctx.stroke();
-        ctx.font = "bold 11px Inter, system-ui, sans-serif";
-        ctx.fillStyle = color;
-        ctx.textBaseline = "middle";
-        ctx.fillText(text, x + 6, y + h / 2);
-        if (subLabel) {
-            ctx.fillStyle = color + "99";
-            ctx.font = "9px Inter, system-ui, sans-serif";
-            ctx.fillText(subLabel, x + tw + 9, y + h / 2);
-        }
-        ctx.textBaseline = "alphabetic";
-        return x + pw;
-    }
-
-    _drawButton(ctx, x, y, h, label, action, colors) {
-        x = Math.round(x);
-        ctx.font = "bold 11px Inter, system-ui, sans-serif";
-        const tw = ctx.measureText(label).width;
-        const bw = Math.round(tw + 20);
-        const isHov = this._hoveredButton === action;
-        const isActive = this._activeButton === action;
-        // Background with visible border
-        ctx.fillStyle = isActive ? colors.active : (isHov ? colors.hover : colors.bg);
-        _roundRect(ctx, x, y, bw, h, 5); ctx.fill();
-        if (isHov || isActive) {
-            ctx.strokeStyle = colors.fg + "55"; ctx.lineWidth = 1;
-            _roundRect(ctx, x, y, bw, h, 5); ctx.stroke();
-        }
-        // Centered text
-        ctx.fillStyle = colors.fg;
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, x + 10, y + h / 2);
-        ctx.textBaseline = "alphabetic";
-        this._toolbarButtons.push({ x, y, w: bw, h, action });
-        return x + bw;
-    }
-
-    handleToolbarClick(action, renderFn) {
-        // Visual click feedback
-        this._activeButton = action;
-        renderFn?.();
-        setTimeout(() => { this._activeButton = null; renderFn?.(); }, 120);
-
-        switch (action) {
-            case "clearPoints":
-                this.saveState();
-                this.points = []; this.hoveredPoint = -1;
-                this.updateWidgets(); break;
-            case "clearBboxes":
-                this.saveState();
-                this.bboxes = []; this.hoveredBbox = -1;
-                this.updateWidgets(); break;
-            case "clearAll":
-                this.saveState();
-                this.points = []; this.bboxes = [];
-                this.hoveredPoint = -1; this.hoveredBbox = -1;
-                this.updateWidgets(); break;
-            case "undo": this.undo(); break;
-            case "redo": this.redo(); break;
-            case "fitView":
-                if (this._containerEl) {
-                    const r = this._containerEl.getBoundingClientRect();
-                    if (r.width > 0 && r.height > 0) this.fitView(r.width, r.height - TOOLBAR_H);
-                    this._hasAutoFitted = true;
-                }
-                break;
-        }
-        renderFn?.();
-    }
-
-    findToolbarButton(sx, sy) {
-        if (!this._toolbarButtons) return null;
-        for (const btn of this._toolbarButtons) {
-            if (sx >= btn.x && sx <= btn.x + btn.w && sy >= btn.y && sy <= btn.y + btn.h) return btn.action;
-        }
-        return null;
+        img.src = url;
     }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Register with ComfyUI
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function draw(ed, ctx, vw, vh) {
+    ctx.save();
+    ctx.fillStyle = COLOR.bg;
+    ctx.fillRect(0, 0, vw, vh);
+
+    const z = ed.zoom;
+    ctx.translate(ed.panX, ed.panY);
+    ctx.scale(z, z);
+
+    if (ed.refImg && ed.refImg.complete) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (_) {}
+    } else {
+        ctx.fillStyle = "#11111b";
+        ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);
+    }
+    ctx.strokeStyle = "#45475a";
+    ctx.lineWidth = 1 / z;
+    ctx.strokeRect(0, 0, ed.canvasW, ed.canvasH);
+
+    for (let i = 0; i < ed.bboxes.length; i++) {
+        const [x1, y1, x2, y2, lbl] = ed.bboxes[i];
+        const c = lbl === 1 ? COLOR.pos : COLOR.neg;
+        ctx.fillStyle = lbl === 1 ? COLOR.posFill : COLOR.negFill;
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.strokeStyle = c;
+        ctx.lineWidth = (ed.hover.kind === "bbox" && ed.hover.idx === i ? 2.5 : 1.5) / z;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        const t = 6 / z;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1 + t); ctx.lineTo(x1, y1); ctx.lineTo(x1 + t, y1);
+        ctx.moveTo(x2 - t, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + t);
+        ctx.moveTo(x2, y2 - t); ctx.lineTo(x2, y2); ctx.lineTo(x2 - t, y2);
+        ctx.moveTo(x1 + t, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - t);
+        ctx.stroke();
+    }
+
+    if (ed.drag?.kind === "bbox-new") {
+        const { sx, sy, ex, ey, label } = ed.drag;
+        const x1 = Math.min(sx, ex), y1 = Math.min(sy, ey);
+        const x2 = Math.max(sx, ex), y2 = Math.max(sy, ey);
+        ctx.fillStyle = label === 1 ? COLOR.posFill : COLOR.negFill;
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.strokeStyle = label === 1 ? COLOR.pos : COLOR.neg;
+        ctx.setLineDash([6 / z, 4 / z]);
+        ctx.lineWidth = 1.5 / z;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.setLineDash([]);
+    }
+
+    for (let i = 0; i < ed.points.length; i++) {
+        const p = ed.points[i];
+        const c = p.label === 1 ? COLOR.pos : COLOR.neg;
+        ctx.strokeStyle = c + "66";
+        ctx.lineWidth = 1 / z;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        const isHov = ed.hover.kind === "point" && ed.hover.idx === i;
+        const dotR = (isHov ? 6 : 4) / z;
+        ctx.fillStyle = c;
+        ctx.beginPath(); ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#000a";
+        ctx.lineWidth = 1.5 / z;
+        ctx.stroke();
+    }
+
+    if (ed.cursor.visible && !ed.drag) {
+        ctx.strokeStyle = "#ffffff66";
+        ctx.lineWidth = 1 / z;
+        ctx.beginPath();
+        ctx.arc(ed.cursor.x, ed.cursor.y, ed.radius, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+function findRefImage(node) {
+    if (!node.inputs) return null;
+    const linkedInput = node.inputs.find(i =>
+        (i.name === "reference_image" || i.name === "image") && i.link != null);
+    if (!linkedInput) return null;
+    const link = app.graph.links[linkedInput.link];
+    if (!link) return null;
+
+    const visited = new Set();
+    const queue = [{ id: link.origin_id, depth: 0 }];
+    while (queue.length) {
+        const { id, depth } = queue.shift();
+        if (visited.has(id)) continue;
+        visited.add(id);
+        const n = app.graph.getNodeById(id);
+        if (!n) continue;
+        if (n.imgs?.length) return { url: n.imgs[0].src };
+        const w = n.widgets?.find(w => w.name === "image");
+        if (w?.value && typeof w.value === "string") {
+            const parts = w.value.split("/");
+            const sub = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+            const fn = parts[parts.length - 1];
+            return { url: `/view?filename=${encodeURIComponent(fn)}&subfolder=${encodeURIComponent(sub)}&type=input` };
+        }
+        if (depth < 3 && n.inputs) {
+            for (const inp of n.inputs) {
+                if (inp.link == null) continue;
+                const li = app.graph.links[inp.link];
+                if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
+            }
+        }
+    }
+    return null;
+}
+
+function installEditor(node) {
+    const ed = new Editor(node);
+
+    const hideWidget = (w) => {
+        if (!w) return;
+        w.type = "hidden";
+        w.computeSize = () => [0, -4];
+        w.draw = () => {};
+        const el = w.element;
+        if (el) {
+            el.hidden = true;
+            el.style.display = "none";
+            const wrap = el.parentElement;
+            if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
+        }
+    };
+    hideWidget(node.widgets?.find(w => w.name === "editor_data"));
+
+    const syncDims = () => {
+        const w = node.widgets?.find(x => x.name === "width");
+        const h = node.widgets?.find(x => x.name === "height");
+        if (w) ed.canvasW = +w.value || ed.canvasW;
+        if (h) ed.canvasH = +h.value || ed.canvasH;
+    };
+    const syncRadius = () => {
+        const r = node.widgets?.find(x => x.name === "default_radius");
+        if (r) ed.radius = +r.value || ed.radius;
+    };
+    syncDims(); syncRadius();
+    ed.load();
+
+    const root = document.createElement("div");
+    root.style.cssText = `
+        display:flex;flex-direction:column;width:100%;height:100%;
+        background:${COLOR.bg};border:1px solid ${COLOR.border};border-radius:6px;
+        overflow:hidden;font-family:Inter,system-ui,sans-serif;color:${COLOR.text};
+        box-sizing:border-box;user-select:none;
+    `;
+
+    // --- Compact toolbar (icon buttons + dropdown menu) ----------------
+    const tb = document.createElement("div");
+    tb.style.cssText = `
+        display:flex;align-items:center;gap:4px;padding:4px 6px;
+        background:linear-gradient(#22223a,#1a1a2e);
+        border-bottom:1px solid ${COLOR.border};
+        flex:0 0 auto;font-size:11px;line-height:1;
+    `;
+    root.appendChild(tb);
+
+    const canvasWrap = document.createElement("div");
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;";
+    root.appendChild(canvasWrap);
+
+    const canvas = document.createElement("canvas");
+    canvas.style.cssText = "display:block;width:100%;height:100%;outline:none;";
+    canvas.tabIndex = 0;
+    canvasWrap.appendChild(canvas);
+
+    // status pill (image res + zoom only — no live cursor coords)
+    const status = document.createElement("div");
+    status.style.cssText = `
+        position:absolute;left:6px;bottom:6px;padding:3px 7px;
+        background:#1e1e2ed8;border:1px solid ${COLOR.border};border-radius:4px;
+        font-size:10px;color:${COLOR.sub};pointer-events:none;
+        font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
+    `;
+    canvasWrap.appendChild(status);
+
+    const ctx = canvas.getContext("2d");
+
+    const mkIcon = (label, title, onClick) => {
+        const b = document.createElement("button");
+        b.textContent = label; b.title = title;
+        b.style.cssText = `
+            min-width:26px;height:24px;padding:0 7px;
+            border:1px solid ${COLOR.border};border-radius:4px;
+            background:#313244;color:${COLOR.text};
+            font-size:11px;font-weight:500;cursor:pointer;
+            display:inline-flex;align-items:center;justify-content:center;
+            white-space:nowrap;line-height:1;flex:0 0 auto;
+            transition:background .12s,border-color .12s;
+        `;
+        b.onmouseenter = () => { b.style.background = "#45475a"; b.style.borderColor = "#585b70"; };
+        b.onmouseleave = () => { b.style.background = "#313244"; b.style.borderColor = COLOR.border; };
+        b.onmousedown = (e) => e.stopPropagation();
+        b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(); render(); };
+        return b;
+    };
+
+    const counter = document.createElement("span");
+    counter.style.cssText = `
+        color:${COLOR.text};font-size:10px;flex:1 1 auto;
+        font-family:ui-monospace,Menlo,monospace;
+        padding:3px 8px;background:#11111b;border:1px solid ${COLOR.border};
+        border-radius:4px;letter-spacing:.3px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    `;
+    tb.appendChild(counter);
+
+    tb.appendChild(mkIcon("↶", "Undo (Ctrl+Z)", () => { if (ed.undo()) ed.save(); }));
+    tb.appendChild(mkIcon("↷", "Redo (Ctrl+Y)", () => { if (ed.redo()) ed.save(); }));
+    tb.appendChild(mkIcon("⛶", "Fit view (F)", () => {
+        const r = canvasWrap.getBoundingClientRect();
+        ed.fitView(r.width, r.height);
+    }));
+
+    // Dropdown menu (≡)
+    const menuBtn = mkIcon("≡", "More actions", () => toggleMenu());
+    tb.appendChild(menuBtn);
+
+    const menu = document.createElement("div");
+    menu.style.cssText = `
+        position:absolute;top:34px;right:6px;z-index:50;
+        background:#1e1e2e;border:1px solid ${COLOR.border};border-radius:6px;
+        box-shadow:0 6px 20px #000a;padding:4px;display:none;
+        min-width:180px;font-size:11px;
+    `;
+    root.style.position = "relative";
+    root.appendChild(menu);
+
+    const mkMenuItem = (label, onClick, danger) => {
+        const it = document.createElement("div");
+        it.textContent = label;
+        it.style.cssText = `
+            padding:7px 12px;border-radius:4px;cursor:pointer;
+            color:${danger ? "#f38ba8" : COLOR.text};white-space:nowrap;
+        `;
+        it.onmouseenter = () => it.style.background = "#313244";
+        it.onmouseleave = () => it.style.background = "";
+        it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
+        return it;
+    };
+    const mkMenuSep = () => {
+        const s = document.createElement("div");
+        s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
+        return s;
+    };
+
+    menu.appendChild(mkMenuItem("Reset zoom (100%)", () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; }));
+    menu.appendChild(mkMenuItem("Fit to view", () => {
+        const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
+    }));
+    menu.appendChild(mkMenuSep());
+    menu.appendChild(mkMenuItem("Clear points", () => {
+        if (!ed.points.length) return;
+        ed.pushUndo(); ed.points = []; ed.save();
+    }, true));
+    menu.appendChild(mkMenuItem("Clear bounding boxes", () => {
+        if (!ed.bboxes.length) return;
+        ed.pushUndo(); ed.bboxes = []; ed.save();
+    }, true));
+    menu.appendChild(mkMenuItem("Clear everything", () => {
+        if (!ed.points.length && !ed.bboxes.length) return;
+        ed.pushUndo(); ed.points = []; ed.bboxes = []; ed.save();
+    }, true));
+
+    function toggleMenu() {
+        const open = menu.style.display === "none" || !menu.style.display;
+        menu.style.display = open ? "block" : "none";
+        if (open) {
+            const off = (e) => {
+                if (!menu.contains(e.target) && e.target !== menuBtn) {
+                    menu.style.display = "none";
+                    document.removeEventListener("mousedown", off, true);
+                }
+            };
+            setTimeout(() => document.addEventListener("mousedown", off, true), 0);
+        }
+    }
+
+    const widgetH = 460;
+    node.addDOMWidget("points_editor", "canvas", root, {
+        serialize: false,
+        hideOnZoom: false,
+        getMinHeight: () => widgetH,
+        getHeight: () => widgetH,
+    });
+
+    // Ensure a sensible default node width so the toolbar fits without scrolling.
+    if (!node.size || node.size[0] < 600) {
+        const h = node.size?.[1] || 620;
+        node.setSize?.([600, Math.max(h, 620)]);
+    }
+
+    let lastW = 0, lastH = 0;
+    function syncCanvasPx() {
+        const r = canvasWrap.getBoundingClientRect();
+        const w = Math.max(1, Math.round(r.width));
+        const h = Math.max(1, Math.round(r.height));
+        if (w === lastW && h === lastH) return false;
+        // Scale pan/zoom proportionally so the visual view stays put under
+        // ComfyUI canvas zoom (which resizes our container without us moving).
+        if (lastW > 0 && lastH > 0 && ed._fitted) {
+            const sx = w / lastW;
+            ed.zoom *= sx;
+            ed.panX *= sx;
+            ed.panY *= (h / lastH);
+        }
+        lastW = w; lastH = h;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (!ed._fitted) ed.fitView(w, h);
+        return true;
+    }
+
+    let raf = 0;
+    function render() {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+            raf = 0;
+            syncCanvasPx();
+            draw(ed, ctx, lastW, lastH);
+            const c = ed.counts();
+            counter.textContent = `pts +${c.pos}/-${c.neg}   box +${c.bp}/-${c.bn}`;
+            status.textContent = `${ed.canvasW}×${ed.canvasH} · zoom ${(ed.zoom * 100).toFixed(0)}% · r ${ed.radius.toFixed(1)}`;
+        });
+    }
+    ed.onLoaded = () => { ed._fitted = false; render(); };
+
+    const ro = new ResizeObserver(() => render());
+    ro.observe(canvasWrap);
+
+    function eventCanvas(e) {
+        const r = canvas.getBoundingClientRect();
+        return ed.viewToCanvas(e.clientX - r.left, e.clientY - r.top);
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); canvas.focus();
+        canvas.setPointerCapture(e.pointerId);
+        const c = eventCanvas(e);
+
+        if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            ed.drag = { kind: "pan", startX: e.clientX - ed.panX, startY: e.clientY - ed.panY };
+            canvas.style.cursor = "grabbing";
+            return;
+        }
+        const pi = ed.findPoint(c.x, c.y);
+        const bi = pi < 0 ? ed.findBbox(c.x, c.y) : -1;
+
+        if (e.shiftKey) {
+            if (pi >= 0) { ed.pushUndo(); ed.points.splice(pi, 1); ed.save(); render(); return; }
+            if (bi >= 0) { ed.pushUndo(); ed.bboxes.splice(bi, 1); ed.save(); render(); return; }
+            return;
+        }
+        if (e.button === 0 && pi >= 0) {
+            ed.pushUndo();
+            ed.drag = { kind: "point", idx: pi };
+            return;
+        }
+        if (e.button === 0 || e.button === 2) {
+            ed.drag = {
+                kind: "maybe-bbox",
+                button: e.button,
+                startX: c.x, startY: c.y,
+                screenStartX: e.clientX, screenStartY: e.clientY,
+            };
+        }
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+        const c = eventCanvas(e);
+        ed.cursor = { x: c.x, y: c.y, visible: true };
+
+        if (ed.drag?.kind === "pan") {
+            ed.panX = e.clientX - ed.drag.startX;
+            ed.panY = e.clientY - ed.drag.startY;
+            render(); return;
+        }
+        if (ed.drag?.kind === "point") {
+            const p = ed.points[ed.drag.idx];
+            if (p) { p.x = +c.x.toFixed(2); p.y = +c.y.toFixed(2); render(); }
+            return;
+        }
+        if (ed.drag?.kind === "maybe-bbox") {
+            const dx = e.clientX - ed.drag.screenStartX;
+            const dy = e.clientY - ed.drag.screenStartY;
+            if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) {
+                ed.drag = {
+                    kind: "bbox-new",
+                    sx: ed.drag.startX, sy: ed.drag.startY,
+                    ex: c.x, ey: c.y,
+                    label: ed.drag.button === 0 ? 1 : 0,
+                    button: ed.drag.button,
+                };
+                render();
+            }
+            return;
+        }
+        if (ed.drag?.kind === "bbox-new") {
+            ed.drag.ex = c.x; ed.drag.ey = c.y; render(); return;
+        }
+
+        const pi = ed.findPoint(c.x, c.y);
+        let kind = null, idx = -1;
+        if (pi >= 0) { kind = "point"; idx = pi; }
+        else {
+            const bi = ed.findBbox(c.x, c.y);
+            if (bi >= 0) { kind = "bbox"; idx = bi; }
+        }
+        if (kind !== ed.hover.kind || idx !== ed.hover.idx) {
+            ed.hover = { kind, idx };
+            canvas.style.cursor = kind ? "pointer" : "crosshair";
+            render();
+        }
+    });
+
+    canvas.addEventListener("pointerup", (e) => {
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        const c = eventCanvas(e);
+
+        if (ed.drag?.kind === "pan") {
+            ed.drag = null; canvas.style.cursor = "crosshair"; return;
+        }
+        if (ed.drag?.kind === "point") {
+            ed.drag = null; ed.save(); render(); return;
+        }
+        if (ed.drag?.kind === "maybe-bbox") {
+            const label = ed.drag.button === 0 ? 1 : 0;
+            ed.drag = null;
+            ed.pushUndo();
+            ed.points.push({
+                x: +c.x.toFixed(2), y: +c.y.toFixed(2),
+                label, radius: ed.radius,
+            });
+            ed.save(); render(); return;
+        }
+        if (ed.drag?.kind === "bbox-new") {
+            const { sx, sy, ex, ey, label } = ed.drag;
+            ed.drag = null;
+            const x1 = Math.min(sx, ex), y1 = Math.min(sy, ey);
+            const x2 = Math.max(sx, ex), y2 = Math.max(sy, ey);
+            if (x2 - x1 >= MIN_BBOX_PX && y2 - y1 >= MIN_BBOX_PX) {
+                ed.pushUndo();
+                ed.bboxes.push([Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), label]);
+                ed.save();
+            }
+            render();
+        }
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+        ed.cursor.visible = false;
+        ed.hover = { kind: null, idx: -1 };
+        render();
+    });
+
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    canvas.addEventListener("wheel", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const r = canvas.getBoundingClientRect();
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        if (e.ctrlKey || e.metaKey) {
+            const f = e.deltaY < 0 ? 1.15 : 0.87;
+            const newZ = Math.max(0.05, Math.min(40, ed.zoom * f));
+            const k = newZ / ed.zoom;
+            ed.panX = mx - (mx - ed.panX) * k;
+            ed.panY = my - (my - ed.panY) * k;
+            ed.zoom = newZ;
+        } else {
+            ed.radius = Math.max(0.5, Math.min(256, ed.radius + (e.deltaY < 0 ? 0.5 : -0.5)));
+            const rW = node.widgets?.find(x => x.name === "default_radius");
+            if (rW) rW.value = ed.radius;
+        }
+        render();
+    }, { passive: false });
+
+    canvas.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+            e.preventDefault();
+            (e.shiftKey ? ed.redo() : ed.undo()) && ed.save(); render();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+            e.preventDefault(); ed.redo() && ed.save(); render();
+        } else if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            if (ed.hover.kind === "point") { ed.pushUndo(); ed.points.splice(ed.hover.idx, 1); ed.save(); }
+            else if (ed.hover.kind === "bbox") { ed.pushUndo(); ed.bboxes.splice(ed.hover.idx, 1); ed.save(); }
+            ed.hover = { kind: null, idx: -1 }; render();
+        } else if (e.key.toLowerCase() === "f") {
+            const r = canvasWrap.getBoundingClientRect();
+            ed.fitView(r.width, r.height); render();
+        }
+    });
+
+    for (const wn of ["width", "height"]) {
+        const w = node.widgets?.find(x => x.name === wn);
+        if (!w) continue;
+        const orig = w.callback;
+        w.callback = function (v) { orig?.call(this, v); syncDims(); ed._fitted = false; render(); };
+    }
+    const rW = node.widgets?.find(x => x.name === "default_radius");
+    if (rW) {
+        const orig = rW.callback;
+        rW.callback = function (v) { orig?.call(this, v); ed.radius = +v; render(); };
+    }
+
+    function tryDiscoverRef() {
+        const r = findRefImage(node);
+        if (r?.url && r.url !== ed.refUrl) ed.setRefImage(r.url);
+    }
+    const origConn = node.onConnectionsChange;
+    node.onConnectionsChange = function (...args) {
+        origConn?.apply(this, args);
+        setTimeout(tryDiscoverRef, 200);
+    };
+    const origExec = node.onExecuted;
+    node.onExecuted = function (out) {
+        origExec?.apply(this, arguments);
+        if (out?.bg_image?.[0]) {
+            const w = out.bg_image_width?.[0];
+            const h = out.bg_image_height?.[0];
+            ed.setRefImage("data:image/jpeg;base64," + out.bg_image[0], w, h);
+        } else {
+            tryDiscoverRef();
+        }
+    };
+    const refPoll = setInterval(() => { if (!ed.refImg) tryDiscoverRef(); }, 1500);
+
+    const origRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        origRemoved?.apply(this, arguments);
+        clearInterval(refPoll); ro.disconnect();
+        if (raf) cancelAnimationFrame(raf);
+    };
+
+    setTimeout(render, 50);
+    setTimeout(tryDiscoverRef, 100);
+
+    node._mecEditor = ed;
+    node._mecRender = render;
+}
 
 app.registerExtension({
     name: "MaskEditControl.PointsBBoxEditor",
-
-    async nodeCreated(node) {
-        if (!["PointsMaskEditor", "SAMMaskGeneratorMEC"].includes(node.comfyClass)) return;
-
-        const editor = new PointsBBoxEditor(node);
-        editor.saveState();
-
-        // Hide the internal serialized-state widgets. Setting widget.type="hidden"
-        // alone is NOT enough on modern ComfyUI: multiline STRING widgets are
-        // backed by a real <textarea> DOM element parented to a div.dom-widget
-        // wrapper, which keeps rendering on top of the node and looks like leaky
-        // UI to the user. We also collapse the layout slot and hide the DOM
-        // wrapper so nothing leaks.
-        const _hideLeakyWidget = (w) => {
-            if (!w) return;
-            w.type = "hidden";
-            w.computeSize = () => [0, -4];
-            w.draw = () => {};
-            const el = w.element;
-            if (el) {
-                el.hidden = true;
-                el.style.display = "none";
-                const wrapper = el.parentElement;
-                if (wrapper && wrapper.classList?.contains("dom-widget")) {
-                    wrapper.style.display = "none";
-                }
-            }
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (!TARGET_NODES.includes(nodeData.name)) return;
+        const orig = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function (info) {
+            orig?.apply(this, arguments);
+            if (this._mecEditor) { this._mecEditor.load(); this._mecRender?.(); }
         };
-        for (const wn of ["editor_data"]) {
-            _hideLeakyWidget(node.widgets?.find(w => w.name === wn));
-        }
-
-        // ── Create DOM widget ────────────────────────────────────────
-        let _editorHeight = 450;
-
-        const container = document.createElement("div");
-        container.style.cssText = "width:100%;position:relative;overflow:hidden;cursor:crosshair;border-radius:6px;border:1px solid #313244;box-sizing:border-box;background:#181825;";
-        editor._containerEl = container;
-
-        const canvas = document.createElement("canvas");
-        canvas.style.cssText = "width:100%;height:100%;display:block;";
-        container.appendChild(canvas);
-
-        node.addDOMWidget("points_editor_canvas", "canvas", container, {
-            serialize: false,
-            hideOnZoom: false,
-            getMinHeight: () => _editorHeight,
-            getMaxHeight: () => _editorHeight,
-            getHeight:    () => _editorHeight,
-        });
-        const ctx = canvas.getContext("2d");
-
-        // ── Size update callback (called when reference image loads with NEW dims)
-        let _prevSizeKey = "";
-        let _resizeDebounceTimer = null;
-        let _isResizing = false;
-        let _lockedNodeW = 0;
-        let _lockedNodeH = 0;
-
-        function _getOtherWidgetsHeight() {
-            // Measure cumulative height of non-editor widgets for accurate total
-            let h = 0;
-            if (node.widgets) {
-                for (const w of node.widgets) {
-                    if (w.name === "points_editor_canvas") continue;
-                    h += (w.computeSize?.(node.size?.[0] || 400)?.[1] ?? 24) + 4;
-                }
-            }
-            // Header + output slots + padding
-            return h + (LiteGraph.NODE_TITLE_HEIGHT || 30) + Math.max(0, (node.outputs?.length || 0)) * 20 + 16;
-        }
-
-        function updateEditorSize() {
-            if (_isResizing) return;
-            const imgW = editor._canvasW;
-            const imgH = editor._canvasH;
-            if (imgW <= 0 || imgH <= 0) return;
-            const nodeW = _lockedNodeW || node.size?.[0] || 500;
-            const availW = Math.max(200, nodeW - 40);
-            const scale  = Math.min(1.0, availW / imgW);
-            const displayH = Math.round(imgH * scale) + TOOLBAR_H + 24;
-            const newEditorH = Math.max(350, Math.min(displayH, 700));
-            const otherH = _getOtherWidgetsHeight();
-            const totalH = newEditorH + otherH;
-            const newW = Math.max(nodeW, Math.min(imgW + 40, 800));
-            // Snap to integers to prevent sub-pixel oscillation
-            const snappedW = Math.round(newW);
-            const snappedH = Math.round(totalH);
-            const sizeKey = `${snappedW}x${snappedH}`;
-            // Only resize if the computed size actually differs
-            if (sizeKey === _prevSizeKey) return;
-            _prevSizeKey = sizeKey;
-            _editorHeight = newEditorH;
-            _lockedNodeW = snappedW;
-            _lockedNodeH = snappedH;
-            // Debounce to prevent rapid consecutive resizes (jitter)
-            if (_resizeDebounceTimer) clearTimeout(_resizeDebounceTimer);
-            _resizeDebounceTimer = setTimeout(() => {
-                _resizeDebounceTimer = null;
-                _isResizing = true;
-                node.setSize([snappedW, snappedH]);
-                if (node.graph) node.graph.setDirtyCanvas(true, true);
-                // Allow two animation frames so LiteGraph + ResizeObserver
-                // reflow fully settles before we accept new resize requests.
-                // One frame was not enough — the observer fired a second
-                // time mid-layout and re-triggered updateEditorSize, causing
-                // the canvas to "auto zoom in / zoom out" repeatedly.
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => { _isResizing = false; });
-                });
-            }, 80);
-        }
-        editor._onImageLoaded = updateEditorSize;
-
-        // Override computeSize to return locked dimensions, preventing
-        // LiteGraph from recalculating and causing relayout jitter.
-        const _origComputeSize = node.computeSize;
-        node.computeSize = function() {
-            if (_lockedNodeW > 0 && _lockedNodeH > 0) {
-                return [_lockedNodeW, _lockedNodeH];
-            }
-            return _origComputeSize?.apply(this, arguments) ?? [400, 500];
-        };
-
-        // ── Render & Resize (stable – prevents shaking) ─────────────
-        let _lastW = 0, _lastH = 0, _rafId = null;
-
-        function ensureCanvasSize() {
-            const rect = container.getBoundingClientRect();
-            const w = Math.round(rect.width);
-            const h = Math.round(rect.height);
-            if (w === 0 || h === 0) return false;
-            if (w !== _lastW || h !== _lastH) {
-                _lastW = w; _lastH = h;
-                const dpr = window.devicePixelRatio || 1;
-                canvas.width  = w * dpr;
-                canvas.height = h * dpr;
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            return true;
-        }
-
-        function render() {
-            if (_rafId) return;
-            _rafId = requestAnimationFrame(() => {
-                _rafId = null;
-                if (!ensureCanvasSize()) return;
-                ctx.clearRect(0, 0, _lastW, _lastH);
-                editor.draw(ctx, 0, 0, _lastW, _lastH);
-            });
-        }
-
-        function renderNow() {
-            if (!ensureCanvasSize()) return;
-            ctx.clearRect(0, 0, _lastW, _lastH);
-            editor.draw(ctx, 0, 0, _lastW, _lastH);
-        }
-
-        const ro = new ResizeObserver(() => render());
-        ro.observe(container);
-        setTimeout(render, 150);
-
-        // ── Sync canvas dimensions from widget values ────────────────
-        function syncCanvasSize() {
-            const wW = node.widgets?.find(w => w.name === "width");
-            const hW = node.widgets?.find(w => w.name === "height");
-            if (wW && hW) { editor._canvasW = wW.value; editor._canvasH = hW.value; }
-        }
-        function syncRadius() {
-            const rW = node.widgets?.find(w => w.name === "default_radius");
-            if (rW) editor.currentRadius = rW.value;
-        }
-        syncCanvasSize();
-        syncRadius();
-        for (const wName of ["width", "height"]) {
-            const wid = node.widgets?.find(w => w.name === wName);
-            if (wid) {
-                const origCb = wid.callback;
-                wid.callback = function(v) {
-                    origCb?.call(this, v);
-                    syncCanvasSize();
-                    updateEditorSize();
-                    render();
-                };
-            }
-        }
-        // Sync default_radius widget → editor.currentRadius
-        const radiusWid = node.widgets?.find(w => w.name === "default_radius");
-        if (radiusWid) {
-            const origRadiusCb = radiusWid.callback;
-            radiusWid.callback = function(v) {
-                origRadiusCb?.call(this, v);
-                editor.currentRadius = v;
-                render();
-            };
-        }
-
-        // ── Try to load reference image ──────────────────────────────
-        function tryLoadRefImage() {
-            if (!node.inputs) return;
-            for (const inp of node.inputs) {
-                if (inp.name === "reference_image" && inp.link != null) {
-                    const linkInfo = app.graph.links[inp.link];
-                    if (!linkInfo) continue;
-                    const srcNode = app.graph.getNodeById(linkInfo.origin_id);
-                    if (!srcNode) continue;
-
-                    // Strategy 1: Node has rendered images (post-execution)
-                    if (srcNode.imgs?.length > 0) { editor.loadRefImage(srcNode.imgs[0].src); return; }
-
-                    // Strategy 2: LoadImage widget with filename
-                    const imgW = srcNode.widgets?.find(w => w.name === "image");
-                    if (imgW?.value) {
-                        const parts = imgW.value.split("/");
-                        const subfolder = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
-                        const filename = parts[parts.length - 1];
-                        editor.loadRefImage(`/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder)}&type=input`);
-                        return;
-                    }
-
-                    // Strategy 3: Walk upstream (2 levels) looking for images
-                    const visited = new Set([srcNode.id]);
-                    const queue = srcNode.inputs ? [...srcNode.inputs] : [];
-                    for (let depth = 0; depth < 2 && queue.length > 0; depth++) {
-                        const batch = queue.splice(0, queue.length);
-                        for (const upInp of batch) {
-                            if (upInp.link == null) continue;
-                            const upLink = app.graph.links[upInp.link];
-                            if (!upLink) continue;
-                            const upNode = app.graph.getNodeById(upLink.origin_id);
-                            if (!upNode || visited.has(upNode.id)) continue;
-                            visited.add(upNode.id);
-                            if (upNode.imgs?.length > 0) { editor.loadRefImage(upNode.imgs[0].src); return; }
-                            const upImgW = upNode.widgets?.find(w => w.name === "image");
-                            if (upImgW?.value) {
-                                const p2 = upImgW.value.split("/");
-                                const sf = p2.length > 1 ? p2.slice(0, -1).join("/") : "";
-                                const fn = p2[p2.length - 1];
-                                editor.loadRefImage(`/view?filename=${encodeURIComponent(fn)}&subfolder=${encodeURIComponent(sf)}&type=input`);
-                                return;
-                            }
-                            if (upNode.inputs) queue.push(...upNode.inputs);
-                        }
-                    }
-                }
-            }
-        }
-
-        const origConnChange = node.onConnectionsChange;
-        node.onConnectionsChange = function(type, index, connected, link_info) {
-            origConnChange?.apply(this, arguments);
-            if (connected) {
-                setTimeout(() => { tryLoadRefImage(); render(); }, 200);
-            } else {
-                // Only clear image when reference_image specifically is disconnected
-                const inp = node.inputs?.[index];
-                if (inp?.name === "reference_image") {
-                    editor._refLoaded = false;
-                    editor._refImage = null;
-                    editor._lastRefUrl = null;
-                    // Do NOT reset _hasAutoFitted here — keeping the user's
-                    // current zoom/pan when an image briefly disconnects
-                    // prevents the "crazy refit" jitter on reconnect.
-                    syncCanvasSize();
-                }
-                render();
-            }
-        };
-        let _imgInterval = setInterval(() => {
-            if (editor._refLoaded) return;
-            tryLoadRefImage();
-        }, 1500);
-
-        // Clean up when node is removed
-        const origOnRemoved = node.onRemoved;
-        node.onRemoved = function() {
-            origOnRemoved?.apply(this, arguments);
-            if (_imgInterval) { clearInterval(_imgInterval); _imgInterval = null; }
-            if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
-            if (_resizeDebounceTimer) { clearTimeout(_resizeDebounceTimer); _resizeDebounceTimer = null; }
-            canvas.removeEventListener("keydown", _keydownHandler);
-            ro.disconnect();
-        };
-
-        const origExecuted = node.onExecuted;
-        node.onExecuted = function(output) {
-            origExecuted?.apply(this, arguments);
-            // If Python sent a reference image (works for video frames and all image sources)
-            if (output?.bg_image?.[0]) {
-                const b64 = output.bg_image[0];
-                const origW = output.bg_image_width?.[0];
-                const origH = output.bg_image_height?.[0];
-                editor.loadRefImage("data:image/jpeg;base64," + b64, origW, origH);
-                return;
-            }
-            // Fallback: re-check upstream node images (always reloads data: URLs)
-            tryLoadRefImage(); render();
-        };
-
-        // ── POINTER DOWN ─────────────────────────────────────────────
-        canvas.addEventListener("pointerdown", (e) => {
-            e.preventDefault(); e.stopPropagation();
-            canvas.focus();
-            canvas.setPointerCapture(e.pointerId);
-
-            const rect = canvas.getBoundingClientRect();
-            const sx = e.clientX - rect.left;
-            const sy = e.clientY - rect.top;
-
-            // Toolbar click?
-            if (sy < TOOLBAR_H) {
-                const action = editor.findToolbarButton(sx, sy);
-                if (action) editor.handleToolbarClick(action, render);
-                return;
-            }
-
-            const canvasSy = sy - TOOLBAR_H;
-            const c = editor.screenToCanvas(sx, canvasSy);
-
-            if (e.button === 1) {
-                editor.isPanning = true;
-                editor.panStart = { x: e.clientX - editor.panX, y: e.clientY - editor.panY };
-                canvas.style.cursor = "grab"; return;
-            }
-            if (e.ctrlKey && !e.shiftKey && (e.button === 0 || e.button === 2)) {
-                editor.isBboxDrag = true;
-                editor.bboxDragLabel = e.button === 0 ? 1 : 0;
-                editor.dragStart = { x: c.x, y: c.y };
-                editor._dragEnd  = { x: c.x, y: c.y };
-                return;
-            }
-            if (e.button === 0 || e.button === 2) {
-                if (e.shiftKey) {
-                    const idx = editor.findPointAt(c.x, c.y);
-                    if (idx >= 0) {
-                        editor.saveState(); editor.points.splice(idx, 1);
-                        editor.hoveredPoint = -1; editor.updateWidgets(); render(); return;
-                    }
-                    const bidx = editor.findBboxAt(c.x, c.y);
-                    if (bidx >= 0) {
-                        editor.saveState(); editor.bboxes.splice(bidx, 1);
-                        editor.hoveredBbox = -1; editor.updateWidgets(); render(); return;
-                    }
-                    return;
-                }
-                // Check if clicking on existing point → start drag
-                const hitIdx = editor.findPointAt(c.x, c.y);
-                if (hitIdx >= 0 && e.button === 0) {
-                    editor.saveState();
-                    editor.isDraggingPoint = true;
-                    editor.dragPointIndex = hitIdx;
-                    editor._dragPointOriginal = { ...editor.points[hitIdx] };
-                    canvas.style.cursor = "grabbing";
-                    return;
-                }
-                editor.saveState();
-                editor.points.push({
-                    x: parseFloat(c.x.toFixed(2)),
-                    y: parseFloat(c.y.toFixed(2)),
-                    label: e.button === 0 ? 1 : 0,
-                    radius: editor.currentRadius,
-                });
-                editor.updateWidgets(); render();
-            }
-        });
-
-        // ── POINTER MOVE ─────────────────────────────────────────────
-        canvas.addEventListener("pointermove", (e) => {
-            e.stopPropagation();
-            const rect = canvas.getBoundingClientRect();
-            const sx = e.clientX - rect.left;
-            const sy = e.clientY - rect.top;
-
-            if (sy < TOOLBAR_H) {
-                const oldHov = editor._hoveredButton;
-                editor._hoveredButton = editor.findToolbarButton(sx, sy);
-                canvas.style.cursor = editor._hoveredButton ? "pointer" : "crosshair";
-                if (oldHov !== editor._hoveredButton) render();
-                return;
-            }
-            if (editor._hoveredButton) { editor._hoveredButton = null; render(); }
-            canvas.style.cursor = editor.isPanning ? "grab" :
-                                  editor.isDraggingPoint ? "grabbing" :
-                                  (editor.hoveredPoint >= 0 ? "grab" : "crosshair");
-
-            const canvasSy = sy - TOOLBAR_H;
-            const c = editor.screenToCanvas(sx, canvasSy);
-            editor._mouseCanvasX = c.x;
-            editor._mouseCanvasY = c.y;
-
-            if (editor.isPanning) {
-                editor.panX = e.clientX - editor.panStart.x;
-                editor.panY = e.clientY - editor.panStart.y;
-                render(); return;
-            }
-            if (editor.isDraggingPoint && editor.dragPointIndex >= 0) {
-                const p = editor.points[editor.dragPointIndex];
-                p.x = parseFloat(c.x.toFixed(2));
-                p.y = parseFloat(c.y.toFixed(2));
-                editor.hoveredPoint = editor.dragPointIndex;
-                editor.updateWidgets();
-                render(); return;
-            }
-            if (editor.isBboxDrag) { editor._dragEnd = { x: c.x, y: c.y }; render(); return; }
-
-            const oldP = editor.hoveredPoint, oldB = editor.hoveredBbox;
-            editor.hoveredPoint = editor.findPointAt(c.x, c.y);
-            editor.hoveredBbox  = editor.hoveredPoint < 0 ? editor.findBboxAt(c.x, c.y) : -1;
-            if (oldP !== editor.hoveredPoint || oldB !== editor.hoveredBbox) {
-                canvas.style.cursor = editor.hoveredPoint >= 0 ? "grab" : "crosshair";
-                render();
-            }
-        });
-
-        // ── POINTER UP ───────────────────────────────────────────────
-        canvas.addEventListener("pointerup", (e) => {
-            e.stopPropagation();
-            try { canvas.releasePointerCapture(e.pointerId); } catch(_) {}
-            if (editor.isPanning) { editor.isPanning = false; canvas.style.cursor = "crosshair"; return; }
-            if (editor.isDraggingPoint) {
-                editor.isDraggingPoint = false;
-                editor.dragPointIndex = -1;
-                editor._dragPointOriginal = null;
-                canvas.style.cursor = "crosshair";
-                editor.updateWidgets();
-                render();
-                return;
-            }
-            if (editor.isBboxDrag && editor.dragStart && editor._dragEnd) {
-                const x1 = Math.min(editor.dragStart.x, editor._dragEnd.x);
-                const y1 = Math.min(editor.dragStart.y, editor._dragEnd.y);
-                const x2 = Math.max(editor.dragStart.x, editor._dragEnd.x);
-                const y2 = Math.max(editor.dragStart.y, editor._dragEnd.y);
-                if (x2 - x1 > 3 && y2 - y1 > 3) {
-                    editor.saveState();
-                    editor.bboxes.push([Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), editor.bboxDragLabel]);
-                    editor.updateWidgets();
-                }
-                editor.isBboxDrag = false; editor.dragStart = null; editor._dragEnd = null;
-                render();
-            }
-        });
-
-        // ── SCROLL ───────────────────────────────────────────────────
-        canvas.addEventListener("wheel", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const rect = canvas.getBoundingClientRect();
-            if (e.clientY - rect.top < TOOLBAR_H) return;
-
-            if (e.ctrlKey || e.metaKey) {
-                // CTRL + Scroll = zoom (centered on cursor)
-                const factor = e.deltaY < 0 ? 1.12 : 0.89;
-                const mx = e.clientX - rect.left;
-                const my = e.clientY - rect.top - TOOLBAR_H;
-                editor.panX = mx - (mx - editor.panX) * factor;
-                editor.panY = my - (my - editor.panY) * factor;
-                editor.zoom *= factor;
-                editor.zoom = Math.max(0.05, Math.min(editor.zoom, 30));
-            } else {
-                // Plain scroll = adjust point radius
-                editor.currentRadius += e.deltaY < 0 ? 0.5 : -0.5;
-                editor.currentRadius = Math.max(0.5, Math.min(editor.currentRadius, 256));
-                // Sync back to widget
-                const rW = node.widgets?.find(w => w.name === "default_radius");
-                if (rW) rW.value = editor.currentRadius;
-            }
-            render();
-        }, { passive: false });
-
-        canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-        // ── Keyboard ─────────────────────────────────────────────────
-        canvas.tabIndex = 0;
-        canvas.style.outline = "none";
-        const _keydownHandler = (e) => {
-            if (e.key === "z" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                if (e.shiftKey) editor.redo(); else editor.undo();
-                render();
-            } else if (e.key === "y" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); editor.redo(); render();
-            } else if (e.key === "Delete" || e.key === "Backspace") {
-                e.preventDefault();
-                if (editor.hoveredPoint >= 0) {
-                    editor.saveState(); editor.points.splice(editor.hoveredPoint, 1);
-                    editor.hoveredPoint = -1; editor.updateWidgets(); render();
-                } else if (editor.hoveredBbox >= 0) {
-                    editor.saveState(); editor.bboxes.splice(editor.hoveredBbox, 1);
-                    editor.hoveredBbox = -1; editor.updateWidgets(); render();
-                }
-            } else if (e.key === "r" || e.key === "R") {
-                if (editor._containerEl) {
-                    const r = editor._containerEl.getBoundingClientRect();
-                    if (r.width > 0 && r.height > 0) editor.fitView(r.width, r.height - TOOLBAR_H);
-                    else { editor.zoom = 1; editor.panX = 0; editor.panY = 0; }
-                }
-                render();
-            }
-        };
-        canvas.addEventListener("keydown", _keydownHandler);
-
-        node._mecEditor = editor;
-        node._mecRender = render;
     },
-
-    // ── Serialization hooks ──────────────────────────────────────────
-    async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (!["PointsMaskEditor", "SAMMaskGeneratorMEC"].includes(nodeData.name)) return;
-        const origOnConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function(info) {
-            origOnConfigure?.apply(this, arguments);
-            if (this._mecEditor && info._mecState) {
-                this._mecEditor.points = info._mecState.points || [];
-                this._mecEditor.bboxes = info._mecState.bboxes || [];
-                this._mecEditor.updateWidgets();
-                this._mecRender?.();
-            }
-        };
-        const origSerialize = nodeType.prototype.serialize;
-        nodeType.prototype.serialize = function() {
-            const data = origSerialize?.apply(this, arguments) || {};
-            if (this._mecEditor) {
-                data._mecState = { points: this._mecEditor.points, bboxes: this._mecEditor.bboxes };
-            }
-            return data;
-        };
+    async nodeCreated(node) {
+        if (!TARGET_NODES.includes(node.comfyClass)) return;
+        installEditor(node);
     },
 });
