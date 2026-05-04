@@ -514,31 +514,48 @@ def get_sam_predictor(model, model_type, img_np):
     """Create the correct SAM predictor for the given model type and set image.
 
     Args:
-        model: loaded SAM model object (SAM2Base)
-        model_type: str ("sam2.1" or "sam3")
+        model: loaded SAM model object
+        model_type: str ("sam2.1", "sam3", "sam_hq", or "sam")
         img_np: uint8 (H, W, 3) RGB image
 
     Returns: predictor object or None
-
-    NOTE: Only SAM 2.1 and SAM 3 are supported. Legacy SAM 1
-    (vit_h/l/b) and the original SAM 2.0 line have been removed.
     """
     predictor = None
 
-    if model_type not in ("sam2.1", "sam3"):
+    if model_type in ("sam2.1", "sam2", "sam3"):
+        try:
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+            predictor = SAM2ImagePredictor(model)
+        except ImportError:
+            logger.error(
+                "[MEC] sam2 package not found. Install with:\n"
+                "  pip install git+https://github.com/facebookresearch/sam2.git"
+            )
+            return None
+    elif model_type == "sam_hq":
+        try:
+            from segment_anything_hq import SamPredictor as HQSamPredictor
+            predictor = HQSamPredictor(model)
+        except ImportError:
+            logger.error(
+                "[MEC] segment_anything_hq package not found. Install with:\n"
+                "  pip install segment-anything-hq"
+            )
+            return None
+    elif model_type in ("sam", "sam1"):
+        try:
+            from segment_anything import SamPredictor
+            predictor = SamPredictor(model)
+        except ImportError:
+            logger.error(
+                "[MEC] segment_anything package not found. Install with:\n"
+                "  pip install segment-anything"
+            )
+            return None
+    else:
         logger.error(
             f"[MEC] Unsupported SAM model_type '{model_type}'. "
-            f"Only 'sam2.1' and 'sam3' are supported."
-        )
-        return None
-
-    try:
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-        predictor = SAM2ImagePredictor(model)
-    except ImportError:
-        logger.error(
-            "[MEC] sam2 package not found. Install with:\n"
-            "  pip install git+https://github.com/facebookresearch/sam2.git"
+            f"Supported: 'sam2.1', 'sam2', 'sam3', 'sam_hq', 'sam', 'sam1'."
         )
         return None
 
