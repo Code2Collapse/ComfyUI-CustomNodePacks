@@ -150,12 +150,34 @@ class SamMultiMaskPickerWidget {
         }
     }
 
-    // ── Build mask overlay thumbnails from all_masks output ──────────
-    buildMaskThumbnails(allMasksData) {
-        // allMasksData would be (3, H, W) tensor data
-        // In practice, JS doesn't have direct tensor access,
-        // so we render a visual approximation on re-execution.
-        // The real mask data is sent to the widget via node output images.
+    // ── Build mask overlay thumbnails from server-rendered PNGs ──────
+    // The Python node renders each of the 3 SAM candidate masks to a PNG in
+    // ComfyUI's temp dir and passes the file infos via the ``ui`` payload.
+    // We download them as <img> elements once (browser caches by filename)
+    // and store them in maskImages[] so draw() can composite each thumbnail.
+    receiveMaskThumbnails(thumbInfos) {
+        if (!Array.isArray(thumbInfos)) return;
+        for (let i = 0; i < Math.min(3, thumbInfos.length); i++) {
+            const info = thumbInfos[i];
+            if (!info || !info.filename) {
+                this.maskImages[i] = null;
+                continue;
+            }
+            const url = `/view?filename=${encodeURIComponent(info.filename)}`
+                      + `&subfolder=${encodeURIComponent(info.subfolder || "")}`
+                      + `&type=${encodeURIComponent(info.type || "temp")}`
+                      + `&t=${Date.now()}`;
+            const img = new Image();
+            img.onload = () => {
+                this.maskImages[i] = img;
+                this._needsRedraw = true;
+                this.node.setDirtyCanvas(true, true);
+            };
+            img.onerror = () => {
+                this.maskImages[i] = null;
+            };
+            img.src = url;
+        }
     }
 
     // ── Draw the picker widget ───────────────────────────────────────
@@ -224,10 +246,33 @@ class SamMultiMaskPickerWidget {
                 }
                 ctx.drawImage(this.sourceImage, sx, sy, sw, sh, tx, ty, thumbW, thumbH);
 
-                // Overlay: semi-transparent colored tint for "mask area"
-                const overlayAlpha = 0.5;
-                ctx.fillStyle = `rgba(${theme.overlayColor[0]}, ${theme.overlayColor[1]}, ${theme.overlayColor[2]}, ${overlayAlpha})`;
-                ctx.fillRect(tx, ty, thumbW, thumbH);
+                // Real mask overlay if Python sent the per-mask PNG. The PNG is
+                // a grayscale L-mode image where pixel value == mask probability.
+                // We composite by drawing the mask in a colored tint using
+                // ``destination-in``-style masking via an offscreen canvas.
+                const maskImg = this.maskImages[i];
+                if (maskImg && maskImg.complete && maskImg.naturalWidth > 0) {
+                    // Match the same letterboxed crop the source image used,
+                    // so alignment matches frame-for-frame.
+                    const off = document.createElement("canvas");
+                    off.width = thumbW;
+                    off.height = thumbH;
+                    const octx = off.getContext("2d");
+                    // Draw the grayscale mask scaled to thumb size with the
+                    // same source crop as the base image (mask is full-res).
+                    octx.drawImage(maskImg, sx, sy, sw, sh, 0, 0, thumbW, thumbH);
+                    // Tint: replace the RGB with the overlay color, keep mask
+                    // luminance as alpha multiplier.
+                    octx.globalCompositeOperation = "source-in";
+                    octx.fillStyle = `rgba(${theme.overlayColor[0]}, ${theme.overlayColor[1]}, ${theme.overlayColor[2]}, 0.55)`;
+                    octx.fillRect(0, 0, thumbW, thumbH);
+                    ctx.drawImage(off, tx, ty);
+                } else {
+                    // No real mask available yet -> faint hint that this card
+                    // is selectable, but no fake-red full overlay anymore.
+                    ctx.fillStyle = `rgba(${theme.overlayColor[0]}, ${theme.overlayColor[1]}, ${theme.overlayColor[2]}, 0.10)`;
+                    ctx.fillRect(tx, ty, thumbW, thumbH);
+                }
 
                 ctx.restore();
             } else {
@@ -371,12 +416,16 @@ app.registerExtension({
                     if (!this._mecPicker) return;
                     this._mecPicker.updateFromNode();
                     this._mecPicker.tryLoadSourceImage();
+                    // ctx is already translated to the node origin by LiteGraph,
+                    // so widget-local coordinates start at (0, widgetY). Passing
+                    // absolute node.pos[*] here doubled the offset and pushed
+                    // the widget far below the node body.
                     return this._mecPicker.draw(
                         ctx,
-                        node.pos[0],
-                        node.pos[1] + widgetY,
+                        0,
+                        widgetY,
                         widgetWidth,
-                        node.pos[1] + widgetY,
+                        widgetY,
                         widgetHeight
                     );
                 },
@@ -385,8 +434,10 @@ app.registerExtension({
                 },
                 mouse: (event, pos, node) => {
                     if (!this._mecPicker) return false;
-                    const localX = pos[0] + node.pos[0];
-                    const localY = pos[1] + node.pos[1];
+                    // ``pos`` is already in widget-local coordinates that match
+                    // the (0, widgetY) origin we draw from above.
+                    const localX = pos[0];
+                    const localY = pos[1];
 
                     if (event.type === "mousemove") {
                         this._mecPicker.onMouseMove(localX, localY);
@@ -421,28 +472,35 @@ app.registerExtension({
             return false;
         };
 
-        // Parse output scores on execution complete
+        // Parse output scores + receive per-mask thumbnail PNGs on execution
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             if (onExecuted) onExecuted.apply(this, arguments);
 
             if (this._mecPicker && message) {
-                // Try to extract scores from the output
+                // Scores can arrive either as ui.scores (preferred) or via the
+                // legacy output.scores path. Try both.
                 try {
-                    const scoresOutput = message.output?.scores;
-                    if (scoresOutput && typeof scoresOutput === "string") {
-                        const parsed = JSON.parse(scoresOutput);
-                        if (Array.isArray(parsed) && parsed.length >= 3) {
-                            this._mecPicker.scores = parsed.slice(0, 3);
-                        }
+                    let parsed = null;
+                    if (Array.isArray(message.scores) && message.scores.length > 0) {
+                        parsed = JSON.parse(message.scores[0]);
+                    } else if (message.output?.scores) {
+                        const raw = message.output.scores;
+                        parsed = JSON.parse(typeof raw === "string" ? raw : raw[0]);
                     } else if (message.output?.ui?.scores) {
-                        const parsed = JSON.parse(message.output.ui.scores);
-                        if (Array.isArray(parsed)) {
-                            this._mecPicker.scores = parsed.slice(0, 3);
-                        }
+                        parsed = JSON.parse(message.output.ui.scores);
+                    }
+                    if (Array.isArray(parsed) && parsed.length >= 3) {
+                        this._mecPicker.scores = parsed.slice(0, 3);
                     }
                 } catch (_) {
                     // Score parsing optional
+                }
+
+                // Real mask thumbnails sent by the Python side.
+                const thumbs = message.mask_thumbs;
+                if (Array.isArray(thumbs) && thumbs.length > 0) {
+                    this._mecPicker.receiveMaskThumbnails(thumbs);
                 }
 
                 this._mecPicker._needsRedraw = true;

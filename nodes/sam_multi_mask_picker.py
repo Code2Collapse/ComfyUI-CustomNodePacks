@@ -13,12 +13,24 @@ Files UNTOUCHED: All other existing node files
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import logging
+import os
 from typing import Optional
 
 import numpy as np
 import torch
+
+try:
+    import folder_paths  # type: ignore
+except Exception:  # pragma: no cover - only at import-time outside ComfyUI
+    folder_paths = None  # type: ignore
+
+try:
+    from PIL import Image as _PILImage  # type: ignore
+except Exception:  # pragma: no cover
+    _PILImage = None  # type: ignore
 
 from .model_manager import (
     MODEL_REGISTRY,
@@ -130,10 +142,12 @@ class SamMultiMaskPickerMEC:
             },
         }
 
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        """Force re-execution when selected_index changes (JS widget interaction)."""
-        return float("nan")
+    # NOTE: IS_CHANGED removed intentionally. Returning float("nan") forced SAM
+    # to re-run on every prompt queue, even when only ``selected_index`` changed,
+    # which is wasteful (SAM inference is heavy). With normal caching, ComfyUI
+    # re-executes only when an input value changes -- which still includes
+    # ``selected_index`` -- so the JS picker continues to work, but identical
+    # re-queues are now properly cached. See docs/inpaint-suite-guide.md.
 
     def pick_mask(
         self,
@@ -315,7 +329,48 @@ class SamMultiMaskPickerMEC:
             "device": device,
         }, indent=2)
 
-        return (selected_mask_t, all_masks_t, idx, scores_str, info)
+        # ── Render mask thumbnails for the JS picker ──────────────
+        # Without this, the JS widget falls back to a flat red overlay on every
+        # thumbnail (it has no access to torch tensors). We save each mask as a
+        # grayscale PNG into ComfyUI's temp dir and return them via the ``ui``
+        # payload so the JS ``onExecuted`` hook can load and composite them.
+        mask_thumb_files: list[dict] = []
+        if folder_paths is not None and _PILImage is not None:
+            try:
+                temp_dir = folder_paths.get_temp_directory()
+                os.makedirs(temp_dir, exist_ok=True)
+                # Stable hash of the inputs so reusing the same prompts hits the
+                # browser cache instead of re-uploading three PNGs every run.
+                key_blob = (
+                    img_np.tobytes()[:16384]
+                    + str(points_list).encode()
+                    + str(box_np.tolist() if box_np is not None else None).encode()
+                    + model_name.encode()
+                )
+                digest = hashlib.sha256(key_blob).hexdigest()[:12]
+                for i in range(3):
+                    mask_arr = (np.clip(masks_np[i], 0.0, 1.0) * 255.0).astype(np.uint8)
+                    fname = f"mec_sam_mask_{digest}_{i}.png"
+                    fpath = os.path.join(temp_dir, fname)
+                    _PILImage.fromarray(mask_arr, mode="L").save(fpath, compress_level=1)
+                    mask_thumb_files.append({
+                        "filename": fname,
+                        "subfolder": "",
+                        "type": "temp",
+                    })
+            except Exception as exc:
+                logger.warning("[MEC] failed to write mask thumbnails: %s", exc)
+                mask_thumb_files = []
+
+        ui_payload = {
+            "mask_thumbs": mask_thumb_files,
+            "scores": [scores_str],
+            "selected_index": [idx],
+        }
+        return {
+            "ui": ui_payload,
+            "result": (selected_mask_t, all_masks_t, idx, scores_str, info),
+        }
 
     @staticmethod
     def _detect_model_type(model_name: str) -> str:

@@ -2,6 +2,34 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## [1.14.0] – 2026-05-04
+
+### Fixed
+
+- **SAM Multi-Mask Picker — render real per-mask thumbnails**: the JS
+  widget previously called an empty `buildMaskThumbnails()` stub and then
+  drew a flat red `fillRect` over all three thumbnails identically, so
+  every candidate looked the same regardless of what SAM produced. The
+  Python node now serializes the three candidate masks as grayscale PNGs
+  to ComfyUI's temp directory (stable input-hash filenames) and ships
+  them on the UI payload as `mask_thumbs`. The JS now loads each PNG via
+  `/view?...&type=temp` into `this.maskImages[i]` and composites the
+  real mask onto each thumbnail using an offscreen canvas with
+  `globalCompositeOperation="source-in"` plus a per-thumb tint.
+- **SAM Multi-Mask Picker — widget no longer renders ~600 px below the
+  node body**: the `addCustomWidget` registration was forwarding
+  `node.pos[0]` and `node.pos[1] + widgetY` into the inner draw/mouse
+  handlers, but LiteGraph already translates the canvas context to the
+  node origin before invoking widget callbacks — the result was a
+  doubled offset that pushed the picker off the bottom of the node.
+  Registration now passes widget-local coordinates (`0, widgetY` for
+  draw; `pos[0], pos[1]` for mouse), so the picker lives inside the
+  node body where it belongs.
+- **SAM Multi-Mask Picker — stop force-rerunning SAM on every queue**:
+  removed `IS_CHANGED → NaN`, which was unconditionally invalidating
+  the cache and re-running SAM on identical inputs. Standard cache
+  semantics now apply.
+
 ## [1.13.1] – 2026-05-04
 
 ### Fixed
