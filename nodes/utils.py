@@ -729,10 +729,13 @@ def points_to_arrays(points_list):
 def normalize_bbox(b, default=(0, 0, 0, 0)):
     """Normalize a BBOX-like input to a 4-tuple ``(x, y, w, h)``.
 
-    Accepts:
-      * 4-tuple/list ``(x, y, w, h)``
-      * list-of-bboxes (returns the first)
-      * numpy array of shape ``(4,)`` or ``(N, 4)``
+    Accepts (with auto-detection between XYWH and XYXY based on nesting depth):
+      * 4-tuple/list ``(x, y, w, h)`` — XYWH
+      * list-of-bboxes ``[[x, y, w, h], ...]`` — XYWH (returns the first)
+      * SAM2/kijai batched format ``[[[x1, y1, x2, y2], ...]]`` — XYXY,
+        auto-converted to XYWH using the first inner box
+      * Optional 5th element (label) on inner box is dropped
+      * numpy array of shape ``(4,)`` or ``(N, 4)`` or ``(1, N, 4)``
       * scalar / malformed values → returns ``default``
     """
     try:
@@ -740,21 +743,48 @@ def normalize_bbox(b, default=(0, 0, 0, 0)):
             return tuple(default)
         if hasattr(b, "tolist"):
             b = b.tolist()
-        if isinstance(b, (list, tuple)):
-            if len(b) == 0:
+        if not isinstance(b, (list, tuple)) or len(b) == 0:
+            return tuple(default)
+
+        # ── SAM2/kijai batched XYXY: [[[x1,y1,x2,y2,...], ...]] ──
+        # 3-level nesting where the innermost is a list of >=4 numbers.
+        if (
+            isinstance(b[0], (list, tuple))
+            and len(b[0]) > 0
+            and isinstance(b[0][0], (list, tuple))
+            and len(b[0][0]) >= 4
+        ):
+            inner = b[0][0]
+            try:
+                x1, y1, x2, y2 = (float(inner[0]), float(inner[1]),
+                                  float(inner[2]), float(inner[3]))
+            except (TypeError, ValueError):
                 return tuple(default)
-            # list-of-bboxes (e.g. [[x,y,w,h], ...]) → first
-            if isinstance(b[0], (list, tuple)) and len(b[0]) == 4:
-                b = b[0]
-            if len(b) == 4 and all(not isinstance(v, (list, tuple)) for v in b):
-                out = []
-                for v in b:
-                    try:
-                        fv = float(v)
-                        out.append(int(fv) if fv.is_integer() else fv)
-                    except (TypeError, ValueError):
-                        return tuple(default)
-                return tuple(out)
+            x, y = min(x1, x2), min(y1, y2)
+            w, h = abs(x2 - x1), abs(y2 - y1)
+            out = []
+            for v in (x, y, w, h):
+                out.append(int(v) if float(v).is_integer() else v)
+            return tuple(out)
+
+        # ── list-of-bboxes XYWH: [[x,y,w,h], ...] → first ──
+        if (
+            isinstance(b[0], (list, tuple))
+            and len(b[0]) >= 4
+            and not isinstance(b[0][0], (list, tuple))
+        ):
+            b = b[0]
+
+        # ── flat 4-tuple XYWH ──
+        if len(b) >= 4 and all(not isinstance(v, (list, tuple)) for v in b[:4]):
+            out = []
+            for v in b[:4]:
+                try:
+                    fv = float(v)
+                    out.append(int(fv) if fv.is_integer() else fv)
+                except (TypeError, ValueError):
+                    return tuple(default)
+            return tuple(out)
     except Exception:
         pass
     return tuple(default)
