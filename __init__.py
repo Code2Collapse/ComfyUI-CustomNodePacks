@@ -42,6 +42,7 @@ from .nodes.temporal_anchor import TemporalAnchorMEC
 from .nodes.sam_multi_mask_picker import SamMultiMaskPickerMEC
 from .nodes.inpaint_suite import InpaintCropProMEC, InpaintStitchProMEC, InpaintPasteBackMEC
 from .nodes.image_comparer import ImageComparerMEC
+from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
 from .nodes.vae_merge import VAEMergeMEC
@@ -88,6 +89,7 @@ _MEC_MAPPINGS = {
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
     "ImageComparerMEC": ImageComparerMEC,
+    "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
     "DrawShapeMEC": DrawShapeMEC,
@@ -121,6 +123,7 @@ _MEC_DISPLAY = {
     "InpaintStitchProMEC": "Inpaint Stitch Pro (MEC)",
     "InpaintPasteBackMEC": "Inpaint Paste Back (MEC)",
     "ImageComparerMEC": "Image Comparer (MEC)",
+    "VideoFramePlayerMEC": "Video Frame Player (MEC)",
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",

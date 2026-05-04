@@ -2,6 +2,58 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## [1.11.0] – 2026-05-08
+
+### Added
+
+#### Ronin-gimbal cinema stabilization (Inpaint Crop / Stitch / Paste-Back)
+
+- New `video_stab_strength` (0–1) widget on `InpaintCropProMEC` activates a
+  two-stage filter cascade on the per-frame mask centroid trajectory:
+  1. **EMA low-pass** at `4 Hz × strength + 0.05` cutoff to kill HF jitter
+     while preserving subject drift.
+  2. **Critically-damped spring** (`k = 8·strength + 0.5`,
+     `damping = 2·√k`) integrated with semi-implicit Euler for inertia
+     and a tiny natural overshoot.
+  - **Pre-warm pass**: the spring is run once on the first 12 frames, the
+    final `(pos, vel)` state is captured, and the real pass is initialised
+    from it — eliminating the snap-to-first-frame artefact that plagues
+    naive spring filters.
+- **99th-percentile center-displacement sizing** (not full envelope): crop
+  width = P99(detected widths) + (P99(cx) − P1(cx)) + 2·padding. Matches
+  cinema operator framing — tight on the subject, ignoring outliers.
+- New `video_stab_fps` (FPS for filter time-base) and `video_stab_padding`
+  widgets.
+- `stitch_data` schema bumped to **v3** with new `frame_offsets` field
+  (per-frame `(x, y)` paste positions in canvas-space). v2 remains fully
+  supported by `InpaintStitchProMEC` and `InpaintPasteBackMEC`.
+- `InpaintStitchProMEC._stitch_v2` and `InpaintPasteBackMEC.paste_back`
+  rewritten with a per-frame paste loop that consumes `frame_offsets`
+  when present (v3) and falls back to the original single-position paste
+  for v2 round-trips.
+- New helpers in `nodes/stabilization_utils.py`: `_median_filter_1d`,
+  `_ema_lowpass`, `_spring_filter`, `ronin_filter_1d`,
+  `compute_ronin_bbox_trajectory`.
+
+### Changed
+
+- `InpaintCropProMEC`: `crop_for_inpaint` signature gains
+  `video_stab_strength`, `video_stab_fps`, `video_stab_padding` (all
+  defaulted; backward compatible).
+- `Step 8.6 crop_mask` now emits a per-frame rectangle stack when Ronin
+  is active.
+- `Step 10` info string reports the active stabilization mode.
+
+### Validated
+
+- Numerical: 11.13 px raw frame-to-frame jitter → 1.34 / 1.64 / 1.76 px at
+  strength 0.3 / 0.7 / 1.0 (≥85% reduction); init-snap ≤ 1.2 px (warmup
+  works).
+- Round-trip: identity inpaint + paste-back is bit-perfect (mean abs
+  diff = 0.0000) on 12-frame jittery video.
+- Static-subject test: 0 px center spread on stationary subject with
+  ±1 px detector noise.
+
 ## [1.9.0] – 2026-04-29
 
 ### Added

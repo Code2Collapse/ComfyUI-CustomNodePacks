@@ -561,3 +561,241 @@ def compute_stable_bbox_trajectory(
     return (max(0, x_min), max(0, y_min),
             min(W, x_max) - max(0, x_min),
             min(H, y_max) - max(0, y_min))
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Ronin-gimbal cinema trajectory
+# ══════════════════════════════════════════════════════════════════════
+
+def _median_filter_1d(arr: np.ndarray, radius: int) -> np.ndarray:
+    """1D median filter along axis 0 with edge replication."""
+    if radius <= 0 or arr.shape[0] <= 1:
+        return arr.copy()
+    n = arr.shape[0]
+    out = np.empty_like(arr)
+    for i in range(n):
+        s = max(0, i - radius)
+        e = min(n, i + radius + 1)
+        out[i] = np.median(arr[s:e], axis=0)
+    return out
+
+
+def _ema_lowpass(targets: np.ndarray, alpha: float,
+                 init_state: Optional[np.ndarray] = None) -> np.ndarray:
+    """Single-pole exponential low-pass.
+
+    alpha: per-frame coefficient (alpha = 1 - exp(-2π fc / fps)).
+    init_state: optional starting state (otherwise targets[0]).
+    """
+    n = targets.shape[0]
+    if n == 0:
+        return targets.copy()
+    out = np.empty_like(targets)
+    out[0] = init_state if init_state is not None else targets[0]
+    for i in range(1, n):
+        out[i] = alpha * targets[i] + (1.0 - alpha) * out[i - 1]
+    return out
+
+
+def _spring_filter(
+    targets: np.ndarray,
+    stiffness: float,
+    damping: float,
+    dt: float,
+    init_pos: Optional[np.ndarray] = None,
+    init_vel: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Critically-damped 2nd-order spring (semi-implicit Euler).
+
+    acc = stiffness * (target - pos) - damping * vel
+    Returns (trajectory, final_pos, final_vel).
+    """
+    n, d = targets.shape
+    if n == 0:
+        z = np.zeros(d, dtype=targets.dtype)
+        return targets.copy(), (init_pos if init_pos is not None else z), z
+    out = np.empty_like(targets)
+    pos = (init_pos if init_pos is not None else targets[0]).copy()
+    vel = (init_vel if init_vel is not None else np.zeros(d, dtype=targets.dtype)).copy()
+    out[0] = pos
+    for i in range(1, n):
+        acc = stiffness * (targets[i] - pos) - damping * vel
+        vel = vel + acc * dt
+        pos = pos + vel * dt
+        out[i] = pos
+    return out, pos, vel
+
+
+def ronin_filter_1d(
+    centers: np.ndarray,
+    strength: float,
+    fps: float = 24.0,
+    warmup_frames: int = 12,
+) -> np.ndarray:
+    """Two-stage Ronin gimbal filter.
+
+    Stage 1: EMA low-pass (cutoff 4 Hz at strength=1.0) → kills HF jitter.
+    Stage 2: Critically-damped spring → adds inertia + tiny settle.
+
+    A pre-warmup pass on the first ``warmup_frames`` is run to settle the
+    integrator so frames 1..N don't have a visible snap-to.
+
+    centers: (N, D) float (e.g. (N, 2) for cx,cy).
+    strength: 0.0 = raw passthrough, 1.0 = full gimbal.
+    fps: source frame rate (only affects time constants).
+    """
+    if strength <= 0.0 or centers.shape[0] <= 1:
+        return centers.copy()
+    s = float(np.clip(strength, 0.0, 1.0))
+
+    # ---- Stage 1: EMA low-pass ----
+    cutoff_hz = 4.0 * s + 0.05  # never quite zero so alpha stays well-defined
+    alpha = 1.0 - math.exp(-2.0 * math.pi * cutoff_hz / max(fps, 1.0))
+    alpha = float(np.clip(alpha, 1e-3, 1.0))
+    lp = _ema_lowpass(centers, alpha)
+
+    # ---- Stage 2: critically-damped spring ----
+    # zeta = 1 (critical) at full strength; weaker damping at lower strength
+    # to keep responsiveness high. omega ~ stiffness in our parameterisation.
+    stiffness = 8.0 * s + 0.5
+    damping = 2.0 * math.sqrt(stiffness)  # = critical damping
+    dt = 1.0 / max(fps, 1.0)
+
+    # ---- Pre-warm: run on first window, reset state to its end, run real pass.
+    n = lp.shape[0]
+    warm_n = int(min(max(warmup_frames, 1), n))
+    _, warm_pos, warm_vel = _spring_filter(lp[:warm_n], stiffness, damping, dt)
+    smoothed, _, _ = _spring_filter(lp, stiffness, damping, dt,
+                                    init_pos=warm_pos, init_vel=warm_vel)
+    return smoothed
+
+
+def compute_ronin_bbox_trajectory(
+    mask: torch.Tensor,
+    strength: float = 0.7,
+    fps: float = 24.0,
+    size_padding: int = 32,
+    warmup_frames: int = 12,
+) -> Tuple[Tuple[int, int, int, int, int, int], List[Tuple[int, int]]]:
+    """Cinema-gimbal (DJI Ronin-style) per-frame trajectory smoothing.
+
+    Pipeline per dimension:
+      1. Per-frame bbox extraction from mask, gap-filled by linear interp.
+      2. Median filter (radius 2) → reject single-frame outlier spikes.
+      3. EMA low-pass (4 Hz × strength cutoff) → kill HF jitter.
+      4. Critically-damped 2nd-order spring → inertia, glide, ~0 overshoot.
+      5. Pre-warm pass so frames 1..N have no snap-to.
+
+    Crop SIZE is locked to a uniform (crop_w, crop_h) sized to the 99th
+    percentile center displacement plus subject size + padding (NOT the
+    full envelope — that over-crops on big subject moves and gives WAN
+    too much hallucination room).
+
+    Args:
+      mask: (B, H, W) float.
+      strength: 0.0 = snappy, 1.0 = full Ronin.
+      fps: source frame rate (controls filter time constants).
+      size_padding: extra pixels added around the envelope+subject size.
+      warmup_frames: integrator pre-warm window length.
+
+    Returns:
+      (env_x, env_y, env_w, env_h, crop_w, crop_h),  per_frame_centers
+        - First tuple: union bbox covering all per-frame crop windows in
+          original image space (used to size canvas expansion).
+        - per_frame_centers: list of (cx, cy) integer centers, one per frame.
+    """
+    B, H, W = mask.shape
+
+    # ---- 1. Per-frame raw bboxes ----
+    raw: List[Optional[Tuple[float, float, float, float]]] = []
+    for b in range(B):
+        nz = torch.nonzero(mask[b] > 0.5, as_tuple=False)
+        if nz.numel() == 0:
+            raw.append(None)
+        else:
+            y0 = nz[:, 0].min().item()
+            y1 = nz[:, 0].max().item()
+            x0 = nz[:, 1].min().item()
+            x1 = nz[:, 1].max().item()
+            raw.append((
+                0.5 * (x0 + x1),                # cx
+                0.5 * (y0 + y1),                # cy
+                float(x1 - x0 + 1),             # w
+                float(y1 - y0 + 1),             # h
+            ))
+
+    valid = [i for i, r in enumerate(raw) if r is not None]
+    if not valid:
+        return (0, 0, W, H, W, H), [(W // 2, H // 2)] * B
+
+    # Linear-interp gaps
+    if len(valid) < B:
+        filled: List[Tuple[float, float, float, float]] = [None] * B  # type: ignore[list-item]
+        for i in range(B):
+            if raw[i] is not None:
+                filled[i] = raw[i]
+                continue
+            prev_j = max((j for j in valid if j < i), default=None)
+            next_j = min((j for j in valid if j > i), default=None)
+            if prev_j is None:
+                filled[i] = raw[next_j]  # type: ignore[index]
+            elif next_j is None:
+                filled[i] = raw[prev_j]  # type: ignore[index]
+            else:
+                t = (i - prev_j) / max(1, (next_j - prev_j))
+                a = raw[prev_j]; b_ = raw[next_j]  # type: ignore[index]
+                filled[i] = tuple(a[k] * (1 - t) + b_[k] * t for k in range(4))  # type: ignore[assignment]
+        raw_full = np.asarray(filled, dtype=np.float64)
+    else:
+        raw_full = np.asarray(raw, dtype=np.float64)
+
+    # ---- 2. Median filter (kill outlier spikes) ----
+    med_radius = 2 if B >= 5 else max(1, B // 2)
+    med = _median_filter_1d(raw_full, med_radius)
+
+    centers_raw = med[:, :2]
+    sizes_raw = med[:, 2:]
+
+    # ---- 3+4+5. Two-stage Ronin filter on centers ----
+    centers_smooth = ronin_filter_1d(
+        centers_raw, strength=strength, fps=fps, warmup_frames=warmup_frames
+    )
+
+    # ---- Subject size: 99th-percentile (not max) to be robust to detector blowups.
+    base_w = float(np.percentile(sizes_raw[:, 0], 99))
+    base_h = float(np.percentile(sizes_raw[:, 1], 99))
+
+    # ---- Crop size: P99 - P1 displacement of smoothed centers + base size + pad.
+    # This sizes the crop to actual shot motion, NOT to outlier spikes.
+    if B >= 4:
+        cx_p99 = float(np.percentile(centers_smooth[:, 0], 99))
+        cx_p01 = float(np.percentile(centers_smooth[:, 0], 1))
+        cy_p99 = float(np.percentile(centers_smooth[:, 1], 99))
+        cy_p01 = float(np.percentile(centers_smooth[:, 1], 1))
+    else:
+        cx_p99 = float(centers_smooth[:, 0].max())
+        cx_p01 = float(centers_smooth[:, 0].min())
+        cy_p99 = float(centers_smooth[:, 1].max())
+        cy_p01 = float(centers_smooth[:, 1].min())
+
+    range_x = max(0.0, cx_p99 - cx_p01)
+    range_y = max(0.0, cy_p99 - cy_p01)
+    pad = float(max(0, size_padding))
+    crop_w = int(round(base_w + range_x + 2.0 * pad))
+    crop_h = int(round(base_h + range_y + 2.0 * pad))
+    crop_w = max(crop_w, int(round(base_w)))
+    crop_h = max(crop_h, int(round(base_h)))
+
+    # Per-frame integer centers
+    centers_int: List[Tuple[int, int]] = [
+        (int(round(centers_smooth[i, 0])), int(round(centers_smooth[i, 1])))
+        for i in range(B)
+    ]
+
+    # Envelope (union of all per-frame crop rects) — for canvas sizing
+    env_x0 = min(c[0] - crop_w // 2 for c in centers_int)
+    env_y0 = min(c[1] - crop_h // 2 for c in centers_int)
+    env_x1 = max(c[0] - crop_w // 2 + crop_w for c in centers_int)
+    env_y1 = max(c[1] - crop_h // 2 + crop_h for c in centers_int)
+
+    return (env_x0, env_y0, env_x1 - env_x0, env_y1 - env_y0, crop_w, crop_h), centers_int

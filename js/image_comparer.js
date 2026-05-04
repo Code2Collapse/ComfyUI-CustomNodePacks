@@ -43,13 +43,15 @@ app.registerExtension({
                 el,
                 imgA: null,
                 imgB: null,
-                diffCvs: null,
+                imgDiff: null,    // server-computed HDR-aware diff
+                diffCvs: null,    // legacy js-side fallback diff
                 mode: 0,
                 divPos: 0.5,
                 alpha: 0.5,
                 drag: false,
-                labelA: "Before",
-                labelB: "After",
+                labelA: "A",
+                labelB: "B",
+                stats: "",
                 labelOpacity: 1.0,
                 _fadeTimer: null,
             };
@@ -164,9 +166,11 @@ app.registerExtension({
             if (!msg?.image_a?.[0] || !msg?.image_b?.[0]) return;
 
             const S = this._S;
-            S.labelA = msg.label_a?.[0] ?? "Before";
-            S.labelB = msg.label_b?.[0] ?? "After";
+            S.labelA = msg.label_a?.[0] ?? "A";
+            S.labelB = msg.label_b?.[0] ?? "B";
+            S.stats  = msg.stats?.[0] ?? "";
             S.diffCvs = null;
+            S.imgDiff = null;
 
             const mkURL = (info) =>
                 api.apiURL(
@@ -175,10 +179,11 @@ app.registerExtension({
                     `&subfolder=${encodeURIComponent(info.subfolder || "")}`
                 );
 
+            const expected = msg.image_diff?.[0] ? 3 : 2;
             let loaded = 0;
             const node = this;
             const done = () => {
-                if (++loaded < 2) return;
+                if (++loaded < expected) return;
                 node._render();
                 const aspect = S.imgA.height / S.imgA.width;
                 const w = Math.max(node.size[0], 320);
@@ -194,6 +199,11 @@ app.registerExtension({
             S.imgB.onload = done;
             S.imgA.src = mkURL(msg.image_a[0]);
             S.imgB.src = mkURL(msg.image_b[0]);
+            if (msg.image_diff?.[0]) {
+                S.imgDiff = new Image();
+                S.imgDiff.onload = done;
+                S.imgDiff.src = mkURL(msg.image_diff[0]);
+            }
         };
 
         /* ── Build difference heatmap (cached) ─────────── */
@@ -351,8 +361,15 @@ app.registerExtension({
                 ctx.stroke();
             } else {
                 /* ── Diff ── */
-                if (!S.diffCvs) this._buildDiff();
-                ctx.drawImage(S.diffCvs || S.imgA, 0, 0, cw, ch);
+                // Prefer the server-computed full-precision diff (preserves
+                // 8-bit vs 16-bit sub-quantization differences). Fall back to
+                // the legacy JS-side heatmap if it's not available.
+                if (S.imgDiff) {
+                    ctx.drawImage(S.imgDiff, 0, 0, cw, ch);
+                } else {
+                    if (!S.diffCvs) this._buildDiff();
+                    ctx.drawImage(S.diffCvs || S.imgA, 0, 0, cw, ch);
+                }
             }
 
             // Labels (bottom-left)
@@ -395,7 +412,14 @@ function _drawLabels(ctx, S, cw, ch) {
             `${S.labelA}  ${Math.round(S.alpha * 100)}%  ${S.labelB}`
         );
     } else {
-        _pill(ctx, 5, ch - 24, `Diff: ${S.labelA} vs ${S.labelB}`);
+        // Diff mode: show stats string (max|d|, PSNR, etc.) instead of plain label
+        const lines = (S.stats || `Diff: ${S.labelA} vs ${S.labelB}`).split(/\r?\n/);
+        const lineH = 14;
+        let y = ch - 6 - (lines.length - 1) * lineH;
+        for (const line of lines) {
+            _pill(ctx, 5, y - 12, line);
+            y += lineH;
+        }
     }
     ctx.restore();
 }
