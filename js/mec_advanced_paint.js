@@ -290,6 +290,20 @@ app.registerExtension({
             dataW.serializeValue = () => dataW.value || "";
             dataW.computeSize = () => [0, -4];
             dataW.type = "hidden";
+            dataW.draw = () => {};
+            // Hide the backing DOM element + its dom-widget wrapper too —
+            // ComfyUI keeps these visible even when widget.type === "hidden".
+            {
+                const el = dataW.element;
+                if (el) {
+                    el.hidden = true;
+                    el.style.display = "none";
+                    const wrapper = el.parentElement;
+                    if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                        wrapper.style.display = "none";
+                    }
+                }
+            }
 
             // Clear button
             // MANUAL bug-fix (Apr 2026): pass an explicit options object so

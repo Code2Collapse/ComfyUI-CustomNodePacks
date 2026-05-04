@@ -954,13 +954,25 @@ app.registerExtension({
 
         const editor = new SplineEditor(node);
 
-        // Hide internal widgets
+        // Hide internal widgets. Multiline STRING widgets in modern ComfyUI
+        // are backed by a real <textarea> DOM element parented to a
+        // div.dom-widget wrapper; setting widget.type="hidden" alone leaves
+        // both visible on top of the node. Collapse the layout slot AND hide
+        // the DOM wrapper.
         for (const wName of ["spline_data", "mask_color", "mask_opacity"]) {
             const w = node.widgets?.find(w => w.name === wName);
-            if (w) {
-                w.type = "hidden";
-                w.computeSize = () => [0, -4];
-                w.draw = () => {};
+            if (!w) continue;
+            w.type = "hidden";
+            w.computeSize = () => [0, -4];
+            w.draw = () => {};
+            const el = w.element;
+            if (el) {
+                el.hidden = true;
+                el.style.display = "none";
+                const wrapper = el.parentElement;
+                if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                    wrapper.style.display = "none";
+                }
             }
         }
 

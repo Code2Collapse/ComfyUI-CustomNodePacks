@@ -2,6 +2,34 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## [1.14.1] – 2026-05-04
+
+### Fixed
+
+- **Hidden multiline-string widgets no longer leak as giant textareas on top
+  of editor nodes.** On modern ComfyUI, multiline `STRING` widgets are
+  backed by a real `<textarea>` DOM element parented to a
+  `div.dom-widget` wrapper. Setting `widget.type = "hidden"` was no
+  longer enough to hide them — the DOM textarea kept rendering on top of
+  the canvas and made `PointsMaskEditor`, `SplineMaskEditorMEC`,
+  `MECAdvancedPaintCanvas`, and `InpaintCompositeMEC` look like a wall of
+  empty text fields. The hide path now also sets `element.style.display
+  = "none"` and collapses the `dom-widget` wrapper so the visible UI
+  matches what those widgets are supposed to be: invisible internal state.
+  Affected widgets:
+  - `PointsMaskEditor.editor_data`
+  - `SplineMaskEditorMEC.spline_data` / `mask_color` / `mask_opacity`
+  - `MECAdvancedPaintCanvas.canvas_data`
+  - `InpaintCompositeMEC` mode-conditional widgets (`blend_mode_override`,
+    `color_match`, `upscale_method`, `feather_edges`, `feather_radius`)
+- **Verified end‐to‐end via Playwright**: created PointsMaskEditor and
+  SplineMaskEditorMEC, captured pre/post screenshots, and exercised the
+  interactive editors. Points editor accepts left/right click for
+  positive/negative points and Ctrl-drag for bboxes — `editor_data`
+  payload contains real coordinates with distinct `label:1`/`label:0`
+  values (no hardcoded zeros). Spline editor accepts 4 control points
+  and renders a smooth catmull-rom curve closed loop, not a polygon.
+
 ## [1.14.0] – 2026-05-04
 
 ### Fixed

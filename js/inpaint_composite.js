@@ -24,11 +24,37 @@ function setWidgetVisible(widget, visible) {
             widget.computeSize = widget.origComputeSize;
             delete widget.origComputeSize;
         }
+        const el = widget.element;
+        if (el) {
+            el.style.display = widget.origElDisplay ?? "";
+            delete widget.origElDisplay;
+            const wrapper = el.parentElement;
+            if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                wrapper.style.display = widget.origWrapperDisplay ?? "";
+                delete widget.origWrapperDisplay;
+            }
+        }
     } else {
         if (widget.origType === undefined) widget.origType = widget.type;
         if (widget.origComputeSize === undefined) widget.origComputeSize = widget.computeSize;
         widget.type = "hidden";
         widget.computeSize = () => [0, -4]; // collapse layout slot
+        // Modern ComfyUI keeps the DOM <textarea>/<input> backing element
+        // visible even when widget.type === "hidden". Collapse it too.
+        const el = widget.element;
+        if (el) {
+            if (widget.origElDisplay === undefined) {
+                widget.origElDisplay = el.style.display || "";
+            }
+            el.style.display = "none";
+            const wrapper = el.parentElement;
+            if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                if (widget.origWrapperDisplay === undefined) {
+                    widget.origWrapperDisplay = wrapper.style.display || "";
+                }
+                wrapper.style.display = "none";
+            }
+        }
     }
 }
 

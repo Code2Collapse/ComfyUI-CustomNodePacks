@@ -588,6 +588,31 @@ app.registerExtension({
         const editor = new PointsBBoxEditor(node);
         editor.saveState();
 
+        // Hide the internal serialized-state widgets. Setting widget.type="hidden"
+        // alone is NOT enough on modern ComfyUI: multiline STRING widgets are
+        // backed by a real <textarea> DOM element parented to a div.dom-widget
+        // wrapper, which keeps rendering on top of the node and looks like leaky
+        // UI to the user. We also collapse the layout slot and hide the DOM
+        // wrapper so nothing leaks.
+        const _hideLeakyWidget = (w) => {
+            if (!w) return;
+            w.type = "hidden";
+            w.computeSize = () => [0, -4];
+            w.draw = () => {};
+            const el = w.element;
+            if (el) {
+                el.hidden = true;
+                el.style.display = "none";
+                const wrapper = el.parentElement;
+                if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                    wrapper.style.display = "none";
+                }
+            }
+        };
+        for (const wn of ["editor_data"]) {
+            _hideLeakyWidget(node.widgets?.find(w => w.name === wn));
+        }
+
         // ── Create DOM widget ────────────────────────────────────────
         let _editorHeight = 450;
 
