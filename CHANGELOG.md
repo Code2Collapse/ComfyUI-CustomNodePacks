@@ -2,6 +2,28 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## [1.13.1] – 2026-05-04
+
+### Fixed
+
+- **Latest-ComfyUI compatibility**: removed deprecated `disable_noise=False`
+  kwarg from two `comfy.sample.sample_custom(…)` call sites in
+  `MECBuilderSampler` (mec_paint_suite.py). The argument was dropped from
+  `comfy.sample.sample_custom`'s signature in recent ComfyUI builds and
+  was raising `TypeError: unexpected keyword argument 'disable_noise'`
+  at sample time.
+- Audited all 41 nodes against the current ComfyUI runtime: full pack
+  imports cleanly, no other deprecated APIs in use
+  (`prepare_noise`, `sampler_object`, `calculate_sigmas`,
+  `OUTPUT_NODE`, `IS_CHANGED` all match current signatures).
+
+### Notes
+
+- ComfyUI's V3 node API (`io.ComfyNode` / `define_schema` /
+  `MatchType` / `Autogrow` / `DynamicCombo`) is **opt-in and additive**
+  — the V1 API used throughout this pack is fully supported and not
+  scheduled for removal. No mass migration required.
+
 ## [1.12.0] – 2026-05-04
 
 ### Added

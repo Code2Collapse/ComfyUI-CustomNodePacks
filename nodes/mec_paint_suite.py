@@ -925,7 +925,7 @@ class MECBuilderSampler:
         out_latent = comfy.sample.sample_custom(
             m, noise, float(cfg), sampler, sigmas,
             positive, negative, latent,
-            disable_noise=False, seed=int(seed),
+            seed=int(seed),
         )
 
         # ---- self-correction polish pass ----
@@ -939,7 +939,7 @@ class MECBuilderSampler:
                 m, noise2, float(cfg_finish if cfg_mode != "Constant" else cfg),
                 sampler, polish_sigmas,
                 positive, negative, out_latent,
-                disable_noise=False, seed=int(seed) + 1,
+                seed=int(seed) + 1,
             )
 
         out_dict = {"samples": out_latent}
