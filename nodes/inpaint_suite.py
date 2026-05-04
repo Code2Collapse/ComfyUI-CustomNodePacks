@@ -1722,3 +1722,165 @@ class InpaintPasteBackMEC:
         )
 
         return (canvas.clamp(0, 1), info)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Unified composite node — replaces the two-node Stitch + PasteBack split
+# ══════════════════════════════════════════════════════════════════════
+
+class InpaintCompositeMEC:
+    """One node that does both Stitch Pro (advanced blending) and Paste Back
+    (clean resize + paste). Pick the mode with the ``mode`` dropdown; the
+    front-end hides parameters that don't apply to the selected mode.
+
+    Modes:
+      • ``stitch_pro`` — composite the inpainted region back through an
+        advanced blend pipeline (edge-aware, Laplacian pyramid, frequency,
+        gaussian, or whatever the crop node baked in). Optional Reinhard
+        color match. Returns the actual blend mask used.
+      • ``paste_back`` — straight resize + paste of the inpainted crop onto
+        the original canvas, with optional Gaussian-feathered edges. Faster,
+        no blend logic, no color match.
+
+    The output signature is unified: (IMAGE, MASK, STRING). In ``paste_back``
+    mode the MASK output is the paste rectangle (1.0 inside, 0.0 outside,
+    feathered if requested) so downstream nodes always receive a usable mask.
+    """
+
+    VRAM_TIER = 1
+    MODES = ["stitch_pro", "paste_back"]
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "stitch_data": ("STITCH_DATA", {
+                    "tooltip": "Stitch data from InpaintCropProMEC"}),
+                "inpainted_image": ("IMAGE", {
+                    "tooltip": "Inpainted result from model (B,H,W,C)"}),
+                "mode": (cls.MODES, {
+                    "default": "stitch_pro",
+                    "tooltip":
+                        "stitch_pro: advanced blend (edge-aware/laplacian/"
+                        "frequency/gaussian) + optional color match.\n"
+                        "paste_back: clean resize + paste with optional "
+                        "feathered edges. Faster, no blend pipeline."}),
+                # ── stitch_pro params ─────────────────────────────────
+                "blend_mode_override": (InpaintStitchProMEC.BLEND_OVERRIDES, {
+                    "default": "from_crop",
+                    "tooltip":
+                        "[stitch_pro only] Override the blend mode from the "
+                        "crop node, or 'from_crop' to keep what the crop "
+                        "node configured."}),
+                "color_match": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip":
+                        "[stitch_pro only] Apply Reinhard mean+std color "
+                        "transfer before blending to suppress hue drift "
+                        "from the inpaint model."}),
+                # ── paste_back params ────────────────────────────────
+                "upscale_method": (InpaintPasteBackMEC.INTERP_METHODS, {
+                    "default": "lanczos",
+                    "tooltip":
+                        "[paste_back only] Interpolation used when resizing "
+                        "the inpainted crop back to its original dims."}),
+                "feather_edges": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip":
+                        "[paste_back only] Gaussian-feather the paste-rect "
+                        "boundary so the seam disappears."}),
+                "feather_radius": ("INT", {
+                    "default": 16, "min": 0, "max": 64, "step": 1,
+                    "tooltip":
+                        "[paste_back only] Feather radius in pixels. 0 "
+                        "disables feathering even if the toggle is on."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("image", "mask", "info")
+    OUTPUT_TOOLTIPS = (
+        "Final image: in stitch_pro mode the inpainted region is blended "
+        "back through the configured blend pipeline; in paste_back mode "
+        "the inpainted crop is resized + pasted (optionally feathered).",
+        "Mask: in stitch_pro mode this is the actual blend mask used (in "
+        "original-image space); in paste_back mode it is the paste rect "
+        "(feathered if enabled) so downstream nodes always get a mask.",
+        "Info string describing mode, parameters, and timings.",
+    )
+    FUNCTION = "composite"
+    CATEGORY = "MaskEditControl/Inpaint"
+    DESCRIPTION = (
+        "Unified composite node. Switch between Stitch Pro (advanced blend "
+        "pipeline) and Paste Back (clean resize + paste) via the mode "
+        "dropdown. Replaces the legacy InpaintStitchProMEC + "
+        "InpaintPasteBackMEC pair (both still registered for backward "
+        "compatibility with existing workflows)."
+    )
+
+    def composite(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
+                  mode: str,
+                  blend_mode_override: str, color_match: bool,
+                  upscale_method: str, feather_edges: bool, feather_radius: int):
+        if mode == "stitch_pro":
+            image, blend_mask, info = InpaintStitchProMEC().stitch(
+                stitch_data=stitch_data,
+                inpainted_image=inpainted_image,
+                blend_mode_override=blend_mode_override,
+                color_match=color_match,
+            )
+            return (image, blend_mask, info)
+
+        if mode == "paste_back":
+            image, info = InpaintPasteBackMEC().paste_back(
+                stitch_data=stitch_data,
+                inpainted_image=inpainted_image,
+                upscale_method=upscale_method,
+                feather_edges=feather_edges,
+                feather_radius=feather_radius,
+            )
+            # Synthesize a paste-rect mask in original-image space so the
+            # MASK output is always populated.
+            B, H, W, _ = image.shape
+            device = image.device
+            paste_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
+            version = stitch_data.get("version", 1)
+            if version >= 2:
+                ctc_x = int(stitch_data["ctc_x"]); ctc_y = int(stitch_data["ctc_y"])
+                ctc_w = int(stitch_data["ctc_w"]); ctc_h = int(stitch_data["ctc_h"])
+                cto_x = int(stitch_data["cto_x"]); cto_y = int(stitch_data["cto_y"])
+                cto_w = int(stitch_data["cto_w"]); cto_h = int(stitch_data["cto_h"])
+                # Original-image-space rect = the cto_* "original-overlap" box.
+                offsets = stitch_data.get("frame_offsets") if version >= 3 else None
+                if offsets is not None and len(offsets) == B:
+                    # Per-frame Ronin: derive each frame's original-space rect
+                    # from canvas-space offset minus canvas-origin (cto_x/y is
+                    # canvas's intersection with original).
+                    canvas_origin_x = ctc_x - cto_x
+                    canvas_origin_y = ctc_y - cto_y
+                    for b, (fx, fy) in enumerate(offsets):
+                        ox = int(fx) - canvas_origin_x
+                        oy = int(fy) - canvas_origin_y
+                        x0 = max(0, ox); y0 = max(0, oy)
+                        x1 = min(W, ox + ctc_w); y1 = min(H, oy + ctc_h)
+                        if x1 > x0 and y1 > y0:
+                            paste_mask[b, y0:y1, x0:x1] = 1.0
+                else:
+                    x0 = max(0, cto_x); y0 = max(0, cto_y)
+                    x1 = min(W, cto_x + cto_w); y1 = min(H, cto_y + cto_h)
+                    if x1 > x0 and y1 > y0:
+                        paste_mask[:, y0:y1, x0:x1] = 1.0
+            else:
+                cx = int(stitch_data.get("crop_x", 0)); cy = int(stitch_data.get("crop_y", 0))
+                cw = int(stitch_data.get("crop_w", W)); ch = int(stitch_data.get("crop_h", H))
+                x0 = max(0, cx); y0 = max(0, cy)
+                x1 = min(W, cx + cw); y1 = min(H, cy + ch)
+                if x1 > x0 and y1 > y0:
+                    paste_mask[:, y0:y1, x0:x1] = 1.0
+            if bool(feather_edges) and int(feather_radius) > 0:
+                paste_mask = _gaussian_blur_2d(
+                    paste_mask.unsqueeze(1), sigma=int(feather_radius)
+                ).squeeze(1).clamp(0, 1)
+            return (image, paste_mask, info)
+
+        raise ValueError(f"InpaintCompositeMEC: unknown mode '{mode}'")

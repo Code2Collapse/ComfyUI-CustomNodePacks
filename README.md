@@ -550,7 +550,37 @@ Crop image tightly around the mask region for focused inpainting, with separate 
 
 ---
 
-#### Inpaint Stitch Pro (MEC)
+#### Inpaint Composite (MEC) — unified Stitch + Paste Back
+
+Single node that combines **Inpaint Stitch Pro** and **Inpaint Paste Back** behind one `mode` dropdown. The frontend hides parameters that don't apply to the current mode so the UI stays clean.
+
+| Parameter | Default | Used in mode | Description |
+|-----------|---------|--------------|-------------|
+| `stitch_data` | — | both | From Inpaint Crop Pro |
+| `inpainted_image` | — | both | Inpainted result from any model |
+| `mode` | `stitch_pro` | both | `stitch_pro` (advanced blend pipeline) or `paste_back` (clean resize + paste) |
+| `blend_mode_override` | `from_crop` | `stitch_pro` | Override blend mode or keep what the crop node configured |
+| `color_match` | `false` | `stitch_pro` | Reinhard mean+std color transfer before blending |
+| `upscale_method` | `lanczos` | `paste_back` | Resize interpolation for the inpainted crop |
+| `feather_edges` | `false` | `paste_back` | Gaussian-feather the paste-rect boundary |
+| `feather_radius` | `16` | `paste_back` | Feather radius in pixels (0 disables) |
+
+**Outputs:** `image`, `mask`, `info`
+- In `stitch_pro` mode `mask` is the actual blend mask used (Laplacian / edge-aware / FFT etc).
+- In `paste_back` mode `mask` is the paste rectangle (feathered if enabled), so downstream nodes always get a usable mask.
+
+**When to use which mode**
+
+| Mode | Use when… |
+|------|----------|
+| `stitch_pro` | You want pro-level seam-hiding (Laplacian pyramid, edge-aware, FFT frequency blend). Slightly heavier. |
+| `paste_back` | You just want a clean resize + paste (optionally feathered). Faster, deterministic, no blend pipeline. |
+
+> **Backward compatibility:** the legacy `Inpaint Stitch Pro (MEC)` and `Inpaint Paste Back (MEC)` nodes are still registered (now labelled "legacy") so existing workflows keep working. New workflows should use **Inpaint Composite (MEC)**.
+
+---
+
+#### Inpaint Stitch Pro (MEC) — *legacy, prefer Inpaint Composite*
 
 Composite inpainted image back into the original using stitch data from Inpaint Crop Pro.
 
@@ -591,7 +621,7 @@ Standalone mask cleanup and dual-mask preparation for inpainting workflows.
 
 ---
 
-#### Inpaint Paste Back (MEC)
+#### Inpaint Paste Back (MEC) — *legacy, prefer Inpaint Composite*
 
 Simple paste-back node: resize the inpainted crop and composite it onto the original with optional Gaussian-feathered alpha blending.
 
@@ -604,7 +634,7 @@ Simple paste-back node: resize the inpainted crop and composite it onto the orig
 
 **Outputs:** `image`, `info`
 
-> **Paste Back vs Stitch Pro:** Paste Back is simpler — just resize + paste with optional feathering. Stitch Pro uses the advanced blend mask (Laplacian pyramid, edge-aware, FFT frequency blend) stored in stitch_data for professional compositing.
+> **Paste Back vs Stitch Pro vs Composite:** All three live in the same suite. The new **Inpaint Composite (MEC)** node merges Stitch Pro and Paste Back behind one mode dropdown — prefer it for new workflows. The two legacy nodes remain for backward compatibility.
 
 ---
 
@@ -925,8 +955,9 @@ All 47 nodes at a glance:
 | 17 | Mask Math | Editing | 1 | Mathematical mask operations (11 ops) |
 | 18 | Spline Mask Editor | Interactive | 1 | Interactive Catmull-Rom / Bezier / polyline spline drawing on canvas |
 | 19 | Inpaint Crop Pro | Inpaint | 1 | Crop around mask for inpainting |
-| 20 | Inpaint Stitch Pro | Inpaint | 1 | Composite inpainted result back |
-| 21 | Inpaint Paste Back | Inpaint | 1 | Simple paste-back with feathered alpha |
+| 20 | **Inpaint Composite** | Inpaint | 1 | Unified Stitch Pro + Paste Back (mode dropdown) |
+| 20a | Inpaint Stitch Pro *(legacy)* | Inpaint | 1 | Composite inpainted result back |
+| 21 | Inpaint Paste Back *(legacy)* | Inpaint | 1 | Simple paste-back with feathered alpha |
 | 22 | Inpaint Mask Prepare | Inpaint | 1 | Clean + dual-mask preparation |
 | 23 | Image Comparer | Preview | 1 | Interactive before/after comparison (3 modes) |
 | 24 | Mask Batch Manager | Video | 1 | Slice/concat/interleave mask batches |

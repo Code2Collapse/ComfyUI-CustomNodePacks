@@ -2,6 +2,35 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## [1.12.0] – 2026-05-04
+
+### Added
+
+#### Inpaint Composite (MEC) — unified Stitch + Paste Back
+
+- New `InpaintCompositeMEC` node merges the previous two-node split
+  (`InpaintStitchProMEC` + `InpaintPasteBackMEC`) behind a single `mode`
+  dropdown:
+  - `stitch_pro` — advanced blend pipeline (edge-aware, Laplacian
+    pyramid, frequency, gaussian) with optional Reinhard color match.
+  - `paste_back` — clean resize + paste with optional Gaussian-feathered
+    edges. Faster, deterministic, no blend pipeline.
+- Unified output signature `(IMAGE, MASK, STRING)`. In `paste_back` mode
+  the MASK is the paste rectangle (feathered if enabled) so downstream
+  nodes always receive a usable mask.
+- New `js/inpaint_composite.js` extension hides parameters that don't
+  apply to the selected mode (clean UI without losing widget state).
+- Internally delegates to the existing Stitch and PasteBack classes — no
+  duplicated logic, no behavioural drift.
+
+### Changed
+
+- Legacy `InpaintStitchProMEC` and `InpaintPasteBackMEC` are still
+  registered for backward compatibility, but their display labels now
+  read "— legacy (MEC)" to steer new workflows toward the unified node.
+- README updated with a new "Inpaint Composite" section, mode-vs-mode
+  guidance, and an updated reference table.
+
 ## [1.11.0] – 2026-05-08
 
 ### Added
