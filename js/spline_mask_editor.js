@@ -380,11 +380,16 @@ function installEditor(node) {
     ed.load();
 
     const root = document.createElement("div");
+    // Inset from node body — leaves a hit area for LiteGraph border / resize
+    // corner so the user can grab edges and the bottom-right grip.
     root.style.cssText = `
-        display:flex;flex-direction:column;width:100%;height:100%;
+        display:flex;flex-direction:column;
+        width:calc(100% - 12px);height:calc(100% - 18px);
+        margin:2px 6px 16px 6px;
         background:${COLOR.bg};border:1px solid ${COLOR.border};border-radius:6px;
         overflow:hidden;font-family:Inter,system-ui,sans-serif;color:${COLOR.text};
         box-sizing:border-box;user-select:none;
+        pointer-events:none;
     `;
 
     const tb = document.createElement("div");
@@ -393,11 +398,12 @@ function installEditor(node) {
         background:linear-gradient(#22223a,#1a1a2e);
         border-bottom:1px solid ${COLOR.border};
         flex:0 0 auto;font-size:11px;line-height:1;
+        pointer-events:auto;
     `;
     root.appendChild(tb);
 
     const canvasWrap = document.createElement("div");
-    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;";
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;pointer-events:auto;";
     root.appendChild(canvasWrap);
 
     const canvas = document.createElement("canvas");
@@ -551,18 +557,17 @@ function installEditor(node) {
     let lastW = 0, lastH = 0;
     function syncCanvasPx() {
         const r = canvasWrap.getBoundingClientRect();
-        const w = Math.max(1, Math.round(r.width));
-        const h = Math.max(1, Math.round(r.height));
-        if (w === lastW && h === lastH) return false;
-        // Scale pan/zoom proportionally so view is stable under container resize.
-        if (lastW > 0 && lastH > 0 && ed._fitted) {
-            const sx = w / lastW;
-            ed.zoom *= sx;
-            ed.panX *= sx;
-            ed.panY *= (h / lastH);
-        }
-        lastW = w; lastH = h;
+        // Parent ComfyUI canvas applies CSS transform: scale(zoom) to DOM
+        // widgets. Use offsetWidth/Height (unscaled layout pixels) to keep
+        // the canvas resolution stable when the user zooms the graph.
+        const cssW = canvasWrap.offsetWidth || r.width;
+        const cssH = canvasWrap.offsetHeight || r.height;
+        const w = Math.max(1, Math.round(cssW));
+        const h = Math.max(1, Math.round(cssH));
         const dpr = window.devicePixelRatio || 1;
+        const needPx = (canvas.width !== w * dpr) || (canvas.height !== h * dpr);
+        if (w === lastW && h === lastH && !needPx) return false;
+        lastW = w; lastH = h;
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -599,20 +604,25 @@ function installEditor(node) {
     const ro = new ResizeObserver(() => render());
     ro.observe(canvasWrap);
 
-    // Mouse coords MUST be scaled by (canvas.width / r.width) because the
-    // <canvas> element is CSS-scaled by ComfyUI's outer-canvas zoom while
-    // its internal pixel buffer (canvas.width) stays fixed.
-    function evScale(r) {
-        return [canvas.width / (r.width || 1), canvas.height / (r.height || 1)];
+    // ComfyUI's outer canvas applies a CSS scale transform when the user
+    // zooms the graph. getBoundingClientRect() returns the *visual*
+    // (post-transform) box; the canvas's logical pixels are unscaled.
+    // Multiply mouse delta by (offsetWidth / rect.width) to undo the
+    // parent scale so clicks land exactly under the cursor at any zoom.
+    function _scale(r, el) {
+        return {
+            sx: (el.offsetWidth  || r.width)  / Math.max(1, r.width),
+            sy: (el.offsetHeight || r.height) / Math.max(1, r.height),
+        };
     }
     function eventCanvas(e) {
         const r = canvas.getBoundingClientRect();
-        const [sx, sy] = evScale(r);
+        const { sx, sy } = _scale(r, canvas);
         return ed.viewToCanvas((e.clientX - r.left) * sx, (e.clientY - r.top) * sy);
     }
     function eventClient(e) {
         const r = canvas.getBoundingClientRect();
-        const [sx, sy] = evScale(r);
+        const { sx, sy } = _scale(r, canvas);
         return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
     }
 
@@ -668,7 +678,7 @@ function installEditor(node) {
             const ec = eventClient(e);
             ed.panX = ec.x - ed.drag.startX;
             ed.panY = ec.y - ed.drag.startY;
-            ed.clampPan(canvas.width, canvas.height);
+            ed.clampPan(lastW, lastH);
             render(); return;
         }
         if (ed.drag?.kind === "point") {
@@ -683,8 +693,10 @@ function installEditor(node) {
         if (hit.shape !== ed.hover.shape || hit.point !== ed.hover.point) {
             ed.hover = hit;
             canvas.style.cursor = hit.shape >= 0 ? "pointer" : "crosshair";
-            render();
         }
+        // Always render so the cursor indicator follows smoothly.
+        // render() coalesces via RAF, so this stays cheap.
+        render();
     });
 
     canvas.addEventListener("pointerup", (e) => {
@@ -706,8 +718,12 @@ function installEditor(node) {
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // Mouse-wheel zoom is intentionally disabled. Zoom via toolbar buttons
-    // or +/-/0 keys.
-    canvas.addEventListener("wheel", () => {}, { passive: true });
+    // or +/-/0 keys. Swallow the wheel so the parent ComfyUI graph canvas
+    // does not zoom while the user hovers our editor.
+    canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    }, { passive: false });
 
     canvas.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {

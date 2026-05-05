@@ -135,11 +135,25 @@ def _opaque_core_with_feather(soft_mask: torch.Tensor,
     inside the mask, so the inpainted region is composited semi-transparently
     and looks 'hollow' / low-opacity. The core is the input mask eroded by
     `radius` pixels; the final alpha is max(core, feathered).
+
+    Important safety net: if `radius` is larger than half the mask's
+    thinnest extent (e.g. user set blend_radius=64 but the mask is only
+    40px thick), naive erosion would wipe the entire core out, leaving
+    *only* the faded feather and producing a translucent / transparent
+    inpaint paste-back. We auto-clamp the erosion radius so a non-empty
+    core always survives.
     """
     if radius <= 0:
         return feathered.clamp(0.0, 1.0)
     binary = (soft_mask > 0.5).float()
-    core = _erode_mask(binary, radius)
+    # Try the requested radius first; if it eats the entire mask, halve and
+    # retry until a non-empty core remains. A non-empty core is what
+    # guarantees the interior of the inpaint stays fully opaque.
+    r = int(radius)
+    core = _erode_mask(binary, r)
+    while r > 1 and core.sum() < binary.sum() * 0.05:
+        r = max(1, r // 2)
+        core = _erode_mask(binary, r)
     return torch.maximum(core, feathered).clamp(0.0, 1.0)
 
 
@@ -1447,6 +1461,14 @@ class InpaintStitchProMEC:
 
         device = _get_device(inpainted_image)
         canvas = canvas_image.to(device).clone()
+        # Defensive: strip alpha if a 4-channel RGBA tensor was fed in (e.g.
+        # from a save-with-alpha or matte node). Compositing RGBA into a
+        # 3-channel canvas silently bleeds alpha into the colour channels
+        # and looks like the inpaint is "transparent" / faded.
+        if inpainted_image.shape[-1] == 4:
+            inpainted_image = inpainted_image[..., :3].contiguous()
+        if canvas.shape[-1] == 4:
+            canvas = canvas[..., :3].contiguous()
         B = inpainted_image.shape[0]
 
         blend_mode = stored_blend_mode if blend_mode_override == "from_crop" else blend_mode_override
@@ -1456,6 +1478,10 @@ class InpaintStitchProMEC:
 
         # Resize blend mask to crop region dimensions
         blend_mask_crop = _resize_mask(stitch_blend_mask_crop.to(device), ctc_h, ctc_w, mode=upscale_method)
+        # Lanczos / bicubic resize can produce ringing values outside [0,1].
+        # Negative alpha makes (1 - mask) > 1, which over-brightens the
+        # canvas and looks like ghosting/transparency at the seam. Clamp.
+        blend_mask_crop = blend_mask_crop.clamp(0.0, 1.0)
 
         # Self-heal: lanczos upscale and any pre-existing buggy crop data can
         # leave interior alpha < 1.0, which composites the inpaint
@@ -1511,7 +1537,7 @@ class InpaintStitchProMEC:
             canvas_crop = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :].clone()
             mask_b = m3 if m3.shape[0] == B else m3.expand(B, -1, -1, -1)
             blended = canvas_crop * (1.0 - mask_b) + inp_resized * mask_b
-            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended
+            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended.clamp(0.0, 1.0)
             paste_iter: List[Tuple[int, int]] = []  # skip slow per-frame loop
         elif uniform_offsets and blend_mode in ("laplacian_pyramid", "frequency_blend") and not color_match:
             # Batched pyramid / FFT blend across the whole batch in one call.
@@ -1555,7 +1581,7 @@ class InpaintStitchProMEC:
                 blended = _frequency_blend(a_bchw, b_bchw, m_b1hw)
                 blended = blended.permute(0, 2, 3, 1).clamp(0.0, 1.0)
             else:
-                blended = canvas_crop * (1.0 - mask_b) + inp_b * mask_b
+                blended = (canvas_crop * (1.0 - mask_b) + inp_b * mask_b).clamp(0.0, 1.0)
 
             canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
 

@@ -372,12 +372,15 @@ class PointsMaskEditor:
         # bbox_json — STRING first positive bbox as [x1,y1,x2,y2]
         bbox_json_out = json.dumps(pos_bboxes[0] if pos_bboxes else [])
 
-        # primary_bbox — BBOX [x, y, w, h] for BBox pipeline / legacy nodes
+        # primary_bbox — BBOX [x, y, w, h] for BBox pipeline / legacy nodes.
+        # Return None when the user has not drawn a box; downstream nodes
+        # (e.g. MaskMattingMEC) will then refuse to run rather than silently
+        # using a full-image bbox as the prompt.
         if pos_bboxes:
             b = pos_bboxes[0]
             primary_bbox = [b[0], b[1], b[2] - b[0], b[3] - b[1]]
         else:
-            primary_bbox = [0, 0, width, height]
+            primary_bbox = None
 
         result = (mask, positive_coords, negative_coords,
                   bboxes_out, neg_bboxes_out,

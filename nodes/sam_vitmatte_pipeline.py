@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import gc
+import time
 
 from .utils import (
     HAS_CV2,
@@ -43,11 +44,69 @@ from .utils import (
     points_to_arrays,
     parse_bbox_input,
 )
+from . import _interrupt_check as _IC
 
 try:
     import cv2
 except ImportError:
     pass
+
+try:
+    import comfy.model_management as _mm  # type: ignore
+except Exception:  # noqa: BLE001
+    _mm = None
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Subject-type presets (informed by seg_matting_combinations reference)
+# ══════════════════════════════════════════════════════════════════════
+# Each preset auto-tunes trimap radii + detail/contrast + matting backend
+# based on the boundary character of the subject. Selecting a preset
+# overrides the manual edge_radius / detail_preservation / edge_contrast
+# / refine_method values so users get good defaults without tuning.
+SUBJECT_PRESETS: dict = {
+    "custom": None,  # honor user widgets verbatim
+    # SAM2 → ViTMatte (HTML use case: "Human hair / fine strands")
+    "hair":      dict(edge_radius=15, dilate=22, erode=10,
+                      detail_preservation=0.95, edge_contrast=1.10,
+                      refine_method="vitmatte"),
+    # SAM2 → GFM/ViTMatte (HTML use case: "Animals / fur")
+    "fur":       dict(edge_radius=18, dilate=26, erode=8,
+                      detail_preservation=0.95, edge_contrast=1.00,
+                      refine_method="vitmatte"),
+    # SAM2 → ViTMatte (HTML use case: "Clothing / fabric")
+    "cloth":     dict(edge_radius=8,  dilate=10, erode=8,
+                      detail_preservation=0.70, edge_contrast=1.00,
+                      refine_method="vitmatte"),
+    # SAM2/BiSeNet → GFM (HTML use case: "Face / skin regions")
+    "skin_face": dict(edge_radius=10, dilate=12, erode=10,
+                      detail_preservation=0.80, edge_contrast=0.95,
+                      refine_method="multi_scale_guided"),
+    # SAM2/YOLO standalone (HTML use case: "Hard-edge subjects")
+    "hard_edge": dict(edge_radius=2,  dilate=2,  erode=2,
+                      detail_preservation=0.30, edge_contrast=0.85,
+                      refine_method="guided_filter"),
+    # Soft glow / motion-blur silhouettes
+    "soft_glow": dict(edge_radius=20, dilate=28, erode=14,
+                      detail_preservation=0.50, edge_contrast=0.70,
+                      refine_method="laplacian_blend"),
+}
+
+
+def _vram_cleanup() -> None:
+    """Free CUDA + RAM caches per user permanent rules."""
+    try:
+        if _mm is not None:
+            _mm.soft_empty_cache()
+    except Exception:
+        pass
+    gc.collect()
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
 
 class SAMViTMattePipelineMEC:
@@ -59,13 +118,27 @@ class SAMViTMattePipelineMEC:
 
     REFINE_METHODS = ["auto", "vitmatte", "guided_filter", "multi_scale_guided",
                       "color_aware", "laplacian_blend"]
+    SUBJECT_TYPES = list(SUBJECT_PRESETS.keys())
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "sam_model": ("SAM_MODEL", {"tooltip": "Loaded SAM model from SAM Model Loader"}),
-                "image": ("IMAGE", {"tooltip": "Input image to segment and matte (first frame used)"}),
+                "image": ("IMAGE", {"tooltip": "Input image / batch to segment + matte"}),
+                "subject_type": (cls.SUBJECT_TYPES, {
+                    "default": "custom",
+                    "tooltip": (
+                        "Auto-tune trimap & matting params based on subject boundary character.\n"
+                        "  custom    : honor manual widgets verbatim (default).\n"
+                        "  hair      : SAM → ViTMatte, wide trimap, high detail (portraits).\n"
+                        "  fur       : SAM → ViTMatte, very wide trimap (animals).\n"
+                        "  cloth     : tighter trimap, structural edges preserved.\n"
+                        "  skin_face : multi-scale guided, soft skin boundary.\n"
+                        "  hard_edge : minimal trimap, binary feel (vehicles, props).\n"
+                        "  soft_glow : laplacian blend, very wide soft band."
+                    ),
+                }),
                 "points_json": ("STRING", {
                     "default": "[]",
                     "multiline": True,
@@ -122,7 +195,19 @@ class SAMViTMattePipelineMEC:
             "optional": {
                 "bbox": ("BBOX", {"tooltip": "Bounding box from BBox node (overrides bbox_json)"}),
                 "existing_mask": ("MASK", {"tooltip": "Use as initial mask instead of SAM first pass"}),
-                "trimap": ("MASK", {"tooltip": "Custom trimap for ViTMatte"}),
+                "trimap": ("MASK", {"tooltip": "Custom trimap for ViTMatte (overrides auto-generated)"}),
+                "trimap_dilate": ("INT", {
+                    "default": 0, "min": 0, "max": 200, "step": 1,
+                    "tooltip": "Outer trimap radius (0 = use edge_radius * 1.5).",
+                }),
+                "trimap_erode": ("INT", {
+                    "default": 0, "min": 0, "max": 200, "step": 1,
+                    "tooltip": "Inner trimap erosion radius (0 = use edge_radius * 1.0).",
+                }),
+                "batch_mode": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Process every frame in the input batch (off = first frame only).",
+                }),
             },
         }
 
@@ -145,11 +230,28 @@ class SAMViTMattePipelineMEC:
         "Iterative SAM refinement → edge-aware matting → multi-scale fusion → cleanup."
     )
 
-    def execute(self, sam_model, image, points_json, bbox_json,
+    def execute(self, sam_model, image, subject_type, points_json, bbox_json,
                 sam_iterations, refine_method, edge_radius,
                 detail_preservation, edge_contrast, fill_holes_enabled,
                 min_region_size, multimask_output, mask_index,
-                score_threshold, bbox=None, existing_mask=None, trimap=None):
+                score_threshold, bbox=None, existing_mask=None, trimap=None,
+                trimap_dilate=0, trimap_erode=0, batch_mode=False):
+
+        # ── Apply subject_type preset (overrides matching widgets) ────
+        preset = SUBJECT_PRESETS.get(subject_type)
+        if preset is not None:
+            edge_radius = preset["edge_radius"]
+            detail_preservation = preset["detail_preservation"]
+            edge_contrast = preset["edge_contrast"]
+            refine_method = preset["refine_method"]
+            if trimap_dilate <= 0:
+                trimap_dilate = preset["dilate"]
+            if trimap_erode <= 0:
+                trimap_erode = preset["erode"]
+
+        # Resolve trimap radii (0 = derive from edge_radius)
+        eff_dilate = trimap_dilate if trimap_dilate > 0 else max(1, int(edge_radius * 1.5))
+        eff_erode  = trimap_erode  if trimap_erode  > 0 else max(1, int(edge_radius * 1.0))
 
         model_info = sam_model
         model = model_info["model"]
@@ -158,78 +260,153 @@ class SAMViTMattePipelineMEC:
         offload = model_info["offload_to_cpu"]
         model_dtype = model_info["dtype"]
 
-        img_tensor = image[0]  # (H, W, C)
-        img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
-        H, W = img_np.shape[:2]
+        # ── Determine batch ───────────────────────────────────────────
+        # image: (B, H, W, C). batch_mode=False -> process [0:1] only.
+        if image.dim() == 3:
+            image_batch = image.unsqueeze(0)
+        else:
+            image_batch = image
+        if not batch_mode:
+            image_batch = image_batch[:1]
+        num_frames = image_batch.shape[0]
 
-        # Parse prompts (shared utilities)
-        points_list = parse_points_json(points_json)
-        box_np = parse_bbox_input(bbox_json, bbox)
-
-        # ── Stage 1: SAM coarse mask (with iterative refinement) ──────
-        if offload and hasattr(model, "to"):
-            model.to(target_device)
+        out_refined: list = []
+        out_coarse:  list = []
+        out_edge:    list = []
+        out_preview: list = []
+        first_bbox = None
+        best_score_overall = 0.0
+        t0 = time.time()
 
         try:
-            coarse_mask, best_score = self._iterative_sam(
-                model, model_type, model_info, img_np, points_list, box_np,
-                sam_iterations, multimask_output, mask_index,
-                score_threshold, target_device, model_dtype,
-                existing_mask, H, W,
-            )
+            if offload and hasattr(model, "to"):
+                model.to(target_device)
+
+            for fi in _IC.track(range(num_frames), total=num_frames,
+                                desc=f"SAM+ViTMatte ({subject_type})"):
+                _IC.check()
+                img_tensor = image_batch[fi]                           # (H, W, C)
+                img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
+                H, W = img_np.shape[:2]
+
+                # Parse prompts (shared utilities) – per-frame so users can
+                # stuff per-frame point lists later if they want.
+                points_list = parse_points_json(points_json)
+                box_np = parse_bbox_input(bbox_json, bbox)
+
+                # Per-frame existing_mask slice if provided as batch
+                em = None
+                if existing_mask is not None:
+                    if existing_mask.dim() == 3 and existing_mask.shape[0] > fi:
+                        em = existing_mask[fi:fi + 1]
+                    elif existing_mask.dim() == 3:
+                        em = existing_mask[:1]
+                    else:
+                        em = existing_mask
+
+                # ── Stage 1: SAM coarse mask (with iterative refinement) ──
+                coarse_mask, best_score = self._iterative_sam(
+                    model, model_type, model_info, img_np, points_list, box_np,
+                    sam_iterations, multimask_output, mask_index,
+                    score_threshold, target_device, model_dtype,
+                    em, H, W,
+                )
+                best_score_overall = max(best_score_overall, best_score)
+
+                # ── Stage 2: Post-process coarse mask ─────────────────
+                coarse_np = coarse_mask.cpu().numpy()
+                if fill_holes_enabled and HAS_CV2:
+                    coarse_np = fill_holes(coarse_np)
+                if min_region_size > 0 and HAS_CV2:
+                    coarse_np = remove_small_regions(coarse_np, min_region_size)
+                coarse_mask = torch.from_numpy(coarse_np)
+
+                # ── Stage 3: Build trimap (per-frame, preset-aware) ───
+                tri_for_frame = None
+                if trimap is not None:
+                    if trimap.dim() == 3 and trimap.shape[0] > fi:
+                        tri_for_frame = trimap[fi]
+                    elif trimap.dim() == 3:
+                        tri_for_frame = trimap[0]
+                    else:
+                        tri_for_frame = trimap
+                elif HAS_CV2:
+                    inner_scale = eff_erode  / max(edge_radius, 1)
+                    outer_scale = eff_dilate / max(edge_radius, 1)
+                    tri_np = generate_trimap(coarse_np, edge_radius,
+                                             inner_scale=inner_scale,
+                                             outer_scale=outer_scale)
+                    tri_for_frame = torch.from_numpy(tri_np)
+
+                _IC.check()
+
+                # ── Stage 4: Edge-aware matting refinement ────────────
+                refined_mask = self._refine_edges(
+                    img_tensor, img_np, coarse_mask, coarse_np,
+                    refine_method, edge_radius, detail_preservation,
+                    tri_for_frame,
+                )
+
+                # ── Stage 5: Edge contrast boost ──────────────────────
+                if edge_contrast != 1.0:
+                    refined_mask = boost_edge_contrast(
+                        refined_mask, coarse_mask, edge_contrast, 10
+                    )
+                refined_mask = refined_mask.clamp(0, 1)
+
+                edge_mask_f = torch.abs(refined_mask - (coarse_mask > 0.5).float())
+                if first_bbox is None:
+                    first_bbox = mask_to_bbox(refined_mask, W, H)
+                preview_f = make_split_preview(img_tensor, coarse_mask, refined_mask)
+
+                out_refined.append(refined_mask)
+                out_coarse.append(coarse_mask)
+                out_edge.append(edge_mask_f)
+                out_preview.append(preview_f)
+
+                # Per-frame VRAM ease (matters for long batches)
+                if num_frames > 1:
+                    _vram_cleanup()
         finally:
             if offload and hasattr(model, "to"):
-                model.to("cpu")
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                try:
+                    model.to("cpu")
+                except Exception:
+                    pass
+            _vram_cleanup()
 
-        # ── Stage 2: Post-process coarse mask ─────────────────────────
-        coarse_np = coarse_mask.cpu().numpy()
-        if fill_holes_enabled and HAS_CV2:
-            coarse_np = fill_holes(coarse_np)
-        if min_region_size > 0 and HAS_CV2:
-            coarse_np = remove_small_regions(coarse_np, min_region_size)
-        coarse_mask = torch.from_numpy(coarse_np)
-
-        # ── Stage 3: Edge-aware matting refinement ────────────────────
-        refined_mask = self._refine_edges(
-            img_tensor, img_np, coarse_mask, coarse_np,
-            refine_method, edge_radius, detail_preservation, trimap,
-        )
-
-        # ── Stage 4: Edge contrast boost ──────────────────────────────
-        if edge_contrast != 1.0:
-            refined_mask = boost_edge_contrast(
-                refined_mask, coarse_mask, edge_contrast, 10
-            )
-
-        refined_mask = refined_mask.clamp(0, 1)
-
-        # ── Outputs ───────────────────────────────────────────────────
-        edge_mask = torch.abs(refined_mask - (coarse_mask > 0.5).float())
-        det_bbox = mask_to_bbox(refined_mask, W, H)
-        preview = make_split_preview(img_tensor, coarse_mask, refined_mask)
+        # ── Stack outputs ─────────────────────────────────────────────
+        refined_stack = torch.stack(out_refined, dim=0)
+        coarse_stack  = torch.stack(out_coarse,  dim=0)
+        edge_stack    = torch.stack(out_edge,    dim=0)
+        preview_stack = torch.stack(out_preview, dim=0)
 
         info = json.dumps({
             "model_type": model_type,
+            "subject_type": subject_type,
+            "frames_processed": num_frames,
+            "batch_mode": bool(batch_mode),
             "sam_iterations": sam_iterations,
             "refine_method": refine_method,
             "edge_radius": edge_radius,
+            "trimap_dilate": eff_dilate,
+            "trimap_erode": eff_erode,
             "detail_preservation": detail_preservation,
-            "score": best_score,
-            "detected_bbox": det_bbox,
-            "mask_area_px": int((refined_mask > 0.5).sum().item()),
-            "mask_area_pct": round(float((refined_mask > 0.5).float().mean().item()) * 100, 2),
+            "edge_contrast": edge_contrast,
+            "best_score": best_score_overall,
+            "detected_bbox": first_bbox,
+            "elapsed_sec": round(time.time() - t0, 3),
+            "mask_area_px": int((refined_stack > 0.5).sum().item()),
+            "mask_area_pct": round(float((refined_stack > 0.5).float().mean().item()) * 100, 2),
         }, indent=2)
 
         return (
-            refined_mask.unsqueeze(0),
-            coarse_mask.unsqueeze(0),
-            edge_mask.unsqueeze(0),
-            preview.unsqueeze(0),
-            det_bbox,
-            best_score,
+            refined_stack,
+            coarse_stack,
+            edge_stack,
+            preview_stack,
+            first_bbox,
+            best_score_overall,
             info,
         )
 

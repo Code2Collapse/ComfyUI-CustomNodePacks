@@ -39,8 +39,11 @@ class PaintCanvasController {
         this.root = document.createElement("div");
         Object.assign(this.root.style, {
             position: "relative",
-            width: "100%",
+            // Inset from the node body so LiteGraph keeps a hit area for
+            // its border / resize corner (mouse-near-borders fix).
+            width: "calc(100% - 12px)",
             minHeight: "320px",
+            margin: "2px 6px 16px 6px",
             background: "#1c1c1c",
             border: "1px solid #444",
             borderRadius: "4px",

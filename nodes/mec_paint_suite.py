@@ -312,37 +312,57 @@ class MECAdvancedPaintCanvas:
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  Node 2 — Context Inpainter (Fixer)                                  ║
 # ╚══════════════════════════════════════════════════════════════════════╝
-def _parse_wildcard_prompt(prompt: str, n_regions: int) -> List[str]:
-    """Parse ``[SEP]`` / ``[SKIP]`` / ``[ASC]`` / ``[DSC]`` markers.
+def _parse_wildcard_prompt(
+    prompt: str,
+    n_regions: int,
+    region_sizes: Optional[List[int]] = None,
+) -> List[str]:
+    """Parse Impact-Pack-style per-face wildcard markers.
 
-    Returns a list of ``n_regions`` prompts, one per region.  ``[SKIP]`` keeps
-    the original prompt; ``[ASC]`` / ``[DSC]`` only flip the *order* in which
-    the segments are zipped against region indices.  Missing segments are
-    padded with the last available segment (or the entire prompt if no [SEP]).
+    Supported markers (Forbidden-Vision compatible):
+      * ``[SEP]``                -- segment separator
+      * ``[ASC]`` / ``[DSC]``    -- ascending / descending region-index order
+      * ``[ASC-SIZE]`` / ``[DSC-SIZE]`` -- order regions by area (small→large
+        or large→small). Requires ``region_sizes`` to be supplied.
+      * ``[SKIP]``               -- emit an empty prompt for that region
+
+    Missing segments are padded with the last available segment (or the
+    entire prompt if no ``[SEP]`` was used).
     """
     if not prompt:
         return [""] * n_regions
     order = "ASC"
     p = prompt
-    if "[DSC]" in p:
-        order = "DSC"
-        p = p.replace("[DSC]", "")
-    if "[ASC]" in p:
-        order = "ASC"
-        p = p.replace("[ASC]", "")
+    # Order markers (size-based variants take priority over the plain ones).
+    for tok, val in (("[DSC-SIZE]", "DSC-SIZE"),
+                     ("[ASC-SIZE]", "ASC-SIZE"),
+                     ("[DSC]", "DSC"),
+                     ("[ASC]", "ASC")):
+        if tok in p:
+            order = val
+            p = p.replace(tok, "")
     parts = [s.strip() for s in re.split(r"\[SEP\]", p)]
     parts = [s for s in parts if s != ""]
     if not parts:
         return [""] * n_regions
+
+    # Build region-index permutation according to the chosen order.
     if order == "DSC":
-        parts = list(reversed(parts))
-    out: List[str] = []
-    for i in range(n_regions):
-        seg = parts[i] if i < len(parts) else parts[-1]
+        idx_order = list(range(n_regions))[::-1]
+    elif order == "ASC-SIZE" and region_sizes is not None and len(region_sizes) >= n_regions:
+        idx_order = sorted(range(n_regions), key=lambda i: region_sizes[i])
+    elif order == "DSC-SIZE" and region_sizes is not None and len(region_sizes) >= n_regions:
+        idx_order = sorted(range(n_regions), key=lambda i: -region_sizes[i])
+    else:  # ASC default
+        idx_order = list(range(n_regions))
+
+    out: List[str] = [""] * n_regions
+    for j, region_idx in enumerate(idx_order):
+        seg = parts[j] if j < len(parts) else parts[-1]
         if "[SKIP]" in seg:
-            out.append("")
+            out[region_idx] = ""
         else:
-            out.append(seg)
+            out[region_idx] = seg
     return out
 
 
@@ -537,8 +557,12 @@ class MECContextInpainter:
 
         # ---- region split for wildcard prompts ---------------------------
         labels, n_reg = _label_regions(m)
-        pos_prompts = _parse_wildcard_prompt(face_positive_prompt, max(n_reg, 1))
-        neg_prompts = _parse_wildcard_prompt(face_negative_prompt, max(n_reg, 1))
+        # Compute per-region pixel counts so [ASC-SIZE] / [DSC-SIZE] work.
+        region_sizes: List[int] = []
+        for i in range(1, n_reg + 1):
+            region_sizes.append(int((labels == i).sum()))
+        pos_prompts = _parse_wildcard_prompt(face_positive_prompt, max(n_reg, 1), region_sizes or None)
+        neg_prompts = _parse_wildcard_prompt(face_negative_prompt, max(n_reg, 1), region_sizes or None)
         # We don't actually run a sampler here; we expose the parsed prompts
         # via the node's print output (deterministic, observable in console).
         if n_reg > 0:
@@ -632,15 +656,19 @@ class MECToneRefiner:
                 "neural_corrector":  ("BOOLEAN", {"default": True, "tooltip": "Enable deterministic tone + gray-world correction (not a learned model)."}),
                 "corrector_tone":    ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend amount toward the tone-corrected image (0 = original, 1 = full correction)."}),
                 "corrector_color":   ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend amount toward the gray-world color-corrected image."}),
-                "enable_upscale":    ("BOOLEAN", {"default": False, "tooltip": "Bicubic upscale by upscale_factor before returning."}),
+                "highlight_protection": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Roll-off applied above 95th-percentile to prevent highlight clipping (0 = none, 1 = strong)."}),
+                "shadow_lift":       ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Lift shadows below the 5th-percentile (0 = none, 1 = strong; mirrors highlight_protection on the dark side)."}),
+                "enable_upscale":    ("BOOLEAN", {"default": False, "tooltip": "Upscale by upscale_factor; uses upscale_model if provided, bicubic otherwise."}),
                 "upscale_factor":    ("FLOAT", {"default": 1.5, "min": 1.0, "max": 4.0, "step": 0.05, "tooltip": "Upscale multiplier applied when enable_upscale is True."}),
-                "ai_enable_dof":     ("BOOLEAN", {"default": False, "tooltip": "Apply a fake center-focus depth-of-field blur."}),
+                "ai_enable_dof":     ("BOOLEAN", {"default": False, "tooltip": "Apply depth-based DOF (uses depth_map if connected, else fake center-focus)."}),
                 "ai_dof_strength":   ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05, "tooltip": "Strength of the DOF blur (also scales the maximum blur radius)."}),
-                "ai_dof_focus_depth":("FLOAT", {"default": 0.7, "min": 0.5, "max": 0.99, "step": 0.01, "tooltip": "DOF focus tightness: 0.5 = wide, 1.0 = strong center-only focus."}),
+                "ai_dof_focus_depth":("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Focus plane: when depth_map is connected this is the in-focus depth value (0=near,1=far); without depth_map it controls center-focus tightness."}),
             },
             "optional": {
                 "latent": ("LATENT", {"tooltip": "Optional pre-existing latent; passed through when supplied (skips VAE encode)."}),
                 "vae":    ("VAE", {"tooltip": "VAE used to encode the refined image into refined_latent (when auto_upscale is True)."}),
+                "upscale_model": ("UPSCALE_MODEL", {"tooltip": "Optional UPSCALE_MODEL (RealESRGAN / 4x-NMKD / etc.). When connected and enable_upscale is True, used instead of bicubic and resized to upscale_factor."}),
+                "depth_map":     ("MASK", {"tooltip": "Optional depth map (0=near,1=far). Drives DOF when connected; replaces the fake center-focus radial gradient."}),
                 # MANUAL bug-fix (Apr 2026): explicit auto_upscale toggle.
                 # When False (and no `latent` is supplied), VAE-encode is
                 # skipped entirely and a zero-latent placeholder is
@@ -674,6 +702,53 @@ class MECToneRefiner:
         return out.clip(0.0, 1.0)
 
     @staticmethod
+    def _highlight_protect(img: np.ndarray, strength: float) -> np.ndarray:
+        """Filmic-style soft roll-off above the 95th percentile.
+
+        Replaces the linear top-end with a Reinhard ``x/(1+k*x)`` curve so
+        bright pixels never clip to pure white. ``strength`` in [0,1] controls
+        how aggressive the roll-off is.
+        """
+        if strength <= 1e-6:
+            return img
+        out = img.copy()
+        for c in range(3):
+            ch = out[..., c]
+            knee = float(np.percentile(ch, 95.0))
+            if knee >= 1.0 - 1e-3:
+                continue
+            above = ch > knee
+            if not above.any():
+                continue
+            x = (ch[above] - knee) / max(1.0 - knee, 1e-6)
+            k = 1.0 + 6.0 * float(strength)
+            rolled = x / (1.0 + k * x)
+            ch[above] = knee + rolled * (1.0 - knee)
+            out[..., c] = ch
+        return out.clip(0.0, 1.0)
+
+    @staticmethod
+    def _shadow_lift(img: np.ndarray, strength: float) -> np.ndarray:
+        """Inverse of highlight protection: lift the bottom 5%."""
+        if strength <= 1e-6:
+            return img
+        out = img.copy()
+        for c in range(3):
+            ch = out[..., c]
+            knee = float(np.percentile(ch, 5.0))
+            if knee <= 1e-3:
+                continue
+            below = ch < knee
+            if not below.any():
+                continue
+            x = 1.0 - ch[below] / max(knee, 1e-6)
+            k = 1.0 + 6.0 * float(strength)
+            lifted = 1.0 - x / (1.0 + k * x)
+            ch[below] = lifted * knee
+            out[..., c] = ch
+        return out.clip(0.0, 1.0)
+
+    @staticmethod
     def _gray_world(img: np.ndarray) -> np.ndarray:
         means = img.reshape(-1, 3).mean(axis=0) + 1e-6
         target = float(means.mean())
@@ -696,10 +771,39 @@ class MECToneRefiner:
         blurred = _gaussian_blur_2d(t, radius).squeeze(0).permute(1, 2, 0).numpy()
         return np.clip(img * (1.0 - coc[..., None]) + blurred * coc[..., None], 0.0, 1.0)
 
+    @staticmethod
+    def _dof_depth(img: np.ndarray, depth: np.ndarray, strength: float, focus_depth: float) -> np.ndarray:
+        """Depth-driven circle-of-confusion DOF.
+
+        ``depth`` is a (H,W) float in [0,1]; ``focus_depth`` is the in-focus
+        plane. Pixels whose depth differs most from focus_depth get the
+        strongest blur. Multi-scale blur is approximated with two Gaussian
+        radii blended by the per-pixel CoC magnitude.
+        """
+        H, W = img.shape[:2]
+        if depth.shape != (H, W):
+            d_t = torch.from_numpy(depth)[None, None].float()
+            d_t = F.interpolate(d_t, size=(H, W), mode="bilinear", align_corners=False)
+            depth = d_t.squeeze().numpy()
+        coc = np.abs(depth - float(focus_depth))
+        coc = (coc / max(coc.max(), 1e-6)) * float(strength)
+        coc = np.clip(coc, 0.0, 1.0)
+        radius_max = max(0.5, 18.0 * float(strength))
+        t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float()
+        b1 = _gaussian_blur_2d(t, radius_max * 0.5).squeeze(0).permute(1, 2, 0).numpy()
+        b2 = _gaussian_blur_2d(t, radius_max).squeeze(0).permute(1, 2, 0).numpy()
+        # 2-tap multi-scale blend by CoC magnitude.
+        c = coc[..., None]
+        c2 = (c * c)
+        out = img * (1.0 - c) + b1 * (c - c2) + b2 * c2
+        return np.clip(out, 0.0, 1.0)
+
     def execute(self, image, neural_corrector, corrector_tone, corrector_color,
+                highlight_protection, shadow_lift,
                 enable_upscale, upscale_factor, ai_enable_dof,
                 ai_dof_strength, ai_dof_focus_depth,
-                latent=None, vae=None, auto_upscale=True):
+                latent=None, vae=None, upscale_model=None,
+                depth_map=None, auto_upscale=True):
         img = _to_bhwc(image)[0].cpu().numpy()
         out = img
 
@@ -710,15 +814,46 @@ class MECToneRefiner:
             out = (1.0 - float(corrector_color)) * out + float(corrector_color) * colored
             out = np.clip(out, 0.0, 1.0)
 
+        # Highlight clipping protection (filmic roll-off).
+        if float(highlight_protection) > 0.0:
+            out = self._highlight_protect(out, float(highlight_protection))
+        if float(shadow_lift) > 0.0:
+            out = self._shadow_lift(out, float(shadow_lift))
+
         if ai_enable_dof:
-            out = self._dof(out, float(ai_dof_strength), float(ai_dof_focus_depth))
+            if depth_map is not None:
+                d = _to_mask(depth_map)[0].cpu().numpy()
+                out = self._dof_depth(out, d, float(ai_dof_strength), float(ai_dof_focus_depth))
+            else:
+                out = self._dof(out, float(ai_dof_strength), float(ai_dof_focus_depth))
 
         if enable_upscale and float(upscale_factor) > 1.0:
-            t = torch.from_numpy(out).permute(2, 0, 1).unsqueeze(0)
             new_h = int(round(out.shape[0] * float(upscale_factor)))
             new_w = int(round(out.shape[1] * float(upscale_factor)))
-            t = F.interpolate(t, size=(new_h, new_w), mode="bicubic", align_corners=False)
-            out = t.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
+            if upscale_model is not None:
+                # Use ComfyUI's upscale-with-model utility for native compat.
+                try:
+                    import comfy_extras.nodes_upscale_model as _um  # type: ignore
+                    img_t = _np_to_bhwc(out)
+                    (upscaled,) = _um.ImageUpscaleWithModel().upscale(upscale_model, img_t)
+                    # Resize to exact target shape (model outputs fixed factor).
+                    if upscaled.shape[1] != new_h or upscaled.shape[2] != new_w:
+                        u = upscaled.permute(0, 3, 1, 2)
+                        u = F.interpolate(u, size=(new_h, new_w), mode="bicubic", align_corners=False)
+                        upscaled = u.permute(0, 2, 3, 1).clamp(0, 1)
+                    out = upscaled[0].cpu().numpy()
+                except (ImportError, AttributeError, RuntimeError) as exc:
+                    logger.warning(
+                        "[MECToneRefiner] upscale_model failed (%s: %s); falling back to bicubic.",
+                        type(exc).__name__, exc,
+                    )
+                    t = torch.from_numpy(out).permute(2, 0, 1).unsqueeze(0)
+                    t = F.interpolate(t, size=(new_h, new_w), mode="bicubic", align_corners=False)
+                    out = t.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
+            else:
+                t = torch.from_numpy(out).permute(2, 0, 1).unsqueeze(0)
+                t = F.interpolate(t, size=(new_h, new_w), mode="bicubic", align_corners=False)
+                out = t.squeeze(0).permute(1, 2, 0).clamp(0, 1).numpy()
 
         out_img = _np_to_bhwc(out)
 

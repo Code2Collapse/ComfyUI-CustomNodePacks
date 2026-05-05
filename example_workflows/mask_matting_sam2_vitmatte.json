@@ -1,0 +1,82 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [40, 80],
+      "size": [320, 314],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1]},
+        {"name": "MASK",  "type": "MASK",  "links": null}
+      ],
+      "widgets_values": ["example.png", "image"]
+    },
+    {
+      "id": 2,
+      "type": "MaskMattingMEC",
+      "pos": [400, 60],
+      "size": [380, 720],
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1},
+        {"name": "pos_points", "type": "STRING", "link": null, "widget": {"name": "pos_points"}},
+        {"name": "neg_points", "type": "STRING", "link": null, "widget": {"name": "neg_points"}}
+      ],
+      "outputs": [
+        {"name": "mask",       "type": "MASK",   "links": [2]},
+        {"name": "alpha",      "type": "MASK",   "links": [3]},
+        {"name": "preview",    "type": "IMAGE",  "links": null},
+        {"name": "trimap",     "type": "MASK",   "links": null},
+        {"name": "bbox",       "type": "BBOX",   "links": null},
+        {"name": "bbox_json",  "type": "STRING", "links": null},
+        {"name": "score",      "type": "FLOAT",  "links": null},
+        {"name": "info",       "type": "STRING", "links": null}
+      ],
+      "widgets_values": [
+        "sam2.1",
+        "vitmatte",
+        "auto",
+        "(auto)",
+        "(auto)",
+        "fp16",
+        "auto",
+        "none",
+        "hair",
+        24, 4, 12,
+        false,
+        "forward",
+        0, 0, 0, 8, 0, -1,
+        false,
+        0,
+        "{\"positive\":[[400,300]],\"negative\":[]}",
+        ""
+      ]
+    },
+    {
+      "id": 3,
+      "type": "PreviewImage",
+      "pos": [820, 60],
+      "size": [320, 270],
+      "inputs": [{"name": "images", "type": "IMAGE", "link": null}],
+      "widgets_values": []
+    },
+    {
+      "id": 4,
+      "type": "MaskToImage",
+      "pos": [820, 360],
+      "size": [320, 90],
+      "inputs": [{"name": "mask", "type": "MASK", "link": 3}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": null}]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 2, 0, 0, 0, "MASK"],
+    [3, 2, 1, 4, 0, "MASK"]
+  ],
+  "groups": [
+    {"title": "MaskMattingMEC — SAM 2.1 + ViTMatte (hair preset)", "bounding": [20, 20, 1140, 800]}
+  ],
+  "version": 0.4
+}

@@ -1,0 +1,25 @@
+SAM 3.1 / SAM3 Library — Vendored copy
+=======================================
+
+Source       : https://github.com/facebookresearch/sam3
+Vendored at  : ComfyUI-CustomNodePacks/third_party/sam3_lib/
+License      : Meta SAM License
+Full text    : https://github.com/facebookresearch/sam3/blob/main/LICENSE
+
+Summary of obligations
+----------------------
+* The SAM Materials (model code, weights, documentation) are licensed by
+  Meta Platforms, Inc. under a non-exclusive, worldwide, royalty-free
+  limited license to use, reproduce, distribute, copy, create derivative
+  works of, and modify.
+* Redistribution must include this license. Derivative works must be
+  distributed under the same Agreement.
+* Outputs and results are provided "AS IS", with no warranty.
+* Use must comply with applicable laws including U.S. export controls
+  and the prohibitions in section 1.b.v (no military / weapons / ITAR
+  / espionage / nuclear / illegal-weapons applications).
+* No reverse engineering of the underlying components.
+
+This file is a notice; the canonical license text lives upstream at the
+URL above and at ``third_party/sam3_lib`` if pulled together with the
+repo. Vendored files retain Meta's copyright headers.

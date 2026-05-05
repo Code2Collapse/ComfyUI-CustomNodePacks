@@ -420,6 +420,55 @@ def _coords_from_splines(spline_data_json: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  AABB extraction for SAM bbox compatibility
+# ══════════════════════════════════════════════════════════════════════
+
+def _bbox_from_splines(spline_data_json: str, canvas_w: int, canvas_h: int):
+    """Compute axis-aligned bounding box covering ALL spline control points.
+
+    Returns:
+        (bbox_json_str, bbox_xywh_list)
+        - bbox_json_str: '[x1, y1, x2, y2]' for SAM ``bbox_json`` consumers
+          (SAMMaskGeneratorMEC, SAMViTMattePipelineMEC, SeC, etc.)
+        - bbox_xywh_list: [x, y, w, h] for ``BBOX`` consumers (BBoxSmooth,
+          inpaint crop, MaskTransformXY, etc.)
+        Falls back to a full-canvas bbox if no points are present.
+    """
+    try:
+        shapes = json.loads(spline_data_json) if isinstance(spline_data_json, str) else spline_data_json
+    except (json.JSONDecodeError, TypeError):
+        shapes = []
+
+    xs: list[float] = []
+    ys: list[float] = []
+    if isinstance(shapes, list):
+        for shape in shapes:
+            if not isinstance(shape, dict):
+                continue
+            for p in shape.get("points", []):
+                if isinstance(p, dict):
+                    xs.append(float(p.get("x", 0)))
+                    ys.append(float(p.get("y", 0)))
+                elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                    xs.append(float(p[0]))
+                    ys.append(float(p[1]))
+
+    if not xs or not ys:
+        return "[]", [0, 0, int(canvas_w), int(canvas_h)]
+
+    x1 = max(0, int(round(min(xs))))
+    y1 = max(0, int(round(min(ys))))
+    x2 = min(int(canvas_w), int(round(max(xs))))
+    y2 = min(int(canvas_h), int(round(max(ys))))
+    if x2 <= x1 or y2 <= y1:
+        return "[]", [0, 0, int(canvas_w), int(canvas_h)]
+
+    bbox_xyxy = [x1, y1, x2, y2]
+    bbox_xywh = [x1, y1, x2 - x1, y2 - y1]
+    return json.dumps(bbox_xyxy), bbox_xywh
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  SPLINE_DATA type builder
 # ══════════════════════════════════════════════════════════════════════
 
@@ -599,12 +648,14 @@ class SplineMaskEditorMEC:
             },
         }
 
-    RETURN_TYPES = ("MASK", "STRING", "SPLINE_DATA")
-    RETURN_NAMES = ("mask", "coords_json", "spline_data_out")
+    RETURN_TYPES = ("MASK", "STRING", "SPLINE_DATA", "STRING", "BBOX")
+    RETURN_NAMES = ("mask", "coords_json", "spline_data_out", "bbox_json", "bbox")
     OUTPUT_TOOLTIPS = (
         "Rasterized spline mask matching the image (or width/height override).",
         "SAM-compatible point coordinates sampled along the spline path.",
         "Structured spline data for downstream shape/motion nodes.",
+        "AABB of all control points as JSON [x1,y1,x2,y2] for SAM bbox_json consumers.",
+        "AABB as BBOX [x, y, w, h] for BBoxSmooth / Inpaint Crop / MaskTransformXY.",
     )
     FUNCTION = "execute"
     CATEGORY = "MaskEditControl/Spline"
@@ -651,6 +702,9 @@ class SplineMaskEditorMEC:
         # Extract SAM-compatible coords
         coords_json = _coords_from_splines(spline_data)
 
+        # Extract AABB for SAM bbox_json + BBOX-typed consumers
+        bbox_json_out, bbox_xywh = _bbox_from_splines(spline_data, out_W, out_H)
+
         # Build SPLINE_DATA custom type
         spline_data_out = _build_spline_data(spline_data, out_W, out_H)
 
@@ -696,7 +750,7 @@ class SplineMaskEditorMEC:
 
         return {
             "ui": {"cache_key": [cache_key], "preview": [preview_b64]},
-            "result": (mask, coords_json, spline_data_out),
+            "result": (mask, coords_json, spline_data_out, bbox_json_out, bbox_xywh),
         }
 
 

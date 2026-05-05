@@ -134,11 +134,21 @@ Look for `[MEC] Loaded 44 MaskEditControl nodes.` in the console to confirm.
 
 ## Detailed Documentation
 
+> **📚 Start here: [`docs/README.md`](docs/README.md)** — the central
+> documentation index with quick-nav by task, pack-by-pack reference,
+> and image-vs-video pipeline guidance.
+
 Every node's parameters, modes, and outputs are documented in depth in the `docs/` folder:
 
 | Guide | Nodes | What's inside |
 |-------|------:|---------------|
+| [**Documentation Index**](docs/README.md) | — | Central nav: quick lookup by task, pack-by-pack reference, image-vs-video helpers |
 | [Inpaint Suite](docs/inpaint-suite.md) | 4 | Crop Pro, Stitch Pro, Paste Back, Mask Prepare — full pipeline with fill modes, blend modes, interpolation methods |
+| [**ProPainter Suite**](docs/propainter.md) ★ new | 5 | Temporal video inpaint, stitch (drop-in for legacy), seam-only refine, model-free remove, RAFT flow refine |
+| [**Face Fixer**](docs/face-fixer.md) ★ new | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
+| [**Paint Suite**](docs/paint-suite.md) ★ new | 2 | Interactive paint canvas (hardness/expansion/blur stages) + smart context inpainter (color match, lightness rescue, differential diffusion) |
+| [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskMattingMEC` — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
+| [**Video Stabilizer**](docs/video-stabilizer.md) ★ new | 3 | Classic GFTT+LK / RAFT dense flow / auto-router with 4 presets; padding-mask output wires into Inpaint Crop Pro |
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
 | [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, Background Remover, both pipelines |
 | [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Luminance Keyer |

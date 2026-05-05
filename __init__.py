@@ -61,6 +61,16 @@ from .nodes.mec_paint_suite import (
     NODE_CLASS_MAPPINGS as _PAINT_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
 )
+# Face Fixer (auto YOLO11 detection + per-face KSampler + smart blend)
+from .nodes.mec_face_fixer import (
+    NODE_CLASS_MAPPINGS as _FACE_FIXER_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _FACE_FIXER_DISPLAY,
+)
+# Mask + Matting (multi-backend: SAM2.1, SAM3 + ViTMatte, RVM, ...)
+from .nodes.mask_matting import (
+    NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
+)
 
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 from .nodes.propainter_temporal_inpaint import ProPainterTemporalMEC
@@ -73,17 +83,16 @@ from .nodes.video_stabilizer_mec import (
     NODE_CLASS_MAPPINGS as _STABILIZER_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _STABILIZER_DISPLAY,
 )
-from .nodes.optical_flow import OpticalFlowMEC
-from .nodes.roto import VectorRotoMEC
-# NOTE: Deep* nodes (DeepFromImage / DeepMerge / DeepHoldout / DeepComposite)
-# now live exclusively in ComfyUI-NukeMaxNodes (May 2026 migration). The MEC
-# duplicates here have been deleted to avoid registry collisions and
-# divergent DEEP_IMAGE type semantics.
-from .nodes.shuffle import ShuffleMEC
-from .nodes.clipboard_tcl import (
-    TclSerializeMEC, TclParseMEC,
-    register_routes as _register_tcl_routes,
-)
+# NOTE: The following node families now live EXCLUSIVELY in
+# ComfyUI-NukeMaxNodes (May 2026 migration) to avoid duplicate functionality
+# and divergent type semantics. The MEC copies have been moved to _deprecated/.
+#   - Deep*    (DeepFromImage / DeepMerge / DeepHoldout / DeepComposite)
+#   - Roto     (VectorRotoMEC      -> NukeMax_RotoSplineEditor + suite)
+#   - Shuffle  (ShuffleMEC         -> NukeMax_ShuffleImage / NukeMax_ShuffleLatent)
+#   - Flow     (OpticalFlowMEC     -> NukeMax_ComputeOpticalFlow + warps)
+#   - Tcl/Nk   (TclSerialize/Parse -> NukeMax_NkScriptSerialize / Parse)
+# FlowRefineMEC (post-flow inpainting prep) is kept here because it is part of
+# the ProPainter pipeline, not a generic Nuke flow utility.
 from .nodes.insight import InsightStatusMEC, install as _install_insight_hook
 from .nodes.integrity_guard import (
     IntegrityStatusMEC,
@@ -94,22 +103,12 @@ from .nodes.integrity_guard import (
 _NUKEMAX_MAPPINGS = {
     "ProPainterTemporalMEC": ProPainterTemporalMEC,
     "FlowRefineMEC": FlowRefineMEC,
-    "OpticalFlowMEC": OpticalFlowMEC,
-    "VectorRotoMEC": VectorRotoMEC,
-    "ShuffleMEC": ShuffleMEC,
-    "TclSerializeMEC": TclSerializeMEC,
-    "TclParseMEC": TclParseMEC,
     "InsightStatusMEC": InsightStatusMEC,
     "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
     "ProPainterTemporalMEC": "ProPainter Temporal Inpaint (MEC)",
     "FlowRefineMEC": "Optical Flow Refine (MEC)",
-    "OpticalFlowMEC": "Optical Flow Re-Vector (MEC)",
-    "VectorRotoMEC": "Vector Roto (MEC)",
-    "ShuffleMEC": "Shuffle Channels (MEC)",
-    "TclSerializeMEC": "TCL Serialize (MEC)",
-    "TclParseMEC": "TCL Parse (MEC)",
     "InsightStatusMEC": "Insight Status (MEC)",
     "IntegrityStatusMEC": "Integrity Status (MEC)",
 }
@@ -199,6 +198,8 @@ NODE_CLASS_MAPPINGS = {
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
+    **_FACE_FIXER_MAPPINGS,
+    **_MASKMATTE_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_PROPAINTER_STITCH_MAPPINGS,
     **_STABILIZER_MAPPINGS,
@@ -208,6 +209,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MEC_DISPLAY,
     **_MA_DISPLAY,
     **_PAINT_DISPLAY,
+    **_FACE_FIXER_DISPLAY,
+    **_MASKMATTE_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_PROPAINTER_STITCH_DISPLAY,
     **_STABILIZER_DISPLAY,
@@ -230,7 +233,6 @@ except Exception:
 try:
     import server as _comfy_server  # noqa: F811
     _ps = _comfy_server.PromptServer.instance
-    _register_tcl_routes(_ps)
     _register_integrity_routes(_ps)
     _start_integrity_scan()
     _install_insight_hook()

@@ -42,7 +42,8 @@ log = logging.getLogger("MEC.propainter_temporal")
 @torch.no_grad()
 def _compute_bidirectional_flow(raft, video_bchw: torch.Tensor,
                                 iters: int = 20,
-                                consistency_thr: float = 1.5
+                                consistency_thr: float = 1.5,
+                                chunk: int = 16,
                                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     video_bchw: (B, C, H, W) in [-1, 1] — RAFT expects [0, 255], we rescale.
@@ -50,6 +51,11 @@ def _compute_bidirectional_flow(raft, video_bchw: torch.Tensor,
         fwd:   (B-1, 2, H, W)
         bwd:   (B-1, 2, H, W)
         valid: (B-1, 1, H, W)  1 where bidirectional flow agrees
+
+    RAFT keeps a 4-level correlation pyramid resident per pair so peak VRAM
+    grows linearly with the number of pairs processed in one forward pass.
+    On 8 GB cards a 720p video with B=80 frames OOMs immediately. We chunk
+    the consecutive pairs in groups of `chunk` and concatenate the results.
     """
     from .propainter_bridge import InputPadder  # vendored
     if InputPadder is None:
@@ -59,12 +65,24 @@ def _compute_bidirectional_flow(raft, video_bchw: torch.Tensor,
     rgb = ((video_bchw.float() + 1.0) * 127.5).clamp(0.0, 255.0)
     padder = InputPadder(rgb.shape)
     rgb_p = padder.pad(rgb)[0]
-    a = rgb_p[:-1]
-    b = rgb_p[1:]
-    _, fwd = raft(a, b, iters=iters, test_mode=True)
-    _, bwd = raft(b, a, iters=iters, test_mode=True)
-    fwd = padder.unpad(fwd)
-    bwd = padder.unpad(bwd)
+    a_all = rgb_p[:-1]
+    b_all = rgb_p[1:]
+
+    fwd_chunks: List[torch.Tensor] = []
+    bwd_chunks: List[torch.Tensor] = []
+    n_pairs = a_all.shape[0]
+    chunk = max(1, int(chunk))
+    for s in range(0, n_pairs, chunk):
+        e = min(s + chunk, n_pairs)
+        _, fwd_c = raft(a_all[s:e], b_all[s:e], iters=iters, test_mode=True)
+        _, bwd_c = raft(b_all[s:e], a_all[s:e], iters=iters, test_mode=True)
+        fwd_chunks.append(fwd_c)
+        bwd_chunks.append(bwd_c)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    fwd = padder.unpad(torch.cat(fwd_chunks, dim=0))
+    bwd = padder.unpad(torch.cat(bwd_chunks, dim=0))
 
     # Consistency: warp bwd by fwd; |fwd + bwd_warped| should be ~0 if vectors agree.
     H, W = video_bchw.shape[-2:]
@@ -355,7 +373,10 @@ class ProPainterTemporalMEC:
                 "neighbor_stride": ("INT",     {"default": 5,  "min": 1, "max": 20}),
                 "ref_stride":      ("INT",     {"default": 10, "min": 1, "max": 50}),
                 "raft_iter":       ("INT",     {"default": 20, "min": 1, "max": 100}),
-                "subvideo_length": ("INT",     {"default": 80, "min": 8, "max": 300}),
+                "subvideo_length": ("INT",     {"default": 30, "min": 8, "max": 300,
+                                                "tooltip": "Frames per InpaintGenerator window. Lower = less VRAM. 8GB cards: 20-30. 12GB: 40-60. 24GB: 80+."}),
+                "raft_chunk":      ("INT",     {"default": 16, "min": 1, "max": 64,
+                                                "tooltip": "Frame-pairs per RAFT forward pass. Lower if you OOM on flow estimation. 8GB: 8-16. 24GB: 32+."}),
                 "use_half":        ("BOOLEAN", {"default": True}),
                 "blend_boundary":  ("BOOLEAN", {"default": True}),
                 "color_match_mode": (["none", "reinhard", "lab_transfer"],
@@ -366,10 +387,27 @@ class ProPainterTemporalMEC:
     # ---------- main entry ----------
     def inpaint_temporal(self, images: torch.Tensor, masks: torch.Tensor,
                          stitch_data: Dict, neighbor_stride: int, ref_stride: int,
-                         raft_iter: int, subvideo_length: int, use_half: bool,
-                         blend_boundary: bool, color_match_mode: str):
+                         raft_iter: int, subvideo_length: int,
+                         use_half: bool,
+                         blend_boundary: bool, color_match_mode: str,
+                         raft_chunk: int = 16):
         if not HAS_PROPAINTER:
             require_propainter()  # raises ProPainterMissingError with install hint
+        # Free any other models (SD checkpoint, VAE, encoders) sitting in VRAM
+        # before we load the ProPainter bundle. ProPainter (RAFT + RFC +
+        # InpaintGenerator) needs ~4-5GB on its own; on an 8GB card you OOM
+        # immediately if a Wan/Flux checkpoint is still resident.
+        try:
+            import comfy.model_management as _mm  # type: ignore
+            _mm.unload_all_models()
+            _mm.soft_empty_cache()
+        except Exception:
+            pass
+        import gc as _gc
+        _gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
         t0 = time.time()
         info_lines: List[str] = []
 
@@ -394,7 +432,7 @@ class ProPainterTemporalMEC:
 
             # ---- RAFT bidirectional flow + consistency ----
             fwd, bwd, valid = _compute_bidirectional_flow(
-                models.raft, video_bchw, iters=raft_iter,
+                models.raft, video_bchw, iters=raft_iter, chunk=raft_chunk,
             )
             valid_ratio = float(valid.mean())
             info_lines.append(f"raft_valid={valid_ratio:.3f}")

@@ -25,7 +25,7 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:100%;min-height:200px;background:#111;border-radius:4px;overflow:hidden;";
+                "position:relative;width:calc(100% - 12px);min-height:200px;margin:2px 6px 16px 6px;background:#111;border-radius:4px;overflow:hidden;pointer-events:auto;";
             // MANUAL bug-fix (Apr 2026): a11y -- screen-reader / keyboard support.
             el.setAttribute("role", "group");
             el.setAttribute("aria-label", "Image A/B comparer (drag horizontally to wipe between images)");

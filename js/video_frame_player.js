@@ -96,7 +96,7 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:100%;min-height:240px;background:#0c0c0c;" +
+                "position:relative;width:calc(100% - 12px);min-height:240px;margin:2px 6px 16px 6px;background:#0c0c0c;pointer-events:auto;" +
                 "border-radius:4px;overflow:hidden;";   // overflow:hidden = no scroll-out
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
