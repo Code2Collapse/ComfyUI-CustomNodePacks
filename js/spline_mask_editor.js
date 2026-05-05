@@ -570,9 +570,21 @@ function installEditor(node) {
     const ro = new ResizeObserver(() => render());
     ro.observe(canvasWrap);
 
+    // Mouse coords MUST be scaled by (canvas.width / r.width) because the
+    // <canvas> element is CSS-scaled by ComfyUI's outer-canvas zoom while
+    // its internal pixel buffer (canvas.width) stays fixed.
+    function evScale(r) {
+        return [canvas.width / (r.width || 1), canvas.height / (r.height || 1)];
+    }
     function eventCanvas(e) {
         const r = canvas.getBoundingClientRect();
-        return ed.viewToCanvas(e.clientX - r.left, e.clientY - r.top);
+        const [sx, sy] = evScale(r);
+        return ed.viewToCanvas((e.clientX - r.left) * sx, (e.clientY - r.top) * sy);
+    }
+    function eventClient(e) {
+        const r = canvas.getBoundingClientRect();
+        const [sx, sy] = evScale(r);
+        return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
     }
 
     canvas.addEventListener("pointerdown", (e) => {
@@ -581,7 +593,8 @@ function installEditor(node) {
         const c = eventCanvas(e);
 
         if (e.button === 1 || (e.button === 0 && e.altKey)) {
-            ed.drag = { kind: "pan", startX: e.clientX - ed.panX, startY: e.clientY - ed.panY };
+            const ec = eventClient(e);
+            ed.drag = { kind: "pan", startX: ec.x - ed.panX, startY: ec.y - ed.panY };
             canvas.style.cursor = "grabbing";
             return;
         }
@@ -623,8 +636,9 @@ function installEditor(node) {
         ed.cursor = { x: c.x, y: c.y, visible: true };
 
         if (ed.drag?.kind === "pan") {
-            ed.panX = e.clientX - ed.drag.startX;
-            ed.panY = e.clientY - ed.drag.startY;
+            const ec = eventClient(e);
+            ed.panX = ec.x - ed.drag.startX;
+            ed.panY = ec.y - ed.drag.startY;
             render(); return;
         }
         if (ed.drag?.kind === "point") {
@@ -664,7 +678,8 @@ function installEditor(node) {
     canvas.addEventListener("wheel", (e) => {
         e.preventDefault(); e.stopPropagation();
         const r = canvas.getBoundingClientRect();
-        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        const [sx, sy] = evScale(r);
+        const mx = (e.clientX - r.left) * sx, my = (e.clientY - r.top) * sy;
         const f = e.deltaY < 0 ? 1.15 : 0.87;
         const newZ = Math.max(0.05, Math.min(40, ed.zoom * f));
         const k = newZ / ed.zoom;

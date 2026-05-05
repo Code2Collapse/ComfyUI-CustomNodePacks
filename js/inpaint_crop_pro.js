@@ -9,25 +9,38 @@ const ALWAYS = new Set([
     "aspect_ratio", "video_stable_crop", "video_stab_strength", "mask_temporal_smooth",
 ]);
 
+// Snapshot the widget's original type/computeSize ONCE at first sight,
+// before any hide can clobber them. Refuse to ever store "hidden" as the
+// original — that's the failure mode that left widgets permanently invisible.
+function snapshotOriginal(w) {
+    if (w.__origTypeCaptured) return;
+    if (w.type && w.type !== "hidden") {
+        w.__origType = w.type;
+    }
+    if (typeof w.computeSize === "function" && !w.__hiddenComputeSize) {
+        w.__origComputeSize = w.computeSize;
+    }
+    w.__origTypeCaptured = true;
+}
+
 function setHidden(w, hidden) {
+    snapshotOriginal(w);
     if (hidden) {
-        if (!w.__origComputeSize) {
-            w.__origComputeSize = w.computeSize;
-            w.__origType = w.type;
-        }
-        w.computeSize = () => [0, -4];
+        w.__hiddenComputeSize = w.__hiddenComputeSize || (() => [0, -4]);
+        w.computeSize = w.__hiddenComputeSize;
         w.hidden = true;
         w.type = "hidden";
     } else {
-        if (w.__origComputeSize) {
-            w.computeSize = w.__origComputeSize;
-            delete w.__origComputeSize;
-        }
+        if (w.__origComputeSize) w.computeSize = w.__origComputeSize;
         w.hidden = false;
-        w.type = w.__origType || w.type;
+        if (w.__origType) w.type = w.__origType;
     }
 }
 
+// User feedback: hiding 10+ widgets by default makes them appear "vanished"
+// in saved workflows. New rule: NEVER hide a widget that has a non-default
+// value (the user explicitly set it). Only hide when both the controlling
+// mode is in its default state AND the dependent widget is also default.
 function applyVisibility(node) {
     const get = (name) => node.widgets?.find(w => w.name === name);
     const sizeMode    = get("size_mode")?.value;
@@ -35,29 +48,36 @@ function applyVisibility(node) {
     const downscale   = get("downscale_factor")?.value;
     const stabStrength = get("video_stab_strength")?.value;
 
+    // Mode-driven reveal flags.
     const showForced  = sizeMode === "forced_size";
     const showRanged  = sizeMode === "ranged_size";
     const showCustom  = aspect === "custom";
     const showDown    = (typeof downscale === "number") ? downscale < 0.999 : false;
     const showStab    = (typeof stabStrength === "number") ? stabStrength > 0.0001 : false;
 
+    // (widget name → reveal flag, default value used for "is this still pristine?" check)
     const conditional = {
-        forced_width:       showForced,
-        forced_height:      showForced,
-        min_size:           showRanged,
-        max_size:           showRanged,
-        custom_aspect_w:    showCustom,
-        custom_aspect_h:    showCustom,
-        downscale_method:   showDown,
-        upscale_method:     showDown,
-        video_stab_fps:     showStab,
-        video_stab_padding: showStab,
+        forced_width:       [showForced, 1024],
+        forced_height:      [showForced, 1024],
+        min_size:           [showRanged, 512],
+        max_size:           [showRanged, 2048],
+        custom_aspect_w:    [showCustom, 1],
+        custom_aspect_h:    [showCustom, 1],
+        downscale_method:   [showDown,   "lanczos"],
+        upscale_method:     [showDown,   "lanczos"],
+        video_stab_fps:     [showStab,   24.0],
+        video_stab_padding: [showStab,   32],
     };
 
     for (const w of node.widgets) {
         if (ALWAYS.has(w.name)) { setHidden(w, false); continue; }
-        if (w.name in conditional) { setHidden(w, !conditional[w.name]); continue; }
-        // Unknown widgets — keep visible
+        if (w.name in conditional) {
+            const [reveal, def] = conditional[w.name];
+            // Show if mode reveals OR user has changed value from default.
+            const userTouched = w.value !== def;
+            setHidden(w, !(reveal || userTouched));
+            continue;
+        }
         setHidden(w, false);
     }
     const sz = node.computeSize();
@@ -85,6 +105,9 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
+            // Snapshot every widget's original type IMMEDIATELY so later
+            // hides can never corrupt it, even under racey re-entry.
+            for (const w of this.widgets || []) snapshotOriginal(w);
             for (const name of ["size_mode", "aspect_ratio", "downscale_factor", "video_stab_strength"]) {
                 hookWidget(this, name);
             }

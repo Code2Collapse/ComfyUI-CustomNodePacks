@@ -526,9 +526,15 @@ function installEditor(node) {
     const ro = new ResizeObserver(() => render());
     ro.observe(canvasWrap);
 
+    // Mouse coords MUST be scaled by (canvas.width / r.width) because the
+    // <canvas> element is CSS-scaled by ComfyUI's outer-canvas zoom while
+    // its internal pixel buffer (canvas.width) stays fixed. Without this,
+    // every click drifts proportional to LiteGraph's zoom level.
     function eventCanvas(e) {
         const r = canvas.getBoundingClientRect();
-        return ed.viewToCanvas(e.clientX - r.left, e.clientY - r.top);
+        const sx = canvas.width  / (r.width  || 1);
+        const sy = canvas.height / (r.height || 1);
+        return ed.viewToCanvas((e.clientX - r.left) * sx, (e.clientY - r.top) * sy);
     }
 
     canvas.addEventListener("pointerdown", (e) => {
@@ -537,7 +543,13 @@ function installEditor(node) {
         const c = eventCanvas(e);
 
         if (e.button === 1 || (e.button === 0 && e.altKey)) {
-            ed.drag = { kind: "pan", startX: e.clientX - ed.panX, startY: e.clientY - ed.panY };
+            const r0 = canvas.getBoundingClientRect();
+            const sx0 = canvas.width / (r0.width || 1), sy0 = canvas.height / (r0.height || 1);
+            ed.drag = {
+                kind: "pan",
+                startX: (e.clientX - r0.left) * sx0 - ed.panX,
+                startY: (e.clientY - r0.top)  * sy0 - ed.panY,
+            };
             canvas.style.cursor = "grabbing";
             return;
         }
@@ -569,8 +581,10 @@ function installEditor(node) {
         ed.cursor = { x: c.x, y: c.y, visible: true };
 
         if (ed.drag?.kind === "pan") {
-            ed.panX = e.clientX - ed.drag.startX;
-            ed.panY = e.clientY - ed.drag.startY;
+            const r1 = canvas.getBoundingClientRect();
+            const sx1 = canvas.width / (r1.width || 1), sy1 = canvas.height / (r1.height || 1);
+            ed.panX = (e.clientX - r1.left) * sx1 - ed.drag.startX;
+            ed.panY = (e.clientY - r1.top)  * sy1 - ed.drag.startY;
             render(); return;
         }
         if (ed.drag?.kind === "point") {
@@ -656,7 +670,9 @@ function installEditor(node) {
     canvas.addEventListener("wheel", (e) => {
         e.preventDefault(); e.stopPropagation();
         const r = canvas.getBoundingClientRect();
-        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        const sx = canvas.width  / (r.width  || 1);
+        const sy = canvas.height / (r.height || 1);
+        const mx = (e.clientX - r.left) * sx, my = (e.clientY - r.top) * sy;
         if (e.ctrlKey || e.metaKey) {
             const f = e.deltaY < 0 ? 1.15 : 0.87;
             const newZ = Math.max(0.05, Math.min(40, ed.zoom * f));
