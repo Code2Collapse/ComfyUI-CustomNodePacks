@@ -744,18 +744,6 @@ class InpaintCropProMEC:
                 "video_stable_crop": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Lock bbox across all frames using union of all mask regions (for video)"}),
-                "video_stab_strength": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "Cinema (Ronin-gimbal) per-frame stabilization. 0=off (use video_stable_crop=True for hard lock). 0.5=responsive operator. 0.8=heavy operator on rig (recommended). 1.0=max inertia. Filter cascade: median → 4Hz EMA → critically-damped spring with pre-warm. Crop size = subject + 99th-percentile motion + padding (NOT full envelope)."}),
-                "video_stab_fps": ("FLOAT", {
-                    "default": 24.0, "min": 1.0, "max": 240.0, "step": 1.0,
-                    "tooltip": "Source frame rate. Controls Ronin filter time constants. Match your video fps."}),
-                "video_stab_padding": ("INT", {
-                    "default": 32, "min": 0, "max": 512, "step": 8,
-                    "tooltip": "Extra pixels of headroom around the crop window (Ronin mode only)."}),
-                "mask_temporal_smooth": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 8.0, "step": 0.5,
-                    "tooltip": "Temporal Gaussian smoothing of the inpaint/blend mask along frames (sigma in frames). 0=off. Use 1.5-3.0 for zero-jitter video. Auto-applied (=1.5) when video_stable_crop is on and this is 0."}),
                 "fill_masked_area": (cls.FILL_MODES, {
                     "default": "edge_pad",
                     "tooltip": "How to fill the masked area in the crop: edge_pad, neutral_gray, or original"}),
@@ -792,6 +780,21 @@ class InpaintCropProMEC:
                 "mask_hipass_filter": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Ignore mask values below this threshold (removes near-transparent noise)"}),
+                # ── Ronin-gimbal cinema stabilization (added ad05a1b) ──
+                # Kept at END of widget list to preserve positional mapping
+                # of workflows saved before this feature was introduced.
+                "video_stab_strength": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Cinema (Ronin-gimbal) per-frame stabilization. 0=off (use video_stable_crop=True for hard lock). 0.5=responsive operator. 0.8=heavy operator on rig (recommended). 1.0=max inertia. Filter cascade: median → 4Hz EMA → critically-damped spring with pre-warm. Crop size = subject + 99th-percentile motion + padding (NOT full envelope)."}),
+                "video_stab_fps": ("FLOAT", {
+                    "default": 24.0, "min": 1.0, "max": 240.0, "step": 1.0,
+                    "tooltip": "Source frame rate. Controls Ronin filter time constants. Match your video fps."}),
+                "video_stab_padding": ("INT", {
+                    "default": 32, "min": 0, "max": 512, "step": 8,
+                    "tooltip": "Extra pixels of headroom around the crop window (Ronin mode only)."}),
+                "mask_temporal_smooth": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 8.0, "step": 0.5,
+                    "tooltip": "Temporal Gaussian smoothing of the inpaint/blend mask along frames (sigma in frames). 0=off. Use 1.5-3.0 for zero-jitter video. Auto-applied (=1.5) when video_stable_crop is on and this is 0."}),
             },
             "optional": {
                 "optional_context_mask": ("MASK", {
