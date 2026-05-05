@@ -30,7 +30,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const CLIP_VERSION = "1.2";
+const CLIP_VERSION = "1.3";
 const CLIP_HEADER  = `# MEC.clipboard ${CLIP_VERSION}`;
 const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
 
@@ -207,9 +207,58 @@ async function _gatherSubgraph(nodes) {
     };
 }
 
-// -----------------------------------------------------------------------
-// Copy
-// -----------------------------------------------------------------------
+// Synchronous variant used by the `copy` event hook (which cannot await).
+// Uses only the already-warmed `_packMapCache`; if the cache hasn't loaded
+// yet the provenance.pack_url comes back null but everything else is intact.
+function _provenanceForSync(node) {
+    const folder = _packFolderForNode(node);
+    if (!folder) return null;
+    const e = _packMapCache?.[folder];
+    return {
+        pack_folder: folder,
+        pack_title: e?.title || folder,
+        pack_url:   e?.url   || null,
+        python_module: node.constructor?.nodeData?.python_module || null,
+    };
+}
+
+function _gatherSubgraphSync(nodes) {
+    const ids = new Set(nodes.map((n) => n.id));
+    const out_nodes = [];
+    for (const n of nodes) {
+        out_nodes.push(_serializeNode(n, _provenanceForSync(n)));
+    }
+    const out_links = [];
+    const links = app.graph?.links || {};
+    for (const k in links) {
+        const l = links[k];
+        if (!l) continue;
+        if (ids.has(l.origin_id) && ids.has(l.target_id)) {
+            out_links.push({
+                src_id: l.origin_id, src_slot: l.origin_slot,
+                dst_id: l.target_id, dst_slot: l.target_slot,
+                type: l.type,
+            });
+        }
+    }
+    const packs = {};
+    for (const n of out_nodes) {
+        const p = n.provenance;
+        if (!p?.pack_folder) continue;
+        packs[p.pack_folder] = {
+            pack_folder: p.pack_folder,
+            pack_title: p.pack_title,
+            pack_url: p.pack_url,
+        };
+    }
+    return {
+        version: CLIP_VERSION,
+        created: new Date().toISOString(),
+        nodes: out_nodes,
+        links: out_links,
+        packs: Object.values(packs),
+    };
+}
 async function _copy(specificNode = null) {
     const nodes = specificNode ? [specificNode] : _selectedNodes();
     if (!nodes.length) { _toast("Nothing selected", "warn"); return; }
@@ -218,6 +267,18 @@ async function _copy(specificNode = null) {
     try {
         await navigator.clipboard.writeText(text);
         const packs = payload.packs.length;
+        // Push into the diagnostics sidebar history (kept tab-local).
+        try {
+            window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+            window.__MEC_CLIPBOARD_HISTORY__.push({
+                ts: Date.now(),
+                payload,
+                text,
+            });
+            if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) {
+                window.__MEC_CLIPBOARD_HISTORY__.shift();
+            }
+        } catch (_) { /* ignore */ }
         _toast(
             `Copied ${nodes.length} node(s)` +
             (packs ? ` from ${packs} pack(s)` : "") +
@@ -360,6 +421,10 @@ async function _paste() {
     let text = "";
     try { text = await navigator.clipboard.readText(); }
     catch (e) { _toast("Clipboard read denied (browser permission)", "error"); return; }
+    return _pasteFromText(text);
+}
+
+async function _pasteFromText(text) {
     const data = _findHeader(text);
     if (!data || !Array.isArray(data.nodes)) {
         _toast("Clipboard does not contain MEC payload", "warn"); return;
@@ -475,85 +540,108 @@ async function _paste() {
 }
 
 // -----------------------------------------------------------------------
-// 3-tier wiring (keyboard + canvas menu + node menu)
+// -----------------------------------------------------------------------
+// 3-tier wiring (clipboard events + keyboard + canvas menu + node menu)
 // -----------------------------------------------------------------------
 //
-// Native LiteGraph already binds Ctrl+C / Ctrl+V on the canvas via its
-// own clipboard. We coexist with it instead of replacing it:
+// Native LiteGraph stores its own clipboard inside `localStorage` and
+// listens for keydown to copy/paste from there. The OS clipboard
+// (`navigator.clipboard`) is a separate channel.
 //
-//   * Ctrl+C  -> let native run (it does in-process clipboard + same-tab
-//                paste); ALSO mirror our enriched JSON into the OS
-//                clipboard so cross-machine + cross-tab paste works.
-//   * Ctrl+V  -> peek at the OS clipboard FIRST. If it carries an MEC
-//                payload (`# MEC.clipboard X.Y` header) we run our
-//                paste path (preventDefault so native doesn't double-
-//                paste). Otherwise we don't preventDefault, so native
-//                handles it normally.
-//   * Ctrl+Alt+C / Ctrl+Alt+V -> explicit MEC-only path (always ours).
+// We hook the *clipboard* DOM events (`copy` / `paste`) at the document
+// level, capture phase — these fire synchronously when Ctrl+C / Ctrl+V
+// (or right-click menu Copy/Paste) is triggered. Doing it here means:
 //
-function _eventInTextField(ev) {
-    const t = ev.target;
-    return !!(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable));
+//   * Ctrl+C  -> `copy` event fires; we synchronously write MEC payload
+//                into `e.clipboardData`. Native LiteGraph's keydown
+//                listener still runs and stores its localStorage copy
+//                so same-tab paste continues to work normally.
+//   * Ctrl+V  -> `paste` event fires; we read `e.clipboardData`. If it
+//                carries an MEC header we run our paste path and
+//                preventDefault so native doesn't double-paste.
+//                Otherwise we let native handle it.
+//   * Ctrl+Alt+C / Ctrl+Alt+V -> kept as keyboard fallback (always MEC).
+//
+function _eventInTextField(target) {
+    return !!(target && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+    ));
 }
 
-function _eventOnCanvas(ev) {
-    // Keydown's target is usually <body>; fall back to checking the
-    // active canvas element ComfyUI uses.
-    const t = ev.target;
-    if (t?.tagName === "CANVAS") return true;
-    if (t === document.body || t === document.documentElement) {
-        return !!app.canvas?.canvas;
-    }
+function _focusOnCanvas() {
+    const a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) return true;
+    if (a.tagName === "CANVAS") return true;
     return false;
 }
 
-window.addEventListener("keydown", async (ev) => {
-    if (!ev.ctrlKey && !ev.metaKey) return;
-    if (ev.shiftKey) return;
-    if (_eventInTextField(ev)) return;
-    if (!_eventOnCanvas(ev)) return;
-    const k = ev.key.toLowerCase();
-
-    // Explicit MEC-only path (Ctrl+Alt+C / Ctrl+Alt+V).
-    if (ev.altKey) {
-        if (k === "c") { ev.preventDefault(); _copy(); }
-        else if (k === "v") { ev.preventDefault(); _paste(); }
-        return;
-    }
-
-    // Plain Ctrl+C: mirror to OS clipboard. Don't preventDefault so the
-    // native LiteGraph clipboard also captures (keeps same-tab paste
-    // identical to today). Mirror is best-effort; failures are silent.
-    if (k === "c") {
+// ------ COPY -----------------------------------------------------------
+document.addEventListener("copy", (ev) => {
+    try {
+        if (_eventInTextField(ev.target)) return;            // typing → native
+        if (!_focusOnCanvas()) return;                       // not on graph → native
         const nodes = _selectedNodes();
-        if (!nodes.length) return;
+        if (!nodes.length) return;                           // nothing → native (selection in textareas etc.)
+        // Build payload SYNCHRONOUSLY using whatever pack info is already cached.
+        // _gatherSubgraph is async only because of the network pack-map fetch;
+        // the pack-map is pre-warmed in setup() so the subsequent calls return
+        // from cache. We still must do the actual work synchronously here, so
+        // call the synchronous variant.
+        const payload = _gatherSubgraphSync(nodes);
+        const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
+        ev.clipboardData.setData("text/plain", text);
+        ev.preventDefault();                                 // we own the OS clipboard
+        // Sidebar history.
         try {
-            const payload = await _gatherSubgraph(nodes);
-            const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
-            await navigator.clipboard.writeText(text);
-        } catch (_) { /* native still ran */ }
-        return;
+            window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+            window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload, text });
+            if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) {
+                window.__MEC_CLIPBOARD_HISTORY__.shift();
+            }
+        } catch (_) { /* ignore */ }
+        const packs = payload.packs.length;
+        _toast(
+            `Copied ${nodes.length} node(s)` +
+            (packs ? ` from ${packs} pack(s)` : "") +
+            ` with full metadata`,
+            "success",
+        );
+    } catch (e) {
+        console.warn("[MEC.clipboard] copy hook failed:", e);
+        // Don't preventDefault → native copy still runs.
     }
+}, true);
 
-    // Plain Ctrl+V: prefer MEC payload if the OS clipboard carries one,
-    // else let native handle it.
-    if (k === "v") {
-        let text = "";
-        try { text = await navigator.clipboard.readText(); }
-        catch (_) { return; /* permission denied -> native handles it */ }
-        if (HEADER_REGEX.test(text || "")) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            _paste();
-        }
-        // else: don't preventDefault, native paste runs.
+// ------ PASTE ----------------------------------------------------------
+document.addEventListener("paste", (ev) => {
+    try {
+        if (_eventInTextField(ev.target)) return;            // pasting into a field → native
+        if (!_focusOnCanvas()) return;
+        const text = ev.clipboardData?.getData?.("text/plain") || "";
+        if (!HEADER_REGEX.test(text)) return;                // not ours → native
+        ev.preventDefault();
+        ev.stopPropagation();
+        _pasteFromText(text);
+    } catch (e) {
+        console.warn("[MEC.clipboard] paste hook failed:", e);
     }
-}, true);  // capture phase so we beat LiteGraph's listener for MEC payloads
+}, true);
+
+// ------ Ctrl+Alt+C / Ctrl+Alt+V keyboard fallback ----------------------
+window.addEventListener("keydown", (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey) || !ev.altKey || ev.shiftKey) return;
+    if (_eventInTextField(ev.target)) return;
+    const k = ev.key.toLowerCase();
+    if (k === "c") { ev.preventDefault(); _copy(); }
+    else if (k === "v") { ev.preventDefault(); _paste(); }
+}, true);
 
 app.registerExtension({
     name: "MEC.Clipboard",
     async setup() {
-        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 Ctrl+C / Ctrl+V (mirrored with native), Ctrl+Alt+C/V (MEC-only)");
+        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 native Ctrl+C/Ctrl+V via clipboard events, Ctrl+Alt+C/V fallback");
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 

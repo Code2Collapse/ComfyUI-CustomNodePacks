@@ -234,6 +234,16 @@ try:
     _register_integrity_routes(_ps)
     _start_integrity_scan()
     _install_insight_hook()
+    try:
+        from .nodes.mec_diagnostics_api import (
+            register_routes as _register_mec_diag_routes,
+            install_insight_bridge as _install_mec_diag_bridge,
+        )
+        _register_mec_diag_routes(_ps)
+        _install_mec_diag_bridge()
+        print("[MEC] mec_diagnostics sidebar API registered.")
+    except Exception as _diag_e:
+        print(f"[MEC] mec_diagnostics deferred: {_diag_e}")
     print("[MEC] NukeNodeMax routes + hooks registered.")
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")
