@@ -30,9 +30,26 @@
 
 import { app } from "../../scripts/app.js";
 
-const CLIP_VERSION = "1.3";
+const CLIP_VERSION = "1.4";
 const CLIP_HEADER  = `# MEC.clipboard ${CLIP_VERSION}`;
 const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
+
+// -----------------------------------------------------------------------
+// Auto-copy toggle (shared with the diagnostics sidebar Clipboard tab and
+// the ComfyUI settings panel). When OFF, Ctrl+C falls back to LiteGraph's
+// native in-tab clipboard only — we don't touch the OS clipboard.
+// -----------------------------------------------------------------------
+export const MEC_AUTOCOPY_KEY = "mec.clipboard.autoCopy";
+export function isAutoCopyEnabled() {
+    try {
+        const v = localStorage.getItem(MEC_AUTOCOPY_KEY);
+        return v === null ? true : v === "1" || v === "true";
+    } catch (_) { return true; }
+}
+export function setAutoCopyEnabled(on) {
+    try { localStorage.setItem(MEC_AUTOCOPY_KEY, on ? "1" : "0"); } catch (_) {}
+    window.dispatchEvent(new CustomEvent("mec-clipboard-autocopy-changed", { detail: { enabled: !!on } }));
+}
 
 // -----------------------------------------------------------------------
 // Toast helper
@@ -580,6 +597,7 @@ function _focusOnCanvas() {
 // ------ COPY -----------------------------------------------------------
 document.addEventListener("copy", (ev) => {
     try {
+        if (!isAutoCopyEnabled()) return;                    // user disabled → native only
         if (_eventInTextField(ev.target)) return;            // typing → native
         if (!_focusOnCanvas()) return;                       // not on graph → native
         const nodes = _selectedNodes();
@@ -640,8 +658,18 @@ window.addEventListener("keydown", (ev) => {
 
 app.registerExtension({
     name: "MEC.Clipboard",
+    settings: [
+        {
+            id: "MEC.Clipboard.AutoCopy",
+            name: "Auto-copy node metadata on Ctrl+C",
+            tooltip: "When enabled, plain Ctrl+C also writes a portable JSON payload (with widget values, link metadata and source-pack info) to the OS clipboard. Disable to use only LiteGraph's native clipboard. The diagnostics sidebar's Clipboard tab still lets you re-copy any past payload manually.",
+            type: "boolean",
+            defaultValue: true,
+            onChange: (v) => setAutoCopyEnabled(!!v),
+        },
+    ],
     async setup() {
-        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 native Ctrl+C/Ctrl+V via clipboard events, Ctrl+Alt+C/V fallback");
+        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 native Ctrl+C/Ctrl+V via clipboard events, Ctrl+Alt+C/V fallback, auto-copy=" + isAutoCopyEnabled());
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 

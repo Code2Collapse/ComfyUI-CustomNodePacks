@@ -32,13 +32,77 @@ log = logging.getLogger("MEC.propainter")
 # We vendor the real upstream repo at `third_party/ProPainter/` and inject
 # its path so its top-level modules `RAFT`, `model.propainter`,
 # `model.recurrent_flow_completion` resolve.
+#
+# If the directory is missing (fresh git clone — `third_party/` is gitignored
+# so it never ships in the pack), fetch the upstream zip from GitHub on first
+# import. No git binary required, no pip install — just urllib + zipfile.
+_PROPAINTER_ZIP_URL = "https://github.com/sczhou/ProPainter/archive/refs/heads/main.zip"
+
+
+def _propainter_dir_is_valid(d: str) -> bool:
+    """Verify the directory looks like a checkout of sczhou/ProPainter."""
+    if not os.path.isdir(d):
+        return False
+    return (
+        os.path.isfile(os.path.join(d, "model", "propainter.py"))
+        and os.path.isfile(os.path.join(d, "model", "recurrent_flow_completion.py"))
+        and os.path.isdir(os.path.join(d, "RAFT"))
+    )
+
+
+def _fetch_propainter_source(target_dir: str) -> bool:
+    """Download + extract sczhou/ProPainter main.zip into target_dir.
+    Returns True on success."""
+    import io
+    import shutil
+    import tempfile
+    import zipfile
+
+    parent = os.path.dirname(target_dir)
+    os.makedirs(parent, exist_ok=True)
+    log.info("[propainter_bridge] fetching ProPainter source from %s", _PROPAINTER_ZIP_URL)
+    try:
+        with urllib.request.urlopen(_PROPAINTER_ZIP_URL, timeout=120) as resp:
+            blob = resp.read()
+    except Exception as e:
+        log.warning("[propainter_bridge] download failed: %s", e)
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            with tempfile.TemporaryDirectory(dir=parent) as tmp:
+                zf.extractall(tmp)
+                # Top-level inside the zip is `ProPainter-main/`.
+                roots = [os.path.join(tmp, n) for n in os.listdir(tmp)]
+                roots = [r for r in roots if os.path.isdir(r)]
+                if not roots:
+                    log.warning("[propainter_bridge] zip had no top-level dir")
+                    return False
+                src = roots[0]
+                # Atomic-ish: move into place. If target already exists, replace.
+                if os.path.exists(target_dir):
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.move(src, target_dir)
+        ok = _propainter_dir_is_valid(target_dir)
+        if ok:
+            log.info("[propainter_bridge] ProPainter source installed at %s", target_dir)
+        else:
+            log.warning("[propainter_bridge] extracted dir failed validation: %s", target_dir)
+        return ok
+    except Exception as e:
+        log.warning("[propainter_bridge] extract failed: %s", e)
+        return False
+
+
 def _add_vendored_propainter_to_path() -> Optional[str]:
     here = os.path.dirname(os.path.abspath(__file__))
     pack_root = os.path.dirname(here)
     candidate = os.path.join(pack_root, "third_party", "ProPainter")
-    if os.path.isdir(candidate) and candidate not in sys.path:
+    if not _propainter_dir_is_valid(candidate):
+        if not _fetch_propainter_source(candidate):
+            return None
+    if candidate not in sys.path:
         sys.path.insert(0, candidate)
-    return candidate if os.path.isdir(candidate) else None
+    return candidate
 
 
 _VENDORED_DIR = _add_vendored_propainter_to_path()
@@ -111,12 +175,15 @@ def require_propainter() -> None:
     """Call before any ProPainter use. Single chokepoint for the error msg."""
     if HAS_PROPAINTER:
         return
+    here = os.path.dirname(os.path.abspath(__file__))
+    pack_root = os.path.dirname(here)
+    target = os.path.join(pack_root, "third_party", "ProPainter")
     raise ProPainterMissingError(
-        "ProPainter is not installed. Run:\n"
-        "    pip install propainter\n"
-        "or, if the pip name is unavailable on your platform, install the\n"
-        "upstream repo:\n"
-        "    pip install git+https://github.com/sczhou/ProPainter.git\n"
+        "ProPainter source not available. The bridge tries to auto-download it\n"
+        f"from {_PROPAINTER_ZIP_URL} into {target}\n"
+        "but that step failed (no internet, blocked URL, or extraction error).\n"
+        "Manual fix: clone the repo there yourself:\n"
+        f"    git clone https://github.com/sczhou/ProPainter.git \"{target}\"\n"
         f"Original import error: {type(_IMPORT_ERROR).__name__}: {_IMPORT_ERROR}"
     )
 

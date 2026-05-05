@@ -400,6 +400,45 @@ window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
 
 async function _renderClipboard(body) {
     body.innerHTML = "";
+
+    // Auto-copy toggle (mirrors the ComfyUI setting + localStorage flag
+    // owned by mec_clipboard.js). Same key, same event \u2014 either control
+    // updates the other.
+    const AUTOCOPY_KEY = "mec.clipboard.autoCopy";
+    const isOn = () => {
+        try {
+            const v = localStorage.getItem(AUTOCOPY_KEY);
+            return v === null ? true : v === "1" || v === "true";
+        } catch (_) { return true; }
+    };
+    const setOn = (on) => {
+        try { localStorage.setItem(AUTOCOPY_KEY, on ? "1" : "0"); } catch (_) {}
+        window.dispatchEvent(new CustomEvent("mec-clipboard-autocopy-changed", { detail: { enabled: !!on } }));
+        try { app.ui?.settings?.setSettingValue?.("MEC.Clipboard.AutoCopy", !!on); } catch (_) {}
+    };
+    const toggleRow = document.createElement("div");
+    toggleRow.className = "mec-diag-card info";
+    toggleRow.style.cssText = "margin-bottom:8px;display:flex;align-items:center;gap:8px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "mec-autocopy-toggle";
+    cb.checked = isOn();
+    cb.onchange = () => setOn(cb.checked);
+    const lbl = document.createElement("label");
+    lbl.htmlFor = "mec-autocopy-toggle";
+    lbl.textContent = "Auto-copy on Ctrl+C";
+    lbl.style.cssText = "cursor:pointer;flex:1;";
+    const hint = document.createElement("div");
+    hint.className = "mec-diag-meta";
+    hint.style.cssText = "flex-basis:100%;font-size:11px;opacity:0.75;";
+    hint.textContent = "When ON, plain Ctrl+C also writes the portable JSON payload to your OS clipboard. When OFF, only LiteGraph's native in-tab clipboard runs \u2014 use the buttons below to re-copy any past payload.";
+    toggleRow.append(cb, lbl, hint);
+    body.appendChild(toggleRow);
+    // Sync with the ComfyUI settings panel.
+    window.addEventListener("mec-clipboard-autocopy-changed", (e) => {
+        cb.checked = !!(e.detail?.enabled);
+    });
+
     const tb = document.createElement("div");
     tb.className = "mec-diag-toolbar";
     const refresh = document.createElement("button");
