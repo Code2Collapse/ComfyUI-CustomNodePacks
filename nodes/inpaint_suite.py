@@ -114,6 +114,33 @@ def _gaussian_blur_mask(mask: torch.Tensor, sigma: float) -> torch.Tensor:
     return blurred.squeeze(1)
 
 
+def _erode_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Binary erosion of a (B, H, W) mask by `radius` pixels via min-pool."""
+    if radius <= 0:
+        return mask
+    k = 2 * int(radius) + 1
+    m4 = mask.unsqueeze(1)
+    eroded = -F.max_pool2d(-m4, kernel_size=k, stride=1, padding=k // 2)
+    return eroded.squeeze(1)
+
+
+def _opaque_core_with_feather(soft_mask: torch.Tensor,
+                              feathered: torch.Tensor,
+                              radius: int) -> torch.Tensor:
+    """Combine an opaque interior 'core' with a feathered boundary ramp.
+
+    Without this step a Gaussian/edge-aware feather drops alpha below 1.0
+    inside the mask, so the inpainted region is composited semi-transparently
+    and looks 'hollow' / low-opacity. The core is the input mask eroded by
+    `radius` pixels; the final alpha is max(core, feathered).
+    """
+    if radius <= 0:
+        return feathered.clamp(0.0, 1.0)
+    binary = (soft_mask > 0.5).float()
+    core = _erode_mask(binary, radius)
+    return torch.maximum(core, feathered).clamp(0.0, 1.0)
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Sobel edge detection — pure torch
 # ══════════════════════════════════════════════════════════════════════
@@ -191,12 +218,12 @@ def _edge_aware_blend_mask(image: torch.Tensor, mask: torch.Tensor, radius: int)
 
     result = edge_weight * sharp_blend + (1.0 - edge_weight) * smooth_blend
 
-    # MANUAL bug-fix (May 2026): do NOT force interior pixels to 1.0 here.
-    # The previous `where(binary>0.5, max(result, binary), result)` clobbered
-    # the inward feather and produced a hard seam exactly at the binary edge —
-    # which is what users perceived as "edges not blending". Letting the
-    # Gaussian feather extend symmetrically inward gives a smooth transition.
-    return result.clamp(0.0, 1.0)
+    # Force the interior of the mask back to fully opaque. Without this the
+    # Gaussian feather drops alpha below 1.0 deep inside the region (worse
+    # after lanczos resize during stitch), so the inpaint is composited
+    # semi-transparently and looks 'hollow'/low-opacity. We only protect a
+    # core eroded by `radius` so the boundary still feathers symmetrically.
+    return _opaque_core_with_feather(mask, result, radius)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -556,13 +583,15 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
     if mode == "edge_aware":
         return _edge_aware_blend_mask(image, mask, radius)
     elif mode == "gaussian":
-        return _gaussian_blur_mask(soft, sigma=radius * 0.4)
+        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.4)
     elif mode == "laplacian_pyramid":
-        return _gaussian_blur_mask(soft, sigma=radius * 0.5)
+        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.5)
     elif mode == "frequency_blend":
-        return _gaussian_blur_mask(soft, sigma=radius * 0.6)
+        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.6)
     else:
-        return _gaussian_blur_mask(soft, sigma=radius * 0.4)
+        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.4)
+    # Keep interior fully opaque (see _opaque_core_with_feather docstring).
+    return _opaque_core_with_feather(soft, feathered, radius)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1380,6 +1409,17 @@ class InpaintStitchProMEC:
 
         # Resize blend mask to crop region dimensions
         blend_mask_crop = _resize_mask(stitch_blend_mask_crop.to(device), ctc_h, ctc_w, mode=upscale_method)
+
+        # Self-heal: lanczos upscale and any pre-existing buggy crop data can
+        # leave interior alpha < 1.0, which composites the inpaint
+        # semi-transparently ("hollow"). Force the interior of the original
+        # mask back to opaque while keeping the boundary feather.
+        original_mask_for_core = stitch_data.get("original_mask")
+        if original_mask_for_core is not None:
+            core_ref = _resize_mask(original_mask_for_core.to(device), ctc_h, ctc_w)
+        else:
+            core_ref = (blend_mask_crop > 0.5).float()
+        blend_mask_crop = _opaque_core_with_feather(core_ref, blend_mask_crop, max(int(blend_radius), 1))
 
         # Regenerate blend mask if overridden — use first-frame canvas crop as
         # context; per-frame regen would explode cost on long clips.
