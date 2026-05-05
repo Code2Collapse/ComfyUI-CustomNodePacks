@@ -18,6 +18,7 @@ open-source projects. Their copyrights and licenses are listed below.
 > | RMBG-2.0 | Bria AI | [BRIA RMBG License](https://huggingface.co/briaai/RMBG-2.0) — non-commercial & research only |
 > | SAM-HQ weights (lkeab/hq-sam) | IIAI | Apache-2.0 ✅ |
 > | MatAnyone2 (pq-yang/MatAnyone2) | NTU/Peng-Qi Yang | [Check HuggingFace page](https://huggingface.co/pq-yang/MatAnyone2) for current license |
+> | ProPainter (sczhou/ProPainter) | S-Lab NTU | [S-Lab License 1.0](https://github.com/sczhou/ProPainter/blob/main/LICENSE) — non-commercial research only |
 >
 > **If you use RMBG-2.0 model weights for commercial purposes you must obtain
 > a separate commercial licence from Bria AI.**  
@@ -177,6 +178,49 @@ Model weights downloaded from `hustvl/vitmatte-small-distinctions-646` and
 **Repository**: <https://github.com/huggingface/safetensors>  
 **Copyright**: Copyright (c) 2022 The HuggingFace Team  
 **License**: Apache License 2.0
+
+---
+
+## 14. ProPainter — sczhou / S-Lab NTU
+
+Vendored in `third_party/ProPainter/`. The upstream repository is shallow-cloned
+and **not modified**. Used by `nodes/propainter_temporal_inpaint.py` and
+`nodes/propainter_stitch_suite.py` for flow-aware temporal video inpainting
+and seam refinement.
+
+**Repository**: <https://github.com/sczhou/ProPainter>  
+**Paper**: ProPainter: Improving Propagation and Transformer for Video Inpainting (ICCV 2023)  
+**Copyright**: Copyright (c) 2023 Shangchen Zhou, S-Lab, Nanyang Technological University  
+**License**: S-Lab License 1.0 (non-commercial research-only — see
+`third_party/ProPainter/LICENSE`)  
+<https://github.com/sczhou/ProPainter/blob/main/LICENSE>
+
+> ⚠️ **NON-COMMERCIAL**: ProPainter weights and code carry an academic /
+> research-only license. The MEC node code (`nodes/propainter_*.py`) is MIT,
+> but commercial use of ProPainter requires a separate licence from the
+> S-Lab authors.
+
+The ProPainter weights (`raft-things.pth`,
+`recurrent_flow_completion.pth`, `ProPainter.pth`) are downloaded from the
+upstream GitHub release and stored in `ComfyUI/models/propainter/`.
+
+---
+
+## 15. ComfyUI-Video-Stabilizer — nomadoor
+
+Vendored in `third_party/ComfyUI-Video-Stabilizer/`. The upstream repository
+is **not modified**. Used by `nodes/video_stabilizer_mec.py` for the three
+`VideoStabilizer*MEC` wrapper nodes (Classic / Flow / Auto).
+
+**Repository**: <https://github.com/nomadoor/ComfyUI-Video-Stabilizer>  
+**Copyright**: Copyright (c) 2025 ComfyUI Video Stabilizer Contributors  
+**License**: MIT License  
+<https://github.com/nomadoor/ComfyUI-Video-Stabilizer/blob/main/LICENSE>
+
+The full upstream LICENSE file is preserved at
+`third_party/ComfyUI-Video-Stabilizer/LICENSE`. The wrapper nodes in
+`nodes/video_stabilizer_mec.py` import upstream helper functions
+(`_stabilize_frames`, `_normalize_video_input`, etc.) without modification.
 
 ---
 

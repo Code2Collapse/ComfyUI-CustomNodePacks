@@ -222,3 +222,6 @@ __marimo__/
 param_history.db 
 _deprecated/
 
+
+# MEC error assistant runtime data
+user/

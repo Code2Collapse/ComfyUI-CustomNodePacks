@@ -62,6 +62,58 @@ from .nodes.mec_paint_suite import (
     NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
 )
 
+# ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
+from .nodes.propainter_temporal_inpaint import ProPainterTemporalMEC
+from .nodes.propainter_flow_refine import FlowRefineMEC
+from .nodes.propainter_stitch_suite import (
+    NODE_CLASS_MAPPINGS as _PROPAINTER_STITCH_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _PROPAINTER_STITCH_DISPLAY,
+)
+from .nodes.video_stabilizer_mec import (
+    NODE_CLASS_MAPPINGS as _STABILIZER_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _STABILIZER_DISPLAY,
+)
+from .nodes.optical_flow import OpticalFlowMEC
+from .nodes.roto import VectorRotoMEC
+# NOTE: Deep* nodes (DeepFromImage / DeepMerge / DeepHoldout / DeepComposite)
+# now live exclusively in ComfyUI-NukeMaxNodes (May 2026 migration). The MEC
+# duplicates here have been deleted to avoid registry collisions and
+# divergent DEEP_IMAGE type semantics.
+from .nodes.shuffle import ShuffleMEC
+from .nodes.clipboard_tcl import (
+    TclSerializeMEC, TclParseMEC,
+    register_routes as _register_tcl_routes,
+)
+from .nodes.insight import InsightStatusMEC, install as _install_insight_hook
+from .nodes.integrity_guard import (
+    IntegrityStatusMEC,
+    register_routes as _register_integrity_routes,
+    start_background_scan as _start_integrity_scan,
+)
+
+_NUKEMAX_MAPPINGS = {
+    "ProPainterTemporalMEC": ProPainterTemporalMEC,
+    "FlowRefineMEC": FlowRefineMEC,
+    "OpticalFlowMEC": OpticalFlowMEC,
+    "VectorRotoMEC": VectorRotoMEC,
+    "ShuffleMEC": ShuffleMEC,
+    "TclSerializeMEC": TclSerializeMEC,
+    "TclParseMEC": TclParseMEC,
+    "InsightStatusMEC": InsightStatusMEC,
+    "IntegrityStatusMEC": IntegrityStatusMEC,
+}
+_NUKEMAX_DISPLAY = {
+    "ProPainterTemporalMEC": "ProPainter Temporal Inpaint (MEC)",
+    "FlowRefineMEC": "Optical Flow Refine (MEC)",
+    "OpticalFlowMEC": "Optical Flow Re-Vector (MEC)",
+    "VectorRotoMEC": "Vector Roto (MEC)",
+    "ShuffleMEC": "Shuffle Channels (MEC)",
+    "TclSerializeMEC": "TCL Serialize (MEC)",
+    "TclParseMEC": "TCL Parse (MEC)",
+    "InsightStatusMEC": "Insight Status (MEC)",
+    "IntegrityStatusMEC": "Integrity Status (MEC)",
+}
+
 # ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────
 # (color_science, exr_io, render_pass, plate_tools, geometry_nodes,
 #  metadata_nodes, exr_metadata_reader, universal_reroute)
@@ -147,12 +199,18 @@ NODE_CLASS_MAPPINGS = {
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
+    **_NUKEMAX_MAPPINGS,
+    **_PROPAINTER_STITCH_MAPPINGS,
+    **_STABILIZER_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
     **_MEC_DISPLAY,
     **_MA_DISPLAY,
     **_PAINT_DISPLAY,
+    **_NUKEMAX_DISPLAY,
+    **_PROPAINTER_STITCH_DISPLAY,
+    **_STABILIZER_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
@@ -167,5 +225,17 @@ try:
     print("[MEC] Parameter Memory server route registered.")
 except Exception:
     pass  # Server not available (e.g. during import-only testing)
+
+# ── Register NukeNodeMax server-side hooks & routes ───────────────────
+try:
+    import server as _comfy_server  # noqa: F811
+    _ps = _comfy_server.PromptServer.instance
+    _register_tcl_routes(_ps)
+    _register_integrity_routes(_ps)
+    _start_integrity_scan()
+    _install_insight_hook()
+    print("[MEC] NukeNodeMax routes + hooks registered.")
+except Exception as _e:
+    print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")
 
 print(f"[MEC] Loaded {len(_MEC_MAPPINGS)} MaskEditControl nodes.")

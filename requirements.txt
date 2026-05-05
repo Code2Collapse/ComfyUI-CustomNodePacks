@@ -7,6 +7,14 @@
 opencv-python>=4.7.0
 scipy>=1.10.0
 
+# ── NukeNodeMax suite ────────────────────────────────────────────────
+# F7 integrity guard — used by nodes/integrity_guard.py
+pipdeptree>=2.13.0
+# P0/P1/P2 ProPainter bridge — install manually (not on PyPI):
+#   pip install git+https://github.com/sczhou/ProPainter.git
+# RAFT + RFC + Inpaint weights are auto-downloaded by propainter_bridge.py
+# from the v0.1.0 GitHub release on first use.
+
 # SAM2/2.1 model support (install from GitHub if pip install SAM-2 fails)
 # pip install git+https://github.com/facebookresearch/sam2.git
 safetensors>=0.4.0
