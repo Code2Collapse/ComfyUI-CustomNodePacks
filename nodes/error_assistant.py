@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, List, Optional
 log = logging.getLogger("MEC.error_assistant")
 
 # =====================================================================
-# Tier 1 — deterministic patterns
+# Tier 1 — deterministic patterns (Doctor-style: JSON pattern packs)
 # =====================================================================
 @dataclass
 class Pattern:
@@ -45,14 +45,115 @@ class Pattern:
     message_re: re.Pattern[str]           # case-insensitive by default
     cause: str
     fixes: List[str] = field(default_factory=list)
+    # Doctor-style metadata
+    category: str = "uncategorized"
+    priority: int = 100
+    confidence: float = 0.8
+    source: str = "builtin"               # provenance: which pack file
 
 
 def _r(pat: str) -> re.Pattern[str]:
     return re.compile(pat, re.IGNORECASE | re.DOTALL)
 
 
+# ---------------------------------------------------------------------
+# JSON pattern-pack loader (hot-reload on file mtime change)
+# ---------------------------------------------------------------------
+def _patterns_root() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    pack_root = os.path.dirname(here)
+    return os.path.join(pack_root, "patterns")
+
+
+_PATTERNS_LOCK = threading.Lock()
+_PATTERNS_CACHE: List[Pattern] = []
+_PATTERNS_MTIME: Dict[str, float] = {}   # path -> last-seen mtime
+
+
+def _scan_pattern_files() -> List[str]:
+    root = _patterns_root()
+    out: List[str] = []
+    if not os.path.isdir(root):
+        return out
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            if f.endswith(".json"):
+                out.append(os.path.join(dirpath, f))
+    return sorted(out)
+
+
+def _parse_pattern_dict(d: Dict[str, Any], source: str) -> Optional[Pattern]:
+    try:
+        pid = str(d["id"])
+        regex = d["regex"]
+        cause = d.get("cause", "")
+        exc_types = tuple(d.get("exc_types") or ())
+        return Pattern(
+            name=pid,
+            exc_types=exc_types,
+            message_re=_r(regex),
+            cause=cause,
+            fixes=list(d.get("fixes") or []),
+            category=str(d.get("category", "uncategorized")),
+            priority=int(d.get("priority", 100)),
+            confidence=float(d.get("confidence", 0.8)),
+            source=source,
+        )
+    except Exception as e:
+        log.warning("[error_assistant] bad pattern in %s: %s", source, e)
+        return None
+
+
+def _load_patterns_from_json() -> List[Pattern]:
+    import json
+    out: List[Pattern] = []
+    for path in _scan_pattern_files():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            rel = os.path.relpath(path, _patterns_root())
+            for entry in data.get("patterns", []):
+                p = _parse_pattern_dict(entry, source=rel.replace("\\", "/"))
+                if p is not None:
+                    out.append(p)
+        except Exception as e:
+            log.warning("[error_assistant] failed to load pattern pack %s: %s", path, e)
+    # Lower priority value = evaluated first (more specific). Stable sort.
+    out.sort(key=lambda p: (p.priority, p.name))
+    return out
+
+
+def _get_patterns() -> List[Pattern]:
+    """Return current patterns; hot-reload on any pack file mtime change."""
+    global _PATTERNS_CACHE, _PATTERNS_MTIME
+    with _PATTERNS_LOCK:
+        files = _scan_pattern_files()
+        cur_mtimes: Dict[str, float] = {}
+        for p in files:
+            try:
+                cur_mtimes[p] = os.path.getmtime(p)
+            except OSError:
+                cur_mtimes[p] = 0.0
+        if cur_mtimes != _PATTERNS_MTIME or not _PATTERNS_CACHE:
+            loaded = _load_patterns_from_json()
+            if loaded:
+                _PATTERNS_CACHE = loaded
+                _PATTERNS_MTIME = cur_mtimes
+                log.info("[error_assistant] loaded %d patterns from %d pack(s)",
+                         len(loaded), len(files))
+            elif not _PATTERNS_CACHE:
+                # JSON missing/corrupt on first run: fall back to bootstrap list.
+                _PATTERNS_CACHE = list(_BOOTSTRAP_PATTERNS)
+                _PATTERNS_MTIME = cur_mtimes
+                log.warning("[error_assistant] no JSON packs found; using %d "
+                            "bootstrap patterns", len(_PATTERNS_CACHE))
+        return _PATTERNS_CACHE
+
+
 # Order matters — first match wins. Most-specific patterns first.
-PATTERNS: List[Pattern] = [
+# This list is ONLY used as a bootstrap fallback when patterns/builtin/core.json
+# is missing or unreadable. The canonical source of truth is the JSON pack.
+_BOOTSTRAP_PATTERNS: List[Pattern] = [
     # ── VRAM / CUDA ────────────────────────────────────────────────
     Pattern(
         "cuda_oom",
@@ -304,7 +405,7 @@ PATTERNS: List[Pattern] = [
 
 
 def match_pattern(exc_type: str, msg: str) -> Optional[Pattern]:
-    for p in PATTERNS:
+    for p in _get_patterns():
         if p.exc_types and exc_type not in p.exc_types and "Exception" not in p.exc_types:
             continue
         if p.message_re.search(msg):
@@ -481,6 +582,13 @@ def explain(exc: BaseException,
             "cause": p.cause,
             "fixes": list(p.fixes),
             "pattern_id": p.name,
+            "category": p.category,
+            "confidence": p.confidence,
+            "provenance": {
+                "pack": "ComfyUI-CustomNodePacks",
+                "source": p.source,
+                "priority": p.priority,
+            },
         }
 
     if mode == "deterministic_only":
@@ -526,7 +634,19 @@ def _fallback(exc_type: str, msg: str) -> Dict[str, Any]:
             "Enable Tier 2 (local model) or Tier 3 (cloud) in Settings → MEC Error Assistant for richer explanations.",
         ],
         "pattern_id": "no_match",
+        "category": "uncategorized",
+        "confidence": 0.0,
+        "provenance": {"pack": "ComfyUI-CustomNodePacks", "source": "fallback"},
     }
+
+
+def reload_patterns() -> int:
+    """Force a re-scan of patterns/ pack files. Returns number of patterns loaded."""
+    global _PATTERNS_CACHE, _PATTERNS_MTIME
+    with _PATTERNS_LOCK:
+        _PATTERNS_CACHE = []
+        _PATTERNS_MTIME = {}
+    return len(_get_patterns())
 
 
 def _format_llm_result(text: str, *, tier: int, tier1: Optional[dict],
@@ -553,4 +673,12 @@ def _format_llm_result(text: str, *, tier: int, tier1: Optional[dict],
         "provider": provider,
         "model": model,
         "tier1_match": (tier1 or {}).get("pattern_id"),
+        "category": (tier1 or {}).get("category", "uncategorized"),
+        "confidence": (tier1 or {}).get("confidence", 0.5),
+        "provenance": {
+            "pack": "ComfyUI-CustomNodePacks",
+            "source": (tier1 or {}).get("provenance", {}).get("source", "llm"),
+            "llm_provider": provider,
+            "llm_model": model,
+        },
     }

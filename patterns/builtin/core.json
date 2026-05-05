@@ -1,0 +1,295 @@
+{
+  "_schema": "MEC.error_patterns/1.0",
+  "_doc": "Each pattern is matched in order. First match wins. Schema fields: id (unique), exc_types (list, [] = any), regex (Python re, IGNORECASE|DOTALL), category, priority (lower=more specific, evaluated first), confidence (0..1), cause, fixes (list).",
+  "patterns": [
+    {
+      "id": "cuda_oom",
+      "category": "memory",
+      "priority": 10,
+      "confidence": 0.98,
+      "exc_types": ["RuntimeError", "torch.cuda.OutOfMemoryError"],
+      "regex": "out of memory|CUDA out of memory|alloc.*failed",
+      "cause": "Your GPU ran out of VRAM while running this node.",
+      "fixes": [
+        "Lower batch size / image resolution.",
+        "Restart ComfyUI with `--lowvram` or `--novram`.",
+        "Set the node's `use_half=True` / dtype `fp16` if available.",
+        "If you have an SDXL+CLIP+VAE all loaded, split the loaders so each component is loaded sequentially.",
+        "Run `torch.cuda.empty_cache()` between nodes (or insert an Insight Status node)."
+      ]
+    },
+    {
+      "id": "cuda_device_assert",
+      "category": "cuda",
+      "priority": 15,
+      "confidence": 0.95,
+      "exc_types": ["RuntimeError"],
+      "regex": "device-side assert triggered",
+      "cause": "A CUDA kernel hit an assertion \u2014 usually an out-of-range index (prompt token id \u2265 vocab size, or a bad pixel index).",
+      "fixes": [
+        "Re-run with environment `CUDA_LAUNCH_BLOCKING=1` so the traceback points to the real call site.",
+        "Check the prompt for unusual characters; some custom CLIP variants use a smaller vocab.",
+        "Verify mask/latent indices fit within their tensor shapes."
+      ]
+    },
+    {
+      "id": "cudnn_status",
+      "category": "cuda",
+      "priority": 15,
+      "confidence": 0.95,
+      "exc_types": ["RuntimeError"],
+      "regex": "CUDNN_STATUS|cuDNN error",
+      "cause": "cuDNN failed \u2014 most often a driver / torch / CUDA version mismatch.",
+      "fixes": [
+        "Confirm your torch build matches the installed CUDA: `python -c \"import torch; print(torch.version.cuda)\"`.",
+        "Update the NVIDIA driver to a version compatible with this CUDA toolkit.",
+        "Try `torch.backends.cudnn.benchmark = False`."
+      ]
+    },
+    {
+      "id": "matmul_shape",
+      "category": "architecture_mismatch",
+      "priority": 20,
+      "confidence": 0.95,
+      "exc_types": ["RuntimeError"],
+      "regex": "mat1 and mat2 shapes cannot be multiplied",
+      "cause": "Two tensors with incompatible inner dimensions were multiplied \u2014 almost always a model architecture mismatch (e.g. SDXL CLIP wired into an SD1.5 model, or a Flux VAE wired into an SDXL pipeline).",
+      "fixes": [
+        "Check that every loader (CHECKPOINT, CLIP, VAE) is from the *same* model family.",
+        "If you used a custom CLIP/text-encoder, confirm its hidden_size matches the diffusion model.",
+        "If using LoRA, confirm the LoRA was trained for this base model."
+      ]
+    },
+    {
+      "id": "size_mismatch",
+      "category": "tensor_shape",
+      "priority": 25,
+      "confidence": 0.9,
+      "exc_types": ["RuntimeError"],
+      "regex": "size of tensor.*must match|sizes? of tensors? must match|expected.*got.*size",
+      "cause": "Tensor sizes don't line up between two operations.",
+      "fixes": [
+        "Make sure upstream image/mask/latent has the resolution the consumer expects.",
+        "If you resized, did you also resize the mask?",
+        "ControlNet / IP-Adapter inputs must match the model's expected resolution."
+      ]
+    },
+    {
+      "id": "scalar_type_half",
+      "category": "dtype",
+      "priority": 25,
+      "confidence": 0.95,
+      "exc_types": ["RuntimeError"],
+      "regex": "expected scalar type Half but found Float|expected scalar type Float but found Half",
+      "cause": "A tensor's dtype (fp16 vs fp32) doesn't match the model \u2014 usually after wiring a half-precision model to a node that produces fp32 (or vice versa).",
+      "fixes": [
+        "Cast at the boundary: `tensor = tensor.half()` or `.float()`.",
+        "If the loader has a `precision` widget, set it to match downstream nodes.",
+        "Restart ComfyUI with `--force-fp16` (or `--force-fp32`) for consistency."
+      ]
+    },
+    {
+      "id": "dtype_bfloat16",
+      "category": "dtype",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": ["RuntimeError"],
+      "regex": "BFloat16|bf16",
+      "cause": "bf16 dtype mismatch. Some older GPUs (Turing and below) don't support bf16.",
+      "fixes": [
+        "Switch the model to fp16: change `precision` widget or pass `--force-fp16`.",
+        "Upgrade torch: `pip install -U torch` (bf16 path improved in 2.4+)."
+      ]
+    },
+    {
+      "id": "safetensors_corrupt",
+      "category": "model_loading",
+      "priority": 20,
+      "confidence": 0.97,
+      "exc_types": ["Exception"],
+      "regex": "PytorchStreamReader|safetensors_rust\\.SafetensorError|HeaderTooLarge|MetadataIncomplete",
+      "cause": "The model file is corrupt or truncated \u2014 almost always an interrupted download.",
+      "fixes": [
+        "Re-download the model. Compare file size against the source (HuggingFace / CivitAI lists exact bytes).",
+        "If you used `git-lfs`, run `git lfs pull` to fetch the actual weights.",
+        "Verify the SHA256 if the source publishes one."
+      ]
+    },
+    {
+      "id": "state_dict_load",
+      "category": "model_loading",
+      "priority": 20,
+      "confidence": 0.92,
+      "exc_types": ["RuntimeError", "KeyError"],
+      "regex": "Error\\(s\\) in loading state_dict|Missing key\\(s\\) in state_dict|Unexpected key",
+      "cause": "The model file structure does not match the loader's expected architecture \u2014 e.g. loading a Flux .safetensors into the SDXL Checkpoint Loader.",
+      "fixes": [
+        "Use the loader matching this model family (Flux loader for Flux, SDXL for SDXL, etc.).",
+        "If the model has 'fp8' / 'gguf' / 'nf4' in its name, use the matching loader.",
+        "Some merged models save as VAE-baked-in \u2014 try a 'Checkpoint Loader (with config)' if you have a yaml."
+      ]
+    },
+    {
+      "id": "missing_model_file",
+      "category": "model_loading",
+      "priority": 20,
+      "confidence": 0.9,
+      "exc_types": ["FileNotFoundError"],
+      "regex": "No such file or directory|cannot find file|does not exist",
+      "cause": "A model / weight file is missing from the expected folder.",
+      "fixes": [
+        "Check `ComfyUI/models/` for the file. Subfolders matter (`checkpoints/`, `vae/`, `loras/`, `clip/`, `controlnet/`).",
+        "If you use `extra_model_paths.yaml`, confirm the path resolves on this OS.",
+        "Manager \u2192 'Install models' may have stalled mid-download \u2014 verify file size."
+      ]
+    },
+    {
+      "id": "module_not_found",
+      "category": "environment",
+      "priority": 15,
+      "confidence": 0.97,
+      "exc_types": ["ModuleNotFoundError", "ImportError"],
+      "regex": "No module named ['\"]?(?P<mod>[\\w.]+)",
+      "cause": "A Python package required by this node is not installed in the ComfyUI venv.",
+      "fixes": [
+        "From the ComfyUI portable folder run: `python_embeded\\python.exe -m pip install <module>`.",
+        "If on Linux/Mac venv: `<venv>/bin/pip install <module>`.",
+        "Some custom nodes ship a `requirements.txt` \u2014 `pip install -r requirements.txt`.",
+        "`<module>` was extracted from the error message above."
+      ]
+    },
+    {
+      "id": "dll_load_windows",
+      "category": "environment",
+      "priority": 20,
+      "confidence": 0.9,
+      "exc_types": ["OSError", "ImportError"],
+      "regex": "DLL load failed|specified module could not be found.*\\.dll",
+      "cause": "A native DLL (CUDA, MSVC runtime, ffmpeg, opencv) couldn't be loaded.",
+      "fixes": [
+        "Reinstall the package that owns the DLL: `pip install --force-reinstall <package>`.",
+        "Install the latest Microsoft Visual C++ Redistributable.",
+        "If it's a CUDA DLL, your torch CUDA version may not match the driver."
+      ]
+    },
+    {
+      "id": "none_attribute",
+      "category": "dataflow",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": ["AttributeError"],
+      "regex": "'NoneType' object has no attribute",
+      "cause": "An upstream node returned `None` \u2014 most often a loader silently failed (missing model, wrong path) or a node has an unconnected required input.",
+      "fixes": [
+        "Look at the node *upstream* of this one \u2014 not this node. Errors propagate.",
+        "Check every loader's filename widget actually selected a file.",
+        "If a loader has a 'use_cache' option, try toggling it off."
+      ]
+    },
+    {
+      "id": "none_iterable",
+      "category": "dataflow",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": ["TypeError"],
+      "regex": "NoneType.*not iterable|object is not iterable",
+      "cause": "Code tried to loop over `None` \u2014 usually `stitch_data` from a crop node that didn't run, or a SAM mask list that came back empty.",
+      "fixes": [
+        "If the message mentions `stitch_data`: the InpaintCropPro node above must run successfully first.",
+        "If SAM-related: the SAM loader / generator may have produced 0 masks \u2014 try a different prompt or lower threshold.",
+        "Add an Insight Status node to confirm upstream actually executed."
+      ]
+    },
+    {
+      "id": "type_image_mask",
+      "category": "dataflow",
+      "priority": 35,
+      "confidence": 0.7,
+      "exc_types": ["TypeError"],
+      "regex": "got: \\[.*\\].*expected.*\\[.*\\]|argument.*to.*has invalid type",
+      "cause": "Wrong tensor type wired into an input \u2014 most often IMAGE wired into a MASK socket or vice versa.",
+      "fixes": [
+        "IMAGE tensors are `(B,H,W,3)` float; MASK tensors are `(B,H,W)` float.",
+        "Use a Convert IMAGE\u2192MASK or MASK\u2192IMAGE node at the boundary."
+      ]
+    },
+    {
+      "id": "key_stitch_data",
+      "category": "dataflow",
+      "priority": 15,
+      "confidence": 0.99,
+      "exc_types": ["KeyError"],
+      "regex": "['\"]stitch_data['\"]",
+      "cause": "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
+      "fixes": [
+        "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
+        "If you bypassed the crop node intentionally, use InpaintCompositeMEC instead \u2014 it doesn't need stitch_data."
+      ]
+    },
+    {
+      "id": "pil_truncated",
+      "category": "io",
+      "priority": 30,
+      "confidence": 0.95,
+      "exc_types": ["OSError", "IOError"],
+      "regex": "image file is truncated|cannot identify image file",
+      "cause": "An input image is corrupt or has an unsupported format.",
+      "fixes": [
+        "Re-save the image as PNG or JPEG.",
+        "Run `ImageOps.exif_transpose` upstream if it's a phone photo with EXIF rotation."
+      ]
+    },
+    {
+      "id": "ffmpeg_missing",
+      "category": "environment",
+      "priority": 25,
+      "confidence": 0.95,
+      "exc_types": ["FileNotFoundError"],
+      "regex": "ffmpeg.*not found|imageio.*ffmpeg",
+      "cause": "The video pipeline needs ffmpeg, which isn't on PATH.",
+      "fixes": [
+        "Install: `pip install imageio-ffmpeg` (downloads a static binary).",
+        "Or install ffmpeg system-wide and ensure `ffmpeg` is on PATH."
+      ]
+    },
+    {
+      "id": "comfy_validate_inputs",
+      "category": "workflow",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": ["Exception"],
+      "regex": "Required input is missing|VALIDATE_INPUTS",
+      "cause": "ComfyUI rejected the graph because a required input slot is unconnected.",
+      "fixes": [
+        "Look for the red dashed input on the failing node \u2014 that's the missing wire.",
+        "If the input is optional in the docs but marked required in code, update the pack."
+      ]
+    },
+    {
+      "id": "samplers_no_sigma",
+      "category": "workflow",
+      "priority": 35,
+      "confidence": 0.7,
+      "exc_types": ["Exception"],
+      "regex": "sigma.*not.*found|scheduler.*not",
+      "cause": "The sampler couldn't build a sigma schedule \u2014 usually wrong scheduler/sampler combo.",
+      "fixes": [
+        "Try `karras` or `normal` scheduler with `dpmpp_2m_sde` sampler \u2014 a safe default.",
+        "Some samplers (LCM, TCD) need their matching scheduler."
+      ]
+    },
+    {
+      "id": "value_error_generic",
+      "category": "workflow",
+      "priority": 999,
+      "confidence": 0.3,
+      "exc_types": ["ValueError"],
+      "regex": ".",
+      "cause": "A widget value is outside its allowed range or has the wrong format.",
+      "fixes": [
+        "Re-read the widget min/max in the node's tooltip.",
+        "If it's a string field, check for trailing whitespace or wrong separator."
+      ]
+    }
+  ]
+}
