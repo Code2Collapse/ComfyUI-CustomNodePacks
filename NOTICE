@@ -1,0 +1,42 @@
+ComfyUI-CustomNodePacks
+Copyright (c) 2025-2026 Code2Collapse (Likhith)
+
+Original author and maintainer: **Code2Collapse (Likhith)**
+GitHub: https://github.com/Code2Collapse
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+============================================================================
+ATTRIBUTION REQUIREMENT
+============================================================================
+
+If you use, fork, redistribute, or build upon this work (in whole or in
+part), you MUST:
+
+  1. Retain this NOTICE file unmodified in your distribution.
+  2. Retain all copyright headers in the original source files.
+  3. Clearly state in your README / about page / credits / documentation
+     that the work is derived from or includes code by:
+         "Code2Collapse (Likhith) -- https://github.com/Code2Collapse"
+  4. Not remove or obscure the original author's name from any source
+     file, commit history, package metadata, or release notes.
+  5. Not use the name "Code2Collapse", "Likhith", or any associated
+     branding/logo to endorse or promote your derivative works without
+     prior written permission (Apache-2.0 Section 6 -- Trademarks).
+
+You ARE free to:
+  - Use the work for any purpose (commercial or non-commercial).
+  - Modify, fork, and redistribute (subject to attribution above).
+  - Include the work in larger projects under any compatible license.
+
+You are NOT permitted to:
+  - Claim authorship of the original work.
+  - Strip out or replace the copyright/attribution notices.
+  - Misrepresent the origin of the work.
+
+============================================================================
+THIRD-PARTY COMPONENTS
+============================================================================
+
+See THIRD_PARTY_LICENSES/ (if present) for the licenses of any third-party
+components bundled or referenced by this project.
