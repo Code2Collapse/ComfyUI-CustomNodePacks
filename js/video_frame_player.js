@@ -422,8 +422,8 @@ app.registerExtension({
 
             const tlRect = () => {
                 const cw = cvs.width, ch = cvs.height;
-                const pad = 12;
-                const x = pad, y = ch - TL_H - 6;
+                const pad = 16;
+                const x = pad, y = ch - TL_H - 14;
                 const w = cw - pad * 2, h = TL_H;
                 return { x, y, w, h, playBtnX: x, playBtnW: PLAY_BTN_W,
                          barX: x + PLAY_BTN_W + 8, barW: w - PLAY_BTN_W - 8 };
@@ -546,8 +546,8 @@ app.registerExtension({
                     if (S.width > 0 && S.height > 0) {
                         const w = Math.max(node.size[0], 360);
                         const aspect = S.height / S.width;
-                        const previewArea = (w - 24) * aspect;
-                        const h = Math.round(previewArea + TL_H + STATUS_H + 24);
+                        const previewArea = (w - 32) * aspect;
+                        const h = Math.round(previewArea + TL_H + STATUS_H + 48);
                         node._lockSize?.(w, h);
                         node.setSize([w, h]);
                     }
@@ -576,18 +576,54 @@ app.registerExtension({
             }
             ctx.clearRect(0, 0, cw, ch);
 
+            // ── Card-style background with rounded corners + subtle border
+            //    so the widget reads as a contained sub-panel inside the node.
+            const cardPad = 8;
+            const cardX = cardPad, cardY = cardPad;
+            const cardW = cw - cardPad * 2, cardH = ch - cardPad * 2;
+            const cardR = 8;
+            const roundRect = (x, y, w, h, r) => {
+                ctx.beginPath();
+                ctx.moveTo(x + r, y);
+                ctx.lineTo(x + w - r, y);
+                ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                ctx.lineTo(x + w, y + h - r);
+                ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                ctx.lineTo(x + r, y + h);
+                ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                ctx.lineTo(x, y + r);
+                ctx.quadraticCurveTo(x, y, x + r, y);
+                ctx.closePath();
+            };
+            ctx.save();
+            ctx.fillStyle = "#15151c";
+            roundRect(cardX, cardY, cardW, cardH, cardR);
+            ctx.fill();
+            ctx.strokeStyle = "#2a2a35";
+            ctx.lineWidth = 1;
+            roundRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1, cardR);
+            ctx.stroke();
+            ctx.restore();
+
             const tl = this._tlRect();
-            const previewMaxH = tl.y - 12 - STATUS_H;
-            const previewMaxW = cw - 24;
+            // Status bar backdrop at the top (inside the card)
+            const statusBarH = STATUS_H + 6;
+            const previewMaxH = tl.y - 12 - statusBarH - cardPad;
+            const previewMaxW = cw - 32;
             const aspect = (S.height || 1) / (S.width || 1);
             let pw = previewMaxW, ph = pw * aspect;
             if (ph > previewMaxH) { ph = previewMaxH; pw = ph / aspect; }
             const px = (cw - pw) / 2;
-            const py = STATUS_H + 6;
+            const py = cardY + statusBarH + 6;
             S.preview = { x: px, y: py, w: pw, h: ph };
 
+            // Preview frame (rounded inset backdrop)
+            ctx.save();
             ctx.fillStyle = "#000";
-            ctx.fillRect(px, py, pw, ph);
+            roundRect(px - 2, py - 2, pw + 4, ph + 4, 6);
+            ctx.fill();
+            ctx.restore();
+
             const cur = S.images?.[S.idx];
             if (cur && cur.complete && cur.naturalWidth > 0) {
                 ctx.drawImage(cur, px, py, pw, ph);
@@ -598,6 +634,13 @@ app.registerExtension({
                 ctx.textBaseline = "middle";
                 ctx.fillText("loading...", px + pw / 2, py + ph / 2);
             }
+
+            // Preview border (subtle, theme-matching)
+            ctx.save();
+            ctx.strokeStyle = "#3a3a48";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+            ctx.restore();
 
             // Crop overlay
             if (this._isCropEnabled?.()) {
@@ -673,21 +716,25 @@ app.registerExtension({
                 ctx.restore();
             }
 
-            // Status line
+            // Status line (with subtle backdrop bar at top of card)
             ctx.save();
-            ctx.fillStyle = "#bbb";
-            ctx.font = "11px sans-serif";
-            ctx.textAlign = "left";
-            ctx.textBaseline = "top";
             const stride = Number(this.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
             const trimSpan = Math.max(0, S.trimEnd - S.trimStart + 1);
             const emit = Math.max(1, Math.ceil(trimSpan / Math.max(1, stride)));
-            const statusTxt = `Frame ${S.idx + 1} / ${S.frameCount}   ${S.width}x${S.height}   ` +
-                              `${S.fps.toFixed(1)} fps   ${S.loopMode}   ` +
-                              `trim ${S.trimStart}-${S.trimEnd}` +
-                              (stride > 1 ? ` /${stride}` : "") +
-                              `  -> ${emit}f`;
-            ctx.fillText(statusTxt, 12, 4);
+            const statusParts = [
+                `Frame ${S.idx + 1}/${S.frameCount}`,
+                `${S.width}\u00d7${S.height}`,
+                `${S.fps.toFixed(1)} fps`,
+                S.loopMode,
+                `trim ${S.trimStart}\u2013${S.trimEnd}` + (stride > 1 ? `/${stride}` : ""),
+                `\u2192 ${emit}f`,
+            ];
+            const statusTxt = statusParts.join("  \u00b7  ");
+            ctx.fillStyle = "#cdd6f4";
+            ctx.font = "11px sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.fillText(statusTxt, cardX + 12, cardY + 13);
             ctx.restore();
 
             // Timeline bar

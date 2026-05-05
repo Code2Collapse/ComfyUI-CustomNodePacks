@@ -7,19 +7,20 @@
  *   - editor_data JSON contract preserved:
  *       {points:[{x,y,label,radius}], bboxes:[[x1,y1,x2,y2,label]]}
  *
- * Interaction model (no mode switch):
- *   Left click          add positive point
- *   Right click         add negative point
- *   Left  drag (empty)  draw positive bbox
- *   Right drag (empty)  draw negative bbox
- *   Drag a point        move it
- *   Shift+click element delete it
- *   Middle / Alt+drag   pan
- *   Wheel               adjust point radius
- *   Ctrl+wheel          zoom (cursor-anchored)
- *   Ctrl+Z / Ctrl+Y     undo / redo
- *   Delete / Backspace  delete hovered element
- *   F                   fit view
+ * Interaction model (May 2026 v2):
+ *   Left click               add positive point
+ *   Right click              add negative point
+ *   Shift + LMB drag         draw positive bbox (multi-bbox)
+ *   Shift + RMB drag         draw negative bbox (multi-bbox)
+ *   Ctrl  + LMB drag         draw positive bbox (single — replaces all)
+ *   Ctrl  + RMB drag         draw negative bbox (single — replaces all)
+ *   Drag a point             move it
+ *   Alt + click element      delete it
+ *   Middle / Alt + drag      pan
+ *   Delete / Backspace       delete hovered element
+ *   Ctrl+Z / Ctrl+Y          undo / redo
+ *   F  / 0                   fit view
+ *   + / -                    zoom in/out
  */
 import { app } from "../../scripts/app.js";
 
@@ -475,7 +476,8 @@ function installEditor(node) {
 
     // Single-bbox toggle: when on, drawing a new bbox replaces the
     // existing one(s). Useful for SAM2/SAM3 single-region prompting.
-    const singleBtn = mkIcon("1\u25A1", "Single bbox mode (replace previous)", () => {
+    // (Ctrl+drag temporarily forces this regardless of toggle state.)
+    const singleBtn = mkIcon("1\u25A1", "Single bbox mode (replace previous). Ctrl+drag does this once without toggling.", () => {
         ed.singleBbox = !ed.singleBbox;
         singleBtn.style.background = ed.singleBbox ? "#7c5cff" : "#313244";
         singleBtn.style.borderColor = ed.singleBbox ? "#7c5cff" : COLOR.border;
@@ -488,6 +490,18 @@ function installEditor(node) {
         }
     });
     tb.appendChild(singleBtn);
+
+    // Visible Clear button (always-accessible, bypasses dropdown menu).
+    const clearBtn = mkIcon("\u2715", "Clear all points + bboxes", () => {
+        if (!ed.points.length && !ed.bboxes.length) return;
+        ed.pushUndo();
+        ed.points = [];
+        ed.bboxes = [];
+        ed.save();
+    });
+    clearBtn.style.color = "#f38ba8";
+    clearBtn.style.borderColor = "#583444";
+    tb.appendChild(clearBtn);
 
     // Dropdown menu (≡)
     const menuBtn = mkIcon("≡", "More actions", () => toggleMenu());
@@ -649,7 +663,8 @@ function installEditor(node) {
         canvas.setPointerCapture(e.pointerId);
         const c = eventCanvas(e);
 
-        if (e.button === 1 || (e.button === 0 && e.altKey)) {
+        // Pan: middle button or Alt+drag (without Shift/Ctrl)
+        if (e.button === 1 || (e.button === 0 && e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey)) {
             const r0 = canvas.getBoundingClientRect();
             const sx = (canvas.offsetWidth  || r0.width)  / Math.max(1, r0.width);
             const sy = (canvas.offsetHeight || r0.height) / Math.max(1, r0.height);
@@ -662,22 +677,41 @@ function installEditor(node) {
             canvas.style.cursor = "grabbing";
             return;
         }
+
         const pi = ed.findPoint(c.x, c.y);
         const bi = pi < 0 ? ed.findBbox(c.x, c.y) : -1;
 
-        if (e.shiftKey) {
+        // Alt+click on an element deletes it (was shift+click; shift now reserved for bbox draw)
+        if (e.altKey && !e.shiftKey && !e.ctrlKey) {
             if (pi >= 0) { ed.pushUndo(); ed.points.splice(pi, 1); ed.save(); render(); return; }
             if (bi >= 0) { ed.pushUndo(); ed.bboxes.splice(bi, 1); ed.save(); render(); return; }
             return;
         }
+
+        // Shift / Ctrl + drag = draw bbox (any button picks polarity).
+        // Ctrl variant replaces existing boxes (single-bbox mode).
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+            ed.drag = {
+                kind: "maybe-bbox",
+                button: e.button,
+                replace: !!(e.ctrlKey || e.metaKey),
+                startX: c.x, startY: c.y,
+                screenStartX: e.clientX, screenStartY: e.clientY,
+            };
+            return;
+        }
+
+        // Plain LMB on existing point → move it
         if (e.button === 0 && pi >= 0) {
             ed.pushUndo();
             ed.drag = { kind: "point", idx: pi };
             return;
         }
+
+        // Plain LMB / RMB on empty space → click-only (commits to a point on pointerup)
         if (e.button === 0 || e.button === 2) {
             ed.drag = {
-                kind: "maybe-bbox",
+                kind: "maybe-point",
                 button: e.button,
                 startX: c.x, startY: c.y,
                 screenStartX: e.clientX, screenStartY: e.clientY,
@@ -702,6 +736,16 @@ function installEditor(node) {
             if (p) { p.x = +c.x.toFixed(2); p.y = +c.y.toFixed(2); render(); }
             return;
         }
+        if (ed.drag?.kind === "maybe-point") {
+            // Plain LMB/RMB drag has no bbox effect anymore; if user drags
+            // far enough we just abandon the click (treat as no-op).
+            const dx = e.clientX - ed.drag.screenStartX;
+            const dy = e.clientY - ed.drag.screenStartY;
+            if (Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) {
+                ed.drag = { kind: "noop" };
+            }
+            return;
+        }
         if (ed.drag?.kind === "maybe-bbox") {
             const dx = e.clientX - ed.drag.screenStartX;
             const dy = e.clientY - ed.drag.screenStartY;
@@ -712,6 +756,7 @@ function installEditor(node) {
                     ex: c.x, ey: c.y,
                     label: ed.drag.button === 0 ? 1 : 0,
                     button: ed.drag.button,
+                    replace: ed.drag.replace,
                 };
                 render();
             }
@@ -747,7 +792,10 @@ function installEditor(node) {
         if (ed.drag?.kind === "point") {
             ed.drag = null; ed.save(); render(); return;
         }
-        if (ed.drag?.kind === "maybe-bbox") {
+        if (ed.drag?.kind === "noop") {
+            ed.drag = null; return;
+        }
+        if (ed.drag?.kind === "maybe-point") {
             const label = ed.drag.button === 0 ? 1 : 0;
             ed.drag = null;
             ed.pushUndo();
@@ -757,15 +805,19 @@ function installEditor(node) {
             });
             ed.save(); render(); return;
         }
+        if (ed.drag?.kind === "maybe-bbox") {
+            // Modifier was held but user didn't actually drag — ignore.
+            ed.drag = null; return;
+        }
         if (ed.drag?.kind === "bbox-new") {
-            const { sx, sy, ex, ey, label } = ed.drag;
+            const { sx, sy, ex, ey, label, replace } = ed.drag;
             ed.drag = null;
             const x1 = Math.min(sx, ex), y1 = Math.min(sy, ey);
             const x2 = Math.max(sx, ex), y2 = Math.max(sy, ey);
             if (x2 - x1 >= MIN_BBOX_PX && y2 - y1 >= MIN_BBOX_PX) {
                 ed.pushUndo();
-                if (ed.singleBbox) {
-                    // Single-bbox mode: replace any existing boxes.
+                if (replace || ed.singleBbox) {
+                    // Single-bbox mode (Ctrl-drag, or toggle on): replace any existing boxes.
                     ed.bboxes = [];
                 }
                 ed.bboxes.push([Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), label]);

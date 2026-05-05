@@ -541,7 +541,7 @@ function installEditor(node) {
         }
     }
 
-    const widgetH = 460;
+    let widgetH = 460;
     node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
@@ -552,6 +552,22 @@ function installEditor(node) {
     if (!node.size || node.size[0] < 600) {
         const h = node.size?.[1] || 640;
         node.setSize?.([600, Math.max(h, 640)]);
+    }
+
+    // When a backdrop image is loaded, grow the canvas widget so the
+    // image's aspect fits without huge empty bars. Mirrors points editor.
+    function resizeForImage() {
+        if (!ed.canvasW || !ed.canvasH) return;
+        const baseW = (node.size?.[0] || 600) - 24;
+        if (baseW <= 0) return;
+        const aspect = ed.canvasH / ed.canvasW;
+        const targetH = Math.max(360, Math.min(900, Math.round(baseW * aspect) + 80));
+        if (Math.abs(targetH - widgetH) >= 10) {
+            widgetH = targetH;
+            const curH = node.size?.[1] || widgetH;
+            const minH = (node.computeSize?.()?.[1]) || widgetH;
+            if (curH < minH) node.setSize?.([node.size[0], minH]);
+        }
     }
 
     let lastW = 0, lastH = 0;
@@ -566,12 +582,15 @@ function installEditor(node) {
         const h = Math.max(1, Math.round(cssH));
         const dpr = window.devicePixelRatio || 1;
         const needPx = (canvas.width !== w * dpr) || (canvas.height !== h * dpr);
-        if (w === lastW && h === lastH && !needPx) return false;
+        const sizeChanged = (w !== lastW) || (h !== lastH);
+        if (!sizeChanged && !needPx) return false;
         lastW = w; lastH = h;
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        if (!ed._fitted) ed.fitView(w, h);
+        // Re-fit on every layout change — fixes "image pad zoom drift" when
+        // the parent ComfyUI graph is zoomed (was: only fit once).
+        if (sizeChanged || !ed._fitted) ed.fitView(w, h);
         return true;
     }
 
@@ -599,7 +618,7 @@ function installEditor(node) {
             updateClosedBtn();
         });
     }
-    ed.onLoaded = () => { ed._fitted = false; render(); };
+    ed.onLoaded = () => { ed._fitted = false; resizeForImage(); render(); };
 
     const ro = new ResizeObserver(() => render());
     ro.observe(canvasWrap);

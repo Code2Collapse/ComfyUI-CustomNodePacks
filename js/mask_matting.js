@@ -11,12 +11,9 @@ import { app } from "../../scripts/app.js";
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports) -> bool.
 const PREDICATES = {
-    pos_points:           (s, m, mode, sup) => sup.has("points") && (mode === "auto" || mode === "points"),
-    neg_points:           (s, m, mode, sup) => sup.has("points") && (mode === "auto" || mode === "points"),
-    pos_bbox:             (s, m, mode, sup) => sup.has("bbox")   && (mode === "auto" || mode === "bbox"),
-    neg_bbox:             (s, m, mode, sup) => sup.has("bbox")   && (mode === "auto" || mode === "bbox"),
-    normal_bbox:          (s, m, mode, sup) => sup.has("bbox")   && (mode === "auto" || mode === "bbox"),
-    text_prompt:          (s, m, mode, sup) => sup.has("text")   && (mode === "auto" || mode === "text"),
+    // pos_points / neg_points / text_prompt are forceInput slots now (no widgets) —
+    // not hidden via JS anymore. Keep entries removed so we don't try to
+    // toggle non-existent widgets.
 
     tracking_direction:   (s, m, mode, sup) => sup.has("video") && (mode === "auto" || mode === "video"),
     frame_annotation:     (s, m, mode, sup) => sup.has("video") && (mode === "auto" || mode === "video"),
