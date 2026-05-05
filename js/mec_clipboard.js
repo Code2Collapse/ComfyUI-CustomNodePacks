@@ -30,7 +30,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const CLIP_VERSION = "1.4";
+const CLIP_VERSION = "1.5";
 const CLIP_HEADER  = `# MEC.clipboard ${CLIP_VERSION}`;
 const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
 
@@ -558,26 +558,30 @@ async function _pasteFromText(text) {
 
 // -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
-// 3-tier wiring (clipboard events + keyboard + canvas menu + node menu)
+// 3-tier wiring (keyboard takeover + DOM events fallback + canvas/node menu)
 // -----------------------------------------------------------------------
 //
-// Native LiteGraph stores its own clipboard inside `localStorage` and
-// listens for keydown to copy/paste from there. The OS clipboard
-// (`navigator.clipboard`) is a separate channel.
+// IMPORTANT: ComfyUI 1.42+ frontend registers Ctrl+C as a Vue keybinding
+// command (`Comfy.Canvas.Copy`) which calls `navigator.clipboard.writeText`
+// from inside its own keydown handler. That handler runs AFTER any plain
+// DOM `copy` event listener, so writing to `e.clipboardData` and calling
+// `preventDefault()` is NOT enough — the frontend command then races and
+// overwrites the OS clipboard with its own (unenriched) payload, which is
+// what produced the user-reported "Ctrl+C just copies plain text" bug.
 //
-// We hook the *clipboard* DOM events (`copy` / `paste`) at the document
-// level, capture phase — these fire synchronously when Ctrl+C / Ctrl+V
-// (or right-click menu Copy/Paste) is triggered. Doing it here means:
+// Fix: take Ctrl+C / Ctrl+V over completely by listening at `window` in
+// the *capture* phase and calling `stopImmediatePropagation` so neither
+// LiteGraph's nor the Vue keybinding system's keydown handlers fire.
 //
-//   * Ctrl+C  -> `copy` event fires; we synchronously write MEC payload
-//                into `e.clipboardData`. Native LiteGraph's keydown
-//                listener still runs and stores its localStorage copy
-//                so same-tab paste continues to work normally.
-//   * Ctrl+V  -> `paste` event fires; we read `e.clipboardData`. If it
-//                carries an MEC header we run our paste path and
-//                preventDefault so native doesn't double-paste.
-//                Otherwise we let native handle it.
-//   * Ctrl+Alt+C / Ctrl+Alt+V -> kept as keyboard fallback (always MEC).
+//   * Ctrl+C  -> we replicate LiteGraph's localStorage copy via
+//                `canvas.copyToClipboard(nodes)` (so in-tab Ctrl+V still
+//                pastes nodes onto the canvas), and we write our enriched
+//                JSON payload to the OS clipboard via navigator.clipboard.
+//   * Ctrl+V  -> read OS clipboard; if it carries an MEC header, run our
+//                paste path; otherwise delegate to native LiteGraph paste.
+//   * Ctrl+Alt+C / Ctrl+Alt+V -> kept as explicit-MEC fallback.
+//   * DOM `copy`/`paste` listeners are kept for the rare case the keydown
+//                handler is bypassed (e.g. native context-menu Copy).
 //
 function _eventInTextField(target) {
     return !!(target && (
@@ -594,24 +598,144 @@ function _focusOnCanvas() {
     return false;
 }
 
-// ------ COPY -----------------------------------------------------------
-document.addEventListener("copy", (ev) => {
+function _activeCanvas() {
+    return app?.canvas
+        || (typeof LGraphCanvas !== "undefined" && LGraphCanvas.active_canvas)
+        || null;
+}
+
+function _nativeCopyToLocalStorage(nodes) {
+    // Mirrors LiteGraph's own copyToClipboard so same-tab Ctrl+V can still
+    // paste the nodes onto the canvas. We try the canvas method first
+    // (handles link bookkeeping correctly), then fall back to a manual
+    // localStorage write.
     try {
-        if (!isAutoCopyEnabled()) return;                    // user disabled → native only
-        if (_eventInTextField(ev.target)) return;            // typing → native
-        if (!_focusOnCanvas()) return;                       // not on graph → native
+        const canvas = _activeCanvas();
+        if (canvas?.copyToClipboard) {
+            canvas.copyToClipboard(nodes);
+            return true;
+        }
+    } catch (e) {
+        console.warn("[MEC.clipboard] canvas.copyToClipboard failed:", e);
+    }
+    try {
+        const data = { nodes: nodes.map(n => n.serialize?.() || {}), links: [] };
+        localStorage.setItem("litegrapheditor_clipboard", JSON.stringify(data));
+        return true;
+    } catch (e) {
+        console.warn("[MEC.clipboard] localStorage write failed:", e);
+        return false;
+    }
+}
+
+function _nativePasteFromLocalStorage() {
+    try {
+        const canvas = _activeCanvas();
+        if (canvas?.pasteFromClipboard) {
+            canvas.pasteFromClipboard();
+            return true;
+        }
+    } catch (e) {
+        console.warn("[MEC.clipboard] canvas.pasteFromClipboard failed:", e);
+    }
+    return false;
+}
+
+// ------ Ctrl+C / Ctrl+V keyboard takeover (PRIMARY path) ---------------
+window.addEventListener("keydown", (ev) => {
+    // Modifier matrix:
+    //   Ctrl+C / Cmd+C            -> primary copy (this branch)
+    //   Ctrl+V / Cmd+V            -> primary paste (this branch)
+    //   Ctrl+Alt+C/V / Cmd+Alt+...-> explicit-MEC fallback (handled below)
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    if (ev.shiftKey) return;
+    const k = (ev.key || "").toLowerCase();
+    if (k !== "c" && k !== "v") return;
+    if (_eventInTextField(ev.target)) return;
+    if (!_focusOnCanvas()) return;
+
+    // Ctrl+Alt+C / Ctrl+Alt+V -> explicit MEC, always on, ignore toggle.
+    if (ev.altKey) {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        if (k === "c") _copy();
+        else _paste();
+        return;
+    }
+
+    if (k === "c") {
+        if (!isAutoCopyEnabled()) return;                    // native only
         const nodes = _selectedNodes();
-        if (!nodes.length) return;                           // nothing → native (selection in textareas etc.)
-        // Build payload SYNCHRONOUSLY using whatever pack info is already cached.
-        // _gatherSubgraph is async only because of the network pack-map fetch;
-        // the pack-map is pre-warmed in setup() so the subsequent calls return
-        // from cache. We still must do the actual work synchronously here, so
-        // call the synchronous variant.
+        if (!nodes.length) return;                           // nothing selected → native
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        // 1. Mirror to LiteGraph's localStorage so in-tab Ctrl+V still works.
+        _nativeCopyToLocalStorage(nodes);
+        // 2. Build enriched payload and write to OS clipboard.
         const payload = _gatherSubgraphSync(nodes);
         const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
-        ev.clipboardData.setData("text/plain", text);
-        ev.preventDefault();                                 // we own the OS clipboard
-        // Sidebar history.
+        const finishCopy = () => {
+            try {
+                window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+                window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload, text });
+                if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) {
+                    window.__MEC_CLIPBOARD_HISTORY__.shift();
+                }
+            } catch (_) { /* ignore */ }
+            const packs = payload.packs.length;
+            _toast(
+                `Copied ${nodes.length} node(s)` +
+                (packs ? ` from ${packs} pack(s)` : "") +
+                ` with full metadata`,
+                "success",
+            );
+        };
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text).then(finishCopy).catch((e) => {
+                console.warn("[MEC.clipboard] writeText failed:", e);
+                _toast("OS clipboard write failed (in-tab paste still works)", "error");
+            });
+        } else {
+            finishCopy();
+        }
+    } else { // k === "v"
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        // Read OS clipboard; if it's an MEC payload, run our paste; else native.
+        const fallbackNative = () => _nativePasteFromLocalStorage();
+        if (navigator.clipboard?.readText) {
+            navigator.clipboard.readText().then((text) => {
+                if (text && HEADER_REGEX.test(text)) {
+                    _pasteFromText(text);
+                } else {
+                    fallbackNative();
+                }
+            }).catch((e) => {
+                console.warn("[MEC.clipboard] readText failed, falling back to native:", e);
+                fallbackNative();
+            });
+        } else {
+            fallbackNative();
+        }
+    }
+}, true);
+
+// ------ DOM copy/paste fallback (only for non-keyboard triggers) -------
+// Native browser context-menu Copy/Paste fires the DOM events without a
+// preceding keydown, so we still want our payload there. The keyboard
+// handler above already preventDefaulted Ctrl+C/V so these listeners
+// will NOT fire for the keyboard path.
+document.addEventListener("copy", (ev) => {
+    try {
+        if (!isAutoCopyEnabled()) return;
+        if (_eventInTextField(ev.target)) return;
+        if (!_focusOnCanvas()) return;
+        const nodes = _selectedNodes();
+        if (!nodes.length) return;
+        const payload = _gatherSubgraphSync(nodes);
+        const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
+        ev.clipboardData?.setData?.("text/plain", text);
+        ev.preventDefault();
         try {
             window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
             window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload, text });
@@ -619,41 +743,23 @@ document.addEventListener("copy", (ev) => {
                 window.__MEC_CLIPBOARD_HISTORY__.shift();
             }
         } catch (_) { /* ignore */ }
-        const packs = payload.packs.length;
-        _toast(
-            `Copied ${nodes.length} node(s)` +
-            (packs ? ` from ${packs} pack(s)` : "") +
-            ` with full metadata`,
-            "success",
-        );
     } catch (e) {
         console.warn("[MEC.clipboard] copy hook failed:", e);
-        // Don't preventDefault → native copy still runs.
     }
 }, true);
 
-// ------ PASTE ----------------------------------------------------------
 document.addEventListener("paste", (ev) => {
     try {
-        if (_eventInTextField(ev.target)) return;            // pasting into a field → native
+        if (_eventInTextField(ev.target)) return;
         if (!_focusOnCanvas()) return;
         const text = ev.clipboardData?.getData?.("text/plain") || "";
-        if (!HEADER_REGEX.test(text)) return;                // not ours → native
+        if (!HEADER_REGEX.test(text)) return;
         ev.preventDefault();
         ev.stopPropagation();
         _pasteFromText(text);
     } catch (e) {
         console.warn("[MEC.clipboard] paste hook failed:", e);
     }
-}, true);
-
-// ------ Ctrl+Alt+C / Ctrl+Alt+V keyboard fallback ----------------------
-window.addEventListener("keydown", (ev) => {
-    if (!(ev.ctrlKey || ev.metaKey) || !ev.altKey || ev.shiftKey) return;
-    if (_eventInTextField(ev.target)) return;
-    const k = ev.key.toLowerCase();
-    if (k === "c") { ev.preventDefault(); _copy(); }
-    else if (k === "v") { ev.preventDefault(); _paste(); }
 }, true);
 
 app.registerExtension({
@@ -669,7 +775,7 @@ app.registerExtension({
         },
     ],
     async setup() {
-        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 native Ctrl+C/Ctrl+V via clipboard events, Ctrl+Alt+C/V fallback, auto-copy=" + isAutoCopyEnabled());
+        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 keydown takeover for Ctrl+C / Ctrl+V (capture phase, stopImmediatePropagation), Ctrl+Alt+C/V explicit fallback, auto-copy=" + isAutoCopyEnabled());
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 
