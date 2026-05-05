@@ -2,19 +2,72 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 /**
- * VideoFramePlayerMEC – lightweight OpenRV-style frame scrubber.
+ * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
  *
- * Renders a canvas + timeline bar. Drag/click on timeline to scrub frames;
- * arrow keys step ±1 frame; space = play/pause. Selected frame index is
- * mirrored back to the `frame_index` widget so the next graph run emits
- * that frame as the IMAGE output.
+ *  - Scrubber: drag/click timeline to scrub; arrows = step frames; space = play.
+ *  - Crop: when crop_enabled is true, an Olm-DragCrop style rectangle is drawn
+ *    on the preview. 4 corner + 4 edge handles resize; drag inside to move.
+ *    Aspect-lock kicks in when aspect_ratio != 'free'.
+ *  - All crop math is clamped to the preview rect so the rectangle CAN'T
+ *    scroll outside the canvas border.
  */
 
 const TL_H = 36;       // timeline bar height
-const TICK_H = 6;      // tick mark height
+const TICK_H = 6;
 const HANDLE_R = 7;
 const PLAY_BTN_W = 28;
 const STATUS_H = 18;
+const CROP_HANDLE_S = 8;       // crop handle hit size (half-edge)
+const CROP_LINE_W = 1.5;
+
+const ASPECT_VALUES = {
+    "free":     null,
+    "original": null,    // dynamic -> srcW/srcH
+    "1:1":      1.0,
+    "4:3":      4.0 / 3.0,
+    "3:4":      3.0 / 4.0,
+    "16:9":     16.0 / 9.0,
+    "9:16":     9.0 / 16.0,
+    "2:1":      2.0,
+    "21:9":     21.0 / 9.0,
+    "custom":   null,    // dynamic -> custom_aspect_w/h
+};
+
+function getAspect(node, S) {
+    const wAR = node.widgets?.find(w => w.name === "aspect_ratio");
+    const ar = wAR?.value ?? "free";
+    if (ar === "free") return null;
+    if (ar === "original") {
+        return (S.width > 0 && S.height > 0) ? S.width / S.height : null;
+    }
+    if (ar === "custom") {
+        const cw = node.widgets?.find(w => w.name === "custom_aspect_w")?.value ?? 16;
+        const ch = node.widgets?.find(w => w.name === "custom_aspect_h")?.value ?? 9;
+        if (cw > 0 && ch > 0) return cw / ch;
+        return null;
+    }
+    return ASPECT_VALUES[ar] ?? null;
+}
+
+function snapToAspect(cx, cy, cw, ch, aspect) {
+    if (!aspect || aspect <= 0) return [cx, cy, cw, ch];
+    const cur = cw / Math.max(ch, 1e-6);
+    const centreX = cx + cw / 2;
+    const centreY = cy + ch / 2;
+    if (cur > aspect) cw = ch * aspect;
+    else              ch = cw / aspect;
+    cx = Math.max(0, Math.min(1 - cw, centreX - cw / 2));
+    cy = Math.max(0, Math.min(1 - ch, centreY - ch / 2));
+    return [cx, cy, cw, ch];
+}
+
+function clamp01Rect(cx, cy, cw, ch) {
+    cw = Math.max(0.001, Math.min(1, cw));
+    ch = Math.max(0.001, Math.min(1, ch));
+    cx = Math.max(0, Math.min(1 - cw, cx));
+    cy = Math.max(0, Math.min(1 - ch, cy));
+    return [cx, cy, cw, ch];
+}
 
 app.registerExtension({
     name: "MEC.VideoFramePlayer",
@@ -29,9 +82,12 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:100%;min-height:240px;background:#0c0c0c;border-radius:4px;overflow:hidden;";
+                "position:relative;width:100%;min-height:240px;background:#0c0c0c;" +
+                "border-radius:4px;overflow:hidden;";   // overflow:hidden = no scroll-out
             el.setAttribute("role", "group");
-            el.setAttribute("aria-label", "Video frame scrubber. Drag timeline to scrub. Left/Right step frames. Space toggles play.");
+            el.setAttribute("aria-label",
+                "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
+                "Arrow keys step frames, space toggles play.");
 
             const cvs = document.createElement("canvas");
             cvs.style.cssText = "display:block;width:100%;cursor:default;";
@@ -42,16 +98,20 @@ app.registerExtension({
                 cvs,
                 ctx: cvs.getContext("2d"),
                 el,
-                images: [],          // Image[] preloaded thumbnails
+                images: [],
                 frameCount: 0,
-                idx: 0,               // current frame
-                width: 0,             // source width
-                height: 0,            // source height
+                idx: 0,
+                width: 0,
+                height: 0,
                 playing: false,
                 fps: 24,
                 _rafId: null,
                 _lastT: 0,
-                drag: false,
+                drag: null,        // null | "tl" | "crop-move" | "crop-N/S/E/W/NE/NW/SE/SW"
+                _dragStart: null,  // { mx, my, cx, cy, cw, ch }
+                _hover: null,
+                // current preview rect (px on canvas) updated each render
+                preview: { x: 0, y: 0, w: 0, h: 0 },
             };
             node._S = S;
 
@@ -66,7 +126,6 @@ app.registerExtension({
             const setIdx = (i) => {
                 if (S.frameCount <= 0) return;
                 S.idx = Math.max(0, Math.min(S.frameCount - 1, Math.round(i)));
-                // Mirror to frame_index widget
                 const w = node.widgets?.find((w) => w.name === "frame_index");
                 if (w) {
                     w.value = S.idx;
@@ -76,42 +135,188 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true);
             };
 
-            const tlRect = () => {
-                const cw = cvs.width, ch = cvs.height;
-                const pad = 12;
-                const x = pad, y = ch - TL_H - 6;
-                const w = cw - pad * 2, h = TL_H;
-                return { x, y, w, h, playBtnX: x, playBtnW: PLAY_BTN_W,
-                         barX: x + PLAY_BTN_W + 8, barW: w - PLAY_BTN_W - 8 };
+            // Read crop widgets (normalized [0..1])
+            const getCropNorm = () => {
+                const get = (n, def) => node.widgets?.find(w => w.name === n)?.value ?? def;
+                return [
+                    Number(get("crop_x", 0)),
+                    Number(get("crop_y", 0)),
+                    Number(get("crop_w", 1)),
+                    Number(get("crop_h", 1)),
+                ];
+            };
+            const setCropNorm = (cx, cy, cw, ch) => {
+                [cx, cy, cw, ch] = clamp01Rect(cx, cy, cw, ch);
+                const set = (n, v) => {
+                    const w = node.widgets?.find(w => w.name === n);
+                    if (!w) return;
+                    w.value = +v.toFixed(4);
+                    if (w.callback) try { w.callback(w.value); } catch (_) {}
+                };
+                set("crop_x", cx); set("crop_y", cy);
+                set("crop_w", cw); set("crop_h", ch);
+            };
+            const isCropEnabled = () =>
+                !!(node.widgets?.find(w => w.name === "crop_enabled")?.value);
+
+            node._setCropNorm = setCropNorm;
+            node._getCropNorm = getCropNorm;
+            node._isCropEnabled = () => isCropEnabled();
+
+            // Crop pixel rect on canvas (intersects preview rect)
+            const cropPxRect = () => {
+                const p = S.preview;
+                if (p.w <= 0 || p.h <= 0) return null;
+                const [cx, cy, cw, ch] = getCropNorm();
+                return {
+                    x: p.x + cx * p.w,
+                    y: p.y + cy * p.h,
+                    w: cw * p.w,
+                    h: ch * p.h,
+                };
+            };
+
+            // Hit-test crop handles. Returns drag mode or null.
+            const handleHit = (mx, my) => {
+                if (!isCropEnabled()) return null;
+                const cr = cropPxRect();
+                if (!cr) return null;
+                const hs = CROP_HANDLE_S;
+                const corners = [
+                    ["NW", cr.x,         cr.y],
+                    ["NE", cr.x + cr.w,  cr.y],
+                    ["SW", cr.x,         cr.y + cr.h],
+                    ["SE", cr.x + cr.w,  cr.y + cr.h],
+                ];
+                for (const [k, hx, hy] of corners) {
+                    if (Math.abs(mx - hx) <= hs && Math.abs(my - hy) <= hs)
+                        return "crop-" + k;
+                }
+                const edges = [
+                    ["N", cr.x + cr.w / 2, cr.y],
+                    ["S", cr.x + cr.w / 2, cr.y + cr.h],
+                    ["W", cr.x,            cr.y + cr.h / 2],
+                    ["E", cr.x + cr.w,     cr.y + cr.h / 2],
+                ];
+                for (const [k, hx, hy] of edges) {
+                    if (Math.abs(mx - hx) <= hs && Math.abs(my - hy) <= hs)
+                        return "crop-" + k;
+                }
+                if (mx >= cr.x && mx <= cr.x + cr.w &&
+                    my >= cr.y && my <= cr.y + cr.h) return "crop-move";
+                return null;
+            };
+
+            // Update crop based on drag
+            const applyCropDrag = (mode, mx, my) => {
+                const ds = S._dragStart;
+                if (!ds) return;
+                const p = S.preview;
+                if (p.w <= 0 || p.h <= 0) return;
+                const dx = (mx - ds.mx) / p.w;
+                const dy = (my - ds.my) / p.h;
+                let [cx, cy, cw, ch] = [ds.cx, ds.cy, ds.cw, ds.ch];
+
+                if (mode === "crop-move") {
+                    cx = ds.cx + dx;
+                    cy = ds.cy + dy;
+                } else {
+                    // edge / corner resize
+                    let nx = cx, ny = cy, nx2 = cx + cw, ny2 = cy + ch;
+                    if (mode.includes("W")) nx = ds.cx + dx;
+                    if (mode.includes("E")) nx2 = ds.cx + ds.cw + dx;
+                    if (mode.includes("N")) ny = ds.cy + dy;
+                    if (mode.includes("S")) ny2 = ds.cy + ds.ch + dy;
+                    if (nx2 < nx + 0.005) {
+                        if (mode.includes("W")) nx = nx2 - 0.005;
+                        else nx2 = nx + 0.005;
+                    }
+                    if (ny2 < ny + 0.005) {
+                        if (mode.includes("N")) ny = ny2 - 0.005;
+                        else ny2 = ny + 0.005;
+                    }
+                    cx = nx; cy = ny; cw = nx2 - nx; ch = ny2 - ny;
+
+                    const aspect = getAspect(node, S);
+                    if (aspect && aspect > 0 && mode !== "crop-move") {
+                        // Anchor opposite corner for aspect snap
+                        const ax = mode.includes("W") ? ds.cx + ds.cw : ds.cx;
+                        const ay = mode.includes("N") ? ds.cy + ds.ch : ds.cy;
+                        let aw = cw, ah = ch;
+                        const cur = aw / Math.max(ah, 1e-6);
+                        if (cur > aspect) aw = ah * aspect;
+                        else              ah = aw / aspect;
+                        let nx_  = mode.includes("W") ? ax - aw : ax;
+                        let ny_  = mode.includes("N") ? ay - ah : ay;
+                        cx = nx_; cy = ny_; cw = aw; ch = ah;
+                    }
+                }
+                setCropNorm(cx, cy, cw, ch);
+                node._render();
             };
 
             cvs.addEventListener("pointerdown", (e) => {
-                const [cx, cy] = canvasXY(e);
+                cvs.focus();
+                const [mx, my] = canvasXY(e);
+                // crop handle / drag inside crop
+                const hit = handleHit(mx, my);
+                if (hit) {
+                    cvs.setPointerCapture(e.pointerId);
+                    S.drag = hit;
+                    const [cx, cy, cw, ch] = getCropNorm();
+                    S._dragStart = { mx, my, cx, cy, cw, ch };
+                    return;
+                }
                 const r = tlRect();
-                // Play/pause button
-                if (cx >= r.playBtnX && cx <= r.playBtnX + r.playBtnW &&
-                    cy >= r.y && cy <= r.y + r.h) {
+                // Play/pause
+                if (mx >= r.playBtnX && mx <= r.playBtnX + r.playBtnW &&
+                    my >= r.y && my <= r.y + r.h) {
                     S.playing = !S.playing;
                     if (S.playing) startPlay(); else stopPlay();
                     node._render();
                     return;
                 }
-                // Timeline bar
-                if (cy >= r.y && cy <= r.y + r.h && cx >= r.barX) {
+                // Timeline
+                if (my >= r.y && my <= r.y + r.h && mx >= r.barX) {
                     cvs.setPointerCapture(e.pointerId);
-                    S.drag = true;
-                    const t = (cx - r.barX) / Math.max(1, r.barW);
+                    S.drag = "tl";
+                    const t = (mx - r.barX) / Math.max(1, r.barW);
                     setIdx(t * (S.frameCount - 1));
                 }
             });
+
             cvs.addEventListener("pointermove", (e) => {
-                if (!S.drag) return;
-                const [cx] = canvasXY(e);
-                const r = tlRect();
-                const t = (cx - r.barX) / Math.max(1, r.barW);
-                setIdx(t * (S.frameCount - 1));
+                const [mx, my] = canvasXY(e);
+                if (S.drag === "tl") {
+                    const r = tlRect();
+                    const t = (mx - r.barX) / Math.max(1, r.barW);
+                    setIdx(t * (S.frameCount - 1));
+                    return;
+                }
+                if (S.drag && S.drag.startsWith("crop")) {
+                    applyCropDrag(S.drag, mx, my);
+                    return;
+                }
+                // hover for cursor
+                const hit = handleHit(mx, my);
+                let cur = "default";
+                if (hit === "crop-move") cur = "move";
+                else if (hit) {
+                    const m = hit.replace("crop-", "");
+                    cur = ({
+                        N: "ns-resize", S: "ns-resize", E: "ew-resize", W: "ew-resize",
+                        NE: "nesw-resize", SW: "nesw-resize",
+                        NW: "nwse-resize", SE: "nwse-resize",
+                    })[m] || "default";
+                }
+                cvs.style.cursor = cur;
             });
-            const up = () => { S.drag = false; };
+
+            const up = (e) => {
+                S.drag = null;
+                S._dragStart = null;
+                try { cvs.releasePointerCapture(e.pointerId); } catch (_) {}
+            };
             cvs.addEventListener("pointerup", up);
             cvs.addEventListener("pointercancel", up);
 
@@ -127,6 +332,16 @@ app.registerExtension({
                 if (handled) { e.preventDefault(); node._render(); }
             });
 
+            const tlRect = () => {
+                const cw = cvs.width, ch = cvs.height;
+                const pad = 12;
+                const x = pad, y = ch - TL_H - 6;
+                const w = cw - pad * 2, h = TL_H;
+                return { x, y, w, h, playBtnX: x, playBtnW: PLAY_BTN_W,
+                         barX: x + PLAY_BTN_W + 8, barW: w - PLAY_BTN_W - 8 };
+            };
+            node._tlRect = tlRect;
+
             const startPlay = () => {
                 S._lastT = performance.now();
                 const tick = (now) => {
@@ -136,7 +351,7 @@ app.registerExtension({
                     if (advance >= 1) {
                         S._lastT = now;
                         let next = S.idx + Math.floor(advance);
-                        if (next >= S.frameCount) next = 0;  // loop
+                        if (next >= S.frameCount) next = 0;
                         setIdx(next);
                     }
                     S._rafId = requestAnimationFrame(tick);
@@ -150,16 +365,39 @@ app.registerExtension({
             node._stopPlay = stopPlay;
 
             node.addDOMWidget("video_player_view", "VFPLAYER", el, { serialize: false });
-            node.setSize([520, 360]);
+            node.setSize([520, 380]);
 
-            // Lock compute size to prevent jitter
-            let _lockedW = 520, _lockedH = 360;
+            let _lockedW = 520, _lockedH = 380;
             const _origCompute = node.computeSize;
-            node.computeSize = function() {
+            node.computeSize = function () {
                 if (_lockedW > 0 && _lockedH > 0) return [_lockedW, _lockedH];
-                return _origCompute?.apply(this, arguments) ?? [520, 360];
+                return _origCompute?.apply(this, arguments) ?? [520, 380];
             };
             node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
+
+            // Re-render whenever a crop-related widget changes from the panel
+            const watch = ["crop_enabled", "aspect_ratio",
+                           "custom_aspect_w", "custom_aspect_h",
+                           "crop_x", "crop_y", "crop_w", "crop_h"];
+            requestAnimationFrame(() => {
+                for (const wn of watch) {
+                    const w = node.widgets?.find(x => x.name === wn);
+                    if (!w) continue;
+                    const _cb = w.callback;
+                    w.callback = function (v) {
+                        try { _cb?.call(this, v); } catch (_) {}
+                        // When aspect_ratio changes, snap the current crop.
+                        if (wn === "aspect_ratio" || wn === "custom_aspect_w" || wn === "custom_aspect_h") {
+                            const a = getAspect(node, S);
+                            const [cx, cy, cw, ch] = getCropNorm();
+                            const [nx, ny, nw, nh] = snapToAspect(cx, cy, cw, ch, a);
+                            setCropNorm(nx, ny, nw, nh);
+                        }
+                        node._render?.();
+                        app.graph.setDirtyCanvas(true);
+                    };
+                }
+            });
         };
 
         const _exec = nodeType.prototype.onExecuted;
@@ -174,6 +412,11 @@ app.registerExtension({
             S.width = msg.width?.[0] ?? 0;
             S.height = msg.height?.[0] ?? 0;
 
+            // Sync server-snapped crop back to widgets
+            if (typeof msg.crop_x?.[0] === "number") {
+                this._setCropNorm?.(msg.crop_x[0], msg.crop_y[0], msg.crop_w[0], msg.crop_h[0]);
+            }
+
             const mkURL = (info) =>
                 api.apiURL(
                     `/view?filename=${encodeURIComponent(info.filename)}` +
@@ -181,13 +424,11 @@ app.registerExtension({
                     `&subfolder=${encodeURIComponent(info.subfolder || "")}`
                 );
 
-            // Preload all preview frames
             S.images = new Array(frames.length);
             const node = this;
             let loaded = 0;
             const onLoad = () => {
                 if (++loaded >= frames.length) {
-                    // Resize node to fit aspect ratio
                     if (S.width > 0 && S.height > 0) {
                         const w = Math.max(node.size[0], 360);
                         const aspect = S.height / S.width;
@@ -221,14 +462,7 @@ app.registerExtension({
             }
             ctx.clearRect(0, 0, cw, ch);
 
-            // Draw current frame fitted to the available area (above timeline)
-            const tl = (function () {
-                const pad = 12;
-                const x = pad, y = ch - TL_H - 6;
-                return { x, y, w: cw - pad * 2, h: TL_H,
-                         playBtnX: x, playBtnW: PLAY_BTN_W,
-                         barX: x + PLAY_BTN_W + 8, barW: cw - pad * 2 - PLAY_BTN_W - 8 };
-            })();
+            const tl = this._tlRect();
             const previewMaxH = tl.y - 12 - STATUS_H;
             const previewMaxW = cw - 24;
             const aspect = (S.height || 1) / (S.width || 1);
@@ -236,6 +470,7 @@ app.registerExtension({
             if (ph > previewMaxH) { ph = previewMaxH; pw = ph / aspect; }
             const px = (cw - pw) / 2;
             const py = STATUS_H + 6;
+            S.preview = { x: px, y: py, w: pw, h: ph };
 
             ctx.fillStyle = "#000";
             ctx.fillRect(px, py, pw, ph);
@@ -247,10 +482,80 @@ app.registerExtension({
                 ctx.font = "12px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                ctx.fillText("loading…", px + pw / 2, py + ph / 2);
+                ctx.fillText("loading...", px + pw / 2, py + ph / 2);
             }
 
-            // Status line (top)
+            // Crop overlay
+            if (this._isCropEnabled?.()) {
+                const [ncx, ncy, ncw, nch] = this._getCropNorm();
+                const cr = {
+                    x: px + ncx * pw, y: py + ncy * ph,
+                    w: ncw * pw,       h: nch * ph,
+                };
+                // Dim outside crop
+                ctx.save();
+                ctx.fillStyle = "rgba(0,0,0,0.55)";
+                // top
+                ctx.fillRect(px, py, pw, cr.y - py);
+                // bottom
+                ctx.fillRect(px, cr.y + cr.h, pw, (py + ph) - (cr.y + cr.h));
+                // left
+                ctx.fillRect(px, cr.y, cr.x - px, cr.h);
+                // right
+                ctx.fillRect(cr.x + cr.w, cr.y, (px + pw) - (cr.x + cr.w), cr.h);
+                ctx.restore();
+
+                // Border
+                ctx.save();
+                ctx.strokeStyle = "#5bf";
+                ctx.lineWidth = CROP_LINE_W;
+                ctx.strokeRect(cr.x + 0.5, cr.y + 0.5, cr.w - 1, cr.h - 1);
+
+                // Rule-of-thirds guides
+                ctx.strokeStyle = "rgba(91,255,255,0.35)";
+                ctx.lineWidth = 1;
+                for (let i = 1; i <= 2; i++) {
+                    const tx = cr.x + (cr.w * i) / 3;
+                    const ty = cr.y + (cr.h * i) / 3;
+                    ctx.beginPath(); ctx.moveTo(tx, cr.y); ctx.lineTo(tx, cr.y + cr.h); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(cr.x, ty); ctx.lineTo(cr.x + cr.w, ty); ctx.stroke();
+                }
+
+                // Handles
+                ctx.fillStyle = "#fff";
+                ctx.strokeStyle = "#222";
+                ctx.lineWidth = 1;
+                const drawHandle = (hx, hy) => {
+                    ctx.fillRect(hx - CROP_HANDLE_S/2, hy - CROP_HANDLE_S/2, CROP_HANDLE_S, CROP_HANDLE_S);
+                    ctx.strokeRect(hx - CROP_HANDLE_S/2 + 0.5, hy - CROP_HANDLE_S/2 + 0.5, CROP_HANDLE_S - 1, CROP_HANDLE_S - 1);
+                };
+                drawHandle(cr.x, cr.y);
+                drawHandle(cr.x + cr.w, cr.y);
+                drawHandle(cr.x, cr.y + cr.h);
+                drawHandle(cr.x + cr.w, cr.y + cr.h);
+                drawHandle(cr.x + cr.w / 2, cr.y);
+                drawHandle(cr.x + cr.w / 2, cr.y + cr.h);
+                drawHandle(cr.x, cr.y + cr.h / 2);
+                drawHandle(cr.x + cr.w, cr.y + cr.h / 2);
+                ctx.restore();
+
+                // Crop dim text
+                ctx.save();
+                ctx.fillStyle = "rgba(0,0,0,0.6)";
+                const cwPx = Math.round(ncw * (S.width || 0));
+                const chPx = Math.round(nch * (S.height || 0));
+                const txt = `${cwPx} x ${chPx}`;
+                ctx.font = "11px sans-serif";
+                const tw = ctx.measureText(txt).width + 8;
+                ctx.fillRect(cr.x + 2, cr.y + 2, tw, 16);
+                ctx.fillStyle = "#fff";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "top";
+                ctx.fillText(txt, cr.x + 6, cr.y + 4);
+                ctx.restore();
+            }
+
+            // Status line
             ctx.save();
             ctx.fillStyle = "#bbb";
             ctx.font = "11px sans-serif";
@@ -260,7 +565,7 @@ app.registerExtension({
             ctx.fillText(statusTxt, 12, 4);
             ctx.restore();
 
-            // Timeline bar background
+            // Timeline bar
             ctx.fillStyle = "#1a1a1a";
             ctx.fillRect(tl.x, tl.y, tl.w, tl.h);
 
@@ -269,22 +574,20 @@ app.registerExtension({
             ctx.fillRect(tl.playBtnX, tl.y, tl.playBtnW, tl.h);
             ctx.fillStyle = "#fff";
             ctx.beginPath();
-            const cx = tl.playBtnX + tl.playBtnW / 2;
-            const cy = tl.y + tl.h / 2;
+            const cxp = tl.playBtnX + tl.playBtnW / 2;
+            const cyp = tl.y + tl.h / 2;
             if (S.playing) {
-                // Pause icon: two bars
-                ctx.fillRect(cx - 6, cy - 7, 4, 14);
-                ctx.fillRect(cx + 2, cy - 7, 4, 14);
+                ctx.fillRect(cxp - 6, cyp - 7, 4, 14);
+                ctx.fillRect(cxp + 2, cyp - 7, 4, 14);
             } else {
-                // Play icon: triangle
-                ctx.moveTo(cx - 5, cy - 7);
-                ctx.lineTo(cx + 7, cy);
-                ctx.lineTo(cx - 5, cy + 7);
+                ctx.moveTo(cxp - 5, cyp - 7);
+                ctx.lineTo(cxp + 7, cyp);
+                ctx.lineTo(cxp - 5, cyp + 7);
                 ctx.closePath();
                 ctx.fill();
             }
 
-            // Timeline track
+            // Track
             const trackY = tl.y + tl.h / 2;
             ctx.strokeStyle = "#333";
             ctx.lineWidth = 4;
@@ -293,7 +596,7 @@ app.registerExtension({
             ctx.lineTo(tl.barX + tl.barW, trackY);
             ctx.stroke();
 
-            // Tick marks every 10% (or every frame if <=20 frames)
+            // Ticks
             ctx.strokeStyle = "#444";
             ctx.lineWidth = 1;
             const tickEvery = S.frameCount <= 20 ? 1 : Math.max(1, Math.floor(S.frameCount / 20));
@@ -315,9 +618,9 @@ app.registerExtension({
             ctx.stroke();
 
             // Handle
-            const hx = tl.barX + tl.barW * progT;
+            const hxp = tl.barX + tl.barW * progT;
             ctx.beginPath();
-            ctx.arc(hx, trackY, HANDLE_R, 0, Math.PI * 2);
+            ctx.arc(hxp, trackY, HANDLE_R, 0, Math.PI * 2);
             ctx.fillStyle = "#fff";
             ctx.fill();
             ctx.strokeStyle = "#5bf";
@@ -325,7 +628,6 @@ app.registerExtension({
             ctx.stroke();
         };
 
-        // Cleanup playback on node removal
         const _onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
             try { this._stopPlay?.(); } catch (_) {}
