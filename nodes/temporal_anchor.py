@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 TemporalAnchorMEC – Temporal Anchor System for mask interpolation over time.
 
 Given anchor frames with their masks, computes signed distance fields (SDF)
@@ -369,6 +370,7 @@ def _compute_confidence(anchor_frames: List[int], total_frames: int) -> List[flo
             max_half_span = 1.0
     else:
         for i in range(len(anchor_frames) - 1):
+            _IC.check()
             span = anchor_frames[i + 1] - anchor_frames[i]
             max_half_span = max(max_half_span, span / 2.0)
         # Also consider distance from 0 to first anchor and last anchor to end
@@ -544,6 +546,7 @@ class TemporalAnchorMEC:
         elif len(anchor_frames_list) < A:
             # Distribute remaining anchors evenly
             for i in range(len(anchor_frames_list), A):
+                _IC.check()
                 if total_frames > 1:
                     idx = int(i * (total_frames - 1) / max(1, A - 1))
                 else:

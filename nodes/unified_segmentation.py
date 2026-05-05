@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 DEPRECATED – This module is superseded by unified_segmentation_node.py + model_manager.py.
 Kept for reference only. Do NOT import this module in production code.
 The canonical MODEL_REGISTRY and model loading live in model_manager.py.
@@ -594,6 +595,7 @@ class UnifiedSegmentation:
         masks_list: list[torch.Tensor] = []
         best = 0.0
         for i in range(B):
+            _IC.check()
             m, s = self._image(
                 model, family, frames[i], pt_coords, pt_labels,
                 box_np, neg_box, "", True, 0, dtype, device, None, H, W,
@@ -621,6 +623,7 @@ class UnifiedSegmentation:
             from PIL import Image as PILImage
 
             for i in range(B):
+                _IC.check()
                 arr = (frames[i].cpu().numpy() * 255).astype(np.uint8)
                 PILImage.fromarray(arr).save(
                     os.path.join(tmp, f"{i:06d}.jpg"), quality=95,
@@ -650,6 +653,7 @@ class UnifiedSegmentation:
             # Assemble batch
             out: list[torch.Tensor] = []
             for i in range(B):
+                _IC.check()
                 out.append(collected.get(i, torch.zeros(H, W, dtype=torch.float32)))
             return torch.stack(out), 1.0
 

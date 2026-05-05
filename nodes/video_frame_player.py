@@ -1,5 +1,6 @@
 """VideoFramePlayerMEC – lightweight in-graph video scrubber.
 
+from . import _interrupt_check as _IC
 Shows an IMAGE batch as a scrubable timeline with a frame slider (OpenRV
 style). Outputs the currently-selected frame as a single IMAGE so it can be
 piped into other nodes.
@@ -96,6 +97,7 @@ class VideoFramePlayerMEC:
         previews = []
         thumb_h = max(1, int(round(H * preview_width / max(W, 1))))
         for i in range(B):
+            _IC.check()
             name = f"vfp_{batch_id}_{i:05d}.jpg"
             path = os.path.join(temp_dir, name)
             if not os.path.exists(path):

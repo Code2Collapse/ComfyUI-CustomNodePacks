@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 LuminanceKeyerMEC – Professional luminance keyer inspired by Nuke's LumaKeyer.
 
 Computes ITU-R BT.709 luminance from an input image, then extracts a matte
@@ -228,6 +229,7 @@ class LuminanceKeyerMEC:
             # Per-frame stats
             frame_coverages = []
             for i in range(B):
+                _IC.check()
                 fc = mask[i].mean().item() * 100.0
                 frame_coverages.append(f"{fc:.1f}%")
 

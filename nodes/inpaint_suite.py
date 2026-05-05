@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 InpaintSuiteMEC — Inpaint Crop Pro + Stitch Pro + Mask Prepare.
 
 Three nodes for professional inpainting workflows:
@@ -692,6 +693,7 @@ def _resize_lanczos(image: torch.Tensor, target_h: int, target_w: int) -> torch.
     B, H, W, C = image.shape
     out = []
     for i in range(B):
+        _IC.check()
         arr = (image[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
         if C == 1:
             arr = arr[:, :, 0]  # PIL needs 2D for grayscale

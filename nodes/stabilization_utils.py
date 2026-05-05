@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 stabilization_utils — Shared camera/motion stabilization primitives.
 
 Provides:
@@ -446,6 +447,7 @@ def motion_adaptive_temporal_smooth(
     flat = mask.reshape(B, H * W)  # (B, HW)
 
     for t in range(B):
+        _IC.check()
         sigma_t = sigmas[t]
         radius = max(1, int(math.ceil(2.5 * sigma_t)))
         weights = torch.zeros(B, device=device, dtype=mask.dtype)
@@ -545,6 +547,7 @@ def compute_stable_bbox_trajectory(
     if len(valid_indices) < B:
         # Fill missing frames with nearest valid bbox
         for i in range(B):
+            _IC.check()
             if per_frame[i] is None:
                 nearest = min(valid_indices, key=lambda j: abs(j - i))
                 per_frame[i] = per_frame[nearest]
@@ -732,6 +735,7 @@ def compute_ronin_bbox_trajectory(
     if len(valid) < B:
         filled: List[Tuple[float, float, float, float]] = [None] * B  # type: ignore[list-item]
         for i in range(B):
+            _IC.check()
             if raw[i] is not None:
                 filled[i] = raw[i]
                 continue

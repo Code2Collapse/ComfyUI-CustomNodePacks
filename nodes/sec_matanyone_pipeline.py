@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 SeCMatAnyonePipelineMEC – SeC segmentation + MatAnyone2 alpha matting pipeline.
 
 Pipeline stages:
@@ -302,6 +303,7 @@ class SeCMatAnyonePipelineMEC:
                 break
 
         for i in range(B):
+            _IC.check()
             img_t = image[min(i, image.shape[0] - 1)].permute(2, 0, 1).to(device)
             m_t = mask[i].unsqueeze(0).to(device)
             m_bin = (m_t > 0.5).float()
@@ -338,6 +340,7 @@ class SeCMatAnyonePipelineMEC:
         alphas = []
 
         for i in range(B):
+            _IC.check()
             img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
             mask_np = mask[i].cpu().numpy().astype(np.float32)
 
@@ -378,6 +381,7 @@ class SeCMatAnyonePipelineMEC:
             import cv2
             refined = []
             for i in range(B):
+                _IC.check()
                 img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
                 a_np = alpha[i].cpu().numpy()
                 guide = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
@@ -390,6 +394,7 @@ class SeCMatAnyonePipelineMEC:
             from .utils import multi_scale_guided_refine
             refined = []
             for i in range(B):
+                _IC.check()
                 img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
                 a_np = alpha[i].cpu().numpy()
                 r = multi_scale_guided_refine(img_np, a_np, edge_radius, 0.5)
@@ -407,6 +412,7 @@ class SeCMatAnyonePipelineMEC:
         """Fill holes and remove small regions."""
         processed = []
         for i in range(B):
+            _IC.check()
             a = alpha[i].cpu().numpy()
             if do_fill:
                 a = fill_holes(a)

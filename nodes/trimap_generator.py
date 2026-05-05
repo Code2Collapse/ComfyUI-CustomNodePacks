@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 TrimapGeneratorMEC – Standalone trimap generation from segmentation masks.
 
 Converts a coarse segmentation mask into a 3-region trimap:
@@ -99,6 +100,7 @@ class TrimapGeneratorMEC:
         unknown_masks = []
 
         for i in range(B):
+            _IC.check()
             m = mask[i].cpu().numpy()
 
             # Apply threshold

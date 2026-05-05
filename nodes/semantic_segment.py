@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 SemanticSegmentMEC – Face / Body / Clothes semantic parsing using SegFormer.
 
 Models supported:
@@ -183,6 +184,7 @@ class SemanticSegmentMEC:
             inf_h, inf_w = H, W
 
         for i in range(B):
+            _IC.check()
             img_np = (image[i].cpu().numpy() * 255).astype(np.uint8)
             pil_img = PILImage.fromarray(img_np[:, :, :3])
             if (inf_h, inf_w) != (H, W):

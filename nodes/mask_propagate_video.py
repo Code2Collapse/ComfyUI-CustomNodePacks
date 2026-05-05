@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 MaskPropagateVideo – Draw/define a mask on one frame and propagate it
 across a video sequence.  Supports static copy, motion-compensated
 propagation (optical flow), and SAM2 video-propagation mode.
@@ -110,6 +111,7 @@ class MaskPropagateVideo:
         """Linearly fade opacity across frames."""
         masks = mask.unsqueeze(0).expand(num_frames, -1, -1).clone()
         for i in range(num_frames):
+            _IC.check()
             if num_frames == 1:
                 alpha = start_opacity
             else:
@@ -125,6 +127,7 @@ class MaskPropagateVideo:
                             dtype=mask.dtype, device=mask.device)
         H, W = mask.shape
         for i in range(num_frames):
+            _IC.check()
             if num_frames == 1:
                 scale = start_scale
             else:
@@ -166,6 +169,7 @@ class MaskPropagateVideo:
 
         imgs_gray = []
         for i in range(B):
+            _IC.check()
             frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
             imgs_gray.append(gray)
@@ -245,6 +249,7 @@ class MaskPropagateVideo:
             tmp = tempfile.mkdtemp(prefix="mec_prop_")
             try:
                 for i in range(B):
+                    _IC.check()
                     frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
                     PILImage.fromarray(frame).save(
                         os.path.join(tmp, f"{i:06d}.jpg"), quality=95,
@@ -314,6 +319,7 @@ class MaskPropagateVideo:
         color = torch.tensor([0.0, 1.0, 0.0], device=images.device)  # green
         alpha = 0.35
         for i in range(B):
+            _IC.check()
             m = masks[i]
             if m.shape[0] != H or m.shape[1] != W:
                 m = F.interpolate(

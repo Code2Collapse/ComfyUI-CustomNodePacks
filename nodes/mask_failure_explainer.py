@@ -1,4 +1,5 @@
 """
+from . import _interrupt_check as _IC
 MaskFailureExplainerMEC – Diagnose why a mask failed and suggest fixes.
 
 Input: image (B,H,W,C), mask (B,H,W) of unknown quality.
@@ -106,6 +107,7 @@ def _compute_blur_score(image: torch.Tensor) -> torch.Tensor:
         import numpy as np
         scores = []
         for i in range(luma.shape[0]):
+            _IC.check()
             gray_np = luma[i].cpu().numpy().astype(np.float64)
             scores.append(_compute_blur_score_cv2(gray_np))
         return torch.tensor(scores, device=_get_device(image), dtype=image.dtype)
@@ -142,6 +144,7 @@ def _compute_boundary_contrast(image: torch.Tensor, mask: torch.Tensor) -> torch
     B = image.shape[0]
     results = []
     for i in range(B):
+        _IC.check()
         ring_pixels = luma[i][ring[i] > 0.5]
         if ring_pixels.numel() < 2:
             results.append(0.0)
@@ -160,6 +163,7 @@ def _compute_boundary_color_confusion(image: torch.Tensor, mask: torch.Tensor) -
     B = image.shape[0]
     results = []
     for i in range(B):
+        _IC.check()
         ring_mask = ring[i] > 0.5
         inside = ring_mask & (binary[i] > 0.5)
         outside = ring_mask & (binary[i] <= 0.5)
@@ -191,6 +195,7 @@ def _compute_bg_complexity_torch(image: torch.Tensor, mask: torch.Tensor) -> tor
     bg_mask = (mask <= 0.5).float()  # (B,H,W)
     results = []
     for i in range(B):
+        _IC.check()
         bg_pixels = bg_mask[i].sum().item()
         if bg_pixels < 1:
             results.append(0.0)
@@ -208,6 +213,7 @@ def _compute_bg_complexity_cv2(image: torch.Tensor, mask: torch.Tensor) -> torch
     B = image.shape[0]
     results = []
     for i in range(B):
+        _IC.check()
         gray_np = (luma[i].cpu().numpy() * 255).astype(np.uint8)
         edges = cv2.Canny(gray_np, 50, 150)
         edge_binary = (edges > 0).astype(np.float32)
@@ -258,6 +264,7 @@ def _build_problem_heatmap(
     bg_mask = (mask <= 0.5).float()
 
     for i in range(B):
+        _IC.check()
         frame_heat = torch.zeros(H, W, device=device, dtype=image.dtype)
 
         # Dark regions contribute where brightness is low
@@ -371,6 +378,7 @@ def _build_explanation(
     issues_found = []
 
     for i in range(B):
+        _IC.check()
         frame_prefix = f"Frame {i}" if B > 1 else "Image"
         frame_issues = []
 
