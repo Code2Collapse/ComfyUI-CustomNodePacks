@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 
 # ── Optional cv2 with torch fallback ──────────────────────────────────
+from . import _progress as _PB
 try:
     import cv2
     HAS_CV2 = True
@@ -106,7 +107,7 @@ def _compute_blur_score(image: torch.Tensor) -> torch.Tensor:
     if HAS_CV2:
         import numpy as np
         scores = []
-        for i in range(luma.shape[0]):
+        for i in _PB.track(range(luma.shape[0]), luma.shape[0], "MaskFailure"):
             _IC.check()
             gray_np = luma[i].cpu().numpy().astype(np.float64)
             scores.append(_compute_blur_score_cv2(gray_np))
@@ -143,7 +144,7 @@ def _compute_boundary_contrast(image: torch.Tensor, mask: torch.Tensor) -> torch
     luma = _compute_luminance(image)  # (B,H,W)
     B = image.shape[0]
     results = []
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         ring_pixels = luma[i][ring[i] > 0.5]
         if ring_pixels.numel() < 2:
@@ -162,7 +163,7 @@ def _compute_boundary_color_confusion(image: torch.Tensor, mask: torch.Tensor) -
     binary = (mask > 0.5).float()
     B = image.shape[0]
     results = []
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         ring_mask = ring[i] > 0.5
         inside = ring_mask & (binary[i] > 0.5)
@@ -194,7 +195,7 @@ def _compute_bg_complexity_torch(image: torch.Tensor, mask: torch.Tensor) -> tor
 
     bg_mask = (mask <= 0.5).float()  # (B,H,W)
     results = []
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         bg_pixels = bg_mask[i].sum().item()
         if bg_pixels < 1:
@@ -212,7 +213,7 @@ def _compute_bg_complexity_cv2(image: torch.Tensor, mask: torch.Tensor) -> torch
     bg_mask = (mask <= 0.5).float()
     B = image.shape[0]
     results = []
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         gray_np = (luma[i].cpu().numpy() * 255).astype(np.uint8)
         edges = cv2.Canny(gray_np, 50, 150)
@@ -263,7 +264,7 @@ def _build_problem_heatmap(
     ring = _get_mask_edge_ring(mask)  # (B,H,W)
     bg_mask = (mask <= 0.5).float()
 
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         frame_heat = torch.zeros(H, W, device=device, dtype=image.dtype)
 
@@ -377,7 +378,7 @@ def _build_explanation(
 
     issues_found = []
 
-    for i in range(B):
+    for i in _PB.track(range(B), B, "MaskFailure"):
         _IC.check()
         frame_prefix = f"Frame {i}" if B > 1 else "Image"
         frame_issues = []

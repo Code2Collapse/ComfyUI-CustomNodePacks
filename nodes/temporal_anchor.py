@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 
 # ── Optional cv2 with torch fallback ──────────────────────────────────
+from . import _progress as _PB
 try:
     import cv2
     import numpy as np
@@ -128,7 +129,7 @@ def _compute_sdf_single(mask: torch.Tensor, iterations: int = 64) -> torch.Tenso
     avg_kernel = torch.ones(1, 1, 3, 3, device=device, dtype=mask.dtype) / 9.0
 
     # Iterative diffusion
-    for _ in range(iterations):
+    for _ in _PB.track(range(iterations), iterations, "TempAnchor"):
         sdf_4d = sdf.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
         sdf_padded = F.pad(sdf_4d, (1, 1, 1, 1), mode="replicate")
         smoothed = F.conv2d(sdf_padded, avg_kernel, padding=0)
@@ -151,7 +152,7 @@ def _compute_sdf_batch(masks: torch.Tensor, iterations: int = 64) -> torch.Tenso
     """Compute SDF for each mask in a batch. masks: (A, H, W) → (A, H, W) SDFs."""
     A = masks.shape[0]
     sdfs = []
-    for i in range(A):
+    for i in _PB.track(range(A), A, "TempAnchor"):
         try:
             sdf_i = _compute_sdf_single(masks[i], iterations=iterations)
         except torch.cuda.OutOfMemoryError:
@@ -183,7 +184,7 @@ def _interpolate_sdf(
     A, H, W = sdf_batch.shape
     result = torch.zeros(total_frames, H, W, device=device, dtype=sdf_batch.dtype)
 
-    for t in range(total_frames):
+    for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
         if t <= anchor_frames[0]:
             # Before or at first anchor → use first anchor's SDF
             result[t] = sdf_batch[0]
@@ -266,8 +267,8 @@ def _estimate_flow_torch(frame_a: torch.Tensor, frame_b: torch.Tensor,
     # Per-block flow
     block_flows = torch.zeros(n_blocks_h, n_blocks_w, 2, device=device, dtype=torch.float32)
 
-    for bi in range(n_blocks_h):
-        for bj in range(n_blocks_w):
+    for bi in _PB.track(range(n_blocks_h), n_blocks_h, "TempAnchor"):
+        for bj in _PB.track(range(n_blocks_w), n_blocks_w, "TempAnchor"):
             y0 = bi * bh
             x0 = bj * bw
             y1 = min(y0 + bh, H)
@@ -380,7 +381,7 @@ def _compute_confidence(anchor_frames: List[int], total_frames: int) -> List[flo
             max_half_span = 1.0
 
     confidence = []
-    for t in range(total_frames):
+    for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
         min_dist = min(abs(t - af) for af in anchor_frames)
         conf = 1.0 - (min_dist / max_half_span)
         conf = max(0.0, min(1.0, conf))
@@ -574,7 +575,7 @@ class TemporalAnchorMEC:
         # Use first anchor's dimensions as target
         target_H, target_W = H, W
         resized_masks = []
-        for i in range(A):
+        for i in _PB.track(range(A), A, "TempAnchor"):
             m = anchor_masks[i]
             if m.shape[0] != target_H or m.shape[1] != target_W:
                 m = F.interpolate(
@@ -605,7 +606,7 @@ class TemporalAnchorMEC:
                 img_H, img_W = images.shape[1], images.shape[2]
                 need_resize_flow = (img_H != target_H or img_W != target_W)
 
-                for t in range(total_frames):
+                for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
                     # Skip anchor frames — they're already exact
                     if t in anchor_frames_list:
                         continue

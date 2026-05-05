@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from . import _progress as _PB
 try:
     import cv2
     HAS_CV2 = True
@@ -286,7 +287,7 @@ def compensate_camera_motion(
 
     use_cv2 = HAS_CV2 and method in ("homography", "affine")
 
-    for i in range(1, B):
+    for i in _PB.track(range(1, B), None, "Stabilizer"):
         ref_idx = i - 1 if reference == "previous" else 0
 
         if use_cv2:
@@ -332,7 +333,7 @@ def compensate_camera_motion(
     # For 'previous' reference, compose transforms to get cumulative alignment
     if reference == "previous" and B > 2:
         cumulative = np.eye(3, dtype=np.float64)
-        for i in range(1, B):
+        for i in _PB.track(range(1, B), None, "Stabilizer"):
             if transforms[i] is not None:
                 cumulative = transforms[i] @ cumulative
                 # Re-warp from original frame using cumulative transform
@@ -446,7 +447,7 @@ def motion_adaptive_temporal_smooth(
     result = torch.zeros_like(mask)
     flat = mask.reshape(B, H * W)  # (B, HW)
 
-    for t in range(B):
+    for t in _PB.track(range(B), B, "Stabilizer"):
         _IC.check()
         sigma_t = sigmas[t]
         radius = max(1, int(math.ceil(2.5 * sigma_t)))
@@ -491,7 +492,7 @@ def smooth_bbox_trajectory(
     # Step 1: Median filter for outlier rejection
     if method in ("median", "median_then_exponential"):
         filtered = np.copy(arr)
-        for i in range(n):
+        for i in _PB.track(range(n), n, "Stabilizer"):
             start = max(0, i - window_radius)
             end = min(n, i + window_radius + 1)
             window = arr[start:end]
@@ -501,7 +502,7 @@ def smooth_bbox_trajectory(
     # Step 2: Exponential smoothing
     if method in ("exponential", "median_then_exponential"):
         smoothed = np.copy(arr)
-        for i in range(1, n):
+        for i in _PB.track(range(1, n), None, "Stabilizer"):
             smoothed[i] = alpha * arr[i] + (1.0 - alpha) * smoothed[i - 1]
         arr = smoothed
 
@@ -528,7 +529,7 @@ def compute_stable_bbox_trajectory(
 
     # Compute per-frame bboxes
     per_frame = []
-    for b in range(B):
+    for b in _PB.track(range(B), B, "Stabilizer"):
         nonzero = torch.nonzero(mask[b] > 0.5, as_tuple=False)
         if nonzero.numel() == 0:
             per_frame.append(None)
@@ -546,7 +547,7 @@ def compute_stable_bbox_trajectory(
 
     if len(valid_indices) < B:
         # Fill missing frames with nearest valid bbox
-        for i in range(B):
+        for i in _PB.track(range(B), B, "Stabilizer"):
             _IC.check()
             if per_frame[i] is None:
                 nearest = min(valid_indices, key=lambda j: abs(j - i))
@@ -576,7 +577,7 @@ def _median_filter_1d(arr: np.ndarray, radius: int) -> np.ndarray:
         return arr.copy()
     n = arr.shape[0]
     out = np.empty_like(arr)
-    for i in range(n):
+    for i in _PB.track(range(n), n, "Stabilizer"):
         s = max(0, i - radius)
         e = min(n, i + radius + 1)
         out[i] = np.median(arr[s:e], axis=0)
@@ -595,7 +596,7 @@ def _ema_lowpass(targets: np.ndarray, alpha: float,
         return targets.copy()
     out = np.empty_like(targets)
     out[0] = init_state if init_state is not None else targets[0]
-    for i in range(1, n):
+    for i in _PB.track(range(1, n), None, "Stabilizer"):
         out[i] = alpha * targets[i] + (1.0 - alpha) * out[i - 1]
     return out
 
@@ -621,7 +622,7 @@ def _spring_filter(
     pos = (init_pos if init_pos is not None else targets[0]).copy()
     vel = (init_vel if init_vel is not None else np.zeros(d, dtype=targets.dtype)).copy()
     out[0] = pos
-    for i in range(1, n):
+    for i in _PB.track(range(1, n), None, "Stabilizer"):
         acc = stiffness * (targets[i] - pos) - damping * vel
         vel = vel + acc * dt
         pos = pos + vel * dt
@@ -711,7 +712,7 @@ def compute_ronin_bbox_trajectory(
 
     # ---- 1. Per-frame raw bboxes ----
     raw: List[Optional[Tuple[float, float, float, float]]] = []
-    for b in range(B):
+    for b in _PB.track(range(B), B, "Stabilizer"):
         nz = torch.nonzero(mask[b] > 0.5, as_tuple=False)
         if nz.numel() == 0:
             raw.append(None)
@@ -734,7 +735,7 @@ def compute_ronin_bbox_trajectory(
     # Linear-interp gaps
     if len(valid) < B:
         filled: List[Tuple[float, float, float, float]] = [None] * B  # type: ignore[list-item]
-        for i in range(B):
+        for i in _PB.track(range(B), B, "Stabilizer"):
             _IC.check()
             if raw[i] is not None:
                 filled[i] = raw[i]

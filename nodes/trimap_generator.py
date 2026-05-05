@@ -17,6 +17,7 @@ import numpy as np
 from .utils import generate_trimap, compute_edge_band_np, HAS_CV2
 
 
+from . import _progress as _PB
 class TrimapGeneratorMEC:
     """Generate a trimap from a segmentation mask.
 
@@ -99,7 +100,7 @@ class TrimapGeneratorMEC:
         fg_masks = []
         unknown_masks = []
 
-        for i in range(B):
+        for i in _PB.track(range(B), B, "Trimap"):
             _IC.check()
             m = mask[i].cpu().numpy()
 

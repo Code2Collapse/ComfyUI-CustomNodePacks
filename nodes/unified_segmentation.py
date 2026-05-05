@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from . import _progress as _PB
 logger = logging.getLogger("MEC")
 
 # ── ComfyUI path helpers ──────────────────────────────────────────────
@@ -594,7 +595,7 @@ class UnifiedSegmentation:
         logger.warning("[MEC] No video propagation for %s — running per-frame.", family)
         masks_list: list[torch.Tensor] = []
         best = 0.0
-        for i in range(B):
+        for i in _PB.track(range(B), B, "UnifiedSeg"):
             _IC.check()
             m, s = self._image(
                 model, family, frames[i], pt_coords, pt_labels,
@@ -622,7 +623,7 @@ class UnifiedSegmentation:
         try:
             from PIL import Image as PILImage
 
-            for i in range(B):
+            for i in _PB.track(range(B), B, "UnifiedSeg"):
                 _IC.check()
                 arr = (frames[i].cpu().numpy() * 255).astype(np.uint8)
                 PILImage.fromarray(arr).save(
@@ -652,7 +653,7 @@ class UnifiedSegmentation:
 
             # Assemble batch
             out: list[torch.Tensor] = []
-            for i in range(B):
+            for i in _PB.track(range(B), B, "UnifiedSeg"):
                 _IC.check()
                 out.append(collected.get(i, torch.zeros(H, W, dtype=torch.float32)))
             return torch.stack(out), 1.0

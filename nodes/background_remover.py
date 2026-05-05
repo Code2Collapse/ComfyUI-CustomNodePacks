@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from PIL import Image as PILImage
 
 from .model_manager import (
+from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
@@ -119,7 +120,7 @@ class BackgroundRemoverMEC:
 
         masks = []
 
-        for i in range(B):
+        for i in _PB.track(range(B), B, "BgRemover"):
             _IC.check()
             img_np = (image[i].cpu().numpy() * 255).astype(np.uint8)
             pil_img = PILImage.fromarray(img_np[:, :, :3])
@@ -201,7 +202,7 @@ class BackgroundRemoverMEC:
             try:
                 import cv2
                 blurred = []
-                for i in range(B):
+                for i in _PB.track(range(B), B, "BgRemover"):
                     _IC.check()
                     a_np = alpha_mask[i].numpy()
                     ksize = mask_blur * 2 + 1

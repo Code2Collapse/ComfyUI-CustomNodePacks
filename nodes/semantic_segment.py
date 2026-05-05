@@ -25,6 +25,7 @@ import torch.nn.functional as F
 from PIL import Image as PILImage
 
 from .model_manager import (
+from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
@@ -183,7 +184,7 @@ class SemanticSegmentMEC:
         else:
             inf_h, inf_w = H, W
 
-        for i in range(B):
+        for i in _PB.track(range(B), B, "SemanticSeg"):
             _IC.check()
             img_np = (image[i].cpu().numpy() * 255).astype(np.uint8)
             pil_img = PILImage.fromarray(img_np[:, :, :3])

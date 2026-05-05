@@ -1,22 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Shared helper: ComfyUI green progress bar + tqdm ETA + Stop-button interrupt.
+"""Combined ComfyUI ProgressBar + tqdm + interrupt-poll wrapper.
 
-Two public APIs:
+Usage::
 
-* ``check()`` — call inside any short loop body to surface Stop clicks.
-* ``track(iterable, total=None, desc="")`` — drop-in replacement for
-  ``range(...)`` / ``enumerate(...)``. Drives the green progress fill on
-  the node UI via ``comfy.utils.ProgressBar`` AND a tqdm terminal line
-  with ETA, AND polls ``processing_interrupted`` between iterations.
+    from . import _progress as _PB
 
-All three integrations degrade to no-ops when ComfyUI / tqdm are absent
-(stand-alone tests), so this module is safe to import anywhere.
+    for x in _PB.track(iterable, total, "MyNode"):
+        ...
+
+* Drives the green progress fill on the node UI via ``comfy.utils.ProgressBar``.
+* Prints a terminal progress line with ETA via ``tqdm``.
+* Raises ``InterruptProcessingException`` when the user clicks Stop.
+
+All three integrations degrade gracefully when ComfyUI / tqdm are absent
+(e.g. unit tests), so the helper is safe to import from any module.
 """
 from __future__ import annotations
 
 from typing import Iterable, Iterator, Optional, TypeVar
 
 T = TypeVar("T")
+
+try:
+    from comfy.utils import ProgressBar as _ComfyPB  # type: ignore
+except Exception:  # noqa: BLE001
+    _ComfyPB = None  # type: ignore
 
 try:
     from comfy.model_management import (  # type: ignore
@@ -27,19 +35,9 @@ except Exception:  # noqa: BLE001
         return None
 
 try:
-    from comfy.utils import ProgressBar as _ComfyPB  # type: ignore
-except Exception:  # noqa: BLE001
-    _ComfyPB = None  # type: ignore
-
-try:
     from tqdm import tqdm as _tqdm  # type: ignore
 except Exception:  # noqa: BLE001
     _tqdm = None  # type: ignore
-
-
-def check() -> None:
-    """Raise ``InterruptProcessingException`` if the user clicked Stop."""
-    _throw()
 
 
 def track(
@@ -47,7 +45,7 @@ def track(
     total: Optional[int] = None,
     desc: str = "",
 ) -> Iterator[T]:
-    """Yield from ``iterable`` while updating UI + terminal progress."""
+    """Yield items from ``iterable`` while updating progress + interrupt poll."""
     if total is None:
         try:
             total = len(iterable)  # type: ignore[arg-type]

@@ -22,6 +22,7 @@ import gc
 import torch
 
 # ITU-R BT.709 luminance coefficients
+from . import _progress as _PB
 _BT709_R = 0.2126
 _BT709_G = 0.7152
 _BT709_B = 0.0722
@@ -228,7 +229,7 @@ class LuminanceKeyerMEC:
 
             # Per-frame stats
             frame_coverages = []
-            for i in range(B):
+            for i in _PB.track(range(B), B, "LumaKeyer"):
                 _IC.check()
                 fc = mask[i].mean().item() * 100.0
                 frame_coverages.append(f"{fc:.1f}%")

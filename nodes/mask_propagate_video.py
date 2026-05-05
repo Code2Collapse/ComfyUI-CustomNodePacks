@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 
 
+from . import _progress as _PB
 class MaskPropagateVideo:
     """Take a mask defined on a single frame and apply / propagate it
     to every frame in an image batch (video sequence)."""
@@ -110,7 +111,7 @@ class MaskPropagateVideo:
     def _fade(mask, num_frames, source_frame, start_opacity, end_opacity):
         """Linearly fade opacity across frames."""
         masks = mask.unsqueeze(0).expand(num_frames, -1, -1).clone()
-        for i in range(num_frames):
+        for i in _PB.track(range(num_frames), num_frames, "MaskPropagate"):
             _IC.check()
             if num_frames == 1:
                 alpha = start_opacity
@@ -126,7 +127,7 @@ class MaskPropagateVideo:
         masks = torch.zeros(num_frames, mask.shape[0], mask.shape[1],
                             dtype=mask.dtype, device=mask.device)
         H, W = mask.shape
-        for i in range(num_frames):
+        for i in _PB.track(range(num_frames), num_frames, "MaskPropagate"):
             _IC.check()
             if num_frames == 1:
                 scale = start_scale
@@ -168,7 +169,7 @@ class MaskPropagateVideo:
             return self._static(src_mask, B)
 
         imgs_gray = []
-        for i in range(B):
+        for i in _PB.track(range(B), B, "MaskPropagate"):
             _IC.check()
             frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -176,7 +177,7 @@ class MaskPropagateVideo:
 
         # Forward propagation
         current_mask = src_mask.cpu().numpy()
-        for i in range(source_frame + 1, B):
+        for i in _PB.track(range(source_frame + 1, B), None, "MaskPropagate"):
             flow = cv2.calcOpticalFlowFarneback(
                 imgs_gray[i-1], imgs_gray[i],
                 None, 0.5, 3, 15, 3, 5, 1.2, 0
@@ -198,7 +199,7 @@ class MaskPropagateVideo:
         # Backward propagation
         if bidirectional and source_frame > 0:
             current_mask = src_mask.cpu().numpy()
-            for i in range(source_frame - 1, -1, -1):
+            for i in _PB.track(range(source_frame - 1, -1, -1), None, "MaskPropagate"):
                 flow = cv2.calcOpticalFlowFarneback(
                     imgs_gray[i+1], imgs_gray[i],
                     None, 0.5, 3, 15, 3, 5, 1.2, 0
@@ -248,7 +249,7 @@ class MaskPropagateVideo:
             # SAM2 video predictor requires JPEG frames in a temp directory
             tmp = tempfile.mkdtemp(prefix="mec_prop_")
             try:
-                for i in range(B):
+                for i in _PB.track(range(B), B, "MaskPropagate"):
                     _IC.check()
                     frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
                     PILImage.fromarray(frame).save(
@@ -318,7 +319,7 @@ class MaskPropagateVideo:
         preview = images.clone()
         color = torch.tensor([0.0, 1.0, 0.0], device=images.device)  # green
         alpha = 0.35
-        for i in range(B):
+        for i in _PB.track(range(B), B, "MaskPropagate"):
             _IC.check()
             m = masks[i]
             if m.shape[0] != H or m.shape[1] != W:

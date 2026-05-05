@@ -26,6 +26,7 @@ from PIL import Image
 import folder_paths
 
 
+from . import _progress as _PB
 _PREVIEW_QUALITY = 80
 
 
@@ -96,7 +97,7 @@ class VideoFramePlayerMEC:
         temp_dir = folder_paths.get_temp_directory()
         previews = []
         thumb_h = max(1, int(round(H * preview_width / max(W, 1))))
-        for i in range(B):
+        for i in _PB.track(range(B), B, "FramePlayer"):
             _IC.check()
             name = f"vfp_{batch_id}_{i:05d}.jpg"
             path = os.path.join(temp_dir, name)

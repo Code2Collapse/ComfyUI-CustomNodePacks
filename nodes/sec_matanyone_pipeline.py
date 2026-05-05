@@ -28,6 +28,7 @@ import torch
 import torch.nn.functional as F
 
 from .model_manager import (
+from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
@@ -291,7 +292,7 @@ class SeCMatAnyonePipelineMEC:
         except Exception as exc:
             logger.debug("[MEC] MatAnyone2 initial step: %s", exc)
 
-        for _ in range(n_warmup):
+        for _ in _PB.track(range(n_warmup), n_warmup, "MatAnyone"):
             try:
                 core.step(first_img, first_frame_pred=True)
             except TypeError:
@@ -302,7 +303,7 @@ class SeCMatAnyonePipelineMEC:
             except Exception:
                 break
 
-        for i in range(B):
+        for i in _PB.track(range(B), B, "MatAnyone"):
             _IC.check()
             img_t = image[min(i, image.shape[0] - 1)].permute(2, 0, 1).to(device)
             m_t = mask[i].unsqueeze(0).to(device)
@@ -339,7 +340,7 @@ class SeCMatAnyonePipelineMEC:
         dev = next(model.parameters()).device
         alphas = []
 
-        for i in range(B):
+        for i in _PB.track(range(B), B, "MatAnyone"):
             _IC.check()
             img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
             mask_np = mask[i].cpu().numpy().astype(np.float32)
@@ -380,7 +381,7 @@ class SeCMatAnyonePipelineMEC:
         elif method == "guided_filter" and HAS_CV2:
             import cv2
             refined = []
-            for i in range(B):
+            for i in _PB.track(range(B), B, "MatAnyone"):
                 _IC.check()
                 img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
                 a_np = alpha[i].cpu().numpy()
@@ -393,7 +394,7 @@ class SeCMatAnyonePipelineMEC:
         elif method == "multi_scale_guided":
             from .utils import multi_scale_guided_refine
             refined = []
-            for i in range(B):
+            for i in _PB.track(range(B), B, "MatAnyone"):
                 _IC.check()
                 img_np = (image[min(i, image.shape[0] - 1)].cpu().numpy() * 255).astype(np.uint8)
                 a_np = alpha[i].cpu().numpy()
@@ -411,7 +412,7 @@ class SeCMatAnyonePipelineMEC:
     def _post_process(self, alpha, do_fill, min_size, B, H, W):
         """Fill holes and remove small regions."""
         processed = []
-        for i in range(B):
+        for i in _PB.track(range(B), B, "MatAnyone"):
             _IC.check()
             a = alpha[i].cpu().numpy()
             if do_fill:

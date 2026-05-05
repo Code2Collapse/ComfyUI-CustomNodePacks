@@ -30,6 +30,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
+from . import _progress as _PB
 try:
     import cv2
     HAS_CV2 = True
@@ -191,7 +192,7 @@ def _edge_aware_blend_mask(image: torch.Tensor, mask: torch.Tensor, radius: int)
     # Step 2: Compute Sobel edge magnitude
     edge_mag = _sobel_edges(luma)  # (B, H, W)
     # Normalize edge magnitude to [0, 1] per frame
-    for b in range(B):
+    for b in _PB.track(range(B), B, "InpaintSuite"):
         emax = edge_mag[b].max()
         if emax > 0:
             edge_mag[b] = edge_mag[b] / emax
@@ -239,7 +240,7 @@ def _build_laplacian_pyramid_torch(img: torch.Tensor, levels: int) -> List[torch
     """
     pyramid: List[torch.Tensor] = []
     current = img
-    for i in range(levels):
+    for i in _PB.track(range(levels), levels, "InpaintSuite"):
         h, w = current.shape[2], current.shape[3]
         # Downsample by 2x with Gaussian pre-filter
         down = _gaussian_blur_2d(current, sigma=1.0)
@@ -282,7 +283,7 @@ def _laplacian_pyramid_blend(img_a: torch.Tensor, img_b: torch.Tensor,
     # Build Gaussian pyramid for the mask
     mask_pyr: List[torch.Tensor] = []
     current_mask = blend_mask
-    for i in range(levels):
+    for i in _PB.track(range(levels), levels, "InpaintSuite"):
         mask_pyr.append(current_mask)
         h, w = current_mask.shape[2], current_mask.shape[3]
         current_mask = F.interpolate(current_mask, size=(max(1, h // 2), max(1, w // 2)),
@@ -382,7 +383,7 @@ def _compute_stable_bbox(mask: torch.Tensor) -> Tuple[int, int, int, int]:
         union_x_max, union_y_max = 0, 0
         any_valid = False
 
-        for b in range(B):
+        for b in _PB.track(range(B), B, "InpaintSuite"):
             x, y, w, h = _compute_bbox_single(mask[b])
             if x < 0:
                 continue
@@ -441,7 +442,7 @@ def _fill_holes_torch(mask: torch.Tensor) -> torch.Tensor:
 
     if HAS_CV2:
         results = []
-        for b in range(B):
+        for b in _PB.track(range(B), B, "InpaintSuite"):
             mask_np = binary[b].cpu().numpy().astype(np.uint8) * 255
             contours, hierarchy = cv2.findContours(
                 mask_np, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
@@ -477,11 +478,11 @@ def _remove_small_regions_torch(mask: torch.Tensor, min_area: int) -> torch.Tens
 
     if HAS_CV2:
         results = []
-        for b in range(B):
+        for b in _PB.track(range(B), B, "InpaintSuite"):
             binary = (mask[b].cpu().numpy() > 0.5).astype(np.uint8)
             n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
             filtered = np.zeros_like(binary)
-            for i in range(1, n_labels):
+            for i in _PB.track(range(1, n_labels), None, "InpaintSuite"):
                 if stats[i, cv2.CC_STAT_AREA] >= min_area:
                     filtered[labels == i] = 1
             results.append(torch.from_numpy(filtered.astype(np.float32)))
@@ -515,7 +516,7 @@ def _color_match_mean_std(source: torch.Tensor, target: torch.Tensor,
     B = source.shape[0]
     binary = (mask > 0.5).float()
 
-    for b in range(B):
+    for b in _PB.track(range(B), B, "InpaintSuite"):
         region_mask = binary[b]  # (H, W)
         if region_mask.sum() < 10:
             continue
@@ -692,7 +693,7 @@ def _resize_lanczos(image: torch.Tensor, target_h: int, target_w: int) -> torch.
     from PIL import Image as PILImage
     B, H, W, C = image.shape
     out = []
-    for i in range(B):
+    for i in _PB.track(range(B), B, "InpaintSuite"):
         _IC.check()
         arr = (image[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
         if C == 1:
@@ -879,7 +880,7 @@ class InpaintCropProMEC:
             results = []
             thresholds = [1, 0.99, 0.97, 0.95, 0.93, 0.9, 0.8, 0.7, 0.6, 0.5,
                           0.4, 0.3, 0.2, 0.1]
-            for b in range(mask.shape[0]):
+            for b in _PB.track(range(mask.shape[0]), mask.shape[0], "InpaintSuite"):
                 mask_np = mask[b].cpu().numpy()
                 for threshold in thresholds:
                     thresholded = mask_np >= threshold
@@ -894,7 +895,7 @@ class InpaintCropProMEC:
 
         # Torch-only fallback: simple binary flood-fill from borders
         filled = mask.clone()
-        for b in range(filled.shape[0]):
+        for b in _PB.track(range(filled.shape[0]), filled.shape[0], "InpaintSuite"):
             m = filled[b]
             binary = (m > 0.5).float()
             bg = torch.zeros_like(binary)
@@ -1134,7 +1135,10 @@ class InpaintCropProMEC:
             cropped_mask = torch.empty(B, ch, cw,
                                        device=device, dtype=mask.dtype)
             frame_offsets = []
-            for b, (cx, cy) in enumerate(ronin_centers):
+            for b, (cx, cy) in _PB.track(
+                list(enumerate(ronin_centers)), len(ronin_centers),
+                "InpaintCropProMEC: per-frame crop",
+            ):
                 fx = cx - cw // 2 + left_pad
                 fy = cy - ch // 2 + top_pad
                 frame_offsets.append((fx, fy))
@@ -1241,7 +1245,10 @@ class InpaintCropProMEC:
         crop_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
         if frame_offsets is not None:
             # Per-frame variable crop region (Ronin mode)
-            for b, (fx, fy) in enumerate(frame_offsets):
+            for b, (fx, fy) in _PB.track(
+                list(enumerate(frame_offsets)), len(frame_offsets),
+                "InpaintCropProMEC: build crop_mask",
+            ):
                 oy1 = max(0, fy - cto_y)
                 oy2 = min(H, fy + crop_h - cto_y)
                 ox1 = max(0, fx - cto_x)
@@ -1452,7 +1459,10 @@ class InpaintStitchProMEC:
         # Build the per-frame blend mask 4D tensor once (shared across frames).
         m3 = blend_mask_crop.unsqueeze(-1)  # (B,h,w,1)
 
-        for b, (fx, fy) in enumerate(offsets_iter):
+        for b, (fx, fy) in _PB.track(
+            list(enumerate(offsets_iter)), len(offsets_iter),
+            "InpaintStitchProMEC: paste frames",
+        ):
             canvas_crop = canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :].clone()
             inp_b = inp_resized[b:b+1]
             mask_b = m3[b:b+1] if m3.shape[0] == B else m3
@@ -1485,7 +1495,10 @@ class InpaintStitchProMEC:
         H, W = cto_h, cto_w
         blend_canvas = torch.zeros(B, canvas.shape[1], canvas.shape[2],
                                    device=device, dtype=canvas.dtype)
-        for b, (fx, fy) in enumerate(offsets_iter):
+        for b, (fx, fy) in _PB.track(
+            list(enumerate(offsets_iter)), len(offsets_iter),
+            "InpaintStitchProMEC: build blend mask",
+        ):
             blend_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w] = (
                 blend_mask_crop[b] if blend_mask_crop.shape[0] == B else blend_mask_crop[0]
             )
@@ -1750,7 +1763,7 @@ class InpaintPasteBackMEC:
             paste_mask = torch.ones(1, 1, crop_h, crop_w, device=device, dtype=torch.float32)
             paste_mask = _gaussian_blur_2d(paste_mask, sigma=feather_radius)
             paste_mask_3d = paste_mask.squeeze(0).squeeze(0).unsqueeze(-1)
-            for b in range(B):
+            for b in _PB.track(range(B), B, "InpaintSuite"):
                 orig_crop = canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
                 canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = (
                     orig_crop * (1.0 - paste_mask_3d) + inp_resized[b] * paste_mask_3d
