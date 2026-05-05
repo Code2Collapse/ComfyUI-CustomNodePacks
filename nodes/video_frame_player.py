@@ -66,6 +66,8 @@ RESIZE_METHODS = ["none", "lanczos", "bicubic", "bilinear", "area", "nearest-exa
 
 OUTPUT_MODES = ["current_frame", "all_frames"]
 
+LOOP_MODES = ["once", "loop", "ping-pong"]
+
 
 # ----------------------------------------------------------------------
 #  Resize helper
@@ -195,11 +197,30 @@ class VideoFramePlayerMEC:
                     "tooltip": "Current frame to emit on the IMAGE output. Drag the timeline to scrub."}),
                 "output_mode": (OUTPUT_MODES, {
                     "default": "current_frame",
-                    "tooltip": "current_frame: emit only the selected frame. all_frames: apply crop+resize to every frame."}),
+                    "tooltip": "current_frame: emit only the selected frame. all_frames: apply trim+stride+crop+resize to every frame."}),
+                # trim / stride / playback
+                "frame_start": ("INT", {
+                    "default": 0, "min": 0, "max": 99999, "step": 1,
+                    "tooltip": "First frame of the trim range. Drag the green marker on the timeline."}),
+                "frame_end": ("INT", {
+                    "default": -1, "min": -1, "max": 99999, "step": 1,
+                    "tooltip": "Last frame of the trim range (inclusive). -1 = last frame. Drag the red marker on the timeline."}),
+                "frame_stride": ("INT", {
+                    "default": 1, "min": 1, "max": 64, "step": 1,
+                    "tooltip": "In 'all_frames' mode, output every Nth frame within the trim range."}),
+                "playback_fps": ("FLOAT", {
+                    "default": 24.0, "min": 0.1, "max": 240.0, "step": 0.5,
+                    "tooltip": "Preview playback speed (frames per second)."}),
+                "loop_mode": (LOOP_MODES, {
+                    "default": "loop",
+                    "tooltip": "Preview playback at end of trim range: once / loop / ping-pong."}),
                 # crop
                 "crop_enabled": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Enable the drag-crop rectangle on the preview."}),
+                "crop_locked": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Lock the crop rect to prevent accidental drags. Press R on the canvas to reset."}),
                 "aspect_ratio": (list(ASPECT_PRESETS.keys()), {
                     "default": "free",
                     "tooltip": "Aspect lock. 'original' = source W:H. 'custom' = custom_aspect_w:custom_aspect_h."}),
@@ -244,23 +265,26 @@ class VideoFramePlayerMEC:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "IMAGE", "INT", "INT", "INT", "INT", "INT", "INT")
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "IMAGE", "INT", "INT", "INT", "INT", "INT", "INT", "INT", "FLOAT")
     RETURN_NAMES = (
         "frame", "frame_index", "frame_count",
         "processed", "out_width", "out_height",
         "crop_x_px", "crop_y_px", "crop_w_px", "crop_h_px",
+        "trimmed_count", "playback_fps",
     )
     OUTPUT_TOOLTIPS = (
         "Single full-resolution frame at the slider position (1,H,W,C) - pre-crop, pre-resize.",
-        "Echo of the selected frame_index (clamped to range).",
+        "Echo of the selected frame_index (clamped to trim range).",
         "Total number of frames in the input batch.",
-        "Processed output: the selected frame OR the whole batch (per output_mode), with crop + resize + upscale applied.",
+        "Processed output: the selected frame OR the trimmed/strided batch (per output_mode), with crop + resize + upscale applied.",
         "Width (px) of the processed output.",
         "Height (px) of the processed output.",
         "Crop left edge in source pixels.",
         "Crop top edge in source pixels.",
         "Crop width in source pixels.",
         "Crop height in source pixels.",
+        "Number of frames emitted on 'processed' after trim+stride (1 in current_frame mode).",
+        "Echo of playback_fps (handy as input to video savers).",
     )
     FUNCTION = "play"
     CATEGORY = "MaskEditControl/Preview"
@@ -296,7 +320,13 @@ class VideoFramePlayerMEC:
         frames: torch.Tensor,
         frame_index: int = 0,
         output_mode: str = "current_frame",
+        frame_start: int = 0,
+        frame_end: int = -1,
+        frame_stride: int = 1,
+        playback_fps: float = 24.0,
+        loop_mode: str = "loop",
         crop_enabled: bool = False,
+        crop_locked: bool = False,
         aspect_ratio: str = "free",
         custom_aspect_w: float = 16.0,
         custom_aspect_h: float = 9.0,
@@ -317,7 +347,14 @@ class VideoFramePlayerMEC:
             raise ValueError(f"VideoFramePlayerMEC: expected 4D IMAGE (B,H,W,C), got shape {tuple(frames.shape)}.")
 
         B, H, W, C = frames.shape
-        idx = max(0, min(int(frame_index), B - 1))
+
+        # trim range (inclusive). frame_end < 0 means "last frame".
+        fs = max(0, min(B - 1, int(frame_start)))
+        fe = (B - 1) if int(frame_end) < 0 else max(0, min(B - 1, int(frame_end)))
+        if fe < fs:
+            fe = fs
+        stride = max(1, int(frame_stride))
+        idx = max(fs, min(int(frame_index), fe))
 
         # preview thumbnails (cached on disk by content digest)
         digest_src = (
@@ -349,6 +386,9 @@ class VideoFramePlayerMEC:
         # backward-compat output: untouched current frame
         out_frame = frames[idx:idx + 1].clone()
 
+        # Build trimmed/strided source for 'all_frames' mode
+        trimmed = frames[fs:fe + 1:stride] if (fs > 0 or fe < B - 1 or stride > 1) else frames
+
         # crop
         cx, cy, cw, ch = float(crop_x), float(crop_y), float(crop_w), float(crop_h)
         if not crop_enabled:
@@ -362,7 +402,7 @@ class VideoFramePlayerMEC:
             cw = max(0.001, min(1.0 - cx, cw))
             ch = max(0.001, min(1.0 - cy, ch))
 
-        src = frames if output_mode == "all_frames" else out_frame
+        src = trimmed if output_mode == "all_frames" else out_frame
 
         if crop_enabled and (cx > 0.0 or cy > 0.0 or cw < 1.0 or ch < 1.0):
             processed = _apply_crop_bhwc(src, cx, cy, cw, ch)
@@ -391,7 +431,13 @@ class VideoFramePlayerMEC:
             "current_index": [idx],
             "width": [W],
             "height": [H],
+            "frame_start": [int(fs)],
+            "frame_end": [int(fe)],
+            "frame_stride": [int(stride)],
+            "playback_fps": [float(playback_fps)],
+            "loop_mode": [str(loop_mode)],
             "crop_enabled": [bool(crop_enabled)],
+            "crop_locked": [bool(crop_locked)],
             "aspect_ratio": [aspect_ratio],
             "custom_aspect_w": [float(custom_aspect_w)],
             "custom_aspect_h": [float(custom_aspect_h)],
@@ -407,6 +453,7 @@ class VideoFramePlayerMEC:
             "crop_h_px": [int(crop_h_px)],
         }
 
+        trimmed_count = int(processed.shape[0])
         return {
             "ui": ui_payload,
             "result": (
@@ -414,5 +461,6 @@ class VideoFramePlayerMEC:
                 processed, out_w, out_h,
                 int(crop_x_px), int(crop_y_px),
                 int(crop_w_px), int(crop_h_px),
+                trimmed_count, float(playback_fps),
             ),
         }

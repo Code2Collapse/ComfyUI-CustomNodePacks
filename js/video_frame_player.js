@@ -32,6 +32,7 @@ const PLAY_BTN_W = 28;
 const STATUS_H = 18;
 const CROP_HANDLE_S = 8;       // crop handle hit size (half-edge)
 const CROP_LINE_W = 1.5;
+const TRIM_HANDLE_W = 6;       // trim marker hit width on timeline
 
 const ASPECT_VALUES = {
     "free":     null,
@@ -118,6 +119,10 @@ app.registerExtension({
                 height: 0,
                 playing: false,
                 fps: 24,
+                loopMode: "loop",
+                _ppDir: 1,         // ping-pong direction
+                trimStart: 0,
+                trimEnd: 0,        // resolved later
                 _rafId: null,
                 _lastT: 0,
                 drag: null,        // null | "tl" | "crop-move" | "crop-N/S/E/W/NE/NW/SE/SW"
@@ -138,7 +143,9 @@ app.registerExtension({
 
             const setIdx = (i) => {
                 if (S.frameCount <= 0) return;
-                S.idx = Math.max(0, Math.min(S.frameCount - 1, Math.round(i)));
+                const lo = Math.max(0, S.trimStart | 0);
+                const hi = Math.min(S.frameCount - 1, S.trimEnd | 0);
+                S.idx = Math.max(lo, Math.min(hi, Math.round(i)));
                 const w = node.widgets?.find((w) => w.name === "frame_index");
                 if (w) {
                     w.value = S.idx;
@@ -147,6 +154,29 @@ app.registerExtension({
                 node._render();
                 app.graph.setDirtyCanvas(true);
             };
+
+            // trim widgets helpers
+            const getTrim = () => {
+                const fs = Number(node.widgets?.find(w => w.name === "frame_start")?.value ?? 0);
+                let fe = Number(node.widgets?.find(w => w.name === "frame_end")?.value ?? -1);
+                const total = Math.max(1, S.frameCount);
+                const lo = Math.max(0, Math.min(total - 1, fs | 0));
+                const hi = (fe < 0) ? (total - 1) : Math.max(lo, Math.min(total - 1, fe | 0));
+                return [lo, hi];
+            };
+            const setTrim = (lo, hi) => {
+                const total = Math.max(1, S.frameCount);
+                lo = Math.max(0, Math.min(total - 1, lo | 0));
+                hi = Math.max(lo, Math.min(total - 1, hi | 0));
+                const wS = node.widgets?.find(w => w.name === "frame_start");
+                const wE = node.widgets?.find(w => w.name === "frame_end");
+                if (wS) { wS.value = lo; try { wS.callback?.(lo); } catch (_) {} }
+                if (wE) { wE.value = hi; try { wE.callback?.(hi); } catch (_) {} }
+                S.trimStart = lo;
+                S.trimEnd = hi;
+                if (S.idx < lo || S.idx > hi) setIdx(Math.max(lo, Math.min(hi, S.idx)));
+            };
+            node._setTrim = setTrim;
 
             // Read crop widgets (normalized [0..1])
             const getCropNorm = () => {
@@ -171,10 +201,13 @@ app.registerExtension({
             };
             const isCropEnabled = () =>
                 !!(node.widgets?.find(w => w.name === "crop_enabled")?.value);
+            const isCropLocked = () =>
+                !!(node.widgets?.find(w => w.name === "crop_locked")?.value);
 
             node._setCropNorm = setCropNorm;
             node._getCropNorm = getCropNorm;
             node._isCropEnabled = () => isCropEnabled();
+            node._isCropLocked = () => isCropLocked();
 
             // Crop pixel rect on canvas (intersects preview rect)
             const cropPxRect = () => {
@@ -191,7 +224,7 @@ app.registerExtension({
 
             // Hit-test crop handles. Returns drag mode or null.
             const handleHit = (mx, my) => {
-                if (!isCropEnabled()) return null;
+                if (!isCropEnabled() || isCropLocked()) return null;
                 const cr = cropPxRect();
                 if (!cr) return null;
                 const hs = CROP_HANDLE_S;
@@ -289,7 +322,21 @@ app.registerExtension({
                     node._render();
                     return;
                 }
-                // Timeline
+                // Trim handles (priority over scrub)
+                if (my >= r.y && my <= r.y + r.h && mx >= r.barX) {
+                    const [lo, hi] = getTrim();
+                    const t0 = S.frameCount > 1 ? lo / (S.frameCount - 1) : 0;
+                    const t1 = S.frameCount > 1 ? hi / (S.frameCount - 1) : 1;
+                    const x0 = r.barX + t0 * r.barW;
+                    const x1 = r.barX + t1 * r.barW;
+                    if (Math.abs(mx - x0) <= TRIM_HANDLE_W) {
+                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-start"; return;
+                    }
+                    if (Math.abs(mx - x1) <= TRIM_HANDLE_W) {
+                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-end"; return;
+                    }
+                }
+                // Timeline scrub
                 if (my >= r.y && my <= r.y + r.h && mx >= r.barX) {
                     cvs.setPointerCapture(e.pointerId);
                     S.drag = "tl";
@@ -306,6 +353,16 @@ app.registerExtension({
                     setIdx(t * (S.frameCount - 1));
                     return;
                 }
+                if (S.drag === "trim-start" || S.drag === "trim-end") {
+                    const r = tlRect();
+                    const t = (mx - r.barX) / Math.max(1, r.barW);
+                    const f = Math.max(0, Math.min(S.frameCount - 1, Math.round(t * (S.frameCount - 1))));
+                    const [lo, hi] = getTrim();
+                    if (S.drag === "trim-start") setTrim(Math.min(f, hi), hi);
+                    else                          setTrim(lo, Math.max(f, lo));
+                    node._render();
+                    return;
+                }
                 if (S.drag && S.drag.startsWith("crop")) {
                     applyCropDrag(S.drag, mx, my);
                     return;
@@ -313,7 +370,8 @@ app.registerExtension({
                 // hover for cursor
                 const hit = handleHit(mx, my);
                 let cur = "default";
-                if (hit === "crop-move") cur = "move";
+                if (isCropEnabled() && isCropLocked()) cur = "not-allowed";
+                else if (hit === "crop-move") cur = "move";
                 else if (hit) {
                     const m = hit.replace("crop-", "");
                     cur = ({
@@ -321,6 +379,18 @@ app.registerExtension({
                         NE: "nesw-resize", SW: "nesw-resize",
                         NW: "nwse-resize", SE: "nwse-resize",
                     })[m] || "default";
+                } else {
+                    // trim-handle hover
+                    const r = tlRect();
+                    if (my >= r.y && my <= r.y + r.h) {
+                        const [lo, hi] = getTrim();
+                        const t0 = S.frameCount > 1 ? lo / (S.frameCount - 1) : 0;
+                        const t1 = S.frameCount > 1 ? hi / (S.frameCount - 1) : 1;
+                        const x0 = r.barX + t0 * r.barW;
+                        const x1 = r.barX + t1 * r.barW;
+                        if (Math.abs(mx - x0) <= TRIM_HANDLE_W ||
+                            Math.abs(mx - x1) <= TRIM_HANDLE_W) cur = "ew-resize";
+                    }
                 }
                 cvs.style.cursor = cur;
             });
@@ -338,9 +408,14 @@ app.registerExtension({
                 const step = e.shiftKey ? 10 : 1;
                 if (e.key === "ArrowLeft")       setIdx(S.idx - step);
                 else if (e.key === "ArrowRight") setIdx(S.idx + step);
-                else if (e.key === "Home")       setIdx(0);
-                else if (e.key === "End")        setIdx(S.frameCount - 1);
+                else if (e.key === "Home")       setIdx(S.trimStart);
+                else if (e.key === "End")        setIdx(S.trimEnd);
                 else if (e.key === " ") { S.playing = !S.playing; if (S.playing) startPlay(); else stopPlay(); }
+                else if (e.key === "r" || e.key === "R") {
+                    if (!isCropLocked()) setCropNorm(0, 0, 1, 1);
+                }
+                else if (e.key === "i" || e.key === "I") setTrim(S.idx, getTrim()[1]);  // mark IN
+                else if (e.key === "o" || e.key === "O") setTrim(getTrim()[0], S.idx);  // mark OUT
                 else handled = false;
                 if (handled) { e.preventDefault(); node._render(); }
             });
@@ -357,14 +432,28 @@ app.registerExtension({
 
             const startPlay = () => {
                 S._lastT = performance.now();
+                S._ppDir = 1;
                 const tick = (now) => {
                     if (!S.playing) return;
                     const dt = (now - S._lastT) / 1000;
-                    const advance = dt * S.fps;
+                    const advance = dt * Math.max(0.1, S.fps);
                     if (advance >= 1) {
                         S._lastT = now;
-                        let next = S.idx + Math.floor(advance);
-                        if (next >= S.frameCount) next = 0;
+                        const lo = S.trimStart | 0;
+                        const hi = S.trimEnd | 0;
+                        const span = Math.max(1, hi - lo + 1);
+                        const inc = Math.floor(advance) * (S.loopMode === "ping-pong" ? S._ppDir : 1);
+                        let next = S.idx + inc;
+                        if (S.loopMode === "once") {
+                            if (next > hi) { next = hi; S.playing = false; stopPlay(); }
+                            else if (next < lo) next = lo;
+                        } else if (S.loopMode === "ping-pong") {
+                            if (next > hi) { next = hi - (next - hi); S._ppDir = -1; if (next < lo) next = lo; }
+                            else if (next < lo) { next = lo + (lo - next); S._ppDir = 1; if (next > hi) next = hi; }
+                        } else { // loop
+                            if (next > hi) next = lo + ((next - lo) % span);
+                            else if (next < lo) next = lo;
+                        }
                         setIdx(next);
                     }
                     S._rafId = requestAnimationFrame(tick);
@@ -389,9 +478,11 @@ app.registerExtension({
             node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
 
             // Re-render whenever a crop-related widget changes from the panel
-            const watch = ["crop_enabled", "aspect_ratio",
+            const watch = ["crop_enabled", "crop_locked", "aspect_ratio",
                            "custom_aspect_w", "custom_aspect_h",
-                           "crop_x", "crop_y", "crop_w", "crop_h"];
+                           "crop_x", "crop_y", "crop_w", "crop_h",
+                           "frame_start", "frame_end", "frame_stride",
+                           "playback_fps", "loop_mode"];
             requestAnimationFrame(() => {
                 for (const wn of watch) {
                     const w = node.widgets?.find(x => x.name === wn);
@@ -405,6 +496,12 @@ app.registerExtension({
                             const [cx, cy, cw, ch] = getCropNorm();
                             const [nx, ny, nw, nh] = snapToAspect(cx, cy, cw, ch, a);
                             setCropNorm(nx, ny, nw, nh);
+                        }
+                        if (wn === "playback_fps") S.fps = Math.max(0.1, Number(v) || 24);
+                        if (wn === "loop_mode") S.loopMode = String(v || "loop");
+                        if (wn === "frame_start" || wn === "frame_end") {
+                            const [lo, hi] = getTrim();
+                            S.trimStart = lo; S.trimEnd = hi;
                         }
                         node._render?.();
                         app.graph.setDirtyCanvas(true);
@@ -424,6 +521,10 @@ app.registerExtension({
             S.idx = Math.max(0, Math.min(S.frameCount - 1, msg.current_index?.[0] ?? S.idx));
             S.width = msg.width?.[0] ?? 0;
             S.height = msg.height?.[0] ?? 0;
+            S.trimStart = msg.frame_start?.[0] ?? 0;
+            S.trimEnd = msg.frame_end?.[0] ?? (S.frameCount - 1);
+            S.fps = Math.max(0.1, Number(msg.playback_fps?.[0] ?? 24));
+            S.loopMode = String(msg.loop_mode?.[0] ?? "loop");
 
             // Sync server-snapped crop back to widgets
             if (typeof msg.crop_x?.[0] === "number") {
@@ -520,9 +621,11 @@ app.registerExtension({
 
                 // Border
                 ctx.save();
-                ctx.strokeStyle = "#5bf";
+                ctx.strokeStyle = this._isCropLocked?.() ? "#f80" : "#5bf";
                 ctx.lineWidth = CROP_LINE_W;
+                if (this._isCropLocked?.()) ctx.setLineDash([6, 4]);
                 ctx.strokeRect(cr.x + 0.5, cr.y + 0.5, cr.w - 1, cr.h - 1);
+                ctx.setLineDash([]);
 
                 // Rule-of-thirds guides
                 ctx.strokeStyle = "rgba(91,255,255,0.35)";
@@ -534,22 +637,24 @@ app.registerExtension({
                     ctx.beginPath(); ctx.moveTo(cr.x, ty); ctx.lineTo(cr.x + cr.w, ty); ctx.stroke();
                 }
 
-                // Handles
-                ctx.fillStyle = "#fff";
-                ctx.strokeStyle = "#222";
-                ctx.lineWidth = 1;
-                const drawHandle = (hx, hy) => {
-                    ctx.fillRect(hx - CROP_HANDLE_S/2, hy - CROP_HANDLE_S/2, CROP_HANDLE_S, CROP_HANDLE_S);
-                    ctx.strokeRect(hx - CROP_HANDLE_S/2 + 0.5, hy - CROP_HANDLE_S/2 + 0.5, CROP_HANDLE_S - 1, CROP_HANDLE_S - 1);
-                };
-                drawHandle(cr.x, cr.y);
-                drawHandle(cr.x + cr.w, cr.y);
-                drawHandle(cr.x, cr.y + cr.h);
-                drawHandle(cr.x + cr.w, cr.y + cr.h);
-                drawHandle(cr.x + cr.w / 2, cr.y);
-                drawHandle(cr.x + cr.w / 2, cr.y + cr.h);
-                drawHandle(cr.x, cr.y + cr.h / 2);
-                drawHandle(cr.x + cr.w, cr.y + cr.h / 2);
+                // Handles (suppressed when locked)
+                if (!this._isCropLocked?.()) {
+                    ctx.fillStyle = "#fff";
+                    ctx.strokeStyle = "#222";
+                    ctx.lineWidth = 1;
+                    const drawHandle = (hx, hy) => {
+                        ctx.fillRect(hx - CROP_HANDLE_S/2, hy - CROP_HANDLE_S/2, CROP_HANDLE_S, CROP_HANDLE_S);
+                        ctx.strokeRect(hx - CROP_HANDLE_S/2 + 0.5, hy - CROP_HANDLE_S/2 + 0.5, CROP_HANDLE_S - 1, CROP_HANDLE_S - 1);
+                    };
+                    drawHandle(cr.x, cr.y);
+                    drawHandle(cr.x + cr.w, cr.y);
+                    drawHandle(cr.x, cr.y + cr.h);
+                    drawHandle(cr.x + cr.w, cr.y + cr.h);
+                    drawHandle(cr.x + cr.w / 2, cr.y);
+                    drawHandle(cr.x + cr.w / 2, cr.y + cr.h);
+                    drawHandle(cr.x, cr.y + cr.h / 2);
+                    drawHandle(cr.x + cr.w, cr.y + cr.h / 2);
+                }
                 ctx.restore();
 
                 // Crop dim text
@@ -574,7 +679,14 @@ app.registerExtension({
             ctx.font = "11px sans-serif";
             ctx.textAlign = "left";
             ctx.textBaseline = "top";
-            const statusTxt = `Frame ${S.idx + 1} / ${S.frameCount}   ${S.width}x${S.height}   ${S.fps} fps`;
+            const stride = Number(this.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
+            const trimSpan = Math.max(0, S.trimEnd - S.trimStart + 1);
+            const emit = Math.max(1, Math.ceil(trimSpan / Math.max(1, stride)));
+            const statusTxt = `Frame ${S.idx + 1} / ${S.frameCount}   ${S.width}x${S.height}   ` +
+                              `${S.fps.toFixed(1)} fps   ${S.loopMode}   ` +
+                              `trim ${S.trimStart}-${S.trimEnd}` +
+                              (stride > 1 ? ` /${stride}` : "") +
+                              `  -> ${emit}f`;
             ctx.fillText(statusTxt, 12, 4);
             ctx.restore();
 
@@ -639,6 +751,41 @@ app.registerExtension({
             ctx.strokeStyle = "#5bf";
             ctx.lineWidth = 2;
             ctx.stroke();
+
+            // Trim region overlay + markers
+            if (S.frameCount > 0) {
+                const t0 = S.frameCount > 1 ? S.trimStart / (S.frameCount - 1) : 0;
+                const t1 = S.frameCount > 1 ? S.trimEnd / (S.frameCount - 1) : 1;
+                const x0 = tl.barX + t0 * tl.barW;
+                const x1 = tl.barX + t1 * tl.barW;
+                // Dim outside trim
+                ctx.save();
+                ctx.fillStyle = "rgba(0,0,0,0.5)";
+                if (x0 > tl.barX) ctx.fillRect(tl.barX, tl.y, x0 - tl.barX, tl.h);
+                if (x1 < tl.barX + tl.barW) ctx.fillRect(x1, tl.y, (tl.barX + tl.barW) - x1, tl.h);
+                // Trim band on track
+                ctx.fillStyle = "rgba(120,220,120,0.18)";
+                ctx.fillRect(x0, trackY - 6, x1 - x0, 12);
+                // Start marker (green) + end marker (red)
+                ctx.fillStyle = "#5d5";
+                ctx.fillRect(x0 - 2, tl.y + 2, 3, tl.h - 4);
+                ctx.fillStyle = "#e55";
+                ctx.fillRect(x1 - 1, tl.y + 2, 3, tl.h - 4);
+                // tiny grip dots
+                ctx.fillStyle = "#fff";
+                ctx.fillRect(x0 - 1, tl.y + tl.h / 2 - 1, 1, 2);
+                ctx.fillRect(x1, tl.y + tl.h / 2 - 1, 1, 2);
+                // Stride visualisation
+                const stride = Number(this.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
+                if (stride > 1 && S.frameCount > 1) {
+                    ctx.fillStyle = "#fc6";
+                    for (let f = S.trimStart; f <= S.trimEnd; f += stride) {
+                        const tx = tl.barX + (f / (S.frameCount - 1)) * tl.barW;
+                        ctx.fillRect(tx - 0.5, trackY - 8, 1, 4);
+                    }
+                }
+                ctx.restore();
+            }
         };
 
         const _onRemoved = nodeType.prototype.onRemoved;
