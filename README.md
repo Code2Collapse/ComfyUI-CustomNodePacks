@@ -149,6 +149,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [EXR I/O](docs/exr-io.md) | 2 | Load and save OpenEXR with imageio + TIFF fallback chain |
 | [Render Passes](docs/render-pass.md) | 2 | Merge beauty + AO/diffuse/spec/emission, depth→CoC mask |
 | [Plate Tools](docs/plate-tools.md) | 4 | Grain match, plate stabilizer (ORB/FFT), clean-plate extractor, difference matte |
+| [Video Frame Player](docs/video-frame-player.md) | 1 | In-graph scrubber + drag-crop (8 handles, aspect-lock) + trim range + frame-stride + lanczos resize/upscale, all in one node |
 
 ---
 
@@ -867,6 +868,28 @@ Per-frame motion detection with 4 independent methods and camera stabilization. 
 ---
 
 ### Preview
+
+#### Video Frame Player (MEC)
+
+In-graph video scrubber with drag-crop overlay, trim range, frame stride,
+lanczos resize, and upscale — all in one node so you don't have to chain
+`Load → Trim → Crop → Resize → Preview`. Plays inside the node, supports
+play/pause + ping-pong loop + I/O hotkeys (mark IN/OUT), and emits the
+trimmed/cropped/resized batch ready to feed a sampler.
+
+| Group | Highlights |
+|-------|------------|
+| **Source** | `frames`, `frame_index`, `output_mode` (current_frame / all_frames) |
+| **Trim & playback** | `frame_start`/`frame_end` (drag green/red markers on the timeline), `frame_stride` (orange ticks), `playback_fps`, `loop_mode` (once/loop/ping-pong) |
+| **Crop** | `crop_enabled`, `crop_locked`, `aspect_ratio` (free / 1:1 / 4:3 / 3:4 / 16:9 / 9:16 / 2:1 / 21:9 / original / custom), `crop_x/y/w/h` set by drag overlay (8 handles + interior move, dim outside, rule-of-thirds guides, live W×H readout) |
+| **Resize** | `resize_method` (none / lanczos / bicubic / bilinear / area / nearest-exact), `target_width`, `target_height`, `upscale_factor` |
+| **Outputs** | `frame`, `frame_index`, `frame_count`, `processed`, `out_width`, `out_height`, `crop_x_px`, `crop_y_px`, `crop_w_px`, `crop_h_px`, `trimmed_count`, `playback_fps` |
+
+**Hotkeys** (canvas focused): `Space` play/pause, `←/→` step ±1 (Shift = ±10), `Home/End` jump to trim bounds, `I/O` mark IN/OUT at current frame, `R` reset crop to full frame.
+
+Full parameter table, pipeline order, and recipes (TikTok 9:16, half-rate stride, 2× lanczos upscale, hero-frame img2img): see [docs/video-frame-player.md](docs/video-frame-player.md).
+
+---
 
 #### Mask Preview Overlay (MEC)
 
