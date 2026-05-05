@@ -3,22 +3,35 @@
 // Captures EVERY widget value, plus the originating custom-node pack
 // (python_module + display_name + best-effort GitHub URL discovered via
 // ComfyUI-Manager's mapping endpoints). On paste:
-//   1. Recreates nodes with positions, sizes, colours, properties.
+//   1. Recreates nodes with positions, sizes, colours, properties, AND
+//      widget->input conversions (the `inputs` array preserves which
+//      widgets were converted to sockets). Done by replaying the same
+//      serialize()/configure() format ComfyUI itself uses to save a
+//      workflow, so anything that round-trips through Save/Load also
+//      round-trips through MEC clipboard.
 //   2. Re-wires intra-selection links.
 //   3. Detects node types that don't exist on the target install,
 //      gathers the unique missing packs, and shows a modal that lets
 //      the user install them via ComfyUI-Manager (if installed) or
 //      copy the GitHub clone URLs.
 //
-// Three tiers of access (kept from previous version, enriched per
-// ComfyUI-Doctor's "give the user actionable next steps" philosophy):
-//   1. Keyboard:           Ctrl+Alt+C / Ctrl+Alt+V
-//   2. Canvas right-click: "MEC: Copy / Paste node(s)"
-//   3. Node right-click:   "MEC: Copy with metadata"
+// Bindings (coexists with native LiteGraph clipboard):
+//   * Ctrl+C / Ctrl+V on canvas               -> mirrored: native runs
+//                                                AND we mirror enriched
+//                                                JSON to OS clipboard.
+//                                                On paste we prefer MEC
+//                                                payload if present;
+//                                                else native runs.
+//   * Ctrl+Alt+C / Ctrl+Alt+V                  -> explicit MEC-only
+//                                                (forces our path even
+//                                                if native would also
+//                                                fire).
+//   * Canvas right-click & node right-click    -> menu entries.
 
 import { app } from "../../scripts/app.js";
 
-const CLIP_HEADER  = "# MEC.clipboard 1.1";
+const CLIP_VERSION = "1.2";
+const CLIP_HEADER  = `# MEC.clipboard ${CLIP_VERSION}`;
 const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
 
 // -----------------------------------------------------------------------
@@ -123,29 +136,34 @@ function _selectedNodes() {
 }
 
 function _serializeNode(n, provenance) {
-    const widgets = {};
-    for (const w of n.widgets || []) {
-        if (!w.name || w.value === undefined) continue;
-        let v = w.value;
-        try {
-            if (typeof w.serializeValue === "function") {
-                v = w.serializeValue(n, n.widgets.indexOf(w));
-            }
-            JSON.stringify(v);
-        } catch (_) { continue; }
-        widgets[w.name] = v;
+    // Use LiteGraph's own serialize() — the exact same format ComfyUI
+    // writes when you Save the workflow. This preserves:
+    //   - widgets_values (canonical array, in the order the node expects)
+    //   - inputs[]  (incl. widget->input conversions: each converted
+    //               input has a `widget: { name }` field)
+    //   - outputs[], mode, order, type, size, pos, color, bgcolor,
+    //     properties, flags, title.
+    // Custom widgets (e.g. KJNodes color picker) implement their own
+    // serializeValue(), which serialize() invokes — so `pad_color` ends
+    // up as the string the node actually expects ("0, 0, 0"), not the
+    // raw widget object.
+    let core;
+    try {
+        core = n.serialize();
+    } catch (e) {
+        console.warn("[MEC.clipboard] node.serialize() failed:", e);
+        core = {
+            id: n.id, type: n.comfyClass || n.type,
+            pos: n.pos, size: n.size,
+            properties: n.properties, flags: n.flags,
+        };
     }
     return {
-        id: n.id,
-        type: n.comfyClass || n.type,
+        ...core,
+        // Mirror our explicit fields on top — harmless duplicates that
+        // make the JSON readable and let older paste code keep working.
+        type: n.comfyClass || core.type,
         title: n.title,
-        pos: [Math.round(n.pos?.[0] ?? 0), Math.round(n.pos?.[1] ?? 0)],
-        size: n.size ? [Math.round(n.size[0]), Math.round(n.size[1])] : undefined,
-        color: n.color,
-        bgcolor: n.bgcolor,
-        flags: n.flags,
-        properties: n.properties,
-        widgets,
         provenance: provenance || null,
     };
 }
@@ -181,7 +199,7 @@ async function _gatherSubgraph(nodes) {
         };
     }
     return {
-        version: "1.1",
+        version: CLIP_VERSION,
         created: new Date().toISOString(),
         nodes: out_nodes,
         links: out_links,
@@ -385,26 +403,57 @@ async function _paste() {
     for (const nd of data.nodes) {
         const node = LiteGraph.createNode(nd.type);
         if (!node) { skipped++; continue; }
-        if (originX === null) { originX = nd.pos[0]; originY = nd.pos[1]; }
-        node.pos = [
-            cursor[0] + (nd.pos[0] - originX),
-            cursor[1] + (nd.pos[1] - originY),
+
+        // Add to graph FIRST so the node has a real id and ComfyUI can
+        // run its onNodeCreated hooks (which create widgets, sockets,
+        // and any pack-specific scaffolding the configure() step relies
+        // on).
+        app.graph.add(node);
+
+        // Compute paste anchor offset.
+        const srcPos = Array.isArray(nd.pos) ? nd.pos : [0, 0];
+        if (originX === null) { originX = srcPos[0]; originY = srcPos[1]; }
+        const dstPos = [
+            cursor[0] + (srcPos[0] - originX),
+            cursor[1] + (srcPos[1] - originY),
         ];
+
+        // configure() is LiteGraph's own load-from-workflow method. It
+        // applies widgets_values (the canonical ordered array), the
+        // inputs[] array (preserving widget->input conversions like the
+        // blue dots beside `width`/`height` on KJNodes' Resize), the
+        // outputs[] array, properties, flags, mode, and size. We strip
+        // id/pos so the new node gets a fresh id and our paste anchor.
+        const cfg = { ...nd };
+        delete cfg.id;
+        delete cfg.provenance;     // not part of LGraph schema
+        delete cfg.pos;
+        try {
+            if (typeof node.configure === "function") {
+                node.configure(cfg);
+            } else {
+                // Defensive fallback (shouldn't trigger in modern ComfyUI).
+                if (Array.isArray(cfg.widgets_values) && node.widgets) {
+                    cfg.widgets_values.forEach((v, i) => {
+                        const w = node.widgets[i];
+                        if (!w) return;
+                        try { w.value = v; w.callback?.(v, app.canvas, node); }
+                        catch (_) {}
+                    });
+                }
+            }
+        } catch (err) {
+            console.warn("[MEC.clipboard] configure() failed for", nd.type, err);
+        }
+
+        // Apply paste anchor + cosmetic fields AFTER configure so they
+        // win over any defaults configure() might restore.
+        node.pos = dstPos;
         if (nd.title) node.title = nd.title;
         if (nd.color) node.color = nd.color;
         if (nd.bgcolor) node.bgcolor = nd.bgcolor;
-        if (nd.flags) node.flags = { ...(node.flags || {}), ...nd.flags };
-        if (nd.properties) node.properties = { ...(node.properties || {}), ...nd.properties };
-        app.graph.add(node);
         if (Array.isArray(nd.size)) node.size = [nd.size[0], nd.size[1]];
-        for (const [wname, wval] of Object.entries(nd.widgets || {})) {
-            const w = (node.widgets || []).find((x) => x.name === wname);
-            if (!w) continue;
-            try {
-                w.value = wval;
-                w.callback?.(wval, app.canvas, node);
-            } catch (err) { console.warn("[MEC.clipboard] widget set failed:", wname, err); }
-        }
+
         idMap[nd.id] = node;
     }
     for (const l of data.links || []) {
@@ -428,19 +477,83 @@ async function _paste() {
 // -----------------------------------------------------------------------
 // 3-tier wiring (keyboard + canvas menu + node menu)
 // -----------------------------------------------------------------------
-window.addEventListener("keydown", (ev) => {
-    if (!ev.ctrlKey || !ev.altKey || ev.shiftKey) return;
+//
+// Native LiteGraph already binds Ctrl+C / Ctrl+V on the canvas via its
+// own clipboard. We coexist with it instead of replacing it:
+//
+//   * Ctrl+C  -> let native run (it does in-process clipboard + same-tab
+//                paste); ALSO mirror our enriched JSON into the OS
+//                clipboard so cross-machine + cross-tab paste works.
+//   * Ctrl+V  -> peek at the OS clipboard FIRST. If it carries an MEC
+//                payload (`# MEC.clipboard X.Y` header) we run our
+//                paste path (preventDefault so native doesn't double-
+//                paste). Otherwise we don't preventDefault, so native
+//                handles it normally.
+//   * Ctrl+Alt+C / Ctrl+Alt+V -> explicit MEC-only path (always ours).
+//
+function _eventInTextField(ev) {
     const t = ev.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    return !!(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable));
+}
+
+function _eventOnCanvas(ev) {
+    // Keydown's target is usually <body>; fall back to checking the
+    // active canvas element ComfyUI uses.
+    const t = ev.target;
+    if (t?.tagName === "CANVAS") return true;
+    if (t === document.body || t === document.documentElement) {
+        return !!app.canvas?.canvas;
+    }
+    return false;
+}
+
+window.addEventListener("keydown", async (ev) => {
+    if (!ev.ctrlKey && !ev.metaKey) return;
+    if (ev.shiftKey) return;
+    if (_eventInTextField(ev)) return;
+    if (!_eventOnCanvas(ev)) return;
     const k = ev.key.toLowerCase();
-    if (k === "c") { ev.preventDefault(); _copy(); }
-    else if (k === "v") { ev.preventDefault(); _paste(); }
-});
+
+    // Explicit MEC-only path (Ctrl+Alt+C / Ctrl+Alt+V).
+    if (ev.altKey) {
+        if (k === "c") { ev.preventDefault(); _copy(); }
+        else if (k === "v") { ev.preventDefault(); _paste(); }
+        return;
+    }
+
+    // Plain Ctrl+C: mirror to OS clipboard. Don't preventDefault so the
+    // native LiteGraph clipboard also captures (keeps same-tab paste
+    // identical to today). Mirror is best-effort; failures are silent.
+    if (k === "c") {
+        const nodes = _selectedNodes();
+        if (!nodes.length) return;
+        try {
+            const payload = await _gatherSubgraph(nodes);
+            const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
+            await navigator.clipboard.writeText(text);
+        } catch (_) { /* native still ran */ }
+        return;
+    }
+
+    // Plain Ctrl+V: prefer MEC payload if the OS clipboard carries one,
+    // else let native handle it.
+    if (k === "v") {
+        let text = "";
+        try { text = await navigator.clipboard.readText(); }
+        catch (_) { return; /* permission denied -> native handles it */ }
+        if (HEADER_REGEX.test(text || "")) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            _paste();
+        }
+        // else: don't preventDefault, native paste runs.
+    }
+}, true);  // capture phase so we beat LiteGraph's listener for MEC payloads
 
 app.registerExtension({
     name: "MEC.Clipboard",
     async setup() {
-        console.log("[MEC.clipboard] portable JSON copy/paste with provenance loaded (Ctrl+Alt+C / Ctrl+Alt+V)");
+        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 Ctrl+C / Ctrl+V (mirrored with native), Ctrl+Alt+C/V (MEC-only)");
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 
@@ -448,8 +561,8 @@ app.registerExtension({
         LGraphCanvas.prototype.getCanvasMenuOptions = function () {
             const opts = origMenu.apply(this, arguments) || [];
             opts.push(null);
-            opts.push({ content: "MEC: Copy node(s) with metadata (Ctrl+Alt+C)", callback: () => _copy() });
-            opts.push({ content: "MEC: Paste node(s) from clipboard (Ctrl+Alt+V)", callback: _paste });
+            opts.push({ content: "MEC: Copy node(s) with metadata (Ctrl+C / Ctrl+Alt+C)", callback: () => _copy() });
+            opts.push({ content: "MEC: Paste node(s) from clipboard (Ctrl+V / Ctrl+Alt+V)", callback: _paste });
             return opts;
         };
         const origNodeMenu = LGraphCanvas.prototype.getNodeMenuOptions;
