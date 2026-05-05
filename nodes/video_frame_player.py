@@ -2,8 +2,8 @@
 
 Originally a frame scrubber. Extended with:
   - Aspect ratio presets (free / 1:1 / 4:3 / 3:4 / 16:9 / 9:16 / 2:1 / 21:9 / custom / original)
-  - Drag-crop overlay on the player canvas (Olm-DragCrop style; aspect-locked
-    when a preset is selected; resize via 8 handles, move by dragging inside)
+  - Drag-crop overlay on the player canvas (8 handles + interior drag,
+    aspect-locked snap, dim-overlay, rule-of-thirds guides)
   - Integrated resize with lanczos / bicubic / bilinear / area / nearest-exact
   - Optional upscale factor on top of the resize
   - Output modes: 'current_frame' (single frame) or 'all_frames' (whole batch
@@ -12,6 +12,17 @@ Originally a frame scrubber. Extended with:
 All operations are pure tensor ops. Crop is normalized in [0,1] so values
 survive resolution swaps. Aspect-lock is enforced both client-side (drag)
 and server-side (snap final crop to preset).
+
+UX inspiration (no code copied — clean-room implementation, see NOTICE.md):
+  - Olm DragCrop (Olli Sorjonen, https://github.com/o-l-l-i/ComfyUI-Olm-DragCrop)
+    popularised the in-node drag-rectangle crop UX. Its licence is
+    source-available / not OSS, so its code cannot be vendored; this
+    implementation was written independently using standard HTML5 canvas
+    drag-handle patterns.
+  - WhatDreamsCost-ComfyUI 'Load Video UI' (Jonathan Watkins,
+    https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI) is GPL-3.0;
+    its widget layout inspired this node's widget set. No GPL source was
+    copied — both the widget definitions and the canvas overlay are original.
 """
 
 from __future__ import annotations

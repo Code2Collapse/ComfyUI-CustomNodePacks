@@ -5,11 +5,24 @@ import { api } from "../../scripts/api.js";
  * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
  *
  *  - Scrubber: drag/click timeline to scrub; arrows = step frames; space = play.
- *  - Crop: when crop_enabled is true, an Olm-DragCrop style rectangle is drawn
- *    on the preview. 4 corner + 4 edge handles resize; drag inside to move.
+ *  - Crop: when crop_enabled is true, a drag-rectangle is drawn on the
+ *    preview. 4 corner + 4 edge handles resize; drag inside to move.
  *    Aspect-lock kicks in when aspect_ratio != 'free'.
  *  - All crop math is clamped to the preview rect so the rectangle CAN'T
  *    scroll outside the canvas border.
+ *
+ * UX inspiration (no code copied - clean-room implementation, see NOTICE.md):
+ *   - Olm DragCrop by Olli Sorjonen (source-available, not OSS):
+ *     https://github.com/o-l-l-i/ComfyUI-Olm-DragCrop
+ *     popularised the in-node drag-rectangle crop UX. Its licence
+ *     prohibits redistribution, so its code is NOT used here; this
+ *     overlay is written independently using standard HTML5 canvas
+ *     drag-handle patterns (8-handle hit-test, aspect-anchor opposite
+ *     corner, dim overlay, rule-of-thirds guides).
+ *   - WhatDreamsCost-ComfyUI 'Load Video UI' by Jonathan Watkins (GPL-3.0):
+ *     https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI
+ *     inspired the trim/timeline+resize widget layout. No GPL source
+ *     was copied (would be incompatible with this pack's MIT licence).
  */
 
 const TL_H = 36;       // timeline bar height

@@ -229,3 +229,46 @@ The full upstream LICENSE file is preserved at
 All Python source files in `nodes/` are original work by Code2Collapse, written
 as ComfyUI node wrappers that call into the above upstream models and
 libraries. No source code was copied verbatim from any of the above projects.
+
+---
+
+## UX / Design Inspirations (no code copied)
+
+The following projects inspired the **interaction design** of certain widgets
+in this pack. **No source code, assets, or literal expression was copied**
+from either project. The implementations in `nodes/video_frame_player.py` and
+`js/video_frame_player.js` are original, clean-room code written from scratch
+using common HTML5 canvas patterns (8-handle drag-resize, aspect-locked snap,
+dim-overlay, rule-of-thirds guides). Listed here purely to credit the
+upstream UX ideas that prompted the feature requests.
+
+### A. Olm DragCrop — Olli Sorjonen (`@o-l-l-i`)
+
+- Repository: <https://github.com/o-l-l-i/ComfyUI-Olm-DragCrop>
+- Author: Olli Sorjonen
+- License: **Source-available, NOT open-source.** Per the upstream README:
+  > "Redistribution, resale, rebranding, or claiming authorship of this code
+  > or extension is strictly prohibited without explicit written permission."
+- **Compatibility note:** Olm DragCrop's licence prohibits redistribution
+  without written permission, so its code **cannot** be vendored or copied
+  into this MIT-licensed pack. The drag-rectangle UX in
+  `VideoFramePlayerMEC` was implemented independently. Credit goes to Olli
+  Sorjonen for popularising the in-node drag-crop UX pattern in the ComfyUI
+  ecosystem.
+
+### B. WhatDreamsCost-ComfyUI — Jonathan Watkins (`@WhatDreamsCost`)
+
+- Repository: <https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI>
+- Author: Jonathan Watkins
+- License: **GPL-3.0** (strong copyleft).
+- **Compatibility note:** GPL-3.0 is **incompatible** with this project's
+  MIT licence for the purposes of code incorporation — including any GPL
+  source into this repo would force the entire repo to GPL-3.0. The
+  "Load Video UI" node's *layout idea* (timeline + trim handles + resize
+  method combo + custom width/height + frame-rate widgets) inspired the
+  widget layout of `VideoFramePlayerMEC`, but the code is original. No
+  GPL-3.0 source was copied, vendored, or executed during development.
+
+If you wish to use Olm DragCrop or WhatDreamsCost-ComfyUI directly, please
+install them as separate ComfyUI custom-node packs from their official
+repositories above, where their respective licences apply.
