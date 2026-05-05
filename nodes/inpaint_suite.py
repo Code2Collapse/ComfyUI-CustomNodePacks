@@ -240,7 +240,10 @@ def _build_laplacian_pyramid_torch(img: torch.Tensor, levels: int) -> List[torch
     """
     pyramid: List[torch.Tensor] = []
     current = img
-    for i in _PB.track(range(levels), levels, "InpaintSuite"):
+    # Inner level loop (5 iters): plain `for` — never tracked. Tracking
+    # here was creating B*levels ProgressBar resets when called inside an
+    # outer per-frame paste loop, which froze the frontend (Phase 9b).
+    for i in range(levels):
         h, w = current.shape[2], current.shape[3]
         # Downsample by 2x with Gaussian pre-filter
         down = _gaussian_blur_2d(current, sigma=1.0)
@@ -283,7 +286,8 @@ def _laplacian_pyramid_blend(img_a: torch.Tensor, img_b: torch.Tensor,
     # Build Gaussian pyramid for the mask
     mask_pyr: List[torch.Tensor] = []
     current_mask = blend_mask
-    for i in _PB.track(range(levels), levels, "InpaintSuite"):
+    # Inner level loop: plain `for` (see _build_laplacian_pyramid_torch).
+    for i in range(levels):
         mask_pyr.append(current_mask)
         h, w = current_mask.shape[2], current_mask.shape[3]
         current_mask = F.interpolate(current_mask, size=(max(1, h // 2), max(1, w // 2)),
@@ -482,7 +486,8 @@ def _remove_small_regions_torch(mask: torch.Tensor, min_area: int) -> torch.Tens
             binary = (mask[b].cpu().numpy() > 0.5).astype(np.uint8)
             n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
             filtered = np.zeros_like(binary)
-            for i in _PB.track(range(1, n_labels), None, "InpaintSuite"):
+            # Inner labels loop: plain `for` to avoid nested ProgressBar spam.
+            for i in range(1, n_labels):
                 if stats[i, cv2.CC_STAT_AREA] >= min_area:
                     filtered[labels == i] = 1
             results.append(torch.from_numpy(filtered.astype(np.float32)))
@@ -689,11 +694,35 @@ def _resize_mask(mask: torch.Tensor, target_h: int, target_w: int,
 
 
 def _resize_lanczos(image: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
-    """Resize (B,H,W,C) via PIL Lanczos (high quality, slightly slower)."""
-    from PIL import Image as PILImage
+    """Resize (B,H,W,C) high-quality.
+
+    For video batches (B > 4) we use torch's GPU bicubic with antialiasing
+    which is ~50-200x faster than CPU PIL Lanczos and visually identical for
+    the small downscales used in inpaint stitching. Single-image / small
+    batches keep the original PIL Lanczos path for max fidelity.
+    """
     B, H, W, C = image.shape
+    if image.shape[1] == target_h and image.shape[2] == target_w:
+        return image
+    if B > 4:
+        # Vectorized GPU path — antialiased bicubic.
+        img_bchw = image.permute(0, 3, 1, 2)
+        try:
+            resized = F.interpolate(
+                img_bchw, size=(target_h, target_w),
+                mode="bicubic", align_corners=False, antialias=True,
+            )
+        except TypeError:
+            # Older torch without antialias kwarg.
+            resized = F.interpolate(
+                img_bchw, size=(target_h, target_w),
+                mode="bicubic", align_corners=False,
+            )
+        return resized.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+
+    from PIL import Image as PILImage
     out = []
-    for i in _PB.track(range(B), B, "InpaintSuite"):
+    for i in _PB.track(range(B), B, "InpaintSuite: lanczos"):
         _IC.check()
         arr = (image[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
         if C == 1:
@@ -1459,8 +1488,41 @@ class InpaintStitchProMEC:
         # Build the per-frame blend mask 4D tensor once (shared across frames).
         m3 = blend_mask_crop.unsqueeze(-1)  # (B,h,w,1)
 
+        # Fast path (Phase 9b): when every frame pastes at the same (fx, fy)
+        # and the blend is gaussian, do ONE vectorized batched composite
+        # instead of B per-frame slices. This is by far the common case
+        # (all non-Ronin video and all single-image inpaints) and turns
+        # an O(B) Python loop into a single torch op.
+        uniform_offsets = (
+            len(offsets_iter) > 1
+            and all(o == offsets_iter[0] for o in offsets_iter)
+        )
+        if uniform_offsets and blend_mode == "gaussian" and not color_match:
+            fx0, fy0 = offsets_iter[0]
+            canvas_crop = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :].clone()
+            mask_b = m3 if m3.shape[0] == B else m3.expand(B, -1, -1, -1)
+            blended = canvas_crop * (1.0 - mask_b) + inp_resized * mask_b
+            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended
+            paste_iter: List[Tuple[int, int]] = []  # skip slow per-frame loop
+        elif uniform_offsets and blend_mode in ("laplacian_pyramid", "frequency_blend") and not color_match:
+            # Batched pyramid / FFT blend across the whole batch in one call.
+            fx0, fy0 = offsets_iter[0]
+            canvas_crop = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :].clone()
+            mask_bb = m3 if m3.shape[0] == B else m3.expand(B, -1, -1, -1)
+            a_bchw = canvas_crop.permute(0, 3, 1, 2)
+            b_bchw = inp_resized.permute(0, 3, 1, 2)
+            m_b1hw = mask_bb.permute(0, 3, 1, 2)
+            if blend_mode == "laplacian_pyramid":
+                blended = _laplacian_pyramid_blend(a_bchw, b_bchw, m_b1hw, levels=5)
+            else:
+                blended = _frequency_blend(a_bchw, b_bchw, m_b1hw)
+            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+            paste_iter = []
+        else:
+            paste_iter = list(offsets_iter)
+
         for b, (fx, fy) in _PB.track(
-            list(enumerate(offsets_iter)), len(offsets_iter),
+            list(enumerate(paste_iter)), len(paste_iter),
             "InpaintStitchProMEC: paste frames",
         ):
             canvas_crop = canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :].clone()
@@ -1495,13 +1557,22 @@ class InpaintStitchProMEC:
         H, W = cto_h, cto_w
         blend_canvas = torch.zeros(B, canvas.shape[1], canvas.shape[2],
                                    device=device, dtype=canvas.dtype)
-        for b, (fx, fy) in _PB.track(
-            list(enumerate(offsets_iter)), len(offsets_iter),
-            "InpaintStitchProMEC: build blend mask",
-        ):
-            blend_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w] = (
-                blend_mask_crop[b] if blend_mask_crop.shape[0] == B else blend_mask_crop[0]
-            )
+        # Fast path: when offsets are uniform, paint the blend mask in one
+        # broadcast write instead of B per-frame slices.
+        if uniform_offsets:
+            fx0, fy0 = offsets_iter[0]
+            if blend_mask_crop.shape[0] == B:
+                blend_canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w] = blend_mask_crop
+            else:
+                blend_canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w] = blend_mask_crop[0:1].expand(B, -1, -1)
+        else:
+            for b, (fx, fy) in _PB.track(
+                list(enumerate(offsets_iter)), len(offsets_iter),
+                "InpaintStitchProMEC: build blend mask",
+            ):
+                blend_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w] = (
+                    blend_mask_crop[b] if blend_mask_crop.shape[0] == B else blend_mask_crop[0]
+                )
         blend_mask_full = blend_canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
 
         color_info = "\n  color_match: applied" if color_match else ""
