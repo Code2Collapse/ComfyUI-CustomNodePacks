@@ -327,6 +327,60 @@ async function _renderPatterns(body) {
     };
 }
 
+// Curated suggestion list for the local-model input. Free-typing is still
+// allowed (the backend resolves any GGUF stub or absolute path). Includes
+// stronger Qwen3 small-class options requested by the user.
+const _LOCAL_MODEL_SUGGESTIONS = [
+    "qwen2.5-0.5b-instruct-q4_k_m",
+    "qwen2.5-1.5b-instruct-q4_k_m",
+    "qwen2.5-3b-instruct-q4_k_m",
+    "qwen3-0.6b-instruct-q4_k_m",
+    "qwen3-1.7b-instruct-q4_k_m",
+    "qwen3-4b-instruct-q4_k_m",
+];
+
+// Rough cost estimate per 1 invocation (~512 in-tokens + 512 out) per model.
+// Numbers are illustrative only — pulled from public pricing as of 2026-05.
+const _CLOUD_COST_HINT = {
+    "openai/gpt-4o-mini":            "~$0.0002 / error",
+    "openai/gpt-4o":                 "~$0.005 / error",
+    "anthropic/claude-3-5-haiku":    "~$0.0008 / error",
+    "anthropic/claude-3-5-sonnet":   "~$0.0095 / error",
+    "gemini/gemini-1.5-flash":       "~$0.0001 / error",
+    "gemini/gemini-1.5-pro":         "~$0.0035 / error",
+    "openrouter/auto":               "varies by route",
+};
+
+function _statusPill(state /* 'ready' | 'warn' | 'error' | 'idle' */, text) {
+    const colors = {
+        ready: { bg: "#16331f", fg: "#7be089", dot: "#3ecf5a" },
+        warn:  { bg: "#3a2e15", fg: "#f0c764", dot: "#e3a93b" },
+        error: { bg: "#3a1818", fg: "#ff8b8b", dot: "#e25151" },
+        idle:  { bg: "#252525", fg: "#999",    dot: "#666"   },
+    }[state] || { bg: "#252525", fg: "#999", dot: "#666" };
+    return `<span style="display:inline-flex;align-items:center;gap:6px;background:${colors.bg};color:${colors.fg};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;">
+        <span style="width:7px;height:7px;border-radius:50%;background:${colors.dot};"></span>${text}
+    </span>`;
+}
+
+function _tierCardHTML(opts) {
+    const { tierNum, title, subtitle, color, bodyHTML } = opts;
+    return `
+    <div class="mec-diag-card" data-tier="${tierNum}" style="border-left:3px solid ${color};margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;">
+                <input type="checkbox" data-k="tier${tierNum}_enabled" style="margin:0;"/>
+                <span style="font-weight:600;color:${color};font-size:13px;">Tier ${tierNum}</span>
+                <span style="opacity:0.85;">— ${title}</span>
+            </label>
+            <span class="mec-diag-tier-status" data-tier-status="${tierNum}">${_statusPill("idle", "checking…")}</span>
+            <button class="mec-diag-btn" data-action="test-tier" data-tier="${tierNum}" style="font-size:11px;padding:3px 10px;">Test</button>
+        </div>
+        <div class="mec-diag-meta" style="font-size:11px;opacity:0.7;margin-bottom:8px;padding-left:24px;">${subtitle}</div>
+        <div style="padding-left:24px;">${bodyHTML}</div>
+    </div>`;
+}
+
 async function _renderSettings(body) {
     body.innerHTML = `<div class="mec-diag-empty">Loading…</div>`;
     const j = await _api("/mec/diagnostics/settings");
@@ -336,47 +390,200 @@ async function _renderSettings(body) {
     }
     const s = j.data;
     body.innerHTML = "";
-    const card = document.createElement("div");
-    card.className = "mec-diag-card";
-    card.innerHTML = `
-        <h4 style="margin:0 0 8px 0;">Error Assistant</h4>
-        <div class="mec-diag-kv">
-            <span class="k">Tier mode</span>
-            <select class="mec-diag-select" data-k="mode">
-                <option value="auto">auto</option>
-                <option value="deterministic_only">deterministic only (Tier 1)</option>
-                <option value="local_only">local only (Tier 1+2)</option>
-                <option value="cloud_only">cloud only (Tier 1+3)</option>
-            </select>
-            <span class="k">Cloud provider</span>
-            <select class="mec-diag-select" data-k="cloud_provider">
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="gemini">gemini</option>
-                <option value="openrouter">openrouter</option>
-            </select>
-            <span class="k">Cloud model</span>
-            <input class="mec-diag-input" data-k="cloud_model"/>
-            <span class="k">Local model</span>
-            <input class="mec-diag-input" data-k="local_model"/>
-            <span class="k">Max tokens</span>
-            <input class="mec-diag-input" data-k="max_tokens" type="number"/>
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Error Assistant</div>
+        <div class="mec-diag-meta" style="font-size:11px;opacity:0.7;margin-bottom:12px;">
+            Pick which tiers run when an error fires. Multiple tiers can be enabled — Tier 1 always runs first to provide context, then the highest-priority enabled LLM tier (Tier 3 if available, else Tier 2).
         </div>
-        <div class="mec-diag-toolbar" style="padding-top:8px;">
-            <button class="mec-diag-btn primary" data-action="save">Save</button>
-            <button class="mec-diag-btn" data-action="reload">Reload patterns</button>
+
+        ${_tierCardHTML({
+            tierNum: 1,
+            title: "Patterns (offline, instant)",
+            subtitle: "Regex/heuristic matcher. Zero VRAM, &lt;1 ms. Always recommended ON — feeds context to the LLM tiers.",
+            color: "#3ecf5a",
+            bodyHTML: `
+                <div class="mec-diag-toolbar" style="margin:0;padding:0;">
+                    <button class="mec-diag-btn" data-action="reload" style="font-size:11px;padding:3px 10px;">Reload patterns</button>
+                </div>`,
+        })}
+
+        ${_tierCardHTML({
+            tierNum: 2,
+            title: "Local LLM (Ollama / llama.cpp)",
+            subtitle: "Runs on your CPU/GPU. Slower than cloud but private and free. Requires <code>llama-cpp-python</code> and a GGUF model.",
+            color: "#5b9bd5",
+            bodyHTML: `
+                <div class="mec-diag-kv">
+                    <span class="k">Local model</span>
+                    <input class="mec-diag-input" data-k="local_model" list="mec-local-model-list" placeholder="qwen3-1.7b-instruct-q4_k_m"/>
+                </div>
+                <datalist id="mec-local-model-list">
+                    ${_LOCAL_MODEL_SUGGESTIONS.map(m => `<option value="${m}"></option>`).join("")}
+                </datalist>
+                <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:4px;">
+                    Type any GGUF stub or absolute path. Suggested: qwen3 series (stronger reasoning at the same size).
+                </div>`,
+        })}
+
+        ${_tierCardHTML({
+            tierNum: 3,
+            title: "Cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter)",
+            subtitle: "Fastest and strongest, but uses an API key and costs per call. Stored encrypted.",
+            color: "#d58a3e",
+            bodyHTML: `
+                <div class="mec-diag-kv">
+                    <span class="k">Provider</span>
+                    <select class="mec-diag-select" data-k="cloud_provider">
+                        <option value="openai">openai</option>
+                        <option value="anthropic">anthropic</option>
+                        <option value="gemini">gemini</option>
+                        <option value="openrouter">openrouter</option>
+                    </select>
+                    <span class="k">Model</span>
+                    <input class="mec-diag-input" data-k="cloud_model" placeholder="gpt-4o-mini"/>
+                    <span class="k">API key</span>
+                    <span style="display:flex;gap:4px;align-items:center;">
+                        <input class="mec-diag-input" data-k-secret="api_key" type="password"
+                               style="flex:1;font-family:monospace;" placeholder="(not set)" autocomplete="off"/>
+                        <button class="mec-diag-btn" data-action="show-key" type="button" title="Show/hide" style="font-size:11px;padding:3px 8px;">👁</button>
+                        <button class="mec-diag-btn" data-action="save-key" type="button" style="font-size:11px;padding:3px 10px;">Save key</button>
+                    </span>
+                </div>
+                <div class="mec-diag-meta" data-cost-hint style="font-size:10.5px;opacity:0.6;margin-top:4px;">
+                    Cost: —
+                </div>`,
+        })}
+
+        <div class="mec-diag-card" style="margin-top:4px;">
+            <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Shared</div>
+            <div class="mec-diag-kv">
+                <span class="k">Max tokens</span>
+                <input class="mec-diag-input" data-k="max_tokens" type="number" min="64" max="4096" step="64"/>
+            </div>
+            <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:4px;">
+                Output cap for Tier 2 / Tier 3. 512 is a good default.
+            </div>
+        </div>
+
+        <div class="mec-diag-toolbar" style="padding-top:10px;justify-content:flex-end;">
+            <button class="mec-diag-btn primary" data-action="save">Save settings</button>
         </div>
     `;
-    body.appendChild(card);
-    for (const el of card.querySelectorAll("[data-k]")) {
+    body.appendChild(wrap);
+
+    // Hydrate non-secret fields.
+    for (const el of wrap.querySelectorAll("[data-k]")) {
         const k = el.dataset.k;
-        if (s[k] !== undefined) el.value = s[k];
+        if (s[k] === undefined) continue;
+        if (el.type === "checkbox") el.checked = !!s[k];
+        else el.value = s[k];
     }
-    card.querySelector('[data-action="save"]').onclick = async () => {
+
+    // Update cost-hint helper.
+    const costHint = wrap.querySelector("[data-cost-hint]");
+    const updateCostHint = () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const model = (wrap.querySelector('[data-k="cloud_model"]').value || "").trim();
+        const k = `${prov}/${model}`;
+        const direct = _CLOUD_COST_HINT[k];
+        const fallback = Object.entries(_CLOUD_COST_HINT).find(([key]) => key.startsWith(prov + "/"));
+        costHint.textContent = "Cost: " + (direct || (fallback ? fallback[1] + " (closest match)" : "varies"));
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", updateCostHint);
+    wrap.querySelector('[data-k="cloud_model"]').addEventListener("input", updateCostHint);
+    updateCostHint();
+
+    // Status pill loader.
+    const setStatus = (n, html) => {
+        const el = wrap.querySelector(`[data-tier-status="${n}"]`);
+        if (el) el.innerHTML = html;
+    };
+    const refreshStatus = async () => {
+        for (const n of [1, 2, 3]) setStatus(n, _statusPill("idle", "checking…"));
+        const r = await _api("/mec/diagnostics/error_assistant/status");
+        if (!r.success) {
+            for (const n of [1, 2, 3]) setStatus(n, _statusPill("error", "backend down"));
+            return;
+        }
+        for (const n of [1, 2, 3]) {
+            const t = r.data[`tier${n}`] || {};
+            const state = t.ready ? "ready" : (n === 1 ? "error" : "warn");
+            const txt = t.ready ? "ready" : (t.detail || "not ready");
+            setStatus(n, _statusPill(state, txt));
+        }
+    };
+    refreshStatus();
+
+    // API-key field: load masked preview, show/hide, save.
+    const keyInput = wrap.querySelector('[data-k-secret="api_key"]');
+    let _keyVisible = false;
+    let _keyDirty = false;
+    keyInput.addEventListener("input", () => { _keyDirty = true; });
+    const loadKeyPreview = async () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const r = await _api(`/mec/diagnostics/error_assistant/secrets?provider=${encodeURIComponent(prov)}`);
+        if (r.success) {
+            keyInput.value = r.data.set ? r.data.preview : "";
+            keyInput.placeholder = r.data.set ? "(stored — type to replace)" : "(not set)";
+            _keyDirty = false;
+        }
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", loadKeyPreview);
+    loadKeyPreview();
+    wrap.querySelector('[data-action="show-key"]').onclick = () => {
+        _keyVisible = !_keyVisible;
+        keyInput.type = _keyVisible ? "text" : "password";
+    };
+    wrap.querySelector('[data-action="save-key"]').onclick = async () => {
+        if (!_keyDirty) {
+            _toast("Type a key first (current value is the masked preview)", "warn");
+            return;
+        }
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const r = await _api("/mec/diagnostics/error_assistant/secrets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov, api_key: keyInput.value }),
+        });
+        if (r.success) {
+            _toast(r.data.set ? `API key saved for ${prov}` : `API key cleared for ${prov}`, "success");
+            await loadKeyPreview();
+            await refreshStatus();
+        } else {
+            _toast("Save failed: " + r.message, "error");
+        }
+    };
+
+    // Per-tier Test buttons.
+    for (const btn of wrap.querySelectorAll('[data-action="test-tier"]')) {
+        btn.onclick = async () => {
+            const n = Number(btn.dataset.tier);
+            btn.disabled = true; const orig = btn.textContent; btn.textContent = "Testing…";
+            const r = await _api("/mec/diagnostics/error_assistant/test_tier", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tier: n }),
+            });
+            btn.disabled = false; btn.textContent = orig;
+            if (!r.success) { _toast(`Tier ${n} test failed: ${r.message}`, "error"); return; }
+            const ok = r.data.ok;
+            _toast(
+                `Tier ${n} ${ok ? "OK" : "fell back to T" + r.data.tier_returned} — ${r.data.elapsed_ms}ms`,
+                ok ? "success" : "warn",
+            );
+        };
+    }
+
+    // Save settings (non-secret fields).
+    wrap.querySelector('[data-action="save"]').onclick = async () => {
         const payload = {};
-        for (const el of card.querySelectorAll("[data-k]")) {
-            let v = el.value;
-            if (el.type === "number") v = Number(v);
+        for (const el of wrap.querySelectorAll("[data-k]")) {
+            let v;
+            if (el.type === "checkbox") v = el.checked;
+            else if (el.type === "number") v = Number(el.value);
+            else v = el.value;
             payload[el.dataset.k] = v;
         }
         const r = await _api("/mec/diagnostics/settings", {
@@ -384,12 +591,14 @@ async function _renderSettings(body) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
         });
-        if (r.success) _toast("Saved", "success");
+        if (r.success) { _toast("Saved", "success"); await refreshStatus(); }
         else _toast("Save failed: " + r.message, "error");
     };
-    card.querySelector('[data-action="reload"]').onclick = async () => {
+
+    // Reload patterns (Tier 1).
+    wrap.querySelector('[data-action="reload"]').onclick = async () => {
         const r = await _api("/mec/diagnostics/reload_patterns", { method: "POST" });
-        if (r.success) _toast(`Reloaded ${r.data.count} patterns`, "success");
+        if (r.success) { _toast(`Reloaded ${r.data.count} patterns`, "success"); await refreshStatus(); }
         else _toast("Reload failed: " + r.message, "error");
     };
 }

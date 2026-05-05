@@ -21,6 +21,7 @@ All responses use the Doctor-style envelope:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import Counter, deque
@@ -223,6 +224,185 @@ def register_routes(server) -> None:
             _FIRST_SEEN.clear()
             _LAST_SEEN.clear()
         return web.json_response(_envelope_ok({"cleared": True}))
+
+    # -----------------------------------------------------------------
+    # Error Assistant — per-tier readiness + smoke test + secrets I/O
+    # -----------------------------------------------------------------
+    def _import_ea():
+        try:
+            from . import error_assistant as _ea  # type: ignore
+            return _ea
+        except Exception:
+            try:
+                from nodes import error_assistant as _ea  # type: ignore
+                return _ea
+            except Exception:
+                return None
+
+    def _import_secrets():
+        try:
+            from . import secrets_store as _ss  # type: ignore
+            return _ss
+        except Exception:
+            try:
+                from nodes import secrets_store as _ss  # type: ignore
+                return _ss
+            except Exception:
+                return None
+
+    def _import_local_llm():
+        try:
+            from . import local_llm as _ll  # type: ignore
+            return _ll
+        except Exception:
+            try:
+                from nodes import local_llm as _ll  # type: ignore
+                return _ll
+            except Exception:
+                return None
+
+    @routes.get("/mec/diagnostics/error_assistant/status")
+    async def _ea_status(_req):  # noqa: ARG001
+        ea = _import_ea()
+        ss = _import_secrets()
+        ll = _import_local_llm()
+        s = ea.load_settings() if ea else {}
+        # Tier 1
+        try:
+            t1_count = len(ea._get_patterns()) if ea else 0
+            t1 = {"ready": t1_count > 0, "detail": f"{t1_count} pattern(s) loaded"}
+        except Exception as e:
+            t1 = {"ready": False, "detail": f"pattern load failed: {e}"}
+        # Tier 2: model file resolvable + llama-cpp-python importable.
+        t2_detail = []
+        t2_ready = True
+        if ll is not None:
+            mid = s.get("local_model", "")
+            try:
+                path = ll._resolve_model_path(mid) if hasattr(ll, "_resolve_model_path") else None
+            except Exception:
+                path = None
+            if path:
+                t2_detail.append(f"model: {os.path.basename(path)}")
+            else:
+                t2_ready = False
+                t2_detail.append(f"model not found ({mid or 'unset'})")
+            try:
+                import llama_cpp  # noqa: F401
+                t2_detail.append("llama-cpp-python ok")
+            except Exception:
+                t2_ready = False
+                t2_detail.append("llama-cpp-python missing")
+        else:
+            t2_ready = False
+            t2_detail.append("local_llm module unavailable")
+        t2 = {"ready": t2_ready, "detail": "; ".join(t2_detail)}
+        # Tier 3: API key for selected provider.
+        prov = s.get("cloud_provider", "openai")
+        if ss is not None:
+            has_key = bool(ss.has_key_for(prov))
+        else:
+            has_key = False
+        t3 = {
+            "ready": has_key,
+            "detail": (f"{prov}: API key set" if has_key
+                       else f"{prov}: API key MISSING — set it in Tier 3 below"),
+        }
+        return web.json_response(_envelope_ok({
+            "tier1": t1,
+            "tier2": t2,
+            "tier3": t3,
+            "settings": s,
+        }))
+
+    @routes.post("/mec/diagnostics/error_assistant/test_tier")
+    async def _ea_test_tier(req):
+        try:
+            payload = await req.json()
+        except Exception as e:
+            return web.json_response(_envelope_err("bad_json", str(e)), status=400)
+        tier = int(payload.get("tier", 0))
+        if tier not in (1, 2, 3):
+            return web.json_response(_envelope_err(
+                "bad_tier", "tier must be 1, 2, or 3"), status=400)
+        ea = _import_ea()
+        if ea is None:
+            return web.json_response(_envelope_err(
+                "error_assistant_unavailable", "module not importable"), status=500)
+        # Construct a representative test exception. The pattern matcher will
+        # match on the message; LLMs get the prompt regardless.
+        try:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+        except RuntimeError as test_exc:
+            t0 = time.time()
+            try:
+                if tier == 1:
+                    res = ea.explain(test_exc, mode="deterministic_only")
+                elif tier == 2:
+                    res = ea.explain(test_exc, mode="local_only")
+                else:
+                    res = ea.explain(test_exc, mode="cloud_only")
+                elapsed_ms = int((time.time() - t0) * 1000)
+                ok = res.get("tier") == tier
+                return web.json_response(_envelope_ok({
+                    "tier_requested": tier,
+                    "tier_returned": res.get("tier"),
+                    "ok": ok,
+                    "elapsed_ms": elapsed_ms,
+                    "headline": res.get("headline", "")[:200],
+                    "preview": (res.get("cause") or "")[:240],
+                }))
+            except Exception as e:
+                return web.json_response(_envelope_err(
+                    "tier_test_failed", f"{type(e).__name__}: {e}"), status=500)
+
+    @routes.get("/mec/diagnostics/error_assistant/secrets")
+    async def _ea_get_secret(req):
+        ss = _import_secrets()
+        if ss is None:
+            return web.json_response(_envelope_err(
+                "secrets_unavailable", "secrets_store not importable"), status=500)
+        prov = req.query.get("provider", "openai")
+        try:
+            key = ss.get_key(prov)
+        except Exception:
+            key = None
+        if not key:
+            return web.json_response(_envelope_ok({
+                "provider": prov, "set": False, "preview": ""}))
+        # Mask: show first 3 + last 4 chars only.
+        if len(key) <= 8:
+            preview = "*" * len(key)
+        else:
+            preview = key[:3] + "*" * max(4, len(key) - 7) + key[-4:]
+        return web.json_response(_envelope_ok({
+            "provider": prov, "set": True, "preview": preview,
+        }))
+
+    @routes.post("/mec/diagnostics/error_assistant/secrets")
+    async def _ea_set_secret(req):
+        try:
+            payload = await req.json()
+        except Exception as e:
+            return web.json_response(_envelope_err("bad_json", str(e)), status=400)
+        prov = (payload.get("provider") or "").strip()
+        key = payload.get("api_key")
+        if not prov:
+            return web.json_response(_envelope_err(
+                "bad_provider", "provider is required"), status=400)
+        ss = _import_secrets()
+        if ss is None:
+            return web.json_response(_envelope_err(
+                "secrets_unavailable", "secrets_store not importable"), status=500)
+        try:
+            if key is None or key == "":
+                ss.delete_key(prov)
+                return web.json_response(_envelope_ok({"provider": prov, "set": False}))
+            ss.set_key(prov, str(key))
+            return web.json_response(_envelope_ok({"provider": prov, "set": True}))
+        except Exception as e:
+            return web.json_response(_envelope_err(
+                "secrets_write_failed", f"{type(e).__name__}: {e}"), status=500)
 
     log.info("[mec_diagnostics] /mec/diagnostics/* routes registered")
 

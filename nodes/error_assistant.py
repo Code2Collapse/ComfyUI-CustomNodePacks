@@ -417,7 +417,13 @@ def match_pattern(exc_type: str, msg: str) -> Optional[Pattern]:
 # Settings store (read-only here; written by ComfyUI Settings UI)
 # =====================================================================
 _DEFAULTS = {
-    "mode": "auto",                           # auto|deterministic_only|local_only|cloud_only
+    "mode": "cloud_only",                     # auto|deterministic_only|local_only|cloud_only
+    # New (v2): three independent toggles. `mode` is derived from them on save
+    # for backward compatibility with all existing runtime code paths. On load,
+    # if these are absent from the file we derive them from `mode`.
+    "tier1_enabled": True,
+    "tier2_enabled": False,
+    "tier3_enabled": True,
     "cloud_provider": "openai",               # openai|anthropic|gemini|openrouter
     "cloud_model": "gpt-4o-mini",
     # API keys are stored encrypted via secrets_store.py — never in this dict
@@ -427,6 +433,31 @@ _DEFAULTS = {
     "max_tokens": 512,
     "include_traceback": True,                 # send last few frames to LLM
 }
+
+
+# Mode <-> tier-flags mapping (canonical):
+#   T1 only           -> deterministic_only
+#   T1+T2             -> local_only
+#   T1+T3             -> cloud_only
+#   T1+T2+T3 / T2+T3  -> auto
+#   anything else     -> deterministic_only (Tier 1 always silently runs first)
+def _flags_to_mode(t1: bool, t2: bool, t3: bool) -> str:
+    if t2 and t3:
+        return "auto"
+    if t3:
+        return "cloud_only"
+    if t2:
+        return "local_only"
+    return "deterministic_only"
+
+
+def _mode_to_flags(mode: str) -> Dict[str, bool]:
+    return {
+        "auto":               {"tier1_enabled": True,  "tier2_enabled": True,  "tier3_enabled": True},
+        "deterministic_only": {"tier1_enabled": True,  "tier2_enabled": False, "tier3_enabled": False},
+        "local_only":         {"tier1_enabled": True,  "tier2_enabled": True,  "tier3_enabled": False},
+        "cloud_only":         {"tier1_enabled": True,  "tier2_enabled": False, "tier3_enabled": True},
+    }.get(mode, {"tier1_enabled": True, "tier2_enabled": False, "tier3_enabled": True})
 
 
 def _settings_path() -> str:
@@ -445,6 +476,9 @@ def load_settings() -> Dict[str, Any]:
             data = json.load(f)
         out = dict(_DEFAULTS)
         out.update({k: v for k, v in data.items() if k in _DEFAULTS})
+        # Back-fill tier flags from `mode` if file pre-dates them.
+        if not any(k in data for k in ("tier1_enabled", "tier2_enabled", "tier3_enabled")):
+            out.update(_mode_to_flags(out.get("mode", "auto")))
         return out
     except Exception as e:
         log.warning("[error_assistant] settings unreadable: %s", e)
@@ -457,6 +491,16 @@ def save_settings(new: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(p), exist_ok=True)
     cur = load_settings()
     cur.update({k: v for k, v in new.items() if k in _DEFAULTS})
+    # If the caller supplied tier flags, they win and override `mode`.
+    if any(k in new for k in ("tier1_enabled", "tier2_enabled", "tier3_enabled")):
+        cur["mode"] = _flags_to_mode(
+            bool(cur.get("tier1_enabled", True)),
+            bool(cur.get("tier2_enabled", False)),
+            bool(cur.get("tier3_enabled", True)),
+        )
+    else:
+        # Otherwise keep flags consistent with `mode`.
+        cur.update(_mode_to_flags(cur.get("mode", "auto")))
     with open(p, "w", encoding="utf-8") as f:
         json.dump(cur, f, indent=2)
 
