@@ -90,9 +90,45 @@ class Editor {
         return { x: (vx - this.panX) / this.zoom, y: (vy - this.panY) / this.zoom };
     }
 
+    // Smallest zoom that still fits the image inside the viewport (no
+    // scrolling past the borders). Used to clamp every zoom-out.
+    minZoom(viewW, viewH) {
+        if (viewW <= 0 || viewH <= 0) return 0.05;
+        return Math.min(viewW / this.canvasW, viewH / this.canvasH);
+    }
+
+    // Stop pan from moving the image off-screen. Anchors:
+    //   - if the image is wider than the viewport, allow X pan only inside
+    //     the overflow region; otherwise centre it horizontally.
+    //   - same for Y.
+    clampPan(viewW, viewH) {
+        const dW = this.canvasW * this.zoom;
+        const dH = this.canvasH * this.zoom;
+        if (dW <= viewW) {
+            this.panX = (viewW - dW) / 2;
+        } else {
+            this.panX = Math.min(0, Math.max(viewW - dW, this.panX));
+        }
+        if (dH <= viewH) {
+            this.panY = (viewH - dH) / 2;
+        } else {
+            this.panY = Math.min(0, Math.max(viewH - dH, this.panY));
+        }
+    }
+
+    setZoomAround(newZ, anchorX, anchorY, viewW, viewH) {
+        const minZ = this.minZoom(viewW, viewH);
+        newZ = Math.max(minZ, Math.min(8, newZ));
+        const k = newZ / this.zoom;
+        this.panX = anchorX - (anchorX - this.panX) * k;
+        this.panY = anchorY - (anchorY - this.panY) * k;
+        this.zoom = newZ;
+        this.clampPan(viewW, viewH);
+    }
+
     fitView(viewW, viewH) {
         if (viewW <= 0 || viewH <= 0) return;
-        const pad = 16;
+        const pad = 8;
         const sx = (viewW - pad * 2) / this.canvasW;
         const sy = (viewH - pad * 2) / this.canvasH;
         this.zoom = Math.max(0.05, Math.min(sx, sy, 8));
@@ -403,7 +439,15 @@ function installEditor(node) {
 
     tb.appendChild(mkIcon("↶", "Undo (Ctrl+Z)", () => { if (ed.undo()) ed.save(); }));
     tb.appendChild(mkIcon("↷", "Redo (Ctrl+Y)", () => { if (ed.redo()) ed.save(); }));
-    tb.appendChild(mkIcon("⛶", "Fit view (F)", () => {
+    tb.appendChild(mkIcon("\u2796", "Zoom out (-)", () => {
+        const r = canvasWrap.getBoundingClientRect();
+        ed.setZoomAround(ed.zoom * 0.85, r.width / 2, r.height / 2, r.width, r.height);
+    }));
+    tb.appendChild(mkIcon("\u2795", "Zoom in (+)", () => {
+        const r = canvasWrap.getBoundingClientRect();
+        ed.setZoomAround(ed.zoom * 1.15, r.width / 2, r.height / 2, r.width, r.height);
+    }));
+    tb.appendChild(mkIcon("\u2B1B", "Fit image (0 / F)", () => {
         const r = canvasWrap.getBoundingClientRect();
         ed.fitView(r.width, r.height);
     }));
@@ -585,6 +629,7 @@ function installEditor(node) {
             const sx1 = canvas.width / (r1.width || 1), sy1 = canvas.height / (r1.height || 1);
             ed.panX = (e.clientX - r1.left) * sx1 - ed.drag.startX;
             ed.panY = (e.clientY - r1.top)  * sy1 - ed.drag.startY;
+            ed.clampPan(canvas.width, canvas.height);
             render(); return;
         }
         if (ed.drag?.kind === "point") {
@@ -667,26 +712,15 @@ function installEditor(node) {
 
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // Mouse wheel inside the editor does NOTHING. Zoom is via toolbar
+    // buttons or +/-/0 keys; this prevents accidental zoom while panning
+    // the parent ComfyUI canvas. Wheel events are not even prevented so
+    // the outer ComfyUI canvas can still receive them via bubbling.
     canvas.addEventListener("wheel", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const r = canvas.getBoundingClientRect();
-        const sx = canvas.width  / (r.width  || 1);
-        const sy = canvas.height / (r.height || 1);
-        const mx = (e.clientX - r.left) * sx, my = (e.clientY - r.top) * sy;
-        if (e.ctrlKey || e.metaKey) {
-            const f = e.deltaY < 0 ? 1.15 : 0.87;
-            const newZ = Math.max(0.05, Math.min(40, ed.zoom * f));
-            const k = newZ / ed.zoom;
-            ed.panX = mx - (mx - ed.panX) * k;
-            ed.panY = my - (my - ed.panY) * k;
-            ed.zoom = newZ;
-        } else {
-            ed.radius = Math.max(0.5, Math.min(256, ed.radius + (e.deltaY < 0 ? 0.5 : -0.5)));
-            const rW = node.widgets?.find(x => x.name === "default_radius");
-            if (rW) rW.value = ed.radius;
-        }
-        render();
-    }, { passive: false });
+        // Eat the event only when the user is over our canvas AND wants
+        // to scroll the parent — we don't want to fight ComfyUI's zoom,
+        // so let it bubble.
+    }, { passive: true });
 
     canvas.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
@@ -699,9 +733,20 @@ function installEditor(node) {
             if (ed.hover.kind === "point") { ed.pushUndo(); ed.points.splice(ed.hover.idx, 1); ed.save(); }
             else if (ed.hover.kind === "bbox") { ed.pushUndo(); ed.bboxes.splice(ed.hover.idx, 1); ed.save(); }
             ed.hover = { kind: null, idx: -1 }; render();
-        } else if (e.key.toLowerCase() === "f") {
+        } else if (e.key.toLowerCase() === "f" || e.key === "0") {
+            e.preventDefault();
             const r = canvasWrap.getBoundingClientRect();
             ed.fitView(r.width, r.height); render();
+        } else if (e.key === "+" || e.key === "=") {
+            e.preventDefault();
+            const r = canvasWrap.getBoundingClientRect();
+            ed.setZoomAround(ed.zoom * 1.15, r.width / 2, r.height / 2, r.width, r.height);
+            render();
+        } else if (e.key === "-" || e.key === "_") {
+            e.preventDefault();
+            const r = canvasWrap.getBoundingClientRect();
+            ed.setZoomAround(ed.zoom * 0.85, r.width / 2, r.height / 2, r.width, r.height);
+            render();
         }
     });
 
