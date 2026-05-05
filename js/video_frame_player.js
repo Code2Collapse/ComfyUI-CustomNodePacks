@@ -96,17 +96,115 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:240px;margin:2px 6px 16px 6px;background:#0c0c0c;pointer-events:auto;" +
-                "border-radius:4px;overflow:hidden;";   // overflow:hidden = no scroll-out
+                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:#15151c;pointer-events:auto;" +
+                "border-radius:8px;overflow:hidden;border:1px solid #2a2a35;display:flex;flex-direction:column;";
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
                 "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
                 "Arrow keys step frames, space toggles play.");
 
+            // ── Header toolbar (Display Mode toggle + Crop button + status badge)
+            const tb = document.createElement("div");
+            tb.style.cssText =
+                "display:flex;align-items:center;justify-content:space-between;" +
+                "padding:6px 10px;background:#1e1e28;border-bottom:1px solid #2a2a35;" +
+                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:#cdd6f4;";
+
+            // left side: Display Mode label + segmented toggle (Time | Frames)
+            const left = document.createElement("div");
+            left.style.cssText = "display:flex;align-items:center;gap:8px;";
+            const dmLabel = document.createElement("span");
+            dmLabel.textContent = "Display Mode";
+            dmLabel.style.cssText = "color:#7c5cff;font-weight:600;font-size:11px;";
+            left.appendChild(dmLabel);
+
+            const seg = document.createElement("div");
+            seg.style.cssText =
+                "display:inline-flex;background:#15151c;border:1px solid #2a2a35;border-radius:4px;overflow:hidden;";
+            const mkSeg = (txt, mode) => {
+                const b = document.createElement("button");
+                b.type = "button";
+                b.textContent = txt;
+                b.dataset.mode = mode;
+                b.style.cssText =
+                    "border:0;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;" +
+                    "background:transparent;color:#cdd6f4;outline:none;";
+                b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); setDisplayMode(mode); };
+                return b;
+            };
+            const segTime = mkSeg("Time", "time");
+            const segFrames = mkSeg("Frames", "frames");
+            seg.appendChild(segTime);
+            seg.appendChild(segFrames);
+            left.appendChild(seg);
+            tb.appendChild(left);
+
+            // right side: Crop toggle + Trimmed badge
+            const right = document.createElement("div");
+            right.style.cssText = "display:flex;align-items:center;gap:8px;";
+            const cropBtn = document.createElement("button");
+            cropBtn.type = "button";
+            cropBtn.textContent = "Crop";
+            cropBtn.style.cssText =
+                "border:1px solid #2a2a35;background:#15151c;color:#cdd6f4;" +
+                "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
+            cropBtn.onclick = (e) => {
+                e.preventDefault(); e.stopPropagation();
+                const w = node.widgets?.find(w => w.name === "crop_enabled");
+                if (!w) return;
+                w.value = !w.value;
+                try { w.callback?.(w.value); } catch (_) {}
+                refreshCropBtn();
+                node._render();
+                app.graph.setDirtyCanvas(true);
+            };
+            right.appendChild(cropBtn);
+
+            const trimBadge = document.createElement("div");
+            trimBadge.style.cssText =
+                "background:#15151c;border:1px solid #2a2a35;border-radius:4px;" +
+                "padding:3px 10px;font:600 11px sans-serif;color:#cdd6f4;";
+            trimBadge.textContent = "Trimmed: 0";
+            right.appendChild(trimBadge);
+            tb.appendChild(right);
+
+            el.appendChild(tb);
+
             const cvs = document.createElement("canvas");
-            cvs.style.cssText = "display:block;width:100%;cursor:default;";
+            cvs.style.cssText = "display:block;width:100%;cursor:default;flex:1 1 auto;";
             cvs.setAttribute("tabindex", "0");
             el.appendChild(cvs);
+
+            // displayMode persists via a hidden widget so it survives save/load.
+            const setDisplayMode = (mode) => {
+                S.displayMode = (mode === "time") ? "time" : "frames";
+                segTime.style.background   = S.displayMode === "time"   ? "#7c5cff" : "transparent";
+                segTime.style.color        = S.displayMode === "time"   ? "#ffffff" : "#cdd6f4";
+                segFrames.style.background = S.displayMode === "frames" ? "#7c5cff" : "transparent";
+                segFrames.style.color      = S.displayMode === "frames" ? "#ffffff" : "#cdd6f4";
+                node._render?.();
+            };
+            const refreshCropBtn = () => {
+                const w = node.widgets?.find(w => w.name === "crop_enabled");
+                const on = !!w?.value;
+                cropBtn.style.background = on ? "#7c5cff" : "#15151c";
+                cropBtn.style.borderColor = on ? "#7c5cff" : "#2a2a35";
+                cropBtn.style.color = on ? "#ffffff" : "#cdd6f4";
+            };
+            const refreshTrimBadge = () => {
+                const stride = Number(node.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
+                const span = Math.max(0, S.trimEnd - S.trimStart + 1);
+                const emit = Math.max(1, Math.ceil(span / Math.max(1, stride)));
+                if (S.displayMode === "time") {
+                    const sec = emit / Math.max(0.1, S.fps);
+                    const m = Math.floor(sec / 60);
+                    const s = Math.floor(sec - m * 60);
+                    trimBadge.textContent = `Trimmed: ${m}:${String(s).padStart(2, "0")}`;
+                } else {
+                    trimBadge.textContent = `Trimmed: ${emit}`;
+                }
+            };
+            node._refreshChrome = () => { refreshCropBtn(); refreshTrimBadge(); };
 
             const S = {
                 cvs,
@@ -130,8 +228,12 @@ app.registerExtension({
                 _hover: null,
                 // current preview rect (px on canvas) updated each render
                 preview: { x: 0, y: 0, w: 0, h: 0 },
+                displayMode: "time",   // "time" | "frames"
             };
             node._S = S;
+            // Apply default UI states once chrome has been wired up.
+            setDisplayMode("time");
+            refreshCropBtn();
 
             const canvasXY = (e) => {
                 const r = cvs.getBoundingClientRect();
@@ -467,13 +569,13 @@ app.registerExtension({
             node._stopPlay = stopPlay;
 
             node.addDOMWidget("video_player_view", "VFPLAYER", el, { serialize: false });
-            node.setSize([520, 380]);
+            node.setSize([520, 416]);
 
-            let _lockedW = 520, _lockedH = 380;
+            let _lockedW = 520, _lockedH = 416;
             const _origCompute = node.computeSize;
             node.computeSize = function () {
                 if (_lockedW > 0 && _lockedH > 0) return [_lockedW, _lockedH];
-                return _origCompute?.apply(this, arguments) ?? [520, 380];
+                return _origCompute?.apply(this, arguments) ?? [520, 416];
             };
             node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
 
@@ -503,6 +605,7 @@ app.registerExtension({
                             const [lo, hi] = getTrim();
                             S.trimStart = lo; S.trimEnd = hi;
                         }
+                        if (wn === "crop_enabled") refreshCropBtn();
                         node._render?.();
                         app.graph.setDirtyCanvas(true);
                     };
@@ -547,7 +650,8 @@ app.registerExtension({
                         const w = Math.max(node.size[0], 360);
                         const aspect = S.height / S.width;
                         const previewArea = (w - 32) * aspect;
-                        const h = Math.round(previewArea + TL_H + STATUS_H + 48);
+                        // +48 = breathing room; +36 = HTML toolbar bar.
+                        const h = Math.round(previewArea + TL_H + STATUS_H + 48 + 36);
                         node._lockSize?.(w, h);
                         node.setSize([w, h]);
                     }
@@ -569,19 +673,31 @@ app.registerExtension({
             if (!S) return;
             const cvs = S.cvs, ctx = S.ctx;
             const cw = S.el.clientWidth || 480;
-            const ch = Math.max(160, S.el.clientHeight || 320);
+            const ch = Math.max(160, cvs.clientHeight || (S.el.clientHeight - 36) || 320);
             if (cvs.width !== cw || cvs.height !== ch) {
                 cvs.width = cw;
                 cvs.height = ch;
             }
             ctx.clearRect(0, 0, cw, ch);
 
-            // ── Card-style background with rounded corners + subtle border
-            //    so the widget reads as a contained sub-panel inside the node.
-            const cardPad = 8;
-            const cardX = cardPad, cardY = cardPad;
-            const cardW = cw - cardPad * 2, cardH = ch - cardPad * 2;
-            const cardR = 8;
+            // The card-style background is now provided by the parent HTML
+            // wrapper (`el`); the canvas itself paints over a transparent
+            // surface. Refresh the toolbar badge first so trim duration is
+            // always in sync with what we're about to draw.
+            this._refreshChrome?.();
+
+            const tl = this._tlRect();
+            const statusBarH = STATUS_H + 6;
+            const previewMaxH = tl.y - 12 - statusBarH - 8;
+            const previewMaxW = cw - 32;
+            const aspect = (S.height || 1) / (S.width || 1);
+            let pw = previewMaxW, ph = pw * aspect;
+            if (ph > previewMaxH) { ph = previewMaxH; pw = ph / aspect; }
+            const px = (cw - pw) / 2;
+            const py = statusBarH + 6;
+            S.preview = { x: px, y: py, w: pw, h: ph };
+
+            // Preview frame (rounded inset backdrop)
             const roundRect = (x, y, w, h, r) => {
                 ctx.beginPath();
                 ctx.moveTo(x + r, y);
@@ -595,29 +711,6 @@ app.registerExtension({
                 ctx.quadraticCurveTo(x, y, x + r, y);
                 ctx.closePath();
             };
-            ctx.save();
-            ctx.fillStyle = "#15151c";
-            roundRect(cardX, cardY, cardW, cardH, cardR);
-            ctx.fill();
-            ctx.strokeStyle = "#2a2a35";
-            ctx.lineWidth = 1;
-            roundRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1, cardR);
-            ctx.stroke();
-            ctx.restore();
-
-            const tl = this._tlRect();
-            // Status bar backdrop at the top (inside the card)
-            const statusBarH = STATUS_H + 6;
-            const previewMaxH = tl.y - 12 - statusBarH - cardPad;
-            const previewMaxW = cw - 32;
-            const aspect = (S.height || 1) / (S.width || 1);
-            let pw = previewMaxW, ph = pw * aspect;
-            if (ph > previewMaxH) { ph = previewMaxH; pw = ph / aspect; }
-            const px = (cw - pw) / 2;
-            const py = cardY + statusBarH + 6;
-            S.preview = { x: px, y: py, w: pw, h: ph };
-
-            // Preview frame (rounded inset backdrop)
             ctx.save();
             ctx.fillStyle = "#000";
             roundRect(px - 2, py - 2, pw + 4, ph + 4, 6);
@@ -635,7 +728,7 @@ app.registerExtension({
                 ctx.fillText("loading...", px + pw / 2, py + ph / 2);
             }
 
-            // Preview border (subtle, theme-matching)
+            // Preview border
             ctx.save();
             ctx.strokeStyle = "#3a3a48";
             ctx.lineWidth = 1;
@@ -716,25 +809,39 @@ app.registerExtension({
                 ctx.restore();
             }
 
-            // Status line (with subtle backdrop bar at top of card)
+            // Status line (time-aware: shows "0:02 / 0:09" in time mode,
+            // "Frame 1 / 50" in frames mode). Other metadata (resolution,
+            // fps, loop, trim) is shown as a single muted line.
             ctx.save();
             const stride = Number(this.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
-            const trimSpan = Math.max(0, S.trimEnd - S.trimStart + 1);
-            const emit = Math.max(1, Math.ceil(trimSpan / Math.max(1, stride)));
-            const statusParts = [
-                `Frame ${S.idx + 1}/${S.frameCount}`,
+            const fmtTime = (sec) => {
+                const m = Math.floor(sec / 60);
+                const s = Math.floor(sec - m * 60);
+                return `${m}:${String(s).padStart(2, "0")}`;
+            };
+            let primary;
+            if (S.displayMode === "time") {
+                const cur = S.idx / Math.max(0.1, S.fps);
+                const tot = (S.frameCount - 1) / Math.max(0.1, S.fps);
+                primary = `${fmtTime(cur)} / ${fmtTime(tot)}`;
+            } else {
+                primary = `Frame ${S.idx + 1} / ${S.frameCount}`;
+            }
+            const secondaryParts = [
                 `${S.width}\u00d7${S.height}`,
                 `${S.fps.toFixed(1)} fps`,
                 S.loopMode,
                 `trim ${S.trimStart}\u2013${S.trimEnd}` + (stride > 1 ? `/${stride}` : ""),
-                `\u2192 ${emit}f`,
             ];
-            const statusTxt = statusParts.join("  \u00b7  ");
+            ctx.font = "600 12px sans-serif";
             ctx.fillStyle = "#cdd6f4";
-            ctx.font = "11px sans-serif";
             ctx.textAlign = "left";
             ctx.textBaseline = "middle";
-            ctx.fillText(statusTxt, cardX + 12, cardY + 13);
+            ctx.fillText(primary, 12, 13);
+            const primaryW = ctx.measureText(primary).width;
+            ctx.font = "11px sans-serif";
+            ctx.fillStyle = "#7f849c";
+            ctx.fillText("\u00b7  " + secondaryParts.join("  \u00b7  "), 12 + primaryW + 8, 13);
             ctx.restore();
 
             // Timeline bar

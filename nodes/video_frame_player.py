@@ -30,6 +30,7 @@ from __future__ import annotations
 from . import _interrupt_check as _IC
 
 import os
+import json
 import hashlib
 from typing import Tuple
 
@@ -43,6 +44,11 @@ import folder_paths
 
 from . import _progress as _PB
 _PREVIEW_QUALITY = 80
+
+# Browser preview format. PNG = lossless, exact colors at 8-bit (browser
+# can't display deeper than 8-bit anyway). JPEG @ q=95 is provided as a
+# fast fallback for huge batches where preview I/O dominates.
+_PREVIEW_FORMAT_DEFAULT = "png"
 
 
 # ----------------------------------------------------------------------
@@ -258,25 +264,38 @@ class VideoFramePlayerMEC:
                 # preview
                 "preview_width": ("INT", {
                     "default": 480, "min": 96, "max": 1920, "step": 16,
-                    "tooltip": "Width (px) of preview JPEGs sent to the browser."}),
+                    "tooltip": "Width (px) of preview frames sent to the browser. Lower = lighter UI; full-resolution IMAGE outputs are unaffected."}),
+                "preview_format": (["png", "jpeg"], {
+                    "default": _PREVIEW_FORMAT_DEFAULT,
+                    "tooltip": "png = lossless, exact colors (recommended). jpeg = smaller payload, slight chroma loss. The IMAGE outputs are always the full-precision source tensor regardless of this setting."}),
                 "preview_quality": ("INT", {
-                    "default": _PREVIEW_QUALITY, "min": 30, "max": 95, "step": 5,
-                    "tooltip": "JPEG quality for previews."}),
+                    "default": 95, "min": 30, "max": 100, "step": 5,
+                    "tooltip": "JPEG quality (ignored when preview_format=png)."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "IMAGE", "INT", "INT", "INT", "INT", "INT", "INT", "INT", "FLOAT")
+    RETURN_TYPES = (
+        "IMAGE", "INT", "INT",
+        "IMAGE", "INT", "INT",
+        "INT", "INT", "INT", "INT",
+        "INT", "FLOAT",
+        # --- new in v2 (May 2026): video-info outputs for downstream automation ---
+        "IMAGE", "INT", "INT", "INT", "INT", "FLOAT", "STRING",
+    )
     RETURN_NAMES = (
         "frame", "frame_index", "frame_count",
         "processed", "out_width", "out_height",
         "crop_x_px", "crop_y_px", "crop_w_px", "crop_h_px",
         "trimmed_count", "playback_fps",
+        # --- new in v2 ---
+        "frames_trimmed", "trim_start_idx", "trim_end_idx",
+        "width", "height", "duration", "video_info",
     )
     OUTPUT_TOOLTIPS = (
-        "Single full-resolution frame at the slider position (1,H,W,C) - pre-crop, pre-resize.",
+        "Single full-resolution frame at the slider position (1,H,W,C) - pre-crop, pre-resize. Full source precision (no JPEG re-encode).",
         "Echo of the selected frame_index (clamped to trim range).",
         "Total number of frames in the input batch.",
-        "Processed output: the selected frame OR the trimmed/strided batch (per output_mode), with crop + resize + upscale applied.",
+        "Processed output: the selected frame OR the trimmed/strided batch (per output_mode), with crop + resize + upscale applied. Full source precision.",
         "Width (px) of the processed output.",
         "Height (px) of the processed output.",
         "Crop left edge in source pixels.",
@@ -285,6 +304,13 @@ class VideoFramePlayerMEC:
         "Crop height in source pixels.",
         "Number of frames emitted on 'processed' after trim+stride (1 in current_frame mode).",
         "Echo of playback_fps (handy as input to video savers).",
+        "Trimmed source batch (frame_start..frame_end inclusive, with stride). NO crop/resize applied. Use this to feed downstream video savers without losing source resolution.",
+        "Resolved trim start frame index.",
+        "Resolved trim end frame index (inclusive).",
+        "Source width in pixels.",
+        "Source height in pixels.",
+        "Total duration of the trimmed range in seconds (trimmed_count / playback_fps).",
+        "JSON string with all video metadata: width, height, fps, duration, frame_count, trim_*, crop_*, etc. Wire to a Show Text node or any downstream automation.",
     )
     FUNCTION = "play"
     CATEGORY = "MaskEditControl/Preview"
@@ -339,7 +365,8 @@ class VideoFramePlayerMEC:
         target_height: int = 0,
         upscale_factor: float = 1.0,
         preview_width: int = 480,
-        preview_quality: int = _PREVIEW_QUALITY,
+        preview_format: str = _PREVIEW_FORMAT_DEFAULT,
+        preview_quality: int = 95,
     ):
         if frames is None or not hasattr(frames, "shape"):
             raise ValueError("VideoFramePlayerMEC: 'frames' input is missing or invalid (expected IMAGE B,H,W,C).")
@@ -357,8 +384,11 @@ class VideoFramePlayerMEC:
         idx = max(fs, min(int(frame_index), fe))
 
         # preview thumbnails (cached on disk by content digest)
+        # Format: PNG = lossless (production default), JPEG = fast.
+        fmt = "png" if str(preview_format).lower() == "png" else "jpeg"
+        ext = "png" if fmt == "png" else "jpg"
         digest_src = (
-            f"{B}x{H}x{W}x{C}_{preview_width}_{preview_quality}_"
+            f"{B}x{H}x{W}x{C}_{preview_width}_{fmt}_{preview_quality}_"
         ).encode()
         for sample_idx in {0, B // 2, B - 1}:
             try:
@@ -373,14 +403,24 @@ class VideoFramePlayerMEC:
         thumb_h = max(1, int(round(H * preview_width / max(W, 1))))
         for i in _PB.track(range(B), B, "FramePlayer: previews"):
             _IC.check()
-            name = f"vfp_{batch_id}_{i:05d}.jpg"
+            name = f"vfp_{batch_id}_{i:05d}.{ext}"
             path = os.path.join(temp_dir, name)
             if not os.path.exists(path):
+                # Detach + clamp + uint8 conversion. We deliberately do NOT
+                # apply gamma; ComfyUI IMAGE tensors are sRGB-encoded by
+                # convention, so a direct uint8 cast IS the correct sRGB
+                # round-trip for the browser.
                 arr = (frames[i].detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
                 pil = Image.fromarray(arr)
                 if pil.size[0] != preview_width:
-                    pil = pil.resize((preview_width, thumb_h), Image.BILINEAR)
-                pil.save(path, "JPEG", quality=int(preview_quality), optimize=False)
+                    # BICUBIC preserves edge sharpness better than BILINEAR;
+                    # PIL Lanczos is too slow for per-frame previews.
+                    pil = pil.resize((preview_width, thumb_h), Image.BICUBIC)
+                if fmt == "png":
+                    pil.save(path, "PNG", optimize=False, compress_level=1)
+                else:
+                    pil.save(path, "JPEG", quality=int(preview_quality),
+                             optimize=False, subsampling=0)  # 4:4:4 = no chroma loss
             previews.append({"filename": name, "subfolder": "", "type": "temp"})
 
         # backward-compat output: untouched current frame
@@ -454,6 +494,36 @@ class VideoFramePlayerMEC:
         }
 
         trimmed_count = int(processed.shape[0])
+
+        # ── v2 outputs (May 2026): video metadata + raw trimmed batch ──
+        # frames_trimmed = source slice with no crop / resize, preserving
+        # full source resolution and dtype. Useful for feeding into video
+        # savers (CombineVideo, VideoHelperSuite Save, etc.) without losing
+        # source pixels.
+        frames_trimmed = trimmed if trimmed.shape[0] > 0 else frames[idx:idx + 1]
+        trim_count_for_dur = max(1, int(frames_trimmed.shape[0]))
+        duration_sec = trim_count_for_dur / max(1e-6, float(playback_fps))
+
+        video_info = {
+            "width": int(W), "height": int(H),
+            "frame_count": int(B),
+            "trim_start_idx": int(fs), "trim_end_idx": int(fe),
+            "trim_stride": int(stride),
+            "trimmed_count": int(frames_trimmed.shape[0]),
+            "fps": float(playback_fps),
+            "duration_sec": float(duration_sec),
+            "loop_mode": str(loop_mode),
+            "crop_enabled": bool(crop_enabled),
+            "crop_norm": [float(cx), float(cy), float(cw), float(ch)],
+            "crop_px":   [int(crop_x_px), int(crop_y_px), int(crop_w_px), int(crop_h_px)],
+            "out_width": int(out_w), "out_height": int(out_h),
+            "aspect_ratio": str(aspect_ratio),
+            "dtype": str(frames.dtype),
+            "channels": int(C),
+            "preview_format": fmt,
+        }
+        video_info_json = json.dumps(video_info, indent=2, sort_keys=True)
+
         return {
             "ui": ui_payload,
             "result": (
@@ -462,5 +532,8 @@ class VideoFramePlayerMEC:
                 int(crop_x_px), int(crop_y_px),
                 int(crop_w_px), int(crop_h_px),
                 trimmed_count, float(playback_fps),
+                # --- v2 ---
+                frames_trimmed, int(fs), int(fe),
+                int(W), int(H), float(duration_sec), video_info_json,
             ),
         }
