@@ -1,22 +1,24 @@
-"""
-from . import _interrupt_check as _IC
-LuminanceKeyerMEC – Professional luminance keyer inspired by Nuke's LumaKeyer.
+﻿"""
+LuminanceKeyerMEC â€“ Professional luminance keyer inspired by Nuke's LumaKeyer.
 
 Computes ITU-R BT.709 luminance from an input image, then extracts a matte
 using low/high thresholds with smooth S-curve falloff and gamma correction.
 
 Modes:
-  - **highlights** – keys bright regions (default low=0.7, high=1.0)
-  - **midtones**   – keys mid-range luminance (default low=0.3, high=0.7)
-  - **shadows**    – keys dark regions (default low=0.0, high=0.3)
-  - **custom**     – uses user-specified low/high thresholds
-  - **auto**       – analyzes the image luminance distribution and picks
+  - **highlights** â€“ keys bright regions (default low=0.7, high=1.0)
+  - **midtones**   â€“ keys mid-range luminance (default low=0.3, high=0.7)
+  - **shadows**    â€“ keys dark regions (default low=0.0, high=0.3)
+  - **custom**     â€“ uses user-specified low/high thresholds
+  - **auto**       â€“ analyzes the image luminance distribution and picks
                      highlights/midtones/shadows automatically
 
 Pure tensor math. No cv2 or model dependencies. VRAM Tier 1.
 """
 
+
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import gc
 import torch
@@ -39,14 +41,14 @@ def _smooth_step(x: torch.Tensor, falloff: float) -> torch.Tensor:
     """Apply a smooth S-curve to values already in [0, 1].
 
     falloff controls steepness:
-      0   → hard binary threshold (step function)
-      1   → standard smoothstep (3t² - 2t³)
-      >1  → very gradual transition (raised to power of falloff)
+      0   â†’ hard binary threshold (step function)
+      1   â†’ standard smoothstep (3tÂ² - 2tÂ³)
+      >1  â†’ very gradual transition (raised to power of falloff)
     """
     x = x.clamp(0.0, 1.0)
     if falloff <= 0.0:
         return (x > 0.5).float()
-    # Hermite smoothstep: 3t² - 2t³
+    # Hermite smoothstep: 3tÂ² - 2tÂ³
     smooth = x * x * (3.0 - 2.0 * x)
     if abs(falloff - 1.0) < 1e-6:
         return smooth
@@ -58,9 +60,9 @@ def _auto_select_mode(luminance: torch.Tensor) -> str:
     """Pick highlights/midtones/shadows based on luminance statistics.
 
     Strategy: compute mean luminance across the entire batch.
-      mean > 0.6  → image is predominantly bright  → key shadows (the minority)
-      mean < 0.4  → image is predominantly dark    → key highlights (the minority)
-      otherwise   → balanced image                  → key midtones
+      mean > 0.6  â†’ image is predominantly bright  â†’ key shadows (the minority)
+      mean < 0.4  â†’ image is predominantly dark    â†’ key highlights (the minority)
+      otherwise   â†’ balanced image                  â†’ key midtones
     """
     mean_luma = luminance.mean().item()
     if mean_luma > 0.6:
@@ -91,23 +93,23 @@ class LuminanceKeyerMEC:
                     "tooltip": (
                         "Preset luminance range or custom thresholds.\n"
                         "auto: Analyzes image brightness to pick best range.\n"
-                        "highlights: Keys bright regions (0.7–1.0).\n"
-                        "midtones: Keys mid-range luminance (0.3–0.7).\n"
-                        "shadows: Keys dark regions (0.0–0.3).\n"
+                        "highlights: Keys bright regions (0.7â€“1.0).\n"
+                        "midtones: Keys mid-range luminance (0.3â€“0.7).\n"
+                        "shadows: Keys dark regions (0.0â€“0.3).\n"
                         "custom: Uses the low/high sliders directly."
                     ),
                 }),
                 "low": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": (
-                        "Low threshold – pixels with luminance below this become 0 in the mask. "
+                        "Low threshold â€“ pixels with luminance below this become 0 in the mask. "
                         "Only used directly in custom mode; presets override this."
                     ),
                 }),
                 "high": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": (
-                        "High threshold – pixels with luminance above this become 1 in the mask. "
+                        "High threshold â€“ pixels with luminance above this become 1 in the mask. "
                         "Only used directly in custom mode; presets override this."
                     ),
                 }),
@@ -162,7 +164,7 @@ class LuminanceKeyerMEC:
         B, H, W, C = image.shape
 
         try:
-            # ── 1. Compute BT.709 luminance ──────────────────────────
+            # â”€â”€ 1. Compute BT.709 luminance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             # image is (B, H, W, C) with C >= 3
             r = image[:, :, :, 0]
             g = image[:, :, :, 1]
@@ -170,7 +172,7 @@ class LuminanceKeyerMEC:
             luminance = _BT709_R * r + _BT709_G * g + _BT709_B * b  # (B, H, W)
             luminance = luminance.clamp(0.0, 1.0)
 
-            # ── 2. Determine thresholds ──────────────────────────────
+            # â”€â”€ 2. Determine thresholds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             effective_mode = mode
             if mode == "auto":
                 effective_mode = _auto_select_mode(luminance)
@@ -186,13 +188,13 @@ class LuminanceKeyerMEC:
             if t_low > t_high:
                 t_low, t_high = t_high, t_low
 
-            # ── 3. Build mask based on mode ───────────────────────────
+            # â”€â”€ 3. Build mask based on mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             span = t_high - t_low
             if span < 1e-7:
                 # Degenerate range: hard binary at the threshold value
                 mask = (luminance >= t_low).float()
             elif effective_mode == "shadows":
-                # Shadows: dark pixels → mask=1, bright pixels → mask=0
+                # Shadows: dark pixels â†’ mask=1, bright pixels â†’ mask=0
                 # Ramp DOWN within [low, high], zero above high
                 t = (luminance - t_low) / span
                 t = t.clamp(0.0, 1.0)
@@ -210,19 +212,19 @@ class LuminanceKeyerMEC:
                 t = t.clamp(0.0, 1.0)
                 mask = _smooth_step(t, falloff)
 
-            # ── 4. Gamma correction ──────────────────────────────────
-            # gamma > 1 → pushes mask darker (pow > 1 compresses toward 0)
-            # gamma < 1 → pushes mask brighter (pow < 1 expands toward 1)
+            # â”€â”€ 4. Gamma correction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # gamma > 1 â†’ pushes mask darker (pow > 1 compresses toward 0)
+            # gamma < 1 â†’ pushes mask brighter (pow < 1 expands toward 1)
             if abs(gamma - 1.0) > 1e-6:
                 mask = mask.clamp(0.0, 1.0).pow(max(gamma, 0.01))
 
-            # ── 5. Invert ────────────────────────────────────────────
+            # â”€â”€ 5. Invert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if invert:
                 mask = 1.0 - mask
 
             mask = mask.clamp(0.0, 1.0)
 
-            # ── 6. Compute statistics for info string ────────────────
+            # â”€â”€ 6. Compute statistics for info string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             mean_luma = luminance.mean().item()
             std_luma = luminance.std().item()
             mask_coverage = mask.mean().item() * 100.0

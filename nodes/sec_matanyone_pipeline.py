@@ -1,12 +1,11 @@
-"""
-from . import _interrupt_check as _IC
-SeCMatAnyonePipelineMEC – SeC segmentation + MatAnyone2 alpha matting pipeline.
+﻿"""
+SeCMatAnyonePipelineMEC â€“ SeC segmentation + MatAnyone2 alpha matting pipeline.
 
 Pipeline stages:
-  1. **SeC coarse segmentation** – MLLM-based object tracking (video-aware)
-  2. **MatAnyone2 alpha matting** – Temporal-consistent alpha with warmup protocol
-  3. **Edge refinement** – Optional ViTMatte / guided-filter edge cleanup
-  4. **Post-processing** – Hole filling, small region removal
+  1. **SeC coarse segmentation** â€“ MLLM-based object tracking (video-aware)
+  2. **MatAnyone2 alpha matting** â€“ Temporal-consistent alpha with warmup protocol
+  3. **Edge refinement** â€“ Optional ViTMatte / guided-filter edge cleanup
+  4. **Post-processing** â€“ Hole filling, small region removal
 
 Best for: Video object segmentation with compositing-grade alpha edges,
 especially scenes with occlusions, re-appearances, and complex motion.
@@ -17,7 +16,10 @@ Key differences from SAM + ViTMatte Pipeline:
   - Better for long video sequences with appearance changes
 """
 
+
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import gc
 import json
@@ -28,12 +30,13 @@ import torch
 import torch.nn.functional as F
 
 from .model_manager import (
-from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
     scan_model_dir,
 )
+
+from . import _progress as _PB
 from .utils import (
     HAS_CV2,
     compute_edge_band_np,
@@ -46,7 +49,7 @@ logger = logging.getLogger("MEC")
 
 
 class SeCMatAnyonePipelineMEC:
-    """End-to-end SeC → MatAnyone2 pipeline.
+    """End-to-end SeC â†’ MatAnyone2 pipeline.
 
     Combines SeC MLLM segmentation with MatAnyone2 temporal alpha matting
     for production-grade video masking with compositing-quality edges.
@@ -164,8 +167,8 @@ class SeCMatAnyonePipelineMEC:
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (
         "SeC + MatAnyone2 end-to-end pipeline:\n"
-        "1. SeC/SAM segmentation → coarse masks\n"
-        "2. MatAnyone2 temporal alpha matting → compositing-grade alpha\n"
+        "1. SeC/SAM segmentation â†’ coarse masks\n"
+        "2. MatAnyone2 temporal alpha matting â†’ compositing-grade alpha\n"
         "3. Optional edge refinement\n"
         "4. Post-processing (hole fill, region cleanup)\n\n"
         "Best for video scenes with occlusions, re-appearances, and complex motion."
@@ -194,12 +197,12 @@ class SeCMatAnyonePipelineMEC:
         is_video = B > 1
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # ── Stage 1: Coarse Segmentation ──────────────────────────────
+        # â”€â”€ Stage 1: Coarse Segmentation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # MANUAL bug-fix (Apr 2026): the legacy import targeted
         # `unified_segmentation_node.UnifiedSegmentationNode` which lives in
         # `_deprecated/`.  The active replacement is
         # `unified_segmentation.UnifiedSegmentation` whose `segment()` exposes
-        # a smaller kwarg surface — call it with only the supported keys.
+        # a smaller kwarg surface â€” call it with only the supported keys.
         from .unified_segmentation import UnifiedSegmentation
         seg_node = UnifiedSegmentation()
         coarse_masks, score, seg_info = seg_node.segment(
@@ -215,7 +218,7 @@ class SeCMatAnyonePipelineMEC:
             existing_mask=None,
         )
 
-        # ── Stage 2: Alpha Matting ────────────────────────────────────
+        # â”€â”€ Stage 2: Alpha Matting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         actual_backend = matting_backend
         if actual_backend == "auto":
             actual_backend = "matanyone2" if is_video else "vitmatte_small"
@@ -229,13 +232,13 @@ class SeCMatAnyonePipelineMEC:
                 image, coarse_masks, actual_backend, edge_radius, B, H, W, device,
             )
 
-        # ── Stage 3: Optional Edge Refinement ─────────────────────────
+        # â”€â”€ Stage 3: Optional Edge Refinement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if edge_refine_method != "none":
             alpha_mask = self._edge_refine(
                 image, alpha_mask, edge_refine_method, edge_radius, B, H, W,
             )
 
-        # ── Stage 4: Post-processing ─────────────────────────────────
+        # â”€â”€ Stage 4: Post-processing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if fill_holes_enabled or min_region_size > 0:
             alpha_mask = self._post_process(
                 alpha_mask, fill_holes_enabled, min_region_size, B, H, W,
@@ -274,7 +277,7 @@ class SeCMatAnyonePipelineMEC:
 
         return (rgb, alpha_mask, coarse_masks, preview, info)
 
-    # ── MatAnyone2 matting ────────────────────────────────────────────
+    # â”€â”€ MatAnyone2 matting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _run_matanyone2(self, image, mask, n_warmup, B, H, W, device):
         """MatAnyone2 temporal alpha matting with warmup protocol."""
@@ -321,7 +324,7 @@ class SeCMatAnyonePipelineMEC:
 
         return torch.stack(alphas)
 
-    # ── ViTMatte matting ──────────────────────────────────────────────
+    # â”€â”€ ViTMatte matting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _run_vitmatte(self, image, mask, variant, edge_radius, B, H, W, device):
         """ViTMatte per-frame alpha matting."""
@@ -369,7 +372,7 @@ class SeCMatAnyonePipelineMEC:
 
         return torch.stack(alphas)
 
-    # ── Edge refinement ───────────────────────────────────────────────
+    # â”€â”€ Edge refinement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _edge_refine(self, image, alpha, method, edge_radius, B, H, W):
         """Post-matting edge refinement."""
@@ -407,7 +410,7 @@ class SeCMatAnyonePipelineMEC:
 
         return alpha
 
-    # ── Post-processing ───────────────────────────────────────────────
+    # â”€â”€ Post-processing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _post_process(self, alpha, do_fill, min_size, B, H, W):
         """Fill holes and remove small regions."""
@@ -422,7 +425,7 @@ class SeCMatAnyonePipelineMEC:
             processed.append(torch.from_numpy(a))
         return torch.stack(processed)
 
-    # ── Trimap generation ─────────────────────────────────────────────
+    # â”€â”€ Trimap generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _generate_trimap(mask_np: np.ndarray, edge_radius: int) -> np.ndarray:

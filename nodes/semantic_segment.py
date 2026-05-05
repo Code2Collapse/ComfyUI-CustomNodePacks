@@ -1,19 +1,21 @@
-"""
-from . import _interrupt_check as _IC
-SemanticSegmentMEC – Face / Body / Clothes semantic parsing using SegFormer.
+﻿"""
+SemanticSegmentMEC â€“ Face / Body / Clothes semantic parsing using SegFormer.
 
 Models supported:
-  - **segformer_face** (jonathandinu/face-parsing) – 19-class facial parts
-    (skin, nose, eyes, eyebrows, ears, mouth, lips, hair, hat, glasses, …)
-  - **segformer_clothes** (mattmdjaga/segformer_b2_clothes) – 18-class apparel
+  - **segformer_face** (jonathandinu/face-parsing) â€“ 19-class facial parts
+    (skin, nose, eyes, eyebrows, ears, mouth, lips, hair, hat, glasses, â€¦)
+  - **segformer_clothes** (mattmdjaga/segformer_b2_clothes) â€“ 18-class apparel
     (hat, hair, sunglasses, upper-clothes, skirt, pants, dress, belt, shoe, bag,
-    scarf, face, left/right arm/leg, …)
+    scarf, face, left/right arm/leg, â€¦)
 
 Output: One combined MASK for all selected classes.
 Each run processes the full batch, giving per-frame masks for video workflows.
 """
 
+
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import gc
 import json
@@ -25,15 +27,16 @@ import torch.nn.functional as F
 from PIL import Image as PILImage
 
 from .model_manager import (
-from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
 )
 
+from . import _progress as _PB
+
 logger = logging.getLogger("MEC")
 
-# ── Class labels for each model ───────────────────────────────────────
+# â”€â”€ Class labels for each model â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 FACE_CLASSES = [
     "background", "skin", "l_brow", "r_brow", "l_eye", "r_eye",

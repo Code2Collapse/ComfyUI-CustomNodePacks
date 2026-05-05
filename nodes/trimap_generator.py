@@ -1,6 +1,5 @@
-"""
-from . import _interrupt_check as _IC
-TrimapGeneratorMEC – Standalone trimap generation from segmentation masks.
+﻿"""
+TrimapGeneratorMEC â€“ Standalone trimap generation from segmentation masks.
 
 Converts a coarse segmentation mask into a 3-region trimap:
   - Foreground (white, 1.0)
@@ -9,6 +8,8 @@ Converts a coarse segmentation mask into a 3-region trimap:
 
 Designed to feed directly into ViTMatte for alpha matting.
 """
+
+from . import _interrupt_check as _IC
 
 import torch
 import torch.nn.functional as F

@@ -1,9 +1,10 @@
-"""
-from . import _interrupt_check as _IC
-MaskPropagateVideo – Draw/define a mask on one frame and propagate it
+﻿"""
+MaskPropagateVideo â€“ Draw/define a mask on one frame and propagate it
 across a video sequence.  Supports static copy, motion-compensated
 propagation (optical flow), and SAM2 video-propagation mode.
 """
+
+from . import _interrupt_check as _IC
 
 import torch
 import torch.nn.functional as F
@@ -79,7 +80,7 @@ class MaskPropagateVideo:
                 size=(H, W), mode="bilinear", align_corners=False
             ).squeeze(0).squeeze(0)
 
-        # ── Dispatch by mode ───────────────────────────────────────────
+        # â”€â”€ Dispatch by mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if mode == "static":
             out_masks = self._static(src_mask, B)
         elif mode == "optical_flow":
@@ -100,7 +101,7 @@ class MaskPropagateVideo:
 
         return (out_masks, preview)
 
-    # ── Mode implementations ─────────────────────────────────────────
+    # â”€â”€ Mode implementations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _static(mask, num_frames):

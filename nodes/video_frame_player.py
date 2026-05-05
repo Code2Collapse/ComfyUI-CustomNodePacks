@@ -1,6 +1,5 @@
-"""VideoFramePlayerMEC – lightweight in-graph video scrubber.
+﻿"""VideoFramePlayerMEC â€“ lightweight in-graph video scrubber.
 
-from . import _interrupt_check as _IC
 Shows an IMAGE batch as a scrubable timeline with a frame slider (OpenRV
 style). Outputs the currently-selected frame as a single IMAGE so it can be
 piped into other nodes.
@@ -14,6 +13,8 @@ Lightweight design:
 """
 
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import os
 import io

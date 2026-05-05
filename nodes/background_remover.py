@@ -1,17 +1,19 @@
-"""
-from . import _interrupt_check as _IC
-BackgroundRemoverMEC – One-click background removal using RMBG-2.0 or BiRefNet.
+﻿"""
+BackgroundRemoverMEC â€“ One-click background removal using RMBG-2.0 or BiRefNet.
 
 Models supported:
-  - **RMBG-2.0** (briaai | ISnet variant) – General-purpose, fast
-  - **BiRefNet-General** – Bilateral reference, high-detail edges
-  - **BiRefNet-Portrait** – Optimized for human portraits
+  - **RMBG-2.0** (briaai | ISnet variant) â€“ General-purpose, fast
+  - **BiRefNet-General** â€“ Bilateral reference, high-detail edges
+  - **BiRefNet-Portrait** â€“ Optimized for human portraits
 
 The node outputs a clean foreground (RGB pre-multiplied) and a high-quality
 alpha MASK. Ideal as a preprocessing step before compositing or inpainting.
 """
 
+
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import gc
 import json
@@ -23,11 +25,12 @@ import torch.nn.functional as F
 from PIL import Image as PILImage
 
 from .model_manager import (
-from . import _progress as _PB
     MODEL_REGISTRY,
     get_or_load_model,
     clear_cache,
 )
+
+from . import _progress as _PB
 
 logger = logging.getLogger("MEC")
 

@@ -1,6 +1,5 @@
-"""
-from . import _interrupt_check as _IC
-TemporalAnchorMEC – Temporal Anchor System for mask interpolation over time.
+﻿"""
+TemporalAnchorMEC â€“ Temporal Anchor System for mask interpolation over time.
 
 Given anchor frames with their masks, computes signed distance fields (SDF)
 for each anchor, then interpolates SDFs between anchors using configurable
@@ -13,10 +12,13 @@ Outputs:
   - confidence FLOAT batch: 1.0 at anchors, lower at midpoints
   - info STRING: computed SDF / flow metrics
 
-Pure tensor SDF — no scipy dependency. VRAM Tier 2.
+Pure tensor SDF â€” no scipy dependency. VRAM Tier 2.
 """
 
+
 from __future__ import annotations
+
+from . import _interrupt_check as _IC
 
 import gc
 import math
@@ -25,7 +27,7 @@ from typing import List, Tuple
 import torch
 import torch.nn.functional as F
 
-# ── Optional cv2 with torch fallback ──────────────────────────────────
+# â”€â”€ Optional cv2 with torch fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 from . import _progress as _PB
 try:
     import cv2
@@ -35,12 +37,12 @@ except ImportError:
     HAS_CV2 = False
 
 
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Helpers
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _get_device(tensor: torch.Tensor) -> torch.device:
-    """Return the device of the tensor — never hardcode 'cuda'."""
+    """Return the device of the tensor â€” never hardcode 'cuda'."""
     return tensor.device
 
 
@@ -61,9 +63,9 @@ def _parse_anchor_frames(anchor_frames_str: str, total_frames: int) -> List[int]
     return indices
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Easing functions — alpha in [0,1] → remapped alpha in [0,1]
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  Easing functions â€” alpha in [0,1] â†’ remapped alpha in [0,1]
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _ease_linear(t: float) -> float:
     return t
@@ -80,7 +82,7 @@ def _ease_out(t: float) -> float:
 
 
 def _ease_smooth_step(t: float) -> float:
-    """Hermite smooth step: 3t² - 2t³."""
+    """Hermite smooth step: 3tÂ² - 2tÂ³."""
     return t * t * (3.0 - 2.0 * t)
 
 
@@ -92,9 +94,9 @@ _EASING_MAP = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  SDF computation — iterative convolution, pure PyTorch
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  SDF computation â€” iterative convolution, pure PyTorch
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _compute_sdf_single(mask: torch.Tensor, iterations: int = 64) -> torch.Tensor:
     """Compute approximate signed distance field for a single (H, W) binary mask.
@@ -149,7 +151,7 @@ def _compute_sdf_single(mask: torch.Tensor, iterations: int = 64) -> torch.Tenso
 
 
 def _compute_sdf_batch(masks: torch.Tensor, iterations: int = 64) -> torch.Tensor:
-    """Compute SDF for each mask in a batch. masks: (A, H, W) → (A, H, W) SDFs."""
+    """Compute SDF for each mask in a batch. masks: (A, H, W) â†’ (A, H, W) SDFs."""
     A = masks.shape[0]
     sdfs = []
     for i in _PB.track(range(A), A, "TempAnchor"):
@@ -164,9 +166,9 @@ def _compute_sdf_batch(masks: torch.Tensor, iterations: int = 64) -> torch.Tenso
     return torch.stack(sdfs, dim=0)
 
 
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  SDF interpolation with easing
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _interpolate_sdf(
     sdf_batch: torch.Tensor,
@@ -176,7 +178,7 @@ def _interpolate_sdf(
 ) -> torch.Tensor:
     """Interpolate SDFs between anchors for every frame.
 
-    sdf_batch: (A, H, W) — one SDF per anchor
+    sdf_batch: (A, H, W) â€” one SDF per anchor
     anchor_frames: sorted list of A frame indices
     Returns: (total_frames, H, W) interpolated SDF field
     """
@@ -186,10 +188,10 @@ def _interpolate_sdf(
 
     for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
         if t <= anchor_frames[0]:
-            # Before or at first anchor → use first anchor's SDF
+            # Before or at first anchor â†’ use first anchor's SDF
             result[t] = sdf_batch[0]
         elif t >= anchor_frames[-1]:
-            # At or after last anchor → use last anchor's SDF
+            # At or after last anchor â†’ use last anchor's SDF
             result[t] = sdf_batch[-1]
         else:
             # Find surrounding anchors
@@ -212,9 +214,9 @@ def _interpolate_sdf(
     return result
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  Optical flow estimation — cv2 + torch fallback
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  Optical flow estimation â€” cv2 + torch fallback
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _estimate_flow_cv2(frame_a: torch.Tensor, frame_b: torch.Tensor) -> torch.Tensor:
     """Estimate dense optical flow using cv2 Farneback.
@@ -294,7 +296,7 @@ def _estimate_flow_torch(frame_a: torch.Tensor, frame_b: torch.Tensor,
             cross_mag = cross.abs().clamp(min=1e-8)
             cross_norm = cross / cross_mag
 
-            # Inverse FFT → correlation surface
+            # Inverse FFT â†’ correlation surface
             corr = torch.fft.ifft2(cross_norm).real
 
             # Find peak
@@ -311,7 +313,7 @@ def _estimate_flow_torch(frame_a: torch.Tensor, frame_b: torch.Tensor,
             block_flows[bi, bj, 1] = float(dy)  # flow_y
 
     # Upscale block flows to dense field via bilinear interpolation
-    # block_flows: (n_blocks_h, n_blocks_w, 2) → permute to (1, 2, n_blocks_h, n_blocks_w)
+    # block_flows: (n_blocks_h, n_blocks_w, 2) â†’ permute to (1, 2, n_blocks_h, n_blocks_w)
     flow_small = block_flows.permute(2, 0, 1).unsqueeze(0)  # (1, 2, nbh, nbw)
     flow_dense = F.interpolate(flow_small, size=(H, W), mode="bilinear",
                                 align_corners=False)  # (1, 2, H, W)
@@ -350,9 +352,9 @@ def _warp_sdf_with_flow(sdf: torch.Tensor, flow: torch.Tensor,
     return warped.squeeze(0).squeeze(0)  # (H, W)
 
 
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Confidence computation
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _compute_confidence(anchor_frames: List[int], total_frames: int) -> List[float]:
     """Compute per-frame confidence. 1.0 at anchor frames, decreasing toward midpoints.
@@ -390,9 +392,9 @@ def _compute_confidence(anchor_frames: List[int], total_frames: int) -> List[flo
     return confidence
 
 
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Info string builder
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _build_info(
     anchor_frames: List[int],
@@ -424,12 +426,12 @@ def _build_info(
     return "\n".join(lines)
 
 
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Main Node Class
-# ══════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class TemporalAnchorMEC:
-    """Temporal Anchor System – SDF-based mask interpolation over time.
+    """Temporal Anchor System â€“ SDF-based mask interpolation over time.
 
     Computes signed distance fields for anchor masks, interpolates between
     them with configurable easing, and optionally refines with optical flow.
@@ -462,7 +464,7 @@ class TemporalAnchorMEC:
                         "linear: constant speed.\n"
                         "ease_in: quadratic slow start.\n"
                         "ease_out: quadratic slow end.\n"
-                        "smooth_step: Hermite S-curve (3t²-2t³)."
+                        "smooth_step: Hermite S-curve (3tÂ²-2tÂ³)."
                     ),
                 }),
                 "sdf_iterations": ("INT", {
@@ -528,17 +530,17 @@ class TemporalAnchorMEC:
     ) -> Tuple[torch.Tensor, List[float], str]:
         device = _get_device(anchor_masks)
 
-        # ── Validate total_frames ────────────────────────────────────
+        # â”€â”€ Validate total_frames â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if total_frames <= 0:
             total_frames = 1
 
-        # ── Ensure anchor_masks is 3D (A, H, W) ─────────────────────
+        # â”€â”€ Ensure anchor_masks is 3D (A, H, W) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if anchor_masks.dim() == 2:
             anchor_masks = anchor_masks.unsqueeze(0)
 
         A, H, W = anchor_masks.shape
 
-        # ── Parse anchor frame indices ───────────────────────────────
+        # â”€â”€ Parse anchor frame indices â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         anchor_frames_list = _parse_anchor_frames(anchor_frames_str, total_frames)
 
         # Trim or pad anchor list to match mask count
@@ -558,7 +560,7 @@ class TemporalAnchorMEC:
             if len(anchor_frames_list) > A:
                 anchor_frames_list = anchor_frames_list[:A]
 
-        # ── Single anchor → replicate to all frames ──────────────────
+        # â”€â”€ Single anchor â†’ replicate to all frames â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if A == 1 or len(anchor_frames_list) == 1:
             single_mask = (anchor_masks[0] > 0.5).float()
             full_masks = single_mask.unsqueeze(0).expand(total_frames, -1, -1).clone()
@@ -571,7 +573,7 @@ class TemporalAnchorMEC:
             )
             return (full_masks, confidence, info)
 
-        # ── Resize anchor masks to uniform size ──────────────────────
+        # â”€â”€ Resize anchor masks to uniform size â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Use first anchor's dimensions as target
         target_H, target_W = H, W
         resized_masks = []
@@ -585,14 +587,14 @@ class TemporalAnchorMEC:
             resized_masks.append(m)
         anchor_masks_uniform = torch.stack(resized_masks, dim=0)
 
-        # ── Compute SDF for each anchor ──────────────────────────────
+        # â”€â”€ Compute SDF for each anchor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sdf_batch = _compute_sdf_batch(anchor_masks_uniform, iterations=sdf_iterations)
 
-        # ── Interpolate SDF across all frames ────────────────────────
+        # â”€â”€ Interpolate SDF across all frames â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         easing_fn = _EASING_MAP.get(easing, _ease_linear)
         sdf_interp = _interpolate_sdf(sdf_batch, anchor_frames_list, total_frames, easing_fn)
 
-        # ── Optional flow refinement ─────────────────────────────────
+        # â”€â”€ Optional flow refinement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         flow_used = False
         flow_mag_mean = 0.0
         if flow_refinement and images is not None:
@@ -607,7 +609,7 @@ class TemporalAnchorMEC:
                 need_resize_flow = (img_H != target_H or img_W != target_W)
 
                 for t in _PB.track(range(total_frames), total_frames, "TempAnchor"):
-                    # Skip anchor frames — they're already exact
+                    # Skip anchor frames â€” they're already exact
                     if t in anchor_frames_list:
                         continue
 
@@ -663,13 +665,13 @@ class TemporalAnchorMEC:
                 if flow_count > 0:
                     flow_mag_mean = total_flow_mag / flow_count
 
-        # ── Threshold SDF → binary masks ─────────────────────────────
+        # â”€â”€ Threshold SDF â†’ binary masks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         full_masks = (sdf_interp < 0).float()
 
-        # ── Compute confidence ───────────────────────────────────────
+        # â”€â”€ Compute confidence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         confidence = _compute_confidence(anchor_frames_list, total_frames)
 
-        # ── Build info string ────────────────────────────────────────
+        # â”€â”€ Build info string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         info = _build_info(
             anchor_frames_list, total_frames, easing,
             sdf_batch, full_masks, confidence,
