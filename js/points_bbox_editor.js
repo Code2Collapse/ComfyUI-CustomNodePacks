@@ -43,6 +43,39 @@ const BBOX_EDGE_PX = 6;
 const MIN_BBOX_PX = 4;
 const CLICK_THRESHOLD_PX = 4;
 
+// Reduce a reference-image URL to a stable identity key that survives
+// graph re-runs but flips when the user actually swaps the input image.
+//   /view?filename=foo.png&subfolder=&type=input  →  "view:input/foo.png"
+//   data:image/jpeg;base64,/9j/4AAQ…             →  "data:<len>:<head>:<tail>"
+//   anything else (raw path / blob / http URL)   →  the URL itself
+// For data URLs we sample length + head + tail of the base64 payload —
+// identical content + identical JPEG/PNG encoder settings produce
+// identical bytes, so this catches "same image, re-run" without paying
+// a full hash. Real image swaps virtually always change the length.
+function _refIdentityKey(url) {
+    if (typeof url !== "string" || !url) return "";
+    if (url.startsWith("data:")) {
+        const comma = url.indexOf(",");
+        const payload = comma >= 0 ? url.slice(comma + 1) : url;
+        const head = payload.slice(0, 24);
+        const tail = payload.slice(-24);
+        return `data:${payload.length}:${head}:${tail}`;
+    }
+    const qIdx = url.indexOf("?");
+    if (qIdx >= 0 && url.slice(0, qIdx).endsWith("/view")) {
+        try {
+            const params = new URLSearchParams(url.slice(qIdx + 1));
+            const fn = params.get("filename") || "";
+            const sub = params.get("subfolder") || "";
+            const type = params.get("type") || "";
+            return `view:${type}/${sub}/${fn}`;
+        } catch (_) {
+            // fall through
+        }
+    }
+    return url;
+}
+
 class Editor {
     constructor(node) {
         this.node = node;
@@ -205,7 +238,11 @@ class Editor {
 
     setRefImage(url, origW, origH) {
         if (url === this.refUrl && this.refImg && this.refImg.complete) return;
+        const newKey = _refIdentityKey(url);
+        const prevKey = this.refKey;
+        const isReplacement = prevKey != null && newKey !== prevKey;
         this.refUrl = url;
+        this.refKey = newKey;
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
@@ -220,12 +257,16 @@ class Editor {
                 if (wW) wW.value = w;
                 if (hW) hW.value = h;
             }
-            // NOTE: previously we wiped points/bboxes whenever the URL
-            // changed, but that fires every time the upstream node
-            // re-executes (it returns a fresh base64 data URL each run)
-            // even when the underlying image is identical. The user's
-            // annotations would silently disappear. Keep them — the
-            // toolbar's Clear-all button is the explicit way to dump them.
+            // Only wipe annotations when the *identity* of the upstream
+            // image changes (filename for /view URLs, content fingerprint
+            // for data URLs). Re-running the graph with the same image
+            // keeps the user's points/bboxes intact.
+            if (isReplacement && (this.points.length || this.bboxes.length)) {
+                this.pushUndo();
+                this.points = [];
+                this.bboxes = [];
+                this.save?.();
+            }
             this._fitted = false;
             this.onLoaded?.();
         };
