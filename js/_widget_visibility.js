@@ -16,43 +16,54 @@
 export function setWidgetVisible(widget, visible) {
     if (!widget) return;
     if (visible) {
-        if (widget.__mec_origType !== undefined) {
-            widget.type = widget.__mec_origType;
+        if ("__mec_origType" in widget) {
+            const t = widget.__mec_origType;
+            if (t === undefined) delete widget.type; else widget.type = t;
             delete widget.__mec_origType;
         }
-        if (widget.__mec_origComputeSize !== undefined) {
-            widget.computeSize = widget.__mec_origComputeSize;
+        if ("__mec_origComputeSize" in widget) {
+            const cs = widget.__mec_origComputeSize;
+            if (cs === undefined) delete widget.computeSize; else widget.computeSize = cs;
             delete widget.__mec_origComputeSize;
+        } else {
+            // No saved original: drop any forced [0,-4] so the prototype default returns.
+            delete widget.computeSize;
         }
         widget.hidden = false;
         const el = widget.element;
         if (el) {
-            el.style.display = widget.__mec_origElDisplay ?? "";
-            delete widget.__mec_origElDisplay;
+            if ("__mec_origElDisplay" in widget) {
+                const d = widget.__mec_origElDisplay;
+                el.style.display = d ?? "";
+                delete widget.__mec_origElDisplay;
+            } else {
+                el.style.display = "";
+            }
             const wrap = el.parentElement;
             if (wrap && wrap.classList?.contains("dom-widget")) {
-                wrap.style.display = widget.__mec_origWrapDisplay ?? "";
-                delete widget.__mec_origWrapDisplay;
+                if ("__mec_origWrapDisplay" in widget) {
+                    const d = widget.__mec_origWrapDisplay;
+                    wrap.style.display = d ?? "";
+                    delete widget.__mec_origWrapDisplay;
+                } else {
+                    wrap.style.display = "";
+                }
             }
         }
         delete widget.__mec_hidden;
     } else {
-        if (widget.__mec_origType === undefined) widget.__mec_origType = widget.type;
-        if (widget.__mec_origComputeSize === undefined) widget.__mec_origComputeSize = widget.computeSize;
+        if (!("__mec_origType" in widget)) widget.__mec_origType = widget.type;
+        if (!("__mec_origComputeSize" in widget)) widget.__mec_origComputeSize = widget.computeSize;
         widget.type = "hidden";
         widget.computeSize = () => [0, -4];
         widget.hidden = true;
         const el = widget.element;
         if (el) {
-            if (widget.__mec_origElDisplay === undefined) {
-                widget.__mec_origElDisplay = el.style.display || "";
-            }
+            if (!("__mec_origElDisplay" in widget)) widget.__mec_origElDisplay = el.style.display;
             el.style.display = "none";
             const wrap = el.parentElement;
             if (wrap && wrap.classList?.contains("dom-widget")) {
-                if (widget.__mec_origWrapDisplay === undefined) {
-                    widget.__mec_origWrapDisplay = wrap.style.display || "";
-                }
+                if (!("__mec_origWrapDisplay" in widget)) widget.__mec_origWrapDisplay = wrap.style.display;
                 wrap.style.display = "none";
             }
         }
