@@ -126,6 +126,38 @@ def _erode_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
     return eroded.squeeze(1)
 
 
+def _expand_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Expand (dilate) a (B, H, W) mask outward by `radius` pixels via max-pool."""
+    if radius <= 0:
+        return mask
+    k = 2 * int(radius) + 1
+    m4 = mask.unsqueeze(1)
+    expanded = F.max_pool2d(m4, kernel_size=k, stride=1, padding=k // 2)
+    return expanded.squeeze(1).clamp(0.0, 1.0)
+
+
+def _oval_face_mask(B: int, H: int, W: int,
+                    device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Soft elliptical alpha mask inscribed in (H, W), shape (B, H, W).
+
+    The ellipse exactly fits the crop frame (major axes = H/2, W/2).
+    Values are 1.0 well inside and fade smoothly to 0.0 at the boundary.
+    Used to remove blocky corner artefacts when stitching back face crops.
+    """
+    cy, cx = (H - 1) / 2.0, (W - 1) / 2.0
+    ry = max(cy, 1e-6)
+    rx = max(cx, 1e-6)
+    y = torch.arange(H, device=device, dtype=dtype) - cy   # (H,)
+    x = torch.arange(W, device=device, dtype=dtype) - cx   # (W,)
+    # Normalised radial distance: 0 at centre, 1 at ellipse boundary, >1 outside
+    r = ((y.unsqueeze(1) / ry) ** 2 + (x.unsqueeze(0) / rx) ** 2).sqrt()  # (H, W)
+    # Linear fade: 1.0 at centre, 0.0 at boundary, clamp at 0
+    alpha = (1.0 - r).clamp(0.0, 1.0)
+    # Lightly blur to anti-alias the oval boundary
+    alpha_soft = _gaussian_blur_mask(alpha.unsqueeze(0), sigma=2.0).squeeze(0)
+    return alpha_soft.unsqueeze(0).expand(B, -1, -1)  # (B, H, W)
+
+
 def _opaque_core_with_feather(soft_mask: torch.Tensor,
                               feathered: torch.Tensor,
                               radius: int) -> torch.Tensor:
@@ -593,30 +625,53 @@ def _apply_inpaint_mask_mode(mask: torch.Tensor, mode: str) -> torch.Tensor:
 # ══════════════════════════════════════════════════════════════════════
 
 def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
-                                 mode: str, radius: int) -> torch.Tensor:
+                                 mode: str, radius: int,
+                                 shape: str = "auto") -> torch.Tensor:
     """Generate the stitch blend mask based on the selected mode.
 
     image: (B, H, W, C)
     mask: (B, H, W)
     mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend'
     radius: feather radius
+    shape: 'auto' | 'oval' | 'rectangle'
+        auto → oval for portrait crops (H ≥ W), rectangle for landscape
     Returns: (B, H, W) soft blend mask
 
-    All modes produce a *bidirectional* feather: the transition zone straddles
-    the binary boundary so the seam disappears smoothly on both sides.
+    Key improvement over the old implementation: the mask is *expanded* outward
+    by ``radius`` pixels before blurring.  This matches the pattern used by
+    InpaintCropAndStitch and ensures the feather zone straddles the boundary
+    (half inside, half outside) rather than being entirely interior — which was
+    the root cause of the hard-edge seam visible at paste-back time.
     """
-    soft = mask.clamp(0.0, 1.0)
-    if mode == "edge_aware":
-        return _edge_aware_blend_mask(image, mask, radius)
-    elif mode == "gaussian":
-        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.4)
-    elif mode == "laplacian_pyramid":
-        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.5)
-    elif mode == "frequency_blend":
-        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.6)
+    B, H, W, C = image.shape
+    device = _get_device(mask)
+
+    # Optional oval shaping: replace rectangular mask with elliptical one.
+    # Eliminates the blocky corner artefacts on face/portrait crops.
+    use_oval = (shape == "oval") or (shape == "auto" and H >= W)
+    if use_oval:
+        oval = _oval_face_mask(B, H, W, device, mask.dtype)
+        soft = (mask.clamp(0.0, 1.0) * oval).clamp(0.0, 1.0)
     else:
-        feathered = _gaussian_blur_mask(soft, sigma=radius * 0.4)
-    # Keep interior fully opaque (see _opaque_core_with_feather docstring).
+        soft = mask.clamp(0.0, 1.0)
+
+    # Expand outward BEFORE blurring — the key step that makes the feather
+    # bidirectional (extends into the surrounding background area).
+    expanded = _expand_mask(soft, radius) if radius > 0 else soft
+
+    if mode == "edge_aware":
+        return _edge_aware_blend_mask(image, expanded, radius)
+    elif mode == "gaussian":
+        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.5)
+    elif mode == "laplacian_pyramid":
+        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.55)
+    elif mode == "frequency_blend":
+        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.6)
+    else:
+        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.5)
+
+    # Keep the original (pre-expand) mask's interior fully opaque so the
+    # inpaint composites at 1.0 inside and only feathers at the boundary.
     return _opaque_core_with_feather(soft, feathered, radius)
 
 
@@ -1823,9 +1878,14 @@ class InpaintPasteBackMEC:
                 offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
 
             if feather_active:
-                paste_mask = torch.ones(1, 1, ctc_h, ctc_w, device=device, dtype=torch.float32)
-                paste_mask = _gaussian_blur_2d(paste_mask, sigma=feather_radius)
-                pm3 = paste_mask.squeeze(0).squeeze(0).unsqueeze(-1)
+                # Correct feather: erode inward to get a zero-border ring,
+                # then blur to create a smooth edge ramp (0 at boundary → 1 inside).
+                # The old _gaussian_blur_2d on a ones-tensor did nothing useful
+                # due to replicate padding making the convolution of a constant = constant.
+                binary_ones = torch.ones(1, ctc_h, ctc_w, device=device, dtype=torch.float32)
+                core = _erode_mask(binary_ones, feather_radius)
+                pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)  # (1, H, W)
+                pm3 = pm_bw.squeeze(0).unsqueeze(-1)  # (H, W, 1)
                 for b, (fx, fy) in enumerate(offsets_iter):
                     crop = canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :]
                     canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
@@ -1866,9 +1926,10 @@ class InpaintPasteBackMEC:
         canvas = original_image.clone()
 
         if feather_active:
-            paste_mask = torch.ones(1, 1, crop_h, crop_w, device=device, dtype=torch.float32)
-            paste_mask = _gaussian_blur_2d(paste_mask, sigma=feather_radius)
-            paste_mask_3d = paste_mask.squeeze(0).squeeze(0).unsqueeze(-1)
+            binary_ones = torch.ones(1, crop_h, crop_w, device=device, dtype=torch.float32)
+            core = _erode_mask(binary_ones, feather_radius)
+            pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)
+            paste_mask_3d = pm_bw.squeeze(0).unsqueeze(-1)  # (crop_h, crop_w, 1)
             for b in _PB.track(range(B), B, "InpaintPasteBackMEC: paste"):
                 orig_crop = canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
                 canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = (
