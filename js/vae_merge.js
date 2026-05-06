@@ -1,29 +1,11 @@
 // VAEMergeMEC: per-block sliders only visible when use_blocks=True AND auto_alpha=False.
 import { app } from "../../scripts/app.js";
+import { setHidden } from "./_widget_visibility.js";
 
 const BLOCKS = [
     "block_conv_in", "block_conv_out", "block_norm_out",
     "block_0", "block_1", "block_2", "block_3", "block_mid",
 ];
-
-function setHidden(w, hidden) {
-    if (hidden) {
-        if (!w.__origComputeSize) {
-            w.__origComputeSize = w.computeSize;
-            w.__origType = w.type;
-        }
-        w.computeSize = () => [0, -4];
-        w.hidden = true;
-        w.type = "hidden";
-    } else {
-        if (w.__origComputeSize) {
-            w.computeSize = w.__origComputeSize;
-            delete w.__origComputeSize;
-        }
-        w.hidden = false;
-        w.type = w.__origType || w.type;
-    }
-}
 
 function applyVisibility(node) {
     const get = (n) => node.widgets?.find(w => w.name === n);

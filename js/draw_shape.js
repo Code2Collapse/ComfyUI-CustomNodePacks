@@ -1,6 +1,7 @@
 // DrawShapeMEC: conditional widget visibility based on `shape` dropdown.
 // Pattern modeled on KJNodes — hide irrelevant widgets by overriding computeSize to [0,-4].
 import { app } from "../../scripts/app.js";
+import { setWidgetVisible } from "./_widget_visibility.js";
 
 const SHAPE_FIELDS = {
     circle:            ["cx","cy","radius"],
@@ -29,35 +30,12 @@ function applyShapeVisibility(node) {
         if (ALWAYS_VISIBLE.has(w.name)) continue;
         // polygon's points_json is in ALWAYS_VISIBLE so we hide it for non-polygon below
         const shouldShow = allowed.has(w.name);
-        if (shouldShow) {
-            if (w.__origComputeSize) {
-                w.computeSize = w.__origComputeSize;
-                delete w.__origComputeSize;
-            }
-            w.hidden = false;
-            w.type = w.__origType || w.type;
-        } else {
-            if (!w.__origComputeSize) {
-                w.__origComputeSize = w.computeSize;
-                w.__origType = w.type;
-            }
-            w.computeSize = () => [0, -4];
-            w.hidden = true;
-            w.type = "hidden";
-        }
+        setWidgetVisible(w, shouldShow);
     }
     // Special: points_json only for polygon
     const pj = node.widgets.find(w => w.name === "points_json");
     if (pj) {
-        const isPoly = shape === "polygon";
-        if (isPoly) {
-            if (pj.__origComputeSize) { pj.computeSize = pj.__origComputeSize; delete pj.__origComputeSize; }
-            pj.hidden = false;
-        } else {
-            if (!pj.__origComputeSize) pj.__origComputeSize = pj.computeSize;
-            pj.computeSize = () => [0, -4];
-            pj.hidden = true;
-        }
+        setWidgetVisible(pj, shape === "polygon");
     }
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);

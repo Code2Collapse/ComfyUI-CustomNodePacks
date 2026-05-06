@@ -7,31 +7,13 @@
 //   - "histogram_diff"  : only hist_* visible
 // combine_method only applies when detection_mode == "combined".
 import { app } from "../../scripts/app.js";
+import { setHidden } from "./_widget_visibility.js";
 
 const PIXEL_DIFF = ["pixel_diff_enabled", "pixel_diff_threshold"];
 const FLOW       = ["flow_enabled", "flow_threshold", "flow_algorithm"];
 const BG_SUB     = ["bg_sub_enabled", "bg_model_frames", "bg_sub_threshold"];
 const HIST       = ["hist_enabled", "hist_grid_size", "hist_threshold"];
 const COMBINE    = ["combine_method"];
-
-function setHidden(w, hidden) {
-    if (hidden) {
-        if (!w.__origComputeSize) {
-            w.__origComputeSize = w.computeSize;
-            w.__origType = w.type;
-        }
-        w.computeSize = () => [0, -4];
-        w.hidden = true;
-        w.type = "hidden";
-    } else {
-        if (w.__origComputeSize) {
-            w.computeSize = w.__origComputeSize;
-            delete w.__origComputeSize;
-        }
-        w.hidden = false;
-        w.type = w.__origType || w.type;
-    }
-}
 
 function applyVisibility(node) {
     const get = (n) => node.widgets?.find(w => w.name === n);
