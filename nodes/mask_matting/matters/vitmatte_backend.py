@@ -51,15 +51,61 @@ class ViTMatteMatter(BaseMatter):
         if not _have_transformers():
             raise RuntimeError("transformers not installed. `pip install transformers`.")
         from transformers import VitMatteForImageMatting, VitMatteImageProcessor
-        path = resolve_backend_weight(self.MODELS_KEY, self.model_name)
+
+        # ── Resolve a usable HF model directory ──────────────────────────
+        # Acceptable layouts under ComfyUI/models/vitmatte/:
+        #   * <root>/<repo-name>/{preprocessor_config.json, config.json, *.safetensors}
+        #   * <root>/{preprocessor_config.json, config.json, *.safetensors}    (flat)
+        #   * a single .safetensors file with a sibling preprocessor_config.json
+        # Anything else → fall back to the HF Hub repo id so the user gets a
+        # real model instead of OSError("Can't load image processor for ...").
+        def _is_hf_model_dir(p: str) -> bool:
+            return (
+                isinstance(p, str)
+                and os.path.isdir(p)
+                and os.path.isfile(os.path.join(p, "preprocessor_config.json"))
+                and os.path.isfile(os.path.join(p, "config.json"))
+            )
+
+        candidates: list[str] = []
+        path = resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None
         if path and os.path.isdir(path):
-            src = path
+            candidates.append(path)
         elif path and os.path.isfile(path):
-            # User supplied a single .safetensors — assume sibling config.json
-            src = os.path.dirname(path)
-        else:
-            # Fallback: treat model_name as HF repo id.
+            candidates.append(os.path.dirname(path))
+
+        # Walk the backend root to find any HF-style sub-folder the user
+        # might have downloaded (e.g. via huggingface-cli or git-lfs).
+        try:
+            root = backend_first_root(self.MODELS_KEY)
+            if root and os.path.isdir(root):
+                if _is_hf_model_dir(root):
+                    candidates.append(root)
+                for entry in sorted(os.listdir(root)):
+                    sub = os.path.join(root, entry)
+                    if _is_hf_model_dir(sub):
+                        candidates.append(sub)
+        except Exception:
+            pass
+
+        src: Optional[str] = None
+        for c in candidates:
+            if _is_hf_model_dir(c):
+                src = c
+                break
+
+        if src is None:
+            # No usable local layout → use HF id (or a sensible default).
             src = self.model_name or "hustvl/vitmatte-small-composition-1k"
+            # If the resolved name still looks like a bare filename (no '/'),
+            # prepend the canonical HF org so transformers can fetch it.
+            if "/" not in src and not os.path.isabs(src):
+                src = "hustvl/vitmatte-small-composition-1k"
+            logger.info(
+                "[ViTMatte] no local HF model dir found under "
+                "ComfyUI/models/vitmatte/ \u2014 falling back to HF Hub: %s", src,
+            )
+
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(self.precision, torch.float16)
         self._processor = VitMatteImageProcessor.from_pretrained(src)
         self._model = VitMatteForImageMatting.from_pretrained(src, torch_dtype=dtype).to(self.device).eval()

@@ -205,7 +205,6 @@ class Editor {
 
     setRefImage(url, origW, origH) {
         if (url === this.refUrl && this.refImg && this.refImg.complete) return;
-        const isReplacement = this.refUrl != null && this.refUrl !== url;
         this.refUrl = url;
         const img = new Image();
         img.crossOrigin = "anonymous";
@@ -221,16 +220,12 @@ class Editor {
                 if (wW) wW.value = w;
                 if (hW) hW.value = h;
             }
-            // When the user swaps the input image: dump stale annotations.
-            // Coordinates are in image pixels, so they are meaningless on a
-            // different image (and were the cause of "phantom" points/boxes
-            // sticking around after changing the LoadImage).
-            if (isReplacement && (this.points.length || this.bboxes.length)) {
-                this.pushUndo();
-                this.points = [];
-                this.bboxes = [];
-                this.save?.();
-            }
+            // NOTE: previously we wiped points/bboxes whenever the URL
+            // changed, but that fires every time the upstream node
+            // re-executes (it returns a fresh base64 data URL each run)
+            // even when the underlying image is identical. The user's
+            // annotations would silently disappear. Keep them — the
+            // toolbar's Clear-all button is the explicit way to dump them.
             this._fitted = false;
             this.onLoaded?.();
         };
