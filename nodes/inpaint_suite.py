@@ -2305,11 +2305,48 @@ class InpaintPasteBackMEC:
                     )
                 offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
 
-            if feather_active:
-                # Correct feather: erode inward to get a zero-border ring,
-                # then blur to create a smooth edge ramp (0 at boundary → 1 inside).
-                # The old _gaussian_blur_2d on a ones-tensor did nothing useful
-                # due to replicate padding making the convolution of a constant = constant.
+            # CRITICAL FIX (May 2026): honour the user's ORIGINAL MASK.
+            #
+            # The previous behaviour was a hard rectangular paste of the
+            # entire crop region (ctc_w × ctc_h), which obliterated all the
+            # unmasked context pixels around the inpaint subject — the
+            # source of the "every pixel shifted" seams the user reported.
+            # If stitch_data carries 'original_mask' (always true for crops
+            # produced by InpaintCropProMEC), we now build a canvas-space
+            # alpha that is bit-exact 0 outside the user mask, so unmasked
+            # pixels are byte-identical to the input. Inside the mask we
+            # composite the inpaint, optionally feathered.
+            original_mask_full = stitch_data.get("original_mask")
+
+            if original_mask_full is not None:
+                om = original_mask_full.to(device).clamp(0.0, 1.0)
+                if om.shape[0] == 1 and B > 1:
+                    om = om.expand(B, -1, -1).contiguous()
+                elif om.shape[0] != B:
+                    om = om[:1].expand(B, -1, -1).contiguous()
+                Hc, Wc = canvas.shape[1], canvas.shape[2]
+                canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
+                mh = min(cto_h, om.shape[1])
+                mw = min(cto_w, om.shape[2])
+                canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
+
+                if feather_active:
+                    blend_full = _exact_inside_feather(canvas_mask, int(feather_radius))
+                else:
+                    # Hard binary: alpha is exactly {0,1}. Outside-mask pixels
+                    # are byte-identical to canvas; inside-mask pixels are
+                    # exactly the inpaint. Zero seam, zero pixel shift.
+                    blend_full = (canvas_mask > 0.5).to(canvas.dtype)
+
+                for b, (fx, fy) in enumerate(offsets_iter):
+                    bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
+                    canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
+                    inp_b = inp_resized[b:b + 1]
+                    canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
+                        canvas_win * (1.0 - bm_win) + inp_b * bm_win
+                    )
+            elif feather_active:
+                # Legacy path: no original_mask — fall back to crop-rectangle feather.
                 binary_ones = torch.ones(1, ctc_h, ctc_w, device=device, dtype=torch.float32)
                 core = _erode_mask(binary_ones, feather_radius)
                 pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)  # (1, H, W)
@@ -2320,6 +2357,7 @@ class InpaintPasteBackMEC:
                         crop * (1.0 - pm3) + inp_resized[b] * pm3
                     )
             else:
+                # Legacy hard rectangular paste (no original_mask, no feather).
                 for b, (fx, fy) in enumerate(offsets_iter):
                     canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
 
@@ -2332,14 +2370,25 @@ class InpaintPasteBackMEC:
                     f"\n  Ronin per-frame paste: x∈[{min(xs)},{max(xs)}] "
                     f"y∈[{min(ys)},{max(ys)}]"
                 )
+            mask_info = (
+                "  alpha: original_mask honoured (zero pixel change outside mask)\n"
+                if original_mask_full is not None
+                else "  alpha: legacy crop-rectangle paste (no original_mask)\n"
+            )
             info = (
                 f"InpaintPasteBackMEC (v{version}):\n"
                 f"  crop→canvas (ref): x={ctc_x}, y={ctc_y}, w={ctc_w}, h={ctc_h}\n"
                 f"  output: {B}x{cto_h}x{cto_w}\n"
                 f"  upscale_method: {upscale_method}\n"
-                f"  feather_edges: {feather_edges}, radius={feather_radius}"
+                + mask_info
+                + f"  feather_edges: {feather_edges}, radius={feather_radius}"
                 + ronin_info
             )
+            # Important: do NOT clamp when original_mask path was used —
+            # outside pixels are bit-exact and must not be perturbed by
+            # clamp on tensors that may already be slightly outside [0,1].
+            if original_mask_full is not None:
+                return (output, info)
             return (output.clamp(0, 1), info)
 
         # V1 fallback
