@@ -158,6 +158,41 @@ def _oval_face_mask(B: int, H: int, W: int,
     return alpha_soft.unsqueeze(0).expand(B, -1, -1)  # (B, H, W)
 
 
+def _exact_inside_feather(binary_mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Build a feather that is GUARANTEED zero outside the original mask.
+
+    Strategy:
+      1. Hard-binarize the input mask (anything > 0.5 → 1, else → 0).
+      2. Erode the binary by ``radius`` to obtain an opaque interior 'core'.
+      3. Gaussian-blur the core (sigma ≈ radius/2). The blur ramp lives in a
+         thin annulus at the *inside* of the original boundary.
+      4. Multiply by the hard binary so the result is *bit-exact 0* outside.
+
+    This is the trick that makes paste-back produce zero pixel/color changes
+    outside the user mask: the alpha channel is exactly 0 there, so
+    ``out = canvas * (1 - alpha) + inp * alpha`` reduces to ``out = canvas``
+    with no floating-point drift, no resampling artefacts, no ringing leak.
+    Inside the mask the alpha ramps smoothly 0→1 over a ``radius``-pixel band
+    against the boundary, which is what hides the seam.
+    """
+    binary = (binary_mask > 0.5).to(binary_mask.dtype)
+    if radius <= 0:
+        return binary
+    r = max(1, int(radius))
+    core = _erode_mask(binary, r)
+    # If the mask is too thin (e.g. blend_radius > half the mask thickness),
+    # fall back to a smaller radius until a non-empty core survives. Avoids
+    # the entire interior fading to translucent.
+    while r > 1 and core.sum() < binary.sum() * 0.05:
+        r = max(1, r // 2)
+        core = _erode_mask(binary, r)
+    sigma = max(0.5, float(r) * 0.5)
+    blurred = _gaussian_blur_mask(core, sigma=sigma).clamp(0.0, 1.0)
+    # Hard-clip the feather to the original mask: this guarantees alpha == 0
+    # everywhere the user did not paint, which is the whole point.
+    return (blurred * binary).clamp(0.0, 1.0)
+
+
 def _opaque_core_with_feather(soft_mask: torch.Tensor,
                               feathered: torch.Tensor,
                               radius: int) -> torch.Tensor:
@@ -646,6 +681,14 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
     B, H, W, C = image.shape
     device = _get_device(mask)
 
+    # 'exact' mode: feather lives entirely INSIDE the original mask. Alpha is
+    # bit-exact 0 outside, which is what guarantees zero pixel/colour change
+    # outside the masked region at paste-back time. We do NOT expand the mask
+    # outward and we do NOT apply oval shaping (oval would clip pixels the
+    # user actually marked for inpainting).
+    if mode == "exact":
+        return _exact_inside_feather(mask, radius)
+
     # Optional oval shaping: replace rectangular mask with elliptical one.
     # Eliminates the blocky corner artefacts on face/portrait crops.
     use_oval = (shape == "oval") or (shape == "auto" and H >= W)
@@ -830,7 +873,12 @@ class InpaintCropProMEC:
     """
 
     VRAM_TIER = 1
-    STITCH_BLEND_MODES = ["edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend"]
+    # 'exact' is the new default: it builds the blend alpha from the original
+    # full-resolution mask in canvas space, with the feather constrained to
+    # live INSIDE the user mask. Outside the mask the alpha is bit-exact 0,
+    # which guarantees zero pixel / colour changes outside the inpainted
+    # region (no lanczos ringing leak, no boundary halo, no seam).
+    STITCH_BLEND_MODES = ["exact", "edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend"]
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
     SIZE_MODES = ["free_size", "forced_size", "ranged_size"]
     FILL_MODES = ["edge_pad", "neutral_gray", "original"]
@@ -855,8 +903,8 @@ class InpaintCropProMEC:
                     "default": "hard_binary",
                     "tooltip": "What the inpaint model sees: hard_binary (crisp), slight_feather (gentle edges), soft_blend (very soft)"}),
                 "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
-                    "default": "gaussian",
-                    "tooltip": "How the result is composited back: edge_aware (Sobel-guided), gaussian, laplacian_pyramid, frequency_blend"}),
+                    "default": "exact",
+                    "tooltip": "How the result is composited back. 'exact' (DEFAULT, RECOMMENDED) guarantees zero pixel/colour change outside the original mask — feather lives entirely inside the mask, alpha is bit-exact 0 elsewhere. Other modes (edge_aware, gaussian, laplacian_pyramid, frequency_blend) are legacy and may show seam artefacts."}),
                 "blend_radius": ("INT", {
                     "default": 32, "min": 1, "max": 256, "step": 1,
                     "tooltip": "Feather radius for the stitch blend mask"}),
@@ -1431,7 +1479,7 @@ class InpaintStitchProMEC:
     """
 
     VRAM_TIER = 1
-    BLEND_OVERRIDES = ["from_crop", "edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend"]
+    BLEND_OVERRIDES = ["from_crop", "exact", "edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1527,6 +1575,131 @@ class InpaintStitchProMEC:
         B = inpainted_image.shape[0]
 
         blend_mode = stored_blend_mode if blend_mode_override == "from_crop" else blend_mode_override
+
+        # ──────────────────────────────────────────────────────────────
+        # 'exact' fast-path: zero pixel / colour change outside the mask.
+        #
+        # The legacy paths build the blend alpha in CROPPED+RESIZED space
+        # then upsample it back, which leaks non-zero alpha values outside
+        # the user's original mask (lanczos ringing, bilinear bleed, etc).
+        # Combined with the lanczos round-trip on the inpaint patch this
+        # produces visible color / pixel shifts at the seam — exactly what
+        # the user is complaining about.
+        #
+        # 'exact' instead:
+        #   1. Maps the ORIGINAL full-resolution mask onto the canvas at
+        #      its native resolution (no resampling for the unmasked area).
+        #   2. Builds the feather strictly INSIDE that mask (erode + blur,
+        #      then multiply by the hard binary so outside is bit-exact 0).
+        #   3. Resizes the inpainted patch back to (ctc_h, ctc_w) and
+        #      composites it through that alpha. Where alpha == 0 the
+        #      output is identically the canvas (= original) pixel.
+        # ──────────────────────────────────────────────────────────────
+        if blend_mode == "exact":
+            original_mask_full = stitch_data.get("original_mask")
+            if original_mask_full is None:
+                raise ValueError(
+                    "InpaintStitchProMEC: stitch_data is missing 'original_mask' "
+                    "which is required by 'exact' blend mode. Re-run the "
+                    "InpaintCropProMEC node to regenerate the stitch_data."
+                )
+            om = original_mask_full.to(device).clamp(0.0, 1.0)
+            # original_mask is in *original* image coordinates (cto_w x cto_h).
+            # Map it onto the (possibly canvas-expanded) canvas grid.
+            if om.shape[0] == 1 and B > 1:
+                om = om.expand(B, -1, -1).contiguous()
+            elif om.shape[0] != B:
+                # Tile / broadcast best-effort.
+                om = om[:1].expand(B, -1, -1).contiguous()
+            Hc, Wc = canvas.shape[1], canvas.shape[2]
+            canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
+            # Place the original mask inside the canvas at its known offset.
+            mh = min(cto_h, om.shape[1])
+            mw = min(cto_w, om.shape[2])
+            canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
+
+            # Build the inside-only feather at full canvas resolution. Alpha
+            # is bit-exact 0 wherever the user did not paint — that's the
+            # zero-pixel-issue guarantee.
+            radius = max(int(blend_radius), 0)
+            blend_full = _exact_inside_feather(canvas_mask, radius)
+
+            # Resize inpainted patch to ctc_h x ctc_w (this is the only
+            # resample in the whole pipeline, and its output is gated by
+            # alpha == 0 outside the user mask, so any ringing is killed).
+            inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
+
+            # Per-frame paste loop. Frame_offsets handle Ronin per-frame crop.
+            if frame_offsets is None:
+                offsets_iter = [(ctc_x, ctc_y)] * B
+            else:
+                if len(frame_offsets) != B:
+                    raise ValueError(
+                        f"InpaintStitchProMEC: frame_offsets length ({len(frame_offsets)}) "
+                        f"does not match inpainted batch size ({B})."
+                    )
+                offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
+
+            uniform_offsets = (
+                len(offsets_iter) > 1
+                and all(o == offsets_iter[0] for o in offsets_iter)
+            )
+
+            if uniform_offsets and not color_match:
+                # Vectorized batched composite — single torch op, zero loops.
+                fx0, fy0 = offsets_iter[0]
+                bm_win = blend_full[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w].unsqueeze(-1)
+                canvas_win = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :]
+                blended = canvas_win * (1.0 - bm_win) + inp_resized * bm_win
+                canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended
+            else:
+                for b, (fx, fy) in _PB.track(
+                    list(enumerate(offsets_iter)), len(offsets_iter),
+                    "InpaintStitchProMEC: paste frames (exact)",
+                ):
+                    inp_b = inp_resized[b:b + 1]
+                    canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
+                    bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
+                    if color_match:
+                        cm_b = (bm_win.squeeze(-1) > 0.01).float()
+                        inp_b = _color_match_mean_std(inp_b, canvas_win, cm_b)
+                    blended = canvas_win * (1.0 - bm_win) + inp_b * bm_win
+                    canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
+
+            # Important: do NOT clamp `canvas` outside the masked region.
+            # Clamping is fine because canvas is already in [0,1], but the
+            # unmasked pixels were never touched (alpha was 0), so they are
+            # bit-exact equal to the input.
+            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
+            blend_mask_full = blend_full[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
+
+            color_info = "\n  color_match: applied (inside mask only)" if color_match else ""
+            ronin_info = ""
+            if frame_offsets is not None:
+                xs = [fx for fx, _ in offsets_iter]
+                ys = [fy for _, fy in offsets_iter]
+                ronin_info = (
+                    f"\n  Ronin per-frame paste: x∈[{min(xs)},{max(xs)}] "
+                    f"y∈[{min(ys)},{max(ys)}]"
+                )
+            info = (
+                f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [exact mode]:\n"
+                f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
+                f"  crop→canvas (ref): x={ctc_x}, y={ctc_y}, w={ctc_w}, h={ctc_h}\n"
+                f"  orig→canvas: x={cto_x}, y={cto_y}, w={cto_w}, h={cto_h}\n"
+                f"  blend_mode: exact (alpha bit-exact 0 outside mask)\n"
+                f"  blend_radius: {blend_radius} (feather inside-only)\n"
+                f"  output: {B}x{cto_h}x{cto_w}"
+                + ronin_info
+                + color_info
+            )
+            return (output, blend_mask_full, info)
+
+        # ──────────────────────────────────────────────────────────────
+        # Legacy paths (edge_aware / gaussian / laplacian_pyramid /
+        # frequency_blend). These build alpha in cropped+resized space and
+        # may show seam artefacts. Kept for backward compatibility only.
+        # ──────────────────────────────────────────────────────────────
 
         # Resize inpainted to crop region dimensions in canvas
         inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
