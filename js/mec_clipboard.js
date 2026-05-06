@@ -699,24 +699,17 @@ window.addEventListener("keydown", (ev) => {
             finishCopy();
         }
     } else { // k === "v"
-        ev.preventDefault();
-        ev.stopImmediatePropagation();
-        // Read OS clipboard; if it's an MEC payload, run our paste; else native.
-        const fallbackNative = () => _nativePasteFromLocalStorage();
-        if (navigator.clipboard?.readText) {
-            navigator.clipboard.readText().then((text) => {
-                if (text && HEADER_REGEX.test(text)) {
-                    _pasteFromText(text);
-                } else {
-                    fallbackNative();
-                }
-            }).catch((e) => {
-                console.warn("[MEC.clipboard] readText failed, falling back to native:", e);
-                fallbackNative();
-            });
-        } else {
-            fallbackNative();
-        }
+        // INTENTIONALLY do NOT preventDefault here. Letting the browser fire
+        // its native `paste` event is what allows ComfyUI to paste images,
+        // workflow JSON, model files, etc. from the OS clipboard. Our own
+        // capture-phase `paste` listener (below) intercepts ONLY when the
+        // clipboard text matches HEADER_REGEX (an MEC payload). Anything
+        // else bubbles to ComfyUI's handlers untouched.
+        //
+        // For an explicit MEC paste even when the clipboard contains a
+        // non-MEC payload (or when the browser blocks readText), users can
+        // still hit Ctrl+Alt+V (the explicit fallback handled above).
+        return;
     }
 }, true);
 
@@ -775,7 +768,18 @@ app.registerExtension({
         },
     ],
     async setup() {
-        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 keydown takeover for Ctrl+C / Ctrl+V (capture phase, stopImmediatePropagation), Ctrl+Alt+C/V explicit fallback, auto-copy=" + isAutoCopyEnabled());
+        // Expose paste helpers on window so other extensions (e.g. the
+        // diagnostics sidebar's "Paste node" button) can drop a MEC payload
+        // into the graph without going through the OS clipboard.
+        try {
+            window.__MEC_CLIPBOARD_API__ = {
+                pasteFromText: _pasteFromText,
+                pasteFromOSClipboard: _paste,
+                copy: _copy,
+                version: CLIP_VERSION,
+            };
+        } catch (_) { /* ignore */ }
+        console.log("[MEC.clipboard] v" + CLIP_VERSION + " loaded \u2014 keydown takeover for Ctrl+C only (Ctrl+V left to native so image/workflow paste keeps working), Ctrl+Alt+C/V explicit fallback, auto-copy=" + isAutoCopyEnabled());
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 

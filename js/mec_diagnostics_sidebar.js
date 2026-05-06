@@ -653,10 +653,23 @@ async function _renderClipboard(body) {
     const refresh = document.createElement("button");
     refresh.className = "mec-diag-btn primary";
     refresh.textContent = "Refresh";
+    const pasteOS = document.createElement("button");
+    pasteOS.className = "mec-diag-btn";
+    pasteOS.textContent = "Paste node from clipboard";
+    pasteOS.title = "Read the current OS clipboard and, if it contains a MEC payload, paste those nodes into the graph (same as Ctrl+Alt+V).";
+    pasteOS.onclick = async () => {
+        const api = window.__MEC_CLIPBOARD_API__;
+        if (!api?.pasteFromOSClipboard) {
+            _toast("MEC clipboard module not loaded", "error");
+            return;
+        }
+        try { await api.pasteFromOSClipboard(); }
+        catch (e) { _toast("Paste failed: " + e, "error"); }
+    };
     const clear = document.createElement("button");
     clear.className = "mec-diag-btn";
     clear.textContent = "Clear history";
-    tb.append(refresh, clear);
+    tb.append(refresh, pasteOS, clear);
     body.appendChild(tb);
     const list = document.createElement("div");
     body.appendChild(list);
@@ -688,7 +701,22 @@ async function _renderClipboard(body) {
                     _toast("Re-copied", "success");
                 } catch (e) { _toast("Clipboard write denied", "error"); }
             };
+            const pasteBtn = document.createElement("button");
+            pasteBtn.className = "mec-diag-btn primary";
+            pasteBtn.style.cssText = "margin-top:4px;margin-left:6px;";
+            pasteBtn.textContent = "Paste into graph";
+            pasteBtn.title = "Drop this payload's nodes into the current workflow without touching the OS clipboard.";
+            pasteBtn.onclick = async () => {
+                const api = window.__MEC_CLIPBOARD_API__;
+                if (!api?.pasteFromText) {
+                    _toast("MEC clipboard module not loaded", "error");
+                    return;
+                }
+                try { await api.pasteFromText(entry.text); }
+                catch (e) { _toast("Paste failed: " + e, "error"); }
+            };
             card.appendChild(replay);
+            card.appendChild(pasteBtn);
             list.appendChild(card);
         }
     }
