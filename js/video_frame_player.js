@@ -671,6 +671,14 @@ app.registerExtension({
         nodeType.prototype._render = function () {
             const S = this._S;
             if (!S) return;
+            // Guard: onNodeCreated calls setDisplayMode("time") BEFORE the
+            // per-instance helpers (_tlRect, etc.) are wired up, which used
+            // to throw "this._tlRect is not a function" and aborted the
+            // entire onNodeCreated → the node appeared in the menu but
+            // crashed on click. Skip the first render until init finishes;
+            // the post-init render call at the bottom of onNodeCreated will
+            // paint the first frame.
+            if (typeof this._tlRect !== "function") return;
             const cvs = S.cvs, ctx = S.ctx;
             const cw = S.el.clientWidth || 480;
             const ch = Math.max(160, cvs.clientHeight || (S.el.clientHeight - 36) || 320);
