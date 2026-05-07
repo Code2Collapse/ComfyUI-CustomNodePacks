@@ -1095,15 +1095,30 @@ class InpaintCropProMEC:
                 "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
                     "default": "poisson",
                     "tooltip": (
-                        "How the result is composited back. All three preserve outside-mask pixels bit-exactly.\n"
-                        "• poisson (DEFAULT, RECOMMENDED): Pérez-Gangnet-Blake seamless cloning + safety feather. "
-                        "Mathematically invisible seam, automatic colour/lighting match. CPU/OpenCV.\n"
-                        "• poisson_mixed: same as poisson, but preserves canvas texture passing through the mask (hair, fabric).\n"
-                        "• exact: pure inside-feather alpha composite (no Poisson). Use when the inpaint already matches surroundings."
+                        "How the result is composited back. All four preserve outside-mask pixels bit-exactly.\n"
+                        "• poisson (DEFAULT, RECOMMENDED for Wan/Flux/SDXL/any diffusion output):\n"
+                        "  Pérez-Gangnet-Blake seamless cloning + inside-only safety feather.\n"
+                        "  Mathematically invisible seam, AUTOMATIC colour/lighting match (cures the 'hollow /\n"
+                        "  washed out / ghost halo' look that diffusion models produce).\n"
+                        "• poisson_mixed: same as poisson, but preserves canvas texture passing through the mask\n"
+                        "  (hair, fabric, fine high-frequency detail).\n"
+                        "• exact: pure inside-only feather alpha composite, NO Poisson, NO colour transfer.\n"
+                        "  Use only when the inpaint already matches surroundings perfectly.\n"
+                        "• classic: lquesada-faithful — hard-binary mask + inside-only feather, no Poisson.\n"
+                        "  Same math as 'exact' but ignores any soft-mask preprocessing the upstream applies.\n"
+                        "  Best for SAM/Florence/Dwpose pipelines where the source mask is already binary.\n"
+                        "  USE WITH color_match=True for diffusion outputs (Stitch node setting)."
                     )}),
                 "blend_radius": ("INT", {
-                    "default": 32, "min": 1, "max": 256, "step": 1,
-                    "tooltip": "Feather radius for the stitch blend mask"}),
+                    "default": 16, "min": 1, "max": 256, "step": 1,
+                    "tooltip": (
+                        "Feather radius (in pixels) for the stitch blend mask. The feather lives ENTIRELY\n"
+                        "INSIDE the mask: outside is byte-exact, alpha ramps 0→1 over this many pixels\n"
+                        "moving inward from the boundary. Auto-capped if the mask is thinner than 2×radius.\n"
+                        "Tight masks (mouth, eye): 8–16. Larger features (hand, head): 16–32.\n"
+                        "Avoid >32 unless your mask is at least 100 px thick — wider feathers can fade the\n"
+                        "interior toward the original (the 'hollow' look)."
+                    )}),
                 "size_mode": (cls.SIZE_MODES, {
                     "default": "free_size",
                     "tooltip": "free_size (keep crop dims), forced_size (exact WxH), ranged_size (clamp to min/max)"}),
@@ -1725,10 +1740,28 @@ class InpaintStitchProMEC:
                 "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result from model (B,H,W,C)"}),
                 "blend_mode_override": (cls.BLEND_OVERRIDES, {
                     "default": "from_crop",
-                    "tooltip": "Override the blend mode from crop node, or use 'from_crop' to keep original"}),
+                    "tooltip": (
+                        "Override the blend mode from crop node, or use 'from_crop' to keep original.\n"
+                        "  poisson         — RECOMMENDED for diffusion outputs (Wan, Flux, SDXL inpaint).\n"
+                        "                    Pérez–Gangnet–Blake gradient transfer + inside-only safety net.\n"
+                        "                    Auto colour/lighting match by construction. Outside byte-exact.\n"
+                        "  poisson_mixed   — Same but cv2.MIXED_CLONE: preserves canvas texture passing\n"
+                        "                    through the mask (hair, fabric).\n"
+                        "  exact           — Pure inside-only feather alpha composite, no Poisson.\n"
+                        "                    Use when the inpaint already matches surroundings perfectly.\n"
+                        "  classic         — lquesada-faithful: hard-binary mask + inside-only feather.\n"
+                        "                    Identical math to 'exact' but ignores any soft-mask preprocessing.\n"
+                        "  linear_exact    — gamma-correct sRGB→linear→sRGB feather.\n"
+                        "  edge_aware/gaussian/laplacian_pyramid/frequency_blend — legacy, aliased to poisson.")}),
                 "color_match": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Apply mean+std color transfer before stitching to reduce color shift"}),
+                    "default": True,
+                    "tooltip": (
+                        "Apply mean+std colour transfer of the inpaint toward the canvas inside the\n"
+                        "feather band BEFORE compositing. CRITICAL for diffusion outputs (Wan, Flux,\n"
+                        "SDXL inpaint, etc.) — those models almost always introduce a small saturation /\n"
+                        "exposure drift that makes the masked region look 'hollow' or 'washed out'\n"
+                        "after stitch. Setting this to False is only useful when the inpaint is\n"
+                        "already perfectly colour-balanced (e.g. a hand-edited frame).")}),
             },
         }
 
@@ -1957,22 +1990,45 @@ class InpaintStitchProMEC:
             return (output, preview_mask, info)
 
         # ──────────────────────────────────────────────────────────────
-        # 'classic' mode — lquesada-style ComfyUI-Inpaint-CropAndStitch
-        # behaviour: hard-binary user mask + symmetric gaussian feather
-        # + linear alpha composite, no Poisson, no inside-only feather.
+        # 'classic' mode — lquesada-faithful inside-only feather.
         #
-        # Differs from 'exact':
-        #   * exact:    feather is INSIDE-only (eroded then blurred, then
-        #               clamped by the binary mask) — outside the user's
-        #               binary mask alpha is bit-exact 0, so unchanged.
-        #   * classic:  feather is SYMMETRIC (gaussian blur of the binary
-        #               mask, no inside-clamp) — alpha smoothly tapers
-        #               across the boundary on BOTH sides. A few pixels
-        #               just outside the binary mask are blended toward
-        #               the inpainted patch. Trades the byte-exact-outside
-        #               guarantee for the softest possible visible seam
-        #               (this is what the upstream lquesada node does, and
-        #               why its results look so seamless to the eye).
+        # CORRECT lquesada semantics (after re-reading upstream + Photoshop /
+        # Krita / GIMP layer-mask behaviour): the feather lives ENTIRELY
+        # INSIDE the user mask. Outside the binary boundary the canvas is
+        # byte-exact, AT the boundary alpha == 0, and alpha ramps to 1 as
+        # you move inward. This is what produces an invisible seam: the
+        # boundary itself is the un-modified original pixel, and the
+        # inpaint *fades in* deeper inside.
+        #
+        # Key fix vs the previous (broken) symmetric-gaussian implementation:
+        # a 64-px symmetric blur on a tight face mask painted ~40 px of
+        # ORIGINAL canvas back into Wan's interior, producing the "ghost
+        # halo / hollow / washed out" failure mode the user reported.
+        # Inside-only feather cannot do that: nothing outside the mask is
+        # ever touched, and the deep interior is 100 % inpainted.
+        #
+        # Mask-thickness safety: if the user picks blend_radius wider than
+        # half the local mask thickness, the eroded core would vanish and
+        # the whole region would fade to translucent (true "hollow"). We
+        # therefore auto-cap radius against the actual mask thickness via
+        # the same safety net used by `_exact_inside_feather`.
+        #
+        # Difference vs `exact`:
+        #   exact:    feather is built from the SOFT user mask (post
+        #             mask_blur / mask_grow / inpaint_mask_mode). Best when
+        #             the upstream mask already encodes the desired soft
+        #             boundary.
+        #   classic:  feather is built from a HARD-BINARISED user mask
+        #             (>0.5 threshold). Best for SAM/Florence/Dwpose-style
+        #             pipelines where the source mask is binary anyway,
+        #             and you want the feather width to be defined purely
+        #             by `blend_radius` (no upstream interaction).
+        #
+        # `color_match=True` is highly recommended for diffusion outputs
+        # (Wan 2.2 Animate, Flux Fill, SDXL inpaint…) — it does mean/std
+        # transfer of the inpaint statistics toward the original canvas
+        # statistics inside the feather band, killing the residual hue /
+        # exposure drift that diffusers always introduce.
         # ──────────────────────────────────────────────────────────────
         if blend_mode == "classic":
             original_mask_full = stitch_data.get("original_mask")
@@ -1993,23 +2049,13 @@ class InpaintStitchProMEC:
             mw = min(cto_w, om.shape[2])
             canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
 
-            radius = max(int(blend_radius), 1)
-            # Hard binarize first (lquesada's "hard binary" semantic), then
-            # symmetric gaussian feather. sigma ≈ radius/3 gives a feather
-            # whose effective half-width matches the radius parameter.
+            radius = max(int(blend_radius), 0)
+            # Hard-binarise then build an inside-only feather. The helper
+            # already does erode → gaussian → multiply-by-binary, with
+            # automatic radius backoff if the mask is too thin to support
+            # the requested feather width.
             binary = (canvas_mask > 0.5).to(canvas.dtype)
-            sigma = max(radius / 3.0, 0.5)
-            alpha = _gaussian_blur_mask(binary, sigma=sigma).clamp(0.0, 1.0)
-            # Truncate gaussian tails: any α below 1/512 cannot survive byte
-            # quantization, so zero them out. This restores byte-exact pixels
-            # for the bulk of the canvas (only the active feather ring is
-            # touched), while keeping the soft visible seam.
-            alpha = torch.where(alpha < (1.0 / 512.0),
-                                torch.zeros_like(alpha), alpha)
-            # Also snap α==1 region to exactly 1.0 so the inpaint interior is
-            # bit-faithful to inp_resized (no canvas bleed-through).
-            alpha = torch.where(alpha > (1.0 - 1.0 / 512.0),
-                                torch.ones_like(alpha), alpha)
+            alpha = _exact_inside_feather(binary, radius)
 
             # Resize inpaint patch back to crop-window dims (only resample).
             inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
@@ -2023,32 +2069,29 @@ class InpaintStitchProMEC:
                     )
                 offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
 
-            # Build a "paste canvas": original canvas with the inpainted
-            # patch laid down at each frame's offset. Then alpha-blend.
-            paste_canvas = canvas.clone()
             for b, (fx, fy) in _PB.track(
                 list(enumerate(offsets_iter)), len(offsets_iter),
                 "InpaintStitchProMEC: paste frames (classic)",
             ):
-                paste_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
+                inp_b = inp_resized[b:b + 1]
+                canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
+                bm_win = alpha[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
                 if color_match:
-                    bm_b = (alpha[b:b + 1] > 0.01).float()
-                    cw = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    pc_window = paste_canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    pc_window = _color_match_mean_std(pc_window, cw,
-                                                     bm_b[:, fy:fy + ctc_h, fx:fx + ctc_w])
-                    paste_canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = pc_window
-            a = alpha.unsqueeze(-1)
-            canvas = canvas * (1.0 - a) + paste_canvas * a
+                    cm_b = (bm_win.squeeze(-1) > 0.01).float()
+                    inp_b = _color_match_mean_std(inp_b, canvas_win, cm_b)
+                blended = canvas_win * (1.0 - bm_win) + inp_b * bm_win
+                canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
 
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
             blend_mask_full = alpha[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
+            cm_info = "  color_match: ON (mean/std transfer inside feather)\n" if color_match else ""
             info = (
                 f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [classic]:\n"
                 f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                f"  blend_mode: classic (lquesada-style hard-binary + symmetric gaussian feather)\n"
-                f"  blend_radius: {radius}px (gaussian sigma {sigma:.2f}px)\n"
-                f"  feather: SYMMETRIC — softest visible seam, but boundary may drift up to ~{radius}px outside binary mask\n"
+                f"  blend_mode: classic (lquesada-faithful, hard-binary + INSIDE-only feather)\n"
+                f"  blend_radius: {radius}px (auto-capped by mask thickness)\n"
+                f"  outside-mask: byte-exact (alpha == 0 outside binary)\n"
+                f"{cm_info}"
                 f"  output: {B}x{cto_h}x{cto_w}"
             )
             return (output, blend_mask_full, info)
