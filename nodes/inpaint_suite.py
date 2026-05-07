@@ -27,37 +27,12 @@ from typing import Dict, List, Tuple, Optional, Any
 import torch
 import torch.nn.functional as F
 
-import numpy as np
-
-from . import _progress as _PB
-from . import _interrupt_check as _IC
 try:
     import cv2
+    import numpy as np
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
-
-try:
-    from scipy.ndimage import binary_closing, binary_fill_holes
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
-    # MANUAL bug-fix (Apr 2026): surface the dependency at import time so
-    # users running InpaintCropProMEC don't silently fall back to a slower
-    # path. Single one-time warning -- no flood on every node call.
-    import logging as _logging
-    _logging.getLogger("MEC.inpaint").warning(
-        "[InpaintCropProMEC] scipy not installed -- mask hole-filling will use "
-        "a slower torch-only fallback. `pip install scipy` to restore full speed."
-    )
-
-from .stabilization_utils import (
-    compensate_camera_motion,
-    compute_motion_magnitudes,
-    motion_adaptive_temporal_smooth,
-    compute_stable_bbox_trajectory,
-    compute_ronin_bbox_trajectory,
-)
 
 logger = logging.getLogger("MEC")
 
@@ -116,259 +91,6 @@ def _gaussian_blur_mask(mask: torch.Tensor, sigma: float) -> torch.Tensor:
     return blurred.squeeze(1)
 
 
-def _erode_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
-    """Binary erosion of a (B, H, W) mask by `radius` pixels via min-pool.
-
-    PERF (May 2026): square structuring-element morphology is *separable*.
-    A k×k dilation/erosion of a square SE is identical to a (1,k) pass
-    followed by a (k,1) pass — provable: max over k×k = max over k rows
-    of (max over k cols). Cost drops from O(k²) to O(2k) per pixel, which
-    for radius=64 (k=129) is a 64× speedup. On CPU (where ComfyUI keeps
-    IMAGE/MASK tensors between nodes) this turns a 28-minute crop on a
-    1024×1024 × ~100-frame video batch into a few seconds. Output is
-    byte-identical to the old single-shot k×k pool.
-    """
-    if radius <= 0:
-        return mask
-    k = 2 * int(radius) + 1
-    pad = k // 2
-    m4 = mask.unsqueeze(1)
-    # Erosion = -dilate(-x). Use separable (1,k) then (k,1) max-pool.
-    neg = -m4
-    neg = F.max_pool2d(neg, kernel_size=(1, k), stride=1, padding=(0, pad))
-    neg = F.max_pool2d(neg, kernel_size=(k, 1), stride=1, padding=(pad, 0))
-    return (-neg).squeeze(1)
-
-
-def _expand_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
-    """Expand (dilate) a (B, H, W) mask outward by `radius` pixels via max-pool.
-
-    PERF (May 2026): see ``_erode_mask`` — separable square SE morphology.
-    """
-    if radius <= 0:
-        return mask
-    k = 2 * int(radius) + 1
-    pad = k // 2
-    m4 = mask.unsqueeze(1)
-    # Separable max-pool: (1,k) then (k,1) — identical result to k×k.
-    m4 = F.max_pool2d(m4, kernel_size=(1, k), stride=1, padding=(0, pad))
-    m4 = F.max_pool2d(m4, kernel_size=(k, 1), stride=1, padding=(pad, 0))
-    return m4.squeeze(1).clamp(0.0, 1.0)
-
-
-def _oval_face_mask(B: int, H: int, W: int,
-                    device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-    """Soft elliptical alpha mask inscribed in (H, W), shape (B, H, W).
-
-    The ellipse exactly fits the crop frame (major axes = H/2, W/2).
-    Values are 1.0 well inside and fade smoothly to 0.0 at the boundary.
-    Used to remove blocky corner artefacts when stitching back face crops.
-    """
-    cy, cx = (H - 1) / 2.0, (W - 1) / 2.0
-    ry = max(cy, 1e-6)
-    rx = max(cx, 1e-6)
-    y = torch.arange(H, device=device, dtype=dtype) - cy   # (H,)
-    x = torch.arange(W, device=device, dtype=dtype) - cx   # (W,)
-    # Normalised radial distance: 0 at centre, 1 at ellipse boundary, >1 outside
-    r = ((y.unsqueeze(1) / ry) ** 2 + (x.unsqueeze(0) / rx) ** 2).sqrt()  # (H, W)
-    # Linear fade: 1.0 at centre, 0.0 at boundary, clamp at 0
-    alpha = (1.0 - r).clamp(0.0, 1.0)
-    # Lightly blur to anti-alias the oval boundary
-    alpha_soft = _gaussian_blur_mask(alpha.unsqueeze(0), sigma=2.0).squeeze(0)
-    return alpha_soft.unsqueeze(0).expand(B, -1, -1)  # (B, H, W)
-
-
-def _exact_inside_feather(binary_mask: torch.Tensor, radius: int) -> torch.Tensor:
-    """Build a feather that is GUARANTEED zero outside the original mask.
-
-    Strategy:
-      1. Hard-binarize the input mask (anything > 0.5 → 1, else → 0).
-      2. Erode the binary by ``radius`` to obtain an opaque interior 'core'.
-      3. Gaussian-blur the core (sigma ≈ radius/2). The blur ramp lives in a
-         thin annulus at the *inside* of the original boundary.
-      4. Multiply by the hard binary so the result is *bit-exact 0* outside.
-
-    This is the trick that makes paste-back produce zero pixel/color changes
-    outside the user mask: the alpha channel is exactly 0 there, so
-    ``out = canvas * (1 - alpha) + inp * alpha`` reduces to ``out = canvas``
-    with no floating-point drift, no resampling artefacts, no ringing leak.
-    Inside the mask the alpha ramps smoothly 0→1 over a ``radius``-pixel band
-    against the boundary, which is what hides the seam.
-    """
-    binary = (binary_mask > 0.5).to(binary_mask.dtype)
-    if radius <= 0:
-        return binary
-    r = max(1, int(radius))
-    core = _erode_mask(binary, r)
-    # If the mask is too thin (e.g. blend_radius > half the mask thickness),
-    # fall back to a smaller radius until a non-empty core survives. Avoids
-    # the entire interior fading to translucent.
-    while r > 1 and core.sum() < binary.sum() * 0.05:
-        r = max(1, r // 2)
-        core = _erode_mask(binary, r)
-    sigma = max(0.5, float(r) * 0.5)
-    blurred = _gaussian_blur_mask(core, sigma=sigma).clamp(0.0, 1.0)
-    # Hard-clip the feather to the original mask: this guarantees alpha == 0
-    # everywhere the user did not paint, which is the whole point.
-    return (blurred * binary).clamp(0.0, 1.0)
-
-
-# ──────────────────────────────────────────────────────────────────────
-#  Gamma-correct sRGB <-> linear conversions for `linear_exact` mode.
-#
-#  Alpha-blending values that are sRGB-encoded (which is what ComfyUI's
-#  IMAGE tensors are) directly mathematically darkens midtones in the
-#  feather band. The fix is universally agreed upon:
-#  decode → blend in linear → encode. The piecewise sRGB transfer curve
-#  (IEC 61966-2-1) is implemented exactly here.
-# ──────────────────────────────────────────────────────────────────────
-def _srgb_to_linear(x: torch.Tensor) -> torch.Tensor:
-    a = 0.055
-    return torch.where(x <= 0.04045, x / 12.92, ((x + a) / (1 + a)).pow(2.4))
-
-
-def _linear_to_srgb(x: torch.Tensor) -> torch.Tensor:
-    a = 0.055
-    x = x.clamp_min(0.0)
-    return torch.where(x <= 0.0031308, 12.92 * x, (1 + a) * x.pow(1.0 / 2.4) - a)
-
-
-# ──────────────────────────────────────────────────────────────────────
-#  Poisson seamless cloning (Pérez, Gangnet, Blake — SIGGRAPH 2003).
-#
-#  For each frame in the batch:
-#    - Place the resized inpaint patch into a canvas-sized 'source' image
-#      at the correct (cto_*, ctc_*) offset so it spatially aligns with
-#      the canvas mask.
-#    - Use the eroded ORIGINAL mask (canvas-resolution) as the binary
-#      Poisson mask. We erode by 1-2 px so the boundary samples lie
-#      strictly OUTSIDE the inpaint patch's lanczos round-trip ringing
-#      band — the Dirichlet boundary then anchors to clean canvas
-#      pixels and the seam is mathematically invisible.
-#    - cv2.seamlessClone solves ∇²f = ∇²g inside Ω, f = f* on ∂Ω.
-#      Outputs 8-bit; we read it back into float32 in [0,1].
-#
-#  Outside the mask the result is *byte-identical* to the canvas because
-#  cv2.seamlessClone's Dirichlet boundary forces it (verified empirically
-#  by the test file _AUDIT/test_poisson_stitch.py).
-#
-#  Runs entirely on CPU via OpenCV's C++ Poisson solver — no VRAM,
-#  ~80-150 ms per 2K frame on a low-end CPU. Perfect for 8GB GPUs.
-# ──────────────────────────────────────────────────────────────────────
-def _poisson_seamless_blend(
-    canvas_frame: torch.Tensor,        # (H, W, 3) float32 in [0,1]
-    inpaint_full: torch.Tensor,        # (H, W, 3) float32 in [0,1] (already pasted)
-    binary_mask: torch.Tensor,         # (H, W)    float32 in {0,1}
-    flags: int,
-    erosion_px: int = 0,
-) -> torch.Tensor:
-    """Seamless-clone `inpaint_full` onto `canvas_frame` inside the mask.
-
-    Returns a float32 (H,W,3) tensor on the same device. Outside the mask
-    the output is byte-identical to `canvas_frame`.
-
-    BUG FIX (May 2026): the prior version eroded the mask by 2 px before
-    calling cv2.seamlessClone, then post-composited with the un-eroded
-    mask. That stamped 2 px of original canvas pixels back onto the
-    inpaint at the user's mask boundary — which is EXACTLY where the
-    Dirichlet condition is supposed to enforce a colour match. The
-    visible "hard rim" the user reported was that 2-px ring of original
-    pixels overwriting Poisson's edge-matched output. The fix: never
-    pre-erode. Pass the un-eroded mask straight to seamlessClone (per
-    Pérez-Gangnet-Blake SIGGRAPH 2003), and only re-stamp canvas pixels
-    OUTSIDE the user's binary mask after the clone (which is necessary
-    because cv2.seamlessClone internally dilates by 1 px and can leak).
-    """
-    if not HAS_CV2:
-        raise RuntimeError(
-            "InpaintStitchProMEC: 'poisson' blend modes require OpenCV. "
-            "Run: pip install opencv-python"
-        )
-
-    H, W = binary_mask.shape[-2:]
-    device, dtype = canvas_frame.device, canvas_frame.dtype
-
-    # Build the binary mask. We do NOT pre-erode — Poisson's Dirichlet
-    # boundary on the un-eroded mask is what gives a seamless edge.
-    bm = (binary_mask.detach().to("cpu").float() > 0.5).numpy().astype(np.uint8)
-    if bm.sum() == 0:
-        # No mask -> just return the canvas unchanged.
-        return canvas_frame.clone()
-
-    if erosion_px > 0:
-        # Optional, off by default. Only used for diagnostics / experiments.
-        k = max(3, 2 * int(erosion_px) + 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        bm_for_clone = cv2.erode(bm, kernel, iterations=1)
-        if bm_for_clone.sum() < bm.sum() * 0.05:
-            bm_for_clone = bm
-    else:
-        bm_for_clone = bm
-
-    # cv2.seamlessClone needs:
-    #   src     = uint8 image to graft FROM
-    #   dst     = uint8 image to graft INTO
-    #   mask    = uint8 binary, 255 = grafted region
-    #   center  = (cx, cy) in dst pixel coords (centroid of the mask)
-    src = (inpaint_full.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
-    dst = (canvas_frame.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
-    mask_u8 = (bm_for_clone * 255).astype(np.uint8)
-
-    # Centroid of the mask -> seamlessClone's `center` argument.
-    ys, xs = np.nonzero(bm_for_clone)
-    if ys.size == 0:
-        return canvas_frame.clone()
-    cy = int((ys.min() + ys.max()) // 2)
-    cx = int((xs.min() + xs.max()) // 2)
-
-    # OpenCV expects BGR order for color images in seamlessClone.
-    src_bgr = cv2.cvtColor(src, cv2.COLOR_RGB2BGR)
-    dst_bgr = cv2.cvtColor(dst, cv2.COLOR_RGB2BGR)
-    out_bgr = cv2.seamlessClone(src_bgr, dst_bgr, mask_u8, (cx, cy), flags)
-    out_rgb = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2RGB)
-
-    # Critical: re-apply the mask to enforce byte-exact outside-mask
-    # pixels. cv2.seamlessClone dilates internally by ~1 px which can
-    # touch a thin border outside the mask. Stamp the un-eroded canvas
-    # back there. This does NOT clobber Poisson's edge-matched output
-    # because every pixel under the original binary mask is preserved.
-    out_f = torch.from_numpy(out_rgb).to(device=device, dtype=dtype) / 255.0
-    bm_full = torch.from_numpy(bm).to(device=device, dtype=dtype).unsqueeze(-1)
-    out_f = canvas_frame * (1.0 - bm_full) + out_f * bm_full
-    return out_f
-
-
-def _opaque_core_with_feather(soft_mask: torch.Tensor,
-                              feathered: torch.Tensor,
-                              radius: int) -> torch.Tensor:
-    """Combine an opaque interior 'core' with a feathered boundary ramp.
-
-    Without this step a Gaussian/edge-aware feather drops alpha below 1.0
-    inside the mask, so the inpainted region is composited semi-transparently
-    and looks 'hollow' / low-opacity. The core is the input mask eroded by
-    `radius` pixels; the final alpha is max(core, feathered).
-
-    Important safety net: if `radius` is larger than half the mask's
-    thinnest extent (e.g. user set blend_radius=64 but the mask is only
-    40px thick), naive erosion would wipe the entire core out, leaving
-    *only* the faded feather and producing a translucent / transparent
-    inpaint paste-back. We auto-clamp the erosion radius so a non-empty
-    core always survives.
-    """
-    if radius <= 0:
-        return feathered.clamp(0.0, 1.0)
-    binary = (soft_mask > 0.5).float()
-    # Try the requested radius first; if it eats the entire mask, halve and
-    # retry until a non-empty core remains. A non-empty core is what
-    # guarantees the interior of the inpaint stays fully opaque.
-    r = int(radius)
-    core = _erode_mask(binary, r)
-    while r > 1 and core.sum() < binary.sum() * 0.05:
-        r = max(1, r // 2)
-        core = _erode_mask(binary, r)
-    return torch.maximum(core, feathered).clamp(0.0, 1.0)
-
-
 # ══════════════════════════════════════════════════════════════════════
 #  Sobel edge detection — pure torch
 # ══════════════════════════════════════════════════════════════════════
@@ -417,9 +139,7 @@ def _edge_aware_blend_mask(image: torch.Tensor, mask: torch.Tensor, radius: int)
 
     # Step 2: Compute Sobel edge magnitude
     edge_mag = _sobel_edges(luma)  # (B, H, W)
-    # Normalize edge magnitude to [0, 1] per frame.
-    # Helper-internal loop: plain `for` (no _PB.track) to avoid nested
-    # ProgressBar resets when called from a node-level tracked loop.
+    # Normalize edge magnitude to [0, 1] per frame
     for b in range(B):
         emax = edge_mag[b].max()
         if emax > 0:
@@ -435,25 +155,17 @@ def _edge_aware_blend_mask(image: torch.Tensor, mask: torch.Tensor, radius: int)
     sigma_min = max(0.5, sigma_base * 0.15)
 
     # Create a spatially-varying sharpness via blending sharp + smooth versions
-    # Use bidirectional feather (blur the soft mask, not the hard binary) so the
-    # transition zone straddles the boundary on BOTH sides — this is what removes
-    # the visible seam at the inpaint boundary.
-    soft = mask.clamp(0.0, 1.0)
-    sharp_blend = _gaussian_blur_mask(soft, sigma_min)
-    smooth_blend = _gaussian_blur_mask(soft, sigma_base)
+    sharp_blend = _gaussian_blur_mask(binary, sigma_min)   # (B, H, W)
+    smooth_blend = _gaussian_blur_mask(binary, sigma_base)  # (B, H, W)
 
-    # Dilate edge magnitude slightly so 1px-thin edges still influence weighting
-    edge_dil = F.max_pool2d(edge_mag.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
-    edge_weight = edge_dil.clamp(0.0, 1.0)
-
+    # Blend: at strong edges use sharp, at weak edges use smooth
+    edge_weight = edge_mag.clamp(0.0, 1.0)
     result = edge_weight * sharp_blend + (1.0 - edge_weight) * smooth_blend
 
-    # Force the interior of the mask back to fully opaque. Without this the
-    # Gaussian feather drops alpha below 1.0 deep inside the region (worse
-    # after lanczos resize during stitch), so the inpaint is composited
-    # semi-transparently and looks 'hollow'/low-opacity. We only protect a
-    # core eroded by `radius` so the boundary still feathers symmetrically.
-    return _opaque_core_with_feather(mask, result, radius)
+    # Ensure the mask interior is 1.0 and exterior is 0.0
+    result = torch.where(binary > 0.5, torch.max(result, binary), result)
+
+    return result.clamp(0.0, 1.0)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -468,9 +180,6 @@ def _build_laplacian_pyramid_torch(img: torch.Tensor, levels: int) -> List[torch
     """
     pyramid: List[torch.Tensor] = []
     current = img
-    # Inner level loop (5 iters): plain `for` — never tracked. Tracking
-    # here was creating B*levels ProgressBar resets when called inside an
-    # outer per-frame paste loop, which froze the frontend (Phase 9b).
     for i in range(levels):
         h, w = current.shape[2], current.shape[3]
         # Downsample by 2x with Gaussian pre-filter
@@ -514,7 +223,6 @@ def _laplacian_pyramid_blend(img_a: torch.Tensor, img_b: torch.Tensor,
     # Build Gaussian pyramid for the mask
     mask_pyr: List[torch.Tensor] = []
     current_mask = blend_mask
-    # Inner level loop: plain `for` (see _build_laplacian_pyramid_torch).
     for i in range(levels):
         mask_pyr.append(current_mask)
         h, w = current_mask.shape[2], current_mask.shape[3]
@@ -599,64 +307,62 @@ def _compute_bbox_single(mask_2d: torch.Tensor) -> Tuple[int, int, int, int]:
 
 
 def _compute_stable_bbox(mask: torch.Tensor) -> Tuple[int, int, int, int]:
-    """Compute a smooth-trajectory bounding box across all frames.
+    """Compute the union bounding box across all frames.
 
     mask: (B, H, W) float32
-    Returns: (x, y, w, h) — single bbox covering the smoothed per-frame trajectory.
-
-    Uses median + exponential smoothing for outlier rejection and jitter reduction,
-    instead of naive union which produces an overly loose crop.
+    Returns: (x, y, w, h) — single bbox covering all frames' mask regions.
     """
     B, H, W = mask.shape
+    union_x_min, union_y_min = W, H
+    union_x_max, union_y_max = 0, 0
+    any_valid = False
 
-    if B <= 2:
-        # For very short sequences, union is fine
-        union_x_min, union_y_min = W, H
-        union_x_max, union_y_max = 0, 0
-        any_valid = False
+    for b in range(B):
+        x, y, w, h = _compute_bbox_single(mask[b])
+        if x < 0:
+            continue
+        any_valid = True
+        union_x_min = min(union_x_min, x)
+        union_y_min = min(union_y_min, y)
+        union_x_max = max(union_x_max, x + w)
+        union_y_max = max(union_y_max, y + h)
 
-        for b in range(B):
-            x, y, w, h = _compute_bbox_single(mask[b])
-            if x < 0:
-                continue
-            any_valid = True
-            union_x_min = min(union_x_min, x)
-            union_y_min = min(union_y_min, y)
-            union_x_max = max(union_x_max, x + w)
-            union_y_max = max(union_y_max, y + h)
+    if not any_valid:
+        return (0, 0, W, H)
 
-        if not any_valid:
-            return (0, 0, W, H)
-
-        return (union_x_min, union_y_min,
-                union_x_max - union_x_min, union_y_max - union_y_min)
-
-    # For longer sequences: use trajectory smoothing
-    return compute_stable_bbox_trajectory(
-        mask, smooth_method="median_then_exponential",
-        window_radius=3, alpha=0.3,
-    )
+    return (union_x_min, union_y_min,
+            union_x_max - union_x_min, union_y_max - union_y_min)
 
 
 # ══════════════════════════════════════════════════════════════════════
 #  Temporal Gaussian smoothing along batch dimension
 # ══════════════════════════════════════════════════════════════════════
 
-def _temporal_gaussian_smooth(mask: torch.Tensor, sigma: float,
-                              motion_mags: Optional[List[float]] = None) -> torch.Tensor:
+def _temporal_gaussian_smooth(mask: torch.Tensor, sigma: float) -> torch.Tensor:
     """Smooth a (B, H, W) mask along the batch (temporal) dimension.
 
-    Uses motion-adaptive smoothing when motion_mags is provided:
-    high-motion frames get less smoothing (preserve detail), low-motion
-    frames get more smoothing (reduce noise).
-
-    Falls back to uniform Gaussian when motion_mags is None.
+    Applies 1D Gaussian convolution along dim=0 independently per spatial pixel.
+    Returns (B, H, W).
     """
-    return motion_adaptive_temporal_smooth(
-        mask, sigma_base=sigma,
-        motion_magnitudes=motion_mags,
-        motion_sensitivity=0.5,
-    )
+    B, H, W = mask.shape
+    if B <= 1 or sigma <= 0:
+        return mask
+    device = _get_device(mask)
+    k1d = _gauss_kernel_1d(sigma, device, mask.dtype)  # (K,)
+    K = len(k1d)
+    pad = K // 2
+
+    # Reshape: (B, H*W) → (H*W, 1, B) for conv1d
+    flat = mask.reshape(B, H * W).permute(1, 0)  # (H*W, B)
+    flat = flat.unsqueeze(1)  # (H*W, 1, B)
+
+    kernel = k1d.view(1, 1, -1)  # (1, 1, K)
+    padded = F.pad(flat, (pad, pad), mode="replicate")
+    smoothed = F.conv1d(padded, kernel)  # (H*W, 1, B)
+
+    # Reshape back: (H*W, 1, B) → (B, H, W)
+    smoothed = smoothed.squeeze(1).permute(1, 0).reshape(B, H, W)
+    return smoothed.clamp(0.0, 1.0)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -675,7 +381,6 @@ def _fill_holes_torch(mask: torch.Tensor) -> torch.Tensor:
     if HAS_CV2:
         results = []
         for b in range(B):
-            _IC.check()
             mask_np = binary[b].cpu().numpy().astype(np.uint8) * 255
             contours, hierarchy = cv2.findContours(
                 mask_np, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
@@ -712,11 +417,9 @@ def _remove_small_regions_torch(mask: torch.Tensor, min_area: int) -> torch.Tens
     if HAS_CV2:
         results = []
         for b in range(B):
-            _IC.check()
             binary = (mask[b].cpu().numpy() > 0.5).astype(np.uint8)
             n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
             filtered = np.zeros_like(binary)
-            # Inner labels loop: plain `for` to avoid nested ProgressBar spam.
             for i in range(1, n_labels):
                 if stats[i, cv2.CC_STAT_AREA] >= min_area:
                     filtered[labels == i] = 1
@@ -752,7 +455,6 @@ def _color_match_mean_std(source: torch.Tensor, target: torch.Tensor,
     binary = (mask > 0.5).float()
 
     for b in range(B):
-        _IC.check()
         region_mask = binary[b]  # (H, W)
         if region_mask.sum() < 10:
             continue
@@ -805,62 +507,29 @@ def _apply_inpaint_mask_mode(mask: torch.Tensor, mode: str) -> torch.Tensor:
 # ══════════════════════════════════════════════════════════════════════
 
 def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
-                                 mode: str, radius: int,
-                                 shape: str = "auto") -> torch.Tensor:
+                                 mode: str, radius: int) -> torch.Tensor:
     """Generate the stitch blend mask based on the selected mode.
 
     image: (B, H, W, C)
     mask: (B, H, W)
     mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend'
     radius: feather radius
-    shape: 'auto' | 'oval' | 'rectangle'
-        auto → oval for portrait crops (H ≥ W), rectangle for landscape
     Returns: (B, H, W) soft blend mask
-
-    Key improvement over the old implementation: the mask is *expanded* outward
-    by ``radius`` pixels before blurring.  This matches the pattern used by
-    InpaintCropAndStitch and ensures the feather zone straddles the boundary
-    (half inside, half outside) rather than being entirely interior — which was
-    the root cause of the hard-edge seam visible at paste-back time.
     """
-    B, H, W, C = image.shape
-    device = _get_device(mask)
-
-    # 'exact' mode: feather lives entirely INSIDE the original mask. Alpha is
-    # bit-exact 0 outside, which is what guarantees zero pixel/colour change
-    # outside the masked region at paste-back time. We do NOT expand the mask
-    # outward and we do NOT apply oval shaping (oval would clip pixels the
-    # user actually marked for inpainting).
-    if mode == "exact":
-        return _exact_inside_feather(mask, radius)
-
-    # Optional oval shaping: replace rectangular mask with elliptical one.
-    # Eliminates the blocky corner artefacts on face/portrait crops.
-    use_oval = (shape == "oval") or (shape == "auto" and H >= W)
-    if use_oval:
-        oval = _oval_face_mask(B, H, W, device, mask.dtype)
-        soft = (mask.clamp(0.0, 1.0) * oval).clamp(0.0, 1.0)
-    else:
-        soft = mask.clamp(0.0, 1.0)
-
-    # Expand outward BEFORE blurring — the key step that makes the feather
-    # bidirectional (extends into the surrounding background area).
-    expanded = _expand_mask(soft, radius) if radius > 0 else soft
-
     if mode == "edge_aware":
-        return _edge_aware_blend_mask(image, expanded, radius)
+        return _edge_aware_blend_mask(image, mask, radius)
     elif mode == "gaussian":
-        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.5)
+        binary = (mask > 0.5).float()
+        return _gaussian_blur_mask(binary, sigma=radius * 0.4)
     elif mode == "laplacian_pyramid":
-        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.55)
+        binary = (mask > 0.5).float()
+        return _gaussian_blur_mask(binary, sigma=radius * 0.5)
     elif mode == "frequency_blend":
-        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.6)
+        binary = (mask > 0.5).float()
+        return _gaussian_blur_mask(binary, sigma=radius * 0.6)
     else:
-        feathered = _gaussian_blur_mask(expanded, sigma=radius * 0.5)
-
-    # Keep the original (pre-expand) mask's interior fully opaque so the
-    # inpaint composites at 1.0 inside and only feathers at the boundary.
-    return _opaque_core_with_feather(soft, feathered, radius)
+        binary = (mask > 0.5).float()
+        return _gaussian_blur_mask(binary, sigma=radius * 0.4)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -909,95 +578,40 @@ def _apply_size_mode(crop_w: int, crop_h: int, size_mode: str,
 #  Resize helpers (IMAGE and MASK)
 # ══════════════════════════════════════════════════════════════════════
 
-# Supported interpolation modes for F.interpolate
-# "lanczos" is implemented via PIL fallback; others map to torch modes.
-_TORCH_INTERP_MODES = {
-    "bilinear": "bilinear",
-    "bicubic": "bicubic",
-    "nearest-exact": "nearest-exact",
-    "area": "area",
-}
-
-
-def _resize_image(image: torch.Tensor, target_h: int, target_w: int,
-                  mode: str = "bilinear") -> torch.Tensor:
-    """Resize (B, H, W, C) image to (B, target_h, target_w, C)."""
+def _resize_image(image: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+    """Resize (B, H, W, C) image to (B, target_h, target_w, C) using bilinear."""
     if image.shape[1] == target_h and image.shape[2] == target_w:
         return image
-    if mode == "lanczos":
-        return _resize_lanczos(image, target_h, target_w)
-    torch_mode = _TORCH_INTERP_MODES.get(mode, "bilinear")
     img_bchw = image.permute(0, 3, 1, 2)
-    align = False if torch_mode in ("bilinear", "bicubic") else None
-    kwargs = {"size": (target_h, target_w), "mode": torch_mode}
-    if align is not None:
-        kwargs["align_corners"] = align
-    resized = F.interpolate(img_bchw, **kwargs)
+    resized = F.interpolate(img_bchw, size=(target_h, target_w), mode="bilinear", align_corners=False)
     return resized.permute(0, 2, 3, 1)
 
 
-def _resize_mask(mask: torch.Tensor, target_h: int, target_w: int,
-                 mode: str = "bilinear") -> torch.Tensor:
-    """Resize (B, H, W) mask to (B, target_h, target_w)."""
+def _resize_mask(mask: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+    """Resize (B, H, W) mask to (B, target_h, target_w) using bilinear."""
     if mask.shape[1] == target_h and mask.shape[2] == target_w:
         return mask
-    if mode == "lanczos":
-        # For masks, convert to 4D, use PIL lanczos, squeeze back
-        m4 = mask.unsqueeze(-1).expand(-1, -1, -1, 1)  # (B,H,W,1)
-        resized = _resize_lanczos(m4, target_h, target_w)
-        return resized[..., 0]
-    torch_mode = _TORCH_INTERP_MODES.get(mode, "bilinear")
     m4 = mask.unsqueeze(1)
-    kwargs = {"size": (target_h, target_w), "mode": torch_mode}
-    if torch_mode in ("bilinear", "bicubic"):
-        kwargs["align_corners"] = False
-    resized = F.interpolate(m4, **kwargs)
+    resized = F.interpolate(m4, size=(target_h, target_w), mode="bilinear", align_corners=False)
     return resized.squeeze(1)
 
 
-def _resize_lanczos(image: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
-    """Resize (B,H,W,C) high-quality.
+# ══════════════════════════════════════════════════════════════════════
+#  Legacy blend-mode aliases — keep old workflows loadable.
+#  Anything not understood by the oldest engine maps to 'gaussian'
+#  (the classic lquesada-style feathered composite that worked).
+# ══════════════════════════════════════════════════════════════════════
 
-    For video batches (B > 4) we use torch's GPU bicubic with antialiasing
-    which is ~50-200x faster than CPU PIL Lanczos and visually identical for
-    the small downscales used in inpaint stitching. Single-image / small
-    batches keep the original PIL Lanczos path for max fidelity.
-    """
-    B, H, W, C = image.shape
-    if image.shape[1] == target_h and image.shape[2] == target_w:
-        return image
-    if B > 4:
-        # Vectorized GPU path — antialiased bicubic.
-        img_bchw = image.permute(0, 3, 1, 2)
-        try:
-            resized = F.interpolate(
-                img_bchw, size=(target_h, target_w),
-                mode="bicubic", align_corners=False, antialias=True,
-            )
-        except TypeError:
-            # Older torch without antialias kwarg.
-            resized = F.interpolate(
-                img_bchw, size=(target_h, target_w),
-                mode="bicubic", align_corners=False,
-            )
-        return resized.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+_LEGACY_BLEND_ALIASES = {
+    "poisson":       "gaussian",
+    "poisson_mixed": "gaussian",
+    "exact":         "gaussian",
+    "linear_exact":  "gaussian",
+    "classic":       "gaussian",
+}
 
-    from PIL import Image as PILImage
-    out = []
-    # Helper-internal loop: plain `for` to avoid nested ProgressBar spam
-    # when called from a tracked node loop. B<=4 here so cost is trivial.
-    for i in range(B):
-        _IC.check()
-        arr = (image[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
-        if C == 1:
-            arr = arr[:, :, 0]  # PIL needs 2D for grayscale
-        pil_img = PILImage.fromarray(arr)
-        pil_img = pil_img.resize((target_w, target_h), PILImage.LANCZOS)
-        t = torch.from_numpy(np.array(pil_img).astype("float32") / 255.0)
-        if C == 1:
-            t = t.unsqueeze(-1)  # restore channel dim
-        out.append(t)
-    return torch.stack(out).to(image.device)
+def _normalize_blend_mode(mode: str) -> str:
+    return _LEGACY_BLEND_ALIASES.get(mode, mode)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1011,74 +625,19 @@ class InpaintCropProMEC:
     - Separated inpaint_mask_mode from stitch_blend_mode
     - Edge-aware, Laplacian pyramid, and frequency blend modes
     - video_stable_crop for consistent bbox across video frames
-    - Downscale/upscale factors for quality control
-    - Mask pre-processing (blur, grow/shrink)
-    - Aspect ratio presets with snap to multiple of 8
-    - CROP_MASK output for mask-aware workflows
     """
 
     VRAM_TIER = 1
-    # 'exact' is the new default: it builds the blend alpha from the original
-    # full-resolution mask in canvas space, with the feather constrained to
-    # live INSIDE the user mask. Outside the mask the alpha is bit-exact 0,
-    # which guarantees zero pixel / colour changes outside the inpainted
-    # region (no lanczos ringing leak, no boundary halo, no seam).
-    # Production-ranked: poisson modes give mathematically invisible seams
-    # AND automatic colour/lighting match (no manual color_match needed).
-    # exact / linear_exact give bit-exact outside-mask pixels (zero pixel
-    # change) but rely on the inpaint already matching the surroundings.
-    # The legacy modes (edge_aware, gaussian, laplacian_pyramid,
-    # frequency_blend) leak alpha outside the mask and are kept only for
-    # backward compatibility with old workflows.
-    # CURRENT modes (May 2026 audit):
-    #   poisson         — DEFAULT. Pérez-Gangnet-Blake hybrid: gradient-domain
-    #                     seamless clone + inside-feather safety net. Mathematically
-    #                     invisible seam, automatic colour/lighting match,
-    #                     bit-exact outside the user mask.
-    #   poisson_mixed   — Same but cv2.MIXED_CLONE (preserves canvas texture
-    #                     passing through the mask, e.g. hair, fabric).
-    #   exact           — Pure inside-feather alpha composite, no Poisson. Use
-    #                     when the inpaint already matches surroundings (fast).
-    #   classic         — lquesada-style hard-binary mask + symmetric gaussian
-    #                     feather + linear alpha composite. Most invisible seam
-    #                     to the eye (feather extends both sides of the boundary)
-    #                     at the cost of the byte-exact-outside guarantee — a
-    #                     few pixels just outside the binary mask are softly
-    #                     blended.
-    # REMOVED (silently aliased to 'poisson' for old-workflow compat):
-    #   linear_exact, edge_aware, gaussian, laplacian_pyramid, frequency_blend
-    STITCH_BLEND_MODES = ["poisson", "poisson_mixed", "exact", "classic"]
-    _LEGACY_BLEND_MODES = {  # → modern equivalent for back-compat aliasing
-        "linear_exact": "exact",
-        "edge_aware":   "poisson",
-        "gaussian":     "poisson",
-        "laplacian_pyramid": "poisson",
-        "frequency_blend":   "poisson",
-    }
+    # Native modes from the original (gracefully-working) engine, plus
+    # legacy aliases so saved workflows that picked 'poisson' / 'classic'
+    # / 'exact' still load. All aliases collapse to 'gaussian' internally.
+    STITCH_BLEND_MODES = [
+        "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend",
+        "poisson", "poisson_mixed", "exact", "linear_exact", "classic",
+    ]
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
     SIZE_MODES = ["free_size", "forced_size", "ranged_size"]
     FILL_MODES = ["edge_pad", "neutral_gray", "original"]
-    INTERP_METHODS = ["lanczos", "bicubic", "bilinear", "nearest-exact", "area"]
-    ASPECT_RATIOS = [
-        "none",
-        "1:1", "4:3", "3:4", "16:9", "9:16",
-        "3:2", "2:3", "21:9", "9:21",
-        "5:4", "4:5", "custom",
-    ]
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, stitch_blend_mode=None, **kwargs):
-        # Accept legacy stitch_blend_mode names so old saved workflows still
-        # load — they are silently mapped to modern equivalents at execution.
-        # ComfyUI skips its own enum validation for any input named as a
-        # parameter of VALIDATE_INPUTS, so we own the check for this field.
-        if stitch_blend_mode is None:
-            return True
-        if stitch_blend_mode in cls.STITCH_BLEND_MODES:
-            return True
-        if stitch_blend_mode in cls._LEGACY_BLEND_MODES:
-            return True
-        return f"stitch_blend_mode '{stitch_blend_mode}' not recognized"
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1093,32 +652,11 @@ class InpaintCropProMEC:
                     "default": "hard_binary",
                     "tooltip": "What the inpaint model sees: hard_binary (crisp), slight_feather (gentle edges), soft_blend (very soft)"}),
                 "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
-                    "default": "poisson",
-                    "tooltip": (
-                        "How the result is composited back. All four preserve outside-mask pixels bit-exactly.\n"
-                        "• poisson (DEFAULT, RECOMMENDED for Wan/Flux/SDXL/any diffusion output):\n"
-                        "  Pérez-Gangnet-Blake seamless cloning + inside-only safety feather.\n"
-                        "  Mathematically invisible seam, AUTOMATIC colour/lighting match (cures the 'hollow /\n"
-                        "  washed out / ghost halo' look that diffusion models produce).\n"
-                        "• poisson_mixed: same as poisson, but preserves canvas texture passing through the mask\n"
-                        "  (hair, fabric, fine high-frequency detail).\n"
-                        "• exact: pure inside-only feather alpha composite, NO Poisson, NO colour transfer.\n"
-                        "  Use only when the inpaint already matches surroundings perfectly.\n"
-                        "• classic: lquesada-faithful — hard-binary mask + inside-only feather, no Poisson.\n"
-                        "  Same math as 'exact' but ignores any soft-mask preprocessing the upstream applies.\n"
-                        "  Best for SAM/Florence/Dwpose pipelines where the source mask is already binary.\n"
-                        "  USE WITH color_match=True for diffusion outputs (Stitch node setting)."
-                    )}),
+                    "default": "gaussian",
+                    "tooltip": "How the result is composited back: edge_aware (Sobel-guided), gaussian, laplacian_pyramid, frequency_blend"}),
                 "blend_radius": ("INT", {
-                    "default": 16, "min": 1, "max": 256, "step": 1,
-                    "tooltip": (
-                        "Feather radius (in pixels) for the stitch blend mask. The feather lives ENTIRELY\n"
-                        "INSIDE the mask: outside is byte-exact, alpha ramps 0→1 over this many pixels\n"
-                        "moving inward from the boundary. Auto-capped if the mask is thinner than 2×radius.\n"
-                        "Tight masks (mouth, eye): 8–16. Larger features (hand, head): 16–32.\n"
-                        "Avoid >32 unless your mask is at least 100 px thick — wider feathers can fade the\n"
-                        "interior toward the original (the 'hollow' look)."
-                    )}),
+                    "default": 32, "min": 1, "max": 256, "step": 1,
+                    "tooltip": "Feather radius for the stitch blend mask"}),
                 "size_mode": (cls.SIZE_MODES, {
                     "default": "free_size",
                     "tooltip": "free_size (keep crop dims), forced_size (exact WxH), ranged_size (clamp to min/max)"}),
@@ -1135,231 +673,32 @@ class InpaintCropProMEC:
                     "default": 2048, "min": 64, "max": 8192, "step": 8,
                     "tooltip": "Maximum dimension for ranged_size mode"}),
                 "padding_multiple": ("INT", {
-                    "default": 8, "min": 2, "max": 128, "step": 2,
-                    "tooltip": "Pad output dimensions to be divisible by this value (must be even, default: 8)"}),
+                    "default": 8, "min": 1, "max": 128, "step": 1,
+                    "tooltip": "Pad output dimensions to be divisible by this value"}),
                 "video_stable_crop": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Lock bbox across all frames using union of all mask regions (for video)"}),
                 "fill_masked_area": (cls.FILL_MODES, {
                     "default": "edge_pad",
                     "tooltip": "How to fill the masked area in the crop: edge_pad, neutral_gray, or original"}),
-                "downscale_factor": ("FLOAT", {
-                    "default": 1.0, "min": 0.25, "max": 1.0, "step": 0.05,
-                    "tooltip": "Downscale crop before inpainting (e.g. 0.5 = half resolution). Stitched back at original res."}),
-                "downscale_method": (cls.INTERP_METHODS, {
-                    "default": "lanczos",
-                    "tooltip": "Interpolation method for downscaling: lanczos (best quality), bicubic, bilinear, nearest-exact, area"}),
-                "upscale_method": (cls.INTERP_METHODS, {
-                    "default": "lanczos",
-                    "tooltip": "Interpolation method for upscaling during stitch-back: lanczos, bicubic, bilinear, nearest-exact, area"}),
-                "mask_blur": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.5,
-                    "tooltip": "Blur the mask edges before cropping (sigma in pixels)"}),
-                "mask_grow": ("INT", {
-                    "default": 0, "min": -128, "max": 128, "step": 1,
-                    "tooltip": "Grow (positive) or shrink (negative) the mask before cropping (pixels)"}),
-                "aspect_ratio": (cls.ASPECT_RATIOS, {
-                    "default": "none",
-                    "tooltip": "Force crop region to specific aspect ratio. 'none' = follow mask shape."}),
-                "custom_aspect_w": ("INT", {
-                    "default": 1, "min": 1, "max": 100, "step": 1,
-                    "tooltip": "Width component of custom aspect ratio"}),
-                "custom_aspect_h": ("INT", {
-                    "default": 1, "min": 1, "max": 100, "step": 1,
-                    "tooltip": "Height component of custom aspect ratio"}),
-                "mask_invert": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Invert the mask before processing (swap inpaint/keep regions)"}),
-                "mask_fill_holes": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Fill enclosed holes inside the mask (prevents gaps from breaking inpainting)"}),
-                "mask_hipass_filter": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Ignore mask values below this threshold (removes near-transparent noise)"}),
-                # ── Ronin-gimbal cinema stabilization (added ad05a1b) ──
-                # Kept at END of widget list to preserve positional mapping
-                # of workflows saved before this feature was introduced.
-                "video_stab_strength": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "Cinema (Ronin-gimbal) per-frame stabilization. 0=off (use video_stable_crop=True for hard lock). 0.5=responsive operator. 0.8=heavy operator on rig (recommended). 1.0=max inertia. Filter cascade: median → 4Hz EMA → critically-damped spring with pre-warm. Crop size = subject + 99th-percentile motion + padding (NOT full envelope)."}),
-                "video_stab_fps": ("FLOAT", {
-                    "default": 24.0, "min": 1.0, "max": 240.0, "step": 1.0,
-                    "tooltip": "Source frame rate. Controls Ronin filter time constants. Match your video fps."}),
-                "video_stab_padding": ("INT", {
-                    "default": 32, "min": 0, "max": 512, "step": 8,
-                    "tooltip": "Extra pixels of headroom around the crop window (Ronin mode only)."}),
-                "mask_temporal_smooth": ("FLOAT", {
-                    "default": 0.0, "min": 0.0, "max": 8.0, "step": 0.5,
-                    "tooltip": "Temporal Gaussian smoothing of the inpaint/blend mask along frames (sigma in frames). 0=off. Use 1.5-3.0 for zero-jitter video. Auto-applied (=1.5) when video_stable_crop is on and this is 0."}),
-            },
-            "optional": {
-                "optional_context_mask": ("MASK", {
-                    "tooltip": "Extra mask defining additional context area to include in the crop (does not affect inpainting, only crop bounds)"}),
             },
         }
 
-    RETURN_TYPES = ("STITCH_DATA", "IMAGE", "IMAGE", "MASK", "MASK", "MASK", "STRING")
-    RETURN_NAMES = ("stitch_data", "cropped_image", "cropped_composite", "inpaint_mask", "stitch_blend_mask", "crop_mask", "info")
-    OUTPUT_TOOLTIPS = (
-        "Stitch metadata bundle to feed into InpaintStitchPro / InpaintPasteBack.",
-        "Cropped image patch (downscaled and padded according to settings).",
-        "Cropped composite (image with masked area filled per fill_masked_area mode).",
-        "Per-mode mask the inpaint model should see inside the crop.",
-        "Feathered/blended mask used when stitching the result back.",
-        "Binary crop region mask in the original-image coordinate space.",
-        "JSON / text info string describing crop bounds, sizes, and modes.",
-    )
+    RETURN_TYPES = ("STITCH_DATA", "IMAGE", "MASK", "MASK", "STRING")
+    RETURN_NAMES = ("stitch_data", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")
     FUNCTION = "crop_for_inpaint"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Crop image around mask with separate inpaint and stitch blend masks. Supports edge-aware, Laplacian, frequency blend, downscale, mask processing, and aspect ratio presets."
-
-    @staticmethod
-    def _snap(val: int, multiple: int) -> int:
-        """Snap value up to nearest multiple."""
-        if multiple <= 1:
-            return val
-        return int(math.ceil(val / multiple) * multiple)
-
-    @staticmethod
-    def _parse_aspect_ratio(name: str, custom_w: int, custom_h: int):
-        """Return (w_ratio, h_ratio) or None if no aspect ratio enforcement."""
-        if name == "none":
-            return None
-        if name == "custom":
-            return (max(1, custom_w), max(1, custom_h))
-        parts = name.split(":")
-        if len(parts) == 2:
-            return (int(parts[0]), int(parts[1]))
-        return None
-
-    @staticmethod
-    def _fill_mask_holes(mask: torch.Tensor) -> torch.Tensor:
-        """Fill enclosed holes inside mask using iterative multi-threshold approach.
-
-        Uses scipy binary_closing + binary_fill_holes at descending thresholds
-        to properly handle soft/gradient masks (lquesada's proven method).
-        Falls back to simple binary flood-fill when scipy is not available.
-        """
-        if HAS_SCIPY:
-            results = []
-            thresholds = [1, 0.99, 0.97, 0.95, 0.93, 0.9, 0.8, 0.7, 0.6, 0.5,
-                          0.4, 0.3, 0.2, 0.1]
-            for b in range(mask.shape[0]):
-                _IC.check()
-                mask_np = mask[b].cpu().numpy()
-                for threshold in thresholds:
-                    thresholded = mask_np >= threshold
-                    closed = binary_closing(thresholded,
-                                            structure=np.ones((3, 3)),
-                                            border_value=1)
-                    filled = binary_fill_holes(closed)
-                    mask_np = np.maximum(mask_np,
-                                         np.where(filled != 0, threshold, 0))
-                results.append(torch.from_numpy(mask_np.astype(np.float32)))
-            return torch.stack(results, dim=0).to(mask.device)
-
-        # Torch-only fallback: simple binary flood-fill from borders
-        filled = mask.clone()
-        for b in range(filled.shape[0]):
-            _IC.check()
-            m = filled[b]
-            binary = (m > 0.5).float()
-            bg = torch.zeros_like(binary)
-            H, W = binary.shape
-            bg[0, :] = 1.0 - binary[0, :]
-            bg[-1, :] = 1.0 - binary[-1, :]
-            bg[:, 0] = torch.max(bg[:, 0], 1.0 - binary[:, 0])
-            bg[:, -1] = torch.max(bg[:, -1], 1.0 - binary[:, -1])
-            inv = 1.0 - binary
-            kernel = torch.ones(1, 1, 3, 3, device=mask.device) / 9.0
-            for _ in range(max(H, W)):
-                prev = bg
-                padded = F.pad(bg.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1),
-                               mode="constant", value=0)
-                bg = (F.conv2d(padded, kernel).squeeze(0).squeeze(0) > 0.01).float() * inv
-                if torch.equal(bg, prev):
-                    break
-            holes = (1.0 - binary) * (1.0 - bg)
-            filled[b] = torch.max(m, holes)
-        return filled
-
-    @staticmethod
-    def _grow_mask(mask: torch.Tensor, pixels: int) -> torch.Tensor:
-        """Morphological grow/shrink of mask. Positive = dilate, negative = erode."""
-        if pixels == 0:
-            return mask
-        k = abs(pixels) * 2 + 1
-        kernel = torch.ones(1, 1, k, k, device=mask.device, dtype=mask.dtype) / (k * k)
-        pad = abs(pixels)
-        m4 = mask.unsqueeze(1)
-        m4 = F.pad(m4, (pad, pad, pad, pad), mode="replicate")
-        conv = F.conv2d(m4, kernel)
-        out = conv.squeeze(1)
-        if pixels > 0:
-            # Dilate: any overlap → 1
-            return (out > 0.01).float()
-        else:
-            # Erode: full overlap → 1
-            return (out > 0.99).float()
+    DESCRIPTION = "Crop image around mask with separate inpaint and stitch blend masks. Supports edge-aware, Laplacian, and frequency blend modes."
 
     def crop_for_inpaint(self, image: torch.Tensor, mask: torch.Tensor,
                          context_expand: float, inpaint_mask_mode: str,
                          stitch_blend_mode: str, blend_radius: int,
                          size_mode: str, forced_width: int, forced_height: int,
                          min_size: int, max_size: int, padding_multiple: int,
-                         video_stable_crop: bool, fill_masked_area: str,
-                         video_stab_strength: float = 0.0,
-                         video_stab_fps: float = 24.0,
-                         video_stab_padding: int = 32,
-                         downscale_factor: float = 1.0,
-                         downscale_method: str = "lanczos",
-                         upscale_method: str = "lanczos",
-                         mask_blur: float = 0.0, mask_grow: int = 0,
-                         aspect_ratio: str = "none",
-                         custom_aspect_w: int = 1, custom_aspect_h: int = 1,
-                         mask_invert: bool = False, mask_fill_holes: bool = False,
-                         mask_hipass_filter: float = 0.0,
-                         mask_temporal_smooth: float = 0.0,
-                         optional_context_mask: Optional[torch.Tensor] = None):
-        # Single 0..100% bar across all phases (trajectory, crop, mask build).
-        with _PB.session("InpaintCropProMEC"):
-            return self._crop_for_inpaint_impl(
-                image, mask, context_expand, inpaint_mask_mode,
-                stitch_blend_mode, blend_radius, size_mode, forced_width,
-                forced_height, min_size, max_size, padding_multiple,
-                video_stable_crop, fill_masked_area, video_stab_strength,
-                video_stab_fps, video_stab_padding, downscale_factor,
-                downscale_method, upscale_method, mask_blur, mask_grow,
-                aspect_ratio, custom_aspect_w, custom_aspect_h, mask_invert,
-                mask_fill_holes, mask_hipass_filter, mask_temporal_smooth,
-                optional_context_mask,
-            )
-
-    def _crop_for_inpaint_impl(self, image: torch.Tensor, mask: torch.Tensor,
-                         context_expand: float, inpaint_mask_mode: str,
-                         stitch_blend_mode: str, blend_radius: int,
-                         size_mode: str, forced_width: int, forced_height: int,
-                         min_size: int, max_size: int, padding_multiple: int,
-                         video_stable_crop: bool, fill_masked_area: str,
-                         video_stab_strength: float = 0.0,
-                         video_stab_fps: float = 24.0,
-                         video_stab_padding: int = 32,
-                         downscale_factor: float = 1.0,
-                         downscale_method: str = "lanczos",
-                         upscale_method: str = "lanczos",
-                         mask_blur: float = 0.0, mask_grow: int = 0,
-                         aspect_ratio: str = "none",
-                         custom_aspect_w: int = 1, custom_aspect_h: int = 1,
-                         mask_invert: bool = False, mask_fill_holes: bool = False,
-                         mask_hipass_filter: float = 0.0,
-                         mask_temporal_smooth: float = 0.0,
-                         optional_context_mask: Optional[torch.Tensor] = None):
-        # Alias removed legacy blend modes onto modern equivalents.
-        stitch_blend_mode = self._LEGACY_BLEND_MODES.get(stitch_blend_mode, stitch_blend_mode)
-        if image is None or not hasattr(image, "shape"):
-            raise ValueError("InpaintCropProMEC: 'image' input is missing or invalid (expected IMAGE tensor BxHxWxC).")
-        if mask is None or not hasattr(mask, "shape"):
-            raise ValueError("InpaintCropProMEC: 'mask' input is missing or invalid (expected MASK tensor BxHxW).")
+                         video_stable_crop: bool, fill_masked_area: str):
+        # Map legacy / removed modes to the closest classic stitcher
+        # (gaussian feather — the lquesada-style invisible blend).
+        stitch_blend_mode = _normalize_blend_mode(stitch_blend_mode)
         device = _get_device(image)
         B, H, W, C = image.shape
 
@@ -1371,47 +710,9 @@ class InpaintCropProMEC:
         if mask.shape[1] != H or mask.shape[2] != W:
             mask = _resize_mask(mask, H, W)
 
-        # Prepare optional context mask
-        if optional_context_mask is not None:
-            if optional_context_mask.dim() == 2:
-                optional_context_mask = optional_context_mask.unsqueeze(0)
-            if optional_context_mask.shape[0] == 1 and B > 1:
-                optional_context_mask = optional_context_mask.expand(B, -1, -1).clone()
-            if optional_context_mask.shape[1] != H or optional_context_mask.shape[2] != W:
-                optional_context_mask = _resize_mask(optional_context_mask, H, W)
-
-        # ── Mask pre-processing: invert, hipass, fill holes, grow, blur ──
-        if mask_invert:
-            mask = 1.0 - mask
-        if mask_hipass_filter > 0:
-            mask = torch.where(mask >= mask_hipass_filter, mask, torch.zeros_like(mask))
-        if mask_fill_holes:
-            mask = self._fill_mask_holes(mask)
-        if mask_grow != 0:
-            mask = self._grow_mask(mask, mask_grow)
-        if mask_blur > 0:
-            mask = _gaussian_blur_mask(mask, sigma=mask_blur).clamp(0.0, 1.0)
-
-        # Ronin cinema-stabilization mode (active when strength>0 and video).
-        # Computes per-frame center trajectory; the rest of the pipeline runs
-        # uniformly afterwards (aspect, size_mode, snap, fill, resize).
-        ronin_active = (float(video_stab_strength) > 0.0) and (B > 1)
-        ronin_centers: Optional[List[Tuple[int, int]]] = None
-        ronin_env: Optional[Tuple[int, int, int, int]] = None  # (env_x, env_y, env_w, env_h)
-
         # Step 1: Compute bounding box
-        if ronin_active:
-            (env_x, env_y, env_w, env_h, ronin_cw, ronin_ch), ronin_centers = (
-                compute_ronin_bbox_trajectory(
-                    mask,
-                    strength=float(video_stab_strength),
-                    fps=float(video_stab_fps),
-                    size_padding=int(video_stab_padding),
-                )
-            )
-            ronin_env = (env_x, env_y, env_w, env_h)
-            # Use ronin envelope as bbox surrogate so info/aspect logic still works
-            bbox_x, bbox_y, bbox_w, bbox_h = env_x, env_y, env_w, env_h
+        if video_stable_crop and B > 1:
+            bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
         else:
             bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
 
@@ -1419,57 +720,18 @@ class InpaintCropProMEC:
         if bbox_w <= 0 or bbox_h <= 0:
             bbox_x, bbox_y, bbox_w, bbox_h = 0, 0, W, H
 
-        # Step 2: Expand bbox by context_expand, always centered on mask
-        center_x = bbox_x + bbox_w / 2.0
-        center_y = bbox_y + bbox_h / 2.0
-
-        crop_w = int(round(bbox_w * context_expand))
-        crop_h = int(round(bbox_h * context_expand))
+        # Step 2: Expand bbox by context_expand
+        expand_w = int(bbox_w * (context_expand - 1.0) / 2.0)
+        expand_h = int(bbox_h * (context_expand - 1.0) / 2.0)
+        crop_x = max(0, bbox_x - expand_w)
+        crop_y = max(0, bbox_y - expand_h)
+        crop_x2 = min(W, bbox_x + bbox_w + expand_w)
+        crop_y2 = min(H, bbox_y + bbox_h + expand_h)
+        crop_w = crop_x2 - crop_x
+        crop_h = crop_y2 - crop_y
 
         if crop_w <= 0 or crop_h <= 0:
-            crop_w, crop_h = W, H
-            center_x, center_y = W / 2.0, H / 2.0
-
-        # Ronin override: lock crop_w/crop_h to the Ronin-computed size and use
-        # the envelope center; per-frame crops are positioned later via centers.
-        if ronin_active:
-            crop_w = max(crop_w, ronin_cw)
-            crop_h = max(crop_h, ronin_ch)
-            center_x = bbox_x + bbox_w / 2.0
-            center_y = bbox_y + bbox_h / 2.0
-
-        # Combine with optional_context_mask bbox (lquesada pattern)
-        if optional_context_mask is not None:
-            ctx_bbox = _compute_stable_bbox(optional_context_mask)
-            if ctx_bbox[2] > 0 and ctx_bbox[3] > 0:
-                # Union the expanded crop bbox with the context mask bbox
-                cx1, cy1 = int(round(center_x - crop_w / 2.0)), int(round(center_y - crop_h / 2.0))
-                cx2, cy2 = cx1 + crop_w, cy1 + crop_h
-                ox1, oy1 = ctx_bbox[0], ctx_bbox[1]
-                ox2, oy2 = ox1 + ctx_bbox[2], oy1 + ctx_bbox[3]
-                ux1 = min(cx1, ox1)
-                uy1 = min(cy1, oy1)
-                ux2 = max(cx2, ox2)
-                uy2 = max(cy2, oy2)
-                crop_w = ux2 - ux1
-                crop_h = uy2 - uy1
-                center_x = ux1 + crop_w / 2.0
-                center_y = uy1 + crop_h / 2.0
-
-        # ── Enforce aspect ratio on crop region ────────────────────────
-        ar = self._parse_aspect_ratio(aspect_ratio, custom_aspect_w, custom_aspect_h)
-        if ar is not None:
-            ar_w, ar_h = ar
-            target_ar = ar_w / ar_h
-            current_ar = crop_w / max(crop_h, 1)
-            if current_ar > target_ar:
-                crop_h = int(round(crop_w / target_ar))
-            else:
-                crop_w = int(round(crop_h * target_ar))
-
-        # Snap crop dimensions to padding_multiple (expand, not shrink)
-        crop_w = self._snap(crop_w, padding_multiple)
-        crop_h = self._snap(crop_h, padding_multiple)
+            crop_x, crop_y, crop_w, crop_h = 0, 0, W, H
 
         # Step 3: Compute target output size
         target_w, target_h = _apply_size_mode(
@@ -1478,124 +740,9 @@ class InpaintCropProMEC:
             min_size, max_size, padding_multiple
         )
 
-        # When forced_size, align crop aspect ratio to target
-        if size_mode == "forced_size" and target_w > 0 and target_h > 0:
-            target_ar = target_w / target_h
-            current_ar = crop_w / max(crop_h, 1)
-            if current_ar < target_ar:
-                crop_w = self._snap(int(round(crop_h * target_ar)), padding_multiple)
-            else:
-                crop_h = self._snap(int(round(crop_w / target_ar)), padding_multiple)
-
-        # Apply downscale factor
-        if downscale_factor < 1.0:
-            target_w = max(padding_multiple, self._snap(int(target_w * downscale_factor), padding_multiple))
-            target_h = max(padding_multiple, self._snap(int(target_h * downscale_factor), padding_multiple))
-
-        # Step 4: Position crop centered on mask (allow extending beyond image)
-        # Ronin path: per-frame variable crop (uniform size, per-frame top-left).
-        # frame_offsets is in CANVAS space (matches ctc_x/ctc_y semantics for v3).
-        frame_offsets: Optional[List[Tuple[int, int]]] = None
-
-        if ronin_active and ronin_centers is not None:
-            # Compute envelope in original image space large enough to contain
-            # every per-frame crop window, then expand canvas once.
-            cw, ch = crop_w, crop_h
-            min_x = min(c[0] - cw // 2 for c in ronin_centers)
-            min_y = min(c[1] - ch // 2 for c in ronin_centers)
-            max_x = max(c[0] - cw // 2 + cw for c in ronin_centers)
-            max_y = max(c[1] - ch // 2 + ch for c in ronin_centers)
-
-            left_pad = max(0, -min_x)
-            top_pad = max(0, -min_y)
-            right_pad = max(0, max_x - W)
-            bottom_pad = max(0, max_y - H)
-            needs_expansion = (left_pad > 0 or top_pad > 0
-                               or right_pad > 0 or bottom_pad > 0)
-
-            if needs_expansion:
-                img_bchw = image.permute(0, 3, 1, 2)
-                canvas_bchw = F.pad(img_bchw,
-                                    (left_pad, right_pad, top_pad, bottom_pad),
-                                    mode="replicate")
-                canvas_image = canvas_bchw.permute(0, 2, 3, 1)
-                exp_H = H + top_pad + bottom_pad
-                exp_W = W + left_pad + right_pad
-                canvas_mask = torch.ones(B, exp_H, exp_W,
-                                         device=device, dtype=mask.dtype)
-                canvas_mask[:, top_pad:top_pad + H, left_pad:left_pad + W] = mask
-            else:
-                canvas_image = image
-                canvas_mask = mask
-
-            cto_x, cto_y, cto_w, cto_h = left_pad, top_pad, W, H
-
-            # Per-frame crop in canvas space.
-            cropped = torch.empty(B, ch, cw, C,
-                                  device=device, dtype=image.dtype)
-            cropped_mask = torch.empty(B, ch, cw,
-                                       device=device, dtype=mask.dtype)
-            frame_offsets = []
-            for b, (cx, cy) in _PB.track(
-                list(enumerate(ronin_centers)), len(ronin_centers),
-                "per-frame crop",
-            ):
-                fx = cx - cw // 2 + left_pad
-                fy = cy - ch // 2 + top_pad
-                frame_offsets.append((fx, fy))
-                cropped[b] = canvas_image[b, fy:fy + ch, fx:fx + cw, :]
-                cropped_mask[b] = canvas_mask[b, fy:fy + ch, fx:fx + cw]
-
-            # ctc_* = first frame (kept for v2-compatible inspection / info).
-            ctc_x, ctc_y = frame_offsets[0]
-            crop_x, crop_y = ctc_x - left_pad, ctc_y - top_pad
-        else:
-            crop_x = int(round(center_x - crop_w / 2.0))
-            crop_y = int(round(center_y - crop_h / 2.0))
-
-            # Calculate canvas padding for out-of-bounds regions
-            left_pad = max(0, -crop_x)
-            top_pad = max(0, -crop_y)
-            right_pad = max(0, (crop_x + crop_w) - W)
-            bottom_pad = max(0, (crop_y + crop_h) - H)
-            needs_expansion = left_pad > 0 or top_pad > 0 or right_pad > 0 or bottom_pad > 0
-
-            if needs_expansion:
-                # Build expanded canvas with edge-replicated borders (lquesada pattern)
-                img_bchw = image.permute(0, 3, 1, 2)  # (B, C, H, W)
-                canvas_bchw = F.pad(img_bchw,
-                                    (left_pad, right_pad, top_pad, bottom_pad),
-                                    mode="replicate")
-                canvas_image = canvas_bchw.permute(0, 2, 3, 1)  # (B, exp_H, exp_W, C)
-
-                # Mask canvas: expanded areas are 1.0 (masked)
-                exp_H = H + top_pad + bottom_pad
-                exp_W = W + left_pad + right_pad
-                canvas_mask = torch.ones(B, exp_H, exp_W, device=device, dtype=mask.dtype)
-                canvas_mask[:, top_pad:top_pad + H, left_pad:left_pad + W] = mask
-
-                # Coordinates in canvas space
-                cto_x, cto_y, cto_w, cto_h = left_pad, top_pad, W, H
-                ctc_x = crop_x + left_pad
-                ctc_y = crop_y + top_pad
-
-                # Crop from canvas
-                cropped = canvas_image[:, ctc_y:ctc_y + crop_h, ctc_x:ctc_x + crop_w, :].clone()
-                cropped_mask = canvas_mask[:, ctc_y:ctc_y + crop_h, ctc_x:ctc_x + crop_w].clone()
-            else:
-                # No expansion needed — clamp and crop directly
-                crop_x = max(0, min(crop_x, W - crop_w))
-                crop_y = max(0, min(crop_y, H - crop_h))
-                # Ensure crop doesn't exceed image
-                crop_w = min(crop_w, W - crop_x)
-                crop_h = min(crop_h, H - crop_y)
-
-                canvas_image = image
-                cto_x, cto_y, cto_w, cto_h = 0, 0, W, H
-                ctc_x, ctc_y = crop_x, crop_y
-
-                cropped = image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
-                cropped_mask = mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w].clone()
+        # Step 4: Crop image and mask
+        cropped = image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
+        cropped_mask = mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w].clone()
 
         # Step 5: Fill masked area in crop
         if fill_masked_area == "neutral_gray":
@@ -1603,30 +750,16 @@ class InpaintCropProMEC:
             binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
             cropped = cropped * (1.0 - binary_3d) + fill_value * binary_3d
         elif fill_masked_area == "edge_pad":
-            img_bchw_fill = cropped.permute(0, 3, 1, 2)
-            blurred_fill = _gaussian_blur_2d(img_bchw_fill, sigma=max(crop_w, crop_h) * 0.15)
+            img_bchw = cropped.permute(0, 3, 1, 2)
+            blurred_fill = _gaussian_blur_2d(img_bchw, sigma=max(crop_w, crop_h) * 0.15)
             blurred_fill = blurred_fill.permute(0, 2, 3, 1)
             binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
             cropped = cropped * (1.0 - binary_3d) + blurred_fill * binary_3d
 
         # Step 6: Resize crop to target dimensions
-        resize_mode = downscale_method if downscale_factor < 1.0 else "bilinear"
         if crop_w != target_w or crop_h != target_h:
-            cropped = _resize_image(cropped, target_h, target_w, mode=resize_mode)
-            cropped_mask = _resize_mask(cropped_mask, target_h, target_w, mode=resize_mode)
-
-        # Step 6.5: Temporal mask stabilization (production zero-jitter video).
-        # Auto-engage when video_stable_crop is on but user left smooth at 0.
-        # Smoothing the *mask* (not the image) along the frame axis kills
-        # boundary shimmer that survives a locked bbox.
-        eff_temporal = float(mask_temporal_smooth)
-        if video_stable_crop and eff_temporal <= 0.0 and B > 1:
-            eff_temporal = 1.5
-        if eff_temporal > 0.0 and B > 1:
-            cropped_mask = motion_adaptive_temporal_smooth(
-                cropped_mask, sigma_base=eff_temporal,
-                motion_magnitudes=None, motion_sensitivity=0.0,
-            ).clamp(0.0, 1.0)
+            cropped = _resize_image(cropped, target_h, target_w)
+            cropped_mask = _resize_mask(cropped_mask, target_h, target_w)
 
         # Step 7: Generate inpaint mask
         inpaint_mask = _apply_inpaint_mask_mode(cropped_mask, inpaint_mask_mode)
@@ -1636,82 +769,39 @@ class InpaintCropProMEC:
             cropped, cropped_mask, stitch_blend_mode, blend_radius
         )
 
-        # Step 8.5: Generate cropped_composite (mask overlaid on cropped image as red tint)
-        mask_rgb = inpaint_mask.unsqueeze(-1) * torch.tensor(
-            [0.8, 0.15, 0.15], device=device, dtype=cropped.dtype
-        ).view(1, 1, 1, 3)
-        cropped_composite = (cropped * (1.0 - inpaint_mask.unsqueeze(-1) * 0.5) + mask_rgb * 0.5).clamp(0, 1)
-
-        # Step 8.6: Generate crop_mask (binary mask showing cropped region in original image space)
-        crop_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
-        if frame_offsets is not None:
-            # Per-frame variable crop region (Ronin mode)
-            for b, (fx, fy) in _PB.track(
-                list(enumerate(frame_offsets)), len(frame_offsets),
-                "build crop_mask",
-            ):
-                oy1 = max(0, fy - cto_y)
-                oy2 = min(H, fy + crop_h - cto_y)
-                ox1 = max(0, fx - cto_x)
-                ox2 = min(W, fx + crop_w - cto_x)
-                if oy2 > oy1 and ox2 > ox1:
-                    crop_mask[b, oy1:oy2, ox1:ox2] = 1.0
-        else:
-            # Map canvas crop back to original image space
-            orig_y1 = max(0, ctc_y - cto_y)
-            orig_y2 = min(H, ctc_y + crop_h - cto_y)
-            orig_x1 = max(0, ctc_x - cto_x)
-            orig_x2 = min(W, ctc_x + crop_w - cto_x)
-            if orig_y2 > orig_y1 and orig_x2 > orig_x1:
-                crop_mask[:, orig_y1:orig_y2, orig_x1:orig_x2] = 1.0
-
-        # Step 9: Build stitch_data dict (v3 with per-frame offsets, or v2 single)
-        stitch_version = 3 if frame_offsets is not None else 2
+        # Step 9: Build stitch_data dict
         stitch_data = {
-            "version": stitch_version,
-            "canvas_image": canvas_image.cpu(),
-            "cto_x": cto_x, "cto_y": cto_y,
-            "cto_w": cto_w, "cto_h": cto_h,
-            "ctc_x": ctc_x, "ctc_y": ctc_y,
-            "ctc_w": crop_w, "ctc_h": crop_h,
-            "target_w": target_w, "target_h": target_h,
+            "original_image": image,
+            "crop_x": crop_x,
+            "crop_y": crop_y,
+            "crop_w": crop_w,
+            "crop_h": crop_h,
+            "target_w": target_w,
+            "target_h": target_h,
             "blend_mode": stitch_blend_mode,
             "blend_radius": blend_radius,
-            "stitch_blend_mask_crop": stitch_blend_mask.cpu(),
-            "original_mask": mask.cpu(),
-            "downscale_factor": downscale_factor,
-            "upscale_method": upscale_method,
-            "downscale_method": downscale_method,
+            "stitch_blend_mask_crop": stitch_blend_mask,
+            "original_mask": mask,
         }
-        if frame_offsets is not None:
-            stitch_data["frame_offsets"] = list(frame_offsets)
 
         # Step 10: Build info string
-        expansion_info = ""
-        if needs_expansion:
-            expansion_info = f"\n  canvas expansion: L={left_pad} T={top_pad} R={right_pad} B={bottom_pad}"
         info_lines = [
             f"InpaintCropProMEC:",
             f"  image: {B}x{H}x{W}x{C}",
             f"  mask bbox: x={bbox_x}, y={bbox_y}, w={bbox_w}, h={bbox_h}",
-            f"  crop region: {crop_w}x{crop_h} centered at ({center_x:.0f},{center_y:.0f})",
+            f"  crop region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}",
             f"  context_expand: {context_expand:.2f}",
-            f"  aspect_ratio: {aspect_ratio}",
-            f"  downscale_factor: {downscale_factor:.2f}",
-            f"  mask_blur: {mask_blur:.1f}, mask_grow: {mask_grow}",
             f"  output size: {target_w}x{target_h} (mode={size_mode})",
             f"  inpaint_mask_mode: {inpaint_mask_mode}",
             f"  stitch_blend_mode: {stitch_blend_mode}, radius={blend_radius}",
             f"  video_stable_crop: {video_stable_crop}",
-            f"  video_stab_strength: {video_stab_strength:.2f}{' (Ronin per-frame ACTIVE)' if ronin_active else ''}",
             f"  fill_masked_area: {fill_masked_area}",
             f"  inpaint_mask range: [{inpaint_mask.min().item():.4f}, {inpaint_mask.max().item():.4f}]",
             f"  blend_mask range: [{stitch_blend_mask.min().item():.4f}, {stitch_blend_mask.max().item():.4f}]",
-            expansion_info,
         ]
         info = "\n".join(info_lines)
 
-        return (stitch_data, cropped, cropped_composite, inpaint_mask, stitch_blend_mask, crop_mask, info)
+        return (stitch_data, cropped, inpaint_mask, stitch_blend_mask, info)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1727,9 +817,8 @@ class InpaintStitchProMEC:
     VRAM_TIER = 1
     BLEND_OVERRIDES = [
         "from_crop",
-        "poisson", "poisson_mixed",
-        "linear_exact", "exact", "classic",
-        "edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend",
+        "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend",
+        "poisson", "poisson_mixed", "exact", "linear_exact", "classic",
     ]
 
     @classmethod
@@ -1740,679 +829,49 @@ class InpaintStitchProMEC:
                 "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result from model (B,H,W,C)"}),
                 "blend_mode_override": (cls.BLEND_OVERRIDES, {
                     "default": "from_crop",
-                    "tooltip": (
-                        "Override the blend mode from crop node, or use 'from_crop' to keep original.\n"
-                        "  poisson         — RECOMMENDED for diffusion outputs (Wan, Flux, SDXL inpaint).\n"
-                        "                    Pérez–Gangnet–Blake gradient transfer + inside-only safety net.\n"
-                        "                    Auto colour/lighting match by construction. Outside byte-exact.\n"
-                        "  poisson_mixed   — Same but cv2.MIXED_CLONE: preserves canvas texture passing\n"
-                        "                    through the mask (hair, fabric).\n"
-                        "  exact           — Pure inside-only feather alpha composite, no Poisson.\n"
-                        "                    Use when the inpaint already matches surroundings perfectly.\n"
-                        "  classic         — lquesada-faithful: hard-binary mask + inside-only feather.\n"
-                        "                    Identical math to 'exact' but ignores any soft-mask preprocessing.\n"
-                        "  linear_exact    — gamma-correct sRGB→linear→sRGB feather.\n"
-                        "  edge_aware/gaussian/laplacian_pyramid/frequency_blend — legacy, aliased to poisson.")}),
+                    "tooltip": "Override the blend mode from crop node, or use 'from_crop' to keep original"}),
                 "color_match": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": (
-                        "Apply mean+std colour transfer of the inpaint toward the canvas inside the\n"
-                        "feather band BEFORE compositing. CRITICAL for diffusion outputs (Wan, Flux,\n"
-                        "SDXL inpaint, etc.) — those models almost always introduce a small saturation /\n"
-                        "exposure drift that makes the masked region look 'hollow' or 'washed out'\n"
-                        "after stitch. Setting this to False is only useful when the inpaint is\n"
-                        "already perfectly colour-balanced (e.g. a hand-edited frame).")}),
+                    "default": False,
+                    "tooltip": "Apply mean+std color transfer before stitching to reduce color shift"}),
             },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "blend_mask_used", "info")
-    OUTPUT_TOOLTIPS = (
-        "Final stitched image with the inpainted region blended back into the original.",
-        "Actual blend mask used (after override and resize back to original space).",
-        "Info string describing blend mode, color match, and timings.",
-    )
     FUNCTION = "stitch"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = "Composite inpainted image back using stitch_data. Supports edge-aware, Laplacian pyramid, and frequency domain blending."
 
     def stitch(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                blend_mode_override: str, color_match: bool):
-        # Alias removed legacy override modes onto modern equivalents.
-        blend_mode_override = InpaintCropProMEC._LEGACY_BLEND_MODES.get(
-            blend_mode_override, blend_mode_override
-        )
-        with _PB.session("InpaintStitchProMEC"):
-            return self._stitch_impl(stitch_data, inpainted_image,
-                                     blend_mode_override, color_match)
-
-    def _stitch_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-               blend_mode_override: str, color_match: bool):
-        if not isinstance(stitch_data, dict) or not stitch_data:
-            raise ValueError(
-                "InpaintStitchProMEC: 'stitch_data' is missing or empty. "
-                "Connect the STITCH_DATA output of an InpaintCropPro node."
-            )
-        version = stitch_data.get("version", 1)
-        required_v1 = ("original_image", "crop_x", "crop_y", "crop_w", "crop_h",
-                       "blend_mode", "blend_radius", "stitch_blend_mask_crop",
-                       "original_mask")
-        required_v2 = ("canvas_image", "ctc_x", "ctc_y", "ctc_w", "ctc_h",
-                       "cto_x", "cto_y", "cto_w", "cto_h", "blend_mode",
-                       "blend_radius", "stitch_blend_mask_crop")
-        required_v3 = required_v2 + ("frame_offsets",)
-        if version >= 3:
-            required = required_v3
-        elif version >= 2:
-            required = required_v2
-        else:
-            required = required_v1
-        missing = [k for k in required if k not in stitch_data]
-        if missing:
-            raise ValueError(
-                f"InpaintStitchProMEC: stitch_data (v{version}) is missing keys: {missing}. "
-                "This usually means the STITCH_DATA input is unconnected or was produced by an incompatible node."
-            )
-        if version >= 2:
-            return self._stitch_v2(stitch_data, inpainted_image,
-                                   blend_mode_override, color_match)
-        return self._stitch_v1(stitch_data, inpainted_image,
-                               blend_mode_override, color_match)
-
-    def _stitch_v2(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-                   blend_mode_override: str, color_match: bool):
-        """V2 stitch: uses canvas coordinates for perfect reversal of canvas expansion.
-
-        v3 extension: when ``frame_offsets`` is present, each frame is pasted
-        at its own (x, y) within the canvas (Ronin per-frame variable crop).
-        """
-        canvas_image = stitch_data["canvas_image"]
-        ctc_x = stitch_data["ctc_x"]
-        ctc_y = stitch_data["ctc_y"]
-        ctc_w = stitch_data["ctc_w"]
-        ctc_h = stitch_data["ctc_h"]
-        cto_x = stitch_data["cto_x"]
-        cto_y = stitch_data["cto_y"]
-        cto_w = stitch_data["cto_w"]
-        cto_h = stitch_data["cto_h"]
-        stored_blend_mode = stitch_data["blend_mode"]
-        blend_radius = stitch_data["blend_radius"]
-        stitch_blend_mask_crop = stitch_data["stitch_blend_mask_crop"]
-        upscale_method = stitch_data.get("upscale_method", "lanczos")
-        frame_offsets = stitch_data.get("frame_offsets")  # None for plain v2
-
-        device = _get_device(inpainted_image)
-        canvas = canvas_image.to(device).clone()
-        # Defensive: strip alpha if a 4-channel RGBA tensor was fed in (e.g.
-        # from a save-with-alpha or matte node). Compositing RGBA into a
-        # 3-channel canvas silently bleeds alpha into the colour channels
-        # and looks like the inpaint is "transparent" / faded.
-        if inpainted_image.shape[-1] == 4:
-            inpainted_image = inpainted_image[..., :3].contiguous()
-        if canvas.shape[-1] == 4:
-            canvas = canvas[..., :3].contiguous()
-        B = inpainted_image.shape[0]
-
-        blend_mode = stored_blend_mode if blend_mode_override == "from_crop" else blend_mode_override
-
-        # ──────────────────────────────────────────────────────────────
-        # PRODUCTION fast-paths (poisson / poisson_mixed / linear_exact).
-        #
-        # poisson / poisson_mixed (Pérez-Gangnet-Blake SIGGRAPH 2003) give
-        # mathematically invisible seams AND automatic colour/lighting
-        # match. linear_exact gives bit-exact outside-mask pixels with a
-        # gamma-correct feather (no dark-fringe on smooth gradients).
-        # All three preserve the original outside-mask pixels exactly.
-        # ──────────────────────────────────────────────────────────────
-        if blend_mode in ("poisson", "poisson_mixed", "linear_exact"):
-            original_mask_full = stitch_data.get("original_mask")
-            if original_mask_full is None:
-                raise ValueError(
-                    f"InpaintStitchProMEC: stitch_data is missing 'original_mask' "
-                    f"which is required by '{blend_mode}' blend mode. Re-run the "
-                    f"InpaintCropProMEC node to regenerate the stitch_data."
-                )
-            om = original_mask_full.to(device).clamp(0.0, 1.0)
-            if om.shape[0] == 1 and B > 1:
-                om = om.expand(B, -1, -1).contiguous()
-            elif om.shape[0] != B:
-                om = om[:1].expand(B, -1, -1).contiguous()
-            Hc, Wc = canvas.shape[1], canvas.shape[2]
-            canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
-            mh = min(cto_h, om.shape[1])
-            mw = min(cto_w, om.shape[2])
-            canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
-
-            # Resize inpaint patch to ctc dims (only resample in the path).
-            inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
-
-            # Per-frame paste positions
-            if frame_offsets is None:
-                offsets_iter = [(ctc_x, ctc_y)] * B
-            else:
-                if len(frame_offsets) != B:
-                    raise ValueError(
-                        f"InpaintStitchProMEC: frame_offsets length ({len(frame_offsets)}) "
-                        f"does not match inpainted batch size ({B})."
-                    )
-                offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
-
-            if blend_mode == "linear_exact":
-                # ── Gamma-correct alpha blend (sRGB → linear → blend → sRGB).
-                radius = max(int(blend_radius), 0)
-                blend_full = _exact_inside_feather(canvas_mask, radius)
-                # Convert canvas + inpaint to linear, blend, convert back.
-                canvas_lin = _srgb_to_linear(canvas.clamp(0, 1))
-                inp_lin = _srgb_to_linear(inp_resized.clamp(0, 1))
-                for b, (fx, fy) in _PB.track(
-                    list(enumerate(offsets_iter)), len(offsets_iter),
-                    "paste frames (linear_exact)",
-                ):
-                    bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
-                    canvas_win = canvas_lin[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    inp_b = inp_lin[b:b + 1]
-                    if color_match:
-                        cm_b = (bm_win.squeeze(-1) > 0.01).float()
-                        inp_b = _color_match_mean_std(inp_b, canvas_win, cm_b)
-                    blended_lin = canvas_win * (1.0 - bm_win) + inp_b * bm_win
-                    blended_srgb = _linear_to_srgb(blended_lin)
-                    # Re-apply hard binary at original mask boundary so
-                    # outside the mask is byte-exact (the linear→srgb
-                    # round-trip can drift by ~1e-7 on float32).
-                    bm_hard = (canvas_mask[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w]
-                               > 0.5).to(canvas.dtype).unsqueeze(-1)
-                    canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
-                        canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] * (1.0 - bm_hard)
-                        + blended_srgb * bm_hard
-                    )
-                output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-                blend_mask_full = blend_full[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
-                info = (
-                    f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [linear_exact]:\n"
-                    f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                    f"  blend_mode: linear_exact (gamma-correct, alpha bit-exact 0 outside mask)\n"
-                    f"  blend_radius: {blend_radius}\n"
-                    f"  output: {B}x{cto_h}x{cto_w}"
-                )
-                return (output, blend_mask_full, info)
-
-            # ── Poisson seamless cloning (NORMAL_CLONE / MIXED_CLONE).
-            # Hybrid (May 2026): no pre-erosion (Dirichlet on the un-eroded
-            # mask is what gives a seamless edge by construction), plus an
-            # inside-feather safety net to soften any residual numerical
-            # drift. Outside the user mask remains byte-exact.
-            flags = cv2.MIXED_CLONE if blend_mode == "poisson_mixed" else cv2.NORMAL_CLONE
-
-            # Snapshot the ORIGINAL canvas before the per-frame Poisson loop
-            # mutates it — we need it for the hybrid feather composite below.
-            canvas_orig = canvas.clone()
-
-            for b, (fx, fy) in _PB.track(
-                list(enumerate(offsets_iter)), len(offsets_iter),
-                f"paste frames ({blend_mode})",
-            ):
-                # Build a full-canvas-sized 'inpaint pasted at offset' image.
-                inp_full = canvas[b].clone()
-                inp_full[fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
-                bm_b = canvas_mask[b]
-                cf = canvas[b]
-                blended = _poisson_seamless_blend(
-                    canvas_frame=cf,
-                    inpaint_full=inp_full,
-                    binary_mask=bm_b,
-                    flags=flags,
-                    erosion_px=0,  # NO pre-erosion — Dirichlet matches edge.
-                )
-                canvas[b] = blended
-
-            # Hybrid safety net: alpha-blend the Poisson result toward the
-            # original canvas using an INSIDE-mask feather. Outside the
-            # user's mask alpha is bit-exact 0 (byte-identical canvas);
-            # interior approaches alpha=1 (pure Poisson); a thin inner
-            # ring fades smoothly between the two, which absorbs any
-            # residual edge mismatch from cv2.seamlessClone.
-            radius = max(int(blend_radius), 1)
-            feather_alpha = _exact_inside_feather(canvas_mask, radius).unsqueeze(-1)
-            canvas = canvas_orig * (1.0 - feather_alpha) + canvas * feather_alpha
-
-            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            preview_mask = feather_alpha.squeeze(-1)[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
-            info = (
-                f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [{blend_mode}]:\n"
-                f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                f"  blend_mode: {blend_mode} (Pérez-Gangnet-Blake hybrid — Poisson + inside-feather safety net)\n"
-                f"  Dirichlet erosion: 0px (un-eroded mask → edge-matched by construction)\n"
-                f"  Inside-feather radius: {radius}px (absorbs residual numerical drift)\n"
-                f"  Auto colour/lighting match: YES\n"
-                f"  Outside-mask pixels: byte-exact (alpha bit-exact 0 outside user mask)\n"
-                f"  output: {B}x{cto_h}x{cto_w}"
-            )
-            return (output, preview_mask, info)
-
-        # ──────────────────────────────────────────────────────────────
-        # 'classic' mode — lquesada-faithful inside-only feather.
-        #
-        # CORRECT lquesada semantics (after re-reading upstream + Photoshop /
-        # Krita / GIMP layer-mask behaviour): the feather lives ENTIRELY
-        # INSIDE the user mask. Outside the binary boundary the canvas is
-        # byte-exact, AT the boundary alpha == 0, and alpha ramps to 1 as
-        # you move inward. This is what produces an invisible seam: the
-        # boundary itself is the un-modified original pixel, and the
-        # inpaint *fades in* deeper inside.
-        #
-        # Key fix vs the previous (broken) symmetric-gaussian implementation:
-        # a 64-px symmetric blur on a tight face mask painted ~40 px of
-        # ORIGINAL canvas back into Wan's interior, producing the "ghost
-        # halo / hollow / washed out" failure mode the user reported.
-        # Inside-only feather cannot do that: nothing outside the mask is
-        # ever touched, and the deep interior is 100 % inpainted.
-        #
-        # Mask-thickness safety: if the user picks blend_radius wider than
-        # half the local mask thickness, the eroded core would vanish and
-        # the whole region would fade to translucent (true "hollow"). We
-        # therefore auto-cap radius against the actual mask thickness via
-        # the same safety net used by `_exact_inside_feather`.
-        #
-        # Difference vs `exact`:
-        #   exact:    feather is built from the SOFT user mask (post
-        #             mask_blur / mask_grow / inpaint_mask_mode). Best when
-        #             the upstream mask already encodes the desired soft
-        #             boundary.
-        #   classic:  feather is built from a HARD-BINARISED user mask
-        #             (>0.5 threshold). Best for SAM/Florence/Dwpose-style
-        #             pipelines where the source mask is binary anyway,
-        #             and you want the feather width to be defined purely
-        #             by `blend_radius` (no upstream interaction).
-        #
-        # `color_match=True` is highly recommended for diffusion outputs
-        # (Wan 2.2 Animate, Flux Fill, SDXL inpaint…) — it does mean/std
-        # transfer of the inpaint statistics toward the original canvas
-        # statistics inside the feather band, killing the residual hue /
-        # exposure drift that diffusers always introduce.
-        # ──────────────────────────────────────────────────────────────
-        if blend_mode == "classic":
-            original_mask_full = stitch_data.get("original_mask")
-            if original_mask_full is None:
-                raise ValueError(
-                    "InpaintStitchProMEC: stitch_data is missing 'original_mask' "
-                    "which is required by 'classic' blend mode. Re-run the "
-                    "InpaintCropProMEC node to regenerate the stitch_data."
-                )
-            om = original_mask_full.to(device).clamp(0.0, 1.0)
-            if om.shape[0] == 1 and B > 1:
-                om = om.expand(B, -1, -1).contiguous()
-            elif om.shape[0] != B:
-                om = om[:1].expand(B, -1, -1).contiguous()
-            Hc, Wc = canvas.shape[1], canvas.shape[2]
-            canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
-            mh = min(cto_h, om.shape[1])
-            mw = min(cto_w, om.shape[2])
-            canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
-
-            radius = max(int(blend_radius), 0)
-            # Hard-binarise then build an inside-only feather. The helper
-            # already does erode → gaussian → multiply-by-binary, with
-            # automatic radius backoff if the mask is too thin to support
-            # the requested feather width.
-            binary = (canvas_mask > 0.5).to(canvas.dtype)
-            alpha = _exact_inside_feather(binary, radius)
-
-            # Resize inpaint patch back to crop-window dims (only resample).
-            inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
-            if frame_offsets is None:
-                offsets_iter = [(ctc_x, ctc_y)] * B
-            else:
-                if len(frame_offsets) != B:
-                    raise ValueError(
-                        f"InpaintStitchProMEC: frame_offsets length ({len(frame_offsets)}) "
-                        f"does not match inpainted batch size ({B})."
-                    )
-                offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
-
-            for b, (fx, fy) in _PB.track(
-                list(enumerate(offsets_iter)), len(offsets_iter),
-                "paste frames (classic)",
-            ):
-                inp_b = inp_resized[b:b + 1]
-                canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                bm_win = alpha[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
-                if color_match:
-                    cm_b = (bm_win.squeeze(-1) > 0.01).float()
-                    inp_b = _color_match_mean_std(inp_b, canvas_win, cm_b)
-                blended = canvas_win * (1.0 - bm_win) + inp_b * bm_win
-                canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
-
-            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            blend_mask_full = alpha[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
-            cm_info = "  color_match: ON (mean/std transfer inside feather)\n" if color_match else ""
-            info = (
-                f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [classic]:\n"
-                f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                f"  blend_mode: classic (lquesada-faithful, hard-binary + INSIDE-only feather)\n"
-                f"  blend_radius: {radius}px (auto-capped by mask thickness)\n"
-                f"  outside-mask: byte-exact (alpha == 0 outside binary)\n"
-                f"{cm_info}"
-                f"  output: {B}x{cto_h}x{cto_w}"
-            )
-            return (output, blend_mask_full, info)
-
-        # ──────────────────────────────────────────────────────────────
-        # 'exact' fast-path: zero pixel / colour change outside the mask.
-        #
-        # The legacy paths build the blend alpha in CROPPED+RESIZED space
-        # then upsample it back, which leaks non-zero alpha values outside
-        # the user's original mask (lanczos ringing, bilinear bleed, etc).
-        # Combined with the lanczos round-trip on the inpaint patch this
-        # produces visible color / pixel shifts at the seam — exactly what
-        # the user is complaining about.
-        #
-        # 'exact' instead:
-        #   1. Maps the ORIGINAL full-resolution mask onto the canvas at
-        #      its native resolution (no resampling for the unmasked area).
-        #   2. Builds the feather strictly INSIDE that mask (erode + blur,
-        #      then multiply by the hard binary so outside is bit-exact 0).
-        #   3. Resizes the inpainted patch back to (ctc_h, ctc_w) and
-        #      composites it through that alpha. Where alpha == 0 the
-        #      output is identically the canvas (= original) pixel.
-        # ──────────────────────────────────────────────────────────────
-        if blend_mode == "exact":
-            original_mask_full = stitch_data.get("original_mask")
-            if original_mask_full is None:
-                raise ValueError(
-                    "InpaintStitchProMEC: stitch_data is missing 'original_mask' "
-                    "which is required by 'exact' blend mode. Re-run the "
-                    "InpaintCropProMEC node to regenerate the stitch_data."
-                )
-            om = original_mask_full.to(device).clamp(0.0, 1.0)
-            # original_mask is in *original* image coordinates (cto_w x cto_h).
-            # Map it onto the (possibly canvas-expanded) canvas grid.
-            if om.shape[0] == 1 and B > 1:
-                om = om.expand(B, -1, -1).contiguous()
-            elif om.shape[0] != B:
-                # Tile / broadcast best-effort.
-                om = om[:1].expand(B, -1, -1).contiguous()
-            Hc, Wc = canvas.shape[1], canvas.shape[2]
-            canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
-            # Place the original mask inside the canvas at its known offset.
-            mh = min(cto_h, om.shape[1])
-            mw = min(cto_w, om.shape[2])
-            canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
-
-            # Build the inside-only feather at full canvas resolution. Alpha
-            # is bit-exact 0 wherever the user did not paint — that's the
-            # zero-pixel-issue guarantee.
-            radius = max(int(blend_radius), 0)
-            blend_full = _exact_inside_feather(canvas_mask, radius)
-
-            # Resize inpainted patch to ctc_h x ctc_w (this is the only
-            # resample in the whole pipeline, and its output is gated by
-            # alpha == 0 outside the user mask, so any ringing is killed).
-            inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
-
-            # Per-frame paste loop. Frame_offsets handle Ronin per-frame crop.
-            if frame_offsets is None:
-                offsets_iter = [(ctc_x, ctc_y)] * B
-            else:
-                if len(frame_offsets) != B:
-                    raise ValueError(
-                        f"InpaintStitchProMEC: frame_offsets length ({len(frame_offsets)}) "
-                        f"does not match inpainted batch size ({B})."
-                    )
-                offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
-
-            uniform_offsets = (
-                len(offsets_iter) > 1
-                and all(o == offsets_iter[0] for o in offsets_iter)
-            )
-
-            if uniform_offsets and not color_match:
-                # Vectorized batched composite — single torch op, zero loops.
-                fx0, fy0 = offsets_iter[0]
-                bm_win = blend_full[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w].unsqueeze(-1)
-                canvas_win = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :]
-                blended = canvas_win * (1.0 - bm_win) + inp_resized * bm_win
-                canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended
-            else:
-                for b, (fx, fy) in _PB.track(
-                    list(enumerate(offsets_iter)), len(offsets_iter),
-                    "paste frames (exact)",
-                ):
-                    inp_b = inp_resized[b:b + 1]
-                    canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
-                    if color_match:
-                        cm_b = (bm_win.squeeze(-1) > 0.01).float()
-                        inp_b = _color_match_mean_std(inp_b, canvas_win, cm_b)
-                    blended = canvas_win * (1.0 - bm_win) + inp_b * bm_win
-                    canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
-
-            # Important: do NOT clamp `canvas` outside the masked region.
-            # Clamping is fine because canvas is already in [0,1], but the
-            # unmasked pixels were never touched (alpha was 0), so they are
-            # bit-exact equal to the input.
-            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            blend_mask_full = blend_full[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
-
-            color_info = "\n  color_match: applied (inside mask only)" if color_match else ""
-            ronin_info = ""
-            if frame_offsets is not None:
-                xs = [fx for fx, _ in offsets_iter]
-                ys = [fy for _, fy in offsets_iter]
-                ronin_info = (
-                    f"\n  Ronin per-frame paste: x∈[{min(xs)},{max(xs)}] "
-                    f"y∈[{min(ys)},{max(ys)}]"
-                )
-            info = (
-                f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [exact mode]:\n"
-                f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                f"  crop→canvas (ref): x={ctc_x}, y={ctc_y}, w={ctc_w}, h={ctc_h}\n"
-                f"  orig→canvas: x={cto_x}, y={cto_y}, w={cto_w}, h={cto_h}\n"
-                f"  blend_mode: exact (alpha bit-exact 0 outside mask)\n"
-                f"  blend_radius: {blend_radius} (feather inside-only)\n"
-                f"  output: {B}x{cto_h}x{cto_w}"
-                + ronin_info
-                + color_info
-            )
-            return (output, blend_mask_full, info)
-
-        # ──────────────────────────────────────────────────────────────
-        # Legacy paths (edge_aware / gaussian / laplacian_pyramid /
-        # frequency_blend). These build alpha in cropped+resized space and
-        # may show seam artefacts. Kept for backward compatibility only.
-        # ──────────────────────────────────────────────────────────────
-
-        # Resize inpainted to crop region dimensions in canvas
-        inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
-
-        # Resize blend mask to crop region dimensions
-        blend_mask_crop = _resize_mask(stitch_blend_mask_crop.to(device), ctc_h, ctc_w, mode=upscale_method)
-        # Lanczos / bicubic resize can produce ringing values outside [0,1].
-        # Negative alpha makes (1 - mask) > 1, which over-brightens the
-        # canvas and looks like ghosting/transparency at the seam. Clamp.
-        blend_mask_crop = blend_mask_crop.clamp(0.0, 1.0)
-
-        # Self-heal: lanczos upscale and any pre-existing buggy crop data can
-        # leave interior alpha < 1.0, which composites the inpaint
-        # semi-transparently ("hollow"). Force the interior of the original
-        # mask back to opaque while keeping the boundary feather.
-        original_mask_for_core = stitch_data.get("original_mask")
-        if original_mask_for_core is not None:
-            core_ref = _resize_mask(original_mask_for_core.to(device), ctc_h, ctc_w)
-        else:
-            core_ref = (blend_mask_crop > 0.5).float()
-        blend_mask_crop = _opaque_core_with_feather(core_ref, blend_mask_crop, max(int(blend_radius), 1))
-
-        # Regenerate blend mask if overridden — use first-frame canvas crop as
-        # context; per-frame regen would explode cost on long clips.
-        if blend_mode_override != "from_crop" and blend_mode_override != stored_blend_mode:
-            ref_x = frame_offsets[0][0] if frame_offsets is not None else ctc_x
-            ref_y = frame_offsets[0][1] if frame_offsets is not None else ctc_y
-            canvas_crop_region = canvas[:, ref_y:ref_y + ctc_h, ref_x:ref_x + ctc_w, :]
-            original_mask = stitch_data.get("original_mask")
-            if original_mask is not None:
-                crop_mask = _resize_mask(original_mask.to(device), ctc_h, ctc_w)
-            else:
-                crop_mask = (blend_mask_crop > 0.5).float()
-            blend_mask_crop = _generate_stitch_blend_mask(
-                canvas_crop_region, crop_mask, blend_mode, blend_radius
-            )
-
-        # Per-frame paste loop (handles both single-position v2 and v3 offsets).
-        if frame_offsets is None:
-            offsets_iter: List[Tuple[int, int]] = [(ctc_x, ctc_y)] * B
-        else:
-            if len(frame_offsets) != B:
-                raise ValueError(
-                    f"InpaintStitchProMEC: frame_offsets length ({len(frame_offsets)}) "
-                    f"does not match inpainted batch size ({B})."
-                )
-            offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
-
-        # Build the per-frame blend mask 4D tensor once (shared across frames).
-        m3 = blend_mask_crop.unsqueeze(-1)  # (B,h,w,1)
-
-        # Fast path (Phase 9b): when every frame pastes at the same (fx, fy)
-        # and the blend is gaussian, do ONE vectorized batched composite
-        # instead of B per-frame slices. This is by far the common case
-        # (all non-Ronin video and all single-image inpaints) and turns
-        # an O(B) Python loop into a single torch op.
-        uniform_offsets = (
-            len(offsets_iter) > 1
-            and all(o == offsets_iter[0] for o in offsets_iter)
-        )
-        if uniform_offsets and blend_mode == "gaussian" and not color_match:
-            fx0, fy0 = offsets_iter[0]
-            canvas_crop = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :].clone()
-            mask_b = m3 if m3.shape[0] == B else m3.expand(B, -1, -1, -1)
-            blended = canvas_crop * (1.0 - mask_b) + inp_resized * mask_b
-            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended.clamp(0.0, 1.0)
-            paste_iter: List[Tuple[int, int]] = []  # skip slow per-frame loop
-        elif uniform_offsets and blend_mode in ("laplacian_pyramid", "frequency_blend") and not color_match:
-            # Batched pyramid / FFT blend across the whole batch in one call.
-            fx0, fy0 = offsets_iter[0]
-            canvas_crop = canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :].clone()
-            mask_bb = m3 if m3.shape[0] == B else m3.expand(B, -1, -1, -1)
-            a_bchw = canvas_crop.permute(0, 3, 1, 2)
-            b_bchw = inp_resized.permute(0, 3, 1, 2)
-            m_b1hw = mask_bb.permute(0, 3, 1, 2)
-            if blend_mode == "laplacian_pyramid":
-                blended = _laplacian_pyramid_blend(a_bchw, b_bchw, m_b1hw, levels=5)
-            else:
-                blended = _frequency_blend(a_bchw, b_bchw, m_b1hw)
-            canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w, :] = blended.permute(0, 2, 3, 1).clamp(0.0, 1.0)
-            paste_iter = []
-        else:
-            paste_iter = list(offsets_iter)
-
-        for b, (fx, fy) in _PB.track(
-            list(enumerate(paste_iter)), len(paste_iter),
-            "paste frames",
-        ):
-            canvas_crop = canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :].clone()
-            inp_b = inp_resized[b:b+1]
-            mask_b = m3[b:b+1] if m3.shape[0] == B else m3
-
-            if color_match:
-                color_mask_b = (mask_b.squeeze(-1) > 0.1).float()
-                inp_b = _color_match_mean_std(inp_b, canvas_crop, color_mask_b)
-
-            if blend_mode == "laplacian_pyramid":
-                a_bchw = canvas_crop.permute(0, 3, 1, 2)
-                b_bchw = inp_b.permute(0, 3, 1, 2)
-                m_b1hw = mask_b.permute(0, 3, 1, 2)
-                blended = _laplacian_pyramid_blend(a_bchw, b_bchw, m_b1hw, levels=5)
-                blended = blended.permute(0, 2, 3, 1).clamp(0.0, 1.0)
-            elif blend_mode == "frequency_blend":
-                a_bchw = canvas_crop.permute(0, 3, 1, 2)
-                b_bchw = inp_b.permute(0, 3, 1, 2)
-                m_b1hw = mask_b.permute(0, 3, 1, 2)
-                blended = _frequency_blend(a_bchw, b_bchw, m_b1hw)
-                blended = blended.permute(0, 2, 3, 1).clamp(0.0, 1.0)
-            else:
-                blended = (canvas_crop * (1.0 - mask_b) + inp_b * mask_b).clamp(0.0, 1.0)
-
-            canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :] = blended
-
-        # Extract original image region from canvas (reverses expansion)
-        output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :].clamp(0.0, 1.0)
-
-        # Build blend mask in original image space (per-frame for v3)
-        H, W = cto_h, cto_w
-        blend_canvas = torch.zeros(B, canvas.shape[1], canvas.shape[2],
-                                   device=device, dtype=canvas.dtype)
-        # Fast path: when offsets are uniform, paint the blend mask in one
-        # broadcast write instead of B per-frame slices.
-        if uniform_offsets:
-            fx0, fy0 = offsets_iter[0]
-            if blend_mask_crop.shape[0] == B:
-                blend_canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w] = blend_mask_crop
-            else:
-                blend_canvas[:, fy0:fy0 + ctc_h, fx0:fx0 + ctc_w] = blend_mask_crop[0:1].expand(B, -1, -1)
-        else:
-            for b, (fx, fy) in _PB.track(
-                list(enumerate(offsets_iter)), len(offsets_iter),
-                "build blend mask",
-            ):
-                blend_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w] = (
-                    blend_mask_crop[b] if blend_mask_crop.shape[0] == B else blend_mask_crop[0]
-                )
-        blend_mask_full = blend_canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
-
-        color_info = "\n  color_match: applied" if color_match else ""
-        ronin_info = ""
-        if frame_offsets is not None:
-            xs = [fx for fx, _ in offsets_iter]
-            ys = [fy for _, fy in offsets_iter]
-            ronin_info = (
-                f"\n  Ronin per-frame paste: x∈[{min(xs)},{max(xs)}] "
-                f"y∈[{min(ys)},{max(ys)}]"
-            )
-        info = (
-            f"InpaintStitchProMEC (v{stitch_data.get('version', 2)}):\n"
-            f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-            f"  crop→canvas (ref): x={ctc_x}, y={ctc_y}, w={ctc_w}, h={ctc_h}\n"
-            f"  orig→canvas: x={cto_x}, y={cto_y}, w={cto_w}, h={cto_h}\n"
-            f"  blend_mode: {blend_mode}"
-            + (" (overridden)" if blend_mode_override != "from_crop" else " (from_crop)")
-            + f"\n  output: {B}x{H}x{W}"
-            + ronin_info
-            + color_info
-        )
-
-        return (output, blend_mask_full, info)
-
-    def _stitch_v1(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-                   blend_mode_override: str, color_match: bool):
-        """V1 stitch: legacy format with direct crop coordinates.
-
-        DEPRECATED (Apr 2026 cleanup): v2 (canvas-based) is the preferred path.
-        Kept for back-compat with workflows produced by InpaintCropProMEC v1.x.
-        Will be removed in a future major version. New crops always emit v2.
-        """
-        import logging as _logging
-        _logging.getLogger("MEC.inpaint").warning(
-            "[InpaintStitchProMEC] stitch_data v1 is deprecated; please re-run "
-            "the InpaintCropProMEC node which now emits v2."
-        )
+        # Map legacy override names ('poisson', 'classic', \u2026) to native modes.
+        if blend_mode_override != "from_crop":
+            blend_mode_override = _normalize_blend_mode(blend_mode_override)
         original_image = stitch_data["original_image"]
         crop_x = stitch_data["crop_x"]
         crop_y = stitch_data["crop_y"]
         crop_w = stitch_data["crop_w"]
         crop_h = stitch_data["crop_h"]
-        stored_blend_mode = stitch_data["blend_mode"]
+        target_w = stitch_data["target_w"]
+        target_h = stitch_data["target_h"]
+        stored_blend_mode = _normalize_blend_mode(stitch_data["blend_mode"])
         blend_radius = stitch_data["blend_radius"]
         stitch_blend_mask_crop = stitch_data["stitch_blend_mask_crop"]
         original_mask = stitch_data["original_mask"]
-        upscale_method = stitch_data.get("upscale_method", "lanczos")
 
         device = _get_device(original_image)
         B, H, W, C = original_image.shape
 
+        # Determine effective blend mode
         blend_mode = stored_blend_mode if blend_mode_override == "from_crop" else blend_mode_override
 
-        inp_resized = _resize_image(inpainted_image, crop_h, crop_w, mode=upscale_method)
-        blend_mask_crop = _resize_mask(stitch_blend_mask_crop, crop_h, crop_w, mode=upscale_method)
+        # Resize inpainted image to crop dimensions
+        inp_resized = _resize_image(inpainted_image, crop_h, crop_w)
 
+        # Resize blend mask to crop dimensions
+        blend_mask_crop = _resize_mask(stitch_blend_mask_crop, crop_h, crop_w)
+
+        # Regenerate blend mask if override differs from stored
         if blend_mode_override != "from_crop" and blend_mode_override != stored_blend_mode:
             crop_region = original_image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
             crop_mask = original_mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
@@ -2420,63 +879,220 @@ class InpaintStitchProMEC:
                 crop_region, crop_mask, blend_mode, blend_radius
             )
 
+        # Optional color matching
         if color_match:
             crop_original = original_image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
             crop_mask_for_color = original_mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
             inp_resized = _color_match_mean_std(inp_resized, crop_original, crop_mask_for_color)
 
+        # Clone the original for compositing
         canvas = original_image.clone()
         canvas_crop = canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
 
+        # Composite based on blend mode
         if blend_mode == "laplacian_pyramid":
             a_bchw = canvas_crop.permute(0, 3, 1, 2)
             b_bchw = inp_resized.permute(0, 3, 1, 2)
             m_b1hw = blend_mask_crop.unsqueeze(1)
             blended_bchw = _laplacian_pyramid_blend(a_bchw, b_bchw, m_b1hw, levels=5)
             blended = blended_bchw.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+
         elif blend_mode == "frequency_blend":
             a_bchw = canvas_crop.permute(0, 3, 1, 2)
             b_bchw = inp_resized.permute(0, 3, 1, 2)
             m_b1hw = blend_mask_crop.unsqueeze(1)
             blended_bchw = _frequency_blend(a_bchw, b_bchw, m_b1hw)
             blended = blended_bchw.permute(0, 2, 3, 1).clamp(0.0, 1.0)
+
         else:
             m3 = blend_mask_crop.unsqueeze(-1)
             blended = canvas_crop * (1.0 - m3) + inp_resized * m3
 
+        # Paste blended region back
         canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = blended
+
+        # Create full-res blend mask for output
         blend_mask_full = torch.zeros(B, H, W, device=device, dtype=original_image.dtype)
         blend_mask_full[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w] = blend_mask_crop
 
-        color_info = "\n  color_match: applied" if color_match else ""
-        info = (
-            f"InpaintStitchProMEC (v1):\n"
-            f"  stitch region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}\n"
-            f"  blend_mode: {blend_mode}\n"
-            f"  output: {B}x{H}x{W}x{C}"
-            + color_info
-        )
+        # Build info string
+        color_info = ""
+        if color_match:
+            color_info = "\n  color_match: applied"
+
+        info_lines = [
+            f"InpaintStitchProMEC:",
+            f"  stitch region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}",
+            f"  blend_mode: {blend_mode}" + (" (overridden)" if blend_mode_override != "from_crop" else " (from_crop)"),
+            f"  inpainted_input: {inpainted_image.shape[0]}x{inpainted_image.shape[1]}x{inpainted_image.shape[2]}x{inpainted_image.shape[3]}",
+            f"  blend_mask range: [{blend_mask_crop.min().item():.4f}, {blend_mask_crop.max().item():.4f}]",
+            f"  output: {B}x{H}x{W}x{C}",
+            color_info,
+        ]
+        info = "\n".join(info_lines)
 
         return (canvas, blend_mask_full, info)
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 3: InpaintMaskPrepareMEC  (REMOVED — Apr 2026 cleanup)
+#  NODE 3: InpaintMaskPrepareMEC
 # ══════════════════════════════════════════════════════════════════════
-# Functionality is duplicated by Impact Pack `MaskFix` and KJNodes
-# `GrowMaskWithBlur`. Snapshot retained at
-# ``_deprecated/inpaint_suite.snapshot.py``.
+
+class InpaintMaskPrepareMEC:
+    """Standalone mask preparation: clean up, grow, produce dual inpaint + stitch masks.
+
+    Separates inpaint_mask (what model sees) from stitch_blend_mask (what composite uses).
+    Optional temporal smoothing for video batch consistency.
+    """
+
+    VRAM_TIER = 1
+    INPAINT_EDGE_MODES = ["hard_binary", "slight_feather"]
+    STITCH_EDGE_MODES = ["gaussian", "edge_aware"]
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mask": ("MASK", {"tooltip": "Raw input mask (B,H,W)"}),
+                "fill_holes": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Fill interior holes in the mask"}),
+                "remove_small_regions": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Remove small disconnected blobs"}),
+                "min_region_area": ("INT", {
+                    "default": 100, "min": 0, "max": 100000, "step": 10,
+                    "tooltip": "Minimum region area in pixels to keep"}),
+                "grow_pixels": ("INT", {
+                    "default": 4, "min": 0, "max": 256, "step": 1,
+                    "tooltip": "Dilate mask by this many pixels"}),
+                "inpaint_edge_mode": (cls.INPAINT_EDGE_MODES, {
+                    "default": "hard_binary",
+                    "tooltip": "Edge style for inpaint mask: hard_binary or slight_feather"}),
+                "stitch_edge_mode": (cls.STITCH_EDGE_MODES, {
+                    "default": "gaussian",
+                    "tooltip": "Edge style for stitch blend mask: gaussian or edge_aware"}),
+                "stitch_feather_radius": ("INT", {
+                    "default": 16, "min": 1, "max": 128, "step": 1,
+                    "tooltip": "Feather radius for the stitch blend mask"}),
+                "temporal_smooth": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Apply Gaussian temporal smoothing along batch dimension (for video)"}),
+                "temporal_sigma": ("FLOAT", {
+                    "default": 1.5, "min": 0.1, "max": 10.0, "step": 0.1,
+                    "tooltip": "Temporal Gaussian sigma in frames"}),
+            },
+            "optional": {
+                "reference_image": ("IMAGE", {
+                    "tooltip": "Reference image for edge-aware stitch blend mask (required for edge_aware mode)"}),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", "MASK", "IMAGE", "STRING")
+    RETURN_NAMES = ("inpaint_mask", "stitch_blend_mask", "debug_preview", "info")
+    FUNCTION = "prepare_mask"
+    CATEGORY = "MaskEditControl/Inpaint"
+    DESCRIPTION = "Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite."
+
+    def prepare_mask(self, mask: torch.Tensor, fill_holes: bool,
+                     remove_small_regions: bool, min_region_area: int,
+                     grow_pixels: int, inpaint_edge_mode: str,
+                     stitch_edge_mode: str, stitch_feather_radius: int,
+                     temporal_smooth: bool, temporal_sigma: float,
+                     reference_image: Optional[torch.Tensor] = None):
+        device = _get_device(mask)
+
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(0)
+        B, H, W = mask.shape
+        working = mask.clone()
+
+        holes_filled = 0
+        regions_removed = 0
+
+        # Step 1: Fill holes
+        if fill_holes:
+            before_sum = (working > 0.5).float().sum().item()
+            working = _fill_holes_torch(working)
+            after_sum = (working > 0.5).float().sum().item()
+            holes_filled = int(after_sum - before_sum)
+
+        # Step 2: Remove small regions
+        if remove_small_regions and min_region_area > 0:
+            before_sum = (working > 0.5).float().sum().item()
+            working = _remove_small_regions_torch(working, min_region_area)
+            after_sum = (working > 0.5).float().sum().item()
+            regions_removed = int(before_sum - after_sum)
+
+        # Step 3: Grow mask
+        if grow_pixels > 0:
+            k = 2 * grow_pixels + 1
+            m4 = working.unsqueeze(1)
+            working = F.max_pool2d(m4, kernel_size=k, stride=1, padding=grow_pixels).squeeze(1)
+            working = working.clamp(0.0, 1.0)
+
+        # Step 4: Generate inpaint mask
+        inpaint_mask = _apply_inpaint_mask_mode(working, inpaint_edge_mode)
+
+        # Step 5: Generate stitch blend mask
+        if stitch_edge_mode == "edge_aware" and reference_image is not None:
+            ref = reference_image
+            if ref.shape[0] == 1 and B > 1:
+                ref = ref.expand(B, -1, -1, -1)
+            if ref.shape[1] != H or ref.shape[2] != W:
+                ref = _resize_image(ref, H, W)
+            stitch_blend_mask = _edge_aware_blend_mask(ref, working, stitch_feather_radius)
+        else:
+            binary = (working > 0.5).float()
+            stitch_blend_mask = _gaussian_blur_mask(binary, sigma=stitch_feather_radius * 0.4)
+
+        # Step 6: Temporal smoothing
+        temporal_variance_before = 0.0
+        temporal_variance_after = 0.0
+        if temporal_smooth and B > 1:
+            temporal_variance_before = stitch_blend_mask.var(dim=0).mean().item()
+            stitch_blend_mask = _temporal_gaussian_smooth(stitch_blend_mask, temporal_sigma)
+            temporal_variance_after = stitch_blend_mask.var(dim=0).mean().item()
+
+        # Step 7: Build debug preview
+        debug_r = inpaint_mask.unsqueeze(-1)
+        debug_g = stitch_blend_mask.unsqueeze(-1)
+        debug_b = torch.zeros(B, H, W, 1, device=device, dtype=mask.dtype)
+        debug_preview = torch.cat([debug_r, debug_g, debug_b], dim=-1)
+
+        # Step 8: Build info string
+        info_lines = [
+            f"InpaintMaskPrepareMEC:",
+            f"  input: {B}x{H}x{W}",
+            f"  fill_holes: {fill_holes} (pixels filled: {holes_filled})",
+            f"  remove_small_regions: {remove_small_regions} (pixels removed: {regions_removed})",
+            f"  grow_pixels: {grow_pixels}",
+            f"  inpaint_edge_mode: {inpaint_edge_mode}",
+            f"  stitch_edge_mode: {stitch_edge_mode}, radius={stitch_feather_radius}",
+            f"  inpaint_mask range: [{inpaint_mask.min().item():.4f}, {inpaint_mask.max().item():.4f}]",
+            f"  stitch_blend_mask range: [{stitch_blend_mask.min().item():.4f}, {stitch_blend_mask.max().item():.4f}]",
+        ]
+        if temporal_smooth and B > 1:
+            info_lines.append(
+                f"  temporal_smooth: sigma={temporal_sigma:.1f}, "
+                f"variance {temporal_variance_before:.6f} → {temporal_variance_after:.6f}"
+            )
+        info = "\n".join(info_lines)
+
+        return (inpaint_mask, stitch_blend_mask, debug_preview, info)
+
+
 # ══════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════
-#  NODE 4: InpaintPasteBackMEC
+#  NODE 4: InpaintPasteBackMEC  (clean resize + paste, no blend pipeline)
+#  Reimplemented on top of the gracefully-working oldest engine.
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintPasteBackMEC:
     """Paste inpainted crop back onto original using stitch_data.
 
-    Simplified companion to InpaintStitchProMEC — no blend mode logic,
-    just a clean resize + paste with optional feathered alpha composite.
-    Accepts stitch_data from InpaintCropProMEC or a manual CROP_INFO dict.
+    Simple resize + alpha-paste with optional Gaussian-feathered edges.
+    Works exactly like the original lquesada-style stitcher: 1.0 inside the
+    paste rectangle, feathered ring at the boundary, 0.0 elsewhere.
     """
 
     VRAM_TIER = 1
@@ -2502,222 +1118,74 @@ class InpaintPasteBackMEC:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
-    OUTPUT_TOOLTIPS = (
-        "Original image with the inpainted crop pasted back (optionally feathered).",
-        "Info string describing paste bounds, resize method, and feather settings.",
-    )
     FUNCTION = "paste_back"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = "Paste inpainted crop back onto original image using stitch_data with optional feathered edges."
 
-    def paste_back(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-                   upscale_method: str, feather_edges: bool, feather_radius: int):
-        with _PB.session("InpaintPasteBackMEC"):
-            return self._paste_back_impl(stitch_data, inpainted_image,
-                                         upscale_method, feather_edges, feather_radius)
-
-    def _paste_back_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-                   upscale_method: str, feather_edges: bool, feather_radius: int):
-        # MANUAL bug-fix (Apr 2026): unify feather_edges + feather_radius.
-        # feather_radius == 0 now ALWAYS disables feathering, regardless of
-        # the legacy ``feather_edges`` toggle. This makes radius the single
-        # source of truth and lets workflows just zero the int instead of
-        # juggling both widgets. ``feather_edges=False`` still disables for
-        # back-compat with old workflows that left radius=16 but turned the
-        # bool off.
-        feather_active = bool(feather_edges) and int(feather_radius) > 0
-        if not isinstance(stitch_data, dict) or not stitch_data:
-            raise ValueError(
-                "InpaintPasteBackMEC: 'stitch_data' is missing or empty. "
-                "Connect the STITCH_DATA output of an InpaintCropPro node."
-            )
-        version = stitch_data.get("version", 1)
-        required_v1 = ("original_image", "crop_x", "crop_y", "crop_w", "crop_h")
-        required_v2 = ("canvas_image", "ctc_x", "ctc_y", "ctc_w", "ctc_h",
-                       "cto_x", "cto_y", "cto_w", "cto_h")
-        required_v3 = required_v2 + ("frame_offsets",)
-        if version >= 3:
-            required = required_v3
-        elif version >= 2:
-            required = required_v2
-        else:
-            required = required_v1
-        missing = [k for k in required if k not in stitch_data]
-        if missing:
-            raise ValueError(
-                f"InpaintPasteBackMEC: stitch_data (v{version}) is missing keys: {missing}. "
-                "This usually means the STITCH_DATA input is unconnected or was produced by an incompatible node."
-            )
-        device = _get_device(inpainted_image)
-
-        if version >= 2:
-            canvas_image = stitch_data["canvas_image"].to(device)
-            ctc_x = stitch_data["ctc_x"]
-            ctc_y = stitch_data["ctc_y"]
-            ctc_w = stitch_data["ctc_w"]
-            ctc_h = stitch_data["ctc_h"]
-            cto_x = stitch_data["cto_x"]
-            cto_y = stitch_data["cto_y"]
-            cto_w = stitch_data["cto_w"]
-            cto_h = stitch_data["cto_h"]
-            frame_offsets = stitch_data.get("frame_offsets")  # v3 per-frame paste
-
-            B = inpainted_image.shape[0]
-            inp_resized = _resize_image(inpainted_image, ctc_h, ctc_w, mode=upscale_method)
-            canvas = canvas_image.clone()
-
-            if frame_offsets is None:
-                offsets_iter: List[Tuple[int, int]] = [(ctc_x, ctc_y)] * B
-            else:
-                if len(frame_offsets) != B:
-                    raise ValueError(
-                        f"InpaintPasteBackMEC: frame_offsets length ({len(frame_offsets)}) "
-                        f"does not match inpainted batch size ({B})."
-                    )
-                offsets_iter = [(int(fx), int(fy)) for (fx, fy) in frame_offsets]
-
-            # CRITICAL FIX (May 2026): honour the user's ORIGINAL MASK.
-            #
-            # The previous behaviour was a hard rectangular paste of the
-            # entire crop region (ctc_w × ctc_h), which obliterated all the
-            # unmasked context pixels around the inpaint subject — the
-            # source of the "every pixel shifted" seams the user reported.
-            # If stitch_data carries 'original_mask' (always true for crops
-            # produced by InpaintCropProMEC), we now build a canvas-space
-            # alpha that is bit-exact 0 outside the user mask, so unmasked
-            # pixels are byte-identical to the input. Inside the mask we
-            # composite the inpaint, optionally feathered.
-            original_mask_full = stitch_data.get("original_mask")
-
-            if original_mask_full is not None:
-                om = original_mask_full.to(device).clamp(0.0, 1.0)
-                if om.shape[0] == 1 and B > 1:
-                    om = om.expand(B, -1, -1).contiguous()
-                elif om.shape[0] != B:
-                    om = om[:1].expand(B, -1, -1).contiguous()
-                Hc, Wc = canvas.shape[1], canvas.shape[2]
-                canvas_mask = torch.zeros(B, Hc, Wc, device=device, dtype=canvas.dtype)
-                mh = min(cto_h, om.shape[1])
-                mw = min(cto_w, om.shape[2])
-                canvas_mask[:, cto_y:cto_y + mh, cto_x:cto_x + mw] = om[:, :mh, :mw]
-
-                if feather_active:
-                    blend_full = _exact_inside_feather(canvas_mask, int(feather_radius))
-                else:
-                    # Hard binary: alpha is exactly {0,1}. Outside-mask pixels
-                    # are byte-identical to canvas; inside-mask pixels are
-                    # exactly the inpaint. Zero seam, zero pixel shift.
-                    blend_full = (canvas_mask > 0.5).to(canvas.dtype)
-
-                for b, (fx, fy) in enumerate(offsets_iter):
-                    bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
-                    canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    inp_b = inp_resized[b:b + 1]
-                    canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
-                        canvas_win * (1.0 - bm_win) + inp_b * bm_win
-                    )
-            elif feather_active:
-                # Legacy path: no original_mask — fall back to crop-rectangle feather.
-                binary_ones = torch.ones(1, ctc_h, ctc_w, device=device, dtype=torch.float32)
-                core = _erode_mask(binary_ones, feather_radius)
-                pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)  # (1, H, W)
-                pm3 = pm_bw.squeeze(0).unsqueeze(-1)  # (H, W, 1)
-                for b, (fx, fy) in enumerate(offsets_iter):
-                    crop = canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :]
-                    canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
-                        crop * (1.0 - pm3) + inp_resized[b] * pm3
-                    )
-            else:
-                # Legacy hard rectangular paste (no original_mask, no feather).
-                for b, (fx, fy) in enumerate(offsets_iter):
-                    canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
-
-            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            ronin_info = ""
-            if frame_offsets is not None:
-                xs = [fx for fx, _ in offsets_iter]
-                ys = [fy for _, fy in offsets_iter]
-                ronin_info = (
-                    f"\n  Ronin per-frame paste: x∈[{min(xs)},{max(xs)}] "
-                    f"y∈[{min(ys)},{max(ys)}]"
-                )
-            mask_info = (
-                "  alpha: original_mask honoured (zero pixel change outside mask)\n"
-                if original_mask_full is not None
-                else "  alpha: legacy crop-rectangle paste (no original_mask)\n"
-            )
-            info = (
-                f"InpaintPasteBackMEC (v{version}):\n"
-                f"  crop→canvas (ref): x={ctc_x}, y={ctc_y}, w={ctc_w}, h={ctc_h}\n"
-                f"  output: {B}x{cto_h}x{cto_w}\n"
-                f"  upscale_method: {upscale_method}\n"
-                + mask_info
-                + f"  feather_edges: {feather_edges}, radius={feather_radius}"
-                + ronin_info
-            )
-            # Important: do NOT clamp when original_mask path was used —
-            # outside pixels are bit-exact and must not be perturbed by
-            # clamp on tensors that may already be slightly outside [0,1].
-            if original_mask_full is not None:
-                return (output, info)
-            return (output.clamp(0, 1), info)
-
-        # V1 fallback
+    def paste_back(self, stitch_data, inpainted_image, upscale_method, feather_edges, feather_radius):
+        if not isinstance(stitch_data, dict):
+            raise ValueError("InpaintPasteBackMEC: stitch_data must be a dict from InpaintCropProMEC")
         original_image = stitch_data["original_image"]
-        crop_x = stitch_data["crop_x"]
-        crop_y = stitch_data["crop_y"]
-        crop_w = stitch_data["crop_w"]
-        crop_h = stitch_data["crop_h"]
+        crop_x = int(stitch_data["crop_x"])
+        crop_y = int(stitch_data["crop_y"])
+        crop_w = int(stitch_data["crop_w"])
+        crop_h = int(stitch_data["crop_h"])
 
+        device = _get_device(original_image)
         B, H, W, C = original_image.shape
-        inp_resized = _resize_image(inpainted_image, crop_h, crop_w, mode=upscale_method)
-        canvas = original_image.clone()
 
-        if feather_active:
-            binary_ones = torch.ones(1, crop_h, crop_w, device=device, dtype=torch.float32)
-            core = _erode_mask(binary_ones, feather_radius)
-            pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)
-            paste_mask_3d = pm_bw.squeeze(0).unsqueeze(-1)  # (crop_h, crop_w, 1)
-            for b in _PB.track(range(B), B, "paste"):
-                orig_crop = canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
-                canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = (
-                    orig_crop * (1.0 - paste_mask_3d) + inp_resized[b] * paste_mask_3d
-                )
+        # Resize inpainted crop to original crop size
+        inp = inpainted_image
+        if inp.shape[1] != crop_h or inp.shape[2] != crop_w:
+            if upscale_method == "lanczos":
+                inp = _resize_lanczos(inp, crop_h, crop_w)
+            else:
+                m = upscale_method if upscale_method != "nearest-exact" else "nearest-exact"
+                inp_bchw = inp.permute(0, 3, 1, 2)
+                inp_bchw = F.interpolate(inp_bchw, size=(crop_h, crop_w),
+                                         mode=("nearest" if m == "nearest-exact" else m),
+                                         align_corners=False if m in ("bilinear", "bicubic") else None)
+                inp = inp_bchw.permute(0, 2, 3, 1)
+
+        feather_active = bool(feather_edges) and int(feather_radius) > 0
+
+        canvas = original_image.clone()
+        if not feather_active:
+            canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = inp.clamp(0.0, 1.0)
         else:
-            canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = inp_resized
+            # Build a soft alpha: 1.0 in interior, gaussian fade to 0 at rect border.
+            r = max(1, int(feather_radius))
+            box = torch.ones(1, 1, crop_h, crop_w, device=device, dtype=original_image.dtype)
+            # Erode by `r` so the gaussian halo lives inside the rectangle.
+            inner_h = max(1, crop_h - 2 * r)
+            inner_w = max(1, crop_w - 2 * r)
+            inner = torch.zeros_like(box)
+            sy, sx = (crop_h - inner_h) // 2, (crop_w - inner_w) // 2
+            inner[:, :, sy:sy + inner_h, sx:sx + inner_w] = 1.0
+            alpha = _gaussian_blur_2d(inner, sigma=r * 0.5).clamp(0.0, 1.0)
+            alpha = alpha.squeeze(0).squeeze(0)  # (crop_h, crop_w)
+            alpha = alpha.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1, 1)
+            base = canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
+            blended = base * (1.0 - alpha) + inp.clamp(0.0, 1.0) * alpha
+            canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = blended
 
         info = (
-            f"InpaintPasteBackMEC (v1):\n"
-            f"  paste region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}\n"
+            f"InpaintPasteBackMEC:\n"
+            f"  paste rect: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}\n"
             f"  upscale_method: {upscale_method}\n"
-            f"  feather_edges: {feather_edges}, radius={feather_radius}\n"
+            f"  feather: {'on r=' + str(feather_radius) if feather_active else 'off'}\n"
             f"  output: {B}x{H}x{W}x{C}"
         )
-
-        return (canvas.clamp(0, 1), info)
+        return (canvas, info)
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Unified composite node — replaces the two-node Stitch + PasteBack split
+#  NODE 5: InpaintCompositeMEC  (mode dispatch over Stitch Pro / Paste Back)
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintCompositeMEC:
-    """One node that does both Stitch Pro (advanced blending) and Paste Back
-    (clean resize + paste). Pick the mode with the ``mode`` dropdown; the
-    front-end hides parameters that don't apply to the selected mode.
-
-    Modes:
-      • ``stitch_pro`` — composite the inpainted region back through an
-        advanced blend pipeline (edge-aware, Laplacian pyramid, frequency,
-        gaussian, or whatever the crop node baked in). Optional Reinhard
-        color match. Returns the actual blend mask used.
-      • ``paste_back`` — straight resize + paste of the inpainted crop onto
-        the original canvas, with optional Gaussian-feathered edges. Faster,
-        no blend logic, no color match.
-
-    The output signature is unified: (IMAGE, MASK, STRING). In ``paste_back``
-    mode the MASK output is the paste rectangle (1.0 inside, 0.0 outside,
-    feathered if requested) so downstream nodes always receive a usable mask.
+    """Unified composite: switch between Stitch Pro (advanced blend) and
+    Paste Back (clean resize + paste) via the `mode` dropdown.
     """
 
     VRAM_TIER = 1
@@ -2727,133 +1195,48 @@ class InpaintCompositeMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stitch_data": ("STITCH_DATA", {
-                    "tooltip": "Stitch data from InpaintCropProMEC"}),
-                "inpainted_image": ("IMAGE", {
-                    "tooltip": "Inpainted result from model (B,H,W,C)"}),
-                "mode": (cls.MODES, {
-                    "default": "stitch_pro",
-                    "tooltip":
-                        "stitch_pro: advanced blend (edge-aware/laplacian/"
-                        "frequency/gaussian) + optional color match.\n"
-                        "paste_back: clean resize + paste with optional "
-                        "feathered edges. Faster, no blend pipeline."}),
-                # ── stitch_pro params ─────────────────────────────────
+                "stitch_data": ("STITCH_DATA", {"tooltip": "Stitch data from InpaintCropProMEC"}),
+                "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result (B,H,W,C)"}),
+                "mode": (cls.MODES, {"default": "stitch_pro"}),
                 "blend_mode_override": (InpaintStitchProMEC.BLEND_OVERRIDES, {
                     "default": "from_crop",
-                    "tooltip":
-                        "[stitch_pro only] Override the blend mode from the "
-                        "crop node, or 'from_crop' to keep what the crop "
-                        "node configured."}),
+                    "tooltip": "[stitch_pro] Override blend mode or use 'from_crop'"}),
                 "color_match": ("BOOLEAN", {
                     "default": False,
-                    "tooltip":
-                        "[stitch_pro only] Apply Reinhard mean+std color "
-                        "transfer before blending to suppress hue drift "
-                        "from the inpaint model."}),
-                # ── paste_back params ────────────────────────────────
+                    "tooltip": "[stitch_pro] Apply Reinhard mean+std color match"}),
                 "upscale_method": (InpaintPasteBackMEC.INTERP_METHODS, {
                     "default": "lanczos",
-                    "tooltip":
-                        "[paste_back only] Interpolation used when resizing "
-                        "the inpainted crop back to its original dims."}),
+                    "tooltip": "[paste_back] Interpolation for resize"}),
                 "feather_edges": ("BOOLEAN", {
                     "default": False,
-                    "tooltip":
-                        "[paste_back only] Gaussian-feather the paste-rect "
-                        "boundary so the seam disappears."}),
+                    "tooltip": "[paste_back] Gaussian-feather rectangle boundary"}),
                 "feather_radius": ("INT", {
                     "default": 16, "min": 0, "max": 64, "step": 1,
-                    "tooltip":
-                        "[paste_back only] Feather radius in pixels. 0 "
-                        "disables feathering even if the toggle is on."}),
+                    "tooltip": "[paste_back] Feather radius in pixels (0 disables)"}),
             },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "mask", "info")
-    OUTPUT_TOOLTIPS = (
-        "Final image: in stitch_pro mode the inpainted region is blended "
-        "back through the configured blend pipeline; in paste_back mode "
-        "the inpainted crop is resized + pasted (optionally feathered).",
-        "Mask: in stitch_pro mode this is the actual blend mask used (in "
-        "original-image space); in paste_back mode it is the paste rect "
-        "(feathered if enabled) so downstream nodes always get a mask.",
-        "Info string describing mode, parameters, and timings.",
-    )
     FUNCTION = "composite"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = (
-        "Unified composite node. Switch between Stitch Pro (advanced blend "
-        "pipeline) and Paste Back (clean resize + paste) via the mode "
-        "dropdown. Replaces the legacy InpaintStitchProMEC + "
-        "InpaintPasteBackMEC pair (both still registered for backward "
-        "compatibility with existing workflows)."
-    )
+    DESCRIPTION = "Unified composite. mode=stitch_pro for advanced blend; mode=paste_back for clean resize+paste."
 
-    def composite(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-                  mode: str,
-                  blend_mode_override: str, color_match: bool,
-                  upscale_method: str, feather_edges: bool, feather_radius: int):
-        if mode == "stitch_pro":
-            image, blend_mask, info = InpaintStitchProMEC().stitch(
-                stitch_data=stitch_data,
-                inpainted_image=inpainted_image,
-                blend_mode_override=blend_mode_override,
-                color_match=color_match,
-            )
-            return (image, blend_mask, info)
-
+    def composite(self, stitch_data, inpainted_image, mode, blend_mode_override,
+                  color_match, upscale_method, feather_edges, feather_radius):
         if mode == "paste_back":
-            image, info = InpaintPasteBackMEC().paste_back(
-                stitch_data=stitch_data,
-                inpainted_image=inpainted_image,
-                upscale_method=upscale_method,
-                feather_edges=feather_edges,
-                feather_radius=feather_radius,
-            )
-            # Synthesize a paste-rect mask in original-image space so the
-            # MASK output is always populated.
-            B, H, W, _ = image.shape
-            device = image.device
-            paste_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
-            version = stitch_data.get("version", 1)
-            if version >= 2:
-                ctc_x = int(stitch_data["ctc_x"]); ctc_y = int(stitch_data["ctc_y"])
-                ctc_w = int(stitch_data["ctc_w"]); ctc_h = int(stitch_data["ctc_h"])
-                cto_x = int(stitch_data["cto_x"]); cto_y = int(stitch_data["cto_y"])
-                cto_w = int(stitch_data["cto_w"]); cto_h = int(stitch_data["cto_h"])
-                # Original-image-space rect = the cto_* "original-overlap" box.
-                offsets = stitch_data.get("frame_offsets") if version >= 3 else None
-                if offsets is not None and len(offsets) == B:
-                    # Per-frame Ronin: derive each frame's original-space rect
-                    # from canvas-space offset minus canvas-origin (cto_x/y is
-                    # canvas's intersection with original).
-                    canvas_origin_x = ctc_x - cto_x
-                    canvas_origin_y = ctc_y - cto_y
-                    for b, (fx, fy) in enumerate(offsets):
-                        ox = int(fx) - canvas_origin_x
-                        oy = int(fy) - canvas_origin_y
-                        x0 = max(0, ox); y0 = max(0, oy)
-                        x1 = min(W, ox + ctc_w); y1 = min(H, oy + ctc_h)
-                        if x1 > x0 and y1 > y0:
-                            paste_mask[b, y0:y1, x0:x1] = 1.0
-                else:
-                    x0 = max(0, cto_x); y0 = max(0, cto_y)
-                    x1 = min(W, cto_x + cto_w); y1 = min(H, cto_y + cto_h)
-                    if x1 > x0 and y1 > y0:
-                        paste_mask[:, y0:y1, x0:x1] = 1.0
-            else:
-                cx = int(stitch_data.get("crop_x", 0)); cy = int(stitch_data.get("crop_y", 0))
-                cw = int(stitch_data.get("crop_w", W)); ch = int(stitch_data.get("crop_h", H))
-                x0 = max(0, cx); y0 = max(0, cy)
-                x1 = min(W, cx + cw); y1 = min(H, cy + ch)
-                if x1 > x0 and y1 > y0:
-                    paste_mask[:, y0:y1, x0:x1] = 1.0
-            if bool(feather_edges) and int(feather_radius) > 0:
-                paste_mask = _gaussian_blur_2d(
-                    paste_mask.unsqueeze(1), sigma=int(feather_radius)
-                ).squeeze(1).clamp(0, 1)
-            return (image, paste_mask, info)
-
-        raise ValueError(f"InpaintCompositeMEC: unknown mode '{mode}'")
+            pb = InpaintPasteBackMEC()
+            img, info = pb.paste_back(stitch_data, inpainted_image,
+                                      upscale_method, feather_edges, feather_radius)
+            # Build a paste-rect mask in original image space
+            crop_x = int(stitch_data["crop_x"]); crop_y = int(stitch_data["crop_y"])
+            crop_w = int(stitch_data["crop_w"]); crop_h = int(stitch_data["crop_h"])
+            B, H, W, _ = img.shape
+            mask = torch.zeros(B, H, W, device=img.device, dtype=img.dtype)
+            mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w] = 1.0
+            return (img, mask, info)
+        # stitch_pro
+        sp = InpaintStitchProMEC()
+        img, blend_mask, info = sp.stitch(stitch_data, inpainted_image,
+                                          blend_mode_override, color_match)
+        return (img, blend_mask, info)
