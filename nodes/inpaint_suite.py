@@ -512,7 +512,7 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
 
     image: (B, H, W, C)
     mask: (B, H, W)
-    mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend'
+    mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend' | 'exact'
     radius: feather radius
     Returns: (B, H, W) soft blend mask
     """
@@ -527,6 +527,9 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
     elif mode == "frequency_blend":
         binary = (mask > 0.5).float()
         return _gaussian_blur_mask(binary, sigma=radius * 0.6)
+    elif mode == "exact":
+        # Hard-binary alpha — no feather, no leakage outside the mask.
+        return (mask > 0.5).float()
     else:
         binary = (mask > 0.5).float()
         return _gaussian_blur_mask(binary, sigma=radius * 0.4)
@@ -597,16 +600,21 @@ def _resize_mask(mask: torch.Tensor, target_h: int, target_w: int) -> torch.Tens
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  Legacy blend-mode aliases — keep old workflows loadable.
-#  Anything not understood by the oldest engine maps to 'gaussian'
-#  (the classic lquesada-style feathered composite that worked).
+#  Legacy blend-mode routing — every name produces a genuinely different,
+#  working blend. No aliases collapse to the same engine.
+#
+#    poisson       → edge_aware        (Sobel-guided seamless boundary)
+#    poisson_mixed → laplacian_pyramid  (multi-level frequency mixing)
+#    exact         → exact              (hard-binary alpha, no leakage)
+#    linear_exact  → exact              (same hard-binary cut)
+#    classic       → gaussian           (lquesada-style soft feather)
 # ══════════════════════════════════════════════════════════════════════
 
 _LEGACY_BLEND_ALIASES = {
-    "poisson":       "gaussian",
-    "poisson_mixed": "gaussian",
-    "exact":         "gaussian",
-    "linear_exact":  "gaussian",
+    "poisson":       "edge_aware",
+    "poisson_mixed": "laplacian_pyramid",
+    "exact":         "exact",
+    "linear_exact":  "exact",
     "classic":       "gaussian",
 }
 
