@@ -756,6 +756,9 @@ class InpaintCropProMEC:
     OUTPUT_PADDING_CHOICES = ["0", "8", "16", "32", "64", "128", "256", "512"]
     DEVICE_MODES = ["cpu (compatible)", "gpu (much faster)"]
     MASK_POLARITY = ["regenerate_subject", "preserve_subject"]
+    INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
+    STITCH_BLEND_MODES = ["gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend"]
+    FILL_MODES = ["none", "edge_pad", "neutral_gray", "original"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -815,6 +818,19 @@ class InpaintCropProMEC:
                 "wan_mask_polarity": (cls.MASK_POLARITY, {
                     "default": "regenerate_subject",
                     "tooltip": "regenerate_subject: mask=1 -> regenerate (lquesada).  preserve_subject: mask=0 -> regenerate (Wan2.2 replacement: mask=1 keeps environment)."}),
+
+                "inpaint_mask_mode": (cls.INPAINT_MASK_MODES, {
+                    "default": "hard_binary",
+                    "tooltip": "What the inpaint sampler sees: hard_binary (crisp), slight_feather (gentle), soft_blend (very soft)."}),
+                "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
+                    "default": "gaussian",
+                    "tooltip": "How the result is composited back: gaussian, edge_aware (Sobel), laplacian_pyramid, frequency_blend."}),
+                "blend_radius": ("INT", {
+                    "default": 32, "min": 1, "max": 256, "step": 1,
+                    "tooltip": "Feather radius for the stitch blend mask (independent of mask_blend_pixels)."}),
+                "fill_masked_area": (cls.FILL_MODES, {
+                    "default": "none",
+                    "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, original."}),
             },
             "optional": {
                 "mask": ("MASK",),
@@ -822,8 +838,8 @@ class InpaintCropProMEC:
             },
         }
 
-    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("stitcher", "cropped_image", "cropped_mask", "info")
+    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING")
+    RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")
     FUNCTION = "inpaint_crop"
     CATEGORY = "MaskEditControl/Inpaint"
     DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). "
@@ -844,6 +860,7 @@ class InpaintCropProMEC:
                      device_mode,
                      wan_align_multiple, wan_temporal_smooth_frames,
                      wan_stable_crop, wan_mask_polarity,
+                     inpaint_mask_mode, stitch_blend_mode, blend_radius, fill_masked_area,
                      mask=None, optional_context_mask=None):
 
         image = image.clone()
@@ -988,6 +1005,8 @@ class InpaintCropProMEC:
             "downscale_algorithm": downscale_algorithm,
             "upscale_algorithm": upscale_algorithm,
             "blend_pixels": mask_blend_pixels,
+            "blend_radius": blend_radius,
+            "stitch_blend_mode": stitch_blend_mode,
             "wan_mask_polarity": wan_mask_polarity,
             "canvas_to_orig_x": [],
             "canvas_to_orig_y": [],
@@ -1045,9 +1064,30 @@ class InpaintCropProMEC:
             out_image = torch.stack(tmp_img, dim=0)
             out_mask  = torch.stack(tmp_msk, dim=0)
 
-        # Wan polarity: flip the user-visible cropped_mask back if needed
+        # ── Step 6: post-process cropped image (fill_masked_area) ─────────
+        if fill_masked_area != "none" and fill_masked_area != "original":
+            binary_3d = (out_mask > 0.5).float().unsqueeze(-1)
+            if fill_masked_area == "neutral_gray":
+                out_image = out_image * (1.0 - binary_3d) + 0.5 * binary_3d
+            elif fill_masked_area == "edge_pad":
+                img_bchw = out_image.permute(0, 3, 1, 2)
+                blurred = _gaussian_blur_2d(img_bchw, sigma=max(out_image.shape[1], out_image.shape[2]) * 0.15)
+                blurred = blurred.permute(0, 2, 3, 1)
+                out_image = out_image * (1.0 - binary_3d) + blurred * binary_3d
+
+        # ── Step 7: derive inpaint_mask (model-facing) and stitch_blend_mask ─
+        inpaint_mask = _apply_inpaint_mask_mode(out_mask, inpaint_mask_mode)
+        stitch_blend_mask = _generate_stitch_blend_mask(
+            out_image, out_mask, stitch_blend_mode, blend_radius
+        )
+
+        # Replace stitcher's per-frame blend mask with the proper feathered one
+        result_stitcher["cropped_mask_for_blend"] = [stitch_blend_mask[i].cpu() for i in range(stitch_blend_mask.shape[0])]
+
+        # Wan polarity: flip user-visible masks back
         if wan_mask_polarity == "preserve_subject":
-            out_mask = (1.0 - out_mask).clamp(0.0, 1.0)
+            inpaint_mask = (1.0 - inpaint_mask).clamp(0.0, 1.0)
+            stitch_blend_mask = (1.0 - stitch_blend_mask).clamp(0.0, 1.0)
 
         info = (
             f"InpaintCropProMEC (lquesada+Wan2.2):\n"
@@ -1061,9 +1101,11 @@ class InpaintCropProMEC:
             f"align={wan_align_multiple}\n"
             f"  wan: stable_crop={wan_stable_crop} temporal={wan_temporal_smooth_frames} "
             f"polarity={wan_mask_polarity}\n"
+            f"  inpaint_mask_mode={inpaint_mask_mode} stitch_blend_mode={stitch_blend_mode} "
+            f"blend_radius={blend_radius} fill={fill_masked_area}\n"
             f"  device={device_mode}"
         )
-        return (result_stitcher, out_image, out_mask, info)
+        return (result_stitcher, out_image, inpaint_mask, stitch_blend_mask, info)
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1198,15 +1240,12 @@ class InpaintCropProMEC:
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintStitchProMEC:
-    """lquesada-style stitch: simple alpha composite back into the original.
-
-    Companion to InpaintCropProMEC. Resizes the inpainted result back to the
-    canvas-crop dimensions, alpha-composites with the precomputed feathered
-    mask (`m * inpainted + (1-m) * canvas`), then crops back to the original
-    (un-extended) image area.
+    """lquesada-style stitch + override blend modes (gaussian / edge_aware /
+    laplacian_pyramid / frequency_blend) + optional color match.
     """
 
     VRAM_TIER = 1
+    BLEND_OVERRIDES = ["from_crop", "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1214,18 +1253,26 @@ class InpaintStitchProMEC:
             "required": {
                 "stitcher": ("STITCHER",),
                 "inpainted_image": ("IMAGE",),
+                "blend_mode_override": (cls.BLEND_OVERRIDES, {
+                    "default": "from_crop",
+                    "tooltip": "Override the blend mode chosen at crop time, or use 'from_crop'."}),
+                "color_match": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Apply mean+std color transfer before stitching to reduce color shift."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("image", "blend_mask_used", "info")
     FUNCTION = "inpaint_stitch"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible)."
+    DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match."
 
-    def inpaint_stitch(self, stitcher, inpainted_image):
+    def inpaint_stitch(self, stitcher, inpainted_image,
+                       blend_mode_override="from_crop", color_match=False):
         inpainted_image = inpainted_image.clone()
         results = []
+        blend_masks_out = []
 
         device_mode = stitcher.get("device_mode", "cpu (compatible)")
         if device_mode == "gpu (much faster)":
@@ -1242,13 +1289,21 @@ class InpaintStitchProMEC:
         downscale_algorithm = stitcher["downscale_algorithm"]
         upscale_algorithm   = stitcher["upscale_algorithm"]
         wan_polarity        = stitcher.get("wan_mask_polarity", "regenerate_subject")
+        stored_mode         = stitcher.get("stitch_blend_mode", "gaussian")
+        blend_radius        = int(stitcher.get("blend_radius", 32))
+
+        # Resolve effective blend mode
+        if blend_mode_override == "from_crop":
+            effective_mode = stored_mode
+        else:
+            effective_mode = blend_mode_override
 
         B = inpainted_image.shape[0]
         n = len(stitcher["cropped_to_canvas_x"])
-        override = (n == 1 and B != 1)
+        override_idx = (n == 1 and B != 1)
 
         for i in range(B):
-            j = 0 if override else i
+            j = 0 if override_idx else i
             cto_x = stitcher["canvas_to_orig_x"][j]
             cto_y = stitcher["canvas_to_orig_y"][j]
             cto_w = stitcher["canvas_to_orig_w"][j]
@@ -1260,8 +1315,13 @@ class InpaintStitchProMEC:
             canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
             blend_mask = stitcher["cropped_mask_for_blend"][j].to(device).unsqueeze(0).clone()
 
+            # Wan replacement-mode polarity: stored mask is "regenerate region",
+            # i.e. lquesada-canonical. No per-frame inversion needed at stitch time
+            # because crop already inverted polarity up-front.
+
             sub_inp = inpainted_image[i:i+1]
 
+            # Resize inpainted result + blend mask to canvas crop dims
             inp_h, inp_w = sub_inp.shape[1], sub_inp.shape[2]
             if ctc_w > inp_w or ctc_h > inp_h:
                 resized_inp = _resize_image_alg(sub_inp, ctc_h, ctc_w, upscale_algorithm)
@@ -1269,22 +1329,72 @@ class InpaintStitchProMEC:
             else:
                 resized_inp = _resize_image_alg(sub_inp, ctc_h, ctc_w, downscale_algorithm)
                 resized_msk = _resize_mask_alg(blend_mask, ctc_h, ctc_w, downscale_algorithm)
+            resized_msk = resized_msk.clamp(0.0, 1.0)
 
-            m3 = resized_msk.unsqueeze(-1).clamp(0.0, 1.0)
             canvas_crop = canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
-            blended = m3 * resized_inp + (1.0 - m3) * canvas_crop
+
+            # Optional color match (mean+std on masked region)
+            if color_match:
+                resized_inp = _color_match_mean_std(resized_inp, canvas_crop, resized_msk)
+
+            # Regenerate the blend mask if the override differs from stored
+            if blend_mode_override != "from_crop" and blend_mode_override != stored_mode:
+                # base binary from the stored feathered mask
+                base_binary = (resized_msk > 0.5).float()
+                resized_msk = _generate_stitch_blend_mask(
+                    canvas_crop, base_binary, effective_mode, blend_radius
+                ).clamp(0.0, 1.0)
+
+            # Composite per blend mode
+            if effective_mode == "laplacian_pyramid":
+                a = canvas_crop.permute(0, 3, 1, 2)
+                b = resized_inp.permute(0, 3, 1, 2)
+                m_b1 = resized_msk.unsqueeze(1)
+                blended = _laplacian_pyramid_blend(a, b, m_b1, levels=5).permute(0, 2, 3, 1).clamp(0.0, 1.0)
+            elif effective_mode == "frequency_blend":
+                a = canvas_crop.permute(0, 3, 1, 2)
+                b = resized_inp.permute(0, 3, 1, 2)
+                m_b1 = resized_msk.unsqueeze(1)
+                blended = _frequency_blend(a, b, m_b1).permute(0, 2, 3, 1).clamp(0.0, 1.0)
+            else:
+                # gaussian / edge_aware / unknown -> simple alpha (mask already encodes mode)
+                m3 = resized_msk.unsqueeze(-1)
+                blended = (m3 * resized_inp + (1.0 - m3) * canvas_crop).clamp(0.0, 1.0)
+
             canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = blended
 
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
             results.append(output.squeeze(0))
 
+            # Build a full-res blend mask in original-image coords for output
+            full_mask = torch.zeros((1, cto_h, cto_w), device=device, dtype=resized_msk.dtype)
+            # mask is in canvas coords; project back into original via the
+            # (cto_x, cto_y) offset and (ctc_x, ctc_y) canvas-crop offset:
+            paste_x = ctc_x - cto_x
+            paste_y = ctc_y - cto_y
+            x0 = max(0, paste_x); y0 = max(0, paste_y)
+            x1 = min(cto_w, paste_x + ctc_w); y1 = min(cto_h, paste_y + ctc_h)
+            if x1 > x0 and y1 > y0:
+                src_x0 = x0 - paste_x; src_y0 = y0 - paste_y
+                src_x1 = src_x0 + (x1 - x0); src_y1 = src_y0 + (y1 - y0)
+                full_mask[:, y0:y1, x0:x1] = resized_msk[:, src_y0:src_y1, src_x0:src_x1]
+            blend_masks_out.append(full_mask.squeeze(0))
+
         out = torch.stack(results, dim=0).cpu()
+        out_blend = torch.stack(blend_masks_out, dim=0).cpu()
+
+        # Wan polarity: present user-visible blend mask in their convention
+        if wan_polarity == "preserve_subject":
+            out_blend = (1.0 - out_blend).clamp(0.0, 1.0)
+
         info = (
-            f"InpaintStitchProMEC (lquesada-compatible):\n"
-            f"  frames: {B}  device={device_mode}  wan_polarity={wan_polarity}\n"
+            f"InpaintStitchProMEC:\n"
+            f"  frames: {B}  device={device_mode}\n"
+            f"  blend_mode: stored={stored_mode} override={blend_mode_override} -> effective={effective_mode}\n"
+            f"  blend_radius={blend_radius}  color_match={color_match}  wan_polarity={wan_polarity}\n"
             f"  out: {out.shape[0]}x{out.shape[1]}x{out.shape[2]}x{out.shape[3]}"
         )
-        return (out, info)
+        return (out, out_blend, info)
 
 
 
@@ -1563,6 +1673,12 @@ class InpaintCompositeMEC:
                 "stitcher": ("STITCHER", {"tooltip": "Stitcher dict from InpaintCropProMEC"}),
                 "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result (B,H,W,C)"}),
                 "mode": (cls.MODES, {"default": "stitch_pro"}),
+                "blend_mode_override": (InpaintStitchProMEC.BLEND_OVERRIDES, {
+                    "default": "from_crop",
+                    "tooltip": "[stitch_pro] Override blend mode or 'from_crop'"}),
+                "color_match": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "[stitch_pro] Apply mean+std color transfer"}),
                 "upscale_method": (InpaintPasteBackMEC.INTERP_METHODS, {
                     "default": "bicubic",
                     "tooltip": "[paste_back] Interpolation for resize"}),
@@ -1575,19 +1691,23 @@ class InpaintCompositeMEC:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("image", "mask", "info")
     FUNCTION = "composite"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Unified composite. mode=stitch_pro = lquesada feather blend; mode=paste_back = clean resize+paste."
+    DESCRIPTION = "Unified composite. mode=stitch_pro = lquesada feather blend with overrides; mode=paste_back = clean resize+paste."
 
     def composite(self, stitcher, inpainted_image, mode,
+                  blend_mode_override, color_match,
                   upscale_method, feather_edges, feather_radius):
         if mode == "paste_back":
             pb = InpaintPasteBackMEC()
             img, info = pb.paste_back(stitcher, inpainted_image,
                                       upscale_method, feather_edges, feather_radius)
-            return (img, info)
+            B, H, W, _ = img.shape
+            mask = torch.zeros(B, H, W, device=img.device, dtype=img.dtype)
+            return (img, mask, info)
         sp = InpaintStitchProMEC()
-        img, info = sp.inpaint_stitch(stitcher, inpainted_image)
-        return (img, info)
+        img, blend_mask, info = sp.inpaint_stitch(stitcher, inpainted_image,
+                                                  blend_mode_override, color_match)
+        return (img, blend_mask, info)

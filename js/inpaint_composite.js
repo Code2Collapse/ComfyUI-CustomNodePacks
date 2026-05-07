@@ -9,12 +9,14 @@ import { app } from "../../scripts/app.js";
  * and still serialize, so backend defaults are always honoured.
  */
 
-const STITCH_WIDGETS = [];
+const STITCH_WIDGETS = ["blend_mode_override", "color_match"];
 const PASTE_WIDGETS = ["upscale_method", "feather_edges", "feather_radius"];
 
 // Static recovery map for the legacy `type="hidden"` bug.
 const ORIGINAL_TYPES = {
     mode: "combo",
+    blend_mode_override: "combo",
+    color_match: "toggle",
     upscale_method: "combo",
     feather_edges: "toggle",
     feather_radius: "number",
