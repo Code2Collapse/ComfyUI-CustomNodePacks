@@ -63,12 +63,33 @@ logger = logging.getLogger("MEC")
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  Device helper
+#  Device helpers
 # ══════════════════════════════════════════════════════════════════════
 
 def _get_device(tensor: torch.Tensor) -> torch.device:
     """Return the device of a tensor — never hardcode 'cuda'."""
     return tensor.device
+
+
+def _inference_device() -> torch.device:
+    """Return the device the inpaint pipeline should COMPUTE on.
+
+    ComfyUI conventionally hands ``IMAGE``/``MASK`` tensors between nodes
+    on CPU. If we naively used ``image.device`` to drive the per-frame
+    loops, every Gaussian blur, alpha composite and resize would run on
+    CPU even when a CUDA GPU is sitting idle. This helper picks the
+    accelerator ComfyUI is currently using so the heavy work goes there.
+
+    Falls back to CUDA-if-present, then CPU. Honours
+    ``--cpu`` / ``--directml`` flags via ``comfy.model_management``.
+    """
+    try:
+        from comfy import model_management as _mm  # type: ignore
+        return _mm.get_torch_device()
+    except Exception:  # noqa: BLE001
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1360,7 +1381,18 @@ class InpaintCropProMEC:
             raise ValueError("InpaintCropProMEC: 'image' input is missing or invalid (expected IMAGE tensor BxHxWxC).")
         if mask is None or not hasattr(mask, "shape"):
             raise ValueError("InpaintCropProMEC: 'mask' input is missing or invalid (expected MASK tensor BxHxW).")
-        device = _get_device(image)
+        # Run all per-frame compute on the GPU. ComfyUI hands IMAGE/MASK
+        # tensors between nodes on CPU by default — using ``image.device``
+        # would lock every blur / resize / alpha-composite to the CPU loop.
+        # Outputs are moved back to the input's original device just before
+        # return so downstream nodes see the same memory layout they always
+        # have (no surprise VRAM hold).
+        _output_device = image.device
+        device = _inference_device()
+        if image.device != device:
+            image = image.to(device, non_blocking=True)
+        if mask.device != device:
+            mask = mask.to(device, non_blocking=True)
         B, H, W, C = image.shape
 
         # Ensure mask dimensions match image
@@ -1666,10 +1698,14 @@ class InpaintCropProMEC:
                 crop_mask[:, orig_y1:orig_y2, orig_x1:orig_x2] = 1.0
 
         # Step 9: Build stitch_data dict (v3 with per-frame offsets, or v2 single)
+        # Stash large tensors on the input's original device. This matches the
+        # pre-fix behaviour for CPU-input workflows (the common case) and
+        # avoids a forced CPU round-trip when the upstream actually fed GPU
+        # tensors in.
         stitch_version = 3 if frame_offsets is not None else 2
         stitch_data = {
             "version": stitch_version,
-            "canvas_image": canvas_image.cpu(),
+            "canvas_image": canvas_image.to(_output_device, non_blocking=True),
             "cto_x": cto_x, "cto_y": cto_y,
             "cto_w": cto_w, "cto_h": cto_h,
             "ctc_x": ctc_x, "ctc_y": ctc_y,
@@ -1677,8 +1713,8 @@ class InpaintCropProMEC:
             "target_w": target_w, "target_h": target_h,
             "blend_mode": stitch_blend_mode,
             "blend_radius": blend_radius,
-            "stitch_blend_mask_crop": stitch_blend_mask.cpu(),
-            "original_mask": mask.cpu(),
+            "stitch_blend_mask_crop": stitch_blend_mask.to(_output_device, non_blocking=True),
+            "original_mask": mask.to(_output_device, non_blocking=True),
             "downscale_factor": downscale_factor,
             "upscale_method": upscale_method,
             "downscale_method": downscale_method,
@@ -1710,6 +1746,16 @@ class InpaintCropProMEC:
             expansion_info,
         ]
         info = "\n".join(info_lines)
+
+        # Migrate outputs back to the input's original device so downstream
+        # ComfyUI nodes see the same convention they always have. Internal
+        # compute already happened on GPU above.
+        if _output_device != device:
+            cropped = cropped.to(_output_device, non_blocking=True)
+            cropped_composite = cropped_composite.to(_output_device, non_blocking=True)
+            inpaint_mask = inpaint_mask.to(_output_device, non_blocking=True)
+            stitch_blend_mask = stitch_blend_mask.to(_output_device, non_blocking=True)
+            crop_mask = crop_mask.to(_output_device, non_blocking=True)
 
         return (stitch_data, cropped, cropped_composite, inpaint_mask, stitch_blend_mask, crop_mask, info)
 
@@ -1782,9 +1828,19 @@ class InpaintStitchProMEC:
         blend_mode_override = InpaintCropProMEC._LEGACY_BLEND_MODES.get(
             blend_mode_override, blend_mode_override
         )
+        # Remember where the caller fed us tensors so we can mirror that
+        # location on the way out. The internal compute path will run on
+        # ``_inference_device()`` (GPU when available) regardless.
+        _output_device = inpainted_image.device
         with _PB.session("InpaintStitchProMEC"):
-            return self._stitch_impl(stitch_data, inpainted_image,
-                                     blend_mode_override, color_match)
+            out_image, out_blend, out_info = self._stitch_impl(
+                stitch_data, inpainted_image, blend_mode_override, color_match
+            )
+        if isinstance(out_image, torch.Tensor) and out_image.device != _output_device:
+            out_image = out_image.to(_output_device, non_blocking=True)
+        if isinstance(out_blend, torch.Tensor) and out_blend.device != _output_device:
+            out_blend = out_blend.to(_output_device, non_blocking=True)
+        return (out_image, out_blend, out_info)
 
     def _stitch_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                blend_mode_override: str, color_match: bool):
@@ -1841,7 +1897,12 @@ class InpaintStitchProMEC:
         upscale_method = stitch_data.get("upscale_method", "lanczos")
         frame_offsets = stitch_data.get("frame_offsets")  # None for plain v2
 
-        device = _get_device(inpainted_image)
+        # Run blend / paste on GPU regardless of where ComfyUI handed us the
+        # tensors (typically CPU). The public ``stitch()`` wrapper migrates
+        # the final image + blend mask back to the caller's device.
+        device = _inference_device()
+        if inpainted_image.device != device:
+            inpainted_image = inpainted_image.to(device, non_blocking=True)
         canvas = canvas_image.to(device).clone()
         # Defensive: strip alpha if a 4-channel RGBA tensor was fed in (e.g.
         # from a save-with-alpha or matte node). Compositing RGBA into a
@@ -2512,9 +2573,16 @@ class InpaintPasteBackMEC:
 
     def paste_back(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
+        # Mirror the caller's device on the output, but compute on GPU.
+        _output_device = inpainted_image.device
         with _PB.session("InpaintPasteBackMEC"):
-            return self._paste_back_impl(stitch_data, inpainted_image,
-                                         upscale_method, feather_edges, feather_radius)
+            out_image, out_info = self._paste_back_impl(
+                stitch_data, inpainted_image, upscale_method,
+                feather_edges, feather_radius,
+            )
+        if isinstance(out_image, torch.Tensor) and out_image.device != _output_device:
+            out_image = out_image.to(_output_device, non_blocking=True)
+        return (out_image, out_info)
 
     def _paste_back_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
@@ -2548,7 +2616,11 @@ class InpaintPasteBackMEC:
                 f"InpaintPasteBackMEC: stitch_data (v{version}) is missing keys: {missing}. "
                 "This usually means the STITCH_DATA input is unconnected or was produced by an incompatible node."
             )
-        device = _get_device(inpainted_image)
+        # Run on GPU; the public ``paste_back`` wrapper migrates the result
+        # back to the caller's device.
+        device = _inference_device()
+        if inpainted_image.device != device:
+            inpainted_image = inpainted_image.to(device, non_blocking=True)
 
         if version >= 2:
             canvas_image = stitch_data["canvas_image"].to(device)
