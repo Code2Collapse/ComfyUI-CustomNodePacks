@@ -12,49 +12,70 @@ import { app } from "../../scripts/app.js";
 const STITCH_WIDGETS = ["blend_mode_override", "color_match"];
 const PASTE_WIDGETS = ["upscale_method", "feather_edges", "feather_radius"];
 
+// Static recovery map for the legacy `type="hidden"` bug: when the old
+// extension hid a widget it overwrote `widget.type` and `widget.computeSize`
+// without reliably saving the originals, so a one-time restore needs to know
+// the canonical type for each widget by name.
+const ORIGINAL_TYPES = {
+    mode: "combo",
+    blend_mode_override: "combo",
+    color_match: "toggle",
+    upscale_method: "combo",
+    feather_edges: "toggle",
+    feather_radius: "number",
+};
+
 function setWidgetVisible(widget, visible) {
     if (!widget) return;
-    if (visible) {
-        // Restore type if we previously hid it.
-        if (widget.origType !== undefined) {
-            widget.type = widget.origType;
-            delete widget.origType;
-        }
-        if (widget.origComputeSize !== undefined) {
-            widget.computeSize = widget.origComputeSize;
-            delete widget.origComputeSize;
-        }
-        const el = widget.element;
-        if (el) {
-            el.style.display = widget.origElDisplay ?? "";
-            delete widget.origElDisplay;
-            const wrapper = el.parentElement;
-            if (wrapper && wrapper.classList?.contains("dom-widget")) {
-                wrapper.style.display = widget.origWrapperDisplay ?? "";
-                delete widget.origWrapperDisplay;
-            }
-        }
-    } else {
-        if (widget.origType === undefined) widget.origType = widget.type;
-        if (widget.origComputeSize === undefined) widget.origComputeSize = widget.computeSize;
-        widget.type = "hidden";
-        widget.computeSize = () => [0, -4]; // collapse layout slot
-        // Modern ComfyUI keeps the DOM <textarea>/<input> backing element
-        // visible even when widget.type === "hidden". Collapse it too.
-        const el = widget.element;
-        if (el) {
-            if (widget.origElDisplay === undefined) {
+    // Modern ComfyUI (Vue frontend) honours `widget.hidden` natively for
+    // both layout and rendering. Older LiteGraph also responds to it.
+    // We additionally mirror the flag onto `widget.options.hidden` because
+    // some widget types (INT/sliders) check there.
+    widget.hidden = !visible;
+    if (widget.options) widget.options.hidden = !visible;
+    // Collapse DOM-backed widgets too (textareas, sliders rendered via DOM).
+    const el = widget.element;
+    if (el) {
+        if (!visible) {
+            if (!Object.prototype.hasOwnProperty.call(widget, "origElDisplay")) {
                 widget.origElDisplay = el.style.display || "";
             }
             el.style.display = "none";
             const wrapper = el.parentElement;
             if (wrapper && wrapper.classList?.contains("dom-widget")) {
-                if (widget.origWrapperDisplay === undefined) {
+                if (!Object.prototype.hasOwnProperty.call(widget, "origWrapperDisplay")) {
                     widget.origWrapperDisplay = wrapper.style.display || "";
                 }
                 wrapper.style.display = "none";
             }
+        } else {
+            if (Object.prototype.hasOwnProperty.call(widget, "origElDisplay")) {
+                el.style.display = widget.origElDisplay ?? "";
+                delete widget.origElDisplay;
+            }
+            const wrapper = el.parentElement;
+            if (wrapper && wrapper.classList?.contains("dom-widget")) {
+                if (Object.prototype.hasOwnProperty.call(widget, "origWrapperDisplay")) {
+                    wrapper.style.display = widget.origWrapperDisplay ?? "";
+                    delete widget.origWrapperDisplay;
+                }
+            }
         }
+    }
+    // Recover from the legacy type="hidden" + collapsed-computeSize bug.
+    // When making a widget visible: if its type is still "hidden", restore
+    // the canonical type from ORIGINAL_TYPES (or origType if present), and
+    // strip any own `computeSize` override so LiteGraph's default sizer runs.
+    if (visible) {
+        if (widget.type === "hidden") {
+            const orig = widget.origType ?? ORIGINAL_TYPES[widget.name];
+            if (orig) widget.type = orig;
+        }
+        delete widget.origType;
+        if (Object.prototype.hasOwnProperty.call(widget, "computeSize")) {
+            delete widget.computeSize;
+        }
+        delete widget.origComputeSize;
     }
 }
 
