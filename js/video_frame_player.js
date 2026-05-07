@@ -160,6 +160,22 @@ app.registerExtension({
             };
             right.appendChild(cropBtn);
 
+            // Advanced ▾ — collapses all native widget rows so the player
+            // view dominates ~80% of node height. Click again to expose.
+            const advBtn = document.createElement("button");
+            advBtn.type = "button";
+            advBtn.textContent = "Advanced ▾";
+            advBtn.title = "Show / hide all parameter widgets (frame_start, crop_x, etc.)";
+            advBtn.style.cssText =
+                "border:1px solid #2a2a35;background:#15151c;color:#cdd6f4;" +
+                "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
+            advBtn.onclick = (e) => {
+                e.preventDefault(); e.stopPropagation();
+                node._toggleAdvanced?.();
+            };
+            right.appendChild(advBtn);
+            node._advBtn = advBtn;
+
             const trimBadge = document.createElement("div");
             trimBadge.style.cssText =
                 "background:#15151c;border:1px solid #2a2a35;border-radius:4px;" +
@@ -569,15 +585,104 @@ app.registerExtension({
             node._stopPlay = stopPlay;
 
             node.addDOMWidget("video_player_view", "VFPLAYER", el, { serialize: false });
-            node.setSize([520, 416]);
+            node.setSize([520, 720]);
 
-            let _lockedW = 520, _lockedH = 416;
+            let _lockedW = 520, _lockedH = 720;
             const _origCompute = node.computeSize;
             node.computeSize = function () {
                 if (_lockedW > 0 && _lockedH > 0) return [_lockedW, _lockedH];
-                return _origCompute?.apply(this, arguments) ?? [520, 416];
+                return _origCompute?.apply(this, arguments) ?? [520, 720];
             };
             node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
+
+            // ── Advanced (collapsible) widget panel ────────────────────
+            // By default we hide every native widget row (frame_index,
+            // output_mode, crop_*, target_*, preview_*, etc.) so the
+            // player canvas + toolbar own the entire node body. The
+            // "Advanced ▾" button in the toolbar toggles them back.
+            //
+            // We hide via the ComfyUI-blessed pattern:
+            //   widget.type      = "hidden"   (skips event hit-testing)
+            //   widget.computeSize = () => [0, -4]   (skips layout slot)
+            //   (the -4 cancels LiteGraph's default 4px row spacer)
+            //
+            // The DOM widget (`video_player_view`) is left visible.
+            node._advancedOpen = false;
+            const _hiddenStash = new Map(); // widget -> { type, computeSize, draw }
+            const _applyAdvanced = (open) => {
+                const widgets = node.widgets || [];
+                for (const w of widgets) {
+                    if (!w || w.name === "video_player_view") continue;
+                    if (open) {
+                        const s = _hiddenStash.get(w);
+                        if (s) {
+                            w.type = s.type;
+                            w.computeSize = s.computeSize;
+                            w.draw = s.draw;
+                            w.hidden = false;
+                            _hiddenStash.delete(w);
+                        }
+                    } else {
+                        if (!_hiddenStash.has(w)) {
+                            _hiddenStash.set(w, {
+                                type: w.type,
+                                computeSize: w.computeSize,
+                                draw: w.draw,
+                            });
+                        }
+                        w.type = "hidden";
+                        w.hidden = true;
+                        w.computeSize = () => [0, -4];
+                        // Some ComfyUI widget classes (slider, combo) ignore
+                        // type === "hidden" and still paint. Stub their draw
+                        // method to a no-op so they truly disappear.
+                        w.draw = () => {};
+                    }
+                }
+                node._advancedOpen = open;
+                if (node._advBtn) {
+                    node._advBtn.textContent = open ? "Advanced ▴" : "Advanced ▾";
+                    node._advBtn.style.background = open ? "#7c5cff" : "#15151c";
+                    node._advBtn.style.borderColor = open ? "#7c5cff" : "#2a2a35";
+                    node._advBtn.style.color = open ? "#ffffff" : "#cdd6f4";
+                }
+                // Adjust locked size so node shrinks/grows accordingly.
+                if (open) {
+                    // Let LiteGraph compute the real height needed for all
+                    // 23 widget rows + DOM widget.
+                    _lockedW = 0; _lockedH = 0;
+                    const sz = _origCompute?.apply(node) ?? [520, 1200];
+                    node.setSize([Math.max(520, sz[0]), Math.max(1200, sz[1])]);
+                    _lockedW = node.size[0]; _lockedH = node.size[1];
+                } else {
+                    _lockedW = 520; _lockedH = 720;
+                    node.setSize([_lockedW, _lockedH]);
+                }
+                node.setDirtyCanvas?.(true, true);
+                app.graph?.setDirtyCanvas(true, true);
+            };
+            node._toggleAdvanced = () => _applyAdvanced(!node._advancedOpen);
+            // Defer initial collapse: poll briefly until we've seen the
+            // widget count stabilise, because LiteGraph adds INPUT_TYPES
+            // widgets asynchronously across versions and a slider added
+            // after our first hide pass would slip through.
+            let _lastCount = (node.widgets || []).length;
+            let _stableTicks = 0;
+            const _initCollapse = () => {
+                const cur = (node.widgets || []).length;
+                if (cur === _lastCount) {
+                    _stableTicks++;
+                } else {
+                    _lastCount = cur;
+                    _stableTicks = 0;
+                }
+                if (_stableTicks >= 3) {
+                    _applyAdvanced(false);
+                } else {
+                    requestAnimationFrame(_initCollapse);
+                }
+            };
+            requestAnimationFrame(_initCollapse);
 
             // Re-render whenever a crop-related widget changes from the panel
             const watch = ["crop_enabled", "crop_locked", "aspect_ratio",
