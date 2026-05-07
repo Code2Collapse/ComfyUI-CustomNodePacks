@@ -600,6 +600,109 @@ def _resize_mask(mask: torch.Tensor, target_h: int, target_w: int) -> torch.Tens
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  Multi-algorithm resize (lquesada-compatible: every option distinct)
+# ══════════════════════════════════════════════════════════════════════
+
+_TORCH_INTERP = {
+    "nearest": "nearest",
+    "bilinear": "bilinear",
+    "bicubic": "bicubic",
+    "area": "area",
+}
+_CV2_INTERP = {
+    "nearest": 0,    # cv2.INTER_NEAREST
+    "bilinear": 1,   # cv2.INTER_LINEAR
+    "bicubic": 2,    # cv2.INTER_CUBIC
+    "lanczos": 4,    # cv2.INTER_LANCZOS4
+    "box":     3,    # cv2.INTER_AREA
+    "hamming": 3,    # cv2.INTER_AREA (closest)
+    "area":    3,    # cv2.INTER_AREA
+}
+
+
+def _resize_image_alg(image: torch.Tensor, target_h: int, target_w: int, alg: str) -> torch.Tensor:
+    """Resize (B,H,W,C) image with the requested algorithm. Distinct paths per name."""
+    if image.shape[1] == target_h and image.shape[2] == target_w:
+        return image
+    if alg in _TORCH_INTERP:
+        mode = _TORCH_INTERP[alg]
+        img_bchw = image.permute(0, 3, 1, 2).contiguous()
+        if mode in ("nearest", "area"):
+            out = F.interpolate(img_bchw, size=(target_h, target_w), mode=mode)
+        else:
+            out = F.interpolate(img_bchw, size=(target_h, target_w), mode=mode, align_corners=False)
+        return out.permute(0, 2, 3, 1).contiguous()
+    # lanczos / box / hamming -> cv2 if available, else bicubic torch fallback
+    if HAS_CV2 and alg in _CV2_INTERP:
+        out = []
+        for b in range(image.shape[0]):
+            arr = (image[b].clamp(0, 1).detach().cpu().numpy() * 255.0).astype(np.uint8)
+            res = cv2.resize(arr, (target_w, target_h), interpolation=_CV2_INTERP[alg])
+            out.append(torch.from_numpy(res).to(image.device, image.dtype) / 255.0)
+        return torch.stack(out, dim=0)
+    img_bchw = image.permute(0, 3, 1, 2).contiguous()
+    out = F.interpolate(img_bchw, size=(target_h, target_w), mode="bicubic", align_corners=False)
+    return out.permute(0, 2, 3, 1).contiguous()
+
+
+def _resize_mask_alg(mask: torch.Tensor, target_h: int, target_w: int, alg: str) -> torch.Tensor:
+    """Resize (B,H,W) mask with the requested algorithm."""
+    if mask.shape[1] == target_h and mask.shape[2] == target_w:
+        return mask
+    if alg in _TORCH_INTERP:
+        mode = _TORCH_INTERP[alg]
+        m4 = mask.unsqueeze(1)
+        if mode in ("nearest", "area"):
+            out = F.interpolate(m4, size=(target_h, target_w), mode=mode)
+        else:
+            out = F.interpolate(m4, size=(target_h, target_w), mode=mode, align_corners=False)
+        return out.squeeze(1).clamp(0.0, 1.0)
+    if HAS_CV2 and alg in _CV2_INTERP:
+        out = []
+        for b in range(mask.shape[0]):
+            arr = (mask[b].clamp(0, 1).detach().cpu().numpy() * 255.0).astype(np.uint8)
+            res = cv2.resize(arr, (target_w, target_h), interpolation=_CV2_INTERP[alg])
+            out.append(torch.from_numpy(res).to(mask.device, mask.dtype) / 255.0)
+        return torch.stack(out, dim=0).clamp(0.0, 1.0)
+    m4 = mask.unsqueeze(1)
+    out = F.interpolate(m4, size=(target_h, target_w), mode="bicubic", align_corners=False)
+    return out.squeeze(1).clamp(0.0, 1.0)
+
+
+def _pad_to_multiple(x: int, m: int) -> int:
+    if m <= 1:
+        return x
+    return int(math.ceil(x / m) * m)
+
+
+def _hipass_filter(mask: torch.Tensor, threshold: float) -> torch.Tensor:
+    """Zero out values below threshold; keep above unchanged. Real distinct from binary."""
+    if threshold <= 0.0:
+        return mask
+    keep = (mask >= threshold).float()
+    return (mask * keep).clamp(0.0, 1.0)
+
+
+def _expand_mask_pixels(mask: torch.Tensor, pixels: int) -> torch.Tensor:
+    """Max-pool dilation by `pixels` (lquesada-compatible)."""
+    if pixels <= 0:
+        return mask
+    k = 2 * pixels + 1
+    m4 = mask.unsqueeze(1)
+    out = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pixels)
+    return out.squeeze(1).clamp(0.0, 1.0)
+
+
+def _edge_replicate_pad(image: torch.Tensor, top: int, bottom: int, left: int, right: int) -> torch.Tensor:
+    """Pad (B,H,W,C) image with edge replication (BCHW replicate)."""
+    if top == 0 and bottom == 0 and left == 0 and right == 0:
+        return image
+    img_bchw = image.permute(0, 3, 1, 2).contiguous()
+    out = F.pad(img_bchw, (left, right, top, bottom), mode="replicate")
+    return out.permute(0, 2, 3, 1).contiguous()
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  Legacy blend-mode routing — every name produces a genuinely different,
 #  working blend. No aliases collapse to the same engine.
 #
@@ -623,323 +726,566 @@ def _normalize_blend_mode(mode: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 1: InpaintCropProMEC
+#  NODE 1: InpaintCropProMEC — lquesada-compatible API + Wan 2.2 Animate aware
+#
+#  Mirrors lquesada/ComfyUI-InpaintCropAndStitch::InpaintCropImproved
+#  (preresize + mask preprocessing pipeline + aspect-ratio-aware crop_magic
+#  + edge-replicate canvas extension + simple mask*inp+(1-mask)*canvas blend).
+#
+#  Wan 2.2 Animate (arXiv:2509.14055) extras:
+#    * wan_align_multiple        - VAE patchify alignment (default 16)
+#    * wan_temporal_smooth_frames - per-frame mask coherence along time axis
+#    * wan_stable_crop           - single union bbox across all frames
+#                                  (replacement-mode requires consistent crop)
+#    * wan_mask_polarity         - regenerate_subject (lquesada default,
+#                                  mask=1 -> inpaint) vs preserve_subject
+#                                  (Wan2.2 replacement-mode polarity,
+#                                  mask=0 -> regenerate)
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintCropProMEC:
-    """Crop image around mask region with separate inpaint and stitch blend masks.
-
-    Key improvements over InpaintCropAndStitch:
-    - Separated inpaint_mask_mode from stitch_blend_mode
-    - Edge-aware, Laplacian pyramid, and frequency blend modes
-    - video_stable_crop for consistent bbox across video frames
-    """
+    """lquesada-style crop + Wan 2.2 Animate-aware extras."""
 
     VRAM_TIER = 1
-    # Native modes from the original (gracefully-working) engine, plus
-    # legacy aliases so saved workflows that picked 'poisson' / 'classic'
-    # / 'exact' still load. All aliases collapse to 'gaussian' internally.
-    STITCH_BLEND_MODES = [
-        "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend",
-        "poisson", "poisson_mixed", "exact", "linear_exact", "classic",
+    RESIZE_ALGS = ["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming", "area"]
+    PRERESIZE_MODES = [
+        "ensure minimum resolution",
+        "ensure maximum resolution",
+        "ensure minimum and maximum resolution",
     ]
-    INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
-    SIZE_MODES = ["free_size", "forced_size", "ranged_size"]
-    FILL_MODES = ["edge_pad", "neutral_gray", "original"]
+    OUTPUT_PADDING_CHOICES = ["0", "8", "16", "32", "64", "128", "256", "512"]
+    DEVICE_MODES = ["cpu (compatible)", "gpu (much faster)"]
+    MASK_POLARITY = ["regenerate_subject", "preserve_subject"]
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE", {"tooltip": "Input image batch (B,H,W,C)"}),
-                "mask": ("MASK", {"tooltip": "Inpaint mask (B,H,W), white = area to inpaint"}),
-                "context_expand": ("FLOAT", {
-                    "default": 1.5, "min": 1.0, "max": 4.0, "step": 0.1,
-                    "tooltip": "How much to expand the crop bbox beyond the mask bounds (1.0 = tight crop)"}),
-                "inpaint_mask_mode": (cls.INPAINT_MASK_MODES, {
-                    "default": "hard_binary",
-                    "tooltip": "What the inpaint model sees: hard_binary (crisp), slight_feather (gentle edges), soft_blend (very soft)"}),
-                "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
-                    "default": "gaussian",
-                    "tooltip": "How the result is composited back: edge_aware (Sobel-guided), gaussian, laplacian_pyramid, frequency_blend"}),
-                "blend_radius": ("INT", {
-                    "default": 32, "min": 1, "max": 256, "step": 1,
-                    "tooltip": "Feather radius for the stitch blend mask"}),
-                "size_mode": (cls.SIZE_MODES, {
-                    "default": "free_size",
-                    "tooltip": "free_size (keep crop dims), forced_size (exact WxH), ranged_size (clamp to min/max)"}),
-                "forced_width": ("INT", {
-                    "default": 1024, "min": 64, "max": 8192, "step": 8,
-                    "tooltip": "Target width for forced_size mode"}),
-                "forced_height": ("INT", {
-                    "default": 1024, "min": 64, "max": 8192, "step": 8,
-                    "tooltip": "Target height for forced_size mode"}),
-                "min_size": ("INT", {
-                    "default": 512, "min": 64, "max": 8192, "step": 8,
-                    "tooltip": "Minimum dimension for ranged_size mode"}),
-                "max_size": ("INT", {
-                    "default": 2048, "min": 64, "max": 8192, "step": 8,
-                    "tooltip": "Maximum dimension for ranged_size mode"}),
-                "padding_multiple": ("INT", {
-                    "default": 8, "min": 1, "max": 128, "step": 1,
-                    "tooltip": "Pad output dimensions to be divisible by this value"}),
-                "video_stable_crop": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Lock bbox across all frames using union of all mask regions (for video)"}),
-                "fill_masked_area": (cls.FILL_MODES, {
-                    "default": "edge_pad",
-                    "tooltip": "How to fill the masked area in the crop: edge_pad, neutral_gray, or original"}),
+                "image": ("IMAGE",),
+                "downscale_algorithm": (cls.RESIZE_ALGS, {"default": "bilinear"}),
+                "upscale_algorithm":   (cls.RESIZE_ALGS, {"default": "bicubic"}),
+
+                "preresize": ("BOOLEAN", {"default": False,
+                    "tooltip": "Resize input image before processing (lquesada-style)."}),
+                "preresize_mode": (cls.PRERESIZE_MODES, {"default": "ensure minimum resolution"}),
+                "preresize_min_width":  ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1}),
+                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 1}),
+                "preresize_max_width":  ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1}),
+                "preresize_max_height": ("INT", {"default": 16384, "min": 0, "max": 16384, "step": 1}),
+
+                "mask_fill_holes":   ("BOOLEAN", {"default": True,
+                    "tooltip": "Mark fully-enclosed regions as masked."}),
+                "mask_expand_pixels":("INT", {"default": 0, "min": 0, "max": 16384, "step": 1,
+                    "tooltip": "Dilate mask by this many pixels."}),
+                "mask_invert":       ("BOOLEAN", {"default": False,
+                    "tooltip": "Invert mask (anything masked is kept)."}),
+                "mask_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 64, "step": 1,
+                    "tooltip": "Pixels of feather for stitch blending (lquesada default 32)."}),
+                "mask_hipass_filter":("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Zero out mask values below this threshold."}),
+
+                "extend_for_outpainting": ("BOOLEAN", {"default": False,
+                    "tooltip": "Extend image with edge-replicated padding for outpainting."}),
+                "extend_up_factor":    ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_down_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_left_factor":  ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+
+                "context_from_mask_extend_factor": ("FLOAT", {
+                    "default": 1.2, "min": 1.0, "max": 100.0, "step": 0.01,
+                    "tooltip": "Grow context bbox by this factor (1.5 = +50% on every side)."}),
+
+                "output_resize_to_target_size": ("BOOLEAN", {"default": True,
+                    "tooltip": "Force output to a specific resolution for sampling."}),
+                "output_target_width":  ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1}),
+                "output_target_height": ("INT", {"default": 512, "min": 64, "max": 16384, "step": 1}),
+                "output_padding": (cls.OUTPUT_PADDING_CHOICES, {"default": "32"}),
+
+                "device_mode": (cls.DEVICE_MODES, {"default": "gpu (much faster)"}),
+
+                "wan_align_multiple": ("INT", {
+                    "default": 16, "min": 1, "max": 256, "step": 1,
+                    "tooltip": "Force final crop W/H to multiples of this (Wan VAE patchify; 16 recommended)."}),
+                "wan_temporal_smooth_frames": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.1,
+                    "tooltip": "Gaussian smoothing of mask along time axis (frames). 0 disables."}),
+                "wan_stable_crop": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Use a single union bbox across all frames (Wan replacement-mode)."}),
+                "wan_mask_polarity": (cls.MASK_POLARITY, {
+                    "default": "regenerate_subject",
+                    "tooltip": "regenerate_subject: mask=1 -> regenerate (lquesada).  preserve_subject: mask=0 -> regenerate (Wan2.2 replacement: mask=1 keeps environment)."}),
+            },
+            "optional": {
+                "mask": ("MASK",),
+                "optional_context_mask": ("MASK",),
             },
         }
 
-    RETURN_TYPES = ("STITCH_DATA", "IMAGE", "MASK", "MASK", "STRING")
-    RETURN_NAMES = ("stitch_data", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")
-    FUNCTION = "crop_for_inpaint"
+    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("stitcher", "cropped_image", "cropped_mask", "info")
+    FUNCTION = "inpaint_crop"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Crop image around mask with separate inpaint and stitch blend masks. Supports edge-aware, Laplacian, and frequency blend modes."
+    DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). "
+                   "Pair with Inpaint Stitch Pro (MEC).")
 
-    def crop_for_inpaint(self, image: torch.Tensor, mask: torch.Tensor,
-                         context_expand: float, inpaint_mask_mode: str,
-                         stitch_blend_mode: str, blend_radius: int,
-                         size_mode: str, forced_width: int, forced_height: int,
-                         min_size: int, max_size: int, padding_multiple: int,
-                         video_stable_crop: bool, fill_masked_area: str):
-        # Map legacy / removed modes to the closest classic stitcher
-        # (gaussian feather — the lquesada-style invisible blend).
-        stitch_blend_mode = _normalize_blend_mode(stitch_blend_mode)
-        device = _get_device(image)
-        B, H, W, C = image.shape
+    def inpaint_crop(self, image, downscale_algorithm, upscale_algorithm,
+                     preresize, preresize_mode,
+                     preresize_min_width, preresize_min_height,
+                     preresize_max_width, preresize_max_height,
+                     mask_fill_holes, mask_expand_pixels, mask_invert,
+                     mask_blend_pixels, mask_hipass_filter,
+                     extend_for_outpainting,
+                     extend_up_factor, extend_down_factor,
+                     extend_left_factor, extend_right_factor,
+                     context_from_mask_extend_factor,
+                     output_resize_to_target_size,
+                     output_target_width, output_target_height, output_padding,
+                     device_mode,
+                     wan_align_multiple, wan_temporal_smooth_frames,
+                     wan_stable_crop, wan_mask_polarity,
+                     mask=None, optional_context_mask=None):
 
-        # Ensure mask dimensions match image
+        image = image.clone()
+        if mask is not None:
+            mask = mask.clone()
+        if optional_context_mask is not None:
+            optional_context_mask = optional_context_mask.clone()
+
+        # Device migration
+        if device_mode == "gpu (much faster)":
+            try:
+                import comfy.model_management as mm
+                target_device = mm.get_torch_device()
+            except Exception:
+                target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            image = image.to(target_device)
+            if mask is not None: mask = mask.to(target_device)
+            if optional_context_mask is not None:
+                optional_context_mask = optional_context_mask.to(target_device)
+        else:
+            image = image.cpu()
+            if mask is not None: mask = mask.cpu()
+            if optional_context_mask is not None:
+                optional_context_mask = optional_context_mask.cpu()
+
+        output_padding_int = int(output_padding)
+
+        B, H, W, _ = image.shape
+
+        # Default / shape-match the mask
+        if mask is None:
+            mask = torch.zeros((B, H, W), device=image.device, dtype=image.dtype)
         if mask.dim() == 2:
             mask = mask.unsqueeze(0)
         if mask.shape[0] == 1 and B > 1:
             mask = mask.expand(B, -1, -1).clone()
+        if mask.shape[0] != B:
+            if mask.shape[0] < B:
+                mask = mask[:1].expand(B, -1, -1).clone()
+            else:
+                mask = mask[:B]
         if mask.shape[1] != H or mask.shape[2] != W:
-            mask = _resize_mask(mask, H, W)
+            mask = _resize_mask_alg(mask, H, W, "bilinear")
 
-        # Step 1: Compute bounding box
-        if video_stable_crop and B > 1:
-            bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
+        if optional_context_mask is None:
+            optional_context_mask = torch.zeros_like(mask)
         else:
-            bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
+            if optional_context_mask.dim() == 2:
+                optional_context_mask = optional_context_mask.unsqueeze(0)
+            if optional_context_mask.shape[0] == 1 and B > 1:
+                optional_context_mask = optional_context_mask.expand(B, -1, -1).clone()
+            if optional_context_mask.shape[0] != B:
+                if optional_context_mask.shape[0] < B:
+                    optional_context_mask = optional_context_mask[:1].expand(B, -1, -1).clone()
+                else:
+                    optional_context_mask = optional_context_mask[:B]
+            if optional_context_mask.shape[1] != H or optional_context_mask.shape[2] != W:
+                optional_context_mask = _resize_mask_alg(optional_context_mask, H, W, "bilinear")
 
-        # Handle empty mask
-        if bbox_w <= 0 or bbox_h <= 0:
-            bbox_x, bbox_y, bbox_w, bbox_h = 0, 0, W, H
+        # Wan polarity: invert mask up-front for "preserve_subject" so all
+        # downstream logic treats mask=1 as "regenerate" (lquesada-canonical).
+        if wan_mask_polarity == "preserve_subject":
+            mask = (1.0 - mask).clamp(0.0, 1.0)
 
-        # Step 2: Expand bbox by context_expand
-        expand_w = int(bbox_w * (context_expand - 1.0) / 2.0)
-        expand_h = int(bbox_h * (context_expand - 1.0) / 2.0)
-        crop_x = max(0, bbox_x - expand_w)
-        crop_y = max(0, bbox_y - expand_h)
-        crop_x2 = min(W, bbox_x + bbox_w + expand_w)
-        crop_y2 = min(H, bbox_y + bbox_h + expand_h)
-        crop_w = crop_x2 - crop_x
-        crop_h = crop_y2 - crop_y
+        # ── Step 1: pre-resize ─────────────────────────────────────────────
+        if preresize:
+            image, mask, optional_context_mask = self._preresize(
+                image, mask, optional_context_mask,
+                preresize_mode, preresize_min_width, preresize_min_height,
+                preresize_max_width, preresize_max_height,
+                downscale_algorithm, upscale_algorithm,
+            )
+            B, H, W = image.shape[0], image.shape[1], image.shape[2]
 
-        if crop_w <= 0 or crop_h <= 0:
-            crop_x, crop_y, crop_w, crop_h = 0, 0, W, H
+        # ── Step 2: mask preprocessing (lquesada order) ────────────────────
+        if mask_fill_holes:
+            mask = _fill_holes_torch(mask)
+        if mask_expand_pixels > 0:
+            mask = _expand_mask_pixels(mask, mask_expand_pixels)
+        if mask_invert:
+            mask = (1.0 - mask).clamp(0.0, 1.0)
+        if mask_blend_pixels > 0:
+            mask = _expand_mask_pixels(mask, mask_blend_pixels)
+            mask = _gaussian_blur_mask(mask, sigma=mask_blend_pixels * 0.5)
+        if mask_hipass_filter >= 0.01:
+            mask = _hipass_filter(mask, mask_hipass_filter)
+            optional_context_mask = _hipass_filter(optional_context_mask, mask_hipass_filter)
 
-        # Step 3: Compute target output size
-        target_w, target_h = _apply_size_mode(
-            crop_w, crop_h, size_mode,
-            forced_width, forced_height,
-            min_size, max_size, padding_multiple
-        )
+        # Wan: temporal coherence
+        if wan_temporal_smooth_frames > 0.0 and B > 1:
+            mask = _temporal_gaussian_smooth(mask, wan_temporal_smooth_frames)
 
-        # Step 4: Crop image and mask
-        cropped = image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
-        cropped_mask = mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w].clone()
+        # ── Step 3: extend for outpainting ─────────────────────────────────
+        if extend_for_outpainting:
+            image, mask, optional_context_mask = self._extend_for_outpainting(
+                image, mask, optional_context_mask,
+                extend_up_factor, extend_down_factor,
+                extend_left_factor, extend_right_factor,
+            )
+            B, H, W = image.shape[0], image.shape[1], image.shape[2]
 
-        # Step 5: Fill masked area in crop
-        if fill_masked_area == "neutral_gray":
-            fill_value = 0.5
-            binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
-            cropped = cropped * (1.0 - binary_3d) + fill_value * binary_3d
-        elif fill_masked_area == "edge_pad":
-            img_bchw = cropped.permute(0, 3, 1, 2)
-            blurred_fill = _gaussian_blur_2d(img_bchw, sigma=max(crop_w, crop_h) * 0.15)
-            blurred_fill = blurred_fill.permute(0, 2, 3, 1)
-            binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
-            cropped = cropped * (1.0 - binary_3d) + blurred_fill * binary_3d
+        # ── Step 4: per-frame (or stable) context bbox ─────────────────────
+        bx_list, by_list, bw_list, bh_list = [], [], [], []
+        if wan_stable_crop:
+            sx, sy, sw, sh = _compute_stable_bbox(mask)
+            if sw <= 0 or sh <= 0:
+                sx, sy, sw, sh = 0, 0, W, H
+            sx, sy, sw, sh = self._grow_context(sx, sy, sw, sh,
+                                                context_from_mask_extend_factor, W, H)
+            ox, oy, ow, oh = _compute_stable_bbox(optional_context_mask)
+            if ow > 0 and oh > 0:
+                nx = min(sx, ox); ny = min(sy, oy)
+                nx2 = max(sx + sw, ox + ow); ny2 = max(sy + sh, oy + oh)
+                sx, sy, sw, sh = nx, ny, nx2 - nx, ny2 - ny
+            for _ in range(B):
+                bx_list.append(sx); by_list.append(sy)
+                bw_list.append(sw); bh_list.append(sh)
+        else:
+            for i in range(B):
+                fx, fy, fw, fh = _compute_bbox_single(mask[i])
+                if fw <= 0 or fh <= 0:
+                    fx, fy, fw, fh = 0, 0, W, H
+                fx, fy, fw, fh = self._grow_context(fx, fy, fw, fh,
+                                                   context_from_mask_extend_factor, W, H)
+                ox, oy, ow, oh = _compute_bbox_single(optional_context_mask[i])
+                if ow > 0 and oh > 0:
+                    nx = min(fx, ox); ny = min(fy, oy)
+                    nx2 = max(fx + fw, ox + ow); ny2 = max(fy + fh, oy + oh)
+                    fx, fy, fw, fh = nx, ny, nx2 - nx, ny2 - ny
+                bx_list.append(fx); by_list.append(fy)
+                bw_list.append(fw); bh_list.append(fh)
 
-        # Step 6: Resize crop to target dimensions
-        if crop_w != target_w or crop_h != target_h:
-            cropped = _resize_image(cropped, target_h, target_w)
-            cropped_mask = _resize_mask(cropped_mask, target_h, target_w)
+        # ── Step 5: per-frame crop_magic ───────────────────────────────────
+        if output_resize_to_target_size:
+            tgt_w, tgt_h = output_target_width, output_target_height
+        else:
+            tgt_w, tgt_h = -1, -1
 
-        # Step 7: Generate inpaint mask
-        inpaint_mask = _apply_inpaint_mask_mode(cropped_mask, inpaint_mask_mode)
-
-        # Step 8: Generate stitch blend mask
-        stitch_blend_mask = _generate_stitch_blend_mask(
-            cropped, cropped_mask, stitch_blend_mode, blend_radius
-        )
-
-        # Step 9: Build stitch_data dict
-        stitch_data = {
-            "original_image": image,
-            "crop_x": crop_x,
-            "crop_y": crop_y,
-            "crop_w": crop_w,
-            "crop_h": crop_h,
-            "target_w": target_w,
-            "target_h": target_h,
-            "blend_mode": stitch_blend_mode,
-            "blend_radius": blend_radius,
-            "stitch_blend_mask_crop": stitch_blend_mask,
-            "original_mask": mask,
+        result_image_list = []
+        result_mask_list = []
+        result_stitcher = {
+            "downscale_algorithm": downscale_algorithm,
+            "upscale_algorithm": upscale_algorithm,
+            "blend_pixels": mask_blend_pixels,
+            "wan_mask_polarity": wan_mask_polarity,
+            "canvas_to_orig_x": [],
+            "canvas_to_orig_y": [],
+            "canvas_to_orig_w": [],
+            "canvas_to_orig_h": [],
+            "canvas_image": [],
+            "cropped_to_canvas_x": [],
+            "cropped_to_canvas_y": [],
+            "cropped_to_canvas_w": [],
+            "cropped_to_canvas_h": [],
+            "cropped_mask_for_blend": [],
+            "device_mode": device_mode,
         }
 
-        # Step 10: Build info string
-        info_lines = [
-            f"InpaintCropProMEC:",
-            f"  image: {B}x{H}x{W}x{C}",
-            f"  mask bbox: x={bbox_x}, y={bbox_y}, w={bbox_w}, h={bbox_h}",
-            f"  crop region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}",
-            f"  context_expand: {context_expand:.2f}",
-            f"  output size: {target_w}x{target_h} (mode={size_mode})",
-            f"  inpaint_mask_mode: {inpaint_mask_mode}",
-            f"  stitch_blend_mode: {stitch_blend_mode}, radius={blend_radius}",
-            f"  video_stable_crop: {video_stable_crop}",
-            f"  fill_masked_area: {fill_masked_area}",
-            f"  inpaint_mask range: [{inpaint_mask.min().item():.4f}, {inpaint_mask.max().item():.4f}]",
-            f"  blend_mask range: [{stitch_blend_mask.min().item():.4f}, {stitch_blend_mask.max().item():.4f}]",
-        ]
-        info = "\n".join(info_lines)
+        for i in range(B):
+            sub_img = image[i:i+1]
+            sub_msk = mask[i:i+1]
+            bx, by, bw, bh = bx_list[i], by_list[i], bw_list[i], bh_list[i]
 
-        return (stitch_data, cropped, inpaint_mask, stitch_blend_mask, info)
+            (canvas_image, cto_x, cto_y, cto_w, cto_h,
+             cropped_image, cropped_mask,
+             ctc_x, ctc_y, ctc_w, ctc_h) = self._crop_magic(
+                sub_img, sub_msk, bx, by, bw, bh,
+                tgt_w if tgt_w > 0 else bw,
+                tgt_h if tgt_h > 0 else bh,
+                output_padding_int, downscale_algorithm, upscale_algorithm,
+                output_resize_to_target_size, wan_align_multiple,
+            )
+
+            result_image_list.append(cropped_image.squeeze(0))
+            result_mask_list.append(cropped_mask.squeeze(0))
+            result_stitcher["canvas_to_orig_x"].append(cto_x)
+            result_stitcher["canvas_to_orig_y"].append(cto_y)
+            result_stitcher["canvas_to_orig_w"].append(cto_w)
+            result_stitcher["canvas_to_orig_h"].append(cto_h)
+            result_stitcher["canvas_image"].append(canvas_image.squeeze(0).cpu())
+            result_stitcher["cropped_to_canvas_x"].append(ctc_x)
+            result_stitcher["cropped_to_canvas_y"].append(ctc_y)
+            result_stitcher["cropped_to_canvas_w"].append(ctc_w)
+            result_stitcher["cropped_to_canvas_h"].append(ctc_h)
+            result_stitcher["cropped_mask_for_blend"].append(cropped_mask.squeeze(0).cpu())
+
+        # Stack outputs
+        try:
+            out_image = torch.stack(result_image_list, dim=0)
+            out_mask  = torch.stack(result_mask_list,  dim=0)
+        except RuntimeError:
+            ref_h, ref_w = result_image_list[0].shape[0], result_image_list[0].shape[1]
+            tmp_img, tmp_msk = [], []
+            for im, mk in zip(result_image_list, result_mask_list):
+                if im.shape[0] != ref_h or im.shape[1] != ref_w:
+                    im = _resize_image_alg(im.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
+                    mk = _resize_mask_alg(mk.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
+                tmp_img.append(im); tmp_msk.append(mk)
+            out_image = torch.stack(tmp_img, dim=0)
+            out_mask  = torch.stack(tmp_msk, dim=0)
+
+        # Wan polarity: flip the user-visible cropped_mask back if needed
+        if wan_mask_polarity == "preserve_subject":
+            out_mask = (1.0 - out_mask).clamp(0.0, 1.0)
+
+        info = (
+            f"InpaintCropProMEC (lquesada+Wan2.2):\n"
+            f"  in: {B}x{H}x{W}\n"
+            f"  preresize={preresize} mode={preresize_mode}\n"
+            f"  mask: fill_holes={mask_fill_holes} expand={mask_expand_pixels}px "
+            f"invert={mask_invert} blend={mask_blend_pixels}px hipass={mask_hipass_filter:.2f}\n"
+            f"  context_factor={context_from_mask_extend_factor:.2f}\n"
+            f"  out: target={'on' if output_resize_to_target_size else 'off'} "
+            f"{output_target_width}x{output_target_height} pad={output_padding} "
+            f"align={wan_align_multiple}\n"
+            f"  wan: stable_crop={wan_stable_crop} temporal={wan_temporal_smooth_frames} "
+            f"polarity={wan_mask_polarity}\n"
+            f"  device={device_mode}"
+        )
+        return (result_stitcher, out_image, out_mask, info)
+
+    # ── Helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _preresize(image, mask, opt_mask, mode, min_w, min_h, max_w, max_h, down_alg, up_alg):
+        H, W = image.shape[1], image.shape[2]
+        new_w, new_h = W, H
+
+        def fit_min(w, h, mw, mh):
+            if w >= mw and h >= mh:
+                return w, h
+            sw = mw / max(w, 1); sh = mh / max(h, 1)
+            s = max(sw, sh)
+            return max(int(round(w * s)), mw), max(int(round(h * s)), mh)
+
+        def fit_max(w, h, mw, mh):
+            if w <= mw and h <= mh:
+                return w, h
+            sw = mw / max(w, 1); sh = mh / max(h, 1)
+            s = min(sw, sh)
+            return min(int(round(w * s)), mw), min(int(round(h * s)), mh)
+
+        if mode == "ensure minimum resolution":
+            new_w, new_h = fit_min(W, H, min_w, min_h)
+        elif mode == "ensure maximum resolution":
+            new_w, new_h = fit_max(W, H, max_w, max_h)
+        elif mode == "ensure minimum and maximum resolution":
+            new_w, new_h = fit_min(W, H, min_w, min_h)
+            new_w, new_h = fit_max(new_w, new_h, max_w, max_h)
+
+        if new_w == W and new_h == H:
+            return image, mask, opt_mask
+
+        alg = up_alg if (new_w * new_h > W * H) else down_alg
+        image = _resize_image_alg(image, new_h, new_w, alg)
+        mask = _resize_mask_alg(mask, new_h, new_w, alg)
+        opt_mask = _resize_mask_alg(opt_mask, new_h, new_w, alg)
+        return image, mask, opt_mask
+
+    @staticmethod
+    def _extend_for_outpainting(image, mask, opt_mask, up_f, down_f, left_f, right_f):
+        H, W = image.shape[1], image.shape[2]
+        up_pad = max(0, int(H * (up_f - 1.0)))
+        down_pad = max(0, int(H * (down_f - 1.0)))
+        left_pad = max(0, int(W * (left_f - 1.0)))
+        right_pad = max(0, int(W * (right_f - 1.0)))
+        if up_pad == 0 and down_pad == 0 and left_pad == 0 and right_pad == 0:
+            return image, mask, opt_mask
+        image = _edge_replicate_pad(image, up_pad, down_pad, left_pad, right_pad)
+        mask = F.pad(mask.unsqueeze(1), (left_pad, right_pad, up_pad, down_pad),
+                     mode="constant", value=1.0).squeeze(1)
+        opt_mask = F.pad(opt_mask.unsqueeze(1), (left_pad, right_pad, up_pad, down_pad),
+                         mode="constant", value=0.0).squeeze(1)
+        return image, mask.clamp(0.0, 1.0), opt_mask.clamp(0.0, 1.0)
+
+    @staticmethod
+    def _grow_context(x, y, w, h, factor, img_w, img_h):
+        if factor <= 1.0:
+            return x, y, w, h
+        gx = int(round(w * (factor - 1.0) / 2.0))
+        gy = int(round(h * (factor - 1.0) / 2.0))
+        nx = max(0, x - gx); ny = max(0, y - gy)
+        nx2 = min(img_w, x + w + gx); ny2 = min(img_h, y + h + gy)
+        return nx, ny, nx2 - nx, ny2 - ny
+
+    @staticmethod
+    def _crop_magic(image, mask, x, y, w, h, target_w, target_h, padding,
+                    down_alg, up_alg, resize_output, align_multiple):
+        """Aspect-ratio fit + edge-replicate canvas + crop + (optional) resize."""
+        B, image_h, image_w, C = image.shape
+
+        if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
+            return (image, 0, 0, image_w, image_h, image, mask, 0, 0, image_w, image_h)
+
+        # 1. Pad target dims to multiple of `padding` AND `align_multiple`
+        m = max(padding, align_multiple, 1)
+        target_w = _pad_to_multiple(target_w, m)
+        target_h = _pad_to_multiple(target_h, m)
+
+        # 2. Grow bbox to match target aspect ratio
+        target_ar = target_w / max(target_h, 1)
+        ctx_ar = w / max(h, 1)
+        if ctx_ar < target_ar:
+            new_w = int(h * target_ar); new_h = h
+            new_x = x - (new_w - w) // 2; new_y = y
+        else:
+            new_w = w; new_h = int(w / target_ar)
+            new_x = x; new_y = y - (new_h - h) // 2
+
+        # 3. If not resizing output, ensure new dims >= target dims
+        if not resize_output:
+            if new_w < target_w:
+                new_x -= (target_w - new_w) // 2; new_w = target_w
+            if new_h < target_h:
+                new_y -= (target_h - new_h) // 2; new_h = target_h
+
+        # 4. Compute canvas padding
+        up_padding = max(0, -new_y)
+        down_padding = max(0, (new_y + new_h) - image_h)
+        left_padding = max(0, -new_x)
+        right_padding = max(0, (new_x + new_w) - image_w)
+
+        canvas_image = _edge_replicate_pad(image, up_padding, down_padding, left_padding, right_padding)
+        canvas_mask = F.pad(mask.unsqueeze(1),
+                            (left_padding, right_padding, up_padding, down_padding),
+                            mode="constant", value=1.0).squeeze(1)
+
+        cto_x, cto_y = left_padding, up_padding
+        cto_w, cto_h = image_w, image_h
+
+        ctc_x = new_x + left_padding
+        ctc_y = new_y + up_padding
+        ctc_w = new_w
+        ctc_h = new_h
+
+        cropped_image = canvas_image[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
+        cropped_mask  = canvas_mask[:,  ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
+
+        # 5. Resize to target
+        if resize_output:
+            alg = up_alg if (target_w > ctc_w or target_h > ctc_h) else down_alg
+            cropped_image = _resize_image_alg(cropped_image, target_h, target_w, alg)
+            cropped_mask  = _resize_mask_alg(cropped_mask,   target_h, target_w, alg)
+
+        return (canvas_image, cto_x, cto_y, cto_w, cto_h,
+                cropped_image, cropped_mask,
+                ctc_x, ctc_y, ctc_w, ctc_h)
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 2: InpaintStitchProMEC
+#  NODE 2: InpaintStitchProMEC — lquesada-compatible 2-input stitcher
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintStitchProMEC:
-    """Composite inpainted image back into original using stitch_data.
+    """lquesada-style stitch: simple alpha composite back into the original.
 
-    Supports blend mode override and optional color matching.
+    Companion to InpaintCropProMEC. Resizes the inpainted result back to the
+    canvas-crop dimensions, alpha-composites with the precomputed feathered
+    mask (`m * inpainted + (1-m) * canvas`), then crops back to the original
+    (un-extended) image area.
     """
 
     VRAM_TIER = 1
-    BLEND_OVERRIDES = [
-        "from_crop",
-        "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend",
-        "poisson", "poisson_mixed", "exact", "linear_exact", "classic",
-    ]
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stitch_data": ("STITCH_DATA", {"tooltip": "Stitch data from InpaintCropProMEC"}),
-                "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result from model (B,H,W,C)"}),
-                "blend_mode_override": (cls.BLEND_OVERRIDES, {
-                    "default": "from_crop",
-                    "tooltip": "Override the blend mode from crop node, or use 'from_crop' to keep original"}),
-                "color_match": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Apply mean+std color transfer before stitching to reduce color shift"}),
+                "stitcher": ("STITCHER",),
+                "inpainted_image": ("IMAGE",),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("image", "blend_mask_used", "info")
-    FUNCTION = "stitch"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "info")
+    FUNCTION = "inpaint_stitch"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Composite inpainted image back using stitch_data. Supports edge-aware, Laplacian pyramid, and frequency domain blending."
+    DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible)."
 
-    def stitch(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
-               blend_mode_override: str, color_match: bool):
-        # Map legacy override names ('poisson', 'classic', \u2026) to native modes.
-        if blend_mode_override != "from_crop":
-            blend_mode_override = _normalize_blend_mode(blend_mode_override)
-        original_image = stitch_data["original_image"]
-        crop_x = stitch_data["crop_x"]
-        crop_y = stitch_data["crop_y"]
-        crop_w = stitch_data["crop_w"]
-        crop_h = stitch_data["crop_h"]
-        target_w = stitch_data["target_w"]
-        target_h = stitch_data["target_h"]
-        stored_blend_mode = _normalize_blend_mode(stitch_data["blend_mode"])
-        blend_radius = stitch_data["blend_radius"]
-        stitch_blend_mask_crop = stitch_data["stitch_blend_mask_crop"]
-        original_mask = stitch_data["original_mask"]
+    def inpaint_stitch(self, stitcher, inpainted_image):
+        inpainted_image = inpainted_image.clone()
+        results = []
 
-        device = _get_device(original_image)
-        B, H, W, C = original_image.shape
-
-        # Determine effective blend mode
-        blend_mode = stored_blend_mode if blend_mode_override == "from_crop" else blend_mode_override
-
-        # Resize inpainted image to crop dimensions
-        inp_resized = _resize_image(inpainted_image, crop_h, crop_w)
-
-        # Resize blend mask to crop dimensions
-        blend_mask_crop = _resize_mask(stitch_blend_mask_crop, crop_h, crop_w)
-
-        # Regenerate blend mask if override differs from stored
-        if blend_mode_override != "from_crop" and blend_mode_override != stored_blend_mode:
-            crop_region = original_image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
-            crop_mask = original_mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
-            blend_mask_crop = _generate_stitch_blend_mask(
-                crop_region, crop_mask, blend_mode, blend_radius
-            )
-
-        # Optional color matching
-        if color_match:
-            crop_original = original_image[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
-            crop_mask_for_color = original_mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
-            inp_resized = _color_match_mean_std(inp_resized, crop_original, crop_mask_for_color)
-
-        # Clone the original for compositing
-        canvas = original_image.clone()
-        canvas_crop = canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :].clone()
-
-        # Composite based on blend mode
-        if blend_mode == "laplacian_pyramid":
-            a_bchw = canvas_crop.permute(0, 3, 1, 2)
-            b_bchw = inp_resized.permute(0, 3, 1, 2)
-            m_b1hw = blend_mask_crop.unsqueeze(1)
-            blended_bchw = _laplacian_pyramid_blend(a_bchw, b_bchw, m_b1hw, levels=5)
-            blended = blended_bchw.permute(0, 2, 3, 1).clamp(0.0, 1.0)
-
-        elif blend_mode == "frequency_blend":
-            a_bchw = canvas_crop.permute(0, 3, 1, 2)
-            b_bchw = inp_resized.permute(0, 3, 1, 2)
-            m_b1hw = blend_mask_crop.unsqueeze(1)
-            blended_bchw = _frequency_blend(a_bchw, b_bchw, m_b1hw)
-            blended = blended_bchw.permute(0, 2, 3, 1).clamp(0.0, 1.0)
-
+        device_mode = stitcher.get("device_mode", "cpu (compatible)")
+        if device_mode == "gpu (much faster)":
+            try:
+                import comfy.model_management as mm
+                device = mm.get_torch_device()
+            except Exception:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            inpainted_image = inpainted_image.to(device)
         else:
-            m3 = blend_mask_crop.unsqueeze(-1)
-            blended = canvas_crop * (1.0 - m3) + inp_resized * m3
+            device = torch.device("cpu")
+            inpainted_image = inpainted_image.cpu()
 
-        # Paste blended region back
-        canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = blended
+        downscale_algorithm = stitcher["downscale_algorithm"]
+        upscale_algorithm   = stitcher["upscale_algorithm"]
+        wan_polarity        = stitcher.get("wan_mask_polarity", "regenerate_subject")
 
-        # Create full-res blend mask for output
-        blend_mask_full = torch.zeros(B, H, W, device=device, dtype=original_image.dtype)
-        blend_mask_full[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w] = blend_mask_crop
+        B = inpainted_image.shape[0]
+        n = len(stitcher["cropped_to_canvas_x"])
+        override = (n == 1 and B != 1)
 
-        # Build info string
-        color_info = ""
-        if color_match:
-            color_info = "\n  color_match: applied"
+        for i in range(B):
+            j = 0 if override else i
+            cto_x = stitcher["canvas_to_orig_x"][j]
+            cto_y = stitcher["canvas_to_orig_y"][j]
+            cto_w = stitcher["canvas_to_orig_w"][j]
+            cto_h = stitcher["canvas_to_orig_h"][j]
+            ctc_x = stitcher["cropped_to_canvas_x"][j]
+            ctc_y = stitcher["cropped_to_canvas_y"][j]
+            ctc_w = stitcher["cropped_to_canvas_w"][j]
+            ctc_h = stitcher["cropped_to_canvas_h"][j]
+            canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
+            blend_mask = stitcher["cropped_mask_for_blend"][j].to(device).unsqueeze(0).clone()
 
-        info_lines = [
-            f"InpaintStitchProMEC:",
-            f"  stitch region: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}",
-            f"  blend_mode: {blend_mode}" + (" (overridden)" if blend_mode_override != "from_crop" else " (from_crop)"),
-            f"  inpainted_input: {inpainted_image.shape[0]}x{inpainted_image.shape[1]}x{inpainted_image.shape[2]}x{inpainted_image.shape[3]}",
-            f"  blend_mask range: [{blend_mask_crop.min().item():.4f}, {blend_mask_crop.max().item():.4f}]",
-            f"  output: {B}x{H}x{W}x{C}",
-            color_info,
-        ]
-        info = "\n".join(info_lines)
+            sub_inp = inpainted_image[i:i+1]
 
-        return (canvas, blend_mask_full, info)
+            inp_h, inp_w = sub_inp.shape[1], sub_inp.shape[2]
+            if ctc_w > inp_w or ctc_h > inp_h:
+                resized_inp = _resize_image_alg(sub_inp, ctc_h, ctc_w, upscale_algorithm)
+                resized_msk = _resize_mask_alg(blend_mask, ctc_h, ctc_w, upscale_algorithm)
+            else:
+                resized_inp = _resize_image_alg(sub_inp, ctc_h, ctc_w, downscale_algorithm)
+                resized_msk = _resize_mask_alg(blend_mask, ctc_h, ctc_w, downscale_algorithm)
+
+            m3 = resized_msk.unsqueeze(-1).clamp(0.0, 1.0)
+            canvas_crop = canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
+            blended = m3 * resized_inp + (1.0 - m3) * canvas_crop
+            canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = blended
+
+            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
+            results.append(output.squeeze(0))
+
+        out = torch.stack(results, dim=0).cpu()
+        info = (
+            f"InpaintStitchProMEC (lquesada-compatible):\n"
+            f"  frames: {B}  device={device_mode}  wan_polarity={wan_polarity}\n"
+            f"  out: {out.shape[0]}x{out.shape[1]}x{out.shape[2]}x{out.shape[3]}"
+        )
+        return (out, info)
+
 
 
 # ══════════════════════════════════════════════════════════════════════
