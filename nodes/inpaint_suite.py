@@ -1442,31 +1442,31 @@ class InpaintMaskPrepareMEC:
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintPasteBackMEC:
-    """Paste inpainted crop back onto original using stitch_data.
+    """Paste inpainted crop back onto original using a STITCHER dict.
 
     Simple resize + alpha-paste with optional Gaussian-feathered edges.
-    Works exactly like the original lquesada-style stitcher: 1.0 inside the
-    paste rectangle, feathered ring at the boundary, 0.0 elsewhere.
+    Reads the new lquesada-compatible STITCHER schema produced by
+    InpaintCropProMEC.
     """
 
     VRAM_TIER = 1
-    INTERP_METHODS = ["lanczos", "bicubic", "bilinear", "nearest-exact", "area"]
+    INTERP_METHODS = ["lanczos", "bicubic", "bilinear", "nearest", "area"]
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stitch_data": ("STITCH_DATA", {"tooltip": "Stitch data from InpaintCropProMEC"}),
+                "stitcher": ("STITCHER", {"tooltip": "Stitcher dict from InpaintCropProMEC"}),
                 "inpainted_image": ("IMAGE", {"tooltip": "Inpainted crop result (B,H,W,C)"}),
                 "upscale_method": (cls.INTERP_METHODS, {
-                    "default": "lanczos",
-                    "tooltip": "Interpolation method for resizing crop back to original dimensions"}),
+                    "default": "bicubic",
+                    "tooltip": "Interpolation method for resizing crop back"}),
                 "feather_edges": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Apply Gaussian feather at crop boundary for seamless paste"}),
+                    "tooltip": "Apply Gaussian feather at crop boundary"}),
                 "feather_radius": ("INT", {
                     "default": 16, "min": 0, "max": 64, "step": 1,
-                    "tooltip": "Feather radius in pixels (only used if feather_edges is True)"}),
+                    "tooltip": "Feather radius in pixels (only used if feather_edges)"}),
             },
         }
 
@@ -1474,63 +1474,71 @@ class InpaintPasteBackMEC:
     RETURN_NAMES = ("image", "info")
     FUNCTION = "paste_back"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Paste inpainted crop back onto original image using stitch_data with optional feathered edges."
+    DESCRIPTION = "Paste inpainted crop back using STITCHER, with optional feathered rectangle edges."
 
-    def paste_back(self, stitch_data, inpainted_image, upscale_method, feather_edges, feather_radius):
-        if not isinstance(stitch_data, dict):
-            raise ValueError("InpaintPasteBackMEC: stitch_data must be a dict from InpaintCropProMEC")
-        original_image = stitch_data["original_image"]
-        crop_x = int(stitch_data["crop_x"])
-        crop_y = int(stitch_data["crop_y"])
-        crop_w = int(stitch_data["crop_w"])
-        crop_h = int(stitch_data["crop_h"])
+    def paste_back(self, stitcher, inpainted_image, upscale_method, feather_edges, feather_radius):
+        if not isinstance(stitcher, dict):
+            raise ValueError("InpaintPasteBackMEC: stitcher must be a dict from InpaintCropProMEC")
 
-        device = _get_device(original_image)
-        B, H, W, C = original_image.shape
+        device_mode = stitcher.get("device_mode", "cpu (compatible)")
+        if device_mode == "gpu (much faster)":
+            try:
+                import comfy.model_management as mm
+                device = mm.get_torch_device()
+            except Exception:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            inpainted_image = inpainted_image.to(device)
+        else:
+            device = torch.device("cpu")
+            inpainted_image = inpainted_image.cpu()
 
-        # Resize inpainted crop to original crop size
-        inp = inpainted_image
-        if inp.shape[1] != crop_h or inp.shape[2] != crop_w:
-            if upscale_method == "lanczos":
-                inp = _resize_lanczos(inp, crop_h, crop_w)
-            else:
-                m = upscale_method if upscale_method != "nearest-exact" else "nearest-exact"
-                inp_bchw = inp.permute(0, 3, 1, 2)
-                inp_bchw = F.interpolate(inp_bchw, size=(crop_h, crop_w),
-                                         mode=("nearest" if m == "nearest-exact" else m),
-                                         align_corners=False if m in ("bilinear", "bicubic") else None)
-                inp = inp_bchw.permute(0, 2, 3, 1)
-
+        B = inpainted_image.shape[0]
+        n = len(stitcher["cropped_to_canvas_x"])
+        override = (n == 1 and B != 1)
+        results = []
         feather_active = bool(feather_edges) and int(feather_radius) > 0
 
-        canvas = original_image.clone()
-        if not feather_active:
-            canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = inp.clamp(0.0, 1.0)
-        else:
-            # Build a soft alpha: 1.0 in interior, gaussian fade to 0 at rect border.
-            r = max(1, int(feather_radius))
-            box = torch.ones(1, 1, crop_h, crop_w, device=device, dtype=original_image.dtype)
-            # Erode by `r` so the gaussian halo lives inside the rectangle.
-            inner_h = max(1, crop_h - 2 * r)
-            inner_w = max(1, crop_w - 2 * r)
-            inner = torch.zeros_like(box)
-            sy, sx = (crop_h - inner_h) // 2, (crop_w - inner_w) // 2
-            inner[:, :, sy:sy + inner_h, sx:sx + inner_w] = 1.0
-            alpha = _gaussian_blur_2d(inner, sigma=r * 0.5).clamp(0.0, 1.0)
-            alpha = alpha.squeeze(0).squeeze(0)  # (crop_h, crop_w)
-            alpha = alpha.unsqueeze(0).unsqueeze(-1).expand(B, -1, -1, 1)
-            base = canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
-            blended = base * (1.0 - alpha) + inp.clamp(0.0, 1.0) * alpha
-            canvas[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = blended
+        for i in range(B):
+            j = 0 if override else i
+            cto_x = stitcher["canvas_to_orig_x"][j]
+            cto_y = stitcher["canvas_to_orig_y"][j]
+            cto_w = stitcher["canvas_to_orig_w"][j]
+            cto_h = stitcher["canvas_to_orig_h"][j]
+            ctc_x = stitcher["cropped_to_canvas_x"][j]
+            ctc_y = stitcher["cropped_to_canvas_y"][j]
+            ctc_w = stitcher["cropped_to_canvas_w"][j]
+            ctc_h = stitcher["cropped_to_canvas_h"][j]
+            canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
 
+            sub_inp = inpainted_image[i:i+1]
+            inp_resized = _resize_image_alg(sub_inp, ctc_h, ctc_w, upscale_method)
+
+            if not feather_active:
+                canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = inp_resized.clamp(0.0, 1.0)
+            else:
+                r = max(1, int(feather_radius))
+                inner_h = max(1, ctc_h - 2 * r)
+                inner_w = max(1, ctc_w - 2 * r)
+                inner = torch.zeros(1, 1, ctc_h, ctc_w, device=device, dtype=canvas.dtype)
+                sy, sx = (ctc_h - inner_h) // 2, (ctc_w - inner_w) // 2
+                inner[:, :, sy:sy + inner_h, sx:sx + inner_w] = 1.0
+                alpha = _gaussian_blur_2d(inner, sigma=r * 0.5).clamp(0.0, 1.0)
+                alpha = alpha.squeeze(0).squeeze(0).unsqueeze(0).unsqueeze(-1)
+                base = canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
+                blended = base * (1.0 - alpha) + inp_resized.clamp(0.0, 1.0) * alpha
+                canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = blended
+
+            output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
+            results.append(output.squeeze(0))
+
+        out = torch.stack(results, dim=0).cpu()
         info = (
             f"InpaintPasteBackMEC:\n"
-            f"  paste rect: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}\n"
-            f"  upscale_method: {upscale_method}\n"
+            f"  frames: {B}  upscale_method={upscale_method}\n"
             f"  feather: {'on r=' + str(feather_radius) if feather_active else 'off'}\n"
-            f"  output: {B}x{H}x{W}x{C}"
+            f"  output: {out.shape[0]}x{out.shape[1]}x{out.shape[2]}x{out.shape[3]}"
         )
-        return (canvas, info)
+        return (out, info)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1538,8 +1546,11 @@ class InpaintPasteBackMEC:
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintCompositeMEC:
-    """Unified composite: switch between Stitch Pro (advanced blend) and
-    Paste Back (clean resize + paste) via the `mode` dropdown.
+    """Unified composite over the new STITCHER schema.
+
+    mode=stitch_pro -> alpha composite using the feathered mask stored in
+                       the stitcher (lquesada-style).
+    mode=paste_back -> hard rectangle paste with optional Gaussian feather.
     """
 
     VRAM_TIER = 1
@@ -1549,17 +1560,11 @@ class InpaintCompositeMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stitch_data": ("STITCH_DATA", {"tooltip": "Stitch data from InpaintCropProMEC"}),
+                "stitcher": ("STITCHER", {"tooltip": "Stitcher dict from InpaintCropProMEC"}),
                 "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result (B,H,W,C)"}),
                 "mode": (cls.MODES, {"default": "stitch_pro"}),
-                "blend_mode_override": (InpaintStitchProMEC.BLEND_OVERRIDES, {
-                    "default": "from_crop",
-                    "tooltip": "[stitch_pro] Override blend mode or use 'from_crop'"}),
-                "color_match": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "[stitch_pro] Apply Reinhard mean+std color match"}),
                 "upscale_method": (InpaintPasteBackMEC.INTERP_METHODS, {
-                    "default": "lanczos",
+                    "default": "bicubic",
                     "tooltip": "[paste_back] Interpolation for resize"}),
                 "feather_edges": ("BOOLEAN", {
                     "default": False,
@@ -1570,27 +1575,19 @@ class InpaintCompositeMEC:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("image", "mask", "info")
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "info")
     FUNCTION = "composite"
     CATEGORY = "MaskEditControl/Inpaint"
-    DESCRIPTION = "Unified composite. mode=stitch_pro for advanced blend; mode=paste_back for clean resize+paste."
+    DESCRIPTION = "Unified composite. mode=stitch_pro = lquesada feather blend; mode=paste_back = clean resize+paste."
 
-    def composite(self, stitch_data, inpainted_image, mode, blend_mode_override,
-                  color_match, upscale_method, feather_edges, feather_radius):
+    def composite(self, stitcher, inpainted_image, mode,
+                  upscale_method, feather_edges, feather_radius):
         if mode == "paste_back":
             pb = InpaintPasteBackMEC()
-            img, info = pb.paste_back(stitch_data, inpainted_image,
+            img, info = pb.paste_back(stitcher, inpainted_image,
                                       upscale_method, feather_edges, feather_radius)
-            # Build a paste-rect mask in original image space
-            crop_x = int(stitch_data["crop_x"]); crop_y = int(stitch_data["crop_y"])
-            crop_w = int(stitch_data["crop_w"]); crop_h = int(stitch_data["crop_h"])
-            B, H, W, _ = img.shape
-            mask = torch.zeros(B, H, W, device=img.device, dtype=img.dtype)
-            mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w] = 1.0
-            return (img, mask, info)
-        # stitch_pro
+            return (img, info)
         sp = InpaintStitchProMEC()
-        img, blend_mask, info = sp.stitch(stitch_data, inpainted_image,
-                                          blend_mode_override, color_match)
-        return (img, blend_mask, info)
+        img, info = sp.inpaint_stitch(stitcher, inpainted_image)
+        return (img, info)
