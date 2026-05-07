@@ -328,7 +328,7 @@ def _compute_stable_bbox(mask: torch.Tensor) -> Tuple[int, int, int, int]:
         union_y_max = max(union_y_max, y + h)
 
     if not any_valid:
-        return (0, 0, W, H)
+        return (-1, -1, -1, -1)
 
     return (union_x_min, union_y_min,
             union_x_max - union_x_min, union_y_max - union_y_min)
@@ -936,12 +936,18 @@ class InpaintCropProMEC:
             B, H, W = image.shape[0], image.shape[1], image.shape[2]
 
         # ── Step 2: mask preprocessing (lquesada order) ────────────────────
+        # CRITICAL: bbox is computed from the *bbox_mask* (no blend feathering),
+        # while the *mask* used for output/stitch carries the soft feather.
         if mask_fill_holes:
             mask = _fill_holes_torch(mask)
         if mask_expand_pixels > 0:
             mask = _expand_mask_pixels(mask, mask_expand_pixels)
         if mask_invert:
             mask = (1.0 - mask).clamp(0.0, 1.0)
+
+        # Snapshot the *binary-ish* mask used for bbox computation BEFORE blend.
+        bbox_mask = mask.clone()
+
         if mask_blend_pixels > 0:
             mask = _expand_mask_pixels(mask, mask_blend_pixels)
             mask = _gaussian_blur_mask(mask, sigma=mask_blend_pixels * 0.5)
@@ -949,9 +955,10 @@ class InpaintCropProMEC:
             mask = _hipass_filter(mask, mask_hipass_filter)
             optional_context_mask = _hipass_filter(optional_context_mask, mask_hipass_filter)
 
-        # Wan: temporal coherence
+        # Wan: temporal coherence (apply to BOTH so they stay aligned)
         if wan_temporal_smooth_frames > 0.0 and B > 1:
             mask = _temporal_gaussian_smooth(mask, wan_temporal_smooth_frames)
+            bbox_mask = _temporal_gaussian_smooth(bbox_mask, wan_temporal_smooth_frames)
 
         # ── Step 3: extend for outpainting ─────────────────────────────────
         if extend_for_outpainting:
@@ -960,12 +967,19 @@ class InpaintCropProMEC:
                 extend_up_factor, extend_down_factor,
                 extend_left_factor, extend_right_factor,
             )
+            # Apply same padding to bbox_mask so its coords match
+            _, bbox_mask, _ = self._extend_for_outpainting(
+                image, bbox_mask, bbox_mask,
+                extend_up_factor, extend_down_factor,
+                extend_left_factor, extend_right_factor,
+            )
             B, H, W = image.shape[0], image.shape[1], image.shape[2]
 
         # ── Step 4: per-frame (or stable) context bbox ─────────────────────
+        # Always use *bbox_mask* (no blend feathering) so bbox is tight.
         bx_list, by_list, bw_list, bh_list = [], [], [], []
         if wan_stable_crop:
-            sx, sy, sw, sh = _compute_stable_bbox(mask)
+            sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
             if sw <= 0 or sh <= 0:
                 sx, sy, sw, sh = 0, 0, W, H
             sx, sy, sw, sh = self._grow_context(sx, sy, sw, sh,
@@ -980,7 +994,7 @@ class InpaintCropProMEC:
                 bw_list.append(sw); bh_list.append(sh)
         else:
             for i in range(B):
-                fx, fy, fw, fh = _compute_bbox_single(mask[i])
+                fx, fy, fw, fh = _compute_bbox_single(bbox_mask[i])
                 if fw <= 0 or fh <= 0:
                     fx, fy, fw, fh = 0, 0, W, H
                 fx, fy, fw, fh = self._grow_context(fx, fy, fw, fh,
@@ -1095,6 +1109,8 @@ class InpaintCropProMEC:
             f"  preresize={preresize} mode={preresize_mode}\n"
             f"  mask: fill_holes={mask_fill_holes} expand={mask_expand_pixels}px "
             f"invert={mask_invert} blend={mask_blend_pixels}px hipass={mask_hipass_filter:.2f}\n"
+            f"  bbox[0]: x={bx_list[0]} y={by_list[0]} w={bw_list[0]} h={bh_list[0]}  "
+            f"(stable={wan_stable_crop})\n"
             f"  context_factor={context_from_mask_extend_factor:.2f}\n"
             f"  out: target={'on' if output_resize_to_target_size else 'off'} "
             f"{output_target_width}x{output_target_height} pad={output_padding} "
