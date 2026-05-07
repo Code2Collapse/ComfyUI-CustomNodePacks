@@ -106,6 +106,19 @@ class BackgroundRemoverMEC:
         mask_blur: int,
         keep_model_loaded: bool = True,
     ):
+        with _PB.session("BgRemover"):
+            return self._remove_bg_impl(image, model_name, threshold, invert,
+                                        mask_blur, keep_model_loaded)
+
+    def _remove_bg_impl(
+        self,
+        image: torch.Tensor,
+        model_name: str,
+        threshold: float,
+        invert: bool,
+        mask_blur: int,
+        keep_model_loaded: bool = True,
+    ):
         B, H, W, C = image.shape
         # MANUAL bug-fix (Apr 2026): full device autodetect (cuda > mps > cpu)
         # so Apple-Silicon and AMD-ROCm users get GPU acceleration too.

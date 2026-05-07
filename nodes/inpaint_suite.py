@@ -260,12 +260,24 @@ def _poisson_seamless_blend(
     inpaint_full: torch.Tensor,        # (H, W, 3) float32 in [0,1] (already pasted)
     binary_mask: torch.Tensor,         # (H, W)    float32 in {0,1}
     flags: int,
-    erosion_px: int = 2,
+    erosion_px: int = 0,
 ) -> torch.Tensor:
     """Seamless-clone `inpaint_full` onto `canvas_frame` inside the mask.
 
     Returns a float32 (H,W,3) tensor on the same device. Outside the mask
     the output is byte-identical to `canvas_frame`.
+
+    BUG FIX (May 2026): the prior version eroded the mask by 2 px before
+    calling cv2.seamlessClone, then post-composited with the un-eroded
+    mask. That stamped 2 px of original canvas pixels back onto the
+    inpaint at the user's mask boundary — which is EXACTLY where the
+    Dirichlet condition is supposed to enforce a colour match. The
+    visible "hard rim" the user reported was that 2-px ring of original
+    pixels overwriting Poisson's edge-matched output. The fix: never
+    pre-erode. Pass the un-eroded mask straight to seamlessClone (per
+    Pérez-Gangnet-Blake SIGGRAPH 2003), and only re-stamp canvas pixels
+    OUTSIDE the user's binary mask after the clone (which is necessary
+    because cv2.seamlessClone internally dilates by 1 px and can leak).
     """
     if not HAS_CV2:
         raise RuntimeError(
@@ -276,23 +288,22 @@ def _poisson_seamless_blend(
     H, W = binary_mask.shape[-2:]
     device, dtype = canvas_frame.device, canvas_frame.dtype
 
-    # Build the binary mask, eroded slightly so the Poisson Dirichlet
-    # boundary samples canvas pixels (not the inpaint's resample ringing).
+    # Build the binary mask. We do NOT pre-erode — Poisson's Dirichlet
+    # boundary on the un-eroded mask is what gives a seamless edge.
     bm = (binary_mask.detach().to("cpu").float() > 0.5).numpy().astype(np.uint8)
     if bm.sum() == 0:
         # No mask -> just return the canvas unchanged.
         return canvas_frame.clone()
 
     if erosion_px > 0:
+        # Optional, off by default. Only used for diagnostics / experiments.
         k = max(3, 2 * int(erosion_px) + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        bm_eroded = cv2.erode(bm, kernel, iterations=1)
-        # If erosion ate the whole mask (very thin region), fall back to
-        # the un-eroded mask rather than skipping the blend.
-        if bm_eroded.sum() < bm.sum() * 0.05:
-            bm_eroded = bm
+        bm_for_clone = cv2.erode(bm, kernel, iterations=1)
+        if bm_for_clone.sum() < bm.sum() * 0.05:
+            bm_for_clone = bm
     else:
-        bm_eroded = bm
+        bm_for_clone = bm
 
     # cv2.seamlessClone needs:
     #   src     = uint8 image to graft FROM
@@ -301,10 +312,10 @@ def _poisson_seamless_blend(
     #   center  = (cx, cy) in dst pixel coords (centroid of the mask)
     src = (inpaint_full.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
     dst = (canvas_frame.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
-    mask_u8 = (bm_eroded * 255).astype(np.uint8)
+    mask_u8 = (bm_for_clone * 255).astype(np.uint8)
 
     # Centroid of the mask -> seamlessClone's `center` argument.
-    ys, xs = np.nonzero(bm_eroded)
+    ys, xs = np.nonzero(bm_for_clone)
     if ys.size == 0:
         return canvas_frame.clone()
     cy = int((ys.min() + ys.max()) // 2)
@@ -317,9 +328,10 @@ def _poisson_seamless_blend(
     out_rgb = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2RGB)
 
     # Critical: re-apply the mask to enforce byte-exact outside-mask
-    # pixels. cv2.seamlessClone uses a small dilation internally, which
-    # can touch a 1-px border outside the mask. We hard-restore the
-    # canvas there using the *un-eroded* original binary mask.
+    # pixels. cv2.seamlessClone dilates internally by ~1 px which can
+    # touch a thin border outside the mask. Stamp the un-eroded canvas
+    # back there. This does NOT clobber Poisson's edge-matched output
+    # because every pixel under the original binary mask is preserved.
     out_f = torch.from_numpy(out_rgb).to(device=device, dtype=dtype) / 255.0
     bm_full = torch.from_numpy(bm).to(device=device, dtype=dtype).unsqueeze(-1)
     out_f = canvas_frame * (1.0 - bm_full) + out_f * bm_full
@@ -1018,11 +1030,25 @@ class InpaintCropProMEC:
     # The legacy modes (edge_aware, gaussian, laplacian_pyramid,
     # frequency_blend) leak alpha outside the mask and are kept only for
     # backward compatibility with old workflows.
-    STITCH_BLEND_MODES = [
-        "poisson", "poisson_mixed",
-        "linear_exact", "exact",
-        "edge_aware", "gaussian", "laplacian_pyramid", "frequency_blend",
-    ]
+    # CURRENT modes (May 2026 audit):
+    #   poisson         — DEFAULT. Pérez-Gangnet-Blake hybrid: gradient-domain
+    #                     seamless clone + inside-feather safety net. Mathematically
+    #                     invisible seam, automatic colour/lighting match,
+    #                     bit-exact outside the user mask.
+    #   poisson_mixed   — Same but cv2.MIXED_CLONE (preserves canvas texture
+    #                     passing through the mask, e.g. hair, fabric).
+    #   exact           — Pure inside-feather alpha composite, no Poisson. Use
+    #                     when the inpaint already matches surroundings (fast).
+    # REMOVED (silently aliased to 'poisson' for old-workflow compat):
+    #   linear_exact, edge_aware, gaussian, laplacian_pyramid, frequency_blend
+    STITCH_BLEND_MODES = ["poisson", "poisson_mixed", "exact"]
+    _LEGACY_BLEND_MODES = {  # → modern equivalent for back-compat aliasing
+        "linear_exact": "exact",
+        "edge_aware":   "poisson",
+        "gaussian":     "poisson",
+        "laplacian_pyramid": "poisson",
+        "frequency_blend":   "poisson",
+    }
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
     SIZE_MODES = ["free_size", "forced_size", "ranged_size"]
     FILL_MODES = ["edge_pad", "neutral_gray", "original"]
@@ -1049,14 +1075,11 @@ class InpaintCropProMEC:
                 "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
                     "default": "poisson",
                     "tooltip": (
-                        "How the result is composited back.\n"
-                        "• poisson (DEFAULT, RECOMMENDED): Pérez-Gangnet-Blake seamless cloning. "
-                        "Mathematically invisible seam + AUTOMATIC colour/lighting match. Outside the mask is byte-exact. "
-                        "CPU/OpenCV — works perfectly on 8 GB GPUs.\n"
-                        "• poisson_mixed: same, but preserves canvas texture passing through the mask (hair, fabric).\n"
-                        "• linear_exact: bit-exact outside the mask + gamma-correct feather (no dark fringe on skin/sky).\n"
-                        "• exact: bit-exact outside the mask, sRGB feather (fast, simplest).\n"
-                        "• edge_aware / gaussian / laplacian_pyramid / frequency_blend: legacy, leak outside the mask."
+                        "How the result is composited back. All three preserve outside-mask pixels bit-exactly.\n"
+                        "• poisson (DEFAULT, RECOMMENDED): Pérez-Gangnet-Blake seamless cloning + safety feather. "
+                        "Mathematically invisible seam, automatic colour/lighting match. CPU/OpenCV.\n"
+                        "• poisson_mixed: same as poisson, but preserves canvas texture passing through the mask (hair, fabric).\n"
+                        "• exact: pure inside-feather alpha composite (no Poisson). Use when the inpaint already matches surroundings."
                     )}),
                 "blend_radius": ("INT", {
                     "default": 32, "min": 1, "max": 256, "step": 1,
@@ -1263,6 +1286,41 @@ class InpaintCropProMEC:
                          mask_hipass_filter: float = 0.0,
                          mask_temporal_smooth: float = 0.0,
                          optional_context_mask: Optional[torch.Tensor] = None):
+        # Single 0..100% bar across all phases (trajectory, crop, mask build).
+        with _PB.session("InpaintCropProMEC"):
+            return self._crop_for_inpaint_impl(
+                image, mask, context_expand, inpaint_mask_mode,
+                stitch_blend_mode, blend_radius, size_mode, forced_width,
+                forced_height, min_size, max_size, padding_multiple,
+                video_stable_crop, fill_masked_area, video_stab_strength,
+                video_stab_fps, video_stab_padding, downscale_factor,
+                downscale_method, upscale_method, mask_blur, mask_grow,
+                aspect_ratio, custom_aspect_w, custom_aspect_h, mask_invert,
+                mask_fill_holes, mask_hipass_filter, mask_temporal_smooth,
+                optional_context_mask,
+            )
+
+    def _crop_for_inpaint_impl(self, image: torch.Tensor, mask: torch.Tensor,
+                         context_expand: float, inpaint_mask_mode: str,
+                         stitch_blend_mode: str, blend_radius: int,
+                         size_mode: str, forced_width: int, forced_height: int,
+                         min_size: int, max_size: int, padding_multiple: int,
+                         video_stable_crop: bool, fill_masked_area: str,
+                         video_stab_strength: float = 0.0,
+                         video_stab_fps: float = 24.0,
+                         video_stab_padding: int = 32,
+                         downscale_factor: float = 1.0,
+                         downscale_method: str = "lanczos",
+                         upscale_method: str = "lanczos",
+                         mask_blur: float = 0.0, mask_grow: int = 0,
+                         aspect_ratio: str = "none",
+                         custom_aspect_w: int = 1, custom_aspect_h: int = 1,
+                         mask_invert: bool = False, mask_fill_holes: bool = False,
+                         mask_hipass_filter: float = 0.0,
+                         mask_temporal_smooth: float = 0.0,
+                         optional_context_mask: Optional[torch.Tensor] = None):
+        # Alias removed legacy blend modes onto modern equivalents.
+        stitch_blend_mode = self._LEGACY_BLEND_MODES.get(stitch_blend_mode, stitch_blend_mode)
         if image is None or not hasattr(image, "shape"):
             raise ValueError("InpaintCropProMEC: 'image' input is missing or invalid (expected IMAGE tensor BxHxWxC).")
         if mask is None or not hasattr(mask, "shape"):
@@ -1667,6 +1725,16 @@ class InpaintStitchProMEC:
 
     def stitch(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                blend_mode_override: str, color_match: bool):
+        # Alias removed legacy override modes onto modern equivalents.
+        blend_mode_override = InpaintCropProMEC._LEGACY_BLEND_MODES.get(
+            blend_mode_override, blend_mode_override
+        )
+        with _PB.session("InpaintStitchProMEC"):
+            return self._stitch_impl(stitch_data, inpainted_image,
+                                     blend_mode_override, color_match)
+
+    def _stitch_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
+               blend_mode_override: str, color_match: bool):
         if not isinstance(stitch_data, dict) or not stitch_data:
             raise ValueError(
                 "InpaintStitchProMEC: 'stitch_data' is missing or empty. "
@@ -1816,8 +1884,15 @@ class InpaintStitchProMEC:
                 return (output, blend_mask_full, info)
 
             # ── Poisson seamless cloning (NORMAL_CLONE / MIXED_CLONE).
+            # Hybrid (May 2026): no pre-erosion (Dirichlet on the un-eroded
+            # mask is what gives a seamless edge by construction), plus an
+            # inside-feather safety net to soften any residual numerical
+            # drift. Outside the user mask remains byte-exact.
             flags = cv2.MIXED_CLONE if blend_mode == "poisson_mixed" else cv2.NORMAL_CLONE
-            erosion_px = max(2, min(int(blend_radius) // 8, 8))
+
+            # Snapshot the ORIGINAL canvas before the per-frame Poisson loop
+            # mutates it — we need it for the hybrid feather composite below.
+            canvas_orig = canvas.clone()
 
             for b, (fx, fy) in _PB.track(
                 list(enumerate(offsets_iter)), len(offsets_iter),
@@ -1833,20 +1908,30 @@ class InpaintStitchProMEC:
                     inpaint_full=inp_full,
                     binary_mask=bm_b,
                     flags=flags,
-                    erosion_px=erosion_px,
+                    erosion_px=0,  # NO pre-erosion — Dirichlet matches edge.
                 )
                 canvas[b] = blended
 
+            # Hybrid safety net: alpha-blend the Poisson result toward the
+            # original canvas using an INSIDE-mask feather. Outside the
+            # user's mask alpha is bit-exact 0 (byte-identical canvas);
+            # interior approaches alpha=1 (pure Poisson); a thin inner
+            # ring fades smoothly between the two, which absorbs any
+            # residual edge mismatch from cv2.seamlessClone.
+            radius = max(int(blend_radius), 1)
+            feather_alpha = _exact_inside_feather(canvas_mask, radius).unsqueeze(-1)
+            canvas = canvas_orig * (1.0 - feather_alpha) + canvas * feather_alpha
+
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
-            # Return a hard-binary preview mask so the user can see what was edited.
-            preview_mask = (canvas_mask[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w] > 0.5).float()
+            preview_mask = feather_alpha.squeeze(-1)[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
             info = (
                 f"InpaintStitchProMEC v{stitch_data.get('version', 2)} [{blend_mode}]:\n"
                 f"  canvas: {canvas_image.shape[1]}x{canvas_image.shape[2]}\n"
-                f"  blend_mode: {blend_mode} (Pérez-Gangnet-Blake seamless cloning)\n"
-                f"  Dirichlet erosion: {erosion_px}px (mask-boundary samples canvas)\n"
+                f"  blend_mode: {blend_mode} (Pérez-Gangnet-Blake hybrid — Poisson + inside-feather safety net)\n"
+                f"  Dirichlet erosion: 0px (un-eroded mask → edge-matched by construction)\n"
+                f"  Inside-feather radius: {radius}px (absorbs residual numerical drift)\n"
                 f"  Auto colour/lighting match: YES\n"
-                f"  Outside-mask pixels: byte-exact (re-applied via hard mask)\n"
+                f"  Outside-mask pixels: byte-exact (alpha bit-exact 0 outside user mask)\n"
                 f"  output: {B}x{cto_h}x{cto_w}"
             )
             return (output, preview_mask, info)
@@ -2266,6 +2351,12 @@ class InpaintPasteBackMEC:
     DESCRIPTION = "Paste inpainted crop back onto original image using stitch_data with optional feathered edges."
 
     def paste_back(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
+                   upscale_method: str, feather_edges: bool, feather_radius: int):
+        with _PB.session("InpaintPasteBackMEC"):
+            return self._paste_back_impl(stitch_data, inpainted_image,
+                                         upscale_method, feather_edges, feather_radius)
+
+    def _paste_back_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
         # MANUAL bug-fix (Apr 2026): unify feather_edges + feather_radius.
         # feather_radius == 0 now ALWAYS disables feathering, regardless of

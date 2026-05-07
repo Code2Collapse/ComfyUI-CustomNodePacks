@@ -551,6 +551,18 @@ class MaskFailureExplainerMEC:
         blur_threshold: float = 50.0,
         brightness_threshold: float = 0.15,
     ) -> tuple[str, torch.Tensor, float, str]:
+        with _PB.session("MaskFailure"):
+            return self._analyze_impl(image, mask, ring_width, blur_threshold,
+                                      brightness_threshold)
+
+    def _analyze_impl(
+        self,
+        image: torch.Tensor,
+        mask: torch.Tensor,
+        ring_width: int = 5,
+        blur_threshold: float = 50.0,
+        brightness_threshold: float = 0.15,
+    ) -> tuple[str, torch.Tensor, float, str]:
         try:
             B, H, W, C = image.shape
 

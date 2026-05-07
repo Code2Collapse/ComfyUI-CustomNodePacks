@@ -61,6 +61,13 @@ class MaskPropagateVideo:
 
     def propagate(self, images, mask, source_frame, mode, flow_threshold,
                   fade_start, fade_end, bidirectional, sam_model=None, points_json=""):
+        with _PB.session("MaskPropagate"):
+            return self._propagate_impl(images, mask, source_frame, mode,
+                                        flow_threshold, fade_start, fade_end,
+                                        bidirectional, sam_model, points_json)
+
+    def _propagate_impl(self, images, mask, source_frame, mode, flow_threshold,
+                  fade_start, fade_end, bidirectional, sam_model=None, points_json=""):
 
         B, H, W, C = images.shape
         source_frame = min(source_frame, B - 1)

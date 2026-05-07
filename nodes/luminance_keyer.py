@@ -161,6 +161,20 @@ class LuminanceKeyerMEC:
         falloff: float,
         invert: bool,
     ) -> tuple[torch.Tensor, str]:
+        with _PB.session("LumaKeyer"):
+            return self._key_luminance_impl(image, mode, low, high, gamma,
+                                            falloff, invert)
+
+    def _key_luminance_impl(
+        self,
+        image: torch.Tensor,
+        mode: str,
+        low: float,
+        high: float,
+        gamma: float,
+        falloff: float,
+        invert: bool,
+    ) -> tuple[torch.Tensor, str]:
         B, H, W, C = image.shape
 
         try:
