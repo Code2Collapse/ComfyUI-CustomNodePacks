@@ -86,9 +86,14 @@ class _Session:
                 self._pbar = None
         if _tqdm is not None:
             try:
-                # Single tqdm bar that reads as "0/100%" and updates desc
-                # per phase. ``leave=False`` keeps the terminal tidy.
-                self._tqdm = _tqdm(total=100, desc=name, leave=False, unit="%")
+                # Single tqdm bar per node call.  ``leave=False`` keeps the
+                # terminal clean; ``ncols=100`` stops bars from wrapping on
+                # wide terminals; ``dynamic_ncols=False`` prevents resize
+                # flicker mid-run.
+                self._tqdm = _tqdm(
+                    total=100, desc=name, leave=False, unit="%",
+                    ncols=100, dynamic_ncols=False,
+                )
             except Exception:  # noqa: BLE001
                 self._tqdm = None
 
@@ -103,7 +108,9 @@ class _Session:
                 pass
         if self._tqdm is not None:
             try:
-                delta = v - self._tqdm.n
+                # Round to integer so tqdm shows "97/100" not "96.9328…".
+                v_int = int(round(v))
+                delta = v_int - int(round(self._tqdm.n))
                 if delta > 0:
                     self._tqdm.update(delta)
             except Exception:  # noqa: BLE001
@@ -112,7 +119,14 @@ class _Session:
     def _set_desc(self, desc: str) -> None:
         if self._tqdm is not None and desc:
             try:
-                self._tqdm.set_description(f"{self.name}: {desc}")
+                # Avoid double-prefix: if the caller already included the
+                # session name (e.g. "InpaintCropProMEC: per-frame crop"),
+                # don't prepend it again.
+                if desc.startswith(self.name):
+                    label = desc
+                else:
+                    label = f"{self.name}: {desc}"
+                self._tqdm.set_description(label)
             except Exception:  # noqa: BLE001
                 pass
 

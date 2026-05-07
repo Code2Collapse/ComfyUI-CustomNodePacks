@@ -1538,7 +1538,7 @@ class InpaintCropProMEC:
             frame_offsets = []
             for b, (cx, cy) in _PB.track(
                 list(enumerate(ronin_centers)), len(ronin_centers),
-                "InpaintCropProMEC: per-frame crop",
+                "per-frame crop",
             ):
                 fx = cx - cw // 2 + left_pad
                 fy = cy - ch // 2 + top_pad
@@ -1648,7 +1648,7 @@ class InpaintCropProMEC:
             # Per-frame variable crop region (Ronin mode)
             for b, (fx, fy) in _PB.track(
                 list(enumerate(frame_offsets)), len(frame_offsets),
-                "InpaintCropProMEC: build crop_mask",
+                "build crop_mask",
             ):
                 oy1 = max(0, fy - cto_y)
                 oy2 = min(H, fy + crop_h - cto_y)
@@ -1906,7 +1906,7 @@ class InpaintStitchProMEC:
                 inp_lin = _srgb_to_linear(inp_resized.clamp(0, 1))
                 for b, (fx, fy) in _PB.track(
                     list(enumerate(offsets_iter)), len(offsets_iter),
-                    "InpaintStitchProMEC: paste frames (linear_exact)",
+                    "paste frames (linear_exact)",
                 ):
                     bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
                     canvas_win = canvas_lin[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
@@ -1949,7 +1949,7 @@ class InpaintStitchProMEC:
 
             for b, (fx, fy) in _PB.track(
                 list(enumerate(offsets_iter)), len(offsets_iter),
-                f"InpaintStitchProMEC: paste frames ({blend_mode})",
+                f"paste frames ({blend_mode})",
             ):
                 # Build a full-canvas-sized 'inpaint pasted at offset' image.
                 inp_full = canvas[b].clone()
@@ -2071,7 +2071,7 @@ class InpaintStitchProMEC:
 
             for b, (fx, fy) in _PB.track(
                 list(enumerate(offsets_iter)), len(offsets_iter),
-                "InpaintStitchProMEC: paste frames (classic)",
+                "paste frames (classic)",
             ):
                 inp_b = inp_resized[b:b + 1]
                 canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
@@ -2175,7 +2175,7 @@ class InpaintStitchProMEC:
             else:
                 for b, (fx, fy) in _PB.track(
                     list(enumerate(offsets_iter)), len(offsets_iter),
-                    "InpaintStitchProMEC: paste frames (exact)",
+                    "paste frames (exact)",
                 ):
                     inp_b = inp_resized[b:b + 1]
                     canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
@@ -2306,7 +2306,7 @@ class InpaintStitchProMEC:
 
         for b, (fx, fy) in _PB.track(
             list(enumerate(paste_iter)), len(paste_iter),
-            "InpaintStitchProMEC: paste frames",
+            "paste frames",
         ):
             canvas_crop = canvas[b:b+1, fy:fy + ctc_h, fx:fx + ctc_w, :].clone()
             inp_b = inp_resized[b:b+1]
@@ -2351,7 +2351,7 @@ class InpaintStitchProMEC:
         else:
             for b, (fx, fy) in _PB.track(
                 list(enumerate(offsets_iter)), len(offsets_iter),
-                "InpaintStitchProMEC: build blend mask",
+                "build blend mask",
             ):
                 blend_canvas[b, fy:fy + ctc_h, fx:fx + ctc_w] = (
                     blend_mask_crop[b] if blend_mask_crop.shape[0] == B else blend_mask_crop[0]
@@ -2678,7 +2678,7 @@ class InpaintPasteBackMEC:
             core = _erode_mask(binary_ones, feather_radius)
             pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)
             paste_mask_3d = pm_bw.squeeze(0).unsqueeze(-1)  # (crop_h, crop_w, 1)
-            for b in _PB.track(range(B), B, "InpaintPasteBackMEC: paste"):
+            for b in _PB.track(range(B), B, "paste"):
                 orig_crop = canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :]
                 canvas[b, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w, :] = (
                     orig_crop * (1.0 - paste_mask_3d) + inp_resized[b] * paste_mask_3d
