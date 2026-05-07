@@ -86,13 +86,12 @@ class _Session:
                 self._pbar = None
         if _tqdm is not None:
             try:
-                # Single tqdm bar per node call. ``leave=True`` keeps the
-                # finished bar in the log so the user can see the final
-                # 100% line (and total elapsed) for every node call.
-                # ``ncols=100`` stops bars from wrapping on wide terminals;
-                # ``dynamic_ncols=False`` prevents resize flicker mid-run.
+                # Single tqdm bar per node call.  ``leave=False`` keeps the
+                # terminal clean; ``ncols=100`` stops bars from wrapping on
+                # wide terminals; ``dynamic_ncols=False`` prevents resize
+                # flicker mid-run.
                 self._tqdm = _tqdm(
-                    total=100, desc=name, leave=True, unit="%",
+                    total=100, desc=name, leave=False, unit="%",
                     ncols=100, dynamic_ncols=False,
                 )
             except Exception:  # noqa: BLE001
@@ -188,44 +187,6 @@ class _Session:
         finally:
             self._depth -= 1
 
-    # ----- non-iterable phase markers -----
-
-    def advance(self, weight: float, desc: str = "") -> None:
-        """Bump the bar forward by ``weight`` percent (no iterable needed).
-
-        Use this around heavy non-loop steps (mask blur, full-canvas resize,
-        gaussian blend-mask build, etc.) so the bar reflects real work
-        rather than sitting at 0/100 until the node finishes.
-        """
-        if self._depth > 0:
-            return  # don't fight an active track() loop
-        if desc:
-            self._set_desc(desc)
-        if weight <= 0:
-            return
-        remaining = max(0.0, 100.0 - self._consumed)
-        # Cap at remaining bar; never overshoot 100%.
-        self._consumed += min(float(weight), remaining)
-        self._push_ui(self._consumed)
-
-    @contextlib.contextmanager
-    def phase(self, desc: str, weight: Optional[float] = None):
-        """Context manager: open a named phase, bump the bar on exit.
-
-        ``weight`` is the share of the bar (0..100) this phase claims.
-        If ``None``, uses adaptive halving (same allocation as ``track``).
-        Sets the tqdm description on entry, advances the bar on exit.
-        Polls the interrupt flag at entry for snappy stop-button response.
-        """
-        _throw()
-        if desc:
-            self._set_desc(desc)
-        try:
-            yield
-        finally:
-            w = self._phase_weight() if weight is None else float(weight)
-            self.advance(w, desc="")
-
     def close(self) -> None:
         # Force final 100% so the user sees a clean finish.
         self._consumed = 100.0
@@ -284,31 +245,6 @@ def with_session(name: str):
                 return fn(*args, **kwargs)
         return wrapper
     return deco
-
-def advance(weight: float, desc: str = "") -> None:
-    """Module-level shortcut for ``_active_session().advance(...)``.
-
-    No-op when no session is open.
-    """
-    s = _active_session()
-    if s is not None:
-        s.advance(weight, desc)
-
-
-@contextlib.contextmanager
-def phase(desc: str, weight: Optional[float] = None):
-    """Module-level shortcut for ``_active_session().phase(...)``.
-
-    Falls back to a no-op context when no session is open so the helper is
-    safe to use unconditionally.
-    """
-    s = _active_session()
-    if s is None:
-        yield
-        return
-    with s.phase(desc, weight):
-        yield
-
 
 def track(
     iterable: Iterable[T],

@@ -63,33 +63,12 @@ logger = logging.getLogger("MEC")
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  Device helpers
+#  Device helper
 # ══════════════════════════════════════════════════════════════════════
 
 def _get_device(tensor: torch.Tensor) -> torch.device:
     """Return the device of a tensor — never hardcode 'cuda'."""
     return tensor.device
-
-
-def _inference_device() -> torch.device:
-    """Return the device the inpaint pipeline should COMPUTE on.
-
-    ComfyUI conventionally hands ``IMAGE``/``MASK`` tensors between nodes
-    on CPU. If we naively used ``image.device`` to drive the per-frame
-    loops, every Gaussian blur, alpha composite and resize would run on
-    CPU even when a CUDA GPU is sitting idle. This helper picks the
-    accelerator ComfyUI is currently using so the heavy work goes there.
-
-    Falls back to CUDA-if-present, then CPU. Honours
-    ``--cpu`` / ``--directml`` flags via ``comfy.model_management``.
-    """
-    try:
-        from comfy import model_management as _mm  # type: ignore
-        return _mm.get_torch_device()
-    except Exception:  # noqa: BLE001
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -288,14 +267,6 @@ def _poisson_seamless_blend(
     Returns a float32 (H,W,3) tensor on the same device. Outside the mask
     the output is byte-identical to `canvas_frame`.
 
-    Performance (May 2026): the entire CPU dispatch is now done on a tight
-    crop around the mask bbox (with a 16-px safety margin). For a typical
-    1024×1024 video frame with a 200×200 face mask, that drops the OpenCV
-    payload by ~25× — both the GPU→CPU transfer and the Poisson solve
-    scale linearly with the bbox area, so this is the single biggest win
-    on the Poisson path. The seamless-clone result is patched back into
-    the full-canvas output; outside-mask pixels remain byte-exact.
-
     BUG FIX (May 2026): the prior version eroded the mask by 2 px before
     calling cv2.seamlessClone, then post-composited with the un-eroded
     mask. That stamped 2 px of original canvas pixels back onto the
@@ -317,62 +288,38 @@ def _poisson_seamless_blend(
     H, W = binary_mask.shape[-2:]
     device, dtype = canvas_frame.device, canvas_frame.dtype
 
-    # Tight bbox around the mask on the GPU (cheap reduction). cv2 still
-    # runs on a CPU crop, but we only ship the bbox over the PCIe bus.
-    bm_gpu = (binary_mask > 0.5)
-    if not bool(bm_gpu.any()):
-        return canvas_frame.clone()
-    rows = bm_gpu.any(dim=1)
-    cols = bm_gpu.any(dim=0)
-    ys = torch.nonzero(rows, as_tuple=False).flatten()
-    xs = torch.nonzero(cols, as_tuple=False).flatten()
-    y0 = int(ys[0].item())
-    y1 = int(ys[-1].item()) + 1
-    x0 = int(xs[0].item())
-    x1 = int(xs[-1].item()) + 1
-    # Pad the crop so cv2.seamlessClone has room for its internal 1-px
-    # dilation + a few px of context for the Laplacian solve. 16 px is
-    # plenty (Poisson's BC is enforced at the very edge of the mask
-    # itself; surrounding context only matters for the gradient field).
-    pad = 16
-    y0 = max(0, y0 - pad)
-    x0 = max(0, x0 - pad)
-    y1 = min(H, y1 + pad)
-    x1 = min(W, x1 + pad)
-    ch = y1 - y0
-    cw = x1 - x0
-
     # Build the binary mask. We do NOT pre-erode — Poisson's Dirichlet
     # boundary on the un-eroded mask is what gives a seamless edge.
-    bm_crop = bm_gpu[y0:y1, x0:x1].detach().to("cpu").numpy().astype(np.uint8)
+    bm = (binary_mask.detach().to("cpu").float() > 0.5).numpy().astype(np.uint8)
+    if bm.sum() == 0:
+        # No mask -> just return the canvas unchanged.
+        return canvas_frame.clone()
 
     if erosion_px > 0:
         # Optional, off by default. Only used for diagnostics / experiments.
         k = max(3, 2 * int(erosion_px) + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        bm_for_clone = cv2.erode(bm_crop, kernel, iterations=1)
-        if bm_for_clone.sum() < bm_crop.sum() * 0.05:
-            bm_for_clone = bm_crop
+        bm_for_clone = cv2.erode(bm, kernel, iterations=1)
+        if bm_for_clone.sum() < bm.sum() * 0.05:
+            bm_for_clone = bm
     else:
-        bm_for_clone = bm_crop
-
-    # Centroid of the mask in CROP coords -> seamlessClone's `center`.
-    ys_c, xs_c = np.nonzero(bm_for_clone)
-    if ys_c.size == 0:
-        return canvas_frame.clone()
-    cy = int((ys_c.min() + ys_c.max()) // 2)
-    cx = int((xs_c.min() + xs_c.max()) // 2)
+        bm_for_clone = bm
 
     # cv2.seamlessClone needs:
-    #   src     = uint8 image to graft FROM (crop)
-    #   dst     = uint8 image to graft INTO (crop)
-    #   mask    = uint8 binary, 255 = grafted region (crop)
+    #   src     = uint8 image to graft FROM
+    #   dst     = uint8 image to graft INTO
+    #   mask    = uint8 binary, 255 = grafted region
     #   center  = (cx, cy) in dst pixel coords (centroid of the mask)
-    src_crop = inpaint_full[y0:y1, x0:x1, :]
-    dst_crop = canvas_frame[y0:y1, x0:x1, :]
-    src = (src_crop.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
-    dst = (dst_crop.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
+    src = (inpaint_full.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
+    dst = (canvas_frame.detach().to("cpu").float().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
     mask_u8 = (bm_for_clone * 255).astype(np.uint8)
+
+    # Centroid of the mask -> seamlessClone's `center` argument.
+    ys, xs = np.nonzero(bm_for_clone)
+    if ys.size == 0:
+        return canvas_frame.clone()
+    cy = int((ys.min() + ys.max()) // 2)
+    cx = int((xs.min() + xs.max()) // 2)
 
     # OpenCV expects BGR order for color images in seamlessClone.
     src_bgr = cv2.cvtColor(src, cv2.COLOR_RGB2BGR)
@@ -380,13 +327,13 @@ def _poisson_seamless_blend(
     out_bgr = cv2.seamlessClone(src_bgr, dst_bgr, mask_u8, (cx, cy), flags)
     out_rgb = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2RGB)
 
-    # Splice the Poisson-blended crop back into a full-canvas output and
-    # re-apply the un-eroded mask to enforce byte-exact outside-mask
-    # pixels (cv2.seamlessClone dilates internally by ~1 px).
-    out_crop = torch.from_numpy(out_rgb).to(device=device, dtype=dtype) / 255.0
-    out_f = canvas_frame.clone()
-    out_f[y0:y1, x0:x1, :] = out_crop
-    bm_full = (binary_mask > 0.5).to(dtype=dtype).unsqueeze(-1)
+    # Critical: re-apply the mask to enforce byte-exact outside-mask
+    # pixels. cv2.seamlessClone dilates internally by ~1 px which can
+    # touch a thin border outside the mask. Stamp the un-eroded canvas
+    # back there. This does NOT clobber Poisson's edge-matched output
+    # because every pixel under the original binary mask is preserved.
+    out_f = torch.from_numpy(out_rgb).to(device=device, dtype=dtype) / 255.0
+    bm_full = torch.from_numpy(bm).to(device=device, dtype=dtype).unsqueeze(-1)
     out_f = canvas_frame * (1.0 - bm_full) + out_f * bm_full
     return out_f
 
@@ -1413,18 +1360,7 @@ class InpaintCropProMEC:
             raise ValueError("InpaintCropProMEC: 'image' input is missing or invalid (expected IMAGE tensor BxHxWxC).")
         if mask is None or not hasattr(mask, "shape"):
             raise ValueError("InpaintCropProMEC: 'mask' input is missing or invalid (expected MASK tensor BxHxW).")
-        # Run all per-frame compute on the GPU. ComfyUI hands IMAGE/MASK
-        # tensors between nodes on CPU by default — using ``image.device``
-        # would lock every blur / resize / alpha-composite to the CPU loop.
-        # Outputs are moved back to the input's original device just before
-        # return so downstream nodes see the same memory layout they always
-        # have (no surprise VRAM hold).
-        _output_device = image.device
-        device = _inference_device()
-        if image.device != device:
-            image = image.to(device, non_blocking=True)
-        if mask.device != device:
-            mask = mask.to(device, non_blocking=True)
+        device = _get_device(image)
         B, H, W, C = image.shape
 
         # Ensure mask dimensions match image
@@ -1445,17 +1381,16 @@ class InpaintCropProMEC:
                 optional_context_mask = _resize_mask(optional_context_mask, H, W)
 
         # ── Mask pre-processing: invert, hipass, fill holes, grow, blur ──
-        with _PB.phase("mask preprocess", weight=8):
-            if mask_invert:
-                mask = 1.0 - mask
-            if mask_hipass_filter > 0:
-                mask = torch.where(mask >= mask_hipass_filter, mask, torch.zeros_like(mask))
-            if mask_fill_holes:
-                mask = self._fill_mask_holes(mask)
-            if mask_grow != 0:
-                mask = self._grow_mask(mask, mask_grow)
-            if mask_blur > 0:
-                mask = _gaussian_blur_mask(mask, sigma=mask_blur).clamp(0.0, 1.0)
+        if mask_invert:
+            mask = 1.0 - mask
+        if mask_hipass_filter > 0:
+            mask = torch.where(mask >= mask_hipass_filter, mask, torch.zeros_like(mask))
+        if mask_fill_holes:
+            mask = self._fill_mask_holes(mask)
+        if mask_grow != 0:
+            mask = self._grow_mask(mask, mask_grow)
+        if mask_blur > 0:
+            mask = _gaussian_blur_mask(mask, sigma=mask_blur).clamp(0.0, 1.0)
 
         # Ronin cinema-stabilization mode (active when strength>0 and video).
         # Computes per-frame center trajectory; the rest of the pipeline runs
@@ -1465,25 +1400,24 @@ class InpaintCropProMEC:
         ronin_env: Optional[Tuple[int, int, int, int]] = None  # (env_x, env_y, env_w, env_h)
 
         # Step 1: Compute bounding box
-        with _PB.phase("compute bbox", weight=6):
-            if ronin_active:
-                (env_x, env_y, env_w, env_h, ronin_cw, ronin_ch), ronin_centers = (
-                    compute_ronin_bbox_trajectory(
-                        mask,
-                        strength=float(video_stab_strength),
-                        fps=float(video_stab_fps),
-                        size_padding=int(video_stab_padding),
-                    )
+        if ronin_active:
+            (env_x, env_y, env_w, env_h, ronin_cw, ronin_ch), ronin_centers = (
+                compute_ronin_bbox_trajectory(
+                    mask,
+                    strength=float(video_stab_strength),
+                    fps=float(video_stab_fps),
+                    size_padding=int(video_stab_padding),
                 )
-                ronin_env = (env_x, env_y, env_w, env_h)
-                # Use ronin envelope as bbox surrogate so info/aspect logic still works
-                bbox_x, bbox_y, bbox_w, bbox_h = env_x, env_y, env_w, env_h
-            else:
-                bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
+            )
+            ronin_env = (env_x, env_y, env_w, env_h)
+            # Use ronin envelope as bbox surrogate so info/aspect logic still works
+            bbox_x, bbox_y, bbox_w, bbox_h = env_x, env_y, env_w, env_h
+        else:
+            bbox_x, bbox_y, bbox_w, bbox_h = _compute_stable_bbox(mask)
 
-            # Handle empty mask
-            if bbox_w <= 0 or bbox_h <= 0:
-                bbox_x, bbox_y, bbox_w, bbox_h = 0, 0, W, H
+        # Handle empty mask
+        if bbox_w <= 0 or bbox_h <= 0:
+            bbox_x, bbox_y, bbox_w, bbox_h = 0, 0, W, H
 
         # Step 2: Expand bbox by context_expand, always centered on mask
         center_x = bbox_x + bbox_w / 2.0
@@ -1664,55 +1598,49 @@ class InpaintCropProMEC:
                 cropped_mask = mask[:, crop_y:crop_y + crop_h, crop_x:crop_x + crop_w].clone()
 
         # Step 5: Fill masked area in crop
-        with _PB.phase("fill masked area", weight=8):
-            if fill_masked_area == "neutral_gray":
-                fill_value = 0.5
-                binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
-                cropped = cropped * (1.0 - binary_3d) + fill_value * binary_3d
-            elif fill_masked_area == "edge_pad":
-                img_bchw_fill = cropped.permute(0, 3, 1, 2)
-                blurred_fill = _gaussian_blur_2d(img_bchw_fill, sigma=max(crop_w, crop_h) * 0.15)
-                blurred_fill = blurred_fill.permute(0, 2, 3, 1)
-                binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
-                cropped = cropped * (1.0 - binary_3d) + blurred_fill * binary_3d
+        if fill_masked_area == "neutral_gray":
+            fill_value = 0.5
+            binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
+            cropped = cropped * (1.0 - binary_3d) + fill_value * binary_3d
+        elif fill_masked_area == "edge_pad":
+            img_bchw_fill = cropped.permute(0, 3, 1, 2)
+            blurred_fill = _gaussian_blur_2d(img_bchw_fill, sigma=max(crop_w, crop_h) * 0.15)
+            blurred_fill = blurred_fill.permute(0, 2, 3, 1)
+            binary_3d = (cropped_mask > 0.5).float().unsqueeze(-1)
+            cropped = cropped * (1.0 - binary_3d) + blurred_fill * binary_3d
 
         # Step 6: Resize crop to target dimensions
-        with _PB.phase("resize crop to target", weight=10):
-            resize_mode = downscale_method if downscale_factor < 1.0 else "bilinear"
-            if crop_w != target_w or crop_h != target_h:
-                cropped = _resize_image(cropped, target_h, target_w, mode=resize_mode)
-                cropped_mask = _resize_mask(cropped_mask, target_h, target_w, mode=resize_mode)
+        resize_mode = downscale_method if downscale_factor < 1.0 else "bilinear"
+        if crop_w != target_w or crop_h != target_h:
+            cropped = _resize_image(cropped, target_h, target_w, mode=resize_mode)
+            cropped_mask = _resize_mask(cropped_mask, target_h, target_w, mode=resize_mode)
 
         # Step 6.5: Temporal mask stabilization (production zero-jitter video).
         # Auto-engage when video_stable_crop is on but user left smooth at 0.
         # Smoothing the *mask* (not the image) along the frame axis kills
         # boundary shimmer that survives a locked bbox.
-        with _PB.phase("temporal smooth", weight=4):
-            eff_temporal = float(mask_temporal_smooth)
-            if video_stable_crop and eff_temporal <= 0.0 and B > 1:
-                eff_temporal = 1.5
-            if eff_temporal > 0.0 and B > 1:
-                cropped_mask = motion_adaptive_temporal_smooth(
-                    cropped_mask, sigma_base=eff_temporal,
-                    motion_magnitudes=None, motion_sensitivity=0.0,
-                ).clamp(0.0, 1.0)
+        eff_temporal = float(mask_temporal_smooth)
+        if video_stable_crop and eff_temporal <= 0.0 and B > 1:
+            eff_temporal = 1.5
+        if eff_temporal > 0.0 and B > 1:
+            cropped_mask = motion_adaptive_temporal_smooth(
+                cropped_mask, sigma_base=eff_temporal,
+                motion_magnitudes=None, motion_sensitivity=0.0,
+            ).clamp(0.0, 1.0)
 
         # Step 7: Generate inpaint mask
-        with _PB.phase("build inpaint mask", weight=4):
-            inpaint_mask = _apply_inpaint_mask_mode(cropped_mask, inpaint_mask_mode)
+        inpaint_mask = _apply_inpaint_mask_mode(cropped_mask, inpaint_mask_mode)
 
         # Step 8: Generate stitch blend mask
-        with _PB.phase("build blend mask", weight=10):
-            stitch_blend_mask = _generate_stitch_blend_mask(
-                cropped, cropped_mask, stitch_blend_mode, blend_radius
-            )
+        stitch_blend_mask = _generate_stitch_blend_mask(
+            cropped, cropped_mask, stitch_blend_mode, blend_radius
+        )
 
         # Step 8.5: Generate cropped_composite (mask overlaid on cropped image as red tint)
-        with _PB.phase("build composite preview", weight=4):
-            mask_rgb = inpaint_mask.unsqueeze(-1) * torch.tensor(
-                [0.8, 0.15, 0.15], device=device, dtype=cropped.dtype
-            ).view(1, 1, 1, 3)
-            cropped_composite = (cropped * (1.0 - inpaint_mask.unsqueeze(-1) * 0.5) + mask_rgb * 0.5).clamp(0, 1)
+        mask_rgb = inpaint_mask.unsqueeze(-1) * torch.tensor(
+            [0.8, 0.15, 0.15], device=device, dtype=cropped.dtype
+        ).view(1, 1, 1, 3)
+        cropped_composite = (cropped * (1.0 - inpaint_mask.unsqueeze(-1) * 0.5) + mask_rgb * 0.5).clamp(0, 1)
 
         # Step 8.6: Generate crop_mask (binary mask showing cropped region in original image space)
         crop_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
@@ -1738,14 +1666,10 @@ class InpaintCropProMEC:
                 crop_mask[:, orig_y1:orig_y2, orig_x1:orig_x2] = 1.0
 
         # Step 9: Build stitch_data dict (v3 with per-frame offsets, or v2 single)
-        # Stash large tensors on the input's original device. This matches the
-        # pre-fix behaviour for CPU-input workflows (the common case) and
-        # avoids a forced CPU round-trip when the upstream actually fed GPU
-        # tensors in.
         stitch_version = 3 if frame_offsets is not None else 2
         stitch_data = {
             "version": stitch_version,
-            "canvas_image": canvas_image.to(_output_device, non_blocking=True),
+            "canvas_image": canvas_image.cpu(),
             "cto_x": cto_x, "cto_y": cto_y,
             "cto_w": cto_w, "cto_h": cto_h,
             "ctc_x": ctc_x, "ctc_y": ctc_y,
@@ -1753,8 +1677,8 @@ class InpaintCropProMEC:
             "target_w": target_w, "target_h": target_h,
             "blend_mode": stitch_blend_mode,
             "blend_radius": blend_radius,
-            "stitch_blend_mask_crop": stitch_blend_mask.to(_output_device, non_blocking=True),
-            "original_mask": mask.to(_output_device, non_blocking=True),
+            "stitch_blend_mask_crop": stitch_blend_mask.cpu(),
+            "original_mask": mask.cpu(),
             "downscale_factor": downscale_factor,
             "upscale_method": upscale_method,
             "downscale_method": downscale_method,
@@ -1786,16 +1710,6 @@ class InpaintCropProMEC:
             expansion_info,
         ]
         info = "\n".join(info_lines)
-
-        # Migrate outputs back to the input's original device so downstream
-        # ComfyUI nodes see the same convention they always have. Internal
-        # compute already happened on GPU above.
-        if _output_device != device:
-            cropped = cropped.to(_output_device, non_blocking=True)
-            cropped_composite = cropped_composite.to(_output_device, non_blocking=True)
-            inpaint_mask = inpaint_mask.to(_output_device, non_blocking=True)
-            stitch_blend_mask = stitch_blend_mask.to(_output_device, non_blocking=True)
-            crop_mask = crop_mask.to(_output_device, non_blocking=True)
 
         return (stitch_data, cropped, cropped_composite, inpaint_mask, stitch_blend_mask, crop_mask, info)
 
@@ -1868,19 +1782,9 @@ class InpaintStitchProMEC:
         blend_mode_override = InpaintCropProMEC._LEGACY_BLEND_MODES.get(
             blend_mode_override, blend_mode_override
         )
-        # Remember where the caller fed us tensors so we can mirror that
-        # location on the way out. The internal compute path will run on
-        # ``_inference_device()`` (GPU when available) regardless.
-        _output_device = inpainted_image.device
         with _PB.session("InpaintStitchProMEC"):
-            out_image, out_blend, out_info = self._stitch_impl(
-                stitch_data, inpainted_image, blend_mode_override, color_match
-            )
-        if isinstance(out_image, torch.Tensor) and out_image.device != _output_device:
-            out_image = out_image.to(_output_device, non_blocking=True)
-        if isinstance(out_blend, torch.Tensor) and out_blend.device != _output_device:
-            out_blend = out_blend.to(_output_device, non_blocking=True)
-        return (out_image, out_blend, out_info)
+            return self._stitch_impl(stitch_data, inpainted_image,
+                                     blend_mode_override, color_match)
 
     def _stitch_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                blend_mode_override: str, color_match: bool):
@@ -1937,12 +1841,7 @@ class InpaintStitchProMEC:
         upscale_method = stitch_data.get("upscale_method", "lanczos")
         frame_offsets = stitch_data.get("frame_offsets")  # None for plain v2
 
-        # Run blend / paste on GPU regardless of where ComfyUI handed us the
-        # tensors (typically CPU). The public ``stitch()`` wrapper migrates
-        # the final image + blend mask back to the caller's device.
-        device = _inference_device()
-        if inpainted_image.device != device:
-            inpainted_image = inpainted_image.to(device, non_blocking=True)
+        device = _get_device(inpainted_image)
         canvas = canvas_image.to(device).clone()
         # Defensive: strip alpha if a 4-channel RGBA tensor was fed in (e.g.
         # from a save-with-alpha or matte node). Compositing RGBA into a
@@ -2052,14 +1951,7 @@ class InpaintStitchProMEC:
                 list(enumerate(offsets_iter)), len(offsets_iter),
                 f"paste frames ({blend_mode})",
             ):
-                # Build the 'inpaint placed on canvas' frame WITHOUT a full
-                # canvas clone every iteration. _poisson_seamless_blend
-                # tightly crops to the mask bbox internally, so we only
-                # need this image to be correct inside that bbox. Starting
-                # from the canvas (a view, not a clone) and overwriting
-                # the inpaint window in-place on a single shared scratch
-                # would mutate the canvas — instead we use canvas[b] as a
-                # read-only base and let the helper crop+copy on its own.
+                # Build a full-canvas-sized 'inpaint pasted at offset' image.
                 inp_full = canvas[b].clone()
                 inp_full[fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
                 bm_b = canvas_mask[b]
@@ -2620,16 +2512,9 @@ class InpaintPasteBackMEC:
 
     def paste_back(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
-        # Mirror the caller's device on the output, but compute on GPU.
-        _output_device = inpainted_image.device
         with _PB.session("InpaintPasteBackMEC"):
-            out_image, out_info = self._paste_back_impl(
-                stitch_data, inpainted_image, upscale_method,
-                feather_edges, feather_radius,
-            )
-        if isinstance(out_image, torch.Tensor) and out_image.device != _output_device:
-            out_image = out_image.to(_output_device, non_blocking=True)
-        return (out_image, out_info)
+            return self._paste_back_impl(stitch_data, inpainted_image,
+                                         upscale_method, feather_edges, feather_radius)
 
     def _paste_back_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
                    upscale_method: str, feather_edges: bool, feather_radius: int):
@@ -2663,11 +2548,7 @@ class InpaintPasteBackMEC:
                 f"InpaintPasteBackMEC: stitch_data (v{version}) is missing keys: {missing}. "
                 "This usually means the STITCH_DATA input is unconnected or was produced by an incompatible node."
             )
-        # Run on GPU; the public ``paste_back`` wrapper migrates the result
-        # back to the caller's device.
-        device = _inference_device()
-        if inpainted_image.device != device:
-            inpainted_image = inpainted_image.to(device, non_blocking=True)
+        device = _get_device(inpainted_image)
 
         if version >= 2:
             canvas_image = stitch_data["canvas_image"].to(device)
@@ -2728,10 +2609,7 @@ class InpaintPasteBackMEC:
                     # exactly the inpaint. Zero seam, zero pixel shift.
                     blend_full = (canvas_mask > 0.5).to(canvas.dtype)
 
-                for b, (fx, fy) in _PB.track(
-                    list(enumerate(offsets_iter)), len(offsets_iter),
-                    "paste frames",
-                ):
+                for b, (fx, fy) in enumerate(offsets_iter):
                     bm_win = blend_full[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w].unsqueeze(-1)
                     canvas_win = canvas[b:b + 1, fy:fy + ctc_h, fx:fx + ctc_w, :]
                     inp_b = inp_resized[b:b + 1]
@@ -2744,20 +2622,14 @@ class InpaintPasteBackMEC:
                 core = _erode_mask(binary_ones, feather_radius)
                 pm_bw = _gaussian_blur_mask(core, sigma=feather_radius * 0.5).clamp(0.0, 1.0)  # (1, H, W)
                 pm3 = pm_bw.squeeze(0).unsqueeze(-1)  # (H, W, 1)
-                for b, (fx, fy) in _PB.track(
-                    list(enumerate(offsets_iter)), len(offsets_iter),
-                    "paste frames (feather)",
-                ):
+                for b, (fx, fy) in enumerate(offsets_iter):
                     crop = canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :]
                     canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = (
                         crop * (1.0 - pm3) + inp_resized[b] * pm3
                     )
             else:
                 # Legacy hard rectangular paste (no original_mask, no feather).
-                for b, (fx, fy) in _PB.track(
-                    list(enumerate(offsets_iter)), len(offsets_iter),
-                    "paste frames (hard)",
-                ):
+                for b, (fx, fy) in enumerate(offsets_iter):
                     canvas[b, fy:fy + ctc_h, fx:fx + ctc_w, :] = inp_resized[b]
 
             output = canvas[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w, :]
