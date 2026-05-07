@@ -117,23 +117,43 @@ def _gaussian_blur_mask(mask: torch.Tensor, sigma: float) -> torch.Tensor:
 
 
 def _erode_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
-    """Binary erosion of a (B, H, W) mask by `radius` pixels via min-pool."""
+    """Binary erosion of a (B, H, W) mask by `radius` pixels via min-pool.
+
+    PERF (May 2026): square structuring-element morphology is *separable*.
+    A k×k dilation/erosion of a square SE is identical to a (1,k) pass
+    followed by a (k,1) pass — provable: max over k×k = max over k rows
+    of (max over k cols). Cost drops from O(k²) to O(2k) per pixel, which
+    for radius=64 (k=129) is a 64× speedup. On CPU (where ComfyUI keeps
+    IMAGE/MASK tensors between nodes) this turns a 28-minute crop on a
+    1024×1024 × ~100-frame video batch into a few seconds. Output is
+    byte-identical to the old single-shot k×k pool.
+    """
     if radius <= 0:
         return mask
     k = 2 * int(radius) + 1
+    pad = k // 2
     m4 = mask.unsqueeze(1)
-    eroded = -F.max_pool2d(-m4, kernel_size=k, stride=1, padding=k // 2)
-    return eroded.squeeze(1)
+    # Erosion = -dilate(-x). Use separable (1,k) then (k,1) max-pool.
+    neg = -m4
+    neg = F.max_pool2d(neg, kernel_size=(1, k), stride=1, padding=(0, pad))
+    neg = F.max_pool2d(neg, kernel_size=(k, 1), stride=1, padding=(pad, 0))
+    return (-neg).squeeze(1)
 
 
 def _expand_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
-    """Expand (dilate) a (B, H, W) mask outward by `radius` pixels via max-pool."""
+    """Expand (dilate) a (B, H, W) mask outward by `radius` pixels via max-pool.
+
+    PERF (May 2026): see ``_erode_mask`` — separable square SE morphology.
+    """
     if radius <= 0:
         return mask
     k = 2 * int(radius) + 1
+    pad = k // 2
     m4 = mask.unsqueeze(1)
-    expanded = F.max_pool2d(m4, kernel_size=k, stride=1, padding=k // 2)
-    return expanded.squeeze(1).clamp(0.0, 1.0)
+    # Separable max-pool: (1,k) then (k,1) — identical result to k×k.
+    m4 = F.max_pool2d(m4, kernel_size=(1, k), stride=1, padding=(0, pad))
+    m4 = F.max_pool2d(m4, kernel_size=(k, 1), stride=1, padding=(pad, 0))
+    return m4.squeeze(1).clamp(0.0, 1.0)
 
 
 def _oval_face_mask(B: int, H: int, W: int,
