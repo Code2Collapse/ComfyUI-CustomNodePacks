@@ -1061,6 +1061,20 @@ class InpaintCropProMEC:
     ]
 
     @classmethod
+    def VALIDATE_INPUTS(cls, stitch_blend_mode=None, **kwargs):
+        # Accept legacy stitch_blend_mode names so old saved workflows still
+        # load — they are silently mapped to modern equivalents at execution.
+        # ComfyUI skips its own enum validation for any input named as a
+        # parameter of VALIDATE_INPUTS, so we own the check for this field.
+        if stitch_blend_mode is None:
+            return True
+        if stitch_blend_mode in cls.STITCH_BLEND_MODES:
+            return True
+        if stitch_blend_mode in cls._LEGACY_BLEND_MODES:
+            return True
+        return f"stitch_blend_mode '{stitch_blend_mode}' not recognized"
+
+    @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
