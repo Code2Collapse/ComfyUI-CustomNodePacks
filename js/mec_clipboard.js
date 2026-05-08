@@ -335,6 +335,39 @@ function _gatherSubgraphSync(nodes) {
         packs: Object.values(packs),
     };
 }
+// -----------------------------------------------------------------------
+// Subgraph payload helper
+// -----------------------------------------------------------------------
+// When the selection contains a SubgraphNode, we cannot use our enriched
+// MEC payload (it cannot serialize the inner-graph definition). Instead
+// we ask ComfyUI's own canvas.copyToClipboard() to populate localStorage
+// with its native (subgraph-aware) format, then wrap that JSON inside an
+// MEC header so it travels through the OS clipboard like any other MEC
+// payload. On paste, _pasteFromText detects kind === "mec_native_wrap"
+// and restores localStorage before triggering native paste.
+function _wrapNativeClipboardForMec(nodes) {
+    const canvas = _activeCanvas();
+    if (!canvas?.copyToClipboard) return null;
+    try { canvas.copyToClipboard(nodes); }
+    catch (e) {
+        try { canvas.copyToClipboard(new Set(nodes)); }
+        catch (_) { try { canvas.copyToClipboard(); } catch (__) { return null; } }
+    }
+    let lg = "";
+    try { lg = localStorage.getItem("litegrapheditor_clipboard") || ""; }
+    catch (_) { return null; }
+    if (!lg) return null;
+    const sg = nodes.filter(_isSubgraphNode).length;
+    const reg = nodes.length - sg;
+    return {
+        version: CLIP_VERSION,
+        kind: "mec_native_wrap",
+        created: new Date().toISOString(),
+        counts: { total: nodes.length, subgraph: sg, regular: reg },
+        lg_clipboard: lg,
+    };
+}
+
 async function _copy(specificNode = null) {
     const items = specificNode ? [specificNode] : _selectedItems();
     const nodes = items.length ? items : (specificNode ? [specificNode] : _selectedNodes());
@@ -346,14 +379,25 @@ async function _copy(specificNode = null) {
     if (_selectionHasSubgraph(nodes)) {
         const sg = nodes.filter(_isSubgraphNode).length;
         const reg = nodes.length - sg;
-        const ok = _nativeCopyToLocalStorage(nodes);
+        const wrap = _wrapNativeClipboardForMec(nodes);
+        let osOk = false;
+        if (wrap && navigator.clipboard?.writeText) {
+            const wrapText = CLIP_HEADER + "\n" + JSON.stringify(wrap, null, 2);
+            try { await navigator.clipboard.writeText(wrapText); osOk = true; }
+            catch (e) { console.warn("[MEC.clipboard] writeText failed:", e); }
+            try {
+                window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+                window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload: wrap, text: wrapText });
+                if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) window.__MEC_CLIPBOARD_HISTORY__.shift();
+            } catch (_) {}
+        }
         _toast(
-            ok
+            wrap
                 ? (reg > 0
-                    ? `Copied ${nodes.length} (${sg} subgraph + ${reg} regular) via native clipboard. MEC metadata skipped.`
-                    : `Copied ${sg} subgraph(s) via native clipboard.`)
+                    ? `Copied ${nodes.length} (${sg} subgraph + ${reg} regular). Native LiteGraph payload${osOk ? " + OS clipboard wrap" : " (in-tab only)"}.`
+                    : `Copied ${sg} subgraph(s). Native LiteGraph payload${osOk ? " + OS clipboard wrap" : " (in-tab only)"}.`)
                 : `Native copy failed — try Ctrl+C with the canvas focused.`,
-            ok ? "info" : "error", 4500,
+            wrap ? "success" : "error", 4500,
         );
         return;
     }
@@ -521,7 +565,36 @@ async function _paste() {
 
 async function _pasteFromText(text) {
     const data = _findHeader(text);
-    if (!data || !Array.isArray(data.nodes)) {
+    if (!data) {
+        _toast("Clipboard does not contain MEC payload", "warn"); return;
+    }
+
+    // -- Subgraph wrap variant -----------------------------------------------
+    // Payload kind === "mec_native_wrap" wraps a verbatim copy of
+    // localStorage.litegrapheditor_clipboard (LiteGraph's own format,
+    // produced by canvas.copyToClipboard()). Restore it into localStorage
+    // and trigger the native paste — this preserves subgraph definitions,
+    // group nodes, and any other LiteGraph-internal types we don't model.
+    if (data.kind === "mec_native_wrap" && typeof data.lg_clipboard === "string") {
+        try { localStorage.setItem("litegrapheditor_clipboard", data.lg_clipboard); }
+        catch (e) { _toast("localStorage write failed: " + e, "error"); return; }
+        const ok = _nativePasteFromLocalStorage();
+        if (ok) {
+            const c = data.counts || {};
+            const sg = c.subgraph || 0, reg = c.regular || 0;
+            _toast(
+                reg > 0
+                    ? `Pasted ${sg + reg} (${sg} subgraph + ${reg} regular) via native clipboard.`
+                    : `Pasted ${sg} subgraph(s) via native clipboard.`,
+                "success",
+            );
+        } else {
+            _toast("Native paste failed — try Ctrl+V on a focused canvas.", "error");
+        }
+        return;
+    }
+
+    if (!Array.isArray(data.nodes)) {
         _toast("Clipboard does not contain MEC payload", "warn"); return;
     }
 
@@ -767,33 +840,27 @@ window.addEventListener("keydown", (ev) => {
             const reg = nodes.length - sg;
             ev.preventDefault();
             ev.stopImmediatePropagation();
-            const canvas = _activeCanvas();
-            let ok = false;
-            try {
-                if (canvas?.copyToClipboard) {
-                    // Try the modern signature (full items array) first;
-                    // some forks accept a Set, some an Array, some no-arg
-                    // (uses selectedItems internally). Try in order.
-                    try { canvas.copyToClipboard(nodes); ok = true; }
-                    catch (_) {
-                        try { canvas.copyToClipboard(new Set(nodes)); ok = true; }
-                        catch (__) {
-                            try { canvas.copyToClipboard(); ok = true; }
-                            catch (___) { /* will toast below */ }
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn("[MEC.clipboard] native copy failed:", e);
+            const wrap = _wrapNativeClipboardForMec(nodes);
+            let osOk = false;
+            if (wrap && navigator.clipboard?.writeText) {
+                const wrapText = CLIP_HEADER + "\n" + JSON.stringify(wrap, null, 2);
+                navigator.clipboard.writeText(wrapText)
+                    .then(() => { osOk = true; })
+                    .catch((e) => { console.warn("[MEC.clipboard] writeText failed:", e); });
+                try {
+                    window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+                    window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload: wrap, text: wrapText });
+                    if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) window.__MEC_CLIPBOARD_HISTORY__.shift();
+                } catch (_) {}
             }
-            console.log(`[MEC.clipboard] subgraph in selection (${sg} subgraph + ${reg} regular) — native copyToClipboard ok=${ok}; MEC metadata skipped to preserve subgraph definitions.`);
+            console.log(`[MEC.clipboard] subgraph in selection (${sg} subgraph + ${reg} regular) — wrapped native LiteGraph payload (length=${wrap?.lg_clipboard?.length || 0}).`);
             _toast(
-                ok
+                wrap
                     ? (reg > 0
-                        ? `Copied ${nodes.length} (${sg} subgraph + ${reg} regular) via native clipboard. MEC metadata skipped.`
-                        : `Copied ${sg} subgraph(s) via native clipboard.`)
-                    : `Native copy failed for subgraph selection — try Ctrl+Alt+C or right-click → Copy.`,
-                ok ? "info" : "error", 4500,
+                        ? `Copied ${nodes.length} (${sg} subgraph + ${reg} regular). Subgraphs preserved.`
+                        : `Copied ${sg} subgraph(s). Subgraphs preserved.`)
+                    : `Native copy failed for subgraph selection.`,
+                wrap ? "success" : "error", 4500,
             );
             return;
         }
@@ -856,11 +923,23 @@ document.addEventListener("copy", (ev) => {
         const items = _selectedItems();
         const nodes = items.length ? items : _selectedNodes();
         if (!nodes.length) return;
-        // Subgraph bypass — see keydown handler above. Returning without
-        // setData/preventDefault lets the browser + ComfyUI's native copy
-        // path own the clipboard, which correctly preserves subgraph
-        // definitions for both pure-subgraph and mixed selections.
-        if (_selectionHasSubgraph(nodes)) return;
+        // Subgraph variant: use the native-clipboard wrap so the OS
+        // clipboard ALSO carries the subgraph definitions (not just
+        // localStorage). On paste we restore localStorage and trigger
+        // native paste — see _pasteFromText "mec_native_wrap" branch.
+        if (_selectionHasSubgraph(nodes)) {
+            const wrap = _wrapNativeClipboardForMec(nodes);
+            if (!wrap) return; // fall through to browser default
+            const wrapText = CLIP_HEADER + "\n" + JSON.stringify(wrap, null, 2);
+            ev.clipboardData?.setData?.("text/plain", wrapText);
+            ev.preventDefault();
+            try {
+                window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+                window.__MEC_CLIPBOARD_HISTORY__.push({ ts: Date.now(), payload: wrap, text: wrapText });
+                if (window.__MEC_CLIPBOARD_HISTORY__.length > 50) window.__MEC_CLIPBOARD_HISTORY__.shift();
+            } catch (_) {}
+            return;
+        }
         const payload = _gatherSubgraphSync(nodes);
         const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
         ev.clipboardData?.setData?.("text/plain", text);
