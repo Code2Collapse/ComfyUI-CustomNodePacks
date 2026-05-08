@@ -506,13 +506,62 @@ def _apply_inpaint_mask_mode(mask: torch.Tensor, mode: str) -> torch.Tensor:
 #  Blend mask generation dispatcher
 # ══════════════════════════════════════════════════════════════════════
 
+def _generate_stitch_blend_mask_video_stable(
+    mask: torch.Tensor,
+    spatial_dilate_px: int = 24,
+    spatial_blur_sigma: float = 18.0,
+    temporal_sigma: float = 3.0,
+) -> torch.Tensor:
+    """Stitch blend mask designed for video with jittery segmentation.
+
+    Pipeline (composition order matters):
+      1. Binarize to get a clean starting boundary.
+      2. Morphological dilation — push the blend zone outward into the
+         visually flat background, away from the noisy segmentation edge.
+      3. Temporal Gaussian smooth (along batch dim) — kills frame-to-frame
+         jitter in boundary position. Re-binarize so the spatial blur in
+         step 4 produces a clean gradient instead of a triple-feathered one.
+      4. Wide spatial Gaussian feather — soft seam invisible against the
+         background that the dilation pushed the blend zone into.
+
+    The model-facing inpaint_mask is NEVER touched by this — it stays sharp.
+
+    mask: (B, H, W)
+    Returns: (B, H, W) soft blend mask, range [0, 1].
+    """
+    if mask.dim() != 3:
+        raise ValueError(f"video_stable expects (B,H,W) mask, got {mask.shape}")
+    B = mask.shape[0]
+    binary = (mask > 0.5).float()
+
+    # Step 1: dilate (push blend zone into background)
+    if spatial_dilate_px > 0:
+        k = int(spatial_dilate_px) * 2 + 1
+        pad = int(spatial_dilate_px)
+        m4 = binary.unsqueeze(1)  # (B, 1, H, W)
+        dilated = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pad)
+        binary = dilated.squeeze(1).clamp(0.0, 1.0)
+
+    # Step 2: temporal smooth → re-binarize (kills jitter at the boundary)
+    if temporal_sigma > 0 and B > 1:
+        smoothed = _temporal_gaussian_smooth(binary, sigma=float(temporal_sigma))
+        # Re-binarize at 0.3 (lower than 0.5) so the blend zone stays slightly
+        # generous — better to err toward generated content covering the seam
+        # than the original frame leaking through.
+        binary = (smoothed > 0.3).float()
+
+    # Step 3: wide spatial Gaussian feather
+    blend = _gaussian_blur_mask(binary, sigma=float(spatial_blur_sigma))
+    return blend.clamp(0.0, 1.0)
+
+
 def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
                                  mode: str, radius: int) -> torch.Tensor:
     """Generate the stitch blend mask based on the selected mode.
 
     image: (B, H, W, C)
     mask: (B, H, W)
-    mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend' | 'exact'
+    mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend' | 'video_stable' | 'exact'
     radius: feather radius
     Returns: (B, H, W) soft blend mask
     """
@@ -527,6 +576,15 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
     elif mode == "frequency_blend":
         binary = (mask > 0.5).float()
         return _gaussian_blur_mask(binary, sigma=radius * 0.6)
+    elif mode == "video_stable":
+        # Jitter-tolerant compositing for video: dilate → temporal smooth →
+        # wide feather. Keeps the model-facing inpaint mask untouched.
+        return _generate_stitch_blend_mask_video_stable(
+            mask,
+            spatial_dilate_px=int(radius),
+            spatial_blur_sigma=float(radius) * 0.75,
+            temporal_sigma=3.0,
+        )
     elif mode == "exact":
         # Hard-binary alpha — no feather, no leakage outside the mask.
         return (mask > 0.5).float()
@@ -757,7 +815,7 @@ class InpaintCropProMEC:
     DEVICE_MODES = ["cpu (compatible)", "gpu (much faster)"]
     MASK_POLARITY = ["regenerate_subject", "preserve_subject"]
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
-    STITCH_BLEND_MODES = ["gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend"]
+    STITCH_BLEND_MODES = ["gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend", "video_stable"]
     FILL_MODES = ["none", "edge_pad", "neutral_gray", "original"]
 
     @classmethod
@@ -1261,7 +1319,7 @@ class InpaintStitchProMEC:
     """
 
     VRAM_TIER = 1
-    BLEND_OVERRIDES = ["from_crop", "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend"]
+    BLEND_OVERRIDES = ["from_crop", "gaussian", "edge_aware", "laplacian_pyramid", "frequency_blend", "video_stable"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1275,6 +1333,17 @@ class InpaintStitchProMEC:
                 "color_match": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Apply mean+std color transfer before stitching to reduce color shift."}),
+                "stitch_temporal_sigma": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 10.0, "step": 0.5,
+                    "tooltip": ("Post-hoc temporal Gaussian smoothing applied to the per-frame "
+                                "blend mask before compositing. 0 = off. "
+                                "2-4 = good for jittery segmentation video (≈3 means a 9-frame window). "
+                                "Works on top of any blend mode (gaussian / edge_aware / video_stable / etc.).")}),
+                "stitch_dilate_px": ("INT", {
+                    "default": 0, "min": 0, "max": 128, "step": 1,
+                    "tooltip": ("Optional dilation (in pixels) applied to the binary core of the blend "
+                                "mask before temporal smoothing — pushes the seam into flat background. "
+                                "Use with stitch_temporal_sigma > 0 for jittery video. 0 = off.")}),
             },
         }
 
@@ -1285,7 +1354,9 @@ class InpaintStitchProMEC:
     DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match."
 
     def inpaint_stitch(self, stitcher, inpainted_image,
-                       blend_mode_override="from_crop", color_match=False):
+                       blend_mode_override="from_crop", color_match=False,
+                       stitch_temporal_sigma: float = 0.0,
+                       stitch_dilate_px: int = 0):
         inpainted_image = inpainted_image.clone()
         results = []
         blend_masks_out = []
@@ -1318,6 +1389,39 @@ class InpaintStitchProMEC:
         n = len(stitcher["cropped_to_canvas_x"])
         override_idx = (n == 1 and B != 1)
 
+        # ── Pre-loop temporal stabilization of per-frame blend masks ───────
+        # Stack all stored blend masks into a (N,H,W) tensor (only when sizes
+        # match — they will when wan_stable_crop is on, which is the typical
+        # video case). Apply optional dilation + temporal Gaussian smoothing
+        # in one shot, then write back as the new source list. This kills
+        # frame-to-frame jitter regardless of which blend mode generated the
+        # mask originally.
+        stabilized_masks: Optional[List[torch.Tensor]] = None
+        temporal_applied = False
+        if (stitch_temporal_sigma > 0.0 or stitch_dilate_px > 0) and n > 1:
+            stored_masks = stitcher["cropped_mask_for_blend"]
+            shapes = {tuple(m.shape) for m in stored_masks}
+            if len(shapes) == 1:
+                batch = torch.stack(
+                    [m.to(device) for m in stored_masks], dim=0
+                ).clamp(0.0, 1.0)
+                if stitch_dilate_px > 0:
+                    binary = (batch > 0.5).float()
+                    k = int(stitch_dilate_px) * 2 + 1
+                    pad = int(stitch_dilate_px)
+                    m4 = binary.unsqueeze(1)
+                    dilated = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pad)
+                    batch = dilated.squeeze(1).clamp(0.0, 1.0)
+                if stitch_temporal_sigma > 0.0:
+                    batch = _temporal_gaussian_smooth(
+                        batch, sigma=float(stitch_temporal_sigma)
+                    )
+                    temporal_applied = True
+                stabilized_masks = [batch[k] for k in range(batch.shape[0])]
+            else:
+                # Variable per-frame mask sizes (rare) — skip stabilization.
+                stabilized_masks = None
+
         for i in range(B):
             j = 0 if override_idx else i
             cto_x = stitcher["canvas_to_orig_x"][j]
@@ -1329,7 +1433,10 @@ class InpaintStitchProMEC:
             ctc_w = stitcher["cropped_to_canvas_w"][j]
             ctc_h = stitcher["cropped_to_canvas_h"][j]
             canvas = stitcher["canvas_image"][j].to(device).unsqueeze(0).clone()
-            blend_mask = stitcher["cropped_mask_for_blend"][j].to(device).unsqueeze(0).clone()
+            if stabilized_masks is not None:
+                blend_mask = stabilized_masks[j].to(device).unsqueeze(0).clone()
+            else:
+                blend_mask = stitcher["cropped_mask_for_blend"][j].to(device).unsqueeze(0).clone()
 
             # Wan replacement-mode polarity: stored mask is "regenerate region",
             # i.e. lquesada-canonical. No per-frame inversion needed at stitch time
@@ -1408,6 +1515,7 @@ class InpaintStitchProMEC:
             f"  frames: {B}  device={device_mode}\n"
             f"  blend_mode: stored={stored_mode} override={blend_mode_override} -> effective={effective_mode}\n"
             f"  blend_radius={blend_radius}  color_match={color_match}  wan_polarity={wan_polarity}\n"
+            f"  temporal: sigma={stitch_temporal_sigma:.2f} dilate={stitch_dilate_px}px applied={temporal_applied}\n"
             f"  out: {out.shape[0]}x{out.shape[1]}x{out.shape[2]}x{out.shape[3]}"
         )
         return (out, out_blend, info)
