@@ -152,6 +152,39 @@ function _selectedNodes() {
     return Object.values(sel);
 }
 
+// ComfyUI's new "Subgraph" feature wraps a node group into a single
+// SubgraphNode whose internal graph definition lives at the workflow
+// level (workflow.definitions/subgraphs) — NOT inside the node's own
+// serialize() output. If we capture such a node with our enriched
+// payload, the inner-graph reference is lost on paste, and reloading
+// the saved workflow paints the node red ("missing definition").
+//
+// Detection covers all known shapes the frontend has shipped:
+//   - `node.isSubgraphNode?.()` (preferred public API).
+//   - `node.type === "Subgraph"` / `"SubgraphNode"`.
+//   - Presence of `node.subgraph` (the inline LGraph) or
+//     `node.subgraphId`/`node.subgraph_id` (definition reference).
+//   - LiteGraph subclass: `LiteGraph.Subgraph` / `LGraphSubgraph`.
+function _isSubgraphNode(node) {
+    if (!node) return false;
+    try { if (typeof node.isSubgraphNode === "function" && node.isSubgraphNode()) return true; } catch (_) {}
+    const t = node.type || node.comfyClass;
+    if (t === "Subgraph" || t === "SubgraphNode" || t === "graph/subgraph") return true;
+    if (node.subgraph != null) return true;
+    if (node.subgraphId != null || node.subgraph_id != null) return true;
+    try {
+        if (typeof LiteGraph !== "undefined") {
+            if (LiteGraph.Subgraph && node instanceof LiteGraph.Subgraph) return true;
+            if (LiteGraph.LGraphSubgraph && node instanceof LiteGraph.LGraphSubgraph) return true;
+        }
+    } catch (_) {}
+    return false;
+}
+
+function _selectionHasSubgraph(nodes) {
+    return Array.isArray(nodes) && nodes.some(_isSubgraphNode);
+}
+
 function _serializeNode(n, provenance) {
     // Use LiteGraph's own serialize() — the exact same format ComfyUI
     // writes when you Save the workflow. This preserves:
@@ -279,6 +312,10 @@ function _gatherSubgraphSync(nodes) {
 async function _copy(specificNode = null) {
     const nodes = specificNode ? [specificNode] : _selectedNodes();
     if (!nodes.length) { _toast("Nothing selected", "warn"); return; }
+    if (_selectionHasSubgraph(nodes)) {
+        _toast("Subgraph nodes detected — use native Ctrl+C (MEC payload would lose the inner-graph reference).", "warn");
+        return;
+    }
     const payload = await _gatherSubgraph(nodes);
     const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
     try {
@@ -667,6 +704,11 @@ window.addEventListener("keydown", (ev) => {
         if (!isAutoCopyEnabled()) return;                    // native only
         const nodes = _selectedNodes();
         if (!nodes.length) return;                           // nothing selected → native
+        // Subgraph bypass: ComfyUI's Subgraph node stores its inner-graph
+        // definition outside node.serialize(). Our enriched payload would
+        // strip that link and save would produce a red node on reload.
+        // Fall through to ComfyUI's native handler.
+        if (_selectionHasSubgraph(nodes)) return;
         ev.preventDefault();
         ev.stopImmediatePropagation();
         // 1. Mirror to LiteGraph's localStorage so in-tab Ctrl+V still works.
@@ -725,6 +767,8 @@ document.addEventListener("copy", (ev) => {
         if (!_focusOnCanvas()) return;
         const nodes = _selectedNodes();
         if (!nodes.length) return;
+        // Subgraph bypass — see keydown handler above.
+        if (_selectionHasSubgraph(nodes)) return;
         const payload = _gatherSubgraphSync(nodes);
         const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
         ev.clipboardData?.setData?.("text/plain", text);

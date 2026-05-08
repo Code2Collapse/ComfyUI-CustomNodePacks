@@ -556,13 +556,18 @@ def _generate_stitch_blend_mask_video_stable(
 
 
 def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
-                                 mode: str, radius: int) -> torch.Tensor:
+                                 mode: str, radius: int,
+                                 video_stable_temporal_sigma: float = 3.0,
+                                 video_stable_dilate_px: int = -1,
+                                 video_stable_blur_sigma: float = -1.0) -> torch.Tensor:
     """Generate the stitch blend mask based on the selected mode.
 
     image: (B, H, W, C)
     mask: (B, H, W)
     mode: 'edge_aware' | 'gaussian' | 'laplacian_pyramid' | 'frequency_blend' | 'video_stable' | 'exact'
     radius: feather radius
+    video_stable_*: only used when mode == 'video_stable'. dilate/blur defaults
+    of -1 mean "derive from radius" (dilate=radius, blur=radius*0.75).
     Returns: (B, H, W) soft blend mask
     """
     if mode == "edge_aware":
@@ -579,11 +584,13 @@ def _generate_stitch_blend_mask(image: torch.Tensor, mask: torch.Tensor,
     elif mode == "video_stable":
         # Jitter-tolerant compositing for video: dilate → temporal smooth →
         # wide feather. Keeps the model-facing inpaint mask untouched.
+        dilate = int(video_stable_dilate_px) if video_stable_dilate_px >= 0 else int(radius)
+        blur = float(video_stable_blur_sigma) if video_stable_blur_sigma >= 0 else float(radius) * 0.75
         return _generate_stitch_blend_mask_video_stable(
             mask,
-            spatial_dilate_px=int(radius),
-            spatial_blur_sigma=float(radius) * 0.75,
-            temporal_sigma=3.0,
+            spatial_dilate_px=dilate,
+            spatial_blur_sigma=blur,
+            temporal_sigma=float(video_stable_temporal_sigma),
         )
     elif mode == "exact":
         # Hard-binary alpha — no feather, no leakage outside the mask.
@@ -882,10 +889,22 @@ class InpaintCropProMEC:
                     "tooltip": "What the inpaint sampler sees: hard_binary (crisp), slight_feather (gentle), soft_blend (very soft)."}),
                 "stitch_blend_mode": (cls.STITCH_BLEND_MODES, {
                     "default": "gaussian",
-                    "tooltip": "How the result is composited back: gaussian, edge_aware (Sobel), laplacian_pyramid, frequency_blend."}),
+                    "tooltip": "How the result is composited back: gaussian, edge_aware (Sobel), laplacian_pyramid, frequency_blend, video_stable."}),
                 "blend_radius": ("INT", {
                     "default": 32, "min": 1, "max": 256, "step": 1,
                     "tooltip": "Feather radius for the stitch blend mask (independent of mask_blend_pixels)."}),
+                "video_stable_temporal_sigma": ("FLOAT", {
+                    "default": 3.0, "min": 0.0, "max": 10.0, "step": 0.5,
+                    "tooltip": ("[video_stable only] Temporal Gaussian sigma in frames. "
+                                "3.0 ≈ 9-frame window. Higher = smoother but laggier on fast motion. 0 = off.")}),
+                "video_stable_dilate_px": ("INT", {
+                    "default": -1, "min": -1, "max": 128, "step": 1,
+                    "tooltip": ("[video_stable only] Pixels to push the blend zone into background "
+                                "BEFORE feathering. -1 = derive from blend_radius. 16-32 typical.")}),
+                "video_stable_blur_sigma": ("FLOAT", {
+                    "default": -1.0, "min": -1.0, "max": 128.0, "step": 0.5,
+                    "tooltip": ("[video_stable only] Spatial Gaussian sigma for the wide feather. "
+                                "-1 = derive from blend_radius (×0.75). Match to dilate value.")}),
                 "fill_masked_area": (cls.FILL_MODES, {
                     "default": "none",
                     "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, original."}),
@@ -918,7 +937,9 @@ class InpaintCropProMEC:
                      device_mode,
                      wan_align_multiple, wan_temporal_smooth_frames,
                      wan_stable_crop, wan_mask_polarity,
-                     inpaint_mask_mode, stitch_blend_mode, blend_radius, fill_masked_area,
+                     inpaint_mask_mode, stitch_blend_mode, blend_radius,
+                     video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
+                     fill_masked_area,
                      mask=None, optional_context_mask=None):
 
         image = image.clone()
@@ -1150,7 +1171,10 @@ class InpaintCropProMEC:
         # ── Step 7: derive inpaint_mask (model-facing) and stitch_blend_mask ─
         inpaint_mask = _apply_inpaint_mask_mode(out_mask, inpaint_mask_mode)
         stitch_blend_mask = _generate_stitch_blend_mask(
-            out_image, out_mask, stitch_blend_mode, blend_radius
+            out_image, out_mask, stitch_blend_mode, blend_radius,
+            video_stable_temporal_sigma=float(video_stable_temporal_sigma),
+            video_stable_dilate_px=int(video_stable_dilate_px),
+            video_stable_blur_sigma=float(video_stable_blur_sigma),
         )
 
         # Replace stitcher's per-frame blend mask with the proper feathered one
