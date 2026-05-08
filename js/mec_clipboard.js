@@ -312,8 +312,25 @@ function _gatherSubgraphSync(nodes) {
 async function _copy(specificNode = null) {
     const nodes = specificNode ? [specificNode] : _selectedNodes();
     if (!nodes.length) { _toast("Nothing selected", "warn"); return; }
+    // Mixed-selection / subgraph handling: explicit MEC copy cannot capture
+    // subgraph inner-graph definitions. Delegate to ComfyUI's native copy
+    // (subgraph-aware) so the user still gets a usable clipboard for the
+    // entire selection — just without our enriched metadata.
     if (_selectionHasSubgraph(nodes)) {
-        _toast("Subgraph nodes detected — use native Ctrl+C (MEC payload would lose the inner-graph reference).", "warn");
+        const sg = nodes.filter(_isSubgraphNode).length;
+        const reg = nodes.length - sg;
+        const ok = _nativeCopyToLocalStorage(nodes);
+        try {
+            // Try to also push to OS clipboard via canvas helper if available.
+            const canvas = _activeCanvas();
+            if (canvas?.copyToClipboard) canvas.copyToClipboard(nodes);
+        } catch (_) {}
+        _toast(
+            reg > 0
+                ? `Copied ${nodes.length} (${sg} subgraph + ${reg} regular) via native clipboard. MEC metadata skipped to preserve subgraph definitions.`
+                : `Copied ${sg} subgraph(s) via native clipboard. MEC metadata skipped to preserve subgraph definitions.`,
+            ok ? "info" : "warn", 4500,
+        );
         return;
     }
     const payload = await _gatherSubgraph(nodes);
@@ -705,10 +722,24 @@ window.addEventListener("keydown", (ev) => {
         const nodes = _selectedNodes();
         if (!nodes.length) return;                           // nothing selected → native
         // Subgraph bypass: ComfyUI's Subgraph node stores its inner-graph
-        // definition outside node.serialize(). Our enriched payload would
-        // strip that link and save would produce a red node on reload.
-        // Fall through to ComfyUI's native handler.
-        if (_selectionHasSubgraph(nodes)) return;
+        // definition outside node.serialize() (in workflow.definitions).
+        // Our enriched payload would strip that link and save+reload would
+        // produce a red node. Fall through to ComfyUI's native handler,
+        // which IS subgraph-aware and correctly copies both subgraphs and
+        // regular nodes in a mixed selection.
+        if (_selectionHasSubgraph(nodes)) {
+            const sg = nodes.filter(_isSubgraphNode).length;
+            const reg = nodes.length - sg;
+            console.log(`[MEC.clipboard] subgraph in selection (${sg} subgraph + ${reg} regular) — using native ComfyUI clipboard to preserve subgraph definitions; enriched MEC metadata skipped for this copy.`);
+            // Best-effort toast — native handler still runs after we return.
+            _toast(
+                reg > 0
+                    ? `Copying ${nodes.length} node(s) (${sg} subgraph + ${reg} regular) via native clipboard. Subgraphs preserved; MEC metadata skipped.`
+                    : `Copying ${sg} subgraph(s) via native clipboard. Subgraphs preserved.`,
+                "info", 4000,
+            );
+            return;
+        }
         ev.preventDefault();
         ev.stopImmediatePropagation();
         // 1. Mirror to LiteGraph's localStorage so in-tab Ctrl+V still works.
@@ -767,7 +798,10 @@ document.addEventListener("copy", (ev) => {
         if (!_focusOnCanvas()) return;
         const nodes = _selectedNodes();
         if (!nodes.length) return;
-        // Subgraph bypass — see keydown handler above.
+        // Subgraph bypass — see keydown handler above. Returning without
+        // setData/preventDefault lets the browser + ComfyUI's native copy
+        // path own the clipboard, which correctly preserves subgraph
+        // definitions for both pure-subgraph and mixed selections.
         if (_selectionHasSubgraph(nodes)) return;
         const payload = _gatherSubgraphSync(nodes);
         const text = CLIP_HEADER + "\n" + JSON.stringify(payload, null, 2);
