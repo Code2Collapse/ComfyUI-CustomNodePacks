@@ -51,6 +51,7 @@ from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
 from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
+from .nodes.mask_refiner_temporal import MaskRefinerTemporalMEC
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
@@ -151,6 +152,7 @@ _MEC_MAPPINGS = {
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
     "SplinePathFlowMaskMEC": SplinePathFlowMaskMEC,
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
+    "MaskRefinerTemporalMEC": MaskRefinerTemporalMEC,
     "DrawShapeMEC": DrawShapeMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
@@ -187,6 +189,7 @@ _MEC_DISPLAY = {
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
     "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
+    "MaskRefinerTemporalMEC": "Mask Refiner — Temporal (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",
     "VAEMergeMEC": "VAE Merge (MEC)",
     "VAELatentInspectorMEC": "VAE Latent Inspector (MEC)",
