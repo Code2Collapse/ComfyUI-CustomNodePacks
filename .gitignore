@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Integrity scan cache (regenerated on import, env-fingerprinted)
+.integrity_cache.json
+.integrity_cache.json.tmp
+
 # C extensions
 *.so
 
