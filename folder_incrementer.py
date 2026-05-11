@@ -300,14 +300,18 @@ class FolderIncrementer:
         # downstream pipeline as a real filename so name_format,
         # extension preservation, and folder derivation all behave
         # identically.
+        #
+        # UX fix (May 2026): if custom_name is empty, fall through to
+        # whatever is currently in source_filename — that field is
+        # editable in the UI, so a user who types directly into it
+        # while source_choice='custom' should NOT have their value
+        # wiped to the "default" label. custom_name is now only a
+        # *higher-priority override*, not the sole input.
         if str(source_choice).lower() == "custom":
             cn = (custom_name or "").strip()
             if cn:
                 source_filename = cn
-            else:
-                # Empty custom_name -> behave like 'no source connected'
-                # so we fall through to the label-based folder.
-                source_filename = ""
+            # else: keep source_filename as-is (manual entry honoured).
 
         # ── 1. Derive names from source file ──────────────────────────
         if source_filename and source_filename.strip() and not _looks_like_input_file(source_filename.strip()):

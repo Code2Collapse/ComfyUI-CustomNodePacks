@@ -73,10 +73,16 @@ class _Session:
     100% on exit so the user sees a clean finish.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, expected_phases: Optional[int] = None):
         self.name = name
         self._consumed = 0.0           # in [0, 100]
         self._depth = 0                 # nested-track counter
+        # Equal-weight scheme when the caller declares total phases up-front
+        # (preferred). Otherwise we fall back to a *bounded* default that
+        # advances ~10% per phase and snaps to 100% on close — far better
+        # than the old 50/25/12.5 stall pattern.
+        self._expected_phases = max(1, int(expected_phases)) if expected_phases else None
+        self._phases_seen = 0
         self._pbar = None
         self._tqdm = None
         if _ComfyPB is not None:
@@ -86,13 +92,14 @@ class _Session:
                 self._pbar = None
         if _tqdm is not None:
             try:
-                # Single tqdm bar per node call.  ``leave=False`` keeps the
-                # terminal clean; ``ncols=100`` stops bars from wrapping on
-                # wide terminals; ``dynamic_ncols=False`` prevents resize
-                # flicker mid-run.
+                # Single tqdm bar per node call. Custom bar_format avoids
+                # the confusing "50/100 [...10%/s]" output that the old
+                # ``unit='%'`` setup produced — now reads as a clean
+                # "[████░░░░] 50% (00:05<00:05)".
                 self._tqdm = _tqdm(
-                    total=100, desc=name, leave=False, unit="%",
+                    total=100, desc=name, leave=False,
                     ncols=100, dynamic_ncols=False,
+                    bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]",
                 )
             except Exception:  # noqa: BLE001
                 self._tqdm = None
@@ -131,13 +138,22 @@ class _Session:
                 pass
 
     def _phase_weight(self) -> float:
-        """Adaptive allocation: half the remaining bar (capped 50%, floor 1%).
+        """Equal allocation when ``expected_phases`` is known; otherwise a
+        bounded default that gives every phase a chance to reach 100%.
 
-        Asymptotic: 50, 25, 12.5, 6.25 ... — never overshoots, always
-        progresses by at least 1% so the user sees motion every phase.
+        With ``expected_phases=N``: every top-level track() claims exactly
+        100/N of the bar — so 4 phases each fill 25%, hit 100% cleanly,
+        and no phase stalls the bar at 87% like the old 50/25/12.5 scheme.
+
+        Without it: assume up to 8 phases by default (12.5% each) and
+        clamp by the remaining budget so we never overshoot.
         """
         remaining = max(0.0, 100.0 - self._consumed)
-        return max(1.0, min(50.0, remaining * 0.5))
+        if self._expected_phases:
+            return max(1.0, min(remaining, 100.0 / self._expected_phases))
+        # Bounded default — 8 even phases. Past phase 8, claim the rest.
+        default_slots = max(1, 8 - self._phases_seen)
+        return max(1.0, min(remaining, remaining / default_slots))
 
     # ----- public iterator -----
 
@@ -160,15 +176,26 @@ class _Session:
                 except Exception:  # noqa: BLE001
                     total = None
 
+            self._phases_seen += 1
             weight = self._phase_weight()
             base = self._consumed
             self._set_desc(desc)
 
             if not total or int(total) <= 0:
-                # Unknown / empty: just iterate, advance once at the end.
+                # Unknown total: advance smoothly across the phase weight,
+                # capped at +1% per item so the bar stays alive. Without
+                # this the bar froze for the entire duration of any
+                # unknown-total phase (mediapipe results, generators, …).
+                step = max(0.5, min(1.5, weight / 20.0))
+                n = 0
                 for item in iterable:
                     _throw()
                     yield item
+                    n += 1
+                    target = min(base + weight - 0.5, base + step * n)
+                    if target > self._consumed:
+                        self._consumed = target
+                        self._push_ui(self._consumed)
                 self._consumed = base + weight
                 self._push_ui(self._consumed)
                 return
@@ -200,12 +227,17 @@ class _Session:
 
 
 @contextlib.contextmanager
-def session(name: str):
+def session(name: str, expected_phases: Optional[int] = None):
     """Open a node-wide progress session.
 
     All ``track()`` calls inside the ``with`` block share a single 0..100%
     bar (UI + terminal). Nested ``track()`` calls are pass-through. Safe
     to nest sessions (the inner one becomes a no-op view of the outer).
+
+    Pass ``expected_phases=N`` to get equal-weight phases (each fills
+    100/N of the bar). Without it the bar uses a bounded default that
+    advances ~12.5% per phase for the first 8 phases, then snaps to
+    100% on close — fixes the old "bar stuck at 87%" UX bug.
     """
     prev = _active_session()
     if prev is not None:
@@ -213,7 +245,7 @@ def session(name: str):
         # outer so callers can ``with _PB.session(...) as s:`` uniformly.
         yield prev
         return
-    s = _Session(name)
+    s = _Session(name, expected_phases=expected_phases)
     _local.session = s
     try:
         yield s
@@ -228,12 +260,15 @@ def session(name: str):
 #  track() — session-aware. Falls back to per-call bar when no session.
 # ══════════════════════════════════════════════════════════════════════
 
-def with_session(name: str):
+def with_session(name: str, expected_phases: Optional[int] = None):
     """Decorator: wrap a node method so its whole call shares one bar.
+
+    Pass ``expected_phases=N`` for equal-weight phases (recommended when
+    the node has a fixed phase count).
 
     Usage::
 
-        @_PB.with_session("BgRemover")
+        @_PB.with_session("BgRemover", expected_phases=3)
         def remove_bg(self, ...):
             for i in _PB.track(range(B), B, "phase 1"):
                 ...
@@ -241,7 +276,7 @@ def with_session(name: str):
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            with session(name):
+            with session(name, expected_phases=expected_phases):
                 return fn(*args, **kwargs)
         return wrapper
     return deco
@@ -282,7 +317,12 @@ def _legacy_track(
             pbar = None
 
     if _tqdm is not None:
-        it = _tqdm(iterable, total=total, desc=desc or None, leave=False)
+        it = _tqdm(
+            iterable, total=total, desc=desc or None, leave=False,
+            ncols=100, dynamic_ncols=False,
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+                       if total else None,
+        )
     else:
         it = iterable
 

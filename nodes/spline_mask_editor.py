@@ -92,12 +92,14 @@ def _gaussian_blur_mask(mask: torch.Tensor, sigma: float) -> torch.Tensor:
 
 def _catmull_rom_sample(points: List[Tuple[float, float]],
                         samples_per_segment: int,
-                        closed: bool) -> List[Tuple[float, float]]:
-    """Centripetal Catmull-Rom spline interpolation through control points.
+                        closed: bool,
+                        alpha: float = 0.5) -> List[Tuple[float, float]]:
+    """Catmull-Rom spline interpolation through control points.
 
     For each segment of 4 consecutive points (P0, P1, P2, P3), computes the
-    curve passing through P1→P2 using centripetal parameterization (alpha=0.5)
-    which avoids cusps and self-intersections.
+    curve passing through P1→P2 using ``alpha``-parameterization where
+    0=uniform, 0.5=centripetal (default — avoids cusps + self-intersections),
+    1=chordal (Foley-Nielsen "loose" curve).
 
     If closed=True, wraps points so the curve forms a closed loop.
     Returns list of (x, y) sampled curve points.
@@ -135,13 +137,16 @@ def _catmull_rom_sample(points: List[Tuple[float, float]],
         p2 = ext[seg + 2]
         p3 = ext[seg + 3]
 
-        # Centripetal parameterization (alpha = 0.5)
-        def _dist(a, b):
-            return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) + 1e-8
+        # alpha-parameterized Catmull-Rom (0=uniform, 0.5=centripetal,
+        # 1=chordal). 0.5 is the safe default — avoids cusps in tight curves.
+        a = max(0.0, min(1.0, float(alpha)))
 
-        d01 = _dist(p0, p1) ** 0.5  # alpha = 0.5 → sqrt of distance
-        d12 = _dist(p1, p2) ** 0.5
-        d23 = _dist(p2, p3) ** 0.5
+        def _dist(pa, pb):
+            return math.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) + 1e-8
+
+        d01 = _dist(p0, p1) ** a
+        d12 = _dist(p1, p2) ** a
+        d23 = _dist(p2, p3) ** a
 
         # Knot values
         t0 = 0.0
@@ -297,7 +302,8 @@ def _rasterize_splines(spline_data_json: str, H: int, W: int,
                        samples_per_segment: int,
                        feather_radius: float,
                        invert: bool,
-                       device: torch.device) -> torch.Tensor:
+                       device: torch.device,
+                       centripetal_alpha: float = 0.5) -> torch.Tensor:
     """Parse spline JSON, sample curves, rasterize to filled mask.
 
     1. Parse spline_data_json (list of shape dicts)
@@ -342,7 +348,8 @@ def _rasterize_splines(spline_data_json: str, H: int, W: int,
             curve_pts = _polyline_sample(pts, shape_closed)
         else:
             # Default: Catmull-Rom
-            curve_pts = _catmull_rom_sample(pts, samples_per_segment, shape_closed)
+            curve_pts = _catmull_rom_sample(pts, samples_per_segment, shape_closed,
+                                            alpha=centripetal_alpha)
 
         if len(curve_pts) < 3 and shape_closed:
             continue
@@ -519,6 +526,29 @@ def _tensor_to_pil(tensor: torch.Tensor):
     return PILImage.fromarray(arr)
 
 
+def _raw_image_b64(image_tensor: torch.Tensor, max_side: int = 1280) -> str:
+    """Return raw JPEG of the first frame as base64 (no overlay).
+
+    The JS editor draws its own interactive spline overlay; sending an image
+    pre-baked with a mask overlay would double-tint. Downscale large images
+    so the data URL stays small enough for the websocket payload.
+    """
+    if not HAS_PIL:
+        return ""
+    img = _tensor_to_pil(image_tensor)
+    if img is None:
+        return ""
+    W, H = img.size
+    if max(W, H) > max_side:
+        scale = max_side / float(max(W, H))
+        img = img.resize((max(1, int(W * scale)), max(1, int(H * scale))),
+                         PILImage.LANCZOS)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=85)
+    # Bare base64 — JS prepends 'data:image/jpeg;base64,' itself.
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _render_preview_b64(image_tensor: torch.Tensor, spline_data_str: str,
                         mask_color: str, mask_opacity: float,
                         spline_type: str, closed: bool, smoothing: bool,
@@ -616,6 +646,15 @@ class SplineMaskEditorMEC:
                     "default": 20, "min": 2, "max": 100, "step": 1,
                     "tooltip": "Curve resolution per segment. Higher = smoother mask edge.",
                 }),
+                "centripetal_alpha": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": (
+                        "Catmull-Rom alpha: 0=uniform (looser/may overshoot), "
+                        "0.5=centripetal (recommended, no cusps), 1=chordal "
+                        "(tighter, follows control points more closely). "
+                        "Catmull-Rom only — ignored for polyline / bezier."
+                    ),
+                }),
                 "feather_radius": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.5,
                     "tooltip": "Gaussian blur on mask edge after rasterization. 0 = hard edge.",
@@ -669,6 +708,7 @@ class SplineMaskEditorMEC:
                 spline_type: str, closed: bool, smoothing: bool,
                 samples_per_segment: int, feather_radius: float,
                 invert: bool,
+                centripetal_alpha: float = 0.5,
                 width: int = 0, height: int = 0,
                 mask_color: str = "#ff00ff", mask_opacity: float = 0.4,
                 node_id=None) -> tuple:
@@ -693,6 +733,7 @@ class SplineMaskEditorMEC:
             feather_radius=feather_radius,
             invert=invert,
             device=device,
+            centripetal_alpha=float(centripetal_alpha),
         )  # (1, H, W)
 
         # Expand to batch size if needed (same mask for all frames)
@@ -741,15 +782,13 @@ class SplineMaskEditorMEC:
         while len(_preview_cache) > _MAX_PREVIEW_CACHE:
             _preview_cache.popitem(last=False)
 
-        # Render initial preview
-        preview_b64 = _render_preview_b64(
-            image, spline_data, mask_color, mask_opacity,
-            spline_type, closed, smoothing, samples_per_segment,
-            feather_radius, invert,
-        )
+        # Send the raw input image to the JS editor as a backdrop fallback.
+        # The JS overlay handles the interactive mask preview client-side, so
+        # we deliberately do NOT bake the mask overlay into this image.
+        raw_b64 = _raw_image_b64(image)
 
         return {
-            "ui": {"cache_key": [cache_key], "preview": [preview_b64]},
+            "ui": {"cache_key": [cache_key], "preview_b64": [raw_b64]},
             "result": (mask, coords_json, spline_data_out, bbox_json_out, bbox_xywh),
         }
 

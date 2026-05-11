@@ -35,6 +35,21 @@ const COLOR = {
 const HISTORY_LIMIT = 80;
 const POINT_HIT_PX = 8;
 
+// Module-level decoded-image cache keyed by URL.
+// Fixes "slow image load": when the user pans the graph or re-opens the
+// node, we re-use the already-decoded HTMLImageElement instead of issuing
+// a fresh fetch + decode every time the URL is re-set.
+const IMG_CACHE = new Map(); // url -> {img, w, h}
+const IMG_CACHE_MAX = 32;
+function _cacheGet(url) { return IMG_CACHE.get(url) || null; }
+function _cachePut(url, entry) {
+    IMG_CACHE.set(url, entry);
+    if (IMG_CACHE.size > IMG_CACHE_MAX) {
+        const firstKey = IMG_CACHE.keys().next().value;
+        if (firstKey !== undefined) IMG_CACHE.delete(firstKey);
+    }
+}
+
 class Editor {
     constructor(node) {
         this.node = node;
@@ -63,6 +78,7 @@ class Editor {
         this.splineType = "catmull_rom";
         this.closedDefault = true;
         this.samplesPerSegment = 20;
+        this.centripetalAlpha = 0.5;
     }
 
     snapshot() { return JSON.stringify({ s: this.shapes, a: this.active }); }
@@ -173,7 +189,30 @@ class Editor {
 
     setRefImage(url, ow, oh) {
         if (url === this.refUrl && this.refImg && this.refImg.complete) return;
+        const sameUrl = (url === this.refUrl);
         this.refUrl = url;
+
+        // Cache hit: zero-cost re-use; do NOT reset zoom/pan when the URL
+        // didn't actually change (was the source of the bounce bug — every
+        // re-render set refImg again, clearing _fitted, snapping the view).
+        const cached = _cacheGet(url);
+        if (cached?.img?.complete) {
+            this.refImg = cached.img;
+            const w = ow || cached.w;
+            const h = oh || cached.h;
+            if (w > 0 && h > 0 && (this.canvasW !== w || this.canvasH !== h)) {
+                this.canvasW = w; this.canvasH = h;
+                const wW = this.node.widgets?.find(x => x.name === "width");
+                const hW = this.node.widgets?.find(x => x.name === "height");
+                if (wW && +wW.value !== w) wW.value = w;
+                if (hW && +hW.value !== h) hW.value = h;
+                this._fitted = false; // dims changed — a fresh fit is correct
+            }
+            if (!sameUrl) this._fitted = false;
+            this.onLoaded?.();
+            return;
+        }
+
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
@@ -187,6 +226,7 @@ class Editor {
                 if (wW && +wW.value !== w) wW.value = w;
                 if (hW && +hW.value !== h) hW.value = h;
             }
+            _cachePut(url, { img, w, h });
             this._fitted = false;
             this.onLoaded?.();
         };
@@ -194,10 +234,7 @@ class Editor {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Spline sampling (Catmull-Rom, polyline) – used only for preview rendering
-// ─────────────────────────────────────────────────────────────────────
-function catmullRom(points, samplesPerSeg, closed) {
+function catmullRom(points, samplesPerSeg, closed, alpha) {
     const n = points.length;
     if (n < 2) return points.slice();
     if (n === 2) {
@@ -215,10 +252,11 @@ function catmullRom(points, samplesPerSeg, closed) {
 
     const out = [];
     const segs = closed ? n : n - 1;
+    // Centripetal Catmull-Rom — alpha is now configurable (0=uniform,
+    // 0.5=centripetal, 1=chordal). 0.5 is the default and avoids cusps.
+    const a = (typeof alpha === "number") ? Math.max(0, Math.min(1, alpha)) : 0.5;
     for (let i = 0; i < segs; i++) {
         const p0 = ext[i], p1 = ext[i + 1], p2 = ext[i + 2], p3 = ext[i + 3];
-        // Centripetal alpha=0.5
-        const a = 0.5;
         const t01 = Math.pow(Math.hypot(p1.x - p0.x, p1.y - p0.y), a) || 1e-6;
         const t12 = Math.pow(Math.hypot(p2.x - p1.x, p2.y - p1.y), a) || 1e-6;
         const t23 = Math.pow(Math.hypot(p3.x - p2.x, p3.y - p2.y), a) || 1e-6;
@@ -244,11 +282,11 @@ function catmullRom(points, samplesPerSeg, closed) {
     return out;
 }
 
-function sampleShape(sh, samplesPerSeg) {
+function sampleShape(sh, samplesPerSeg, alpha) {
     const pts = sh.points;
     if (pts.length < 2) return pts.slice();
     if (sh.type === "polyline") return pts.slice();
-    return catmullRom(pts, samplesPerSeg, sh.closed);
+    return catmullRom(pts, samplesPerSeg, sh.closed, alpha);
 }
 
 function draw(ed, ctx, vw, vh) {
@@ -278,7 +316,7 @@ function draw(ed, ctx, vw, vh) {
         const isActive = s === ed.active;
 
         if (sh.points.length >= 2) {
-            const sampled = sampleShape(sh, ed.samplesPerSegment);
+            const sampled = sampleShape(sh, ed.samplesPerSegment, ed.centripetalAlpha);
             ctx.strokeStyle = c;
             ctx.lineWidth = (isActive ? 2.0 : 1.5) / z;
             ctx.fillStyle = c + "22";
@@ -370,11 +408,13 @@ function installEditor(node) {
         const sps = node.widgets?.find(x => x.name === "samples_per_segment");
         const w = node.widgets?.find(x => x.name === "width");
         const h = node.widgets?.find(x => x.name === "height");
+        const ca = node.widgets?.find(x => x.name === "centripetal_alpha");
         if (t) ed.splineType = t.value;
         if (c) ed.closedDefault = !!c.value;
         if (sps) ed.samplesPerSegment = +sps.value || 20;
         if (w && +w.value > 0) ed.canvasW = +w.value;
         if (h && +h.value > 0) ed.canvasH = +h.value;
+        if (ca && typeof ca.value === "number") ed.centripetalAlpha = ca.value;
     };
     syncFromWidgets();
     ed.load();
@@ -588,9 +628,15 @@ function installEditor(node) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        // Re-fit on every layout change — fixes "image pad zoom drift" when
-        // the parent ComfyUI graph is zoomed (was: only fit once).
-        if (sizeChanged || !ed._fitted) ed.fitView(w, h);
+        // Auto-fit ONLY on first sizing or when a new image set _fitted=false.
+        // Previously we re-fit on every resize → any container reflow snapped
+        // the user's zoom/pan back to "fit", which is the "bouncy image"
+        // complaint. Now we just clamp pan into the new viewport instead.
+        if (!ed._fitted) {
+            ed.fitView(w, h);
+        } else {
+            ed.clampPan(w, h);
+        }
         return true;
     }
 
@@ -784,7 +830,7 @@ function installEditor(node) {
     });
 
     // React to widget edits
-    for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height"]) {
+    for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height", "centripetal_alpha"]) {
         const w = node.widgets?.find(x => x.name === wn);
         if (!w) continue;
         const orig = w.callback;
@@ -816,8 +862,12 @@ function installEditor(node) {
     const origExec = node.onExecuted;
     node.onExecuted = function (out) {
         origExec?.apply(this, arguments);
-        if (out?.preview_b64?.[0]) {
-            ed.setRefImage("data:image/jpeg;base64," + out.preview_b64[0]);
+        // Server may emit either key depending on version; accept both.
+        const b64 = out?.preview_b64?.[0] ?? out?.preview?.[0];
+        if (b64) {
+            // Bare base64 → prepend data-url prefix; full data URL → pass through.
+            const url = b64.startsWith("data:") ? b64 : ("data:image/jpeg;base64," + b64);
+            ed.setRefImage(url);
         } else {
             tryDiscoverRef();
         }
@@ -853,3 +903,8 @@ app.registerExtension({
         installEditor(node);
     },
 });
+
+// Export for reuse by sibling editors (e.g. SplinePathFlowMaskMEC).
+// Stash on window so a separate module file can pick it up without a build step.
+window.__MEC_SPLINE_EDITOR__ = { installEditor, IMG_CACHE };
+

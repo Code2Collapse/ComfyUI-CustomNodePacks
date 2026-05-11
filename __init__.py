@@ -49,6 +49,7 @@ from .nodes.inpaint_suite import (
 from .nodes.image_comparer import ImageComparerMEC
 from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
+from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
@@ -148,6 +149,7 @@ _MEC_MAPPINGS = {
     "ImageComparerMEC": ImageComparerMEC,
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
+    "SplinePathFlowMaskMEC": SplinePathFlowMaskMEC,
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
     "DrawShapeMEC": DrawShapeMEC,
     "VAEMergeMEC": VAEMergeMEC,
@@ -183,6 +185,7 @@ _MEC_DISPLAY = {
     "ImageComparerMEC": "Image Comparer (MEC)",
     "VideoFramePlayerMEC": "Video Frame Player (MEC)",
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
+    "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",
     "VAEMergeMEC": "VAE Merge (MEC)",
