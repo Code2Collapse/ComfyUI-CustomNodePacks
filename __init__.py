@@ -53,6 +53,10 @@ from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
 from .nodes.mask_refiner_temporal import MaskRefinerTemporalMEC
 from .nodes.spline_mask_tracker import SplineMaskTrackerMEC
+from .nodes.video_mask_editor import (
+    VideoMaskEditorMEC,
+    register_routes as _register_vme_routes,
+)
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
@@ -155,6 +159,7 @@ _MEC_MAPPINGS = {
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
     "MaskRefinerTemporalMEC": MaskRefinerTemporalMEC,
     "SplineMaskTrackerMEC": SplineMaskTrackerMEC,
+    "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "DrawShapeMEC": DrawShapeMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
@@ -193,6 +198,7 @@ _MEC_DISPLAY = {
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
     "MaskRefinerTemporalMEC": "Mask Refiner — Temporal (MEC)",
     "SplineMaskTrackerMEC": "Spline Mask Tracker (MEC)",
+    "VideoMaskEditorMEC": "Video Mask Editor (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",
     "VAEMergeMEC": "VAE Merge (MEC)",
     "VAELatentInspectorMEC": "VAE Latent Inspector (MEC)",
@@ -237,6 +243,13 @@ try:
     print("[MEC] Parameter Memory server route registered.")
 except Exception:
     pass  # Server not available (e.g. during import-only testing)
+
+# ── Register server routes for Video Mask Editor ─────────────────────
+try:
+    import server as _comfy_server_vme
+    _register_vme_routes(_comfy_server_vme.PromptServer.instance)
+except Exception:
+    pass  # Server not available
 
 # ── Register NukeNodeMax server-side hooks & routes ───────────────────
 try:
