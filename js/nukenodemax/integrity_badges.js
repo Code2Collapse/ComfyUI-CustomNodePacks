@@ -75,6 +75,10 @@ function ingest(d) {
     STATE.fromCache = !!d.from_cache;
     STATE.ready = d.ready !== false;
     STATE.status = d.status || (STATE.ready ? "ok" : "scanning");
+    STATE.envKind = d.env_kind || "?";
+    STATE.platform = d.platform || "?";
+    STATE.python = d.python || "";
+    STATE.pythonVersion = d.python_version || "";
     STATE.lastUpdated = Date.now();
     refreshButton();
     refreshDialogIfOpen();
@@ -454,7 +458,7 @@ function renderDialogBody() {
     if (events.length === 0) {
         body.innerHTML = `<div class="mec-integ-empty">
             ✓ No integrity events. Environment looks clean.<br/>
-            <span style="opacity:0.7;font-size:11px;">Backend: ${STATE.backend || "pip"} · Last scan: ${STATE.lastUpdated ? new Date(STATE.lastUpdated).toLocaleTimeString() : "n/a"}</span>
+            <span style="opacity:0.7;font-size:11px;">Backend: ${STATE.backend || "pip"} · Env: ${STATE.envKind || "?"} (${STATE.platform || "?"}) · Python ${STATE.pythonVersion || "?"} · Last scan: ${STATE.lastUpdated ? new Date(STATE.lastUpdated).toLocaleTimeString() : "n/a"}</span>
         </div>`;
         return;
     }

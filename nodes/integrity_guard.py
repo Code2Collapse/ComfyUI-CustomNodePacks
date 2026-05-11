@@ -123,21 +123,36 @@ def _emit(event: Dict[str, Any]) -> None:
 
 def _run(cmd: List[str], timeout: int = 60,
          stdout_limit: int = 8000, stderr_limit: int = 4000) -> Dict[str, Any]:
+    # On Windows, prevent a console window from flashing when the parent
+    # ComfyUI process is a GUI launcher (pythonw.exe, embedded Python
+    # spawned by Comfy-Desktop, etc.). On other OSes this flag is 0.
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-            check=False,
+            cmd, capture_output=True, timeout=timeout, check=False,
+            # Force UTF-8 with replace so non-ASCII package names / paths
+            # don't crash decoding on Windows (default cp1252) or on
+            # systems with a broken locale (containers, minimal images).
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=creationflags,
         )
         return {
             "ok": proc.returncode == 0,
             "rc": proc.returncode,
             "stdout": proc.stdout if stdout_limit is None
-                      else proc.stdout.strip()[:stdout_limit],
+                      else (proc.stdout or "").strip()[:stdout_limit],
             "stderr": proc.stderr if stderr_limit is None
-                      else proc.stderr.strip()[:stderr_limit],
+                      else (proc.stderr or "").strip()[:stderr_limit],
         }
     except FileNotFoundError as e:
         return {"ok": False, "rc": -1, "stdout": "", "stderr": str(e)}
+    except PermissionError as e:
+        # Sandboxed installs (some Docker / Snap layouts) reject exec.
+        return {"ok": False, "rc": -4, "stdout": "", "stderr": f"permission denied: {e}"}
+    except OSError as e:
+        return {"ok": False, "rc": -5, "stdout": "", "stderr": f"os error: {e}"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "rc": -2, "stdout": "", "stderr": f"timeout after {timeout}s"}
 
@@ -238,9 +253,46 @@ def _pip_module_available() -> bool:
     pip. We need to know that BEFORE running `pip check`, otherwise the
     "no module named pip" stderr gets mis-categorised as a dependency
     conflict and the user sees no useful events.
+
+    Cached for the lifetime of the process so we don't pay the ~50–200 ms
+    interpreter spin-up on every rescan.
     """
+    global _PIP_AVAILABLE_CACHE
+    if _PIP_AVAILABLE_CACHE is not None:
+        return _PIP_AVAILABLE_CACHE
     out = _run([sys.executable, "-m", "pip", "--version"], timeout=15)
-    return out["ok"]
+    _PIP_AVAILABLE_CACHE = bool(out["ok"])
+    return _PIP_AVAILABLE_CACHE
+
+
+_PIP_AVAILABLE_CACHE: Optional[bool] = None
+
+
+def _detect_env_kind() -> str:
+    """Best-effort classification of the current Python environment.
+
+    Returned strings are stable and used by the UI to tailor install hints
+    (e.g. "conda env: install uv via `conda install -c conda-forge uv`").
+    """
+    exe = (sys.executable or "").replace("\\", "/").lower()
+    # Conda: presence of CONDA_PREFIX env var OR "conda-meta" beside the exe.
+    if os.environ.get("CONDA_PREFIX") or os.environ.get("CONDA_DEFAULT_ENV"):
+        return "conda"
+    conda_meta = os.path.join(os.path.dirname(sys.executable), "..", "conda-meta")
+    if os.path.isdir(conda_meta):
+        return "conda"
+    # ComfyUI Windows portable bundles ship as python_embeded / python_embedded.
+    if "python_embeded" in exe or "python_embedded" in exe:
+        return "portable-embed"
+    # venv / virtualenv: sys.prefix differs from sys.base_prefix.
+    if getattr(sys, "base_prefix", sys.prefix) != sys.prefix:
+        return "venv"
+    if hasattr(sys, "real_prefix"):  # legacy virtualenv
+        return "venv"
+    # uv-managed projects expose UV_PROJECT_ENVIRONMENT pointing at .venv.
+    if os.environ.get("UV_PROJECT_ENVIRONMENT") or os.environ.get("VIRTUAL_ENV"):
+        return "venv"
+    return "system"
 
 
 def _run_pip_check() -> Dict[str, Any]:
@@ -279,7 +331,7 @@ def _run_pip_check() -> Dict[str, Any]:
             ),
             "unavailable": True,
         }
-    out = _run([sys.executable, "-m", "pip", "check"], timeout=45,
+    out = _run([sys.executable, "-m", "pip", "check"], timeout=120,
                stdout_limit=16000)
     out["backend"] = "pip"
     return out
@@ -312,8 +364,36 @@ def _run_dep_tree_size() -> int:
 # Worker
 # =====================================================================
 def _worker(force: bool = False, delay: float = 0.0):
+    try:
+        _worker_impl(force=force, delay=delay)
+    except Exception as e:  # noqa: BLE001
+        # The scan thread must never die silently — the UI would stay
+        # stuck on "scan running…" forever. Surface the failure as an
+        # event and a non-fatal report so the user can see what broke.
+        log.exception("[integrity] worker crashed")
+        err = {
+            "ready": True, "status": "error", "from_cache": False,
+            "events": [{"kind": "scan_error", "severity": "warn",
+                         "message": f"{type(e).__name__}: {e}"}],
+            "scanned_at": time.time(),
+            "python": sys.executable,
+            "pack_root": _PACK_ROOT,
+        }
+        with _LOCK:
+            _LAST_REPORT.clear()
+            _LAST_REPORT.update(err)
+        _emit({"type": "report", **err})
+
+
+def _worker_impl(force: bool = False, delay: float = 0.0):
     if delay > 0:
         time.sleep(delay)
+
+    # Re-detect uv on force-rescan so users who just installed it get the
+    # benefit without restarting ComfyUI.
+    global _UV_BIN
+    if force:
+        _UV_BIN = shutil.which("uv")
 
     # ---- cache fast-path ----
     if not force:
@@ -344,6 +424,8 @@ def _worker(force: bool = False, delay: float = 0.0):
         "from_cache": False, "scanned_at": time.time(),
         "python": sys.executable, "python_version": sys.version.split()[0],
         "pack_root": _PACK_ROOT, "cache_path": _CACHE_PATH,
+        "env_kind": _detect_env_kind(),
+        "platform": sys.platform,
     }
 
     # ---- pip check (uv if available, else pip; or report unavailable) ----
@@ -352,11 +434,34 @@ def _worker(force: bool = False, delay: float = 0.0):
     report["used_uv"] = bool(_UV_BIN)
     report["backend"] = pip_check.get("backend", "unknown")
     if pip_check.get("unavailable"):
-        # Neither uv nor pip available — flag clearly, don't pretend there's a conflict.
+        # Neither uv nor pip available — flag clearly with an env-specific
+        # remediation hint so the user knows exactly what to run.
+        kind = report.get("env_kind", "system")
+        hint = {
+            "portable-embed": (
+                "ComfyUI portable embed lacks pip. Either drop a "
+                "`get-pip.py` next to python.exe and run "
+                "`python_embeded\\python.exe get-pip.py`, or install uv: "
+                "`powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\"`."
+            ),
+            "conda": (
+                "Conda env without pip. Run `conda install pip` inside this "
+                "env, or `conda install -c conda-forge uv`."
+            ),
+            "venv": (
+                "venv missing pip. Recreate with `python -m venv --upgrade-deps "
+                f"{sys.prefix}` or install uv globally."
+            ),
+            "system": (
+                "Install pip via `python -m ensurepip --upgrade`, or "
+                "install uv: https://docs.astral.sh/uv/getting-started/installation/"
+            ),
+        }.get(kind, "Install pip or uv so MEC can verify dependency consistency.")
         report["events"].append({
             "kind": "tooling_unavailable",
             "severity": "info",
-            "message": pip_check.get("stderr") or "pip/uv unavailable",
+            "message": (pip_check.get("stderr") or "pip/uv unavailable")
+                       + f"\nHint: {hint}",
         })
     elif not pip_check["ok"]:
         lines = [ln.strip() for ln in (pip_check.get("stdout") or "").splitlines() if ln.strip()]
