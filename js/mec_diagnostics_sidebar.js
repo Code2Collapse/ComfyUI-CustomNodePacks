@@ -327,67 +327,171 @@ async function _renderPatterns(body) {
     };
 }
 
-// Curated suggestion list for the local-model input. Free-typing is still
-// allowed (the backend resolves any GGUF stub or absolute path). Each entry
-// shows approx VRAM/RAM footprint at Q4 quant + one-line "best for" hint.
+// =====================================================================
+//  MODEL CATALOG — verified May 2026 against Ollama library, HuggingFace
+//  Qwen org, Microsoft, Google, Meta, IBM, Mistral, DeepSeek, Liquid AI.
+//  Free-typing is allowed everywhere; these are quick-pick suggestions.
+// =====================================================================
+
+// GGUF stubs for llama-cpp-python (Tier 2 fallback backend). Each row has
+// approximate VRAM at Q4_K_M plus a one-line "best for" hint. The user can
+// drop a GGUF file in ComfyUI/models/llm/ and pick it from this list.
 const _LOCAL_MODEL_SUGGESTIONS = [
-    { id: "qwen3-0.6b-instruct-q4_k_m",            ram: "~450 MB",  note: "tiny, fastest" },
-    { id: "qwen3-1.7b-instruct-q4_k_m",            ram: "~1.1 GB",  note: "balanced default" },
-    { id: "qwen3-4b-instruct-q4_k_m",              ram: "~2.5 GB",  note: "strongest small local" },
-    { id: "qwen2.5-0.5b-instruct-q4_k_m",          ram: "~400 MB",  note: "legacy tiny" },
-    { id: "qwen2.5-1.5b-instruct-q4_k_m",          ram: "~1.0 GB",  note: "legacy balanced" },
-    { id: "qwen2.5-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "legacy mid" },
-    { id: "qwen2.5-coder-1.5b-instruct-q4_k_m",    ram: "~1.0 GB",  note: "code-aware" },
-    { id: "phi-3.5-mini-instruct-q4_k_m",          ram: "~2.3 GB",  note: "MS, strong reasoning" },
-    { id: "gemma-2-2b-it-q4_k_m",                  ram: "~1.6 GB",  note: "Google, multilingual" },
-    { id: "llama-3.2-1b-instruct-q4_k_m",          ram: "~770 MB",  note: "Meta, fast" },
-    { id: "llama-3.2-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Meta, good" },
-    { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "HF, fast" },
-    { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "tiniest, weak" },
-    { id: "deepseek-r1-distill-qwen-1.5b-q4_k_m",  ram: "~1.0 GB",  note: "chain-of-thought" },
-    { id: "internlm2.5-1.8b-chat-q4_k_m",          ram: "~1.2 GB",  note: "Shanghai AI Lab" },
+    // Qwen3.6 (latest, MoE + dense, vision/tools/thinking)
+    { id: "qwen3.6-27b-instruct-q4_k_m",           ram: "~16 GB",   note: "Qwen3.6 27B — flagship dense, thinking" },
+    { id: "qwen3.6-35b-a3b-instruct-q4_k_m",       ram: "~20 GB",   note: "Qwen3.6 35B-A3B — MoE, 3B active" },
+    // Qwen3.5 (multimodal family, FP8 + GGUF variants)
+    { id: "qwen3.5-0.8b-instruct-q4_k_m",          ram: "~600 MB",  note: "Qwen3.5 0.8B — tiny, multimodal" },
+    { id: "qwen3.5-2b-instruct-q4_k_m",            ram: "~1.4 GB",  note: "Qwen3.5 2B — fastest balanced" },
+    { id: "qwen3.5-4b-instruct-q4_k_m",            ram: "~2.6 GB",  note: "Qwen3.5 4B — recommended default" },
+    { id: "qwen3.5-9b-instruct-q4_k_m",            ram: "~5.5 GB",  note: "Qwen3.5 9B — strongest 8GB-VRAM pick" },
+    { id: "qwen3.5-27b-instruct-q4_k_m",           ram: "~16 GB",   note: "Qwen3.5 27B — dense flagship" },
+    // Qwen3 (original, still excellent)
+    { id: "qwen3-0.6b-instruct-q4_k_m",            ram: "~450 MB",  note: "Qwen3 0.6B — fastest" },
+    { id: "qwen3-1.7b-instruct-q4_k_m",            ram: "~1.1 GB",  note: "Qwen3 1.7B — proven balanced" },
+    { id: "qwen3-4b-instruct-q4_k_m",              ram: "~2.5 GB",  note: "Qwen3 4B — strong small local" },
+    { id: "qwen3-8b-instruct-q4_k_m",              ram: "~5.0 GB",  note: "Qwen3 8B" },
+    { id: "qwen3-14b-instruct-q4_k_m",             ram: "~8.5 GB",  note: "Qwen3 14B" },
+    // Qwen2.5 (legacy)
+    { id: "qwen2.5-0.5b-instruct-q4_k_m",          ram: "~400 MB",  note: "Qwen2.5 0.5B (legacy)" },
+    { id: "qwen2.5-1.5b-instruct-q4_k_m",          ram: "~1.0 GB",  note: "Qwen2.5 1.5B (legacy)" },
+    { id: "qwen2.5-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "Qwen2.5 3B (legacy)" },
+    { id: "qwen2.5-7b-instruct-q4_k_m",            ram: "~4.5 GB",  note: "Qwen2.5 7B (legacy)" },
+    { id: "qwen2.5-coder-1.5b-instruct-q4_k_m",    ram: "~1.0 GB",  note: "Qwen2.5-Coder 1.5B — code errors" },
+    { id: "qwen2.5-coder-7b-instruct-q4_k_m",      ram: "~4.5 GB",  note: "Qwen2.5-Coder 7B — code errors" },
+    // Google Gemma 4 / 3 / 3n
+    { id: "gemma-4-e2b-it-q4_k_m",                 ram: "~1.5 GB",  note: "Gemma 4 E2B — efficient edge" },
+    { id: "gemma-4-e4b-it-q4_k_m",                 ram: "~3.0 GB",  note: "Gemma 4 E4B — efficient" },
+    { id: "gemma-3-1b-it-q4_k_m",                  ram: "~750 MB",  note: "Gemma 3 1B — fast" },
+    { id: "gemma-3-4b-it-q4_k_m",                  ram: "~2.5 GB",  note: "Gemma 3 4B — multimodal" },
+    { id: "gemma-3-12b-it-q4_k_m",                 ram: "~7.0 GB",  note: "Gemma 3 12B" },
+    { id: "gemma-3n-e2b-it-q4_k_m",                ram: "~1.5 GB",  note: "Gemma 3n E2B — phone-grade" },
+    // Microsoft Phi-4
+    { id: "phi-4-mini-instruct-q4_k_m",            ram: "~2.3 GB",  note: "Phi-4-Mini 3.8B — tool calls" },
+    { id: "phi-4-mini-reasoning-q4_k_m",           ram: "~2.3 GB",  note: "Phi-4-Mini-Reasoning 3.8B" },
+    { id: "phi-3.5-mini-instruct-q4_k_m",          ram: "~2.3 GB",  note: "Phi-3.5-Mini (legacy)" },
+    // Meta Llama 3.2
+    { id: "llama-3.2-1b-instruct-q4_k_m",          ram: "~770 MB",  note: "Llama 3.2 1B — fast" },
+    { id: "llama-3.2-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Llama 3.2 3B — good general" },
+    // IBM Granite 4 (enterprise, tools)
+    { id: "granite-4.1-3b-instruct-q4_k_m",        ram: "~2.0 GB",  note: "Granite 4.1 3B — RAG/tools" },
+    { id: "granite-4.1-8b-instruct-q4_k_m",        ram: "~5.0 GB",  note: "Granite 4.1 8B — RAG/tools" },
+    { id: "granite-4-350m-instruct-q4_k_m",        ram: "~280 MB",  note: "Granite 4 350M — micro" },
+    { id: "granite-4-1b-instruct-q4_k_m",          ram: "~750 MB",  note: "Granite 4 1B — micro" },
+    // DeepSeek-R1 distills (reasoning chains)
+    { id: "deepseek-r1-distill-qwen-1.5b-q4_k_m",  ram: "~1.0 GB",  note: "DeepSeek-R1 1.5B — chain-of-thought" },
+    { id: "deepseek-r1-distill-qwen-7b-q4_k_m",    ram: "~4.5 GB",  note: "DeepSeek-R1 7B — reasoning" },
+    { id: "deepseek-r1-distill-llama-8b-q4_k_m",   ram: "~5.0 GB",  note: "DeepSeek-R1 Llama-8B" },
+    { id: "deepseek-r1-distill-qwen-14b-q4_k_m",   ram: "~8.5 GB",  note: "DeepSeek-R1 14B" },
+    // Liquid AI LFM2.5 (on-device thinking)
+    { id: "lfm2.5-1.2b-thinking-q4_k_m",           ram: "~800 MB",  note: "LFM2.5 1.2B — on-device thinking" },
+    // SmolLM2 (HF tiny)
+    { id: "smollm2-135m-instruct-q4_k_m",          ram: "~120 MB",  note: "SmolLM2 135M — extreme tiny" },
+    { id: "smollm2-360m-instruct-q4_k_m",          ram: "~250 MB",  note: "SmolLM2 360M" },
+    { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "SmolLM2 1.7B" },
+    // Mistral Small
+    { id: "mistral-small-3.2-24b-instruct-q4_k_m", ram: "~14 GB",   note: "Mistral Small 3.2 24B — vision" },
+    // Misc
+    { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "TinyLlama (legacy weak)" },
 ];
 
-// Curated Ollama tag suggestions. The actual list comes from /api/tags but
-// these are shown as quick-pick chips when the daemon isn't reachable yet.
+// Curated Ollama tag suggestions, organized by family. The live list comes
+// from /api/tags but these prefill the datalist + chips when offline.
+// ALL VERIFIED ON https://ollama.com/library (May 2026).
 const _OLLAMA_MODEL_SUGGESTIONS = [
-    "qwen3:0.6b", "qwen3:1.7b", "qwen3:4b", "qwen3:8b",
-    "qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:3b", "qwen2.5:7b",
-    "llama3.2:1b", "llama3.2:3b", "llama3.1:8b",
-    "phi3.5:3.8b", "gemma2:2b", "gemma2:9b",
-    "deepseek-r1:1.5b", "deepseek-r1:7b", "deepseek-r1:8b",
-    "mistral:7b", "codellama:7b",
+    // Qwen3.6 — latest (2 weeks ago on Ollama)
+    "qwen3.6:27b", "qwen3.6:35b",
+    // Qwen3.5 — multimodal family (1 month ago)
+    "qwen3.5:0.8b", "qwen3.5:2b", "qwen3.5:4b", "qwen3.5:9b", "qwen3.5:27b", "qwen3.5:35b",
+    // Qwen3 — original (still excellent)
+    "qwen3:0.6b", "qwen3:1.7b", "qwen3:4b", "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b",
+    // Qwen3 coder
+    "qwen3-coder:30b",
+    // Qwen2.5 — legacy
+    "qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:3b", "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b",
+    "qwen2.5-coder:0.5b", "qwen2.5-coder:1.5b", "qwen2.5-coder:3b", "qwen2.5-coder:7b",
+    // Gemma 4 / 3 / 3n — Google
+    "gemma4:e2b", "gemma4:e4b", "gemma4:26b",
+    "gemma3:270m", "gemma3:1b", "gemma3:4b", "gemma3:12b", "gemma3:27b",
+    "gemma3n:e2b", "gemma3n:e4b",
+    // Llama 3.2 / 3.3 — Meta
+    "llama3.2:1b", "llama3.2:3b", "llama3.1:8b", "llama3.3:70b",
+    // Phi-4 / Phi-3.5 — Microsoft
+    "phi4-mini:3.8b", "phi4-mini-reasoning:3.8b", "phi4:14b", "phi3.5:3.8b",
+    // DeepSeek-R1 distills — reasoning
+    "deepseek-r1:1.5b", "deepseek-r1:7b", "deepseek-r1:8b", "deepseek-r1:14b", "deepseek-r1:32b",
+    // IBM Granite 4 — enterprise tools/RAG
+    "granite4.1:3b", "granite4.1:8b", "granite4.1:30b", "granite4:350m", "granite4:1b", "granite4:3b",
+    // Mistral
+    "mistral:7b", "mistral-small3.2:24b", "mistral-nemo:12b",
+    // Liquid AI LFM2.5
+    "lfm2.5-thinking:1.2b",
+    // SmolLM2 — HF tiny
+    "smollm2:135m", "smollm2:360m", "smollm2:1.7b",
+    // Misc legacy
+    "tinyllama:1.1b",
 ];
 
-// Rough cost estimate per 1 invocation (~512 in-tokens + 512 out) per model.
-// Numbers are illustrative only — pulled from public pricing as of 2026-05.
+// Rough cost estimate per 1 invocation (~512 in + 512 out tokens) per model.
+// Pulled from public pricing pages May 2026 — verify yourself before bulk use.
 const _CLOUD_COST_HINT = {
-    "openai/gpt-4o-mini":            "~$0.0002 / error",
-    "openai/gpt-4o":                 "~$0.005 / error",
-    "openai/gpt-4.1-mini":           "~$0.0003 / error",
-    "anthropic/claude-3-5-haiku":    "~$0.0008 / error",
-    "anthropic/claude-3-5-sonnet":   "~$0.0095 / error",
-    "anthropic/claude-3-7-sonnet":   "~$0.012 / error",
-    "gemini/gemini-1.5-flash":       "~$0.0001 / error",
-    "gemini/gemini-1.5-pro":         "~$0.0035 / error",
-    "gemini/gemini-2.0-flash":       "~$0.0002 / error",
-    "openrouter/auto":               "varies by route",
-    "groq/llama-3.3-70b-versatile":  "FREE tier available",
-    "groq/llama-3.1-8b-instant":     "FREE tier available",
-    "groq/mixtral-8x7b-32768":       "FREE tier available",
-    "deepseek/deepseek-chat":        "~$0.00007 / error",
-    "deepseek/deepseek-reasoner":    "~$0.0006 / error",
+    // OpenAI
+    "openai/gpt-4o-mini":              "~$0.0002 / error",
+    "openai/gpt-4o":                   "~$0.005 / error",
+    "openai/gpt-4.1-mini":             "~$0.0003 / error",
+    "openai/gpt-4.1":                  "~$0.004 / error",
+    "openai/o4-mini":                  "~$0.0008 / error (reasoning)",
+    // Anthropic
+    "anthropic/claude-3-5-haiku":      "~$0.0008 / error",
+    "anthropic/claude-3-5-sonnet":     "~$0.0095 / error",
+    "anthropic/claude-3-7-sonnet":     "~$0.012 / error",
+    "anthropic/claude-sonnet-4":       "~$0.015 / error",
+    // Google Gemini
+    "gemini/gemini-1.5-flash":         "~$0.0001 / error",
+    "gemini/gemini-1.5-pro":           "~$0.0035 / error",
+    "gemini/gemini-2.0-flash":         "~$0.0002 / error",
+    "gemini/gemini-2.5-flash":         "~$0.0003 / error",
+    "gemini/gemini-2.5-pro":           "~$0.004 / error",
+    // OpenRouter
+    "openrouter/auto":                 "varies by route",
+    "openrouter/openai/gpt-4o-mini":   "~$0.0002 / error",
+    // Groq (free tier with rate limits)
+    "groq/llama-3.3-70b-versatile":    "FREE tier (rate-limited)",
+    "groq/llama-3.1-8b-instant":       "FREE tier (rate-limited)",
+    "groq/mixtral-8x7b-32768":         "FREE tier (rate-limited)",
+    "groq/gemma2-9b-it":               "FREE tier (rate-limited)",
+    "groq/qwen-qwq-32b":               "FREE tier (rate-limited)",
+    // DeepSeek (cheapest paid)
+    "deepseek/deepseek-chat":          "~$0.00007 / error",
+    "deepseek/deepseek-reasoner":      "~$0.0006 / error",
 };
 
-// Curated Tier-3 model suggestions per provider (filled into the model
-// <input>'s datalist when the user picks a provider).
+// Tier-3 model datalist per provider. Updated May 2026.
 const _CLOUD_MODEL_SUGGESTIONS = {
-    openai:     ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
-    anthropic:  ["claude-3-5-haiku-latest", "claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest"],
-    gemini:     ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.0-flash-exp"],
-    openrouter: ["openai/gpt-4o-mini", "anthropic/claude-3-5-haiku", "google/gemini-flash-1.5", "auto"],
-    groq:       ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
-    deepseek:   ["deepseek-chat", "deepseek-reasoner"],
+    openai: [
+        "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1",
+        "o4-mini", "o3-mini",
+    ],
+    anthropic: [
+        "claude-3-5-haiku-latest", "claude-3-5-sonnet-latest",
+        "claude-3-7-sonnet-latest", "claude-sonnet-4-latest", "claude-opus-4-latest",
+    ],
+    gemini: [
+        "gemini-1.5-flash-latest", "gemini-1.5-pro-latest",
+        "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro",
+    ],
+    openrouter: [
+        "auto", "openai/gpt-4o-mini", "anthropic/claude-3-5-haiku",
+        "google/gemini-flash-1.5", "deepseek/deepseek-chat",
+        "qwen/qwen-2.5-72b-instruct", "meta-llama/llama-3.3-70b-instruct",
+    ],
+    groq: [
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768", "gemma2-9b-it", "qwen-qwq-32b",
+    ],
+    deepseek: [
+        "deepseek-chat", "deepseek-reasoner",
+    ],
 };
 
 function _statusPill(state /* 'ready' | 'warn' | 'error' | 'idle' */, text) {
@@ -397,8 +501,8 @@ function _statusPill(state /* 'ready' | 'warn' | 'error' | 'idle' */, text) {
         error: { bg: "#3a1818", fg: "#ff8b8b", dot: "#e25151" },
         idle:  { bg: "#252525", fg: "#999",    dot: "#666"   },
     }[state] || { bg: "#252525", fg: "#999", dot: "#666" };
-    return `<span style="display:inline-flex;align-items:center;gap:6px;background:${colors.bg};color:${colors.fg};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500;">
-        <span style="width:7px;height:7px;border-radius:50%;background:${colors.dot};"></span>${text}
+    return `<span style="display:inline-flex;align-items:center;gap:6px;background:${colors.bg};color:${colors.fg};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:500;line-height:1.4;max-width:100%;overflow-wrap:anywhere;white-space:normal;">
+        <span style="width:7px;height:7px;border-radius:50%;background:${colors.dot};flex:0 0 auto;"></span><span style="overflow-wrap:anywhere;">${text}</span>
     </span>`;
 }
 
@@ -406,16 +510,18 @@ function _tierCardHTML(opts) {
     const { tierNum, title, subtitle, color, bodyHTML } = opts;
     return `
     <div class="mec-diag-card" data-tier="${tierNum}" style="border-left:3px solid ${color};margin-bottom:10px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;">
-                <input type="checkbox" data-k="tier${tierNum}_enabled" style="margin:0;"/>
-                <span style="font-weight:600;color:${color};font-size:13px;">Tier ${tierNum}</span>
-                <span style="opacity:0.85;">— ${title}</span>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1;min-width:0;">
+                <input type="checkbox" data-k="tier${tierNum}_enabled" style="margin:0;flex:0 0 auto;"/>
+                <span style="font-weight:600;color:${color};font-size:13px;white-space:nowrap;">Tier ${tierNum}</span>
+                <span style="opacity:0.9;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">— ${title}</span>
             </label>
-            <span class="mec-diag-tier-status" data-tier-status="${tierNum}">${_statusPill("idle", "checking…")}</span>
-            <button class="mec-diag-btn" data-action="test-tier" data-tier="${tierNum}" style="font-size:11px;padding:3px 10px;">Test</button>
+            <button class="mec-diag-btn" data-action="test-tier" data-tier="${tierNum}" style="font-size:11px;padding:3px 10px;flex:0 0 auto;">Test</button>
         </div>
-        <div class="mec-diag-meta" style="font-size:11px;opacity:0.7;margin-bottom:8px;padding-left:24px;">${subtitle}</div>
+        <div style="margin:0 0 4px 24px;">
+            <span class="mec-diag-tier-status" data-tier-status="${tierNum}" style="display:block;">${_statusPill("idle", "checking…")}</span>
+        </div>
+        <div style="font-size:11px;opacity:0.7;line-height:1.4;margin:0 0 6px 24px;">${subtitle}</div>
         <div style="padding-left:24px;">${bodyHTML}</div>
     </div>`;
 }
@@ -479,7 +585,7 @@ async function _renderSettings(body) {
         ${_tierCardHTML({
             tierNum: 2,
             title: "Local LLM (Ollama or llama.cpp)",
-            subtitle: "Runs on your machine. Private, free, no API key. Ollama is recommended — easier setup, more models.",
+            subtitle: "Runs on your machine. Private, free, no API key. Ollama is recommended — supports Qwen3.6 / Qwen3.5 / Gemma 4 / Granite 4 / DeepSeek-R1 out of the box.",
             color: "#5b9bd5",
             bodyHTML: `
                 <div class="mec-diag-kv">
@@ -494,7 +600,7 @@ async function _renderSettings(body) {
                         <span class="k">Server URL</span>
                         <input class="mec-diag-input" data-k="ollama_url" placeholder="http://localhost:11434"/>
                         <span class="k">Model</span>
-                        <input class="mec-diag-input" data-k="ollama_model" list="mec-ollama-model-list" placeholder="qwen3:4b"/>
+                        <input class="mec-diag-input" data-k="ollama_model" list="mec-ollama-model-list" placeholder="qwen3.5:4b"/>
                     </div>
                     <datalist id="mec-ollama-model-list">
                         ${_OLLAMA_MODEL_SUGGESTIONS.map(m => `<option value="${m}"></option>`).join("")}
@@ -504,8 +610,9 @@ async function _renderSettings(body) {
                         <span data-ollama-info style="font-size:10.5px;opacity:0.7;align-self:center;">—</span>
                     </div>
                     <div data-ollama-chips style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"></div>
-                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;">
-                        Install Ollama: <a href="https://ollama.com/download" target="_blank" style="color:#7bb6f4;">ollama.com/download</a> · then run e.g. <code>ollama pull qwen3:4b</code>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;line-height:1.5;">
+                        Install Ollama: <a href="https://ollama.com/download" target="_blank" style="color:#7bb6f4;">ollama.com/download</a><br/>
+                        Browse models: <a href="https://ollama.com/library" target="_blank" style="color:#7bb6f4;">ollama.com/library</a> · pull a recommended one: <code>ollama pull qwen3.5:4b</code> or <code>ollama pull qwen3.6:27b</code>
                     </div>
                 </div>
                 <div data-tier2-llamacpp style="margin-top:6px;display:none;">
@@ -530,8 +637,9 @@ async function _renderSettings(body) {
                             </tbody>
                         </table>
                     </details>
-                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;">
-                        Place GGUF in <code>ComfyUI/models/llm/</code> · install: <code>pip install llama-cpp-python</code>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;line-height:1.5;">
+                        Place GGUF in <code>ComfyUI/models/llm/</code> · install: <code>pip install llama-cpp-python</code><br/>
+                        Download GGUFs from <a href="https://huggingface.co/models?library=gguf&sort=trending" target="_blank" style="color:#7bb6f4;">HuggingFace</a> · <a href="https://www.modelscope.cn/models?name=gguf" target="_blank" style="color:#7bb6f4;">ModelScope</a> · <a href="https://huggingface.co/Qwen" target="_blank" style="color:#7bb6f4;">Qwen org</a>
                     </div>
                 </div>`,
         })}
