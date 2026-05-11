@@ -391,8 +391,52 @@ const _LOCAL_MODEL_SUGGESTIONS = [
     { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "SmolLM2 1.7B" },
     // Mistral Small
     { id: "mistral-small-3.2-24b-instruct-q4_k_m", ram: "~14 GB",   note: "Mistral Small 3.2 24B — vision" },
-    // Misc
+    // Mistral Nemo / Magistral
+    { id: "mistral-nemo-instruct-2407-q4_k_m",     ram: "~7.5 GB",  note: "Mistral Nemo 12B — 128k ctx" },
+    { id: "magistral-small-2506-q4_k_m",           ram: "~14 GB",   note: "Magistral Small 24B — reasoning" },
+    { id: "ministral-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Ministral 3B (edge)" },
+    { id: "ministral-8b-instruct-q4_k_m",          ram: "~5.0 GB",  note: "Ministral 8B" },
+    // NVIDIA Nemotron / Hermes-3
+    { id: "nemotron-mini-4b-instruct-q4_k_m",      ram: "~2.6 GB",  note: "Nemotron-Mini 4B — RAG tuned" },
+    { id: "hermes-3-llama-3.2-3b-q4_k_m",          ram: "~2.0 GB",  note: "Hermes-3 3B — tool use" },
+    { id: "hermes-3-llama-3.1-8b-q4_k_m",          ram: "~5.0 GB",  note: "Hermes-3 8B — agentic" },
+    // Yi-1.5 / 01.AI
+    { id: "yi-1.5-6b-chat-q4_k_m",                 ram: "~3.8 GB",  note: "Yi-1.5 6B — bilingual" },
+    { id: "yi-1.5-9b-chat-q4_k_m",                 ram: "~5.5 GB",  note: "Yi-1.5 9B" },
+    // MiniCPM-3 / OpenBMB
+    { id: "minicpm-3-4b-q4_k_m",                   ram: "~2.7 GB",  note: "MiniCPM-3 4B — strong tiny" },
+    { id: "minicpm-v-2.6-q4_k_m",                  ram: "~5.5 GB",  note: "MiniCPM-V 2.6 8B — vision" },
+    // Internlm 2.5 / 3
+    { id: "internlm2.5-1.8b-chat-q4_k_m",          ram: "~1.2 GB",  note: "InternLM2.5 1.8B" },
+    { id: "internlm2.5-7b-chat-q4_k_m",            ram: "~4.5 GB",  note: "InternLM2.5 7B" },
+    { id: "internlm3-8b-instruct-q4_k_m",          ram: "~5.0 GB",  note: "InternLM3 8B" },
+    // Athene / Nous / Tülu
+    { id: "athene-v2-chat-72b-q4_k_m",             ram: "~40 GB",   note: "Athene-V2 72B — top-tier (needs >24GB)" },
+    { id: "tulu-3-8b-instruct-q4_k_m",             ram: "~5.0 GB",  note: "Tülu 3 8B — Allen AI" },
+    { id: "tulu-3-70b-instruct-q4_k_m",            ram: "~40 GB",   note: "Tülu 3 70B (>24GB)" },
+    // SmolLM3 (newer)
+    { id: "smollm3-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "SmolLM3 3B — HF tiny v3" },
+    // ERNIE 4.5 / Baidu
+    { id: "ernie-4.5-21b-a3b-q4_k_m",              ram: "~12 GB",   note: "ERNIE-4.5 21B-A3B MoE" },
+    // OpenAI gpt-oss / OSS local
+    { id: "gpt-oss-20b-q4_k_m",                    ram: "~12 GB",   note: "gpt-oss 20B — OpenAI open" },
+    { id: "gpt-oss-120b-q4_k_m",                   ram: "~60 GB",   note: "gpt-oss 120B (>24GB)" },
+    // Coding-specialised
+    { id: "deepseek-coder-v2-lite-instruct-q4_k_m",ram: "~9.5 GB",  note: "DeepSeek-Coder-V2 Lite 16B-A2B" },
+    { id: "codegemma-2b-instruct-q4_k_m",          ram: "~1.5 GB",  note: "CodeGemma 2B" },
+    { id: "codegemma-7b-instruct-q4_k_m",          ram: "~4.5 GB",  note: "CodeGemma 7B" },
+    { id: "starcoder2-3b-q4_k_m",                  ram: "~2.0 GB",  note: "StarCoder2 3B" },
+    { id: "starcoder2-7b-q4_k_m",                  ram: "~4.5 GB",  note: "StarCoder2 7B" },
+    { id: "granite-code-3b-instruct-q4_k_m",       ram: "~2.0 GB",  note: "Granite-Code 3B" },
+    { id: "granite-code-8b-instruct-q4_k_m",       ram: "~5.0 GB",  note: "Granite-Code 8B" },
+    // Vision-language (for log+screenshot errors)
+    { id: "llava-1.6-mistral-7b-q4_k_m",           ram: "~5.5 GB",  note: "LLaVA-1.6 7B — vision" },
+    { id: "moondream2-q4_k_m",                     ram: "~1.5 GB",  note: "Moondream2 — tiny vision" },
+    // Misc / legacy
     { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "TinyLlama (legacy weak)" },
+    { id: "stablelm-zephyr-3b-q4_k_m",             ram: "~2.0 GB",  note: "StableLM-Zephyr 3B" },
+    { id: "openchat-3.6-8b-q4_k_m",                ram: "~5.0 GB",  note: "OpenChat 3.6 8B" },
+    { id: "neural-chat-7b-v3.3-q4_k_m",            ram: "~4.5 GB",  note: "Intel Neural-Chat 7B" },
 ];
 
 // Curated Ollama tag suggestions, organized by family. The live list comes
@@ -637,9 +681,13 @@ async function _renderSettings(body) {
                             </tbody>
                         </table>
                     </details>
-                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;line-height:1.5;">
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.7;margin-top:6px;line-height:1.6;">
+                        <div style="background:#1a2632;border-left:2px solid #5b9bd5;padding:4px 8px;margin-bottom:6px;border-radius:3px;">
+                            <b style="color:#7bb6f4;">No Ollama needed.</b> llama.cpp runs the smallest models directly — <code>smollm2-135m</code> (~120 MB RAM), <code>qwen3-0.6b</code> (~450 MB), <code>granite-4-350m</code> (~280 MB). Pure CPU works; GPU optional.
+                        </div>
                         Place GGUF in <code>ComfyUI/models/llm/</code> · install: <code>pip install llama-cpp-python</code><br/>
-                        Download GGUFs from <a href="https://huggingface.co/models?library=gguf&sort=trending" target="_blank" style="color:#7bb6f4;">HuggingFace</a> · <a href="https://www.modelscope.cn/models?name=gguf" target="_blank" style="color:#7bb6f4;">ModelScope</a> · <a href="https://huggingface.co/Qwen" target="_blank" style="color:#7bb6f4;">Qwen org</a>
+                        On Windows / no compiler: <code>pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu</code> (CPU) or <code>/cu124</code> (CUDA 12.4)<br/>
+                        Download GGUFs from <a href="https://huggingface.co/bartowski" target="_blank" style="color:#7bb6f4;">bartowski</a> · <a href="https://huggingface.co/unsloth" target="_blank" style="color:#7bb6f4;">unsloth</a> · <a href="https://huggingface.co/lmstudio-community" target="_blank" style="color:#7bb6f4;">lmstudio-community</a> · <a href="https://huggingface.co/models?library=gguf&sort=trending" target="_blank" style="color:#7bb6f4;">HF trending</a> · <a href="https://www.modelscope.cn/models?name=gguf" target="_blank" style="color:#7bb6f4;">ModelScope</a>
                     </div>
                 </div>`,
         })}
