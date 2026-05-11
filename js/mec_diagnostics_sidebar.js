@@ -726,12 +726,161 @@ async function _renderClipboard(body) {
 }
 
 // -----------------------------------------------------------------------
+// Integrity tab — mirrors the topbar button's modal but inline.
+// Reads live state from window.__MEC_INTEGRITY__ (set by
+// js/nukenodemax/integrity_badges.js). Survives if that script
+// hasn't loaded yet by falling back to a direct /nukenodemax/
+// integrity_report fetch.
+// -----------------------------------------------------------------------
+function _extractPkg(msg) {
+    let m = msg.match(/^The package [`"]([A-Za-z0-9_.\-]+)[`"]/);
+    if (m) return m[1];
+    m = msg.match(/^([A-Za-z0-9_.\-]+)\s+\S+\s+(?:has requirement|requires|depends)/i);
+    if (m) return m[1];
+    return null;
+}
+
+async function _renderIntegrity(body) {
+    body.innerHTML = "";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "mec-diag-toolbar";
+    const refresh = document.createElement("button");
+    refresh.className = "mec-diag-btn primary";
+    refresh.textContent = "Refresh";
+    const openDlg = document.createElement("button");
+    openDlg.className = "mec-diag-btn";
+    openDlg.textContent = "Open full dialog";
+    openDlg.onclick = () => window.__MEC_INTEGRITY__?.open?.();
+    const muteLabel = document.createElement("label");
+    muteLabel.style.cssText = "display:flex;align-items:center;gap:4px;font-size:11px;margin-left:auto;";
+    const muteCb = document.createElement("input");
+    muteCb.type = "checkbox";
+    muteCb.checked = !!window.__MEC_INTEGRITY__?.isMuted?.();
+    muteCb.onchange = () => {
+        window.__MEC_INTEGRITY__?.setMuted?.(muteCb.checked);
+        _toast(muteCb.checked ? "Integrity warnings muted" : "Integrity warnings un-muted");
+    };
+    muteLabel.append(muteCb, document.createTextNode("Mute warnings"));
+    toolbar.append(refresh, openDlg, muteLabel);
+    body.appendChild(toolbar);
+
+    const meta = document.createElement("div");
+    meta.className = "mec-diag-meta";
+    meta.style.cssText = "padding:0 2px 6px;";
+    body.appendChild(meta);
+
+    const list = document.createElement("div");
+    body.appendChild(list);
+
+    function render(state) {
+        const events = state?.events || [];
+        meta.textContent =
+            `pip_check: ${state?.pipOk ? "ok" : "conflicts"} · ` +
+            `checksum drift: ${state?.drift ?? 0} · ` +
+            `backend: ${state?.usedUv ? "uv" : "pip"}` +
+            (state?.fromCache ? " (cached)" : " (fresh)") +
+            (state?.lastUpdated ? ` · ${new Date(state.lastUpdated).toLocaleTimeString()}` : "");
+
+        list.innerHTML = "";
+        if (!events.length) {
+            list.innerHTML = `<div class="mec-diag-empty">No integrity events. Environment looks clean.</div>`;
+            return;
+        }
+
+        // Group by kind for readability.
+        const groups = {};
+        for (const e of events) (groups[e.kind] = groups[e.kind] || []).push(e);
+
+        for (const [kind, items] of Object.entries(groups)) {
+            const h = document.createElement("div");
+            h.style.cssText = "font-weight:600;opacity:0.8;margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;";
+            h.textContent = `${kind.replace(/_/g, " ")} (${items.length})`;
+            list.appendChild(h);
+
+            for (const e of items) {
+                const sev = (e.severity || "warn").toLowerCase();
+                const card = document.createElement("div");
+                card.className = `mec-diag-card ${sev === "error" ? "error" : "warn"}`;
+                const row = document.createElement("div");
+                row.className = "mec-diag-row";
+                const id = document.createElement("span");
+                id.className = "mec-diag-id";
+                id.textContent = sev;
+                const metaR = document.createElement("span");
+                metaR.className = "mec-diag-meta";
+                metaR.textContent = e.file || "";
+                row.append(id, metaR);
+                card.appendChild(row);
+                const msg = document.createElement("div");
+                msg.className = "mec-diag-msg";
+                msg.textContent = e.message;
+                card.appendChild(msg);
+                const pkg = e.kind === "dependency_conflict" ? _extractPkg(e.message) : null;
+                if (pkg) {
+                    const act = document.createElement("button");
+                    act.className = "mec-diag-btn primary";
+                    act.style.cssText = "margin-top:6px;";
+                    act.textContent = `Reinstall ${pkg}`;
+                    act.onclick = () => window.__MEC_INTEGRITY__?.reinstall?.(pkg);
+                    card.appendChild(act);
+                }
+                list.appendChild(card);
+            }
+        }
+    }
+
+    // Subscribe to live state if available; otherwise fetch once.
+    let unsub = null;
+    if (window.__MEC_INTEGRITY__) {
+        unsub = window.__MEC_INTEGRITY__.subscribe(render);
+    } else {
+        const j = await _api("/nukenodemax/integrity_report");
+        render({
+            events: j.events || [],
+            pipOk: j.pip_check ? !!j.pip_check.ok : true,
+            drift: (j.checksum_drift || []).length,
+            usedUv: !!j.used_uv,
+            fromCache: !!j.from_cache,
+            lastUpdated: Date.now(),
+        });
+    }
+
+    refresh.onclick = async () => {
+        if (window.__MEC_INTEGRITY__) {
+            await window.__MEC_INTEGRITY__.refresh();
+            _toast("Integrity report refreshed");
+        } else {
+            const j = await _api("/nukenodemax/integrity_report");
+            render({
+                events: j.events || [],
+                pipOk: j.pip_check ? !!j.pip_check.ok : true,
+                drift: (j.checksum_drift || []).length,
+                usedUv: !!j.used_uv,
+                fromCache: !!j.from_cache,
+                lastUpdated: Date.now(),
+            });
+        }
+    };
+
+    // Tear down the subscription when this body is re-rendered (tab swap).
+    const teardownObs = new MutationObserver(() => {
+        if (!document.body.contains(list)) {
+            if (unsub) { try { unsub(); } catch {} }
+            teardownObs.disconnect();
+        }
+    });
+    teardownObs.observe(body.parentNode || document.body, { childList: true });
+}
+
+// -----------------------------------------------------------------------
 // Tab manager
 // -----------------------------------------------------------------------
 const TABS = [
     { id: "diag",  label: "Diagnostics", render: _renderDiagnostics },
     { id: "stats", label: "Statistics",  render: _renderStatistics },
     { id: "clip",  label: "Clipboard",   render: _renderClipboard  },
+    { id: "intg",  label: "Integrity",   render: _renderIntegrity  },
     { id: "set",   label: "Settings",    render: _renderSettings   },
     { id: "pat",   label: "Patterns",    render: _renderPatterns   },
 ];
