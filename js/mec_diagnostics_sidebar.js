@@ -328,15 +328,35 @@ async function _renderPatterns(body) {
 }
 
 // Curated suggestion list for the local-model input. Free-typing is still
-// allowed (the backend resolves any GGUF stub or absolute path). Includes
-// stronger Qwen3 small-class options requested by the user.
+// allowed (the backend resolves any GGUF stub or absolute path). Each entry
+// shows approx VRAM/RAM footprint at Q4 quant + one-line "best for" hint.
 const _LOCAL_MODEL_SUGGESTIONS = [
-    "qwen2.5-0.5b-instruct-q4_k_m",
-    "qwen2.5-1.5b-instruct-q4_k_m",
-    "qwen2.5-3b-instruct-q4_k_m",
-    "qwen3-0.6b-instruct-q4_k_m",
-    "qwen3-1.7b-instruct-q4_k_m",
-    "qwen3-4b-instruct-q4_k_m",
+    { id: "qwen3-0.6b-instruct-q4_k_m",            ram: "~450 MB",  note: "tiny, fastest" },
+    { id: "qwen3-1.7b-instruct-q4_k_m",            ram: "~1.1 GB",  note: "balanced default" },
+    { id: "qwen3-4b-instruct-q4_k_m",              ram: "~2.5 GB",  note: "strongest small local" },
+    { id: "qwen2.5-0.5b-instruct-q4_k_m",          ram: "~400 MB",  note: "legacy tiny" },
+    { id: "qwen2.5-1.5b-instruct-q4_k_m",          ram: "~1.0 GB",  note: "legacy balanced" },
+    { id: "qwen2.5-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "legacy mid" },
+    { id: "qwen2.5-coder-1.5b-instruct-q4_k_m",    ram: "~1.0 GB",  note: "code-aware" },
+    { id: "phi-3.5-mini-instruct-q4_k_m",          ram: "~2.3 GB",  note: "MS, strong reasoning" },
+    { id: "gemma-2-2b-it-q4_k_m",                  ram: "~1.6 GB",  note: "Google, multilingual" },
+    { id: "llama-3.2-1b-instruct-q4_k_m",          ram: "~770 MB",  note: "Meta, fast" },
+    { id: "llama-3.2-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Meta, good" },
+    { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "HF, fast" },
+    { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "tiniest, weak" },
+    { id: "deepseek-r1-distill-qwen-1.5b-q4_k_m",  ram: "~1.0 GB",  note: "chain-of-thought" },
+    { id: "internlm2.5-1.8b-chat-q4_k_m",          ram: "~1.2 GB",  note: "Shanghai AI Lab" },
+];
+
+// Curated Ollama tag suggestions. The actual list comes from /api/tags but
+// these are shown as quick-pick chips when the daemon isn't reachable yet.
+const _OLLAMA_MODEL_SUGGESTIONS = [
+    "qwen3:0.6b", "qwen3:1.7b", "qwen3:4b", "qwen3:8b",
+    "qwen2.5:0.5b", "qwen2.5:1.5b", "qwen2.5:3b", "qwen2.5:7b",
+    "llama3.2:1b", "llama3.2:3b", "llama3.1:8b",
+    "phi3.5:3.8b", "gemma2:2b", "gemma2:9b",
+    "deepseek-r1:1.5b", "deepseek-r1:7b", "deepseek-r1:8b",
+    "mistral:7b", "codellama:7b",
 ];
 
 // Rough cost estimate per 1 invocation (~512 in-tokens + 512 out) per model.
@@ -344,11 +364,30 @@ const _LOCAL_MODEL_SUGGESTIONS = [
 const _CLOUD_COST_HINT = {
     "openai/gpt-4o-mini":            "~$0.0002 / error",
     "openai/gpt-4o":                 "~$0.005 / error",
+    "openai/gpt-4.1-mini":           "~$0.0003 / error",
     "anthropic/claude-3-5-haiku":    "~$0.0008 / error",
     "anthropic/claude-3-5-sonnet":   "~$0.0095 / error",
+    "anthropic/claude-3-7-sonnet":   "~$0.012 / error",
     "gemini/gemini-1.5-flash":       "~$0.0001 / error",
     "gemini/gemini-1.5-pro":         "~$0.0035 / error",
+    "gemini/gemini-2.0-flash":       "~$0.0002 / error",
     "openrouter/auto":               "varies by route",
+    "groq/llama-3.3-70b-versatile":  "FREE tier available",
+    "groq/llama-3.1-8b-instant":     "FREE tier available",
+    "groq/mixtral-8x7b-32768":       "FREE tier available",
+    "deepseek/deepseek-chat":        "~$0.00007 / error",
+    "deepseek/deepseek-reasoner":    "~$0.0006 / error",
+};
+
+// Curated Tier-3 model suggestions per provider (filled into the model
+// <input>'s datalist when the user picks a provider).
+const _CLOUD_MODEL_SUGGESTIONS = {
+    openai:     ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+    anthropic:  ["claude-3-5-haiku-latest", "claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest"],
+    gemini:     ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.0-flash-exp"],
+    openrouter: ["openai/gpt-4o-mini", "anthropic/claude-3-5-haiku", "google/gemini-flash-1.5", "auto"],
+    groq:       ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+    deepseek:   ["deepseek-chat", "deepseek-reasoner"],
 };
 
 function _statusPill(state /* 'ready' | 'warn' | 'error' | 'idle' */, text) {
@@ -404,33 +443,103 @@ async function _renderSettings(body) {
             subtitle: "Regex/heuristic matcher. Zero VRAM, &lt;1 ms. Always recommended ON — feeds context to the LLM tiers.",
             color: "#3ecf5a",
             bodyHTML: `
-                <div class="mec-diag-toolbar" style="margin:0;padding:0;">
+                <div class="mec-diag-toolbar" style="margin:0;padding:0;gap:6px;">
                     <button class="mec-diag-btn" data-action="reload" style="font-size:11px;padding:3px 10px;">Reload patterns</button>
+                    <button class="mec-diag-btn" data-action="toggle-custom" style="font-size:11px;padding:3px 10px;">Custom patterns ▾</button>
+                </div>
+                <div data-custom-patterns style="display:none;margin-top:8px;border-top:1px dashed #333;padding-top:8px;">
+                    <div style="font-size:11px;font-weight:600;margin-bottom:4px;">Add your own pattern</div>
+                    <div class="mec-diag-kv" style="grid-template-columns:90px 1fr;">
+                        <span class="k">ID</span>
+                        <input class="mec-diag-input" data-cp="id" placeholder="my_custom_oom" style="font-family:monospace;"/>
+                        <span class="k">Regex</span>
+                        <input class="mec-diag-input" data-cp="regex" placeholder="(?i)my custom error message" style="font-family:monospace;"/>
+                        <span class="k">Category</span>
+                        <select class="mec-diag-select" data-cp="category">
+                            <option value="user">user</option>
+                            <option value="vram">vram</option>
+                            <option value="shape">shape</option>
+                            <option value="missing">missing</option>
+                            <option value="network">network</option>
+                            <option value="config">config</option>
+                            <option value="uncategorized">uncategorized</option>
+                        </select>
+                        <span class="k">Cause</span>
+                        <input class="mec-diag-input" data-cp="cause" placeholder="One-sentence explanation"/>
+                        <span class="k">Fixes</span>
+                        <textarea class="mec-diag-input" data-cp="fixes" rows="3" placeholder="One fix per line"></textarea>
+                    </div>
+                    <div class="mec-diag-toolbar" style="margin:6px 0 0 0;padding:0;justify-content:flex-end;">
+                        <button class="mec-diag-btn primary" data-action="add-pattern" style="font-size:11px;padding:3px 10px;">Add pattern</button>
+                    </div>
+                    <div data-custom-list style="margin-top:10px;font-size:11px;"></div>
                 </div>`,
         })}
 
         ${_tierCardHTML({
             tierNum: 2,
-            title: "Local LLM (Ollama / llama.cpp)",
-            subtitle: "Runs on your CPU/GPU. Slower than cloud but private and free. Requires <code>llama-cpp-python</code> and a GGUF model.",
+            title: "Local LLM (Ollama or llama.cpp)",
+            subtitle: "Runs on your machine. Private, free, no API key. Ollama is recommended — easier setup, more models.",
             color: "#5b9bd5",
             bodyHTML: `
                 <div class="mec-diag-kv">
-                    <span class="k">Local model</span>
-                    <input class="mec-diag-input" data-k="local_model" list="mec-local-model-list" placeholder="qwen3-1.7b-instruct-q4_k_m"/>
+                    <span class="k">Backend</span>
+                    <select class="mec-diag-select" data-k="tier2_backend">
+                        <option value="ollama">ollama (recommended)</option>
+                        <option value="llamacpp">llama.cpp + GGUF</option>
+                    </select>
                 </div>
-                <datalist id="mec-local-model-list">
-                    ${_LOCAL_MODEL_SUGGESTIONS.map(m => `<option value="${m}"></option>`).join("")}
-                </datalist>
-                <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:4px;">
-                    Type any GGUF stub or absolute path. Suggested: qwen3 series (stronger reasoning at the same size).
+                <div data-tier2-ollama style="margin-top:6px;">
+                    <div class="mec-diag-kv">
+                        <span class="k">Server URL</span>
+                        <input class="mec-diag-input" data-k="ollama_url" placeholder="http://localhost:11434"/>
+                        <span class="k">Model</span>
+                        <input class="mec-diag-input" data-k="ollama_model" list="mec-ollama-model-list" placeholder="qwen3:4b"/>
+                    </div>
+                    <datalist id="mec-ollama-model-list">
+                        ${_OLLAMA_MODEL_SUGGESTIONS.map(m => `<option value="${m}"></option>`).join("")}
+                    </datalist>
+                    <div class="mec-diag-toolbar" style="margin:6px 0 0 0;padding:0;gap:6px;">
+                        <button class="mec-diag-btn" data-action="ollama-refresh" type="button" style="font-size:11px;padding:3px 10px;">Refresh installed</button>
+                        <span data-ollama-info style="font-size:10.5px;opacity:0.7;align-self:center;">—</span>
+                    </div>
+                    <div data-ollama-chips style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;">
+                        Install Ollama: <a href="https://ollama.com/download" target="_blank" style="color:#7bb6f4;">ollama.com/download</a> · then run e.g. <code>ollama pull qwen3:4b</code>
+                    </div>
+                </div>
+                <div data-tier2-llamacpp style="margin-top:6px;display:none;">
+                    <div class="mec-diag-kv">
+                        <span class="k">GGUF stub</span>
+                        <input class="mec-diag-input" data-k="local_model" list="mec-local-model-list" placeholder="qwen3-1.7b-instruct-q4_k_m"/>
+                    </div>
+                    <datalist id="mec-local-model-list">
+                        ${_LOCAL_MODEL_SUGGESTIONS.map(m => `<option value="${m.id}"></option>`).join("")}
+                    </datalist>
+                    <details style="margin-top:6px;">
+                        <summary style="cursor:pointer;font-size:11px;opacity:0.8;">Curated GGUF catalog (${_LOCAL_MODEL_SUGGESTIONS.length} models)</summary>
+                        <table style="width:100%;font-size:10.5px;border-collapse:collapse;margin-top:4px;">
+                            <thead><tr style="opacity:0.7;text-align:left;"><th style="padding:2px 4px;">Model</th><th style="padding:2px 4px;">VRAM</th><th style="padding:2px 4px;">Note</th></tr></thead>
+                            <tbody>
+                            ${_LOCAL_MODEL_SUGGESTIONS.map(m => `
+                                <tr data-pick="${m.id}" style="cursor:pointer;border-top:1px solid #2a2a2a;">
+                                    <td style="padding:2px 4px;font-family:monospace;">${m.id}</td>
+                                    <td style="padding:2px 4px;opacity:0.8;">${m.ram}</td>
+                                    <td style="padding:2px 4px;opacity:0.7;">${m.note}</td>
+                                </tr>`).join("")}
+                            </tbody>
+                        </table>
+                    </details>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;">
+                        Place GGUF in <code>ComfyUI/models/llm/</code> · install: <code>pip install llama-cpp-python</code>
+                    </div>
                 </div>`,
         })}
 
         ${_tierCardHTML({
             tierNum: 3,
-            title: "Cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter)",
-            subtitle: "Fastest and strongest, but uses an API key and costs per call. Stored encrypted.",
+            title: "Cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter / Groq / DeepSeek)",
+            subtitle: "Fastest and strongest. Groq has a free tier; OpenRouter and DeepSeek are cheapest paid. Keys are stored encrypted.",
             color: "#d58a3e",
             bodyHTML: `
                 <div class="mec-diag-kv">
@@ -440,9 +549,11 @@ async function _renderSettings(body) {
                         <option value="anthropic">anthropic</option>
                         <option value="gemini">gemini</option>
                         <option value="openrouter">openrouter</option>
+                        <option value="groq">groq (free tier)</option>
+                        <option value="deepseek">deepseek (cheap)</option>
                     </select>
                     <span class="k">Model</span>
-                    <input class="mec-diag-input" data-k="cloud_model" placeholder="gpt-4o-mini"/>
+                    <input class="mec-diag-input" data-k="cloud_model" list="mec-cloud-model-list" placeholder="gpt-4o-mini"/>
                     <span class="k">API key</span>
                     <span style="display:flex;gap:4px;align-items:center;">
                         <input class="mec-diag-input" data-k-secret="api_key" type="password"
@@ -451,6 +562,7 @@ async function _renderSettings(body) {
                         <button class="mec-diag-btn" data-action="save-key" type="button" style="font-size:11px;padding:3px 10px;">Save key</button>
                     </span>
                 </div>
+                <datalist id="mec-cloud-model-list"></datalist>
                 <div class="mec-diag-meta" data-cost-hint style="font-size:10.5px;opacity:0.6;margin-top:4px;">
                     Cost: —
                 </div>`,
@@ -494,6 +606,118 @@ async function _renderSettings(body) {
     wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", updateCostHint);
     wrap.querySelector('[data-k="cloud_model"]').addEventListener("input", updateCostHint);
     updateCostHint();
+
+    // ----- Cloud model datalist updates with provider -----
+    const cloudModelDL = wrap.querySelector("#mec-cloud-model-list");
+    const cloudModelInput = wrap.querySelector('[data-k="cloud_model"]');
+    const refreshCloudDatalist = () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const opts = _CLOUD_MODEL_SUGGESTIONS[prov] || [];
+        cloudModelDL.innerHTML = opts.map(m => `<option value="${m}"></option>`).join("");
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", refreshCloudDatalist);
+    refreshCloudDatalist();
+
+    // ----- Tier 2 backend toggle (ollama vs llama.cpp) -----
+    const backendSel = wrap.querySelector('[data-k="tier2_backend"]');
+    const ollamaPane = wrap.querySelector("[data-tier2-ollama]");
+    const llamaPane  = wrap.querySelector("[data-tier2-llamacpp]");
+    const syncTier2Pane = () => {
+        const isOl = backendSel.value === "ollama";
+        ollamaPane.style.display = isOl ? "" : "none";
+        llamaPane.style.display  = isOl ? "none" : "";
+    };
+    backendSel.addEventListener("change", syncTier2Pane);
+    syncTier2Pane();
+
+    // ----- Tier 2 / llama.cpp: clickable GGUF rows -----
+    for (const tr of llamaPane.querySelectorAll("tr[data-pick]")) {
+        tr.addEventListener("click", () => {
+            llamaPane.querySelector('[data-k="local_model"]').value = tr.dataset.pick;
+        });
+    }
+
+    // ----- Tier 2 / Ollama: refresh installed models -----
+    const ollamaInfo = ollamaPane.querySelector("[data-ollama-info]");
+    const ollamaChips = ollamaPane.querySelector("[data-ollama-chips]");
+    const ollamaModelInput = ollamaPane.querySelector('[data-k="ollama_model"]');
+    const refreshOllama = async () => {
+        const url = ollamaPane.querySelector('[data-k="ollama_url"]').value || "http://localhost:11434";
+        ollamaInfo.textContent = "checking…";
+        ollamaChips.innerHTML = "";
+        const r = await _api(`/mec/diagnostics/ollama/tags?url=${encodeURIComponent(url)}`);
+        if (!r.success) { ollamaInfo.textContent = "error: " + (r.message || r.error); return; }
+        if (!r.data.available) { ollamaInfo.textContent = "daemon unreachable"; return; }
+        const models = r.data.models || [];
+        ollamaInfo.textContent = models.length ? `${models.length} installed` : "no models pulled";
+        for (const m of models) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "mec-diag-btn";
+            chip.style.cssText = "font-size:10.5px;padding:2px 8px;background:#2a3a4a;";
+            chip.textContent = m;
+            chip.onclick = () => { ollamaModelInput.value = m; };
+            ollamaChips.appendChild(chip);
+        }
+    };
+    ollamaPane.querySelector('[data-action="ollama-refresh"]').onclick = refreshOllama;
+    // Auto-probe once on first render (cheap).
+    setTimeout(() => { if (backendSel.value === "ollama") refreshOllama(); }, 50);
+
+    // ----- Tier 1: custom-pattern toggle + list + add/remove -----
+    const customWrap = wrap.querySelector("[data-custom-patterns]");
+    const customList = wrap.querySelector("[data-custom-list]");
+    wrap.querySelector('[data-action="toggle-custom"]').onclick = async () => {
+        const showing = customWrap.style.display !== "none";
+        customWrap.style.display = showing ? "none" : "";
+        if (!showing) await refreshCustomList();
+    };
+    const refreshCustomList = async () => {
+        customList.innerHTML = "loading…";
+        const r = await _api("/mec/diagnostics/patterns/custom");
+        if (!r.success) { customList.textContent = "error: " + r.message; return; }
+        const items = (r.data && r.data.patterns) || [];
+        if (!items.length) { customList.innerHTML = `<em style="opacity:0.6;">No custom patterns yet.</em>`; return; }
+        customList.innerHTML = `<div style="font-weight:600;margin-bottom:4px;">Current custom patterns (${items.length})</div>` +
+            items.map(p => `
+                <div style="display:flex;gap:6px;align-items:center;padding:3px 0;border-top:1px dashed #2a2a2a;">
+                    <code style="flex:0 0 auto;">${p.id}</code>
+                    <span style="flex:1;opacity:0.75;font-size:10px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.regex}</span>
+                    <span style="opacity:0.6;font-size:10px;">${p.category}</span>
+                    <button class="mec-diag-btn" data-rm="${p.id}" style="font-size:10.5px;padding:1px 6px;">✕</button>
+                </div>`).join("");
+        for (const btn of customList.querySelectorAll("[data-rm]")) {
+            btn.onclick = async () => {
+                const id = btn.dataset.rm;
+                if (!confirm(`Remove custom pattern "${id}"?`)) return;
+                const r2 = await _api(`/mec/diagnostics/patterns/custom?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+                if (r2.success) { _toast(`Removed "${id}"`, "success"); await refreshCustomList(); }
+                else _toast("Remove failed: " + r2.message, "error");
+            };
+        }
+    };
+    wrap.querySelector('[data-action="add-pattern"]').onclick = async () => {
+        const get = (name) => (wrap.querySelector(`[data-cp="${name}"]`).value || "").trim();
+        const payload = {
+            id: get("id"),
+            regex: get("regex"),
+            category: get("category") || "user",
+            cause: get("cause"),
+            fixes: get("fixes").split("\n").map(s => s.trim()).filter(Boolean),
+        };
+        if (!payload.id || !payload.regex) { _toast("ID and regex are required", "warn"); return; }
+        const r = await _api("/mec/diagnostics/patterns/custom", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (r.success) {
+            _toast(`Added "${payload.id}". Total patterns: ${r.data.total_patterns}`, "success");
+            for (const cp of wrap.querySelectorAll("[data-cp]")) cp.value = cp.tagName === "SELECT" ? cp.options[0].value : "";
+            await refreshCustomList();
+            await refreshStatus();
+        } else { _toast("Add failed: " + r.message, "error"); }
+    };
 
     // Status pill loader.
     const setStatus = (n, html) => {

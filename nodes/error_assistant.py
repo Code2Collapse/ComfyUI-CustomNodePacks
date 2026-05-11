@@ -424,11 +424,15 @@ _DEFAULTS = {
     "tier1_enabled": True,
     "tier2_enabled": False,
     "tier3_enabled": True,
-    "cloud_provider": "openai",               # openai|anthropic|gemini|openrouter
+    "cloud_provider": "openai",               # openai|anthropic|gemini|openrouter|groq|deepseek
     "cloud_model": "gpt-4o-mini",
     # API keys are stored encrypted via secrets_store.py — never in this dict
     "local_model": "qwen2.5-0.5b-instruct-q4_k_m",
     "local_threads": 0,                        # 0 = llama.cpp default
+    # Tier 2 backend: "llamacpp" (local GGUF) or "ollama" (HTTP daemon).
+    "tier2_backend": "llamacpp",
+    "ollama_url": "http://localhost:11434",
+    "ollama_model": "qwen3:4b",
     "stream": True,
     "max_tokens": 512,
     "include_traceback": True,                 # send last few frames to LLM
@@ -536,8 +540,31 @@ def _build_prompt(exc_type: str, msg: str, node_class: Optional[str],
 
 
 def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
-    """Run the user-selected GGUF model on CPU via llama-cpp-python.
+    """Run the user-selected local model. Backend = "llamacpp" or "ollama".
     Returns text or None if backend unavailable."""
+    backend = (settings.get("tier2_backend") or "llamacpp").strip().lower()
+    if backend == "ollama":
+        try:
+            from . import ollama_llm  # type: ignore
+        except Exception:
+            try:
+                import importlib
+                ollama_llm = importlib.import_module(
+                    "nodes.ollama_llm", package=__package__)
+            except Exception as e:
+                log.info("[error_assistant] ollama_llm unavailable: %s", e)
+                return None
+        try:
+            return ollama_llm.generate(
+                model=settings.get("ollama_model") or "qwen3:4b",
+                prompt=prompt,
+                url=settings.get("ollama_url"),
+                max_tokens=settings.get("max_tokens", 512),
+            )
+        except Exception as e:
+            log.warning("[error_assistant] ollama gen failed: %s", e)
+            return None
+    # Default: llama-cpp-python with a local GGUF file.
     global _local_backend
     try:
         from . import local_llm  # type: ignore
@@ -659,9 +686,16 @@ def explain(exc: BaseException,
     if mode in ("auto", "local_only"):
         text = _explain_local(prompt, settings)
         if text:
+            backend = (settings.get("tier2_backend") or "llamacpp").lower()
+            if backend == "ollama":
+                t2_provider = "ollama"
+                t2_model = settings.get("ollama_model") or "qwen3:4b"
+            else:
+                t2_provider = "local"
+                t2_model = settings.get("local_model")
             return _format_llm_result(text, tier=2, tier1=tier1, exc_type=exc_type, msg=msg,
-                                      provider="local",
-                                      model=settings.get("local_model"))
+                                      provider=t2_provider,
+                                      model=t2_model)
 
     # --- Fall back to Tier 1 ---
     return tier1 or _fallback(exc_type, msg)

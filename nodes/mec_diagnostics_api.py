@@ -261,11 +261,23 @@ def register_routes(server) -> None:
             except Exception:
                 return None
 
+    def _import_ollama_llm():
+        try:
+            from . import ollama_llm as _ol  # type: ignore
+            return _ol
+        except Exception:
+            try:
+                from nodes import ollama_llm as _ol  # type: ignore
+                return _ol
+            except Exception:
+                return None
+
     @routes.get("/mec/diagnostics/error_assistant/status")
     async def _ea_status(_req):  # noqa: ARG001
         ea = _import_ea()
         ss = _import_secrets()
         ll = _import_local_llm()
+        ol = _import_ollama_llm()
         s = ea.load_settings() if ea else {}
         # Tier 1
         try:
@@ -273,29 +285,49 @@ def register_routes(server) -> None:
             t1 = {"ready": t1_count > 0, "detail": f"{t1_count} pattern(s) loaded"}
         except Exception as e:
             t1 = {"ready": False, "detail": f"pattern load failed: {e}"}
-        # Tier 2: model file resolvable + llama-cpp-python importable.
+        # Tier 2 — depends on selected backend (llamacpp | ollama).
+        backend = (s.get("tier2_backend") or "llamacpp").strip().lower()
         t2_detail = []
         t2_ready = True
-        if ll is not None:
-            mid = s.get("local_model", "")
-            try:
-                path = ll._resolve_model_path(mid) if hasattr(ll, "_resolve_model_path") else None
-            except Exception:
-                path = None
-            if path:
-                t2_detail.append(f"model: {os.path.basename(path)}")
+        if backend == "ollama":
+            url = s.get("ollama_url") or "http://localhost:11434"
+            t2_detail.append(f"backend: ollama @ {url}")
+            if ol is None:
+                t2_ready = False
+                t2_detail.append("ollama_llm module unavailable")
+            elif ol.is_available(url):
+                models = ol.list_models(url)
+                t2_detail.append(f"models: {len(models)}")
+                want = s.get("ollama_model") or ""
+                if want and want not in models:
+                    t2_ready = False
+                    t2_detail.append(f"model '{want}' NOT pulled — run "
+                                     f"`ollama pull {want}`")
             else:
                 t2_ready = False
-                t2_detail.append(f"model not found ({mid or 'unset'})")
-            try:
-                import llama_cpp  # noqa: F401
-                t2_detail.append("llama-cpp-python ok")
-            except Exception:
-                t2_ready = False
-                t2_detail.append("llama-cpp-python missing")
+                t2_detail.append("ollama daemon unreachable")
         else:
-            t2_ready = False
-            t2_detail.append("local_llm module unavailable")
+            t2_detail.append("backend: llama-cpp-python")
+            if ll is not None:
+                mid = s.get("local_model", "")
+                try:
+                    path = ll._resolve_model_path(mid) if hasattr(ll, "_resolve_model_path") else None
+                except Exception:
+                    path = None
+                if path:
+                    t2_detail.append(f"model: {os.path.basename(path)}")
+                else:
+                    t2_ready = False
+                    t2_detail.append(f"model not found ({mid or 'unset'})")
+                try:
+                    import llama_cpp  # noqa: F401
+                    t2_detail.append("llama-cpp-python ok")
+                except Exception:
+                    t2_ready = False
+                    t2_detail.append("llama-cpp-python missing")
+            else:
+                t2_ready = False
+                t2_detail.append("local_llm module unavailable")
         t2 = {"ready": t2_ready, "detail": "; ".join(t2_detail)}
         # Tier 3: API key for selected provider.
         prov = s.get("cloud_provider", "openai")
@@ -403,6 +435,124 @@ def register_routes(server) -> None:
         except Exception as e:
             return web.json_response(_envelope_err(
                 "secrets_write_failed", f"{type(e).__name__}: {e}"), status=500)
+
+    # -----------------------------------------------------------------
+    # Tier 2 — Ollama daemon helpers
+    # -----------------------------------------------------------------
+    @routes.get("/mec/diagnostics/ollama/tags")
+    async def _ol_tags(req):
+        ol = _import_ollama_llm()
+        if ol is None:
+            return web.json_response(_envelope_err(
+                "ollama_unavailable", "ollama_llm module not importable"),
+                status=500)
+        url = req.query.get("url")
+        if not url:
+            ea = _import_ea()
+            s = ea.load_settings() if ea else {}
+            url = s.get("ollama_url") or "http://localhost:11434"
+        try:
+            avail = ol.is_available(url)
+            models = ol.list_models(url) if avail else []
+            return web.json_response(_envelope_ok({
+                "url": url,
+                "available": avail,
+                "models": models,
+            }))
+        except Exception as e:
+            return web.json_response(_envelope_err(
+                "ollama_tags_failed", f"{type(e).__name__}: {e}"), status=500)
+
+    # -----------------------------------------------------------------
+    # Tier 1 — custom user patterns (add / list / remove / hot-reload)
+    # -----------------------------------------------------------------
+    def _user_patterns_path():
+        here = os.path.dirname(os.path.abspath(__file__))
+        pack_root = os.path.dirname(here)
+        d = os.path.join(pack_root, "patterns", "user")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "user_patterns.json")
+
+    def _load_user_patterns():
+        import json
+        p = _user_patterns_path()
+        if not os.path.exists(p):
+            return {"patterns": []}
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or not isinstance(data.get("patterns"), list):
+                return {"patterns": []}
+            return data
+        except Exception:
+            return {"patterns": []}
+
+    def _save_user_patterns(data):
+        import json
+        p = _user_patterns_path()
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    @routes.get("/mec/diagnostics/patterns/custom")
+    async def _custom_list(_req):  # noqa: ARG001
+        return web.json_response(_envelope_ok(_load_user_patterns()))
+
+    @routes.post("/mec/diagnostics/patterns/custom")
+    async def _custom_add(req):
+        import re as _re
+        try:
+            payload = await req.json()
+        except Exception as e:
+            return web.json_response(_envelope_err("bad_json", str(e)), status=400)
+        pid = str(payload.get("id") or "").strip()
+        regex = str(payload.get("regex") or "").strip()
+        if not pid or not regex:
+            return web.json_response(_envelope_err(
+                "missing_field", "id and regex are required"), status=400)
+        try:
+            _re.compile(regex)
+        except _re.error as e:
+            return web.json_response(_envelope_err(
+                "bad_regex", f"invalid regex: {e}"), status=400)
+        entry = {
+            "id": pid,
+            "regex": regex,
+            "cause": str(payload.get("cause") or ""),
+            "fixes": list(payload.get("fixes") or []),
+            "category": str(payload.get("category") or "user"),
+            "exc_types": list(payload.get("exc_types") or []),
+            "priority": int(payload.get("priority") or 50),
+            "confidence": float(payload.get("confidence") or 0.8),
+        }
+        data = _load_user_patterns()
+        # replace if id exists, else append
+        out = [p for p in data["patterns"] if p.get("id") != pid]
+        out.append(entry)
+        data["patterns"] = out
+        _save_user_patterns(data)
+        # hot reload
+        ea = _import_ea()
+        n = ea.reload_patterns() if ea else 0
+        return web.json_response(_envelope_ok({
+            "added": entry, "total_patterns": n,
+        }))
+
+    @routes.delete("/mec/diagnostics/patterns/custom")
+    async def _custom_remove(req):
+        pid = req.query.get("id")
+        if not pid:
+            return web.json_response(_envelope_err(
+                "missing_id", "query param `id` is required"), status=400)
+        data = _load_user_patterns()
+        before = len(data["patterns"])
+        data["patterns"] = [p for p in data["patterns"] if p.get("id") != pid]
+        removed = before - len(data["patterns"])
+        _save_user_patterns(data)
+        ea = _import_ea()
+        n = ea.reload_patterns() if ea else 0
+        return web.json_response(_envelope_ok({
+            "removed": removed, "total_patterns": n,
+        }))
 
     log.info("[mec_diagnostics] /mec/diagnostics/* routes registered")
 

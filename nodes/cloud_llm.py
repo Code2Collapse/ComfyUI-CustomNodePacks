@@ -160,6 +160,56 @@ _DISPATCH = {
 }
 
 
+def _groq(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+    key = _get_key("groq")
+    if not key:
+        return None
+    body = {
+        "model": model or "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    j = _http_post("https://api.groq.com/openai/v1/chat/completions", headers, body)
+    if not j:
+        return None
+    try:
+        return (j["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return None
+
+
+def _deepseek(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+    key = _get_key("deepseek")
+    if not key:
+        return None
+    body = {
+        "model": model or "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    j = _http_post("https://api.deepseek.com/v1/chat/completions", headers, body)
+    if not j:
+        return None
+    try:
+        return (j["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return None
+
+
+_DISPATCH["groq"]     = _groq
+_DISPATCH["deepseek"] = _deepseek
+
+
 def generate(provider: str, model: str, prompt: str,
              max_tokens: int = 512) -> Optional[str]:
     fn = _DISPATCH.get((provider or "").strip().lower())

@@ -15,6 +15,7 @@ overlays — strictly NO console.log fallback for telemetry.
 """
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import time
@@ -114,10 +115,15 @@ def install() -> bool:
         log.warning("[insight] no PromptExecutor / GraphExecution class found")
         return False
 
-    # The actual per-node call goes through `_map_node_over_list` or
-    # `recursive_execute`. We wrap whichever exists.
+    # The actual per-node call goes through different functions depending on
+    # ComfyUI version. We wrap whichever exists, in priority order:
+    #   - current (2024+): top-level `execute(server, dynprompt, caches,
+    #     current_item, extra_data, executed, prompt_id, ...)`
+    #   - older          : `recursive_execute(...)`
+    #   - ancient        : `_map_node_over_list(...)`
     candidates = [
-        ("recursive_execute", getattr(_exec, "recursive_execute", None)),
+        ("execute",             getattr(_exec, "execute", None)),
+        ("recursive_execute",   getattr(_exec, "recursive_execute", None)),
         ("_map_node_over_list", getattr(_exec, "_map_node_over_list", None)),
     ]
     target_fn_name = None
@@ -128,60 +134,105 @@ def install() -> bool:
             target_fn = fn
             break
     if target_fn is None:
-        log.warning("[insight] no recursive_execute / _map_node_over_list found")
+        log.warning("[insight] no execute / recursive_execute / _map_node_over_list found")
         return False
 
-    @functools.wraps(target_fn)
-    def wrapped(*args, **kwargs):
-        node_id = None
-        # Heuristic: ComfyUI passes `unique_id` either positionally or as kwarg.
-        for key in ("unique_id", "node_id"):
+    def _extract_node_id(args, kwargs):
+        for key in ("unique_id", "node_id", "current_item"):
             if key in kwargs:
-                node_id = kwargs[key]
-                break
-        if node_id is None and len(args) >= 4:
-            node_id = args[3]
+                return kwargs[key]
+        if len(args) >= 4:
+            # current `execute(server, dynprompt, caches, current_item, ...)` and
+            # older `recursive_execute(server, prompt, outputs, current_item, ...)`
+            return args[3]
+        return None
 
-        torch_dev_avail = torch.cuda.is_available()
-        if torch_dev_avail:
+    def _snapshot_mem():
+        if torch.cuda.is_available():
             torch.cuda.synchronize()
-            mem_before = torch.cuda.memory_allocated()
-            peak_before = torch.cuda.max_memory_allocated()
-        else:
-            mem_before = peak_before = 0
-        t0 = time.time()
+            return (torch.cuda.memory_allocated(),
+                    torch.cuda.max_memory_allocated())
+        return (0, 0)
+
+    def _emit_done(node_id, t0, mem_before, peak_before, result):
+        elapsed = (time.time() - t0) * 1000.0
+        mem_after, peak_after = _snapshot_mem()
+        # ComfyUI's `execute()` returns an ExecutionResult enum. On FAILURE
+        # it doesn't raise — it returns the failure value. Detect that.
+        is_failure = False
         try:
-            result = target_fn(*args, **kwargs)
-            elapsed = (time.time() - t0) * 1000.0
-            if torch_dev_avail:
-                torch.cuda.synchronize()
-                mem_after = torch.cuda.memory_allocated()
-                peak_after = torch.cuda.max_memory_allocated()
+            ER = getattr(_exec, "ExecutionResult", None)
+            if ER is not None and result is not None:
+                fail_val = getattr(ER, "FAILURE", None)
+                # `execute` returns a tuple (ExecutionResult, error, ex) on the
+                # current API; older versions just return the enum.
+                check = result[0] if isinstance(result, tuple) else result
+                if fail_val is not None and check == fail_val:
+                    is_failure = True
+        except Exception:
+            pass
+        ev = {
+            "type": "node_error" if is_failure else "node_done",
+            "node_id": node_id,
+            "elapsed_ms": elapsed,
+            "vram_delta_mb": (mem_after - mem_before) / (1 << 20),
+            "vram_peak_mb": (peak_after - peak_before) / (1 << 20),
+        }
+        if is_failure and isinstance(result, tuple) and len(result) >= 3:
+            err, ex = result[1], result[2]
+            if isinstance(err, dict):
+                ev["exc_type"] = err.get("exception_type") or (
+                    type(ex).__name__ if ex else "Exception")
+                ev["exc_msg"] = err.get("exception_message") or (
+                    str(ex) if ex else "")
             else:
-                mem_after = peak_after = 0
-            _emit({
-                "type": "node_done",
-                "node_id": node_id,
-                "elapsed_ms": elapsed,
-                "vram_delta_mb": (mem_after - mem_before) / (1 << 20),
-                "vram_peak_mb": (peak_after - peak_before) / (1 << 20),
-            })
-            return result
-        except BaseException as e:
-            elapsed = (time.time() - t0) * 1000.0
-            _emit({
-                "type": "node_error",
-                "node_id": node_id,
-                "elapsed_ms": elapsed,
-                "exc_type": type(e).__name__,
-                "exc_msg": str(e),
-                "hint": explain_exception(e),
-                "trace": traceback.format_exc(limit=12),
-            })
-            raise
+                ev["exc_type"] = type(ex).__name__ if ex else "Exception"
+                ev["exc_msg"] = str(ex) if ex else ""
+            ev["hint"] = explain_exception(ex) if ex else ""
+        _emit(ev)
+
+    def _emit_raise(node_id, t0, e):
+        elapsed = (time.time() - t0) * 1000.0
+        _emit({
+            "type": "node_error",
+            "node_id": node_id,
+            "elapsed_ms": elapsed,
+            "exc_type": type(e).__name__,
+            "exc_msg": str(e),
+            "hint": explain_exception(e),
+            "trace": traceback.format_exc(limit=12),
+        })
+
+    if asyncio.iscoroutinefunction(target_fn):
+        @functools.wraps(target_fn)
+        async def wrapped(*args, **kwargs):
+            node_id = _extract_node_id(args, kwargs)
+            mem_before, peak_before = _snapshot_mem()
+            t0 = time.time()
+            try:
+                result = await target_fn(*args, **kwargs)
+                _emit_done(node_id, t0, mem_before, peak_before, result)
+                return result
+            except BaseException as e:
+                _emit_raise(node_id, t0, e)
+                raise
+    else:
+        @functools.wraps(target_fn)
+        def wrapped(*args, **kwargs):
+            node_id = _extract_node_id(args, kwargs)
+            mem_before, peak_before = _snapshot_mem()
+            t0 = time.time()
+            try:
+                result = target_fn(*args, **kwargs)
+                _emit_done(node_id, t0, mem_before, peak_before, result)
+                return result
+            except BaseException as e:
+                _emit_raise(node_id, t0, e)
+                raise
 
     setattr(_exec, target_fn_name, wrapped)
-    log.info("[insight] wrapped execution.%s", target_fn_name)
+    log.info("[insight] wrapped execution.%s (async=%s)",
+             target_fn_name, asyncio.iscoroutinefunction(target_fn))
     _INSTALLED = True
     return True
 
