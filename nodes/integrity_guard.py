@@ -46,15 +46,59 @@ log = logging.getLogger("MEC.integrity")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PACK_ROOT = os.path.dirname(_HERE)
 _CHECKSUM_PATH = os.path.join(_PACK_ROOT, "third_party", "checksums.json")
-_CACHE_PATH = os.path.join(_PACK_ROOT, ".integrity_cache.json")
+
+
+def _pick_cache_path() -> str:
+    """Choose a writable location for the integrity cache.
+
+    Preference order:
+      1. <pack_root>/.cache/integrity.json   (next to the code, normal case)
+      2. <user_data_dir>/MEC/integrity_cache.json  (Comfy user dir)
+      3. <tempdir>/MEC_integrity_cache.json  (last resort)
+
+    Some installs (Manager-managed, read-only mounts, system-wide installs)
+    cannot write inside the pack directory. Falling back keeps integrity
+    checks working on those systems instead of repeatedly re-running the
+    scan because the cache write silently failed.
+    """
+    candidates = [os.path.join(_PACK_ROOT, ".cache", "integrity.json")]
+    try:
+        import folder_paths  # type: ignore
+        user_dir = getattr(folder_paths, "get_user_directory", lambda: None)()
+        if user_dir:
+            candidates.append(os.path.join(user_dir, "MEC", "integrity_cache.json"))
+    except Exception:
+        pass
+    import tempfile
+    candidates.append(os.path.join(tempfile.gettempdir(), "MEC_integrity_cache.json"))
+    # Legacy location — read-only fallback so existing caches still load.
+    legacy = os.path.join(_PACK_ROOT, ".integrity_cache.json")
+    for path in candidates:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # Probe writability without clobbering existing data.
+            probe = path + ".probe"
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(probe)
+            return path
+        except OSError:
+            continue
+    # Everything failed — return the first candidate, _save_cache will log it.
+    return legacy
+
+
+_CACHE_PATH = _pick_cache_path()
+_LEGACY_CACHE_PATH = os.path.join(_PACK_ROOT, ".integrity_cache.json")
 
 # Cache TTL: how long a successful scan stays valid before re-running.
 _CACHE_TTL_SECONDS = 24 * 3600  # 24h
 
 # Defer the initial background scan so ComfyUI + Manager finish their own
-# startup work first. This stops Manager's update-check from being kicked
-# off because our subprocess churn happens to land in its startup window.
-_STARTUP_DELAY_SECONDS = 20
+# startup work first. Tuned down from 20s — users open the diagnostics
+# panel quickly and a stale "scan running…" frustrates them more than the
+# tiny chance of competing with Manager's startup check.
+_STARTUP_DELAY_SECONDS = 8
 
 # Locate `uv` once at import time. uv is ~5–20x faster than `python -m pip`
 # at metadata-only operations (pip check, pip tree). Falls back to pip if
@@ -62,7 +106,7 @@ _STARTUP_DELAY_SECONDS = 20
 _UV_BIN: Optional[str] = shutil.which("uv")
 
 _LOCK = threading.Lock()
-_LAST_REPORT: Dict[str, Any] = {"ready": False}
+_LAST_REPORT: Dict[str, Any] = {"ready": False, "status": "pending"}
 
 
 # =====================================================================
@@ -152,23 +196,25 @@ def _env_fingerprint() -> str:
 
 def _load_cache() -> Optional[Dict[str, Any]]:
     """Return cached report if fresh AND fingerprint matches, else None."""
-    try:
-        if not os.path.isfile(_CACHE_PATH):
-            return None
-        with open(_CACHE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        ts = float(data.get("_cached_at", 0))
-        if time.time() - ts > _CACHE_TTL_SECONDS:
-            return None
-        if data.get("_fingerprint") != _env_fingerprint():
-            return None
-        # Strip cache-only fields before returning.
-        report = {k: v for k, v in data.items()
-                  if k not in ("_cached_at", "_fingerprint")}
-        return report
-    except (OSError, json.JSONDecodeError, ValueError) as e:
-        log.debug("[integrity] cache load failed: %s", e)
-        return None
+    paths = [_CACHE_PATH]
+    if _LEGACY_CACHE_PATH != _CACHE_PATH:
+        paths.append(_LEGACY_CACHE_PATH)
+    for path in paths:
+        try:
+            if not os.path.isfile(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ts = float(data.get("_cached_at", 0))
+            if time.time() - ts > _CACHE_TTL_SECONDS:
+                continue
+            if data.get("_fingerprint") != _env_fingerprint():
+                continue
+            return {k: v for k, v in data.items()
+                    if k not in ("_cached_at", "_fingerprint")}
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            log.debug("[integrity] cache load failed (%s): %s", path, e)
+    return None
 
 
 def _save_cache(report: Dict[str, Any]) -> None:
@@ -176,12 +222,25 @@ def _save_cache(report: Dict[str, Any]) -> None:
         payload = dict(report)
         payload["_cached_at"] = time.time()
         payload["_fingerprint"] = _env_fingerprint()
+        os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
         tmp = _CACHE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
         os.replace(tmp, _CACHE_PATH)
     except OSError as e:
-        log.debug("[integrity] cache save failed: %s", e)
+        log.warning("[integrity] cache save failed (%s): %s", _CACHE_PATH, e)
+
+
+def _pip_module_available() -> bool:
+    """Cheap probe: does `python -m pip --version` succeed?
+
+    Embedded Python builds (portable ComfyUI on some systems) ship without
+    pip. We need to know that BEFORE running `pip check`, otherwise the
+    "no module named pip" stderr gets mis-categorised as a dependency
+    conflict and the user sees no useful events.
+    """
+    out = _run([sys.executable, "-m", "pip", "--version"], timeout=15)
+    return out["ok"]
 
 
 def _run_pip_check() -> Dict[str, Any]:
@@ -207,9 +266,23 @@ def _run_pip_check() -> Dict[str, Any]:
                and not ln.startswith("Checked ")
         )
         out["stdout"] = cleaned[:16000]
+        out["backend"] = "uv"
         return out
-    return _run([sys.executable, "-m", "pip", "check"], timeout=45,
-                stdout_limit=16000)
+    if not _pip_module_available():
+        return {
+            "ok": False, "rc": -3, "stdout": "", "backend": "none",
+            "stderr": (
+                "pip is not available in this Python interpreter "
+                f"({sys.executable}). Install pip (`python -m ensurepip`) "
+                "or install `uv` (https://docs.astral.sh/uv/) so MEC can "
+                "verify dependency consistency."
+            ),
+            "unavailable": True,
+        }
+    out = _run([sys.executable, "-m", "pip", "check"], timeout=45,
+               stdout_limit=16000)
+    out["backend"] = "pip"
+    return out
 
 
 def _run_dep_tree_size() -> int:
@@ -247,6 +320,8 @@ def _worker(force: bool = False, delay: float = 0.0):
         cached = _load_cache()
         if cached is not None:
             cached["from_cache"] = True
+            cached.setdefault("ready", True)
+            cached.setdefault("status", "ok")
             with _LOCK:
                 _LAST_REPORT.clear()
                 _LAST_REPORT.update(cached)
@@ -255,22 +330,53 @@ def _worker(force: bool = False, delay: float = 0.0):
                      len(cached.get("events", [])))
             return
 
-    report: Dict[str, Any] = {"ready": True, "events": [], "from_cache": False}
+    # Announce scan-in-progress so the UI can stop showing "looks clean"
+    # before the first scan has actually run.
+    scanning = {"ready": False, "status": "scanning", "events": [],
+                "from_cache": False, "used_uv": bool(_UV_BIN)}
+    with _LOCK:
+        _LAST_REPORT.clear()
+        _LAST_REPORT.update(scanning)
+    _emit({"type": "scanning", **scanning})
 
-    # ---- pip check (uv if available, else pip) ----
+    report: Dict[str, Any] = {
+        "ready": True, "status": "ok", "events": [],
+        "from_cache": False, "scanned_at": time.time(),
+        "python": sys.executable, "python_version": sys.version.split()[0],
+        "pack_root": _PACK_ROOT, "cache_path": _CACHE_PATH,
+    }
+
+    # ---- pip check (uv if available, else pip; or report unavailable) ----
     pip_check = _run_pip_check()
     report["pip_check"] = pip_check
     report["used_uv"] = bool(_UV_BIN)
-    if not pip_check["ok"]:
-        for line in pip_check["stdout"].splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            report["events"].append({
-                "kind": "dependency_conflict",
-                "severity": "warn",
-                "message": line,
-            })
+    report["backend"] = pip_check.get("backend", "unknown")
+    if pip_check.get("unavailable"):
+        # Neither uv nor pip available — flag clearly, don't pretend there's a conflict.
+        report["events"].append({
+            "kind": "tooling_unavailable",
+            "severity": "info",
+            "message": pip_check.get("stderr") or "pip/uv unavailable",
+        })
+    elif not pip_check["ok"]:
+        lines = [ln.strip() for ln in (pip_check.get("stdout") or "").splitlines() if ln.strip()]
+        if lines:
+            for line in lines:
+                report["events"].append({
+                    "kind": "dependency_conflict",
+                    "severity": "warn",
+                    "message": line,
+                })
+        else:
+            # pip check failed but produced no parseable output — surface stderr
+            # so the user can see WHY (otherwise the UI shows "events=0" forever).
+            stderr = (pip_check.get("stderr") or "").strip()
+            if stderr:
+                report["events"].append({
+                    "kind": "pip_check_error",
+                    "severity": "warn",
+                    "message": stderr.splitlines()[0][:400],
+                })
 
     # ---- dep tree size (uv only; skipped otherwise) ----
     report["dep_tree_size"] = _run_dep_tree_size()
@@ -279,16 +385,32 @@ def _worker(force: bool = False, delay: float = 0.0):
     expected = {}
     if os.path.isfile(_CHECKSUM_PATH):
         try:
-            expected = json.load(open(_CHECKSUM_PATH, "r", encoding="utf-8"))
+            with open(_CHECKSUM_PATH, "r", encoding="utf-8") as f:
+                expected = json.load(f)
         except Exception as e:
             log.warning("[integrity] cannot read %s: %s", _CHECKSUM_PATH, e)
+            report["events"].append({
+                "kind": "checksum_baseline_unreadable",
+                "severity": "info",
+                "message": f"checksums.json failed to parse: {e}",
+            })
+    else:
+        # No baseline shipped — drift detection is dormant. Tell the user
+        # rather than silently producing zero drift events.
+        report["checksum_baseline"] = "missing"
+        report["events"].append({
+            "kind": "checksum_baseline_missing",
+            "severity": "info",
+            "message": "no third_party/checksums.json baseline present — file drift checks skipped",
+        })
     drift = []
-    for path in _walk_py_files():
-        rel = os.path.relpath(path, _PACK_ROOT).replace("\\", "/")
-        if rel in expected:
-            actual = _sha256(path)
-            if actual != expected[rel]:
-                drift.append({"file": rel, "expected": expected[rel], "actual": actual})
+    if expected:
+        for path in _walk_py_files():
+            rel = os.path.relpath(path, _PACK_ROOT).replace("\\", "/")
+            if rel in expected:
+                actual = _sha256(path)
+                if actual != expected[rel]:
+                    drift.append({"file": rel, "expected": expected[rel], "actual": actual})
     report["checksum_drift"] = drift
     for d in drift:
         report["events"].append({
@@ -303,8 +425,8 @@ def _worker(force: bool = False, delay: float = 0.0):
         _LAST_REPORT.update(report)
     _save_cache(report)
     _emit({"type": "report", **report})
-    log.info("[integrity] scan complete (%d events, uv=%s)",
-             len(report["events"]), bool(_UV_BIN))
+    log.info("[integrity] scan complete (%d events, backend=%s)",
+             len(report["events"]), report["backend"])
 
 
 def start_background_scan(force: bool = False, delay: Optional[float] = None) -> None:

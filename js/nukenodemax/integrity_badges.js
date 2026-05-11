@@ -71,7 +71,10 @@ function ingest(d) {
     STATE.pipOk = d.pip_check ? !!d.pip_check.ok : true;
     STATE.drift = (d.checksum_drift || []).length;
     STATE.usedUv = !!d.used_uv;
+    STATE.backend = d.backend || (d.used_uv ? "uv" : "pip");
     STATE.fromCache = !!d.from_cache;
+    STATE.ready = d.ready !== false;
+    STATE.status = d.status || (STATE.ready ? "ok" : "scanning");
     STATE.lastUpdated = Date.now();
     refreshButton();
     refreshDialogIfOpen();
@@ -432,15 +435,27 @@ function renderDialogBody() {
 
     if (meta) {
         const parts = [];
-        parts.push(STATE.usedUv ? "uv" : "pip");
+        parts.push(STATE.backend || (STATE.usedUv ? "uv" : "pip"));
         parts.push(STATE.fromCache ? "cached" : "fresh");
+        if (STATE.status && STATE.status !== "ok") parts.push(STATE.status);
         if (STATE.lastUpdated) parts.push(new Date(STATE.lastUpdated).toLocaleTimeString());
         meta.textContent = parts.join(" · ");
     }
 
     body.innerHTML = "";
+    if (STATE.ready === false || STATE.status === "scanning") {
+        body.innerHTML = `<div class="mec-integ-empty">
+            <div style="font-size:20px;margin-bottom:6px;">⏳</div>
+            Integrity scan running… results will appear here shortly.<br/>
+            <span style="opacity:0.7;font-size:11px;">First scan after startup takes ~5–30s depending on installed package count.</span>
+        </div>`;
+        return;
+    }
     if (events.length === 0) {
-        body.innerHTML = `<div class="mec-integ-empty">No integrity events. Environment looks clean.</div>`;
+        body.innerHTML = `<div class="mec-integ-empty">
+            ✓ No integrity events. Environment looks clean.<br/>
+            <span style="opacity:0.7;font-size:11px;">Backend: ${STATE.backend || "pip"} · Last scan: ${STATE.lastUpdated ? new Date(STATE.lastUpdated).toLocaleTimeString() : "n/a"}</span>
+        </div>`;
         return;
     }
 
