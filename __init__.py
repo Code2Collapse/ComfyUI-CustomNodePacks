@@ -45,7 +45,10 @@ from .nodes.inpaint_suite import (
     InpaintPasteBackMEC,
     InpaintCompositeMEC,
 )
-from .nodes.image_comparer import ImageComparerMEC
+# VideoComparerMEC replaces ImageComparerMEC. The old image_comparer.py is
+# retained on disk as an importable helper (ImageComparerMEC class), but only
+# VideoComparerMEC is registered.
+from .nodes.video_comparer import VideoComparerMEC
 from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
 from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
@@ -139,7 +142,7 @@ _MEC_MAPPINGS = {
     "InpaintCompositeMEC": InpaintCompositeMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
-    "ImageComparerMEC": ImageComparerMEC,
+    "VideoComparerMEC": VideoComparerMEC,
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
     "SplinePathFlowMaskMEC": SplinePathFlowMaskMEC,
@@ -167,7 +170,7 @@ _MEC_DISPLAY = {
     "InpaintCompositeMEC": "Inpaint Composite (MEC)",
     "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (MEC)",
     "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (MEC)",
-    "ImageComparerMEC": "Image Comparer (MEC)",
+    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (MEC)",
     "VideoFramePlayerMEC": "Video Frame Player (MEC)",
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
     "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
