@@ -230,12 +230,27 @@ function injectStyle() {
         color: var(--descriptions-text-color, #a6adc8);
         font-style: italic;
     }
+    /* Always-visible pinned fallback widget. Sits on top of the canvas
+       in the top-right corner so it never gets clipped by the topbar
+       button-group (which has overflow:hidden). Draggable. */
+    .mec-integ-float {
+        position: fixed !important;
+        top: 56px; right: 12px;
+        z-index: 99997;
+        cursor: grab;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+        backdrop-filter: blur(4px);
+    }
+    .mec-integ-float.dragging { cursor: grabbing; opacity: 0.85; }
+    .mec-integ-float.hidden   { display: none !important; }
     `;
     document.head.appendChild(s);
 }
 
 // ── Topbar button ───────────────────────────────────────────────────
 let BTN_EL = null;
+let FLOAT_EL = null;       // always-visible floating fallback widget
+const LS_FLOAT_POS = "MEC.integrity.floatPos";  // persist drag position
 
 function summary() {
     const muted = isMuted();
@@ -251,20 +266,37 @@ function summary() {
 }
 
 function refreshButton() {
-    if (!BTN_EL) return;
     const s = summary();
-    BTN_EL.className = "mec-integ-btn " + s.tone;
-    BTN_EL.title = STATE.lastUpdated
-        ? `MEC Integrity — last updated ${new Date(STATE.lastUpdated).toLocaleTimeString()}`
-        : "MEC Integrity";
-    BTN_EL.innerHTML = "";
-    const lbl = document.createElement("span");
-    lbl.textContent = s.text;
-    const dot = document.createElement("span");
-    dot.className = "mec-integ-dot " + s.dotClass;
-    dot.textContent = s.dot;
-    BTN_EL.appendChild(lbl);
-    if (s.dot !== "") BTN_EL.appendChild(dot);
+    // ----- topbar button -----
+    if (BTN_EL) {
+        BTN_EL.className = "mec-integ-btn " + s.tone;
+        BTN_EL.title = STATE.lastUpdated
+            ? `MEC Integrity — last updated ${new Date(STATE.lastUpdated).toLocaleTimeString()}`
+            : "MEC Integrity";
+        BTN_EL.innerHTML = "";
+        const lbl = document.createElement("span");
+        lbl.textContent = s.text;
+        const dot = document.createElement("span");
+        dot.className = "mec-integ-dot " + s.dotClass;
+        dot.textContent = s.dot;
+        BTN_EL.appendChild(lbl);
+        if (s.dot !== "") BTN_EL.appendChild(dot);
+    }
+    // ----- floating fallback widget (always visible) -----
+    if (FLOAT_EL) {
+        FLOAT_EL.className = "mec-integ-float mec-integ-btn " + s.tone;
+        FLOAT_EL.title = (STATE.lastUpdated
+            ? `MEC Integrity — last updated ${new Date(STATE.lastUpdated).toLocaleTimeString()}`
+            : "MEC Integrity") + "  (drag to move · double-click to hide for 1 h)";
+        const lbl2 = FLOAT_EL.querySelector("[data-role='lbl']");
+        const dot2 = FLOAT_EL.querySelector("[data-role='dot']");
+        if (lbl2) lbl2.textContent = s.text;
+        if (dot2) {
+            dot2.className = "mec-integ-dot " + s.dotClass;
+            dot2.textContent = s.dot;
+            dot2.style.display = s.dot ? "" : "none";
+        }
+    }
 }
 
 function findManagerButton() {
@@ -345,6 +377,83 @@ function startMountObserver() {
     observer.observe(document.body, { childList: true, subtree: true });
     mountButton();
     setTimeout(() => observer.disconnect(), 15000);
+}
+
+// ── Always-visible floating fallback widget ─────────────────────────
+// Required because:
+//   1. The topbar button can be clipped by `comfyui-button-group`
+//      which has `overflow:hidden` on narrow windows.
+//   2. Some custom topbar layouts hide the button-group entirely.
+// The float is a small draggable pill pinned to the viewport.
+function mountFloater() {
+    if (FLOAT_EL && document.body.contains(FLOAT_EL)) return;
+    const w = document.createElement("button");
+    w.type = "button";
+    w.className = "mec-integ-float mec-integ-btn";
+    w.id = "mec-integrity-float";
+    w.innerHTML = `<span data-role="lbl">Integrity</span><span data-role="dot" class="mec-integ-dot ok">✓</span>`;
+    // Restore persisted position.
+    try {
+        const pos = JSON.parse(localStorage.getItem(LS_FLOAT_POS) || "null");
+        if (pos && typeof pos.top === "number" && typeof pos.left === "number") {
+            w.style.top = pos.top + "px";
+            w.style.left = pos.left + "px";
+            w.style.right = "auto";
+        }
+    } catch { /* ignore */ }
+    // Hide for 1 h on double-click.
+    const hideUntilKey = "MEC.integrity.float.hideUntil";
+    const hideUntil = parseInt(localStorage.getItem(hideUntilKey) || "0", 10);
+    if (hideUntil && Date.now() < hideUntil) w.classList.add("hidden");
+    w.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        localStorage.setItem(hideUntilKey, String(Date.now() + 3600 * 1000));
+        w.classList.add("hidden");
+        toast("Integrity widget hidden for 1 hour");
+    });
+    // Drag-to-move (with click vs. drag detection).
+    let dragStart = null;
+    let moved = false;
+    w.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        dragStart = { x: e.clientX, y: e.clientY,
+                      ox: w.offsetLeft, oy: w.offsetTop };
+        moved = false;
+        w.classList.add("dragging");
+        e.preventDefault();
+    });
+    window.addEventListener("mousemove", (e) => {
+        if (!dragStart) return;
+        const dx = e.clientX - dragStart.x;
+        const dy = e.clientY - dragStart.y;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        const nx = Math.max(0, Math.min(window.innerWidth - w.offsetWidth,
+                                         dragStart.ox + dx));
+        const ny = Math.max(0, Math.min(window.innerHeight - w.offsetHeight,
+                                         dragStart.oy + dy));
+        w.style.left = nx + "px";
+        w.style.top = ny + "px";
+        w.style.right = "auto";
+    });
+    window.addEventListener("mouseup", () => {
+        if (!dragStart) return;
+        w.classList.remove("dragging");
+        if (moved) {
+            try {
+                localStorage.setItem(LS_FLOAT_POS,
+                    JSON.stringify({ top: w.offsetTop, left: w.offsetLeft }));
+            } catch { /* ignore */ }
+        }
+        dragStart = null;
+    });
+    // Click-without-drag opens the dialog.
+    w.addEventListener("click", (e) => {
+        if (moved) { e.preventDefault(); e.stopPropagation(); moved = false; return; }
+        openDialog();
+    });
+    FLOAT_EL = w;
+    document.body.appendChild(w);
+    refreshButton();
 }
 
 // ── Modal dialog ────────────────────────────────────────────────────
@@ -537,6 +646,7 @@ app.registerExtension({
         api.addEventListener("nukenodemax.integrity", (ev) => ingest(ev.detail || ev));
 
         startMountObserver();
+        mountFloater();
         fetchReport();
 
         // Light periodic poll in case the socket misses an event.

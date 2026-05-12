@@ -27,7 +27,10 @@ def _stub(key, display, models_key, needs_trimap=False):
     return cls
 
 
-_stub("matanyone",   "MatAnyone (video matting)", "matanyone", needs_trimap=True)
-_stub("bgmattingv2", "BackgroundMattingV2",       "bgmattingv2")
+# Removed 2026-05-12:
+#   * MatAnyone — multi-day video matting integration, stays out until real.
+#   * bgmattingv2 — promoted to real backend in ``bgmattingv2_backend.py``.
+# birefnet / rmbg are kept as "matter view" stubs because the segmenter
+# side already implements them.
 _stub("birefnet",    "BiRefNet (matter view)",    "birefnet")
 _stub("rmbg",        "RMBG-2.0 (matter view)",    "rmbg")

@@ -29,12 +29,13 @@ def _stub(key: str, display: str, models_key: str, modes: set, deps_check=lambda
     return cls
 
 
-# All remaining backends from the master list.
-_stub("sec",            "SeC (Segment-and-Track)",         "sec",            {"points", "bbox", "video", "auto"})
-_stub("grounding-dino", "Grounding DINO (text → bbox)",    "grounding-dino", {"text"})
-# birefnet / rmbg / inspyrenet are now real backends in salient_backend.py.
-_stub("videomama",      "VideoMaMa (text-video)",          "videomama",      {"text", "video"})
-_stub("cutie",          "Cutie (video object track)",      "cutie",          {"points", "bbox", "video"})
-_stub("dis",            "DIS-IS-Net (high-res salient)",   "dis",            {"auto"})
-_stub("xmem",           "XMem++ (long-form video)",        "xmem",           {"points", "bbox", "video"})
-_stub("person-mask",    "Impact PersonMask",               "ultralytics_bbox", {"auto"})
+# Remaining stubs awaiting real wiring (Tier-1 candidates only).
+# Removed 2026-05-12:
+#   * SeC / VideoMaMa / Cutie / XMem — multi-day video integrations,
+#     stay out of the combo list until backed by a real implementation.
+#   * grounding-dino / dis / person-mask — promoted to real backends
+#     in ``experimental_backend.py`` (registered there, overrides the
+#     stub registration order; stubs no longer needed here).
+# birefnet / rmbg / inspyrenet are real backends in ``salient_backend.py``.
+# This file is intentionally empty of stub registrations now; kept so
+# the package import wiring remains stable.
