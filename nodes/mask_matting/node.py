@@ -1,4 +1,15 @@
-"""MaskMattingMEC — single multi-backend segmentation + matting node."""
+"""MaskOpsMEC — single multi-backend segmentation + matting + refine + diagnostics node.
+
+Absorbs:
+    * MaskMattingMEC (segmenter + matter + VFX) — base node
+    * MaskRefineMEC (11-stage training-free mask refinement)
+    * TrimapGeneratorMEC (advanced edge-aware trimap)
+    * LuminanceKeyerMEC (Nuke-style luma key pre-stage)
+    * MaskFailureExplainerMEC (post-mortem severity / suggestion diagnostics)
+
+All previous standalone nodes are hard-removed from the ComfyUI registry; their
+Python classes remain importable for use as internal helpers.
+"""
 from __future__ import annotations
 
 import json
@@ -28,7 +39,31 @@ from .utils import (
     to_mask,
 )
 
-logger = logging.getLogger("MEC.MaskMatting")
+logger = logging.getLogger("MEC.MaskOps")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Lazy helper imports — internal classes that used to be standalone nodes.
+# Imported on first use to avoid heavy module-load cost.
+# ──────────────────────────────────────────────────────────────────────
+def _get_luma_keyer():
+    from ..luminance_keyer import LuminanceKeyerMEC
+    return LuminanceKeyerMEC()
+
+
+def _get_trimap_advanced():
+    from ..trimap_generator import TrimapGeneratorMEC
+    return TrimapGeneratorMEC()
+
+
+def _get_refiner():
+    from .refine_node import MaskRefineMEC
+    return MaskRefineMEC()
+
+
+def _get_explainer():
+    from ..mask_failure_explainer import MaskFailureExplainerMEC
+    return MaskFailureExplainerMEC()
 
 
 def _segmenter_choices() -> List[str]:
@@ -141,48 +176,61 @@ def _resolve_model_choice(choice: str, expected_key: str,
 
 
 # ══════════════════════════════════════════════════════════════════════
-class MaskMattingMEC:
-    """Unified segmenter + matter node.
+class MaskOpsMEC:
+    """Unified segmenter + matter + refine + diagnose node.
 
     Pick a ``segmenter`` (e.g. SAM 2.1) and an optional ``matter`` (e.g.
     ViTMatte / RVM). The node auto-detects the prompt mode from the
     inputs you actually wire — points, bbox, text, or video — and routes
-    them through the chosen backend.
+    them through the chosen backend. Optional pre-stage luminance key,
+    advanced edge-aware trimap, 11-stage training-free refinement, and
+    automatic failure diagnostics are bolted into the same node, so the
+    entire mask-creation pipeline lives behind one socket.
     """
 
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (
-        "Production-grade segmentation + matting in a single node. "
-        "Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / RMBG-2.0 / "
-        "InSPyReNet + ViTMatte / RVM / MatAnyone) with VFX post-processing: "
-        "TTA flip-fuse, multi-scale ensembling, despill, light wrap, "
-        "edge/inside/outside separation, CRF / guided-filter refinement, "
-        "no-GT quality scoring, holdout/garbage matte support, and "
-        "premultiplied output for compositors."
+        "Production-grade segmentation + matting + refine + diagnostics in "
+        "one node. Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / "
+        "RMBG-2.0 / InSPyReNet + ViTMatte / RVM / MatAnyone). Optional "
+        "Nuke-style luma-key pre-stage, edge-aware trimap, 11-stage "
+        "training-free mask refinement (hole-fill → morph → thin-recover → "
+        "joint-bilateral → guided → DenseCRF → edge-snap → cascade → "
+        "feather → gamma → threshold), and automatic mask-failure "
+        "diagnostics with severity score + suggested method. Replaces "
+        "the standalone MaskMattingMEC, MaskRefineMEC, TrimapGeneratorMEC, "
+        "LuminanceKeyerMEC, and MaskFailureExplainerMEC nodes."
     )
     FUNCTION = "execute"
     RETURN_TYPES = (
         "MASK", "MASK", "IMAGE", "MASK", "BBOX", "STRING", "FLOAT", "STRING",
         "IMAGE", "IMAGE", "MASK", "MASK", "MASK",
+        # NEW outputs (refine + diagnose + luma-key debug)
+        "MASK", "MASK", "FLOAT", "STRING",
     )
     RETURN_NAMES = (
         "mask", "alpha", "preview", "trimap", "bbox", "bbox_json", "score", "info",
         "despilled", "lightwrap_rgba", "edge_mask", "inside_mask", "outside_mask",
+        "luma_key_mask", "problem_regions", "severity", "suggested_method",
     )
     OUTPUT_TOOLTIPS = (
         "Coarse mask from the segmenter (B,H,W).",
-        "Refined alpha after matter + optional CRF / guided refine (production output).",
+        "Refined alpha after matter + refinement (production output).",
         "image * alpha premultiplied preview.",
         "Trimap (0/0.5/1) used by the matter.",
         "Tight bbox around the alpha as [x0,y0,x1,y1].",
         "Same bbox as JSON {'x','y','w','h'}.",
         "Overall production-quality score in [0,1] (boundary + coherence + size + smoothness).",
-        "JSON: backends, modes, per-frame quality breakdown, settings used.",
+        "JSON: backends, modes, per-frame quality breakdown, refine stages run, settings used.",
         "Image with backing-colour spill suppressed (when `despill_strength`>0).",
         "RGBA light-wrap layer to ADD over the new background.",
         "Soft edge band where matting actually matters.",
         "Solid-fg interior mask (safe to colour-grade).",
         "Solid-bg exterior mask (safe to defocus / replace).",
+        "Luminance keyer output (empty if `enable_luma_key` is off).",
+        "Diagnostic problem-region heatmap from the failure explainer.",
+        "Severity score [0,1] from the failure explainer.",
+        "Suggested next masking method (string) from the failure explainer.",
     )
 
     @classmethod
@@ -239,6 +287,60 @@ class MaskMattingMEC:
                 "lightwrap_radius": ("INT", {"default": 8, "min": 1, "max": 64, "tooltip": "Light-wrap halo radius in pixels."}),
                 "edge_band_radius": ("INT", {"default": 4, "min": 1, "max": 64, "tooltip": "Width of the soft edge band when splitting edge/inside/outside masks."}),
                 "premultiply": ("BOOLEAN", {"default": True, "tooltip": "Premultiply preview by alpha. Disable for straight-alpha outputs."}),
+
+                # ── Luma-key pre-stage (Nuke-style LumaKeyer) ───────────
+                "enable_luma_key": ("BOOLEAN", {"default": False, "tooltip": "Run a luminance keyer on the source image BEFORE segmentation and use it as a hint / external_mask."}),
+                "luma_mode": (["auto", "highlights", "midtones", "shadows", "custom"], {"default": "auto"}),
+                "luma_low":   ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "luma_high":  ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "luma_gamma": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 10.0, "step": 0.01}),
+                "luma_falloff": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "luma_invert": ("BOOLEAN", {"default": False}),
+                "luma_mix": (["intersect", "union", "replace", "hint_only"], {"default": "hint_only",
+                    "tooltip": "How to combine the luma-key mask with the segmenter result. 'hint_only' = use as external_mask hint; 'intersect/union/replace' = combine with the final alpha."}),
+
+                # ── Advanced edge-aware trimap (Trimap Generator) ───────
+                "enable_advanced_trimap": ("BOOLEAN", {"default": False, "tooltip": "Use the edge-aware trimap generator (asymmetric inner/outer scaling, image-edge snapping, smoothing) instead of the simple dilate/erode trimap."}),
+                "trimap_inner_scale": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 3.0, "step": 0.1}),
+                "trimap_outer_scale": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 5.0, "step": 0.1}),
+                "trimap_smooth": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.5}),
+                "trimap_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+
+                # ── 11-stage training-free refinement ───────────────────
+                "enable_refine": ("BOOLEAN", {"default": False, "tooltip": "Run the unified 11-stage refinement pipeline on the alpha after matting."}),
+                "refine_hole_fill": ("BOOLEAN", {"default": False, "tooltip": "Stage 1: scipy.binary_fill_holes on the binarised alpha."}),
+                "refine_hole_fill_thresh": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 0.95, "step": 0.05}),
+                "refine_morph_op": (["none", "close", "open", "dilate", "erode"], {"default": "none", "tooltip": "Stage 2: morphology with a circular SE."}),
+                "refine_morph_radius": ("INT", {"default": 3, "min": 1, "max": 64}),
+                "refine_thin_recover": ("BOOLEAN", {"default": False, "tooltip": "Stage 3: skeletonize+keep-long-branches+dilate to re-inject hair/wire."}),
+                "refine_thin_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 0.95, "step": 0.05}),
+                "refine_thin_min_branch_len": ("INT", {"default": 8, "min": 1, "max": 256}),
+                "refine_thin_branch_dilate": ("INT", {"default": 2, "min": 1, "max": 16}),
+                "refine_joint_bilateral": ("BOOLEAN", {"default": False, "tooltip": "Stage 4: cv2.ximgproc joint bilateral (RGB guide)."}),
+                "refine_jb_diameter": ("INT", {"default": 9, "min": 3, "max": 31}),
+                "refine_jb_sigma_color": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 200.0, "step": 1.0}),
+                "refine_jb_sigma_space": ("FLOAT", {"default": 7.0, "min": 1.0, "max": 200.0, "step": 1.0}),
+                "refine_guided_filter": ("BOOLEAN", {"default": True, "tooltip": "Stage 5: He et al. guided filter (torch, always available)."}),
+                "refine_gf_radius": ("INT", {"default": 8, "min": 1, "max": 64}),
+                "refine_gf_epsilon": ("FLOAT", {"default": 0.0001, "min": 1e-6, "max": 0.1, "step": 1e-5}),
+                "refine_dense_crf": ("BOOLEAN", {"default": False, "tooltip": "Stage 6: DenseCRF (requires pydensecrf)."}),
+                "refine_crf_iterations": ("INT", {"default": 5, "min": 1, "max": 30}),
+                "refine_crf_gauss_sxy": ("FLOAT", {"default": 3.0, "min": 0.1, "max": 50.0, "step": 0.1}),
+                "refine_crf_bilateral_sxy": ("FLOAT", {"default": 50.0, "min": 1.0, "max": 200.0, "step": 1.0}),
+                "refine_crf_bilateral_srgb": ("FLOAT", {"default": 13.0, "min": 1.0, "max": 100.0, "step": 0.5}),
+                "refine_edge_snap": ("BOOLEAN", {"default": False, "tooltip": "Stage 7: modulate mask boundary by RGB gradient magnitude."}),
+                "refine_edge_snap_strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "refine_edge_snap_band": ("INT", {"default": 6, "min": 1, "max": 32}),
+                "refine_cascade_passes": ("INT", {"default": 0, "min": 0, "max": 5, "tooltip": "Stage 8: CascadePSP-style repeats with shrinking radii."}),
+                "refine_feather_sigma": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1, "tooltip": "Stage 9: Gaussian blur on the soft alpha."}),
+                "refine_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0, "step": 0.05, "tooltip": "Stage 10: pow curve on the soft alpha."}),
+                "refine_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Stage 11: hard binarise at this value (0 = keep soft)."}),
+
+                # ── Failure diagnostics ─────────────────────────────────
+                "enable_diagnose": ("BOOLEAN", {"default": True, "tooltip": "Run automatic mask-failure diagnostics (severity score + suggested method)."}),
+                "diag_ring_width": ("INT", {"default": 5, "min": 1, "max": 50}),
+                "diag_blur_threshold": ("FLOAT", {"default": 50.0, "min": 0.0, "max": 1000.0, "step": 1.0}),
+                "diag_brightness_threshold": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {
                 # Slot order shown on the node's left edge: these two come
@@ -296,6 +398,32 @@ class MaskMattingMEC:
                 despill="off", despill_strength=1.0, preserve_skin=True,
                 lightwrap_strength=0.0, lightwrap_radius=8,
                 edge_band_radius=4, premultiply=True,
+                # NEW: luma key
+                enable_luma_key=False, luma_mode="auto",
+                luma_low=0.0, luma_high=1.0, luma_gamma=1.0,
+                luma_falloff=1.0, luma_invert=False, luma_mix="hint_only",
+                # NEW: advanced trimap
+                enable_advanced_trimap=False,
+                trimap_inner_scale=1.0, trimap_outer_scale=1.5,
+                trimap_smooth=0.0, trimap_threshold=0.5,
+                # NEW: refine pipeline
+                enable_refine=False,
+                refine_hole_fill=False, refine_hole_fill_thresh=0.5,
+                refine_morph_op="none", refine_morph_radius=3,
+                refine_thin_recover=False, refine_thin_threshold=0.5,
+                refine_thin_min_branch_len=8, refine_thin_branch_dilate=2,
+                refine_joint_bilateral=False, refine_jb_diameter=9,
+                refine_jb_sigma_color=25.0, refine_jb_sigma_space=7.0,
+                refine_guided_filter=True, refine_gf_radius=8, refine_gf_epsilon=0.0001,
+                refine_dense_crf=False, refine_crf_iterations=5,
+                refine_crf_gauss_sxy=3.0, refine_crf_bilateral_sxy=50.0,
+                refine_crf_bilateral_srgb=13.0,
+                refine_edge_snap=False, refine_edge_snap_strength=0.5,
+                refine_edge_snap_band=6, refine_cascade_passes=0,
+                refine_feather_sigma=0.0, refine_gamma=1.0, refine_threshold=0.0,
+                # NEW: diagnose
+                enable_diagnose=True, diag_ring_width=5,
+                diag_blur_threshold=50.0, diag_brightness_threshold=0.15,
                 positive_coords="", negative_coords="",
                 pos_points="", neg_points="", pos_bbox=None, neg_bbox=None,
                 normal_bbox=None, text_prompt="", external_mask=None,
@@ -323,6 +451,24 @@ class MaskMattingMEC:
         try:
             img_bhwc = to_bhwc(image)
             B, H, W, _ = img_bhwc.shape
+
+            # ── Luma-key pre-stage ────────────────────────────────────
+            luma_mask_t: Optional[torch.Tensor] = None
+            if bool(enable_luma_key):
+                try:
+                    keyer = _get_luma_keyer()
+                    luma_mask_t, _luma_info = keyer._key_luminance_impl(
+                        img_bhwc, luma_mode,
+                        float(luma_low), float(luma_high),
+                        float(luma_gamma), float(luma_falloff),
+                        bool(luma_invert),
+                    )
+                    # Use as hint when nothing else is wired.
+                    if external_mask is None and luma_mix == "hint_only":
+                        external_mask = luma_mask_t
+                except Exception as _e:
+                    logger.warning("[MaskOps] luma keyer failed: %s", _e)
+                    luma_mask_t = None
 
             pos_pts, _ = parse_points(pos_points)
             neg_a, neg_b = parse_points(neg_points)
@@ -429,6 +575,22 @@ class MaskMattingMEC:
             d, e, edge = apply_subject_preset(subject_preset, int(trimap_dilate), int(trimap_erode), int(edge_radius))
             if external_trimap is not None:
                 trimap_t = to_mask(external_trimap)
+            elif bool(enable_advanced_trimap):
+                # Edge-aware trimap via the absorbed TrimapGeneratorMEC.
+                try:
+                    tg = _get_trimap_advanced()
+                    trimap_t, _fg_m, _unk_m = tg.generate(
+                        mask_t,
+                        edge_radius=int(edge if edge > 0 else 15),
+                        inner_erosion=float(trimap_inner_scale),
+                        outer_dilation=float(trimap_outer_scale),
+                        smooth=float(trimap_smooth),
+                        threshold=float(trimap_threshold),
+                        image=img_bhwc,
+                    )
+                except Exception as _e:
+                    logger.warning("[MaskOps] advanced trimap failed (%s) — falling back to simple.", _e)
+                    trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
             else:
                 trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
 
@@ -458,6 +620,58 @@ class MaskMattingMEC:
                 alpha_t = _vfx.crf_refine(
                     img_bhwc.to(alpha_t.device), alpha_t,
                     iterations=int(refine_iterations))
+            # 1.5. NEW: 11-stage training-free refinement pipeline.
+            refine_info_json: str = ""
+            if bool(enable_refine):
+                try:
+                    refiner = _get_refiner()
+                    r_mask, r_alpha, _r_preview, r_info = refiner.execute(
+                        img_bhwc, alpha_t,
+                        enable_hole_fill=bool(refine_hole_fill),
+                        hole_fill_threshold=float(refine_hole_fill_thresh),
+                        morph_op=refine_morph_op,
+                        morph_radius=int(refine_morph_radius),
+                        enable_thin_recover=bool(refine_thin_recover),
+                        thin_threshold=float(refine_thin_threshold),
+                        thin_min_branch_len=int(refine_thin_min_branch_len),
+                        thin_branch_dilate=int(refine_thin_branch_dilate),
+                        enable_joint_bilateral=bool(refine_joint_bilateral),
+                        jb_diameter=int(refine_jb_diameter),
+                        jb_sigma_color=float(refine_jb_sigma_color),
+                        jb_sigma_space=float(refine_jb_sigma_space),
+                        enable_guided_filter=bool(refine_guided_filter),
+                        gf_radius=int(refine_gf_radius),
+                        gf_epsilon=float(refine_gf_epsilon),
+                        enable_dense_crf=bool(refine_dense_crf),
+                        crf_iterations=int(refine_crf_iterations),
+                        crf_gauss_sxy=float(refine_crf_gauss_sxy),
+                        crf_bilateral_sxy=float(refine_crf_bilateral_sxy),
+                        crf_bilateral_srgb=float(refine_crf_bilateral_srgb),
+                        enable_edge_snap=bool(refine_edge_snap),
+                        edge_snap_strength=float(refine_edge_snap_strength),
+                        edge_snap_band=int(refine_edge_snap_band),
+                        cascade_passes=int(refine_cascade_passes),
+                        feather_sigma=float(refine_feather_sigma),
+                        gamma=float(refine_gamma),
+                        threshold=float(refine_threshold),
+                    )
+                    # Soft alpha from the refiner.
+                    alpha_t = r_alpha.to(alpha_t.device).float().clamp(0, 1)
+                    refine_info_json = r_info
+                except Exception as _e:
+                    logger.warning("[MaskOps] refine pipeline failed: %s", _e)
+            # 1.6. Luma-key combine (intersect/union/replace post-segmentation).
+            if luma_mask_t is not None and luma_mix in ("intersect", "union", "replace"):
+                lm = luma_mask_t.to(alpha_t.device).float().clamp(0, 1)
+                if lm.shape[0] != alpha_t.shape[0] and lm.shape[0] == 1:
+                    lm = lm.expand_as(alpha_t)
+                if lm.shape[-2:] == alpha_t.shape[-2:]:
+                    if luma_mix == "intersect":
+                        alpha_t = torch.minimum(alpha_t, lm)
+                    elif luma_mix == "union":
+                        alpha_t = torch.maximum(alpha_t, lm)
+                    elif luma_mix == "replace":
+                        alpha_t = lm
             # 2. Holdout / core overrides (garbage matte semantics).
             if holdout_mask is not None:
                 hm = to_mask(holdout_mask)
@@ -509,6 +723,27 @@ class MaskMattingMEC:
             quality = _vfx.score_quality(img_bhwc, alpha_t.cpu())
             final_score = float(quality["overall"])
 
+            # 7. NEW: failure diagnostics.
+            explanation_str = ""
+            problem_heatmap = torch.zeros_like(alpha_cpu)
+            severity_val = 0.0
+            suggested = ""
+            if bool(enable_diagnose):
+                try:
+                    explainer = _get_explainer()
+                    explanation_str, problem_heatmap, severity_val, suggested = \
+                        explainer._analyze_impl(
+                            img_bhwc, alpha_t,
+                            int(diag_ring_width),
+                            float(diag_blur_threshold),
+                            float(diag_brightness_threshold),
+                        )
+                    problem_heatmap = problem_heatmap.cpu().float().clamp(0, 1)
+                    severity_val = float(severity_val)
+                except Exception as _e:
+                    logger.warning("[MaskOps] diagnose failed: %s", _e)
+                    explanation_str = f"diagnose_error: {_e}"
+
             info_obj = {
                 "segmenter": seg_key,
                 "matter": mat_key,
@@ -517,7 +752,8 @@ class MaskMattingMEC:
                 "segmenter_score": score,
                 "production_score": final_score,
                 "subject_preset": subject_preset,
-                "trimap": {"dilate": d, "erode": e, "edge": edge},
+                "trimap": {"dilate": d, "erode": e, "edge": edge,
+                           "advanced": bool(enable_advanced_trimap)},
                 "vfx": {
                     "tta_flip": bool(tta_flip),
                     "multiscale": bool(multiscale),
@@ -527,8 +763,30 @@ class MaskMattingMEC:
                     "lightwrap_strength": float(lightwrap_strength),
                     "premultiply": bool(premultiply),
                 },
+                "luma_key": {
+                    "enabled": bool(enable_luma_key),
+                    "mode": luma_mode,
+                    "mix": luma_mix,
+                },
+                "refine": {
+                    "enabled": bool(enable_refine),
+                    "info": refine_info_json,
+                },
+                "diagnose": {
+                    "enabled": bool(enable_diagnose),
+                    "severity": float(severity_val),
+                    "suggested_method": suggested,
+                    "explanation": explanation_str,
+                },
                 "quality": quality,
             }
+            # Output luma-key mask (zeros if not run).
+            if luma_mask_t is None:
+                luma_out = torch.zeros_like(alpha_cpu)
+            else:
+                luma_out = luma_mask_t.cpu().float().clamp(0, 1)
+                if luma_out.shape != alpha_cpu.shape:
+                    luma_out = torch.zeros_like(alpha_cpu)
             return (
                 mask_t.cpu(),
                 alpha_cpu,
@@ -543,10 +801,14 @@ class MaskMattingMEC:
                 edge_m,
                 inside_m,
                 outside_m,
+                luma_out,
+                problem_heatmap,
+                float(severity_val),
+                suggested,
             )
         finally:
             free_vram()
 
 
-NODE_CLASS_MAPPINGS = {"MaskMattingMEC": MaskMattingMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskMattingMEC": "Mask + Matting (MEC)"}
+NODE_CLASS_MAPPINGS = {"MaskOpsMEC": MaskOpsMEC}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskOpsMEC": "Mask Ops — Seg + Matte + Refine + Diagnose (MEC)"}

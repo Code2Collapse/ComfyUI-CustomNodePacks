@@ -33,11 +33,11 @@ from .nodes.bbox_nodes import BBoxSmooth
 # Legacy standalone refiners (ViTMatteRefinerMEC, MaskRefinerTemporalMEC,
 # MaskRefineCRF/Guided/ThinStructure/QualityScore/TrimapFromUncertainty) are
 # fully superseded by the unified MaskRefineMEC inside Mask + Matting.
-from .nodes.trimap_generator import TrimapGeneratorMEC
+# TrimapGeneratorMEC, LuminanceKeyerMEC, MaskFailureExplainerMEC are now
+# absorbed into MaskOpsMEC (mask_matting) and no longer registered standalone.
+# Their source files are kept on disk as importable helper classes.
 from .nodes.parameter_memory import ParameterHistoryMEC
 from .nodes.sec_matanyone_pipeline import SeCMatAnyonePipelineMEC
-from .nodes.luminance_keyer import LuminanceKeyerMEC
-from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 from .nodes.temporal_anchor import TemporalAnchorMEC
 from .nodes.inpaint_suite import (
     InpaintCropProMEC,
@@ -136,11 +136,8 @@ _MEC_MAPPINGS = {
     "MaskPropagateVideo": MaskPropagateVideo,
     "PointsMaskEditor": PointsMaskEditor,
     "BBoxSmooth": BBoxSmooth,
-    "TrimapGeneratorMEC": TrimapGeneratorMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
-    "LuminanceKeyerMEC": LuminanceKeyerMEC,
-    "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
     "TemporalAnchorMEC": TemporalAnchorMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintCompositeMEC": InpaintCompositeMEC,
@@ -167,11 +164,8 @@ _MEC_DISPLAY = {
     "MaskPropagateVideo": "Mask Propagate Video (MEC)",
     "PointsMaskEditor": "Points Mask Editor (MEC)",
     "BBoxSmooth": "BBox Smooth Temporal (MEC)",
-    "TrimapGeneratorMEC": "Trimap Generator (MEC)",
     "ParameterHistoryMEC": "Parameter History (MEC)",
     "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (MEC)",
-    "LuminanceKeyerMEC": "Luminance Keyer (MEC)",
-    "MaskFailureExplainerMEC": "Mask Failure Explainer (MEC)",
     "TemporalAnchorMEC": "Temporal Anchor System (MEC)",
     "InpaintCropProMEC": "Inpaint Crop Pro (MEC)",
     "InpaintCompositeMEC": "Inpaint Composite (MEC)",
