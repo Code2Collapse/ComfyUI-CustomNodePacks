@@ -78,12 +78,10 @@ from .nodes.mask_matting import (
 )
 
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
-from .nodes.propainter_temporal_inpaint import ProPainterTemporalMEC
-from .nodes.propainter_flow_refine import FlowRefineMEC
-from .nodes.propainter_stitch_suite import (
-    NODE_CLASS_MAPPINGS as _PROPAINTER_STITCH_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _PROPAINTER_STITCH_DISPLAY,
-)
+# ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
+# Helper source files are kept on disk as importable Python classes; only
+# ProPainterMEC is registered here.
+from .nodes.propainter_unified import ProPainterMEC
 from .nodes.video_stabilizer_mec import (
     NODE_CLASS_MAPPINGS as _STABILIZER_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _STABILIZER_DISPLAY,
@@ -106,14 +104,12 @@ from .nodes.integrity_guard import (
 )
 
 _NUKEMAX_MAPPINGS = {
-    "ProPainterTemporalMEC": ProPainterTemporalMEC,
-    "FlowRefineMEC": FlowRefineMEC,
+    "ProPainterMEC": ProPainterMEC,
     "InsightStatusMEC": InsightStatusMEC,
     "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
-    "ProPainterTemporalMEC": "ProPainter Temporal Inpaint (MEC)",
-    "FlowRefineMEC": "Optical Flow Refine (MEC)",
+    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (MEC)",
     "InsightStatusMEC": "Insight Status (MEC)",
     "IntegrityStatusMEC": "Integrity Status (MEC)",
 }
@@ -195,7 +191,6 @@ NODE_CLASS_MAPPINGS = {
     **_FACE_FIXER_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
-    **_PROPAINTER_STITCH_MAPPINGS,
     **_STABILIZER_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -206,7 +201,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FACE_FIXER_DISPLAY,
     **_MASKMATTE_DISPLAY,
     **_NUKEMAX_DISPLAY,
-    **_PROPAINTER_STITCH_DISPLAY,
     **_STABILIZER_DISPLAY,
 }
 
