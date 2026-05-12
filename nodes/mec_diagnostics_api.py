@@ -40,6 +40,12 @@ _CATEGORY_HITS: Counter[str] = Counter()
 _FIRST_SEEN: Dict[str, float] = {}
 _LAST_SEEN: Dict[str, float] = {}
 
+# Background download jobs for Tier 2 GGUF models.
+# job_id -> { id, repo, file, dest_dir, dest_path, bytes_done, total, status,
+#             error, started_ts, finished_ts }
+_DOWNLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
+_DOWNLOAD_LOCK = threading.Lock()
+
 
 def record_event(event: Dict[str, Any]) -> None:
     """Insight executor wrapper calls this on every node_done / node_error.
@@ -462,6 +468,264 @@ def register_routes(server) -> None:
         except Exception as e:
             return web.json_response(_envelope_err(
                 "ollama_tags_failed", f"{type(e).__name__}: {e}"), status=500)
+
+    # -----------------------------------------------------------------
+    # Tier 2 — llama.cpp GGUF model scanner
+    # -----------------------------------------------------------------
+    @routes.get("/mec/diagnostics/local_llm/scan")
+    async def _llm_scan(_req):  # noqa: ARG001
+        ll = _import_local_llm()
+        try:
+            if ll is not None:
+                dirs = ll._candidate_dirs()
+            else:
+                # Replicate _candidate_dirs logic when module is unavailable.
+                here = os.path.dirname(os.path.abspath(__file__))
+                pack_root = os.path.dirname(here)
+                dirs = [os.path.join(pack_root, "user", "models")]
+                try:
+                    import folder_paths  # type: ignore  # noqa: F401
+                    for _k in ("llm", "LLM", "language_models"):
+                        try:
+                            dirs.extend(folder_paths.get_folder_paths(_k))
+                        except Exception:
+                            pass
+                    try:
+                        dirs.append(os.path.join(folder_paths.models_dir, "llm"))
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                dirs = [p for p in dirs if p and os.path.isdir(p)]
+            installed = []
+            for d in dirs:
+                try:
+                    for fn in os.listdir(d):
+                        if fn.lower().endswith(".gguf"):
+                            fp = os.path.join(d, fn)
+                            try:
+                                sz = round(os.path.getsize(fp) / (1024 * 1024), 1)
+                            except Exception:
+                                sz = 0
+                            installed.append({
+                                "filename": fn,
+                                "path": fp,
+                                "dir": d,
+                                "size_mb": sz,
+                            })
+                except Exception:
+                    continue
+            return web.json_response(_envelope_ok({
+                "dirs": dirs,
+                "installed": installed,
+            }))
+        except Exception as e:
+            return web.json_response(
+                _envelope_err("scan_failed", f"{type(e).__name__}: {e}"),
+                status=500)
+
+    # -----------------------------------------------------------------
+    # Tier 2 — GGUF download from HuggingFace
+    # -----------------------------------------------------------------
+    def _llm_dest_dir():
+        """First writable directory for GGUFs."""
+        ll = _import_local_llm()
+        if ll is not None and hasattr(ll, "_candidate_dirs"):
+            try:
+                cands = ll._candidate_dirs()
+            except Exception:
+                cands = []
+        else:
+            cands = []
+        try:
+            import folder_paths  # type: ignore
+            try:
+                cands.append(os.path.join(folder_paths.models_dir, "llm"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        for d in cands:
+            if not d:
+                continue
+            try:
+                os.makedirs(d, exist_ok=True)
+                if os.access(d, os.W_OK):
+                    return d
+            except Exception:
+                continue
+        # Last resort: pack/user/models
+        here = os.path.dirname(os.path.abspath(__file__))
+        pack_root = os.path.dirname(here)
+        fallback = os.path.join(pack_root, "user", "models")
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+    def _do_download(job_id: str, repo: str, fname: str, dest_dir: str):
+        import urllib.request
+        import urllib.error
+        rec = _DOWNLOAD_JOBS[job_id]
+        dest_path = os.path.join(dest_dir, fname)
+        rec["dest_path"] = dest_path
+        # If file already exists and is non-empty, mark done.
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            with _DOWNLOAD_LOCK:
+                rec["status"] = "exists"
+                rec["bytes_done"] = os.path.getsize(dest_path)
+                rec["total"] = rec["bytes_done"]
+                rec["finished_ts"] = time.time()
+            return
+        # Prefer huggingface_hub when present (handles mirrors, retries).
+        try:
+            from huggingface_hub import hf_hub_download  # type: ignore
+            tmp = hf_hub_download(
+                repo_id=repo,
+                filename=fname,
+                local_dir=dest_dir,
+                local_dir_use_symlinks=False,
+            )
+            # hf_hub_download returns path. Move to canonical location if needed.
+            if os.path.abspath(tmp) != os.path.abspath(dest_path):
+                try:
+                    os.replace(tmp, dest_path)
+                except Exception:
+                    dest_path = tmp
+                    rec["dest_path"] = dest_path
+            sz = os.path.getsize(dest_path)
+            with _DOWNLOAD_LOCK:
+                rec["bytes_done"] = sz
+                rec["total"] = sz
+                rec["status"] = "done"
+                rec["finished_ts"] = time.time()
+            return
+        except ImportError:
+            pass
+        except Exception as e:
+            # Fall through to urllib if HF lib path fails for any reason.
+            log.warning("[mec_diagnostics] hf_hub_download failed (%s); fallback to urllib", e)
+        # urllib fallback (streamed)
+        url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
+        tmp_path = dest_path + ".part"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "MEC-Diagnostics/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                total = int(resp.headers.get("Content-Length", "0") or "0")
+                with _DOWNLOAD_LOCK:
+                    rec["total"] = total
+                with open(tmp_path, "wb") as f:
+                    chunk = 1024 * 256
+                    while True:
+                        buf = resp.read(chunk)
+                        if not buf:
+                            break
+                        f.write(buf)
+                        with _DOWNLOAD_LOCK:
+                            rec["bytes_done"] += len(buf)
+                            if rec.get("cancel"):
+                                raise RuntimeError("cancelled")
+            os.replace(tmp_path, dest_path)
+            with _DOWNLOAD_LOCK:
+                rec["status"] = "done"
+                rec["finished_ts"] = time.time()
+        except Exception as e:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            with _DOWNLOAD_LOCK:
+                rec["status"] = "error"
+                rec["error"] = f"{type(e).__name__}: {e}"
+                rec["finished_ts"] = time.time()
+
+    @routes.post("/mec/diagnostics/local_llm/download")
+    async def _llm_download(req):
+        import uuid
+        try:
+            payload = await req.json()
+        except Exception as e:
+            return web.json_response(_envelope_err("bad_json", str(e)), status=400)
+        cid = (payload.get("id") or "").strip()
+        repo = (payload.get("repo") or "").strip()
+        fname = (payload.get("file") or "").strip()
+        if not repo or not fname:
+            return web.json_response(_envelope_err(
+                "missing_repo_or_file",
+                "Both 'repo' and 'file' are required (e.g. {repo:'bartowski/Qwen2.5-0.5B-Instruct-GGUF', file:'Qwen2.5-0.5B-Instruct-Q4_K_M.gguf'})."
+            ), status=400)
+        # Refuse anything that isn't .gguf.
+        if not fname.lower().endswith(".gguf"):
+            return web.json_response(_envelope_err(
+                "not_gguf", "Only .gguf filenames are accepted."), status=400)
+        # Refuse path traversal in filename.
+        if "/" in fname or "\\" in fname or ".." in fname:
+            return web.json_response(_envelope_err(
+                "bad_filename", "Filename must be a bare name with no path components."),
+                status=400)
+        dest_dir = _llm_dest_dir()
+        job_id = uuid.uuid4().hex[:12]
+        rec = {
+            "job_id": job_id,
+            "id": cid,
+            "repo": repo,
+            "file": fname,
+            "dest_dir": dest_dir,
+            "dest_path": os.path.join(dest_dir, fname),
+            "bytes_done": 0,
+            "total": 0,
+            "status": "running",
+            "error": "",
+            "started_ts": time.time(),
+            "finished_ts": 0.0,
+            "cancel": False,
+        }
+        with _DOWNLOAD_LOCK:
+            _DOWNLOAD_JOBS[job_id] = rec
+        th = threading.Thread(
+            target=_do_download,
+            args=(job_id, repo, fname, dest_dir),
+            daemon=True,
+            name=f"mec-dl-{job_id}",
+        )
+        th.start()
+        return web.json_response(_envelope_ok({
+            "job_id": job_id,
+            "dest_dir": dest_dir,
+            "dest_path": rec["dest_path"],
+        }))
+
+    @routes.get("/mec/diagnostics/local_llm/download_progress")
+    async def _llm_download_progress(req):
+        job_id = (req.query.get("job_id") or "").strip()
+        if not job_id:
+            return web.json_response(_envelope_err(
+                "missing_job_id", "job_id query param required"), status=400)
+        with _DOWNLOAD_LOCK:
+            rec = _DOWNLOAD_JOBS.get(job_id)
+            if rec is None:
+                return web.json_response(_envelope_err(
+                    "unknown_job", "no such job_id"), status=404)
+            out = {k: v for k, v in rec.items() if k != "cancel"}
+        # Add percent.
+        total = out.get("total") or 0
+        done = out.get("bytes_done") or 0
+        out["percent"] = round((done / total * 100.0) if total > 0 else 0.0, 1)
+        return web.json_response(_envelope_ok(out))
+
+    @routes.post("/mec/diagnostics/local_llm/download_cancel")
+    async def _llm_download_cancel(req):
+        try:
+            payload = await req.json()
+        except Exception as e:
+            return web.json_response(_envelope_err("bad_json", str(e)), status=400)
+        job_id = (payload.get("job_id") or "").strip()
+        with _DOWNLOAD_LOCK:
+            rec = _DOWNLOAD_JOBS.get(job_id)
+            if rec is None:
+                return web.json_response(_envelope_err(
+                    "unknown_job", "no such job_id"), status=404)
+            rec["cancel"] = True
+        return web.json_response(_envelope_ok({"job_id": job_id, "cancelling": True}))
 
     # -----------------------------------------------------------------
     # Tier 1 — custom user patterns (add / list / remove / hot-reload)

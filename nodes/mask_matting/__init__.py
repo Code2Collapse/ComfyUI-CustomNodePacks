@@ -26,6 +26,17 @@ This pack contains ZERO Forbidden-Vision (AGPL) code.
 """
 from __future__ import annotations
 
-from .node import MaskMattingMEC, NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .node import MaskMattingMEC
+from .node import NODE_CLASS_MAPPINGS as _MM_MAPPINGS
+from .node import NODE_DISPLAY_NAME_MAPPINGS as _MM_DISPLAY
+from .refine_node import MaskRefineMEC
+from .refine_node import NODE_CLASS_MAPPINGS as _MR_MAPPINGS
+from .refine_node import NODE_DISPLAY_NAME_MAPPINGS as _MR_DISPLAY
 
-__all__ = ["MaskMattingMEC", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+NODE_CLASS_MAPPINGS = {**_MM_MAPPINGS, **_MR_MAPPINGS}
+NODE_DISPLAY_NAME_MAPPINGS = {**_MM_DISPLAY, **_MR_DISPLAY}
+
+__all__ = [
+    "MaskMattingMEC", "MaskRefineMEC",
+    "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS",
+]

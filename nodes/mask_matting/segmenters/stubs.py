@@ -32,10 +32,8 @@ def _stub(key: str, display: str, models_key: str, modes: set, deps_check=lambda
 # All remaining backends from the master list.
 _stub("sec",            "SeC (Segment-and-Track)",         "sec",            {"points", "bbox", "video", "auto"})
 _stub("grounding-dino", "Grounding DINO (text → bbox)",    "grounding-dino", {"text"})
-_stub("birefnet",       "BiRefNet (BG removal)",           "birefnet",       {"auto"})
-_stub("rmbg",           "RMBG-2.0 (BG removal)",           "rmbg",           {"auto"})
+# birefnet / rmbg / inspyrenet are now real backends in salient_backend.py.
 _stub("videomama",      "VideoMaMa (text-video)",          "videomama",      {"text", "video"})
-_stub("inspyrenet",     "InSPyReNet (BG removal)",         "inspyrenet",     {"auto"})
 _stub("cutie",          "Cutie (video object track)",      "cutie",          {"points", "bbox", "video"})
 _stub("dis",            "DIS-IS-Net (high-res salient)",   "dis",            {"auto"})
 _stub("xmem",           "XMem++ (long-form video)",        "xmem",           {"points", "bbox", "video"})

@@ -25,6 +25,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { findUpstreamFramesAsync } from "./_frame_finder.js";
 
 const NODE_NAME = "SplineMaskTrackerMEC";
 
@@ -279,37 +280,8 @@ function catmullRom(points, samplesPerSeg, closed) {
 /** Walk the input chain from `node` looking for a node with imgs[].length
  *  > 0 (LoadImage / VHS_LoadVideo / SaveImage etc populate this after a
  *  graph execution). Return an array of URLs. */
-function findUpstreamFrames(node) {
-    if (!node.inputs) return [];
-    const linkedInput = node.inputs.find(i => i.name === "image" && i.link != null);
-    if (!linkedInput) return [];
-    const visited = new Set();
-    const queue = [{ id: app.graph.links[linkedInput.link]?.origin_id, depth: 0 }];
-    while (queue.length) {
-        const { id, depth } = queue.shift();
-        if (id == null || visited.has(id)) continue;
-        visited.add(id);
-        const n = app.graph.getNodeById(id);
-        if (!n) continue;
-        if (n.imgs?.length) return n.imgs.map(im => im.src);
-        // Some video loaders use videos[] instead.
-        const w = n.widgets?.find(w => w.name === "image" || w.name === "video");
-        if (w?.value && typeof w.value === "string") {
-            const parts = w.value.split("/");
-            const sub = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
-            const fn = parts[parts.length - 1];
-            return [`/view?filename=${encodeURIComponent(fn)}&subfolder=${encodeURIComponent(sub)}&type=input`];
-        }
-        if (depth < 4 && n.inputs) {
-            for (const inp of n.inputs) {
-                if (inp.link == null) continue;
-                const li = app.graph.links[inp.link];
-                if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
-            }
-        }
-    }
-    return [];
-}
+// findUpstreamFrames moved to _frame_finder.js (shared async finder
+// with video-source + sibling-preview support).
 
 
 // ─── Painter ────────────────────────────────────────────────────────
@@ -580,8 +552,8 @@ function installEditor(node) {
     }
 
     // ── Frame loading ───────────────────────────────────────────────
-    function loadFrames() {
-        const urls = findUpstreamFrames(node);
+    async function loadFrames() {
+        const urls = await findUpstreamFramesAsync(node, { maxVideoFrames: 32 });
         if (!urls.length) {
             flashStatus("No frames found upstream. Queue Prompt once, then click ↻ Reload frames.");
             state.frames = [];

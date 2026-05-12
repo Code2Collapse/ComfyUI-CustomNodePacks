@@ -12,6 +12,7 @@ from .matters import all_matters, get_matter_cls
 from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
 from .segmenters import list_keys as list_segmenter_keys
+from . import _vfx
 from .utils import (
     apply_subject_preset,
     bbox_from_mask,
@@ -151,22 +152,37 @@ class MaskMattingMEC:
 
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (
-        "Multi-backend segmentation + matting in a single node. Supports "
-        "SAM 2.1 / SAM 3 / SeC + ViTMatte / RVM / MatAnyone with auto-mode "
-        "selection (points / bbox / text / video)."
+        "Production-grade segmentation + matting in a single node. "
+        "Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / RMBG-2.0 / "
+        "InSPyReNet + ViTMatte / RVM / MatAnyone) with VFX post-processing: "
+        "TTA flip-fuse, multi-scale ensembling, despill, light wrap, "
+        "edge/inside/outside separation, CRF / guided-filter refinement, "
+        "no-GT quality scoring, holdout/garbage matte support, and "
+        "premultiplied output for compositors."
     )
     FUNCTION = "execute"
-    RETURN_TYPES = ("MASK", "MASK", "IMAGE", "MASK", "BBOX", "STRING", "FLOAT", "STRING")
-    RETURN_NAMES = ("mask", "alpha", "preview", "trimap", "bbox", "bbox_json", "score", "info")
+    RETURN_TYPES = (
+        "MASK", "MASK", "IMAGE", "MASK", "BBOX", "STRING", "FLOAT", "STRING",
+        "IMAGE", "IMAGE", "MASK", "MASK", "MASK",
+    )
+    RETURN_NAMES = (
+        "mask", "alpha", "preview", "trimap", "bbox", "bbox_json", "score", "info",
+        "despilled", "lightwrap_rgba", "edge_mask", "inside_mask", "outside_mask",
+    )
     OUTPUT_TOOLTIPS = (
-        "Coarse mask straight from the segmenter (B,H,W).",
-        "Refined alpha from the matter (= mask if matter='none').",
-        "RGB preview = image * alpha (handy debug output).",
-        "Trimap fed to the matter (0=bg, 0.5=unknown, 1=fg).",
+        "Coarse mask from the segmenter (B,H,W).",
+        "Refined alpha after matter + optional CRF / guided refine (production output).",
+        "image * alpha premultiplied preview.",
+        "Trimap (0/0.5/1) used by the matter.",
         "Tight bbox around the alpha as [x0,y0,x1,y1].",
         "Same bbox as JSON {'x','y','w','h'}.",
-        "Segmenter confidence score in [0,1].",
-        "JSON dict with backend ids, modes used, and per-frame counts.",
+        "Overall production-quality score in [0,1] (boundary + coherence + size + smoothness).",
+        "JSON: backends, modes, per-frame quality breakdown, settings used.",
+        "Image with backing-colour spill suppressed (when `despill_strength`>0).",
+        "RGBA light-wrap layer to ADD over the new background.",
+        "Soft edge band where matting actually matters.",
+        "Solid-fg interior mask (safe to colour-grade).",
+        "Solid-bg exterior mask (safe to defocus / replace).",
     )
 
     @classmethod
@@ -210,6 +226,19 @@ class MaskMattingMEC:
                 "end_frame":   ("INT", {"default": -1, "min": -1, "max": 100000, "tooltip": "-1 = last frame."}),
                 "auto_download": ("BOOLEAN", {"default": False, "tooltip": "Allow lazy auto-download from HF/torch.hub when a weight is missing."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
+                # ── VFX / production post-processing ────────────────────
+                "tta_flip": ("BOOLEAN", {"default": False, "tooltip": "Test-time augmentation: run segmenter on the H-flipped image and average. Slower but cleaner."}),
+                "multiscale": ("BOOLEAN", {"default": False, "tooltip": "Run the segmenter at 0.75x / 1.0x / 1.25x and fuse. Helps small / thin subjects."}),
+                "post_refine": (["none", "guided", "crf", "crf+guided"], {"default": "none", "tooltip": "Final alpha refinement. 'guided' = guided filter (fast, torch-only). 'crf' = DenseCRF (requires pydensecrf, sharpest edges)."}),
+                "refine_radius": ("INT", {"default": 8, "min": 1, "max": 64, "tooltip": "Spatial radius for guided / CRF refinement."}),
+                "refine_iterations": ("INT", {"default": 5, "min": 1, "max": 30, "tooltip": "CRF inference iterations."}),
+                "despill": (["off", "green", "blue", "red", "magenta", "cyan", "yellow", "white", "black", "auto"], {"default": "off", "tooltip": "Colour decontamination on the named backing. 'auto' estimates the colour from image corners."}),
+                "despill_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "How aggressively to subtract the spill (0 = off)."}),
+                "preserve_skin": ("BOOLEAN", {"default": True, "tooltip": "Keep warm pixels (R>G>B) untouched during despill."}),
+                "lightwrap_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "Light-wrap intensity. 0 = off; ~0.3-0.6 = natural blend over the new BG."}),
+                "lightwrap_radius": ("INT", {"default": 8, "min": 1, "max": 64, "tooltip": "Light-wrap halo radius in pixels."}),
+                "edge_band_radius": ("INT", {"default": 4, "min": 1, "max": 64, "tooltip": "Width of the soft edge band when splitting edge/inside/outside masks."}),
+                "premultiply": ("BOOLEAN", {"default": True, "tooltip": "Premultiply preview by alpha. Disable for straight-alpha outputs."}),
             },
             "optional": {
                 # Slot order shown on the node's left edge: these two come
@@ -228,6 +257,8 @@ class MaskMattingMEC:
                     "tooltip": "Open-vocabulary text prompt (SAM3 / GroundingDINO / VideoMaMa). Wire from any STRING source."}),
                 "external_mask": ("MASK", {"tooltip": "Optional mask used as a hint or overridden when input_mode='auto' falls through."}),
                 "external_trimap": ("MASK", {"tooltip": "Optional pre-computed trimap that bypasses internal trimap generation."}),
+                "holdout_mask": ("MASK", {"tooltip": "Garbage / holdout matte. Pixels where this is >0 are FORCED to alpha=0 (used to chop out boom mics, rigs, etc)."}),
+                "core_mask": ("MASK", {"tooltip": "Core / inside matte. Pixels where this is >0 are FORCED to alpha=1 (used to lock down opaque interiors)."}),
             },
         }
 
@@ -260,10 +291,15 @@ class MaskMattingMEC:
                 individual_objects, tracking_direction, frame_annotation,
                 object_id, max_frames_to_track, memory_size, start_frame, end_frame,
                 auto_download, seed,
+                tta_flip=False, multiscale=False, post_refine="none",
+                refine_radius=8, refine_iterations=5,
+                despill="off", despill_strength=1.0, preserve_skin=True,
+                lightwrap_strength=0.0, lightwrap_radius=8,
+                edge_band_radius=4, premultiply=True,
                 positive_coords="", negative_coords="",
                 pos_points="", neg_points="", pos_bbox=None, neg_bbox=None,
                 normal_bbox=None, text_prompt="", external_mask=None,
-                external_trimap=None):
+                external_trimap=None, holdout_mask=None, core_mask=None):
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
         pos_points = positive_coords or pos_points or ""
@@ -332,6 +368,21 @@ class MaskMattingMEC:
                 device=device, precision=precision,
                 attention=attention, offload=offload,
             )
+
+            def _segment_once(img_in: torch.Tensor) -> torch.Tensor:
+                out = seg_inst.segment(
+                    img_in, mode=mode,
+                    positive_points=pos_pts, negative_points=neg_pts,
+                    bbox=bbox_used, text_prompt=text_prompt,
+                    frame_annotation=int(frame_annotation), object_id=int(object_id),
+                    max_frames=int(max_frames_to_track), memory_size=int(memory_size),
+                    start_frame=int(start_frame), end_frame=int(end_frame),
+                    individual_objects=bool(individual_objects),
+                    tracking_direction=tracking_direction, seed=int(seed),
+                )
+                return out["mask"].float().clamp(0, 1)
+
+            # First pass — also captures score metadata.
             seg_out = seg_inst.segment(
                 img_bhwc, mode=mode,
                 positive_points=pos_pts, negative_points=neg_pts,
@@ -344,6 +395,18 @@ class MaskMattingMEC:
             )
             mask_t: torch.Tensor = seg_out["mask"].float().clamp(0, 1)
             score = float(seg_out.get("score", 1.0))
+
+            # Optional ensembling — fuse first pass with augmented passes.
+            if bool(multiscale) and bool(tta_flip):
+                fused = _vfx.multiscale_fuse(
+                    img_bhwc, lambda x: _vfx.tta_flip_fuse(x, _segment_once))
+                mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
+            elif bool(tta_flip):
+                fused = _vfx.tta_flip_fuse(img_bhwc, _segment_once)
+                mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
+            elif bool(multiscale):
+                fused = _vfx.multiscale_fuse(img_bhwc, _segment_once)
+                mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
             logger.warning("[MaskMatting] seg done \u2014 mask sum=%.1f score=%.3f shape=%s",
                            float(mask_t.sum()), score, tuple(mask_t.shape))
 
@@ -385,32 +448,101 @@ class MaskMattingMEC:
             else:
                 alpha_t = mask_t
 
-            # Preview = image * alpha
-            preview = (img_bhwc.cpu() * alpha_t.unsqueeze(-1)).clamp(0, 1)
+            # ── VFX post-processing pipeline ─────────────────────────
+            # 1. Post refinement (CRF / guided filter).
+            if post_refine in ("guided", "crf+guided"):
+                alpha_t = _vfx.guided_refine(
+                    img_bhwc.to(alpha_t.device), alpha_t,
+                    radius=int(refine_radius), epsilon=1e-4)
+            if post_refine in ("crf", "crf+guided"):
+                alpha_t = _vfx.crf_refine(
+                    img_bhwc.to(alpha_t.device), alpha_t,
+                    iterations=int(refine_iterations))
+            # 2. Holdout / core overrides (garbage matte semantics).
+            if holdout_mask is not None:
+                hm = to_mask(holdout_mask)
+                if hm.shape[-2:] == alpha_t.shape[-2:]:
+                    if hm.shape[0] != alpha_t.shape[0] and hm.shape[0] == 1:
+                        hm = hm.expand_as(alpha_t)
+                    alpha_t = (alpha_t * (1.0 - hm.to(alpha_t.device))).clamp(0, 1)
+            if core_mask is not None:
+                cm = to_mask(core_mask)
+                if cm.shape[-2:] == alpha_t.shape[-2:]:
+                    if cm.shape[0] != alpha_t.shape[0] and cm.shape[0] == 1:
+                        cm = cm.expand_as(alpha_t)
+                    alpha_t = torch.maximum(alpha_t, cm.to(alpha_t.device)).clamp(0, 1)
+            # 3. Despill on the source image (using the FINAL alpha as mask).
+            if despill != "off" and float(despill_strength) > 0:
+                despilled = _vfx.despill(
+                    img_bhwc.to(alpha_t.device), alpha_t,
+                    backing=despill, strength=float(despill_strength),
+                    preserve_skin=bool(preserve_skin)).cpu()
+            else:
+                despilled = img_bhwc.cpu().clone()
+            # 4. Light wrap layer.
+            if float(lightwrap_strength) > 0:
+                lightwrap = _vfx.lightwrap_layer(
+                    img_bhwc.to(alpha_t.device), alpha_t,
+                    bg_color=None, radius=int(lightwrap_radius),
+                    strength=float(lightwrap_strength)).cpu()
+            else:
+                lightwrap = torch.zeros((*alpha_t.shape, 4),
+                                         dtype=img_bhwc.dtype)
+            # 5. Edge / inside / outside masks.
+            edge_m, inside_m, outside_m = _vfx.edge_inside_outside(
+                alpha_t, edge_radius=int(edge_band_radius))
+            edge_m, inside_m, outside_m = edge_m.cpu(), inside_m.cpu(), outside_m.cpu()
+
+            # Preview = image * alpha (premultiplied) or straight alpha.
+            alpha_cpu = alpha_t.cpu()
+            if bool(premultiply):
+                preview = (despilled * alpha_cpu.unsqueeze(-1)).clamp(0, 1)
+            else:
+                preview = despilled.clamp(0, 1)
 
             # Bbox from alpha (first frame)
-            x0, y0, x1, y1 = bbox_from_mask(alpha_t[0].cpu().numpy())
+            x0, y0, x1, y1 = bbox_from_mask(alpha_cpu[0].numpy())
             bbox_list = [int(x0), int(y0), int(x1), int(y1)]
             bjson = bbox_to_json((x0, y0, x1, y1))
+
+            # 6. Production quality scoring (no GT).
+            quality = _vfx.score_quality(img_bhwc, alpha_t.cpu())
+            final_score = float(quality["overall"])
 
             info_obj = {
                 "segmenter": seg_key,
                 "matter": mat_key,
                 "mode": mode,
                 "frames": int(B),
-                "score": score,
+                "segmenter_score": score,
+                "production_score": final_score,
                 "subject_preset": subject_preset,
                 "trimap": {"dilate": d, "erode": e, "edge": edge},
+                "vfx": {
+                    "tta_flip": bool(tta_flip),
+                    "multiscale": bool(multiscale),
+                    "post_refine": post_refine,
+                    "despill": despill,
+                    "despill_strength": float(despill_strength),
+                    "lightwrap_strength": float(lightwrap_strength),
+                    "premultiply": bool(premultiply),
+                },
+                "quality": quality,
             }
             return (
-                mask_t,
-                alpha_t,
+                mask_t.cpu(),
+                alpha_cpu,
                 preview,
-                trimap_t,
+                trimap_t.cpu(),
                 bbox_list,
                 bjson,
-                score,
+                final_score,
                 json.dumps(info_obj),
+                despilled,
+                lightwrap,
+                edge_m,
+                inside_m,
+                outside_m,
             )
         finally:
             free_vram()

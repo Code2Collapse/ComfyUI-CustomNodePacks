@@ -26,20 +26,19 @@ from .nodes.mask_transform_xy import MaskTransformXY
 from .nodes.mask_draw_frame import MaskDrawFrame, DrawShapeMEC
 from .nodes.mask_propagate_video import MaskPropagateVideo
 from .nodes.points_mask_editor import PointsMaskEditor
-from .nodes.sam_model_loader import SAMModelLoaderMEC
-from .nodes.sam_mask_generator import SAMMaskGeneratorMEC
+# Legacy SAM* nodes and standalone BackgroundRemover / SemanticSegment are
+# fully superseded by MaskMattingMEC (multi-backend pipeline). Their source
+# files are kept on disk for reference but no longer registered.
 from .nodes.bbox_nodes import BBoxSmooth
-from .nodes.vitmatte_refiner import ViTMatteRefinerMEC
-from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
+# Legacy standalone refiners (ViTMatteRefinerMEC, MaskRefinerTemporalMEC,
+# MaskRefineCRF/Guided/ThinStructure/QualityScore/TrimapFromUncertainty) are
+# fully superseded by the unified MaskRefineMEC inside Mask + Matting.
 from .nodes.trimap_generator import TrimapGeneratorMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
 from .nodes.sec_matanyone_pipeline import SeCMatAnyonePipelineMEC
-from .nodes.background_remover import BackgroundRemoverMEC
-from .nodes.semantic_segment import SemanticSegmentMEC
 from .nodes.luminance_keyer import LuminanceKeyerMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 from .nodes.temporal_anchor import TemporalAnchorMEC
-from .nodes.sam_multi_mask_picker import SamMultiMaskPickerMEC
 from .nodes.inpaint_suite import (
     InpaintCropProMEC,
     InpaintStitchProMEC,
@@ -51,7 +50,6 @@ from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.spline_mask_editor import SplineMaskEditorMEC
 from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
 from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
-from .nodes.mask_refiner_temporal import MaskRefinerTemporalMEC
 from .nodes.spline_mask_tracker import SplineMaskTrackerMEC
 from .nodes.video_mask_editor import (
     VideoMaskEditorMEC,
@@ -128,26 +126,22 @@ from .nodes.model_analysis import (
     NODE_CLASS_MAPPINGS as _MA_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MA_DISPLAY,
 )
+# Legacy mask refinement suite (DenseCRF / Guided / Thin / QualityScore / Trimap)
+# is fully replaced by the single ``MaskRefineMEC`` node registered via
+# ``mask_matting`` package — no separate registration here.
 
 _MEC_MAPPINGS = {
     "MaskTransformXY": MaskTransformXY,
     "MaskDrawFrame": MaskDrawFrame,
     "MaskPropagateVideo": MaskPropagateVideo,
     "PointsMaskEditor": PointsMaskEditor,
-    "SAMModelLoaderMEC": SAMModelLoaderMEC,
-    "SAMMaskGeneratorMEC": SAMMaskGeneratorMEC,
     "BBoxSmooth": BBoxSmooth,
-    "ViTMatteRefinerMEC": ViTMatteRefinerMEC,
-    "SAMViTMattePipelineMEC": SAMViTMattePipelineMEC,
     "TrimapGeneratorMEC": TrimapGeneratorMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
-    "BackgroundRemoverMEC": BackgroundRemoverMEC,
-    "SemanticSegmentMEC": SemanticSegmentMEC,
     "LuminanceKeyerMEC": LuminanceKeyerMEC,
     "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
     "TemporalAnchorMEC": TemporalAnchorMEC,
-    "SamMultiMaskPickerMEC": SamMultiMaskPickerMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintCompositeMEC": InpaintCompositeMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
@@ -157,7 +151,6 @@ _MEC_MAPPINGS = {
     "SplineMaskEditorMEC": SplineMaskEditorMEC,
     "SplinePathFlowMaskMEC": SplinePathFlowMaskMEC,
     "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
-    "MaskRefinerTemporalMEC": MaskRefinerTemporalMEC,
     "SplineMaskTrackerMEC": SplineMaskTrackerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "DrawShapeMEC": DrawShapeMEC,
@@ -173,20 +166,13 @@ _MEC_DISPLAY = {
     "MaskDrawFrame": "Mask Draw Frame (MEC)",
     "MaskPropagateVideo": "Mask Propagate Video (MEC)",
     "PointsMaskEditor": "Points Mask Editor (MEC)",
-    "SAMModelLoaderMEC": "SAM Model Loader (MEC)",
-    "SAMMaskGeneratorMEC": "SAM Mask Generator (MEC)",
     "BBoxSmooth": "BBox Smooth Temporal (MEC)",
-    "ViTMatteRefinerMEC": "ViTMatte Edge Refiner (MEC)",
-    "SAMViTMattePipelineMEC": "SAM + ViTMatte Pipeline (MEC)",
     "TrimapGeneratorMEC": "Trimap Generator (MEC)",
     "ParameterHistoryMEC": "Parameter History (MEC)",
     "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (MEC)",
-    "BackgroundRemoverMEC": "Background Remover (MEC)",
-    "SemanticSegmentMEC": "Semantic Segment (MEC)",
     "LuminanceKeyerMEC": "Luminance Keyer (MEC)",
     "MaskFailureExplainerMEC": "Mask Failure Explainer (MEC)",
     "TemporalAnchorMEC": "Temporal Anchor System (MEC)",
-    "SamMultiMaskPickerMEC": "SAM Multi-Mask Picker (MEC)",
     "InpaintCropProMEC": "Inpaint Crop Pro (MEC)",
     "InpaintCompositeMEC": "Inpaint Composite (MEC)",
     "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (MEC)",
@@ -196,7 +182,6 @@ _MEC_DISPLAY = {
     "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
     "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
     "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
-    "MaskRefinerTemporalMEC": "Mask Refiner — Temporal (MEC)",
     "SplineMaskTrackerMEC": "Spline Mask Tracker (MEC)",
     "VideoMaskEditorMEC": "Video Mask Editor (MEC)",
     "DrawShapeMEC": "Draw Shape (MEC)",

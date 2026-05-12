@@ -9,6 +9,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { findUpstreamFramesAsync } from "./_frame_finder.js";
 
 const NODE_NAME = "VideoMaskEditorMEC";
 
@@ -34,30 +35,9 @@ function uuid() {
         (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & 15) >> (c / 4)).toString(16));
 }
 
-// ─── Upstream frame discovery (same BFS as spline tracker) ──────────
-function findUpstreamFrames(node) {
-    if (!node.inputs) return [];
-    const inp = node.inputs.find(i => i.name === "image" && i.link != null);
-    if (!inp) return [];
-    const visited = new Set();
-    const queue = [{ id: app.graph.links[inp.link]?.origin_id, depth: 0 }];
-    while (queue.length) {
-        const { id, depth } = queue.shift();
-        if (id == null || visited.has(id)) continue;
-        visited.add(id);
-        const n = app.graph.getNodeById(id);
-        if (!n) continue;
-        if (n.imgs?.length) return n.imgs.map(im => im.src);
-        if (depth < 4 && n.inputs) {
-            for (const i2 of n.inputs) {
-                if (i2.link == null) continue;
-                const li = app.graph.links[i2.link];
-                if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
-            }
-        }
-    }
-    return [];
-}
+// ─── Upstream frame discovery (shared finder) ──────────────────────
+// Implementation lives in _frame_finder.js and handles video sources,
+// sibling preview scan, and single-frame fallback.
 
 function loadImage(url) {
     return new Promise((resolve, reject) => {
@@ -122,7 +102,7 @@ class VMEEditor {
 
     // ── frame init / switch ──────────────────────────────────────────
     async loadFrames() {
-        const urls = findUpstreamFrames(this.node);
+        const urls = await findUpstreamFramesAsync(this.node, { maxVideoFrames: 32 });
         if (!urls.length) {
             alert("[VideoMaskEditor]\n\nNo frames found upstream. " +
                   "Queue Prompt once so the upstream image source has " +

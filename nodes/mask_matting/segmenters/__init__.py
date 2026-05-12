@@ -97,7 +97,7 @@ def list_keys(installed_only: bool = False) -> List[str]:
 # broken optional dep can't take down the whole pack.
 def _import_all() -> None:
     from importlib import import_module
-    for mod in ("sam2_backend", "sam3_backend", "sam31_backend", "stubs"):
+    for mod in ("sam2_backend", "sam3_backend", "sam31_backend", "salient_backend", "stubs"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:
