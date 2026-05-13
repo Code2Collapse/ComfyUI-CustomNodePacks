@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-customnodepacks"
 description = "Custom node packs for ComfyUI: FolderIncrementer (auto-versioning) + MaskEditControl (pinpoint mask editing with SAM 2.1 / SAM 3, per-axis erode/expand, point editor, bbox tools, video mask propagation)."
-version = "1.27.5"
+version = "1.27.6"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 readme = "README.md"
@@ -23,6 +23,6 @@ Repository = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks"
 Issues = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks/issues"
 
 [tool.comfy]
-PublisherId = "likhith-24"
+PublisherId = "code2collapse"
 DisplayName = "ComfyUI-CustomNodePacks"
 Icon = "https://i.pinimg.com/736x/5d/52/19/5d5219ef27c1530bea027ff95d352e05.jpg"
