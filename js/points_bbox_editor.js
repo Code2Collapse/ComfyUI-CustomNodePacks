@@ -23,8 +23,10 @@
  *   + / -                    zoom in/out
  */
 import { app } from "../../scripts/app.js";
+import { installModeGated } from "./_mode_gate.js";
 
-const TARGET_NODES = ["PointsMaskEditor", "SAMMaskGeneratorMEC"];
+// Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
+const TARGET_NODES = ["MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC"];
 
 const COLOR = {
     bg: "#181825",
@@ -615,6 +617,9 @@ function installEditor(node) {
         getHeight: () => widgetH,
     });
 
+    // Stash host root for mode-gate hide/show on the unified node.
+    node._mecPointsHost = root;
+
     // Resize the widget so the image canvas matches the input image's
     // aspect ratio. Called after a new image loads.
     function resizeForImage() {
@@ -968,6 +973,15 @@ app.registerExtension({
     },
     async nodeCreated(node) {
         if (!TARGET_NODES.includes(node.comfyClass)) return;
-        installEditor(node);
+        if (node.comfyClass === "MaskEditMEC") {
+            installModeGated(node, {
+                activeWhen: "points_bbox",
+                installerKey: "maskEditPoints",
+                installer: (n) => installEditor(n),
+                hostFinder: (n) => n._mecPointsHost || null,
+            });
+        } else {
+            installEditor(node);
+        }
     },
 });

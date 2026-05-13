@@ -22,23 +22,21 @@ from .folder_incrementer import (
 from .nodes import model_manager as _model_manager  # noqa: F401
 
 # ── MaskEditControl nodes ─────────────────────────────────────────────
-from .nodes.mask_transform_xy import MaskTransformXY
-from .nodes.mask_draw_frame import MaskDrawFrame, DrawShapeMEC
-from .nodes.mask_propagate_video import MaskPropagateVideo
-from .nodes.points_mask_editor import PointsMaskEditor
-# Legacy SAM* nodes and standalone BackgroundRemover / SemanticSegment are
-# fully superseded by MaskMattingMEC (multi-backend pipeline). Their source
-# files are kept on disk for reference but no longer registered.
-from .nodes.bbox_nodes import BBoxSmooth
-# Legacy standalone refiners (ViTMatteRefinerMEC, MaskRefinerTemporalMEC,
-# MaskRefineCRF/Guided/ThinStructure/QualityScore/TrimapFromUncertainty) are
-# fully superseded by the unified MaskRefineMEC inside Mask + Matting.
-# TrimapGeneratorMEC, LuminanceKeyerMEC, MaskFailureExplainerMEC are now
-# absorbed into MaskOpsMEC (mask_matting) and no longer registered standalone.
-# Their source files are kept on disk as importable helper classes.
+# Unified composition wrappers — these replace 12 legacy node classes:
+#   MaskEditMEC      replaces MaskTransformXY, MaskDrawFrame, DrawShapeMEC,
+#                    PointsMaskEditor, BBoxSmooth
+#   SplineMaskMEC    replaces SplineMaskEditorMEC, SplineMaskTrackerMEC,
+#                    SplinePathFlowMaskMEC
+#   MaskTrackerMEC   replaces MotionMaskTrackerMEC, MaskPropagateVideo,
+#                    TemporalAnchorMEC, TemporalConsistencyCheckerMEC
+# The original source files remain on disk as internal implementation
+# modules; they are imported by the unified wrappers via composition.
+# No legacy NODE_CLASS_MAPPINGS entries are registered.
+from .nodes.mask_edit_mec import MaskEditMEC
+from .nodes.spline_mask_mec import SplineMaskMEC
+from .nodes.mask_tracker_mec import MaskTrackerMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
 from .nodes.sec_matanyone_pipeline import SeCMatAnyonePipelineMEC
-from .nodes.temporal_anchor import TemporalAnchorMEC
 from .nodes.inpaint_suite import (
     InpaintCropProMEC,
     InpaintStitchProMEC,
@@ -50,10 +48,6 @@ from .nodes.inpaint_suite import (
 # VideoComparerMEC is registered.
 from .nodes.video_comparer import VideoComparerMEC
 from .nodes.video_frame_player import VideoFramePlayerMEC
-from .nodes.spline_mask_editor import SplineMaskEditorMEC
-from .nodes.spline_path_flow_mask import SplinePathFlowMaskMEC
-from .nodes.motion_mask_tracker import MotionMaskTrackerMEC
-from .nodes.spline_mask_tracker import SplineMaskTrackerMEC
 from .nodes.video_mask_editor import (
     VideoMaskEditorMEC,
     register_routes as _register_vme_routes,
@@ -61,7 +55,6 @@ from .nodes.video_mask_editor import (
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
-from .nodes.temporal_consistency_checker import TemporalConsistencyCheckerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 
 # ── MEC Paint Suite (Advanced Paint Canvas + Fixer + Refiner + Builder) ───
@@ -130,58 +123,40 @@ from .nodes.model_analysis import (
 # ``mask_matting`` package — no separate registration here.
 
 _MEC_MAPPINGS = {
-    "MaskTransformXY": MaskTransformXY,
-    "MaskDrawFrame": MaskDrawFrame,
-    "MaskPropagateVideo": MaskPropagateVideo,
-    "PointsMaskEditor": PointsMaskEditor,
-    "BBoxSmooth": BBoxSmooth,
+    "MaskEditMEC": MaskEditMEC,
+    "SplineMaskMEC": SplineMaskMEC,
+    "MaskTrackerMEC": MaskTrackerMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
-    "TemporalAnchorMEC": TemporalAnchorMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintCompositeMEC": InpaintCompositeMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
     "VideoComparerMEC": VideoComparerMEC,
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
-    "SplineMaskEditorMEC": SplineMaskEditorMEC,
-    "SplinePathFlowMaskMEC": SplinePathFlowMaskMEC,
-    "MotionMaskTrackerMEC": MotionMaskTrackerMEC,
-    "SplineMaskTrackerMEC": SplineMaskTrackerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
-    "DrawShapeMEC": DrawShapeMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
     "BatchVersionManagerMEC": BatchVersionManagerMEC,
-    "TemporalConsistencyCheckerMEC": TemporalConsistencyCheckerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
 }
 
 _MEC_DISPLAY = {
-    "MaskTransformXY": "Mask Transform XY (MEC)",
-    "MaskDrawFrame": "Mask Draw Frame (MEC)",
-    "MaskPropagateVideo": "Mask Propagate Video (MEC)",
-    "PointsMaskEditor": "Points Mask Editor (MEC)",
-    "BBoxSmooth": "BBox Smooth Temporal (MEC)",
+    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox (MEC)",
+    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (MEC)",
+    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (MEC)",
     "ParameterHistoryMEC": "Parameter History (MEC)",
     "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (MEC)",
-    "TemporalAnchorMEC": "Temporal Anchor System (MEC)",
     "InpaintCropProMEC": "Inpaint Crop Pro (MEC)",
     "InpaintCompositeMEC": "Inpaint Composite (MEC)",
     "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (MEC)",
     "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (MEC)",
     "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (MEC)",
     "VideoFramePlayerMEC": "Video Frame Player (MEC)",
-    "SplineMaskEditorMEC": "Spline Mask Editor (MEC)",
-    "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
-    "MotionMaskTrackerMEC": "Motion Mask Tracker (MEC)",
-    "SplineMaskTrackerMEC": "Spline Mask Tracker (MEC)",
     "VideoMaskEditorMEC": "Video Mask Editor (MEC)",
-    "DrawShapeMEC": "Draw Shape (MEC)",
     "VAEMergeMEC": "VAE Merge (MEC)",
     "VAELatentInspectorMEC": "VAE Latent Inspector (MEC)",
     "BatchVersionManagerMEC": "Batch Version Manager (MEC)",
-    "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker (MEC)",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor (MEC)",
 }
 

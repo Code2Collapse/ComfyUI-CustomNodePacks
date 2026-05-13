@@ -1,13 +1,17 @@
-// MotionMaskTrackerMEC: per-method threshold/option widgets only visible
-// when their method is active in detection_mode.
-//   - "combined"        : everything visible
-//   - "pixel_diff"      : only pixel_diff_* visible
-//   - "optical_flow"    : only flow_* visible
-//   - "background_sub"  : only bg_* visible
-//   - "histogram_diff"  : only hist_* visible
-// combine_method only applies when detection_mode == "combined".
+// MotionMaskTrackerMEC / MaskTrackerMEC(mode=motion):
+// per-method threshold/option widgets only visible when their method is
+// active in detection_mode AND the parent mode is "motion" (unified node).
 import { app } from "../../scripts/app.js";
 import { setHidden } from "./_widget_visibility.js";
+
+const TARGET_NODES = ["MaskTrackerMEC", "MotionMaskTrackerMEC"];
+
+function _isActive(node) {
+    if (node.comfyClass === "MotionMaskTrackerMEC") return true;
+    if (node.comfyClass !== "MaskTrackerMEC") return false;
+    const modeW = node.widgets?.find(w => w.name === "mode");
+    return String(modeW?.value ?? "") === "motion";
+}
 
 const PIXEL_DIFF = ["pixel_diff_enabled", "pixel_diff_threshold"];
 const FLOW       = ["flow_enabled", "flow_threshold", "flow_algorithm"];
@@ -16,6 +20,7 @@ const HIST       = ["hist_enabled", "hist_grid_size", "hist_threshold"];
 const COMBINE    = ["combine_method"];
 
 function applyVisibility(node) {
+    if (!_isActive(node)) return;
     const get = (n) => node.widgets?.find(w => w.name === n);
     const mode = String(get("detection_mode")?.value ?? "combined");
     const combined = mode === "combined";
@@ -53,11 +58,12 @@ function hookWidget(node, name) {
 app.registerExtension({
     name: "MEC.MotionMaskTrackerMEC.ConditionalUI",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "MotionMaskTrackerMEC") return;
+        if (!TARGET_NODES.includes(nodeData.name)) return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
             hookWidget(this, "detection_mode");
+            hookWidget(this, "mode"); // unified-node mode flips
             setTimeout(() => applyVisibility(this), 0);
             return r;
         };

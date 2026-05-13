@@ -19,51 +19,58 @@
 // =====================================================================
 
 import { app } from "/scripts/app.js";
+import { installModeGated } from "./_mode_gate.js";
 
-const NODE_NAME = "SplinePathFlowMaskMEC";
+// Targets unified SplineMaskMEC (mode=flow_path) and any legacy
+// SplinePathFlowMaskMEC nodes on saved graphs.
+const NODE_NAMES = ["SplineMaskMEC", "SplinePathFlowMaskMEC"];
+const NODE_NAME = "SplineMaskMEC";
+
+function _installFlowEditor(node) {
+    const ed = window.__MEC_SPLINE_EDITOR__;
+    if (!ed || typeof ed.installEditor !== "function") {
+        console.warn(
+            "[SplinePathFlowMask] SplineMaskEditor module not loaded; " +
+            "embedded editor unavailable. Use the raw spline_data widget."
+        );
+        return;
+    }
+    const useEditorW = node.widgets?.find?.((w) => w.name === "use_embedded_editor");
+    const wantEditor = useEditorW ? !!useEditorW.value : true;
+    if (!wantEditor) return;
+    try {
+        ed.installEditor(node, { hostNode: NODE_NAME });
+        node.__mec_editor_installed = true;
+    } catch (err) {
+        console.error("[SplinePathFlowMask] installEditor failed:", err);
+    }
+}
 
 app.registerExtension({
     name: "MEC.SplinePathFlowMask.EmbeddedEditor",
 
     async nodeCreated(node) {
-        if (!node || node.comfyClass !== NODE_NAME) return;
-
-        // Wait one tick so all widgets are realized.
+        if (!node || !NODE_NAMES.includes(node.comfyClass)) return;
         await new Promise((r) => setTimeout(r, 0));
 
-        const ed = window.__MEC_SPLINE_EDITOR__;
-        if (!ed || typeof ed.installEditor !== "function") {
-            console.warn(
-                "[SplinePathFlowMask] SplineMaskEditor module not loaded; " +
-                "embedded editor unavailable. Use the raw spline_data widget."
-            );
+        if (node.comfyClass === "SplineMaskMEC") {
+            installModeGated(node, {
+                activeWhen: "flow_path",
+                installerKey: "splineFlowPath",
+                installer: (n) => _installFlowEditor(n),
+                hostFinder: (n) => n._mecSplineEditHost || null,
+            });
             return;
         }
 
+        // Legacy direct binding.
+        _installFlowEditor(node);
         const useEditorW = node.widgets?.find?.((w) => w.name === "use_embedded_editor");
-        const wantEditor = useEditorW ? !!useEditorW.value : true;
-
-        if (wantEditor) {
-            try {
-                ed.installEditor(node, { hostNode: NODE_NAME });
-            } catch (err) {
-                console.error("[SplinePathFlowMask] installEditor failed:", err);
-            }
-        }
-
-        // React to the toggle: if user flips it after creation, reload the
-        // graph or hint. We avoid hot-swapping the canvas to keep state simple.
         if (useEditorW && useEditorW.callback === undefined) {
             useEditorW.callback = (v) => {
                 if (v && !node.__mec_editor_installed) {
-                    try {
-                        ed.installEditor(node, { hostNode: NODE_NAME });
-                    } catch (e) {
-                        console.error(e);
-                    }
+                    _installFlowEditor(node);
                 }
-                // Hiding the canvas mid-session is not supported; instruct
-                // user to reload the workflow to fully remove it.
                 node.setDirtyCanvas?.(true, true);
             };
         }

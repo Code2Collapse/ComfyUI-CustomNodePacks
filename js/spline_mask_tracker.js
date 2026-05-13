@@ -26,8 +26,12 @@
 
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
+import { installModeGated } from "./_mode_gate.js";
 
-const NODE_NAME = "SplineMaskTrackerMEC";
+// Targets unified SplineMaskMEC (mode=track) and any legacy
+// SplineMaskTrackerMEC nodes on saved graphs.
+const NODE_NAMES = ["SplineMaskMEC", "SplineMaskTrackerMEC"];
+const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
     bg:     "#181825",
@@ -546,6 +550,9 @@ function installEditor(node) {
         getHeight: () => widgetH,
     });
 
+    // Stash root for the mode-gate helper.
+    node._mecSplineTrackHost = root;
+
     if (!node.size || node.size[0] < 620) {
         const h = node.size?.[1] || 720;
         node.setSize?.([620, Math.max(h, 720)]);
@@ -855,12 +862,21 @@ function installEditor(node) {
 app.registerExtension({
     name: "MEC.SplineMaskTracker",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_NAME) return;
+        if (!NODE_NAMES.includes(nodeData.name)) return;
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             origCreated?.apply(this, arguments);
-            // Defer until widgets are populated.
-            setTimeout(() => installEditor(this), 0);
+            const node = this;
+            if (node.comfyClass === "SplineMaskMEC") {
+                installModeGated(node, {
+                    activeWhen: "track",
+                    installerKey: "splineTrack",
+                    installer: (n) => installEditor(n),
+                    hostFinder: (n) => n._mecSplineTrackHost || null,
+                });
+            } else {
+                setTimeout(() => installEditor(node), 0);
+            }
         };
     },
 });

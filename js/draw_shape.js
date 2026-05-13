@@ -1,7 +1,17 @@
-// DrawShapeMEC: conditional widget visibility based on `shape` dropdown.
-// Pattern modeled on KJNodes — hide irrelevant widgets by overriding computeSize to [0,-4].
+// DrawShapeMEC / MaskEditMEC(mode=draw_shape):
+// conditional widget visibility based on `shape` dropdown.
+// Only runs when the active node mode is draw_shape on the unified node.
 import { app } from "../../scripts/app.js";
 import { setWidgetVisible } from "./_widget_visibility.js";
+
+const TARGET_NODES = ["MaskEditMEC", "DrawShapeMEC"];
+
+function _isActive(node) {
+    if (node.comfyClass === "DrawShapeMEC") return true;
+    if (node.comfyClass !== "MaskEditMEC") return false;
+    const modeW = node.widgets?.find(w => w.name === "mode");
+    return String(modeW?.value ?? "") === "draw_shape";
+}
 
 const SHAPE_FIELDS = {
     circle:            ["cx","cy","radius"],
@@ -22,6 +32,7 @@ const ALWAYS_VISIBLE = new Set([
 ]);
 
 function applyShapeVisibility(node) {
+    if (!_isActive(node)) return;
     const shapeWidget = node.widgets?.find(w => w.name === "shape");
     if (!shapeWidget) return;
     const shape = shapeWidget.value;
@@ -46,7 +57,7 @@ function applyShapeVisibility(node) {
 app.registerExtension({
     name: "MEC.DrawShapeMEC.ConditionalUI",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "DrawShapeMEC") return;
+        if (!TARGET_NODES.includes(nodeData.name)) return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -56,6 +67,16 @@ app.registerExtension({
                 const origCallback = shapeWidget.callback;
                 shapeWidget.callback = (v, ...rest) => {
                     const r2 = origCallback?.call(shapeWidget, v, ...rest);
+                    applyShapeVisibility(this);
+                    return r2;
+                };
+            }
+            // Also re-evaluate when the mode widget flips (unified node).
+            const modeW = this.widgets?.find(w => w.name === "mode");
+            if (modeW) {
+                const origCb = modeW.callback;
+                modeW.callback = (v, ...rest) => {
+                    const r2 = origCb?.call(modeW, v, ...rest);
                     applyShapeVisibility(this);
                     return r2;
                 };

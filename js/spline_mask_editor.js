@@ -21,8 +21,13 @@
  *   F                   fit view
  */
 import { app } from "../../scripts/app.js";
+import { installModeGated } from "./_mode_gate.js";
 
-const NODE_NAME = "SplineMaskEditorMEC";
+// Targets both the unified SplineMaskMEC (mode=edit) node and any
+// legacy SplineMaskEditorMEC references that may still live on saved
+// graphs. The unified node is gated on mode === "edit".
+const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC"];
+const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
     bg: "#181825",
@@ -589,6 +594,10 @@ function installEditor(node) {
         getHeight: () => widgetH,
     });
 
+    // Stash host DOM root for the mode-gate so it can hide/show this
+    // editor when the user toggles the unified node's `mode` widget.
+    node._mecSplineEditHost = root;
+
     if (!node.size || node.size[0] < 600) {
         const h = node.size?.[1] || 640;
         node.setSize?.([600, Math.max(h, 640)]);
@@ -891,7 +900,7 @@ function installEditor(node) {
 app.registerExtension({
     name: "Comfy.MEC.SplineMaskEditor",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_NAME) return;
+        if (!NODE_NAMES.includes(nodeData.name)) return;
         const orig = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             orig?.apply(this, arguments);
@@ -899,8 +908,19 @@ app.registerExtension({
         };
     },
     async nodeCreated(node) {
-        if (node.comfyClass !== NODE_NAME) return;
-        installEditor(node);
+        if (!NODE_NAMES.includes(node.comfyClass)) return;
+        if (node.comfyClass === "SplineMaskMEC") {
+            // Unified node: only install the editor when mode === "edit".
+            installModeGated(node, {
+                activeWhen: "edit",
+                installerKey: "splineEdit",
+                installer: (n) => installEditor(n),
+                hostFinder: (n) => n._mecSplineEditHost || null,
+            });
+        } else {
+            // Legacy direct binding (kept for backward graph loading only).
+            installEditor(node);
+        }
     },
 });
 
