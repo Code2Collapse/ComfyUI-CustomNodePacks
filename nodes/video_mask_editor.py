@@ -176,11 +176,15 @@ def _translate(mask: np.ndarray, dx: float, dy: float) -> np.ndarray:
         )
     # Integer roll fallback.
     out = np.zeros_like(mask)
-    idx = int(round(dx)); idy = int(round(dy))
+    idx = int(round(dx))
+    idy = int(round(dy))
     H, W = mask.shape[:2]
-    src_x0 = max(0, -idx); src_y0 = max(0, -idy)
-    dst_x0 = max(0, idx);  dst_y0 = max(0, idy)
-    w = max(0, W - abs(idx)); h = max(0, H - abs(idy))
+    src_x0 = max(0, -idx)
+    src_y0 = max(0, -idy)
+    dst_x0 = max(0, idx)
+    dst_y0 = max(0, idy)
+    w = max(0, W - abs(idx))
+    h = max(0, H - abs(idy))
     if w > 0 and h > 0:
         out[dst_y0:dst_y0 + h, dst_x0:dst_x0 + w] = \
             mask[src_y0:src_y0 + h, src_x0:src_x0 + w]
