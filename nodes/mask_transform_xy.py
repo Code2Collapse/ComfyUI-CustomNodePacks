@@ -103,14 +103,17 @@ class MaskTransformXY:
             kx = self._gauss_kernel_1d(sigma_x, mask.device)
             kx = kx.view(1, 1, 1, -1)
             px = kx.shape[-1] // 2
-            mask = F.pad(mask, (px, px, 0, 0), mode="reflect")
+            # F.pad reflect requires pad < dim; fall back to replicate otherwise.
+            pad_mode_x = "reflect" if px < mask.shape[-1] else "replicate"
+            mask = F.pad(mask, (px, px, 0, 0), mode=pad_mode_x)
             mask = F.conv2d(mask, kx, padding=0)
         # Y blur
         if sigma_y > 0:
             ky = self._gauss_kernel_1d(sigma_y, mask.device)
             ky = ky.view(1, 1, -1, 1)
             py = ky.shape[-2] // 2
-            mask = F.pad(mask, (0, 0, py, py), mode="reflect")
+            pad_mode_y = "reflect" if py < mask.shape[-2] else "replicate"
+            mask = F.pad(mask, (0, 0, py, py), mode=pad_mode_y)
             mask = F.conv2d(mask, ky, padding=0)
         if need_batch:
             mask = mask.squeeze(0).squeeze(0)

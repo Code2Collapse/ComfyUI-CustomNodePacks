@@ -270,6 +270,27 @@ class MECFaceFixer:
         import comfy.model_management as mm
         import gc
         import json
+
+        # ── Required-input validation ──
+        missing = []
+        if model is None:
+            missing.append("model")
+        if vae is None:
+            missing.append("vae")
+        if positive is None:
+            missing.append("positive")
+        if negative is None:
+            missing.append("negative")
+        if face_model is None:
+            missing.append("face_model")
+        if missing:
+            raise ValueError(
+                "MECFaceFixer: required input(s) missing: "
+                + ", ".join(missing)
+                + ". Connect MODEL, VAE, CONDITIONING and a face-detection "
+                "model (e.g. UltralyticsDetectorProvider)."
+            )
+
         try:
             img_b = _to_bhwc(image)
             B, H, W, _ = img_b.shape

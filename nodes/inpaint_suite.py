@@ -1381,6 +1381,13 @@ class InpaintStitchProMEC:
                        blend_mode_override="from_crop", color_match=False,
                        stitch_temporal_sigma: float = 0.0,
                        stitch_dilate_px: int = 0):
+        if not isinstance(stitcher, dict):
+            raise ValueError(
+                "InpaintStitchProMEC: 'stitcher' input is missing or invalid "
+                "(got "
+                f"{type(stitcher).__name__}). Connect the 'stitcher' output "
+                "of InpaintCropProMEC to this node."
+            )
         inpainted_image = inpainted_image.clone()
         results = []
         blend_masks_out = []

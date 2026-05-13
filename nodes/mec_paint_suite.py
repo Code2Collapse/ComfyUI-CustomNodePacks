@@ -1028,6 +1028,18 @@ class MECBuilderSampler:
         import comfy.samplers
         import comfy.sample
 
+        # ── Required-input validation ──
+        if model is None:
+            raise ValueError(
+                "MECBuilderSampler: 'model' input is required. "
+                "Connect a MODEL output (e.g. CheckpointLoaderSimple) to this node."
+            )
+        if positive is None or negative is None:
+            raise ValueError(
+                "MECBuilderSampler: 'positive' and 'negative' CONDITIONING "
+                "inputs are required. Connect CLIPTextEncode outputs."
+            )
+
         w, h = self._resolve_resolution(resolution_preset, custom_width, custom_height)
 
         if latent_image is None:

@@ -337,12 +337,28 @@ class MaskEditMEC:
             reference_image=reference_image,
             existing_mask=existing_mask,
         )
-        # PointsMaskEditor returns 8-tuple — pass through verbatim
-        if isinstance(result, tuple) and len(result) == 8:
-            return result
+        # PointsMaskEditor returns ComfyUI {"ui": ..., "result": (8-tuple)}
+        # or, in some paths, a raw 8-tuple. Handle both.
+        if isinstance(result, dict) and "result" in result:
+            payload = result["result"]
+        else:
+            payload = result
+        if isinstance(payload, tuple) and len(payload) == 8:
+            # Normalize any None / unexpected BBOX-port values so downstream
+            # nodes never receive None on a declared BBOX port.
+            mask, pos_c, neg_c, bboxes, neg_bboxes, pts_json, bbox_json, prim_bbox = payload
+            if bboxes is None:
+                bboxes = []
+            if neg_bboxes is None:
+                neg_bboxes = []
+            if prim_bbox is None or not isinstance(prim_bbox, (list, tuple)) \
+                    or len(prim_bbox) < 4:
+                prim_bbox = list(_EMPTY_BBOX)
+            return (mask, pos_c, neg_c, bboxes, neg_bboxes,
+                    pts_json, bbox_json, prim_bbox)
         # Defensive fallback
         return (_empty_mask(reference_image), "[]", "[]", [], [],
-                "[]", "[]", _EMPTY_BBOX)
+                "[]", "[]", list(_EMPTY_BBOX))
 
     # ── bbox_smooth ──────────────────────────────────────────────────
     def _mode_bbox_smooth(self, bboxes_json, smoothing_radius, method, alpha):

@@ -522,6 +522,19 @@ class VAEMergeMEC:
         recipe_in: str = "",
     ) -> Tuple[Any, str, str, str]:
 
+        # ── Required-input validation (fail fast with clear message) ──
+        if vae_a is None or vae_b is None:
+            missing = []
+            if vae_a is None:
+                missing.append("vae_a")
+            if vae_b is None:
+                missing.append("vae_b")
+            raise ValueError(
+                "VAEMergeMEC: required VAE input(s) missing: "
+                + ", ".join(missing)
+                + ". Connect a VAE Loader to each input."
+            )
+
         # ── Recipe-import: override widgets if a recipe is provided ──
         loaded = _parse_recipe(recipe_in)
         if loaded is not None:
