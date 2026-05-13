@@ -74,12 +74,36 @@ jobs:
             echo "__END__"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Check if version already published
+        id: version_check
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli as tomllib
+          import os, urllib.request
+          d = tomllib.load(open("pyproject.toml", "rb"))
+          node_id = d["project"]["name"]
+          version = d["project"]["version"]
+          url = f"https://api.comfy.org/nodes/{node_id}/versions/{version}"
+          try:
+              code = urllib.request.urlopen(url).getcode()
+          except Exception:
+              code = 0
+          flag = "true" if code == 200 else "false"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"already_published={flag}\n")
+          print(f"Version {version} already published: {flag}")
+          PY
+
       - name: Publish (dry-run)
         if: github.event.inputs.dry_run == 'true'
         run: echo "DRY RUN - would publish $(grep '^version' pyproject.toml)"
 
       - name: Publish to Comfy Registry
-        if: github.event.inputs.dry_run != 'true'
+        if: github.event.inputs.dry_run != 'true' && steps.version_check.outputs.already_published != 'true'
         uses: Comfy-Org/publish-node-action@v1
         with:
           personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
