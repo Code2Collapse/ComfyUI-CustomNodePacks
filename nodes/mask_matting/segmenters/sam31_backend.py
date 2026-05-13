@@ -90,7 +90,7 @@ class SAM31Segmenter(BaseSegmenter):
     DISPLAY = "SAM 3.1 (independent: text + points + bbox)"
     MODELS_KEY = "sam3.1"
     SUPPORTS_MODES = {"points", "bbox", "text", "auto"}
-    STATUS = "ready" if _have_vendor() else "experimental"
+    STATUS = "ready" if _have_vendor() else "missing-deps"
 
     DEFAULT_CONF = 0.20
 

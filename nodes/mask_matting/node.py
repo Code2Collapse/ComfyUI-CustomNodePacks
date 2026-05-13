@@ -240,7 +240,7 @@ class MaskOpsMEC:
                 "image": ("IMAGE", {"tooltip": "Source image or video frames (B,H,W,C)."}),
                 "segmenter": (_segmenter_choices(), {
                     "default": _segmenter_choices()[0],
-                    "tooltip": "Coarse-mask backend. Entries tagged [experimental] / [missing-deps] won't run yet.",
+                    "tooltip": "Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate.",
                 }),
                 "matter": (_matter_choices(), {
                     "default": "vitmatte" if "vitmatte" in [k for k in list_matter_keys()] else "none",

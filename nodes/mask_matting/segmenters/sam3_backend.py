@@ -2,7 +2,7 @@
 
 SAM 3 (Meta, 2026) extends SAM 2 with native text prompting. We import the
 public ``sam3`` package lazily; when absent the backend reports
-``missing-deps`` and the combo entry shows an experimental badge.
+``missing-deps`` and the combo entry shows a [missing-deps] badge.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class SAM3Segmenter(BaseSegmenter):
     DISPLAY = "SAM 3 (text + points + bbox)"
     MODELS_KEY = "sam3"
     SUPPORTS_MODES = {"points", "bbox", "text", "auto"}
-    STATUS = "ready" if _have_sam3() else "experimental"
+    STATUS = "ready" if _have_sam3() else "missing-deps"
 
     def load(self) -> None:
         if self._model is not None:

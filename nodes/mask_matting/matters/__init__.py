@@ -73,7 +73,8 @@ def list_keys(installed_only: bool = False):
 def _import_all() -> None:
     from importlib import import_module
     for mod in ("vitmatte_backend", "rvm_backend",
-                "bgmattingv2_backend", "matanyone_backend", "stubs"):
+                "bgmattingv2_backend", "matanyone_backend",
+                "salient_matter_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:

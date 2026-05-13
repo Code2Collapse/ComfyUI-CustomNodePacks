@@ -99,7 +99,7 @@ def _import_all() -> None:
     from importlib import import_module
     for mod in ("sam2_backend", "sam3_backend", "sam31_backend",
                 "salient_backend", "experimental_backend",
-                "video_backend", "stubs"):
+                "video_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:
