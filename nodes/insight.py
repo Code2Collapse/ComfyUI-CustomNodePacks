@@ -18,13 +18,21 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 import time
 import traceback
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 
 log = logging.getLogger("MEC.insight")
+
+try:
+    import psutil  # type: ignore
+    _PROC = psutil.Process(os.getpid())
+except Exception:  # noqa: BLE001
+    psutil = None  # type: ignore
+    _PROC = None
 
 
 # =====================================================================
@@ -154,9 +162,31 @@ def install() -> bool:
                     torch.cuda.max_memory_allocated())
         return (0, 0)
 
-    def _emit_done(node_id, t0, mem_before, peak_before, result):
+    def _snapshot_cpu() -> Tuple[float, int]:
+        """(process_cpu_seconds, rss_bytes). Falls back to time.process_time()
+        + 0 when psutil isn't available."""
+        try:
+            if _PROC is not None:
+                ts = _PROC.cpu_times()
+                cpu = float(ts.user) + float(ts.system)
+                rss = int(_PROC.memory_info().rss)
+                return cpu, rss
+        except Exception:
+            pass
+        return float(time.process_time()), 0
+
+    def _parent_subgraph_id(node_id) -> Optional[str]:
+        """Subgraph child node ids are encoded as "<parent>:<child>" (or
+        deeper with multiple ':'). Return the top-level parent id when the
+        node is inside a subgraph, else None."""
+        if isinstance(node_id, str) and ":" in node_id:
+            return node_id.split(":", 1)[0]
+        return None
+
+    def _emit_done(node_id, t0, cpu0, rss0, mem_before, peak_before, result):
         elapsed = (time.time() - t0) * 1000.0
         mem_after, peak_after = _snapshot_mem()
+        cpu1, rss1 = _snapshot_cpu()
         # ComfyUI's `execute()` returns an ExecutionResult enum. On FAILURE
         # it doesn't raise — it returns the failure value. Detect that.
         is_failure = False
@@ -174,9 +204,12 @@ def install() -> bool:
         ev = {
             "type": "node_error" if is_failure else "node_done",
             "node_id": node_id,
+            "parent_id": _parent_subgraph_id(node_id),
             "elapsed_ms": elapsed,
+            "cpu_ms": max(0.0, (cpu1 - cpu0) * 1000.0),
             "vram_delta_mb": (mem_after - mem_before) / (1 << 20),
             "vram_peak_mb": (peak_after - peak_before) / (1 << 20),
+            "ram_delta_mb": (rss1 - rss0) / (1 << 20) if rss0 else 0.0,
         }
         if is_failure and isinstance(result, tuple) and len(result) >= 3:
             err, ex = result[1], result[2]
@@ -196,6 +229,7 @@ def install() -> bool:
         _emit({
             "type": "node_error",
             "node_id": node_id,
+            "parent_id": _parent_subgraph_id(node_id),
             "elapsed_ms": elapsed,
             "exc_type": type(e).__name__,
             "exc_msg": str(e),
@@ -208,10 +242,11 @@ def install() -> bool:
         async def wrapped(*args, **kwargs):
             node_id = _extract_node_id(args, kwargs)
             mem_before, peak_before = _snapshot_mem()
+            cpu0, rss0 = _snapshot_cpu()
             t0 = time.time()
             try:
                 result = await target_fn(*args, **kwargs)
-                _emit_done(node_id, t0, mem_before, peak_before, result)
+                _emit_done(node_id, t0, cpu0, rss0, mem_before, peak_before, result)
                 return result
             except BaseException as e:
                 _emit_raise(node_id, t0, e)
@@ -221,10 +256,11 @@ def install() -> bool:
         def wrapped(*args, **kwargs):
             node_id = _extract_node_id(args, kwargs)
             mem_before, peak_before = _snapshot_mem()
+            cpu0, rss0 = _snapshot_cpu()
             t0 = time.time()
             try:
                 result = target_fn(*args, **kwargs)
-                _emit_done(node_id, t0, mem_before, peak_before, result)
+                _emit_done(node_id, t0, cpu0, rss0, mem_before, peak_before, result)
                 return result
             except BaseException as e:
                 _emit_raise(node_id, t0, e)

@@ -303,84 +303,150 @@ class MaskRefineMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
+        # Compact UI: stage toggles + one "preset" combo that fills in the
+        # numerics. Power users can override any default by wiring a JSON
+        # blob into `advanced_overrides_json` (optional, defaults to "").
         return {
             "required": {
                 "image": ("IMAGE", {"tooltip": "RGB guide. Required for all edge-aware stages."}),
-                "mask": ("MASK", {"tooltip": "Mask to refine (soft or hard)."}),
+                "mask":  ("MASK",  {"tooltip": "Mask to refine (soft or hard)."}),
+                "preset": (
+                    ["balanced", "fast", "hair", "aggressive", "crf_heavy"],
+                    {"default": "balanced",
+                     "tooltip": "Picks sensible numeric defaults for every enabled stage. "
+                                "Override with `advanced_overrides_json` if needed."},
+                ),
 
-                # --- Stage 1: hole fill ---
-                "enable_hole_fill": ("BOOLEAN", {"default": False,
-                    "tooltip": "Fill interior holes (eyes / mouths) via scipy.binary_fill_holes."}),
-                "hole_fill_threshold": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 0.95, "step": 0.05}),
-
-                # --- Stage 2: morphology ---
-                "morph_op": (["none", "close", "open", "dilate", "erode"], {"default": "none",
-                    "tooltip": "Morphological op with a circular SE."}),
-                "morph_radius": ("INT", {"default": 3, "min": 1, "max": 64,
-                    "tooltip": "Radius (px) of the structuring element."}),
-
-                # --- Stage 3: thin-structure recovery ---
-                "enable_thin_recover": ("BOOLEAN", {"default": False,
-                    "tooltip": "Skeletonize → keep long branches → dilate. Re-injects hair/wires."}),
-                "thin_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 0.95, "step": 0.05}),
-                "thin_min_branch_len": ("INT", {"default": 8, "min": 1, "max": 256}),
-                "thin_branch_dilate": ("INT", {"default": 2, "min": 1, "max": 16}),
-
-                # --- Stage 4: joint bilateral ---
-                "enable_joint_bilateral": ("BOOLEAN", {"default": False,
-                    "tooltip": "RGB-guided bilateral filter (cv2.ximgproc preferred)."}),
-                "jb_diameter": ("INT", {"default": 9, "min": 3, "max": 31}),
-                "jb_sigma_color": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-                "jb_sigma_space": ("FLOAT", {"default": 7.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-
-                # --- Stage 5: guided filter ---
-                "enable_guided_filter": ("BOOLEAN", {"default": True,
-                    "tooltip": "He et al. guided filter. Best free edge-aware smoother."}),
-                "gf_radius": ("INT", {"default": 8, "min": 1, "max": 64}),
-                "gf_epsilon": ("FLOAT", {"default": 0.0001, "min": 1e-6, "max": 0.1, "step": 1e-5}),
-
-                # --- Stage 6: DenseCRF ---
-                "enable_dense_crf": ("BOOLEAN", {"default": False,
-                    "tooltip": "DenseCRF boundary refinement. Requires pydensecrf."}),
-                "crf_iterations": ("INT", {"default": 5, "min": 1, "max": 30}),
-                "crf_gauss_sxy": ("FLOAT", {"default": 3.0, "min": 0.1, "max": 50.0, "step": 0.1}),
-                "crf_bilateral_sxy": ("FLOAT", {"default": 50.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-                "crf_bilateral_srgb": ("FLOAT", {"default": 13.0, "min": 1.0, "max": 100.0, "step": 0.5}),
-
-                # --- Stage 7: edge snap ---
-                "enable_edge_snap": ("BOOLEAN", {"default": False,
-                    "tooltip": "Modulate mask boundary by RGB gradient magnitude."}),
-                "edge_snap_strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "edge_snap_band": ("INT", {"default": 6, "min": 1, "max": 32}),
-
-                # --- Stage 8: cascade ---
-                "cascade_passes": ("INT", {"default": 0, "min": 0, "max": 5,
-                    "tooltip": "CascadePSP-style repeats of (joint-bilat + guided + edge-snap) with progressively shrinking radii. 0 = off."}),
-
-                # --- Stage 9-11: final tone ---
-                "feather_sigma": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1,
-                    "tooltip": "Gaussian blur sigma applied to the final soft alpha."}),
-                "gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0, "step": 0.05,
-                    "tooltip": "Pow curve on the soft alpha. >1 hardens, <1 softens."}),
-                "threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Hard binarize at this value. 0 keeps soft alpha (recommended)."}),
+                # 11 stage toggles (one widget each — these are the only knobs
+                # most users touch).
+                "enable_hole_fill":       ("BOOLEAN",                                      {"default": False}),
+                "morph_op":               (["none", "close", "open", "dilate", "erode"],   {"default": "none"}),
+                "enable_thin_recover":    ("BOOLEAN",                                      {"default": False}),
+                "enable_joint_bilateral": ("BOOLEAN",                                      {"default": False}),
+                "enable_guided_filter":   ("BOOLEAN",                                      {"default": True}),
+                "enable_dense_crf":       ("BOOLEAN",                                      {"default": False}),
+                "enable_edge_snap":       ("BOOLEAN",                                      {"default": False}),
+                "cascade_passes":         ("INT",   {"default": 0, "min": 0, "max": 5}),
+                "feather_sigma":          ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1}),
+                "gamma":                  ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0,  "step": 0.05}),
+                "threshold":              ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.01}),
+            },
+            "optional": {
+                "advanced_overrides_json": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": (
+                        "Optional JSON overriding any preset numeric. "
+                        'Example: {"gf_radius":12, "jb_sigma_color":40, "crf_iterations":8}. '
+                        "Recognised keys: hole_fill_threshold, morph_radius, "
+                        "thin_threshold, thin_min_branch_len, thin_branch_dilate, "
+                        "jb_diameter, jb_sigma_color, jb_sigma_space, gf_radius, "
+                        "gf_epsilon, crf_iterations, crf_gauss_sxy, crf_bilateral_sxy, "
+                        "crf_bilateral_srgb, edge_snap_strength, edge_snap_band."
+                    ),
+                }),
             },
         }
+
+    # ── Preset table (used to populate stage numerics) ────────────────
+    _PRESETS = {
+        "balanced": {
+            "hole_fill_threshold": 0.5,
+            "morph_radius": 3,
+            "thin_threshold": 0.5, "thin_min_branch_len": 8, "thin_branch_dilate": 2,
+            "jb_diameter": 9, "jb_sigma_color": 25.0, "jb_sigma_space": 7.0,
+            "gf_radius": 8, "gf_epsilon": 1e-4,
+            "crf_iterations": 5, "crf_gauss_sxy": 3.0,
+            "crf_bilateral_sxy": 50.0, "crf_bilateral_srgb": 13.0,
+            "edge_snap_strength": 0.5, "edge_snap_band": 6,
+        },
+        "fast": {
+            "hole_fill_threshold": 0.5,
+            "morph_radius": 2,
+            "thin_threshold": 0.5, "thin_min_branch_len": 12, "thin_branch_dilate": 1,
+            "jb_diameter": 5, "jb_sigma_color": 15.0, "jb_sigma_space": 5.0,
+            "gf_radius": 4, "gf_epsilon": 1e-3,
+            "crf_iterations": 3, "crf_gauss_sxy": 2.0,
+            "crf_bilateral_sxy": 30.0, "crf_bilateral_srgb": 10.0,
+            "edge_snap_strength": 0.35, "edge_snap_band": 4,
+        },
+        "hair": {
+            "hole_fill_threshold": 0.4,
+            "morph_radius": 2,
+            "thin_threshold": 0.35, "thin_min_branch_len": 4, "thin_branch_dilate": 1,
+            "jb_diameter": 7, "jb_sigma_color": 20.0, "jb_sigma_space": 4.0,
+            "gf_radius": 4, "gf_epsilon": 1e-5,
+            "crf_iterations": 5, "crf_gauss_sxy": 2.0,
+            "crf_bilateral_sxy": 40.0, "crf_bilateral_srgb": 8.0,
+            "edge_snap_strength": 0.65, "edge_snap_band": 4,
+        },
+        "aggressive": {
+            "hole_fill_threshold": 0.5,
+            "morph_radius": 5,
+            "thin_threshold": 0.5, "thin_min_branch_len": 6, "thin_branch_dilate": 3,
+            "jb_diameter": 13, "jb_sigma_color": 40.0, "jb_sigma_space": 10.0,
+            "gf_radius": 16, "gf_epsilon": 1e-4,
+            "crf_iterations": 10, "crf_gauss_sxy": 4.0,
+            "crf_bilateral_sxy": 70.0, "crf_bilateral_srgb": 15.0,
+            "edge_snap_strength": 0.8, "edge_snap_band": 10,
+        },
+        "crf_heavy": {
+            "hole_fill_threshold": 0.5,
+            "morph_radius": 3,
+            "thin_threshold": 0.5, "thin_min_branch_len": 8, "thin_branch_dilate": 2,
+            "jb_diameter": 9, "jb_sigma_color": 25.0, "jb_sigma_space": 7.0,
+            "gf_radius": 8, "gf_epsilon": 1e-4,
+            "crf_iterations": 15, "crf_gauss_sxy": 3.0,
+            "crf_bilateral_sxy": 60.0, "crf_bilateral_srgb": 13.0,
+            "edge_snap_strength": 0.5, "edge_snap_band": 6,
+        },
+    }
 
     # -----------------------------------------------------------------
     def execute(
         self,
         image, mask,
-        enable_hole_fill, hole_fill_threshold,
-        morph_op, morph_radius,
-        enable_thin_recover, thin_threshold, thin_min_branch_len, thin_branch_dilate,
-        enable_joint_bilateral, jb_diameter, jb_sigma_color, jb_sigma_space,
-        enable_guided_filter, gf_radius, gf_epsilon,
-        enable_dense_crf, crf_iterations, crf_gauss_sxy, crf_bilateral_sxy, crf_bilateral_srgb,
-        enable_edge_snap, edge_snap_strength, edge_snap_band,
+        preset,
+        enable_hole_fill,
+        morph_op,
+        enable_thin_recover,
+        enable_joint_bilateral,
+        enable_guided_filter,
+        enable_dense_crf,
+        enable_edge_snap,
         cascade_passes,
         feather_sigma, gamma, threshold,
+        advanced_overrides_json="",
     ):
+        # Resolve preset → numerics, then layer JSON overrides on top.
+        cfg = dict(self._PRESETS.get(preset, self._PRESETS["balanced"]))
+        if advanced_overrides_json and advanced_overrides_json.strip():
+            try:
+                import json as _json
+                user = _json.loads(advanced_overrides_json)
+                if isinstance(user, dict):
+                    cfg.update({k: v for k, v in user.items() if k in cfg})
+            except Exception as e:
+                log.warning("[MaskRefineMEC] bad advanced_overrides_json: %s", e)
+
+        # Bind locals so the original pipeline body works unchanged.
+        hole_fill_threshold = float(cfg["hole_fill_threshold"])
+        morph_radius        = int(cfg["morph_radius"])
+        thin_threshold      = float(cfg["thin_threshold"])
+        thin_min_branch_len = int(cfg["thin_min_branch_len"])
+        thin_branch_dilate  = int(cfg["thin_branch_dilate"])
+        jb_diameter         = int(cfg["jb_diameter"])
+        jb_sigma_color      = float(cfg["jb_sigma_color"])
+        jb_sigma_space      = float(cfg["jb_sigma_space"])
+        gf_radius           = int(cfg["gf_radius"])
+        gf_epsilon          = float(cfg["gf_epsilon"])
+        crf_iterations      = int(cfg["crf_iterations"])
+        crf_gauss_sxy       = float(cfg["crf_gauss_sxy"])
+        crf_bilateral_sxy   = float(cfg["crf_bilateral_sxy"])
+        crf_bilateral_srgb  = float(cfg["crf_bilateral_srgb"])
+        edge_snap_strength  = float(cfg["edge_snap_strength"])
+        edge_snap_band      = int(cfg["edge_snap_band"])
+
         img_t = _to_image_bhwc(image)
         m_t = _to_mask_bhw(mask)
         img_t, m_t = _match_batch(img_t, m_t)

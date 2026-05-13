@@ -1371,3 +1371,11 @@ The `UniversalRerouteMEC`-equivalent typed reroutes (and the SAM / ViT-Matte loa
 <p align="center">
   Made with ❤️ for the ComfyUI community
 </p>
+
+
+---
+
+## Full Node & Parameter Reference
+
+A complete, auto-generated reference covering every node, return type and widget exposed by this pack lives in [NODE_REFERENCE.md](./NODE_REFERENCE.md). It is regenerated whenever `INPUT_TYPES` change.
+

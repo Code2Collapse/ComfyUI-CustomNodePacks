@@ -1,16 +1,19 @@
 // FILE: web/extensions/nukenodemax/insight_overlay.js
-// FEATURE: W1 — DOM heatmap overlay for per-node VRAM / timing
+// FEATURE: W1 — DOM heatmap overlay for per-node VRAM / timing / CPU / RAM
 // INTEGRATES WITH: nodes/insight.py (event "nukenodemax.insight")
 //
-// Listens to the ComfyUI socket and paints a colored badge on each node's
-// LiteGraph DOM container. Color = VRAM delta normalised against the heaviest
-// node in the current run; tooltip shows ms + MB. NO console.log telemetry.
+// Listens to the ComfyUI socket and paints a colored badge BELOW each node's
+// LiteGraph shape (never over the title bar). Two compact lines:
+//      line 1: <ms>ms · <vram>MB
+//      line 2: cpu <ms>ms · ram <mb>MB
+// Color = VRAM delta normalised against the heaviest node in the current run.
+// Subgraph parent nodes show aggregated stats from their child executions.
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
 const STATE = {
-    nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, error?}
+    nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, cpu_ms, ram_delta_mb, error?}
     maxVram: 1,
     maxMs: 1,
 };
@@ -20,11 +23,7 @@ function ensureBadge(nodeId) {
     if (!node) return null;
     let badge = node._mecInsightBadge;
     if (!badge) {
-        badge = {
-            text: "",
-            color: "#444",
-            tooltip: "",
-        };
+        badge = { line1: "", line2: "", color: "#444", tooltip: "" };
         node._mecInsightBadge = badge;
     }
     return badge;
@@ -33,11 +32,21 @@ function ensureBadge(nodeId) {
 function colorFor(deltaMb, maxMb, isError) {
     if (isError) return "#ff3a3a";
     const t = Math.max(0, Math.min(1, deltaMb / Math.max(maxMb, 1)));
-    // green -> yellow -> red
     const r = Math.round(60 + 195 * t);
     const g = Math.round(200 - 140 * t);
     const b = 60;
     return `rgb(${r},${g},${b})`;
+}
+
+function fmtMs(v) {
+    if (!isFinite(v)) return "0ms";
+    if (v >= 10000) return `${(v / 1000).toFixed(1)}s`;
+    return `${v.toFixed(0)}ms`;
+}
+function fmtMb(v) {
+    if (!isFinite(v)) return "0MB";
+    if (Math.abs(v) >= 1024) return `${(v / 1024).toFixed(1)}GB`;
+    return `${v.toFixed(0)}MB`;
 }
 
 function refresh() {
@@ -48,39 +57,86 @@ function refresh() {
         const badge = ensureBadge(id);
         if (!badge) continue;
         if (info.error) {
-            badge.text = "✕ " + (info.exc_type || "err");
+            badge.line1 = "✕ " + (info.exc_type || "err");
+            badge.line2 = "";
             badge.color = colorFor(0, STATE.maxVram, true);
             badge.tooltip = `${info.exc_type}: ${info.exc_msg || ""}\n${info.hint || ""}`;
         } else {
-            badge.text = `${info.elapsed_ms.toFixed(0)}ms · ${info.vram_delta_mb.toFixed(0)}MB`;
-            badge.color = colorFor(info.vram_delta_mb, STATE.maxVram, false);
-            badge.tooltip = `elapsed=${info.elapsed_ms.toFixed(1)}ms  vram_delta=${info.vram_delta_mb.toFixed(1)}MB  peak=${(info.vram_peak_mb || 0).toFixed(1)}MB`;
+            badge.line1 = `${fmtMs(info.elapsed_ms || 0)} · ${fmtMb(info.vram_delta_mb || 0)}`;
+            badge.line2 = `cpu ${fmtMs(info.cpu_ms || 0)} · ram ${fmtMb(info.ram_delta_mb || 0)}`;
+            badge.color = colorFor(info.vram_delta_mb || 0, STATE.maxVram, false);
+            const parts = [
+                `elapsed=${(info.elapsed_ms || 0).toFixed(1)}ms`,
+                `cpu=${(info.cpu_ms || 0).toFixed(1)}ms`,
+                `vram_delta=${(info.vram_delta_mb || 0).toFixed(1)}MB`,
+                `vram_peak=${(info.vram_peak_mb || 0).toFixed(1)}MB`,
+                `ram_delta=${(info.ram_delta_mb || 0).toFixed(1)}MB`,
+            ];
+            if (info.subgraph_children) parts.push(`subgraph_children=${info.subgraph_children}`);
+            badge.tooltip = parts.join("  ");
         }
     }
     app.graph.setDirtyCanvas(true, true);
 }
 
+function _aggregateInto(parentId, sample) {
+    if (!parentId) return;
+    let agg = STATE.nodes.get(parentId);
+    if (!agg || !agg.subgraph_children) {
+        agg = {
+            elapsed_ms: 0,
+            cpu_ms: 0,
+            vram_delta_mb: 0,
+            vram_peak_mb: 0,
+            ram_delta_mb: 0,
+            subgraph_children: 0,
+        };
+    }
+    agg.elapsed_ms    += sample.elapsed_ms    || 0;
+    agg.cpu_ms        += sample.cpu_ms        || 0;
+    agg.vram_delta_mb += sample.vram_delta_mb || 0;
+    agg.ram_delta_mb  += sample.ram_delta_mb  || 0;
+    agg.vram_peak_mb   = Math.max(agg.vram_peak_mb || 0, sample.vram_peak_mb || 0);
+    agg.subgraph_children += 1;
+    STATE.nodes.set(parentId, agg);
+    if (agg.vram_delta_mb > STATE.maxVram) STATE.maxVram = agg.vram_delta_mb;
+}
+
 function onInsight(ev) {
     const data = ev.detail || ev;
-    if (!data || !data.node_id) return;
+    if (!data || data.node_id === undefined || data.node_id === null) return;
     if (data.type === "node_done") {
-        STATE.nodes.set(data.node_id, {
+        const sample = {
             elapsed_ms: data.elapsed_ms || 0,
+            cpu_ms: data.cpu_ms || 0,
             vram_delta_mb: data.vram_delta_mb || 0,
             vram_peak_mb: data.vram_peak_mb || 0,
-        });
-        if ((data.vram_delta_mb || 0) > STATE.maxVram) STATE.maxVram = data.vram_delta_mb;
-        if ((data.elapsed_ms || 0) > STATE.maxMs) STATE.maxMs = data.elapsed_ms;
+            ram_delta_mb: data.ram_delta_mb || 0,
+        };
+        STATE.nodes.set(data.node_id, sample);
+        if (sample.vram_delta_mb > STATE.maxVram) STATE.maxVram = sample.vram_delta_mb;
+        if (sample.elapsed_ms    > STATE.maxMs)   STATE.maxMs   = sample.elapsed_ms;
+        if (data.parent_id) _aggregateInto(data.parent_id, sample);
     } else if (data.type === "node_error") {
         STATE.nodes.set(data.node_id, {
             error: true,
             elapsed_ms: data.elapsed_ms || 0,
+            cpu_ms: 0,
             vram_delta_mb: 0,
+            ram_delta_mb: 0,
             exc_type: data.exc_type,
             exc_msg: data.exc_msg,
             hint: data.hint,
             trace: data.trace,
         });
+        if (data.parent_id) {
+            const p = STATE.nodes.get(data.parent_id) || {};
+            p.error = true;
+            p.exc_type = data.exc_type;
+            p.exc_msg = data.exc_msg;
+            p.hint = data.hint;
+            STATE.nodes.set(data.parent_id, p);
+        }
     }
     refresh();
 }
@@ -90,40 +146,44 @@ app.registerExtension({
     setup() {
         api.addEventListener("nukenodemax.insight", onInsight);
 
-        // Hook draw to paint badges in-canvas.
+        // Paint badges BELOW the node body so the title bar stays clean.
         const origDraw = LGraphCanvas.prototype.drawNodeShape;
         LGraphCanvas.prototype.drawNodeShape = function (node, ctx, size, fgColor, bgColor, selected, mouseOver) {
             origDraw.apply(this, arguments);
             const badge = node._mecInsightBadge;
-            if (!badge || !badge.text) return;
+            if (!badge || (!badge.line1 && !badge.line2)) return;
+
             ctx.save();
+            ctx.font = "10px monospace";
+            const lines = badge.line2 ? [badge.line1, badge.line2] : [badge.line1];
+            const widths = lines.map((s) => ctx.measureText(s).width);
+            const w = Math.max(...widths) + 12;
+            const lineH = 12;
+            const h = lineH * lines.length + 4;
+
+            // Anchored just below the node bottom edge.
+            const x = Math.max(0, size[0] - w);
+            const y = size[1] + 4;
+
             ctx.fillStyle = badge.color;
-            const w = ctx.measureText(badge.text).width + 12;
-            const h = 16;
-            const x = size[0] - w - 4;
-            const y = -h - 2;
             ctx.fillRect(x, y, w, h);
             ctx.fillStyle = "#fff";
-            ctx.font = "10px monospace";
             ctx.textBaseline = "middle";
-            ctx.fillText(badge.text, x + 6, y + h / 2);
+            for (let i = 0; i < lines.length; i++) {
+                ctx.fillText(lines[i], x + 6, y + 2 + lineH * (i + 0.5));
+            }
             ctx.restore();
         };
 
-        // Tooltip on hover via title append.
-        const origGetTitle = LGraphCanvas.prototype.processMouseMove;
-        // Lightweight: rely on the badge tooltip stored on the node object;
-        // user can right-click for full hint. (No DOM tooltip layer to avoid
-        // fighting ComfyUI's own.)
-
-        // Right-click menu: show hint for failing nodes.
+        // Right-click menu: show full hint / stats.
         const origMenu = LGraphCanvas.prototype.getNodeMenuOptions;
         LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
             const opts = origMenu ? origMenu.apply(this, arguments) : [];
             const badge = node._mecInsightBadge;
             if (badge && badge.tooltip) {
+                const isErr = !!STATE.nodes.get(node.id)?.error;
                 opts.unshift({
-                    content: "Insight: " + (STATE.nodes.get(node.id)?.error ? "show error hint" : "show stats"),
+                    content: "Insight: " + (isErr ? "show error hint" : "show stats"),
                     callback: () => alert(badge.tooltip),
                 });
                 opts.unshift(null);  // separator
