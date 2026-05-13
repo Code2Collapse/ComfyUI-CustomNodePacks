@@ -103,11 +103,13 @@ def _all_weight_files() -> List[str]:
         for f in list_backend_files(key):
             tag = f"{key}/{f}"
             if tag not in seen:
-                items.append(tag); seen.add(tag)
+                items.append(tag)
+                seen.add(tag)
         for p in list_backend_presets(key):
             tag = f"[preset:{key}] {p['name']}"
             if tag not in seen:
-                items.append(tag); seen.add(tag)
+                items.append(tag)
+                seen.add(tag)
     return items
 
 

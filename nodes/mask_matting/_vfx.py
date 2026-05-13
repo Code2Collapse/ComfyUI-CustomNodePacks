@@ -250,8 +250,10 @@ def guided_refine(image_bhwc: torch.Tensor, mask_bhw: torch.Tensor, *,
     def _box(x):
         return F.conv2d(F.pad(x, pad, mode="reflect"), box)
 
-    mean_I = _box(I); mean_p = _box(p)
-    corr_I = _box(I * I); corr_Ip = _box(I * p)
+    mean_I = _box(I)
+    mean_p = _box(p)
+    corr_I = _box(I * I)
+    corr_Ip = _box(I * p)
     var_I = corr_I - mean_I * mean_I
     cov_Ip = corr_Ip - mean_I * mean_p
     a = cov_Ip / (var_I + float(epsilon))
@@ -314,20 +316,24 @@ def score_quality(image_bhwc: torch.Tensor, alpha_bhw: torch.Tensor, *,
     frames = []
     overalls: List[float] = []
     for b in range(img.shape[0]):
-        rgb = img[b]; m = msk[b]
+        rgb = img[b]
+        m = msk[b]
         H, W = m.shape
         gray = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
-        gx = np.gradient(gray, axis=1); gy = np.gradient(gray, axis=0)
+        gx = np.gradient(gray, axis=1)
+        gy = np.gradient(gray, axis=0)
         grad = np.sqrt(gx * gx + gy * gy)
         grad = grad / max(grad.max(), 1e-6)
-        mgx = np.gradient(m, axis=1); mgy = np.gradient(m, axis=0)
+        mgx = np.gradient(m, axis=1)
+        mgy = np.gradient(m, axis=0)
         bnd = (np.sqrt(mgx * mgx + mgy * mgy) > 0.05)
         if bnd.sum() > 5:
             edge_align = float((grad * bnd).sum() / (bnd.sum() + 1e-6))
             edge_align = float(np.clip(edge_align * 4.0, 0.0, 1.0))
         else:
             edge_align = 0.0
-        fg = m > binarize_at; bgm = ~fg
+        fg = m > binarize_at
+        bgm = ~fg
         if fg.sum() > 50 and bgm.sum() > 50:
             fm, bm = rgb[fg].mean(axis=0), rgb[bgm].mean(axis=0)
             fs = rgb[fg].std(axis=0) + 1e-6

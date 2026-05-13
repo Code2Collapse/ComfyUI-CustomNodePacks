@@ -221,7 +221,8 @@ class SAM31Segmenter(BaseSegmenter):
                     positive_points or [], negative_points or [],
                     bbox, text_prompt,
                 )
-                outs.append(m); score = max(score, s)
+                outs.append(m)
+                score = max(score, s)
             mask_t = torch.from_numpy(np.stack(outs, 0))
             logger.warning(
                 "[SAM3.1] segment done — B=%d sum=%.1f score=%.3f text=%r pts=+%d/-%d bbox=%s",

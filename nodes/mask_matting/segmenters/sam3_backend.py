@@ -90,7 +90,8 @@ class SAM3Segmenter(BaseSegmenter):
             score = 0.0
             for i in interruptible_range(B, label="sam3"):
                 m, s = self._seg_one(image_bhwc[i].cpu().numpy(), pos, neg, bbox, text_prompt)
-                outs.append(m); score = s
+                outs.append(m)
+                score = s
             mask_t = torch.from_numpy(np.stack(outs, 0))
             return {"mask": mask_t.float(), "score": float(score), "info": {"backend": self.KEY}}
         except Exception:

@@ -434,7 +434,8 @@ def _generate_pattern(
         nx = _frame_noise(H, W, sig, seed,         frame)
         ny = _frame_noise(H, W, sig, seed + 8191,  frame)
         # Gradient (central differences) of the scalar potential.
-        gy = np.zeros_like(nx); gx = np.zeros_like(ny)
+        gy = np.zeros_like(nx)
+        gx = np.zeros_like(ny)
         gy[1:-1, :] = (nx[2:, :] - nx[:-2, :]) * 0.5
         gx[:, 1:-1] = (ny[:, 2:] - ny[:, :-2]) * 0.5
         # Curl = (∂ny/∂x, -∂nx/∂y) — magnitude used to perturb the band.

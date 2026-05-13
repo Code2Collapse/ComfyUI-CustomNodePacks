@@ -1065,12 +1065,16 @@ class InpaintCropProMEC:
                                                 context_from_mask_extend_factor, W, H)
             ox, oy, ow, oh = _compute_stable_bbox(optional_context_mask)
             if ow > 0 and oh > 0:
-                nx = min(sx, ox); ny = min(sy, oy)
-                nx2 = max(sx + sw, ox + ow); ny2 = max(sy + sh, oy + oh)
+                nx = min(sx, ox)
+                ny = min(sy, oy)
+                nx2 = max(sx + sw, ox + ow)
+                ny2 = max(sy + sh, oy + oh)
                 sx, sy, sw, sh = nx, ny, nx2 - nx, ny2 - ny
             for _ in range(B):
-                bx_list.append(sx); by_list.append(sy)
-                bw_list.append(sw); bh_list.append(sh)
+                bx_list.append(sx)
+                by_list.append(sy)
+                bw_list.append(sw)
+                bh_list.append(sh)
         else:
             for i in range(B):
                 fx, fy, fw, fh = _compute_bbox_single(bbox_mask[i])
@@ -1080,11 +1084,15 @@ class InpaintCropProMEC:
                                                    context_from_mask_extend_factor, W, H)
                 ox, oy, ow, oh = _compute_bbox_single(optional_context_mask[i])
                 if ow > 0 and oh > 0:
-                    nx = min(fx, ox); ny = min(fy, oy)
-                    nx2 = max(fx + fw, ox + ow); ny2 = max(fy + fh, oy + oh)
+                    nx = min(fx, ox)
+                    ny = min(fy, oy)
+                    nx2 = max(fx + fw, ox + ow)
+                    ny2 = max(fy + fh, oy + oh)
                     fx, fy, fw, fh = nx, ny, nx2 - nx, ny2 - ny
-                bx_list.append(fx); by_list.append(fy)
-                bw_list.append(fw); bh_list.append(fh)
+                bx_list.append(fx)
+                by_list.append(fy)
+                bw_list.append(fw)
+                bh_list.append(fh)
 
         # ── Step 5: per-frame crop_magic ───────────────────────────────────
         if output_resize_to_target_size:
@@ -1153,7 +1161,8 @@ class InpaintCropProMEC:
                 if im.shape[0] != ref_h or im.shape[1] != ref_w:
                     im = _resize_image_alg(im.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
                     mk = _resize_mask_alg(mk.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
-                tmp_img.append(im); tmp_msk.append(mk)
+                tmp_img.append(im)
+                tmp_msk.append(mk)
             out_image = torch.stack(tmp_img, dim=0)
             out_mask  = torch.stack(tmp_msk, dim=0)
 
@@ -1215,14 +1224,16 @@ class InpaintCropProMEC:
         def fit_min(w, h, mw, mh):
             if w >= mw and h >= mh:
                 return w, h
-            sw = mw / max(w, 1); sh = mh / max(h, 1)
+            sw = mw / max(w, 1)
+            sh = mh / max(h, 1)
             s = max(sw, sh)
             return max(int(round(w * s)), mw), max(int(round(h * s)), mh)
 
         def fit_max(w, h, mw, mh):
             if w <= mw and h <= mh:
                 return w, h
-            sw = mw / max(w, 1); sh = mh / max(h, 1)
+            sw = mw / max(w, 1)
+            sh = mh / max(h, 1)
             s = min(sw, sh)
             return min(int(round(w * s)), mw), min(int(round(h * s)), mh)
 
@@ -1265,8 +1276,10 @@ class InpaintCropProMEC:
             return x, y, w, h
         gx = int(round(w * (factor - 1.0) / 2.0))
         gy = int(round(h * (factor - 1.0) / 2.0))
-        nx = max(0, x - gx); ny = max(0, y - gy)
-        nx2 = min(img_w, x + w + gx); ny2 = min(img_h, y + h + gy)
+        nx = max(0, x - gx)
+        ny = max(0, y - gy)
+        nx2 = min(img_w, x + w + gx)
+        ny2 = min(img_h, y + h + gy)
         return nx, ny, nx2 - nx, ny2 - ny
 
     @staticmethod
@@ -1287,18 +1300,24 @@ class InpaintCropProMEC:
         target_ar = target_w / max(target_h, 1)
         ctx_ar = w / max(h, 1)
         if ctx_ar < target_ar:
-            new_w = int(h * target_ar); new_h = h
-            new_x = x - (new_w - w) // 2; new_y = y
+            new_w = int(h * target_ar)
+            new_h = h
+            new_x = x - (new_w - w) // 2
+            new_y = y
         else:
-            new_w = w; new_h = int(w / target_ar)
-            new_x = x; new_y = y - (new_h - h) // 2
+            new_w = w
+            new_h = int(w / target_ar)
+            new_x = x
+            new_y = y - (new_h - h) // 2
 
         # 3. If not resizing output, ensure new dims >= target dims
         if not resize_output:
             if new_w < target_w:
-                new_x -= (target_w - new_w) // 2; new_w = target_w
+                new_x -= (target_w - new_w) // 2
+                new_w = target_w
             if new_h < target_h:
-                new_y -= (target_h - new_h) // 2; new_h = target_h
+                new_y -= (target_h - new_h) // 2
+                new_h = target_h
 
         # 4. Compute canvas padding
         up_padding = max(0, -new_y)
@@ -1526,11 +1545,15 @@ class InpaintStitchProMEC:
             # (cto_x, cto_y) offset and (ctc_x, ctc_y) canvas-crop offset:
             paste_x = ctc_x - cto_x
             paste_y = ctc_y - cto_y
-            x0 = max(0, paste_x); y0 = max(0, paste_y)
-            x1 = min(cto_w, paste_x + ctc_w); y1 = min(cto_h, paste_y + ctc_h)
+            x0 = max(0, paste_x)
+            y0 = max(0, paste_y)
+            x1 = min(cto_w, paste_x + ctc_w)
+            y1 = min(cto_h, paste_y + ctc_h)
             if x1 > x0 and y1 > y0:
-                src_x0 = x0 - paste_x; src_y0 = y0 - paste_y
-                src_x1 = src_x0 + (x1 - x0); src_y1 = src_y0 + (y1 - y0)
+                src_x0 = x0 - paste_x
+                src_y0 = y0 - paste_y
+                src_x1 = src_x0 + (x1 - x0)
+                src_y1 = src_y0 + (y1 - y0)
                 full_mask[:, y0:y1, x0:x1] = resized_msk[:, src_y0:src_y1, src_x0:src_x1]
             blend_masks_out.append(full_mask.squeeze(0))
 

@@ -750,7 +750,8 @@ def compute_ronin_bbox_trajectory(
                 filled[i] = raw[prev_j]  # type: ignore[index]
             else:
                 t = (i - prev_j) / max(1, (next_j - prev_j))
-                a = raw[prev_j]; b_ = raw[next_j]  # type: ignore[index]
+                a = raw[prev_j]  # type: ignore[index]
+                b_ = raw[next_j]  # type: ignore[index]
                 filled[i] = tuple(a[k] * (1 - t) + b_[k] * t for k in range(4))  # type: ignore[assignment]
         raw_full = np.asarray(filled, dtype=np.float64)
     else:

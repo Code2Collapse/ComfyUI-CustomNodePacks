@@ -280,8 +280,10 @@ class GroundingDinoSegmenter(BaseSegmenter):
         scores = r["scores"].detach().cpu().numpy()
         best = int(np.argmax(scores))
         x1, y1, x2, y2 = boxes[best].astype(int)
-        x1 = max(0, x1); y1 = max(0, y1)
-        x2 = min(W, x2); y2 = min(H, y2)
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(W, x2)
+        y2 = min(H, y2)
         if x2 > x1 and y2 > y1:
             mask[y1:y2, x1:x2] = 1.0
         return mask, float(scores[best]), (int(x1), int(y1), int(x2), int(y2))

@@ -410,8 +410,10 @@ class ProPainterStitchMEC:
         if canvas.dim() != 4 or canvas.shape[-1] != 3:
             raise ValueError(f"canvas_image bad shape {tuple(canvas.shape)}")
         B, H_canvas, W_canvas, _ = canvas.shape
-        ctc_x = int(stitch_data["ctc_x"]); ctc_y = int(stitch_data["ctc_y"])
-        ctc_w = int(stitch_data["ctc_w"]); ctc_h = int(stitch_data["ctc_h"])
+        ctc_x = int(stitch_data["ctc_x"])
+        ctc_y = int(stitch_data["ctc_y"])
+        ctc_w = int(stitch_data["ctc_w"])
+        ctc_h = int(stitch_data["ctc_h"])
         frame_offsets = stitch_data.get("frame_offsets")  # v3 list[(x,y)] or None
         if frame_offsets is not None and len(frame_offsets) != B:
             raise ValueError(
@@ -433,7 +435,8 @@ class ProPainterStitchMEC:
 
         pasted = canvas.clone()
         for b, (fx, fy) in enumerate(offsets):
-            y2 = min(fy + ctc_h, H_canvas); x2 = min(fx + ctc_w, W_canvas)
+            y2 = min(fy + ctc_h, H_canvas)
+            x2 = min(fx + ctc_w, W_canvas)
             pasted[b, fy:y2, fx:x2, :] = inp_resized[b, :y2 - fy, :x2 - fx, :]
 
         # ----- 2. Build mask = (boundary band) ∪ (original mask) -----
@@ -442,8 +445,10 @@ class ProPainterStitchMEC:
         # the crop rectangle perimeter.
         if boundary_band_pixels > 0:
             for b, (fx, fy) in enumerate(offsets):
-                y0 = max(0, fy); y1 = min(H_canvas, fy + ctc_h)
-                x0 = max(0, fx); x1 = min(W_canvas, fx + ctc_w)
+                y0 = max(0, fy)
+                y1 = min(H_canvas, fy + ctc_h)
+                x0 = max(0, fx)
+                x1 = min(W_canvas, fx + ctc_w)
                 # Outer band (outside crop).
                 oy0 = max(0, y0 - boundary_band_pixels)
                 oy1 = min(H_canvas, y1 + boundary_band_pixels)
