@@ -737,3 +737,8 @@ class UnifiedSegmentation:
 
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+NODE_CLASS_MAPPINGS = {"UnifiedSegmentation": UnifiedSegmentation}
+NODE_DISPLAY_NAME_MAPPINGS = {"UnifiedSegmentation": "Unified Segmentation (SAM2/SAM3/SeC)"}
+

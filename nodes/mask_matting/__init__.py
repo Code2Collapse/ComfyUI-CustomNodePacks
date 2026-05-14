@@ -44,10 +44,24 @@ except Exception as _exc:  # pragma: no cover
     MaskTemporalMEC = None  # type: ignore
     _MT_MAPPINGS, _MT_DISPLAY = {}, {}
 
-NODE_CLASS_MAPPINGS = {**_MO_MAPPINGS, **_MT_MAPPINGS}
-NODE_DISPLAY_NAME_MAPPINGS = {**_MO_DISPLAY, **_MT_DISPLAY}
+try:
+    from .refine_node import (
+        MaskRefineMEC,
+        NODE_CLASS_MAPPINGS as _MR_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MR_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.MaskMatting").warning(
+        "MaskRefineMEC unavailable: %s", _exc
+    )
+    MaskRefineMEC = None  # type: ignore
+    _MR_MAPPINGS, _MR_DISPLAY = {}, {}
+
+NODE_CLASS_MAPPINGS = {**_MO_MAPPINGS, **_MT_MAPPINGS, **_MR_MAPPINGS}
+NODE_DISPLAY_NAME_MAPPINGS = {**_MO_DISPLAY, **_MT_DISPLAY, **_MR_DISPLAY}
 
 __all__ = [
-    "MaskOpsMEC", "MaskTemporalMEC",
+    "MaskOpsMEC", "MaskTemporalMEC", "MaskRefineMEC",
     "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS",
 ]
