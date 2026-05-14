@@ -172,15 +172,20 @@ def compute_integrity(mask_bhw: torch.Tensor,
                        jump_threshold: float = 0.15) -> Dict[str, Any]:
     """Per-frame drift detection.
 
-    * area_delta: ratio of frame i's area / frame i-1's area; a drop below
-      ``drop_threshold`` (default 0.4 = 60% loss) flags the frame.
-    * centroid_delta: L2 distance in normalized coords; > ``jump_threshold``
-      (default 0.15 of frame diagonal) flags the frame.
-    * iou_prev: IoU with previous binary mask; < ``drop_threshold`` flags
-      a sudden disconnect.
+    * Total mask dropout (area falls to 0) and re-appearance are always
+      flagged.
+    * area_ratio: frame i's area / frame i-1's area; when the relative
+      drop meets or exceeds ``drop_threshold`` the frame is flagged
+      (e.g. ``drop_threshold=0.4`` flags any frame whose mask shrank to
+      60% or less of the previous frame).
+    * centroid_delta: L2 distance in normalised coords; values greater
+      than ``jump_threshold`` flag the frame.
+    * iou_prev: IoU with the previous binary mask; when both frames
+      are non-empty but IoU is below ``1 - drop_threshold`` the
+      subject has likely jumped or been re-targeted.
 
-    Returns dict suitable for JSON serialisation + a list of flagged frame
-    indices.
+    Returns dict suitable for JSON serialisation + a list of flagged
+    frame indices.
     """
     B = mask_bhw.shape[0]
     frames: List[Dict[str, Any]] = []
@@ -203,11 +208,26 @@ def compute_integrity(mask_bhw: torch.Tensor,
                 "iou_prev": round(iou, 4),
             })
             why: List[str] = []
-            if area > 0 and prev_area > 0 and ratio < drop_threshold:
-                why.append(f"area drop {ratio:.2f}x")
+            # Total mask dropout (mask had area, now zero) — always
+            # flagged regardless of drop_threshold; this is the single
+            # most important integrity event.
+            if prev_area > 0 and area <= 0:
+                why.append("mask dropout (area=0)")
+            # Total mask reappearance after dropout.
+            elif prev_area <= 0 and area > 0:
+                why.append("mask reappeared after dropout")
+            # Partial area drop (relative).  ratio = area / prev_area;
+            # a drop of >= drop_threshold means new area is <= (1 - dt) of
+            # previous — e.g. dt=0.4 flags any frame where mask shrank to
+            # 60% or less of its previous size.
+            elif area > 0 and prev_area > 0 and ratio <= (1.0 - drop_threshold):
+                why.append(f"area drop to {ratio:.2f}x")
             if cdist > jump_threshold:
                 why.append(f"centroid jump {cdist:.2f}")
-            if iou < drop_threshold and prev_area > 0 and area > 0:
+            # IoU disconnect: when both masks are non-empty but their
+            # overlap is below (1 - drop_threshold), the subject has
+            # likely jumped or been re-targeted.
+            if iou < (1.0 - drop_threshold) and prev_area > 0 and area > 0:
                 why.append(f"low IoU {iou:.2f}")
             if why:
                 rec["warn"] = "; ".join(why)

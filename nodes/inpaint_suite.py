@@ -960,14 +960,20 @@ class InpaintCropProMEC:
             if mask is not None:
                 # Pre-erode by 1 px so the inpaint sampler regenerates a
                 # hair INSIDE the subject, leaving a clean fringe-free
-                # stitch.  Uses torch min-pool (= erosion) — no cv2 dep.
+                # stitch.  Uses explicit zero-padding + min-pool (erosion)
+                # — no cv2 dep. F.max_pool2d pads with -inf internally,
+                # which would skip border erosion, so we pad with 0 first.
                 _m = mask
                 if _m.dim() == 2:
                     _m = _m.unsqueeze(0)
                 _m4 = _m.unsqueeze(1)
-                # erosion = -max_pool(-x) with k=3, pad=1
-                _eroded = -F.max_pool2d(-_m4, kernel_size=3, stride=1, padding=1)
-                mask = _eroded.squeeze(1).clamp(0.0, 1.0)
+                # Pad with 1 (treat outside as foreground) so we don't
+                # over-erode if the subject touches the frame edge —
+                # then min-pool = -max_pool(-x).
+                _m4_pad = F.pad(_m4, (1, 1, 1, 1), mode="constant", value=1.0)
+                _neg = -_m4_pad
+                _pooled = F.max_pool2d(_neg, kernel_size=3, stride=1, padding=0)
+                mask = (-_pooled).squeeze(1).clamp(0.0, 1.0)
         if mask is not None:
             mask = mask.clone()
         if optional_context_mask is not None:
