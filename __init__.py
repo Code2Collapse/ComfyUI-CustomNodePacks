@@ -267,6 +267,18 @@ try:
         print("[MEC] wizard routes registered.")
     except Exception as _wz:
         print(f"[MEC] wizard deferred: {_wz}")
+    try:
+        from .nodes.workflow_doctor import register_routes as _register_workflow_doctor_routes
+        _register_workflow_doctor_routes(_ps)
+        print("[C2C] workflow_doctor routes registered.")
+    except Exception as _wd:
+        print(f"[C2C] workflow_doctor deferred: {_wd}")
+    try:
+        from .nodes.style_presets import register_routes as _register_style_presets_routes
+        _register_style_presets_routes(_ps)
+        print("[C2C] style_presets routes registered.")
+    except Exception as _sp:
+        print(f"[C2C] style_presets deferred: {_sp}")
     # ── C2C AI spine (v2.0-dev) ────────────────────────────────────
     try:
         from .c2c_ai.api_routes import register_routes as _register_c2c_ai_routes
