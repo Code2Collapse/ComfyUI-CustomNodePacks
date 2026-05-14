@@ -112,6 +112,67 @@ function _injectStyle() {
         background: var(--p-content-background, #181825);
         color: var(--fg-color, #cdd6f4); font-size:11px;
     }
+
+    /* ---- C2C header banner ---- */
+    .c2c-diag-header {
+        flex-shrink:0;
+        display:flex; align-items:center; gap:10px;
+        padding:10px 12px 10px 12px;
+        background: linear-gradient(135deg, #181825 0%, #1e1e2e 60%, #181825 100%);
+        border-bottom:1px solid var(--border-color, #313244);
+    }
+    .c2c-diag-logo {
+        width:32px; height:32px; border-radius:8px; flex-shrink:0;
+        display:flex; align-items:center; justify-content:center;
+        background: linear-gradient(135deg, #89b4fa 0%, #cba6f7 100%);
+        color:#11111b; font-weight:800; font-size:14px;
+        font-family: ui-monospace, 'Cascadia Mono', monospace;
+        letter-spacing:-0.5px;
+        box-shadow: 0 2px 6px rgba(137, 180, 250, 0.25);
+    }
+    .c2c-diag-title-block {
+        display:flex; flex-direction:column; gap:1px; flex:1; min-width:0;
+    }
+    .c2c-diag-title {
+        font-size:13px; font-weight:600; color:#cdd6f4; line-height:1.1;
+    }
+    .c2c-diag-sub {
+        font-size:10px; color:#6c7086; letter-spacing:0.04em;
+        text-transform:uppercase;
+    }
+    .c2c-diag-pills {
+        display:flex; gap:5px; flex-shrink:0; align-items:center;
+    }
+    .c2c-diag-pill {
+        display:inline-flex; align-items:center; gap:4px;
+        padding:3px 8px; border-radius:10px;
+        font-size:10px; font-weight:600;
+        border:1px solid transparent;
+        font-family: ui-monospace, monospace;
+        cursor:default; user-select:none;
+    }
+    .c2c-diag-pill .dot {
+        width:6px; height:6px; border-radius:50%;
+        background: currentColor; flex-shrink:0;
+    }
+    .c2c-diag-pill.ok    { color:#a6e3a1; background:rgba(166,227,161,0.10); border-color:rgba(166,227,161,0.25); }
+    .c2c-diag-pill.warn  { color:#f9e2af; background:rgba(249,226,175,0.10); border-color:rgba(249,226,175,0.25); }
+    .c2c-diag-pill.err   { color:#f38ba8; background:rgba(243,139,168,0.12); border-color:rgba(243,139,168,0.30); }
+    .c2c-diag-pill.info  { color:#89b4fa; background:rgba(137,180,250,0.10); border-color:rgba(137,180,250,0.25); }
+    .c2c-diag-pill.muted { color:#6c7086; background:rgba(108,112,134,0.08); border-color:rgba(108,112,134,0.20); }
+    .c2c-diag-pill[role="button"] { cursor:pointer; }
+    .c2c-diag-pill[role="button"]:hover { filter:brightness(1.2); }
+
+    /* Pretty empty state */
+    .mec-diag-empty {
+        color: var(--descriptions-text-color, #a6adc8);
+        text-align:center; padding:32px 12px;
+        font-style:italic; font-size:11px;
+        display:flex; flex-direction:column; align-items:center; gap:8px;
+    }
+    .mec-diag-empty::before {
+        content:'◌'; font-size:24px; opacity:0.4; font-style:normal;
+    }
     `;
     document.head.appendChild(s);
 }
@@ -1424,11 +1485,117 @@ const TABS = [
     { id: "pat",   label: "Patterns",    render: _renderPatterns   },
 ];
 
+function _buildHeader(root) {
+    const header = document.createElement("div");
+    header.className = "c2c-diag-header";
+
+    const logo = document.createElement("div");
+    logo.className = "c2c-diag-logo";
+    logo.textContent = "C2C";
+    logo.title = "Code2Collapse — Likhith";
+
+    const titleBlock = document.createElement("div");
+    titleBlock.className = "c2c-diag-title-block";
+    const title = document.createElement("div");
+    title.className = "c2c-diag-title";
+    title.textContent = "Diagnostics";
+    const sub = document.createElement("div");
+    sub.className = "c2c-diag-sub";
+    sub.textContent = "Code2Collapse";
+    titleBlock.append(title, sub);
+
+    const pills = document.createElement("div");
+    pills.className = "c2c-diag-pills";
+
+    // Integrity pill — clickable, opens the integrity dialog.
+    const intgPill = document.createElement("span");
+    intgPill.className = "c2c-diag-pill muted";
+    intgPill.setAttribute("role", "button");
+    intgPill.title = "Integrity status — click for details";
+    intgPill.innerHTML = `<span class="dot"></span><span class="lbl">INT —</span>`;
+    intgPill.addEventListener("click", () => {
+        try { window.__MEC_INTEGRITY__?.open?.(); }
+        catch (e) { console.warn("[C2C.diag] integrity open failed:", e); }
+    });
+
+    // Live events pill — populated by the diagnostics feed.
+    const eventsPill = document.createElement("span");
+    eventsPill.className = "c2c-diag-pill info";
+    eventsPill.innerHTML = `<span class="dot"></span><span class="lbl">0 evt</span>`;
+    eventsPill.title = "Recent diagnostic events (last 200)";
+
+    pills.append(intgPill, eventsPill);
+    header.append(logo, titleBlock, pills);
+    root.appendChild(header);
+
+    // Subscribe to integrity bus for live updates.
+    let unsub = null;
+    function applyIntegrity(s) {
+        if (!s) return;
+        const errCount = (s.events || []).filter(e => (e.severity || "") === "error").length;
+        const warnCount = (s.events || []).filter(e => (e.severity || "") === "warn").length;
+        const driftCount = s.drift || 0;
+        const pipBad = s.pipOk === false;
+        intgPill.classList.remove("ok", "warn", "err", "muted", "info");
+        let cls = "ok", lbl = "INT OK";
+        if (errCount > 0 || pipBad) { cls = "err"; lbl = `INT ${errCount + (pipBad ? 1 : 0)}`; }
+        else if (warnCount > 0 || driftCount > 0) { cls = "warn"; lbl = `INT ${warnCount + driftCount}`; }
+        intgPill.classList.add(cls);
+        intgPill.querySelector(".lbl").textContent = lbl;
+    }
+    try {
+        if (window.__MEC_INTEGRITY__?.subscribe) {
+            unsub = window.__MEC_INTEGRITY__.subscribe(applyIntegrity);
+        } else {
+            // Fallback — single fetch.
+            _api("/nukenodemax/integrity_report").then(j => {
+                if (j && j.success !== false) applyIntegrity({
+                    events: j.events || [],
+                    pipOk: j.pip_check ? !!j.pip_check.ok : true,
+                    drift: (j.checksum_drift || []).length,
+                });
+            });
+        }
+    } catch (e) { /* bus may not be ready yet */ }
+
+    // Poll events pill from diagnostics feed (cheap, every 6s).
+    let stopped = false;
+    async function pollEvents() {
+        if (stopped) return;
+        const j = await _api("/mec/diagnostics/recent?limit=200");
+        if (j && j.success !== false) {
+            const all = j.data || [];
+            const errs = all.filter(e => (e.type === "node_error" || e.severity === "error")).length;
+            eventsPill.classList.remove("ok", "warn", "err", "info");
+            if (errs > 0)       { eventsPill.classList.add("err");  }
+            else if (all.length){ eventsPill.classList.add("info"); }
+            else                { eventsPill.classList.add("ok");   }
+            eventsPill.querySelector(".lbl").textContent =
+                `${all.length} evt${errs ? " · " + errs + " err" : ""}`;
+        }
+        setTimeout(pollEvents, 6000);
+    }
+    pollEvents();
+
+    // Cleanup when header is removed.
+    const obs = new MutationObserver(() => {
+        if (!document.body.contains(header)) {
+            stopped = true;
+            if (unsub) { try { unsub(); } catch {} }
+            obs.disconnect();
+        }
+    });
+    obs.observe(root.parentNode || document.body, { childList: true, subtree: true });
+}
+
 function _mountSidebar(el) {
     _injectStyle();
     el.innerHTML = "";
     const root = document.createElement("div");
     root.className = "mec-diag-root";
+
+    _buildHeader(root);
+
     const tabBar = document.createElement("div");
     tabBar.className = "mec-diag-tabs";
     const body = document.createElement("div");
@@ -1468,7 +1635,7 @@ app.registerExtension({
                 id: "mec.diagnostics",
                 icon: "pi pi-shield",
                 title: "C2C Diagnostics",
-                tooltip: "MaskEditControl diagnostics, statistics, clipboard history & error patterns",
+                tooltip: "Code2Collapse — diagnostics, statistics, clipboard history, integrity & error patterns",
                 type: "custom",
                 render(el) { _mountSidebar(el); },
             });
