@@ -345,6 +345,21 @@ class MaskRefineMEC:
                         "crf_bilateral_srgb, edge_snap_strength, edge_snap_band."
                     ),
                 }),
+                "enable_integrity_check": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Compute per-frame integrity stats on the refined mask "
+                        "(coverage, abrupt drops, frame-to-frame jumps) and "
+                        "append them to the `info` JSON. Adds negligible cost "
+                        "for single frames; cheap for short clips."
+                    ),
+                }),
+                "integrity_drop_threshold": ("FLOAT", {
+                    "default": 0.40, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Relative coverage drop that flags a frame."}),
+                "integrity_jump_threshold": ("FLOAT", {
+                    "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Relative frame-to-frame coverage jump that flags a frame."}),
             },
         }
 
@@ -417,6 +432,9 @@ class MaskRefineMEC:
         cascade_passes,
         feather_sigma, gamma, threshold,
         advanced_overrides_json="",
+        enable_integrity_check: bool = False,
+        integrity_drop_threshold: float = 0.40,
+        integrity_jump_threshold: float = 0.15,
     ):
         # Resolve preset → numerics, then layer JSON overrides on top.
         cfg = dict(self._PRESETS.get(preset, self._PRESETS["balanced"]))
@@ -573,7 +591,7 @@ class MaskRefineMEC:
         preview = (img_t * alpha.unsqueeze(-1)).clamp(0.0, 1.0)
 
         import json as _json
-        info = _json.dumps({
+        info_payload = {
             "ran": ran,
             "skipped": skipped,
             "deps": {
@@ -587,7 +605,22 @@ class MaskRefineMEC:
             "output_shape": list(out_t.shape),
             "input_sum": float(m_t.sum().item()),
             "output_sum": float(out_t.sum().item()),
-        }, indent=2)
+        }
+
+        if enable_integrity_check:
+            try:
+                from .temporal_node import compute_integrity
+                _mask_for_integrity = out_t if out_t.dim() == 3 else out_t.unsqueeze(0)
+                integ = compute_integrity(
+                    _mask_for_integrity,
+                    drop_threshold=float(integrity_drop_threshold),
+                    jump_threshold=float(integrity_jump_threshold),
+                )
+                info_payload["integrity"] = integ
+            except Exception as _e:  # pragma: no cover - defensive
+                info_payload["integrity_error"] = str(_e)
+
+        info = _json.dumps(info_payload, indent=2)
 
         return (out_t, alpha, preview, info)
 
