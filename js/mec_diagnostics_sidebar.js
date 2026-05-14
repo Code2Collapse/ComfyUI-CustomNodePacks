@@ -1,4 +1,4 @@
-// MEC Diagnostics — sidebar tab.
+// C2C Diagnostics — sidebar tab.
 //
 // Coexists with rookiestar28/ComfyUI-Doctor. We register our OWN sidebar
 // entry under id `mec.diagnostics` with a distinct icon, so both panels
@@ -138,7 +138,7 @@ function _fmtTs(ts) {
 function _toast(msg, severity = "info") {
     try {
         app.extensionManager?.toast?.add({
-            severity, summary: "MEC Diagnostics", detail: msg, life: 3000,
+            severity, summary: "C2C Diagnostics", detail: msg, life: 3000,
         });
     } catch (_) { /* sidebar may render before toast service is ready */ }
 }
@@ -1467,7 +1467,7 @@ app.registerExtension({
             app.extensionManager?.registerSidebarTab?.({
                 id: "mec.diagnostics",
                 icon: "pi pi-shield",
-                title: "MEC Diagnostics",
+                title: "C2C Diagnostics",
                 tooltip: "MaskEditControl diagnostics, statistics, clipboard history & error patterns",
                 type: "custom",
                 render(el) { _mountSidebar(el); },
