@@ -45,6 +45,7 @@ This pack registers **33 nodes**.  Each section lists the node's category, retur
 |------|------|-----------------|-------------|
 | `prefix` | STRING | `"v"`  | Prefix before the version number (e.g. 'v' → v001) |
 | `padding` | INT | `3` (min 1, max 10) | Zero-pad width (3 → 001) |
+| `suffix` | STRING | `""` | Optional suffix appended to the basename of `filename_prefix` and `output_filename` (e.g. `_Inpaint` → `.../v001/clip_Inpaint.mov`). Empty disables it. Sanitized for cross-platform safety. Does NOT alter `version_string` or `folder_name`. |
 | `label` | STRING | `"default"`  | Fallback folder name (used only when no source file is connected) |
 | `date_format` | combo[MM-DD-YYYY, DD-MM-YYYY, YYYY-MM-DD] | `"MM-DD-YYYY"`  | Date format for the date subfolder (e.g. 02-22-2026 or 2026-02-22) |
 | `path_style` | combo[auto, windows, linux, macos] | `"auto"`  | Path separator style for output strings. auto=detect from current OS, windows=backslash, linux/macos=forward slash. Use 'auto' unless you design workflows on one OS and run on another. |

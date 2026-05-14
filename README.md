@@ -949,6 +949,10 @@ Filesystem-aware auto-versioning for output files.
 - **Filesystem-based** — no global counter file; scans the actual directory
 - **Cancel-safe** — if you cancel mid-execution, no version is wasted
 - **Extension-preserving** — `photo.png` → `photo/v001/photo.png`
+- **Optional suffix** — set the new `suffix` widget (e.g. `_Inpaint`) and the
+  basename of `filename_prefix` / `output_filename` becomes `photo_Inpaint`
+  (folder + `version_string` are unchanged). No more downstream `Concatenate`
+  nodes just to tag a pass.
 
 **Outputs:**
 

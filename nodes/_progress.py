@@ -99,7 +99,8 @@ class _Session:
                 self._tqdm = _tqdm(
                     total=100, desc=name, leave=False,
                     ncols=100, dynamic_ncols=False,
-                    bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]",
+                    bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} "
+                               "[{elapsed}<{remaining}, {rate_fmt}]",
                 )
             except Exception:  # noqa: BLE001
                 self._tqdm = None
@@ -320,7 +321,8 @@ def _legacy_track(
         it = _tqdm(
             iterable, total=total, desc=desc or None, leave=False,
             ncols=100, dynamic_ncols=False,
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} "
+                       "[{elapsed}<{remaining}, {rate_fmt}]"
                        if total else None,
         )
     else:

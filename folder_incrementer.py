@@ -198,6 +198,12 @@ class FolderIncrementer:
                     "tooltip": "Prefix before the version number (e.g. 'v' → v001)"}),
                 "padding": ("INT", {"default": 3, "min": 1, "max": 10,
                     "tooltip": "Zero-pad width (3 → 001)"}),
+                "suffix": ("STRING", {"default": "",
+                    "tooltip": "Optional suffix appended to the BASENAME of the "
+                               "filename_prefix and output_filename outputs. Example: "
+                               "suffix='_Inpaint' → '.../v001/clip_Inpaint.mov'. "
+                               "Leave empty to disable. Sanitized for cross-platform "
+                               "safety. Does NOT affect the version_string or folder_name."}),
                 "label": ("STRING", {"default": "default",
                     "tooltip": "Fallback folder name (used only when no source file is connected)"}),
                 "date_format": (DATE_FORMAT_CHOICES, {
@@ -289,7 +295,8 @@ class FolderIncrementer:
                   source_choice="auto", name_format="basename",
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
-                  folder_name_override="", reserve_version=False):
+                  folder_name_override="", reserve_version=False,
+                  suffix=""):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -375,13 +382,18 @@ class FolderIncrementer:
         # ── 6. Build output paths using chosen separator ──────────────
         subfolder_path = sep.join([folder_name, today_date, version_string])
 
-        if name_no_ext:
-            filename_prefix = sep.join([subfolder_path, name_no_ext])
-        else:
-            filename_prefix = sep.join([subfolder_path, version_string])
+        # Suffix is appended to the BASENAME (not the folder). Sanitized so it
+        # cannot escape the directory or break the file system. Empty string
+        # (the default) is a no-op.
+        safe_suffix = ""
+        if suffix and str(suffix).strip():
+            safe_suffix = _sanitize_folder_name(str(suffix).strip(), fallback="")
+        basename_no_ext = (name_no_ext or version_string) + safe_suffix
+
+        filename_prefix = sep.join([subfolder_path, basename_no_ext])
 
         if name_no_ext and ext:
-            output_filename = sep.join([subfolder_path, f"{name_no_ext}{ext}"])
+            output_filename = sep.join([subfolder_path, f"{basename_no_ext}{ext}"])
         else:
             output_filename = filename_prefix
 

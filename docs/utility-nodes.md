@@ -209,6 +209,7 @@ Auto-increment version folders for each queue run. Creates dated subdirectories 
 |-----------|------|---------|-------|-------------|
 | `prefix` | STRING | `"v"` | — | Prefix before version number (e.g. `"v"` → `v001`) |
 | `padding` | INT | `3` | 1 – 10 | Zero-pad width (3 → 001, 4 → 0001) |
+| `suffix` | STRING | `""` | — | Optional suffix appended to the basename of `filename_prefix` / `output_filename` (e.g. `_Inpaint` → `.../v001/clip_Inpaint.mov`). Empty disables. |
 | `label` | STRING | `"default"` | — | Fallback folder name when no source file connected |
 | `date_format` | COMBO | `MM-DD-YYYY` | `MM-DD-YYYY`, `DD-MM-YYYY`, `YYYY-MM-DD` | Date format for the date subfolder |
 

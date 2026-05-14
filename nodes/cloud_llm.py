@@ -54,14 +54,15 @@ def _get_key(provider: str) -> Optional[str]:
     return secrets_store.get_key(provider)
 
 
-def _openai(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _openai(model: str, prompt: str, max_tokens: int,
+            system: Optional[str] = None) -> Optional[str]:
     key = _get_key("openai")
     if not key:
         return None
     body = {
         "model": model or "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": int(max_tokens),
@@ -77,14 +78,15 @@ def _openai(model: str, prompt: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-def _anthropic(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _anthropic(model: str, prompt: str, max_tokens: int,
+               system: Optional[str] = None) -> Optional[str]:
     key = _get_key("anthropic")
     if not key:
         return None
     body = {
         "model": model or "claude-3-5-haiku-latest",
         "max_tokens": int(max_tokens),
-        "system": SYSTEM_PROMPT,
+        "system": system if system is not None else SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
     }
@@ -102,7 +104,8 @@ def _anthropic(model: str, prompt: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-def _gemini(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _gemini(model: str, prompt: str, max_tokens: int,
+            system: Optional[str] = None) -> Optional[str]:
     key = _get_key("gemini")
     if not key:
         return None
@@ -110,7 +113,7 @@ def _gemini(model: str, prompt: str, max_tokens: int) -> Optional[str]:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
     body = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "system_instruction": {"parts": [{"text": system if system is not None else SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": int(max_tokens)},
     }
@@ -124,14 +127,15 @@ def _gemini(model: str, prompt: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-def _openrouter(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _openrouter(model: str, prompt: str, max_tokens: int,
+                system: Optional[str] = None) -> Optional[str]:
     key = _get_key("openrouter")
     if not key:
         return None
     body = {
         "model": model or "openai/gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": int(max_tokens),
@@ -160,14 +164,15 @@ _DISPATCH = {
 }
 
 
-def _groq(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _groq(model: str, prompt: str, max_tokens: int,
+          system: Optional[str] = None) -> Optional[str]:
     key = _get_key("groq")
     if not key:
         return None
     body = {
         "model": model or "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": int(max_tokens),
@@ -183,14 +188,15 @@ def _groq(model: str, prompt: str, max_tokens: int) -> Optional[str]:
         return None
 
 
-def _deepseek(model: str, prompt: str, max_tokens: int) -> Optional[str]:
+def _deepseek(model: str, prompt: str, max_tokens: int,
+              system: Optional[str] = None) -> Optional[str]:
     key = _get_key("deepseek")
     if not key:
         return None
     body = {
         "model": model or "deepseek-chat",
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": int(max_tokens),
@@ -211,9 +217,10 @@ _DISPATCH["deepseek"] = _deepseek
 
 
 def generate(provider: str, model: str, prompt: str,
-             max_tokens: int = 512) -> Optional[str]:
+             max_tokens: int = 512,
+             system: Optional[str] = None) -> Optional[str]:
     fn = _DISPATCH.get((provider or "").strip().lower())
     if fn is None:
         log.warning("[cloud_llm] unknown provider %r", provider)
         return None
-    return fn(model, prompt, max_tokens)
+    return fn(model, prompt, max_tokens, system)

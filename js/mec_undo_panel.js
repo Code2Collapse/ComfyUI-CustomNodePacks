@@ -1,0 +1,228 @@
+/**
+ * mec_undo_panel.js — Phase 18c: Visual undo history panel
+ *
+ * Snapshots graph.serialize() into a ring buffer on every change (debounced)
+ * and presents a panel listing recent snapshots with timestamps and node-
+ * count deltas. Click a row to restore that snapshot.
+ *
+ * Settings:
+ *   mec.undo_panel.enabled — bool (default true)
+ *   mec.undo_panel.max     — number (default 20)
+ */
+
+import { app } from "../../scripts/app.js";
+
+const BTN_ID   = "mec-undo-btn";
+const PANEL_ID = "mec-undo-panel";
+const STYLE_ID = "mec-undo-style";
+
+const _stack = [];  // [{ ts, snap, node_count }]
+let _debounce = null;
+let _suspend  = false;  // suppress capture during restore
+
+function _injectStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const s = document.createElement("style");
+    s.id = STYLE_ID;
+    s.textContent = `
+#${BTN_ID} {
+    position: fixed;
+    bottom: 386px;
+    right: 16px;
+    z-index: 99996;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    color: #fab387;
+    font-size: 14px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center;
+}
+#${BTN_ID}:hover { border-color: #fab387; }
+#${PANEL_ID} {
+    position: fixed;
+    bottom: 386px;
+    right: 64px;
+    z-index: 99996;
+    width: 320px;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 10px;
+    color: #cdd6f4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.65);
+    display: none;
+}
+#${PANEL_ID}.visible { display: block; }
+#${PANEL_ID} h3 { margin: 0 0 6px 0; color: #fab387; font-size: 13px; display: flex; justify-content: space-between; }
+#${PANEL_ID} .ud-close { background: none; border: none; color: #6c7086; cursor: pointer; font-size: 14px; }
+#${PANEL_ID} .ud-row {
+    padding: 6px 8px;
+    border: 1px solid #313244;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+#${PANEL_ID} .ud-row:hover { border-color: #fab387; background: #313244; }
+#${PANEL_ID} .ud-ts   { font-family: monospace; color: #cdd6f4; font-size: 11px; }
+#${PANEL_ID} .ud-info { color: #6c7086; font-size: 10px; }
+    `.trim();
+    document.head.appendChild(s);
+}
+
+function _settingsEnabled() {
+    try { return app.ui.settings.getSettingValue("mec.undo_panel.enabled", true); }
+    catch { return true; }
+}
+function _maxStack() {
+    try { return Math.max(2, app.ui.settings.getSettingValue("mec.undo_panel.max", 20)); }
+    catch { return 20; }
+}
+
+function _capture() {
+    if (_suspend) return;
+    const g = app.graph;
+    if (!g || typeof g.serialize !== "function") return;
+    let snap;
+    try { snap = g.serialize(); } catch { return; }
+    const node_count = Array.isArray(snap?.nodes) ? snap.nodes.length : 0;
+    _stack.push({ ts: Date.now(), snap, node_count });
+    while (_stack.length > _maxStack()) _stack.shift();
+    if (_open) _render();
+}
+
+function _scheduleCapture() {
+    if (!_settingsEnabled()) return;
+    clearTimeout(_debounce);
+    _debounce = setTimeout(_capture, 600);
+}
+
+function _restore(idx) {
+    const entry = _stack[idx];
+    if (!entry?.snap) return;
+    _suspend = true;
+    try {
+        app.loadGraphData(JSON.parse(JSON.stringify(entry.snap)));
+        console.log(`[MEC.UndoPanel] Restored snapshot ${idx} (${entry.node_count} nodes)`);
+    } catch (e) {
+        console.warn("[MEC.UndoPanel] restore failed:", e);
+    } finally {
+        setTimeout(() => { _suspend = false; }, 1200);
+    }
+}
+
+let _open = false;
+function _toggle() {
+    _open = !_open;
+    const p = document.getElementById(PANEL_ID);
+    if (!p) return;
+    if (_open) { p.classList.add("visible"); _render(); }
+    else       { p.classList.remove("visible"); }
+}
+
+function _render() {
+    const p = document.getElementById(PANEL_ID);
+    if (!p) return;
+    if (!_stack.length) {
+        p.innerHTML = `
+            <h3>↶ Undo history <button class="ud-close">×</button></h3>
+            <div style="color:#6c7086;text-align:center;padding:14px;">No snapshots yet.</div>
+        `;
+        p.querySelector(".ud-close").addEventListener("click", _toggle);
+        return;
+    }
+    const rows = _stack.slice().reverse().map((e, i) => {
+        const realIdx = _stack.length - 1 - i;
+        return `
+            <div class="ud-row" data-i="${realIdx}">
+                <span class="ud-ts">${new Date(e.ts).toLocaleTimeString()}</span>
+                <span class="ud-info">${e.node_count} nodes</span>
+            </div>
+        `;
+    }).join("");
+    p.innerHTML = `
+        <h3>↶ Undo history <button class="ud-close">×</button></h3>
+        ${rows}
+    `;
+    p.querySelector(".ud-close").addEventListener("click", _toggle);
+    p.querySelectorAll(".ud-row").forEach(el => {
+        el.addEventListener("click", () => {
+            const idx = parseInt(el.getAttribute("data-i"), 10);
+            _restore(idx);
+        });
+    });
+}
+
+function _hookGraphChanges() {
+    const g = app.graph;
+    if (!g) return;
+    if (g._mecUndoHooked) return;
+    g._mecUndoHooked = true;
+    const origChange = g.onGraphChanged?.bind(g);
+    g.onGraphChanged = function () {
+        if (origChange) origChange.apply(g, arguments);
+        _scheduleCapture();
+    };
+    // Also listen to LiteGraph after change events if available
+    const origAfter = g.afterChange?.bind(g);
+    g.afterChange = function () {
+        if (origAfter) origAfter.apply(g, arguments);
+        _scheduleCapture();
+    };
+    // Initial capture.
+    _capture();
+}
+
+app.registerExtension({
+    name: "MEC.UndoPanel",
+    settings: [
+        {
+            id: "mec.undo_panel.enabled",
+            name: "Undo Panel: capture graph snapshots",
+            type: "boolean",
+            defaultValue: true,
+        },
+        {
+            id: "mec.undo_panel.max",
+            name: "Undo Panel: max snapshots",
+            type: "number",
+            defaultValue: 20,
+        },
+    ],
+    async setup() {
+        _injectStyle();
+        if (!document.getElementById(BTN_ID)) {
+            const b = document.createElement("button");
+            b.id = BTN_ID;
+            b.title = "Undo history";
+            b.textContent = "↶";
+            b.addEventListener("click", _toggle);
+            document.body.appendChild(b);
+        }
+        if (!document.getElementById(PANEL_ID)) {
+            const p = document.createElement("div");
+            p.id = PANEL_ID;
+            document.body.appendChild(p);
+        }
+        // graph may not exist yet at setup time
+        const waitForGraph = setInterval(() => {
+            if (app.graph) {
+                _hookGraphChanges();
+                clearInterval(waitForGraph);
+            }
+        }, 200);
+        const enabled = _settingsEnabled();
+        document.getElementById(BTN_ID).style.display = enabled ? "flex" : "none";
+        console.log("[MEC.UndoPanel] Loaded.");
+    },
+});

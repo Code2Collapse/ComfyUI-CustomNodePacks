@@ -219,6 +219,54 @@ try:
         print("[MEC] mec_diagnostics sidebar API registered.")
     except Exception as _diag_e:
         print(f"[MEC] mec_diagnostics deferred: {_diag_e}")
+    try:
+        from .nodes.node_explain import register_routes as _register_node_explain_routes
+        _register_node_explain_routes(_ps)
+        print("[MEC] node_explain routes registered.")
+    except Exception as _ne:
+        print(f"[MEC] node_explain deferred: {_ne}")
+    try:
+        from .nodes.error_translator import register_routes as _register_error_translator_routes
+        _register_error_translator_routes(_ps)
+        print("[MEC] error_translator routes registered.")
+    except Exception as _et:
+        print(f"[MEC] error_translator deferred: {_et}")
+    try:
+        from .nodes.flamegraph import register_routes as _register_flamegraph_routes
+        _register_flamegraph_routes(_ps)
+        print("[MEC] flamegraph routes registered.")
+    except Exception as _fg:
+        print(f"[MEC] flamegraph deferred: {_fg}")
+    try:
+        from .nodes.tensor_inspector import register_routes as _register_tensor_inspector_routes
+        _register_tensor_inspector_routes(_ps)
+        print("[MEC] tensor_inspector routes registered.")
+    except Exception as _ti:
+        print(f"[MEC] tensor_inspector deferred: {_ti}")
+    try:
+        from .nodes.token_counter import register_routes as _register_token_counter_routes
+        _register_token_counter_routes(_ps)
+        print("[MEC] token_counter routes registered.")
+    except Exception as _tc:
+        print(f"[MEC] token_counter deferred: {_tc}")
+    try:
+        from .nodes.group_presets import register_routes as _register_group_presets_routes
+        _register_group_presets_routes(_ps)
+        print("[MEC] group_presets routes registered.")
+    except Exception as _gp:
+        print(f"[MEC] group_presets deferred: {_gp}")
+    try:
+        from .nodes.cost_estimator import register_routes as _register_cost_estimator_routes
+        _register_cost_estimator_routes(_ps)
+        print("[MEC] cost_estimator routes registered.")
+    except Exception as _ce:
+        print(f"[MEC] cost_estimator deferred: {_ce}")
+    try:
+        from .nodes.wizard import register_routes as _register_wizard_routes
+        _register_wizard_routes(_ps)
+        print("[MEC] wizard routes registered.")
+    except Exception as _wz:
+        print(f"[MEC] wizard deferred: {_wz}")
     print("[MEC] NukeNodeMax routes + hooks registered.")
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")

@@ -450,11 +450,13 @@ app.registerExtension({
                 // matches what Python will write to disk.
                 const fmt      = getNameFormat();
                 const preview  = formatSourceName(result.filename, fmt);
+                const sfx      = (node.widgets?.find(w => w.name === "suffix")?.value || "").trim();
+                const sfxLabel = sfx ? `${sfx}` : "";
                 const tag = result.mode === "global" ? "\uD83C\uDF10"  // globe for global scan
                           : result.mode === "input"  ? "\uD83D\uDD0C"  // plug for non-trigger input
                           : result.mode === "custom" ? "\u270D\uFE0F"  // hand-writing for custom
                                                      : "\uD83D\uDCC4"; // page for trigger
-                setStatus(`${tag} ${preview}`);
+                setStatus(`${tag} ${preview}${sfxLabel}`);
                 app.graph.setDirtyCanvas(true);
             } else {
                 const manual = sfWidget?.value && sfWidget.value.trim();
