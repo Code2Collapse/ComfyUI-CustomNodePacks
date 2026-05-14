@@ -611,7 +611,7 @@ def register_routes(server) -> None:
 # =====================================================================
 class IntegrityStatusMEC:
     DESCRIPTION = "Returns the latest integrity scan as a string."
-    CATEGORY = "MaskEditControl/Diagnostic"
+    CATEGORY = "C2C/Diagnostic"
     FUNCTION = "status"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("report",)
@@ -640,4 +640,4 @@ class IntegrityStatusMEC:
 
 
 NODE_CLASS_MAPPINGS = {"IntegrityStatusMEC": IntegrityStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status (C2C)"}

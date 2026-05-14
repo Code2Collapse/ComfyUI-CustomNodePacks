@@ -143,7 +143,7 @@ class LuminanceKeyerMEC:
         "JSON summary of effective mode and thresholds used.",
     )
     FUNCTION = "key_luminance"
-    CATEGORY = "MaskEditControl/Keying"
+    CATEGORY = "C2C/Keying"
     DESCRIPTION = (
         "Professional luminance keyer inspired by Nuke's LumaKeyer.\n"
         "Computes ITU-R BT.709 luminance from an image and extracts a matte\n"

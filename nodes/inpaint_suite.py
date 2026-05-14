@@ -918,9 +918,9 @@ class InpaintCropProMEC:
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING")
     RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")
     FUNCTION = "inpaint_crop"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). "
-                   "Pair with Inpaint Stitch Pro (MEC).")
+                   "Pair with Inpaint Stitch Pro (C2C).")
 
     def inpaint_crop(self, image, downscale_algorithm, upscale_algorithm,
                      preresize, preresize_mode,
@@ -1393,7 +1393,7 @@ class InpaintStitchProMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "blend_mask_used", "info")
     FUNCTION = "inpaint_stitch"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match."
 
     def inpaint_stitch(self, stitcher, inpainted_image,
@@ -1633,7 +1633,7 @@ class InpaintMaskPrepareMEC:
     RETURN_TYPES = ("MASK", "MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("inpaint_mask", "stitch_blend_mask", "debug_preview", "info")
     FUNCTION = "prepare_mask"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite."
 
     def prepare_mask(self, mask: torch.Tensor, fill_holes: bool,
@@ -1761,7 +1761,7 @@ class InpaintPasteBackMEC:
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
     FUNCTION = "paste_back"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Paste inpainted crop back using STITCHER, with optional feathered rectangle edges."
 
     def paste_back(self, stitcher, inpainted_image, upscale_method, feather_edges, feather_radius):
@@ -1872,7 +1872,7 @@ class InpaintCompositeMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "mask", "info")
     FUNCTION = "composite"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Unified composite. mode=stitch_pro = lquesada feather blend with overrides; mode=paste_back = clean resize+paste."
 
     def composite(self, stitcher, inpainted_image, mode,

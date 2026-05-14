@@ -110,7 +110,7 @@ class TemporalConsistencyCheckerMEC:
         "JSON report with per-pair scores, min/max/mean, and metadata.",
     )
     FUNCTION = "check"
-    CATEGORY = "MaskEditControl/Diagnostics"
+    CATEGORY = "C2C/Diagnostics"
     DESCRIPTION = (
         "Score frame-to-frame stability of an IMAGE or MASK batch. "
         "Returns flicker_score in [0, 1] (lower = more stable) and a per-pair JSON report."
@@ -190,5 +190,5 @@ class TemporalConsistencyCheckerMEC:
 
 NODE_CLASS_MAPPINGS = {"TemporalConsistencyCheckerMEC": TemporalConsistencyCheckerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker (MEC)"
+    "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker (C2C)"
 }

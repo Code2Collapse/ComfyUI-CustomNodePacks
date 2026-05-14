@@ -237,7 +237,7 @@ class SAMModelLoaderMEC:
         "Loaded SAM model wrapper for downstream SAM nodes.",
     )
     FUNCTION = "load"
-    CATEGORY = "MaskEditControl/SAM"
+    CATEGORY = "C2C/SAM"
     DESCRIPTION = (
         "Load SAM 2.1 or SAM 3 model. "
         "Auto-detects architecture from filename. "

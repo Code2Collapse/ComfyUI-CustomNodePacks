@@ -285,7 +285,7 @@ class ModelMetadataExtractorMEC:
         "License + lineage information as JSON when present in metadata.",
     )
     FUNCTION = "extract"
-    CATEGORY = "MaskEditControl/Diagnostics"
+    CATEGORY = "C2C/Diagnostics"
     DESCRIPTION = (
         "Inspect model file metadata WITHOUT unpickling or loading weights. "
         "Safe to run on untrusted .ckpt files. Reports tensor count, params, "
@@ -337,5 +337,5 @@ class ModelMetadataExtractorMEC:
 
 NODE_CLASS_MAPPINGS = {"ModelMetadataExtractorMEC": ModelMetadataExtractorMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ModelMetadataExtractorMEC": "Model Metadata Extractor (MEC)"
+    "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)"
 }

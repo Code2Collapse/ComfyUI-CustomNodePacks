@@ -133,7 +133,7 @@ class MaskDrawFrame:
     RETURN_TYPES = ("MASK",)
     OUTPUT_TOOLTIPS = ("Mask with the drawn shape blended into the optional input mask.",)
     FUNCTION = "draw"
-    CATEGORY = "MaskEditControl/Draw"
+    CATEGORY = "C2C/Draw"
     DESCRIPTION = "Draw precise geometric shapes onto a mask with feathering, rotation, and blend operations."
 
     # â”€â”€ Rotation helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -804,7 +804,7 @@ class DrawShapeMEC:
     RETURN_TYPES = ("MASK",)
     OUTPUT_TOOLTIPS = ("Generated mask batch containing the drawn shape(s).",)
     FUNCTION = "draw"
-    CATEGORY = "MaskEditControl/Draw"
+    CATEGORY = "C2C/Draw"
     DESCRIPTION = (
         "Unified shape drawing: pick any of 12 shapes from the dropdown.\n"
         "Parameters adapt per shape â€” unused ones are simply ignored.\n"

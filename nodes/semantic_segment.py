@@ -119,7 +119,7 @@ class SemanticSegmentMEC:
         "JSON summary of model, classes used, and per-class pixel counts.",
     )
     FUNCTION = "parse"
-    CATEGORY = "MaskEditControl/Segmentation"
+    CATEGORY = "C2C/Segmentation"
     DESCRIPTION = (
         "Semantic face / clothes parsing using SegFormer.\n"
         "Select classes by name (comma-separated) to build a combined mask.\n"

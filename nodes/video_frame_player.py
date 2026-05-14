@@ -313,7 +313,7 @@ class VideoFramePlayerMEC:
         "JSON string with all video metadata: width, height, fps, duration, frame_count, trim_*, crop_*, etc. Wire to a Show Text node or any downstream automation.",
     )
     FUNCTION = "play"
-    CATEGORY = "MaskEditControl/Preview"
+    CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True
     DESCRIPTION = (
         "Video scrubber + drag-crop + integrated resize. Drag the timeline to scrub frames. "

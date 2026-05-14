@@ -108,7 +108,7 @@ class ViTMatteRefinerMEC:
         "RGB preview overlaying the refined mask on the source image.",
     )
     FUNCTION = "refine"
-    CATEGORY = "MaskEditControl/Refinement"
+    CATEGORY = "C2C/Refinement"
     DESCRIPTION = (
         "Refine mask edges using image-guided matting. "
         "Supports ViTMatte, multi-scale guided filter, LAB color-aware, "

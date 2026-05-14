@@ -197,7 +197,7 @@ class MaskTrackerMEC:
         "Mode/metric label string.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Video"
+    CATEGORY = "C2C/Video"
     DESCRIPTION = (
         "Unified video-mask tracker. Pick a mode and the corresponding "
         "engine runs. All modes share the (mask, video) input pair. "
@@ -331,5 +331,5 @@ class MaskTrackerMEC:
 
 NODE_CLASS_MAPPINGS = {"MaskTrackerMEC": MaskTrackerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (MEC)",
+    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (C2C)",
 }

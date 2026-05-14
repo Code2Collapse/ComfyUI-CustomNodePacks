@@ -164,7 +164,7 @@ class SeCMatAnyonePipelineMEC:
         "JSON summary of stages, models, and per-stage timings.",
     )
     FUNCTION = "process"
-    CATEGORY = "MaskEditControl/Pipeline"
+    CATEGORY = "C2C/Pipeline"
     DESCRIPTION = (
         "SeC + MatAnyone2 end-to-end pipeline:\n"
         "1. SeC/SAM segmentation â†’ coarse masks\n"

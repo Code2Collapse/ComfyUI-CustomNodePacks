@@ -223,7 +223,7 @@ class SplineMaskMEC:
         "AABB of control points as [x,y,w,h]; [0,0,0,0] when N/A.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Spline"
+    CATEGORY = "C2C/Spline"
     DESCRIPTION = (
         "Unified spline mask node. Same control-point canvas drives "
         "three modes: edit (single-frame rasterize), track (LK optical "
@@ -360,5 +360,5 @@ class SplineMaskMEC:
 
 NODE_CLASS_MAPPINGS = {"SplineMaskMEC": SplineMaskMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (MEC)",
+    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (C2C)",
 }

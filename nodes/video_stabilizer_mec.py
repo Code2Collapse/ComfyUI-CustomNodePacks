@@ -208,7 +208,7 @@ class VideoStabilizerClassicMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
-    CATEGORY = "MaskEditControl/Stabilization"
+    CATEGORY = "C2C/Stabilization"
     DESCRIPTION = "Feature-tracking video stabilizer (vendored MIT ComfyUI-Video-Stabilizer)."
 
     def stabilize(self, frames: torch.Tensor, frame_rate: float,
@@ -283,7 +283,7 @@ class VideoStabilizerFlowMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
-    CATEGORY = "MaskEditControl/Stabilization"
+    CATEGORY = "C2C/Stabilization"
     DESCRIPTION = "RAFT dense-flow video stabilizer (vendored MIT ComfyUI-Video-Stabilizer)."
 
     def stabilize(self, frames: torch.Tensor, frame_rate: float,
@@ -371,7 +371,7 @@ class VideoStabilizerAutoMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
-    CATEGORY = "MaskEditControl/Stabilization"
+    CATEGORY = "C2C/Stabilization"
     DESCRIPTION = "Auto stabilizer that picks classic vs. flow backend based on clip length and VRAM."
 
     PRESETS = {
@@ -435,7 +435,7 @@ NODE_CLASS_MAPPINGS = {
     "VideoStabilizerAutoMEC":    VideoStabilizerAutoMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (MEC)",
-    "VideoStabilizerFlowMEC":    "Video Stabilizer — RAFT Flow (MEC)",
-    "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (MEC)",
+    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (C2C)",
+    "VideoStabilizerFlowMEC":    "Video Stabilizer — RAFT Flow (C2C)",
+    "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (C2C)",
 }

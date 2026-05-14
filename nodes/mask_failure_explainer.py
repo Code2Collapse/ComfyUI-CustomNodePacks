@@ -535,7 +535,7 @@ class MaskFailureExplainerMEC:
         "Suggested masking method or refinement to try next.",
     )
     FUNCTION = "analyze"
-    CATEGORY = "MaskEditControl/Diagnostics"
+    CATEGORY = "C2C/Diagnostics"
     DESCRIPTION = (
         "Diagnose why a mask might be failing. Analyzes brightness, blur, "
         "boundary contrast, color confusion, and background complexity. "

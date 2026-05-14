@@ -245,7 +245,7 @@ class ProPainterStitchRefineMEC:
         "Info string: ring stats, ProPainter timings, frame count.",
     )
     FUNCTION = "refine"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Run ProPainter on the seam ring of an already-stitched image to fix boundary flicker / hard edges."
 
     def refine(self, stitched_image: torch.Tensor, stitch_data: Dict[str, Any],
@@ -369,7 +369,7 @@ class ProPainterStitchMEC:
         "Info string with timings, coverage, mode.",
     )
     FUNCTION = "stitch"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Stitch inpainted crop back using ProPainter for flow-consistent seams. Drop-in replacement for InpaintStitchProMEC."
 
     def _resize_to(self, t: torch.Tensor, h: int, w: int, method: str) -> torch.Tensor:
@@ -560,7 +560,7 @@ class ProPainterRemoveMEC:
         "Quality preset used + ProPainter timings.",
     )
     FUNCTION = "remove"
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "ProPainter-only object / wire / plate removal. No SD model required."
 
     def remove(self, images: torch.Tensor, masks: torch.Tensor,
@@ -618,7 +618,7 @@ NODE_CLASS_MAPPINGS = {
     "ProPainterRemoveMEC":       ProPainterRemoveMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ProPainterStitchRefineMEC": "ProPainter Stitch Refine — seam ring (MEC)",
-    "ProPainterStitchMEC":       "ProPainter Stitch — flow-aware composite (MEC)",
-    "ProPainterRemoveMEC":       "ProPainter Remove — object / wire / plate (MEC)",
+    "ProPainterStitchRefineMEC": "ProPainter Stitch Refine — seam ring (C2C)",
+    "ProPainterStitchMEC":       "ProPainter Stitch — flow-aware composite (C2C)",
+    "ProPainterRemoveMEC":       "ProPainter Remove — object / wire / plate (C2C)",
 }

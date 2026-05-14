@@ -469,7 +469,7 @@ class VideoComparerMEC:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("preview", "diff_mask", "scope", "info")
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Preview"
+    CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True
     DESCRIPTION = "Nuke-grade A/B comparer for image / video / EXR / audio with wipe, onion, diff, scopes, bit-depth crush, and audio analysis."
 
@@ -569,4 +569,4 @@ class VideoComparerMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VideoComparerMEC": VideoComparerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)"}

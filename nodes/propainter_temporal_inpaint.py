@@ -358,7 +358,7 @@ class ProPainterTemporalMEC:
         "Temporal video inpaint via ProPainter (RAFT + RFC + InpaintGenerator). "
         "Drop in between InpaintCropProMEC and InpaintCompositeMEC."
     )
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     FUNCTION = "inpaint_temporal"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("inpainted_image", "info")
@@ -493,4 +493,4 @@ class ProPainterTemporalMEC:
 
 
 NODE_CLASS_MAPPINGS = {"ProPainterTemporalMEC": ProPainterTemporalMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint (C2C)"}

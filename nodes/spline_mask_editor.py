@@ -697,7 +697,7 @@ class SplineMaskEditorMEC:
         "AABB as BBOX [x, y, w, h] for BBoxSmooth / Inpaint Crop / MaskTransformXY.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Spline"
+    CATEGORY = "C2C/Spline"
     DESCRIPTION = (
         "Draw closed or open spline shapes on the image canvas. "
         "Supports Catmull-Rom, Bezier, and polyline. Outputs mask, "

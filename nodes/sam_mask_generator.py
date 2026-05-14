@@ -128,7 +128,7 @@ class SAMMaskGeneratorMEC:
         "JSON summary of prompts, scores, and refinement steps.",
     )
     FUNCTION = "generate"
-    CATEGORY = "MaskEditControl/SAM"
+    CATEGORY = "C2C/SAM"
     DESCRIPTION = (
         "Generate masks using SAM with point + bounding box prompts, "
         "iterative refinement, and VRAM offload support."

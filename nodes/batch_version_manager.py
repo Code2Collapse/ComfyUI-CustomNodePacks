@@ -127,7 +127,7 @@ class BatchVersionManagerMEC:
         "JSON metadata: show, shot, task, user, host, timestamp, reservation status.",
     )
     FUNCTION = "allocate"
-    CATEGORY = "MaskEditControl/IO"
+    CATEGORY = "C2C/IO"
     DESCRIPTION = (
         "Compute (and optionally atomically reserve) the next v### directory under "
         "<root>/<show>/<shot>/<task>/. Forward-slash output paths."
@@ -259,4 +259,4 @@ class BatchVersionManagerMEC:
 
 
 NODE_CLASS_MAPPINGS = {"BatchVersionManagerMEC": BatchVersionManagerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"BatchVersionManagerMEC": "Batch Version Manager (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"BatchVersionManagerMEC": "Batch Version Manager (C2C)"}

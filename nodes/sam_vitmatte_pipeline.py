@@ -224,7 +224,7 @@ class SAMViTMattePipelineMEC:
         "JSON summary of stages, parameters, and timings.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Pipeline"
+    CATEGORY = "C2C/Pipeline"
     DESCRIPTION = (
         "SAM + ViTMatte combined pipeline for compositing-grade alpha mattes. "
         "Iterative SAM refinement → edge-aware matting → multi-scale fusion → cleanup."

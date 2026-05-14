@@ -90,7 +90,7 @@ class BackgroundRemoverMEC:
         "JSON summary of the parameters used for this run.",
     )
     FUNCTION = "remove_bg"
-    CATEGORY = "MaskEditControl/Matting"
+    CATEGORY = "C2C/Matting"
     DESCRIPTION = (
         "One-click background removal using RMBG-2.0 or BiRefNet.\n"
         "Outputs foreground (premultiplied RGB) and high-quality alpha mask.\n"

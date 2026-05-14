@@ -82,7 +82,7 @@ class TrimapGeneratorMEC:
         "Unknown boundary band of the trimap.",
     )
     FUNCTION = "generate"
-    CATEGORY = "MaskEditControl/Trimap"
+    CATEGORY = "C2C/Trimap"
     DESCRIPTION = (
         "Generate a trimap from a segmentation mask. "
         "White=foreground, black=background, gray=unknown boundary. "

@@ -1,4 +1,4 @@
-"""Spline Mask Tracker (MEC) — Item #4.
+"""Spline Mask Tracker (C2C) — Item #4.
 
 User goal: "Draw a spline on the first frame, some middle frames and the
 final frame; the node tracks the pixel shifts and draws a continuous
@@ -274,7 +274,7 @@ class SplineMaskTrackerMEC:
         "Diagnostic JSON: keyframes used, tracking failure count, etc.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Spline"
+    CATEGORY = "C2C/Spline"
     DESCRIPTION = (
         "Draw a spline on a few keyframes (first, middle, last) and the "
         "node uses Lucas-Kanade tracking + Catmull-Rom to draw a "
@@ -417,5 +417,5 @@ class SplineMaskTrackerMEC:
 # ─────────────────────────────────────────────────────────────────────
 NODE_CLASS_MAPPINGS = {"SplineMaskTrackerMEC": SplineMaskTrackerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplineMaskTrackerMEC": "Spline Mask Tracker (MEC)",
+    "SplineMaskTrackerMEC": "Spline Mask Tracker (C2C)",
 }

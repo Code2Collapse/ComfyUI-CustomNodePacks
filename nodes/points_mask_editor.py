@@ -83,7 +83,7 @@ class PointsMaskEditor:
         "First positive bbox as [x, y, w, h] for BBox pipeline nodes.",
     )
     FUNCTION = "generate"
-    CATEGORY = "MaskEditControl/Editor"
+    CATEGORY = "C2C/Editor"
     DESCRIPTION = (
         "Unified points + bbox editor. Click for points, Ctrl+drag for boxes – "
         "no mode switching. Outputs feed directly into SAM2/SAM2.1/SAM3/SeC/ViTMatte.\n\n"

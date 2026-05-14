@@ -430,7 +430,7 @@ class VideoMaskEditorMEC:
     """Pinpoint per-frame mask editing across an entire video batch."""
 
     VRAM_TIER = 0
-    CATEGORY = "MaskEditControl/VideoMask"
+    CATEGORY = "C2C/VideoMask"
     DESCRIPTION = (
         "Open the in-browser video mask editor (brush / erase / fill / "
         "lasso / onion-skin) to pin per-frame keyframes, then tweens "
@@ -542,4 +542,4 @@ class VideoMaskEditorMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VideoMaskEditorMEC": VideoMaskEditorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoMaskEditorMEC": "Video Mask Editor (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VideoMaskEditorMEC": "Video Mask Editor (C2C)"}

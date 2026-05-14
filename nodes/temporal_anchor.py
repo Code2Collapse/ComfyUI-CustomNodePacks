@@ -491,7 +491,7 @@ class TemporalAnchorMEC:
         "JSON summary of anchor frames, easing, SDF iterations, and timings.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Temporal"
+    CATEGORY = "C2C/Temporal"
     DESCRIPTION = (
         "Interpolate masks between anchor frames using Signed Distance Fields (SDF). "
         "Supports easing functions and optional optical flow refinement."

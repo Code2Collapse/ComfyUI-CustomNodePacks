@@ -56,7 +56,7 @@ class MaskPropagateVideo:
         "RGB preview with the mask overlaid on each frame.",
     )
     FUNCTION = "propagate"
-    CATEGORY = "MaskEditControl/Video"
+    CATEGORY = "C2C/Video"
     DESCRIPTION = "Propagate a single-frame mask across all video frames using static copy, optical flow, SAM2 video, or fade modes."
 
     def propagate(self, images, mask, source_frame, mode, flow_threshold,

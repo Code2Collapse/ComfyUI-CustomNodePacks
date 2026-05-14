@@ -158,7 +158,7 @@ class MECFaceFixer:
     selected sampler / scheduler exactly like the built-in KSampler.
     """
 
-    CATEGORY = "MEC/Paint"
+    CATEGORY = "C2C/Paint"
     DESCRIPTION = (
         "Auto face detection (YOLO11) + per-face crop + AI pre-upscale + "
         "context-aware sampling + smart blend with wildcard per-face prompts. "
@@ -449,5 +449,5 @@ NODE_CLASS_MAPPINGS = {
     "MECFaceFixer": MECFaceFixer,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MECFaceFixer": "Face Fixer (MEC)",
+    "MECFaceFixer": "Face Fixer (C2C)",
 }

@@ -165,7 +165,7 @@ class MECAdvancedPaintCanvas:
          (0 = hard, 1 = full blur).
     """
 
-    CATEGORY = "MEC/Paint"
+    CATEGORY = "C2C/Paint"
     DESCRIPTION = (
         "Interactive paint canvas with procedural mask math: hardness, expansion, and blur stages "
         "are applied in order to the alpha channel of painted strokes."
@@ -399,7 +399,7 @@ class MECContextInpainter:
         ``debug_mask`` (used when feeding back into another sampler).
     """
 
-    CATEGORY = "MEC/Paint"
+    CATEGORY = "C2C/Paint"
     DESCRIPTION = (
         "Smart-blend an inpainted region back over the original image with crop padding, "
         "feathered blend mask, optional color correction, lightness rescue, and differential diffusion."
@@ -635,7 +635,7 @@ class MECToneRefiner:
     raised to a power that matches ``ai_dof_focus_depth``.
     """
 
-    CATEGORY = "MEC/Paint"
+    CATEGORY = "C2C/Paint"
     DESCRIPTION = (
         "Auto-correct tone (black/white-point + gray-world), optionally upscale, "
         "and apply a fake center-focus depth-of-field blur."
@@ -960,7 +960,7 @@ class MECBuilderSampler:
     built-in KSampler does — we only override ``cond_scale`` per step.
     """
 
-    CATEGORY = "MEC/Paint"
+    CATEGORY = "C2C/Paint"
     DESCRIPTION = (
         "KSampler with adaptive CFG curves (Constant, Linear, Ease Down) plus an optional "
         "self-correction polish pass and resolution presets."
@@ -1114,8 +1114,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MECAdvancedPaintCanvas": "Advanced Paint Canvas (MEC)",
-    "MECContextInpainter":    "Context Inpainter / Fixer (MEC)",
-    "MECToneRefiner":         "Tone Refiner (MEC)",
-    "MECBuilderSampler":      "Builder Sampler (MEC)",
+    "MECAdvancedPaintCanvas": "Advanced Paint Canvas (C2C)",
+    "MECContextInpainter":    "Context Inpainter / Fixer (C2C)",
+    "MECToneRefiner":         "Tone Refiner (C2C)",
+    "MECBuilderSampler":      "Builder Sampler (C2C)",
 }

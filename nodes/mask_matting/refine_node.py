@@ -290,7 +290,7 @@ class MaskRefineMEC:
         "pydensecrf (DenseCRF). Each missing dep silently disables only "
         "its stage; the rest still run."
     )
-    CATEGORY = "MaskEditControl/Pipeline"
+    CATEGORY = "C2C/Pipeline"
     FUNCTION = "execute"
     RETURN_TYPES = ("MASK", "MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("mask", "alpha", "preview", "info")
@@ -593,4 +593,4 @@ class MaskRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskRefineMEC": MaskRefineMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refine — Unified (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refine — Unified (C2C)"}

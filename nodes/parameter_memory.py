@@ -249,7 +249,7 @@ class ParameterHistoryMEC:
     OUTPUT_TOOLTIPS = ("Human-readable parameter history report for the chosen mode.",)
     OUTPUT_NODE = True
     FUNCTION = "query"
-    CATEGORY = "MaskEditControl/Utils"
+    CATEGORY = "C2C/Utils"
     DESCRIPTION = (
         "Query the parameter history database. Shows what parameters were changed, "
         "when, and what the previous values were. Supports run-to-run diffs."

@@ -83,7 +83,7 @@ class VAELatentInspectorMEC:
         "Total Inf element count in latent['samples'].",
     )
     FUNCTION = "inspect"
-    CATEGORY = "MaskEditControl/Diagnostics"
+    CATEGORY = "C2C/Diagnostics"
     DESCRIPTION = (
         "Inspect a LATENT tensor: per-channel min/max/mean/std, NaN & Inf counts, "
         "and a one-word verdict (healthy/low_contrast/saturated/corrupt). "
@@ -138,4 +138,4 @@ class VAELatentInspectorMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VAELatentInspectorMEC": VAELatentInspectorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VAELatentInspectorMEC": "VAE Latent Inspector (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VAELatentInspectorMEC": "VAE Latent Inspector (C2C)"}

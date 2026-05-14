@@ -75,7 +75,7 @@ class SamMultiMaskPickerMEC:
     """
 
     VRAM_TIER = 2
-    CATEGORY = "MaskEditControl/SAM"
+    CATEGORY = "C2C/SAM"
     FUNCTION = "pick_mask"
     RETURN_TYPES = ("MASK", "MASK", "INT", "STRING", "STRING")
     RETURN_NAMES = ("selected_mask", "all_masks", "selected_index", "scores", "info")

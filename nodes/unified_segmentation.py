@@ -320,7 +320,7 @@ class UnifiedSegmentation:
         "JSON summary of model, prompts, and per-frame metadata.",
     )
     FUNCTION = "segment"
-    CATEGORY = "MaskEditControl/Segmentation"
+    CATEGORY = "C2C/Segmentation"
     DESCRIPTION = (
         "Unified segmentation supporting SAM2/2.1, SAM3, and SeC.  "
         "Auto-detects image vs video mode from input batch size.  "

@@ -47,7 +47,7 @@ class BBoxSmooth:
         "First bbox of the smoothed sequence as a BBOX tuple.",
     )
     FUNCTION = "smooth"
-    CATEGORY = "MaskEditControl/BBox"
+    CATEGORY = "C2C/BBox"
     DESCRIPTION = "Smooth bounding boxes across video frames to eliminate jitter. Median-based outlier rejection + exponential smoothing for best results."
 
     def smooth(self, bboxes_json, smoothing_radius, method, alpha):

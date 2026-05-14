@@ -168,7 +168,7 @@ class FlowRefineMEC:
     DESCRIPTION = ("RAFT-based dense optical flow with bidirectional consistency "
                    "and grid_sample warping. Falls back to multi-scale LK when "
                    "ProPainter / RAFT isn't installed.")
-    CATEGORY = "MaskEditControl/VFX"
+    CATEGORY = "C2C/VFX"
     FUNCTION = "refine_flow"
     RETURN_TYPES = ("IMAGE", "IMAGE", "MASK")
     RETURN_NAMES = ("flow_field_rgb", "warped", "consistency")
@@ -214,4 +214,4 @@ class FlowRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"FlowRefineMEC": FlowRefineMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"FlowRefineMEC": "Flow Refine — RAFT (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"FlowRefineMEC": "Flow Refine — RAFT (C2C)"}

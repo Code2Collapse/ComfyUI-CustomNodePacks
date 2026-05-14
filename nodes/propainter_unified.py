@@ -70,7 +70,7 @@ _MODES = ["temporal", "remove", "stitch", "stitch_refine", "flow"]
 class ProPainterMEC:
     """Unified ProPainter dispatcher — one node, five modes."""
 
-    CATEGORY = "MaskEditControl/Inpaint"
+    CATEGORY = "C2C/Inpaint"
     FUNCTION = "execute"
     DESCRIPTION = (
         "Unified ProPainter node. Absorbs ProPainterTemporal / Remove / "
@@ -310,5 +310,5 @@ class ProPainterMEC:
 
 NODE_CLASS_MAPPINGS = {"ProPainterMEC": ProPainterMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (MEC)",
+    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (C2C)",
 }

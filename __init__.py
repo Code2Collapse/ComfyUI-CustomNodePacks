@@ -105,9 +105,9 @@ _NUKEMAX_MAPPINGS = {
     "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
-    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (MEC)",
-    "InsightStatusMEC": "Insight Status (MEC)",
-    "IntegrityStatusMEC": "Integrity Status (MEC)",
+    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (C2C)",
+    "InsightStatusMEC": "Insight Status (C2C)",
+    "IntegrityStatusMEC": "Integrity Status (C2C)",
 }
 
 # ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────
@@ -143,21 +143,21 @@ _MEC_MAPPINGS = {
 
 _MEC_DISPLAY = {
     "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox (MEC)",
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (MEC)",
-    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (MEC)",
-    "ParameterHistoryMEC": "Parameter History (MEC)",
-    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (MEC)",
-    "InpaintCropProMEC": "Inpaint Crop Pro (MEC)",
-    "InpaintCompositeMEC": "Inpaint Composite (MEC)",
-    "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (MEC)",
-    "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (MEC)",
-    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (MEC)",
-    "VideoFramePlayerMEC": "Video Frame Player (MEC)",
-    "VideoMaskEditorMEC": "Video Mask Editor (MEC)",
-    "VAEMergeMEC": "VAE Merge (MEC)",
-    "VAELatentInspectorMEC": "VAE Latent Inspector (MEC)",
-    "BatchVersionManagerMEC": "Batch Version Manager (MEC)",
-    "ModelMetadataExtractorMEC": "Model Metadata Extractor (MEC)",
+    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (C2C)",
+    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (C2C)",
+    "ParameterHistoryMEC": "Parameter History (C2C)",
+    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (C2C)",
+    "InpaintCropProMEC": "Inpaint Crop Pro (C2C)",
+    "InpaintCompositeMEC": "Inpaint Composite (C2C)",
+    "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (C2C)",
+    "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (C2C)",
+    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)",
+    "VideoFramePlayerMEC": "Video Frame Player (C2C)",
+    "VideoMaskEditorMEC": "Video Mask Editor (C2C)",
+    "VAEMergeMEC": "VAE Merge (C2C)",
+    "VAELatentInspectorMEC": "VAE Latent Inspector (C2C)",
+    "BatchVersionManagerMEC": "Batch Version Manager (C2C)",
+    "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)",
 }
 
 # ── Merge all mappings ────────────────────────────────────────────────

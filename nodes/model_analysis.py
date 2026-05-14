@@ -1,5 +1,5 @@
 """
-Model-analysis nodes (MEC):
+Model-analysis nodes (C2C):
   - VAESimilarityAnalyserMEC: Tensor-by-tensor cosine similarity between
     two VAEs (or any two state-dict-bearing model objects).
   - VAEBlockInspectorMEC: Per-block weight statistics for a VAE.
@@ -74,7 +74,7 @@ class VAESimilarityAnalyserMEC:
         "JSON list of the 10 most divergent blocks (lowest cosine first).",
     )
     FUNCTION = "analyse"
-    CATEGORY = "MaskEditControl/ModelAnalysis"
+    CATEGORY = "C2C/ModelAnalysis"
     DESCRIPTION = "Cosine similarity between two VAEs (per tensor + per block)."
 
     def analyse(self, vae_a, vae_b, include_per_tensor: bool = False):
@@ -164,7 +164,7 @@ class VAEBlockInspectorMEC:
         "Aggregate anomaly score in [0, 1] (higher means more outliers detected).",
     )
     FUNCTION = "inspect"
-    CATEGORY = "MaskEditControl/ModelAnalysis"
+    CATEGORY = "C2C/ModelAnalysis"
     DESCRIPTION = "Per-block weight stats for a VAE (mean/std/abs_mean/count)."
 
     def inspect(self, vae, anomaly_threshold: float = 5.0):
@@ -253,6 +253,6 @@ NODE_CLASS_MAPPINGS = {
     "VAEBlockInspectorMEC": VAEBlockInspectorMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VAESimilarityAnalyserMEC": "VAE Similarity Analyser (MEC)",
-    "VAEBlockInspectorMEC": "VAE Block Inspector (MEC)",
+    "VAESimilarityAnalyserMEC": "VAE Similarity Analyser (C2C)",
+    "VAEBlockInspectorMEC": "VAE Block Inspector (C2C)",
 }

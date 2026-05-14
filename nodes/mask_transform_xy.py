@@ -40,7 +40,7 @@ class MaskTransformXY:
     RETURN_TYPES = ("MASK",)
     OUTPUT_TOOLTIPS = ("Transformed mask after morphology, blur, offset, feather, and threshold.",)
     FUNCTION = "transform"
-    CATEGORY = "MaskEditControl/Transform"
+    CATEGORY = "C2C/Transform"
     DESCRIPTION = "Erode/expand mask independently on X & Y with blur, offset, feather, and threshold."
 
 

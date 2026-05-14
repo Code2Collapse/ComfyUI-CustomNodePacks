@@ -1,5 +1,5 @@
 """
-nodes/vae_merge.py — VAE Merge (MEC) — flagship VAE merging node.
+nodes/vae_merge.py — VAE Merge (C2C) — flagship VAE merging node.
 
 Recreates and extends the (now-deleted) TechnoByteJS/ComfyUI-TechNodes
 VAE Merge node with a richer merge-method set borrowed from `meh` /
@@ -405,7 +405,7 @@ def _parse_recipe(recipe_json: str) -> Optional[Dict[str, Any]]:
 
 class VAEMergeMEC:
     """
-    (MEC) VAE Merge — combine 2 or 3 VAE checkpoints with TechnoByte-style
+    (C2C) VAE Merge — combine 2 or 3 VAE checkpoints with TechnoByte-style
     method coverage plus data-driven auto-alpha, latent reconstruction
     probe, dry-run, and exportable recipes.
 
@@ -492,7 +492,7 @@ class VAEMergeMEC:
         "Probe report with MSE/PSNR per VAE when reference_image is connected.",
     )
     FUNCTION = "merge"
-    CATEGORY = "MaskEditControl/VAE"
+    CATEGORY = "C2C/VAE"
     OUTPUT_NODE = False
 
     # ------------------------------------------------------------------
@@ -740,4 +740,4 @@ class VAEMergeMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VAEMergeMEC": VAEMergeMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VAEMergeMEC": "VAE Merge (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VAEMergeMEC": "VAE Merge (C2C)"}

@@ -485,7 +485,7 @@ class MotionMaskTrackerMEC:
         "JSON summary of methods used, thresholds, and per-frame stats.",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Video"
+    CATEGORY = "C2C/Video"
     DESCRIPTION = (
         "Per-frame motion detection using pixel diff, optical flow, "
         "background subtraction, and histogram analysis. "

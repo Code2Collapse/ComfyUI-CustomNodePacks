@@ -68,7 +68,7 @@ class ImageComparerMEC:
         "Stats string: max/mean/PSNR/percent-of-pixels-different.",
     )
     FUNCTION = "compare"
-    CATEGORY = "MaskEditControl/Preview"
+    CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True
     DESCRIPTION = "Nuke-style A/B comparer: wipe slider, overlay, and HDR-aware diff (gain + gamma) that preserves 8-vs-16-bit precision differences."
 

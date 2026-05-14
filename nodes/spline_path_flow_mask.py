@@ -615,7 +615,7 @@ class SplinePathFlowMaskMEC:
         "Procedural flow / wave / dust mask along the spline path (frames, H, W).",
     )
     FUNCTION = "execute"
-    CATEGORY = "MaskEditControl/Spline"
+    CATEGORY = "C2C/Spline"
     DESCRIPTION = (
         "Generate procedural masks along a spline path — ocean waves, "
         "flowing water, dust trails, smoke, lightning, comet pulses. "
@@ -708,5 +708,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplinePathFlowMaskMEC": "Spline Path Flow Mask (MEC)",
+    "SplinePathFlowMaskMEC": "Spline Path Flow Mask (C2C)",
 }
