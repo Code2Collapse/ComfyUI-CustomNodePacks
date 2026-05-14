@@ -46,6 +46,7 @@ class BaseSegmenter:
         positive_points: Optional[List[Tuple[float, float]]] = None,
         negative_points: Optional[List[Tuple[float, float]]] = None,
         bbox: Optional[Tuple[int, int, int, int]] = None,
+        neg_bbox: Optional[Tuple[int, int, int, int]] = None,
         text_prompt: str = "",
         frame_annotation: int = 0,
         object_id: int = 0,

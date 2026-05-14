@@ -30,10 +30,24 @@ from .node import MaskOpsMEC
 from .node import NODE_CLASS_MAPPINGS as _MO_MAPPINGS
 from .node import NODE_DISPLAY_NAME_MAPPINGS as _MO_DISPLAY
 
-NODE_CLASS_MAPPINGS = {**_MO_MAPPINGS}
-NODE_DISPLAY_NAME_MAPPINGS = {**_MO_DISPLAY}
+try:
+    from .temporal_node import (
+        MaskTemporalMEC,
+        NODE_CLASS_MAPPINGS as _MT_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MT_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.MaskMatting").warning(
+        "MaskTemporalMEC unavailable: %s", _exc
+    )
+    MaskTemporalMEC = None  # type: ignore
+    _MT_MAPPINGS, _MT_DISPLAY = {}, {}
+
+NODE_CLASS_MAPPINGS = {**_MO_MAPPINGS, **_MT_MAPPINGS}
+NODE_DISPLAY_NAME_MAPPINGS = {**_MO_DISPLAY, **_MT_DISPLAY}
 
 __all__ = [
-    "MaskOpsMEC",
+    "MaskOpsMEC", "MaskTemporalMEC",
     "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS",
 ]
