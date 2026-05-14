@@ -267,6 +267,15 @@ try:
         print("[MEC] wizard routes registered.")
     except Exception as _wz:
         print(f"[MEC] wizard deferred: {_wz}")
+    # ── C2C AI spine (v2.0-dev) ────────────────────────────────────
+    try:
+        from .c2c_ai.api_routes import register_routes as _register_c2c_ai_routes
+        from .c2c_ai.bootstrap import bootstrap as _c2c_ai_bootstrap
+        _register_c2c_ai_routes(_ps)
+        _c2c_ai_bootstrap()
+        print("[C2C AI] spine registered (/c2c/ai/*).")
+    except Exception as _ai:
+        print(f"[C2C AI] spine deferred: {_ai}")
     print("[MEC] NukeNodeMax routes + hooks registered.")
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")

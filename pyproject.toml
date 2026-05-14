@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-customnodepacks"
 description = "Custom node packs for ComfyUI: FolderIncrementer (auto-versioning) + MaskEditControl (pinpoint mask editing with SAM 2.1 / SAM 3, per-axis erode/expand, point editor, bbox tools, video mask propagation)."
-version = "1.30.1"
+version = "2.0.0-dev"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 readme = "README.md"
@@ -16,7 +16,13 @@ dependencies = [
     "diffusers>=0.27",
     "accelerate",
     "matplotlib",
+    "httpx>=0.27",
+    "keyring>=24.0",
 ]
+
+[project.optional-dependencies]
+ai-cloud = ["anthropic>=0.34", "openai>=1.40"]
+ai-local = []  # llama.cpp or Ollama is installed system-wide; no Python deps required
 
 [project.urls]
 Repository = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks"
