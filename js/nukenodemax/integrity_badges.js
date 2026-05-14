@@ -120,36 +120,72 @@ function injectStyle() {
     s.id = STYLE_ID;
     s.textContent = `
     .mec-integ-btn {
-        display: inline-flex; align-items: center; gap: 4px;
-        padding: 2px 6px; margin: 0 2px;
-        height: 24px;
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 0 9px; margin: 0 4px;
+        height: 28px;
         box-sizing: border-box;
         flex: 0 0 auto;
         align-self: center;
-        border-radius: 4px;
-        background: var(--comfy-menu-bg, #353535);
-        color: var(--fg-color, #ddd);
-        border: 1px solid var(--border-color, #555);
+        border-radius: 14px;
+        background: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
         cursor: pointer;
-        font-size: 12px;
+        font-size: 11px; font-weight: 700;
+        letter-spacing: 0.4px;
         font-family: var(--p-font-family, system-ui), sans-serif;
         line-height: 1;
         white-space: nowrap;
         user-select: none;
+        transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
     }
-    .mec-integ-btn:hover { background: var(--p-button-secondary-hover-bg, #454545); }
-    .mec-integ-btn.warn  { border-color:#fab387; color:#fab387; }
-    .mec-integ-btn.error { border-color:#f38ba8; color:#f38ba8; }
-    .mec-integ-btn.muted { opacity: 0.6; }
+    .mec-integ-btn:hover {
+        background: #45475a;
+        box-shadow: 0 0 0 1px #585b70 inset, 0 2px 6px rgba(0,0,0,0.35);
+    }
+    .mec-integ-btn .mec-integ-icon { font-size: 14px; line-height: 1; }
+    .mec-integ-btn .mec-integ-label {
+        font-size: 10px; letter-spacing: 0.6px;
+    }
+    .mec-integ-btn.ok {
+        border-color: #a6e3a1; color: #a6e3a1;
+        background: linear-gradient(180deg, #1e2e26 0%, #1e1e2e 100%);
+    }
+    .mec-integ-btn.warn {
+        border-color: #fab387; color: #fab387;
+        background: linear-gradient(180deg, #3a2a1e 0%, #1e1e2e 100%);
+    }
+    .mec-integ-btn.error {
+        border-color: #f38ba8; color: #f38ba8;
+        background: linear-gradient(180deg, #3a1e26 0%, #1e1e2e 100%);
+        animation: mec-integ-pulse 2.4s ease-in-out infinite;
+    }
+    .mec-integ-btn.scan {
+        border-color: #89b4fa; color: #89b4fa;
+        background: linear-gradient(180deg, #1e273a 0%, #1e1e2e 100%);
+        animation: mec-integ-scan 1.4s ease-in-out infinite;
+    }
+    .mec-integ-btn.muted { opacity: 0.55; filter: grayscale(0.6); }
+    @keyframes mec-integ-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(243,139,168,0.0); }
+        50%      { box-shadow: 0 0 0 4px rgba(243,139,168,0.18); }
+    }
+    @keyframes mec-integ-scan {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(137,180,250,0.0); }
+        50%      { box-shadow: 0 0 0 4px rgba(137,180,250,0.25); }
+    }
     .mec-integ-dot {
-        display:inline-block; min-width:14px; height:14px;
-        padding: 0 4px; border-radius: 7px;
+        display:inline-flex; align-items:center; justify-content:center;
+        min-width:18px; height:18px;
+        padding: 0 5px; border-radius: 9px;
         background:#f38ba8; color:#11111b;
-        font-size:10px; font-weight:700; text-align:center;
-        line-height:14px;
+        font-size:10px; font-weight:800; text-align:center;
+        line-height:1;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.35);
     }
     .mec-integ-dot.warn  { background:#fab387; }
     .mec-integ-dot.ok    { background:#a6e3a1; }
+    .mec-integ-dot.error { background:#f38ba8; }
 
     .mec-integ-mask {
         position: fixed; inset: 0; z-index: 99998;
@@ -242,19 +278,22 @@ function injectStyle() {
 let BTN_EL = null;
 
 function summary() {
-    // Icon-only label ("⛨") to keep the button narrow so it never
-    // deforms the topbar widget row. Full text lives in the tooltip
-    // and the modal dialog.
+    // Compact pill with a clear text label so users can see the
+    // integrity state at a glance. Tooltip + modal still carry full detail.
     const muted = isMuted();
     const issues = STATE.events.length;
+    const scanning = STATE.ready === false || STATE.status === "scanning";
+    if (scanning) {
+        return { tone: "scan", text: "⛨", label: "SCAN", dotClass: "", dot: "" };
+    }
     if (muted) {
-        return { tone: "muted", text: "⛨", dotClass: "ok", dot: "" };
+        return { tone: "muted", text: "⛨", label: "INT", dotClass: "ok", dot: "" };
     }
     if (!STATE.pipOk || issues > 0) {
         const tone = STATE.pipOk ? "warn" : "error";
-        return { tone, text: "⛨", dotClass: tone, dot: String(issues || "!") };
+        return { tone, text: "⛨", label: "INT", dotClass: tone, dot: String(issues || "!") };
     }
-    return { tone: "", text: "⛨", dotClass: "ok", dot: "" };
+    return { tone: "ok", text: "⛨", label: "OK", dotClass: "ok", dot: "" };
 }
 
 function refreshButton() {
@@ -262,11 +301,16 @@ function refreshButton() {
     if (!BTN_EL) return;
     BTN_EL.className = "mec-integ-btn " + s.tone;
     BTN_EL.title = (STATE.lastUpdated
-        ? `MEC Integrity (${STATE.events.length}) — last updated ${new Date(STATE.lastUpdated).toLocaleTimeString()}`
-        : `MEC Integrity (${STATE.events.length})`);
+        ? `MEC Integrity — ${STATE.events.length} event(s) — last scan ${new Date(STATE.lastUpdated).toLocaleTimeString()}. Click for details.`
+        : `MEC Integrity — ${STATE.events.length} event(s). Click for details.`);
     BTN_EL.innerHTML = "";
+    const icon = document.createElement("span");
+    icon.className = "mec-integ-icon";
+    icon.textContent = s.text;
+    BTN_EL.appendChild(icon);
     const lbl = document.createElement("span");
-    lbl.textContent = s.text;
+    lbl.className = "mec-integ-label";
+    lbl.textContent = s.label;
     BTN_EL.appendChild(lbl);
     if (s.dot !== "") {
         const dot = document.createElement("span");

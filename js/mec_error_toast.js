@@ -89,6 +89,92 @@ function _injectStyle() {
     border-radius: 50%;
     animation: mec-spin 0.7s linear infinite;
 }
+@keyframes mec-spin { to { transform: rotate(360deg); } }
+.mec-toast-teach {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; margin-left: 6px;
+    border-radius: 10px;
+    background: #313244; color: #f9e2af;
+    border: 1px solid #45475a;
+    font-size: 10px; font-weight: 700; cursor: pointer;
+}
+.mec-toast-teach:hover { background: #45475a; color: #fab387; }
+.mec-teach-mask {
+    position: fixed; inset: 0; z-index: 999999;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--p-font-family, system-ui), sans-serif;
+}
+.mec-teach-dlg {
+    width: min(560px, 92vw); max-height: 86vh;
+    background: #1e1e2e; color: #cdd6f4;
+    border: 1px solid #45475a; border-radius: 8px;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; overflow: hidden;
+    font-size: 12px;
+}
+.mec-teach-dlg header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: #181825; border-bottom: 1px solid #313244;
+    font-weight: 600; font-size: 13px;
+}
+.mec-teach-dlg header .sp { flex: 1; }
+.mec-teach-dlg header button {
+    background: transparent; border: none; color: inherit;
+    font-size: 18px; cursor: pointer; padding: 0 4px;
+}
+.mec-teach-dlg .body { padding: 12px 14px; overflow: auto; }
+.mec-teach-dlg label {
+    display: block; font-size: 11px;
+    opacity: 0.75; margin: 8px 0 4px; font-weight: 600;
+    letter-spacing: 0.4px; text-transform: uppercase;
+}
+.mec-teach-dlg input[type=text],
+.mec-teach-dlg textarea {
+    width: 100%; box-sizing: border-box;
+    background: #11111b; color: #cdd6f4;
+    border: 1px solid #313244; border-radius: 4px;
+    padding: 6px 8px; font-size: 12px; font-family: inherit;
+}
+.mec-teach-dlg textarea { min-height: 60px; resize: vertical;
+    font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 11px; }
+.mec-teach-dlg .fixrow {
+    display: flex; gap: 4px; margin-bottom: 4px;
+}
+.mec-teach-dlg .fixrow input { flex: 1; }
+.mec-teach-dlg .fixrow button {
+    background: #313244; color: #f38ba8; border: 1px solid #45475a;
+    border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px;
+}
+.mec-teach-dlg .addfix {
+    background: #313244; color: #a6e3a1; border: 1px solid #45475a;
+    border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px;
+    margin-top: 4px;
+}
+.mec-teach-dlg footer {
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 14px; border-top: 1px solid #313244;
+    background: #181825;
+}
+.mec-teach-dlg footer .sp { flex: 1; }
+.mec-teach-dlg footer button {
+    padding: 5px 14px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; font-weight: 600; border: 1px solid #45475a;
+}
+.mec-teach-dlg .ok-btn { background: #a6e3a1; color: #11111b; border-color: #a6e3a1; }
+.mec-teach-dlg .ok-btn:hover { filter: brightness(1.1); }
+.mec-teach-dlg .cancel-btn { background: #313244; color: #cdd6f4; }
+.mec-teach-dlg .cancel-btn:hover { background: #45475a; }
+.mec-teach-dlg .err { color: #f38ba8; font-size: 11px; padding: 4px 0; }
+.mec-teach-dlg .raw-preview {
+    background: #11111b; border-left: 2px solid #45475a;
+    padding: 6px 8px; margin: 4px 0 8px;
+    font-family: ui-monospace, "Cascadia Mono", monospace;
+    font-size: 10px; color: #6c7086;
+    max-height: 70px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; border-radius: 0 4px 4px 0;
+}
     `.trim();
     document.head.appendChild(style);
 }
@@ -141,6 +227,13 @@ function _renderFriendly(textNode, originalMessage, data) {
           }</ul>`
         : "";
 
+    const noMatch = (data.pattern_id === "no_match" || data.tier1_match === "no_match"
+                    || data.tier1_match == null && tier >= 2);
+    const teachBtn = noMatch
+        ? `<button class="mec-toast-teach" data-role="teach"
+                   title="Teach MEC how to recognise this error next time">📚 Teach me</button>`
+        : "";
+
     textNode.innerHTML = `
         <div class="mec-toast-friendly" ${ATTR_DONE}="1">
             <div class="mec-toast-cause"><strong>${_esc(data.headline || "Error")}</strong></div>
@@ -149,6 +242,7 @@ function _renderFriendly(textNode, originalMessage, data) {
             <div class="mec-toast-meta">
                 <span class="mec-toast-badge">${tierLabel}</span>
                 <span class="mec-toast-toggle">Show original</span>
+                ${teachBtn}
             </div>
             <pre class="mec-toast-original">${_esc(originalMessage)}</pre>
         </div>`.trim();
@@ -164,6 +258,143 @@ function _renderFriendly(textNode, originalMessage, data) {
                 : "Show original";
         });
     }
+    const teach = textNode.querySelector('[data-role="teach"]');
+    if (teach) {
+        teach.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            _openTeachDialog(originalMessage, data);
+        });
+    }
+}
+
+// ── "Teach me" dialog ───────────────────────────────────────────────
+let _TEACH_DLG = null;
+function _closeTeachDialog() {
+    if (_TEACH_DLG) { _TEACH_DLG.remove(); _TEACH_DLG = null; }
+}
+function _openTeachDialog(originalMessage, data) {
+    _closeTeachDialog();
+    const firstLine = (originalMessage || "").split("\n")[0].slice(0, 200);
+    // Suggest a forgiving regex client-side; backend will re-derive if blank.
+    const suggestedRegex = firstLine
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/\d+/g, "\\d+")
+        .replace(/\s+/g, "\\s+");
+    const tier = data.tier ?? 0;
+
+    const mask = document.createElement("div");
+    mask.className = "mec-teach-mask";
+    mask.addEventListener("click", (e) => { if (e.target === mask) _closeTeachDialog(); });
+
+    const dlg = document.createElement("div");
+    dlg.className = "mec-teach-dlg";
+    dlg.innerHTML = `
+        <header>
+            <span>📚 Teach MEC about this error</span>
+            <span class="sp"></span>
+            <button data-role="x" title="Close">×</button>
+        </header>
+        <div class="body">
+            <label>Original error</label>
+            <div class="raw-preview">${_esc(originalMessage).slice(0, 800)}</div>
+            <label>Pattern ID (optional, lowercase slug)</label>
+            <input type="text" data-role="id" placeholder="(auto from message)">
+            <label>Match regex (Python re, case-insensitive)</label>
+            <input type="text" data-role="regex" value="${_esc(suggestedRegex)}">
+            <label>Cause — what does this mean? *</label>
+            <textarea data-role="cause" placeholder="${_esc(data?.cause || '')}">${_esc(data?.cause || '')}</textarea>
+            <label>Fixes — one per row</label>
+            <div data-role="fixes"></div>
+            <button class="addfix" data-role="addfix">＋ Add fix</button>
+            <label>Category</label>
+            <input type="text" data-role="cat" value="user">
+            <div class="err" data-role="err" style="display:none"></div>
+        </div>
+        <footer>
+            <span style="font-size:10px;opacity:0.6;">Saved to <code>patterns/user/learned.json</code></span>
+            <span class="sp"></span>
+            <button class="cancel-btn" data-role="cancel">Cancel</button>
+            <button class="ok-btn" data-role="save">Save pattern</button>
+        </footer>`;
+
+    mask.appendChild(dlg);
+    document.body.appendChild(mask);
+    _TEACH_DLG = mask;
+
+    const fixesWrap = dlg.querySelector('[data-role="fixes"]');
+    const addFix = (val = "") => {
+        const row = document.createElement("div");
+        row.className = "fixrow";
+        row.innerHTML = `<input type="text" value="${_esc(val)}" placeholder="Suggested fix">
+                         <button type="button" title="Remove">−</button>`;
+        row.querySelector("button").addEventListener("click", () => row.remove());
+        fixesWrap.appendChild(row);
+        return row;
+    };
+    const initialFixes = Array.isArray(data?.fixes) && data.fixes.length ? data.fixes : [""];
+    initialFixes.slice(0, 6).forEach(f => addFix(String(f || "")));
+
+    dlg.querySelector('[data-role="addfix"]').addEventListener("click", () => addFix(""));
+    dlg.querySelector('[data-role="x"]').addEventListener("click", _closeTeachDialog);
+    dlg.querySelector('[data-role="cancel"]').addEventListener("click", _closeTeachDialog);
+
+    dlg.querySelector('[data-role="save"]').addEventListener("click", async () => {
+        const errBox = dlg.querySelector('[data-role="err"]');
+        errBox.style.display = "none";
+        const cause = dlg.querySelector('[data-role="cause"]').value.trim();
+        if (!cause) {
+            errBox.textContent = "Cause is required.";
+            errBox.style.display = "block";
+            return;
+        }
+        const payload = {
+            message: originalMessage,
+            cause,
+            regex:  dlg.querySelector('[data-role="regex"]').value.trim() || undefined,
+            id:     dlg.querySelector('[data-role="id"]').value.trim() || undefined,
+            category: dlg.querySelector('[data-role="cat"]').value.trim() || "user",
+            source_tier: tier || undefined,
+            fixes: Array.from(fixesWrap.querySelectorAll("input"))
+                        .map(i => i.value.trim()).filter(Boolean),
+        };
+        try {
+            const r = await fetch("/mec/teach_error", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const j = await r.json();
+            if (!j.success) {
+                errBox.textContent = j.message || "Save failed.";
+                errBox.style.display = "block";
+                return;
+            }
+            // Cache the new translation so subsequent identical toasts hit fast path.
+            _CACHE.set(originalMessage, {
+                tier: 1,
+                headline: data?.headline || originalMessage.split("\n")[0],
+                cause,
+                fixes: payload.fixes,
+                pattern_id: j.data.id,
+                category: payload.category,
+                confidence: 0.7,
+            });
+            try {
+                app.extensionManager?.toast?.add({
+                    severity: "success",
+                    summary: "MEC learned a new pattern",
+                    detail: `Saved as "${j.data.id}". Next time this fires it will match instantly.`,
+                    life: 4000,
+                });
+            } catch {}
+            _closeTeachDialog();
+        } catch (e) {
+            errBox.textContent = String(e);
+            errBox.style.display = "block";
+        }
+    });
+
+    setTimeout(() => dlg.querySelector('[data-role="cause"]').focus(), 0);
 }
 
 function _renderLoading(textNode, originalMessage) {
