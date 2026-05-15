@@ -260,7 +260,22 @@ app.registerExtension({
             muteBtn.textContent = "🔇 A";
             muteBtn.title = "Toggle audio (unmute A — B stays muted to avoid echo)";
             muteBtn.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10.5px;";
+            // Frame-step buttons for real per-frame A/B comparison.
+            const mkStep = (label, title) => {
+                const b = document.createElement("button");
+                b.type = "button"; b.textContent = label; b.title = title;
+                b.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 8px;cursor:pointer;font-family:ui-monospace,monospace;font-size:11px;line-height:1;";
+                return b;
+            };
+            const btnFirst = mkStep("⏮", "Jump to first frame");
+            const btnStepB = mkStep("◀ 1f", "Step back 1 frame (key: ,)");
+            const btnStepF = mkStep("1f ▶", "Step forward 1 frame (key: .)");
+            const btnLast  = mkStep("⏭", "Jump to last frame");
             transport.appendChild(playBtn);
+            transport.appendChild(btnFirst);
+            transport.appendChild(btnStepB);
+            transport.appendChild(btnStepF);
+            transport.appendChild(btnLast);
             transport.appendChild(seek);
             transport.appendChild(tReadout);
             transport.appendChild(muteBtn);
@@ -271,7 +286,13 @@ app.registerExtension({
             // we always seek both to master.currentTime per RAF tick. Master is
             // picked as whichever has the longer duration (so the shorter one
             // pauses at its end naturally).
-            const _sp = { active: false, raf: 0, master: vidA, slave: vidB };
+            const _sp = { active: false, raf: 0, master: vidA, slave: vidB, fps: 30, rvfcA: 0, rvfcB: 0 };
+
+            const _spDetectFps = () => {
+                // Best-effort fps: prefer rVFC-reported processingDuration, else fall back to 30.
+                // We can also derive it lazily from successive timestamps.
+                return _sp.fps;
+            };
 
             const _spPickMaster = () => {
                 const dA = isFinite(vidA.duration) ? vidA.duration : 0;
@@ -303,9 +324,76 @@ app.registerExtension({
                 }
                 // Update transport UI
                 const dur = _sp.master.duration || 0;
-                tReadout.textContent = `${t.toFixed(2)} / ${dur.toFixed(2)}`;
+                const fps = _spDetectFps();
+                const f = Math.round(t * fps);
+                const fEnd = Math.round(dur * fps);
+                tReadout.textContent = `f ${f}/${fEnd} · ${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
                 seek.value = String(Math.round((dur > 0 ? t / dur : 0) * 10000));
                 playBtn.textContent = _sp.master.paused ? "▶" : "❚❚";
+            };
+
+            // Frame-step API — exposed for keyboard + button handlers.
+            const _spStepFrames = (n) => {
+                _spPickMaster();
+                if (!_sp.master.duration) return;
+                if (!_sp.master.paused) _sp.master.pause();
+                if (!_sp.slave.paused)  _sp.slave.pause();
+                const fps = _spDetectFps();
+                const dt = n / Math.max(1, fps);
+                const t = Math.max(0, Math.min((_sp.master.duration || 0) - 1e-3,
+                                                _sp.master.currentTime + dt));
+                try {
+                    _sp.master.currentTime = t;
+                    _sp.slave.currentTime  = Math.min(_sp.slave.duration || t, t);
+                } catch {}
+                _spSync();
+            };
+            const _spJump = (where) => {
+                _spPickMaster();
+                if (!_sp.master.duration) return;
+                if (!_sp.master.paused) _sp.master.pause();
+                if (!_sp.slave.paused)  _sp.slave.pause();
+                const t = (where === "end")
+                    ? Math.max(0, (_sp.master.duration || 0) - (1 / Math.max(1, _spDetectFps())))
+                    : 0;
+                try {
+                    _sp.master.currentTime = t;
+                    _sp.slave.currentTime  = Math.min(_sp.slave.duration || t, t);
+                } catch {}
+                _spSync();
+            };
+
+            // Per-decoded-frame sync via requestVideoFrameCallback (Chromium, Safari 16+).
+            const _spInstallRVFC = () => {
+                const setup = (vid, key) => {
+                    if (!vid.requestVideoFrameCallback) return;
+                    const cb = (now, meta) => {
+                        if (!_sp.active) return;
+                        // Derive an fps estimate from successive expectedDisplayTimes.
+                        if (meta && meta.expectedDisplayTime && vid._lastEDT) {
+                            const dt = (meta.expectedDisplayTime - vid._lastEDT) / 1000;
+                            if (dt > 1e-4 && dt < 1) {
+                                const inst = 1 / dt;
+                                _sp.fps = _sp.fps ? (_sp.fps * 0.8 + inst * 0.2) : inst;
+                            }
+                        }
+                        if (meta) vid._lastEDT = meta.expectedDisplayTime;
+                        if (vid === _sp.master) _spSync();
+                        try { vid[key] = vid.requestVideoFrameCallback(cb); } catch {}
+                    };
+                    try { vid[key] = vid.requestVideoFrameCallback(cb); } catch {}
+                };
+                setup(vidA, "rvfcA");
+                setup(vidB, "rvfcB");
+            };
+            const _spUninstallRVFC = () => {
+                if (vidA.cancelVideoFrameCallback && vidA.rvfcA) {
+                    try { vidA.cancelVideoFrameCallback(vidA.rvfcA); } catch {}
+                }
+                if (vidB.cancelVideoFrameCallback && vidB.rvfcB) {
+                    try { vidB.cancelVideoFrameCallback(vidB.rvfcB); } catch {}
+                }
+                vidA.rvfcA = 0; vidB.rvfcB = 0;
             };
 
             const _spRaf = () => {
@@ -338,6 +426,24 @@ app.registerExtension({
             muteBtn.addEventListener("click", () => {
                 vidA.muted = !vidA.muted;
                 muteBtn.textContent = vidA.muted ? "🔇 A" : "🔊 A";
+            });
+            btnFirst.addEventListener("click", () => _spJump("start"));
+            btnLast .addEventListener("click", () => _spJump("end"));
+            btnStepB.addEventListener("click", () => _spStepFrames(-1));
+            btnStepF.addEventListener("click", () => _spStepFrames(+1));
+            // Make the player div focusable so it can capture keyboard events.
+            playerHost.tabIndex = 0;
+            playerHost.style.outline = "none";
+            playerHost.addEventListener("keydown", (e) => {
+                if (!_sp.active) return;
+                if (e.key === "," || e.key === "ArrowLeft")  { _spStepFrames(-1); e.preventDefault(); }
+                else if (e.key === "." || e.key === "ArrowRight") { _spStepFrames(+1); e.preventDefault(); }
+                else if (e.key === "Home") { _spJump("start"); e.preventDefault(); }
+                else if (e.key === "End")  { _spJump("end");   e.preventDefault(); }
+                else if (e.code === "Space") {
+                    playBtn.click();
+                    e.preventDefault();
+                }
             });
             // Keep the loop running while master is playing.
             vidA.addEventListener("play",  () => _spKick());
@@ -390,9 +496,11 @@ app.registerExtension({
                     overlay.style.display = "none";
                     hint.style.display = "none";
                     playerHost.style.display = "flex";
+                    const wasActive = _sp.active;
                     _sp.active = true;
                     _spLoadSources();
                     _spPickMaster();
+                    if (!wasActive) _spInstallRVFC();
                     // If neither A nor B is a video, show a placeholder.
                     const aIsVid = S.srcA && S.srcA.kind === "video";
                     const bIsVid = S.srcB && S.srcB.kind === "video";
@@ -400,9 +508,11 @@ app.registerExtension({
                         tReadout.textContent = "(no videos)";
                         seek.disabled = true;
                         playBtn.disabled = true;
+                        for (const b of [btnFirst, btnLast, btnStepB, btnStepF]) b.disabled = true;
                     } else {
                         seek.disabled = false;
                         playBtn.disabled = false;
+                        for (const b of [btnFirst, btnLast, btnStepB, btnStepF]) b.disabled = false;
                     }
                     modeBadge.textContent = mode;
                     return;
@@ -410,6 +520,7 @@ app.registerExtension({
                     // Coming back from synced_player → restore canvas view.
                     _sp.active = false;
                     if (_sp.raf) { cancelAnimationFrame(_sp.raf); _sp.raf = 0; }
+                    _spUninstallRVFC();
                     try { vidA.pause(); vidB.pause(); } catch {}
                     playerHost.style.display = "none";
                     cvs.style.display = "block";

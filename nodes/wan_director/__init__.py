@@ -21,28 +21,19 @@ Licensed under the Apache License, Version 2.0.
 """
 from __future__ import annotations
 
-from .shotlist import WanShotListMEC
-from .picker import WanShotPickerMEC, WanShotCountMEC
-from .bridge import WanFrameBridgeMEC
-from .concat import WanShotConcatMEC
-from .schedule import WanPromptScheduleMEC
+from .director_node import WanDirectorC2C
+
+# Wan Director is intentionally ONE node — the visual timeline holds
+# shot-list, picker, frame-bridge, concat and schedule semantics inline
+# (matching WhatDreamsCost LTX Director's single-node UX). The helper
+# modules on disk are kept as importable utilities only.
 
 NODE_CLASS_MAPPINGS = {
-    "WanShotListMEC":        WanShotListMEC,
-    "WanShotPickerMEC":      WanShotPickerMEC,
-    "WanShotCountMEC":       WanShotCountMEC,
-    "WanFrameBridgeMEC":     WanFrameBridgeMEC,
-    "WanShotConcatMEC":      WanShotConcatMEC,
-    "WanPromptScheduleMEC":  WanPromptScheduleMEC,
+    "WanDirectorC2C": WanDirectorC2C,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "WanShotListMEC":        "Wan Director — Shot List (C2C)",
-    "WanShotPickerMEC":      "Wan Director — Shot Picker (C2C)",
-    "WanShotCountMEC":       "Wan Director — Shot Count (C2C)",
-    "WanFrameBridgeMEC":     "Wan Director — Frame Bridge (C2C)",
-    "WanShotConcatMEC":      "Wan Director — Shot Concat (C2C)",
-    "WanPromptScheduleMEC":  "Wan Director — Prompt Schedule (C2C)",
+    "WanDirectorC2C": "Wan Director",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
