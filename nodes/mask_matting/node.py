@@ -816,4 +816,4 @@ class MaskOpsMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskOpsMEC": MaskOpsMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskOpsMEC": "Mask Ops — Seg + Matte + Refine + Diagnose (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskOpsMEC": "Mask + Matting (C2C)"}

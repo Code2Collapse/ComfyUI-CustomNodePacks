@@ -66,8 +66,10 @@ function ensurePanel() {
     if (p) return p;
     p = document.createElement("div");
     p.id = PANEL_ID;
+    // z-index 100000 keeps the × close button clickable above the
+    // "What's Wired" chip (z=99995). top:96 leaves the chip uncovered.
     p.style.cssText =
-        `position:fixed;top:50px;right:12px;width:480px;max-height:78vh;z-index:9985;
+        `position:fixed;top:96px;right:12px;width:480px;max-height:78vh;z-index:100000;
          background:${C.bg};color:${C.fg};border:1px solid ${C.border};border-radius:8px;
          box-shadow:0 12px 40px rgba(0,0,0,0.55);overflow:hidden;
          display:flex;flex-direction:column;

@@ -320,7 +320,9 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
                 detail=f"Node {ntype} (id {nid}) is muted (mode=4).",
                 fix_hint="Right-click the node and unmute if you want it to run."))
 
-        # missing required inputs
+        # missing required inputs — collapsed into ONE finding per node so a
+        # freshly-added node with 8 unwired sockets emits 1 entry, not 8.
+        _missing: list[tuple[str, str]] = []
         for slot_idx, inp in enumerate(n.get("inputs") or []):
             if not isinstance(inp, dict):
                 continue
@@ -331,11 +333,23 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
             if inp.get("widget") is not None:
                 continue
             iname = inp.get("name", f"slot{slot_idx}")
-            findings.append(_finding(
-                "missing_input", node_id=nid, node_type=ntype,
-                detail=f"{ntype}.{iname} has no incoming link.",
-                fix_hint=f"Connect a {inp.get('type', '?')} output into '{iname}'.",
-                title_override=f"Required input '{iname}' is not connected"))
+            itype = str(inp.get("type", "?"))
+            _missing.append((iname, itype))
+        if _missing:
+            if len(_missing) == 1:
+                iname, itype = _missing[0]
+                findings.append(_finding(
+                    "missing_input", node_id=nid, node_type=ntype,
+                    detail=f"{ntype}.{iname} has no incoming link.",
+                    fix_hint=f"Connect a {itype} output into '{iname}'.",
+                    title_override=f"Required input '{iname}' is not connected"))
+            else:
+                names = ", ".join(f"{n_}({t_})" for n_, t_ in _missing)
+                findings.append(_finding(
+                    "missing_input", node_id=nid, node_type=ntype,
+                    detail=f"{ntype} has {len(_missing)} unconnected required inputs: {names}.",
+                    fix_hint="Wire each listed input to a producer of the matching type.",
+                    title_override=f"{len(_missing)} required inputs are not connected"))
 
         # CLIPTextEncode empty
         if ntype.startswith("CLIPTextEncode"):

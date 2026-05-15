@@ -316,6 +316,28 @@ class MaskRefineMEC:
                      "tooltip": "Picks sensible numeric defaults for every enabled stage. "
                                 "Override with `advanced_overrides_json` if needed."},
                 ),
+                "auto_edge_lock": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "Pin the mask to real image edges to stop bleeding into "
+                        "the background. Force-enables guided_filter + edge_snap "
+                        "with parameters tuned by `subject_class`. Recommended "
+                        "for any face / garment / product / hair workflow."
+                    ),
+                }),
+                "subject_class": (
+                    ["general", "face", "hair", "garment", "object", "hard_surface"],
+                    {"default": "general",
+                     "tooltip": (
+                        "Tunes auto_edge_lock for the dominant subject:\n"
+                        "  general     — balanced edge protection\n"
+                        "  face        — tight 2-3 px band, high snap, no morph dilate\n"
+                        "  hair        — thin-recover ON, soft band, low snap\n"
+                        "  garment     — medium band, medium snap, close holes\n"
+                        "  object      — medium band, high snap, fill holes\n"
+                        "  hard_surface— thin band, max snap, threshold > 0.5"),
+                    },
+                ),
 
                 # 11 stage toggles (one widget each — these are the only knobs
                 # most users touch).
@@ -418,10 +440,66 @@ class MaskRefineMEC:
     }
 
     # -----------------------------------------------------------------
+    # Subject-aware edge-lock overlays (only applied when auto_edge_lock=True)
+    # Each entry layers ON TOP of the numeric preset and ALSO force-enables
+    # the stages needed to physically pin the boundary to the image gradient.
+    _SUBJECT_PROFILES = {
+        "general": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True},
+            "cfg":   {"gf_radius": 8,  "gf_epsilon": 1e-4,
+                      "edge_snap_strength": 0.55, "edge_snap_band": 6},
+            "morph": "keep",
+        },
+        "face": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True,
+                      "enable_joint_bilateral": True},
+            "cfg":   {"gf_radius": 6,  "gf_epsilon": 1e-5,
+                      "jb_diameter": 7, "jb_sigma_color": 18.0, "jb_sigma_space": 5.0,
+                      "edge_snap_strength": 0.75, "edge_snap_band": 3,
+                      "feather_sigma_override": 0.6},
+            "morph": "none",   # never dilate a face mask
+        },
+        "hair": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True,
+                      "enable_thin_recover": True},
+            "cfg":   {"gf_radius": 4,  "gf_epsilon": 1e-5,
+                      "thin_threshold": 0.35, "thin_min_branch_len": 4,
+                      "thin_branch_dilate": 1,
+                      "edge_snap_strength": 0.5, "edge_snap_band": 5},
+            "morph": "none",   # preserve thin strands
+        },
+        "garment": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True,
+                      "enable_hole_fill": True},
+            "cfg":   {"gf_radius": 10, "gf_epsilon": 1e-4,
+                      "hole_fill_threshold": 0.5,
+                      "edge_snap_strength": 0.6, "edge_snap_band": 5},
+            "morph": "keep",
+        },
+        "object": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True,
+                      "enable_hole_fill": True},
+            "cfg":   {"gf_radius": 12, "gf_epsilon": 1e-4,
+                      "hole_fill_threshold": 0.5,
+                      "edge_snap_strength": 0.7, "edge_snap_band": 5},
+            "morph": "close_if_none",
+        },
+        "hard_surface": {
+            "force": {"enable_guided_filter": True, "enable_edge_snap": True},
+            "cfg":   {"gf_radius": 6,  "gf_epsilon": 1e-5,
+                      "edge_snap_strength": 0.9, "edge_snap_band": 2,
+                      "threshold_override": 0.5},
+            "morph": "none",
+        },
+    }
+
+    # -----------------------------------------------------------------
     def execute(
         self,
         image, mask,
         preset,
+        auto_edge_lock,
+        subject_class,
         enable_hole_fill,
         morph_op,
         enable_thin_recover,
@@ -446,6 +524,37 @@ class MaskRefineMEC:
                     cfg.update({k: v for k, v in user.items() if k in cfg})
             except Exception as e:
                 log.warning("[MaskRefineMEC] bad advanced_overrides_json: %s", e)
+
+        # Subject-aware edge-lock: force-enable edge-pinning stages and
+        # overlay subject-specific numerics on top of the preset.
+        edge_lock_applied = None
+        if auto_edge_lock:
+            prof = self._SUBJECT_PROFILES.get(subject_class,
+                                              self._SUBJECT_PROFILES["general"])
+            cfg.update(prof["cfg"])
+            for flag, val in prof["force"].items():
+                # force-enable stages
+                if flag == "enable_hole_fill":
+                    enable_hole_fill = bool(val) or enable_hole_fill
+                elif flag == "enable_thin_recover":
+                    enable_thin_recover = bool(val) or enable_thin_recover
+                elif flag == "enable_joint_bilateral":
+                    enable_joint_bilateral = bool(val) or enable_joint_bilateral
+                elif flag == "enable_guided_filter":
+                    enable_guided_filter = bool(val) or enable_guided_filter
+                elif flag == "enable_edge_snap":
+                    enable_edge_snap = bool(val) or enable_edge_snap
+            # Morphology override policy
+            if prof["morph"] == "none":
+                morph_op = "none"
+            elif prof["morph"] == "close_if_none" and morph_op == "none":
+                morph_op = "close"
+            # Optional auto-overrides for feather / threshold
+            if "feather_sigma_override" in cfg and feather_sigma == 0.0:
+                feather_sigma = float(cfg["feather_sigma_override"])
+            if "threshold_override" in cfg and threshold == 0.0:
+                threshold = float(cfg["threshold_override"])
+            edge_lock_applied = subject_class
 
         # Bind locals so the original pipeline body works unchanged.
         hole_fill_threshold = float(cfg["hole_fill_threshold"])
@@ -594,6 +703,7 @@ class MaskRefineMEC:
         info_payload = {
             "ran": ran,
             "skipped": skipped,
+            "auto_edge_lock": edge_lock_applied,
             "deps": {
                 "cv2": _CV2,
                 "cv2.ximgproc": _HAS_XIMG,
@@ -637,4 +747,4 @@ class MaskRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskRefineMEC": MaskRefineMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refine — Unified (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refiner (C2C)"}

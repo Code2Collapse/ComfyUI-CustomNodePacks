@@ -56,6 +56,7 @@ from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
+from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
 # ── MEC Paint Suite (Advanced Paint Canvas + Fixer + Refiner + Builder) ───
 from .nodes.mec_paint_suite import (
@@ -151,6 +152,7 @@ _MEC_MAPPINGS = {
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
     "BatchVersionManagerMEC": BatchVersionManagerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
+    "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
 }
 
 _MEC_DISPLAY = {
@@ -170,6 +172,7 @@ _MEC_DISPLAY = {
     "VAELatentInspectorMEC": "VAE Latent Inspector (C2C)",
     "BatchVersionManagerMEC": "Batch Version Manager (C2C)",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)",
+    "MaskFailureExplainerMEC": "Mask Failure Explainer — Diagnostics (C2C)",
 }
 
 # ── Merge all mappings ────────────────────────────────────────────────
