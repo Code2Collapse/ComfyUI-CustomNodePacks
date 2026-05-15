@@ -150,8 +150,21 @@ class SAM2Segmenter(BaseSegmenter):
                 box=box,
                 multimask_output=True,
             )
-        # pick highest-scoring mask
-        best = int(np.argmax(scores))
+        # Smart pick — when neg points are supplied AND the user enabled
+        # auto_disambiguate (default True), favour the candidate that
+        # excludes them; otherwise fall back to highest score.
+        use_smart = bool(getattr(self, "auto_disambiguate", True))
+        if neg and use_smart:
+            try:
+                from .._auto_quality import smart_pick_sam_mask
+                H, W = image_hwc.shape[:2]
+                best, _details = smart_pick_sam_mask(
+                    masks, scores, list(pos), list(neg), H, W,
+                )
+            except Exception:
+                best = int(np.argmax(scores))
+        else:
+            best = int(np.argmax(scores))
         return masks[best].astype(np.float32), float(scores[best])
 
     def _segment_video(self, frames_bhwc: torch.Tensor, pos, neg, bbox,

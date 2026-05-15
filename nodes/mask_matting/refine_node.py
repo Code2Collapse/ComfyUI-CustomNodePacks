@@ -258,6 +258,162 @@ def _edge_snap(m: np.ndarray, rgb: np.ndarray, strength: float,
     return new.clip(0.0, 1.0)
 
 
+# ── NEW power-user primitives ────────────────────────────────────────
+def _domain_transform(m: np.ndarray, rgb: np.ndarray,
+                       sigma_s: float, sigma_r: float) -> np.ndarray:
+    """Gastal & Oliveira (2011) Domain Transform — RGB-edge-preserving
+    filter. Sharper than guided filter on hair-like fine detail, much
+    faster than DenseCRF. Uses cv2.ximgproc.dtFilter when available."""
+    if not (_CV2 and _HAS_XIMG):
+        return m
+    try:
+        dt = cv2.ximgproc.dtFilter  # type: ignore[attr-defined]
+    except Exception:
+        return m
+    guide = (rgb * 255.0).clip(0, 255).astype(np.uint8)
+    src = m.astype(np.float32)
+    try:
+        return np.clip(dt(guide, src, float(sigma_s), float(sigma_r),
+                          mode=cv2.ximgproc.DTF_RF), 0.0, 1.0)
+    except Exception:
+        return m
+
+
+def _color_decontaminate(m: np.ndarray, rgb: np.ndarray,
+                          band_radius: int = 3,
+                          strength: float = 0.5) -> np.ndarray:
+    """Push the alpha in the thin boundary band toward 0 or 1 based on
+    LAB-distance to the local fg/bg means. Boundary colour cleanup
+    without modifying RGB (since this node returns mask not RGBA)."""
+    if not (_CV2 and _HAS_SCIPY):
+        return m
+    binary = (m > 0.5).astype(np.uint8)
+    if binary.sum() < 5 or (1 - binary).sum() < 5:
+        return m
+    # build band
+    eroded = _ndi.binary_erosion(binary, iterations=band_radius).astype(np.uint8)
+    dilated = _ndi.binary_dilation(binary, iterations=band_radius).astype(np.uint8)
+    band = (dilated & (1 - eroded)).astype(bool)
+    if not band.any():
+        return m
+    lab = cv2.cvtColor((rgb * 255).clip(0, 255).astype(np.uint8),
+                        cv2.COLOR_RGB2LAB).astype(np.float32)
+    fg_pixels = lab[eroded.astype(bool)]
+    bg_pixels = lab[(1 - dilated).astype(bool)]
+    if fg_pixels.size < 9 or bg_pixels.size < 9:
+        return m
+    fg_mu = fg_pixels.mean(axis=0)
+    bg_mu = bg_pixels.mean(axis=0)
+    band_pix = lab[band]
+    d_fg = np.linalg.norm(band_pix - fg_mu[None], axis=1)
+    d_bg = np.linalg.norm(band_pix - bg_mu[None], axis=1)
+    target = (d_bg / (d_fg + d_bg + 1e-6)).astype(np.float32)
+    out = m.copy()
+    out[band] = (1.0 - strength) * m[band] + strength * target
+    return out.clip(0.0, 1.0)
+
+
+def _unsharp_alpha(m: np.ndarray, sigma: float, amount: float) -> np.ndarray:
+    """Alpha sharpening via unsharp mask: α + amount·(α − gauss(α))."""
+    if not _CV2 or sigma <= 0 or amount <= 0:
+        return m
+    blur = cv2.GaussianBlur(m.astype(np.float32), (0, 0), float(sigma))
+    sharp = m + float(amount) * (m - blur)
+    return np.clip(sharp, 0.0, 1.0)
+
+
+def _anti_alias(m: np.ndarray, strength: float = 0.5) -> np.ndarray:
+    """Subpixel boundary smoothing: bilinear up 2× → soft thresh → down."""
+    if not _CV2 or strength <= 0:
+        return m
+    h, w = m.shape
+    big = cv2.resize(m, (w * 2, h * 2), interpolation=cv2.INTER_LINEAR)
+    # soft threshold-like contrast bend that smooths the rampy region
+    big = np.clip((big - 0.5) * (1.0 + strength) + 0.5, 0.0, 1.0)
+    small = cv2.resize(big, (w, h), interpolation=cv2.INTER_AREA)
+    return small.astype(np.float32)
+
+
+def _chroma_lock(m: np.ndarray, rgb: np.ndarray,
+                  strength: float = 0.5, band_radius: int = 5) -> np.ndarray:
+    """When the LAB-luma gradient is flat (similar fg/bg lightness) but
+    LAB-chroma changes, weight the boundary by chroma gradient instead.
+    Helps when fg/bg luminance is identical (e.g. red lipstick on similar
+    red background)."""
+    if not _CV2:
+        return m
+    lab = cv2.cvtColor((rgb * 255).clip(0, 255).astype(np.uint8),
+                        cv2.COLOR_RGB2LAB).astype(np.float32) / 255.0
+    L, A, B = lab[..., 0], lab[..., 1], lab[..., 2]
+    gL = np.hypot(*np.gradient(L))
+    gC = np.hypot(*np.gradient(A)) + np.hypot(*np.gradient(B))
+    gL_n = gL / max(gL.max(), 1e-6)
+    gC_n = gC / max(gC.max(), 1e-6)
+    # weight = strong where chroma > luma gradient
+    chroma_dom = np.clip(gC_n - gL_n, 0.0, 1.0)
+    mgx = np.gradient(m, axis=1)
+    mgy = np.gradient(m, axis=0)
+    mg = np.hypot(mgx, mgy)
+    if _HAS_SCIPY:
+        band = _ndi.binary_dilation(mg > 0.05,
+                                     iterations=int(band_radius)).astype(np.float32)
+    else:
+        band = (mg > 0.05).astype(np.float32)
+    blend = (1.0 - strength) + strength * chroma_dom
+    out = m * (1.0 - band) + (m * blend) * band
+    return out.clip(0.0, 1.0)
+
+
+def _speck_removal(m: np.ndarray, min_area: int = 32,
+                    fill_holes_below: int = 32) -> np.ndarray:
+    """Drop foreground specks below min_area px and fill background holes
+    below fill_holes_below px (small isolated negatives inside the
+    subject)."""
+    if not _HAS_SCIPY:
+        return m
+    binary = (m > 0.5).astype(np.uint8)
+    if binary.sum() < 1:
+        return m
+    labels, n = _ndi.label(binary)
+    keep = np.zeros_like(binary, dtype=bool)
+    for lbl in range(1, n + 1):
+        comp = labels == lbl
+        if comp.sum() >= int(min_area):
+            keep |= comp
+    # holes inside foreground
+    inv = 1 - keep.astype(np.uint8)
+    h_labels, h_n = _ndi.label(inv)
+    for lbl in range(1, h_n + 1):
+        comp = h_labels == lbl
+        # exclude background that touches the image border
+        if (comp[0, :].any() or comp[-1, :].any()
+                or comp[:, 0].any() or comp[:, -1].any()):
+            continue
+        if comp.sum() < int(fill_holes_below):
+            keep |= comp
+    out = m * keep.astype(np.float32)
+    return out.clip(0.0, 1.0)
+
+
+def _temporal_smooth(stack: torch.Tensor, alpha_ema: float = 0.7,
+                      bidirectional: bool = True) -> torch.Tensor:
+    """Per-pixel EMA across the batch dimension. Use only for video.
+    stack: (B,H,W). When bidirectional, runs forward then backward and
+    averages — kills high-freq flicker without lagging the mask."""
+    if stack.shape[0] < 2 or alpha_ema <= 0:
+        return stack
+    a = float(np.clip(alpha_ema, 0.0, 0.99))
+    fwd = stack.clone()
+    for t in range(1, stack.shape[0]):
+        fwd[t] = a * fwd[t - 1] + (1.0 - a) * stack[t]
+    if not bidirectional:
+        return fwd.clamp(0.0, 1.0)
+    bwd = stack.clone()
+    for t in range(stack.shape[0] - 2, -1, -1):
+        bwd[t] = a * bwd[t + 1] + (1.0 - a) * stack[t]
+    return ((fwd + bwd) * 0.5).clamp(0.0, 1.0)
+
+
 def _feather(m: torch.Tensor, sigma: float) -> torch.Tensor:
     if sigma <= 0.0:
         return m
@@ -352,6 +508,32 @@ class MaskRefineMEC:
                 "feather_sigma":          ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1}),
                 "gamma":                  ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0,  "step": 0.05}),
                 "threshold":              ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0,  "step": 0.01}),
+
+                # ── NEW power-user stages ──────────────────────────────
+                "enable_domain_transform": ("BOOLEAN", {"default": False, "tooltip":
+                    "Gastal & Oliveira (2011) Domain Transform RGB-edge "
+                    "filter. Often sharper than guided filter on hair / "
+                    "fine detail; much faster than DenseCRF. Requires "
+                    "opencv-contrib-python (ximgproc)."}),
+                "enable_color_decontaminate": ("BOOLEAN", {"default": False, "tooltip":
+                    "Push alpha in the boundary band toward 0/1 using "
+                    "local LAB-distance to fg/bg means. Fixes 'halo' "
+                    "alpha bleed when bg has similar luminance."}),
+                "enable_unsharp_alpha": ("BOOLEAN", {"default": False, "tooltip":
+                    "Sharpen the soft alpha (α + amount·(α − gauss(α)))."}),
+                "enable_anti_alias": ("BOOLEAN", {"default": False, "tooltip":
+                    "Sub-pixel boundary smoothing (bilinear up 2× → soft "
+                    "contrast → down)."}),
+                "enable_chroma_lock": ("BOOLEAN", {"default": False, "tooltip":
+                    "When fg/bg luminance is similar but chroma differs, "
+                    "weight the boundary by LAB chroma gradient instead "
+                    "of luma. Helps red-on-red, green-on-green, etc."}),
+                "enable_speck_removal": ("BOOLEAN", {"default": False, "tooltip":
+                    "Drop foreground components below `speck_min_area` "
+                    "and fill background holes inside the subject."}),
+                "enable_temporal_smooth": ("BOOLEAN", {"default": False, "tooltip":
+                    "Bidirectional alpha EMA across the batch dim (for "
+                    "VIDEO masks only). Removes flicker without lag."}),
             },
             "optional": {
                 "advanced_overrides_json": ("STRING", {
@@ -364,7 +546,11 @@ class MaskRefineMEC:
                         "thin_threshold, thin_min_branch_len, thin_branch_dilate, "
                         "jb_diameter, jb_sigma_color, jb_sigma_space, gf_radius, "
                         "gf_epsilon, crf_iterations, crf_gauss_sxy, crf_bilateral_sxy, "
-                        "crf_bilateral_srgb, edge_snap_strength, edge_snap_band."
+                        "crf_bilateral_srgb, edge_snap_strength, edge_snap_band, "
+                        "dt_sigma_s, dt_sigma_r, decontam_band, decontam_strength, "
+                        "unsharp_sigma, unsharp_amount, anti_alias_strength, "
+                        "chroma_lock_strength, chroma_lock_band, speck_min_area, "
+                        "speck_fill_holes_below, temporal_alpha, temporal_bidi."
                     ),
                 }),
                 "enable_integrity_check": ("BOOLEAN", {
@@ -386,6 +572,17 @@ class MaskRefineMEC:
         }
 
     # ── Preset table (used to populate stage numerics) ────────────────
+    # Defaults for the new power-user stages — same for every preset
+    # unless a preset overrides them below.
+    _NEW_STAGE_DEFAULTS = {
+        "dt_sigma_s": 30.0, "dt_sigma_r": 0.10,
+        "decontam_band": 3, "decontam_strength": 0.5,
+        "unsharp_sigma": 1.0, "unsharp_amount": 0.5,
+        "anti_alias_strength": 0.5,
+        "chroma_lock_strength": 0.5, "chroma_lock_band": 5,
+        "speck_min_area": 32, "speck_fill_holes_below": 32,
+        "temporal_alpha": 0.7, "temporal_bidi": True,
+    }
     _PRESETS = {
         "balanced": {
             "hole_fill_threshold": 0.5,
@@ -509,6 +706,13 @@ class MaskRefineMEC:
         enable_edge_snap,
         cascade_passes,
         feather_sigma, gamma, threshold,
+        enable_domain_transform=False,
+        enable_color_decontaminate=False,
+        enable_unsharp_alpha=False,
+        enable_anti_alias=False,
+        enable_chroma_lock=False,
+        enable_speck_removal=False,
+        enable_temporal_smooth=False,
         advanced_overrides_json="",
         enable_integrity_check: bool = False,
         integrity_drop_threshold: float = 0.40,
@@ -516,6 +720,9 @@ class MaskRefineMEC:
     ):
         # Resolve preset → numerics, then layer JSON overrides on top.
         cfg = dict(self._PRESETS.get(preset, self._PRESETS["balanced"]))
+        # New power-user stage defaults (presets can override per-key below)
+        for _k, _v in self._NEW_STAGE_DEFAULTS.items():
+            cfg.setdefault(_k, _v)
         if advanced_overrides_json and advanced_overrides_json.strip():
             try:
                 import json as _json
@@ -675,9 +882,80 @@ class MaskRefineMEC:
                 if b == 0 and cp == 0:
                     ran.append(f"cascade_x{int(cascade_passes)}")
 
+            # 8a. NEW: Domain Transform (sharper than guided on hair)
+            if enable_domain_transform:
+                if _CV2 and _HAS_XIMG:
+                    m = _domain_transform(m, rgb,
+                                           float(cfg["dt_sigma_s"]),
+                                           float(cfg["dt_sigma_r"]))
+                    if b == 0:
+                        ran.append("domain_transform")
+                elif b == 0:
+                    skipped.append("domain_transform(missing:cv2.ximgproc)")
+
+            # 8b. NEW: colour decontamination at boundary
+            if enable_color_decontaminate:
+                if _CV2 and _HAS_SCIPY:
+                    m = _color_decontaminate(m, rgb,
+                                              int(cfg["decontam_band"]),
+                                              float(cfg["decontam_strength"]))
+                    if b == 0:
+                        ran.append("color_decontaminate")
+                elif b == 0:
+                    skipped.append("color_decontaminate(missing:cv2/scipy)")
+
+            # 8c. NEW: speck / hole cleanup
+            if enable_speck_removal:
+                if _HAS_SCIPY:
+                    m = _speck_removal(m,
+                                        int(cfg["speck_min_area"]),
+                                        int(cfg["speck_fill_holes_below"]))
+                    if b == 0:
+                        ran.append("speck_removal")
+                elif b == 0:
+                    skipped.append("speck_removal(missing:scipy)")
+
+            # 8d. NEW: chroma-gradient edge lock
+            if enable_chroma_lock:
+                if _CV2:
+                    m = _chroma_lock(m, rgb,
+                                      float(cfg["chroma_lock_strength"]),
+                                      int(cfg["chroma_lock_band"]))
+                    if b == 0:
+                        ran.append("chroma_lock")
+                elif b == 0:
+                    skipped.append("chroma_lock(missing:cv2)")
+
+            # 8e. NEW: alpha unsharp
+            if enable_unsharp_alpha:
+                if _CV2:
+                    m = _unsharp_alpha(m,
+                                        float(cfg["unsharp_sigma"]),
+                                        float(cfg["unsharp_amount"]))
+                    if b == 0:
+                        ran.append("unsharp_alpha")
+                elif b == 0:
+                    skipped.append("unsharp_alpha(missing:cv2)")
+
+            # 8f. NEW: subpixel anti-alias
+            if enable_anti_alias:
+                if _CV2:
+                    m = _anti_alias(m, float(cfg["anti_alias_strength"]))
+                    if b == 0:
+                        ran.append("anti_alias")
+                elif b == 0:
+                    skipped.append("anti_alias(missing:cv2)")
+
             out_np[b] = m
 
         out_t = torch.from_numpy(out_np).to(m_t.device, dtype=torch.float32)
+
+        # 8g. NEW: temporal EMA across batch (video flicker)
+        if enable_temporal_smooth and out_t.shape[0] > 1:
+            out_t = _temporal_smooth(out_t,
+                                      float(cfg["temporal_alpha"]),
+                                      bool(cfg["temporal_bidi"]))
+            ran.append(f"temporal_smooth(a={float(cfg['temporal_alpha']):.2f})")
 
         # 9. feather (torch, batched)
         if feather_sigma > 0:

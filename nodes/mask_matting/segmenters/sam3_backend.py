@@ -74,7 +74,18 @@ class SAM3Segmenter(BaseSegmenter):
                 if _text:
                     kw["text"] = _text
                 m, sc, _ = self._predictor.predict(**kw)
-                best = int(np.argmax(sc))
+                use_smart = bool(getattr(self, "auto_disambiguate", True))
+                if _neg and use_smart:
+                    try:
+                        from .._auto_quality import smart_pick_sam_mask
+                        H, W = frame_hwc.shape[:2]
+                        best, _ = smart_pick_sam_mask(
+                            m, sc, list(_pos), list(_neg), H, W,
+                        )
+                    except Exception:
+                        best = int(np.argmax(sc))
+                else:
+                    best = int(np.argmax(sc))
                 return m[best].astype(np.float32), float(sc[best])
 
             # Positive pass.

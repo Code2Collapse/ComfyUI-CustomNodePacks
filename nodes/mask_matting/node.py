@@ -56,11 +56,6 @@ def _get_trimap_advanced():
     return TrimapGeneratorMEC()
 
 
-def _get_refiner():
-    from .refine_node import MaskRefineMEC
-    return MaskRefineMEC()
-
-
 def _get_explainer():
     from ..mask_failure_explainer import MaskFailureExplainerMEC
     return MaskFailureExplainerMEC()
@@ -185,23 +180,29 @@ class MaskOpsMEC:
     ViTMatte / RVM). The node auto-detects the prompt mode from the
     inputs you actually wire — points, bbox, text, or video — and routes
     them through the chosen backend. Optional pre-stage luminance key,
-    advanced edge-aware trimap, 11-stage training-free refinement, and
-    automatic failure diagnostics are bolted into the same node, so the
-    entire mask-creation pipeline lives behind one socket.
+    advanced edge-aware trimap, automatic quality-handling (CLAHE /
+    unsharp / denoise / chroma stretch for hard images + guided-filter
+    alpha polish), and automatic failure diagnostics are bolted into
+    the same node, so the entire mask-creation pipeline lives behind
+    one socket. For manual 11-stage refinement, chain MaskRefineMEC
+    downstream.
     """
 
     CATEGORY = "MaskEditControl/Pipeline"
     DESCRIPTION = (
-        "Production-grade segmentation + matting + refine + diagnostics in "
-        "one node. Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / "
-        "RMBG-2.0 / InSPyReNet + ViTMatte / RVM / MatAnyone). Optional "
-        "Nuke-style luma-key pre-stage, edge-aware trimap, 11-stage "
-        "training-free mask refinement (hole-fill → morph → thin-recover → "
-        "joint-bilateral → guided → DenseCRF → edge-snap → cascade → "
-        "feather → gamma → threshold), and automatic mask-failure "
-        "diagnostics with severity score + suggested method. Replaces "
-        "the standalone MaskMattingMEC, MaskRefineMEC, TrimapGeneratorMEC, "
-        "LuminanceKeyerMEC, and MaskFailureExplainerMEC nodes."
+        "Production-grade segmentation + matting + AUTO-QUALITY + "
+        "diagnostics in one node. Multi-backend (SAM 2.1 / SAM 3 / "
+        "SAM 3.1 / BiRefNet / RMBG-2.0 / InSPyReNet + ViTMatte / RVM "
+        "/ MatAnyone). Optional Nuke-style luma-key pre-stage, edge-"
+        "aware trimap, and AUTO-QUALITY pipeline that detects motion "
+        "blur, low light, low contrast, speckle noise and similar bg/"
+        "fg, then applies just-enough pre-processing before the "
+        "segmenter and a light guided-filter polish on the alpha — no "
+        "knobs to tune. When you supply pos+neg points (e.g. pos on "
+        "face, neg on neck) it picks the SAM candidate that excludes "
+        "the neg points, so you get the face only, not the whole "
+        "person. For manual 11-stage refinement (hole-fill, joint "
+        "bilateral, DenseCRF, etc.) chain MaskRefineMEC downstream."
     )
     FUNCTION = "execute"
     RETURN_TYPES = (
@@ -308,35 +309,27 @@ class MaskOpsMEC:
                 "trimap_smooth": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.5}),
                 "trimap_threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
 
-                # ── 11-stage training-free refinement ───────────────────
-                "enable_refine": ("BOOLEAN", {"default": False, "tooltip": "Run the unified 11-stage refinement pipeline on the alpha after matting."}),
-                "refine_hole_fill": ("BOOLEAN", {"default": False, "tooltip": "Stage 1: scipy.binary_fill_holes on the binarised alpha."}),
-                "refine_hole_fill_thresh": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 0.95, "step": 0.05}),
-                "refine_morph_op": (["none", "close", "open", "dilate", "erode"], {"default": "none", "tooltip": "Stage 2: morphology with a circular SE."}),
-                "refine_morph_radius": ("INT", {"default": 3, "min": 1, "max": 64}),
-                "refine_thin_recover": ("BOOLEAN", {"default": False, "tooltip": "Stage 3: skeletonize+keep-long-branches+dilate to re-inject hair/wire."}),
-                "refine_thin_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 0.95, "step": 0.05}),
-                "refine_thin_min_branch_len": ("INT", {"default": 8, "min": 1, "max": 256}),
-                "refine_thin_branch_dilate": ("INT", {"default": 2, "min": 1, "max": 16}),
-                "refine_joint_bilateral": ("BOOLEAN", {"default": False, "tooltip": "Stage 4: cv2.ximgproc joint bilateral (RGB guide)."}),
-                "refine_jb_diameter": ("INT", {"default": 9, "min": 3, "max": 31}),
-                "refine_jb_sigma_color": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-                "refine_jb_sigma_space": ("FLOAT", {"default": 7.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-                "refine_guided_filter": ("BOOLEAN", {"default": True, "tooltip": "Stage 5: He et al. guided filter (torch, always available)."}),
-                "refine_gf_radius": ("INT", {"default": 8, "min": 1, "max": 64}),
-                "refine_gf_epsilon": ("FLOAT", {"default": 0.0001, "min": 1e-6, "max": 0.1, "step": 1e-5}),
-                "refine_dense_crf": ("BOOLEAN", {"default": False, "tooltip": "Stage 6: DenseCRF (requires pydensecrf)."}),
-                "refine_crf_iterations": ("INT", {"default": 5, "min": 1, "max": 30}),
-                "refine_crf_gauss_sxy": ("FLOAT", {"default": 3.0, "min": 0.1, "max": 50.0, "step": 0.1}),
-                "refine_crf_bilateral_sxy": ("FLOAT", {"default": 50.0, "min": 1.0, "max": 200.0, "step": 1.0}),
-                "refine_crf_bilateral_srgb": ("FLOAT", {"default": 13.0, "min": 1.0, "max": 100.0, "step": 0.5}),
-                "refine_edge_snap": ("BOOLEAN", {"default": False, "tooltip": "Stage 7: modulate mask boundary by RGB gradient magnitude."}),
-                "refine_edge_snap_strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "refine_edge_snap_band": ("INT", {"default": 6, "min": 1, "max": 32}),
-                "refine_cascade_passes": ("INT", {"default": 0, "min": 0, "max": 5, "tooltip": "Stage 8: CascadePSP-style repeats with shrinking radii."}),
-                "refine_feather_sigma": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 20.0, "step": 0.1, "tooltip": "Stage 9: Gaussian blur on the soft alpha."}),
-                "refine_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 5.0, "step": 0.05, "tooltip": "Stage 10: pow curve on the soft alpha."}),
-                "refine_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Stage 11: hard binarise at this value (0 = keep soft)."}),
+                # ── Auto-Quality (zero-knob hard-case handling) ─────────
+                # Replaces the old 25-widget refine cluster.  Power users
+                # who want manual refinement should chain MaskRefineMEC.
+                "auto_quality": ("BOOLEAN", {"default": True, "tooltip":
+                    "AUTOMATIC robustness for hard images. Detects motion "
+                    "blur, low light, low contrast, speckle noise and "
+                    "low bg/fg colour separation, then applies just-enough "
+                    "pre-processing (CLAHE, unsharp, NL-means, chroma "
+                    "stretch) BEFORE the segmenter, and a light guided-"
+                    "filter+edge-snap polish on the alpha. No knobs."}),
+                "auto_disambiguate": ("BOOLEAN", {"default": True, "tooltip":
+                    "When BOTH positive and negative points are supplied, "
+                    "score SAM's 3 candidate masks by (pos-coverage − "
+                    "neg-coverage − size-penalty) instead of raw score. "
+                    "This is what makes `pos=face, neg=neck` return just "
+                    "the face, not the whole person."}),
+                "quality_mode": (["fast", "balanced", "max_fidelity"],
+                    {"default": "balanced", "tooltip":
+                        "Strength of auto_quality pre/post processing. "
+                        "fast = mild, balanced = default, max_fidelity = "
+                        "NL-means denoise + larger guided filter."}),
 
                 # ── Failure diagnostics ─────────────────────────────────
                 "enable_diagnose": ("BOOLEAN", {"default": True, "tooltip": "Run automatic mask-failure diagnostics (severity score + suggested method)."}),
@@ -408,21 +401,9 @@ class MaskOpsMEC:
                 enable_advanced_trimap=False,
                 trimap_inner_scale=1.0, trimap_outer_scale=1.5,
                 trimap_smooth=0.0, trimap_threshold=0.5,
-                # NEW: refine pipeline
-                enable_refine=False,
-                refine_hole_fill=False, refine_hole_fill_thresh=0.5,
-                refine_morph_op="none", refine_morph_radius=3,
-                refine_thin_recover=False, refine_thin_threshold=0.5,
-                refine_thin_min_branch_len=8, refine_thin_branch_dilate=2,
-                refine_joint_bilateral=False, refine_jb_diameter=9,
-                refine_jb_sigma_color=25.0, refine_jb_sigma_space=7.0,
-                refine_guided_filter=True, refine_gf_radius=8, refine_gf_epsilon=0.0001,
-                refine_dense_crf=False, refine_crf_iterations=5,
-                refine_crf_gauss_sxy=3.0, refine_crf_bilateral_sxy=50.0,
-                refine_crf_bilateral_srgb=13.0,
-                refine_edge_snap=False, refine_edge_snap_strength=0.5,
-                refine_edge_snap_band=6, refine_cascade_passes=0,
-                refine_feather_sigma=0.0, refine_gamma=1.0, refine_threshold=0.0,
+                # NEW: auto-quality (replaces the old refine_* cluster)
+                auto_quality=True, auto_disambiguate=True,
+                quality_mode="balanced",
                 # NEW: diagnose
                 enable_diagnose=True, diag_ring_width=5,
                 diag_blur_threshold=50.0, diag_brightness_threshold=0.15,
@@ -453,6 +434,30 @@ class MaskOpsMEC:
         try:
             img_bhwc = to_bhwc(image)
             B, H, W, _ = img_bhwc.shape
+
+            # ── Auto-Quality: detect hard-case issues + preprocess ─────
+            # Original `img_bhwc` is preserved for matting + preview;
+            # only the segmenter sees the cleaned copy.
+            auto_q_info: Dict[str, Any] = {"enabled": bool(auto_quality)}
+            seg_image = img_bhwc
+            if bool(auto_quality):
+                try:
+                    from ._auto_quality import (
+                        analyze_image as _analyze,
+                        preprocess_for_segmentation as _preproc,
+                    )
+                    issues = _analyze(img_bhwc)
+                    seg_image, pre_steps = _preproc(
+                        img_bhwc, issues, quality_mode=quality_mode,
+                    )
+                    auto_q_info.update({
+                        "issues": issues,
+                        "pre_steps": pre_steps,
+                        "mode": quality_mode,
+                    })
+                except Exception as _e:
+                    logger.warning("[MaskOps] auto preprocess failed: %s", _e)
+                    seg_image = img_bhwc
 
             # ── Luma-key pre-stage ────────────────────────────────────
             luma_mask_t: Optional[torch.Tensor] = None
@@ -517,6 +522,12 @@ class MaskOpsMEC:
                 device=device, precision=precision,
                 attention=attention, offload=offload,
             )
+            # Tell the backend whether to use smart pos/neg disambiguation
+            # when SAM returns multiple candidate masks.
+            try:
+                setattr(seg_inst, "auto_disambiguate", bool(auto_disambiguate))
+            except Exception:
+                pass
 
             def _segment_once(img_in: torch.Tensor) -> torch.Tensor:
                 out = seg_inst.segment(
@@ -534,7 +545,7 @@ class MaskOpsMEC:
 
             # First pass — also captures score metadata.
             seg_out = seg_inst.segment(
-                img_bhwc, mode=mode,
+                seg_image, mode=mode,
                 positive_points=pos_pts, negative_points=neg_pts,
                 bbox=bbox_used, neg_bbox=neg_bbox_used,
                 text_prompt=text_prompt,
@@ -550,13 +561,13 @@ class MaskOpsMEC:
             # Optional ensembling — fuse first pass with augmented passes.
             if bool(multiscale) and bool(tta_flip):
                 fused = _vfx.multiscale_fuse(
-                    img_bhwc, lambda x: _vfx.tta_flip_fuse(x, _segment_once))
+                    seg_image, lambda x: _vfx.tta_flip_fuse(x, _segment_once))
                 mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
             elif bool(tta_flip):
-                fused = _vfx.tta_flip_fuse(img_bhwc, _segment_once)
+                fused = _vfx.tta_flip_fuse(seg_image, _segment_once)
                 mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
             elif bool(multiscale):
-                fused = _vfx.multiscale_fuse(img_bhwc, _segment_once)
+                fused = _vfx.multiscale_fuse(seg_image, _segment_once)
                 mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
             logger.warning("[MaskMatting] seg done \u2014 mask sum=%.1f score=%.3f shape=%s",
                            float(mask_t.sum()), score, tuple(mask_t.shape))
@@ -625,46 +636,19 @@ class MaskOpsMEC:
                 alpha_t = _vfx.crf_refine(
                     img_bhwc.to(alpha_t.device), alpha_t,
                     iterations=int(refine_iterations))
-            # 1.5. NEW: 11-stage training-free refinement pipeline.
-            refine_info_json: str = ""
-            if bool(enable_refine):
+            # 1.5. AUTO-QUALITY post-matting polish (replaces the
+            # old 25-widget refine cluster).  Power users who want a
+            # full 11-stage refinement chain should connect a
+            # MaskRefineMEC node downstream.
+            auto_q_steps_post: list = []
+            if bool(auto_quality):
                 try:
-                    refiner = _get_refiner()
-                    r_mask, r_alpha, _r_preview, r_info = refiner.execute(
-                        img_bhwc, alpha_t,
-                        enable_hole_fill=bool(refine_hole_fill),
-                        hole_fill_threshold=float(refine_hole_fill_thresh),
-                        morph_op=refine_morph_op,
-                        morph_radius=int(refine_morph_radius),
-                        enable_thin_recover=bool(refine_thin_recover),
-                        thin_threshold=float(refine_thin_threshold),
-                        thin_min_branch_len=int(refine_thin_min_branch_len),
-                        thin_branch_dilate=int(refine_thin_branch_dilate),
-                        enable_joint_bilateral=bool(refine_joint_bilateral),
-                        jb_diameter=int(refine_jb_diameter),
-                        jb_sigma_color=float(refine_jb_sigma_color),
-                        jb_sigma_space=float(refine_jb_sigma_space),
-                        enable_guided_filter=bool(refine_guided_filter),
-                        gf_radius=int(refine_gf_radius),
-                        gf_epsilon=float(refine_gf_epsilon),
-                        enable_dense_crf=bool(refine_dense_crf),
-                        crf_iterations=int(refine_crf_iterations),
-                        crf_gauss_sxy=float(refine_crf_gauss_sxy),
-                        crf_bilateral_sxy=float(refine_crf_bilateral_sxy),
-                        crf_bilateral_srgb=float(refine_crf_bilateral_srgb),
-                        enable_edge_snap=bool(refine_edge_snap),
-                        edge_snap_strength=float(refine_edge_snap_strength),
-                        edge_snap_band=int(refine_edge_snap_band),
-                        cascade_passes=int(refine_cascade_passes),
-                        feather_sigma=float(refine_feather_sigma),
-                        gamma=float(refine_gamma),
-                        threshold=float(refine_threshold),
-                    )
-                    # Soft alpha from the refiner.
-                    alpha_t = r_alpha.to(alpha_t.device).float().clamp(0, 1)
-                    refine_info_json = r_info
+                    from ._auto_quality import polish_alpha as _polish
+                    alpha_t = _polish(img_bhwc, alpha_t,
+                                       quality_mode=quality_mode)
+                    auto_q_steps_post.append(f"polish({quality_mode})")
                 except Exception as _e:
-                    logger.warning("[MaskOps] refine pipeline failed: %s", _e)
+                    logger.warning("[MaskOps] auto polish failed: %s", _e)
             # 1.6. Luma-key combine (intersect/union/replace post-segmentation).
             if luma_mask_t is not None and luma_mix in ("intersect", "union", "replace"):
                 lm = luma_mask_t.to(alpha_t.device).float().clamp(0, 1)
@@ -774,8 +758,13 @@ class MaskOpsMEC:
                     "mix": luma_mix,
                 },
                 "refine": {
-                    "enabled": bool(enable_refine),
-                    "info": refine_info_json,
+                    "enabled": False,
+                    "note": "11-stage refinement now lives in MaskRefineMEC; chain it downstream for power-user tweaking.",
+                },
+                "auto_quality": {
+                    **auto_q_info,
+                    "post_steps": auto_q_steps_post,
+                    "disambiguate": bool(auto_disambiguate),
                 },
                 "diagnose": {
                     "enabled": bool(enable_diagnose),
