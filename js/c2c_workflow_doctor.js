@@ -11,6 +11,7 @@
  *     into /c2c/ai/stream with feature="workflow_doctor".
  */
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 
 const BTN_ID = "c2c-doctor-btn";
 const PANEL_ID = "c2c-doctor-panel";
@@ -24,7 +25,10 @@ const SEV_COLOR = { error: C.red, warning: C.yellow, info: C.blue };
 const SEV_ICON = { error: "✖", warning: "⚠", info: "ℹ" };
 
 function focusNode(nid) {
-    const n = app.graph?.getNodeById?.(nid);
+    // Subgraph-aware: nid may be inside a nested subgraph the root
+    // graph cannot find directly.
+    const resolved = findNodeAnywhere(nid);
+    const n = resolved?.node || app.graph?.getNodeById?.(nid);
     if (!n) return;
     app.canvas?.deselectAllNodes?.();
     app.canvas?.selectNode?.(n);

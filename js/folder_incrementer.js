@@ -31,6 +31,13 @@ app.registerExtension({
     nodeCreated(node) {
         if (node.comfyClass !== "FolderIncrementer") return;
 
+        // Subgraph-aware graph accessor: when this node lives inside a
+        // SubgraphNode wrapper, all of its links and siblings are in
+        // node.graph (the inner LGraph), NOT in app.graph (the root).
+        // Every helper below uses G() instead of app.graph for that
+        // reason.
+        const G = () => node.graph || app.graph;
+
         // Widget names commonly used by ComfyUI loaders to hold the
         // filename of the file they read.  Order matters: most-specific
         // first.  LoadImage uses "image", LoadVideo uses "video",
@@ -73,7 +80,7 @@ app.registerExtension({
             if (!busName) return [];
 
             const results = [];
-            const allNodes = app.graph._nodes || app.graph.nodes || [];
+            const allNodes = G()._nodes || G().nodes || [];
             for (const n of allNodes) {
                 if (n.id === getNode.id) continue;
                 const title = (n.title || "").toLowerCase();
@@ -107,9 +114,9 @@ app.registerExtension({
             if (!n?.inputs) return null;
             for (const inp of n.inputs) {
                 if (inp.link == null) continue;
-                const link = app.graph.links[inp.link];
+                const link = G().links[inp.link];
                 if (!link) continue;
-                return app.graph.getNodeById(link.origin_id) || null;
+                return G().getNodeById(link.origin_id) || null;
             }
             return null;
         }
@@ -175,9 +182,9 @@ app.registerExtension({
                 if (current.inputs) {
                     for (const inp of current.inputs) {
                         if (inp.link == null) continue;
-                        const link = app.graph.links[inp.link];
+                        const link = G().links[inp.link];
                         if (!link) continue;
-                        const upstream = app.graph.getNodeById(link.origin_id);
+                        const upstream = G().getNodeById(link.origin_id);
                         if (upstream && !visited.has(upstream.id)) {
                             queue.push(upstream);
                         }
@@ -195,9 +202,9 @@ app.registerExtension({
         function getSourceNodeFromInput(inputName) {
             const inp = findInput(inputName);
             if (!inp || inp.link == null) return null;
-            const linkInfo = app.graph.links[inp.link];
+            const linkInfo = G().links[inp.link];
             if (!linkInfo) return null;
-            return app.graph.getNodeById(linkInfo.origin_id) || null;
+            return G().getNodeById(linkInfo.origin_id) || null;
         }
 
         function getSourceChoice() {
@@ -338,9 +345,9 @@ app.registerExtension({
                 for (const inp of node.inputs) {
                     if (namedInputs.has(inp.name)) continue;
                     if (inp.link == null) continue;
-                    const linkInfo = app.graph.links[inp.link];
+                    const linkInfo = G().links[inp.link];
                     if (!linkInfo) continue;
-                    const src = app.graph.getNodeById(linkInfo.origin_id);
+                    const src = G().getNodeById(linkInfo.origin_id);
                     if (!src) continue;
                     const fn = findFilenameFromChain(src);
                     if (fn) {
@@ -350,7 +357,7 @@ app.registerExtension({
             }
 
             // ── Global fallback: scan every loader in the graph ──────
-            const allNodes = app.graph._nodes || app.graph.nodes || [];
+            const allNodes = G()._nodes || G().nodes || [];
             const candidates = [];
             for (const n of allNodes) {
                 if (!isInputLoader(n)) continue;
@@ -432,7 +439,7 @@ app.registerExtension({
             const el = w._el;
             if (el && el.textContent !== text) {
                 el.textContent = text;
-                app.graph.setDirtyCanvas(true);
+                G().setDirtyCanvas(true);
             }
         }
 
@@ -457,7 +464,7 @@ app.registerExtension({
                           : result.mode === "custom" ? "\u270D\uFE0F"  // hand-writing for custom
                                                      : "\uD83D\uDCC4"; // page for trigger
                 setStatus(`${tag} ${preview}${sfxLabel}`);
-                app.graph.setDirtyCanvas(true);
+                G().setDirtyCanvas(true);
             } else {
                 const manual = sfWidget?.value && sfWidget.value.trim();
                 if (manual) {
@@ -532,7 +539,8 @@ app.registerExtension({
         if (node._fiPollTimer) clearInterval(node._fiPollTimer);
         node._fiPollTimer = setInterval(() => {
             // Stop polling if the node is gone from the graph
-            const stillThere = (app.graph._nodes || app.graph.nodes || [])
+            const g = G();
+            const stillThere = (g._nodes || g.nodes || [])
                 .some(n => n.id === node.id);
             if (!stillThere) {
                 clearInterval(node._fiPollTimer);

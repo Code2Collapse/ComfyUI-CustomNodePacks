@@ -31,12 +31,20 @@
 //
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
 
 const SETTINGS = {
     enabled: true,
     eta: true,
     title_pct: true,
 };
+
+// Per-node WeakMap so lookups inside onDrawForeground are O(1) and don't
+// depend on whether the user is currently viewing the root graph or a
+// subgraph interior. Each entry is the same shape as the legacy
+// PROGRESS map, plus an optional `bubble` flag set on ancestor wrapper
+// SubgraphNodes so the bar shows up on the wrapper too.
+const PROGRESS_BY_NODE = new WeakMap();
 
 // node_id (string) -> {
 //   value, max,                       // latest progress
@@ -66,6 +74,22 @@ function _record(id, value, max) {
     p.last_ts = t;
     p.samples.push({ ts: t, value });
     if (p.samples.length > SAMPLE_WINDOW) p.samples.shift();
+
+    // Mirror into the per-node WeakMap so the draw hook can find this
+    // entry regardless of which graph (root or subgraph) is being
+    // rendered. Also project a "bubble" entry onto every ancestor
+    // SubgraphNode wrapper so the user sees progress on the wrapper
+    // when they are at the parent level.
+    const resolved = findNodeAnywhere(id);
+    if (resolved) {
+        PROGRESS_BY_NODE.set(resolved.node, p);
+        for (const wrapper of resolved.wrapperChain) {
+            // Use the same progress object reference so updates are
+            // shared, but tag a property so the draw code can render a
+            // subtler indicator on the wrapper.
+            PROGRESS_BY_NODE.set(wrapper, p);
+        }
+    }
 }
 
 function _rate(p) {
@@ -121,14 +145,17 @@ function _apply_title_prefix(node, pct) {
 }
 
 function _clear_title_prefix(node_id) {
-    const g = app.graph;
-    if (!g) return;
-    const node = g.getNodeById?.(Number(node_id)) || null;
-    if (!node) { ORIG_TITLES.delete(node_id); return; }
+    const resolved = findNodeAnywhere(node_id);
+    if (!resolved) { ORIG_TITLES.delete(node_id); return; }
     if (ORIG_TITLES.has(node_id)) {
-        node.title = ORIG_TITLES.get(node_id);
+        resolved.node.title = ORIG_TITLES.get(node_id);
         ORIG_TITLES.delete(node_id);
     }
+    // Also clear any wrapper-chain entries that may have been mirrored.
+    for (const wrapper of resolved.wrapperChain) {
+        if (PROGRESS_BY_NODE.has(wrapper)) PROGRESS_BY_NODE.delete(wrapper);
+    }
+    if (resolved.node) PROGRESS_BY_NODE.delete(resolved.node);
 }
 
 function _clear_all_title_prefixes() {
@@ -143,7 +170,7 @@ api.addEventListener("progress", (ev) => {
     const id = String(d.node ?? d.node_id ?? EXEC_NODE ?? "");
     if (!id) return;
     _record(id, +d.value, +d.max || 1);
-    if (app.graph) app.graph.setDirtyCanvas(true, true);
+    dirtyAllGraphs();
 });
 
 api.addEventListener("executing", (ev) => {
@@ -154,7 +181,7 @@ api.addEventListener("executing", (ev) => {
         // Workflow finished — clear overlays + title prefixes.
         PROGRESS.clear();
         _clear_all_title_prefixes();
-        if (app.graph) app.graph.setDirtyCanvas(true, true);
+        dirtyAllGraphs();
     }
 });
 
@@ -165,13 +192,13 @@ api.addEventListener("executed", (ev) => {
         PROGRESS.delete(id);
         _clear_title_prefix(id);
     }
-    if (app.graph) app.graph.setDirtyCanvas(true, true);
+    dirtyAllGraphs();
 });
 
 api.addEventListener("execution_error", () => {
     PROGRESS.clear();
     _clear_all_title_prefixes();
-    if (app.graph) app.graph.setDirtyCanvas(true, true);
+    dirtyAllGraphs();
 });
 
 // Drive a steady redraw while ≥1 node is in progress so smoothing + ETA
@@ -188,7 +215,7 @@ function _animate_loop() {
         if (Math.abs(diff) > 0.01) p.smoothed += diff * 0.18;
         else p.smoothed = target;
     }
-    if (app.graph) app.graph.setDirtyCanvas(true, true);
+    dirtyAllGraphs();
     _raf_handle = requestAnimationFrame(_animate_loop);
 }
 function _ensure_anim() {
@@ -232,8 +259,9 @@ app.registerExtension({
             if (origDrawFg) origDrawFg.apply(this, arguments);
             if (!SETTINGS.enabled) return;
             if (this.flags?.collapsed) return;
-            const id = String(this.id);
-            const p = PROGRESS.get(id);
+            // Per-node WeakMap lookup works for top-level AND subgraph
+            // children AND wrapper SubgraphNodes (mirrored on record).
+            const p = PROGRESS_BY_NODE.get(this);
             if (!p) return;
             const v = (p.smoothed > 0 ? p.smoothed : p.value);
             const pct = Math.max(0, Math.min(100, (v / p.max) * 100));

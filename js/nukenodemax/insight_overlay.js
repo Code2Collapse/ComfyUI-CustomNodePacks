@@ -11,6 +11,7 @@
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { findNodeAnywhere } from "../_subgraph_walk.js";
 
 const STATE = {
     nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, cpu_ms, ram_delta_mb, error?}
@@ -52,7 +53,10 @@ function fmtMb(v) {
 function refresh() {
     if (!app.graph) return;
     for (const [id, info] of STATE.nodes.entries()) {
-        const node = app.graph._nodes_by_id?.[id];
+        // Subgraph-aware: id may be composite ("7:5") or live inside a
+        // SubgraphNode the root graph cannot see.
+        const resolved = findNodeAnywhere(id);
+        const node = resolved?.node || app.graph._nodes_by_id?.[id];
         if (!node) continue;
         const badge = ensureBadge(id);
         if (!badge) continue;

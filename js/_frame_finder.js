@@ -16,20 +16,26 @@
 
 import { app } from "../../scripts/app.js";
 
-function _ancestorsOf(startId, maxDepth = 32) {
+// All graph traversal uses an explicit `graph` argument (the LGraph the
+// caller's node lives in). This is critical for subgraph support: when
+// the consuming node is placed inside a SubgraphNode, `node.graph` is
+// the *inner* LGraph, not `app.graph`. Using `app.graph` blindly would
+// fail to find any of the upstream image/video producers.
+
+function _ancestorsOf(graph, startId, maxDepth = 32) {
     const out = new Set();
-    if (startId == null) return out;
+    if (startId == null || !graph) return out;
     const queue = [{ id: startId, depth: 0 }];
     while (queue.length) {
         const { id, depth } = queue.shift();
         if (id == null || out.has(id)) continue;
         out.add(id);
         if (depth >= maxDepth) continue;
-        const n = app.graph.getNodeById(id);
+        const n = graph.getNodeById?.(id);
         if (!n?.inputs) continue;
         for (const inp of n.inputs) {
             if (inp.link == null) continue;
-            const li = app.graph.links[inp.link];
+            const li = graph.links?.[inp.link];
             if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
         }
     }
@@ -69,7 +75,11 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
     if (!node.inputs) return [];
     const inp = node.inputs.find(i => i.name === "image" && i.link != null);
     if (!inp) return [];
-    const directLink = app.graph.links[inp.link];
+    // CRITICAL: use the node's own graph, NOT app.graph. When this
+    // node is inside a subgraph, its links/nodes live in the inner
+    // LGraph; app.graph is the root and won't find them.
+    const graph = node.graph || app.graph;
+    const directLink = graph.links?.[inp.link];
     const sourceId = directLink?.origin_id;
     if (sourceId == null) return [];
 
@@ -81,7 +91,7 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
             const { id, depth } = queue.shift();
             if (id == null || visited.has(id)) continue;
             visited.add(id);
-            const n = app.graph.getNodeById(id);
+            const n = graph.getNodeById?.(id);
             if (!n) continue;
 
             // Multi-frame preview thumbnails (batch).
@@ -105,7 +115,7 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
             if (depth < 6 && n.inputs) {
                 for (const i2 of n.inputs) {
                     if (i2.link == null) continue;
-                    const li = app.graph.links[i2.link];
+                    const li = graph.links?.[i2.link];
                     if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
                 }
             }
@@ -115,20 +125,21 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
     // Pass 2: sibling-preview scan. Build VME's ancestor set,
     // then pick the graph node whose ancestry intersects ours
     // and has the most imgs[].
-    const myAncestors = _ancestorsOf(sourceId);
+    const myAncestors = _ancestorsOf(graph, sourceId);
     myAncestors.add(sourceId);
     let best = null;
-    for (const n of app.graph._nodes) {
+    const allNodes = graph._nodes || graph.nodes || [];
+    for (const n of allNodes) {
         if (!n.imgs?.length) continue;
         if (n.id === node.id) continue;
         // Find this node's own ancestors (going upstream from its inputs).
         let nAnc = null;
         for (const i2 of n.inputs || []) {
             if (i2.link == null) continue;
-            const li = app.graph.links[i2.link];
+            const li = graph.links?.[i2.link];
             if (li) {
                 nAnc = nAnc || new Set();
-                for (const a of _ancestorsOf(li.origin_id)) nAnc.add(a);
+                for (const a of _ancestorsOf(graph, li.origin_id)) nAnc.add(a);
             }
         }
         if (!nAnc) continue;
@@ -150,7 +161,7 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
             const { id, depth } = queue.shift();
             if (id == null || visited.has(id)) continue;
             visited.add(id);
-            const n = app.graph.getNodeById(id);
+            const n = graph.getNodeById?.(id);
             if (!n) continue;
             if (n.imgs?.length === 1) return n.imgs.map(im => im.src);
             const w = n.widgets?.find(w => w.name === "image" || w.name === "video");
@@ -163,7 +174,7 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
             if (depth < 6 && n.inputs) {
                 for (const i2 of n.inputs) {
                     if (i2.link == null) continue;
-                    const li = app.graph.links[i2.link];
+                    const li = graph.links?.[i2.link];
                     if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
                 }
             }
@@ -180,7 +191,8 @@ export function findUpstreamFrames(node) {
     if (!node.inputs) return [];
     const inp = node.inputs.find(i => i.name === "image" && i.link != null);
     if (!inp) return [];
-    const directLink = app.graph.links[inp.link];
+    const graph = node.graph || app.graph;
+    const directLink = graph.links?.[inp.link];
     const sourceId = directLink?.origin_id;
     if (sourceId == null) return [];
 
@@ -192,13 +204,13 @@ export function findUpstreamFrames(node) {
             const { id, depth } = queue.shift();
             if (id == null || visited.has(id)) continue;
             visited.add(id);
-            const n = app.graph.getNodeById(id);
+            const n = graph.getNodeById?.(id);
             if (!n) continue;
             if (n.imgs?.length > 1) return n.imgs.map(im => im.src);
             if (depth < 6 && n.inputs) {
                 for (const i2 of n.inputs) {
                     if (i2.link == null) continue;
-                    const li = app.graph.links[i2.link];
+                    const li = graph.links?.[i2.link];
                     if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
                 }
             }
@@ -206,19 +218,20 @@ export function findUpstreamFrames(node) {
     }
 
     // Pass 2: sibling preview scan
-    const myAncestors = _ancestorsOf(sourceId);
+    const myAncestors = _ancestorsOf(graph, sourceId);
     myAncestors.add(sourceId);
     let best = null;
-    for (const n of app.graph._nodes) {
+    const allNodes = graph._nodes || graph.nodes || [];
+    for (const n of allNodes) {
         if (!n.imgs?.length) continue;
         if (n.id === node.id) continue;
         let nAnc = null;
         for (const i2 of n.inputs || []) {
             if (i2.link == null) continue;
-            const li = app.graph.links[i2.link];
+            const li = graph.links?.[i2.link];
             if (li) {
                 nAnc = nAnc || new Set();
-                for (const a of _ancestorsOf(li.origin_id)) nAnc.add(a);
+                for (const a of _ancestorsOf(graph, li.origin_id)) nAnc.add(a);
             }
         }
         if (!nAnc) continue;
@@ -239,7 +252,7 @@ export function findUpstreamFrames(node) {
             const { id, depth } = queue.shift();
             if (id == null || visited.has(id)) continue;
             visited.add(id);
-            const n = app.graph.getNodeById(id);
+            const n = graph.getNodeById?.(id);
             if (!n) continue;
             if (n.imgs?.length === 1) return n.imgs.map(im => im.src);
             const w = n.widgets?.find(w => w.name === "image" || w.name === "video");
@@ -252,7 +265,7 @@ export function findUpstreamFrames(node) {
             if (depth < 6 && n.inputs) {
                 for (const i2 of n.inputs) {
                     if (i2.link == null) continue;
-                    const li = app.graph.links[i2.link];
+                    const li = graph.links?.[i2.link];
                     if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
                 }
             }

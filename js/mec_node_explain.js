@@ -58,7 +58,13 @@ function _toGraph(e) {
 
 /** Find the node whose title bar contains the graph-space point (gx, gy). */
 function _nodeAtTitle(gx, gy) {
-    const nodes = app.graph._nodes;
+    // Subgraph-aware: when the user has drilled into a subgraph,
+    // `app.canvas.graph` is that inner LGraph, not `app.graph` (which
+    // remains the root). Hit-testing must use the actually-rendered
+    // graph or the click would resolve to nodes the user can't even
+    // see.
+    const g = app.canvas?.graph || app.graph;
+    const nodes = g?._nodes;
     if (!nodes) return null;
     // Iterate in reverse so topmost (highest index) node wins
     for (let i = nodes.length - 1; i >= 0; i--) {

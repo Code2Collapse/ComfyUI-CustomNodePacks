@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 
 /**
  * Parameter Memory v2 — Compact parameter tracking + named presets.
@@ -283,7 +284,10 @@ app.registerExtension({
     api.addEventListener("executed", (event) => {
       const nodeId = event?.detail?.node;
       if (!nodeId) return;
-      const node = app.graph?.getNodeById(Number(nodeId));
+      // Subgraph-aware lookup: handles composite ids like "7:5" and
+      // also nested-only nodes the root graph wouldn't know about.
+      const resolved = findNodeAnywhere(nodeId);
+      const node = resolved?.node || app.graph?.getNodeById(Number(nodeId));
       if (!node) return;
       const pre = _preQueueSnapshots.get(node.id);
       if (!pre) return;
