@@ -165,8 +165,12 @@ app.registerExtension({
         _update();
 
         // Periodic safety refresh — in case some custom op mutates the graph
-        // without going through the hooked methods.
-        setInterval(_update, 2000);
+        // without going through the hooked methods. Store the handle so the
+        // interval can be torn down (e.g. on hot-reload of the extension or
+        // when the page navigates away).
+        const _t = setInterval(_update, 2000);
+        window.addEventListener("beforeunload", () => clearInterval(_t), { once: true });
+        window.__MEC_COMPLEXITY_HUD_INTERVAL = _t;
 
         console.log("[MEC.ComplexityHUD] Loaded.");
     },

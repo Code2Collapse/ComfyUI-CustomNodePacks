@@ -141,10 +141,20 @@ def _query_history(node_class: str = "", last_n_runs: int = 10) -> list[dict]:
 
         results = []
         for r in rows:
+            # Defensive: a corrupted delta_json row would otherwise abort the
+            # entire history query. Skip the bad row and log it.
+            try:
+                delta = json.loads(r[5])
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(
+                    f"[MEC] param_history: dropping row ts={r[0]} run_id={r[1]} "
+                    f"node_id={r[2]} with malformed delta_json ({e})"
+                )
+                continue
             results.append({
                 "ts": r[0], "run_id": r[1], "node_id": r[2],
                 "node_title": r[3], "node_class": r[4],
-                "delta": json.loads(r[5]),
+                "delta": delta,
             })
         return results
     except Exception as e:
@@ -165,9 +175,17 @@ def _diff_runs(run_a: int, run_b: int) -> list[dict]:
             ).fetchall()
             nodes = {}
             for r in rows:
+                try:
+                    delta = json.loads(r[3])
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(
+                        f"[MEC] _diff_runs: dropping node_id={r[0]} with "
+                        f"malformed delta_json ({e})"
+                    )
+                    continue
                 nodes[r[0]] = {
                     "node_id": r[0], "node_title": r[1],
-                    "node_class": r[2], "delta": json.loads(r[3]),
+                    "node_class": r[2], "delta": delta,
                 }
             return nodes
 

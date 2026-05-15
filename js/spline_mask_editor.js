@@ -93,9 +93,13 @@ class Editor {
         this.redoStack.length = 0;
     }
     restore(s) {
-        const o = JSON.parse(s);
-        this.shapes = o.s || [];
-        this.active = o.a ?? -1;
+        // Defensive: corrupted snapshot would crash entire canvas.
+        let o;
+        try { o = JSON.parse(s); }
+        catch (e) { console.warn("[MEC.SplineMaskEditor] restore: malformed snapshot, ignored", e); return; }
+        if (!o) return;
+        this.shapes = Array.isArray(o.s) ? o.s : [];
+        this.active = Number.isFinite(o.a) ? o.a : -1;
     }
     undo() {
         if (!this.undoStack.length) return false;

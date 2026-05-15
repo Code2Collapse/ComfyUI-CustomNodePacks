@@ -111,7 +111,15 @@ class Editor {
         if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
         this.redoStack.length = 0;
     }
-    restore(s) { const o = JSON.parse(s); this.points = o.p || []; this.bboxes = o.b || []; }
+    restore(s) {
+        // Defensive: corrupted snapshot would crash entire canvas.
+        let o;
+        try { o = JSON.parse(s); }
+        catch (e) { console.warn("[MEC.PointsBBoxEditor] restore: malformed snapshot, ignored", e); return; }
+        if (!o) return;
+        this.points = Array.isArray(o.p) ? o.p : [];
+        this.bboxes = Array.isArray(o.b) ? o.b : [];
+    }
     undo() {
         if (!this.undoStack.length) return false;
         this.redoStack.push(this.snapshot());

@@ -175,7 +175,10 @@ app.registerExtension({
     async setup() {
         _injectStyle();
         _scanAll();
-        setInterval(_scanAll, 4000);  // catch nodes added by graph load
+        // Store the handle so the interval can be torn down on page unload.
+        const _t = setInterval(_scanAll, 4000);  // catch nodes added by graph load
+        window.addEventListener("beforeunload", () => clearInterval(_t), { once: true });
+        window.__MEC_TOKEN_COUNTER_INTERVAL = _t;
         console.log("[MEC.TokenCounter] Loaded.");
     },
 });
