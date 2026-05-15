@@ -479,6 +479,7 @@ class MaskOpsMEC:
                 parse_bbox(pos_bbox)
                 or parse_bbox(normal_bbox)
             )
+            neg_bbox_used = parse_bbox(neg_bbox)
 
             # If a bbox slot is wired but the upstream produced nothing usable,
             # bail loudly. Silent fallthrough was masking misconfigured editors
@@ -501,10 +502,10 @@ class MaskOpsMEC:
 
             logger.warning(
                 "[MaskMatting] seg=%s matter=%s mode=%s B=%d  "
-                "pts(+%d/-%d) bbox=%s text=%r model=%r matter_model=%r ext_mask=%s ext_trimap=%s",
+                "pts(+%d/-%d) bbox=%s neg_bbox=%s text=%r model=%r matter_model=%r ext_mask=%s ext_trimap=%s",
                 seg_key, mat_key, mode, B,
                 len(pos_pts), len(neg_pts),
-                bbox_used, (text_prompt or "")[:32],
+                bbox_used, neg_bbox_used, (text_prompt or "")[:32],
                 model, matter_model,
                 None if external_mask is None else tuple(external_mask.shape),
                 None if external_trimap is None else tuple(external_trimap.shape),
@@ -521,7 +522,8 @@ class MaskOpsMEC:
                 out = seg_inst.segment(
                     img_in, mode=mode,
                     positive_points=pos_pts, negative_points=neg_pts,
-                    bbox=bbox_used, text_prompt=text_prompt,
+                    bbox=bbox_used, neg_bbox=neg_bbox_used,
+                    text_prompt=text_prompt,
                     frame_annotation=int(frame_annotation), object_id=int(object_id),
                     max_frames=int(max_frames_to_track), memory_size=int(memory_size),
                     start_frame=int(start_frame), end_frame=int(end_frame),
@@ -534,7 +536,8 @@ class MaskOpsMEC:
             seg_out = seg_inst.segment(
                 img_bhwc, mode=mode,
                 positive_points=pos_pts, negative_points=neg_pts,
-                bbox=bbox_used, text_prompt=text_prompt,
+                bbox=bbox_used, neg_bbox=neg_bbox_used,
+                text_prompt=text_prompt,
                 frame_annotation=int(frame_annotation), object_id=int(object_id),
                 max_frames=int(max_frames_to_track), memory_size=int(memory_size),
                 start_frame=int(start_frame), end_frame=int(end_frame),

@@ -220,7 +220,7 @@ class SAM2Segmenter(BaseSegmenter):
 
     def segment(self, image_bhwc, *, mode="auto",
                 positive_points=None, negative_points=None,
-                bbox=None, text_prompt="", frame_annotation=0,
+                bbox=None, neg_bbox=None, text_prompt="", frame_annotation=0,
                 object_id=0, max_frames=0, memory_size=8,
                 start_frame=0, end_frame=-1, individual_objects=False,
                 tracking_direction="forward", seed=0):

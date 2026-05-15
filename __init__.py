@@ -72,6 +72,18 @@ from .nodes.mask_matting import (
     NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
 )
+# Unified Segmentation (SAM2/SAM3/SeC, single node)
+try:
+    from .nodes.unified_segmentation import (
+        NODE_CLASS_MAPPINGS as _USEG_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _USEG_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.UnifiedSeg").warning(
+        "UnifiedSegmentation unavailable: %s", _exc
+    )
+    _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
 
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
@@ -168,6 +180,7 @@ NODE_CLASS_MAPPINGS = {
     **_PAINT_MAPPINGS,
     **_FACE_FIXER_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
+    **_USEG_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
 }
@@ -178,6 +191,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_PAINT_DISPLAY,
     **_FACE_FIXER_DISPLAY,
     **_MASKMATTE_DISPLAY,
+    **_USEG_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
 }

@@ -912,6 +912,13 @@ class InpaintCropProMEC:
             "optional": {
                 "mask": ("MASK",),
                 "optional_context_mask": ("MASK",),
+                "roto_quality": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": ("Roto-Sync mode: tightens the inpaint seam for clean alpha edges. "
+                                "Forces laplacian_pyramid blend, halves blend_radius (min 4), "
+                                "and pre-erodes the inpaint mask by 1 px so the stitch falls just "
+                                "inside the subject. Safe to leave OFF for general inpaint; turn ON "
+                                "for compositing / roto / VFX work where boundaries must not bleed.")}),
             },
         }
 
@@ -940,9 +947,33 @@ class InpaintCropProMEC:
                      inpaint_mask_mode, stitch_blend_mode, blend_radius,
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
-                     mask=None, optional_context_mask=None):
+                     mask=None, optional_context_mask=None,
+                     roto_quality: bool = False):
 
         image = image.clone()
+        # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
+        # Applied here (single point) so every downstream branch — single
+        # crop, video crop, stitch metadata — inherits the change.
+        if roto_quality:
+            stitch_blend_mode = "laplacian_pyramid"
+            blend_radius = max(4, int(blend_radius) // 2)
+            if mask is not None:
+                # Pre-erode by 1 px so the inpaint sampler regenerates a
+                # hair INSIDE the subject, leaving a clean fringe-free
+                # stitch.  Uses explicit zero-padding + min-pool (erosion)
+                # — no cv2 dep. F.max_pool2d pads with -inf internally,
+                # which would skip border erosion, so we pad with 0 first.
+                _m = mask
+                if _m.dim() == 2:
+                    _m = _m.unsqueeze(0)
+                _m4 = _m.unsqueeze(1)
+                # Pad with 1 (treat outside as foreground) so we don't
+                # over-erode if the subject touches the frame edge —
+                # then min-pool = -max_pool(-x).
+                _m4_pad = F.pad(_m4, (1, 1, 1, 1), mode="constant", value=1.0)
+                _neg = -_m4_pad
+                _pooled = F.max_pool2d(_neg, kernel_size=3, stride=1, padding=0)
+                mask = (-_pooled).squeeze(1).clamp(0.0, 1.0)
         if mask is not None:
             mask = mask.clone()
         if optional_context_mask is not None:
@@ -1120,6 +1151,7 @@ class InpaintCropProMEC:
             "cropped_to_canvas_h": [],
             "cropped_mask_for_blend": [],
             "device_mode": device_mode,
+            "roto_quality": bool(roto_quality),
         }
 
         for i in range(B):
@@ -1388,6 +1420,13 @@ class InpaintStitchProMEC:
                                 "mask before temporal smoothing — pushes the seam into flat background. "
                                 "Use with stitch_temporal_sigma > 0 for jittery video. 0 = off.")}),
             },
+            "optional": {
+                "roto_quality_override": (["from_crop", "force_on", "force_off"], {
+                    "default": "from_crop",
+                    "tooltip": ("Roto-Sync at stitch time. 'from_crop' honors the InpaintCropProMEC "
+                                "flag (recommended). 'force_on' applies tight-seam stitching even if "
+                                "crop didn't set it; 'force_off' disables it.")}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
@@ -1399,7 +1438,8 @@ class InpaintStitchProMEC:
     def inpaint_stitch(self, stitcher, inpainted_image,
                        blend_mode_override="from_crop", color_match=False,
                        stitch_temporal_sigma: float = 0.0,
-                       stitch_dilate_px: int = 0):
+                       stitch_dilate_px: int = 0,
+                       roto_quality_override: str = "from_crop"):
         if not isinstance(stitcher, dict):
             raise ValueError(
                 "InpaintStitchProMEC: 'stitcher' input is missing or invalid "
@@ -1407,6 +1447,14 @@ class InpaintStitchProMEC:
                 f"{type(stitcher).__name__}). Connect the 'stitcher' output "
                 "of InpaintCropProMEC to this node."
             )
+        # Resolve roto-quality flag (override > crop-time setting).
+        _crop_roto = bool(stitcher.get("roto_quality", False))
+        if roto_quality_override == "force_on":
+            roto_quality = True
+        elif roto_quality_override == "force_off":
+            roto_quality = False
+        else:
+            roto_quality = _crop_roto
         inpainted_image = inpainted_image.clone()
         results = []
         blend_masks_out = []
@@ -1434,6 +1482,13 @@ class InpaintStitchProMEC:
             effective_mode = stored_mode
         else:
             effective_mode = blend_mode_override
+
+        # Roto-Sync at stitch time: prefer laplacian_pyramid (sharper),
+        # halve the blend radius (min 4) for a tighter seam.
+        if roto_quality:
+            if effective_mode in ("gaussian", "edge_aware"):
+                effective_mode = "laplacian_pyramid"
+            blend_radius = max(4, int(blend_radius) // 2)
 
         B = inpainted_image.shape[0]
         n = len(stitcher["cropped_to_canvas_x"])
