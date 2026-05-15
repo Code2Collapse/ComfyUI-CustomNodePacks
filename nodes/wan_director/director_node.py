@@ -1,0 +1,730 @@
+"""
+Wan Director — visual multi-shot timeline node for Wan video models.
+
+A single, model-aware Director node that lets the user lay out image,
+text and audio clips on a visual timeline and emits the model-specific
+bundle of (model, conditioning, latent, fps, audio, guide_data) needed
+by Wan 2.1 / 2.2 / Fun / Animate. The actual timeline UI lives in the
+companion ``js/wan_director_timeline.js`` extension; this Python class
+holds the schema + dispatches per-variant output assembly.
+
+Forked-from inspiration: WhatDreamsCost-ComfyUI / LTX Director (MIT).
+See NOTICE.
+
+Author: Code2Collapse, May 2026.  Apache-2.0.
+"""
+from __future__ import annotations
+
+import base64
+import io as _io
+import json
+import logging
+import math
+import os
+from typing import Any
+
+import numpy as np
+import torch
+from PIL import Image
+
+import folder_paths  # type: ignore
+
+log = logging.getLogger("MEC.WanDirector")
+
+# ── Variant table ────────────────────────────────────────────────────
+#
+# Each entry encodes the per-variant differences that drive output
+# assembly: latent shape, divisible_by, default fps, and which optional
+# pathways (negative prompt, control video, reference image, dual cfg)
+# are user-facing.
+
+VARIANT_TABLE: dict[str, dict[str, Any]] = {
+    "wan2.1_t2v": {
+        "label":          "Wan 2.1 — Text → Video",
+        "latent_channels": 16,
+        "spatial_div":     8,    # Wan VAE spatial compression
+        "temporal_div":    4,    # Wan VAE temporal compression
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        False,
+        "ref_image":       False,
+        "control_video":   False,
+    },
+    "wan2.1_i2v": {
+        "label":          "Wan 2.1 — Image → Video",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     True,
+        "supports_neg":    True,
+        "dual_cfg":        False,
+        "ref_image":       False,
+        "control_video":   False,
+    },
+    "wan2.2_t2v": {
+        "label":          "Wan 2.2 — Text → Video (dual-cfg)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        True,
+        "ref_image":       False,
+        "control_video":   False,
+    },
+    "wan2.2_i2v": {
+        "label":          "Wan 2.2 — Image → Video (dual-cfg)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     True,
+        "supports_neg":    True,
+        "dual_cfg":        True,
+        "ref_image":       False,
+        "control_video":   False,
+    },
+    "wan_fun_inp": {
+        "label":          "Wan Fun — Inpaint (mask + control)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     True,
+        "supports_neg":    True,
+        "dual_cfg":        False,
+        "ref_image":       False,
+        "control_video":   True,
+    },
+    "wan_fun_control": {
+        "label":          "Wan Fun — Control Video (depth/pose/canny)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        False,
+        "ref_image":       False,
+        "control_video":   True,
+    },
+    "wan_animate": {
+        "label":          "Wan Animate — Reference + Pose",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        False,
+        "ref_image":       True,
+        "control_video":   True,
+    },
+}
+
+VARIANT_KEYS: list[str] = list(VARIANT_TABLE)
+
+
+# ── Tensor helpers ───────────────────────────────────────────────────
+
+def _snap(val: int, div: int) -> int:
+    return max(div, (val // div) * div)
+
+
+def _load_image_tensor(seg: dict) -> torch.Tensor:
+    """Decode an image segment to a [1,H,W,3] float32 tensor in [0,1]."""
+    if seg.get("imageFile"):
+        file_path = os.path.join(folder_paths.get_input_directory(), seg["imageFile"])
+        if os.path.exists(file_path):
+            img = Image.open(file_path).convert("RGB")
+            arr = np.asarray(img, dtype=np.float32) / 255.0
+            return torch.from_numpy(arr).unsqueeze(0)
+
+    b64_str = seg.get("imageB64", "") or ""
+    if not b64_str or b64_str.startswith("/view?"):
+        return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+    if "," in b64_str:
+        b64_str = b64_str.split(",", 1)[1]
+    try:
+        img_bytes = base64.b64decode(b64_str)
+        img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+        arr = np.asarray(img, dtype=np.float32) / 255.0
+        return torch.from_numpy(arr).unsqueeze(0)
+    except Exception as exc:                                    # noqa: BLE001
+        log.warning("[WanDirector] image decode failed: %s", exc)
+        return torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+
+
+def _resize_image(t: torch.Tensor, tw: int, th: int, method: str, div: int) -> torch.Tensor:
+    """Resize [1,H,W,3] with method ∈ {stretch,fit,pad,crop} and snap to div."""
+    from PIL import Image as _Pil  # local import keeps cold-start fast
+    tw, th = _snap(tw, div), _snap(th, div)
+    img_np = (t[0].cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+    pil = _Pil.fromarray(img_np)
+    sw, sh = pil.size
+    if method == "stretch to fit":
+        out = pil.resize((tw, th), _Pil.LANCZOS)
+    elif method == "pad":
+        r = min(tw / sw, th / sh)
+        nw, nh = _snap(int(sw * r), div), _snap(int(sh * r), div)
+        inner = pil.resize((nw, nh), _Pil.LANCZOS)
+        out = _Pil.new("RGB", (tw, th), (0, 0, 0))
+        out.paste(inner, ((tw - nw) // 2, (th - nh) // 2))
+    elif method == "crop":
+        r = max(tw / sw, th / sh)
+        nw, nh = int(sw * r), int(sh * r)
+        inner = pil.resize((nw, nh), _Pil.LANCZOS)
+        l, top = (nw - tw) // 2, (nh - th) // 2
+        out = inner.crop((l, top, l + tw, top + th))
+    else:  # maintain aspect ratio
+        r = min(tw / sw, th / sh)
+        nw, nh = _snap(int(sw * r), div), _snap(int(sh * r), div)
+        out = pil.resize((nw, nh), _Pil.LANCZOS)
+    arr = np.asarray(out, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr).unsqueeze(0)
+
+
+# ── Audio mux (reused from LTX Director; PyAV) ───────────────────────
+
+def _build_combined_audio(timeline_data_str: str, duration_frames: int,
+                          frame_rate: float, target: str = "music_44k_stereo") -> dict:
+    """Mix the timeline's audio clips into a single ComfyUI AUDIO dict.
+
+    ``target`` chooses sample rate + channel count:
+      * ``music_44k_stereo`` (default): 44.1 kHz stereo
+      * ``speech_16k_mono``:            16 kHz mono   (for Wan-S2V style)
+    """
+    if target == "speech_16k_mono":
+        sr, layout, channels = 16000, "mono", 1
+    else:
+        sr, layout, channels = 44100, "stereo", 2
+
+    total = max(1, int(math.ceil(duration_frames / max(1e-3, frame_rate) * sr)))
+    empty = {"waveform": torch.zeros((1, channels, total), dtype=torch.float32),
+             "sample_rate": sr}
+
+    if not timeline_data_str:
+        return empty
+    try:
+        data = json.loads(timeline_data_str)
+        audio_segs = data.get("audioSegments", []) or []
+    except Exception:                                            # noqa: BLE001
+        return empty
+    if not audio_segs:
+        return empty
+
+    try:
+        import av  # type: ignore
+    except ImportError:
+        log.warning("[WanDirector] PyAV missing; cannot mix audio. `pip install av`.")
+        return empty
+
+    out = torch.zeros((channels, total), dtype=torch.float32)
+
+    for seg in audio_segs:
+        buf = None
+        if seg.get("audioFile"):
+            fp = os.path.join(folder_paths.get_input_directory(), seg["audioFile"])
+            if os.path.exists(fp):
+                with open(fp, "rb") as f:
+                    buf = _io.BytesIO(f.read())
+        if buf is None and seg.get("audioB64"):
+            b64 = seg["audioB64"]
+            if "," in b64:
+                b64 = b64.split(",", 1)[1]
+            try:
+                buf = _io.BytesIO(base64.b64decode(b64))
+            except Exception:                                    # noqa: BLE001
+                buf = None
+        if buf is None:
+            continue
+
+        try:
+            frames_t: list[torch.Tensor] = []
+            with av.open(buf) as container:
+                stream = container.streams.audio[0]
+                resampler = av.AudioResampler(format="fltp", layout=layout, rate=sr)
+                for fr in container.decode(stream):
+                    for rf in resampler.resample(fr):
+                        frames_t.append(torch.from_numpy(rf.to_ndarray()))
+                for rf in resampler.resample(None):
+                    frames_t.append(torch.from_numpy(rf.to_ndarray()))
+            if not frames_t:
+                continue
+            wave = torch.cat(frames_t, dim=1)
+            if wave.shape[0] != channels:                        # mono ↔ stereo coerce
+                wave = wave.mean(dim=0, keepdim=True) if channels == 1 else wave.expand(channels, -1)
+
+            trim_start = float(seg.get("trimStart", 0))
+            length = float(seg.get("length", 1))
+            start = float(seg.get("start", 0))
+            s0 = int(trim_start / max(1e-3, frame_rate) * sr)
+            n = max(0, int(length / max(1e-3, frame_rate) * sr))
+            s1 = min(wave.shape[1], s0 + n)
+            if s1 <= s0:
+                continue
+            clip = wave[:, s0:s1]
+            d0 = int(start / max(1e-3, frame_rate) * sr)
+            if d0 >= out.shape[1]:
+                continue
+            d1 = min(out.shape[1], d0 + clip.shape[1])
+            out[:, d0:d1] += clip[:, : d1 - d0]
+        except Exception as exc:                                 # noqa: BLE001
+            log.warning("[WanDirector] audio segment error (%s): %s", seg.get("fileName"), exc)
+            continue
+
+    return {"waveform": out.unsqueeze(0), "sample_rate": sr}
+
+
+# ── Variant-aware latent factory ─────────────────────────────────────
+
+def _empty_wan_latent(variant: str, w: int, h: int, frames: int) -> dict:
+    """Build an empty Wan latent of the right shape.
+
+    Wan VAE: 16 channels, /8 spatial, /4 temporal.
+    The temporal formula mirrors Wan's reference code: ``(F - 1) // 4 + 1``
+    latent frames for ``F`` pixel frames.
+    """
+    cfg = VARIANT_TABLE[variant]
+    ch = int(cfg["latent_channels"])
+    sd = int(cfg["spatial_div"])
+    td = int(cfg["temporal_div"])
+    lw, lh = max(1, w // sd), max(1, h // sd)
+    lt = max(1, (frames - 1) // td + 1)
+    try:
+        import comfy.model_management as mm  # type: ignore
+        device = mm.intermediate_device()
+    except Exception:                                            # noqa: BLE001
+        device = torch.device("cpu")
+    samples = torch.zeros((1, ch, lt, lh, lw), device=device, dtype=torch.float32)
+    return {"samples": samples}
+
+
+# ── PromptRelay helpers (universal: native + Kijai + generic fallback) ──
+#
+# These wrap `nodes.prompt_relay` so the Director can embed PromptRelay
+# without duplicating logic. The PromptRelay module already handles
+# any open-source video model via its generic-introspection fallback.
+
+def _apply_prompt_relay_native(model, clip, latent, global_prompt, local_list,
+                               segment_lengths_str, epsilon):
+    """Apply PromptRelay to a native ComfyUI MODEL. Returns (patched_model, conditioning)."""
+    from ..prompt_relay._nodes import _encode_native as _pr_encode_native
+    local_prompts_str = " | ".join(local_list)
+    return _pr_encode_native(
+        model, clip, latent,
+        global_prompt or local_list[0],
+        local_prompts_str,
+        segment_lengths_str or "",
+        float(epsilon),
+        None,
+    )
+
+
+def _apply_kijai_branch(wan_model, wan_t5, pos_text, neg_text, local_list,
+                        segment_lengths_str, duration_frames, epsilon,
+                        enable_prompt_relay):
+    """Drive Kijai WanVideoWrapper: encode prompts via T5, optionally PromptRelay-patch."""
+    from ..prompt_relay._core import (
+        build_segments, convert_pixel_to_latent_lengths, create_mask_fn,
+        distribute_segment_lengths, map_token_indices,
+    )
+    from ..prompt_relay._patches import patch_kijai
+
+    relay_used = False
+    relay_note = ""
+
+    encoder = wan_t5["model"]
+    tokenizer = getattr(encoder, "tokenizer", None)
+    if tokenizer is None:
+        raise RuntimeError(
+            "Kijai T5 encoder is missing .tokenizer. "
+            "Update ComfyUI-WanVideoWrapper to a recent version."
+        )
+
+    try:
+        import comfy.model_management as mm  # type: ignore
+        device_to = mm.get_torch_device()
+    except Exception:                                                # noqa: BLE001
+        device_to = torch.device("cuda")
+
+    if enable_prompt_relay and len(local_list) >= 2:
+        latent_frames = max(1, (duration_frames - 1) // 4 + 1)
+
+        class _TokAdapter:
+            add_eos = True
+            def __call__(self_inner, text):
+                ids, _mask = tokenizer([text], return_mask=True, add_special_tokens=True)
+                return {"input_ids": ids}
+
+        full_prompt, token_ranges = map_token_indices(_TokAdapter(), pos_text, local_list)
+
+        parsed_lengths = None
+        if segment_lengths_str.strip():
+            pixel_lengths = [int(x.strip()) for x in segment_lengths_str.split(",") if x.strip()]
+            parsed_lengths = convert_pixel_to_latent_lengths(pixel_lengths, 4, latent_frames)
+        effective_lengths = distribute_segment_lengths(len(local_list), latent_frames, parsed_lengths)
+
+        transformer = getattr(getattr(wan_model, "model", wan_model), "diffusion_model", None)
+        patch_size = tuple(getattr(transformer, "patch_size", (1, 2, 2))) if transformer is not None else (1, 2, 2)
+        fallback_tpf = max(1, 64 * 64 // (patch_size[1] * patch_size[2]))
+
+        q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, None)
+        mask_fn = create_mask_fn(q_token_idx, fallback_tpf, latent_frames)
+
+        n = patch_kijai(wan_model, mask_fn)
+        relay_used = True
+        relay_note = f"Kijai PromptRelay applied to {n} cross-attn blocks ({len(local_list)} segments)"
+        encode_prompt = full_prompt
+    elif enable_prompt_relay:
+        relay_note = "skipped (need 2+ local prompts)"
+        encode_prompt = pos_text
+    else:
+        encode_prompt = pos_text
+
+    with torch.no_grad():
+        try:
+            context = encoder([encode_prompt], device_to)
+            context_null = encoder([neg_text or ""], device_to)
+        finally:
+            try:
+                import comfy.model_management as mm  # type: ignore
+                mm.soft_empty_cache()
+            except Exception:                                        # noqa: BLE001
+                pass
+
+    text_embeds = {
+        "prompt_embeds": context,
+        "negative_prompt_embeds": context_null,
+        "echoshot": False,
+    }
+    return wan_model, text_embeds, relay_used, relay_note
+
+
+# ── The node ─────────────────────────────────────────────────────────
+
+class WanDirectorC2C:
+    """Wan Director — visual multi-shot timeline (single node, all Wan variants).
+
+    The timeline UI is rendered by ``js/wan_director_timeline.js``. The
+    hidden string widgets ``timeline_data`` / ``local_prompts`` /
+    ``segment_lengths`` / ``guide_strength`` / ``negative_prompts`` are
+    serialised by the JS extension and parsed here on execute.
+    """
+
+    CATEGORY = "C2C/wan_director"
+    FUNCTION = "execute"
+
+    DESCRIPTION = (
+        "Visual timeline director for Wan 2.1 / 2.2 / Fun / Animate. "
+        "Drag image, text and audio clips onto the timeline, choose a "
+        "model_variant, and the node emits the matching CONDITIONING, "
+        "LATENT, FPS and AUDIO bundle. Inspired by WhatDreamsCost / "
+        "LTX Director (MIT), redesigned for the Wan VAE shape (16ch, /8 "
+        "spatial, /4 temporal) and Wan-specific options (dual-CFG for "
+        "2.2, reference image for Animate, control track for Fun)."
+    )
+
+    RETURN_TYPES = (
+        "MODEL",
+        "CONDITIONING",
+        "CONDITIONING",
+        "LATENT",
+        "FLOAT",
+        "AUDIO",
+        "IMAGE",
+        "STRING",
+        "WANVIDEOMODEL",
+        "WANVIDEOTEXTEMBEDS",
+    )
+    RETURN_NAMES = (
+        "model",
+        "positive",
+        "negative",
+        "video_latent",
+        "frame_rate",
+        "combined_audio",
+        "reference_image",
+        "info",
+        "wan_model",
+        "wan_text_embeds",
+    )
+    OUTPUT_TOOLTIPS = (
+        "Native MODEL (patched with PromptRelay if enabled). When backend='kijai', this is a straight passthrough of the input `model` socket if connected, else None — use `wan_model` instead.",
+        "Positive CONDITIONING (native branch). Empty list when backend='kijai'.",
+        "Negative CONDITIONING (native branch). Empty list when backend='kijai'.",
+        "Empty Wan latent sized to the timeline's resolved (W,H,frames). Channels=16, /8 spatial, /4 temporal.",
+        "Frame rate echoed for downstream sampler/saver nodes.",
+        "Audio waveform mixed from the timeline's audio segments.",
+        "Reference image (first image clip) — used by Wan I2V/Animate as the start/reference frame. Black image if none.",
+        "JSON: resolved backend, variant, latent shape, segment count, audio sample rate, prompt-relay status, warnings.",
+        "Kijai WANVIDEOMODEL (only populated when backend='kijai'; PromptRelay-patched in place if enabled).",
+        "Kijai WANVIDEOTEXTEMBEDS dict (only populated when backend='kijai'). Feed directly into WanVideoSampler.",
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "backend": (["native", "kijai"], {
+                    "default": "native",
+                    "tooltip": (
+                        "Which video-model stack to drive.\n\n"
+                        "  native — ComfyUI's built-in Wan implementation. Connect `model` + `clip`.\n"
+                        "  kijai  — Kijai's ComfyUI-WanVideoWrapper. Connect `wan_model` + `wan_t5` (optional sockets).\n\n"
+                        "PromptRelay (if enabled) is applied to whichever backbone is active and "
+                        "falls back to the generic-introspection patcher for any third-party model."
+                    ),
+                }),
+                "model": ("MODEL", {"tooltip": "Native Wan MODEL (2.1 / 2.2 / Fun / Animate). Required when backend='native'."}),
+                "clip":  ("CLIP",  {"tooltip": "Text encoder paired with the Wan model (UMT5 for 2.x). Required when backend='native'."}),
+                "model_variant": (VARIANT_KEYS, {
+                    "default": "wan2.1_i2v",
+                    "tooltip": "Which Wan family / mode this timeline targets. "
+                               "Changes which optional sliders are visible and how "
+                               "the latent + conditioning are assembled.",
+                }),
+                "duration_frames": ("INT", {
+                    "default": 81, "min": 1, "max": 10000, "step": 1,
+                    "tooltip": "Total timeline length in pixel-space frames. Wan 2.x "
+                               "defaults to 81 frames (≈ 5 s @ 16 fps).",
+                }),
+                "duration_seconds": ("FLOAT", {
+                    "default": 5.0, "min": 0.1, "max": 1000.0, "step": 0.01,
+                    "tooltip": "Total timeline duration in seconds (synced from frames by the UI).",
+                }),
+                "frame_rate": ("FLOAT", {
+                    "default": 16.0, "min": 1.0, "max": 240.0, "step": 1.0,
+                    "tooltip": "FPS. Wan 2.x is trained at 16 fps; raise for slow-motion-like output.",
+                }),
+                "global_prompt": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": "Persistent context prepended to every per-clip prompt "
+                               "(characters, lighting, style anchors).",
+                }),
+                # Timeline-managed hidden strings (the JS extension writes these).
+                "timeline_data":     ("STRING", {"multiline": True, "default": ""}),
+                "local_prompts":     ("STRING", {"multiline": True, "default": ""}),
+                "negative_prompts":  ("STRING", {"multiline": True, "default": ""}),
+                "segment_lengths":   ("STRING", {"default": ""}),
+                "guide_strength":    ("STRING", {"default": ""}),
+                "display_mode":      (["seconds", "frames"], {"default": "seconds"}),
+                # Resolution + resize policy
+                "custom_width":  ("INT", {"default": 832, "min": 0, "max": 8192, "step": 8,
+                                          "tooltip": "Target width. 0 = inherit from first image clip."}),
+                "custom_height": ("INT", {"default": 480, "min": 0, "max": 8192, "step": 8,
+                                          "tooltip": "Target height. 0 = inherit from first image clip."}),
+                "resize_method": (["maintain aspect ratio", "stretch to fit", "pad", "crop"],
+                                  {"default": "maintain aspect ratio"}),
+                # Wan 2.2 dual-CFG (only meaningful when variant is wan2.2_*)
+                "cfg_high_noise": ("FLOAT", {
+                    "default": 3.5, "min": 0.0, "max": 20.0, "step": 0.1,
+                    "tooltip": "Wan 2.2 high-noise expert CFG. Ignored for non-2.2 variants.",
+                }),
+                "cfg_low_noise":  ("FLOAT", {
+                    "default": 3.5, "min": 0.0, "max": 20.0, "step": 0.1,
+                    "tooltip": "Wan 2.2 low-noise expert CFG. Ignored for non-2.2 variants.",
+                }),
+                # Wan Animate
+                "ref_strength":  ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
+                    "tooltip": "Wan Animate reference-image influence. Ignored for other variants.",
+                }),
+                # Audio target
+                "audio_target": (["music_44k_stereo", "speech_16k_mono"], {
+                    "default": "music_44k_stereo",
+                    "tooltip": "Output AUDIO format. Use `speech_16k_mono` if you intend "
+                               "to feed Wan-S2V or any speech-driven pipeline downstream.",
+                }),
+                # Embedded PromptRelay (universal — works for native + Kijai +
+                # any third-party diffusion backbone via the generic-fallback patcher).
+                "enable_prompt_relay": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Apply the PromptRelay temporal cross-attention bias to the active backbone. "
+                        "Works on native ComfyUI MODEL, Kijai WANVIDEOMODEL, and arbitrary third-party "
+                        "video diffusion models (auto-falls back to generic introspection). When the "
+                        "timeline has 2+ text/image clips, the per-clip prompts become the local "
+                        "prompts and `global_prompt` is the anchor. With 0 or 1 clip this is a no-op."
+                    ),
+                }),
+                "prompt_relay_epsilon": ("FLOAT", {
+                    "default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4,
+                    "tooltip": "PromptRelay penalty decay. <0.1 = sharp boundaries; ≥0.5 softer.",
+                }),
+            },
+            "optional": {
+                "optional_latent":  ("LATENT", {"tooltip": "Override the auto-built empty latent."}),
+                "control_video":    ("IMAGE",  {"tooltip": "For Wan Fun / Animate: control sequence (depth/pose/canny)."}),
+                "control_mask":     ("MASK",   {"tooltip": "For Wan Fun Inpaint: per-frame mask track."}),
+                "wan_model":        ("WANVIDEOMODEL",    {"tooltip": "Kijai WanVideoWrapper model patcher (required when backend='kijai')."}),
+                "wan_t5":           ("WANTEXTENCODER",   {"tooltip": "Kijai T5 text encoder (required when backend='kijai')."}),
+            },
+        }
+
+    # ── Execute ──────────────────────────────────────────────────────
+
+    def execute(self,
+                backend, model, clip, model_variant, duration_frames, duration_seconds,
+                frame_rate, global_prompt, timeline_data, local_prompts,
+                negative_prompts, segment_lengths, guide_strength, display_mode,
+                custom_width, custom_height, resize_method,
+                cfg_high_noise, cfg_low_noise, ref_strength, audio_target,
+                enable_prompt_relay, prompt_relay_epsilon,
+                optional_latent=None, control_video=None, control_mask=None,
+                wan_model=None, wan_t5=None):
+
+        if model_variant not in VARIANT_TABLE:
+            raise ValueError(f"Unknown model_variant '{model_variant}'. "
+                             f"Choices: {VARIANT_KEYS}")
+        vcfg = VARIANT_TABLE[model_variant]
+        warnings: list[str] = []
+
+        # ── Parse timeline for image clips → reference frame ─────────
+        try:
+            tdata = json.loads(timeline_data) if timeline_data else {}
+        except json.JSONDecodeError as exc:
+            warnings.append(f"timeline_data JSON parse failed: {exc}; treating as empty.")
+            tdata = {}
+
+        img_segs = sorted(
+            [s for s in tdata.get("segments", [])
+             if s.get("type", "image") == "image"
+             and (s.get("imageFile") or s.get("imageB64"))
+             and int(s.get("start", 0)) < duration_frames],
+            key=lambda s: s.get("start", 0),
+        )
+
+        # Resolve output dimensions: prefer user override; else first image.
+        out_w, out_h = int(custom_width), int(custom_height)
+        ref_image = torch.zeros((1, max(64, out_h or 480), max(64, out_w or 832), 3),
+                                dtype=torch.float32)
+        if img_segs:
+            first = _load_image_tensor(img_segs[0])
+            if out_w <= 0 or out_h <= 0:
+                out_h, out_w = first.shape[1], first.shape[2]
+            ref_image = _resize_image(first, out_w, out_h, resize_method, vcfg["spatial_div"])
+            out_h, out_w = ref_image.shape[1], ref_image.shape[2]
+        else:
+            out_w = _snap(out_w or 832, vcfg["spatial_div"])
+            out_h = _snap(out_h or 480, vcfg["spatial_div"])
+            ref_image = torch.zeros((1, out_h, out_w, 3), dtype=torch.float32)
+            if vcfg["needs_image"]:
+                warnings.append(f"Variant '{model_variant}' expects an image clip; "
+                                "using a black reference frame.")
+
+        # ── Build positive / negative prompt text ────────────────────
+        local_list = [p.strip() for p in (local_prompts or "").split("|") if p.strip()]
+        neg_list   = [p.strip() for p in (negative_prompts or "").split("|") if p.strip()]
+
+        pos_text = (global_prompt.strip() + ". " if global_prompt.strip() else "") + \
+                   (" ".join(local_list) if local_list else global_prompt.strip())
+        if not pos_text.strip():
+            pos_text = "a cinematic shot"
+            warnings.append("Empty positive prompt; defaulted to 'a cinematic shot'.")
+
+        neg_text = " ".join(neg_list) if neg_list else \
+                   "low quality, blurry, distorted, watermark, text, jpeg artifacts"
+
+        # ── Latent ───────────────────────────────────────────────────
+        if optional_latent is not None:
+            latent = optional_latent
+        else:
+            latent = _empty_wan_latent(model_variant, out_w, out_h, int(duration_frames))
+
+        # ── Audio mix ────────────────────────────────────────────────
+        audio_out = _build_combined_audio(
+            timeline_data, int(duration_frames), float(frame_rate), audio_target,
+        )
+
+        # ── Backend dispatch ─────────────────────────────────────────
+        # Native and Kijai are both populated when possible; outputs not
+        # relevant to the active backend are returned as harmless empty
+        # values (the user just doesn't wire them).
+        out_model_native = model
+        out_pos = []
+        out_neg = []
+        out_wan_model = wan_model
+        out_text_embeds = None
+
+        relay_used = False
+        relay_note = ""
+
+        if backend == "native":
+            pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
+            neg_cond = clip.encode_from_tokens_scheduled(clip.tokenize(neg_text))
+
+            if vcfg["dual_cfg"]:
+                for c in pos_cond:
+                    c[1]["wan_cfg_high_noise"] = float(cfg_high_noise)
+                    c[1]["wan_cfg_low_noise"]  = float(cfg_low_noise)
+                for c in neg_cond:
+                    c[1]["wan_cfg_high_noise"] = float(cfg_high_noise)
+                    c[1]["wan_cfg_low_noise"]  = float(cfg_low_noise)
+            if vcfg["ref_image"]:
+                for c in pos_cond:
+                    c[1]["wan_ref_strength"] = float(ref_strength)
+
+            # Optional embedded PromptRelay on the native MODEL.
+            out_model_native = model
+            if enable_prompt_relay and len(local_list) >= 2:
+                try:
+                    out_model_native, _pr_cond = _apply_prompt_relay_native(
+                        model, clip, latent, global_prompt, local_list,
+                        segment_lengths, float(prompt_relay_epsilon),
+                    )
+                    relay_used = True
+                    relay_note = f"native PromptRelay applied ({len(local_list)} segments)"
+                except Exception as exc:                            # noqa: BLE001
+                    warnings.append(f"PromptRelay (native) skipped: {exc}")
+                    log.warning("PromptRelay native failed: %s", exc)
+            elif enable_prompt_relay:
+                relay_note = "skipped (need 2+ local prompts)"
+
+            out_pos = pos_cond
+            out_neg = neg_cond
+
+        elif backend == "kijai":
+            if wan_model is None or wan_t5 is None:
+                raise ValueError(
+                    "backend='kijai' requires both `wan_model` (WANVIDEOMODEL) and "
+                    "`wan_t5` (WANTEXTENCODER) optional sockets to be connected."
+                )
+            out_wan_model, out_text_embeds, relay_used, relay_note = \
+                _apply_kijai_branch(
+                    wan_model, wan_t5, pos_text, neg_text,
+                    local_list, segment_lengths, int(duration_frames),
+                    float(prompt_relay_epsilon), enable_prompt_relay,
+                )
+            # Native sockets get harmless empties so downstream wiring is optional.
+            out_pos = []
+            out_neg = []
+        else:
+            raise ValueError(f"Unknown backend '{backend}'. Choices: native, kijai.")
+
+        info = json.dumps({
+            "backend":      backend,
+            "variant":      model_variant,
+            "label":        vcfg["label"],
+            "out_size":     [out_w, out_h],
+            "frames":       int(duration_frames),
+            "fps":          float(frame_rate),
+            "latent_shape": list(latent["samples"].shape),
+            "n_text":       len(local_list),
+            "n_neg":        len(neg_list),
+            "n_image":      len(img_segs),
+            "audio_sr":     audio_out["sample_rate"],
+            "prompt_relay": {
+                "enabled":   bool(enable_prompt_relay),
+                "applied":   bool(relay_used),
+                "note":      relay_note,
+                "epsilon":   float(prompt_relay_epsilon),
+            },
+            "warnings":     warnings,
+        }, indent=2)
+
+        return (out_model_native, out_pos, out_neg, latent, float(frame_rate),
+                audio_out, ref_image, info, out_wan_model, out_text_embeds)
