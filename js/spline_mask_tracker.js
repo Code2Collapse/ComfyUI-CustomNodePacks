@@ -108,11 +108,21 @@ class TrackerState {
         this.redoStack.length = 0;
     }
     restore(s) {
-        const o = JSON.parse(s);
-        this.keyframes = new Map(o.k.map(([f, pts]) =>
-            [Number(f), pts.map(p => ({ x: +p.x, y: +p.y }))]
-        ));
-        this.curFrame = o.f ?? 0;
+        // Guard: undo/redo snapshots are produced by snapshot() so they
+        // SHOULD be valid JSON, but a corrupted widget value or a runaway
+        // dev-tools manipulation would crash the entire LiteGraph canvas.
+        let o;
+        try { o = JSON.parse(s); }
+        catch (e) { console.warn("[MEC.SplineMaskTracker] restore: malformed snapshot, ignored", e); return; }
+        if (!o || !Array.isArray(o.k)) return;
+        try {
+            this.keyframes = new Map(o.k.map(([f, pts]) =>
+                [Number(f), (pts || []).map(p => ({ x: +p.x, y: +p.y }))]
+            ));
+            this.curFrame = Number(o.f) || 0;
+        } catch (e) {
+            console.warn("[MEC.SplineMaskTracker] restore: malformed snapshot shape, ignored", e);
+        }
     }
     undo() {
         if (!this.undoStack.length) return false;
