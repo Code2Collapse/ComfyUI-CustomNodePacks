@@ -285,12 +285,22 @@ function ensureRoot() {
     _input.addEventListener("keydown", onKey);
     _addbtn.addEventListener("click", () => {
         close();
-        // Delegate to stock add-node palette (Vue command).
-        try { app.extensionManager?.command?.execute?.("Comfy.NewSearch"); }
-        catch { /* fallback: dispatch key event */
-            window.dispatchEvent(new KeyboardEvent("keydown", {
-                key: "f", ctrlKey: true, bubbles: true,
-            }));
+        // Delegate to stock add-node palette. Prefer the Vue command;
+        // fall back to the legacy LiteGraph search (made visible by
+        // c2c_legacy_search_visibility.js). NEVER dispatch a Ctrl+F
+        // key event here — that would loop straight back to us.
+        try {
+            const cmd = app.extensionManager?.command?.execute;
+            if (typeof cmd === "function") {
+                cmd("Comfy.NewSearch");
+                return;
+            }
+        } catch { /* fall through */ }
+        try {
+            // Legacy path: call the canvas search box directly.
+            app.canvas?.showSearchBox?.(new MouseEvent("mousedown"));
+        } catch (e) {
+            console.warn("[C2C.WorkflowFind] could not open add-node search:", e);
         }
     });
     return _root;
