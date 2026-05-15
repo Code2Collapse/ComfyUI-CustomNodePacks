@@ -224,9 +224,25 @@ class SeCMatAnyonePipelineMEC:
             actual_backend = "matanyone2" if is_video else "vitmatte_small"
 
         if actual_backend == "matanyone2":
-            alpha_mask = self._run_matanyone2(
-                image, coarse_masks, n_warmup, B, H, W, device,
-            )
+            try:
+                alpha_mask = self._run_matanyone2(
+                    image, coarse_masks, n_warmup, B, H, W, device,
+                )
+            except Exception as e:
+                # MatAnyone2 weights are not yet on HuggingFace (the upstream
+                # `pq-yang/MatAnyone2` repo doesn't exist as of May 2026).  We
+                # fall back to ViTMatte so the pipeline still produces a
+                # usable alpha — the user just loses temporal consistency.
+                logger.warning(
+                    "[MEC] MatAnyone2 unavailable (%s: %s) â†’ falling back to "
+                    "vitmatte_small. Install MatAnyone2 weights manually to "
+                    "models/matanyone2/ to enable temporal matting.",
+                    type(e).__name__, str(e)[:120],
+                )
+                actual_backend = "vitmatte_small"
+                alpha_mask = self._run_vitmatte(
+                    image, coarse_masks, actual_backend, edge_radius, B, H, W, device,
+                )
         else:
             alpha_mask = self._run_vitmatte(
                 image, coarse_masks, actual_backend, edge_radius, B, H, W, device,

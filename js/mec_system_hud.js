@@ -54,7 +54,10 @@ function _injectStyle() {
 #${HUD_ID} {
     position: fixed;
     right: 10px;
-    bottom: 10px;
+    /* Raised well above ComfyUI's bottom status bar (FPS + VRAM/RAM
+       badges + queue indicator). Native bar is ~52px on the modern Vue
+       UI; keep a 12px safety gap so we never overlap. */
+    bottom: 64px;
     z-index: 99996;
     background: #1e1e2e;
     color: #cdd6f4;

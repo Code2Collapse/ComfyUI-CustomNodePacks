@@ -27,7 +27,7 @@ function ensurePanel() {
     p = document.createElement("div");
     p.id = PANEL_ID;
     p.style.cssText =
-        `position:fixed;bottom:18px;right:18px;width:460px;max-height:60vh;
+        `position:fixed;bottom:52px;right:18px;width:460px;max-height:60vh;
          z-index:9991;background:${C.bg};color:${C.fg};
          border:1px solid ${C.red};border-radius:8px;
          box-shadow:0 8px 32px rgba(0,0,0,0.6);overflow:hidden;
@@ -153,7 +153,7 @@ function _showInlinePrompt(text, ctx) {
     const div = document.createElement("div");
     div.id = id;
     div.style.cssText =
-        `position:fixed;bottom:18px;right:18px;z-index:9992;
+        `position:fixed;bottom:52px;right:18px;z-index:9992;
          background:${C.bg};color:${C.fg};
          border:1px solid ${C.red};border-radius:8px;padding:10px 14px;
          box-shadow:0 8px 32px rgba(0,0,0,0.6);

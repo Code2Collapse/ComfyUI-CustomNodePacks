@@ -245,7 +245,7 @@ function ensureAIPanel() {
     p = document.createElement("div");
     p.id = ID;
     p.style.cssText =
-        `position:fixed;bottom:18px;right:18px;width:520px;max-height:60vh;z-index:9994;
+        `position:fixed;bottom:52px;right:18px;width:520px;max-height:60vh;z-index:9994;
          background:${C.bg};color:${C.fg};border:1px solid ${C.mauve};border-radius:8px;
          box-shadow:0 12px 40px rgba(0,0,0,0.55);overflow:hidden;
          display:flex;flex-direction:column;
