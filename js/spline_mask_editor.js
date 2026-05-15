@@ -166,6 +166,48 @@ class Editor {
         }
         return { shape: -1, point: -1 };
     }
+    // Hit-test Bezier handle endpoints on the active shape only.
+    // Returns {shape, point, side:"in"|"out"} or null.
+    findHandle(cx, cy) {
+        if (this.active < 0) return null;
+        const sh = this.shapes[this.active];
+        if (!sh || sh.type !== "bezier" || !Array.isArray(sh.handles)) return null;
+        const r = POINT_HIT_PX / this.zoom;
+        const r2 = r * r;
+        for (let i = 0; i < sh.points.length; i++) {
+            const h = sh.handles[i];
+            if (!h) continue;
+            const p = sh.points[i];
+            for (const side of ["in", "out"]) {
+                const hv = h[side];
+                if (!hv) continue;
+                const hx = p.x + hv.x, hy = p.y + hv.y;
+                const d = (hx - cx) ** 2 + (hy - cy) ** 2;
+                if (d < r2) return { shape: this.active, point: i, side };
+            }
+        }
+        return null;
+    }
+    // Ensure shape.handles is sized to match shape.points; create symmetric
+    // tangents from neighbours when missing. Idempotent.
+    ensureHandles(sh) {
+        if (sh.type !== "bezier") return;
+        if (!Array.isArray(sh.handles)) sh.handles = [];
+        const n = sh.points.length;
+        for (let i = 0; i < n; i++) {
+            if (sh.handles[i] && sh.handles[i].in && sh.handles[i].out) continue;
+            const p = sh.points[i];
+            const prev = sh.points[i - 1] || (sh.closed ? sh.points[n - 1] : null);
+            const next = sh.points[i + 1] || (sh.closed ? sh.points[0]     : null);
+            let tx = 0, ty = 0;
+            if (prev && next) { tx = (next.x - prev.x) * 0.25; ty = (next.y - prev.y) * 0.25; }
+            else if (prev)    { tx = (p.x - prev.x) * 0.33;    ty = (p.y - prev.y) * 0.33; }
+            else if (next)    { tx = (next.x - p.x) * 0.33;    ty = (next.y - p.y) * 0.33; }
+            else              { tx = 40; ty = 0; }
+            sh.handles[i] = { in: { x: -tx, y: -ty }, out: { x: tx, y: ty } };
+        }
+        sh.handles.length = n;
+    }
 
     save() {
         const w = this.node.widgets?.find(w => w.name === "spline_data");
@@ -192,6 +234,7 @@ class Editor {
                     ...(sh.handles ? { handles: sh.handles } : {}),
                 }));
                 this.active = this.shapes.length ? 0 : -1;
+                for (const sh of this.shapes) if (sh.type === "bezier") this.ensureHandles(sh);
             }
         } catch (_) {}
     }
@@ -291,10 +334,39 @@ function catmullRom(points, samplesPerSeg, closed, alpha) {
     return out;
 }
 
+function bezierCubic(points, samplesPerSeg, closed, handles) {
+    const n = points.length;
+    if (n < 2 || !Array.isArray(handles) || handles.length < n) return points.slice();
+    const out = [];
+    const segs = closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const h1 = handles[i];
+        const h2 = handles[(i + 1) % n];
+        if (!h1 || !h2) continue;
+        const c1x = p1.x + (h1.out?.x ?? 0), c1y = p1.y + (h1.out?.y ?? 0);
+        const c2x = p2.x + (h2.in?.x  ?? 0), c2y = p2.y + (h2.in?.y  ?? 0);
+        const last = i === segs - 1;
+        const steps = samplesPerSeg + (last ? 1 : 0);
+        for (let s = 0; s < steps; s++) {
+            const t = s / samplesPerSeg;
+            const u = 1 - t;
+            const b0 = u * u * u, b1 = 3 * u * u * t, b2 = 3 * u * t * t, b3 = t * t * t;
+            out.push({
+                x: b0 * p1.x + b1 * c1x + b2 * c2x + b3 * p2.x,
+                y: b0 * p1.y + b1 * c1y + b2 * c2y + b3 * p2.y,
+            });
+        }
+    }
+    return out;
+}
+
 function sampleShape(sh, samplesPerSeg, alpha) {
     const pts = sh.points;
     if (pts.length < 2) return pts.slice();
     if (sh.type === "polyline") return pts.slice();
+    if (sh.type === "bezier")   return bezierCubic(pts, samplesPerSeg, sh.closed, sh.handles);
     return catmullRom(pts, samplesPerSeg, sh.closed, alpha);
 }
 
@@ -352,6 +424,33 @@ function draw(ed, ctx, vw, vh) {
                 ctx.strokeStyle = "#fff";
                 ctx.lineWidth = 1 / z;
                 ctx.beginPath(); ctx.arc(p.x, p.y, r + 2 / z, 0, Math.PI * 2); ctx.stroke();
+            }
+        }
+
+        // Bezier handle endpoints + connector lines (active shape only).
+        if (isActive && sh.type === "bezier" && Array.isArray(sh.handles)) {
+            for (let i = 0; i < sh.points.length; i++) {
+                const p = sh.points[i];
+                const h = sh.handles[i];
+                if (!h) continue;
+                for (const side of ["in", "out"]) {
+                    const hv = h[side];
+                    if (!hv) continue;
+                    const hx = p.x + hv.x, hy = p.y + hv.y;
+                    ctx.strokeStyle = "#fab387aa";
+                    ctx.lineWidth = 1 / z;
+                    ctx.beginPath();
+                    ctx.moveTo(p.x, p.y);
+                    ctx.lineTo(hx, hy);
+                    ctx.stroke();
+                    ctx.fillStyle = "#fab387";
+                    ctx.beginPath();
+                    ctx.arc(hx, hy, 3.5 / z, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = "#000a";
+                    ctx.lineWidth = 1 / z;
+                    ctx.stroke();
+                }
             }
         }
     }
@@ -715,6 +814,14 @@ function installEditor(node) {
             canvas.style.cursor = "grabbing";
             return;
         }
+        // Bezier handle drag takes priority over point hit, on active shape only.
+        const handleHit = (e.button === 0 && !e.shiftKey) ? ed.findHandle(c.x, c.y) : null;
+        if (handleHit) {
+            ed.pushUndo();
+            ed.drag = { kind: "handle", shape: handleHit.shape, point: handleHit.point, side: handleHit.side,
+                        mirror: !e.altKey };
+            return;
+        }
         const hit = ed.findPoint(c.x, c.y);
 
         if (e.button === 2) {
@@ -745,6 +852,7 @@ function installEditor(node) {
         ed.pushUndo();
         if (ed.active < 0 || ed.active >= ed.shapes.length) ed.newPath();
         ed.shapes[ed.active].points.push({ x: +c.x.toFixed(2), y: +c.y.toFixed(2) });
+        ed.ensureHandles(ed.shapes[ed.active]);
         ed.save(); render();
     });
 
@@ -767,6 +875,25 @@ function installEditor(node) {
             }
             return;
         }
+        if (ed.drag?.kind === "handle") {
+            const sh = ed.shapes[ed.drag.shape];
+            if (sh && Array.isArray(sh.handles)) {
+                const p = sh.points[ed.drag.point];
+                const h = sh.handles[ed.drag.point];
+                if (p && h) {
+                    const nx = +(c.x - p.x).toFixed(2);
+                    const ny = +(c.y - p.y).toFixed(2);
+                    h[ed.drag.side] = { x: nx, y: ny };
+                    // Symmetric mirror unless Alt held when drag started.
+                    if (ed.drag.mirror) {
+                        const other = ed.drag.side === "in" ? "out" : "in";
+                        h[other] = { x: -nx, y: -ny };
+                    }
+                    render();
+                }
+            }
+            return;
+        }
         const hit = ed.findPoint(c.x, c.y);
         if (hit.shape !== ed.hover.shape || hit.point !== ed.hover.point) {
             ed.hover = hit;
@@ -783,6 +910,9 @@ function installEditor(node) {
             ed.drag = null; canvas.style.cursor = "crosshair"; return;
         }
         if (ed.drag?.kind === "point") {
+            ed.drag = null; ed.save(); render(); return;
+        }
+        if (ed.drag?.kind === "handle") {
             ed.drag = null; ed.save(); render(); return;
         }
     });
@@ -852,7 +982,10 @@ function installEditor(node) {
             syncFromWidgets();
             // Apply spline_type / closed change to ALL existing shapes
             if (wn === "spline_type") {
-                for (const sh of ed.shapes) sh.type = ed.splineType;
+                for (const sh of ed.shapes) {
+                    sh.type = ed.splineType;
+                    if (sh.type === "bezier") ed.ensureHandles(sh);
+                }
                 ed.save();
             } else if (wn === "closed") {
                 // do not clobber per-shape closed flag automatically; only newly added paths use it

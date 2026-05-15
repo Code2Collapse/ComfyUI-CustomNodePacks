@@ -50,11 +50,19 @@ Vendored third-party packages (under third_party/):
       Usage:    Optional Kijai-backend integration for the Wan Director
                 (nodes/wan_director/director_node.py, when backend="kijai").
 
-  * WhatDreamsCost-ComfyUI (LTX Director reference)
+  * WhatDreamsCost-ComfyUI (LTX Director — behavioural inspiration only)
       Source:   https://github.com/WhatDreamsCost/ComfyUI
-      License:  MIT
-      Usage:    Reference / structural inspiration for the timeline JS
-                in nodes/wan_director/ (js/wan_director_timeline.js).
+      License:  GPL-3.0 (verified May 2026 — see upstream LICENSE).
+      Usage:    Our `js/wan_director_timeline.js` is a CLEAN-ROOM
+                reimplementation. No source code from the upstream file
+                `js/ltx_director.js` was copied, ported, or transformed
+                into our file. Only the *timeline_data JSON schema* and
+                publicly observable interaction behaviour were used as a
+                reference so a user's saved LTX-Director timeline can be
+                round-tripped through ours. The file is original work
+                authored under Apache-2.0. If you believe any portion is
+                substantially similar to GPL-3 source, please open an
+                issue and we will reauthor the affected section.
 
   * ComfyUI-KJNodes
       Author:   Kijai
