@@ -86,6 +86,19 @@ except Exception as _exc:  # pragma: no cover
     )
     _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
 
+# Wan Director (P9) — multi-shot orchestration utilities
+try:
+    from .nodes.wan_director import (
+        NODE_CLASS_MAPPINGS as _WANDIR_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _WANDIR_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.WanDirector").warning(
+        "WanDirector unavailable: %s", _exc
+    )
+    _WANDIR_MAPPINGS, _WANDIR_DISPLAY = {}, {}
+
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
@@ -186,6 +199,7 @@ NODE_CLASS_MAPPINGS = {
     **_USEG_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
+    **_WANDIR_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -197,6 +211,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_USEG_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
+    **_WANDIR_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
