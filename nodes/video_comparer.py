@@ -60,6 +60,11 @@ _MODES = [
     "audio_waveform",
     "audio_spectro",
     "audio_loudness",
+    # Client-side dual-<video> synced player. The server emits the
+    # A-frame unchanged so the queued preview is still valid; the JS
+    # widget swaps the canvas for two real <video> elements wired to a
+    # shared transport (play/pause/seek mirrored between them).
+    "synced_player",
 ]
 
 _BIT_DEPTHS = ["8", "10", "12", "16", "32"]

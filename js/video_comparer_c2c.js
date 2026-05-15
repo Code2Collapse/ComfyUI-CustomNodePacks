@@ -26,6 +26,10 @@ const NODE_IDS = new Set(["VideoComparerC2C", "VideoComparerMEC"]);
 const LIVE_MODES = new Set([
     "wipe", "onion", "diff", "side_by_side",
     "per_channel", "false_color", "bit_depth_crush",
+    // synced_player is technically not "canvas-rendered" — it uses two
+    // real <video> elements — but it IS fully client-side, so we mark
+    // it LIVE so the LIVE/Queue badge reads correctly.
+    "synced_player",
 ]);
 
 // 256-entry color LUTs (matplotlib-style approximations) for false_color /
@@ -198,6 +202,150 @@ app.registerExtension({
 
             const ctx = cvs.getContext("2d", { willReadFrequently: true });
 
+            // ── Synced dual-video player (mode = "synced_player") ──
+            // Two side-by-side <video> elements sharing a single transport.
+            // Hidden by default; activated by the render() switch.
+            const playerHost = document.createElement("div");
+            playerHost.style.cssText = "display:none;flex-direction:column;width:100%;background:#0a0a10;";
+            const playerRow = document.createElement("div");
+            playerRow.style.cssText = "display:flex;width:100%;gap:2px;background:#0a0a10;";
+            const vidA = document.createElement("video");
+            const vidB = document.createElement("video");
+            for (const v of [vidA, vidB]) {
+                v.style.cssText = "flex:1 1 50%;width:50%;height:auto;display:block;background:#000;";
+                v.playsInline = true;
+                v.preload = "auto";
+                v.muted = true;          // dual-audio would echo; user can unmute the master
+                v.controls = false;
+            }
+            vidA.title = "A";
+            vidB.title = "B";
+            const vidALabel = document.createElement("div");
+            vidALabel.textContent = "A";
+            vidALabel.style.cssText = "position:absolute;top:6px;left:6px;background:rgba(0,0,0,0.6);color:#a6e3a1;padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
+            const vidBLabel = document.createElement("div");
+            vidBLabel.textContent = "B";
+            vidBLabel.style.cssText = "position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#f5c2e7;padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
+            const wrapA = document.createElement("div");
+            wrapA.style.cssText = "position:relative;flex:1 1 50%;min-width:0;";
+            wrapA.appendChild(vidA);
+            wrapA.appendChild(vidALabel);
+            const wrapB = document.createElement("div");
+            wrapB.style.cssText = "position:relative;flex:1 1 50%;min-width:0;";
+            wrapB.appendChild(vidB);
+            wrapB.appendChild(vidBLabel);
+            playerRow.appendChild(wrapA);
+            playerRow.appendChild(wrapB);
+            playerHost.appendChild(playerRow);
+
+            // Shared transport: play/pause button + seekbar + time readout.
+            const transport = document.createElement("div");
+            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:#11111b;border-top:1px solid #1f1f2a;color:#cdd6f4;font:11px system-ui;";
+            const playBtn = document.createElement("button");
+            playBtn.type = "button";
+            playBtn.textContent = "▶";
+            playBtn.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:13px;line-height:1;";
+            const seek = document.createElement("input");
+            seek.type = "range";
+            seek.min = "0";
+            seek.max = "10000";
+            seek.value = "0";
+            seek.step = "1";
+            seek.style.cssText = "flex:1 1 auto;accent-color:#89b4fa;";
+            const tReadout = document.createElement("span");
+            tReadout.textContent = "0.00 / 0.00";
+            tReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:#a6adc8;min-width:84px;text-align:right;";
+            const muteBtn = document.createElement("button");
+            muteBtn.type = "button";
+            muteBtn.textContent = "🔇 A";
+            muteBtn.title = "Toggle audio (unmute A — B stays muted to avoid echo)";
+            muteBtn.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10.5px;";
+            transport.appendChild(playBtn);
+            transport.appendChild(seek);
+            transport.appendChild(tReadout);
+            transport.appendChild(muteBtn);
+            playerHost.appendChild(transport);
+            wrap.appendChild(playerHost);
+
+            // Synced-player state — _sp.master is whichever <video> drives time;
+            // we always seek both to master.currentTime per RAF tick. Master is
+            // picked as whichever has the longer duration (so the shorter one
+            // pauses at its end naturally).
+            const _sp = { active: false, raf: 0, master: vidA, slave: vidB };
+
+            const _spPickMaster = () => {
+                const dA = isFinite(vidA.duration) ? vidA.duration : 0;
+                const dB = isFinite(vidB.duration) ? vidB.duration : 0;
+                if (dB > dA) { _sp.master = vidB; _sp.slave = vidA; }
+                else         { _sp.master = vidA; _sp.slave = vidB; }
+            };
+
+            const _spLoadSources = () => {
+                const a = S.srcA, b = S.srcB;
+                if (a && a.kind === "video" && vidA.src !== a.el.currentSrc && a.el.currentSrc) {
+                    vidA.src = a.el.currentSrc;
+                }
+                if (b && b.kind === "video" && vidB.src !== b.el.currentSrc && b.el.currentSrc) {
+                    vidB.src = b.el.currentSrc;
+                }
+            };
+
+            const _spSync = () => {
+                // Push master.currentTime onto slave (with rate-matched tolerance)
+                if (!_sp.master.duration || !_sp.slave.duration) return;
+                const t = _sp.master.currentTime;
+                if (Math.abs(_sp.slave.currentTime - t) > 0.05) {
+                    try { _sp.slave.currentTime = Math.min(_sp.slave.duration, t); } catch {}
+                }
+                if (_sp.master.paused !== _sp.slave.paused) {
+                    if (_sp.master.paused) _sp.slave.pause();
+                    else _sp.slave.play().catch(() => {});
+                }
+                // Update transport UI
+                const dur = _sp.master.duration || 0;
+                tReadout.textContent = `${t.toFixed(2)} / ${dur.toFixed(2)}`;
+                seek.value = String(Math.round((dur > 0 ? t / dur : 0) * 10000));
+                playBtn.textContent = _sp.master.paused ? "▶" : "❚❚";
+            };
+
+            const _spRaf = () => {
+                _sp.raf = 0;
+                if (!_sp.active) return;
+                _spSync();
+                if (!_sp.master.paused) _sp.raf = requestAnimationFrame(_spRaf);
+            };
+            const _spKick = () => { if (!_sp.raf) _sp.raf = requestAnimationFrame(_spRaf); };
+
+            playBtn.addEventListener("click", () => {
+                _spPickMaster();
+                if (_sp.master.paused) {
+                    _sp.master.play().catch(() => {});
+                    _sp.slave.play().catch(() => {});
+                    _spKick();
+                } else {
+                    _sp.master.pause();
+                    _sp.slave.pause();
+                    _spSync();
+                }
+            });
+            seek.addEventListener("input", () => {
+                _spPickMaster();
+                const dur = _sp.master.duration || 0;
+                const t = (parseInt(seek.value, 10) / 10000) * dur;
+                try { _sp.master.currentTime = t; _sp.slave.currentTime = Math.min(_sp.slave.duration || t, t); } catch {}
+                _spSync();
+            });
+            muteBtn.addEventListener("click", () => {
+                vidA.muted = !vidA.muted;
+                muteBtn.textContent = vidA.muted ? "🔇 A" : "🔊 A";
+            });
+            // Keep the loop running while master is playing.
+            vidA.addEventListener("play",  () => _spKick());
+            vidB.addEventListener("play",  () => _spKick());
+            vidA.addEventListener("pause", () => _spSync());
+            vidB.addEventListener("pause", () => _spSync());
+
+
             // ── Frame scrubbing for videos ───────────────────
             const applyFrameToVideos = () => {
                 const fIdx = Math.max(0, getVal(node, "frame_index", 0) | 0);
@@ -235,6 +383,39 @@ app.registerExtension({
                 const cw = wrap.clientWidth || 400;
                 const mode = getVal(node, "mode", "wipe");
                 const isLive = LIVE_MODES.has(mode);
+
+                // ── synced_player mode: swap canvas for dual <video> ──
+                if (mode === "synced_player") {
+                    cvs.style.display = "none";
+                    overlay.style.display = "none";
+                    hint.style.display = "none";
+                    playerHost.style.display = "flex";
+                    _sp.active = true;
+                    _spLoadSources();
+                    _spPickMaster();
+                    // If neither A nor B is a video, show a placeholder.
+                    const aIsVid = S.srcA && S.srcA.kind === "video";
+                    const bIsVid = S.srcB && S.srcB.kind === "video";
+                    if (!aIsVid && !bIsVid) {
+                        tReadout.textContent = "(no videos)";
+                        seek.disabled = true;
+                        playBtn.disabled = true;
+                    } else {
+                        seek.disabled = false;
+                        playBtn.disabled = false;
+                    }
+                    modeBadge.textContent = mode;
+                    return;
+                } else if (_sp.active) {
+                    // Coming back from synced_player → restore canvas view.
+                    _sp.active = false;
+                    if (_sp.raf) { cancelAnimationFrame(_sp.raf); _sp.raf = 0; }
+                    try { vidA.pause(); vidB.pause(); } catch {}
+                    playerHost.style.display = "none";
+                    cvs.style.display = "block";
+                    overlay.style.display = "flex";
+                    hint.style.display = "block";
+                }
 
                 if (!S.srcA && !S.srcB && !S.serverPreview) {
                     const ch = 240;
