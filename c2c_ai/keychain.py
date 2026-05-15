@@ -43,6 +43,10 @@ KEY_OPENAI = "OPENAI_API_KEY"
 KEY_QWEN = "QWEN_API_KEY"
 KEY_OPENROUTER = "OPENROUTER_API_KEY"
 KEY_HF = "HUGGINGFACE_API_KEY"
+# P10.1 — extended providers
+KEY_AZURE_OPENAI = "AZURE_OPENAI_API_KEY"
+KEY_GEMINI = "GEMINI_API_KEY"
+KEY_COHERE = "COHERE_API_KEY"
 
 ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_ANTHROPIC,
@@ -50,6 +54,9 @@ ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_QWEN,
     KEY_OPENROUTER,
     KEY_HF,
+    KEY_AZURE_OPENAI,
+    KEY_GEMINI,
+    KEY_COHERE,
 )
 
 
@@ -120,6 +127,16 @@ def parse_keys_txt(path: str) -> dict[str, str]:
         "huggingface": KEY_HF,
         "huggingface_api_key": KEY_HF,
         "hf_token": KEY_HF,
+        # P10.1 — extended providers
+        "azure": KEY_AZURE_OPENAI,
+        "azure_openai": KEY_AZURE_OPENAI,
+        "azure_openai_api_key": KEY_AZURE_OPENAI,
+        "gemini": KEY_GEMINI,
+        "gemini_api_key": KEY_GEMINI,
+        "google_api_key": KEY_GEMINI,
+        "google_ai": KEY_GEMINI,
+        "cohere": KEY_COHERE,
+        "cohere_api_key": KEY_COHERE,
     }
 
     pat = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.+?)\s*$")

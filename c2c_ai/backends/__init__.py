@@ -16,5 +16,15 @@ from __future__ import annotations
 from .base import Backend
 from .anthropic import AnthropicBackend
 from .openai_compat import OpenAICompatBackend
+from .gemini import GeminiBackend
+from .cohere import CohereBackend
+from .azure_openai import AzureOpenAIBackend
 
-__all__ = ["Backend", "AnthropicBackend", "OpenAICompatBackend"]
+__all__ = [
+    "Backend",
+    "AnthropicBackend",
+    "OpenAICompatBackend",
+    "GeminiBackend",
+    "CohereBackend",
+    "AzureOpenAIBackend",
+]

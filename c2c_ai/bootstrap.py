@@ -27,7 +27,13 @@ import logging
 import os
 from pathlib import Path
 
-from .backends import AnthropicBackend, OpenAICompatBackend
+from .backends import (
+    AnthropicBackend,
+    OpenAICompatBackend,
+    GeminiBackend,
+    CohereBackend,
+    AzureOpenAIBackend,
+)
 from .router import get_router
 
 log = logging.getLogger("c2c_ai.bootstrap")
@@ -96,6 +102,41 @@ def build_backend(entry: dict):
             base_url=entry["base_url"],
             model=entry.get("model", "auto"),
             max_context=int(entry.get("max_context", 32_768)),
+        )
+    elif kind == "gemini":
+        b = GeminiBackend.build(
+            backend_id=entry.get("id", "cloud.gemini"),
+            model=entry.get("model", "gemini-1.5-flash-latest"),
+            display_name=entry.get("display_name", "Gemini (Google)"),
+            cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.000075)),
+            cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0003)),
+            max_context=int(entry.get("max_context", 1_000_000)),
+        )
+    elif kind == "cohere":
+        b = CohereBackend.build(
+            backend_id=entry.get("id", "cloud.cohere"),
+            model=entry.get("model", "command-r-08-2024"),
+            display_name=entry.get("display_name", "Command R (Cohere)"),
+            cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.00015)),
+            cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0006)),
+            max_context=int(entry.get("max_context", 128_000)),
+        )
+    elif kind == "azure_openai":
+        ep = entry.get("endpoint") or ""
+        dep = entry.get("deployment") or ""
+        if not ep or not dep:
+            raise ValueError("azure_openai backend requires 'endpoint' and "
+                             "'deployment' fields")
+        b = AzureOpenAIBackend.build(
+            backend_id=entry.get("id", "cloud.azure_openai"),
+            endpoint=ep,
+            deployment=dep,
+            api_version=entry.get("api_version", "2024-02-15-preview"),
+            model=entry.get("model", "gpt-4o-mini"),
+            display_name=entry.get("display_name", "Azure OpenAI"),
+            cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.00015)),
+            cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0006)),
+            max_context=int(entry.get("max_context", 128_000)),
         )
     else:
         raise ValueError(f"unknown backend kind: {kind!r}")

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 import urllib.error
@@ -216,11 +217,135 @@ _DISPATCH["groq"]     = _groq
 _DISPATCH["deepseek"] = _deepseek
 
 
+# ─── P10.1: Extended providers (Azure OpenAI, Cohere, Custom OpenAI-compatible) ───
+def _azure_openai(model: str, prompt: str, max_tokens: int,
+                  system: Optional[str] = None,
+                  endpoint: Optional[str] = None,
+                  api_version: str = "2024-02-15-preview") -> Optional[str]:
+    """Azure OpenAI Service.
+
+    Requires:
+      - key (stored as 'azure_openai' in secrets_store)
+      - endpoint URL (e.g. https://my-resource.openai.azure.com)
+      - deployment name passed as `model` (NOT the underlying model id)
+
+    The `endpoint` is read from the router config (or kwargs) since it is
+    user-specific. Falls back to AZURE_OPENAI_ENDPOINT env var.
+    """
+    key = _get_key("azure_openai")
+    if not key:
+        return None
+    ep = endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+    if not ep:
+        log.warning("[cloud_llm] azure_openai: no endpoint configured")
+        return None
+    deployment = model or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+    url = (f"{ep.rstrip('/')}/openai/deployments/{deployment}"
+           f"/chat/completions?api-version={api_version}")
+    body = {
+        "messages": [
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    headers = {"api-key": key, "Content-Type": "application/json"}
+    j = _http_post(url, headers, body)
+    if not j:
+        return None
+    try:
+        return (j["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return None
+
+
+def _cohere(model: str, prompt: str, max_tokens: int,
+            system: Optional[str] = None) -> Optional[str]:
+    """Cohere Chat API v2 (https://docs.cohere.com/reference/chat)."""
+    key = _get_key("cohere")
+    if not key:
+        return None
+    messages = []
+    if system is not None or SYSTEM_PROMPT:
+        messages.append({"role": "system",
+                         "content": system if system is not None else SYSTEM_PROMPT})
+    messages.append({"role": "user", "content": prompt})
+    body = {
+        "model": model or "command-r-08-2024",
+        "messages": messages,
+        "max_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    j = _http_post("https://api.cohere.com/v2/chat", headers, body)
+    if not j:
+        return None
+    try:
+        # v2 returns: {"message": {"content": [{"type":"text","text":"..."}]}}
+        parts = j["message"]["content"]
+        return "".join(p.get("text", "") for p in parts if p.get("type") == "text").strip()
+    except Exception:
+        return None
+
+
+def _custom_openai(model: str, prompt: str, max_tokens: int,
+                   system: Optional[str] = None,
+                   base_url: Optional[str] = None,
+                   api_key_override: Optional[str] = None,
+                   extra_headers: Optional[dict] = None) -> Optional[str]:
+    """Custom OpenAI-compatible endpoint (vLLM, LM Studio, LiteLLM, etc.).
+
+    Reads base_url from kwargs (router-provided) or CUSTOM_LLM_BASE_URL env.
+    Key is optional — many local servers don't require it.
+    """
+    base = base_url or os.environ.get("CUSTOM_LLM_BASE_URL")
+    if not base:
+        log.warning("[cloud_llm] custom: no base_url configured")
+        return None
+    key = api_key_override or _get_key("custom") or "not-needed"
+    body = {
+        "model": model or "default",
+        "messages": [
+            {"role": "system", "content": system if system is not None else SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    j = _http_post(f"{base.rstrip('/')}/chat/completions", headers, body)
+    if not j:
+        return None
+    try:
+        return (j["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return None
+
+
+_DISPATCH["azure_openai"] = _azure_openai
+_DISPATCH["cohere"]       = _cohere
+_DISPATCH["custom"]       = _custom_openai
+
+
 def generate(provider: str, model: str, prompt: str,
              max_tokens: int = 512,
-             system: Optional[str] = None) -> Optional[str]:
+             system: Optional[str] = None,
+             **extra_kwargs) -> Optional[str]:
+    """Dispatch to the named provider.
+
+    `extra_kwargs` are forwarded to providers that accept them (azure_openai,
+    custom). They are silently ignored by providers that don't.
+    """
     fn = _DISPATCH.get((provider or "").strip().lower())
     if fn is None:
         log.warning("[cloud_llm] unknown provider %r", provider)
         return None
-    return fn(model, prompt, max_tokens, system)
+    # Filter kwargs by what the function accepts to remain backward-compatible.
+    import inspect
+    sig = inspect.signature(fn)
+    accepted = {k: v for k, v in extra_kwargs.items() if k in sig.parameters}
+    return fn(model, prompt, max_tokens, system, **accepted)
+

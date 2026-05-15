@@ -30,7 +30,7 @@ C2C found "All API Keys Of Comfy.txt" in your project folder. We can save these 
 
 What happens next:
   1. We read the file once.
-  2. Each key (ANTHROPIC_API_KEY, OPENAI_API_KEY, QWEN_API_KEY, OPENROUTER_API_KEY, HF_TOKEN) is stored as a separate entry in the credential store under the service name "c2c-comfy".
+  2. Each key (ANTHROPIC_API_KEY, OPENAI_API_KEY, QWEN_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, COHERE_API_KEY, AZURE_OPENAI_API_KEY, HF_TOKEN) is stored as a separate entry in the credential store under the service name "c2c-comfy".
   3. The original .txt file is NOT automatically deleted — you'll be asked next.`;
 
 // --- low-level API helpers ---------------------------------------------------
@@ -228,6 +228,17 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
         startCfg.backends.push({ kind:"openrouter", id:"cloud.openrouter",
             model:"anthropic/claude-3.5-sonnet", enabled:false });
     }
+    if (haveKeys.keys?.includes("GEMINI_API_KEY")) {
+        startCfg.backends.push({ kind:"gemini", id:"cloud.gemini",
+            model:"gemini-1.5-flash-latest", enabled:true });
+    }
+    if (haveKeys.keys?.includes("COHERE_API_KEY")) {
+        startCfg.backends.push({ kind:"cohere", id:"cloud.cohere",
+            model:"command-r-08-2024", enabled:false });
+    }
+    // Azure OpenAI is NOT auto-enabled at first-run even when the key is
+    // present because it additionally requires endpoint + deployment name
+    // that we can't auto-detect. The user adds it manually in the editor.
     (detect.servers || []).slice(0, 2).forEach(srv => {
         startCfg.backends.push({
             kind:"local", id:srv.id, display_name:srv.name,

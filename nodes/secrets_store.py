@@ -34,7 +34,11 @@ from typing import Optional
 
 log = logging.getLogger("MEC.secrets")
 
-PROVIDERS = ("openai", "anthropic", "gemini", "openrouter", "groq", "deepseek")
+PROVIDERS = (
+    "openai", "anthropic", "gemini", "openrouter", "groq", "deepseek",
+    # P10.1 — extended providers
+    "azure_openai", "cohere", "custom",
+)
 
 
 def _user_dir() -> str:
