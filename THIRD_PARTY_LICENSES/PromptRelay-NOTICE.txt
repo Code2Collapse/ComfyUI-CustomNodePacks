@@ -1,0 +1,26 @@
+Prompt Relay — Attribution
+==========================
+
+This repository's `nodes/prompt_relay/` module is a refined, multi-backend port
+of the algorithm and reference implementation by Gordon Chen and contributors:
+
+  - Project page : https://gordonchen19.github.io/Prompt-Relay/
+  - Reference impl: https://github.com/GordonChen19/Prompt-Relay
+
+All design credit for the Gaussian temporal-cost matrix, segment scheduler,
+smart-prompt parser, and timeline editor concept belongs to the upstream
+authors. This port:
+
+  * reorganises the code into a backend-agnostic core,
+  * adds compatibility with Kijai's ComfyUI-WanVideoWrapper (which bypasses
+    ComfyUI's ModelPatcher.object_patches),
+  * adds a generic-fallback patcher for third-party model backbones.
+
+Upstream repository ships without a LICENSE file as of May 2026. The author
+has publicly described the project as open source / free for use; this port
+is distributed under the Apache-2.0 license of ComfyUI-CustomNodePacks. If
+the upstream maintainers attach a specific license that conflicts, this
+module will be relicensed to match.
+
+See ComfyUI-CustomNodePacks/nodes/prompt_relay/NOTICE.md for the in-tree copy
+of this notice.

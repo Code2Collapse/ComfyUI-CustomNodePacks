@@ -114,6 +114,20 @@ except Exception as _exc:  # pragma: no cover
     )
     _HELPERS_MAPPINGS, _HELPERS_DISPLAY = {}, {}
 
+# Prompt Relay — refined port (native + Kijai + generic-fallback backends).
+# Algorithm credit: Gordon Chen & contributors. See nodes/prompt_relay/NOTICE.md.
+try:
+    from .nodes.prompt_relay import (
+        NODE_CLASS_MAPPINGS as _PROMPTRELAY_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _PROMPTRELAY_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("C2C.PromptRelay").warning(
+        "PromptRelay unavailable: %s", _exc
+    )
+    _PROMPTRELAY_MAPPINGS, _PROMPTRELAY_DISPLAY = {}, {}
+
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
@@ -218,6 +232,7 @@ NODE_CLASS_MAPPINGS = {
     **_STABILIZER_MAPPINGS,
     **_WANDIR_MAPPINGS,
     **_HELPERS_MAPPINGS,
+    **_PROMPTRELAY_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -231,6 +246,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_STABILIZER_DISPLAY,
     **_WANDIR_DISPLAY,
     **_HELPERS_DISPLAY,
+    **_PROMPTRELAY_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
