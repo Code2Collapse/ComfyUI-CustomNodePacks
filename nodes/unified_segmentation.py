@@ -507,6 +507,15 @@ class UnifiedSegmentation:
             logger.debug("[MEC] SAM unexpected keys: %d", len(unexpected))
 
         model = model.to(dtype).to(device).eval()
+        # Stash resolved config + checkpoint path so the video predictor can
+        # be rebuilt via ``build_sam2_video_predictor`` (which is the only
+        # supported entrypoint in modern sam2 — ``SAM2VideoPredictor(model)``
+        # raises TypeError on missing image_encoder/memory_attention args).
+        try:
+            model._mec_ckpt_path = path
+            model._mec_config = config
+        except Exception:
+            pass
         logger.info(
             "[MEC] Loaded %s  (%s, %s, missing=%d, unexpected=%d)",
             reg["filename"], dtype, device, len(missing), len(unexpected),
@@ -687,13 +696,34 @@ class UnifiedSegmentation:
         dtype, device, B, H, W,
     ):
         try:
-            from sam2.sam2_video_predictor import SAM2VideoPredictor
+            from sam2.build_sam import build_sam2_video_predictor
         except ImportError:
             raise RuntimeError(
                 "sam2 package is required for video propagation."
             )
 
-        video_pred = SAM2VideoPredictor(model)
+        # Modern sam2 requires the video predictor to be built via
+        # ``build_sam2_video_predictor`` (Hydra-instantiated). Passing an
+        # already-built ``SAM2Base`` directly to ``SAM2VideoPredictor()``
+        # raises ``TypeError: missing image_encoder/memory_attention/
+        # memory_encoder`` because those are required positional args on
+        # ``SAM2Base.__init__``.
+        cfg = getattr(model, "_mec_config", None) or "configs/sam2.1/sam2.1_hiera_l.yaml"
+        ckpt = getattr(model, "_mec_ckpt_path", None)
+        # Build with ckpt_path=None to bypass sam2's internal torch.load
+        # which defaults to weights_only=True in PyTorch 2.6+ and rejects
+        # the .pt format we ship; load the state_dict via our helper
+        # (handles .safetensors + .pt with weights_only=False).
+        video_pred = build_sam2_video_predictor(
+            config_file=cfg, ckpt_path=None, device=str(device),
+        )
+        if ckpt:
+            v_state = _load_state_dict(ckpt)
+            v_miss, v_unex = video_pred.load_state_dict(v_state, strict=False)
+            if v_miss:
+                logger.debug("[MEC] SAM video missing keys: %d", len(v_miss))
+            if v_unex:
+                logger.debug("[MEC] SAM video unexpected keys: %d", len(v_unex))
 
         # Save frames to temp JPEG dir (required by init_state)
         tmp = tempfile.mkdtemp(prefix="mec_vid_")
