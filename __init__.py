@@ -88,6 +88,21 @@ except Exception as _exc:  # pragma: no cover
     )
     _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
 
+# SAM Multi-Mask Picker — interactive 3-thumbnail mask chooser
+# (user-recalled feature: pick best of N SAM candidates by score)
+try:
+    from .nodes.sam_multi_mask_picker import SamMultiMaskPickerMEC
+    _SAMPICKER_MAPPINGS = {"SamMultiMaskPickerMEC": SamMultiMaskPickerMEC}
+    _SAMPICKER_DISPLAY = {
+        "SamMultiMaskPickerMEC": "SAM Multi-Mask Picker — 3 candidates + scores",
+    }
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.SamMultiPicker").warning(
+        "SamMultiMaskPickerMEC unavailable: %s", _exc
+    )
+    _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY = {}, {}
+
 # Wan Director (P9) — multi-shot orchestration utilities
 try:
     from .nodes.wan_director import (
@@ -232,6 +247,7 @@ NODE_CLASS_MAPPINGS = {
     **_FACE_FIXER_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
     **_USEG_MAPPINGS,
+    **_SAMPICKER_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
     **_WANDIR_MAPPINGS,
@@ -246,6 +262,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FACE_FIXER_DISPLAY,
     **_MASKMATTE_DISPLAY,
     **_USEG_DISPLAY,
+    **_SAMPICKER_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
     **_WANDIR_DISPLAY,
