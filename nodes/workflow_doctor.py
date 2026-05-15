@@ -151,28 +151,78 @@ def _normalize_links(wf: Dict[str, Any]) -> List[Tuple[int, int, int, int, int, 
     return out
 
 
+_WIDGET_LAYOUT_CACHE: Dict[str, List[str]] = {}
+
+
+def _widget_layout_for(node_type: str) -> List[str]:
+    """Return the positional widget-name layout for a node class, as it would
+    appear in LiteGraph's `widgets_values` array.
+
+    A widget is created for every primitive input (INT/FLOAT/STRING/BOOLEAN/COMBO).
+    Slot-type inputs (IMAGE, MASK, LATENT, MODEL, CLIP, VAE, CONDITIONING, ...)
+    do NOT consume a widgets_values slot. Some widgets (seed/INT with control,
+    text/STRING multiline) emit an extra positional value — we handle the most
+    common: seed → followed by `control_after_generate` string.
+    """
+    if node_type in _WIDGET_LAYOUT_CACHE:
+        return _WIDGET_LAYOUT_CACHE[node_type]
+    layout: List[str] = []
+    try:
+        from nodes import NODE_CLASS_MAPPINGS  # type: ignore
+        cls = NODE_CLASS_MAPPINGS.get(node_type)
+        if cls is not None:
+            it = cls.INPUT_TYPES() if hasattr(cls, "INPUT_TYPES") else {}
+            for section in ("required", "optional"):
+                for name, spec in (it.get(section) or {}).items():
+                    if not isinstance(spec, (list, tuple)) or not spec:
+                        continue
+                    t = spec[0]
+                    # COMBO widget: first element is a list of choices
+                    if isinstance(t, (list, tuple)):
+                        layout.append(name)
+                        continue
+                    if t in ("INT", "FLOAT", "STRING", "BOOLEAN"):
+                        layout.append(name)
+                        # seed widgets emit a hidden control_after_generate slot
+                        if t == "INT" and name in ("seed", "noise_seed"):
+                            layout.append("control_after_generate")
+    except Exception:  # noqa: BLE001
+        pass
+    _WIDGET_LAYOUT_CACHE[node_type] = layout
+    return layout
+
+
 def _widget_value(node: Dict[str, Any], name_hints: Iterable[str]) -> Any:
-    """Best-effort: look up a widget value by name. LiteGraph serializes widgets
-    into `widgets_values` (positional). We fall back to that when the node also
-    carries `widgets` metadata; otherwise we try `inputs.<name>` (API JSON)."""
+    """Look up a widget value by name. Robust against the three shapes we
+    actually see in the wild:
+
+      1. LiteGraph serialize(): `widgets_values` is a positional list; widget
+         names are NOT included. We recover them from NODE_CLASS_MAPPINGS.
+      2. API JSON (graphToPrompt): `inputs` is a dict of {name: value-or-link}.
+      3. Legacy/test shape: node carries `widgets` metadata with names.
+    """
+    hints = list(name_hints)
+    # (1) legacy `widgets`+`widgets_values` paired arrays
     widgets = node.get("widgets") or []
     values = node.get("widgets_values") or []
     if widgets and values and len(widgets) == len(values):
         for w, v in zip(widgets, values):
-            wn = (w or {}).get("name", "")
-            if wn in name_hints:
+            if (w or {}).get("name", "") in hints:
                 return v
-    # API-JSON style fallback
+    # (2) API-JSON `inputs` dict
     inputs = node.get("inputs")
     if isinstance(inputs, dict):
-        for hint in name_hints:
+        for hint in hints:
             if hint in inputs:
-                return inputs[hint]
-    # Last resort: positional probe with the known KSampler layout
-    if (node.get("type") or "").startswith("KSampler") and values:
-        layout = ["seed", "control_after_generate", "steps", "cfg",
-                  "sampler_name", "scheduler", "denoise"]
-        for hint in name_hints:
+                val = inputs[hint]
+                # API-JSON puts links as [node_id, slot] lists — those aren't widget values
+                if not isinstance(val, list):
+                    return val
+    # (3) positional via INPUT_TYPES layout
+    if values:
+        ntype = node.get("type") or ""
+        layout = _widget_layout_for(ntype)
+        for hint in hints:
             if hint in layout:
                 idx = layout.index(hint)
                 if idx < len(values):
@@ -378,23 +428,23 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
 
         # Rule 2: SAM 3.1 without negative bbox prompts
         if ntype in ("UnifiedSegmentation",) or "SAM3" in ntype:
-            seg_mode = _widget_value(n, ("model", "seg_model", "segmenter"))
+            seg_mode = _widget_value(n, ("model_name", "model", "seg_model", "segmenter"))
             uses_sam3 = isinstance(seg_mode, str) and ("sam3" in seg_mode.lower() or "sam 3" in seg_mode.lower())
             if uses_sam3 or "SAM3" in ntype:
-                # If there is no input_boxes_labels link OR widget value is empty:
+                neg_slot_names = ("neg_bbox_json", "input_boxes_labels", "negative_bbox")
                 has_neg = False
-                for slot_idx, inp in enumerate(n.get("inputs") or []):
-                    if isinstance(inp, dict) and inp.get("name") == "input_boxes_labels" and inp.get("link") is not None:
+                for inp in n.get("inputs") or []:
+                    if isinstance(inp, dict) and inp.get("name") in neg_slot_names and inp.get("link") is not None:
                         has_neg = True
                         break
-                wv = _widget_value(n, ("input_boxes_labels",))
+                wv = _widget_value(n, neg_slot_names)
                 if isinstance(wv, str) and wv.strip():
                     has_neg = True
                 if not has_neg:
                     findings.append(_finding(
                         "sam3_no_neg_boxes", node_id=nid, node_type=ntype,
-                        detail="SAM 3.x detected without input_boxes_labels (negative boxes).",
-                        fix_hint="Add input_boxes_labels with negative bboxes (label=0) around false-positive regions."))
+                        detail="SAM 3.x detected without negative bbox prompts (neg_bbox_json).",
+                        fix_hint="Set neg_bbox_json to a [x1,y1,x2,y2] around regions that should be excluded."))
 
         # Rule 3: video inpaint without roto_quality
         if ntype == "InpaintCropProMEC":
@@ -405,14 +455,25 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
                     detail="InpaintCropProMEC running on a multi-frame batch with roto_quality=False.",
                     fix_hint="Enable roto_quality=True for crisp 1-px erosion + laplacian-pyramid blending."))
 
-        # Rule 4: ViTMatte with non-auto trimap
-        if "ViTMatte" in ntype or "VitMatte" in ntype or ntype == "MaskRefineMEC":
+        # Rule 4: ViTMatte-capable node with non-auto trimap, OR MaskMattingMEC
+        # using a vitmatte backend without a subject_preset tuned for it.
+        if "ViTMatte" in ntype or "VitMatte" in ntype:
             tri = _widget_value(n, ("trimap_mode", "trimap"))
             if isinstance(tri, str) and tri.lower() not in ("auto", ""):
                 findings.append(_finding(
                     "vitmatte_manual_trimap", node_id=nid, node_type=ntype,
                     detail=f"trimap_mode='{tri}' (not 'auto') for a ViTMatte-capable node.",
                     fix_hint="Set trimap_mode='auto' unless you have a verified hand-painted trimap."))
+        if ntype == "MaskMattingMEC":
+            matter = _widget_value(n, ("matter",))
+            subj = _widget_value(n, ("subject_preset", "preset"))
+            if (isinstance(matter, str) and "vitmatte" in matter.lower() and
+                    isinstance(subj, str) and subj.lower() in ("general", "none", "")):
+                findings.append(_finding(
+                    "vitmatte_manual_trimap", node_id=nid, node_type=ntype,
+                    detail=f"matter='{matter}' with subject_preset='{subj}'.",
+                    title_override="ViTMatte backend without a tuned subject preset",
+                    fix_hint="Pick subject_preset=hair / fur / hard_edge so the auto-trimap matches the subject."))
 
         # Rule 5: integrity disabled in multi-frame
         if ntype == "MaskRefineMEC":
