@@ -99,6 +99,19 @@ except Exception as _exc:  # pragma: no cover
     )
     _WANDIR_MAPPINGS, _WANDIR_DISPLAY = {}, {}
 
+# C2C helpers (12 tiny utilities)
+try:
+    from .nodes.helpers import (
+        NODE_CLASS_MAPPINGS as _HELPERS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _HELPERS_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("C2C.helpers").warning(
+        "C2C helpers unavailable: %s", _exc
+    )
+    _HELPERS_MAPPINGS, _HELPERS_DISPLAY = {}, {}
+
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
@@ -200,6 +213,7 @@ NODE_CLASS_MAPPINGS = {
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
     **_WANDIR_MAPPINGS,
+    **_HELPERS_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -212,6 +226,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
     **_WANDIR_DISPLAY,
+    **_HELPERS_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
