@@ -92,6 +92,22 @@ RULES: List[Dict[str, str]] = [
     {"id": "no_sampler",           "severity": "info",
      "title": "No sampler in graph",
      "description": "Workflow contains no KSampler/SamplerCustom — this may be intentional (pure I/O) but unusual."},
+    # ---- v2 P8: mask-hygiene rules
+    {"id": "temporal_gaussian_long_batch", "severity": "warning",
+     "title": "Gaussian temporal smoothing on long batch",
+     "description": "MaskTemporalMEC with temporal_mode=gaussian on >12-frame batch causes mask drag/smearing on fast motion."},
+    {"id": "sam3_no_neg_boxes", "severity": "info",
+     "title": "SAM 3.1 used without negative bbox prompts",
+     "description": "SAM 3.x benefits from negative bounding boxes to exclude false positives — consider supplying input_boxes_labels."},
+    {"id": "video_inpaint_no_roto", "severity": "warning",
+     "title": "Video inpaint without roto_quality",
+     "description": "InpaintCropProMEC on multi-frame input should set roto_quality=True for crisp edges and laplacian-pyramid blending."},
+    {"id": "vitmatte_manual_trimap", "severity": "info",
+     "title": "ViTMatte with manual trimap mode",
+     "description": "ViTMatte typically produces best results with trimap_mode=auto; manual trimaps may under/over-segment hair and fine edges."},
+    {"id": "multiframe_integrity_disabled", "severity": "error",
+     "title": "Mask integrity check disabled on multi-frame workflow",
+     "description": "MaskRefineMEC on a multi-frame batch with enable_integrity_check=False loses silent-failure detection. Enable it or add MaskTemporalMEC."},
 ]
 
 _RULES_BY_ID = {r["id"]: r for r in RULES}
@@ -345,6 +361,68 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
         if ntype in _OUTPUT_TYPES:
             stats["outputs"] += 1
 
+        # ---------- v2 P8: mask-hygiene rules ----------
+        # Detect whether this is a multi-frame / video workflow once.
+        # We approximate "video / multi-frame" by checking known video loaders
+        # OR EmptyLatentImage batch_size > 1.
+        # (Computed lazily below — see _is_multiframe_graph.)
+
+        # Rule 1: gaussian temporal smoothing on long batches
+        if ntype == "MaskTemporalMEC":
+            tmode = _widget_value(n, ("temporal_mode",))
+            if tmode == "gaussian" and _approx_batch_size(nodes) > 12:
+                findings.append(_finding(
+                    "temporal_gaussian_long_batch", node_id=nid, node_type=ntype,
+                    detail=f"MaskTemporalMEC temporal_mode=gaussian with approx batch>{12}.",
+                    fix_hint="Switch temporal_mode to 'raft_flow' for motion-preserving stabilization."))
+
+        # Rule 2: SAM 3.1 without negative bbox prompts
+        if ntype in ("UnifiedSegmentation",) or "SAM3" in ntype:
+            seg_mode = _widget_value(n, ("model", "seg_model", "segmenter"))
+            uses_sam3 = isinstance(seg_mode, str) and ("sam3" in seg_mode.lower() or "sam 3" in seg_mode.lower())
+            if uses_sam3 or "SAM3" in ntype:
+                # If there is no input_boxes_labels link OR widget value is empty:
+                has_neg = False
+                for slot_idx, inp in enumerate(n.get("inputs") or []):
+                    if isinstance(inp, dict) and inp.get("name") == "input_boxes_labels" and inp.get("link") is not None:
+                        has_neg = True
+                        break
+                wv = _widget_value(n, ("input_boxes_labels",))
+                if isinstance(wv, str) and wv.strip():
+                    has_neg = True
+                if not has_neg:
+                    findings.append(_finding(
+                        "sam3_no_neg_boxes", node_id=nid, node_type=ntype,
+                        detail="SAM 3.x detected without input_boxes_labels (negative boxes).",
+                        fix_hint="Add input_boxes_labels with negative bboxes (label=0) around false-positive regions."))
+
+        # Rule 3: video inpaint without roto_quality
+        if ntype == "InpaintCropProMEC":
+            roto = _widget_value(n, ("roto_quality",))
+            if _approx_batch_size(nodes) > 1 and roto is not True:
+                findings.append(_finding(
+                    "video_inpaint_no_roto", node_id=nid, node_type=ntype,
+                    detail="InpaintCropProMEC running on a multi-frame batch with roto_quality=False.",
+                    fix_hint="Enable roto_quality=True for crisp 1-px erosion + laplacian-pyramid blending."))
+
+        # Rule 4: ViTMatte with non-auto trimap
+        if "ViTMatte" in ntype or "VitMatte" in ntype or ntype == "MaskRefineMEC":
+            tri = _widget_value(n, ("trimap_mode", "trimap"))
+            if isinstance(tri, str) and tri.lower() not in ("auto", ""):
+                findings.append(_finding(
+                    "vitmatte_manual_trimap", node_id=nid, node_type=ntype,
+                    detail=f"trimap_mode='{tri}' (not 'auto') for a ViTMatte-capable node.",
+                    fix_hint="Set trimap_mode='auto' unless you have a verified hand-painted trimap."))
+
+        # Rule 5: integrity disabled in multi-frame
+        if ntype == "MaskRefineMEC":
+            integrity = _widget_value(n, ("enable_integrity_check",))
+            if _approx_batch_size(nodes) > 1 and integrity is False:
+                findings.append(_finding(
+                    "multiframe_integrity_disabled", node_id=nid, node_type=ntype,
+                    detail="MaskRefineMEC on multi-frame batch with enable_integrity_check=False.",
+                    fix_hint="Enable enable_integrity_check=True or add a MaskTemporalMEC node."))
+
     # ---------- duplicate seeds
     for seed, sampler_ids in sampler_seeds.items():
         if len(sampler_ids) > 1:
@@ -403,6 +481,23 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------ helpers
+def _approx_batch_size(nodes: List[Dict[str, Any]]) -> int:
+    """Heuristic batch-size for the graph. Looks at EmptyLatentImage.batch_size,
+    VHS_LoadVideo.frame_load_cap, and any node with a 'batch_size' widget."""
+    max_b = 1
+    video_loader_types = ("VHS_LoadVideo", "VHS_LoadVideoPath", "LoadVideo")
+    for n in nodes:
+        ntype = str(n.get("type", "") or n.get("class_type", ""))
+        bs = _widget_value(n, ("batch_size", "frame_load_cap"))
+        if isinstance(bs, int) and bs > max_b:
+            max_b = bs
+        if ntype in video_loader_types:
+            # If no widget value found, assume >1.
+            if max_b == 1:
+                max_b = 16
+    return max_b
+
+
 def _guess_family(ckpt_name: str) -> str:
     n = ckpt_name.lower()
     if "xl" in n or "sdxl" in n or "pony" in n or "illustrious" in n:

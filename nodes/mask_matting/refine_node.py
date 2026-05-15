@@ -617,6 +617,17 @@ class MaskRefineMEC:
                     jump_threshold=float(integrity_jump_threshold),
                 )
                 info_payload["integrity"] = integ
+                try:
+                    from .integrity_bridge import publish as _integrity_publish
+                    extra = {}
+                    frames_arr = integ.get("frames", [])
+                    if isinstance(frames_arr, list) and frames_arr:
+                        extra["area"] = [float(f.get("area", 0.0)) for f in frames_arr]
+                        extra["centroid_dx"] = [float(f.get("centroid_delta", 0.0)) for f in frames_arr]
+                        extra["iou_prev"] = [float(f.get("iou_prev", 1.0)) for f in frames_arr]
+                    _integrity_publish("MaskRefineMEC", integ, extra)
+                except Exception:
+                    pass
             except Exception as _e:  # pragma: no cover - defensive
                 info_payload["integrity_error"] = str(_e)
 

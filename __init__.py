@@ -293,6 +293,12 @@ try:
         print("[C2C] style_presets routes registered.")
     except Exception as _sp:
         print(f"[C2C] style_presets deferred: {_sp}")
+    try:
+        from .nodes.mask_matting.integrity_bridge import register_routes as _register_integrity_bridge_routes
+        _register_integrity_bridge_routes(_ps)
+        print("[C2C] mask_integrity bridge routes registered.")
+    except Exception as _ib:
+        print(f"[C2C] mask_integrity bridge deferred: {_ib}")
     # ── C2C AI spine (v2.0-dev) ────────────────────────────────────
     try:
         from .c2c_ai.api_routes import register_routes as _register_c2c_ai_routes

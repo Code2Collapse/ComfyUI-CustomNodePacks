@@ -336,6 +336,19 @@ class MaskTemporalMEC:
         if temporal_mode == "raft_flow":
             _release_raft()
 
+        # Publish to the HUD bridge so the Mask Integrity sidebar can show it.
+        try:
+            from .integrity_bridge import publish as _integrity_publish
+            extra: Dict[str, Any] = {}
+            frames_arr = report.get("frames", [])
+            if isinstance(frames_arr, list) and frames_arr:
+                extra["area"] = [float(f.get("area", 0.0)) for f in frames_arr]
+                extra["centroid_dx"] = [float(f.get("centroid_delta", 0.0)) for f in frames_arr]
+                extra["iou_prev"] = [float(f.get("iou_prev", 1.0)) for f in frames_arr]
+            _integrity_publish("MaskTemporalMEC", report, extra)
+        except Exception:
+            log.exception("[MaskTemporal] integrity publish failed")
+
         return (out, json.dumps(report), warning)
 
 
