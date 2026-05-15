@@ -152,8 +152,16 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
          "url":  "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50.pth"},
     ],
     "matanyone": [
+        # Primary: GitHub release (public, no token). This is the original
+        # weight file shipped with v1.0.0 and used by the vendored
+        # MatAnyone2 hugging_face/app.py.
         {"name": "matanyone.pth",
-         "url":  "https://huggingface.co/PeiqingYang/MatAnyone/resolve/main/matanyone.pth"},
+         "url":  "https://github.com/pq-yang/MatAnyone/releases/download/v1.0.0/matanyone.pth"},
+        # Alt: HF mirror — same weights re-published as safetensors on the
+        # public PeiqingYang/MatAnyone repo (141 MB, 'model.safetensors').
+        # Saved under the matanyone backend root with its original HF name.
+        {"name": "model.safetensors",
+         "url":  "https://huggingface.co/PeiqingYang/MatAnyone/resolve/main/model.safetensors"},
     ],
     "birefnet": [
         {"name": "BiRefNet-general-epoch_244.pth",

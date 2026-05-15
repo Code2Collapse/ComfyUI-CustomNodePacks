@@ -34,6 +34,42 @@ def _have_sam2() -> bool:
         return False
 
 
+def _sam2_api_compatible() -> Tuple[bool, str]:
+    """Verify the installed sam2 package exposes the expected API.
+
+    Returns ``(ok, message)``. The user reports that "none of the commits
+    worked", so we don't pin a hash; we probe the actually-installed package
+    and refuse to load with a clear, actionable error if the API has drifted.
+    Checks:
+      * ``sam2.build_sam`` exposes ``build_sam2`` and ``build_sam2_video_predictor``
+      * ``SAM2Base.__init__`` accepts ``image_encoder``, ``memory_attention``,
+        ``memory_encoder`` as parameters (the post-2024-08 layout that
+        matches every checkpoint released by Meta).
+    """
+    try:
+        import importlib
+        bs = importlib.import_module("sam2.build_sam")
+        if not (hasattr(bs, "build_sam2") and hasattr(bs, "build_sam2_video_predictor")):
+            return False, (
+                "sam2.build_sam is missing build_sam2 / build_sam2_video_predictor. "
+                "Reinstall sam2 from facebookresearch/sam2 (or `pip install sam2`)."
+            )
+        import inspect
+        from sam2.modeling.sam2_base import SAM2Base  # type: ignore
+        params = list(inspect.signature(SAM2Base.__init__).parameters.keys())
+        required = ("image_encoder", "memory_attention", "memory_encoder")
+        for r in required:
+            if r not in params:
+                return False, (
+                    f"sam2 install is too old: SAM2Base.__init__ is missing '{r}'. "
+                    "Update: pip install -U --force-reinstall "
+                    "git+https://github.com/facebookresearch/sam2"
+                )
+        return True, "ok"
+    except Exception as e:  # pragma: no cover — defensive
+        return False, f"sam2 import failed: {e!r}"
+
+
 @register
 class SAM2Segmenter(BaseSegmenter):
     KEY = "sam2.1"
@@ -57,14 +93,83 @@ class SAM2Segmenter(BaseSegmenter):
 
     @staticmethod
     def _cfg_for(name: str) -> str:
+        """Resolve the YAML config for a checkpoint filename.
+
+        Strips common variant suffixes (``-fp16``, ``.fp16``, ``_fp16``)
+        before lookup so that e.g. ``sam2_hiera_base_plus-fp16.safetensors``
+        correctly maps to the base_plus config (embed_dim=112) rather than
+        silently falling through to the large default (embed_dim=144) and
+        triggering a state_dict size mismatch at load time.
+        """
         stem = os.path.splitext(os.path.basename(name))[0]
-        return SAM2Segmenter._CFG_BY_NAME.get(stem, "configs/sam2.1/sam2.1_hiera_l.yaml")
+        # Normalise common precision tags
+        for tag in ("-fp16", ".fp16", "_fp16", "-bf16", ".bf16", "_bf16"):
+            if stem.endswith(tag):
+                stem = stem[: -len(tag)]
+                break
+        cfg = SAM2Segmenter._CFG_BY_NAME.get(stem)
+        if cfg is not None:
+            return cfg
+        # Last-ditch substring routing — preserve the previous default
+        # only when no signal is present in the filename.
+        if "base_plus" in stem or "base+" in stem:
+            return ("configs/sam2.1/sam2.1_hiera_b+.yaml" if "2.1" in stem
+                    else "configs/sam2/sam2_hiera_b+.yaml")
+        if "tiny" in stem:
+            return ("configs/sam2.1/sam2.1_hiera_t.yaml" if "2.1" in stem
+                    else "configs/sam2/sam2_hiera_t.yaml")
+        if "small" in stem:
+            return ("configs/sam2.1/sam2.1_hiera_s.yaml" if "2.1" in stem
+                    else "configs/sam2/sam2_hiera_s.yaml")
+        if "large" in stem:
+            return ("configs/sam2.1/sam2.1_hiera_l.yaml" if "2.1" in stem
+                    else "configs/sam2/sam2_hiera_l.yaml")
+        return "configs/sam2.1/sam2.1_hiera_l.yaml"
+
+    @staticmethod
+    def _detect_embed_dim(sd: Dict[str, torch.Tensor]) -> Optional[int]:
+        """Probe the first Hiera patch-embed weight to recover embed_dim.
+
+        Used as a final correctness gate: even after stem-based cfg routing,
+        if the checkpoint's patch-embed dim disagrees with what the chosen
+        cfg implies we abort early with a helpful message instead of letting
+        ``load_state_dict`` produce a wall of shape-mismatch lines.
+        """
+        for k in (
+            "image_encoder.trunk.patch_embed.proj.weight",
+            "trunk.patch_embed.proj.weight",
+            "image_encoder.patch_embed.proj.weight",
+        ):
+            t = sd.get(k)
+            if t is not None and t.ndim >= 1:
+                return int(t.shape[0])
+        return None
+
+    # Canonical Hiera embed_dim per variant (used for early sanity check).
+    _EXPECTED_EMBED_DIM = {
+        "tiny":      96,
+        "small":     96,
+        "base_plus": 112,
+        "large":     144,
+    }
+
+    @staticmethod
+    def _variant_for_cfg(cfg: str) -> Optional[str]:
+        s = cfg.lower()
+        if "_t."     in s or "tiny"      in s: return "tiny"
+        if "_s."     in s or "small"     in s: return "small"
+        if "_b+"     in s or "base_plus" in s: return "base_plus"
+        if "_l."     in s or "large"     in s: return "large"
+        return None
 
     def load(self) -> None:
         if self._model is not None:
             return
         if not self.is_available():
             raise RuntimeError("SAM2 not installed. `pip install sam2` (or `git+https://github.com/facebookresearch/sam2`).")
+        ok, msg = _sam2_api_compatible()
+        if not ok:
+            raise RuntimeError(f"[SAM2] incompatible install: {msg}")
         from sam2.build_sam import build_sam2, build_sam2_video_predictor
         from sam2.sam2_image_predictor import SAM2ImagePredictor
         ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name)
@@ -73,6 +178,28 @@ class SAM2Segmenter(BaseSegmenter):
                 f"SAM2 checkpoint '{self.model_name}' not found under {backend_first_root(self.MODELS_KEY)}."
             )
         cfg = self._cfg_for(self.model_name)
+        # Probe the checkpoint up-front and abort early on cfg/dim disagreement.
+        sd_probe = self._read_state_dict(ckpt)
+        ckpt_dim = self._detect_embed_dim(sd_probe)
+        variant = self._variant_for_cfg(cfg)
+        expected_dim = self._EXPECTED_EMBED_DIM.get(variant) if variant else None
+        if ckpt_dim is not None and expected_dim is not None and ckpt_dim != expected_dim:
+            # Try to repair by routing to the variant matching the actual dim.
+            inv = {v: k for k, v in self._EXPECTED_EMBED_DIM.items()}
+            target_variant = inv.get(ckpt_dim)
+            if target_variant is not None:
+                cfg_family = "sam2.1" if "2.1" in cfg else "sam2"
+                short = {"tiny": "t", "small": "s", "base_plus": "b+", "large": "l"}[target_variant]
+                cfg = f"configs/{cfg_family}/{cfg_family}_hiera_{short}.yaml"
+                logger.warning(
+                    "[SAM2] '%s' has embed_dim=%d; routing to %s (was %s).",
+                    self.model_name, ckpt_dim, cfg, variant,
+                )
+            else:
+                raise RuntimeError(
+                    f"[SAM2] checkpoint '{self.model_name}' has unknown embed_dim={ckpt_dim} "
+                    f"(expected one of {sorted(set(self._EXPECTED_EMBED_DIM.values()))})."
+                )
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(self.precision, torch.float16)
         # Bypass SAM2's _load_checkpoint entirely — it hard-codes
         # `torch.load(..., weights_only=True)` and assumes a `.pt` pickle. The
@@ -82,8 +209,7 @@ class SAM2Segmenter(BaseSegmenter):
         # supporting both formats.
         with torch.inference_mode():
             self._image_model = build_sam2(cfg, ckpt_path=None, device=self.device)
-            sd = self._read_state_dict(ckpt)
-            self._load_state_dict_lenient(self._image_model, sd)
+            self._load_state_dict_lenient(self._image_model, sd_probe)
             self._predictor = SAM2ImagePredictor(self._image_model)
             self._video_predictor = None  # lazy-build on video call
 
