@@ -805,4 +805,4 @@ class MaskOpsMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskOpsMEC": MaskOpsMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskOpsMEC": "Mask + Matting (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskOpsMEC": "Mask + Matting"}

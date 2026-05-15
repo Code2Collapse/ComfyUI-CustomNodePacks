@@ -493,4 +493,4 @@ class ProPainterTemporalMEC:
 
 
 NODE_CLASS_MAPPINGS = {"ProPainterTemporalMEC": ProPainterTemporalMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint"}

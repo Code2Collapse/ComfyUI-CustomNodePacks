@@ -149,10 +149,11 @@ app.registerExtension({
             function: () => openNodeSearch(),
         },
     ],
-    keybindings: [
-        { combo: { key: "f", ctrl: true },  commandId: "c2c.search.openNodeSearch" },
-        { combo: { key: "f", metaKey: true }, commandId: "c2c.search.openNodeSearch" },
-    ],
+    // NOTE: We do NOT register a `keybindings:` entry because ComfyUI's
+    // keybinding registry conflict-checks by `key` alone and ignores
+    // modifiers — so { key:"f", ctrl:true } collides with KJNodes' bare
+    // `f` and spams a toast on every reload. The capture-phase listener
+    // below handles Ctrl+F directly and works everywhere.
     async setup() {
         // Capture phase so we beat ComfyUI 1.42+ Vue keybindings AND the
         // browser's native Ctrl+F dialog. This duplicates the registered

@@ -640,4 +640,4 @@ class IntegrityStatusMEC:
 
 
 NODE_CLASS_MAPPINGS = {"IntegrityStatusMEC": IntegrityStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status"}

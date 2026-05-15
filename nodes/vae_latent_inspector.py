@@ -138,4 +138,4 @@ class VAELatentInspectorMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VAELatentInspectorMEC": VAELatentInspectorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VAELatentInspectorMEC": "VAE Latent Inspector (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VAELatentInspectorMEC": "VAE Latent Inspector"}

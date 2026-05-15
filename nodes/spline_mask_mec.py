@@ -360,5 +360,5 @@ class SplineMaskMEC:
 
 NODE_CLASS_MAPPINGS = {"SplineMaskMEC": SplineMaskMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (C2C)",
+    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path",
 }

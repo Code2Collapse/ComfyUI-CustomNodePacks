@@ -214,4 +214,4 @@ class FlowRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"FlowRefineMEC": FlowRefineMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"FlowRefineMEC": "Flow Refine — RAFT (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"FlowRefineMEC": "Flow Refine — RAFT"}

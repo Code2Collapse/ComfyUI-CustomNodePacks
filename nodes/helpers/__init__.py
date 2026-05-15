@@ -47,7 +47,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageBatchSplitMEC":   "Image Batch Split (C2C)",
     "MaskBatchCombineMEC":  "Mask Batch Combine (C2C)",
     "SeedListMEC":          "Seed List Generator (C2C)",
-    "ConditionalSwitchMEC": "Conditional Switch (C2C)",
+    "ConditionalSwitchMEC": "Conditional Switch",
     "TextTemplateMEC":      "Text Template (C2C)",
     "NumberLerpMEC":        "Number Lerp (C2C)",
     "DimensionsSnapMEC":    "Dimensions Snap (C2C)",

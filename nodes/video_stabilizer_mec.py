@@ -435,7 +435,7 @@ NODE_CLASS_MAPPINGS = {
     "VideoStabilizerAutoMEC":    VideoStabilizerAutoMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (C2C)",
+    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic",
     "VideoStabilizerFlowMEC":    "Video Stabilizer — RAFT Flow (C2C)",
     "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (C2C)",
 }

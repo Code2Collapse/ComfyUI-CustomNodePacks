@@ -190,5 +190,5 @@ class TemporalConsistencyCheckerMEC:
 
 NODE_CLASS_MAPPINGS = {"TemporalConsistencyCheckerMEC": TemporalConsistencyCheckerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker (C2C)"
+    "TemporalConsistencyCheckerMEC": "Temporal Consistency Checker"
 }

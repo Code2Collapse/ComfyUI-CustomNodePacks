@@ -618,7 +618,7 @@ NODE_CLASS_MAPPINGS = {
     "ProPainterRemoveMEC":       ProPainterRemoveMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ProPainterStitchRefineMEC": "ProPainter Stitch Refine — seam ring (C2C)",
+    "ProPainterStitchRefineMEC": "ProPainter Stitch Refine — seam ring",
     "ProPainterStitchMEC":       "ProPainter Stitch — flow-aware composite (C2C)",
     "ProPainterRemoveMEC":       "ProPainter Remove — object / wire / plate (C2C)",
 }

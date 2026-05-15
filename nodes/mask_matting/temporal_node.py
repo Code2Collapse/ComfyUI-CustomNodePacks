@@ -353,4 +353,4 @@ class MaskTemporalMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskTemporalMEC": MaskTemporalMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskTemporalMEC": "Mask Temporal Stabilizer + Integrity (MEC)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskTemporalMEC": "Mask Temporal Stabilizer + Integrity"}

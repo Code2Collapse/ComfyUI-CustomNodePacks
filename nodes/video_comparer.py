@@ -1,8 +1,14 @@
-"""VideoComparerMEC — Nuke-grade A/B media comparer.
+"""VideoComparerC2C — Nuke-grade A/B media comparer.
 
 Replaces ImageComparerMEC. Accepts IMAGE tensors, AUDIO dicts, or uploaded
 files of any common type (PNG/JPG/WEBP/TIFF/EXR/HDR/MP4/MOV/MKV/WEBM/GIF/
 WAV/MP3/FLAC/OGG/AAC/M4A).
+
+Note on naming: the class was originally ``VideoComparerMEC`` because it
+shipped in the MEC pack. Per the project naming rule (MEC = mask-only
+nodes, C2C = everything else) it has been renamed to ``VideoComparerC2C``.
+The old key ``VideoComparerMEC`` is still registered as an alias so saved
+workflows continue to load.
 
 All visualisations are computed server-side in float32 so 8 vs 16 vs 32-bit
 precision differences survive. Output is one preview frame per Queue plus
@@ -428,7 +434,7 @@ def _resolve_source(image: Optional[torch.Tensor], audio: Optional[dict],
 # ──────────────────────────────────────────────────────────────────────────
 # Node
 # ──────────────────────────────────────────────────────────────────────────
-class VideoComparerMEC:
+class VideoComparerC2C:
     """Universal A/B comparer for image / video / EXR / HDR / audio."""
 
     @classmethod
@@ -508,7 +514,7 @@ class VideoComparerMEC:
         if a_frame is None and b_frame is None:
             blank = np.zeros((360, 640, 3), dtype=np.float32)
             return self._wrap(blank, np.zeros(blank.shape[:2], np.float32), blank,
-                              "VideoComparerMEC: no inputs (provide image_a/b, audio_a/b, or file_a/b)")
+                              "VideoComparerC2C: no inputs (provide image_a/b, audio_a/b, or file_a/b)")
         if a_frame is None:
             a_frame = np.zeros_like(b_frame)
         if b_frame is None:
@@ -568,5 +574,15 @@ class VideoComparerMEC:
         return (preview_t, mask_t, scope_t, info)
 
 
-NODE_CLASS_MAPPINGS = {"VideoComparerMEC": VideoComparerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)"}
+# Back-compat alias: old saved workflows reference "VideoComparerMEC"; map
+# that key to the renamed class so they still resolve.
+VideoComparerMEC = VideoComparerC2C  # noqa: F841 — export for back-compat imports
+
+NODE_CLASS_MAPPINGS = {
+    "VideoComparerC2C": VideoComparerC2C,
+    "VideoComparerMEC": VideoComparerC2C,  # legacy alias
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
+    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio",
+}

@@ -43,10 +43,12 @@ from .nodes.inpaint_suite import (
     InpaintPasteBackMEC,
     InpaintCompositeMEC,
 )
-# VideoComparerMEC replaces ImageComparerMEC. The old image_comparer.py is
-# retained on disk as an importable helper (ImageComparerMEC class), but only
-# VideoComparerMEC is registered.
-from .nodes.video_comparer import VideoComparerMEC
+# VideoComparerC2C (renamed from VideoComparerMEC) replaces the deprecated
+# ImageComparerMEC. The old image_comparer.py is retained on disk as an
+# importable helper (ImageComparerMEC class), but only VideoComparerC2C is
+# registered — with "VideoComparerMEC" kept as a back-compat alias key so
+# saved workflows still load.
+from .nodes.video_comparer import VideoComparerC2C
 from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.video_mask_editor import (
     VideoMaskEditorMEC,
@@ -144,9 +146,9 @@ _NUKEMAX_MAPPINGS = {
     "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
-    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (C2C)",
-    "InsightStatusMEC": "Insight Status (C2C)",
-    "IntegrityStatusMEC": "Integrity Status (C2C)",
+    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow",
+    "InsightStatusMEC": "Insight Status",
+    "IntegrityStatusMEC": "Integrity Status",
 }
 
 # ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────
@@ -171,7 +173,8 @@ _MEC_MAPPINGS = {
     "InpaintCompositeMEC": InpaintCompositeMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
-    "VideoComparerMEC": VideoComparerMEC,
+    "VideoComparerC2C": VideoComparerC2C,
+    "VideoComparerMEC": VideoComparerC2C,  # legacy alias for saved workflows
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
@@ -182,23 +185,24 @@ _MEC_MAPPINGS = {
 }
 
 _MEC_DISPLAY = {
-    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox (MEC)",
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (C2C)",
-    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (C2C)",
-    "ParameterHistoryMEC": "Parameter History (C2C)",
-    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (C2C)",
-    "InpaintCropProMEC": "Inpaint Crop Pro (C2C)",
-    "InpaintCompositeMEC": "Inpaint Composite (C2C)",
-    "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (C2C)",
-    "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (C2C)",
-    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)",
-    "VideoFramePlayerMEC": "Video Frame Player (C2C)",
-    "VideoMaskEditorMEC": "Video Mask Editor (C2C)",
-    "VAEMergeMEC": "VAE Merge (C2C)",
-    "VAELatentInspectorMEC": "VAE Latent Inspector (C2C)",
-    "BatchVersionManagerMEC": "Batch Version Manager (C2C)",
-    "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)",
-    "MaskFailureExplainerMEC": "Mask Failure Explainer — Diagnostics (C2C)",
+    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox",
+    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path",
+    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency",
+    "ParameterHistoryMEC": "Parameter History",
+    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline",
+    "InpaintCropProMEC": "Inpaint Crop Pro",
+    "InpaintCompositeMEC": "Inpaint Composite",
+    "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy",
+    "InpaintPasteBackMEC": "Inpaint Paste Back — legacy",
+    "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
+    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio",
+    "VideoFramePlayerMEC": "Video Frame Player",
+    "VideoMaskEditorMEC": "Video Mask Editor",
+    "VAEMergeMEC": "VAE Merge",
+    "VAELatentInspectorMEC": "VAE Latent Inspector",
+    "BatchVersionManagerMEC": "Batch Version Manager",
+    "ModelMetadataExtractorMEC": "Model Metadata Extractor",
+    "MaskFailureExplainerMEC": "Mask Failure Explainer — Diagnostics",
 }
 
 # ── Merge all mappings ────────────────────────────────────────────────

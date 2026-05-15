@@ -302,4 +302,4 @@ class InsightStatusMEC:
 
 
 NODE_CLASS_MAPPINGS = {"InsightStatusMEC": InsightStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"InsightStatusMEC": "Insight Status (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"InsightStatusMEC": "Insight Status"}

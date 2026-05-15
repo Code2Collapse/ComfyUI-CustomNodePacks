@@ -259,4 +259,4 @@ class BatchVersionManagerMEC:
 
 
 NODE_CLASS_MAPPINGS = {"BatchVersionManagerMEC": BatchVersionManagerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"BatchVersionManagerMEC": "Batch Version Manager (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"BatchVersionManagerMEC": "Batch Version Manager"}

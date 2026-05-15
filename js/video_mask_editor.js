@@ -970,7 +970,10 @@ function openModal(node) {
         if (e.key === "l" || e.key === "L") { setTool("lasso"); e.preventDefault(); return; }
         if (e.key === "k" || e.key === "K") { ed.pin(); e.preventDefault(); return; }
         if (e.key === "o" || e.key === "O") { btnOnion.click(); e.preventDefault(); return; }
-        if (e.key === "f" || e.key === "F") { ed.fitView(); ed.draw(); e.preventDefault(); return; }
+        // NOTE: bare F is reserved by KJNodes.fillConnectSelected. Use Shift+F here.
+        if ((e.key === "F" || e.key === "f") && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            ed.fitView(); ed.draw(); e.preventDefault(); e.stopImmediatePropagation(); return;
+        }
         if (e.key === "[") { ed.brushRadius = Math.max(2, ed.brushRadius - 4); ed.draw(); e.preventDefault(); return; }
         if (e.key === "]") { ed.brushRadius = Math.min(200, ed.brushRadius + 4); ed.draw(); e.preventDefault(); return; }
         if (e.key === "ArrowLeft") { ed._switchFrame(ed.curFrame - 1); e.preventDefault(); return; }

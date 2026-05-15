@@ -417,5 +417,5 @@ class SplineMaskTrackerMEC:
 # ─────────────────────────────────────────────────────────────────────
 NODE_CLASS_MAPPINGS = {"SplineMaskTrackerMEC": SplineMaskTrackerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplineMaskTrackerMEC": "Spline Mask Tracker (C2C)",
+    "SplineMaskTrackerMEC": "Spline Mask Tracker",
 }

@@ -1025,4 +1025,4 @@ class MaskRefineMEC:
 
 
 NODE_CLASS_MAPPINGS = {"MaskRefineMEC": MaskRefineMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refiner (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refiner"}

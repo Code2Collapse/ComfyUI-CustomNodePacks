@@ -187,12 +187,10 @@ app.registerExtension({
             function: resetSelectedOrAll,
         },
     ],
-    keybindings: [
-        // Vue-layer binding (works inside the canvas). Capture-listener below
-        // catches the rest.
-        { combo: { key: "r", ctrl: true },  commandId: "c2c.reset.selectedDefaults" },
-        { combo: { key: "r", metaKey: true }, commandId: "c2c.reset.selectedDefaults" },
-    ],
+    // NOTE: No `keybindings:` entry — ComfyUI's registry conflict-checks
+    // by `key` alone (ignoring modifiers), so { key:"r", ctrl:true }
+    // collides with Comfy.RefreshNodeDefinitions' bare `r` and spams a
+    // toast. The capture-phase listener below handles Ctrl+R directly.
     async setup() {
         // Capture-phase fallback so we beat the browser's reload-page.
         window.addEventListener("keydown", (e) => {

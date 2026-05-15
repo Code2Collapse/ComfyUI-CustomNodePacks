@@ -542,4 +542,4 @@ class VideoMaskEditorMEC:
 
 
 NODE_CLASS_MAPPINGS = {"VideoMaskEditorMEC": VideoMaskEditorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoMaskEditorMEC": "Video Mask Editor (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"VideoMaskEditorMEC": "Video Mask Editor"}
