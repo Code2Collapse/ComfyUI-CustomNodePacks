@@ -396,7 +396,7 @@ app.registerExtension({
             name: "Group Presets: enabled",
             tooltip: "Save selections as reusable presets and recall via the 📚 button.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => {
                 const b = document.getElementById(BTN_ID);
                 if (b) b.style.display = v ? "flex" : "none";

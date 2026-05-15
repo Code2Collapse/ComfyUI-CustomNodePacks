@@ -427,7 +427,7 @@ app.registerExtension({
     name: "c2c.ai.settings",
     settings: [
         { id: SETTING_FIRSTRUN, name: "C2C ▸ AI ▸ First-run completed",
-          type: "hidden", defaultValue: false },
+          type: "hidden", default: false },
     ],
     async setup() {
         try {

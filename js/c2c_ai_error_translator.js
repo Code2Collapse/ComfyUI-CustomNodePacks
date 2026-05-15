@@ -124,7 +124,7 @@ app.registerExtension({
     name: "c2c.ai.errorTranslator",
     settings: [
         { id: SETTING_AUTO, name: "C2C ▸ AI ▸ Auto-open error helper on execution error",
-          type: "boolean", defaultValue: false },
+          type: "boolean", default: false },
     ],
     async setup() {
         // Hook ComfyUI's execution error event

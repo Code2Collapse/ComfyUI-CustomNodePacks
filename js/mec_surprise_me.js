@@ -133,7 +133,7 @@ app.registerExtension({
             name: "Surprise Me: enabled",
             tooltip: "Show 🎰 button that randomizes seeds and queues a fresh run.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => {
                 const b = document.getElementById(BTN_ID);
                 if (b) b.style.display = v ? "flex" : "none";
@@ -144,7 +144,7 @@ app.registerExtension({
             name: "Surprise Me: also add a random style tag to the prompt",
             tooltip: "Appends a small lighting/style tag (e.g. 'cinematic lighting') to the first CLIPTextEncode prompt.",
             type: "boolean",
-            defaultValue: false,
+            default: false,
         },
     ],
     async setup() {

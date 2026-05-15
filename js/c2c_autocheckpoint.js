@@ -270,11 +270,11 @@ app.registerExtension({
     name: "c2c.autocheckpoint",
     settings: [
         { id: SETTING_ENABLED, name: "C2C ▸ Auto-Checkpoint ▸ Enabled",
-          type: "boolean", defaultValue: true },
+          type: "boolean", default: true },
         { id: SETTING_RING, name: "C2C ▸ Auto-Checkpoint ▸ Ring size",
-          type: "slider", attrs: { min: 5, max: 100, step: 1 }, defaultValue: RING_MAX_DEFAULT },
+          type: "slider", attrs: { min: 5, max: 100, step: 1 }, default: RING_MAX_DEFAULT },
         { id: SETTING_BTN, name: "C2C ▸ Auto-Checkpoint ▸ Show top-left button",
-          type: "boolean", defaultValue: true, onChange: ensureButton },
+          type: "boolean", default: true, onChange: ensureButton },
     ],
     commands: [
         { id: "c2c.autockpt.open",      label: "C2C: Open auto-checkpoint history", function: openPicker },

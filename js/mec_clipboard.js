@@ -978,7 +978,7 @@ app.registerExtension({
             name: "Auto-copy node metadata on Ctrl+C",
             tooltip: "When enabled, plain Ctrl+C also writes a portable JSON payload (with widget values, link metadata and source-pack info) to the OS clipboard. Disable to use only LiteGraph's native clipboard. The diagnostics sidebar's Clipboard tab still lets you re-copy any past payload manually.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => setAutoCopyEnabled(!!v),
         },
     ],

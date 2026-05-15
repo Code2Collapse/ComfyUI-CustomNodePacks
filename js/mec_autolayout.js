@@ -132,19 +132,19 @@ app.registerExtension({
             id: "mec.autolayout.enabled",
             name: "Auto-layout: right-click canvas → Tidy",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
         {
             id: "mec.autolayout.col_gap",
             name: "Auto-layout: horizontal gap (px)",
             type: "number",
-            defaultValue: 60,
+            default: 60,
         },
         {
             id: "mec.autolayout.row_gap",
             name: "Auto-layout: vertical gap (px)",
             type: "number",
-            defaultValue: 40,
+            default: 40,
         },
     ],
     commands: [

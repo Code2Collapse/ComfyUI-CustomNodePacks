@@ -150,7 +150,7 @@ app.registerExtension({
             name: "Seed Sweep: right-click 'Sweep seeds…' menu",
             tooltip: "Queue multiple prompts with sequential seed values from a node's right-click menu.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
     ],
     async setup() {

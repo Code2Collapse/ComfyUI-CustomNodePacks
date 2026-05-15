@@ -203,7 +203,7 @@ app.registerExtension({
             id: "mec.sticky_notes.enabled",
             name: "Sticky Notes: right-click canvas → Add",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
     ],
     async setup() {

@@ -165,7 +165,7 @@ app.registerExtension({
             name: "Token Counter: CLIP token badge on prompt widgets",
             tooltip: "Show a live x/77 token-count under CLIPTextEncode prompts.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: () => app.canvas?.setDirty?.(true, true),
         },
     ],

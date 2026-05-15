@@ -221,7 +221,7 @@ app.registerExtension({
             name: "What's Wired: workflow legend",
             tooltip: "Floating chip listing the active model / sampler / size / LoRAs.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: _render,
         },
     ],

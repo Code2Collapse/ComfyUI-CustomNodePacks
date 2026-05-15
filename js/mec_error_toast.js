@@ -501,7 +501,7 @@ app.registerExtension({
             name: "Error Toast: plain-English rewrite",
             tooltip: "Rewrite red error toasts using the MEC error explainer.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
     ],
     async setup() {

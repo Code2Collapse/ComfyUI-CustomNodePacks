@@ -264,10 +264,10 @@ app.registerExtension({
     name: "c2c.ai.statusBar",
     settings: [
         { id: SETTING_HUD, name: "C2C ▸ AI ▸ Show top-right status HUD",
-          type: "boolean", defaultValue: true,
+          type: "boolean", default: true,
           onChange: () => refresh() },
         { id: SETTING_PAUSE, name: "C2C ▸ AI ▸ Pause all AI calls",
-          type: "boolean", defaultValue: false,
+          type: "boolean", default: false,
           onChange: () => refresh() },
     ],
     async setup() {

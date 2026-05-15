@@ -246,7 +246,7 @@ app.registerExtension({
             id: "mec.wire_labels.enabled",
             name: "Wire Labels: double-click connection to name it",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: () => app.canvas?.setDirty?.(true, true),
         },
     ],

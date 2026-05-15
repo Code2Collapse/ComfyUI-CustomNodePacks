@@ -101,13 +101,13 @@ app.registerExtension({
             id: "mec.isolate.enabled",
             name: "Isolate Subgraph: right-click node → Isolate",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
         {
             id: "mec.isolate.dim",
             name: "Isolate Subgraph: dimmed alpha (0..1)",
             type: "number",
-            defaultValue: 0.18,
+            default: 0.18,
         },
     ],
     async setup() {

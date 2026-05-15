@@ -227,7 +227,7 @@ app.registerExtension({
             name: "C2C: consolidate floating buttons into sidebar",
             tooltip: "Hide the right-rail floating buttons and route them through the C2C sidebar tab.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => _ensureHideStyle(v),
         },
     ],

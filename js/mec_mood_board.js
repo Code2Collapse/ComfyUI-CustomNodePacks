@@ -191,7 +191,7 @@ app.registerExtension({
             id: "mec.mood_board.enabled",
             name: "Mood Board: session output gallery",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => {
                 const b = document.getElementById(BTN_ID);
                 if (b) b.style.display = v ? "flex" : "none";

@@ -147,7 +147,7 @@ app.registerExtension({
     name: "c2c.ai.explainer",
     settings: [
         { id: SETTING_ENABLE, name: "C2C ▸ AI ▸ Show 'Explain with AI' in node menu",
-          type: "boolean", defaultValue: true },
+          type: "boolean", default: true },
     ],
     async beforeRegisterNodeDef(nodeType) {
         const orig = nodeType.prototype.getExtraMenuOptions;

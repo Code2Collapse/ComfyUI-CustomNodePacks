@@ -302,7 +302,7 @@ app.registerExtension({
     name: "c2c.workflow.doctor",
     settings: [
         { id: SETTING_SHOW_BTN, name: "C2C ▸ Doctor ▸ Show top-left button",
-          type: "boolean", defaultValue: true, onChange: ensureButton },
+          type: "boolean", default: true, onChange: ensureButton },
     ],
     commands: [
         { id: "c2c.doctor.open",

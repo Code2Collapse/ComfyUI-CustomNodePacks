@@ -190,13 +190,13 @@ app.registerExtension({
             id: "mec.undo_panel.enabled",
             name: "Undo Panel: capture graph snapshots",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
         {
             id: "mec.undo_panel.max",
             name: "Undo Panel: max snapshots",
             type: "number",
-            defaultValue: 20,
+            default: 20,
         },
     ],
     async setup() {

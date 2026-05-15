@@ -134,13 +134,13 @@ app.registerExtension({
             id: "mec.completion_fx.confetti",
             name: "Completion FX: confetti on success",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
         {
             id: "mec.completion_fx.chime",
             name: "Completion FX: subtle chime on success",
             type: "boolean",
-            defaultValue: false,
+            default: false,
         },
     ],
     async setup() {

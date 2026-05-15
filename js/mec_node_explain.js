@@ -447,7 +447,7 @@ app.registerExtension({
             tooltip: "Which backend to use for 'What does this node do?' hover tooltips.",
             type:    "combo",
             options: ["auto", "api", "gguf", "off"],
-            defaultValue: "auto",
+            default: "auto",
         },
         {
             id:      "mec.node_explain.gguf_quant",
@@ -455,7 +455,7 @@ app.registerExtension({
             tooltip: "Which Qwen3.5-2B quantisation to use for local inference.",
             type:    "combo",
             options: ["Q4_K_M", "Q5_K_M", "Q8_0"],
-            defaultValue: "Q4_K_M",
+            default: "Q4_K_M",
         },
     ],
 

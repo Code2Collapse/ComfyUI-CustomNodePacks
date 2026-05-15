@@ -278,7 +278,7 @@ app.registerExtension({
             name: "Flame Graph: enabled",
             tooltip: "Show the ⏱ button for the execution flame graph.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => {
                 const btn = document.getElementById(BTN_ID);
                 if (btn) btn.style.display = v ? "flex" : "none";
@@ -289,7 +289,7 @@ app.registerExtension({
             name: "Flame Graph: auto-open after run",
             tooltip: "Automatically open the flame graph panel when a prompt finishes.",
             type: "boolean",
-            defaultValue: false,
+            default: false,
         },
     ],
     async setup() {

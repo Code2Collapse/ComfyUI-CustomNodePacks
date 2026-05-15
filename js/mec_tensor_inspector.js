@@ -272,7 +272,7 @@ app.registerExtension({
             name: "Tensor Inspector: enabled",
             tooltip: "Right-click a node → 'Inspect tensor outputs' to see shape/dtype/stats.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
     ],
     async setup() {

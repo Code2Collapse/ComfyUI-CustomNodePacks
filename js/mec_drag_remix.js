@@ -141,13 +141,13 @@ app.registerExtension({
             name: "Drag-to-Remix: drop images onto canvas",
             tooltip: "Dropping image files spawns a LoadImage node at the drop position.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
         },
         {
             id: "mec.drag_remix.auto_wire",
             name: "Drag-to-Remix: auto-wire into existing VAEEncode if present",
             type: "boolean",
-            defaultValue: false,
+            default: false,
         },
     ],
     async setup() {
