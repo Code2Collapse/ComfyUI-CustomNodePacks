@@ -188,7 +188,12 @@ _MEC_MAPPINGS = {
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
     "VideoComparerC2C": VideoComparerC2C,
-    "VideoComparerMEC": VideoComparerC2C,  # legacy alias for saved workflows
+    # NOTE: "VideoComparerMEC" was the legacy class key. To prevent it from
+    # showing up as a separate (duplicate) entry in the node search palette,
+    # it is NO LONGER registered here. Saved workflows that reference the old
+    # type are migrated at graph-load time by js/video_comparer_c2c.js, which
+    # rewrites `type: "VideoComparerMEC"` -> `"VideoComparerC2C"` before
+    # LiteGraph instantiates the node.
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
@@ -209,7 +214,6 @@ _MEC_DISPLAY = {
     "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy",
     "InpaintPasteBackMEC": "Inpaint Paste Back — legacy",
     "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
-    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio",
     "VideoFramePlayerMEC": "Video Frame Player",
     "VideoMaskEditorMEC": "Video Mask Editor",
     "VAEMergeMEC": "VAE Merge",

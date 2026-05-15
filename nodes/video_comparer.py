@@ -585,9 +585,11 @@ VideoComparerMEC = VideoComparerC2C  # noqa: F841 — export for back-compat imp
 
 NODE_CLASS_MAPPINGS = {
     "VideoComparerC2C": VideoComparerC2C,
-    "VideoComparerMEC": VideoComparerC2C,  # legacy alias
+    # Legacy "VideoComparerMEC" key intentionally NOT registered here — it
+    # would surface as a duplicate entry in the node search palette. Saved
+    # workflows that reference the old type are migrated at graph-load time
+    # by js/video_comparer_c2c.js (LiteGraph type-rewrite hook).
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
-    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio",
 }

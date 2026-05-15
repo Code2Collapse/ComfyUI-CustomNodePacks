@@ -151,8 +151,48 @@ function makeUploadButton(node, slot, label, onUploaded) {
     return btn;
 }
 
+// ── Legacy-type migration: saved workflows that reference the old
+// `VideoComparerMEC` key would otherwise fail to instantiate because we
+// no longer register that key in NODE_CLASS_MAPPINGS (it caused a
+// duplicate entry in the node search palette). We hook
+// `loadGraphData` / `app.graph.configure` and rewrite the node `type`
+// in-place BEFORE LiteGraph tries to find the registered class.
+// Idempotent — safe to run on every graph load.
+function _migrateLegacyVideoComparerTypes(graphData) {
+    try {
+        const nodes = graphData?.nodes;
+        if (!Array.isArray(nodes)) return;
+        let migrated = 0;
+        for (const n of nodes) {
+            if (n && n.type === "VideoComparerMEC") {
+                n.type = "VideoComparerC2C";
+                migrated += 1;
+            }
+        }
+        if (migrated > 0) {
+            console.log(
+                `[VideoComparerC2C] migrated ${migrated} legacy ` +
+                `"VideoComparerMEC" node(s) to "VideoComparerC2C" on load.`
+            );
+        }
+    } catch (e) {
+        console.warn("[VideoComparerC2C] legacy-type migration failed:", e);
+    }
+}
+
 app.registerExtension({
     name: "MEC.VideoComparer",
+    async setup() {
+        // Wrap loadGraphData so EVERY graph load (file open, paste, undo,
+        // template, examples) is run through the migration.
+        const _origLoad = app.loadGraphData?.bind(app);
+        if (typeof _origLoad === "function") {
+            app.loadGraphData = function (graphData, ...rest) {
+                _migrateLegacyVideoComparerTypes(graphData);
+                return _origLoad(graphData, ...rest);
+            };
+        }
+    },
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (!NODE_IDS.has(nodeData.name)) return;
 
