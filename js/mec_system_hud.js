@@ -111,11 +111,19 @@ function _ensureHud() {
         _render();
     });
     document.body.appendChild(_hud);
+    // Register with the dock-anchor so the chip auto-shifts up when a
+    // bottom panel (image feed, queue tab, splitter) extends over our
+    // base offset. See `mec_dock_anchor.js`.
+    try { window.__mecDock?.register?.(_hud, { baseBottom: 64 }); } catch (_) {}
     return _hud;
 }
 
 function _hide() {
-    if (_hud) { _hud.remove(); _hud = null; }
+    if (_hud) {
+        try { window.__mecDock?.unregister?.(_hud); } catch (_) {}
+        _hud.remove();
+        _hud = null;
+    }
 }
 
 function _vramTone(used, total) {

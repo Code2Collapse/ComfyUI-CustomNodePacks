@@ -18,8 +18,9 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";  // kept for future use
 
 // ── constants ──────────────────────────────────────────────────────────────
-const DWELL_MS   = 800;   // how long to hover before showing tooltip
-const HIDE_MS    = 150;   // delay before hiding after mouse leaves
+const DEFAULT_DWELL_MS = 250;   // how long to hover before showing tooltip
+                                // (was 800 — user reported too sluggish)
+const HIDE_MS    = 120;   // delay before hiding after mouse leaves
 const TITLE_H    = 30;    // LiteGraph default title bar height in graph-coords
 const POPOVER_W  = 360;   // popover width px
 const POPOVER_ID = "mec-node-explain-popover";
@@ -427,12 +428,15 @@ function _onMouseMove(e) {
     const backend = _getSetting("mec.node_explain.backend", "auto");
     if (backend === "off") return;
 
+    const dwellMs = Math.max(50, parseInt(
+        _getSetting("mec.node_explain.dwell_ms", DEFAULT_DWELL_MS), 10) || DEFAULT_DWELL_MS);
+
     _dwellTimer = setTimeout(() => {
         _dwellTimer = null;
         if (_currentNode === node) {
             _fetchAndShow(node);
         }
-    }, DWELL_MS);
+    }, dwellMs);
 }
 
 function _onMouseLeave() {
@@ -463,6 +467,14 @@ app.registerExtension({
             options: ["Q4_K_M", "Q5_K_M", "Q8_0"],
             default: "Q4_K_M",
         },
+        {
+            id:      "mec.node_explain.dwell_ms",
+            name:    "Node Explain: hover dwell (ms)",
+            tooltip: "How long to hover a node title before the explanation card appears. Lower = snappier.",
+            type:    "slider",
+            attrs:   { min: 50, max: 1500, step: 50 },
+            default: DEFAULT_DWELL_MS,
+        },
     ],
 
     async setup() {
@@ -487,6 +499,6 @@ app.registerExtension({
             _scheduleHide();
         });
 
-        console.log("[MEC.NodeExplain] Loaded — hover a node title for 800 ms to explain it.");
+        console.log("[MEC.NodeExplain] Loaded — hover a node title to explain it (default 250 ms dwell, configurable).");
     },
 });

@@ -62,7 +62,7 @@ def _get_explainer():
 
 
 def _segmenter_choices() -> List[str]:
-    out: List[str] = []
+    out: List[str] = ["auto"]  # auto_route picks from image stats
     for k, cls in all_segmenters().items():
         badge = "" if cls.STATUS == "ready" else f"  [{cls.STATUS}]"
         out.append(f"{k}{badge}")
@@ -70,7 +70,7 @@ def _segmenter_choices() -> List[str]:
 
 
 def _matter_choices() -> List[str]:
-    out: List[str] = ["none"]
+    out: List[str] = ["none", "auto"]
     for k, cls in all_matters().items():
         badge = "" if cls.STATUS == "ready" else f"  [{cls.STATUS}]"
         out.append(f"{k}{badge}")
@@ -419,6 +419,89 @@ class MaskOpsMEC:
         input_mode = "auto"
         seg_key = _strip_badge(segmenter)
         mat_key = _strip_badge(matter)
+
+        # ── auto_route: pick best segmenter/matter from image stats ────
+        # Triggered when user picks "auto" (added to the choices list)
+        # OR auto_quality=True AND segmenter="sam2.1" (default) AND no
+        # explicit user choice override.  Heuristic:
+        #   text prompt present                  → sam3 (open-vocab)
+        #   B>1 (video)                          → sam2.1 (video propagation)
+        #   boundary_ambig>0.6 or hair preset    → vitmatte + birefnet
+        #   speckle_score>0.5 + B==1             → sam3 (more robust)
+        #   else                                 → sam2.1 (general best)
+        # Auto-route metadata gets baked into the `info` JSON.
+        _auto_routed = False
+        _auto_route_reasons: list[str] = []
+        if seg_key == "auto":
+            _auto_routed = True
+            try:
+                from ._auto_quality import analyze_image as _ar_analyze
+                _stats = _ar_analyze(to_bhwc(image))
+            except Exception:
+                _stats = {"boundary_ambig": 0.0, "speckle_score": 0.0,
+                          "blur_score": 0.0, "lowlight_score": 0.0}
+            _avail = set(all_segmenters().keys())
+            _has_text = bool(text_prompt and text_prompt.strip())
+            _B = int(image.shape[0]) if hasattr(image, "shape") else 1
+            if _has_text and "sam3" in _avail:
+                seg_key = "sam3"
+                _auto_route_reasons.append("text_prompt→sam3")
+            elif _B > 1 and "sam2.1" in _avail:
+                seg_key = "sam2.1"
+                _auto_route_reasons.append(f"video(B={_B})→sam2.1")
+            elif _stats.get("boundary_ambig", 0) > 0.6 and "birefnet" in _avail:
+                seg_key = "birefnet"
+                _auto_route_reasons.append(
+                    f"boundary_ambig={_stats['boundary_ambig']:.2f}→birefnet"
+                )
+            elif _stats.get("speckle_score", 0) > 0.5 and "sam3" in _avail:
+                seg_key = "sam3"
+                _auto_route_reasons.append(
+                    f"speckle={_stats['speckle_score']:.2f}→sam3"
+                )
+            else:
+                # General best: prefer sam2.1, then sam3, then first ready.
+                for _pref in ("sam2.1", "sam3", "rmbg2", "birefnet"):
+                    if _pref in _avail:
+                        seg_key = _pref
+                        _auto_route_reasons.append(f"default→{_pref}")
+                        break
+                else:
+                    seg_key = next(iter(_avail), "sam2.1")
+                    _auto_route_reasons.append(f"fallback→{seg_key}")
+            logger.info(
+                "[MaskMatting] auto_route picked segmenter=%s (reasons: %s)",
+                seg_key, "; ".join(_auto_route_reasons),
+            )
+
+        if mat_key == "auto":
+            _auto_routed = True
+            _avail_m = set(all_matters().keys())
+            # If we used a salient segmenter (birefnet/rmbg2) the alpha
+            # is already a soft matte → "none". Otherwise ViTMatte wins
+            # for hair/fur/cloth; matanyone for video; bgmattingv2 last.
+            if seg_key in ("birefnet", "rmbg2"):
+                mat_key = "none"
+                _auto_route_reasons.append("salient_seg→matter=none")
+            else:
+                try:
+                    _B2 = int(image.shape[0]) if hasattr(image, "shape") else 1
+                except Exception:
+                    _B2 = 1
+                if _B2 > 1 and "matanyone" in _avail_m:
+                    mat_key = "matanyone"
+                    _auto_route_reasons.append(f"video(B={_B2})→matanyone")
+                elif "vitmatte" in _avail_m:
+                    mat_key = "vitmatte"
+                    _auto_route_reasons.append("default→vitmatte")
+                else:
+                    mat_key = "none"
+                    _auto_route_reasons.append("no_matter_available→none")
+            logger.info(
+                "[MaskMatting] auto_route picked matter=%s (reasons: %s)",
+                mat_key, "; ".join(_auto_route_reasons),
+            )
+
         seg_cls = get_segmenter_cls(seg_key)
         if seg_cls is None:
             raise ValueError(f"Unknown segmenter '{seg_key}'. Choices: {list(all_segmenters())}")
@@ -736,6 +819,10 @@ class MaskOpsMEC:
             info_obj = {
                 "segmenter": seg_key,
                 "matter": mat_key,
+                "auto_route": {
+                    "applied": bool(_auto_routed),
+                    "reasons": _auto_route_reasons,
+                },
                 "mode": mode,
                 "frames": int(B),
                 "segmenter_score": score,
