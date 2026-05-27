@@ -6,6 +6,7 @@
     POST /c2c/ai/probe                  → force refresh of all health probes
     POST /c2c/ai/ask                    → non-streaming ask      {"feature","messages","..."}
     POST /c2c/ai/stream                 → SSE stream             same body
+    POST /c2c/doctor/explain            → AI error explainer     {"message","traceback","node_id?","node_type?","kind?"}
     GET  /c2c/ai/keys/list              → list canonical key names currently in keychain
     POST /c2c/ai/keys/set               → set one key            {"name","value"}
     POST /c2c/ai/keys/delete            → delete one key         {"name"}
@@ -167,6 +168,116 @@ def register_routes(server) -> None:
         await resp.write(b"event: done\ndata: {}\n\n")
         await resp.write_eof()
         return resp
+
+    # ----------------------------------------------------- B2: doctor explain
+    # POST /c2c/doctor/explain — antivirus-style plain-English error doctor.
+    # Takes a captured traceback / message (+ optional node context) and
+    # routes it through the AI router with a pre-canned system prompt so the
+    # answer is consistent across cloud / local backends. Single JSON response
+    # (no streaming) because the explainer is small and the UI wants the full
+    # answer before rendering. Hooked to ComfyUI's `execution_error` event
+    # client-side via the Doctor's Error Log tab.
+    @routes.post("/c2c/doctor/explain")
+    async def _doctor_explain(req):
+        body = await req.json()
+        message    = (body.get("message") or "").strip()
+        traceback  = (body.get("traceback") or "").strip()
+        node_id    = body.get("node_id")
+        node_type  = (body.get("node_type") or "").strip()
+        kind       = (body.get("kind") or "execution_error").strip()
+        if not message and not traceback:
+            return _err("EMPTY_ERROR", "either message or traceback is required")
+        # Hard cap so a runaway 10MB traceback doesn't blow up the prompt.
+        if len(traceback) > 8000:
+            traceback = traceback[-8000:]
+        if len(message) > 2000:
+            message = message[:2000]
+        system_prompt = (
+            "You are the C2C Doctor — an antivirus-style explainer for "
+            "ComfyUI runtime errors. Given a Python traceback or JavaScript "
+            "error from a ComfyUI workflow, produce a strict-JSON object "
+            "with these exact keys:\n"
+            "  summary       — one sentence, plain English, no jargon\n"
+            "  root_cause    — what actually went wrong (1-3 sentences)\n"
+            "  severity      — one of: info | warning | error | critical\n"
+            "  category      — one of: missing_model | missing_node | "
+            "shape_mismatch | oom | dependency | network | filesystem | "
+            "user_input | bug | unknown\n"
+            "  fixes         — array of 1-5 concrete actionable steps\n"
+            "  preventive    — one sentence on how to avoid this next time\n"
+            "Rules:\n"
+            " - Output ONLY the JSON object, no markdown, no preamble.\n"
+            " - Each `fixes` item is imperative voice (\"Install X\", "
+            "\"Reduce batch size to 1\").\n"
+            " - If the error mentions a specific node id/type, refer to it "
+            "by name in the explanation.\n"
+            " - If the cause is unclear, set category=\"unknown\" and "
+            "suggest diagnostics in `fixes`.\n"
+        )
+        ctx_lines = []
+        if node_id is not None:
+            ctx_lines.append(f"Node id: {node_id}")
+        if node_type:
+            ctx_lines.append(f"Node type: {node_type}")
+        ctx_lines.append(f"Error kind: {kind}")
+        if message:
+            ctx_lines.append(f"Message:\n{message}")
+        if traceback:
+            ctx_lines.append(f"Traceback:\n{traceback}")
+        user_prompt = "\n\n".join(ctx_lines)
+        msgs = [
+            Message(role="system", content=system_prompt),
+            Message(role="user",   content=user_prompt),
+        ]
+        loop = asyncio.get_event_loop()
+        try:
+            resp = await loop.run_in_executor(
+                None,
+                lambda: get_router().ask(
+                    "doctor.explain",
+                    msgs,
+                    sensitivity=Sensitivity.NORMAL,
+                    max_tokens=600,
+                    temperature=0.2,
+                ),
+            )
+        except Exception as exc:
+            return _err("DISPATCH_FAILED", str(exc), code=500)
+        # Robust JSON extraction — some local models wrap output in
+        # ```json ... ``` or add a sentence before/after.
+        text = resp.text or ""
+        parsed = None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            import re as _re
+            m = _re.search(r"\{.*\}", text, _re.DOTALL)
+            if m:
+                try:
+                    parsed = json.loads(m.group(0))
+                except Exception:
+                    parsed = None
+        if not isinstance(parsed, dict):
+            # Surface the raw text so the UI can still display something
+            # useful instead of an empty card.
+            parsed = {
+                "summary": text[:240] or "Model returned unparseable output.",
+                "root_cause": "",
+                "severity": "warning",
+                "category": "unknown",
+                "fixes": [],
+                "preventive": "",
+                "_raw_output": text,
+            }
+        return _ok({
+            "explanation": parsed,
+            "backend_id":  resp.backend_id,
+            "model":       resp.model,
+            "input_tokens":  resp.input_tokens,
+            "output_tokens": resp.output_tokens,
+            "cost_usd":      resp.cost_usd,
+            "latency_ms":    resp.latency_ms,
+        })
 
     # ------------------------------------------------------------- keys
     @routes.get("/c2c/ai/keys/list")
