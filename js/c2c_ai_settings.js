@@ -17,11 +17,9 @@ import { app } from "../../scripts/app.js";
 const TAB_ID = "c2c.ai";
 const SETTING_FIRSTRUN = "c2c.ai.firstRunCompleted";
 
-const C = {
-    bg:"#1e1e2e", bg2:"#181825", fg:"#cdd6f4", sub:"#a6adc8",
-    border:"#313244", red:"#f38ba8", green:"#a6e3a1", yellow:"#f9e2af",
-    blue:"#89b4fa", mauve:"#cba6f7", teal:"#94e2d5",
-};
+// All colors source from CSS custom properties emitted by _c2c_theme.js
+// (--c2c-bg, --c2c-mauve, etc.) — modal, sidebar, wizard all repaint when
+// setVariant() flips mocha/latte/oled. No hardcoded palette.
 
 const VERBATIM_KEYCHAIN_NOTICE =
 `Importing your API keys
@@ -50,17 +48,17 @@ function modal({ title, body, buttons }) {
     return new Promise((resolve) => {
         const back = document.createElement("div");
         back.style.cssText =
-            `position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,0.55);
+            `position:fixed;inset:0;z-index:var(--c2c-z-modal);background:color-mix(in srgb, var(--c2c-shadowBase) 55%, transparent);
              display:flex;align-items:center;justify-content:center;`;
         const card = document.createElement("div");
         card.style.cssText =
-            `background:${C.bg};color:${C.fg};border:1px solid ${C.border};
+            `background:var(--c2c-bg);color:var(--c2c-fg);border:1px solid var(--c2c-border);
              border-radius:8px;padding:18px;min-width:480px;max-width:720px;
              max-height:80vh;overflow:auto;
              font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;
-             box-shadow:0 12px 40px rgba(0,0,0,0.6);`;
+             box-shadow:0 12px 40px color-mix(in srgb, var(--c2c-shadowBase) 60%, transparent);`;
         card.innerHTML =
-            `<h2 style="margin:0 0 10px;color:${C.mauve};font-size:15px;
+            `<h2 style="margin:0 0 10px;color:var(--c2c-mauve);font-size:15px;
                         text-transform:uppercase;letter-spacing:0.5px;">${title}</h2>`;
         const bodyDiv = document.createElement("div");
         if (typeof body === "string") bodyDiv.innerHTML = body;
@@ -73,9 +71,9 @@ function modal({ title, body, buttons }) {
             const btn = document.createElement("button");
             btn.textContent = b.label;
             btn.style.cssText =
-                `background:${b.primary ? C.mauve : C.bg2};
-                 color:${b.primary ? C.bg : C.fg};
-                 border:1px solid ${b.primary ? C.mauve : C.border};
+                `background:${b.primary ? "var(--c2c-mauve)" : "var(--c2c-bg2)"};
+                 color:${b.primary ? "var(--c2c-bg)" : "var(--c2c-fg)"};
+                 border:1px solid ${b.primary ? "var(--c2c-mauve)" : "var(--c2c-border)"};
                  border-radius:4px;padding:6px 14px;cursor:pointer;font-size:12px;`;
             btn.onclick = () => { back.remove(); resolve(b.value); };
             btnRow.appendChild(btn);
@@ -90,8 +88,8 @@ function preBlock(text) {
     const pre = document.createElement("pre");
     pre.textContent = text;
     pre.style.cssText =
-        `background:${C.bg2};border:1px solid ${C.border};border-radius:4px;
-         padding:10px;font-size:11px;white-space:pre-wrap;color:${C.sub};
+        `background:var(--c2c-bg2);border:1px solid var(--c2c-border);border-radius:4px;
+         padding:10px;font-size:11px;white-space:pre-wrap;color:var(--c2c-sub);
          max-height:280px;overflow:auto;line-height:1.45;font-family:ui-monospace,monospace;`;
     return pre;
 }
@@ -105,7 +103,7 @@ async function runFirstRunWizard() {
 `<p>C2C v2.0 adds AI-powered helpers across many features. Every AI call goes
 through one router — pick <b>Cloud</b>, <b>Local</b>, or let it auto-choose
 per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends</i>.</p>
-<p style="color:${C.sub}">This wizard will:
+<p style="color:var(--c2c-sub)">This wizard will:
  1. Detect any local AI servers (Ollama, LM Studio, llama.cpp).
  2. Offer to import any API keys you have in <code>All API Keys Of Comfy.txt</code>.
  3. Save a starting configuration. Nothing is sent anywhere until you actually use an AI feature.</p>`,
@@ -133,14 +131,14 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
         localBody.innerHTML =
             `<p>No local AI servers detected on the usual ports
              (Ollama:11434, LM Studio:1234, llama.cpp:8080, vLLM:8000).</p>
-             <p style="color:${C.sub}">If you have Ollama installed, start it and re-run this
+             <p style="color:var(--c2c-sub)">If you have Ollama installed, start it and re-run this
              wizard from <i>Settings → C2C ▸ AI Backends → Re-run wizard</i>.</p>`;
     } else {
         localBody.innerHTML =
             `<p>Local AI servers detected:</p>
              <ul>${localList.map(s =>
                 `<li><b>${s.name}</b> @ ${s.base_url}
-                 ${s.models?.length ? `<div style="color:${C.sub};font-size:11px">
+                 ${s.models?.length ? `<div style="color:var(--c2c-sub);font-size:11px">
                  models: ${s.models.slice(0,3).join(", ")}${s.models.length>3 ? "…" : ""}</div>` : ""}</li>`).join("")}</ul>`;
     }
     const continueLocal = await modal({
@@ -159,7 +157,7 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
             div.innerHTML =
                 `<p>Cloud providers need API keys. We can read them from your existing
                  file and store them in your OS credential store (encrypted at rest).</p>
-                 <p style="color:${C.sub};font-size:11px">Suggested file:
+                 <p style="color:var(--c2c-sub);font-size:11px">Suggested file:
                  <code>${txtPathCandidate}</code></p>`;
             div.appendChild(preBlock(VERBATIM_KEYCHAIN_NOTICE));
             return div;
@@ -179,8 +177,8 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
         } catch (exc) {
             await modal({
                 title: "Import failed",
-                body: `<p style="color:${C.red}">${String(exc.message || exc)}</p>
-                       <p style="color:${C.sub}">You can paste keys manually under
+                body: `<p style="color:var(--c2c-red)">${String(exc.message || exc)}</p>
+                       <p style="color:var(--c2c-sub)">You can paste keys manually under
                        <i>Settings → C2C ▸ AI Backends → Keys</i>.</p>`,
                 buttons: [{ label: "Continue", value: true, primary: true }],
             });
@@ -202,7 +200,7 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
                     title: "Delete the file",
                     body: `<p>To finish, please delete the file manually:</p>
                            <p><code>${txtPathCandidate}</code></p>
-                           <p style="color:${C.sub}">C2C deliberately won't auto-delete user files.</p>`,
+                           <p style="color:var(--c2c-sub)">C2C deliberately won't auto-delete user files.</p>`,
                     buttons: [{ label: "Done", value: true, primary: true }],
                 });
             }
@@ -253,7 +251,7 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
         title: "Step 3 of 3 — Ready",
         body: `<p>Initial config saved:</p>
                <ul>${startCfg.backends.map(b => `<li>${b.kind} — <code>${b.id}</code>${b.enabled ? "" : " (disabled)"}</li>`).join("") || "<li>(none yet)</li>"}</ul>
-               <p style="color:${C.sub}">Tweak any time under <i>Settings → C2C ▸ AI Backends</i>.</p>`,
+               <p style="color:var(--c2c-sub)">Tweak any time under <i>Settings → C2C ▸ AI Backends</i>.</p>`,
         buttons: [{ label: "Finish", value: true, primary: true }],
     });
     app.ui?.settings?.setSettingValue(SETTING_FIRSTRUN, true);
@@ -264,15 +262,15 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
 function buildSettingsView(root) {
     root.innerHTML = "";
     root.style.cssText =
-        `padding:12px;color:${C.fg};background:${C.bg};
+        `padding:12px;color:var(--c2c-fg);background:var(--c2c-bg);
          font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;height:100%;
          overflow:auto;`;
 
     const header = document.createElement("div");
     header.innerHTML =
-        `<h3 style="margin:0 0 4px;color:${C.mauve};text-transform:uppercase;
+        `<h3 style="margin:0 0 4px;color:var(--c2c-mauve);text-transform:uppercase;
                     letter-spacing:0.6px;font-size:13px;">C2C AI Backends</h3>
-         <div style="color:${C.sub};font-size:11px;margin-bottom:10px;">
+         <div style="color:var(--c2c-sub);font-size:11px;margin-bottom:10px;">
             One spine. Cloud and Local share the same router.
          </div>`;
     root.appendChild(header);
@@ -281,13 +279,13 @@ function buildSettingsView(root) {
     root.appendChild(sections);
 
     async function refresh() {
-        sections.innerHTML = "<div style='color:" + C.sub + "'>loading…</div>";
+        sections.innerHTML = "<div style='color:var(--c2c-sub)'>loading…</div>";
         let st, cfg;
         try {
             [st, cfg] = await Promise.all([apiGet("/c2c/ai/status"), apiGet("/c2c/ai/config")]);
         } catch (exc) {
             sections.innerHTML =
-                `<div style="color:${C.red}">Could not load status: ${exc.message}</div>`;
+                `<div style="color:var(--c2c-red)">Could not load status: ${exc.message}</div>`;
             return;
         }
 
@@ -295,34 +293,34 @@ function buildSettingsView(root) {
 
         // ----- Backends section
         const sec1 = document.createElement("section");
-        sec1.innerHTML = `<h4 style="color:${C.blue};margin:8px 0 6px;font-size:12px;">Backends</h4>`;
+        sec1.innerHTML = `<h4 style="color:var(--c2c-blue);margin:8px 0 6px;font-size:12px;">Backends</h4>`;
         const tbl = document.createElement("table");
         tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
         tbl.innerHTML =
             `<thead><tr>
-               <th style="text-align:left;padding:4px;border-bottom:1px solid ${C.border}">id</th>
-               <th style="text-align:left;padding:4px;border-bottom:1px solid ${C.border}">model</th>
-               <th style="padding:4px;border-bottom:1px solid ${C.border}">health</th>
-               <th style="padding:4px;border-bottom:1px solid ${C.border}">enabled</th>
-               <th style="padding:4px;border-bottom:1px solid ${C.border}"></th>
+               <th style="text-align:left;padding:4px;border-bottom:1px solid var(--c2c-border)">id</th>
+               <th style="text-align:left;padding:4px;border-bottom:1px solid var(--c2c-border)">model</th>
+               <th style="padding:4px;border-bottom:1px solid var(--c2c-border)">health</th>
+               <th style="padding:4px;border-bottom:1px solid var(--c2c-border)">enabled</th>
+               <th style="padding:4px;border-bottom:1px solid var(--c2c-border)"></th>
              </tr></thead>`;
         const tbody = document.createElement("tbody");
         (st.backends || []).forEach(b => {
             const tr = document.createElement("tr");
             tr.innerHTML =
-                `<td style="padding:4px;border-bottom:1px solid ${C.border}">
-                   <span style="color:${b.tier==="cloud"?C.blue:C.green}">${b.tier==="cloud"?"☁":"💻"}</span>
-                   ${b.id}<div style="color:${C.sub};font-size:10px">${b.display_name}</div></td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border};color:${C.sub}">${b.model}</td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border};text-align:center;
-                     color:${b.health?.ok ? C.green : C.red}">
+                `<td style="padding:4px;border-bottom:1px solid var(--c2c-border)">
+                   <span style="color:${b.tier==="cloud"?"var(--c2c-blue)":"var(--c2c-green)"}">${b.tier==="cloud"?"☁":"💻"}</span>
+                   ${b.id}<div style="color:var(--c2c-sub);font-size:10px">${b.display_name}</div></td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);color:var(--c2c-sub)">${b.model}</td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);text-align:center;
+                     color:${b.health?.ok ? "var(--c2c-green)" : "var(--c2c-red)"}">
                    ${b.health?.ok ? "ok" : "down"}
-                   <div style="color:${C.sub};font-size:10px">${b.health?.last_rtt_ms ?? "?"}ms</div></td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border};text-align:center">
+                   <div style="color:var(--c2c-sub);font-size:10px">${b.health?.last_rtt_ms ?? "?"}ms</div></td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);text-align:center">
                    <input type="checkbox" data-id="${b.id}" class="c2c-en" ${b.enabled?"checked":""}></td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border}">
-                   <button data-id="${b.id}" class="c2c-test" style="background:${C.bg2};color:${C.fg};
-                     border:1px solid ${C.border};border-radius:3px;padding:2px 8px;cursor:pointer;font-size:10px">test</button></td>`;
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border)">
+                   <button data-id="${b.id}" class="c2c-test" style="background:var(--c2c-bg2);color:var(--c2c-fg);
+                     border:1px solid var(--c2c-border);border-radius:3px;padding:2px 8px;cursor:pointer;font-size:10px">test</button></td>`;
             tbody.appendChild(tr);
         });
         tbl.appendChild(tbody);
@@ -334,7 +332,7 @@ function buildSettingsView(root) {
             const b = document.createElement("button");
             b.textContent = label;
             b.style.cssText =
-                `background:${C.bg2};color:${C.fg};border:1px solid ${C.border};
+                `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
                  border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;`;
             b.onclick = async () => {
                 if (label === "Refresh probes") { await apiPost("/c2c/ai/probe"); refresh(); }
@@ -368,20 +366,20 @@ function buildSettingsView(root) {
 
         // ----- Routing section
         const sec2 = document.createElement("section");
-        sec2.innerHTML = `<h4 style="color:${C.blue};margin:14px 0 6px;font-size:12px;">Per-feature routing</h4>`;
+        sec2.innerHTML = `<h4 style="color:var(--c2c-blue);margin:14px 0 6px;font-size:12px;">Per-feature routing</h4>`;
         const policyTbl = document.createElement("table");
         policyTbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
         (st.policies || []).forEach(p => {
             const tr = document.createElement("tr");
-            const sel = `<select data-feature="${p.feature}" class="c2c-policy" style="background:${C.bg2};color:${C.fg};border:1px solid ${C.border};border-radius:3px;font-size:11px;padding:2px 4px;">
+            const sel = `<select data-feature="${p.feature}" class="c2c-policy" style="background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:3px;font-size:11px;padding:2px 4px;">
               ${["", "auto","prefer_local","prefer_cloud","cloud_only","local_only"].map(v =>
                 `<option value="${v}" ${(p.override||"")===v ? "selected" : ""}>${v||"(use default)"}</option>`).join("")}
             </select>`;
             tr.innerHTML =
-                `<td style="padding:4px;border-bottom:1px solid ${C.border}">${p.feature}</td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border};color:${C.sub};font-size:10px">default: ${p.default}</td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border}">${sel}</td>
-                 <td style="padding:4px;border-bottom:1px solid ${C.border};color:${C.mauve}">→ ${p.effective}</td>`;
+                `<td style="padding:4px;border-bottom:1px solid var(--c2c-border)">${p.feature}</td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);color:var(--c2c-sub);font-size:10px">default: ${p.default}</td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border)">${sel}</td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);color:var(--c2c-mauve)">→ ${p.effective}</td>`;
             policyTbl.appendChild(tr);
         });
         sec2.appendChild(policyTbl);
@@ -400,15 +398,15 @@ function buildSettingsView(root) {
         const sec3 = document.createElement("section");
         const cost = st.cost || {};
         sec3.innerHTML =
-            `<h4 style="color:${C.blue};margin:14px 0 6px;font-size:12px;">Daily budget</h4>
+            `<h4 style="color:var(--c2c-blue);margin:14px 0 6px;font-size:12px;">Daily budget</h4>
              <div>$${(cost.today_cost_usd ?? 0).toFixed(4)} / cap $${(cost.cap_usd ?? 0).toFixed(2)}
                   (${cost.today_calls ?? 0} calls today)</div>
              <div style="margin-top:8px">
-               <label style="color:${C.sub};font-size:11px">Daily cap (USD):</label>
+               <label style="color:var(--c2c-sub);font-size:11px">Daily cap (USD):</label>
                <input id="c2c-cap" type="number" step="0.05" min="0" value="${cost.cap_usd ?? 1.0}"
-                      style="background:${C.bg2};color:${C.fg};border:1px solid ${C.border};
+                      style="background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
                              border-radius:3px;padding:2px 6px;width:80px;font-size:11px;margin-left:6px"/>
-               <button id="c2c-cap-save" style="background:${C.bg2};color:${C.fg};border:1px solid ${C.border};
+               <button id="c2c-cap-save" style="background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
                        border-radius:3px;padding:2px 10px;cursor:pointer;font-size:11px;margin-left:6px">save</button>
              </div>`;
         sections.appendChild(sec3);
@@ -418,6 +416,128 @@ function buildSettingsView(root) {
             await apiPost("/c2c/ai/cost/cap", { usd });
             refresh();
         };
+
+        // ----- Local GGUF (text_encoders/) section — B1
+        // Pulls the live list of GGUF files from ComfyUI's `text_encoders`
+        // folder via /c2c/ai/text_encoders/list and lets the user add one
+        // as a `text_encoder_local` backend without editing ai_config.json
+        // by hand.
+        const sec4 = document.createElement("section");
+        sec4.innerHTML =
+            `<h4 style="color:var(--c2c-blue);margin:14px 0 6px;font-size:12px;">
+                Local GGUF (text_encoders/)
+             </h4>
+             <div id="c2c-te-status" style="color:var(--c2c-sub);font-size:11px;
+                  margin-bottom:6px;">scanning…</div>
+             <div id="c2c-te-controls" style="display:flex;gap:6px;flex-wrap:wrap;
+                  align-items:center;"></div>
+             <div id="c2c-te-roots" style="color:var(--c2c-sub);font-size:10px;
+                  margin-top:6px;"></div>`;
+        sections.appendChild(sec4);
+
+        (async () => {
+            let te;
+            try {
+                te = await apiGet("/c2c/ai/text_encoders/list");
+            } catch (exc) {
+                sec4.querySelector("#c2c-te-status").innerHTML =
+                    `<span style="color:var(--c2c-red)">scan failed: ${exc.message}</span>`;
+                return;
+            }
+            const statusEl = sec4.querySelector("#c2c-te-status");
+            const ctrlEl   = sec4.querySelector("#c2c-te-controls");
+            const rootsEl  = sec4.querySelector("#c2c-te-roots");
+            const items = te.items || [];
+            const haveLib = !!te.llamacpp_available;
+
+            // Status line: lib availability + count.
+            statusEl.innerHTML =
+                `${haveLib
+                    ? `<span style="color:var(--c2c-green)">✓ llama-cpp-python installed</span>`
+                    : `<span style="color:var(--c2c-red)">✗ llama-cpp-python not installed</span> ` +
+                      `<code style="color:var(--c2c-sub)">pip install llama-cpp-python</code>`}
+                 · <span>${items.length} GGUF file${items.length===1?"":"s"} found</span>`;
+
+            // Roots line.
+            rootsEl.innerHTML = `Scanned folders: ${
+                (te.roots || []).map(r => `<code>${r}</code>`).join(" · ") || "(none)"
+            }`;
+
+            // The "model_file" the active local.llamacpp backend points at,
+            // if any — pre-select it in the combo.
+            const existing = (cfg.backends || []).find(
+                e => e.kind === "text_encoder_local",
+            );
+
+            if (items.length === 0) {
+                ctrlEl.innerHTML =
+                    `<span style="color:var(--c2c-sub);font-size:11px">
+                        Drop a *.gguf model into the folder above and click Rescan.
+                     </span>`;
+            } else {
+                const sel = document.createElement("select");
+                sel.style.cssText =
+                    `background:var(--c2c-bg2);color:var(--c2c-fg);
+                     border:1px solid var(--c2c-border);border-radius:3px;
+                     font-size:11px;padding:2px 4px;max-width:340px;`;
+                items.forEach(it => {
+                    const o = document.createElement("option");
+                    o.value = it.name;
+                    const mb = it.size_bytes
+                        ? ` (${(it.size_bytes / (1024 * 1024)).toFixed(0)} MB)`
+                        : "";
+                    o.textContent = it.name + mb;
+                    if (existing && existing.model_file === it.name) {
+                        o.selected = true;
+                    }
+                    sel.appendChild(o);
+                });
+                ctrlEl.appendChild(sel);
+
+                const apply = document.createElement("button");
+                apply.textContent = existing ? "Update" : "Add as backend";
+                apply.style.cssText =
+                    `background:var(--c2c-bg2);color:var(--c2c-fg);
+                     border:1px solid var(--c2c-border);border-radius:3px;
+                     padding:2px 10px;cursor:pointer;font-size:11px;`;
+                apply.disabled = !haveLib;
+                apply.title = haveLib ? "" :
+                    "llama-cpp-python must be installed first";
+                apply.onclick = async () => {
+                    const newCfg = await apiGet("/c2c/ai/config");
+                    newCfg.backends = newCfg.backends || [];
+                    let entry = newCfg.backends.find(
+                        e => e.kind === "text_encoder_local",
+                    );
+                    if (entry) {
+                        entry.model_file = sel.value;
+                        entry.enabled = true;
+                    } else {
+                        newCfg.backends.push({
+                            kind: "text_encoder_local",
+                            id: "local.llamacpp",
+                            display_name: "Local GGUF (llama.cpp)",
+                            model_file: sel.value,
+                            n_ctx: 8192,
+                            n_gpu_layers: -1,
+                            enabled: true,
+                        });
+                    }
+                    await apiPost("/c2c/ai/config", newCfg);
+                    refresh();
+                };
+                ctrlEl.appendChild(apply);
+            }
+
+            const rescan = document.createElement("button");
+            rescan.textContent = "Rescan";
+            rescan.style.cssText =
+                `background:var(--c2c-bg2);color:var(--c2c-fg);
+                 border:1px solid var(--c2c-border);border-radius:3px;
+                 padding:2px 10px;cursor:pointer;font-size:11px;`;
+            rescan.onclick = () => refresh();
+            ctrlEl.appendChild(rescan);
+        })();
     }
     refresh();
 }

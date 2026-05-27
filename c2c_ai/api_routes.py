@@ -16,6 +16,9 @@
     GET  /c2c/ai/config                 → ai_config.json contents
     POST /c2c/ai/config                 → replace ai_config.json (also re-bootstraps)
     POST /c2c/ai/backends/test          → call .probe() on one backend, return result
+    GET  /c2c/ai/prompts                → list registered prompt templates (name, version, sha256, vars)
+    POST /c2c/ai/prompts/render         → render one             {"name","vars":{...}}
+    GET  /c2c/ai/prompts/verify         → run golden-hash regression on every template
 """
 
 from __future__ import annotations
@@ -211,6 +214,57 @@ def register_routes(server) -> None:
         found = await loop.run_in_executor(None, detect_local_servers)
         return _ok({"servers": found})
 
+    # ------------------------------------------------------ text encoders
+    # B1: list GGUF files under ComfyUI's text_encoders folder(s). The
+    # Settings UI populates a combo from this so users can pick a local
+    # in-process chat model without editing ai_config.json by hand.
+    # Uses folder_paths so extra_model_paths.yaml entries also count.
+    @routes.get("/c2c/ai/text_encoders/list")
+    async def _text_encoders_list(_req):
+        try:
+            import folder_paths  # type: ignore
+        except Exception as exc:
+            return _err("NO_FOLDER_PATHS", f"folder_paths unavailable: {exc}",
+                        code=500)
+        try:
+            files = folder_paths.get_filename_list("text_encoders") or []
+        except Exception as exc:
+            return _err("SCAN_FAILED", str(exc), code=500)
+        ggufs = [f for f in files if isinstance(f, str)
+                 and f.lower().endswith(".gguf")]
+        # Surface absolute paths + file size so the UI can display them.
+        items = []
+        for name in ggufs:
+            try:
+                abs_p = folder_paths.get_full_path("text_encoders", name)
+            except Exception:
+                abs_p = None
+            size = None
+            if abs_p:
+                try:
+                    size = int(__import__("os").path.getsize(abs_p))
+                except Exception:
+                    size = None
+            items.append({"name": name, "path": abs_p, "size_bytes": size})
+        # Surface the configured roots so the UI can tell the user where
+        # to drop new GGUFs.
+        try:
+            roots = list(folder_paths.get_folder_paths("text_encoders") or [])
+        except Exception:
+            roots = []
+        # Detect whether llama-cpp-python is installed so the UI can warn
+        # the user up-front instead of failing on first chat.
+        try:
+            import importlib.util
+            llamacpp_available = importlib.util.find_spec("llama_cpp") is not None
+        except Exception:
+            llamacpp_available = False
+        return _ok({
+            "items": items,
+            "roots": roots,
+            "llamacpp_available": llamacpp_available,
+        })
+
     # --------------------------------------------------------- policy
     @routes.get("/c2c/ai/policy")
     async def _policy_get(_req):
@@ -277,5 +331,50 @@ def register_routes(server) -> None:
             "last_error": h.last_error,
             "last_probe_at": h.last_probe_at,
         })
+
+    # ---------------------------------------------------------- prompts
+    # Versioned Jinja2 system-prompt library (no inline prompt strings in JS).
+    from . import prompts as prompt_lib
+
+    @routes.get("/c2c/ai/prompts")
+    async def _prompts_list(_req):
+        return _ok({"templates": prompt_lib.list_templates()})
+
+    @routes.post("/c2c/ai/prompts/render")
+    async def _prompts_render(req):
+        try:
+            body = await req.json()
+        except Exception as exc:
+            return _err("BAD_BODY", f"invalid JSON: {exc}")
+        if not isinstance(body, dict):
+            return _err("BAD_BODY", "body must be a JSON object")
+        name = body.get("name")
+        if not isinstance(name, str) or not name:
+            return _err("MISSING_NAME", "'name' (string) is required")
+        vars_in = body.get("vars") or {}
+        if not isinstance(vars_in, dict):
+            return _err("BAD_VARS", "'vars' must be a JSON object")
+        # All var values must be JSON-serialisable scalars/lists/dicts.
+        if not prompt_lib.has(name):
+            return _err("UNKNOWN_TEMPLATE", f"no prompt template named {name!r}", code=404)
+        try:
+            text = prompt_lib.render(name, **vars_in)
+        except (KeyError, ValueError) as exc:
+            return _err("RENDER_FAILED", str(exc))
+        except Exception as exc:                       # pragma: no cover
+            log.exception("prompt render failed: %s", name)
+            return _err("RENDER_ERR", str(exc), code=500)
+        # Look up version + golden so the JS client can pin against drift.
+        meta = next((t for t in prompt_lib.list_templates() if t["name"] == name), {})
+        return _ok({
+            "name": name,
+            "text": text,
+            "version": meta.get("version", "0.0.0"),
+            "golden_sha256": meta.get("golden_sha256", ""),
+        })
+
+    @routes.get("/c2c/ai/prompts/verify")
+    async def _prompts_verify(_req):
+        return _ok({"results": prompt_lib.verify_goldens()})
 
     log.info("c2c_ai routes registered under /c2c/ai/*")
