@@ -215,10 +215,12 @@ def register_routes(server) -> None:
         return _ok({"servers": found})
 
     # ------------------------------------------------------ text encoders
-    # B1: list GGUF files under ComfyUI's text_encoders folder(s). The
-    # Settings UI populates a combo from this so users can pick a local
-    # in-process chat model without editing ai_config.json by hand.
-    # Uses folder_paths so extra_model_paths.yaml entries also count.
+    # B1: list every file under ComfyUI's `text_encoders` folder(s) — not
+    # just GGUFs. The combo widget in the Settings UI surfaces them all so
+    # users can see what's actually on disk; only `.gguf` files are
+    # `chat_capable` (loaded in-process by llama-cpp-python). Non-GGUF
+    # files (T5/CLIP `.safetensors`/`.bin`/`.pt`) are still listed but
+    # disabled in the combo with a tooltip explaining why.
     @routes.get("/c2c/ai/text_encoders/list")
     async def _text_encoders_list(_req):
         try:
@@ -230,30 +232,41 @@ def register_routes(server) -> None:
             files = folder_paths.get_filename_list("text_encoders") or []
         except Exception as exc:
             return _err("SCAN_FAILED", str(exc), code=500)
-        ggufs = [f for f in files if isinstance(f, str)
-                 and f.lower().endswith(".gguf")]
-        # Surface absolute paths + file size so the UI can display them.
+        import os as _os
+        CHAT_EXTS = (".gguf",)
+        ENC_EXTS  = (".safetensors", ".bin", ".pt", ".pth", ".ckpt")
         items = []
-        for name in ggufs:
+        for name in files:
+            if not isinstance(name, str):
+                continue
+            ext = _os.path.splitext(name)[1].lower()
             try:
                 abs_p = folder_paths.get_full_path("text_encoders", name)
             except Exception:
                 abs_p = None
-            size = None
-            if abs_p:
-                try:
-                    size = int(__import__("os").path.getsize(abs_p))
-                except Exception:
-                    size = None
-            items.append({"name": name, "path": abs_p, "size_bytes": size})
-        # Surface the configured roots so the UI can tell the user where
-        # to drop new GGUFs.
+            try:
+                size = int(_os.path.getsize(abs_p)) if abs_p else None
+            except Exception:
+                size = None
+            kind = ("gguf"  if ext in CHAT_EXTS
+                    else "encoder" if ext in ENC_EXTS
+                    else "other")
+            items.append({
+                "name": name,
+                "path": abs_p,
+                "size_bytes": size,
+                "ext": ext,
+                "kind": kind,
+                "chat_capable": kind == "gguf",
+            })
+        # Stable order: chat-capable first, then encoders, then other; name asc.
+        items.sort(key=lambda it: (0 if it["kind"] == "gguf"
+                                   else 1 if it["kind"] == "encoder"
+                                   else 2, it["name"].lower()))
         try:
             roots = list(folder_paths.get_folder_paths("text_encoders") or [])
         except Exception:
             roots = []
-        # Detect whether llama-cpp-python is installed so the UI can warn
-        # the user up-front instead of failing on first chat.
         try:
             import importlib.util
             llamacpp_available = importlib.util.find_spec("llama_cpp") is not None
@@ -263,6 +276,12 @@ def register_routes(server) -> None:
             "items": items,
             "roots": roots,
             "llamacpp_available": llamacpp_available,
+            "counts": {
+                "total": len(items),
+                "chat_capable": sum(1 for it in items if it["chat_capable"]),
+                "encoder": sum(1 for it in items if it["kind"] == "encoder"),
+                "other": sum(1 for it in items if it["kind"] == "other"),
+            },
         })
 
     # --------------------------------------------------------- policy

@@ -449,14 +449,21 @@ function buildSettingsView(root) {
             const rootsEl  = sec4.querySelector("#c2c-te-roots");
             const items = te.items || [];
             const haveLib = !!te.llamacpp_available;
+            const counts = te.counts || {};
+            const chatItems = items.filter(it => it.chat_capable);
 
-            // Status line: lib availability + count.
+            // Status line: lib availability + breakdown.
             statusEl.innerHTML =
                 `${haveLib
                     ? `<span style="color:var(--c2c-green)">✓ llama-cpp-python installed</span>`
                     : `<span style="color:var(--c2c-red)">✗ llama-cpp-python not installed</span> ` +
                       `<code style="color:var(--c2c-sub)">pip install llama-cpp-python</code>`}
-                 · <span>${items.length} GGUF file${items.length===1?"":"s"} found</span>`;
+                 · <span>${items.length} file${items.length===1?"":"s"} total</span>
+                 · <span style="color:var(--c2c-green)">${counts.chat_capable ?? 0} GGUF</span>
+                 · <span style="color:var(--c2c-sub)">${counts.encoder ?? 0} encoder</span>
+                 ${(counts.other ?? 0) > 0
+                    ? `· <span style="color:var(--c2c-sub)">${counts.other} other</span>`
+                    : ""}`;
 
             // Roots line.
             rootsEl.innerHTML = `Scanned folders: ${
@@ -486,12 +493,27 @@ function buildSettingsView(root) {
                     const mb = it.size_bytes
                         ? ` (${(it.size_bytes / (1024 * 1024)).toFixed(0)} MB)`
                         : "";
-                    o.textContent = it.name + mb;
+                    const badge =
+                        it.kind === "gguf"     ? "[GGUF]"    :
+                        it.kind === "encoder"  ? "[encoder]" : "[other]";
+                    o.textContent = `${badge} ${it.name}${mb}`;
+                    if (!it.chat_capable) {
+                        o.disabled = true;
+                        o.title = it.kind === "encoder"
+                            ? "Diffusion text-encoder (T5/CLIP). Used by image " +
+                              "pipelines — not loadable as an in-process chat LLM."
+                            : "Not a recognised model file.";
+                    }
                     if (existing && existing.model_file === it.name) {
                         o.selected = true;
                     }
                     sel.appendChild(o);
                 });
+                // Ensure the initial selection lands on a chat-capable option
+                // if nothing was pre-selected and any exist.
+                if (!existing && chatItems.length) {
+                    sel.value = chatItems[0].name;
+                }
                 ctrlEl.appendChild(sel);
 
                 const apply = document.createElement("button");
@@ -500,10 +522,23 @@ function buildSettingsView(root) {
                     `background:var(--c2c-bg2);color:var(--c2c-fg);
                      border:1px solid var(--c2c-border);border-radius:3px;
                      padding:2px 10px;cursor:pointer;font-size:11px;`;
-                apply.disabled = !haveLib;
-                apply.title = haveLib ? "" :
-                    "llama-cpp-python must be installed first";
+                const disabledReason = !haveLib
+                    ? "llama-cpp-python must be installed first"
+                    : chatItems.length === 0
+                        ? "No GGUF files found — only GGUF can be loaded in-process"
+                        : "";
+                apply.disabled = !!disabledReason;
+                apply.title = disabledReason;
                 apply.onclick = async () => {
+                    // Guard: only allow chat-capable models through.
+                    const picked = items.find(it => it.name === sel.value);
+                    if (!picked || !picked.chat_capable) {
+                        apply.textContent = "GGUF only";
+                        setTimeout(() => {
+                            apply.textContent = existing ? "Update" : "Add as backend";
+                        }, 1500);
+                        return;
+                    }
                     const newCfg = await apiGet("/c2c/ai/config");
                     newCfg.backends = newCfg.backends || [];
                     let entry = newCfg.backends.find(
