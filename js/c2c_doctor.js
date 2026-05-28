@@ -252,8 +252,8 @@ function injectStyles() {
 #${PANEL_ID} {
     position: fixed; top: 0; right: 0; height: 100vh;
     width: var(--c2c-doc-w, 540px); min-width: 380px; max-width: 95vw;
-    background: var(--c2c-bg, #1a1a1f); color: var(--c2c-fg, #e8e8ec);
-    border-left: 1px solid var(--c2c-border, #333);
+    background: var(--c2c-bg, var(--c2c-bg2)); color: var(--c2c-fg, var(--c2c-accentBright));
+    border-left: 1px solid var(--c2c-border, var(--c2c-gray800));
     box-shadow: -8px 0 32px rgba(0,0,0,.4);
     display: grid; grid-template-rows: auto auto 1fr auto;
     z-index: var(--c2c-z-popover);
@@ -265,33 +265,33 @@ function injectStyles() {
 #${PANEL_ID} .c2c-doc-hdr {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--c2c-border, #333);
-    background: var(--c2c-bg-elev, #22222a);
+    border-bottom: 1px solid var(--c2c-border, var(--c2c-gray800));
+    background: var(--c2c-bg-elev, var(--c2c-bg));
 }
 #${PANEL_ID} .c2c-doc-title { font-size: 14px; font-weight: 600; flex: 1; }
 #${PANEL_ID} .c2c-doc-iconbtn {
-    background: transparent; border: 1px solid var(--c2c-border, #444);
-    color: var(--c2c-fg, #e8e8ec); padding: 3px 8px; border-radius: 4px;
+    background: transparent; border: 1px solid var(--c2c-border, var(--c2c-gray700));
+    color: var(--c2c-fg, var(--c2c-accentBright)); padding: 3px 8px; border-radius: 4px;
     cursor: pointer; font: inherit;
 }
-#${PANEL_ID} .c2c-doc-iconbtn:hover { background: var(--c2c-bg-hover, #2a2a32); }
+#${PANEL_ID} .c2c-doc-iconbtn:hover { background: var(--c2c-bg-hover, var(--c2c-panelBg)); }
 #${PANEL_ID} .c2c-doc-tabs {
     display: flex; flex-wrap: wrap; gap: 2px;
     padding: 6px 8px;
-    border-bottom: 1px solid var(--c2c-border, #333);
-    background: var(--c2c-bg-elev, #22222a);
+    border-bottom: 1px solid var(--c2c-border, var(--c2c-gray800));
+    background: var(--c2c-bg-elev, var(--c2c-bg));
 }
 #${PANEL_ID} .c2c-doc-tab {
     padding: 4px 8px; border-radius: 4px;
     background: transparent; border: 1px solid transparent;
-    color: var(--c2c-fg-dim, #aaa); cursor: pointer; font: inherit;
+    color: var(--c2c-fg-dim, var(--c2c-gray300)); cursor: pointer; font: inherit;
     white-space: nowrap;
 }
-#${PANEL_ID} .c2c-doc-tab:hover { background: var(--c2c-bg-hover, #2a2a32); color: var(--c2c-fg, #e8e8ec); }
+#${PANEL_ID} .c2c-doc-tab:hover { background: var(--c2c-bg-hover, var(--c2c-panelBg)); color: var(--c2c-fg, var(--c2c-accentBright)); }
 #${PANEL_ID} .c2c-doc-tab.active {
-    background: var(--c2c-accent-bg, #233);
-    color: var(--c2c-accent, #6bf);
-    border-color: var(--c2c-accent, #6bf);
+    background: var(--c2c-accent-bg, var(--c2c-panelBg));
+    color: var(--c2c-accent, var(--c2c-accentSoft));
+    border-color: var(--c2c-accent, var(--c2c-accentSoft));
 }
 #${PANEL_ID} .c2c-doc-body {
     overflow: auto; padding: 12px;
@@ -299,55 +299,55 @@ function injectStyles() {
 #${PANEL_ID} .c2c-doc-footer {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 12px;
-    border-top: 1px solid var(--c2c-border, #333);
-    background: var(--c2c-bg-elev, #22222a);
-    font-size: 11px; color: var(--c2c-fg-dim, #888);
+    border-top: 1px solid var(--c2c-border, var(--c2c-gray800));
+    background: var(--c2c-bg-elev, var(--c2c-bg));
+    font-size: 11px; color: var(--c2c-fg-dim, var(--c2c-gray400));
 }
-#${PANEL_ID} h3 { font-size: 12px; margin: 0 0 8px; color: var(--c2c-accent, #6bf);
+#${PANEL_ID} h3 { font-size: 12px; margin: 0 0 8px; color: var(--c2c-accent, var(--c2c-accentSoft));
                    text-transform: uppercase; letter-spacing: .04em; }
 #${PANEL_ID} .c2c-doc-section { margin-bottom: 16px; }
 #${PANEL_ID} table { width: 100%; border-collapse: collapse; font-size: 11px; }
 #${PANEL_ID} th, #${PANEL_ID} td {
     text-align: left; padding: 4px 8px;
-    border-bottom: 1px solid var(--c2c-border-soft, #2a2a32);
+    border-bottom: 1px solid var(--c2c-border-soft, var(--c2c-panelBg));
     vertical-align: top;
 }
-#${PANEL_ID} th { color: var(--c2c-fg-dim, #999); font-weight: 600; }
+#${PANEL_ID} th { color: var(--c2c-fg-dim, var(--c2c-gray360)); font-weight: 600; }
 #${PANEL_ID} .c2c-doc-pill {
     display: inline-block; padding: 1px 6px; border-radius: 10px;
     font-size: 10px; font-weight: 600;
 }
-#${PANEL_ID} .pill-err  { background: #5b1f1f; color: #ffb4b4; }
-#${PANEL_ID} .pill-warn { background: #5b471f; color: #ffe0a8; }
-#${PANEL_ID} .pill-info { background: #1f3a5b; color: #aacaff; }
-#${PANEL_ID} .pill-ok   { background: #1f5b30; color: #aaffc8; }
+#${PANEL_ID} .pill-err  { background: var(--c2c-panelBg); color: var(--c2c-dangerTint); }
+#${PANEL_ID} .pill-warn { background: var(--c2c-surface0); color: var(--c2c-yellow); }
+#${PANEL_ID} .pill-info { background: var(--c2c-surface0); color: var(--c2c-accentLink); }
+#${PANEL_ID} .pill-ok   { background: var(--c2c-surface0); color: var(--c2c-teal); }
 #${PANEL_ID} .c2c-doc-finding {
-    border: 1px solid var(--c2c-border, #333); border-radius: 5px;
+    border: 1px solid var(--c2c-border, var(--c2c-gray800)); border-radius: 5px;
     padding: 8px 10px; margin-bottom: 6px;
-    background: var(--c2c-bg-elev, #22222a);
+    background: var(--c2c-bg-elev, var(--c2c-bg));
 }
 #${PANEL_ID} .c2c-doc-finding .fhead {
     display: flex; gap: 8px; align-items: center; margin-bottom: 4px;
 }
 #${PANEL_ID} .c2c-doc-finding .ftitle { font-weight: 600; flex: 1; }
-#${PANEL_ID} .c2c-doc-finding .fbody { color: var(--c2c-fg-dim, #bbb); font-size: 11px; }
+#${PANEL_ID} .c2c-doc-finding .fbody { color: var(--c2c-fg-dim, var(--c2c-gray250)); font-size: 11px; }
 #${PANEL_ID} .c2c-doc-finding .ffix {
     margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap;
 }
 #${PANEL_ID} .c2c-doc-drop {
-    border: 2px dashed var(--c2c-border, #555); border-radius: 6px;
+    border: 2px dashed var(--c2c-border, var(--c2c-gray600)); border-radius: 6px;
     padding: 24px; text-align: center; cursor: pointer;
-    color: var(--c2c-fg-dim, #aaa);
+    color: var(--c2c-fg-dim, var(--c2c-gray300));
 }
-#${PANEL_ID} .c2c-doc-drop.over { border-color: var(--c2c-accent, #6bf); background: rgba(80,180,255,.06); }
-#${PANEL_ID} .c2c-doc-empty { color: var(--c2c-fg-dim, #888); font-style: italic; padding: 12px; text-align: center; }
-#${PANEL_ID} .c2c-doc-spark { height: 60px; background: var(--c2c-bg-elev, #1f1f25);
-                              border: 1px solid var(--c2c-border-soft, #2a2a32); border-radius: 4px;
+#${PANEL_ID} .c2c-doc-drop.over { border-color: var(--c2c-accent, var(--c2c-accentSoft)); background: rgba(80,180,255,.06); }
+#${PANEL_ID} .c2c-doc-empty { color: var(--c2c-fg-dim, var(--c2c-gray400)); font-style: italic; padding: 12px; text-align: center; }
+#${PANEL_ID} .c2c-doc-spark { height: 60px; background: var(--c2c-bg-elev, var(--c2c-bg));
+                              border: 1px solid var(--c2c-border-soft, var(--c2c-panelBg)); border-radius: 4px;
                               margin-bottom: 4px; display: block; width: 100%; }
 #${PANEL_ID} .c2c-doc-kv { display: grid; grid-template-columns: 160px 1fr; gap: 2px 12px; font-size: 11px; }
-#${PANEL_ID} .c2c-doc-kv > div:nth-child(odd) { color: var(--c2c-fg-dim, #999); }
+#${PANEL_ID} .c2c-doc-kv > div:nth-child(odd) { color: var(--c2c-fg-dim, var(--c2c-gray360)); }
 #${PANEL_ID} pre.c2c-doc-pre {
-    background: var(--c2c-bg-elev, #1f1f25); border: 1px solid var(--c2c-border-soft, #2a2a32);
+    background: var(--c2c-bg-elev, var(--c2c-bg)); border: 1px solid var(--c2c-border-soft, var(--c2c-panelBg));
     border-radius: 4px; padding: 8px; font-size: 11px; line-height: 1.4;
     max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
@@ -355,14 +355,14 @@ function injectStyles() {
     position: fixed;
     top: calc(var(--c2c-native-top, 48px) + 4px);
     right: 8px;
-    background: var(--c2c-bg-elev, #22222a); color: var(--c2c-fg, #e8e8ec);
-    border: 1px solid var(--c2c-border, #444); border-radius: 4px;
+    background: var(--c2c-bg-elev, var(--c2c-bg)); color: var(--c2c-fg, var(--c2c-accentBright));
+    border: 1px solid var(--c2c-border, var(--c2c-gray700)); border-radius: 4px;
     padding: 4px 10px; font: 12px/1 ui-sans-serif, sans-serif;
     cursor: pointer; z-index: var(--c2c-z-dock, 2500);
     /* Fallback only — hidden when OmniBar is present */
 }
-#${BTN_ID}.sev-warn { border-color: #d4a52a; color: #ffd97a; }
-#${BTN_ID}.sev-err  { border-color: #d44a4a; color: #ff9a9a; }
+#${BTN_ID}.sev-warn { border-color: var(--c2c-warnBright); color: var(--c2c-warnSoft); }
+#${BTN_ID}.sev-err  { border-color: var(--c2c-danger); color: var(--c2c-dangerTint); }
 `;
     document.head.appendChild(el);
 }
@@ -468,7 +468,7 @@ function setActiveTab(key) {
         .then(() => { refs.status.textContent = "ok"; })
         .catch((exc) => {
             refs.body.innerHTML =
-                `<div class="c2c-doc-empty" style="color:#f88">render error: ${esc(exc && exc.message || exc)}</div>`;
+                `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">render error: ${esc(exc && exc.message || exc)}</div>`;
             refs.status.textContent = "error";
             // eslint-disable-next-line no-console
             console.error("[c2c-doctor] tab render", key, exc);
@@ -576,7 +576,7 @@ async function renderLint(body) {
     const rep = _lastLint && _lastLint.report;
     if (!rep) { body.innerHTML = '<div class="c2c-doc-empty">no graph</div>'; return; }
     if (rep.success === false) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">analyze failed: ${esc(rep.error || rep._fetchError || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">analyze failed: ${esc(rep.error || rep._fetchError || "unknown")}</div>`;
         return;
     }
     const findings = rep.findings || [];
@@ -669,7 +669,7 @@ const MODEL_SOURCES = [
 async function renderModels(body) {
     const oi = await fetchJSON("/object_info");
     if (!oi || oi._fetchError) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/object_info failed: ${esc(oi && oi._fetchError || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/object_info failed: ${esc(oi && oi._fetchError || "unknown")}</div>`;
         return;
     }
     const rows = [];
@@ -730,7 +730,7 @@ async function renderModels(body) {
 async function renderPerf(body) {
     const j = await fetchJSON("/c2c/int/runs?n=200");
     if (!j || j._fetchError) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/int/runs failed: ${esc(j && j._fetchError || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/int/runs failed: ${esc(j && j._fetchError || "unknown")}</div>`;
         return;
     }
     const items = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
@@ -789,7 +789,7 @@ async function renderPerf(body) {
 async function renderDeps(body) {
     const j = await fetchJSON("/c2c/depcheck/snapshot");
     if (!j || j._fetchError || j.success === false) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/depcheck/snapshot failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/depcheck/snapshot failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
         return;
     }
     const dirs = (j.data && j.data.dirs) || [];
@@ -826,7 +826,7 @@ async function renderDeps(body) {
 async function renderPyEnv(body) {
     const j = await fetchJSON("/c2c/doctor/pyenv");
     if (!j || j._fetchError || j.success === false) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/doctor/pyenv failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/doctor/pyenv failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
         return;
     }
     const py = j.python || {}; const cv = j.comfy || {}; const dv = j.device || {};
@@ -885,7 +885,7 @@ async function renderDisk(body) {
     body.innerHTML = `<div class="c2c-doc-empty">scanning disk... (this can take a few seconds on first run)</div>`;
     const j = await fetchJSON("/c2c/doctor/disk");
     if (!j || j._fetchError || j.success === false) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/doctor/disk failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/doctor/disk failed: ${esc(j && (j._fetchError || j.error) || "unknown")}</div>`;
         return;
     }
     const drive = j.drive || {};
@@ -973,7 +973,7 @@ async function renderGpu(body, refs) {
           <canvas class="c2c-doc-spark" data-role="ram"></canvas>
           <div class="c2c-doc-kv" data-role="ram-kv"></div>
         </div>
-        <div style="color:var(--c2c-fg-dim,#888);font-size:11px">samples buffered: <span data-role="n">0</span></div>`;
+        <div style="color:var(--c2c-fg-dim,var(--c2c-gray400));font-size:11px">samples buffered: <span data-role="n">0</span></div>`;
     const vramC = body.querySelector('[data-role="vram"]');
     const ramC  = body.querySelector('[data-role="ram"]');
 
@@ -988,8 +988,8 @@ async function renderGpu(body, refs) {
         const ramData  = _gpuRing.map((s) => s.ram_used);
         const vramMax  = _gpuRing.length ? _gpuRing[_gpuRing.length - 1].vram_total : 0;
         const ramMax   = _gpuRing.length ? _gpuRing[_gpuRing.length - 1].ram_total : 0;
-        _spark(vctx, W, H, vramData, vramMax, "#6bf");
-        _spark(rctx, W, H, ramData, ramMax, "#fb6");
+        _spark(vctx, W, H, vramData, vramMax, "var(--c2c-accentSoft)");
+        _spark(rctx, W, H, ramData, ramMax, "var(--c2c-warn)");
         const last = _gpuRing[_gpuRing.length - 1];
         if (last) {
             body.querySelector('[data-role="vram-kv"]').innerHTML =
@@ -1091,7 +1091,7 @@ async function renderErrors(body) {
                 const j = await r.json();
                 if (!j || !j.success) {
                     const err = (j && j.error) || `HTTP ${r.status}`;
-                    host.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">Explain failed: ${esc(String(err))}</div>`;
+                    host.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">Explain failed: ${esc(String(err))}</div>`;
                     return;
                 }
                 const ex = j.data.explanation || {};
@@ -1099,7 +1099,7 @@ async function renderErrors(body) {
                              : ex.severity === "error"    ? "err"
                              : ex.severity === "warning"  ? "warn" : "ok";
                 const fixes = Array.isArray(ex.fixes) ? ex.fixes : [];
-                host.innerHTML = `<div class="c2c-doc-section" style="margin:0;border-left:3px solid var(--c2c-accent,#4ea8ff);padding-left:10px">
+                host.innerHTML = `<div class="c2c-doc-section" style="margin:0;border-left:3px solid var(--c2c-accent,var(--c2c-accentSoft));padding-left:10px">
                   <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
                     <span class="c2c-doc-pill pill-${sevCls}">${esc(ex.severity || "unknown")}</span>
                     <span class="c2c-doc-pill">${esc(ex.category || "unknown")}</span>
@@ -1114,7 +1114,7 @@ async function renderErrors(body) {
                   ${ex._raw_output ? `<details style="margin-top:6px"><summary style="cursor:pointer;opacity:.7">raw model output</summary><pre style="white-space:pre-wrap;font-size:11px">${esc(ex._raw_output)}</pre></details>` : ""}
                 </div>`;
             } catch (e) {
-                host.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">Explain failed: ${esc(String(e && e.message || e))}</div>`;
+                host.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">Explain failed: ${esc(String(e && e.message || e))}</div>`;
             } finally {
                 btn._busy = false; btn.disabled = false;
             }
@@ -1128,7 +1128,7 @@ async function renderErrors(body) {
 async function renderVersions(body) {
     const j = await fetchJSON("/c2c/registry/status");
     if (!j || j._fetchError) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/registry/status failed: ${esc(j && j._fetchError || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/registry/status failed: ${esc(j && j._fetchError || "unknown")}</div>`;
         return;
     }
     // Real payload shape from nodes/_c2c_registry.py:
@@ -1217,7 +1217,7 @@ async function renderSettings(body) {
 async function renderHistory(body) {
     const j = await fetchJSON("/c2c/int/runs?n=500");
     if (!j || j._fetchError) {
-        body.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">/c2c/int/runs failed: ${esc(j && j._fetchError || "unknown")}</div>`;
+        body.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">/c2c/int/runs failed: ${esc(j && j._fetchError || "unknown")}</div>`;
         return;
     }
     const items = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
@@ -1262,7 +1262,7 @@ function _scanDropZone(body, intro) {
     body.innerHTML = `
     <div class="c2c-doc-section">
       <h3>${esc(intro.title)}</h3>
-      <div style="color:var(--c2c-fg-dim,#999);margin-bottom:8px">${esc(intro.help)}</div>
+      <div style="color:var(--c2c-fg-dim,var(--c2c-gray360));margin-bottom:8px">${esc(intro.help)}</div>
       <div class="c2c-doc-drop" data-role="drop">
         Drop file here or <u>click to pick</u> (max 64 MiB)
       </div>
@@ -1288,7 +1288,7 @@ function _scanDropZone(body, intro) {
 
 async function _doScan(f, out) {
     if (f.size > 64 * 1024 * 1024) {
-        out.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">File too large (${fmtBytes(f.size)}). Server cap is 64 MiB.</div>`;
+        out.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">File too large (${fmtBytes(f.size)}). Server cap is 64 MiB.</div>`;
         return;
     }
     out.innerHTML = `<div class="c2c-doc-empty">scanning ${esc(f.name)} (${fmtBytes(f.size)})...</div>`;
@@ -1299,11 +1299,11 @@ async function _doScan(f, out) {
         const r = await fetch("/c2c/doctor/scan_file", { method: "POST", body: fd });
         j = await r.json();
     } catch (exc) {
-        out.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">scan failed: ${esc(exc.message)}</div>`;
+        out.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">scan failed: ${esc(exc.message)}</div>`;
         return;
     }
     if (j.success === false && j.error) {
-        out.innerHTML = `<div class="c2c-doc-empty" style="color:#f88">${esc(j.error)}: ${esc(j.detail || "")}</div>`;
+        out.innerHTML = `<div class="c2c-doc-empty" style="color:var(--c2c-dangerSoft)">${esc(j.error)}: ${esc(j.detail || "")}</div>`;
         return;
     }
     const issues = j.issues || [];
@@ -1396,7 +1396,7 @@ function _hookOmniBar() {
             pill.title = "C2C Doctor — workflow lint & diagnostics";
             pill.style.cssText = "display:flex;align-items:center;gap:5px;";
             const dot = document.createElement("span");
-            dot.style.cssText = "width:6px;height:6px;border-radius:50%;background:#a6e3a1;flex-shrink:0;";
+            dot.style.cssText = "width:6px;height:6px;border-radius:50%;background:var(--c2c-okSoft);flex-shrink:0;";
             const label = document.createElement("span");
             label.textContent = "Doctor";
             pill.append(dot, label);
@@ -1405,9 +1405,9 @@ function _hookOmniBar() {
             // Keep dot color in sync with current Doctor severity.
             const _sync = () => {
                 const s = _doctorStatus();
-                dot.style.background = s.errors > 0 ? "#f38ba8"
-                                     : s.warnings > 0 ? "#ffd166"
-                                     : "#a6e3a1";
+                dot.style.background = s.errors > 0 ? "var(--c2c-red)"
+                                     : s.warnings > 0 ? "var(--c2c-warn)"
+                                     : "var(--c2c-okSoft)";
             };
             document.addEventListener("c2c:doctor-status", _sync);
 

@@ -1,4 +1,4 @@
-// wan_director_player.js — live preview player embedded in WanDirectorC2C.
+﻿// wan_director_player.js — live preview player embedded in WanDirectorC2C.
 //
 // Responsibilities (kept deliberately small):
 //   1. A DOM widget rendering the timeline's image clips as a scrubbable
@@ -41,16 +41,16 @@ function makePlayerDOM(node) {
     const root = document.createElement("div");
     root.style.cssText = `
         position: relative; width: 100%; height: ${PLAYER_H}px;
-        background: #1a1a1a; border: 1px solid #444; border-radius: 4px;
+        background: var(--c2c-gray950); border: 1px solid var(--c2c-gray700); border-radius: 4px;
         display: flex; flex-direction: column; font-family: system-ui, sans-serif;
-        color: #ddd; box-sizing: border-box; overflow: hidden;
+        color: var(--c2c-gray150); box-sizing: border-box; overflow: hidden;
     `;
 
     // ── Video / image preview area ────────────────────────────────
     const stage = document.createElement("div");
     stage.style.cssText = `
         flex: 1 1 auto; min-height: 0; position: relative;
-        background: #000; display: flex; align-items: center; justify-content: center;
+        background: var(--c2c-black); display: flex; align-items: center; justify-content: center;
     `;
     const stageImg = document.createElement("img");
     stageImg.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
@@ -58,7 +58,7 @@ function makePlayerDOM(node) {
     stageVideo.controls = true;
     stageVideo.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
     const stageMsg = document.createElement("div");
-    stageMsg.style.cssText = "color:#888; font-size:12px; padding:8px; text-align:center;";
+    stageMsg.style.cssText = "color:var(--c2c-gray400); font-size:12px; padding:8px; text-align:center;";
     stageMsg.textContent = "No preview yet — add image/video clips or run the workflow.";
     stage.append(stageImg, stageVideo, stageMsg);
 
@@ -66,19 +66,19 @@ function makePlayerDOM(node) {
     const controls = document.createElement("div");
     controls.style.cssText = `
         flex: 0 0 ${BTN_H}px; display: flex; align-items: center; gap: 6px;
-        padding: 0 6px; background: #232323; border-top: 1px solid #333;
+        padding: 0 6px; background: var(--c2c-neutral910); border-top: 1px solid var(--c2c-gray800);
     `;
     const mkBtn = (label, title) => {
         const b = document.createElement("button");
         b.textContent = label; b.title = title;
-        b.style.cssText = "background:#333;color:#ddd;border:1px solid #555;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px;";
+        b.style.cssText = "background:var(--c2c-gray800);color:var(--c2c-gray150);border:1px solid var(--c2c-gray600);border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px;";
         return b;
     };
     const btnPrev = mkBtn("⏮", "Previous clip");
     const btnPlay = mkBtn("▶", "Play / pause");
     const btnNext = mkBtn("⏭", "Next clip");
     const status  = document.createElement("span");
-    status.style.cssText = "flex:1 1 auto;font-size:11px;color:#aaa;margin-left:8px;";
+    status.style.cssText = "flex:1 1 auto;font-size:11px;color:var(--c2c-gray300);margin-left:8px;";
     status.textContent = "idle";
     controls.append(btnPrev, btnPlay, btnNext, status);
 
@@ -86,8 +86,8 @@ function makePlayerDOM(node) {
     const strip = document.createElement("div");
     strip.style.cssText = `
         flex: 0 0 ${STRIP_H}px; display: flex; gap: 4px;
-        padding: 4px; overflow-x: auto; background: #1f1f1f;
-        border-top: 1px solid #333;
+        padding: 4px; overflow-x: auto; background: var(--c2c-neutral940);
+        border-top: 1px solid var(--c2c-gray800);
     `;
 
     root.append(stage, controls, strip);
@@ -132,7 +132,7 @@ function makePlayerDOM(node) {
         status.textContent = `clip ${i + 1}/${state.clips.length} · frame ${clip.start}\u2013${clip.start + clip.length}`;
         // highlight thumb
         strip.querySelectorAll("[data-thumb]").forEach((el, idx) => {
-            el.style.outline = (idx === i) ? "2px solid #6cf" : "1px solid #444";
+            el.style.outline = (idx === i) ? "2px solid var(--c2c-cyanBright2)" : "1px solid var(--c2c-gray700)";
         });
     }
 
@@ -143,8 +143,8 @@ function makePlayerDOM(node) {
             tile.setAttribute("data-thumb", String(i));
             tile.style.cssText = `
                 flex: 0 0 ${Math.max(48, STRIP_H - 16)}px; height: ${STRIP_H - 16}px;
-                background: #000 center/contain no-repeat url("${clip.url}");
-                border-radius: 2px; cursor: pointer; outline: 1px solid #444;
+                background: var(--c2c-black) center/contain no-repeat url("${clip.url}");
+                border-radius: 2px; cursor: pointer; outline: 1px solid var(--c2c-gray700);
             `;
             tile.title = `${clip.start}–${clip.start + clip.length}f${clip.text ? ` · ${clip.text}` : ""}`;
             tile.onclick = () => selectClip(i);

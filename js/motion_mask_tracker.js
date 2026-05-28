@@ -1,4 +1,4 @@
-// MotionMaskTrackerMEC / MaskTrackerMEC(mode=motion):
+﻿// MotionMaskTrackerMEC / MaskTrackerMEC(mode=motion):
 // per-method threshold/option widgets only visible when their method is
 // active in detection_mode AND the parent mode is "motion" (unified node).
 import { app } from "../../scripts/app.js";
@@ -56,7 +56,7 @@ function hookWidget(node, name) {
 }
 
 app.registerExtension({
-    name: "MEC.MotionMaskTrackerMEC.ConditionalUI",
+    name: "MEC.MotionMaskTracker.ConditionalUI",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (!TARGET_NODES.includes(nodeData.name)) return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;

@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
 
 const ROOT_ID = "c2c-bookmarks-root";
 const SETTING_ID = "c2c.bookmarks.enabled";
@@ -26,29 +27,29 @@ function injectStyle() {
     s.textContent = `
 #${ROOT_ID} {
     position: fixed; top: 56px; right: 14px;
-    z-index: 9000; display: flex; gap: 4px;
-    background: rgba(18,20,24,0.78);
-    border: 1px solid rgba(255,255,255,0.08);
+    z-index: var(--c2c-z-hud, 1000); display: flex; gap: 4px;
+    background: color-mix(in srgb, var(--c2c-bg) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c2c-fg) 8%, transparent);
     border-radius: 7px; padding: 4px;
     font: 11px ui-sans-serif, system-ui, sans-serif;
-    color: #cfd6e0; backdrop-filter: blur(6px);
+    color: var(--c2c-fg); backdrop-filter: blur(6px);
 }
 #${ROOT_ID} .cell {
     min-width: 22px; height: 22px;
     border-radius: 4px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.06);
+    background: color-mix(in srgb, var(--c2c-fg) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c2c-fg) 6%, transparent);
     display:flex; align-items:center; justify-content:center;
-    cursor: pointer; color:#7d8896;
+    cursor: pointer; color: var(--c2c-sub, var(--c2c-fg));
     font-weight: 600;
 }
 #${ROOT_ID} .cell.filled {
-    background: rgba(91,141,239,0.16);
-    border-color: rgba(91,141,239,0.45);
-    color:#cfe0ff;
+    background: color-mix(in srgb, var(--c2c-blue) 16%, transparent);
+    border-color: color-mix(in srgb, var(--c2c-blue) 45%, transparent);
+    color: var(--c2c-fg);
 }
 #${ROOT_ID} .cell:hover {
-    border-color: rgba(255,209,102,0.6);
+    border-color: color-mix(in srgb, var(--c2c-yellow) 60%, transparent);
 }`;
     document.head.appendChild(s);
 }
@@ -63,7 +64,8 @@ function getMap() {
 }
 
 function findNode(id) {
-    return (app.graph?._nodes || []).find((n) => String(n.id) === String(id));
+    const hit = findNodeAnywhere(id);
+    return hit ? hit.node : null;
 }
 
 function pulseFocus(node) {
@@ -119,12 +121,34 @@ function jumpToSlot(slot) {
 }
 
 let _root = null;
+let _omnibarUnreg = null;
+
 function ensureRoot() {
     if (_root) return _root;
     injectStyle();
     _root = document.createElement("div");
     _root.id = ROOT_ID;
-    document.body.appendChild(_root);
+    // Register with OmniBar bookmarks section. Retry for up to 4 s (40×100ms)
+    // because OmniBar extension loads after us alphabetically. If OmniBar never
+    // arrives, fall back to legacy body-appended fixed strip.
+    let _tries = 0;
+    const _tryOmniBar = () => {
+        if (window.C2COmniBar?.register) {
+            _omnibarUnreg = window.C2COmniBar.register({
+                section: "bookmarks",
+                id: "bookmarks",
+                order: 10,
+                element: _root,
+                update: render,
+            });
+        } else if (++_tries < 40) {
+            setTimeout(_tryOmniBar, 100);
+        } else {
+            // OmniBar unavailable — mount as legacy fixed strip
+            if (!document.body.contains(_root)) document.body.appendChild(_root);
+        }
+    };
+    _tryOmniBar();
     return _root;
 }
 
@@ -191,7 +215,12 @@ app.registerExtension({
         const _origLoad = app.loadGraphData?.bind(app);
         if (typeof _origLoad === "function") {
             app.loadGraphData = function (...args) {
-                const r = _origLoad(...args);
+                let r;
+                try { r = _origLoad(...args); }
+                catch (err) {
+                    log.warn("[node_bookmarks] loadGraphData upstream threw", err);
+                    throw err;
+                }
                 setTimeout(render, 50);
                 return r;
             };

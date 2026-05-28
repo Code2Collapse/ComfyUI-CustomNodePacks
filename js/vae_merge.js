@@ -1,4 +1,4 @@
-// VAEMergeMEC: per-block sliders only visible when use_blocks=True AND auto_alpha=False.
+﻿// VAEMergeMEC: per-block sliders only visible when use_blocks=True AND auto_alpha=False.
 import { app } from "../../scripts/app.js";
 import { setHidden } from "./_widget_visibility.js";
 
@@ -34,7 +34,7 @@ function hookWidget(node, name) {
 }
 
 app.registerExtension({
-    name: "MEC.VAEMergeMEC.ConditionalUI",
+    name: "MEC.VAEMerge.ConditionalUI",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "VAEMergeMEC") return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;

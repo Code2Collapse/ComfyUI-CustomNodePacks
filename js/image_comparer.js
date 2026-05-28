@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { C } from './_c2c_theme.js';
 
 /**
  * ImageComparerMEC – interactive before/after comparison widget.
@@ -25,7 +26,7 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:200px;margin:2px 6px 16px 6px;background:#111;border-radius:4px;overflow:hidden;pointer-events:auto;";
+                "position:relative;width:calc(100% - 12px);min-height:200px;margin:2px 6px 16px 6px;background:var(--c2c-neutral990);border-radius:4px;overflow:hidden;pointer-events:auto;";
             // MANUAL bug-fix (Apr 2026): a11y -- screen-reader / keyboard support.
             el.setAttribute("role", "group");
             el.setAttribute("aria-label", "Image A/B comparer (drag horizontally to wipe between images)");
@@ -303,7 +304,7 @@ app.registerExtension({
                 ctx.save();
                 ctx.shadowColor = "rgba(0,0,0,0.6)";
                 ctx.shadowBlur = 6;
-                ctx.strokeStyle = "#fff";
+                ctx.strokeStyle = C.white;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(dx, 0);
@@ -317,11 +318,11 @@ app.registerExtension({
                 ctx.arc(dx, hy, HANDLE_R, 0, Math.PI * 2);
                 ctx.fillStyle = "rgba(255,255,255,0.92)";
                 ctx.fill();
-                ctx.strokeStyle = "#666";
+                ctx.strokeStyle = C.gray500;
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
                 // Grip dots (⋮ pattern)
-                ctx.fillStyle = "#555";
+                ctx.fillStyle = C.gray600;
                 for (let dy = -6; dy <= 6; dy += 6) {
                     ctx.beginPath();
                     ctx.arc(dx - 3, hy + dy, 1.5, 0, Math.PI * 2);
@@ -346,7 +347,7 @@ app.registerExtension({
                 ctx.beginPath();
                 ctx.roundRect(barX, by, barW, bh, 3);
                 ctx.fill();
-                ctx.fillStyle = "#5bf";
+                ctx.fillStyle = C.cyanBright;
                 ctx.beginPath();
                 ctx.roundRect(barX, by, barW * S.alpha, bh, 3);
                 ctx.fill();
@@ -354,9 +355,9 @@ app.registerExtension({
                 const hx = barX + barW * S.alpha;
                 ctx.beginPath();
                 ctx.arc(hx, by + bh / 2, 7, 0, Math.PI * 2);
-                ctx.fillStyle = "#fff";
+                ctx.fillStyle = C.white;
                 ctx.fill();
-                ctx.strokeStyle = "#5bf";
+                ctx.strokeStyle = C.cyanBright;
                 ctx.lineWidth = 2;
                 ctx.stroke();
             } else {
@@ -390,7 +391,7 @@ function _pill(ctx, x, y, text) {
     ctx.beginPath();
     ctx.roundRect(x, y, pw, ph, 4);
     ctx.fill();
-    ctx.fillStyle = "#eee";
+    ctx.fillStyle = C.gray110;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText(text, x + 6, y + ph / 2);
@@ -442,7 +443,7 @@ function _drawBtns(ctx, S, cw) {
         ctx.beginPath();
         ctx.roundRect(x, BTN_PAD, BTN_W, BTN_H, 4);
         ctx.fill();
-        ctx.fillStyle = active ? "#fff" : "#bbb";
+        ctx.fillStyle = active ? "var(--c2c-white)" : "var(--c2c-gray250)";
         ctx.fillText(MODES[i], x + BTN_W / 2, BTN_PAD + BTN_H / 2);
     }
     ctx.restore();

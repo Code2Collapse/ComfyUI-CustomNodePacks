@@ -32,8 +32,13 @@ const SETTING_BTN = "c2c.autocheckpoint.showButton";
 const SETTING_ENABLED = "c2c.autocheckpoint.enabled";
 const THROTTLE_MS = 30_000;
 
-const C = { bg:"#1e1e2e", bg2:"#181825", fg:"#cdd6f4", sub:"#a6adc8",
-            border:"#313244", mauve:"#cba6f7", red:"#f38ba8", green:"#a6e3a1" };
+// Theme-aware: surfaces below use CSS custom properties emitted by _c2c_theme.js
+// (--c2c-bg/bg2/fg/sub/border/mauve/red/green/shadowBase). Canvas thumbnail paint
+// resolves --c2c-bg2 at draw time via getComputedStyle so snapshots taken under
+// any variant render their backdrop in the active palette.
+function _cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
 // ============================================================ IndexedDB layer
 function openDB() {
@@ -111,7 +116,8 @@ function _makeThumbnail() {
         const tmp = document.createElement("canvas");
         tmp.width = 256; tmp.height = 144;
         const ctx = tmp.getContext("2d");
-        ctx.fillStyle = C.bg2; ctx.fillRect(0, 0, 256, 144);
+        const bg2 = _cssVar("--c2c-bg2");
+        if (bg2) { ctx.fillStyle = bg2; ctx.fillRect(0, 0, 256, 144); }
         ctx.drawImage(canvas, 0, 0, 256, 144);
         return tmp.toDataURL("image/png");
     } catch (_) { return ""; }
@@ -172,44 +178,44 @@ async function openPicker() {
     const back = document.createElement("div");
     back.id = PICKER_ID;
     back.style.cssText =
-        `position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,0.55);
+        `position:fixed;inset:0;z-index:var(--c2c-z-modal);background:color-mix(in srgb, var(--c2c-shadowBase) 55%, transparent);
          display:flex;align-items:center;justify-content:center;`;
     const card = document.createElement("div");
     card.style.cssText =
-        `background:${C.bg};color:${C.fg};border:1px solid ${C.border};
+        `background:var(--c2c-bg);color:var(--c2c-fg);border:1px solid var(--c2c-border);
          border-radius:8px;padding:14px;width:720px;max-height:80vh;overflow:auto;
          font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;
-         box-shadow:0 12px 40px rgba(0,0,0,0.6);`;
+         box-shadow:0 12px 40px color-mix(in srgb, var(--c2c-shadowBase) 60%, transparent);`;
     card.innerHTML =
         `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-           <h3 style="margin:0;color:${C.mauve};font-size:14px;letter-spacing:0.5px;text-transform:uppercase">Auto-checkpoints</h3>
-           <span style="color:${C.sub};font-size:11px">last ${all.length} workflow snapshots</span>
+           <h3 style="margin:0;color:var(--c2c-mauve);font-size:14px;letter-spacing:0.5px;text-transform:uppercase">Auto-checkpoints</h3>
+           <span style="color:var(--c2c-sub);font-size:11px">last ${all.length} workflow snapshots</span>
            <span style="flex:1"></span>
-           <button id="snap-now" style="background:${C.mauve};color:${C.bg};border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Snapshot now</button>
-           <button id="clear-all" style="background:${C.bg2};color:${C.red};border:1px solid ${C.red};border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Clear all</button>
-           <button id="close-x" style="background:transparent;color:${C.sub};border:none;font-size:18px;cursor:pointer">×</button>
+           <button id="snap-now" style="background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Snapshot now</button>
+           <button id="clear-all" style="background:var(--c2c-bg2);color:var(--c2c-red);border:1px solid var(--c2c-red);border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Clear all</button>
+           <button id="close-x" style="background:transparent;color:var(--c2c-sub);border:none;font-size:18px;cursor:pointer">×</button>
          </div>`;
     if (all.length === 0) {
-        card.insertAdjacentHTML("beforeend", `<p style="color:${C.sub}">No checkpoints yet. Queue a prompt or click "Snapshot now".</p>`);
+        card.insertAdjacentHTML("beforeend", `<p style="color:var(--c2c-sub)">No checkpoints yet. Queue a prompt or click "Snapshot now".</p>`);
     } else {
         const grid = document.createElement("div");
         grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;";
         all.forEach(snap => {
             const card2 = document.createElement("div");
             card2.style.cssText =
-                `background:${C.bg2};border:1px solid ${C.border};border-radius:6px;
+                `background:var(--c2c-bg2);border:1px solid var(--c2c-border);border-radius:6px;
                  padding:6px;cursor:pointer;transition:border-color 0.15s;`;
-            card2.onmouseenter = () => card2.style.borderColor = C.mauve;
-            card2.onmouseleave = () => card2.style.borderColor = C.border;
+            card2.onmouseenter = () => card2.style.borderColor = "var(--c2c-mauve)";
+            card2.onmouseleave = () => card2.style.borderColor = "var(--c2c-border)";
             const dt = new Date(snap.ts);
             card2.innerHTML =
-                `<img src="${snap.thumb || ""}" style="width:100%;height:120px;object-fit:cover;background:${C.bg};border-radius:3px"/>
+                `<img src="${snap.thumb || ""}" style="width:100%;height:120px;object-fit:cover;background:var(--c2c-bg);border-radius:3px"/>
                  <div style="margin-top:4px;font-size:11px">${snap.label}</div>
-                 <div style="color:${C.sub};font-size:10px">${dt.toLocaleString()}</div>
-                 <div style="color:${C.sub};font-size:10px">${snap.node_count} nodes · ${(snap.size_bytes/1024).toFixed(1)} KB</div>
+                 <div style="color:var(--c2c-sub);font-size:10px">${dt.toLocaleString()}</div>
+                 <div style="color:var(--c2c-sub);font-size:10px">${snap.node_count} nodes · ${(snap.size_bytes/1024).toFixed(1)} KB</div>
                  <div style="margin-top:4px;display:flex;gap:4px">
-                   <button class="ckpt-restore" data-id="${snap.id}" style="flex:1;background:${C.mauve};color:${C.bg};border:none;border-radius:3px;padding:3px;cursor:pointer;font-size:10px">Restore</button>
-                   <button class="ckpt-del" data-id="${snap.id}" style="background:${C.bg};color:${C.red};border:1px solid ${C.red};border-radius:3px;padding:3px 6px;cursor:pointer;font-size:10px">×</button>
+                   <button class="ckpt-restore" data-id="${snap.id}" style="flex:1;background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:3px;padding:3px;cursor:pointer;font-size:10px">Restore</button>
+                   <button class="ckpt-del" data-id="${snap.id}" style="background:var(--c2c-bg);color:var(--c2c-red);border:1px solid var(--c2c-red);border-radius:3px;padding:3px 6px;cursor:pointer;font-size:10px">×</button>
                  </div>`;
             grid.appendChild(card2);
         });
@@ -248,15 +254,38 @@ function ensureButton() {
     btn.id = BTN_ID;
     btn.title = "C2C — open auto-checkpoint history";
     btn.textContent = "↺ History";
+    // Positioning is delegated to __c2cTopDock so this button reflows below
+    // ComfyUI's top chrome and never collides with the workflow-tabs row.
     btn.style.cssText =
-        `position:fixed;top:6px;left:12px;z-index:9999;
-         background:${C.bg};color:${C.fg};border:1px solid ${C.border};
+        `background:var(--c2c-bg);color:var(--c2c-fg);border:1px solid var(--c2c-border);
          border-radius:10px;padding:3px 10px;cursor:pointer;font-size:11px;
          font-family:ui-sans-serif,system-ui,sans-serif;`;
-    btn.onmouseenter = () => btn.style.borderColor = C.mauve;
-    btn.onmouseleave = () => btn.style.borderColor = C.border;
+    btn.onmouseenter = () => btn.style.borderColor = "var(--c2c-mauve)";
+    btn.onmouseleave = () => btn.style.borderColor = "var(--c2c-border)";
     btn.onclick = openPicker;
-    document.body.appendChild(btn);
+    if (window.__c2cTopDock) {
+        window.__c2cTopDock.register(btn, { side: "left", order: 10 });
+    } else {
+        // Fallback: pin to a safe fixed position; retry dock registration
+        // each animation frame in case _c2c_top_dock.js loads after us.
+        btn.style.position = "fixed";
+        btn.style.top = "60px";
+        btn.style.left = "12px";
+        btn.style.setProperty("z-index", "var(--c2c-z-dock, 2500)");
+        document.body.appendChild(btn);
+        const tryRegister = () => {
+            if (window.__c2cTopDock) {
+                btn.style.position = "";
+                btn.style.top = "";
+                btn.style.left = "";
+                btn.style.removeProperty("z-index");
+                window.__c2cTopDock.register(btn, { side: "left", order: 10 });
+            } else {
+                requestAnimationFrame(tryRegister);
+            }
+        };
+        requestAnimationFrame(tryRegister);
+    }
 }
 
 // ============================================================ event hookups

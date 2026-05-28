@@ -94,24 +94,24 @@ function openModal(meta, parsed, file) {
     return new Promise((resolve) => {
         const root = document.createElement("div");
         root.style.cssText = `
-            position: fixed; inset: 0; z-index: 13000;
+            position: fixed; inset: 0; z-index: var(--c2c-z-modal);
             display: flex; align-items: center; justify-content: center;
-            background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
+            background: color-mix(in srgb, var(--c2c-shadowBase) 55%, transparent); backdrop-filter: blur(2px);
         `;
         const dlg = document.createElement("div");
         dlg.style.cssText = `
             width: min(820px, 92vw); max-height: 84vh; overflow: hidden;
-            background: #141821; color: #e5ecf5;
-            border: 1px solid rgba(255,255,255,0.14); border-radius: 10px;
-            box-shadow: 0 18px 48px rgba(0,0,0,0.7);
+            background: var(--c2c-bg2); color: var(--c2c-accentText);
+            border: 1px solid color-mix(in srgb, var(--c2c-highlightBase) 14%, transparent); border-radius: 10px;
+            box-shadow: 0 18px 48px color-mix(in srgb, var(--c2c-shadowBase) 70%, transparent);
             font: 12px ui-sans-serif, system-ui, sans-serif;
             display: flex; flex-direction: column;
         `;
         const head = document.createElement("div");
-        head.style.cssText = "padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08);";
-        head.innerHTML = `<div><span style="font-weight:600;color:#cfe0ff;">Image Metadata</span> <span style="color:#7a8492;">— ${escapeHtml(file.name)} · ${(file.size/1024).toFixed(1)} KB</span></div>`;
+        head.style.cssText = "padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent);";
+        head.innerHTML = `<div><span style="font-weight:600;color:var(--c2c-accentLight);">Image Metadata</span> <span style="color:var(--c2c-sub);">— ${escapeHtml(file.name)} · ${(file.size/1024).toFixed(1)} KB</span></div>`;
         const closeBtn = document.createElement("span");
-        closeBtn.textContent = "✕"; closeBtn.style.cssText = "cursor:pointer;color:#888;";
+        closeBtn.textContent = "✕"; closeBtn.style.cssText = "cursor:pointer;color:var(--c2c-sub);";
         closeBtn.addEventListener("click", () => done(false));
         head.appendChild(closeBtn);
         dlg.appendChild(head);
@@ -123,7 +123,7 @@ function openModal(meta, parsed, file) {
         summary.style.cssText = "margin-bottom:10px;";
         if (parsed) {
             const tag = parsed.kind === "a1111" ? "A1111" : (parsed.kind === "comfy-workflow" ? "ComfyUI workflow" : "ComfyUI prompt");
-            summary.innerHTML = `<span style="background:#2c4a82;color:#cfe0ff;padding:2px 8px;border-radius:10px;font-weight:600;">${tag}</span>`;
+            summary.innerHTML = `<span style="background:color-mix(in srgb, var(--c2c-blue) 40%, transparent);color:var(--c2c-accentLight);padding:2px 8px;border-radius:10px;font-weight:600;">${tag}</span>`;
             if (parsed.kind === "comfy-workflow") {
                 const nodes = (parsed.data && parsed.data.nodes) || [];
                 summary.innerHTML += ` · ${nodes.length} nodes`;
@@ -135,14 +135,14 @@ function openModal(meta, parsed, file) {
                 if (m) summary.innerHTML += ` · Sampler ${escapeHtml(m[2])} · ${escapeHtml(m[1])} steps · ${escapeHtml(m[3])}`;
             }
         } else {
-            summary.innerHTML = `<span style="background:#5a3a30;color:#ffd1a3;padding:2px 8px;border-radius:10px;">No workflow chunk found</span>`;
+            summary.innerHTML = `<span style="background:color-mix(in srgb, var(--c2c-peach) 30%, transparent);color:var(--c2c-peach);padding:2px 8px;border-radius:10px;">No workflow chunk found</span>`;
         }
         body.appendChild(summary);
 
         const tabs = document.createElement("div");
-        tabs.style.cssText = "display:flex; gap:8px; margin-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.06);";
+        tabs.style.cssText = "display:flex; gap:8px; margin-bottom:8px; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 6%, transparent);";
         const content = document.createElement("pre");
-        content.style.cssText = "background:#0f1218; padding:10px; border-radius:6px; max-height:46vh; overflow:auto; color:#cfd6e0; font:11px ui-monospace, monospace; white-space:pre-wrap; word-break:break-word;";
+        content.style.cssText = "background:var(--c2c-bg); padding:10px; border-radius:6px; max-height:46vh; overflow:auto; color:var(--c2c-accentLight2); font:11px ui-monospace, monospace; white-space:pre-wrap; word-break:break-word;";
 
         const tabSpec = [];
         if (parsed) tabSpec.push({ k: "parsed", n: "Parsed" });
@@ -166,14 +166,14 @@ function openModal(meta, parsed, file) {
         for (const t of tabSpec) {
             const b = document.createElement("button");
             b.textContent = t.n; b.dataset.k = t.k;
-            b.style.cssText = "padding:5px 10px; background:transparent; color:#cfd6e0; border:none; cursor:pointer; font-weight:500;";
-            b.addEventListener("mouseenter", () => b.style.background = "rgba(255,255,255,0.05)");
-            b.addEventListener("mouseleave", () => b.style.background = b.classList.contains("active") ? "rgba(91,141,239,0.18)" : "transparent");
+            b.style.cssText = "padding:5px 10px; background:transparent; color:var(--c2c-accentLight2); border:none; cursor:pointer; font-weight:500;";
+            b.addEventListener("mouseenter", () => b.style.background = "color-mix(in srgb, var(--c2c-highlightBase) 5%, transparent)");
+            b.addEventListener("mouseleave", () => b.style.background = b.classList.contains("active") ? "color-mix(in srgb, var(--c2c-blue) 18%, transparent)" : "transparent");
             b.addEventListener("click", () => showTab(t.k));
             tabs.appendChild(b);
         }
         const style = document.createElement("style");
-        style.textContent = `.active { background: rgba(91,141,239,0.18) !important; color:#cfe0ff !important; }`;
+        style.textContent = `.active { background: color-mix(in srgb, var(--c2c-blue) 18%, transparent) !important; color: var(--c2c-accentLight) !important; }`;
         dlg.appendChild(style);
 
         body.appendChild(tabs);
@@ -181,16 +181,16 @@ function openModal(meta, parsed, file) {
         dlg.appendChild(body);
 
         const foot = document.createElement("div");
-        foot.style.cssText = "padding:10px 14px; border-top:1px solid rgba(255,255,255,0.08); display:flex; gap:8px; justify-content:flex-end;";
-        const cancel = mkBtn("Cancel", "#7a8492", () => done(false));
-        const copy = mkBtn("Copy JSON", "#5b8def", async () => {
+        foot.style.cssText = "padding:10px 14px; border-top:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent); display:flex; gap:8px; justify-content:flex-end;";
+        const cancel = mkBtn("Cancel", "var(--c2c-sub)", () => done(false));
+        const copy = mkBtn("Copy JSON", "var(--c2c-blue)", async () => {
             try {
                 await navigator.clipboard.writeText(content.textContent);
                 copy.textContent = "Copied!";
                 setTimeout(() => copy.textContent = "Copy JSON", 1200);
             } catch {}
         });
-        const load = mkBtn(parsed && parsed.kind === "comfy-workflow" ? "Load workflow" : "Load image", "#3aa66a", () => done(true));
+        const load = mkBtn(parsed && parsed.kind === "comfy-workflow" ? "Load workflow" : "Load image", "var(--c2c-green)", () => done(true));
         foot.appendChild(cancel); foot.appendChild(copy); foot.appendChild(load);
         dlg.appendChild(foot);
         root.appendChild(dlg);
@@ -207,7 +207,10 @@ function openModal(meta, parsed, file) {
 function mkBtn(text, color, onClick) {
     const b = document.createElement("button");
     b.textContent = text;
-    b.style.cssText = `padding:6px 14px; background:${color}; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:12px;`;
+    // White-on-accent text is an intentional universal-contrast pattern for action buttons.
+    // All --c2c-* accent tokens are saturated mid-tones across mocha/latte/oled.
+    // --c2c-onAccent is the universal-contrast token (white by default) injected by _c2c_theme.
+    b.style.cssText = `padding:6px 14px; background:${color}; color:var(--c2c-onAccent); border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:12px;`;
     b.addEventListener("click", onClick);
     return b;
 }

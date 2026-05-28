@@ -14,6 +14,16 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { C } from './_c2c_theme.js';
+// Optional: noodle-style helpers (separate extension). Import is lazy /
+// non-fatal — if the file is missing or the extension hasn't registered
+// yet, we degrade gracefully and just don't show the noodle submenu.
+let NOODLE_STYLES = null;
+let NOODLE_SETTING_ID = null;
+import("./c2c_noodle_styles.js")
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+    .then((m) => { NOODLE_STYLES = m.NOODLE_STYLES; NOODLE_SETTING_ID = m.NOODLE_SETTING_ID; })
+    .catch(() => { /* file absent; reroute menu still works without it */ });
 
 const NODE_TYPE   = "UniversalRerouteMEC";
 const NODE_WIDTH  = 40;
@@ -23,24 +33,24 @@ const HIT_RADIUS  = 100;
 
 // ── Type → color (matches ComfyUI link palette) ─────────────────────
 const TYPE_COLORS = {
-  IMAGE:        "#64b5f6",
-  LATENT:       "#ff6e9c",
-  MASK:         "#81c784",
-  MODEL:        "#b39ddb",
-  CLIP:         "#ffd54f",
-  VAE:          "#4dd0e1",
-  CONDITIONING: "#ffa726",
-  INT:          "#a1c4fd",
-  FLOAT:        "#a1c4fd",
-  STRING:       "#c5e1a5",
-  BOOLEAN:      "#ce93d8",
-  COMBO:        "#90a4ae",
-  BBOX:         "#ef9a9a",
-  SAM_MODEL:    "#b39ddb",
-  CONTROL_NET:  "#4db6ac",
-  SEC_MODEL:    "#e57373",
-  SAM2MODEL:    "#b39ddb",
-  "*":          "#888",
+  IMAGE:        "var(--c2c-blueSoft2)",
+  LATENT:       "var(--c2c-pinkMid)",
+  MASK:         "var(--c2c-okMid)",
+  MODEL:        "var(--c2c-violet)",
+  CLIP:         "var(--c2c-amberSoft2)",
+  VAE:          "var(--c2c-cyanSoft)",
+  CONDITIONING: "var(--c2c-amberMid2)",
+  INT:          "var(--c2c-blueSoft)",
+  FLOAT:        "var(--c2c-blueSoft)",
+  STRING:       "var(--c2c-okPale2)",
+  BOOLEAN:      "var(--c2c-violetSoft2)",
+  COMBO:        "var(--c2c-slate450)",
+  BBOX:         "var(--c2c-dangerTint2)",
+  SAM_MODEL:    "var(--c2c-violet)",
+  CONTROL_NET:  "var(--c2c-tealMid)",
+  SEC_MODEL:    "var(--c2c-dangerSoft4)",
+  SAM2MODEL:    "var(--c2c-violet)",
+  "*":          "var(--c2c-gray400)",
 };
 
 function typeColor(t) { return TYPE_COLORS[t] || TYPE_COLORS["*"]; }
@@ -61,8 +71,8 @@ app.registerExtension({
     if (node.comfyClass !== NODE_TYPE) return;
 
     node.setSize([NODE_WIDTH, NODE_HEIGHT]);
-    node.color   = "#1a1a2e";
-    node.bgcolor = "#1a1a2e";
+    node.color   = "var(--c2c-panelHi)";
+    node.bgcolor = "var(--c2c-panelHi)";
     node.shape   = LiteGraph.BOX_SHAPE;
     node.serialize_widgets = false;
     node.isVirtualNode = true;
@@ -116,7 +126,7 @@ app.registerExtension({
       // Outer ring
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = "#16213e";
+      ctx.fillStyle = C.panelDeep10;
       ctx.fill();
       ctx.lineWidth = 2;
       ctx.strokeStyle = c;
@@ -145,7 +155,7 @@ app.registerExtension({
       // Type label
       if (this.properties.showLabel && t !== "*") {
         ctx.font = "8px Inter, system-ui, sans-serif";
-        ctx.fillStyle = "#bac2de";
+        ctx.fillStyle = C.subtext1;
         ctx.textAlign = "center";
         ctx.fillText(t, cx, cy + r + 11);
       }
@@ -163,7 +173,9 @@ app.registerExtension({
     const origMenu = node.getExtraMenuOptions;
     node.getExtraMenuOptions = function (_canvas, options) {
       origMenu?.apply(this, arguments);
-      options.unshift(
+
+      // 1. Reroute-specific actions
+      const base = [
         {
           content: "Remove Reroute (reconnect)",
           callback: () => dissolveReroute(this),
@@ -175,7 +187,46 @@ app.registerExtension({
             this.setDirtyCanvas?.(true, true);
           },
         },
-      );
+      ];
+
+      // 2. Get/Set conversion (rgthree-style). Detect a registered
+      //    SetNode/GetNode pair if present; otherwise show a disabled
+      //    placeholder so the user knows the menu slot is reserved.
+      const hasSetGet = !!(window.LiteGraph?.registered_node_types?.["SetNode"]
+                       && window.LiteGraph?.registered_node_types?.["GetNode"]);
+      base.push({
+        content: hasSetGet
+          ? "Convert to Get / Set Variable"
+          : "Convert to Get / Set (install rgthree-comfy to enable)",
+        disabled: !hasSetGet,
+        callback: hasSetGet ? () => convertToGetSet(this) : undefined,
+      });
+
+      // 3. Noodle-style quick-switch submenu (if extension is loaded)
+      if (NOODLE_STYLES && NOODLE_SETTING_ID) {
+        let cur = "default";
+        try { cur = app.ui.settings.getSettingValue(NOODLE_SETTING_ID, "default"); } catch (__c2cErr) { __c2cReport("universal_reroute", __c2cErr); }
+        const submenu = NOODLE_STYLES.map((s) => ({
+          content: `${s === cur ? "✓ " : "  "}${s}`,
+          callback: () => {
+            try { app.ui.settings.setSettingValue(NOODLE_SETTING_ID, s); } catch (__c2cErr) { __c2cReport("universal_reroute", __c2cErr); }
+            app.canvas?.setDirty?.(true, true);
+          },
+        }));
+        base.push({
+          content: "🍝 Noodle Style",
+          has_submenu: true,
+          submenu: { options: submenu },
+        });
+      }
+
+      // 4. Hint that all of the above also lives in Settings
+      base.push({
+        content: "— configurable in Settings → mec.noodle.style —",
+        disabled: true,
+      });
+
+      options.unshift(...base);
     };
   },
 
@@ -218,6 +269,54 @@ app.registerExtension({
     }
   },
 });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  Convert to Get/Set (rgthree-style virtual wires)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+// Only fires when rgthree-comfy's SetNode/GetNode are registered. Drops
+// a Set on the source side and a Get on each target side, with a shared
+// auto-generated variable name, then removes this dot.
+
+function convertToGetSet(node) {
+  const g = node.graph || app.graph;
+  if (!g || !window.LiteGraph?.registered_node_types?.["SetNode"]
+        || !window.LiteGraph?.registered_node_types?.["GetNode"]) {
+    return;
+  }
+  const inLink = node.inputs?.[0]?.link;
+  let srcId = null, srcSlot = null;
+  if (inLink != null) {
+    const lk = g.links?.[inLink];
+    if (lk) { srcId = lk.origin_id; srcSlot = lk.origin_slot; }
+  }
+  const targets = [];
+  for (const lid of (node.outputs?.[0]?.links || [])) {
+    const lk = g.links?.[lid];
+    if (lk) targets.push({ id: lk.target_id, slot: lk.target_slot });
+  }
+  const name = `var_${Math.random().toString(36).slice(2, 8)}`;
+
+  const setNode = window.LiteGraph.createNode("SetNode");
+  const getNode = window.LiteGraph.createNode("GetNode");
+  if (!setNode || !getNode) return;
+  setNode.pos = [node.pos[0] - 120, node.pos[1]];
+  getNode.pos = [node.pos[0] + 120, node.pos[1]];
+  if (setNode.widgets?.[0]) setNode.widgets[0].value = name;
+  if (getNode.widgets?.[0]) getNode.widgets[0].value = name;
+  g.add(setNode); g.add(getNode);
+
+  if (srcId != null) {
+    const src = g.getNodeById(srcId);
+    src?.connect?.(srcSlot, setNode, 0);
+  }
+  for (const tgt of targets) {
+    const dst = g.getNodeById(tgt.id);
+    if (dst) getNode.connect(0, dst, tgt.slot);
+  }
+  g.remove(node);
+  app.canvas?.setDirty?.(true, true);
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Dissolve — reconnect source → targets, remove the dot

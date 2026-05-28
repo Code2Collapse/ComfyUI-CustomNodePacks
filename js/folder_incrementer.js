@@ -1,4 +1,4 @@
-import { app } from "../../scripts/app.js";
+﻿import { app } from "../../scripts/app.js";
 
 /**
  * FolderIncrementer JS companion
@@ -410,9 +410,9 @@ app.registerExtension({
                 el.style.cssText = [
                     "padding: 2px 6px",
                     "font: 11px monospace",
-                    "color: #9fe39f",
-                    "background: #1e1e1e",
-                    "border: 1px solid #333",
+                    "color: var(--c2c-okPale)",
+                    "background: var(--c2c-neutral950)",
+                    "border: 1px solid var(--c2c-gray800)",
                     "border-radius: 3px",
                     "white-space: nowrap",
                     "overflow: hidden",

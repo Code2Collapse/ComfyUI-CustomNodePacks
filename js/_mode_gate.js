@@ -1,3 +1,5 @@
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+
 // =====================================================================
 // _mode_gate.js — Shared helper for the unified-mode MEC nodes.
 //
@@ -73,7 +75,7 @@ export function installModeGated(node, opts) {
                 // Re-run ALL registered gate evaluators for this node.
                 const evals = node._mecGateEvaluators || [];
                 for (const fn of evals) {
-                    try { fn(); } catch (e) { /* swallow */ }
+                    try { fn(); } catch (e) { __c2cReport("_mode_gate", e); }
                 }
                 return r;
             };

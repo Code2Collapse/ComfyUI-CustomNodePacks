@@ -29,29 +29,32 @@ function injectStyle() {
     s.textContent = `
 #${ROOT_ID} {
     position: fixed; top: 80px; right: 24px;
-    z-index: 100000;
+    z-index: var(--c2c-z-modal);
     width: 360px; max-height: 70vh;
-    background: rgba(22,24,30,0.96);
-    border: 1px solid rgba(255,255,255,0.12);
+    background: color-mix(in srgb, var(--c2c-bg2) 96%, transparent);
+    border: 1px solid var(--c2c-border);
     border-radius: 10px;
-    box-shadow: 0 10px 36px rgba(0,0,0,0.55);
+    box-shadow: 0 10px 36px color-mix(in srgb, var(--c2c-shadowBase) 55%, transparent);
     backdrop-filter: blur(10px);
-    color: #e7ecf3; font: 12px ui-sans-serif, system-ui, sans-serif;
+    color: var(--c2c-fg); font: 12px ui-sans-serif, system-ui, sans-serif;
     overflow: hidden; display: flex; flex-direction: column;
 }
 #${ROOT_ID} .hdr {
     padding: 9px 12px;
-    background: rgba(91,141,239,0.12);
-    border-bottom: 1px solid rgba(91,141,239,0.25);
+    background: color-mix(in srgb, var(--c2c-mauve) 18%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--c2c-mauve) 35%, transparent);
     display: flex; align-items: center; gap: 8px;
 }
-#${ROOT_ID} .hdr .ttl { font-weight: 600; color:#9ec1ff; }
+#${ROOT_ID} .hdr .ttl { font-weight: 600; color: var(--c2c-mauve); }
 #${ROOT_ID} .hdr .closex {
-    margin-left:auto; cursor:pointer; color:#9aa6b2;
+    margin-left:auto; cursor:pointer; color: var(--c2c-sub);
     width:18px; height:18px; line-height:18px; text-align:center;
     border-radius:4px;
 }
-#${ROOT_ID} .hdr .closex:hover { color:#fff; background:rgba(255,255,255,0.07); }
+#${ROOT_ID} .hdr .closex:hover {
+    color: var(--c2c-fg);
+    background: color-mix(in srgb, var(--c2c-highlightBase) 7%, transparent);
+}
 #${ROOT_ID} .body {
     padding: 8px 10px 12px; overflow-y: auto;
 }
@@ -60,26 +63,27 @@ function injectStyle() {
     gap: 6px; padding: 4px 0; align-items: center;
 }
 #${ROOT_ID} .row label {
-    color: #cfd6e0; font-size: 11.5px;
+    color: var(--c2c-fg); font-size: 11.5px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 #${ROOT_ID} .row input, #${ROOT_ID} .row select {
     width: 100%; box-sizing: border-box;
-    background: rgba(0,0,0,0.30); color:#fff;
-    border: 1px solid rgba(255,255,255,0.10);
+    background: color-mix(in srgb, var(--c2c-shadowBase) 30%, transparent);
+    color: var(--c2c-fg);
+    border: 1px solid var(--c2c-border);
     border-radius: 5px; padding: 4px 7px;
     font: 12px ui-monospace, monospace;
 }
 #${ROOT_ID} .row.differs input,
 #${ROOT_ID} .row.differs select {
-    border-color: rgba(255,209,102,0.55);
+    border-color: color-mix(in srgb, var(--c2c-yellow) 55%, transparent);
 }
 #${ROOT_ID} .row .badge {
-    font-size: 9.5px; color: #ffd166;
+    font-size: 9.5px; color: var(--c2c-yellow);
     margin-left: 4px;
 }
 #${ROOT_ID} .empty {
-    color:#7d8896; text-align:center; padding: 16px 0;
+    color: var(--c2c-sub); text-align:center; padding: 16px 0;
 }`;
     document.head.appendChild(s);
 }
@@ -135,6 +139,10 @@ function open() {
         return;
     }
     injectStyle();
+    // If the cached root was removed from the DOM by another extension, rebuild it.
+    if (_root && !document.body.contains(_root)) {
+        _root = null; _body = null; _hdr = null;
+    }
     if (!_root) {
         _root = document.createElement("div");
         _root.id = ROOT_ID;

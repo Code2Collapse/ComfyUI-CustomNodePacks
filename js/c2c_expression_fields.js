@@ -1,4 +1,4 @@
-// c2c_expression_fields.js — Excel-style `=expr` in numeric widgets (C2C)
+﻿// c2c_expression_fields.js — Excel-style `=expr` in numeric widgets (C2C)
 // ---------------------------------------------------------------------
 // What it does:
 //   • Any numeric (INT/FLOAT) widget will evaluate values starting with
@@ -66,8 +66,10 @@ function tokenize(src) {
             i += m[0].length;
             continue;
         }
-        if ("+-*/%(),".includes(c)) { tk.push({ t: c }); i++; continue; }
+        // ORDER MATTERS: check `**` (pow) BEFORE single-char `*` so the
+        // multi-char operator isn't shadowed.
         if (c === '*' && src[i+1] === '*') { tk.push({ t: "pow" }); i += 2; continue; }
+        if ("+-*/%(),".includes(c)) { tk.push({ t: c }); i++; continue; }
         throw new Error("unexpected '" + c + "' @ " + i);
     }
     return tk;
@@ -191,8 +193,8 @@ function hookWidget(node, w) {
                 const out = evaluate(v, resolveRef);
                 w._expr = v;
                 w.value = out;
-                // refresh DOM widget element if any
-                if (w.inputEl) w.inputEl.value = out;
+                // refresh DOM widget element if any (modern widget API)
+                if (w.element && "value" in w.element) w.element.value = out;
                 if (typeof origCb === "function") origCb.call(this, out, ...rest);
                 return;
             } catch (e) {
@@ -221,7 +223,7 @@ function reevalAll() {
                 const v = evaluate(w._expr, resolveRef);
                 if (v !== w.value) {
                     w.value = v;
-                    if (w.inputEl) w.inputEl.value = v;
+                    if (w.element && "value" in w.element) w.element.value = v;
                 }
             } catch { /* ignore until source becomes valid */ }
         }

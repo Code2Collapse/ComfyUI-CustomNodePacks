@@ -12,6 +12,7 @@
 //     them.
 // ─────────────────────────────────────────────────────────────────────
 import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const NODE_NAME = "MECAdvancedPaintCanvas";
 
@@ -44,8 +45,8 @@ class PaintCanvasController {
             width: "calc(100% - 12px)",
             minHeight: "320px",
             margin: "2px 6px 16px 6px",
-            background: "#1c1c1c",
-            border: "1px solid #444",
+            background: "var(--c2c-neutral955)",
+            border: "1px solid var(--c2c-gray700)",
             borderRadius: "4px",
             overflow: "hidden",
             userSelect: "none",
@@ -140,7 +141,7 @@ class PaintCanvasController {
         const size = +(getWidget(this.node, "brush_size")?.value     ?? 20);
         const hard = +(getWidget(this.node, "brush_hardness")?.value ?? 0.8);
         const op   = +(getWidget(this.node, "brush_opacity")?.value  ?? 1.0);
-        const col  = (getWidget(this.node, "brush_color")?.value     ?? "#000000");
+        const col  = (getWidget(this.node, "brush_color")?.value     ?? "var(--c2c-black)");
         return { size, hard, op, col };
     }
 
@@ -347,7 +348,7 @@ app.registerExtension({
         // Make sure the latest canvas pixels are written before save / queue
         const onSerialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (o) {
-            try { this._mecPaint?.serialise(); } catch (e) {}
+            try { this._mecPaint?.serialise(); } catch (e) { __c2cReport("mec_advanced_paint", e); }
             onSerialize?.apply(this, arguments);
         };
     },

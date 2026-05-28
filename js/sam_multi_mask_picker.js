@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 /**
  * MEC – SAM Multi-Mask Picker Widget
@@ -31,17 +32,17 @@ function isDarkTheme() {
 function getThemeColors() {
     const dark = isDarkTheme();
     return {
-        bg: dark ? "#1e1e2e" : "#f5f5f5",
-        cardBg: dark ? "#313244" : "#e0e0e0",
-        cardSelectedBg: dark ? "#45475a" : "#c0c0c0",
-        border: dark ? "#585b70" : "#999999",
-        selectedBorder: dark ? "#89b4fa" : "#1a73e8",
-        text: dark ? "#cdd6f4" : "#333333",
-        textDim: dark ? "#6c7086" : "#777777",
-        scoreBg: dark ? "#11111bee" : "#ffffffee",
-        scoreText: dark ? "#a6e3a1" : "#2e7d32",
+        bg: dark ? "var(--c2c-bg)" : "var(--c2c-gray050)",
+        cardBg: dark ? "var(--c2c-border)" : "var(--c2c-gray100)",
+        cardSelectedBg: dark ? "var(--c2c-surface1)" : "var(--c2c-gray220)",
+        border: dark ? "var(--c2c-surface2)" : "var(--c2c-gray360)",
+        selectedBorder: dark ? "var(--c2c-blue)" : "var(--c2c-blueAction)",
+        text: dark ? "var(--c2c-fg)" : "var(--c2c-gray800)",
+        textDim: dark ? "var(--c2c-dim)" : "var(--c2c-gray450)",
+        scoreBg: dark ? "var(--c2c-bg3)ee" : "var(--c2c-white)",
+        scoreText: dark ? "var(--c2c-green)" : "var(--c2c-okDeep)",
         overlayColor: dark ? [255, 80, 80] : [200, 40, 40],
-        labelBg: dark ? "#181825cc" : "#ffffffcc",
+        labelBg: dark ? "var(--c2c-bg2)cc" : "var(--c2c-white)",
     };
 }
 
@@ -95,9 +96,7 @@ class SamMultiMaskPickerWidget {
                         this.scores = parsed.slice(0, 3);
                     }
                 }
-            } catch (_) {
-                // scores not available yet
-            }
+            } catch (__c2cErr) { __c2cReport("sam_multi_mask_picker", __c2cErr); }
         }
     }
 
@@ -122,10 +121,12 @@ class SamMultiMaskPickerWidget {
         const imgInput = this.node.inputs[0]; // image is first required input
         if (!imgInput || !imgInput.link) return;
 
-        const linkInfo = app.graph.links[imgInput.link];
+        // Resolve links within the node's owning graph (subgraph-safe).
+        const ownerGraph = this.node.graph || app.graph;
+        const linkInfo = ownerGraph?.links?.[imgInput.link];
         if (!linkInfo) return;
 
-        const sourceNode = app.graph.getNodeById(linkInfo.origin_id);
+        const sourceNode = ownerGraph.getNodeById?.(linkInfo.origin_id);
         if (!sourceNode) return;
 
         // Try to get the image URL from the source node's imgs array (preview images)
@@ -282,8 +283,8 @@ class SamMultiMaskPickerWidget {
                 roundRect(ctx, tx, ty, thumbW, thumbH, 4);
                 ctx.clip();
                 const grad = ctx.createLinearGradient(tx, ty, tx, ty + thumbH);
-                grad.addColorStop(0, isSelected ? "#3a5068" : "#2a3040");
-                grad.addColorStop(1, isSelected ? "#2a4058" : "#1a2030");
+                grad.addColorStop(0, isSelected ? "var(--c2c-panelMid)" : "var(--c2c-panelMid2)");
+                grad.addColorStop(1, isSelected ? "var(--c2c-panelMid3)" : "var(--c2c-panelMid4)");
                 ctx.fillStyle = grad;
                 ctx.fillRect(tx, ty, thumbW, thumbH);
                 // Draw mask index letter
@@ -493,9 +494,7 @@ app.registerExtension({
                     if (Array.isArray(parsed) && parsed.length >= 3) {
                         this._mecPicker.scores = parsed.slice(0, 3);
                     }
-                } catch (_) {
-                    // Score parsing optional
-                }
+                } catch (__c2cErr) { __c2cReport("sam_multi_mask_picker", __c2cErr); }
 
                 // Real mask thumbnails sent by the Python side.
                 const thumbs = message.mask_thumbs;

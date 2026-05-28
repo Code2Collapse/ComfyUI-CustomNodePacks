@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes } from "./_subgraph_walk.js";
 
 const SETTING_ENABLED = "c2c.modelSwap.enabled";
 const SETTING_LORAS_ONLY = "c2c.modelSwap.lorasOnly";
@@ -60,11 +61,11 @@ function fuzzyScore(hay, needle) {
 function collectLoaderWidgets() {
     if (!app.graph) return [];
     const out = [];
-    for (const n of app.graph._nodes || []) {
+    forAllNodes((n) => {
         const type = n.type || "";
         const isLoader = LOADER_PATTERNS.some(rx => rx.test(type));
-        if (!isLoader) continue;
-        if (_lorasOnly && !/lora/i.test(type)) continue;
+        if (!isLoader) return;
+        if (_lorasOnly && !/lora/i.test(type)) return;
         for (const w of (n.widgets || [])) {
             const isCombo = COMBO_WIDGET_TYPES.has(w.type) ||
                 (w.options && Array.isArray(w.options.values));
@@ -77,7 +78,7 @@ function collectLoaderWidgets() {
             if (!looksLikeFile && !/lora|model|name|checkpoint|vae|clip|unet|encoder/i.test(w.name)) continue;
             out.push({ node: n, widget: w });
         }
-    }
+    });
     return out;
 }
 
@@ -102,20 +103,20 @@ function open() {
     _root = document.createElement("div");
     _root.style.cssText = `
         position: fixed; left: 50%; top: 18%; transform: translateX(-50%);
-        z-index: 12000; width: 640px; max-height: 64vh; overflow: hidden;
-        background: #161a22; color: #e5ecf5;
-        border: 1px solid rgba(255,255,255,0.14); border-radius: 8px;
+        z-index: var(--c2c-z-palette); width: 640px; max-height: 64vh; overflow: hidden;
+        background: var(--c2c-bg2); color: var(--c2c-accentText);
+        border: 1px solid color-mix(in srgb, var(--c2c-highlightBase) 14%, transparent); border-radius: 8px;
         font: 12px ui-sans-serif, system-ui, sans-serif;
-        box-shadow: 0 18px 48px rgba(0,0,0,0.7);
+        box-shadow: 0 18px 48px color-mix(in srgb, var(--c2c-shadowBase) 70%, transparent);
         display:flex; flex-direction:column;
     `;
     const header = document.createElement("div");
-    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.08); color:#cfe0ff;";
+    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent); color:var(--c2c-accentLight);";
     header.textContent = "Quick-Swap Model — pick a loader";
     _root.appendChild(header);
     const input = document.createElement("input");
     input.type = "text"; input.placeholder = "Filter loaders…";
-    input.style.cssText = "padding:8px 12px; border:none; outline:none; background:rgba(255,255,255,0.04); color:#e5ecf5; font:12px ui-sans-serif;";
+    input.style.cssText = "padding:8px 12px; border:none; outline:none; background:color-mix(in srgb, var(--c2c-highlightBase) 4%, transparent); color:var(--c2c-accentText); font:12px ui-sans-serif;";
     _root.appendChild(input);
     const list = document.createElement("div");
     list.style.cssText = "overflow:auto; flex:1; max-height:50vh;";
@@ -127,13 +128,13 @@ function open() {
     const render = () => {
         list.innerHTML = "";
         if (filtered.length === 0) {
-            list.innerHTML = `<div style="padding:18px;color:#7a8492;text-align:center;">No loader widgets found in this workflow.</div>`;
+            list.innerHTML = `<div style="padding:18px;color:var(--c2c-sub);text-align:center;">No loader widgets found in this workflow.</div>`;
             return;
         }
         filtered.forEach((it, i) => {
             const r = document.createElement("div");
-            r.style.cssText = `padding:6px 12px; cursor:pointer; ${i === active ? "background:rgba(91,141,239,0.22);" : ""}`;
-            r.innerHTML = `<span style="color:#cfe0ff;">#${it.node.id}</span> <span style="color:#8b96a5;">${escapeHtml(it.node.type)}</span> · <code>${escapeHtml(it.widget.name)}</code> = <span style="color:#ffd166;">${escapeHtml(String(it.widget.value))}</span>`;
+            r.style.cssText = `padding:6px 12px; cursor:pointer; ${i === active ? "background:color-mix(in srgb, var(--c2c-blue) 22%, transparent);" : ""}`;
+            r.innerHTML = `<span style="color:var(--c2c-accentLight);">#${it.node.id}</span> <span style="color:var(--c2c-sub);">${escapeHtml(it.node.type)}</span> · <code>${escapeHtml(it.widget.name)}</code> = <span style="color:var(--c2c-yellow);">${escapeHtml(String(it.widget.value))}</span>`;
             r.addEventListener("click", () => { active = i; openSwap(filtered[active]); });
             r.addEventListener("mouseenter", () => { active = i; render(); });
             list.appendChild(r);
@@ -165,20 +166,20 @@ function openSwap(item) {
     _root = document.createElement("div");
     _root.style.cssText = `
         position: fixed; left: 50%; top: 18%; transform: translateX(-50%);
-        z-index: 12000; width: 720px; max-height: 64vh; overflow: hidden;
-        background: #161a22; color: #e5ecf5;
-        border: 1px solid rgba(255,255,255,0.14); border-radius: 8px;
+        z-index: var(--c2c-z-palette); width: 720px; max-height: 64vh; overflow: hidden;
+        background: var(--c2c-bg2); color: var(--c2c-accentText);
+        border: 1px solid color-mix(in srgb, var(--c2c-highlightBase) 14%, transparent); border-radius: 8px;
         font: 12px ui-sans-serif, system-ui, sans-serif;
-        box-shadow: 0 18px 48px rgba(0,0,0,0.7);
+        box-shadow: 0 18px 48px color-mix(in srgb, var(--c2c-shadowBase) 70%, transparent);
         display:flex; flex-direction:column;
     `;
     const header = document.createElement("div");
-    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid rgba(255,255,255,0.08); color:#cfe0ff;";
+    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent); color:var(--c2c-accentLight);";
     header.textContent = `Swap #${item.node.id} ${item.node.type} · ${item.widget.name}  (current: ${item.widget.value})`;
     _root.appendChild(header);
     const input = document.createElement("input");
     input.type = "text"; input.placeholder = `Filter ${values.length} choices…`;
-    input.style.cssText = "padding:8px 12px; border:none; outline:none; background:rgba(255,255,255,0.04); color:#e5ecf5; font:12px ui-sans-serif;";
+    input.style.cssText = "padding:8px 12px; border:none; outline:none; background:color-mix(in srgb, var(--c2c-highlightBase) 4%, transparent); color:var(--c2c-accentText); font:12px ui-sans-serif;";
     _root.appendChild(input);
     const list = document.createElement("div");
     list.style.cssText = "overflow:auto; flex:1; max-height:50vh;";
@@ -200,7 +201,7 @@ function openSwap(item) {
         filtered.slice(0, 400).forEach((v, i) => {
             const r = document.createElement("div");
             const isCur = String(v) === String(item.widget.value);
-            r.style.cssText = `padding:6px 12px; cursor:pointer; ${i === active ? "background:rgba(91,141,239,0.22);" : ""} ${isCur ? "color:#ffd166;" : ""}`;
+            r.style.cssText = `padding:6px 12px; cursor:pointer; ${i === active ? "background:color-mix(in srgb, var(--c2c-blue) 22%, transparent);" : ""} ${isCur ? "color:var(--c2c-yellow);" : ""}`;
             r.innerHTML = `${isCur ? "★ " : "  "}<code>${escapeHtml(String(v))}</code>`;
             r.addEventListener("click", () => commit(v));
             r.addEventListener("mouseenter", () => { active = i; render(); });
@@ -230,7 +231,15 @@ function openSwap(item) {
 function pulse(node) {
     if (!node) return;
     const orig = node.bgcolor;
-    node.bgcolor = "#5b8def";
+    // Read live blue accent from theme (flips across mocha/latte/oled).
+    // If the theme stylesheet is not yet injected the read returns empty —
+    // skip the pulse rather than burn in a palette-specific literal.
+    let blue = "";
+    try {
+        blue = (getComputedStyle(document.documentElement).getPropertyValue("--c2c-blue") || "").trim();
+    } catch {}
+    if (!blue) return;
+    node.bgcolor = blue;
     app.canvas.centerOnNode(node);
     app.graph.setDirtyCanvas(true, true);
     setTimeout(() => { node.bgcolor = orig; app.graph.setDirtyCanvas(true, true); }, 700);

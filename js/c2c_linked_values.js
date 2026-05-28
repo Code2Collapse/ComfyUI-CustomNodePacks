@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes, findNodeAnywhere } from "./_subgraph_walk.js";
 
 const SETTING_ENABLED = "c2c.linkedValues.enabled";
 const SETTING_MASTER_ONLY = "c2c.linkedValues.propagate_master_only";
@@ -75,7 +76,7 @@ function propagate(groupName, value, originNodeId, originWidgetName) {
             if (!t) continue;
             if (t.node === originNodeId && t.widget === originWidgetName) continue;
             if (_masterOnly && !(grp.master && grp.master.node === originNodeId && grp.master.widget === originWidgetName)) continue;
-            const node = app.graph.getNodeById(t.node);
+            const node = findNodeAnywhere(t.node)?.node;
             if (!node) continue;
             const w = (node.widgets || []).find(x => x.name === t.widget);
             if (!w) continue;
@@ -112,9 +113,9 @@ function hookWidget(node, widget) {
 
 function rehookAll() {
     if (!app.graph) return;
-    for (const n of app.graph._nodes || []) {
+    forAllNodes((n) => {
         for (const w of n.widgets || []) hookWidget(n, w);
-    }
+    });
 }
 
 // ── Pill UI ───────────────────────────────────────────────────────────
@@ -124,11 +125,11 @@ function ensurePill() {
     el = document.createElement("div");
     el.id = PILL_ID;
     el.style.cssText = `
-        position: fixed; right: 14px; bottom: 158px; z-index: 9100;
-        background: rgba(18,20,24,0.84);
-        color: #cfd6e0; font: 11px ui-sans-serif, system-ui, sans-serif;
+        position: fixed; right: 14px; bottom: 158px; z-index: var(--c2c-z-hud);
+        background: color-mix(in srgb, var(--c2c-panelBg) 84%, transparent);
+        color: var(--c2c-accentLight2); font: 11px ui-sans-serif, system-ui, sans-serif;
         padding: 4px 10px; border-radius: 13px;
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid var(--c2c-border);
         cursor: pointer; user-select: none; backdrop-filter: blur(6px);
     `;
     el.title = "Linked Value Groups — click to manage";
@@ -157,10 +158,15 @@ function refreshPill() {
 }
 
 function pulseNode(nodeId) {
-    const n = app.graph.getNodeById(nodeId);
+    const n = findNodeAnywhere(nodeId)?.node;
     if (!n) return;
     const orig = n.bgcolor;
-    n.bgcolor = "#5b8def";
+    // Read live accent from the active theme so the pulse flips with mocha/latte/oled.
+    // If the theme stylesheet has not been injected yet, skip the pulse rather than
+    // burn in a palette-specific literal (would break latte/oled tint).
+    const accent = (getComputedStyle(document.documentElement).getPropertyValue("--c2c-accentSoft2") || "").trim();
+    if (!accent) return;
+    n.bgcolor = accent;
     app.canvas.centerOnNode(n);
     app.graph.setDirtyCanvas(true, true);
     setTimeout(() => { n.bgcolor = orig; app.graph.setDirtyCanvas(true, true); }, PULSE_MS);
@@ -169,48 +175,49 @@ function pulseNode(nodeId) {
 function openManager() {
     const s = getStore() || {};
     const dlg = document.createElement("div");
+    // bg2 + accentText both flip across mocha/latte/oled; panelDeep2 does NOT.
     dlg.style.cssText = `
         position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-        z-index: 12000; width: 540px; max-height: 70vh; overflow: auto;
-        background: #161a22; color: #e5ecf5;
-        border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+        z-index: var(--c2c-z-modal); width: 540px; max-height: 70vh; overflow: auto;
+        background: var(--c2c-bg2); color: var(--c2c-accentText);
+        border: 1px solid var(--c2c-border); border-radius: 8px;
         padding: 14px 18px; font: 12px ui-sans-serif, system-ui, sans-serif;
-        box-shadow: 0 12px 36px rgba(0,0,0,0.65);
+        box-shadow: 0 12px 36px color-mix(in srgb, var(--c2c-shadowBase) 65%, transparent);
     `;
     const close = () => dlg.remove();
     const h = document.createElement("div");
     h.style.cssText = "font-weight:600;font-size:13px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;";
-    h.innerHTML = `<span>Linked Value Groups</span><span style="cursor:pointer;color:#888" title="Close">✕</span>`;
+    h.innerHTML = `<span>Linked Value Groups</span><span style="cursor:pointer;color:var(--c2c-accentMuted2)" title="Close">✕</span>`;
     h.lastChild.addEventListener("click", close);
     dlg.appendChild(h);
 
     const entries = Object.entries(s);
     if (entries.length === 0) {
         const e = document.createElement("div");
-        e.style.cssText = "padding:24px 8px;color:#7a8492;text-align:center;";
+        e.style.cssText = "padding:24px 8px;color:var(--c2c-accentMuted2);text-align:center;";
         e.textContent = "No groups yet. Right-click any widget → \"Link with group...\"";
         dlg.appendChild(e);
     } else {
         for (const [name, grp] of entries) {
             const card = document.createElement("div");
-            card.style.cssText = "margin-bottom:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;";
+            card.style.cssText = "margin-bottom:10px;padding:8px 10px;background:color-mix(in srgb, var(--c2c-surface0) 30%, transparent);border-radius:6px;";
             const title = document.createElement("div");
-            title.style.cssText = "font-weight:600;color:#cfe0ff;margin-bottom:4px;display:flex;justify-content:space-between;";
-            title.innerHTML = `<span>${escapeHtml(name)} <span style="color:#7a8492;font-weight:400">· last = ${escapeHtml(String(grp.last))}</span></span>`;
+            title.style.cssText = "font-weight:600;color:var(--c2c-accentLight);margin-bottom:4px;display:flex;justify-content:space-between;";
+            title.innerHTML = `<span>${escapeHtml(name)} <span style="color:var(--c2c-accentMuted2);font-weight:400">· last = ${escapeHtml(String(grp.last))}</span></span>`;
             const del = document.createElement("span");
             del.textContent = "Delete";
-            del.style.cssText = "cursor:pointer;color:#ff7a7a;font-size:11px;font-weight:400;";
+            del.style.cssText = "cursor:pointer;color:var(--c2c-dangerSoft2);font-size:11px;font-weight:400;";
             del.addEventListener("click", () => { delete s[name]; refreshPill(); close(); openManager(); });
             title.appendChild(del);
             card.appendChild(title);
             const members = [grp.master, ...(grp.members || [])].filter(Boolean);
             for (const m of members) {
                 const isMaster = grp.master && m.node === grp.master.node && m.widget === grp.master.widget;
-                const node = app.graph.getNodeById(m.node);
+                const node = findNodeAnywhere(m.node)?.node;
                 const row = document.createElement("div");
                 row.style.cssText = "padding:3px 6px;cursor:pointer;border-radius:3px;display:flex;justify-content:space-between;";
                 row.innerHTML = `<span>${isMaster ? "★ " : "  "}#${m.node} · ${escapeHtml(node ? node.title || node.type : "missing")} · <code>${escapeHtml(m.widget)}</code></span>`;
-                row.addEventListener("mouseenter", () => row.style.background = "rgba(91,141,239,0.16)");
+                row.addEventListener("mouseenter", () => row.style.background = "color-mix(in srgb, var(--c2c-accentSoft2) 16%, transparent)");
                 row.addEventListener("mouseleave", () => row.style.background = "");
                 row.addEventListener("click", () => { pulseNode(m.node); close(); });
                 card.appendChild(row);
@@ -303,7 +310,12 @@ app.registerExtension({
         const origLoad = app.loadGraphData ? app.loadGraphData.bind(app) : null;
         if (origLoad) {
             app.loadGraphData = function (...args) {
-                const r = origLoad(...args);
+                let r;
+                try { r = origLoad(...args); }
+                catch (err) {
+                    console.warn("[linked_values] loadGraphData upstream threw", err);
+                    throw err;
+                }
                 setTimeout(() => { rehookAll(); refreshPill(); }, 100);
                 return r;
             };

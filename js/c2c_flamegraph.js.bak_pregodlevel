@@ -1,0 +1,284 @@
+/**
+ * c2c_flamegraph.js — Phase 3: Execution Flame Graph
+ *
+ * After a prompt execution completes, fetch /mec/diagnostics/flamegraph and
+ * render a horizontal bar chart of per-node elapsed time. Surfaced as a
+ * floating panel that the user can toggle on/off.
+ *
+ * Settings:
+ *   mec.flamegraph.enabled       — bool (default true)
+ *   mec.flamegraph.auto_show     — bool (default false) → auto-open after run
+ */
+
+import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
+import { buildPanel } from "./_c2c_window.js";
+
+const STYLE_ID  = "mec-flamegraph-style";
+const PANEL_ID  = "c2c-flame";
+const BTN_ID    = "mec-flamegraph-btn";
+
+let _isOpen = false;
+let _lastData = null;
+
+function _injectStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+#${BTN_ID} {
+    position: fixed;
+    bottom: 60px;
+    right: 16px;
+    z-index: var(--c2c-z-hud, 1000);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #1e1e2e;
+    border: 1px solid #45475a;
+    color: #fab387;
+    font-size: 18px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#${BTN_ID}:hover { border-color: #89b4fa; color: #89b4fa; }
+/* Inner content styles only — panel chrome comes from _c2c_window.js. */
+#${PANEL_ID} .fg-row {
+    display: grid;
+    grid-template-columns: 1fr 60px;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid #313244;
+}
+#${PANEL_ID} .fg-bar {
+    position: relative;
+    height: 20px;
+    background: #313244;
+    border-radius: 3px;
+    overflow: hidden;
+}
+#${PANEL_ID} .fg-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+#${PANEL_ID} .fg-bar-label {
+    position: absolute;
+    top: 0;
+    left: 6px;
+    line-height: 20px;
+    font-size: 11px;
+    color: #cdd6f4;
+    white-space: nowrap;
+    text-shadow: 0 0 3px rgba(0,0,0,0.7);
+}
+#${PANEL_ID} .fg-time {
+    font-size: 11px;
+    color: #a6e3a1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+#${PANEL_ID} .fg-row.fg-error .fg-bar-fill { background: #f38ba8 !important; }
+#${PANEL_ID} .fg-row.fg-error .fg-time     { color: #f38ba8; }
+#${PANEL_ID} .fg-empty {
+    color: #6c7086;
+    font-style: italic;
+    padding: 12px 0;
+    text-align: center;
+}
+#${PANEL_ID} .fg-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+#${PANEL_ID} .fg-actions button {
+    background: #313244;
+    border: 1px solid #45475a;
+    color: #cdd6f4;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 11px;
+}
+#${PANEL_ID} .fg-actions button:hover { border-color: #89b4fa; color: #89b4fa; }
+    `.trim();
+    document.head.appendChild(style);
+}
+
+function _heatColor(pct) {
+    // pct in 0..1 → green to red
+    const r = Math.round(166 + (243 - 166) * pct);  // a6 → f3
+    const g = Math.round(227 + (139 - 227) * pct);  // e3 → 8b
+    const b = Math.round(161 + (168 - 161) * pct);  // a1 → a8
+    return `rgb(${r},${g},${b})`;
+}
+
+function _esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function _renderPanel(data) {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    const body = panel.querySelector(".c2c-win-body");
+    if (!body) return;
+
+    if (!data || !data.rows || data.rows.length === 0) {
+        body.innerHTML = `<div class="fg-empty">No completed runs yet — queue a prompt first.</div>`;
+        return;
+    }
+
+    const maxMs = data.rows[0].elapsed_ms || 1;
+    const rowsHtml = data.rows.map(r => {
+        const pct = Math.min(1, r.elapsed_ms / maxMs);
+        const color = r.error ? "#f38ba8" : _heatColor(pct);
+        const label = `${_esc(r.node_class)} (#${_esc(r.node_id)})`;
+        return `
+            <div class="fg-row ${r.error ? "fg-error" : ""}">
+                <div class="fg-bar" title="${r.error ? "Errored: " + _esc(r.exc_type || "") : ""}">
+                    <div class="fg-bar-fill" style="width:${(pct * 100).toFixed(1)}%;background:${color};"></div>
+                    <div class="fg-bar-label">${label}</div>
+                </div>
+                <div class="fg-time">${r.elapsed_ms.toFixed(0)} ms</div>
+            </div>`;
+    }).join("");
+
+    body.innerHTML = `<div class="fg-rows">${rowsHtml}</div>`;
+
+    // Update subtitle/meta via the buildPanel refs (cheaper than re-render).
+    const subtitle = panel.querySelector(".c2c-win-subtitle");
+    if (subtitle) {
+        subtitle.textContent = `${data.node_count} nodes · total ${data.total_ms.toFixed(0)} ms${
+            data.prompt_id ? ` · prompt ${String(data.prompt_id).slice(0, 8)}…` : ""
+        }`;
+    }
+}
+
+function _copyCsv() {
+    if (!_lastData || !_lastData.rows) return;
+    const header = "node_id,node_class,elapsed_ms,cpu_ms,vram_delta_mb,vram_peak_mb,error";
+    const lines = _lastData.rows.map(r =>
+        `${r.node_id},${r.node_class},${r.elapsed_ms},${r.cpu_ms},${r.vram_delta_mb},${r.vram_peak_mb},${r.error}`
+    );
+    const csv = [header, ...lines].join("\n");
+    navigator.clipboard?.writeText(csv).then(() => {
+        console.log("[MEC.FlameGraph] CSV copied to clipboard.");
+    });
+}
+
+async function _refresh() {
+    try {
+        const resp = await fetch("/mec/diagnostics/flamegraph?limit=50");
+        const json = await resp.json();
+        if (json.success) {
+            _lastData = json.data;
+            _renderPanel(json.data);
+        }
+    } catch (e) {
+        console.warn("[MEC.FlameGraph] fetch failed:", e);
+    }
+}
+
+function _openPanel() {
+    _isOpen = true;
+    _ensurePanel();
+    _refresh();
+}
+
+function _closePanel() {
+    _isOpen = false;
+    document.getElementById(PANEL_ID)?.remove();
+}
+
+function _togglePanel() {
+    _isOpen ? _closePanel() : _openPanel();
+}
+
+/** Create the buildPanel-backed window if not already mounted. */
+function _ensurePanel() {
+    if (document.getElementById(PANEL_ID)) return;
+    buildPanel({
+        id: PANEL_ID,
+        title: "⏱ Execution Flame Graph",
+        shortcut: "Ctrl+Shift+G",
+        width: 520,
+        height: 460,
+        storageKey: "flame",
+        onClose: () => { _isOpen = false; },
+        actions: [
+            { label: "Refresh",  className: "",        onClick: _refresh },
+            { label: "Copy CSV", className: "primary", onClick: _copyCsv },
+        ],
+    });
+}
+
+function _ensureUi() {
+    if (!document.getElementById(BTN_ID)) {
+        const btn = document.createElement("button");
+        btn.id = BTN_ID;
+        btn.title = "Execution Flame Graph (Ctrl+Shift+G)";
+        btn.textContent = "⏱";
+        btn.addEventListener("click", _togglePanel);
+        document.body.appendChild(btn);
+    }
+}
+
+app.registerExtension({
+    name: "C2C.FlameGraph",
+    settings: [
+        {
+            id: "c2c.flamegraph.enabled",
+            name: "Flame Graph: enabled",
+            tooltip: "Show the ⏱ button for the execution flame graph.",
+            type: "boolean",
+            default: true,
+            onChange: (v) => {
+                const btn = document.getElementById(BTN_ID);
+                if (btn) btn.style.display = v ? "flex" : "none";
+            },
+        },
+        {
+            id: "c2c.flamegraph.auto_show",
+            name: "Flame Graph: auto-open after run",
+            tooltip: "Automatically open the flame graph panel when a prompt finishes.",
+            type: "boolean",
+            default: false,
+        },
+    ],
+    async setup() {
+        _injectStyle();
+        _ensureUi();
+
+        const enabled = (() => {
+            try { return app.ui.settings.getSettingValue("c2c.flamegraph.enabled", true); }
+            catch { return true; }
+        })();
+        const btn = document.getElementById(BTN_ID);
+        if (btn) btn.style.display = enabled ? "flex" : "none";
+
+        // Listen for prompt execution-done events
+        api.addEventListener("execution_success", () => {
+            const auto = (() => {
+                try { return app.ui.settings.getSettingValue("c2c.flamegraph.auto_show", false); }
+                catch { return false; }
+            })();
+            if (_isOpen) {
+                // Already open → silently refresh
+                _refresh();
+            } else if (auto) {
+                _openPanel();
+            }
+        });
+
+        // Also refresh on execution_error so user can see what crashed
+        api.addEventListener("execution_error", () => {
+            if (_isOpen) _refresh();
+        });
+
+        console.log("[MEC.FlameGraph] Loaded — click ⏱ button to view per-node timings.");
+    },
+});

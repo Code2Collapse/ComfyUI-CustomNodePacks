@@ -1,4 +1,4 @@
-// Generic widget-migration safety net for ALL CustomNodePacks (MEC) nodes.
+﻿// Generic widget-migration safety net for ALL CustomNodePacks (MEC) nodes.
 //
 // Problem: ComfyUI serializes node widget values positionally as
 // `widgets_values: [v0, v1, …]`. When a node author appends a new widget

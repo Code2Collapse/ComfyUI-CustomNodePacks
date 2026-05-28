@@ -16,6 +16,7 @@
 
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { reportFailure as __c2cReport } from "../_c2c_report.js";
 
 // ── State ───────────────────────────────────────────────────────────
 const STATE = {
@@ -38,7 +39,7 @@ function setMuted(v) {
 const SUBSCRIBERS = new Set();
 function notify() {
     for (const cb of SUBSCRIBERS) {
-        try { cb(STATE); } catch (e) { /* ignore */ }
+        try { cb(STATE); } catch (e) { __c2cReport("integrity_badges", e); }
     }
 }
 
@@ -118,6 +119,8 @@ function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
     const s = document.createElement("style");
     s.id = STYLE_ID;
+    // P0.1b theme-tokenized: every color resolves via _c2c_theme.js CSS vars.
+    // No raw rgba/rgb/hsl/hex literals remain in this block.
     s.textContent = `
     .mec-integ-btn {
         display: inline-flex; align-items: center; gap: 5px;
@@ -127,9 +130,9 @@ function injectStyle() {
         flex: 0 0 auto;
         align-self: center;
         border-radius: 14px;
-        background: #313244;
-        color: #cdd6f4;
-        border: 1px solid #45475a;
+        background: var(--c2c-surface0);
+        color: var(--c2c-fg);
+        border: 1px solid var(--c2c-surface1);
         cursor: pointer;
         font-size: 11px; font-weight: 700;
         letter-spacing: 0.4px;
@@ -140,74 +143,83 @@ function injectStyle() {
         transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
     }
     .mec-integ-btn:hover {
-        background: #45475a;
-        box-shadow: 0 0 0 1px #585b70 inset, 0 2px 6px rgba(0,0,0,0.35);
+        background: var(--c2c-surface1);
+        box-shadow: 0 0 0 1px var(--c2c-surface2) inset,
+                    0 2px 6px color-mix(in srgb, var(--c2c-shadowBase) 35%, transparent);
     }
     .mec-integ-btn .mec-integ-icon { font-size: 14px; line-height: 1; }
     .mec-integ-btn .mec-integ-label {
         font-size: 10px; letter-spacing: 0.6px;
     }
     .mec-integ-btn.ok {
-        border-color: #a6e3a1; color: #a6e3a1;
-        background: linear-gradient(180deg, #1e2e26 0%, #1e1e2e 100%);
+        border-color: var(--c2c-green); color: var(--c2c-green);
+        background: linear-gradient(180deg,
+            color-mix(in srgb, var(--c2c-green) 15%, var(--c2c-bg) 85%) 0%,
+            var(--c2c-bg) 100%);
     }
     .mec-integ-btn.warn {
-        border-color: #fab387; color: #fab387;
-        background: linear-gradient(180deg, #3a2a1e 0%, #1e1e2e 100%);
+        border-color: var(--c2c-peach); color: var(--c2c-peach);
+        background: linear-gradient(180deg,
+            color-mix(in srgb, var(--c2c-peach) 15%, var(--c2c-bg) 85%) 0%,
+            var(--c2c-bg) 100%);
     }
     .mec-integ-btn.error {
-        border-color: #f38ba8; color: #f38ba8;
-        background: linear-gradient(180deg, #3a1e26 0%, #1e1e2e 100%);
+        border-color: var(--c2c-red); color: var(--c2c-red);
+        background: linear-gradient(180deg,
+            color-mix(in srgb, var(--c2c-red) 15%, var(--c2c-bg) 85%) 0%,
+            var(--c2c-bg) 100%);
         animation: mec-integ-pulse 2.4s ease-in-out infinite;
     }
     .mec-integ-btn.scan {
-        border-color: #89b4fa; color: #89b4fa;
-        background: linear-gradient(180deg, #1e273a 0%, #1e1e2e 100%);
+        border-color: var(--c2c-blue); color: var(--c2c-blue);
+        background: linear-gradient(180deg,
+            color-mix(in srgb, var(--c2c-blue) 15%, var(--c2c-bg) 85%) 0%,
+            var(--c2c-bg) 100%);
         animation: mec-integ-scan 1.4s ease-in-out infinite;
     }
     .mec-integ-btn.muted { opacity: 0.55; filter: grayscale(0.6); }
     @keyframes mec-integ-pulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(243,139,168,0.0); }
-        50%      { box-shadow: 0 0 0 4px rgba(243,139,168,0.18); }
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c2c-red) 0%, transparent); }
+        50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c2c-red) 18%, transparent); }
     }
     @keyframes mec-integ-scan {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(137,180,250,0.0); }
-        50%      { box-shadow: 0 0 0 4px rgba(137,180,250,0.25); }
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c2c-blue) 0%, transparent); }
+        50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c2c-blue) 25%, transparent); }
     }
     .mec-integ-dot {
         display:inline-flex; align-items:center; justify-content:center;
         min-width:18px; height:18px;
         padding: 0 5px; border-radius: 9px;
-        background:#f38ba8; color:#11111b;
+        background:var(--c2c-red); color:var(--c2c-bg3);
         font-size:10px; font-weight:800; text-align:center;
         line-height:1;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+        box-shadow: 0 1px 2px color-mix(in srgb, var(--c2c-shadowBase) 35%, transparent);
     }
-    .mec-integ-dot.warn  { background:#fab387; }
-    .mec-integ-dot.ok    { background:#a6e3a1; }
-    .mec-integ-dot.error { background:#f38ba8; }
+    .mec-integ-dot.warn  { background:var(--c2c-peach); }
+    .mec-integ-dot.ok    { background:var(--c2c-green); }
+    .mec-integ-dot.error { background:var(--c2c-red); }
 
     .mec-integ-mask {
-        position: fixed; inset: 0; z-index: 99998;
-        background: rgba(0,0,0,0.55);
+        position: fixed; inset: 0; z-index: var(--c2c-z-modal);
+        background: color-mix(in srgb, var(--c2c-shadowBase) 55%, transparent);
         display: flex; align-items: center; justify-content: center;
         font-family: var(--p-font-family, system-ui), sans-serif;
     }
     .mec-integ-dlg {
         width: min(720px, 92vw); max-height: 80vh;
-        background: var(--comfy-menu-bg, #1e1e2e);
-        color: var(--fg-color, #cdd6f4);
-        border: 1px solid var(--border-color, #45475a);
+        background: var(--c2c-bg);
+        color: var(--c2c-fg);
+        border: 1px solid var(--c2c-surface1);
         border-radius: 8px;
-        box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+        box-shadow: 0 12px 48px color-mix(in srgb, var(--c2c-shadowBase) 50%, transparent);
         display: flex; flex-direction: column;
         overflow: hidden;
     }
     .mec-integ-dlg-header {
         display: flex; align-items: center; gap: 8px;
         padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color, #313244);
-        background: var(--p-content-background, #181825);
+        border-bottom: 1px solid var(--c2c-surface0);
+        background: var(--c2c-bg2);
     }
     .mec-integ-dlg-title {
         flex: 1; font-weight: 600; font-size: 14px;
@@ -222,23 +234,23 @@ function injectStyle() {
     .mec-integ-dlg-footer {
         display: flex; gap: 8px; align-items: center;
         padding: 8px 14px;
-        border-top: 1px solid var(--border-color, #313244);
+        border-top: 1px solid var(--c2c-surface0);
     }
     .mec-integ-dlg-footer .spacer { flex: 1; }
     .mec-integ-x {
         background: transparent; border: none; color: inherit;
         font-size: 18px; cursor: pointer; padding: 0 4px;
     }
-    .mec-integ-x:hover { color: #f38ba8; }
+    .mec-integ-x:hover { color: var(--c2c-red); }
     .mec-integ-row {
         display: flex; gap: 8px; align-items: flex-start;
         padding: 8px 10px; margin-bottom: 6px;
         border-radius: 4px;
-        background: var(--p-content-background, #181825);
-        border-left: 3px solid #89b4fa;
+        background: var(--c2c-bg2);
+        border-left: 3px solid var(--c2c-blue);
     }
-    .mec-integ-row.warn  { border-left-color: #fab387; }
-    .mec-integ-row.error { border-left-color: #f38ba8; }
+    .mec-integ-row.warn  { border-left-color: var(--c2c-peach); }
+    .mec-integ-row.error { border-left-color: var(--c2c-red); }
     .mec-integ-kind {
         font-size: 10px; font-weight: 600;
         text-transform: uppercase; letter-spacing: 0.5px;
@@ -251,23 +263,23 @@ function injectStyle() {
     }
     .mec-integ-act {
         padding: 3px 10px; border-radius: 4px;
-        background: var(--p-primary-color, #89b4fa);
-        color: var(--p-primary-color-text, #11111b);
+        background: var(--c2c-blue);
+        color: var(--c2c-bg3);
         border: none; cursor: pointer; font-size: 11px;
         font-weight: 600;
     }
     .mec-integ-act:hover { filter: brightness(1.1); }
     .mec-integ-btn-sec {
         padding: 4px 12px; border-radius: 4px;
-        background: var(--p-button-secondary-bg, #313244);
-        color: var(--fg-color, #cdd6f4);
-        border: 1px solid var(--border-color, #45475a);
+        background: var(--c2c-surface0);
+        color: var(--c2c-fg);
+        border: 1px solid var(--c2c-surface1);
         cursor: pointer; font-size: 12px;
     }
-    .mec-integ-btn-sec:hover { background: var(--p-button-secondary-hover-bg, #45475a); }
+    .mec-integ-btn-sec:hover { background: var(--c2c-surface1); }
     .mec-integ-empty {
         text-align: center; padding: 30px 10px;
-        color: var(--descriptions-text-color, #a6adc8);
+        color: var(--c2c-sub);
         font-style: italic;
     }
     `;
@@ -352,52 +364,21 @@ function findFallbackContainer() {
 }
 
 function mountButton() {
-    if (BTN_EL && document.body.contains(BTN_EL)) return;
-    const btn = document.createElement("button");
-    btn.id = "mec-integrity-btn";
-    btn.className = "mec-integ-btn";
-    btn.type = "button";
-    btn.addEventListener("click", openDialog);
-    BTN_EL = btn;
-    refreshButton();
-
-    const mgr = findManagerButton();
-    if (mgr && mgr.parentNode) {
-        mgr.parentNode.insertBefore(btn, mgr.nextSibling);
-        return;
-    }
-    const container = findFallbackContainer();
-    if (container) {
-        container.appendChild(btn);
-    } else {
-        // Last resort: subtle pin to top-right (only if no menu exists).
-        Object.assign(btn.style, {
-            position: "fixed", top: "6px", right: "6px", zIndex: 999,
-        });
-        document.body.appendChild(btn);
-    }
+    // ── Retired 2026-05-26 ──────────────────────────────────────────
+    // The standalone `#mec-integrity-btn` topbar button has been
+    // retired in favour of the canonical `#c2c-int-chip` inside the
+    // C2C OmniBar (`c2c_int_badge.js`). The integrity dialog is still
+    // available programmatically via `window.__MEC_INTEGRITY__.open()`.
+    // This stub exists only so any external caller that still references
+    // `mountButton` does not throw.
+    return;
 }
 
 function startMountObserver() {
-    // ComfyUI-Manager may register its button after our setup() runs.
-    // Watch the DOM until we find it; stop once stable.
-    let tries = 0;
-    const observer = new MutationObserver(() => {
-        tries++;
-        if (BTN_EL && document.body.contains(BTN_EL)) {
-            const mgr = findManagerButton();
-            if (mgr && BTN_EL.previousSibling !== mgr) {
-                mgr.parentNode?.insertBefore(BTN_EL, mgr.nextSibling);
-            }
-            if (tries > 40) observer.disconnect();
-            return;
-        }
-        mountButton();
-        if (tries > 80) observer.disconnect();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    mountButton();
-    setTimeout(() => observer.disconnect(), 15000);
+    // Retired 2026-05-26 — no topbar button to mount any more.
+    // Cleanup: remove any stale `#mec-integrity-btn` element that an
+    // older session may have persisted in the DOM.
+    document.getElementById("mec-integrity-btn")?.remove();
 }
 
 // ── (Floating fallback widget removed — user-mandated 2026-05) ──────
@@ -574,11 +555,20 @@ function installNodeBadge() {
         if (drifted) {
             const ctx = arguments[1];
             ctx.save();
-            ctx.fillStyle = "#fab387";
+            // P0.1b: resolve theme vars at paint-time so the node badge
+            // flips with the active C2C variant (canvas can't read var()).
+            const _root = document.documentElement;
+            // No literal fallback: if the theme isn't loaded the dot simply
+            // won't render (acceptable degradation; satisfies P0.1b "no color
+            // hardcoded to one palette").
+            const _peach = getComputedStyle(_root).getPropertyValue("--c2c-peach").trim();
+            const _bg3   = getComputedStyle(_root).getPropertyValue("--c2c-bg3").trim();
+            if (!_peach || !_bg3) { ctx.restore(); return; }
+            ctx.fillStyle = _peach;
             ctx.beginPath();
             ctx.arc(8, -8, 5, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = "#11111b";
+            ctx.fillStyle = _bg3;
             ctx.font = "bold 9px monospace";
             ctx.textBaseline = "middle";
             ctx.textAlign = "center";

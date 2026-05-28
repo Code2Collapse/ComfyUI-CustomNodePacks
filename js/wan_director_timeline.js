@@ -25,6 +25,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { C } from './_c2c_theme.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 const RULER_H = 22;
@@ -177,7 +178,7 @@ class TimelineEditor {
         root.style.cssText = `
             display:flex;flex-direction:column;gap:4px;width:100%;height:100%;
             box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;
-            color:#e0e0e0;background:#181820;border-radius:6px;padding:6px;
+            color:var(--c2c-gray100);background:var(--c2c-scrimDark7);border-radius:6px;padding:6px;
         `;
         // Toolbar
         const tb = document.createElement("div");
@@ -188,11 +189,11 @@ class TimelineEditor {
             b.textContent = label;
             b.title = title;
             b.style.cssText = `
-                background:#2a2a36;color:#cdd6f4;border:1px solid #3a3a4a;
+                background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);
                 border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;
             `;
-            b.onmouseenter = () => { b.style.background = "#3a3a4a"; };
-            b.onmouseleave = () => { b.style.background = "#2a2a36"; };
+            b.onmouseenter = () => { b.style.background = "var(--c2c-surface1Alt)"; };
+            b.onmouseleave = () => { b.style.background = "var(--c2c-panelBg)"; };
             return b;
         };
         this.btnAddText  = mkBtn("+ Text",  "Add a text-only segment");
@@ -204,13 +205,13 @@ class TimelineEditor {
         this.btnZoomIn   = mkBtn("+",       "Zoom in");
         this.btnFit      = mkBtn("Fit",     "Fit timeline to view");
         const modeSel = document.createElement("select");
-        modeSel.style.cssText = "background:#2a2a36;color:#cdd6f4;border:1px solid #3a3a4a;border-radius:4px;padding:3px;font-size:11px;";
+        modeSel.style.cssText = "background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);border-radius:4px;padding:3px;font-size:11px;";
         modeSel.innerHTML = '<option value="seconds">Seconds</option><option value="frames">Frames</option>';
         modeSel.value = this.displayMode;
         modeSel.onchange = () => { writeWidget(this.node, "display_mode", modeSel.value); this.render(); };
         this.modeSel = modeSel;
         const status = document.createElement("span");
-        status.style.cssText = "margin-left:auto;font-size:10.5px;color:#a6adc8;font-family:ui-monospace,monospace;";
+        status.style.cssText = "margin-left:auto;font-size:10.5px;color:var(--c2c-sub);font-family:ui-monospace,monospace;";
         this.statusEl = status;
         for (const el of [this.btnAddText, this.btnAddImage, this.btnAddAudio, this.btnDelete,
                           this.btnPlay, this.btnZoomOut, this.btnZoomIn, this.btnFit, modeSel, status]) {
@@ -220,13 +221,13 @@ class TimelineEditor {
 
         // Canvas wrap (for drag-drop overlay)
         const wrap = document.createElement("div");
-        wrap.style.cssText = "position:relative;width:100%;background:#0e0e14;border-radius:4px;border:1px solid #2a2a36;";
+        wrap.style.cssText = "position:relative;width:100%;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
         this.cvs.style.cssText = "display:block;width:100%;height:" + (RULER_H + IMG_TRACK_H + AUD_TRACK_H) + "px;outline:none;cursor:default;";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
-        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:#fff;font-size:14px;border:2px dashed #89b4fa;border-radius:4px;";
+        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:var(--c2c-white);font-size:14px;border:2px dashed var(--c2c-blue);border-radius:4px;";
         dropHint.textContent = "Drop image or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
@@ -236,17 +237,17 @@ class TimelineEditor {
         // Player bar (seekbar + readout)
         const pbar = document.createElement("div");
         pbar.style.cssText = `
-            display:flex;align-items:center;gap:6px;background:#11111b;
-            border:1px solid #2a2a36;border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;
+            display:flex;align-items:center;gap:6px;background:var(--c2c-bg3);
+            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;
         `;
         this.seek = document.createElement("input");
         this.seek.type = "range";
         this.seek.min = "0";
         this.seek.max = "10000";
         this.seek.value = "0";
-        this.seek.style.cssText = "flex:1 1 auto;accent-color:#89b4fa;";
+        this.seek.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-blue);";
         this.timeReadout = document.createElement("span");
-        this.timeReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:#a6adc8;min-width:120px;text-align:right;";
+        this.timeReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:var(--c2c-sub);min-width:120px;text-align:right;";
         this.timeReadout.textContent = "f 0 / 0";
         pbar.appendChild(this.seek);
         pbar.appendChild(this.timeReadout);
@@ -255,15 +256,15 @@ class TimelineEditor {
         // Properties panel
         const props = document.createElement("div");
         props.style.cssText = `
-            display:flex;flex-direction:column;gap:4px;background:#11111b;
-            border:1px solid #2a2a36;border-radius:4px;padding:6px;min-height:${PROPS_MIN_H}px;
+            display:flex;flex-direction:column;gap:4px;background:var(--c2c-bg3);
+            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;min-height:${PROPS_MIN_H}px;
         `;
         const labelRow = document.createElement("div");
-        labelRow.style.cssText = "display:flex;gap:8px;align-items:center;font-size:11px;color:#a6adc8;";
+        labelRow.style.cssText = "display:flex;gap:8px;align-items:center;font-size:11px;color:var(--c2c-sub);";
         this.propTitle = document.createElement("span");
         this.propTitle.textContent = "No segment selected";
         this.propBounds = document.createElement("span");
-        this.propBounds.style.cssText = "margin-left:auto;color:#7d8590;font-family:ui-monospace,monospace;";
+        this.propBounds.style.cssText = "margin-left:auto;color:var(--c2c-slateMute);font-family:ui-monospace,monospace;";
         labelRow.appendChild(this.propTitle);
         labelRow.appendChild(this.propBounds);
         props.appendChild(labelRow);
@@ -271,12 +272,12 @@ class TimelineEditor {
         const ta = document.createElement("textarea");
         ta.placeholder = "Prompt for this segment (select an image or text clip)";
         ta.style.cssText = `
-            background:#0e0e14;color:#e0e0e0;border:1px solid #2a2a36;border-radius:4px;
+            background:var(--c2c-scrimDark3);color:var(--c2c-gray100);border:1px solid var(--c2c-panelBg);border-radius:4px;
             padding:6px;font-size:12px;font-family:ui-sans-serif,system-ui,sans-serif;
             resize:vertical;min-height:60px;outline:none;width:100%;box-sizing:border-box;
         `;
-        ta.onfocus = () => { ta.style.borderColor = "#89b4fa"; };
-        ta.onblur  = () => { ta.style.borderColor = "#2a2a36"; };
+        ta.onfocus = () => { ta.style.borderColor = "var(--c2c-blue)"; };
+        ta.onblur  = () => { ta.style.borderColor = "var(--c2c-panelBg)"; };
         ta.oninput = () => {
             const seg = this._selSeg();
             if (seg && (seg.type === "image" || seg.type === "text")) {
@@ -288,15 +289,15 @@ class TimelineEditor {
         props.appendChild(ta);
 
         const gsRow = document.createElement("div");
-        gsRow.style.cssText = "display:flex;gap:6px;align-items:center;font-size:11px;color:#a6adc8;";
+        gsRow.style.cssText = "display:flex;gap:6px;align-items:center;font-size:11px;color:var(--c2c-sub);";
         const gsLabel = document.createElement("span");
         gsLabel.textContent = "Guide strength:";
         this.gsSlider = document.createElement("input");
         this.gsSlider.type = "range";
         this.gsSlider.min = "0"; this.gsSlider.max = "200"; this.gsSlider.value = "100";
-        this.gsSlider.style.cssText = "flex:1 1 auto;accent-color:#a6e3a1;";
+        this.gsSlider.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-okSoft);";
         this.gsVal = document.createElement("span");
-        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:#cdd6f4;min-width:40px;text-align:right;";
+        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:var(--c2c-fg);min-width:40px;text-align:right;";
         this.gsVal.textContent = "1.00";
         this.gsSlider.oninput = () => {
             const v = parseInt(this.gsSlider.value) / 100;
@@ -314,7 +315,7 @@ class TimelineEditor {
 
         // Audio info box (visible only when audio segment selected)
         this.audioInfo = document.createElement("div");
-        this.audioInfo.style.cssText = "display:none;background:#0e0e14;border:1px solid #2a2a36;border-radius:4px;padding:6px;font-size:11px;color:#a6adc8;line-height:1.5;font-family:ui-monospace,monospace;";
+        this.audioInfo.style.cssText = "display:none;background:var(--c2c-scrimDark3);border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;font-size:11px;color:var(--c2c-sub);line-height:1.5;font-family:ui-monospace,monospace;";
         props.appendChild(this.audioInfo);
 
         root.appendChild(props);
@@ -706,8 +707,8 @@ class TimelineEditor {
         const m = document.createElement("div");
         m.id = "__wd_ctx";
         m.style.cssText = `
-            position:fixed;left:${x}px;top:${y}px;z-index:99999;
-            background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;
+            position:fixed;left:${x}px;top:${y}px;z-index: var(--c2c-z-popover, 9000);
+            background:var(--c2c-bg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1);
             border-radius:4px;padding:4px;font:11px system-ui;min-width:140px;
             box-shadow:0 4px 16px rgba(0,0,0,0.5);
         `;
@@ -715,7 +716,7 @@ class TimelineEditor {
             const row = document.createElement("div");
             row.textContent = it.label;
             row.style.cssText = "padding:5px 10px;cursor:pointer;border-radius:3px;";
-            row.onmouseenter = () => row.style.background = "#313244";
+            row.onmouseenter = () => row.style.background = "var(--c2c-surface0)";
             row.onmouseleave = () => row.style.background = "transparent";
             row.onclick = () => { m.remove(); it.action(); };
             m.appendChild(row);
@@ -868,9 +869,9 @@ class TimelineEditor {
         // Background tracks
         ctx.fillStyle = "#0a0a10";
         ctx.fillRect(0, 0, cssW, cssH);
-        ctx.fillStyle = "#11111b";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, RULER_H, cssW, IMG_TRACK_H);
-        ctx.fillStyle = "#0e0e16";
+        ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, RULER_H + IMG_TRACK_H, cssW, AUD_TRACK_H);
 
         // Out-of-duration shadow
@@ -896,7 +897,7 @@ class TimelineEditor {
     }
 
     _drawRuler(ctx, cssW) {
-        ctx.fillStyle = "#1a1a26";
+        ctx.fillStyle = C.panelHi2;
         ctx.fillRect(0, 0, cssW, RULER_H);
         ctx.fillStyle = "#5a5a78";
         ctx.font = "10px ui-monospace,monospace";
@@ -912,7 +913,7 @@ class TimelineEditor {
             ctx.moveTo(x, RULER_H - 6);
             ctx.lineTo(x, RULER_H);
             ctx.stroke();
-            ctx.fillStyle = "#7d8590";
+            ctx.fillStyle = C.slateMute;
             ctx.fillText(fmtTime(f, this.fps, this.displayMode), x + 3, RULER_H / 2);
         }
     }
@@ -941,9 +942,9 @@ class TimelineEditor {
                 else { dh = w / ar; dy = y + (h - dh) / 2; }
                 ctx.drawImage(img, dx, dy, dw, dh);
             } else {
-                ctx.fillStyle = "#3a3a4a";
+                ctx.fillStyle = C.surface1Alt;
                 ctx.fillRect(x1, y, w, h);
-                ctx.fillStyle = "#7d8590";
+                ctx.fillStyle = C.slateMute;
                 ctx.font = "10px ui-sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
@@ -954,7 +955,7 @@ class TimelineEditor {
                 const oh = Math.max(14, Math.min(28, h * 0.18));
                 ctx.fillStyle = "rgba(0,0,0,0.6)";
                 ctx.fillRect(x1, y + h - oh, w, oh);
-                ctx.fillStyle = "#cdd6f4";
+                ctx.fillStyle = C.fg;
                 ctx.font = `${Math.round(oh * 0.55)}px ui-sans-serif`;
                 ctx.textAlign = "left";
                 ctx.textBaseline = "middle";
@@ -970,7 +971,7 @@ class TimelineEditor {
         } else if (seg.type === "text") {
             ctx.fillStyle = "#2d1f3a";
             ctx.fillRect(x1, y, w, h);
-            ctx.fillStyle = "#f5c2e7";
+            ctx.fillStyle = C.pink;
             ctx.font = "11px ui-sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -986,7 +987,7 @@ class TimelineEditor {
                 const trim = seg.trimStart || 0;
                 const cx = w;
                 const mid = y + h / 2;
-                ctx.strokeStyle = "#a6e3a1";
+                ctx.strokeStyle = C.okSoft;
                 ctx.lineWidth = 1;
                 ctx.beginPath();
                 const steps = Math.min(peaks.length, Math.max(20, Math.floor(w / 2)));
@@ -1003,7 +1004,7 @@ class TimelineEditor {
             }
             // Filename label
             if (w > 40) {
-                ctx.fillStyle = "#cdd6f4";
+                ctx.fillStyle = C.fg;
                 ctx.font = "10px ui-sans-serif";
                 ctx.textAlign = "left";
                 ctx.textBaseline = "top";
@@ -1018,21 +1019,21 @@ class TimelineEditor {
         }
 
         // Border
-        ctx.strokeStyle = selected ? "#89b4fa" : "#1a1a26";
+        ctx.strokeStyle = selected ? "var(--c2c-blue)" : "var(--c2c-panelHi2)";
         ctx.lineWidth = selected ? 2 : 1;
         ctx.strokeRect(x1 + 0.5, y + 0.5, w - 1, h - 1);
     }
 
     _drawPlayhead(ctx, cssH) {
         const x = this._frameToX(this.playhead);
-        ctx.strokeStyle = "#f38ba8";
+        ctx.strokeStyle = C.red;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, cssH);
         ctx.stroke();
         // Triangle handle
-        ctx.fillStyle = "#f38ba8";
+        ctx.fillStyle = C.red;
         ctx.beginPath();
         ctx.moveTo(x - 6, 0);
         ctx.lineTo(x + 6, 0);

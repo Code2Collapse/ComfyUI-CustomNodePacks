@@ -1,4 +1,4 @@
-// c2c_legacy_search_visibility.js — keeps the stock LiteGraph add-node
+﻿// c2c_legacy_search_visibility.js — keeps the stock LiteGraph add-node
 // dialog visible. Companion to c2c_workflow_find.js.
 // ---------------------------------------------------------------------
 // Why:

@@ -38,12 +38,13 @@ function injectStyle() {
     s.textContent = `
 #${ROOT_ID} {
     position: fixed; top: 18%; left: 50%; transform: translateX(-50%);
-    z-index: 100001; width: min(640px, 94vw);
-    background: rgba(20, 22, 28, 0.97);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,0.65);
+    z-index: var(--c2c-z-palette); width: min(640px, 94vw);
+    background: color-mix(in srgb, var(--c2c-bg2) 97%, transparent);
+    border: 1px solid var(--c2c-border);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px color-mix(in srgb, var(--c2c-shadowBase) 65%, transparent);
     font: 13px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-    color: #e8ecf1; backdrop-filter: blur(14px);
+    color: var(--c2c-fg); backdrop-filter: blur(14px);
     padding: 10px 10px 8px;
     display: none;
 }
@@ -52,26 +53,28 @@ function injectStyle() {
     display:flex; align-items:center; gap:10px; padding: 0 4px 6px;
 }
 #${ROOT_ID} .c2c-cmdpal-title {
-    font-weight: 600; color: #b3d1ff; letter-spacing: .2px;
+    font-weight: 600; color: var(--c2c-mauve); letter-spacing: .2px;
 }
 #${ROOT_ID} .c2c-cmdpal-hint {
-    margin-left: auto; color:#7d8896; font-size: 11px;
+    margin-left: auto; color: var(--c2c-sub); font-size: 11px;
 }
 #${ROOT_ID} input.c2c-cmdpal-input {
     width: 100%; box-sizing: border-box;
-    background: rgba(0,0,0,0.40); color:#fff;
-    border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;
+    background: color-mix(in srgb, var(--c2c-shadowBase) 40%, transparent);
+    color: var(--c2c-fg);
+    border: 1px solid var(--c2c-border); border-radius: 8px;
     padding: 11px 12px; font: 14px ui-monospace, "Cascadia Code", monospace;
     outline: none;
 }
 #${ROOT_ID} input.c2c-cmdpal-input:focus {
-    border-color: #5b8def; box-shadow: 0 0 0 2px rgba(91,141,239,0.20);
+    border-color: var(--c2c-mauve);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c2c-mauve) 30%, transparent);
 }
 #${ROOT_ID} .c2c-cmdpal-list {
     margin-top: 7px; max-height: 460px; overflow-y: auto;
 }
 #${ROOT_ID} .c2c-cmdpal-cat {
-    color:#9fb6d1; font-size:10.5px; text-transform:uppercase;
+    color: var(--c2c-sub); font-size:10.5px; text-transform:uppercase;
     letter-spacing:1px; padding: 6px 6px 2px;
 }
 #${ROOT_ID} .c2c-cmdpal-row {
@@ -79,23 +82,28 @@ function injectStyle() {
     gap: 8px; align-items:center; padding: 7px 9px;
     border-radius: 7px; cursor: pointer; user-select:none;
 }
-#${ROOT_ID} .c2c-cmdpal-row.sel { background: rgba(91,141,239,0.22); }
-#${ROOT_ID} .c2c-cmdpal-row:hover { background: rgba(255,255,255,0.05); }
-#${ROOT_ID} .c2c-cmdpal-row .icn {
-    color:#9ec1ff; text-align:center; font-size: 14px;
+#${ROOT_ID} .c2c-cmdpal-row.sel {
+    background: color-mix(in srgb, var(--c2c-mauve) 28%, transparent);
 }
-#${ROOT_ID} .c2c-cmdpal-row .ttl { color:#fff; }
-#${ROOT_ID} .c2c-cmdpal-row .sub { color:#9fa9b8; font-size: 11.5px; }
+#${ROOT_ID} .c2c-cmdpal-row:hover {
+    background: color-mix(in srgb, var(--c2c-highlightBase) 5%, transparent);
+}
+#${ROOT_ID} .c2c-cmdpal-row .icn {
+    color: var(--c2c-mauve); text-align:center; font-size: 14px;
+}
+#${ROOT_ID} .c2c-cmdpal-row .ttl { color: var(--c2c-fg); }
+#${ROOT_ID} .c2c-cmdpal-row .sub { color: var(--c2c-sub); font-size: 11.5px; }
 #${ROOT_ID} .c2c-cmdpal-row mark {
-    background: rgba(255,209,102,0.30); color:#fff;
+    background: color-mix(in srgb, var(--c2c-yellow) 35%, transparent);
+    color: var(--c2c-fg);
     border-radius: 2px; padding: 0 1px;
 }
 #${ROOT_ID} .c2c-cmdpal-empty {
-    color:#7d8896; text-align:center; padding: 18px 0 12px;
+    color: var(--c2c-sub); text-align:center; padding: 18px 0 12px;
 }
 .c2c-cmdpal-backdrop {
-    position: fixed; inset: 0; z-index: 100000;
-    background: rgba(0,0,0,0.30);
+    position: fixed; inset: 0; z-index: calc(var(--c2c-z-palette) - 1);
+    background: color-mix(in srgb, var(--c2c-shadowBase) 30%, transparent);
     display: none;
 }
 .c2c-cmdpal-backdrop.is-open { display: block; }
@@ -121,7 +129,7 @@ function fuzzy(needle, haystack) {
     const hits = [];
     while (i < n.length && j < h.length) {
         if (n[i] === h[j]) {
-            if (last === j - 1) {
+            if (hits.length && last === j - 1) {
                 runs++; hits[hits.length - 1][1] = j + 1;
             } else {
                 runs = 1; hits.push([j, j + 1]);

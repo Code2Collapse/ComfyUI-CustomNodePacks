@@ -24,6 +24,8 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { C } from './_c2c_theme.js';
 
 const STYLE_ID = "c2c-workflow-find-style";
 const ROOT_ID  = "c2c-workflow-find-root";
@@ -37,33 +39,33 @@ function injectStyle() {
     s.textContent = `
 #${ROOT_ID} {
     position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
-    z-index: 100000; width: min(520px, 92vw);
+    z-index: var(--c2c-z-palette, 100001); width: min(520px, 92vw);
     background: rgba(24, 26, 30, 0.97);
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.55);
     font: 12.5px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-    color: #e8ecf1; backdrop-filter: blur(12px);
+    color: var(--c2c-fgAltLight); backdrop-filter: blur(12px);
     padding: 8px 8px 6px;
 }
 #${ROOT_ID} .c2c-find-header {
     display:flex; align-items:center; gap:8px; padding: 0 4px 6px;
 }
 #${ROOT_ID} .c2c-find-title {
-    font-weight: 600; color:#9ec1ff; letter-spacing:.2px;
+    font-weight: 600; color:var(--c2c-accentLink); letter-spacing:.2px;
     flex:0 0 auto;
 }
 #${ROOT_ID} .c2c-find-hint {
-    color:#7d8896; font-size: 11px; margin-left:auto;
+    color:var(--c2c-accentMuted); font-size: 11px; margin-left:auto;
 }
 #${ROOT_ID} input.c2c-find-input {
     width: 100%; box-sizing: border-box;
-    background: rgba(0,0,0,0.35); color:#fff;
+    background: rgba(0,0,0,0.35); color:var(--c2c-white);
     border: 1px solid rgba(255,255,255,0.10); border-radius: 7px;
     padding: 9px 10px; font: 13px ui-monospace, "Cascadia Code", monospace;
     outline: none;
 }
 #${ROOT_ID} input.c2c-find-input:focus {
-    border-color: #5b8def; box-shadow: 0 0 0 2px rgba(91,141,239,0.18);
+    border-color: var(--c2c-accentSoft2); box-shadow: 0 0 0 2px rgba(91,141,239,0.18);
 }
 #${ROOT_ID} .c2c-find-results {
     margin-top: 6px; max-height: 320px; overflow-y: auto;
@@ -75,24 +77,24 @@ function injectStyle() {
 }
 #${ROOT_ID} .c2c-find-row.sel { background: rgba(91,141,239,0.20); }
 #${ROOT_ID} .c2c-find-row:hover { background: rgba(255,255,255,0.06); }
-#${ROOT_ID} .c2c-find-row .ttl { color:#fff; font-weight:500; }
+#${ROOT_ID} .c2c-find-row .ttl { color:var(--c2c-white); font-weight:500; }
 #${ROOT_ID} .c2c-find-row .typ {
-    color:#9ec1ff; font: 11px ui-monospace, monospace; opacity:.85;
+    color:var(--c2c-accentLink); font: 11px ui-monospace, monospace; opacity:.85;
 }
 #${ROOT_ID} .c2c-find-row .meta {
-    color:#7d8896; font-size: 10.5px; margin-left:auto;
+    color:var(--c2c-accentMuted); font-size: 10.5px; margin-left:auto;
 }
 #${ROOT_ID} .c2c-find-row mark {
-    background: rgba(255, 209, 102, 0.32); color:#fff;
+    background: rgba(255, 209, 102, 0.32); color:var(--c2c-white);
     border-radius: 2px; padding: 0 1px;
 }
 #${ROOT_ID} .c2c-find-empty {
-    color:#7d8896; text-align:center; padding: 14px 0 10px;
+    color:var(--c2c-accentMuted); text-align:center; padding: 14px 0 10px;
 }
 #${ROOT_ID} .c2c-find-addbtn {
     display:block; width: 100%; margin-top:4px;
     padding: 8px; border-radius: 7px;
-    background: rgba(91,141,239,0.16); color:#cfe0ff;
+    background: rgba(91,141,239,0.16); color:var(--c2c-accentLight);
     border:1px solid rgba(91,141,239,0.35); cursor:pointer;
     font: 12px ui-sans-serif; text-align:center;
 }
@@ -240,7 +242,7 @@ function focusNode(node) {
                     ctx.save();
                     ctx.strokeStyle = `rgba(91,141,239,${a.toFixed(3)})`;
                     ctx.lineWidth = 4 + 6 * t;
-                    ctx.shadowColor = "#5b8def";
+                    ctx.shadowColor = C.accentSoft2;
                     ctx.shadowBlur = 16;
                     ctx.strokeRect(-2, -2, node.size[0] + 4, node.size[1] + 4);
                     ctx.restore();
@@ -290,9 +292,12 @@ function ensureRoot() {
         // c2c_legacy_search_visibility.js). NEVER dispatch a Ctrl+F
         // key event here — that would loop straight back to us.
         try {
-            const cmd = app.extensionManager?.command?.execute;
-            if (typeof cmd === "function") {
-                cmd("Comfy.NewSearch");
+            const mgr = app.extensionManager?.command;
+            if (mgr && typeof mgr.execute === "function") {
+                // Workspace.SearchBox.Toggle is the canonical add-node
+                // palette command in modern ComfyUI. (Comfy.NewSearch
+                // never shipped under that id.)
+                mgr.execute("Workspace.SearchBox.Toggle");
                 return;
             }
         } catch { /* fall through */ }
@@ -434,7 +439,7 @@ app.registerExtension({
                 defaultValue: true,
                 category: ["c2c", "Overlays", "Workflow Find"],
             });
-        } catch (e) { /* settings API not ready */ }
+        } catch (e) { __c2cReport("c2c_workflow_find", e); }
         window.addEventListener("keydown", onGlobalKey, true);
         console.log("[C2C.WorkflowFind] Ctrl+F now searches nodes in workflow.");
     },

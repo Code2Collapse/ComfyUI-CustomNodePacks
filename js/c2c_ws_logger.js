@@ -73,13 +73,13 @@ let _selected = new Set();
 
 function renderTabBody(el) {
     _root = el;
-    el.style.cssText = "display:flex; flex-direction:column; height:100%; font:12px ui-sans-serif, system-ui, sans-serif; color:#e5ecf5;";
+    el.style.cssText = "display:flex; flex-direction:column; height:100%; font:12px ui-sans-serif, system-ui, sans-serif; color:var(--c2c-accentText);";
 
     const toolbar = document.createElement("div");
     toolbar.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; padding:8px; border-bottom:1px solid rgba(255,255,255,0.06); align-items:center;";
 
     const sel = document.createElement("select");
-    sel.style.cssText = "background:rgba(255,255,255,0.05); color:#e5ecf5; border:1px solid rgba(255,255,255,0.1); padding:3px 6px; border-radius:4px;";
+    sel.style.cssText = "background:rgba(255,255,255,0.05); color:var(--c2c-accentText); border:1px solid rgba(255,255,255,0.1); padding:3px 6px; border-radius:4px;";
     for (const v of ["all", ...EVENT_TYPES]) {
         const o = document.createElement("option");
         o.value = v; o.textContent = v; sel.appendChild(o);
@@ -90,7 +90,7 @@ function renderTabBody(el) {
 
     const search = document.createElement("input");
     search.type = "text"; search.placeholder = "search…";
-    search.style.cssText = "flex:1; min-width:80px; background:rgba(255,255,255,0.05); color:#e5ecf5; border:1px solid rgba(255,255,255,0.1); padding:3px 6px; border-radius:4px;";
+    search.style.cssText = "flex:1; min-width:80px; background:rgba(255,255,255,0.05); color:var(--c2c-accentText); border:1px solid rgba(255,255,255,0.1); padding:3px 6px; border-radius:4px;";
     search.addEventListener("input", () => { _searchText = search.value; renderRows(); });
     toolbar.appendChild(search);
 
@@ -117,7 +117,7 @@ function renderTabBody(el) {
 
     const status = document.createElement("div");
     status.id = "c2c-ws-log-status";
-    status.style.cssText = "padding:4px 8px; border-top:1px solid rgba(255,255,255,0.06); color:#7a8492; font-size:10px;";
+    status.style.cssText = "padding:4px 8px; border-top:1px solid rgba(255,255,255,0.06); color:var(--c2c-accentMuted2); font-size:10px;";
     el.appendChild(status);
 
     renderRows();
@@ -152,7 +152,7 @@ function renderRows() {
         row.style.cssText = `padding:3px 8px; cursor:pointer; border-left:3px solid ${color}; ${selected ? "background:rgba(91,141,239,0.18);" : ""}`;
         const time = new Date(e.t).toISOString().slice(11, 23);
         const detail = summarize(e.detail);
-        row.innerHTML = `<span style="color:#7a8492;">${time}</span> <span style="color:${color}; font-weight:600;">${e.type}</span> <span style="color:#cfd6e0;">${escapeHtml(detail)}</span>`;
+        row.innerHTML = `<span style="color:var(--c2c-accentMuted2);">${time}</span> <span style="color:${color}; font-weight:600;">${e.type}</span> <span style="color:var(--c2c-accentLight2);">${escapeHtml(detail)}</span>`;
         row.addEventListener("click", (ev) => {
             if (ev.shiftKey) {
                 if (_selected.has(e.seq)) _selected.delete(e.seq);
@@ -170,16 +170,16 @@ function renderRows() {
 
 function colorForType(t) {
     return {
-        status: "#7a8492",
-        executing: "#5b8def",
-        progress: "#5bd3ef",
-        executed: "#3aa66a",
-        execution_start: "#a06fd0",
-        execution_error: "#e25c5c",
-        execution_cached: "#a89060",
-        execution_interrupted: "#d4a04a",
-        b_preview: "#888",
-    }[t] || "#cfd6e0";
+        status: "var(--c2c-accentMuted2)",
+        executing: "var(--c2c-accentSoft2)",
+        progress: "var(--c2c-cyanMid)",
+        executed: "var(--c2c-okMute)",
+        execution_start: "var(--c2c-violetMid)",
+        execution_error: "var(--c2c-dangerMid)",
+        execution_cached: "var(--c2c-amberDim)",
+        execution_interrupted: "var(--c2c-amberMid)",
+        b_preview: "var(--c2c-gray400)",
+    }[t] || "var(--c2c-accentLight2)";
 }
 
 function summarize(d) {
@@ -195,12 +195,12 @@ function summarize(d) {
 
 function showDetail(entry) {
     const root = document.createElement("div");
-    root.style.cssText = "position:fixed; inset:0; z-index:13000; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center;";
+    root.style.cssText = "position:fixed; inset:0; z-index: var(--c2c-z-modal, 10000); background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center;";
     const dlg = document.createElement("div");
-    dlg.style.cssText = "width:min(720px,90vw); max-height:80vh; overflow:auto; background:#141821; color:#e5ecf5; padding:14px 18px; border:1px solid rgba(255,255,255,0.14); border-radius:8px; font:12px ui-sans-serif;";
-    dlg.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><b>${entry.type}</b> <span style="color:#7a8492;">seq ${entry.seq} · ${new Date(entry.t).toISOString()}</span></div>`;
+    dlg.style.cssText = "width:min(720px,90vw); max-height:80vh; overflow:auto; background:var(--c2c-panelDeep3); color:var(--c2c-accentText); padding:14px 18px; border:1px solid rgba(255,255,255,0.14); border-radius:8px; font:12px ui-sans-serif;";
+    dlg.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:8px;"><b>${entry.type}</b> <span style="color:var(--c2c-accentMuted2);">seq ${entry.seq} · ${new Date(entry.t).toISOString()}</span></div>`;
     const pre = document.createElement("pre");
-    pre.style.cssText = "background:#0f1218; padding:10px; border-radius:6px; overflow:auto; max-height:60vh; font:11px ui-monospace, monospace;";
+    pre.style.cssText = "background:var(--c2c-panelDeep4); padding:10px; border-radius:6px; overflow:auto; max-height:60vh; font:11px ui-monospace, monospace;";
     pre.textContent = JSON.stringify(entry.detail, null, 2);
     dlg.appendChild(pre);
     root.appendChild(dlg);
@@ -214,7 +214,7 @@ function showDetail(entry) {
 function mkBtn(label, onClick) {
     const b = document.createElement("button");
     b.textContent = label;
-    b.style.cssText = "background:rgba(255,255,255,0.06); color:#cfd6e0; border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:2px 8px; cursor:pointer;";
+    b.style.cssText = "background:rgba(255,255,255,0.06); color:var(--c2c-accentLight2); border:1px solid rgba(255,255,255,0.1); border-radius:4px; padding:2px 8px; cursor:pointer;";
     b.addEventListener("click", onClick);
     return b;
 }

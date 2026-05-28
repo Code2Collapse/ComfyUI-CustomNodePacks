@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { findNodeAnywhere } from "./_subgraph_walk.js";
+import { C } from './_c2c_theme.js';
 
 /**
  * Parameter Memory v2 — Compact parameter tracking + named presets.
@@ -28,8 +29,8 @@ const PRESET_STORAGE_KEY     = "MEC.ParamPresets";
 
 // ── Tooltip styling ──────────────────────────────────────────────────
 const TT = {
-  bg: "#1e1e2edd", fg: "#cdd6f4", accent: "#89b4fa", warn: "#f9e2af",
-  dim: "#6c7086", radius: 6, pad: 8, maxW: 280,
+  bg: "var(--c2c-bg)", fg: "var(--c2c-fg)", accent: "var(--c2c-blue)", warn: "var(--c2c-yellow)",
+  dim: "var(--c2c-overlay0)", radius: 6, pad: 8, maxW: 280,
 };
 
 let _runCounter = 0;
@@ -210,7 +211,7 @@ function _drawTooltip(ctx, lines, x, y) {
   ctx.save();
   ctx.fillStyle = TT.bg;
   _rr(ctx, tx, ty, w, h, TT.radius); ctx.fill();
-  ctx.strokeStyle = "#45475a"; ctx.lineWidth = 1;
+  ctx.strokeStyle = C.surface1; ctx.lineWidth = 1;
   _rr(ctx, tx, ty, w, h, TT.radius); ctx.stroke();
 
   let ly = ty + TT.pad + fs;
@@ -457,13 +458,13 @@ function _showHistoryDialog(node) {
   const cur   = _captureValues(node);
   const S     = _esc;
 
-  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:#1e1e2e;color:#cdd6f4;">`;
+  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:var(--c2c-bg);color:var(--c2c-fg);">`;
 
   // ── Widget values table ──
   html += `<div style="margin-bottom:12px;">`;
-  html += `<div style="color:#89b4fa;font-weight:bold;margin-bottom:6px;">Widget Values</div>`;
+  html += `<div style="color:var(--c2c-blue);font-weight:bold;margin-bottom:6px;">Widget Values</div>`;
   html += `<table style="width:100%;border-collapse:collapse;font-size:11px;">`;
-  html += `<tr style="color:#6c7086;border-bottom:1px solid #313244;">
+  html += `<tr style="color:var(--c2c-overlay0);border-bottom:1px solid var(--c2c-surface0);">
     <td style="padding:3px 6px;">Widget</td>
     <td style="padding:3px 6px;">Current</td>
     <td style="padding:3px 6px;">Default</td>
@@ -473,13 +474,13 @@ function _showHistoryDialog(node) {
     const def = mem.defaults[k];
     const changed = def !== undefined && def !== v;
     const icon = changed
-      ? `<span style="color:#f9e2af;">~</span>`
-      : `<span style="color:#a6e3a1;">\u2022</span>`;
-    const style = changed ? "color:#f9e2af;" : "";
-    html += `<tr style="border-bottom:1px solid #1e1e2e88;">
-      <td style="padding:2px 6px;color:#cba6f7;">${S(k)}</td>
+      ? `<span style="color:var(--c2c-yellow);">~</span>`
+      : `<span style="color:var(--c2c-okSoft);">\u2022</span>`;
+    const style = changed ? "color:var(--c2c-yellow);" : "";
+    html += `<tr style="border-bottom:1px solid var(--c2c-bg);">
+      <td style="padding:2px 6px;color:var(--c2c-mauve);">${S(k)}</td>
       <td style="padding:2px 6px;${style}">${S(_fv(v))}</td>
-      <td style="padding:2px 6px;color:#6c7086;">${S(_fv(def))}</td>
+      <td style="padding:2px 6px;color:var(--c2c-overlay0);">${S(_fv(def))}</td>
       <td style="padding:2px 6px;">${icon}</td></tr>`;
   }
   html += `</table></div>`;
@@ -488,15 +489,15 @@ function _showHistoryDialog(node) {
   const changedWidgets = Object.keys(mem.changes).filter(k => mem.changes[k].length > 0);
   if (changedWidgets.length > 0) {
     html += `<div style="margin-bottom:12px;">`;
-    html += `<div style="color:#89b4fa;font-weight:bold;margin-bottom:6px;">Change History</div>`;
+    html += `<div style="color:var(--c2c-blue);font-weight:bold;margin-bottom:6px;">Change History</div>`;
     for (const wn of changedWidgets) {
       const ring = mem.changes[wn];
       html += `<div style="margin-bottom:6px;">`;
-      html += `<span style="color:#cba6f7;">${S(wn)}</span> <span style="color:#6c7086;">(${ring.length})</span><br/>`;
+      html += `<span style="color:var(--c2c-mauve);">${S(wn)}</span> <span style="color:var(--c2c-overlay0);">(${ring.length})</span><br/>`;
       for (const [ep, from, to] of ring.slice(-5))
-        html += `<span style="color:#6c7086;margin-left:8px;">${_ts(ep)}</span> ${S(_fv(from))} <span style="color:#f9e2af;">\u2192</span> ${S(_fv(to))}<br/>`;
+        html += `<span style="color:var(--c2c-overlay0);margin-left:8px;">${_ts(ep)}</span> ${S(_fv(from))} <span style="color:var(--c2c-yellow);">\u2192</span> ${S(_fv(to))}<br/>`;
       if (ring.length > 5)
-        html += `<span style="color:#6c7086;margin-left:8px;">\u2026 +${ring.length - 5} more</span><br/>`;
+        html += `<span style="color:var(--c2c-overlay0);margin-left:8px;">\u2026 +${ring.length - 5} more</span><br/>`;
       html += `</div>`;
     }
     html += `</div>`;
@@ -505,15 +506,15 @@ function _showHistoryDialog(node) {
   // ── Diff snapshots ──
   if (mem.diffs.length > 0) {
     html += `<div>`;
-    html += `<div style="color:#89b4fa;font-weight:bold;margin-bottom:6px;">Run Snapshots <span style="color:#6c7086;font-weight:normal;">(diffs from defaults)</span></div>`;
+    html += `<div style="color:var(--c2c-blue);font-weight:bold;margin-bottom:6px;">Run Snapshots <span style="color:var(--c2c-overlay0);font-weight:normal;">(diffs from defaults)</span></div>`;
     for (const [rid, ep, diff] of mem.diffs.slice(-6)) {
       const keys = Object.keys(diff);
       if (keys.length === 0) {
-        html += `<span style="color:#6c7086;">Run #${rid} (${_fullTs(ep)}) \u2014 all defaults</span><br/>`;
+        html += `<span style="color:var(--c2c-overlay0);">Run #${rid} (${_fullTs(ep)}) \u2014 all defaults</span><br/>`;
       } else {
-        html += `<span style="color:#a6adc8;">Run #${rid}</span> <span style="color:#6c7086;">${_fullTs(ep)}</span><br/>`;
+        html += `<span style="color:var(--c2c-sub);">Run #${rid}</span> <span style="color:var(--c2c-overlay0);">${_fullTs(ep)}</span><br/>`;
         for (const k of keys)
-          html += `<span style="margin-left:8px;color:#cba6f7;">${S(k)}</span>: <span style="color:#f9e2af;">${S(_fv(diff[k]))}</span><br/>`;
+          html += `<span style="margin-left:8px;color:var(--c2c-mauve);">${S(k)}</span>: <span style="color:var(--c2c-yellow);">${S(_fv(diff[k]))}</span><br/>`;
       }
     }
     html += `</div>`;
@@ -534,7 +535,7 @@ function _showDiffDialog(node) {
 
   if (mem.diffs.length < 2) {
     _showModal(
-      `<div style="font-family:monospace;padding:20px;color:#a6adc8;background:#1e1e2e;">Run the workflow at least twice to compare.</div>`,
+      `<div style="font-family:monospace;padding:20px;color:var(--c2c-sub);background:var(--c2c-bg);">Run the workflow at least twice to compare.</div>`,
       "Run Diff"
     );
     return;
@@ -543,14 +544,14 @@ function _showDiffDialog(node) {
   const [ridA, , diffA] = mem.diffs[mem.diffs.length - 2];
   const [ridB, , diffB] = mem.diffs[mem.diffs.length - 1];
 
-  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:#1e1e2e;color:#cdd6f4;">`;
-  html += `<div style="color:#6c7086;margin-bottom:8px;">Run #${ridA} \u2192 Run #${ridB}</div>`;
+  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:var(--c2c-bg);color:var(--c2c-fg);">`;
+  html += `<div style="color:var(--c2c-overlay0);margin-bottom:8px;">Run #${ridA} \u2192 Run #${ridB}</div>`;
 
   const allKeys = new Set([...Object.keys(diffA), ...Object.keys(diffB)]);
   let hasChanges = false;
 
   html += `<table style="width:100%;border-collapse:collapse;font-size:11px;">`;
-  html += `<tr style="color:#6c7086;border-bottom:1px solid #313244;">
+  html += `<tr style="color:var(--c2c-overlay0);border-bottom:1px solid var(--c2c-surface0);">
     <td style="padding:3px 6px;">Widget</td>
     <td style="padding:3px 6px;">Run #${ridA}</td>
     <td style="padding:3px 6px;">Run #${ridB}</td></tr>`;
@@ -560,16 +561,16 @@ function _showDiffDialog(node) {
     const vb = diffB[k] ?? mem.defaults[k];
     if (va !== vb) {
       hasChanges = true;
-      html += `<tr style="border-bottom:1px solid #1e1e2e88;">
-        <td style="padding:2px 6px;color:#cba6f7;">${S(k)}</td>
-        <td style="padding:2px 6px;color:#f38ba8;">${S(_fv(va))}</td>
-        <td style="padding:2px 6px;color:#a6e3a1;">${S(_fv(vb))}</td></tr>`;
+      html += `<tr style="border-bottom:1px solid var(--c2c-bg);">
+        <td style="padding:2px 6px;color:var(--c2c-mauve);">${S(k)}</td>
+        <td style="padding:2px 6px;color:var(--c2c-red);">${S(_fv(va))}</td>
+        <td style="padding:2px 6px;color:var(--c2c-okSoft);">${S(_fv(vb))}</td></tr>`;
     }
   }
   html += `</table>`;
 
   if (!hasChanges)
-    html += `<div style="color:#a6adc8;margin-top:8px;">No parameters changed between these runs.</div>`;
+    html += `<div style="color:var(--c2c-sub);margin-top:8px;">No parameters changed between these runs.</div>`;
 
   html += `</div>`;
   _showModal(html, `${S(title)} \u2014 Run Diff`);
@@ -607,7 +608,7 @@ function _applyPreset(node, name) {
   if (applied > 0) {
     node.setDirtyCanvas?.(true, true);
     const orig = node.bgcolor;
-    node.bgcolor = "#313244";
+    node.bgcolor = "var(--c2c-surface0)";
     setTimeout(() => { node.bgcolor = orig; node.setDirtyCanvas?.(true, true); }, 300);
   }
 }
@@ -618,19 +619,19 @@ function _managePresetsDialog(node) {
   const S = _esc;
   const names = Object.keys(mem.presets);
 
-  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:#1e1e2e;color:#cdd6f4;">`;
+  let html = `<div style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12px;padding:14px;background:var(--c2c-bg);color:var(--c2c-fg);">`;
 
   if (names.length === 0) {
-    html += `<div style="color:#a6adc8;">No presets saved for this node type.</div>`;
+    html += `<div style="color:var(--c2c-sub);">No presets saved for this node type.</div>`;
   } else {
     for (const pname of names) {
       const preset = mem.presets[pname];
       const n = Object.keys(preset).length;
-      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #313244;">`;
-      html += `<div><span style="color:#89b4fa;font-weight:bold;">${S(pname)}</span> <span style="color:#6c7086;">(${n} params)</span></div>`;
-      html += `<button data-preset="${S(pname)}" class="mec-preset-del" style="background:#f38ba8;color:#1e1e2e;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Delete</button>`;
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--c2c-surface0);">`;
+      html += `<div><span style="color:var(--c2c-blue);font-weight:bold;">${S(pname)}</span> <span style="color:var(--c2c-overlay0);">(${n} params)</span></div>`;
+      html += `<button data-preset="${S(pname)}" class="mec-preset-del" style="background:var(--c2c-red);color:var(--c2c-bg);border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Delete</button>`;
       html += `</div>`;
-      html += `<div style="margin:4px 0 8px 12px;color:#6c7086;font-size:10px;">`;
+      html += `<div style="margin:4px 0 8px 12px;color:var(--c2c-overlay0);font-size:10px;">`;
       const entries = Object.entries(preset).slice(0, 8);
       html += entries.map(([k, v]) => `${S(k)}=${S(_fv(v))}`).join(", ");
       if (n > 8) html += ` \u2026 +${n - 8}`;
@@ -680,16 +681,16 @@ function _showModal(html, title) {
 
   const overlay = document.createElement("div");
   overlay.id = "mec-param-modal";
-  overlay.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;";
+  overlay.style.cssText = "position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);z-index: var(--c2c-z-popover, 9000);display:flex;align-items:center;justify-content:center;";
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
 
   const dlg = document.createElement("div");
-  dlg.style.cssText = "background:#181825;border:1px solid #313244;border-radius:12px;min-width:380px;max-width:680px;max-height:80vh;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+  dlg.style.cssText = "background:var(--c2c-bg2);border:1px solid var(--c2c-surface0);border-radius:12px;min-width:380px;max-width:680px;max-height:80vh;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
 
   const bar = document.createElement("div");
-  bar.style.cssText = "padding:10px 16px;background:#11111b;border-bottom:1px solid #313244;display:flex;justify-content:space-between;align-items:center;";
-  bar.innerHTML = `<span style="color:#89b4fa;font-weight:bold;font-size:13px;">${_esc(title)}</span>
-    <button id="mec-modal-x" style="background:none;border:none;color:#6c7086;cursor:pointer;font-size:16px;padding:2px 6px;">\u2715</button>`;
+  bar.style.cssText = "padding:10px 16px;background:var(--c2c-bg3);border-bottom:1px solid var(--c2c-surface0);display:flex;justify-content:space-between;align-items:center;";
+  bar.innerHTML = `<span style="color:var(--c2c-blue);font-weight:bold;font-size:13px;">${_esc(title)}</span>
+    <button id="mec-modal-x" style="background:none;border:none;color:var(--c2c-overlay0);cursor:pointer;font-size:16px;padding:2px 6px;">\u2715</button>`;
   dlg.appendChild(bar);
 
   const body = document.createElement("div");
@@ -710,5 +711,5 @@ function _showModal(html, title) {
 function _esc(s) {
   if (typeof s !== "string") s = String(s ?? "");
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+          .replace(/"/g, "&quot;").replace(/'/g, "&var(--c2c-blueLink);");
 }

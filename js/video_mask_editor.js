@@ -10,21 +10,53 @@
 
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { C } from './_c2c_theme.js';
 
 const NODE_NAME = "VideoMaskEditorMEC";
 
-const C = {
-    bg:      "#0e0e16",
-    panel:   "#181825",
-    border:  "#313244",
-    text:    "#cdd6f4",
-    sub:     "#7f849c",
-    accent:  "#a6e3a1",
-    accent2: "#89b4fa",
-    warn:    "#fab387",
-    danger:  "#f38ba8",
-    onion:   "#f9e2af",
+// ─── Theme palette ─────────────────────────────────────────────────
+// Reads live CSS custom properties so Canvas2D + cssText interpolations
+// stay in sync with the active C2C theme. Hex fallbacks keep the editor
+// usable if tokens are unset (e.g. theme module hasn't booted yet).
+const _C_FALLBACK = {
+    bg:      "var(--c2c-scrimDark)",
+    panel:   "var(--c2c-bg2)",
+    border:  "var(--c2c-surface0)",
+    text:    "var(--c2c-fg)",
+    sub:     "var(--c2c-overlay1)",
+    accent:  "var(--c2c-okSoft)",
+    accent2: "var(--c2c-blue)",
+    warn:    "var(--c2c-peach)",
+    danger:  "var(--c2c-red)",
+    onion:   "var(--c2c-yellow)",
 };
+const _C_TOKEN = {
+    bg:      "--c2c-bg",
+    panel:   "--c2c-surface0",
+    border:  "--c2c-surface2",
+    text:    "--c2c-fg",
+    sub:     "--c2c-sub",
+    accent:  "--c2c-green",
+    accent2: "--c2c-blue",
+    warn:    "--c2c-yellow",
+    danger:  "--c2c-red",
+    onion:   "--c2c-yellow",
+};
+const C = new Proxy(_C_FALLBACK, {
+    get(target, key) {
+        const tok = _C_TOKEN[key];
+        if (tok) {
+            try {
+                const v = getComputedStyle(document.documentElement).getPropertyValue(tok).trim();
+                if (v) return v;
+            } catch (err) {
+                __c2cReport?.("video_mask_editor.palette", err, { token: tok, severity: "info" });
+            }
+        }
+        return target[key];
+    },
+});
 
 const HISTORY_LIMIT = 60;
 
@@ -135,7 +167,7 @@ class VMEEditor {
             const r = await fetch(`/mec/video_mask_editor/state?session=${encodeURIComponent(this.sessionId)}`);
             const j = await r.json();
             for (const f of j.keyframes || []) await this._fetchExistingKeyframe(f);
-        } catch (e) { /* fine */ }
+        } catch (e) { __c2cReport("video_mask_editor", e); }
         this._switchFrame(0, { fresh: true });
         return true;
     }
@@ -162,7 +194,7 @@ class VMEEditor {
                 id.data[i + 3] = a;
             }
             this.keyframes.set(f, id);
-        } catch (e) { /* ignore */ }
+        } catch (e) { __c2cReport("video_mask_editor", e); }
     }
 
     _hexToRgb(hex) {
@@ -335,7 +367,7 @@ class VMEEditor {
         const off = document.createElement("canvas");
         off.width = W; off.height = H;
         const oc = off.getContext("2d");
-        oc.fillStyle = "#ffffff";
+        oc.fillStyle = C.white;
         oc.beginPath();
         oc.moveTo(this.lasso[0].x, this.lasso[0].y);
         for (let i = 1; i < this.lasso.length; i++) oc.lineTo(this.lasso[i].x, this.lasso[i].y);
@@ -395,9 +427,9 @@ class VMEEditor {
         if (frame?.complete) {
             ctx.imageSmoothingEnabled = true;
             try { ctx.drawImage(frame, 0, 0, this.frameW, this.frameH); }
-            catch (_) {}
+            catch (__c2cErr) { __c2cReport("video_mask_editor", __c2cErr); }
         } else {
-            ctx.fillStyle = "#11111b";
+            ctx.fillStyle = C.bg3;
             ctx.fillRect(0, 0, this.frameW, this.frameH);
             ctx.fillStyle = C.sub;
             ctx.font = "14px Inter, system-ui";
@@ -498,7 +530,7 @@ class VMEEditor {
                 cursor:pointer;font-size:11px;border:1px solid transparent;
                 border-color:${f === this.curFrame ? C.accent + "55" : "transparent"};
             `;
-            row.onmouseenter = () => { if (f !== this.curFrame) row.style.background = "#222234"; };
+            row.onmouseenter = () => { if (f !== this.curFrame) row.style.background = "var(--c2c-panelTintAlt)"; };
             row.onmouseleave = () => { row.style.background = f === this.curFrame ? C.accent + "22" : "transparent"; };
             const dot = document.createElement("span");
             dot.textContent = "📌";
@@ -546,14 +578,14 @@ class VMEEditor {
         const H = Math.max(1, Math.floor(r.height));
         if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
         const ctx = c.getContext("2d");
-        ctx.fillStyle = "#11111b";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = C.border;
         ctx.fillRect(8, H / 2 - 2, W - 16, 4);
         const n = Math.max(1, this.frameCount);
         // Frame ticks.
         if (n <= 200) {
-            ctx.fillStyle = "#45475a";
+            ctx.fillStyle = C.surface1;
             for (let i = 0; i < n; i++) {
                 const x = 8 + (W - 16) * (i / Math.max(1, n - 1));
                 ctx.fillRect(x - 0.5, H / 2 - 4, 1, 8);
@@ -653,7 +685,8 @@ function openModal(node) {
 
     const overlay = document.createElement("div");
     overlay.style.cssText = `
-        position:fixed;inset:0;z-index:10000;background:${C.bg}f0;
+        position:fixed;inset:0;z-index:var(--c2c-z-modal, 10000);
+        background:color-mix(in srgb, ${C.bg} 94%, transparent);
         display:flex;flex-direction:column;color:${C.text};
         font-family:Inter,system-ui,sans-serif;
     `;
@@ -663,7 +696,7 @@ function openModal(node) {
     const top = document.createElement("div");
     top.style.cssText = `
         display:flex;align-items:center;gap:8px;padding:8px 14px;
-        background:linear-gradient(${C.panel},#101018);
+        background:linear-gradient(${C.panel},var(--c2c-scrimDark5));
         border-bottom:1px solid ${C.border};flex:0 0 auto;flex-wrap:wrap;
     `;
     overlay.appendChild(top);
@@ -689,7 +722,7 @@ function openModal(node) {
             display:inline-flex;align-items:center;justify-content:center;gap:6px;
             transition:background .12s,border-color .12s,transform .05s;
         `;
-        b.onmouseenter = () => { b.style.background = opts.hover || "#2a2a3e"; };
+        b.onmouseenter = () => { b.style.background = opts.hover || "var(--c2c-panelBgAlt2)"; };
         b.onmouseleave = () => { b.style.background = opts.bg || C.panel; };
         b.onmousedown = () => { b.style.transform = "scale(0.97)"; };
         b.onmouseup = () => { b.style.transform = "scale(1)"; };
@@ -709,7 +742,7 @@ function openModal(node) {
         for (const k in toolBtns) {
             const sel = k === id;
             toolBtns[k].style.background = sel ? C.accent : C.panel;
-            toolBtns[k].style.color = sel ? "#181825" : C.text;
+            toolBtns[k].style.color = sel ? "var(--c2c-bg2)" : C.text;
             toolBtns[k].style.borderColor = sel ? C.accent : C.border;
         }
         ed.lasso = [];
@@ -777,22 +810,22 @@ function openModal(node) {
 
     top.appendChild(sep());
 
-    const btnPin = mkBtn("📌 Pin Keyframe", { title: "Pin current mask (K)", bg: "#2d4a3e", hover: "#3a5f50", fg: C.accent });
+    const btnPin = mkBtn("📌 Pin Keyframe", { title: "Pin current mask (K)", bg: "var(--c2c-okBg2)", hover: "var(--c2c-okBg)", fg: C.accent });
     btnPin.onclick = () => ed.pin();
     top.appendChild(btnPin);
 
-    const btnUnpin = mkBtn("✕ Unpin", { title: "Remove keyframe", bg: "#4a2d2d", hover: "#5f3a3a", fg: C.danger });
+    const btnUnpin = mkBtn("✕ Unpin", { title: "Remove keyframe", bg: "var(--c2c-dangerBg2)", hover: "var(--c2c-dangerBg3)", fg: C.danger });
     btnUnpin.onclick = () => ed.unpin();
     top.appendChild(btnUnpin);
 
     top.appendChild(sep());
 
     const btnSave = mkBtn("💾 Save & Close", { title: "Persist keyframes to server & close",
-        bg: C.accent, fg: "#0f0f17", border: C.accent, hover: "#7fd17a" });
+        bg: C.accent, fg: "var(--c2c-scrimDark6)", border: C.accent, hover: "var(--c2c-okMid2)" });
     top.appendChild(btnSave);
 
     const btnCancel = mkBtn("✕ Cancel", { title: "Discard changes & close",
-        bg: C.panel, hover: "#332233", fg: C.danger });
+        bg: C.panel, hover: "var(--c2c-violetBgAlt)", fg: C.danger });
     top.appendChild(btnCancel);
 
     // ── Body: canvas + sidebar ─────────────────────────────────────
@@ -821,7 +854,7 @@ function openModal(node) {
     const scrubCanvas = document.createElement("canvas");
     scrubCanvas.style.cssText = `
         position:absolute;left:0;right:0;bottom:0;height:36px;width:100%;
-        background:#11111b;border-top:1px solid ${C.border};cursor:pointer;
+        background:var(--c2c-bg3);border-top:1px solid ${C.border};cursor:pointer;
     `;
     viewport.appendChild(scrubCanvas);
 

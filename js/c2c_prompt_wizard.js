@@ -15,12 +15,15 @@
  * links to the AI Settings tab.
  */
 import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { forAllNodes } from "./_subgraph_walk.js";
+import { streamAI } from "./_c2c_ai_client.js";
 
 const TAB_ID = "c2c.prompt";
 
-const C = { bg:"#1e1e2e", bg2:"#181825", fg:"#cdd6f4", sub:"#a6adc8",
-            border:"#313244", mauve:"#cba6f7", blue:"#89b4fa", green:"#a6e3a1",
-            red:"#f38ba8", yellow:"#f9e2af", teal:"#94e2d5" };
+// Theme colors come from `_c2c_theme.js` CSS variables (`--c2c-*`). They flip
+// live across mocha/latte/oled when `setVariant()` rewrites :root vars, so the
+// sidebar repaints without rebuild. No literal hex/rgb in this file.
 
 // --------------------------------------------------------- prompt synthesis
 const SYS_BY_MODEL = {
@@ -87,8 +90,9 @@ function findTargetEncoders() {
     const sel = Object.values(app.canvas?.selected_nodes || {});
     const encs = sel.filter(n => /CLIPTextEncode/.test(n.type || ""));
     if (encs.length === 0) {
-        // No selection — scan whole graph for the two most plausible.
-        const all = (app.graph._nodes || []).filter(n => /CLIPTextEncode/.test(n.type || ""));
+        // No selection — scan root + every subgraph for plausible encoders.
+        const all = [];
+        forAllNodes((n) => { if (/CLIPTextEncode/.test(n.type || "")) all.push(n); });
         if (all.length === 0) return { positive: null, negative: null };
         if (all.length === 1) return { positive: all[0], negative: null };
         return _classifyByKSamplerWiring(all);
@@ -98,22 +102,24 @@ function findTargetEncoders() {
 }
 
 function _classifyByKSamplerWiring(encs) {
-    // Find KSampler and see which encoder feeds .negative input
-    const samplers = (app.graph._nodes || []).filter(n => /KSampler/.test(n.type || ""));
-    for (const s of samplers) {
+    // Find KSamplers anywhere (root + subgraphs) and see which encoder feeds .negative.
+    // Track each sampler's owning graph so we resolve its links/nodes locally.
+    const samplers = [];
+    forAllNodes((n, g) => { if (/KSampler/.test(n.type || "")) samplers.push({ node: n, graph: g }); });
+    for (const { node: s, graph: sg } of samplers) {
         const neg = (s.inputs || []).find(i => i.name === "negative");
         const pos = (s.inputs || []).find(i => i.name === "positive");
         if (neg?.link != null) {
-            const ln = app.graph.links[neg.link];
-            const src = ln && app.graph.getNodeById(ln.origin_id);
+            const ln = sg?.links?.[neg.link];
+            const src = ln && sg?.getNodeById?.(ln.origin_id);
             if (encs.includes(src)) {
                 const other = encs.find(n => n !== src) || null;
                 return { positive: other, negative: src };
             }
         }
         if (pos?.link != null) {
-            const ln = app.graph.links[pos.link];
-            const src = ln && app.graph.getNodeById(ln.origin_id);
+            const ln = sg?.links?.[pos.link];
+            const src = ln && sg?.getNodeById?.(ln.origin_id);
             if (encs.includes(src)) {
                 const other = encs.find(n => n !== src) || null;
                 return { positive: src, negative: other };
@@ -153,14 +159,14 @@ async function loadAIStatus() {
 function buildView(root) {
     root.innerHTML = "";
     const wrap = document.createElement("div");
-    wrap.style.cssText = `padding:10px;background:${C.bg};color:${C.fg};
+    wrap.style.cssText = `padding:10px;background:var(--c2c-bg);color:var(--c2c-fg);
         font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;
         height:100%;overflow:auto;`;
     wrap.innerHTML =
-        `<h3 style="margin:0 0 10px;color:${C.mauve};font-size:13px;letter-spacing:0.5px;text-transform:uppercase">Prompt Wizard</h3>
-         <div id="pw-status" style="font-size:10px;color:${C.sub};margin-bottom:8px"></div>
+        `<h3 style="margin:0 0 10px;color:var(--c2c-mauve);font-size:13px;letter-spacing:0.5px;text-transform:uppercase">Prompt Wizard</h3>
+         <div id="pw-status" style="font-size:10px;color:var(--c2c-sub);margin-bottom:8px"></div>
 
-         <label style="display:block;font-size:10px;color:${C.sub};margin-top:6px">Model family</label>
+         <label style="display:block;font-size:10px;color:var(--c2c-sub);margin-top:6px">Model family</label>
          <select id="pw-model" style="${selStyle()}">
            <option value="sdxl">SDXL (tag style)</option>
            <option value="sd1.5">SD 1.5 (weighted tokens)</option>
@@ -168,7 +174,7 @@ function buildView(root) {
            <option value="any">Any / generic</option>
          </select>
 
-         <label style="display:block;font-size:10px;color:${C.sub};margin-top:6px">Style preset (optional)</label>
+         <label style="display:block;font-size:10px;color:var(--c2c-sub);margin-top:6px">Style preset (optional)</label>
          <select id="pw-preset" style="${selStyle()}"><option value="">— none —</option></select>
 
          ${field("subject",  "Subject",          "e.g. a young woman with red hair, holding a lantern")}
@@ -186,18 +192,18 @@ function buildView(root) {
            <button id="pw-clear" style="${btnGhost()}">Clear</button>
          </div>
 
-         <h4 style="margin:14px 0 6px;color:${C.green};font-size:11px;letter-spacing:0.5px;text-transform:uppercase">Positive</h4>
+         <h4 style="margin:14px 0 6px;color:var(--c2c-green);font-size:11px;letter-spacing:0.5px;text-transform:uppercase">Positive</h4>
          <textarea id="pw-pos" rows="5" style="${areaStyle()}"></textarea>
 
-         <h4 style="margin:10px 0 6px;color:${C.red};font-size:11px;letter-spacing:0.5px;text-transform:uppercase">Negative</h4>
+         <h4 style="margin:10px 0 6px;color:var(--c2c-red);font-size:11px;letter-spacing:0.5px;text-transform:uppercase">Negative</h4>
          <textarea id="pw-neg" rows="4" style="${areaStyle()}"></textarea>
 
          <div style="display:flex;gap:6px;margin-top:8px">
            <button id="pw-apply" style="${btnPrimary()}">Apply to selected encoders</button>
            <button id="pw-copy"  style="${btnGhost()}">Copy both</button>
          </div>
-         <div id="pw-msg" style="margin-top:8px;font-size:10px;color:${C.sub}"></div>
-         <div id="pw-stream" style="margin-top:8px;font-size:10px;color:${C.sub};max-height:80px;overflow:auto;white-space:pre-wrap;border:1px solid ${C.border};border-radius:4px;padding:4px;display:none"></div>`;
+         <div id="pw-msg" style="margin-top:8px;font-size:10px;color:var(--c2c-sub)"></div>
+         <div id="pw-stream" style="margin-top:8px;font-size:10px;color:var(--c2c-sub);max-height:80px;overflow:auto;white-space:pre-wrap;border:1px solid var(--c2c-border);border-radius:4px;padding:4px;display:none"></div>`;
     root.appendChild(wrap);
 
     // Populate presets + status
@@ -215,7 +221,7 @@ function buildView(root) {
         if (ok) {
             el.textContent = `${(s.backends || []).filter(b => b.health?.ok).length} backend(s) online · cost today $${(s.cost_today_usd ?? 0).toFixed(3)}`;
         } else {
-            el.innerHTML = `<span style="color:${C.red}">No AI backend online.</span> Open the C2C AI sidebar tab to configure.`;
+            el.innerHTML = `<span style="color:var(--c2c-red)">No AI backend online.</span> Open the C2C AI sidebar tab to configure.`;
         }
     });
 
@@ -237,14 +243,17 @@ function buildView(root) {
 }
 
 function field(name, label, ph) {
-    return `<label style="display:block;font-size:10px;color:${C.sub};margin-top:6px">${label}</label>
+    return `<label style="display:block;font-size:10px;color:var(--c2c-sub);margin-top:6px">${label}</label>
             <input type="text" data-field="${name}" placeholder="${ph}" style="${inputStyle()}"/>`;
 }
-function selStyle()   { return `width:100%;background:${C.bg2};color:${C.fg};border:1px solid ${C.border};border-radius:4px;padding:4px;font-size:11px`; }
+function selStyle()   { return `width:100%;background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:4px;padding:4px;font-size:11px`; }
 function inputStyle() { return selStyle(); }
-function areaStyle()  { return `width:100%;background:${C.bg2};color:${C.fg};border:1px solid ${C.border};border-radius:4px;padding:6px;font-size:11px;font-family:ui-monospace,Menlo,monospace`; }
-function btnPrimary() { return `background:${C.mauve};color:${C.bg};border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
-function btnGhost()   { return `background:${C.bg2};color:${C.fg};border:1px solid ${C.border};border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
+function areaStyle()  { return `width:100%;background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:4px;padding:6px;font-size:11px;font-family:ui-monospace,Menlo,monospace`; }
+// Primary button uses mauve bg + var(--c2c-bg) as text. Both flip across
+// variants in opposite directions (mauve gets darker in latte, bg gets
+// lighter), so contrast is preserved on every theme.
+function btnPrimary() { return `background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
+function btnGhost()   { return `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
 
 async function runGeneration(wrap) {
     const form = {};
@@ -259,7 +268,7 @@ async function runGeneration(wrap) {
             if (j.success) {
                 presetSummary = j.data.name + " — " + (j.data.positive || "").slice(0, 200);
             }
-        } catch (_) {}
+        } catch (__c2cErr) { __c2cReport("c2c_prompt_wizard", __c2cErr); }
     }
 
     const sys = SYS_BY_MODEL[model] || SYS_BY_MODEL.any;
@@ -272,64 +281,29 @@ async function runGeneration(wrap) {
     wrap.querySelector("#pw-neg").value = "";
 
     let buffer = "";
-    try {
-        const r = await fetch("/c2c/ai/stream", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
-            body: JSON.stringify({
-                feature: "prompt_wizard",
-                sensitivity: "public",
-                max_tokens: 900,
-                temperature: 0.7,
-                messages: [
-                    { role: "system", content: sys },
-                    { role: "user", content: user },
-                ],
-            }),
-        });
-        if (!r.ok || !r.body) {
-            const j = await r.json().catch(() => ({}));
-            msg.textContent = "AI request failed: " + (j.message || ("HTTP " + r.status));
-            return;
-        }
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let idx;
-            while ((idx = buf.indexOf("\n\n")) !== -1) {
-                const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
-                const lines = frame.split("\n");
-                let event = "message", data = "";
-                lines.forEach(l => {
-                    if (l.startsWith("event: ")) event = l.slice(7).trim();
-                    else if (l.startsWith("data: ")) data += l.slice(6);
-                });
-                if (!data) continue;
-                if (event === "error") { msg.textContent = "AI error: " + data; return; }
-                if (event === "done")  { continue; }
-                try {
-                    const obj = JSON.parse(data);
-                    if (obj.chunk) {
-                        buffer += obj.chunk;
-                        stream.textContent = buffer;
-                        stream.scrollTop = stream.scrollHeight;
-                    }
-                } catch (_) {}
-            }
-        }
-        // Split when stream is complete
-        const split = splitPositiveNegative(buffer);
-        wrap.querySelector("#pw-pos").value = split.positive;
-        wrap.querySelector("#pw-neg").value = split.negative;
-        msg.textContent = "Done. Review and apply.";
-        window.__C2C_AI_HUD__?.refresh?.();
-    } catch (exc) {
-        msg.textContent = "Error: " + exc.message;
-    }
+    const result = await streamAI({
+        feature: "prompt_wizard",
+        sensitivity: "public",
+        max_tokens: 900,
+        temperature: 0.7,
+        messages: [
+            { role: "system", content: sys },
+            { role: "user", content: user },
+        ],
+        onChunk: (_chunk, total) => {
+            buffer = total;
+            stream.textContent = buffer;
+            stream.scrollTop = stream.scrollHeight;
+        },
+        onError: (err) => {
+            msg.textContent = "AI " + (err.kind || "error") + ": " + (err.message || "");
+        },
+    });
+    if (!result.ok) return;
+    const split = splitPositiveNegative(buffer);
+    wrap.querySelector("#pw-pos").value = split.positive;
+    wrap.querySelector("#pw-neg").value = split.negative;
+    msg.textContent = "Done. Review and apply.";
 }
 
 function applyToSelection(wrap) {

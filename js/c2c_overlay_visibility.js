@@ -1,4 +1,4 @@
-/**
+﻿/**
  * c2c_overlay_visibility.js — One-stop ON/OFF switch for every floating
  * C2C/MEC overlay, HUD, badge, and quick-action button.
  *
@@ -136,14 +136,8 @@ const OVERLAYS = [
         tip: "📚 save & recall node-group templates.",
         defaultOn: false,
     },
-    {
-        id: "integrityBtn",
-        selector: "#mec-integrity-btn",
-        label: "Integrity Status button",
-        category: ["C2C Overlays", "Right-rail buttons"],
-        tip: "🛡 mask integrity summary.",
-        defaultOn: true,
-    },
+    // Legacy `integrityBtn` (#mec-integrity-btn) entry retired 2026-05-26.
+    // The canonical INT chip now lives inside the OmniBar as #c2c-int-chip.
     {
         id: "doctorBtn",
         selector: "#c2c-doctor-btn",

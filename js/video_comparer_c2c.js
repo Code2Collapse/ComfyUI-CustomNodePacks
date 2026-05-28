@@ -18,6 +18,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { C } from './_c2c_theme.js';
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -187,8 +188,26 @@ app.registerExtension({
         // template, examples) is run through the migration.
         const _origLoad = app.loadGraphData?.bind(app);
         if (typeof _origLoad === "function") {
+            // Defensive: ComfyUI's loadDefaultWorkflow path can invoke
+            // app.loadGraphData() with no arguments (or null) when there is
+            // no previously-saved workflow. Some upstream wrappers (Manager,
+            // rgthree) dereference graphData.extra and crash on undefined,
+            // which cascades through ALL c2c loadGraphData wrappers and
+            // leaves the OmniPill ecosystem in a half-initialised state
+            // (buttons render but downstream init never completes). Coalesce
+            // to a benign empty workflow so every wrapper downstream has a
+            // safe object to read from.
+            const _emptyGraph = () => ({
+                extra: {}, nodes: [], links: [], groups: [],
+                version: 0.4, last_node_id: 0, last_link_id: 0,
+                config: {},
+            });
             app.loadGraphData = function (graphData, ...rest) {
-                _migrateLegacyVideoComparerTypes(graphData);
+                if (graphData == null) graphData = _emptyGraph();
+                try { _migrateLegacyVideoComparerTypes(graphData); }
+                catch (err) {
+                    console.warn("[video_comparer] migrate failed", err);
+                }
                 return _origLoad(graphData, ...rest);
             };
         }
@@ -213,7 +232,7 @@ app.registerExtension({
 
             // ── Build DOM widget ─────────────────────────────
             const wrap = document.createElement("div");
-            wrap.style.cssText = "position:relative;width:calc(100% - 12px);margin:6px;background:#0d0d12;border:1px solid #1f1f2a;border-radius:6px;overflow:hidden;min-height:240px;";
+            wrap.style.cssText = "position:relative;width:calc(100% - 12px);margin:6px;background:var(--c2c-scrimDark2);border:1px solid #1f1f2a;border-radius:6px;overflow:hidden;min-height:240px;";
             wrap.setAttribute("role", "group");
             wrap.setAttribute("aria-label", "A/B media comparer canvas");
 
@@ -224,13 +243,13 @@ app.registerExtension({
             wrap.appendChild(cvs);
 
             const overlay = document.createElement("div");
-            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:4px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;font:11px system-ui,sans-serif;color:#cdd6f4;text-shadow:0 1px 2px rgba(0,0,0,0.8);";
+            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:4px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;font:11px system-ui,sans-serif;color:var(--c2c-fg);text-shadow:0 1px 2px rgba(0,0,0,0.8);";
             const modeBadge = document.createElement("div");
             modeBadge.textContent = "wipe";
             modeBadge.style.cssText = "background:rgba(0,0,0,0.55);padding:2px 8px;border-radius:10px;";
             const liveBadge = document.createElement("div");
             liveBadge.textContent = "● LIVE";
-            liveBadge.style.cssText = "background:rgba(40,180,80,0.85);color:#fff;padding:2px 8px;border-radius:10px;font-weight:600;";
+            liveBadge.style.cssText = "background:rgba(40,180,80,0.85);color:var(--c2c-white);padding:2px 8px;border-radius:10px;font-weight:600;";
             overlay.appendChild(modeBadge);
             overlay.appendChild(liveBadge);
             wrap.appendChild(overlay);
@@ -252,7 +271,7 @@ app.registerExtension({
             const vidA = document.createElement("video");
             const vidB = document.createElement("video");
             for (const v of [vidA, vidB]) {
-                v.style.cssText = "flex:1 1 50%;width:50%;height:auto;display:block;background:#000;";
+                v.style.cssText = "flex:1 1 50%;width:50%;height:auto;display:block;background:var(--c2c-black);";
                 v.playsInline = true;
                 v.preload = "auto";
                 v.muted = true;          // dual-audio would echo; user can unmute the master
@@ -262,10 +281,10 @@ app.registerExtension({
             vidB.title = "B";
             const vidALabel = document.createElement("div");
             vidALabel.textContent = "A";
-            vidALabel.style.cssText = "position:absolute;top:6px;left:6px;background:rgba(0,0,0,0.6);color:#a6e3a1;padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
+            vidALabel.style.cssText = "position:absolute;top:6px;left:6px;background:rgba(0,0,0,0.6);color:var(--c2c-okSoft);padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
             const vidBLabel = document.createElement("div");
             vidBLabel.textContent = "B";
-            vidBLabel.style.cssText = "position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#f5c2e7;padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
+            vidBLabel.style.cssText = "position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:var(--c2c-pink);padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
             const wrapA = document.createElement("div");
             wrapA.style.cssText = "position:relative;flex:1 1 50%;min-width:0;";
             wrapA.appendChild(vidA);
@@ -280,31 +299,31 @@ app.registerExtension({
 
             // Shared transport: play/pause button + seekbar + time readout.
             const transport = document.createElement("div");
-            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:#11111b;border-top:1px solid #1f1f2a;color:#cdd6f4;font:11px system-ui;";
+            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--c2c-bg3);border-top:1px solid #1f1f2a;color:var(--c2c-fg);font:11px system-ui;";
             const playBtn = document.createElement("button");
             playBtn.type = "button";
             playBtn.textContent = "▶";
-            playBtn.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:13px;line-height:1;";
+            playBtn.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 10px;cursor:pointer;font-size:13px;line-height:1;";
             const seek = document.createElement("input");
             seek.type = "range";
             seek.min = "0";
             seek.max = "10000";
             seek.value = "0";
             seek.step = "1";
-            seek.style.cssText = "flex:1 1 auto;accent-color:#89b4fa;";
+            seek.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-blue);";
             const tReadout = document.createElement("span");
             tReadout.textContent = "0.00 / 0.00";
-            tReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:#a6adc8;min-width:84px;text-align:right;";
+            tReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:var(--c2c-sub);min-width:84px;text-align:right;";
             const muteBtn = document.createElement("button");
             muteBtn.type = "button";
             muteBtn.textContent = "🔇 A";
             muteBtn.title = "Toggle audio (unmute A — B stays muted to avoid echo)";
-            muteBtn.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10.5px;";
+            muteBtn.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10.5px;";
             // Frame-step buttons for real per-frame A/B comparison.
             const mkStep = (label, title) => {
                 const b = document.createElement("button");
                 b.type = "button"; b.textContent = label; b.title = title;
-                b.style.cssText = "background:#1e1e2e;border:1px solid #313244;color:#cdd6f4;border-radius:4px;padding:2px 8px;cursor:pointer;font-family:ui-monospace,monospace;font-size:11px;line-height:1;";
+                b.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 8px;cursor:pointer;font-family:ui-monospace,monospace;font-size:11px;line-height:1;";
                 return b;
             };
             const btnFirst = mkStep("⏮", "Jump to first frame");
@@ -571,7 +590,7 @@ app.registerExtension({
                 if (!S.srcA && !S.srcB && !S.serverPreview) {
                     const ch = 240;
                     if (cvs.width !== cw || cvs.height !== ch) { cvs.width = cw; cvs.height = ch; }
-                    ctx.fillStyle = "#0d0d12"; ctx.fillRect(0, 0, cw, ch);
+                    ctx.fillStyle = C.scrimDark2; ctx.fillRect(0, 0, cw, ch);
                     ctx.fillStyle = "#5a5a78";
                     ctx.font = "12px system-ui,sans-serif";
                     ctx.textAlign = "center";
@@ -615,7 +634,7 @@ app.registerExtension({
                     if (refA) drawSource(refA, 0, 0, cw, ch);
                     ctx.fillStyle = "rgba(0,0,0,0.55)";
                     ctx.fillRect(0, 0, cw, ch);
-                    ctx.fillStyle = "#fce5b6";
+                    ctx.fillStyle = C.warnTint;
                     ctx.font = "13px system-ui,sans-serif";
                     ctx.textAlign = "center";
                     ctx.fillText(`'${mode}' renders on the server — Queue to update`, cw / 2, ch / 2);
@@ -635,7 +654,7 @@ app.registerExtension({
                     ctx.beginPath();
                     ctx.arc(dx, ch / 2, 10, 0, Math.PI * 2);
                     ctx.fillStyle = "rgba(255,230,80,0.95)"; ctx.fill();
-                    ctx.fillStyle = "#000"; ctx.font = "bold 12px system-ui";
+                    ctx.fillStyle = C.black; ctx.font = "bold 12px system-ui";
                     ctx.textAlign = "center"; ctx.textBaseline = "middle";
                     ctx.fillText("⇆", dx, ch / 2);
                     ctx.textBaseline = "alphabetic";
@@ -728,7 +747,7 @@ app.registerExtension({
                 if (!a || !b) {
                     ctx.fillStyle = "rgba(0,0,0,0.45)";
                     ctx.fillRect(0, ch - 28, cw, 28);
-                    ctx.fillStyle = "#fce5b6";
+                    ctx.fillStyle = C.warnTint;
                     ctx.font = "11px system-ui,sans-serif";
                     ctx.textAlign = "center";
                     ctx.fillText(a ? "Waiting for B…" : "Waiting for A…", cw / 2, ch - 10);
