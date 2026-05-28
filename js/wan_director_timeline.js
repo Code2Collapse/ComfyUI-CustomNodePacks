@@ -348,18 +348,54 @@ class TimelineEditor {
             this.fileAud.value = "";
         };
 
-        // Drag-drop on canvas wrap
-        const wrap = this.cvsWrap;
-        wrap.ondragover = (e) => { e.preventDefault(); this.dropHint.style.display = "flex"; };
-        wrap.ondragleave = () => { this.dropHint.style.display = "none"; };
-        wrap.ondrop = async (e) => {
-            e.preventDefault();
-            this.dropHint.style.display = "none";
-            for (const f of e.dataTransfer.files) {
-                if (f.type.startsWith("image/")) await this.addImageSegmentFromFile(f);
-                else if (f.type.startsWith("audio/")) await this.addAudioSegmentFromFile(f);
-            }
+        // Drag-drop: accept drops ANYWHERE on the timeline (was canvas-only,
+        // which made the node feel like it "takes nothing" because users
+        // dropped on the props/textbox area). Also stop propagation so
+        // ComfyUI's document-level drop handler (which interprets images as
+        // workflow files or auto-adds LoadImage nodes) doesn't steal the
+        // event. (P1.2 regression fix)
+        const dropZone = this.container;
+        const isFileDrag = (e) => {
+            const t = e.dataTransfer?.types;
+            return t && (t.includes("Files") || Array.from(t).includes("Files"));
         };
+        dropZone.addEventListener("dragover", (e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this.dropHint.style.display = "flex";
+        });
+        dropZone.addEventListener("dragleave", (e) => {
+            // Only hide when we actually leave the container, not when
+            // moving between its children.
+            if (e.target === dropZone || !dropZone.contains(e.relatedTarget)) {
+                this.dropHint.style.display = "none";
+            }
+        });
+        dropZone.addEventListener("drop", async (e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this.dropHint.style.display = "none";
+            const files = Array.from(e.dataTransfer?.files || []);
+            let accepted = 0;
+            for (const f of files) {
+                if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
+                else if (f.type.startsWith("audio/")) { await this.addAudioSegmentFromFile(f); accepted += 1; }
+            }
+            if (accepted === 0 && files.length > 0) {
+                // Give visible feedback that the drop was received but rejected.
+                const orig = this.dropHint.textContent;
+                this.dropHint.textContent = `Unsupported (${files.map(f => f.type || "?").join(", ")})`;
+                this.dropHint.style.display = "flex";
+                this.dropHint.style.background = "rgba(220,80,80,0.25)";
+                setTimeout(() => {
+                    this.dropHint.style.display = "none";
+                    this.dropHint.textContent = orig;
+                    this.dropHint.style.background = "rgba(80,140,220,0.25)";
+                }, 1600);
+            }
+        });
 
         // Canvas mouse
         this.cvs.addEventListener("mousedown", (e) => this._onMouseDown(e));
