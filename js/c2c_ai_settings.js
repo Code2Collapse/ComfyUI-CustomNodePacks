@@ -13,8 +13,10 @@
  *      .txt file.
  */
 import { app } from "../../scripts/app.js";
+import { buildPanel } from "./_c2c_window.js";
 
 const TAB_ID = "c2c.ai";
+const RIGHT_DOCK_ID = "c2c.ai.right-dock";
 const SETTING_FIRSTRUN = "c2c.ai.firstRunCompleted";
 
 // All colors source from CSS custom properties emitted by _c2c_theme.js
@@ -353,6 +355,22 @@ function buildSettingsView(root) {
             };
             btnRow.appendChild(b);
         });
+        // Show "Pop out right" only when this view is NOT already hosted in
+        // the right dock (otherwise the button is redundant and the click
+        // would simply close the dock via the toggle).
+        if (!root.closest?.(`#${RIGHT_DOCK_ID}`)) {
+            const popBtn = document.createElement("button");
+            popBtn.textContent = "Pop out → right dock";
+            popBtn.title = "Open the AI panel as a floating window on the right (Ctrl+Alt+A)";
+            popBtn.style.cssText =
+                `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                 border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;margin-left:auto;`;
+            popBtn.onclick = () => {
+                try { openRightDock(); }
+                catch (exc) { console.error("[c2c.ai] openRightDock failed:", exc); }
+            };
+            btnRow.appendChild(popBtn);
+        }
         sec1.appendChild(btnRow);
         sections.appendChild(sec1);
 
@@ -646,6 +664,70 @@ function buildSettingsView(root) {
     refresh();
 }
 
+// ============================================================ right-side dock
+// ComfyUI's extensionManager.registerSidebarTab() docks every tab on the
+// LEFT only (there is no `side` or `position` option). To deliver the
+// "AI panel on the right" form factor that the P0.7 brief requires, we
+// build a floating panel via the shared _c2c_window.buildPanel() and
+// position it at the right viewport edge on first open. The same
+// buildSettingsView() renders into the floating body so the dock + the
+// left sidebar tab always show identical content.
+function openRightDock() {
+    const existing = document.getElementById(RIGHT_DOCK_ID);
+    if (existing) {
+        // toggle: second activation closes the dock
+        existing.remove();
+        return null;
+    }
+    const width = 420;
+    const height = Math.max(360, Math.min(window.innerHeight - 80, 900));
+    const panel = buildPanel({
+        id: RIGHT_DOCK_ID,
+        title: "C2C AI",
+        shortcut: "Ctrl+Alt+A",
+        width,
+        height,
+        storageKey: "ai-right-dock",
+    });
+    // On first open (no persisted position yet), park against right edge.
+    // buildPanel's cascade() leaves explicit left/top; only override when
+    // the storageKey has no saved geometry.
+    try {
+        const persisted = localStorage.getItem("c2c.win.ai-right-dock");
+        if (!persisted) {
+            panel.el.style.left = `${Math.max(0, window.innerWidth - width - 16)}px`;
+            panel.el.style.top  = `60px`;
+        }
+    } catch (_exc) { /* ignore quota / privacy errors */ }
+    panel.body.style.padding = "0";
+    panel.body.style.overflow = "auto";
+    buildSettingsView(panel.body);
+    if (panel.setSubtitle) panel.setSubtitle("right dock");
+    return panel;
+}
+
+// Global Ctrl+Alt+A keyboard toggle. Registered once at module load —
+// guard with a flag so re-imports don't stack listeners.
+if (!window.__C2C_AI_DOCK_HOTKEY__) {
+    window.__C2C_AI_DOCK_HOTKEY__ = true;
+    window.addEventListener("keydown", (ev) => {
+        // Ignore when typing into a text field — the shortcut must not
+        // steal characters from a prompt textarea.
+        const t = ev.target;
+        const tag = (t && t.tagName) || "";
+        const editable =
+            tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+            (t && t.isContentEditable);
+        if (editable) return;
+        if (ev.ctrlKey && ev.altKey && !ev.shiftKey && !ev.metaKey &&
+            (ev.key === "a" || ev.key === "A")) {
+            ev.preventDefault();
+            try { openRightDock(); }
+            catch (exc) { console.error("[c2c.ai] openRightDock failed:", exc); }
+        }
+    }, true);
+}
+
 // ============================================================ registration
 app.registerExtension({
     name: "c2c.ai.settings",
@@ -681,5 +763,5 @@ app.registerExtension({
     },
 });
 
-// expose for other JS that wants to re-trigger the wizard
-window.__C2C_AI_SETTINGS__ = { runFirstRunWizard };
+// expose for other JS that wants to re-trigger the wizard or pop the dock
+window.__C2C_AI_SETTINGS__ = { runFirstRunWizard, openRightDock };
