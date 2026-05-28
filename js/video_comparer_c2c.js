@@ -271,7 +271,12 @@ app.registerExtension({
             const vidA = document.createElement("video");
             const vidB = document.createElement("video");
             for (const v of [vidA, vidB]) {
-                v.style.cssText = "flex:1 1 50%;width:50%;height:auto;display:block;background:var(--c2c-black);";
+                // NOTE: parent wrapA/wrapB already provide the 50/50 split via
+                // `flex:1 1 50%`. The <video> itself must fill its wrapper
+                // (width:100%) — using width:50% here caused each video to
+                // render at 25% of total width (50% of 50%), making the
+                // player look "broken" / "can't see it play". (P1.2 regression fix)
+                v.style.cssText = "width:100%;height:auto;display:block;background:var(--c2c-black);";
                 v.playsInline = true;
                 v.preload = "auto";
                 v.muted = true;          // dual-audio would echo; user can unmute the master
@@ -817,7 +822,10 @@ app.registerExtension({
 
             // ── Mount DOM widget + lock size ─────────────────
             node.addDOMWidget("comparer_view", "COMPARER", wrap, { serialize: false });
-            const LOCKED_W = 480, LOCKED_H = 560;
+            // Default size: wide enough so each video gets ~360px in the
+            // dual-player view (was 480 → each video ~224px, felt cramped).
+            // User can still resize via the corner handle.
+            const LOCKED_W = 760, LOCKED_H = 600;
             node.setSize([LOCKED_W, LOCKED_H]);
 
             // ── Upload buttons (wired to live load) ─────────
