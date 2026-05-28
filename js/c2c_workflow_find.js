@@ -473,30 +473,62 @@ function onKey(ev) {
     }
 }
 
-// ── Global Ctrl+F intercept ───────────────────────────────────────────
+// ── Global key intercepts ─────────────────────────────────────────────
+// Tiny helper: is the finder root currently visible?
+function isOpen() {
+    return !!(_root && _root.style.display !== "none"
+              && getComputedStyle(_root).display !== "none");
+}
+
 function onGlobalKey(ev) {
+    // ─ Esc anywhere closes the finder, even if focus has drifted off the
+    //   input (clicked outside, etc.). Bound on capture so we win before
+    //   ComfyUI's own Esc handlers can swallow it.
+    if (ev.key === "Escape" && isOpen()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+        return;
+    }
+    // ─ Ctrl+F / Cmd+F: open, focus, or TOGGLE close when already open.
     if (!(ev.ctrlKey || ev.metaKey)) return;
     if (ev.key !== "f" && ev.key !== "F") return;
-    // Honor toggle.
     const enabled = (() => {
         try { return app.ui.settings.getSettingValue(SETTING_ID, true) !== false; }
         catch { return true; }
     })();
     if (!enabled) return;
-    // Don't hijack inside form fields the user is actively editing.
     const ae = document.activeElement;
     const tag = ae?.tagName?.toLowerCase();
     const isEditable = tag === "input" || tag === "textarea"
                        || ae?.isContentEditable === true;
-    // Allow Ctrl+F inside our own finder input to be a no-op (already open).
-    if (isEditable && _root && _root.contains(ae)) {
+    // Pressing Ctrl+F again while focus is inside our finder → close it.
+    if (isOpen() && _root && _root.contains(ae)) {
         ev.preventDefault();
+        ev.stopPropagation();
+        close();
+        return;
+    }
+    // Focus drifted away but finder is still visible → bring focus back
+    // (don't close — user might want to keep typing where they left off).
+    if (isOpen()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _input?.focus();
         return;
     }
     if (isEditable) return;  // user is typing in a widget — leave Ctrl+F alone
     ev.preventDefault();
     ev.stopPropagation();
     open();
+}
+
+// Click-outside-closes: if the user mouses anywhere outside the finder
+// while it's open, dismiss it. Matches Spotlight / VS Code Cmd-P UX.
+function onGlobalPointerDown(ev) {
+    if (!isOpen()) return;
+    if (_root && _root.contains(ev.target)) return;
+    close();
 }
 
 app.registerExtension({
@@ -518,6 +550,8 @@ app.registerExtension({
         // Kick off synonym table load — search still works without it.
         loadSynonyms().catch(() => { /* already logged */ });
         window.addEventListener("keydown", onGlobalKey, true);
+        // Bound on capture so we see clicks before LiteGraph swallows them.
+        window.addEventListener("mousedown", onGlobalPointerDown, true);
         console.log("[C2C.WorkflowFind] Ctrl+F now searches nodes in workflow (Fuse).");
     },
 
