@@ -211,6 +211,31 @@ class AnthropicBackend(Backend):
         self.health = HealthState(ok=ok, last_rtt_ms=rtt, last_error=err, last_probe_at=time.time())
         return self.health
 
+    # ---------------------------------------------------------- list_models
+    # Curated current Anthropic-served model identifiers, ordered cheap→smart.
+    # Updated alongside Anthropic's public model lineup (see
+    # https://docs.anthropic.com/claude/docs/models-overview). Anthropic does
+    # expose a ``GET /v1/models`` endpoint but it is rate-limited and requires
+    # the same key as ask(); the curated list below is the user-visible
+    # default. The configured ``info.model`` is always pinned to position 0
+    # so the active selection survives any list refresh.
+    KNOWN_MODELS: tuple[str, ...] = (
+        "claude-3-5-haiku-latest",
+        "claude-3-5-sonnet-latest",
+        "claude-3-opus-latest",
+        "claude-3-haiku-20240307",
+        "claude-3-sonnet-20240229",
+    )
+
+    def list_models(self, timeout: float = 5.0) -> list[str]:
+        out: list[str] = []
+        if self.info.model:
+            out.append(self.info.model)
+        for m in self.KNOWN_MODELS:
+            if m not in out:
+                out.append(m)
+        return out
+
 
 def _split_system(messages: list) -> tuple[str | None, list[dict]]:
     """Anthropic wants ``system`` as a top-level string, not in the messages list."""

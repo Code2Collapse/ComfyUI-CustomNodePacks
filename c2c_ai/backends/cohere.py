@@ -193,3 +193,24 @@ class CohereBackend(Backend):
         self.health = HealthState(ok=ok, last_rtt_ms=rtt,
                                   last_error=err, last_probe_at=time.time())
         return self.health
+
+    # ---------------------------------------------------------- list_models
+    # Curated current Cohere Chat-v2 model identifiers, ordered cheap→smart.
+    # Cohere's ``GET /v1/models`` does work with the same Bearer token but is
+    # rate-limited; the curated list below is the user-visible default.
+    KNOWN_MODELS: tuple[str, ...] = (
+        "command-r-08-2024",
+        "command-r-plus-08-2024",
+        "command-r7b-12-2024",
+        "command-r",
+        "command-r-plus",
+    )
+
+    def list_models(self, timeout: float = 5.0) -> list[str]:
+        out: list[str] = []
+        if self.info.model:
+            out.append(self.info.model)
+        for m in self.KNOWN_MODELS:
+            if m not in out:
+                out.append(m)
+        return out

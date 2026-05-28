@@ -17,6 +17,7 @@
     GET  /c2c/ai/config                 → ai_config.json contents
     POST /c2c/ai/config                 → replace ai_config.json (also re-bootstraps)
     POST /c2c/ai/backends/test          → call .probe() on one backend, return result
+    GET  /c2c/ai/backends/{id}/models   → list candidate model IDs for one backend
     GET  /c2c/ai/prompts                → list registered prompt templates (name, version, sha256, vars)
     POST /c2c/ai/prompts/render         → render one             {"name","vars":{...}}
     GET  /c2c/ai/prompts/verify         → run golden-hash regression on every template
@@ -461,6 +462,27 @@ def register_routes(server) -> None:
             "last_error": h.last_error,
             "last_probe_at": h.last_probe_at,
         })
+
+    @routes.get("/c2c/ai/backends/{id}/models")
+    async def _backend_models(req):
+        """List the model identifiers a single backend can serve.
+
+        Cloud backends (Anthropic, Gemini, Cohere) return a curated set.
+        OpenAI-compatible backends (incl. local Ollama / LM Studio) live-fetch
+        ``GET {base_url}/v1/models``. The llama.cpp local backend scans
+        ``folder_paths.get_filename_list("text_encoders")`` for ``*.gguf``.
+        The currently configured model is always pinned at position 0.
+        """
+        bid = req.match_info.get("id") or ""
+        backend = get_router().get(bid)
+        if not backend:
+            return _err("UNKNOWN_BACKEND", f"no backend with id={bid!r}", code=404)
+        loop = asyncio.get_event_loop()
+        try:
+            models = await loop.run_in_executor(None, backend.list_models)
+        except Exception as exc:
+            return _err("LIST_FAILED", str(exc), code=500)
+        return _ok({"id": bid, "models": list(models or [])})
 
     # ---------------------------------------------------------- prompts
     # Versioned Jinja2 system-prompt library (no inline prompt strings in JS).

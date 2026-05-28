@@ -42,6 +42,28 @@ class Backend(abc.ABC):
     def probe(self, timeout: float = 5.0) -> HealthState:
         """Refresh health state. MUST update ``self.health`` and return it."""
 
+    # ---- model discovery -----------------------------------------------------
+
+    def list_models(self, timeout: float = 5.0) -> list[str]:
+        """Return the list of model identifiers this backend can serve.
+
+        Default returns ``[self.info.model]`` — the single currently configured
+        model. Concrete backends override this to:
+          * Cloud providers with stable curated lists (Anthropic, Gemini,
+            Cohere) — return a static tuple of currently supported models.
+          * OpenAI-compatible servers (cloud + local Ollama/LM Studio) —
+            live-fetch ``GET {base_url}/v1/models``.
+          * llama.cpp local — enumerate GGUFs in the ``text_encoders`` folder.
+
+        Implementations MUST always include ``self.info.model`` in the result
+        so the currently-selected model is never dropped from the picker (even
+        if the live remote list temporarily excludes it).
+
+        Failures (network error, no key) MUST NOT raise — return
+        ``[self.info.model]`` so the picker always has at least one choice.
+        """
+        return [self.info.model] if self.info.model else []
+
     # ---- helpers -------------------------------------------------------------
 
     def supports(self, cap: Capability) -> bool:

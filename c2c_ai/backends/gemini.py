@@ -201,3 +201,27 @@ class GeminiBackend(Backend):
         self.health = HealthState(ok=ok, last_rtt_ms=rtt,
                                   last_error=err, last_probe_at=time.time())
         return self.health
+
+    # ---------------------------------------------------------- list_models
+    # Curated current Gemini model identifiers, ordered cheap→smart.
+    # Google's Generative Language API does expose ``/v1beta/models?key=...``
+    # but the response includes hundreds of embedding / fine-tune variants
+    # that aren't useful as chat targets; the curated list below is the set
+    # surfaced to users. Configured ``info.model`` is always pinned at
+    # position 0 so the active selection survives a list refresh.
+    KNOWN_MODELS: tuple[str, ...] = (
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash-8b-latest",
+        "gemini-1.5-pro-latest",
+        "gemini-2.0-flash-exp",
+        "gemini-2.0-flash-thinking-exp",
+    )
+
+    def list_models(self, timeout: float = 5.0) -> list[str]:
+        out: list[str] = []
+        if self.info.model:
+            out.append(self.info.model)
+        for m in self.KNOWN_MODELS:
+            if m not in out:
+                out.append(m)
+        return out
