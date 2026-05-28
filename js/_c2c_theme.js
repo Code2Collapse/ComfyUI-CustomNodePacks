@@ -557,16 +557,19 @@ export function applyResponsiveCSS() {
 /* ── Node-body multiline-string widget polish ─────────────────────────── */
 /* ComfyUI ships .comfy-multiline-input (the JSON / prompt / customtext
    textarea inside a node) with a stark near-black background and no
-   border, so on dark node bodies it reads as an unmotivated "black box"
-   slab next to the widget label. Soften by:
-     • blending the fill with the node body shade,
-     • adding a 1px hairline so the edit area is visually delimited,
-     • giving it a tiny radius to match every other C2C surface.
-   Scope is the native ComfyUI class only — no other selectors changed. */
+   border. The DOM textarea sits on top of a LiteGraph CANVAS that paints
+   its own solid-black widget rectangle underneath — so a translucent
+   textarea bg lets that black slab bleed through and looks like an
+   unmotivated "black box" on the node.
+
+   CRITICAL: the background MUST be opaque, otherwise the canvas-painted
+   black widget shape shows through (verified live 2026-05-28). We use a
+   solid panel shade slightly lighter than the typical ComfyUI node body
+   (#353535) so the textarea is visually delimited but not jarring. */
 textarea.comfy-multiline-input {
-    background: var(--c2c-bgPanel, rgba(255, 255, 255, 0.04)) !important;
+    background: #2b2b30 !important;
     color: var(--c2c-fg, #e6e6e6) !important;
-    border: 1px solid var(--c2c-borderSoft, rgba(255, 255, 255, 0.08)) !important;
+    border: 1px solid rgba(255, 255, 255, 0.10) !important;
     border-radius: 4px !important;
     padding: 2px 6px !important;
     box-sizing: border-box !important;
@@ -574,12 +577,14 @@ textarea.comfy-multiline-input {
                 background     var(--c2c-dur-fast, 120ms) var(--c2c-ease-out, ease-out);
 }
 textarea.comfy-multiline-input:hover {
-    border-color: var(--c2c-borderHover, rgba(255, 255, 255, 0.18)) !important;
+    background: #32323a !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
 }
 textarea.comfy-multiline-input:focus {
+    background: #32323a !important;
     outline: none !important;
     border-color: var(--c2c-blue, #89b4fa) !important;
-    box-shadow: var(--c2c-focus-ring, 0 0 0 2px #89b4fa) !important;
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.35) !important;
 }
 `;
 }
