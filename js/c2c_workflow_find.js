@@ -26,11 +26,63 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
+import Fuse from "./vendor/fuse.min.mjs";
 
 const STYLE_ID = "c2c-workflow-find-style";
 const ROOT_ID  = "c2c-workflow-find-root";
 const SETTING_ID = "c2c.workflowFind.enabled";
 const HIGHLIGHT_MS = 1200;
+const SYNONYMS_URL = new URL("./c2c_search_synonyms.json", import.meta.url).href;
+
+// ── Synonym table (loaded async at setup) ─────────────────────────────
+let _SYN = null;  // { term: [expansion, ...] }
+let _synLoaded = false;
+async function loadSynonyms() {
+    if (_synLoaded) return _SYN;
+    try {
+        const r = await fetch(SYNONYMS_URL, { cache: "force-cache" });
+        if (r.ok) {
+            const json = await r.json();
+            _SYN = Object.fromEntries(
+                Object.entries(json).filter(([k]) => !k.startsWith("_"))
+            );
+        }
+    } catch (e) {
+        console.warn("[C2C.WorkflowFind] synonym table failed to load:", e);
+    }
+    _synLoaded = true;
+    return _SYN;
+}
+
+/** Expand a raw query into a Fuse extended-search OR string. */
+function expandQuery(q) {
+    const raw = (q || "").trim();
+    if (!raw) return "";
+    if (!_SYN) return raw;
+    // Split user query into whitespace-separated tokens; for each token,
+    // collect its synonym expansions (lower-case key lookup).
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    const variants = new Set([raw]);
+    for (const t of tokens) {
+        const key = t.toLowerCase();
+        const exp = _SYN[key];
+        if (Array.isArray(exp)) {
+            for (const phrase of exp) {
+                // Substitute this token within the original query so the
+                // surrounding context is preserved.
+                const rebuilt = tokens
+                    .map((x) => (x === t ? phrase : x))
+                    .join(" ");
+                variants.add(rebuilt);
+            }
+        }
+    }
+    // Fuse extended search: '|' is logical OR between space-delimited
+    // sub-queries. Quote multi-word phrases so they stay grouped.
+    return [...variants]
+        .map((v) => (v.includes(" ") ? `"${v}"` : v))
+        .join(" | ");
+}
 
 function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -105,47 +157,25 @@ function injectStyle() {
     document.head.appendChild(s);
 }
 
-// ── Fuzzy scoring (subsequence + bonuses) ─────────────────────────────
-function fuzzyScore(needle, haystack) {
-    if (!needle) return { score: 0, hits: [] };
-    const n = needle.toLowerCase();
-    const h = (haystack || "").toLowerCase();
-    if (!h) return { score: -1, hits: [] };
-    if (h === n) return { score: 1000, hits: [[0, h.length]] };
-    const exactIdx = h.indexOf(n);
-    if (exactIdx !== -1) {
-        return {
-            score: 600 - exactIdx + (exactIdx === 0 ? 80 : 0),
-            hits: [[exactIdx, exactIdx + n.length]],
-        };
-    }
-    // subsequence match
-    let i = 0, j = 0, last = -1, runs = 0, score = 0;
-    const hits = [];
-    while (i < n.length && j < h.length) {
-        if (n[i] === h[j]) {
-            if (last === j - 1) {
-                runs++;
-                hits[hits.length - 1][1] = j + 1;
-            } else {
-                runs = 1;
-                hits.push([j, j + 1]);
-                if (j === 0 || /[\s_\-./]/.test(h[j - 1])) score += 30;
-            }
-            score += 10 + runs * 4;
-            last = j;
-            i++;
-        }
-        j++;
-    }
-    if (i < n.length) return { score: -1, hits: [] };
-    return { score, hits };
-}
+// ── Fuzzy scoring (Fuse.js, with synonym-expanded extended search) ────
+// Fuse v7 returns `matches:[{key,value,indices:[[a,b],...]}, ...]` when
+// `includeMatches:true`. We convert that into the same {field, hits, val}
+// shape the renderer already understands.
 
 function highlight(text, hits) {
-    if (!hits || !hits.length) return text;
+    if (!hits || !hits.length) return escapeHtml(text);
+    // Merge overlapping/adjacent hit ranges so <mark> wrapping is clean.
+    const ranges = [...hits].sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const [a, b] of ranges) {
+        if (merged.length && a <= merged[merged.length - 1][1]) {
+            merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], b);
+        } else {
+            merged.push([a, b]);
+        }
+    }
     let out = "", cur = 0;
-    for (const [a, b] of hits) {
+    for (const [a, b] of merged) {
         out += escapeHtml(text.slice(cur, a));
         out += "<mark>" + escapeHtml(text.slice(a, b)) + "</mark>";
         cur = b;
@@ -177,38 +207,79 @@ function searchGraph(query) {
     const nodes = app.graph?._nodes || [];
     const q = (query || "").trim();
     if (!q) return [];
-    const results = [];
-    for (const n of nodes) {
-        const title = n.title || n.type || "";
-        const type  = n.type || "";
-        const comment = n.properties?.comment || n.properties?.note || "";
-        const group = getGroupForNode(n);
-        const idStr = String(n.id ?? "");
 
-        // Exact id hit goes to the top.
-        const idExact = (idStr === q);
+    // Build the row corpus on every search — graph is small (typically
+    // < a few hundred nodes) and node titles/properties may be edited
+    // between opens, so a cached index would go stale.
+    const rows = nodes.map((n) => ({
+        node: n,
+        idStr: String(n.id ?? ""),
+        title: n.title || n.type || "",
+        type:  n.type || "",
+        comment: n.properties?.comment || n.properties?.note || "",
+        group: getGroupForNode(n),
+    }));
 
-        const s1 = fuzzyScore(q, title);
-        const s2 = fuzzyScore(q, type);
-        const s3 = fuzzyScore(q, comment);
-        const s4 = fuzzyScore(q, group);
+    // Exact node-id hit gets a synthetic top-ranked result.
+    const idExactRow = rows.find((r) => r.idStr === q);
 
-        let best = -1, hitsField = null, fieldVal = "";
-        for (const [s, hits, val, name] of [
-            [s1.score, s1.hits, title,   "title"],
-            [s2.score, s2.hits, type,    "type"],
-            [s3.score, s3.hits, comment, "comment"],
-            [s4.score, s4.hits, group,   "group"],
-        ]) {
-            if (s > best) { best = s; hitsField = { field: name, hits, val }; fieldVal = val; }
+    const fuse = new Fuse(rows, {
+        keys: [
+            { name: "title",   weight: 0.45 },
+            { name: "type",    weight: 0.30 },
+            { name: "comment", weight: 0.15 },
+            { name: "group",   weight: 0.10 },
+        ],
+        includeScore: true,
+        includeMatches: true,
+        threshold: 0.4,
+        ignoreLocation: true,
+        useExtendedSearch: true,
+        minMatchCharLength: 1,
+    });
+
+    const pattern = expandQuery(q);
+    const fuseHits = fuse.search(pattern, { limit: 24 });
+
+    // Map Fuse output to the {score, hits, title, type, group} shape the
+    // renderer expects. Fuse score: 0 = perfect, 1 = worst — invert for
+    // our descending sort.
+    const out = fuseHits.map((h) => {
+        const r = h.item;
+        // Pick the highest-weighted matched key to show with <mark>.
+        const fieldOrder = ["title", "type", "comment", "group"];
+        let best = null;
+        for (const f of fieldOrder) {
+            const m = h.matches?.find((x) => x.key === f);
+            if (m) { best = m; break; }
         }
-        if (idExact) best = 9999;
-        if (best > 0 || idExact) {
-            results.push({ node: n, score: best, hits: hitsField, title, type, group, idExact });
-        }
+        return {
+            node: r.node,
+            score: Math.round((1 - (h.score ?? 1)) * 1000),
+            hits: best
+                // Fuse v7 indices are [start, end] INCLUSIVE; the
+                // renderer + highlight() use half-open ranges, so we
+                // convert once here.
+                ? { field: best.key,
+                    hits: (best.indices || []).map(([a, b]) => [a, b + 1]),
+                    val: best.value }
+                : null,
+            title: r.title,
+            type:  r.type,
+            group: r.group,
+            idExact: false,
+        };
+    });
+
+    if (idExactRow && !out.some((r) => r.node === idExactRow.node)) {
+        out.unshift({
+            node: idExactRow.node, score: 9999,
+            hits: { field: "title", hits: [], val: idExactRow.title },
+            title: idExactRow.title, type: idExactRow.type, group: idExactRow.group,
+            idExact: true,
+        });
     }
-    results.sort((a, b) => b.score - a.score);
-    return results.slice(0, 24);
+    return out.slice(0, 24);
 }
 
 // ── Pan + zoom + pulse ────────────────────────────────────────────────
@@ -311,12 +382,16 @@ function ensureRoot() {
     return _root;
 }
 
-function open() {
+function open(prefill) {
     ensureRoot();
     _root.style.display = "block";
-    _input.value = "";
+    _input.value = typeof prefill === "string" ? prefill : "";
     refresh();
     _input.focus();
+    if (_input.value) {
+        // Place caret at end so the user can edit/extend the prefilled query.
+        _input.setSelectionRange(_input.value.length, _input.value.length);
+    }
 }
 
 function close() {
@@ -440,7 +515,38 @@ app.registerExtension({
                 category: ["c2c", "Overlays", "Workflow Find"],
             });
         } catch (e) { __c2cReport("c2c_workflow_find", e); }
+        // Kick off synonym table load — search still works without it.
+        loadSynonyms().catch(() => { /* already logged */ });
         window.addEventListener("keydown", onGlobalKey, true);
-        console.log("[C2C.WorkflowFind] Ctrl+F now searches nodes in workflow.");
+        console.log("[C2C.WorkflowFind] Ctrl+F now searches nodes in workflow (Fuse).");
+    },
+
+    /**
+     * Right-click on a node → "🔍 Find similar nodes…" entry that
+     * pre-fills the in-workflow finder with the clicked node's type.
+     * Survives across LiteGraph versions; only adds the entry when the
+     * setting is enabled.
+     */
+    getNodeMenuOptions(_canvas, options, node) {
+        try {
+            const enabled = (() => {
+                try { return app.ui.settings.getSettingValue(SETTING_ID, true) !== false; }
+                catch { return true; }
+            })();
+            if (!enabled || !node) return options;
+            const seed = node.type || node.title || "";
+            if (!seed) return options;
+            // Insert near the top, before the default "Properties" group.
+            const entry = {
+                content: "🔍 Find similar nodes…",
+                callback: () => { try { open(seed); } catch (e) { __c2cReport("c2c_workflow_find", e); } },
+            };
+            // LiteGraph passes options as an array; the first nullish slot
+            // is a separator placeholder — insert just above it.
+            const sepIdx = options.findIndex((o) => o == null);
+            if (sepIdx > 0) options.splice(sepIdx, 0, entry);
+            else options.unshift(entry, null);
+        } catch (e) { __c2cReport("c2c_workflow_find", e); }
+        return options;
     },
 });

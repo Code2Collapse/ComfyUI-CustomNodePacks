@@ -1,0 +1,99 @@
+{
+    "_schema": "C2C in-workflow finder synonym table (Apache-2.0). Keys are lower-case shorthand or alternative spellings; values are expansion phrases that are concatenated to the user query before Fuse search. Keep terms tightly scoped to ComfyUI / SD ecosystem vocabulary.",
+    "_version": 1,
+
+    "vae": ["variational autoencoder", "encoder decoder", "latent decoder"],
+    "encoder": ["text encoder", "vae encoder", "embedding"],
+    "decoder": ["vae decoder", "image decoder"],
+
+    "cn": ["controlnet", "control net", "conditioning"],
+    "controlnet": ["cn", "control net", "conditioning"],
+
+    "lora": ["low rank adapter", "low-rank adapter", "adapter"],
+    "loras": ["lora", "adapter"],
+
+    "clip": ["text encoder", "clip text", "prompt encoder"],
+    "t5": ["t5 text encoder", "text encoder"],
+    "te": ["text encoder", "clip", "t5"],
+
+    "ksampler": ["sampler", "diffusion sampler", "denoise"],
+    "sampler": ["ksampler", "scheduler", "denoise"],
+    "scheduler": ["sampler", "noise schedule"],
+
+    "checkpoint": ["model", "ckpt", "base model"],
+    "ckpt": ["checkpoint", "model"],
+    "unet": ["diffusion model", "denoiser", "backbone"],
+    "model": ["checkpoint", "ckpt", "unet"],
+
+    "mask": ["matte", "alpha", "segmentation"],
+    "matting": ["mask", "matte", "alpha", "alpha matte"],
+    "matte": ["mask", "alpha", "matting"],
+    "seg": ["segmentation", "mask"],
+    "segmentation": ["seg", "mask", "matte"],
+
+    "upscale": ["upscaler", "super resolution", "esrgan", "sr"],
+    "upscaler": ["upscale", "super resolution", "esrgan"],
+    "sr": ["upscale", "super resolution"],
+
+    "inpaint": ["inpainting", "fill", "edit", "repaint"],
+    "inpainting": ["inpaint", "fill", "edit"],
+    "outpaint": ["outpainting", "expand", "extend canvas"],
+
+    "img2img": ["image to image", "init image"],
+    "i2i": ["img2img", "image to image"],
+    "txt2img": ["text to image"],
+    "t2i": ["txt2img", "text to image"],
+
+    "wan": ["wan2 video", "wan animate", "wan22"],
+    "wanvideo": ["wan video", "wan2 video"],
+    "wan22": ["wan 2.2", "wan22 t2v"],
+    "wananimate": ["wan animate", "pose animation"],
+
+    "flux": ["flux dev", "flux schnell", "flux1"],
+    "sdxl": ["sd xl", "stable diffusion xl"],
+    "sd3": ["stable diffusion 3"],
+    "sd15": ["sd 1.5", "stable diffusion 1.5"],
+
+    "pose": ["pose estimation", "openpose", "skeleton", "landmark"],
+    "openpose": ["pose", "skeleton"],
+    "depth": ["depth map", "midas", "zoe", "depth anything"],
+    "normal": ["normal map", "surface normal"],
+    "canny": ["edge detection", "edges"],
+
+    "preview": ["thumbnail", "viewer", "display"],
+    "save": ["write", "export"],
+    "load": ["read", "import", "open"],
+
+    "image": ["img", "picture", "frame", "rgb"],
+    "video": ["movie", "clip", "frames"],
+    "audio": ["sound", "wav", "waveform"],
+
+    "latent": ["latents", "z", "noise"],
+    "noise": ["latent", "rng", "seed"],
+
+    "conditioning": ["cond", "prompt", "clip output"],
+    "prompt": ["text", "conditioning"],
+    "negative": ["neg", "negative prompt"],
+
+    "ip": ["ipadapter", "ip adapter", "image prompt"],
+    "ipadapter": ["ip adapter", "image prompt", "ip"],
+
+    "face": ["facial", "head", "portrait", "insightface", "facefusion"],
+    "insightface": ["face", "facial recognition"],
+
+    "background": ["bg", "backdrop"],
+    "bg": ["background"],
+    "foreground": ["fg", "subject"],
+    "fg": ["foreground"],
+
+    "rembg": ["remove background", "background removal", "bg removal"],
+    "bria": ["rembg", "background removal"],
+
+    "mec": ["model embed config", "model embedded config"],
+
+    "tile": ["tiling", "tiled"],
+    "batch": ["batches", "batch size"],
+
+    "comp": ["compositing", "composite", "blend"],
+    "blend": ["mix", "compositing", "alpha blend"]
+}
