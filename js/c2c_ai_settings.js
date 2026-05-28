@@ -43,6 +43,18 @@ async function api(method, url, body) {
 const apiGet  = (u)    => api("GET",  u);
 const apiPost = (u, b) => api("POST", u, b);
 
+// HTML-attribute-safe escape (used when interpolating user/server values
+// into ``data-*`` attributes inside template-literal HTML — prevents the
+// model id "claude-3-5-sonnet" or a quoted display name from breaking out
+// of the attribute and injecting markup).
+function escAttr(s) {
+    return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
 // =============================================================== modal helpers
 function modal({ title, body, buttons }) {
     return new Promise((resolve) => {
@@ -311,7 +323,8 @@ function buildSettingsView(root) {
                 `<td style="padding:4px;border-bottom:1px solid var(--c2c-border)">
                    <span style="color:${b.tier==="cloud"?"var(--c2c-blue)":"var(--c2c-green)"}">${b.tier==="cloud"?"☁":"💻"}</span>
                    ${b.id}<div style="color:var(--c2c-sub);font-size:10px">${b.display_name}</div></td>
-                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border);color:var(--c2c-sub)">${b.model}</td>
+                 <td style="padding:4px;border-bottom:1px solid var(--c2c-border)" class="c2c-model-cell" data-id="${b.id}" data-current="${escAttr(b.model || "")}">
+                   <span style="color:var(--c2c-sub)">${b.model}</span></td>
                  <td style="padding:4px;border-bottom:1px solid var(--c2c-border);text-align:center;
                      color:${b.health?.ok ? "var(--c2c-green)" : "var(--c2c-red)"}">
                    ${b.health?.ok ? "ok" : "down"}
@@ -362,6 +375,62 @@ function buildSettingsView(root) {
                     b.textContent = "err"; setTimeout(() => b.textContent = "test", 1500);
                 }
             });
+        });
+
+        // --- model-picker hydration (P0.7-2b) -----------------------------
+        // For each backend row, fetch the candidate-model list lazily (one
+        // request per backend, in parallel) and replace the static label
+        // with a <select>. On change, GET /c2c/ai/config, patch entry.model
+        // for the matching backend, POST it back, then refresh.
+        tbody.querySelectorAll("td.c2c-model-cell").forEach(async (cell) => {
+            const id = cell.dataset.id;
+            const current = cell.dataset.current || "";
+            let res;
+            try {
+                res = await apiGet(`/c2c/ai/backends/${encodeURIComponent(id)}/models`);
+            } catch (_exc) {
+                return; // leave static label in place; backend may be unreachable
+            }
+            const models = Array.isArray(res?.models) ? res.models : [];
+            if (models.length <= 1) return; // nothing to pick from — keep label
+            const sel = document.createElement("select");
+            sel.dataset.id = id;
+            sel.className = "c2c-model-select";
+            sel.style.cssText =
+                `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                 border-radius:3px;padding:2px 4px;font-size:11px;max-width:220px;`;
+            // ensure current model is always present so the active selection
+            // never disappears even if the backend dropped it from /models.
+            const seen = new Set();
+            const ordered = [];
+            if (current) { seen.add(current); ordered.push(current); }
+            for (const m of models) { if (!seen.has(m)) { seen.add(m); ordered.push(m); } }
+            for (const m of ordered) {
+                const opt = document.createElement("option");
+                opt.value = m; opt.textContent = m;
+                if (m === current) opt.selected = true;
+                sel.appendChild(opt);
+            }
+            sel.addEventListener("change", async (e) => {
+                const next = e.target.value;
+                if (!next || next === current) return;
+                e.target.disabled = true;
+                try {
+                    const cfgNow = await apiGet("/c2c/ai/config");
+                    const entry = (cfgNow.backends || []).find(x => x.id === id);
+                    if (!entry) throw new Error(`backend ${id} missing from config`);
+                    entry.model = next;
+                    await apiPost("/c2c/ai/config", cfgNow);
+                    refresh();
+                } catch (exc) {
+                    e.target.disabled = false;
+                    e.target.value = current;
+                    console.error("[c2c.ai] model swap failed:", exc);
+                    alert(`Could not switch model: ${exc.message || exc}`);
+                }
+            });
+            cell.innerHTML = "";
+            cell.appendChild(sel);
         });
 
         // ----- Routing section
