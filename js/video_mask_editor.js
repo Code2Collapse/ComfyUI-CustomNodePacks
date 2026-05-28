@@ -11,7 +11,13 @@
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
-import { C } from './_c2c_theme.js';
+// NOTE: do NOT import { C } from './_c2c_theme.js' here.
+// This module defines its OWN local `C` Proxy below (line ~46) that reads
+// live CSS custom properties so Canvas2D fillStyle / strokeStyle stays in
+// sync with the active C2C variant at paint time. A duplicate `import { C }`
+// produced `SyntaxError: Identifier 'C' has already been declared` and made
+// the browser silently drop this entire ESM extension (mask editor never
+// registered). Verified via `node --input-type=module` reparse 2026-05-28.
 
 const NODE_NAME = "VideoMaskEditorMEC";
 
@@ -19,29 +25,46 @@ const NODE_NAME = "VideoMaskEditorMEC";
 // Reads live CSS custom properties so Canvas2D + cssText interpolations
 // stay in sync with the active C2C theme. Hex fallbacks keep the editor
 // usable if tokens are unset (e.g. theme module hasn't booted yet).
+//
+// IMPORTANT: Canvas2D fillStyle/strokeStyle does NOT understand `var(...)`
+// CSS functions — assigning a `var(...)` string is silently ignored and
+// the previous color (default #000000) is kept. So every fallback below
+// MUST be a literal color, NOT a `var(...)` reference. Same applies to
+// keys that don't have a `_C_TOKEN` entry: the proxy returns the literal
+// fallback directly. (Verified 2026-05-28: missing `white`/`bg3`/`surface1`
+// keys made the lasso-fill paint black instead of white, breaking the
+// inside/outside polygon mask.)
 const _C_FALLBACK = {
-    bg:      "var(--c2c-scrimDark)",
-    panel:   "var(--c2c-bg2)",
-    border:  "var(--c2c-surface0)",
-    text:    "var(--c2c-fg)",
-    sub:     "var(--c2c-overlay1)",
-    accent:  "var(--c2c-okSoft)",
-    accent2: "var(--c2c-blue)",
-    warn:    "var(--c2c-peach)",
-    danger:  "var(--c2c-red)",
-    onion:   "var(--c2c-yellow)",
+    bg:       "#1e1e2e",
+    bg3:      "#181825",   // scrubber track + "loading…" background
+    panel:    "#313244",
+    surface0: "#313244",
+    surface1: "#45475a",   // frame tick marks
+    border:   "#45475a",
+    text:     "#cdd6f4",
+    sub:      "#9399b2",
+    accent:   "#a6e3a1",
+    accent2:  "#89b4fa",
+    warn:     "#fab387",
+    danger:   "#f38ba8",
+    onion:    "#f9e2af",
+    white:    "#ffffff",   // lasso-fill stencil — MUST be opaque white
 };
 const _C_TOKEN = {
-    bg:      "--c2c-bg",
-    panel:   "--c2c-surface0",
-    border:  "--c2c-surface2",
-    text:    "--c2c-fg",
-    sub:     "--c2c-sub",
-    accent:  "--c2c-green",
-    accent2: "--c2c-blue",
-    warn:    "--c2c-yellow",
-    danger:  "--c2c-red",
-    onion:   "--c2c-yellow",
+    bg:       "--c2c-bg",
+    panel:    "--c2c-surface0",
+    surface0: "--c2c-surface0",
+    border:   "--c2c-surface2",
+    text:     "--c2c-fg",
+    sub:      "--c2c-sub",
+    accent:   "--c2c-green",
+    accent2:  "--c2c-blue",
+    warn:     "--c2c-yellow",
+    danger:   "--c2c-red",
+    onion:    "--c2c-yellow",
+    // NOTE: `bg3`, `surface1`, `white` deliberately have no CSS token —
+    // they fall through to the literal hex in _C_FALLBACK above so the
+    // canvas always gets a parseable color.
 };
 const C = new Proxy(_C_FALLBACK, {
     get(target, key) {
