@@ -24,6 +24,7 @@
 import { app } from "../../scripts/app.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { capabilityFor, nodeColor } from "./c2c_node_taxonomy.js";
+import { renderGraphPreview, legendHTML } from "./c2c_graph_preview.js";
 
 const PANEL_ID = "c2c-library-panel";
 const STYLE_ID = "c2c-library-style";
@@ -419,7 +420,10 @@ function renderResults() {
     });
 }
 
+let _preview = null;
+
 function showDetail(fp) {
+    if (_preview) { _preview.destroy(); _preview = null; }
     if (!fp) { _refs.detail.innerHTML = ""; return; }
     const chips = (fp.nodes || []).map((nt) => {
         const cap = capabilityFor(nt);
@@ -430,16 +434,36 @@ function showDetail(fp) {
 <div style="color:#8888bb;font-size:11px;margin-bottom:4px">${esc(fp.path)}</div>
 <div class="qrow">
   <button class="acc" data-act="open">Open in canvas</button>
+  <button data-act="preview">Preview graph</button>
   <button data-act="copy">Copy path</button>
   <span class="sp"></span>
   <span style="color:#5a5a9a">${fp.node_count} nodes</span>
 </div>
+<div data-role="preview" style="margin-top:6px"></div>
+<div data-role="legend" style="margin-top:4px;display:none"></div>
 <div style="margin-top:6px">${chips}</div>`;
     _refs.detail.querySelector('[data-act="open"]').addEventListener("click", () => openWorkflow(fp));
+    _refs.detail.querySelector('[data-act="preview"]').addEventListener("click", () => previewWorkflow(fp));
     _refs.detail.querySelector('[data-act="copy"]').addEventListener("click", () => {
         navigator.clipboard?.writeText(fp.path);
         _refs.status.textContent = "Copied: " + fp.path;
     });
+}
+
+async function previewWorkflow(fp) {
+    const host = _refs.detail.querySelector('[data-role="preview"]');
+    const legend = _refs.detail.querySelector('[data-role="legend"]');
+    if (!host) return;
+    host.innerHTML = '<div style="color:#5a5a9a">Loading preview\u2026</div>';
+    try {
+        const data = await jget("/c2c/library/load?path=" + encodeURIComponent(fp.path));
+        if (!data.success) { host.innerHTML = '<div style="color:#cc6666">Preview error: ' + esc(data.error || "?") + "</div>"; return; }
+        if (_preview) { _preview.destroy(); _preview = null; }
+        _preview = renderGraphPreview(host, data.workflow, { height: 300 });
+        if (legend) { legend.innerHTML = legendHTML(); legend.style.display = "block"; }
+    } catch (e) {
+        host.innerHTML = '<div style="color:#cc6666">Preview failed: ' + esc(String(e)) + "</div>";
+    }
 }
 
 async function openWorkflow(fp) {
