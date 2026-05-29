@@ -27,6 +27,7 @@ import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import Fuse from "./vendor/fuse.min.mjs";
+import { capabilityFor } from "./c2c_node_taxonomy.js";
 
 const STYLE_ID = "c2c-workflow-find-style";
 const ROOT_ID  = "c2c-workflow-find-root";
@@ -218,6 +219,10 @@ function searchGraph(query) {
         type:  n.type || "",
         comment: n.properties?.comment || n.properties?.note || "",
         group: getGroupForNode(n),
+        // Capability keywords describing what this node DOES — lets a
+        // natural-language query ("upscale", "face swap", "caption")
+        // match nodes whose name doesn't contain the search words.
+        caps: capabilityFor(n.type),
     }));
 
     // Exact node-id hit gets a synthetic top-ranked result.
@@ -225,10 +230,11 @@ function searchGraph(query) {
 
     const fuse = new Fuse(rows, {
         keys: [
-            { name: "title",   weight: 0.45 },
-            { name: "type",    weight: 0.30 },
-            { name: "comment", weight: 0.15 },
-            { name: "group",   weight: 0.10 },
+            { name: "title",   weight: 0.40 },
+            { name: "type",    weight: 0.26 },
+            { name: "caps",    weight: 0.14 },
+            { name: "comment", weight: 0.12 },
+            { name: "group",   weight: 0.08 },
         ],
         includeScore: true,
         includeMatches: true,
