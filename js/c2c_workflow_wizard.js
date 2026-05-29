@@ -252,12 +252,14 @@ function _ensureUi() {
         p.innerHTML = `
             <h3>
                 <span>🧙 Workflow Wizard</span>
+                <button class="wz-browse" title="Browse live workflows (OpenArt + Civitai)" style="background:none;border:none;color:var(--c2c-mauve);cursor:pointer;font-size:13px;padding:0 6px">🔍</button>
                 <button class="wz-close" title="Close">×</button>
             </h3>
             <div class="wz-body" data-role="body"></div>
         `;
         document.body.appendChild(p);
         p.querySelector(".wz-close").addEventListener("click", _toggle);
+        p.querySelector(".wz-browse").addEventListener("click", () => window.__C2C_PRESET_HUB__?.open({ tab: "openart" }));
         attachWindowChrome(p, {
             storageKey: "workflow_wizard",
             headerSelector: "h3",

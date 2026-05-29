@@ -81,7 +81,9 @@ function ensurePanel() {
         actions: [
             { label: "↻", className: "icon", id: "rerun", title: "Re-analyze",
               onClick: () => refresh(refs) },
-            { label: "📋", className: "icon", id: "copy", title: "Copy findings JSON",
+            { label: "�", className: "icon", id: "browse", title: "Browse live GitHub issues for this workflow",
+              onClick: () => window.__C2C_PRESET_HUB__?.open({ tab: "c2c_doctor" }) },
+            { label: "�📋", className: "icon", id: "copy", title: "Copy findings JSON",
               onClick: () => {
                   navigator.clipboard?.writeText(JSON.stringify(_lastStaticReport, null, 2));
                   refs.setStatus("copied");

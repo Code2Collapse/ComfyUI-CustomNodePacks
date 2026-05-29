@@ -477,6 +477,13 @@ try:
         print("[C2C] style_presets routes registered.")
     except Exception as _sp:
         print(f"[C2C] style_presets deferred: {_sp}")
+    # ── C2C Preset Hub (live aggregator: lexica/civitai/hf/openart/pdexter/issues) ─
+    try:
+        from .nodes._c2c_preset_hub import register_routes as _register_preset_hub_routes
+        _register_preset_hub_routes(_ps)
+        print("[C2C] preset hub routes registered (/c2c/presets/*).")
+    except Exception as _ph:
+        print(f"[C2C] preset hub deferred: {_ph}")
     try:
         from .nodes.mask_matting.integrity_bridge import register_routes as _register_integrity_bridge_routes
         _register_integrity_bridge_routes(_ps)

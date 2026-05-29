@@ -111,8 +111,14 @@ function open() {
         display:flex; flex-direction:column;
     `;
     const header = document.createElement("div");
-    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent); color:var(--c2c-accentLight);";
-    header.textContent = "Quick-Swap Model — pick a loader";
+    header.style.cssText = "padding:8px 12px; font-weight:600; border-bottom:1px solid color-mix(in srgb, var(--c2c-highlightBase) 8%, transparent); color:var(--c2c-accentLight); display:flex; justify-content:space-between; align-items:center;";
+    header.innerHTML = `<span>Quick-Swap Model — pick a loader</span>`;
+    const browseBtn = document.createElement("button");
+    browseBtn.textContent = "🔍 Browse Live";
+    browseBtn.title = "Browse models on HuggingFace + Civitai";
+    browseBtn.style.cssText = "background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:10px;";
+    browseBtn.onclick = () => window.__C2C_PRESET_HUB__?.open({ tab: "huggingface" });
+    header.appendChild(browseBtn);
     _root.appendChild(header);
     const input = document.createElement("input");
     input.type = "text"; input.placeholder = "Filter loaders…";

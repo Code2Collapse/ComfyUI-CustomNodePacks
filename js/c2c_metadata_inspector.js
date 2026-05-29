@@ -191,7 +191,8 @@ function openModal(meta, parsed, file) {
             } catch {}
         });
         const load = mkBtn(parsed && parsed.kind === "comfy-workflow" ? "Load workflow" : "Load image", "var(--c2c-green)", () => done(true));
-        foot.appendChild(cancel); foot.appendChild(copy); foot.appendChild(load);
+        const browse = mkBtn("🔍 Image → Prompt", "var(--c2c-mauve)", () => window.__C2C_PRESET_HUB__?.open({ tab: "image2prompt" }));
+        foot.appendChild(cancel); foot.appendChild(copy); foot.appendChild(browse); foot.appendChild(load);
         dlg.appendChild(foot);
         root.appendChild(dlg);
         document.body.appendChild(root);

@@ -190,6 +190,7 @@ function buildView(root) {
          <div style="display:flex;gap:6px;margin-top:10px">
            <button id="pw-go" style="${btnPrimary()}">✨ Generate</button>
            <button id="pw-clear" style="${btnGhost()}">Clear</button>
+           <button id="pw-browse" style="${btnGhost()}" title="Browse live prompts on Lexica">🔍 Browse Live</button>
          </div>
 
          <h4 style="margin:14px 0 6px;color:var(--c2c-green);font-size:11px;letter-spacing:0.5px;text-transform:uppercase">Positive</h4>
@@ -227,6 +228,10 @@ function buildView(root) {
 
     // Wire actions
     wrap.querySelector("#pw-go").onclick = () => runGeneration(wrap);
+    wrap.querySelector("#pw-browse").onclick = () => {
+        const q = wrap.querySelector("#pw-pos")?.value || (wrap.querySelector("input[data-field='subject']")?.value || "");
+        window.__C2C_PRESET_HUB__?.open({ tab: "lexica", q });
+    };
     wrap.querySelector("#pw-clear").onclick = () => {
         wrap.querySelectorAll("input[data-field]").forEach(i => i.value = "");
         wrap.querySelector("#pw-pos").value = "";

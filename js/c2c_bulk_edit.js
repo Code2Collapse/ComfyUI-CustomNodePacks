@@ -150,6 +150,7 @@ function open() {
             <div class="hdr">
                 <div class="ttl">Bulk Edit</div>
                 <div class="sub" style="opacity:.7"></div>
+                <div class="bulk-browse" title="Suggest prompts from Lexica" style="cursor:pointer;margin-left:auto;font-size:13px;color:var(--c2c-mauve)">🔍</div>
                 <div class="closex" title="Close (Esc)">✕</div>
             </div>
             <div class="body"></div>`;
@@ -157,6 +158,7 @@ function open() {
         _hdr  = _root.querySelector(".hdr");
         _body = _root.querySelector(".body");
         _hdr.querySelector(".closex").addEventListener("click", close);
+        _hdr.querySelector(".bulk-browse").addEventListener("click", () => window.__C2C_PRESET_HUB__?.open({ tab: "lexica" }));
         window.addEventListener("keydown", (ev) => {
             if (ev.key === "Escape" && _root && _root.style.display !== "none") {
                 ev.preventDefault(); close();

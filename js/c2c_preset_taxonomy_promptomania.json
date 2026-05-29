@@ -1,0 +1,73 @@
+{
+  "_about": "Promptomania-style native prompt builder taxonomy. Re-implemented from public dropdown values for the C2C Preset Hub. Attribution: builder concept inspired by promptomania.com (public taxonomy). No upstream calls are made; this is local data.",
+  "_version": "1.0",
+  "categories": [
+    {
+      "key": "medium",
+      "label": "Art Medium",
+      "options": ["photograph", "oil painting", "watercolor", "digital painting", "3D render", "pencil sketch", "charcoal drawing", "ink illustration", "concept art", "matte painting", "vector art", "low poly", "pixel art", "claymation", "gouache"]
+    },
+    {
+      "key": "style",
+      "label": "Art Style",
+      "options": ["photorealistic", "hyperrealistic", "impressionism", "surrealism", "cyberpunk", "steampunk", "art nouveau", "art deco", "baroque", "minimalism", "vaporwave", "synthwave", "ukiyo-e", "anime", "studio ghibli", "pixar", "comic book", "noir"]
+    },
+    {
+      "key": "artist",
+      "label": "Artist Influence",
+      "options": ["Greg Rutkowski", "Alphonse Mucha", "Hayao Miyazaki", "Zdzislaw Beksinski", "H.R. Giger", "Moebius", "Artgerm", "Ilya Kuvshinov", "Makoto Shinkai", "Syd Mead", "Norman Rockwell", "Caravaggio", "Rembrandt", "Vincent van Gogh", "Katsuhiro Otomo"]
+    },
+    {
+      "key": "lighting",
+      "label": "Lighting",
+      "options": ["soft lighting", "studio lighting", "golden hour", "blue hour", "rim lighting", "volumetric lighting", "cinematic lighting", "backlit", "neon glow", "dramatic shadows", "global illumination", "ambient occlusion", "moody", "high key", "low key"]
+    },
+    {
+      "key": "camera",
+      "label": "Camera / Lens",
+      "options": ["35mm", "50mm", "85mm portrait lens", "wide angle", "fisheye", "telephoto", "macro", "tilt-shift", "drone shot", "bokeh", "shallow depth of field", "long exposure", "Sony A7R IV", "Canon EOS R5", "Hasselblad"]
+    },
+    {
+      "key": "composition",
+      "label": "Composition",
+      "options": ["close-up", "extreme close-up", "medium shot", "full body", "wide shot", "bird's eye view", "low angle", "high angle", "dutch angle", "rule of thirds", "centered", "symmetrical", "leading lines", "over the shoulder"]
+    },
+    {
+      "key": "mood",
+      "label": "Mood",
+      "options": ["serene", "melancholic", "epic", "whimsical", "ominous", "dreamy", "energetic", "nostalgic", "tense", "tranquil", "mysterious", "joyful", "somber"]
+    },
+    {
+      "key": "color",
+      "label": "Color Palette",
+      "options": ["vibrant", "muted", "monochrome", "pastel", "warm tones", "cool tones", "earth tones", "neon", "sepia", "high contrast", "desaturated", "complementary colors", "analogous colors"]
+    },
+    {
+      "key": "detail",
+      "label": "Detail / Quality",
+      "options": ["highly detailed", "intricate details", "8k", "4k", "ultra detailed", "sharp focus", "masterpiece", "best quality", "award winning", "trending on artstation", "octane render", "unreal engine 5", "ray tracing", "photorealism"]
+    },
+    {
+      "key": "environment",
+      "label": "Environment",
+      "options": ["studio backdrop", "forest", "cityscape", "desert", "ocean", "mountains", "interior room", "spaceship", "underwater", "rooftop", "alleyway", "meadow", "snowy landscape", "ruins", "fantasy castle"]
+    }
+  ],
+  "negative_presets": [
+    {
+      "key": "standard",
+      "label": "Standard Negative",
+      "value": "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, jpeg artifacts, signature, watermark, blurry"
+    },
+    {
+      "key": "photoreal",
+      "label": "Photoreal Negative",
+      "value": "cartoon, anime, illustration, painting, drawing, 3d render, cgi, plastic skin, oversaturated, deformed, disfigured, mutation, extra limbs"
+    },
+    {
+      "key": "minimal",
+      "label": "Minimal Negative",
+      "value": "watermark, text, logo, signature"
+    }
+  ]
+}
