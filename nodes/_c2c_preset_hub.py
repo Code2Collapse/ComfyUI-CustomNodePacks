@@ -10,7 +10,7 @@ Sources
     lexica        API     https://lexica.art/api/v1/search?q={q}
     civitai       API     https://civitai.com/api/v1/images?...
     huggingface   API     https://huggingface.co/api/models?search={q}
-    openart       API     https://openart.ai/api/feed/workflows?q={q}
+    openart       API     https://openart.ai/api/public/workflows/feed?q={q}
     promptdexter  scrape  https://promptdexter.com/?search={q}   (1 req/sec)
     promptomania  native  local taxonomy JSON (no upstream call)
     c2c_doctor    API     GitHub issues search (for Workflow Doctor wire-up)
@@ -214,6 +214,8 @@ def _card(
     tags: Optional[List[str]] = None,
     permalink: str = "",
     kind: str = "prompt",
+    nsfw: bool = False,
+    nsfw_unknown: bool = False,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
@@ -233,6 +235,8 @@ def _card(
         "tags": tags or [],
         "permalink": permalink or "",
         "kind": kind,
+        "nsfw": bool(nsfw),
+        "nsfw_unknown": bool(nsfw_unknown),
         "extra": extra or {},
     }
 
@@ -257,6 +261,7 @@ async def _src_lexica(q: str, filters: Dict[str, Any], page: int) -> List[Dict[s
             height=it.get("height"),
             cfg=it.get("guidance"),
             permalink=f"https://lexica.art/?q={quote(q or '')}",
+            nsfw=bool(it.get("nsfw", False)),
         ))
     return out
 
@@ -265,7 +270,9 @@ async def _src_lexica(q: str, filters: Dict[str, Any], page: int) -> List[Dict[s
 # Source: Civitai (public API; auth optional for higher limits)
 # --------------------------------------------------------------------------
 async def _src_civitai(q: str, filters: Dict[str, Any], page: int) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {"limit": 24, "sort": "Most Reactions", "nsfw": "None"}
+    # NSFW is allowed through and flagged per-card; the client blurs flagged
+    # thumbnails by default with a click-to-reveal control.
+    params: Dict[str, Any] = {"limit": 24, "sort": "Most Reactions"}
     if q:
         params["query"] = q
     model = filters.get("checkpoint") or filters.get("model")
@@ -296,6 +303,7 @@ async def _src_civitai(q: str, filters: Dict[str, Any], page: int) -> List[Dict[
             width=it.get("width"),
             height=it.get("height"),
             permalink=f"https://civitai.com/images/{it.get('id', '')}",
+            nsfw=bool(it.get("nsfw")) or str(it.get("nsfwLevel") or "").strip().lower() not in ("", "none", "0", "1"),
         ))
     return out
 
@@ -326,9 +334,31 @@ async def _src_huggingface(q: str, filters: Dict[str, Any], page: int) -> List[D
 # --------------------------------------------------------------------------
 # Source: OpenArt workflows (public feed)
 # --------------------------------------------------------------------------
+# OpenArt's public feed exposes no explicit NSFW flag, so we infer it from the
+# title / description / category text. Conservative keyword set — false
+# positives only cause a blur (recoverable via click-to-reveal), while a miss
+# would show explicit content unblurred, so we err toward flagging.
+_NSFW_TERMS = (
+    "nsfw", "r18", "r-18", "18+", "adult", "explicit", "uncensored",
+    "nude", "nudes", "naked", "topless", "nipple", "areola", "lingerie",
+    "porn", "porno", "hentai", "ecchi", "lewd", "erotic", "erotica",
+    "sex", "sexy", "sexual", "boob", "boobs", "breast", "cleavage",
+    "undress", "undressing", "clothes swap", "cloth swap", "clothing removal",
+    "remove clothes", "deepnude", "onlyfans", "bikini", "panties", "thong",
+    "ahegao", "bdsm", "fetish", "genital", "vagina", "penis", "anal",
+)
+
+
+def _looks_nsfw(*parts: Any) -> bool:
+    """Heuristic NSFW detector over arbitrary text fragments."""
+    blob = " ".join(str(p or "") for p in parts).lower()
+    return any(term in blob for term in _NSFW_TERMS)
+
+
 async def _src_openart(q: str, filters: Dict[str, Any], page: int) -> List[Dict[str, Any]]:
+    # OpenArt public workflow feed (moved from /api/feed/workflows in 2026).
     params = {"q": q or "", "limit": 24}
-    url = f"https://openart.ai/api/feed/workflows?{urlencode(params)}"
+    url = f"https://openart.ai/api/public/workflows/feed?{urlencode(params)}"
     data = await _http_get_json(url, "openart.ai")
     items = []
     if isinstance(data, dict):
@@ -337,16 +367,40 @@ async def _src_openart(q: str, filters: Dict[str, Any], page: int) -> List[Dict[
         items = data
     out: List[Dict[str, Any]] = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         wid = it.get("id") or it.get("workflow_id") or it.get("slug", "")
+        thumbs = it.get("thumbnails")
+        thumb = ""
+        if isinstance(thumbs, list) and thumbs:
+            first = thumbs[0]
+            thumb = (first.get("url", "") if isinstance(first, dict) else str(first)) or ""
+        if not thumb:
+            thumb = it.get("thumbnail") or it.get("cover") or it.get("image", "") or ""
+        cats = it.get("categories")
+        tags = [str(c) for c in cats][:8] if isinstance(cats, list) else []
+        ncount = it.get("nodes_count")
+        node_total = ncount.get("total") if isinstance(ncount, dict) else None
+        creator = it.get("creator") or {}
+        name = str(it.get("name", "") or "")
+        desc = str(it.get("description", "") or "")
+        flagged = _looks_nsfw(name, desc, " ".join(tags))
         out.append(_card(
             "openart", wid,
-            thumb=it.get("thumbnail") or it.get("cover") or it.get("image", ""),
-            image=it.get("image") or it.get("cover", ""),
-            prompt=str(it.get("description", "") or ""),
-            model=str(it.get("base_model", "") or ""),
-            tags=it.get("tags", [])[:8] if isinstance(it.get("tags"), list) else [],
+            thumb=thumb,
+            image=thumb,
+            prompt=desc,
+            tags=tags,
             permalink=f"https://openart.ai/workflows/{wid}",
             kind="workflow",
+            nsfw=flagged,
+            nsfw_unknown=not flagged,
+            extra={
+                "title": name,
+                "author": str(creator.get("name") or creator.get("username") or "") if isinstance(creator, dict) else "",
+                "node_count": node_total,
+                "nodes": it.get("nodes_index") if isinstance(it.get("nodes_index"), list) else [],
+            },
         ))
     return out
 

@@ -16,11 +16,16 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { forAllNodes } from "./_subgraph_walk.js";
+import { c2cConfirm, c2cPrompt } from "./_c2c_dialog.js";
+import { capabilityFor, nodeColor } from "./c2c_node_taxonomy.js";
+import { renderGraphPreview, legendHTML } from "./c2c_graph_preview.js";
+import { scoreLocal } from "./c2c_workflow_library.js";
 
 const MODAL_ID = "c2c-preset-hub-modal";
 
 // Tabs map 1:1 to backend sources + the two local tabs.
 const TABS = [
+    { key: "workflows", label: "\ud83d\udcc2 Workflows" },
     { key: "lexica", label: "Lexica" },
     { key: "civitai", label: "Civitai" },
     { key: "huggingface", label: "HF" },
@@ -38,6 +43,20 @@ let _state = {
     useFlags: { ckpt: true, loras: true, dims: false, prompt: true },
     results: [],
     selected: null,     // currently previewed card
+    showNsfw: false,    // when false, NSFW thumbnails are blurred (click to reveal)
+};
+
+// Workflows tab (merged local + online) sub-state.
+const _wf = {
+    scope: "both",      // "local" | "online" | "both"
+    dirs: [],           // scan locations
+    dirsLoaded: false,
+    scanned: false,
+    scanning: false,
+    fingerprints: [],   // last scan fingerprints
+    local: [],          // scored local results
+    online: [],         // online (OpenArt) workflow cards
+    status: "",
 };
 
 // ----------------------------------------------------------- styles
@@ -45,6 +64,47 @@ function box() { return `background:var(--c2c-bg2);color:var(--c2c-fg);border:1p
 function btnPrimary() { return `background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:5px;padding:6px 14px;cursor:pointer;font-size:12px`; }
 function btnGhost() { return `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:5px;padding:6px 12px;cursor:pointer;font-size:12px`; }
 function inputStyle() { return `width:100%;box-sizing:border-box;background:var(--c2c-bg);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:5px;padding:6px;font-size:12px`; }
+
+// ----------------------------------------------------------- NSFW thumbnails
+// Returns the markup for a card thumbnail cell. NSFW-flagged images are
+// blurred with a click-to-reveal overlay unless the user has toggled
+// "show NSFW" on. The cell is position:relative so the overlay can fill it.
+function isBlurred(card) {
+    if (_state.showNsfw) return false;
+    // Explicitly flagged, OR an unverified source (e.g. OpenArt has no NSFW
+    // field) where we cannot guarantee the thumbnail is safe.
+    return !!card.nsfw || !!card.nsfw_unknown;
+}
+function thumbCellHtml(card, { h = 120, fallback = "prompt" } = {}) {
+    const img = card.thumb || card.image;
+    const blurred = isBlurred(card);
+    const unverified = !card.nsfw && !!card.nsfw_unknown;
+    const label = unverified ? "unverified \u00b7 click to reveal" : "NSFW \u00b7 click to reveal";
+    const imgTag = img
+        ? `<img src="${_esc(img)}" loading="lazy" style="width:100%;height:${h}px;object-fit:cover;background:var(--c2c-bg);${blurred ? "filter:blur(20px)" : ""}"/>`
+        : `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:var(--c2c-sub);font-size:10px">${_esc(fallback)}</div>`;
+    const overlay = blurred
+        ? `<div class="ph-nsfw-reveal" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:rgba(0,0,0,0.45);cursor:pointer">
+             <span style="font-size:18px">\ud83d\udd1e</span>
+             <span style="font-size:9px;color:#fff;letter-spacing:0.5px">${label}</span>
+           </div>`
+        : "";
+    return `<div style="position:relative;width:100%">${imgTag}${overlay}</div>`;
+}
+
+// Wire reveal overlays inside a freshly-rendered container. Clicking an
+// overlay unblurs only that card and stops the click from selecting it.
+function wireNsfwReveals(root) {
+    root.querySelectorAll(".ph-nsfw-reveal").forEach((ov) => {
+        ov.onclick = (e) => {
+            e.stopPropagation();
+            const cell = ov.parentElement;
+            const im = cell && cell.querySelector("img");
+            if (im) im.style.filter = "";
+            ov.remove();
+        };
+    });
+}
 
 // ----------------------------------------------------------- graph scan (settings-aware prefill, ALL 7)
 function scanGraphFilters() {
@@ -138,6 +198,30 @@ async function fetchInterrogate(imageB64) {
     return await r.json();
 }
 
+// ----------------------------------------------------------- library (local workflows) backend
+async function libLocations() {
+    const r = await fetch("/c2c/library/locations");
+    return await r.json();
+}
+async function libSaveLocations(directories) {
+    const r = await fetch("/c2c/library/locations", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ directories }),
+    });
+    return await r.json();
+}
+async function libScan(directories) {
+    const r = await fetch("/c2c/library/scan", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ directories }),
+    });
+    return await r.json();
+}
+async function libLoad(path) {
+    const r = await fetch("/c2c/library/load?path=" + encodeURIComponent(path));
+    return await r.json();
+}
+
 // ----------------------------------------------------------- modal scaffold
 function ensureModal() {
     let modal = document.getElementById(MODAL_ID);
@@ -190,6 +274,7 @@ function renderTabs(modal) {
 function renderSidebar(modal) {
     const host = modal.querySelector("#ph-sidebar");
     const f = _state.filters;
+    if (_state.tab === "workflows") { renderWorkflowSidebar(modal, host); return; }
     const builderOrLocal = _state.tab === "promptomania" || _state.tab === "image2prompt";
     if (builderOrLocal) { host.innerHTML = `<div style="font-size:11px;color:var(--c2c-sub)">This tab has no search filters.</div>`; return; }
     host.innerHTML = `
@@ -215,6 +300,7 @@ function renderSidebar(modal) {
 
 function renderGrid(modal, opts = {}) {
     const grid = modal.querySelector("#ph-grid");
+    if (_state.tab === "workflows") { renderWorkflows(modal, grid, opts); return; }
     if (_state.tab === "promptomania") { renderBuilder(modal, grid); return; }
     if (_state.tab === "image2prompt") { renderImage2Prompt(modal, grid); return; }
 
@@ -235,14 +321,13 @@ function renderGrid(modal, opts = {}) {
     for (const card of results) {
         const c = document.createElement("div");
         c.style.cssText = `${box()};overflow:hidden;cursor:pointer;display:flex;flex-direction:column`;
-        const img = card.thumb || card.image;
         c.innerHTML = `
-          ${img ? `<img src="${_esc(img)}" loading="lazy" style="width:100%;height:120px;object-fit:cover;background:var(--c2c-bg)"/>`
-                : `<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--c2c-sub);font-size:10px">${_esc(card.kind || "prompt")}</div>`}
+          ${thumbCellHtml(card, { fallback: card.kind || "prompt" })}
           <div style="padding:6px;font-size:10px;color:var(--c2c-fg);max-height:54px;overflow:hidden">${_esc((card.prompt || card.model || card.id || "").slice(0, 90))}</div>`;
         c.onclick = () => { _state.selected = card; renderPreview(modal); };
         grid.appendChild(c);
     }
+    wireNsfwReveals(grid);
 }
 
 function renderPreview(modal) {
@@ -257,8 +342,15 @@ function renderPreview(modal) {
     if (card.steps != null) params.push(`steps: ${card.steps}`);
     if (card.seed) params.push(`seed: ${_esc(card.seed)}`);
     if (card.width && card.height) params.push(`${card.width}×${card.height}`);
+    const previewBlurred = isBlurred(card);
     p.innerHTML = `
-      ${card.image ? `<img src="${_esc(card.image)}" style="width:100%;border-radius:6px;background:var(--c2c-bg)"/>` : ""}
+      ${card.image ? `<div style="position:relative">
+          <img src="${_esc(card.image)}" style="width:100%;border-radius:6px;background:var(--c2c-bg);${previewBlurred ? "filter:blur(24px)" : ""}"/>
+          ${previewBlurred ? `<div class="ph-nsfw-reveal" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:rgba(0,0,0,0.45);cursor:pointer;border-radius:6px">
+              <span style="font-size:22px">\u{1F51E}</span>
+              <span style="font-size:10px;color:#fff;letter-spacing:0.5px">NSFW \u00b7 click to reveal</span>
+            </div>` : ""}
+        </div>` : ""}
       <div style="margin-top:8px;font-size:11px;color:var(--c2c-sub)">Prompt</div>
       <div style="font-size:11px;white-space:pre-wrap;border:1px solid var(--c2c-border);border-radius:5px;padding:6px;margin-top:2px;max-height:160px;overflow:auto">${_esc(card.prompt || "(none)")}</div>
       ${card.negative ? `<div style="margin-top:6px;font-size:11px;color:var(--c2c-sub)">Negative</div>
@@ -278,11 +370,13 @@ function renderPreview(modal) {
     };
     const openBtn = p.querySelector("#ph-open");
     if (openBtn) openBtn.onclick = () => window.open(card.permalink, "_blank", "noopener");
+    wireNsfwReveals(p);
 }
 
 // ----------------------------------------------------------- apply-to-graph per card type
 function applyCardToGraph(modal, card) {
     const msg = modal.querySelector("#ph-apply-msg");
+    return (async () => {
     try {
         const kind = card.kind || "prompt";
         if (kind === "model") {
@@ -303,7 +397,7 @@ function applyCardToGraph(modal, card) {
             return;
         }
         // Default: prompt card → ask positive or negative, write to CLIPTextEncode.
-        const target = window.confirm("Apply as POSITIVE prompt?\n\nOK = positive, Cancel = negative") ? "positive" : "negative";
+        const target = (await c2cConfirm("Apply as POSITIVE prompt?\n\nOK = positive, Cancel = negative")) ? "positive" : "negative";
         const enc = findEncoder(target);
         if (!enc) { msg.textContent = "No CLIPTextEncode found for " + target + "."; return; }
         const w = (enc.widgets || []).find(x => x.name === "text");
@@ -315,6 +409,7 @@ function applyCardToGraph(modal, card) {
         __c2cReport("c2c_preset_modal:applyCard", exc);
         msg.textContent = "Apply failed: " + (exc?.message || exc);
     }
+    })();
 }
 
 function findEncoder(role) {
@@ -438,21 +533,289 @@ function renderImage2Prompt(modal, grid) {
     };
 }
 
+// ----------------------------------------------------------- Workflows (merged local + online)
+function renderWorkflowSidebar(modal, host) {
+    const scopeBtn = (key, label) => {
+        const active = _wf.scope === key;
+        return `<button data-scope="${key}" style="flex:1;padding:5px 0;border-radius:5px;cursor:pointer;font-size:11px;border:1px solid var(--c2c-border);
+            background:${active ? "var(--c2c-mauve)" : "var(--c2c-bg2)"};color:${active ? "var(--c2c-bg)" : "var(--c2c-fg)"}">${label}</button>`;
+    };
+    const locRows = (_wf.dirs || []).length
+        ? _wf.dirs.map((d, i) => `
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;margin:3px 0">
+              <span data-lib-tog="${i}" style="cursor:pointer;width:16px;text-align:center;color:${d.enabled ? "var(--c2c-green)" : "var(--c2c-sub)"}">${d.enabled ? "\u2611" : "\u2610"}</span>
+              <span title="${_esc(d.path)}" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${d.exists === false ? "color:var(--c2c-red)" : ""}">${_esc(d.path)}${d.exists === false ? " [missing]" : ""}</span>
+              <span data-lib-rm="${i}" style="cursor:pointer;color:var(--c2c-sub)">\u00d7</span>
+            </div>`).join("")
+        : `<div style="font-size:10px;color:var(--c2c-sub)">No folders yet.</div>`;
+
+    host.innerHTML = `
+      <div style="font-size:11px;color:var(--c2c-sub);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Search scope</div>
+      <div style="display:flex;gap:4px">${scopeBtn("local", "Local")}${scopeBtn("online", "Online")}${scopeBtn("both", "Both")}</div>
+      <label style="display:block;font-size:10px;color:var(--c2c-sub);margin-top:12px">Query</label>
+      <input id="ph-wf-query" type="text" value="${_esc(_state.q)}" placeholder="e.g. generate video from an image" style="${inputStyle()}"/>
+      <button id="ph-wf-apply" style="${btnPrimary()};margin-top:10px;width:100%">Search \u2192</button>
+      <div style="font-size:11px;color:var(--c2c-sub);text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 6px">Local folders</div>
+      <div id="ph-wf-locs">${locRows}</div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button id="ph-wf-addloc" style="${btnGhost()};flex:1">+ Folder</button>
+        <button id="ph-wf-scan" style="${btnGhost()};flex:1">Rescan</button>
+      </div>`;
+
+    host.querySelectorAll("[data-scope]").forEach((b) => {
+        b.onclick = () => { _wf.scope = b.dataset.scope; renderWorkflowSidebar(modal, host); runSearch(modal); };
+    });
+    host.querySelector("#ph-wf-query").oninput = (e) => { _state.q = e.target.value; };
+    host.querySelector("#ph-wf-query").onkeydown = (e) => { if (e.key === "Enter") runSearch(modal); };
+    host.querySelector("#ph-wf-apply").onclick = () => runSearch(modal);
+    host.querySelector("#ph-wf-scan").onclick = () => { _wf.scanned = false; runSearch(modal, { force: true }); };
+    host.querySelector("#ph-wf-addloc").onclick = async () => {
+        const p = await c2cPrompt("Workflow folder path (absolute):", "");
+        if (!p) return;
+        _wf.dirs = _wf.dirs || [];
+        _wf.dirs.push({ path: p, enabled: true });
+        const r = await libSaveLocations(_wf.dirs);
+        if (r.success) { _wf.dirs = r.directories; _wf.scanned = false; }
+        renderWorkflowSidebar(modal, host);
+        runSearch(modal, { force: true });
+    };
+    host.querySelectorAll("[data-lib-tog]").forEach((el) => {
+        el.onclick = async () => {
+            const i = +el.dataset.libTog;
+            _wf.dirs[i].enabled = !_wf.dirs[i].enabled;
+            const r = await libSaveLocations(_wf.dirs);
+            if (r.success) _wf.dirs = r.directories;
+            _wf.scanned = false;
+            renderWorkflowSidebar(modal, host);
+            runSearch(modal, { force: true });
+        };
+    });
+    host.querySelectorAll("[data-lib-rm]").forEach((el) => {
+        el.onclick = async () => {
+            _wf.dirs.splice(+el.dataset.libRm, 1);
+            const r = await libSaveLocations(_wf.dirs);
+            if (r.success) _wf.dirs = r.directories;
+            _wf.scanned = false;
+            renderWorkflowSidebar(modal, host);
+            runSearch(modal, { force: true });
+        };
+    });
+}
+
+async function searchWorkflows(modal, opts = {}) {
+    const q = _state.q || "";
+    _wf.local = [];
+    _wf.online = [];
+
+    // ── local ──
+    if (_wf.scope === "local" || _wf.scope === "both") {
+        try {
+            if (!_wf.dirsLoaded) {
+                const loc = await libLocations();
+                _wf.dirs = loc.success ? (loc.directories || []) : [];
+                _wf.dirsLoaded = true;
+                renderSidebar(modal);
+            }
+            if (!_wf.scanned || opts.force) {
+                _wf.scanning = true;
+                _wf.status = "Scanning local folders\u2026";
+                renderGrid(modal, { loading: true });
+                renderFooter(modal);
+                const scan = await libScan(_wf.dirs);
+                _wf.fingerprints = scan.success ? (scan.workflows || []) : [];
+                _wf.scanned = true;
+                _wf.scanning = false;
+            }
+            const pool = _wf.fingerprints;
+            _wf.local = (q.trim()
+                ? pool.map((fp) => scoreLocal(fp, q)).filter((fp) => fp.score > 0)
+                : pool.map((fp) => ({ ...fp, score: 0, matched_terms: [] })))
+                .sort((a, b) => (b.score || 0) - (a.score || 0))
+                .slice(0, 200);
+        } catch (exc) {
+            _wf.scanning = false;
+            __c2cReport("c2c_preset_modal:wfLocal", exc);
+        }
+    }
+
+    // ── online (OpenArt workflow community) ──
+    if (_wf.scope === "online" || _wf.scope === "both") {
+        try {
+            const j = await (opts.force ? fetchRefresh("openart", q) : fetchSearch("openart", q));
+            _wf.online = (j.results || []).map((c) => ({ ...c, __online: true }));
+            if (!j.ok && j.message) _wf.status = "Online: " + j.message;
+        } catch (exc) {
+            __c2cReport("c2c_preset_modal:wfOnline", exc);
+        }
+    }
+
+    _wf.status = `Local ${_wf.local.length} \u00b7 Online ${_wf.online.length}`;
+    renderGrid(modal);
+    renderFooter(modal);
+}
+
+function renderWorkflows(modal, grid, opts = {}) {
+    if (opts.loading || _wf.scanning) {
+        grid.style.display = "block";
+        grid.innerHTML = `<div style="color:var(--c2c-sub);font-size:12px">${_esc(_wf.status || "Loading\u2026")}</div>`;
+        return;
+    }
+    grid.style.display = "block";
+    grid.innerHTML = "";
+
+    const sectionCss = "font-size:11px;color:var(--c2c-sub);text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 8px";
+    const gridCss = "display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:18px";
+
+    // Local section
+    if (_wf.scope === "local" || _wf.scope === "both") {
+        const head = document.createElement("div");
+        head.style.cssText = sectionCss;
+        head.textContent = `\ud83d\udcc2 Local workflows (${_wf.local.length})`;
+        grid.appendChild(head);
+        if (!_wf.local.length) {
+            const empty = document.createElement("div");
+            empty.style.cssText = "color:var(--c2c-sub);font-size:12px;margin-bottom:18px";
+            empty.textContent = _wf.dirs.length ? "No local matches. Add folders or try another query." : "No scan folders yet \u2014 add one in the sidebar.";
+            grid.appendChild(empty);
+        } else {
+            const wrap = document.createElement("div");
+            wrap.style.cssText = gridCss;
+            for (const fp of _wf.local) {
+                const chips = (fp.nodes || []).slice(0, 6).map((nt) =>
+                    `<span style="display:inline-block;margin:2px;padding:1px 6px;border-radius:3px;font-size:9px;color:#fff;background:${nodeColor(nt)}" title="${_esc(capabilityFor(nt))}">${_esc(nt)}</span>`).join("");
+                const card = document.createElement("div");
+                card.style.cssText = `${box()};padding:8px;display:flex;flex-direction:column;gap:4px`;
+                card.innerHTML = `
+                  <div style="font-size:12px;font-weight:600;color:var(--c2c-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_esc(fp.path)}">${_esc(fp.filename)}</div>
+                  <div style="font-size:10px;color:var(--c2c-sub)">${fp.node_count} nodes${fp.score ? ` \u00b7 score ${fp.score.toFixed(1)}` : ""}</div>
+                  <div>${chips}</div>
+                  <div style="display:flex;gap:6px;margin-top:4px">
+                    <button class="wf-open" style="${btnPrimary()};padding:4px 10px;font-size:11px">Open in canvas</button>
+                    <button class="wf-prev" style="${btnGhost()};padding:4px 10px;font-size:11px">Preview</button>
+                  </div>`;
+                card.querySelector(".wf-open").onclick = () => openLocalWorkflow(modal, fp);
+                card.querySelector(".wf-prev").onclick = () => previewLocalWorkflow(modal, fp);
+                wrap.appendChild(card);
+            }
+            grid.appendChild(wrap);
+        }
+    }
+
+    // Online section (reuse prompt-card preview pane via _state.selected)
+    if (_wf.scope === "online" || _wf.scope === "both") {
+        const head = document.createElement("div");
+        head.style.cssText = sectionCss;
+        head.textContent = `\ud83c\udf10 Online \u2014 OpenArt (${_wf.online.length})`;
+        grid.appendChild(head);
+        if (!_wf.online.length) {
+            const empty = document.createElement("div");
+            empty.style.cssText = "color:var(--c2c-sub);font-size:12px";
+            empty.textContent = "No online results. Try a different query.";
+            grid.appendChild(empty);
+        } else {
+            const wrap = document.createElement("div");
+            wrap.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px";
+            for (const c of _wf.online) {
+                const el = document.createElement("div");
+                el.style.cssText = `${box()};overflow:hidden;cursor:pointer;display:flex;flex-direction:column`;
+                const ex = c.extra || {};
+                const title = String(ex.title || c.prompt || c.id || "")
+                    .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+                const sub = ex.node_count ? `${ex.node_count} nodes${ex.author ? ` \u00b7 ${ex.author}` : ""}` : (ex.author || "");
+                el.innerHTML = `
+                  ${thumbCellHtml(c, { fallback: "workflow" })}
+                  <div style="padding:6px;display:flex;flex-direction:column;gap:2px">
+                    <div style="font-size:11px;font-weight:600;color:var(--c2c-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_esc(title)}">${_esc(title.slice(0, 70) || "workflow")}</div>
+                    ${sub ? `<div style="font-size:9px;color:var(--c2c-sub)">${_esc(sub)}</div>` : ""}
+                  </div>`;
+                el.onclick = () => { _state.selected = c; renderPreview(modal); };
+                wrap.appendChild(el);
+            }
+            grid.appendChild(wrap);
+            wireNsfwReveals(wrap);
+        }
+    }
+}
+
+let _wfPreview = null;
+function previewLocalWorkflow(modal, fp) {
+    const p = modal.querySelector("#ph-preview");
+    p.style.display = "block";
+    p.innerHTML = `
+      <div style="font-size:11px;color:var(--c2c-sub)">Graph preview</div>
+      <div style="font-size:12px;font-weight:600;margin:2px 0 6px">${_esc(fp.filename)}</div>
+      <div id="ph-wf-prev-host" style="font-size:11px;color:var(--c2c-sub)">Loading\u2026</div>
+      <div id="ph-wf-prev-legend" style="margin-top:6px;display:none"></div>
+      <button id="ph-wf-prev-open" style="${btnPrimary()};margin-top:10px">Open in canvas</button>`;
+    p.querySelector("#ph-wf-prev-open").onclick = () => openLocalWorkflow(modal, fp);
+    libLoad(fp.path).then((data) => {
+        const host = p.querySelector("#ph-wf-prev-host");
+        if (!host) return;
+        if (!data.success) { host.innerHTML = `<span style="color:var(--c2c-red)">Preview error: ${_esc(data.error || "?")}</span>`; return; }
+        host.innerHTML = "";
+        if (_wfPreview) { _wfPreview.destroy?.(); _wfPreview = null; }
+        _wfPreview = renderGraphPreview(host, data.workflow, { height: 280 });
+        const lg = p.querySelector("#ph-wf-prev-legend");
+        if (lg) { lg.innerHTML = legendHTML(); lg.style.display = "block"; }
+    }).catch((exc) => {
+        const host = p.querySelector("#ph-wf-prev-host");
+        if (host) host.innerHTML = `<span style="color:var(--c2c-red)">Preview failed: ${_esc(String(exc))}</span>`;
+    });
+}
+
+async function openLocalWorkflow(modal, fp) {
+    _wf.status = "Loading " + fp.filename + "\u2026";
+    renderFooter(modal);
+    try {
+        const data = await libLoad(fp.path);
+        if (!data.success) { _wf.status = "Load error: " + (data.error || "?"); renderFooter(modal); return; }
+        await app.loadGraphData(data.workflow);
+        _wf.status = "Loaded " + fp.filename;
+        renderFooter(modal);
+        close();
+    } catch (exc) {
+        __c2cReport("c2c_preset_modal:wfOpen", exc);
+        _wf.status = "Open failed: " + (exc?.message || exc);
+        renderFooter(modal);
+    }
+}
+
 // ----------------------------------------------------------- footer / cache badge
 function renderFooter(modal, info) {
     const f = modal.querySelector("#ph-footer");
+    const nsfwBtn = `<button id="ph-nsfw" title="Toggle blurring of NSFW thumbnails" style="${btnGhost()};padding:3px 10px">${_state.showNsfw ? "\u{1F51E} NSFW: shown" : "\u{1F51E} NSFW: blurred"}</button>`;
+    const wireNsfwBtn = () => {
+        const nb = f.querySelector("#ph-nsfw");
+        if (nb) nb.onclick = () => {
+            _state.showNsfw = !_state.showNsfw;
+            renderGrid(modal);
+            renderPreview(modal);
+            renderFooter(modal, info);
+        };
+    };
+    if (_state.tab === "workflows") {
+        const scopeLbl = _wf.scope === "local" ? "Local only" : _wf.scope === "online" ? "Online only" : "Local + Online";
+        f.innerHTML = `<span>${_esc(_wf.status || scopeLbl)}</span>
+          <span style="display:flex;gap:6px">${nsfwBtn}<button id="ph-wf-refresh" style="${btnGhost()};padding:3px 10px">Refresh ↻</button></span>`;
+        const rb = f.querySelector("#ph-wf-refresh");
+        if (rb) rb.onclick = () => { _wf.scanned = false; runSearch(modal, { force: true }); };
+        wireNsfwBtn();
+        return;
+    }
     if (_state.tab === "promptomania" || _state.tab === "image2prompt") { f.innerHTML = `<span>Local tab — no network fetch.</span><span></span>`; return; }
     const age = info?.age_seconds;
     const ageStr = age == null ? "" : age < 90 ? "just now" : age < 3600 ? `${Math.round(age / 60)}m ago` : `${Math.round(age / 3600)}h ago`;
     const badge = info?.cached ? `${tabLabel()} · fetched ${ageStr}` : `${tabLabel()} · live`;
     f.innerHTML = `<span>${_esc(badge)}</span>
-      <span><button id="ph-refresh" style="${btnGhost()};padding:3px 10px">Refresh ↻</button></span>`;
+      <span style="display:flex;gap:6px">${nsfwBtn}<button id="ph-refresh" style="${btnGhost()};padding:3px 10px">Refresh ↻</button></span>`;
     const rb = f.querySelector("#ph-refresh");
     if (rb) rb.onclick = () => runSearch(modal, { force: true });
+    wireNsfwBtn();
 }
 
 // ----------------------------------------------------------- orchestration
 async function runSearch(modal, opts = {}) {
+    if (_state.tab === "workflows") { await searchWorkflows(modal, opts); return; }
     if (_state.tab === "promptomania" || _state.tab === "image2prompt") { renderGrid(modal); renderFooter(modal); return; }
     const q = buildQueryForSource(_state.tab);
     renderGrid(modal, { loading: true });
