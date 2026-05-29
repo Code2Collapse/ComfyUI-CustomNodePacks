@@ -535,7 +535,10 @@ function openPkgFilter() {
     });
 }
 
-// ── Toolbar button ────────────────────────────────────────────────────
+// ── Toolbar button (standalone fallback only) ─────────────────────────
+// Used only if the OmniBar extension never loads. When OmniBar is present
+// the Library lives inside it as a "tools" slot (see _hookOmniBar below) and
+// this fixed-position button is removed.
 function ensureButton() {
     if (document.getElementById(BTN_ID)) return;
     const b = document.createElement("button");
@@ -546,11 +549,59 @@ function ensureButton() {
     document.body.appendChild(b);
 }
 
+// ── OmniBar integration ───────────────────────────────────────────────
+// Register the Library as an OmniBar "tools" slot using the public
+// window.C2COmniBar.register() API. Falls back to the standalone button if
+// OmniBar hasn't loaded yet, retrying briefly while it boots.
+function _hookOmniBar() {
+    const tryReg = () => {
+        const ob = window.C2COmniBar;
+        if (!ob || typeof ob.register !== "function") return false;
+        try {
+            const pill = document.createElement("button");
+            pill.id = "c2c-library-pill";
+            pill.className = "c2c-omnibar-slot-pill";
+            pill.title = "C2C Workflow Library — search your saved workflows";
+            pill.style.cssText = "display:flex;align-items:center;gap:5px;";
+            const icon = document.createElement("span");
+            icon.textContent = "📚";
+            icon.style.flexShrink = "0";
+            const label = document.createElement("span");
+            label.textContent = "Library";
+            pill.append(icon, label);
+            pill.addEventListener("click", openPanel);
+
+            ob.register({
+                section: "tools",
+                id: "c2c-library",
+                order: 40,
+                element: pill,
+                onMode(mode) {
+                    label.style.display = mode === "icon" ? "none" : "";
+                },
+            });
+            // OmniBar now hosts the Library — drop the standalone button.
+            document.getElementById(BTN_ID)?.remove();
+            return true;
+        } catch (exc) {
+            // eslint-disable-next-line no-console
+            console.error("[c2c-library] omnibar register", exc);
+            return false;
+        }
+    };
+    if (tryReg()) return;
+    let n = 0;
+    const iv = setInterval(() => {
+        if (tryReg() || ++n > 40) clearInterval(iv);
+    }, 500);
+}
+
 app.registerExtension({
     name: "C2C.WorkflowLibrary",
     async setup() {
         injectStyles();
         ensureButton();
+        _hookOmniBar();
         window.__C2C_LIBRARY__ = { open: openPanel, close: closePanel };
     },
 });

@@ -601,7 +601,12 @@ def register_routes(server) -> None:
                 "cached_at": time.time(), "age_seconds": 0, "results": results,
             })
         except Exception as exc:
-            _record_failure(f"search:{source}", exc, hint=f"live fetch from {source} failed")
+            # Transient upstream outage (HTTP 5xx, timeout, etc.) for an
+            # OPTIONAL live source. This is already surfaced inline to the
+            # caller below, so we only log it — recording it in the boot-style
+            # registry would wrongly raise the "optional components unavailable"
+            # toast for a per-request hiccup.
+            log.info("preset_hub search:%s transient fetch failure: %s", source, exc)
             return web.json_response({
                 "ok": False, "source": source, "message": str(exc),
                 "cached_result_if_any": cached["result"] if cached else None,
@@ -625,7 +630,7 @@ def register_routes(server) -> None:
                 if str(r.get("id")) == cid:
                     return web.json_response({"ok": True, "source": source, "detail": r})
         except Exception as exc:
-            _record_failure(f"detail:{source}", exc, hint="detail refetch failed")
+            log.info("preset_hub detail:%s transient refetch failure: %s", source, exc)
             return web.json_response({"ok": False, "source": source, "message": str(exc)})
         return web.json_response({"ok": False, "source": source, "message": "id not found"}, status=404)
 
@@ -649,7 +654,7 @@ def register_routes(server) -> None:
             return web.json_response({"ok": True, "source": source, "cached": False,
                                       "cached_at": time.time(), "age_seconds": 0, "results": results})
         except Exception as exc:
-            _record_failure(f"refresh:{source}", exc, hint=f"live refetch from {source} failed")
+            log.info("preset_hub refresh:%s transient refetch failure: %s", source, exc)
             return web.json_response({"ok": False, "source": source, "message": str(exc), "results": []})
 
     @routes.get("/c2c/presets/cache-stats")
