@@ -16,6 +16,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";  // kept for future use
+import { capabilityFor, nodeColor, lighten } from "./c2c_node_taxonomy.js";
 
 // ── constants ──────────────────────────────────────────────────────────────
 const DEFAULT_DWELL_MS = 250;   // how long to hover before showing tooltip
@@ -1256,10 +1257,24 @@ function _renderSlotsLocal(el, node) {
     el.innerHTML = `
         <div class="mec-ne-headline">${_esc(title)}</div>
         <div class="mec-ne-purpose mec-ne-muted"><code>${_esc(cls)}</code></div>
+        ${_capabilityBlock(cls)}
         ${inputsBlock}
         ${outputsBlock}
         ${widgetsBlock}`.trim();
     el.classList.add("visible");
+}
+
+/** Instant capability summary derived from the shared node taxonomy
+ *  (js/c2c_node_taxonomy.js). Shows the node's category colour + the
+ *  capability keywords used by the Workflow Library / Finder search, so the
+ *  explanation surface and search stay in lock-step. */
+function _capabilityBlock(cls) {
+    const caps = capabilityFor(cls);
+    if (!caps) return "";
+    const col = nodeColor(cls);
+    return `<div class="mec-ne-purpose" style="display:flex;gap:6px;align-items:center;margin-top:3px">`
+         + `<span style="width:10px;height:10px;border-radius:2px;flex:0 0 auto;background:${col};border:1px solid ${lighten(col, 40)}"></span>`
+         + `<span style="color:#9aa0d0;font-size:11px">${_esc(caps)}</span></div>`;
 }
 
 function _showError(el, msg) {
