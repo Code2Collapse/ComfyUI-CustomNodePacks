@@ -58,6 +58,54 @@ def register_routes(server) -> None:
         return web.json_response(
             {"success": False, "error": key, "message": msg}, status=code)
 
+    # Track D.1 — translate a raw error string through the deterministic
+    # rule pack and return the strict-JSON shape /c2c/doctor/explain
+    # promises (summary/root_cause/severity/category/fixes/preventive).
+    # Returns ``None`` on no-match so the caller can escalate to the LLM.
+    _SEVERITY_BY_CATEGORY = {
+        "missing_model":   "warning",
+        "missing_node":    "warning",
+        "shape_mismatch":  "error",
+        "oom":             "critical",
+        "dependency":      "error",
+        "network":         "warning",
+        "filesystem":      "warning",
+        "user_input":      "info",
+        "bug":             "error",
+        "uncategorized":   "warning",
+        "unknown":         "warning",
+    }
+    _ALLOWED_CATEGORIES = set(_SEVERITY_BY_CATEGORY.keys())
+
+    def _rule_pack_match(raw: str):
+        if not raw or not raw.strip():
+            return None
+        import re as _re
+        m = _re.search(r"([A-Za-z_][\w\.]*)\s*:\s*", raw)
+        exc_type = m.group(1) if m else "Exception"
+        try:
+            from nodes import error_assistant as _ea  # type: ignore[import-not-found]
+        except Exception:
+            return None
+        try:
+            match = _ea.match_pattern(exc_type, raw)
+        except Exception:
+            return None
+        if match is None:
+            return None
+        cat = match.category if match.category in _ALLOWED_CATEGORIES else "unknown"
+        return {
+            "summary":    match.cause.split(". ")[0][:240] if match.cause else match.name,
+            "root_cause": match.cause or "",
+            "severity":   _SEVERITY_BY_CATEGORY.get(cat, "warning"),
+            "category":   cat,
+            "fixes":      list(match.fixes or [])[:5],
+            "preventive": "",
+            "rule":       match.name,
+            "confidence": round(float(match.confidence), 2),
+            "source":     match.source,
+        }
+
     # ---------------------------------------------------------- status
     @routes.get("/c2c/ai/status")
     async def _status(_req):
@@ -230,6 +278,23 @@ def register_routes(server) -> None:
             Message(role="system", content=system_prompt),
             Message(role="user",   content=user_prompt),
         ]
+        # Track D.1 — rule-pack first. If the deterministic pattern pack
+        # matches the error we synthesise the strict-JSON response locally
+        # (zero latency, zero cost) and skip the LLM round-trip entirely.
+        # Only escalates to LLM on no-match.
+        try:
+            rp_match = _rule_pack_match(message + "\n" + traceback)
+        except Exception:
+            rp_match = None
+        if rp_match is not None:
+            return _ok({
+                "explanation": rp_match,
+                "backend_id":  "deterministic.rulepack",
+                "model":       "error_assistant.patterns",
+                "redacted":    False,
+                "cost_usd":    0.0,
+                "tier":        "deterministic",
+            })
         loop = asyncio.get_event_loop()
         try:
             resp = await loop.run_in_executor(

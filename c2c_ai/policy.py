@@ -39,6 +39,13 @@ _DEFAULTS: dict[str, Policy] = {
     "macro_ai":         Policy.PREFER_CLOUD,   # benefits from stronger reasoning
     "workflow_translator": Policy.PREFER_CLOUD,
     "tensor_inspector": Policy.LOCAL_ONLY,     # numeric data, no benefit from cloud
+    # Track D.1 — error-explanation features. Default to PREFER_LOCAL so users
+    # with Ollama still get richer answers; the router falls through to the
+    # deterministic rule pack automatically when no LLM is available.
+    "doctor.explain":   Policy.PREFER_LOCAL,
+    "error.explain":    Policy.PREFER_LOCAL,
+    "plain.english":    Policy.PREFER_LOCAL,
+    "error_assistant":  Policy.PREFER_LOCAL,
 }
 
 

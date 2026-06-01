@@ -235,9 +235,24 @@ function _mergeGraphHealthIntoLevel(level, gh) {
 }
 
 // Plain-English error translator for the Doctor popover. Maps common
-// Python exception types to a one-line user-facing explanation. Falls
-// back to the raw exc_type when nothing matches.
-function _plainEnglishError(err) {
+// Python exception types to a one-line user-facing explanation.
+//
+// Track D.1 — now server-augmented: the local switch is the *instant*
+// fallback used while the popover renders, and a background fetch to
+// /mec/translate_error replaces it with the server's rule-pack answer
+// (which can match Flux/Wan/SD3/GGUF/etc. rules that the JS switch
+// cannot). Result is cached per-(exc_type, exc_msg) so reopening the
+// popover for the same error is instant on subsequent renders.
+const _PLAIN_ENGLISH_CACHE = new Map();   // key -> {text, ts}
+const _PLAIN_ENGLISH_INFLIGHT = new Map(); // key -> Promise
+
+function _plainEnglishCacheKey(err) {
+    const t = String(err?.exc_type || "");
+    const m = String(err?.exc_msg  || "").slice(0, 160);
+    return `${t}|${m}`;
+}
+
+function _plainEnglishLocal(err) {
     try {
         const t = String(err?.exc_type || "").trim();
         const m = String(err?.exc_msg  || "").toLowerCase();
@@ -261,19 +276,72 @@ function _plainEnglishError(err) {
             "ZeroDivisionError":      "A divide-by-zero happened \u2014 likely an empty mask or zero-length input.",
         };
         if (T[t]) {
-            // Sharpen the OOM message when we can spot the GiB hint.
             if ((t === "OutOfMemoryError" || t.endsWith("OutOfMemoryError")) && m.includes("gib")) {
                 return T[t] + " (saw a GiB allocation request in the error).";
             }
             return T[t];
         }
-        if (m.includes("out of memory") || m.includes("oom")) {
-            return T["OutOfMemoryError"];
-        }
+        if (m.includes("out of memory") || m.includes("oom")) return T["OutOfMemoryError"];
         if (m.includes("no such file")) return T["FileNotFoundError"];
         if (m.includes("permission denied")) return T["PermissionError"];
         return t ? `(${t}) \u2014 see message below.` : "See message below.";
     } catch { return ""; }
+}
+
+async function _plainEnglishFromServer(err) {
+    const exc_type = String(err?.exc_type || "").trim();
+    const message  = String(err?.exc_msg  || "");
+    if (!message && !exc_type) return "";
+    try {
+        const resp = await fetch("/mec/translate_error", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ exc_type, message }),
+        });
+        if (!resp.ok) return "";
+        const j = await resp.json();
+        // /mec/translate_error returns either {success:true,data:{cause,fixes,...}}
+        // or {explanation:{...}}; handle both robustly.
+        const payload = (j && j.data) || j || {};
+        const cause = payload.cause || payload.summary || payload.root_cause || "";
+        return String(cause || "").trim();
+    } catch { return ""; }
+}
+
+function _plainEnglishError(err) {
+    if (!err) return "";
+    const key = _plainEnglishCacheKey(err);
+    const cached = _PLAIN_ENGLISH_CACHE.get(key);
+    if (cached && cached.text) return cached.text;
+    // Kick off the upgrade-to-server-answer once per error fingerprint.
+    if (!_PLAIN_ENGLISH_INFLIGHT.has(key)) {
+        const p = _plainEnglishFromServer(err).then((serverText) => {
+            if (serverText) {
+                _PLAIN_ENGLISH_CACHE.set(key, { text: serverText, ts: Date.now() });
+                _refreshPopoverPlainEnglish(err, serverText);
+            }
+            _PLAIN_ENGLISH_INFLIGHT.delete(key);
+            return serverText;
+        });
+        _PLAIN_ENGLISH_INFLIGHT.set(key, p);
+    }
+    return _plainEnglishLocal(err);
+}
+
+// Update any visible Doctor popover plain-English line in place when the
+// server response arrives. Scoped to the badge's own popover so we never
+// touch unrelated DOM.
+function _refreshPopoverPlainEnglish(err, text) {
+    try {
+        if (!text) return;
+        const root = document.getElementById(POPOVER_ID);
+        if (!root) return;
+        const slot = root.querySelector(".int-top div[data-c2c-plain]");
+        if (slot && slot.dataset.c2cKey === _plainEnglishCacheKey(err)) {
+            // textContent for XSS safety
+            slot.textContent = text;
+        }
+    } catch { /* defensive */ }
 }
 
 function _buildChip() {
@@ -572,7 +640,7 @@ function _renderPopover(health) {
                     <div class="int-row ${rt.recent_errors ? "err" : ""}"><span>Recent errors</span><span class="v">${rt.recent_errors || 0}</span></div>
                     ${rt.last_error ? `<div class="int-top"><span class="sev-error">●</span>
                         <b>${escape(rt.last_error.exc_type || "Error")}</b>
-                        <div style="opacity:0.95; margin-top:4px; font-weight:600;">${escape(_plainEnglishError(rt.last_error))}</div>
+                        <div data-c2c-plain data-c2c-key="${escape(_plainEnglishCacheKey(rt.last_error))}" style="opacity:0.95; margin-top:4px; font-weight:600;">${escape(_plainEnglishError(rt.last_error))}</div>
                         <div style="opacity:0.7; margin-top:2px; font-size:10px; font-family:ui-monospace,monospace;">${escape((rt.last_error.exc_msg || "").slice(0, 200))}</div>
                     </div>` : ""}
                 ` : `<div style="opacity:0.55; font-size:11px;">Diagnostics ring unavailable.</div>`}

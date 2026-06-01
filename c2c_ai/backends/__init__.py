@@ -19,6 +19,8 @@ from .openai_compat import OpenAICompatBackend
 from .gemini import GeminiBackend
 from .cohere import CohereBackend
 from .azure_openai import AzureOpenAIBackend
+from .llamacpp_local import LlamaCppBackend
+from .rulepack import RulePackBackend
 
 __all__ = [
     "Backend",
@@ -27,4 +29,6 @@ __all__ = [
     "GeminiBackend",
     "CohereBackend",
     "AzureOpenAIBackend",
+    "LlamaCppBackend",
+    "RulePackBackend",
 ]

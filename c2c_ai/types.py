@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable
 class Tier(str, Enum):
     CLOUD = "cloud"
     LOCAL = "local"
+    DETERMINISTIC = "deterministic"  # Track D.1: rule-pack / introspector / non-LLM
 
 
 class Policy(str, Enum):
@@ -22,6 +23,7 @@ class Policy(str, Enum):
     PREFER_CLOUD = "prefer_cloud"
     CLOUD_ONLY = "cloud_only"
     LOCAL_ONLY = "local_only"
+    DETERMINISTIC_ONLY = "deterministic_only"  # Track D.1: rule-pack only; never LLM
 
 
 class Capability(str, Enum):

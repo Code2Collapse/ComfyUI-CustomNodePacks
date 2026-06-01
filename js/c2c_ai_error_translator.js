@@ -53,6 +53,36 @@ async function translate(errorText, context = "") {
     panel.querySelector(".ctx").textContent = context || "execution error";
     const body = panel.querySelector(".body");
     body.textContent = "";
+    panel.querySelector(".status").textContent = "checking rule pack…";
+
+    // Track D.1 — try the offline deterministic rule pack first. Zero cost,
+    // <10ms, works even with no AI backends configured. Only escalate to
+    // the streaming LLM endpoint on no-match.
+    try {
+        const rp = await fetch("/mec/translate_error", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: errorText }),
+        });
+        if (rp.ok) {
+            const j = await rp.json().catch(() => null);
+            const payload = (j && (j.data || j)) || {};
+            const cause = String(payload.cause || payload.summary || payload.root_cause || "").trim();
+            const fixes = Array.isArray(payload.fixes) ? payload.fixes : (Array.isArray(payload.fix_steps) ? payload.fix_steps : []);
+            if (cause) {
+                const lines = [cause];
+                if (fixes.length) {
+                    lines.push("");
+                    lines.push("Try this:");
+                    for (const step of fixes) lines.push("\u2022 " + step);
+                }
+                body.textContent = lines.join("\n");
+                panel.querySelector(".status").textContent = "rule pack (offline)";
+                panel.querySelector(".backend").textContent = "deterministic";
+                return;
+            }
+        }
+    } catch (__c2cRpErr) { __c2cReport("c2c_ai_error_translator:rulepack", __c2cRpErr, { level: "info" }); }
     panel.querySelector(".status").textContent = "asking local AI…";
 
     const sys = "You are a senior ComfyUI engineer. The user just hit a Python traceback. Translate it into a plain-English explanation that a non-developer can follow. Suggest concrete next steps. Be terse. Use bullet points. End with one sentence on the most likely fix.";

@@ -117,12 +117,35 @@ class Router:
         self._probe_stop.set()
 
     # ============================================================ selection
+    # Track D.1 — features for which we transparently fall back to the
+    # deterministic rule-pack backend when no LLM is healthy. Anything
+    # error-explanation-shaped should never raise "no backend available"
+    # because we always have the offline rule pack to lean on.
+    _DETERMINISTIC_FALLBACK_FEATURES = frozenset({
+        "doctor.explain",
+        "error.explain",
+        "plain.english",
+        "error_translator",
+        "error_assistant",
+    })
+
     def select(self, feature: str, required: set[Capability],
                policy_override: Policy | None = None) -> Backend:
         """Pick the best backend or raise."""
         eff_policy = policy_mod.resolve(feature, policy_override)
         candidates = self._filter(required, eff_policy)
         if not candidates:
+            # Track D.1 — graceful fallback to the deterministic rule pack
+            # for explanation features. Only kicks in when the requested
+            # policy isn't already one that excludes deterministic (the
+            # explicit *_ONLY policies are user choices we must honor).
+            if (feature in self._DETERMINISTIC_FALLBACK_FEATURES
+                    and eff_policy not in (Policy.CLOUD_ONLY, Policy.LOCAL_ONLY)):
+                det = self._deterministic_backends(required)
+                if det:
+                    log.info("no LLM backend for feature=%s — falling back to %s",
+                             feature, det[0].info.id)
+                    return det[0]
             raise RuntimeError(
                 f"no backend available for feature={feature} policy={eff_policy.value} "
                 f"required={sorted(c.value for c in required)}. "
@@ -136,13 +159,23 @@ class Router:
         candidates.sort(key=lambda c: c.health.last_probe_at, reverse=True)
         return candidates[0]
 
+    def _deterministic_backends(self, required: set[Capability]) -> list[Backend]:
+        return [b for b in self.all_backends()
+                if b.info.enabled
+                and b.info.tier == Tier.DETERMINISTIC
+                and required.issubset(b.info.capabilities)
+                and b.health.ok]
+
     def _filter(self, required: set[Capability], pol: Policy) -> list[Backend]:
         backends = [b for b in self.all_backends() if b.info.enabled]
         # capability filter
         backends = [b for b in backends if required.issubset(b.info.capabilities)]
-        # policy filter / ordering
+        # Bucket by tier
         cloud = [b for b in backends if b.info.tier == Tier.CLOUD]
         local = [b for b in backends if b.info.tier == Tier.LOCAL]
+        deterministic = [b for b in backends if b.info.tier == Tier.DETERMINISTIC]
+        if pol == Policy.DETERMINISTIC_ONLY:
+            return deterministic
         if pol == Policy.CLOUD_ONLY:
             return cloud
         if pol == Policy.LOCAL_ONLY:
@@ -151,7 +184,11 @@ class Router:
             return local + cloud
         if pol == Policy.PREFER_CLOUD:
             return cloud + local
-        # AUTO: cheapest first (local is free → wins), then cloud sorted by input cost
+        # AUTO: cheapest first. Deterministic is intentionally NOT in this list
+        # — it is reserved as an explicit-opt-in tier (DETERMINISTIC_ONLY) or
+        # as a no-LLM-available fallback inside select(), so that AUTO doesn't
+        # silently route every chat call to the rule pack just because it's
+        # the cheapest backend.
         local_sorted = sorted(local, key=lambda b: b.info.cost_per_1k_input)
         cloud_sorted = sorted(cloud, key=lambda b: b.info.cost_per_1k_input)
         return local_sorted + cloud_sorted
