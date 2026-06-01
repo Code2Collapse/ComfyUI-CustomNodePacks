@@ -43,8 +43,24 @@ let _state = {
     useFlags: { ckpt: true, loras: true, dims: false, prompt: true },
     results: [],
     selected: null,     // currently previewed card
-    showNsfw: false,    // when false, NSFW thumbnails are blurred (click to reveal)
+    // 3-state NSFW filter (Track A.1, 2026-05-30):
+    //   "sfw"  → drop any card with nsfw || nsfw_unknown.
+    //   "both" → render everything; blur nsfw || nsfw_unknown (DEFAULT).
+    //   "nsfw" → drop cards with nsfw === false && nsfw_unknown === false.
+    // Persisted in localStorage under "c2c.presetHub.nsfwMode".
+    nsfwMode: "both",
+    showNsfw: false,    // legacy alias: true iff nsfwMode === "nsfw".
 };
+
+// Restore persisted NSFW mode on module load (best-effort; storage may be
+// unavailable in some embedded contexts).
+try {
+    const _persisted = localStorage.getItem("c2c.presetHub.nsfwMode");
+    if (_persisted === "sfw" || _persisted === "both" || _persisted === "nsfw") {
+        _state.nsfwMode = _persisted;
+        _state.showNsfw = (_persisted === "nsfw");
+    }
+} catch (_e) { /* localStorage unavailable — keep defaults */ }
 
 // Workflows tab (merged local + online) sub-state.
 const _wf = {
@@ -70,10 +86,74 @@ function inputStyle() { return `width:100%;box-sizing:border-box;background:var(
 // blurred with a click-to-reveal overlay unless the user has toggled
 // "show NSFW" on. The cell is position:relative so the overlay can fill it.
 function isBlurred(card) {
-    if (_state.showNsfw) return false;
-    // Explicitly flagged, OR an unverified source (e.g. OpenArt has no NSFW
-    // field) where we cannot guarantee the thumbnail is safe.
+    // In "nsfw" mode the user has explicitly asked for NSFW content — no blur.
+    if (_state.nsfwMode === "nsfw") return false;
+    // In "sfw" mode the card never reaches the renderer (filtered upstream),
+    // so the only mode where blur applies is "both".
     return !!card.nsfw || !!card.nsfw_unknown;
+}
+
+// Track A.1 — return true iff the card is allowed under the current NSFW
+// filter mode. Used by every render path that builds a result list.
+function passesNsfwFilter(card) {
+    const flagged = !!(card && (card.nsfw || card.nsfw_unknown));
+    if (_state.nsfwMode === "sfw") return !flagged;
+    if (_state.nsfwMode === "nsfw") return flagged;
+    return true; // "both"
+}
+
+// Normalise a card returned by an online workflow source so the NSFW
+// fields are always defined. OpenArt and other community feeds have no
+// explicit NSFW flag; older server builds did not stamp nsfw_unknown on
+// every record, so we conservatively default to "unverified" (blurred)
+// whenever the source did not provide either field.
+const _UNVERIFIED_SOURCES = new Set(["openart"]);
+function normalizeOnlineWorkflowCard(card) {
+    if (card == null || typeof card !== "object") return card;
+    if (card.nsfw === undefined) card.nsfw = false;
+    if (card.nsfw_unknown === undefined) {
+        // Default-blur for known-unverified sources, default-clear otherwise.
+        card.nsfw_unknown = _UNVERIFIED_SOURCES.has(String(card.source || ""));
+    }
+    return card;
+}
+
+// Track A.2 — collapse cards that represent the same workflow across (or
+// within) sources. Dedupe key: lowercased title + first-token of author,
+// falling back to the thumbnail URL. The first occurrence wins and gets an
+// `also_on` array listing the other source labels the work appeared in.
+function dedupeWorkflows(cards) {
+    if (!Array.isArray(cards) || cards.length < 2) return cards || [];
+    const _firstToken = (s) => String(s || "").trim().toLowerCase().split(/\s+/)[0] || "";
+    const _norm = (s) => String(s || "").toLowerCase().replace(/<[^>]*>/g, " ")
+        .replace(/[^a-z0-9]+/g, " ").trim();
+    const _key = (c) => {
+        const ex = c.extra || {};
+        const title = _norm(ex.title || c.prompt || c.id || "");
+        const author = _firstToken(ex.author);
+        if (title) return `t:${title}|a:${author}`;
+        const thumb = String(c.thumb || c.image || "").trim().toLowerCase();
+        return thumb ? `u:${thumb}` : "";
+    };
+    const seen = new Map();
+    const out = [];
+    for (const c of cards) {
+        const k = _key(c);
+        if (!k) { out.push(c); continue; }
+        const prior = seen.get(k);
+        if (prior) {
+            // Record the additional source on the survivor.
+            const src = String(c.source || c.__source || "").trim();
+            if (src && src !== prior.source) {
+                prior.also_on = prior.also_on || [];
+                if (!prior.also_on.includes(src)) prior.also_on.push(src);
+            }
+            continue;
+        }
+        seen.set(k, c);
+        out.push(c);
+    }
+    return out;
 }
 function thumbCellHtml(card, { h = 120, fallback = "prompt" } = {}) {
     const img = card.thumb || card.image;
@@ -167,6 +247,42 @@ function buildQueryForSource(source) {
 function stripExt(s) { return String(s || "").replace(/\.(safetensors|ckpt|pt|bin)$/i, "").replace(/[\\/]/g, " "); }
 
 // ----------------------------------------------------------- backend calls
+
+// Retry-with-jitter helper for optional backend fetches that may race the
+// server boot. Returns the eventual successful response, or throws the LAST
+// error if all attempts fail. Delays in ms; jitter is ±20%.
+async function _retry(fn, label, attempts = 3, baseDelays = [250, 500, 1000]) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (exc) {
+            lastErr = exc;
+            if (i === attempts - 1) break;
+            const base = baseDelays[Math.min(i, baseDelays.length - 1)] || 1000;
+            const jitter = base * (0.8 + Math.random() * 0.4);
+            // Intermediate-retry noise stays at "warn" → console only, no toast.
+            __c2cReport(`c2c_preset_modal:${label}:retry${i + 1}`, exc, { level: "warn" });
+            await new Promise((r) => setTimeout(r, jitter));
+        }
+    }
+    throw lastErr;
+}
+
+// One-time backend-readiness probe. Returns true if /c2c/presets/sources is
+// alive (server-side preset hub is mounted). Cached on the modal until reload.
+let _backendReady = null;
+async function probePresetBackend() {
+    if (_backendReady !== null) return _backendReady;
+    try {
+        const r = await fetch("/c2c/presets/sources");
+        _backendReady = r.ok;
+    } catch (_e) {
+        _backendReady = false;
+    }
+    return _backendReady;
+}
+
 async function fetchSources() {
     try {
         const r = await fetch("/c2c/presets/sources");
@@ -176,8 +292,11 @@ async function fetchSources() {
 async function fetchSearch(source, q) {
     const filtersJson = encodeURIComponent(JSON.stringify(_state.filters));
     const url = `/c2c/presets/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}&filters=${filtersJson}&page=0`;
-    const r = await fetch(url);
-    return await r.json();
+    return await _retry(async () => {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    }, "search");
 }
 async function fetchRefresh(source, q) {
     const r = await fetch("/c2c/presets/refresh", {
@@ -200,8 +319,11 @@ async function fetchInterrogate(imageB64) {
 
 // ----------------------------------------------------------- library (local workflows) backend
 async function libLocations() {
-    const r = await fetch("/c2c/library/locations");
-    return await r.json();
+    return await _retry(async () => {
+        const r = await fetch("/c2c/library/locations");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    }, "libLocations");
 }
 async function libSaveLocations(directories) {
     const r = await fetch("/c2c/library/locations", {
@@ -211,11 +333,14 @@ async function libSaveLocations(directories) {
     return await r.json();
 }
 async function libScan(directories) {
-    const r = await fetch("/c2c/library/scan", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ directories }),
-    });
-    return await r.json();
+    return await _retry(async () => {
+        const r = await fetch("/c2c/library/scan", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ directories }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    }, "libScan");
 }
 async function libLoad(path) {
     const r = await fetch("/c2c/library/load?path=" + encodeURIComponent(path));
@@ -308,9 +433,24 @@ function renderGrid(modal, opts = {}) {
         grid.innerHTML = `<div style="color:var(--c2c-sub);font-size:12px">Fetching live from ${tabLabel()}…</div>`;
         return;
     }
-    const results = _state.results || [];
+    const results = (_state.results || []).filter(passesNsfwFilter);
     if (!results.length) {
-        grid.innerHTML = `<div style="color:var(--c2c-sub);font-size:12px">No results. Try a different query or press Apply.</div>`;
+        // Differentiate "no results from server" vs "all filtered out by NSFW mode".
+        const allCount = (_state.results || []).length;
+        let hint = "No results. Try a different query or press Apply.";
+        if (allCount > 0 && _state.nsfwMode !== "both") {
+            const mode = _state.nsfwMode === "sfw" ? "SFW only" : "NSFW only";
+            hint = `No results match the “${mode}” filter (${allCount} hidden). Switch the NSFW filter to “Both” to see them.`;
+        }
+        // Track A.4 — Civitai-specific hint: anonymous Civitai requests are
+        // server-capped to SFW. If the user picks "NSFW only" and gets zero
+        // results back from the server (allCount === 0), surface the API-key
+        // requirement so they don't think the filter is broken.
+        if (_state.tab === "civitai" && _state.nsfwMode === "nsfw" && allCount === 0) {
+            hint = `Civitai requires an API key to return NSFW results. ` +
+                   `Add CIVITAI_API_KEY in your environment (or in Settings → Secrets) and restart ComfyUI.`;
+        }
+        grid.innerHTML = `<div style="color:var(--c2c-sub);font-size:12px">${_esc(hint)}</div>`;
         return;
     }
     grid.style.display = "grid";
@@ -322,12 +462,16 @@ function renderGrid(modal, opts = {}) {
         const c = document.createElement("div");
         c.style.cssText = `${box()};overflow:hidden;cursor:pointer;display:flex;flex-direction:column`;
         c.innerHTML = `
-          ${thumbCellHtml(card, { fallback: card.kind || "prompt" })}
-          <div style="padding:6px;font-size:10px;color:var(--c2c-fg);max-height:54px;overflow:hidden">${_esc((card.prompt || card.model || card.id || "").slice(0, 90))}</div>`;
+          ${_thumbWithOverlays(card, { fallback: card.kind || "prompt" })}
+          <div style="padding:6px;display:flex;flex-direction:column;gap:2px">
+            <div style="font-size:10px;color:var(--c2c-fg);max-height:54px;overflow:hidden">${_esc((card.prompt || card.model || card.id || "").slice(0, 90))}</div>
+            ${_cardBadgesHtml(card)}
+          </div>`;
         c.onclick = () => { _state.selected = card; renderPreview(modal); };
         grid.appendChild(c);
     }
     wireNsfwReveals(grid);
+    _wirePermalinkClicks(grid);
 }
 
 function renderPreview(modal) {
@@ -634,7 +778,10 @@ async function searchWorkflows(modal, opts = {}) {
                 .slice(0, 200);
         } catch (exc) {
             _wf.scanning = false;
-            __c2cReport("c2c_preset_modal:wfLocal", exc);
+            // Optional feature — workflow library backend may not be mounted
+            // on slim ComfyUI installs. Log to console only; do NOT toast.
+            __c2cReport("c2c_preset_modal:wfLocal", exc, { level: "info" });
+            _wf.status = "Local workflow library unavailable (backend not loaded).";
         }
     }
 
@@ -642,10 +789,18 @@ async function searchWorkflows(modal, opts = {}) {
     if (_wf.scope === "online" || _wf.scope === "both") {
         try {
             const j = await (opts.force ? fetchRefresh("openart", q) : fetchSearch("openart", q));
-            _wf.online = (j.results || []).map((c) => ({ ...c, __online: true }));
+            _wf.online = (j.results || []).map((c) =>
+                normalizeOnlineWorkflowCard({ ...c, __online: true }));
+            // Track A.2 — cross-source dedupe. Currently only OpenArt is
+            // wired, but dedupe also collapses intra-source duplicates
+            // (the public feed occasionally returns the same workflow more
+            // than once) and is forward-compatible with future Civitai/HF
+            // workflow sources.
+            _wf.online = dedupeWorkflows(_wf.online);
             if (!j.ok && j.message) _wf.status = "Online: " + j.message;
         } catch (exc) {
-            __c2cReport("c2c_preset_modal:wfOnline", exc);
+            // Optional — online source may be down. Console only, no toast.
+            __c2cReport("c2c_preset_modal:wfOnline", exc, { level: "info" });
         }
     }
 
@@ -703,19 +858,24 @@ function renderWorkflows(modal, grid, opts = {}) {
 
     // Online section (reuse prompt-card preview pane via _state.selected)
     if (_wf.scope === "online" || _wf.scope === "both") {
+        const onlineFiltered = _wf.online.filter(passesNsfwFilter);
+        const hiddenByFilter = _wf.online.length - onlineFiltered.length;
         const head = document.createElement("div");
         head.style.cssText = sectionCss;
-        head.textContent = `\ud83c\udf10 Online \u2014 OpenArt (${_wf.online.length})`;
+        const hiddenStr = hiddenByFilter > 0 ? ` \u00b7 ${hiddenByFilter} hidden by NSFW filter` : "";
+        head.textContent = `\ud83c\udf10 Online \u2014 OpenArt (${onlineFiltered.length})${hiddenStr}`;
         grid.appendChild(head);
-        if (!_wf.online.length) {
+        if (!onlineFiltered.length) {
             const empty = document.createElement("div");
             empty.style.cssText = "color:var(--c2c-sub);font-size:12px";
-            empty.textContent = "No online results. Try a different query.";
+            empty.textContent = _wf.online.length
+                ? "All online results were hidden by the NSFW filter."
+                : "No online results. Try a different query.";
             grid.appendChild(empty);
         } else {
             const wrap = document.createElement("div");
             wrap.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px";
-            for (const c of _wf.online) {
+            for (const c of onlineFiltered) {
                 const el = document.createElement("div");
                 el.style.cssText = `${box()};overflow:hidden;cursor:pointer;display:flex;flex-direction:column`;
                 const ex = c.extra || {};
@@ -723,16 +883,18 @@ function renderWorkflows(modal, grid, opts = {}) {
                     .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
                 const sub = ex.node_count ? `${ex.node_count} nodes${ex.author ? ` \u00b7 ${ex.author}` : ""}` : (ex.author || "");
                 el.innerHTML = `
-                  ${thumbCellHtml(c, { fallback: "workflow" })}
+                  ${_thumbWithOverlays(c, { fallback: "workflow" })}
                   <div style="padding:6px;display:flex;flex-direction:column;gap:2px">
                     <div style="font-size:11px;font-weight:600;color:var(--c2c-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_esc(title)}">${_esc(title.slice(0, 70) || "workflow")}</div>
                     ${sub ? `<div style="font-size:9px;color:var(--c2c-sub)">${_esc(sub)}</div>` : ""}
+                    ${_cardBadgesHtml(c)}
                   </div>`;
                 el.onclick = () => { _state.selected = c; renderPreview(modal); };
                 wrap.appendChild(el);
             }
             grid.appendChild(wrap);
             wireNsfwReveals(wrap);
+            _wirePermalinkClicks(wrap);
         }
     }
 }
@@ -780,19 +942,165 @@ async function openLocalWorkflow(modal, fp) {
     }
 }
 
+// ----------------------------------------------------------- card chip helpers (Track A.3)
+
+// Per-source display label + colour used for the corner "source" badge.
+// Themed via --c2c-* CSS vars; falls back to safe hex if a var is missing.
+const _SOURCE_META = {
+    lexica:      { label: "Lexica",      icon: "L" },
+    civitai:     { label: "Civitai",     icon: "C" },
+    huggingface: { label: "HF",          icon: "H" },
+    openart:     { label: "OpenArt",     icon: "O" },
+    promptdexter:{ label: "Pdexter",     icon: "P" },
+    c2c_doctor:  { label: "Issues",      icon: "G" },
+    workflows:   { label: "Workflow",    icon: "W" },
+};
+function _sourceLabel(src) {
+    const k = String(src || "").toLowerCase();
+    return (_SOURCE_META[k] && _SOURCE_META[k].label) || (k || "?");
+}
+
+// Tiny themed pill helper. Returns inline-styled HTML; safe to insert with
+// innerHTML (caller pre-escapes the label).
+function _chipHtml(label, opts = {}) {
+    const {
+        bg = "var(--c2c-bg)",
+        fg = "var(--c2c-fg)",
+        border = "var(--c2c-border)",
+        title = "",
+        extra = "",
+    } = opts;
+    return (
+        `<span title="${_esc(title || label)}" style="display:inline-block;` +
+            `padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;` +
+            `background:${bg};color:${fg};border:1px solid ${border};` +
+            `margin:1px 2px 0 0;line-height:1.4;${extra}">` +
+            _esc(label) +
+        `</span>`
+    );
+}
+
+// Build the cluster of badges that decorate a card (source, NSFW, tag chips,
+// "also on" list). Returns a string suitable for inline insertion under the
+// card thumbnail.
+function _cardBadgesHtml(card, { maxTags = 3 } = {}) {
+    const parts = [];
+    if (card.source) {
+        parts.push(_chipHtml(_sourceLabel(card.source), {
+            bg: "var(--c2c-mauve)", fg: "var(--c2c-bg)", border: "var(--c2c-mauve)",
+            title: `Source: ${_sourceLabel(card.source)}`,
+        }));
+    }
+    if (card.nsfw === true) {
+        parts.push(_chipHtml("NSFW", {
+            bg: "var(--c2c-red,#ef4444)", fg: "#fff", border: "var(--c2c-red,#ef4444)",
+            title: "Source flagged this card as NSFW.",
+        }));
+    } else if (card.nsfw_unknown === true) {
+        parts.push(_chipHtml("?", {
+            bg: "var(--c2c-bg2)", fg: "var(--c2c-sub)", border: "var(--c2c-border)",
+            title: "Source does not flag NSFW — thumbnail blurred to be safe.",
+        }));
+    }
+    const tags = Array.isArray(card.tags) ? card.tags.filter(Boolean).slice(0, maxTags) : [];
+    for (const t of tags) {
+        parts.push(_chipHtml(String(t).slice(0, 14), { title: `Tag: ${t}` }));
+    }
+    if (Array.isArray(card.also_on) && card.also_on.length) {
+        parts.push(_chipHtml(`also on ${card.also_on.length}`, {
+            title: `Also published on: ${card.also_on.map(_sourceLabel).join(", ")}`,
+        }));
+    }
+    if (!parts.length) return "";
+    return `<div style="display:flex;flex-wrap:wrap;align-items:center;margin-top:2px">${parts.join("")}</div>`;
+}
+
+// Width × height pill rendered on top of the thumbnail when dims are known.
+function _dimsBadgeHtml(card) {
+    if (!card || !card.width || !card.height) return "";
+    return (
+        `<span style="position:absolute;right:4px;bottom:4px;background:rgba(0,0,0,0.55);` +
+            `color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;line-height:1.4">` +
+            `${card.width}\u00d7${card.height}` +
+        `</span>`
+    );
+}
+
+// "Open in source" icon button (top-right of thumbnail). Stops click
+// propagation so it does not also trigger card-select.
+function _permalinkButtonHtml(card) {
+    if (!card || !card.permalink) return "";
+    return (
+        `<a class="c2c-ph-permalink" href="${_esc(card.permalink)}" target="_blank" rel="noopener noreferrer" ` +
+            `title="Open original on ${_esc(_sourceLabel(card.source))}" ` +
+            `style="position:absolute;right:4px;top:4px;background:rgba(0,0,0,0.55);color:#fff;` +
+            `font-size:11px;line-height:1;padding:2px 5px;border-radius:3px;text-decoration:none">\u2197</a>`
+    );
+}
+
+// Glue the dims + permalink overlays onto a thumbnail cell.
+function _thumbWithOverlays(card, opts) {
+    const inner = thumbCellHtml(card, opts);
+    return inner.replace(
+        /<\/div>$/,
+        `${_dimsBadgeHtml(card)}${_permalinkButtonHtml(card)}</div>`,
+    );
+}
+
+// Wire the permalink-button click handlers inside a freshly rendered container
+// so a click on the "open in source" button does not also select the card.
+function _wirePermalinkClicks(root) {
+    if (!root) return;
+    root.querySelectorAll("a.c2c-ph-permalink").forEach((a) => {
+        a.addEventListener("click", (e) => e.stopPropagation());
+    });
+}
+
 // ----------------------------------------------------------- footer / cache badge
-function renderFooter(modal, info) {
-    const f = modal.querySelector("#ph-footer");
-    const nsfwBtn = `<button id="ph-nsfw" title="Toggle blurring of NSFW thumbnails" style="${btnGhost()};padding:3px 10px">${_state.showNsfw ? "\u{1F51E} NSFW: shown" : "\u{1F51E} NSFW: blurred"}</button>`;
-    const wireNsfwBtn = () => {
-        const nb = f.querySelector("#ph-nsfw");
-        if (nb) nb.onclick = () => {
-            _state.showNsfw = !_state.showNsfw;
+// 3-state SFW/NSFW segmented control. Modes:
+//   sfw  → drop nsfw + nsfw_unknown
+//   both → blur nsfw + nsfw_unknown (default)
+//   nsfw → keep only nsfw + nsfw_unknown
+function _nsfwSegmentedHtml() {
+    const mode = _state.nsfwMode || "both";
+    const segCss = (active) => {
+        const base = `border:1px solid var(--c2c-border);background:var(--c2c-bg2);color:var(--c2c-fg);` +
+                     `padding:3px 9px;font-size:11px;cursor:pointer;line-height:1.4`;
+        const on = `background:var(--c2c-mauve);color:var(--c2c-bg);border-color:var(--c2c-mauve)`;
+        return base + (active ? `;${on}` : "");
+    };
+    return (
+        `<span class="c2c-nsfw-seg" role="group" aria-label="NSFW filter" ` +
+              `title="Filter results by NSFW status" ` +
+              `style="display:inline-flex;border-radius:5px;overflow:hidden;line-height:1">` +
+            `<button data-mode="sfw"  style="${segCss(mode==='sfw' )};border-radius:5px 0 0 5px">SFW only</button>` +
+            `<button data-mode="both" style="${segCss(mode==='both')};border-left:none;border-right:none">Both (blur)</button>` +
+            `<button data-mode="nsfw" style="${segCss(mode==='nsfw')};border-radius:0 5px 5px 0">NSFW only</button>` +
+        `</span>`
+    );
+}
+function _wireNsfwSegmented(rootEl, modal, info) {
+    const seg = rootEl.querySelector(".c2c-nsfw-seg");
+    if (!seg) return;
+    seg.querySelectorAll("button[data-mode]").forEach((b) => {
+        b.onclick = () => {
+            const m = b.getAttribute("data-mode");
+            if (m !== "sfw" && m !== "both" && m !== "nsfw") return;
+            _state.nsfwMode = m;
+            _state.showNsfw = (m === "nsfw"); // keep legacy alias in sync
+            try { localStorage.setItem("c2c.presetHub.nsfwMode", m); }
+            catch (_e) { /* storage unavailable */ }
             renderGrid(modal);
             renderPreview(modal);
             renderFooter(modal, info);
         };
-    };
+    });
+}
+
+function renderFooter(modal, info) {
+    const f = modal.querySelector("#ph-footer");
+    const nsfwBtn = _nsfwSegmentedHtml();
+    const wireNsfwBtn = () => _wireNsfwSegmented(f, modal, info);
     if (_state.tab === "workflows") {
         const scopeLbl = _wf.scope === "local" ? "Local only" : _wf.scope === "online" ? "Online only" : "Local + Online";
         f.innerHTML = `<span>${_esc(_wf.status || scopeLbl)}</span>
@@ -823,7 +1131,10 @@ async function runSearch(modal, opts = {}) {
     try {
         j = opts.force ? await fetchRefresh(_state.tab, q) : await fetchSearch(_state.tab, q);
     } catch (exc) {
-        __c2cReport("c2c_preset_modal:search", exc);
+        // User-initiated search failed after retries. The inline red banner
+        // already informs the user — log at "warn" so it surfaces in DevTools
+        // but does NOT add to the registry-failure toast pile.
+        __c2cReport("c2c_preset_modal:search", exc, { level: "warn" });
         modal.querySelector("#ph-grid").innerHTML = `<div style="color:var(--c2c-red);font-size:12px">Search failed: ${_esc(exc?.message || exc)}</div>`;
         return;
     }
@@ -855,7 +1166,30 @@ function open(optsArg = {}) {
     _state.filters = scanGraphFilters();
     if (optsArg.filters) _state.filters = Object.assign({}, _state.filters, optsArg.filters);
     _state.selected = null;
+    // Bust in-memory online caches so stale records (e.g. from a session
+    // where the backend hadn't yet stamped `nsfw_unknown`) cannot bleed
+    // back into the freshly-opened modal with the wrong blur state.
+    _wf.online = [];
+    _state.results = [];
     modal.style.display = "block";
+    // Fire-and-forget readiness probe so we have a sane diagnostic if the
+    // preset backend isn't mounted (e.g. extension load order race).
+    probePresetBackend().then((ok) => {
+        if (!ok) {
+            __c2cReport(
+                "c2c_preset_modal:probe",
+                new Error("/c2c/presets/sources unreachable; preset backend not mounted"),
+                { level: "info" },
+            );
+            const grid = modal.querySelector("#ph-grid");
+            if (grid && !grid.innerHTML.trim()) {
+                grid.innerHTML =
+                    `<div style="color:var(--c2c-sub);font-size:12px;padding:8px">` +
+                    `Preset backend not loaded yet — restart ComfyUI if this persists.` +
+                    `</div>`;
+            }
+        }
+    });
     renderAll(modal);
 }
 function close() {

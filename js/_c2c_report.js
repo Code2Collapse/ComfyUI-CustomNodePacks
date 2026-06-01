@@ -6,11 +6,20 @@
  *   - No silent empty `catch (_) {}` blocks anywhere in C2C/MEC code.
  *
  * The reporter:
- *   - Logs to console (via console.error) so DevTools surfaces it.
+ *   - Logs to console (level-aware: info|warn|error) so DevTools surfaces it.
  *   - Dispatches a window CustomEvent "c2c:registry-failure" with structured
  *     detail so the registry-status HUD and diagnostics sidebar can aggregate.
  *   - Best-effort POSTs to /c2c/registry/failure for the server-side audit log
  *     using fetch keepalive, so unload-time errors still make it.
+ *
+ * Severity model (2026-05-30, Track A.5):
+ *   - level: "error"  (default) — full pipeline: console.error + dispatch + POST.
+ *           The registry status HUD will surface this as a toast.
+ *   - level: "warn"            — console.warn + dispatch only; NO server POST.
+ *           Used for recoverable issues (one failed retry of N).
+ *   - level: "info"            — console.info only; NO dispatch, NO POST.
+ *           Used for optional-feature absences (missing optional route, etc.)
+ *           where the user must NOT see a red toast.
  *
  * The implementation MUST itself be bullet-proof: it cannot throw, because
  * throwing inside an error handler would create an infinite loop or hide the
@@ -19,6 +28,7 @@
  */
 
 const _C2C_REPORT_ENDPOINT = "/c2c/registry/failure";
+const _VALID_LEVELS = new Set(["error", "warn", "info"]);
 
 /**
  * Report a non-fatal failure from a C2C/MEC module.
@@ -27,10 +37,25 @@ const _C2C_REPORT_ENDPOINT = "/c2c/registry/failure";
  *                           or "filename:callsite". Required.
  * @param {*}      err       The caught error/exception. Optional but
  *                           strongly recommended.
- * @param {string} [component] Optional component override; defaults to
- *                             "c2c" when not provided.
+ * @param {string|object} [componentOrOpts]
+ *                           Either a component-name string (legacy 3-arg
+ *                           positional form) OR an options object:
+ *                             { component?: string, level?: "error"|"warn"|"info" }
+ *                           Default level is "error" (back-compat).
  */
-export function reportFailure(where, err, component) {
+export function reportFailure(where, err, componentOrOpts) {
+    // Normalise the 3rd arg into {component, level}. Back-compat: a bare
+    // string is still treated as component name with level="error".
+    let component = "c2c";
+    let level = "error";
+    if (typeof componentOrOpts === "string") {
+        component = componentOrOpts;
+    } else if (componentOrOpts && typeof componentOrOpts === "object") {
+        if (componentOrOpts.component) component = String(componentOrOpts.component);
+        if (componentOrOpts.level && _VALID_LEVELS.has(componentOrOpts.level)) {
+            level = componentOrOpts.level;
+        }
+    }
     let detail;
     try {
         detail = {
@@ -39,6 +64,7 @@ export function reportFailure(where, err, component) {
             message: (err && err.message) ? String(err.message) : String(err),
             stack: (err && err.stack) ? String(err.stack) : null,
             name: (err && err.name) ? String(err.name) : null,
+            level,
             ts: Date.now(),
         };
     } catch (buildErr) {
@@ -53,31 +79,43 @@ export function reportFailure(where, err, component) {
         return;
     }
 
-    // 1) Console — primary developer-facing channel.
+    // 1) Console — primary developer-facing channel. Level-aware so we don't
+    //    spam DevTools with red noise for optional-feature absences.
     try {
+        const prefix = `[${detail.component}] ${detail.where}:`;
         // eslint-disable-next-line no-console
-        console.error(`[${detail.component}] ${detail.where}:`, err);
+        if (level === "info") console.info(prefix, err);
+        // eslint-disable-next-line no-console
+        else if (level === "warn") console.warn(prefix, err);
+        // eslint-disable-next-line no-console
+        else console.error(prefix, err);
     } catch (consoleErr) {
         // If even console.error throws (e.g. console mocked away), do nothing.
         void consoleErr;
     }
 
     // 2) Window CustomEvent — picked up by c2c_registry_status.js and the
-    //    diagnostics sidebar.
-    try {
-        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-            window.dispatchEvent(new CustomEvent("c2c:registry-failure", { detail }));
-        }
-    } catch (dispatchErr) {
+    //    diagnostics sidebar. Skipped for level="info" so optional-feature
+    //    absences don't accumulate in the registry-failure log.
+    if (level !== "info") {
         try {
-            // eslint-disable-next-line no-console
-            console.error("[c2c-report] dispatch-failed", dispatchErr);
-        } catch (innerDispatchErr) {
-            void innerDispatchErr;
+            if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+                window.dispatchEvent(new CustomEvent("c2c:registry-failure", { detail }));
+            }
+        } catch (dispatchErr) {
+            try {
+                // eslint-disable-next-line no-console
+                console.error("[c2c-report] dispatch-failed", dispatchErr);
+            } catch (innerDispatchErr) {
+                void innerDispatchErr;
+            }
         }
     }
 
     // 3) Best-effort server POST. Keepalive lets it survive page unload.
+    //    Only fires for level="error" so optional-failure noise does not
+    //    surface as a red toast via /c2c/registry/status.
+    if (level !== "error") return;
     try {
         if (typeof fetch === "function") {
             fetch(_C2C_REPORT_ENDPOINT, {
