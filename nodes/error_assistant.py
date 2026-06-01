@@ -548,6 +548,19 @@ def _build_prompt(exc_type: str, msg: str, node_class: Optional[str],
     return "\n".join(parts)
 
 
+def _record_tier_failure(key: str, exc: BaseException, *, hint: str | None = None) -> None:
+    """Best-effort: surface tier-2/tier-3 failures in the Doctor panel.
+
+    Falls back to a debug log if _c2c_registry is unavailable (e.g. during
+    partial install). Never raises.
+    """
+    try:
+        from . import _c2c_registry  # type: ignore
+        _c2c_registry.record_failure(key, exc, hint=hint, group="error_assistant")
+    except Exception:
+        log.debug("[error_assistant] failure not recorded (registry missing): %s/%s", key, exc)
+
+
 def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
     """Run the user-selected local model. Backend = "llamacpp" or "ollama".
     Returns text or None if backend unavailable."""
@@ -571,6 +584,8 @@ def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
                 max_tokens=settings.get("max_tokens", 512),
             )
         except Exception as e:
+            _record_tier_failure("tier2.ollama", e,
+                                 hint="Is the ollama server running on the configured URL?")
             log.warning("[error_assistant] ollama gen failed: %s", e)
             return None
     # Default: llama-cpp-python with a local GGUF file.
@@ -607,6 +622,8 @@ def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
         return _local_backend.generate(prompt,
                                        max_tokens=settings.get("max_tokens", 512))
     except Exception as e:
+        _record_tier_failure("tier2.llamacpp", e,
+                             hint="Check the GGUF path / llama-cpp-python install.")
         log.warning("[error_assistant] local model gen failed: %s", e)
         return None
 
@@ -632,6 +649,9 @@ def _explain_cloud(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
             max_tokens=settings.get("max_tokens", 512),
         )
     except Exception as e:
+        provider = settings.get("cloud_provider", "openai")
+        _record_tier_failure(f"tier3.{provider}", e,
+                             hint="Check the API key in the Settings panel and network connectivity.")
         log.warning("[error_assistant] cloud gen failed: %s", e)
         return None
 
