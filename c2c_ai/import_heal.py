@@ -283,22 +283,84 @@ def _triage(pack: FailedPack) -> None:
     # (FAILED_IMPORT_MODULES path with opaque error), trust the report.
     missing_lc = {m.lower() for m in pack.missing_modules}
 
+    # Known dist-name → import-name aliases. Used as a fallback when the
+    # distribution is not installed (so importlib.metadata can't tell us
+    # its top-level modules). Keep this short — only well-known mismatches.
+    _DIST_TO_IMPORT_ALIASES: Dict[str, Tuple[str, ...]] = {
+        "py-cpuinfo": ("cpuinfo",),
+        "opencv-python": ("cv2",),
+        "opencv-python-headless": ("cv2",),
+        "opencv-contrib-python": ("cv2",),
+        "pillow": ("pil",),
+        "scikit-image": ("skimage",),
+        "scikit-learn": ("sklearn",),
+        "pyyaml": ("yaml",),
+        "protobuf": ("google",),
+        "python-dateutil": ("dateutil",),
+        "beautifulsoup4": ("bs4",),
+        "msgpack-python": ("msgpack",),
+        "pycryptodome": ("crypto",),
+        "ffmpeg-python": ("ffmpeg",),
+        "huggingface-hub": ("huggingface_hub",),
+        "sentence-transformers": ("sentence_transformers",),
+        "pyturbojpeg": ("turbojpeg",),
+        "gitpython": ("git",),
+    }
+
+    def _dist_provides_module(pkg: str, module: str) -> bool:
+        """Best-effort check: does dist ``pkg`` provide top-level ``module``?
+
+        Strategy: try ``importlib.metadata.packages_distributions()`` (true
+        runtime mapping for installed dists), then fall back to a small
+        alias table for uninstalled common-mismatch cases, then to
+        normalised string equality.
+        """
+        pkg_lc = pkg.lower().replace("_", "-")
+        mod_lc = module.lower()
+        # 1. Static normalised match (covers 80%+ of cases).
+        if pkg_lc == mod_lc or pkg_lc.replace("-", "") == mod_lc.replace("-", "").replace("_", ""):
+            return True
+        # 2. importlib.metadata reverse-lookup (only works if installed).
+        try:
+            import importlib.metadata as _md
+            pd = getattr(_md, "packages_distributions", None)
+            if pd is not None:
+                rev = pd()  # {top_level_import: [dist_names]}
+                for tl, dists in rev.items():
+                    if tl.lower() != mod_lc:
+                        continue
+                    if any(d.lower().replace("_", "-") == pkg_lc for d in dists):
+                        return True
+        except Exception:
+            pass
+        # 3. Alias table fallback for uninstalled common mismatches.
+        for alias in _DIST_TO_IMPORT_ALIASES.get(pkg_lc, ()):
+            if alias.lower() == mod_lc:
+                return True
+        # 4. Heuristic: dist with leading "py-" prefix often provides bare module.
+        if pkg_lc.startswith("py-") and pkg_lc[3:] == mod_lc:
+            return True
+        return False
+
     def _matches_missing(pkg: str) -> bool:
         if not missing_lc:
             return True
-        # Top-level dist name often differs from import name (PIL vs pillow,
-        # cv2 vs opencv-python). For now we accept either form; E.2 will
-        # rely on `uv pip install <distname>` resolving the import.
-        norm = pkg.lower().replace("_", "-")
-        nostrip = norm.replace("-", "")
-        for m in missing_lc:
-            if norm == m or nostrip == m.replace("_", "").replace("-", ""):
-                return True
+        if any(_dist_provides_module(pkg, m) for m in missing_lc):
+            return True
         return False
 
-    safe_entries = [e for e in report.safe if _matches_missing(e.package)]
-    risky_entries = [e for e in report.risky if _matches_missing(e.package)]
-    breaking_entries = [e for e in report.breaking if _matches_missing(e.package)]
+    # Final defensive filter — never let a VCS-URL artefact reach the
+    # installer even if dependency_checker missed one.
+    def _is_real_dist(name: str) -> bool:
+        bad = {"git", "hg", "svn", "bzr", "http", "https", "file", "ftp", ""}
+        return name.lower() not in bad
+
+    safe_entries = [e for e in report.safe
+                    if _is_real_dist(e.package) and _matches_missing(e.package)]
+    risky_entries = [e for e in report.risky
+                     if _is_real_dist(e.package) and _matches_missing(e.package)]
+    breaking_entries = [e for e in report.breaking
+                        if _is_real_dist(e.package) and _matches_missing(e.package)]
 
     pack.safe_to_install = [e.package for e in safe_entries]
 

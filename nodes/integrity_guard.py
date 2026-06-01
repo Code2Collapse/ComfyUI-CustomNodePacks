@@ -683,6 +683,10 @@ def _heal_validate_packages(packages: List[str]) -> Tuple[List[str], Optional[st
     rejected the entire batch is refused — partial install is never safe.
     """
     accepted: List[str] = []
+    # Names that look superficially valid but never represent a real PyPI
+    # distribution. These appear when a requirements.txt parser mis-handles
+    # a `git+https://…` line and emits a literal "git" entry.
+    _BOGUS = {"git", "hg", "svn", "bzr", "http", "https", "file", "ftp"}
     for pkg in packages:
         if not isinstance(pkg, str):
             return ([], f"non-string package entry: {pkg!r}")
@@ -694,6 +698,8 @@ def _heal_validate_packages(packages: List[str]) -> Tuple[List[str], Optional[st
             return ([], f"unsafe characters in package name: {pkg!r}")
         if bare in _HEAL_CRITICAL:
             return ([], f"refusing to touch CRITICAL package: {bare}")
+        if bare in _BOGUS:
+            return ([], f"refusing bogus dist name (likely VCS-URL parse artefact): {bare}")
         accepted.append(pkg)
     return (accepted, None)
 
