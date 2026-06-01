@@ -267,6 +267,26 @@ class OpenAICompatBackend(Backend):
         return h
 
     # =============================================================== ask
+    # Retry strategy: honour Retry-After on 429 / 503; bounded exponential
+    # backoff on other transient HTTP errors (502/504) and connection
+    # failures. Total wall-clock cap = ~30 s so we don't hold up a Comfy
+    # queue while the cloud provider has a bad minute.
+    _RETRY_STATUS = (429, 502, 503, 504)
+    _MAX_RETRIES = 3
+    _BACKOFF_BASE = 1.5  # seconds
+    _BACKOFF_CAP = 15.0  # per-attempt sleep ceiling
+
+    @staticmethod
+    def _retry_after_seconds(resp: "httpx.Response") -> float | None:
+        """Parse a Retry-After header (delta-seconds form only)."""
+        ra = resp.headers.get("retry-after") if resp is not None else None
+        if not ra:
+            return None
+        try:
+            return max(0.0, float(ra.strip()))
+        except (TypeError, ValueError):
+            return None  # HTTP-date form intentionally ignored (rare in practice)
+
     def ask(self, req: AskRequest) -> AskResponse:
         url = f"{self.base_url}{self.api_path}/chat/completions"
         body: dict = {
@@ -279,13 +299,44 @@ class OpenAICompatBackend(Backend):
             body["response_format"] = {"type": "json_object"}
 
         t0 = now_ms()
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                r = client.post(url, headers=self._headers(), json=body)
-        except httpx.RequestError as exc:
-            raise RuntimeError(f"{self.info.id}: connection failed: {exc}")
+        last_exc: Exception | None = None
+        r: "httpx.Response | None" = None
+        for attempt in range(self._MAX_RETRIES + 1):
+            try:
+                with httpx.Client(timeout=120.0) as client:
+                    r = client.post(url, headers=self._headers(), json=body)
+            except httpx.RequestError as exc:
+                last_exc = exc
+                # Connection-level error — backoff & retry unless we're out of attempts
+                if attempt >= self._MAX_RETRIES:
+                    raise RuntimeError(f"{self.info.id}: connection failed after "
+                                       f"{attempt + 1} attempts: {exc}")
+                sleep_s = min(self._BACKOFF_CAP, self._BACKOFF_BASE * (2 ** attempt))
+                log.info("%s connect retry %d/%d in %.1fs (%s)",
+                         self.info.id, attempt + 1, self._MAX_RETRIES, sleep_s, exc)
+                time.sleep(sleep_s)
+                continue
+
+            if r.status_code == 200:
+                break
+            if r.status_code in self._RETRY_STATUS and attempt < self._MAX_RETRIES:
+                ra = self._retry_after_seconds(r)
+                if ra is None:
+                    ra = min(self._BACKOFF_CAP, self._BACKOFF_BASE * (2 ** attempt))
+                else:
+                    ra = min(self._BACKOFF_CAP, ra)
+                log.info("%s HTTP %d retry %d/%d in %.1fs",
+                         self.info.id, r.status_code, attempt + 1,
+                         self._MAX_RETRIES, ra)
+                time.sleep(ra)
+                continue
+            # non-retryable status, or out of attempts
+            break
+
         latency = now_ms() - t0
 
+        if r is None:
+            raise RuntimeError(f"{self.info.id}: no response (last error: {last_exc})")
         if r.status_code != 200:
             raise RuntimeError(f"{self.info.id} {r.status_code}: {r.text[:400]}")
 

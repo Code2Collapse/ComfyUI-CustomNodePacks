@@ -305,6 +305,16 @@ class Router:
             except Exception:
                 raise exc
 
+        # Centralised post-processing: strip Qwen3/DeepSeek-R1 <think> blocks
+        # from *every* backend response so individual backends don't need to
+        # remember to do it themselves. Safe on non-thinking models.
+        try:
+            from .utils import strip_think as _strip_think
+            if resp.text:
+                resp.text = _strip_think(resp.text)
+        except Exception as _se:  # never let post-processing break the response
+            log.debug("strip_think skipped: %s", _se)
+
         resp.redacted = redacted_flag
         self._meter.record(make_entry(
             feature=feature, backend_info=backend.info, model=backend.info.model,

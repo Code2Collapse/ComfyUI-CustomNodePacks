@@ -356,13 +356,8 @@ class BorrowedEncoderBackend(Backend):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Qwen3-style <think>...</think> stripper
-# Duplicates node_explain._THINK_RE for now — Track D.5 will centralise it
-# in c2c_ai/utils/qwen3_filter.py and have router._dispatch apply it to all
-# backend responses.
+# Qwen3-style <think>...</think> stripper — delegates to the shared helper
+# in c2c_ai.utils.qwen3_filter so all backends get identical behaviour and
+# the router can re-apply it centrally as a safety net.
 # ─────────────────────────────────────────────────────────────────────────
-_THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-
-
-def _strip_think(text: str) -> str:
-    return _THINK_RE.sub("", text or "").strip()
+from ..utils.qwen3_filter import strip_think as _strip_think  # noqa: E402
