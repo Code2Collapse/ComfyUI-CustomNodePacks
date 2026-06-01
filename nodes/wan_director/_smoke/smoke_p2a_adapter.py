@@ -189,7 +189,7 @@ def main() -> int:
             assert d_to_noise  > 1e-6, f"{ftype}: mixed identical to noise"
             assert d_to_source > 1e-6, f"{ftype}: mixed identical to source"
             print(f"{OK} freq_mix_3d[{ftype:11s}] shape={tuple(mixed.shape)} "
-                  f"Δnoise={d_to_noise:.4f} Δsource={d_to_source:.4f}")
+                  f"d_to_noise={d_to_noise:.4f} d_to_source={d_to_source:.4f}")
     except AssertionError as ex:
         print(f"{NO} {ex}"); all_ok = False
     except Exception as ex:

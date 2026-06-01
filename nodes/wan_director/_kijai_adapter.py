@@ -41,6 +41,14 @@ from .features._local_magcache  import MagCache
 from .features._local_easycache import EasyCache
 from .features._local_slg       import SLGConfig, should_apply_slg, \
                                        make_layer_skip_predicate, combine_slg
+from .features._local_feta            import feta_attention_bias
+from .features._local_riflex          import rescale_rope_freqs, \
+                                             riflex_extrapolation_active
+from .features._local_uni3c           import encode_camera_poses
+from .features._local_context_windows import plan_windows, \
+                                             blend_window_weights, \
+                                             splice_windows
+from .features._local_taehv_preview   import latent_to_rgb_preview
 
 log = logging.getLogger("MEC.WanDirector.Adapter")
 
@@ -119,12 +127,17 @@ def probe() -> dict[str, str]:
     # "kijai" if the API matches what we wrap; otherwise fall back to
     # local. For this slice, only NAG + FreeInit have local impls and
     # kijai detection paths.
-    out["nag"]      = "kijai" if _has("nodes",          "WanVideoNAG"      ) else "local"
-    out["freeinit"] = "kijai" if _has("nodes_freeinit", "WanVideoFreeInit" ) else "local"
-    out["teacache"] = "kijai" if _has("nodes",          "WanVideoTeaCache" ) else "local"
-    out["magcache"] = "kijai" if _has("nodes",          "WanVideoMagCache" ) else "local"
-    out["easycache"]= "kijai" if _has("nodes",          "WanVideoEasyCache") else "local"
-    out["slg"]      = "kijai" if _has("nodes",          "WanVideoSLG"      ) else "local"
+    out["nag"]       = "kijai" if _has("nodes",          "WanVideoNAG"            ) else "local"
+    out["freeinit"]  = "kijai" if _has("nodes_freeinit", "WanVideoFreeInit"       ) else "local"
+    out["teacache"]  = "kijai" if _has("nodes",          "WanVideoTeaCache"       ) else "local"
+    out["magcache"]  = "kijai" if _has("nodes",          "WanVideoMagCache"       ) else "local"
+    out["easycache"] = "kijai" if _has("nodes",          "WanVideoEasyCache"      ) else "local"
+    out["slg"]       = "kijai" if _has("nodes",          "WanVideoSLG"            ) else "local"
+    out["feta"]      = "kijai" if _has("nodes",          "WanVideoFETA"           ) else "local"
+    out["riflex"]    = "kijai" if _has("nodes",          "WanVideoRIFLEx"         ) else "local"
+    out["uni3c"]     = "kijai" if _has("nodes",          "WanVideoUni3CController") else "local"
+    out["context_windows"] = "kijai" if _has("nodes",    "WanVideoContextWindows" ) else "local"
+    out["taehv_preview"]   = "kijai" if _has("nodes",    "WanVideoTAEHVPreview"   ) else "local"
     for f in _FEATURES:
         if f in out:
             continue
@@ -300,6 +313,103 @@ def apply_slg(
     return combine_slg(eps_pos, eps_skip, cfg.slg_scale)
 
 
+# ── FETA / RIFLEx / Uni3C / Context Windows / TAEHV preview ──────────
+
+
+def apply_feta(
+    attn_logits: torch.Tensor,
+    *,
+    feta_scale:     float = 0.5,
+    freq_center:    float = 0.20,
+    freq_bandwidth: float = 0.15,
+) -> torch.Tensor:
+    """Apply FETA frequency-domain bias to attention logits."""
+    LAST_BACKEND["feta"] = probe().get("feta", "local")
+    return feta_attention_bias(
+        attn_logits,
+        feta_scale=feta_scale,
+        freq_center=freq_center,
+        freq_bandwidth=freq_bandwidth,
+    )
+
+
+def apply_riflex(
+    rope_freqs: torch.Tensor,
+    *,
+    source_len: int,
+    target_len: int,
+    k: int = 2,
+) -> torch.Tensor:
+    """Rescale the lowest-k RoPE freqs for length extrapolation.
+
+    If ``target_len`` is not greater than ``source_len`` this returns
+    a clone unchanged.
+    """
+    LAST_BACKEND["riflex"] = probe().get("riflex", "local")
+    if not riflex_extrapolation_active(target_len, source_len):
+        return rope_freqs.clone()
+    return rescale_rope_freqs(
+        rope_freqs, source_len=source_len, target_len=target_len, k=k,
+    )
+
+
+def apply_uni3c(
+    extrinsics: torch.Tensor,
+    *,
+    embed_dim: int | None = None,
+) -> torch.Tensor:
+    """Encode camera extrinsics into a per-frame embedding sequence."""
+    LAST_BACKEND["uni3c"] = probe().get("uni3c", "local")
+    return encode_camera_poses(extrinsics, embed_dim=embed_dim)
+
+
+def apply_context_windows(
+    n_frames: int,
+    *,
+    window: int,
+    overlap: int,
+    strategy: str = "static",
+) -> list:
+    """Plan context windows for long-video sampling.
+
+    Returns a list of ``range`` objects. Use :func:`splice_context_windows`
+    to blend per-window outputs back together.
+    """
+    LAST_BACKEND["context_windows"] = probe().get("context_windows", "local")
+    return plan_windows(
+        n_frames, window=window, overlap=overlap, strategy=strategy,
+    )
+
+
+def splice_context_windows(
+    window_outputs,
+    plan,
+    full_len: int,
+    *,
+    overlap: int = 0,
+) -> torch.Tensor:
+    """Blend per-window outputs into a single ``(full_len, ...)`` tensor."""
+    return splice_windows(window_outputs, plan, full_len, overlap=overlap)
+
+
+def apply_taehv_preview(
+    latent: torch.Tensor,
+    *,
+    seed: int = 1729,
+    percentile: float = 0.02,
+) -> torch.Tensor:
+    """Render an RGB preview from a Wan-style latent tensor.
+
+    When kijai's TAEHV is not available we use a weight-free
+    deterministic linear-projection fallback (good enough for the
+    Director's live-preview UI).
+    """
+    LAST_BACKEND["taehv_preview"] = probe().get("taehv_preview", "local")
+    # Local path only for now — wiring real TAEHV weights is a later
+    # slice once we have a verified .pth in models/vae_approx/.
+    return latent_to_rgb_preview(latent, seed=seed, percentile=percentile)
+
+
 # Re-exported so the Director / sampler wrapper can use the predicate
 # inside its transformer-block iteration without re-importing.
 __all__ = [
@@ -307,4 +417,7 @@ __all__ = [
     "apply_nag", "apply_freeinit",
     "make_cache",
     "build_slg", "apply_slg", "make_layer_skip_predicate",
+    "apply_feta", "apply_riflex", "apply_uni3c",
+    "apply_context_windows", "splice_context_windows",
+    "apply_taehv_preview",
 ]
