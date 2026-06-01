@@ -34,8 +34,13 @@ from typing import Any
 
 import torch
 
-from .features._local_nag      import build_nag_patch, apply_nag_to_attn_output
-from .features._local_freeinit import freq_mix_3d, get_freq_filter
+from .features._local_nag       import build_nag_patch, apply_nag_to_attn_output
+from .features._local_freeinit  import freq_mix_3d, get_freq_filter
+from .features._local_teacache  import TeaCache
+from .features._local_magcache  import MagCache
+from .features._local_easycache import EasyCache
+from .features._local_slg       import SLGConfig, should_apply_slg, \
+                                       make_layer_skip_predicate, combine_slg
 
 log = logging.getLogger("MEC.WanDirector.Adapter")
 
@@ -114,8 +119,12 @@ def probe() -> dict[str, str]:
     # "kijai" if the API matches what we wrap; otherwise fall back to
     # local. For this slice, only NAG + FreeInit have local impls and
     # kijai detection paths.
-    out["nag"]      = "kijai" if _has("nodes",          "WanVideoNAG"     ) else "local"
-    out["freeinit"] = "kijai" if _has("nodes_freeinit", "WanVideoFreeInit") else "local"
+    out["nag"]      = "kijai" if _has("nodes",          "WanVideoNAG"      ) else "local"
+    out["freeinit"] = "kijai" if _has("nodes_freeinit", "WanVideoFreeInit" ) else "local"
+    out["teacache"] = "kijai" if _has("nodes",          "WanVideoTeaCache" ) else "local"
+    out["magcache"] = "kijai" if _has("nodes",          "WanVideoMagCache" ) else "local"
+    out["easycache"]= "kijai" if _has("nodes",          "WanVideoEasyCache") else "local"
+    out["slg"]      = "kijai" if _has("nodes",          "WanVideoSLG"      ) else "local"
     for f in _FEATURES:
         if f in out:
             continue
@@ -209,3 +218,93 @@ def apply_freeinit(
         device=noise.device, dtype=torch.float32,
     )
     return freq_mix_3d(source, noise, flt)
+
+
+# ── Caches (TeaCache / MagCache / EasyCache) ──────────────────────────
+
+
+def make_cache(kind: str, **kwargs):
+    """Build a cache gate of the requested kind.
+
+    Args:
+        kind: one of ``"teacache"``, ``"magcache"``, ``"easycache"``,
+            or ``"none"`` (returns ``None`` — caller should bypass).
+        **kwargs: forwarded to the cache class constructor; unknown
+            keys are silently ignored so callers can pass a single
+            superset dict.
+
+    Returns:
+        A cache instance (or ``None`` for ``"none"``). Each instance
+        has ``should_skip``, ``record``, ``cached_residual``, ``reset``,
+        and ``report`` per the local cache classes.
+    """
+    k = (kind or "none").lower()
+    LAST_BACKEND[k] = probe().get(k, "local") if k != "none" else "none"
+    if k == "none":
+        return None
+    if k == "teacache":
+        return TeaCache(
+            rel_l1_thresh=float(kwargs.get("rel_l1_thresh", 0.10)),
+            max_skips=int(kwargs.get("max_skips", 5)),
+        )
+    if k == "magcache":
+        return MagCache(
+            mag_thresh=float(kwargs.get("mag_thresh", 1.2)),
+            ema_alpha=float(kwargs.get("ema_alpha", 0.3)),
+            max_skips=int(kwargs.get("max_skips", 5)),
+        )
+    if k == "easycache":
+        return EasyCache(
+            l1_thresh=float(kwargs.get("l1_thresh", 0.02)),
+            max_skips=int(kwargs.get("max_skips", 4)),
+        )
+    raise ValueError(f"make_cache: unknown kind {kind!r}")
+
+
+# ── SLG (Skip Layer Guidance) ─────────────────────────────────────────
+
+
+def build_slg(
+    skip_layers: list[int] | tuple[int, ...] = (),
+    *,
+    slg_scale: float = 0.7,
+    start_pct: float = 0.0,
+    end_pct:   float = 1.0,
+) -> SLGConfig:
+    """Build a validated SLGConfig; records backend in LAST_BACKEND."""
+    LAST_BACKEND["slg"] = probe().get("slg", "local")
+    return SLGConfig(
+        skip_layers=tuple(skip_layers),
+        slg_scale=slg_scale,
+        start_pct=start_pct,
+        end_pct=end_pct,
+    )
+
+
+def apply_slg(
+    eps_pos:  torch.Tensor,
+    eps_skip: torch.Tensor,
+    cfg: SLGConfig,
+    *,
+    step: int = 0,
+    n_steps: int = 1,
+) -> torch.Tensor:
+    """Combine a full + skip-layer prediction into the SLG-guided eps.
+
+    If the current ``step`` falls outside the cfg's step window
+    (``start_pct``..``end_pct``) or ``skip_layers`` is empty, the
+    function returns ``eps_pos`` unchanged.
+    """
+    if not should_apply_slg(step, n_steps, cfg):
+        return eps_pos
+    return combine_slg(eps_pos, eps_skip, cfg.slg_scale)
+
+
+# Re-exported so the Director / sampler wrapper can use the predicate
+# inside its transformer-block iteration without re-importing.
+__all__ = [
+    "probe", "capability_report", "LAST_BACKEND",
+    "apply_nag", "apply_freeinit",
+    "make_cache",
+    "build_slg", "apply_slg", "make_layer_skip_predicate",
+]
