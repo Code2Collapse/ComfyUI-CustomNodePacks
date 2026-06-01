@@ -451,6 +451,10 @@ class TimelineEditor {
 
     commitChanges() {
         if (this.suppressCommit) return;
+        // Bracket the widget-value writes with LiteGraph's change
+        // notifications so each persisted timeline state becomes a
+        // proper undo step in the native Ctrl+Z stack.
+        try { app.graph?.beforeChange?.(); } catch (_) {}
         // timeline_data JSON
         const segOut = this.segments.map(s => ({
             id: s.id, type: s.type, start: s.start, length: s.length,
@@ -481,6 +485,7 @@ class TimelineEditor {
             sorted.filter(s => s.type === "image")
                   .map(s => (typeof s.guideStrength === "number" ? s.guideStrength : 1.0).toFixed(2))
                   .join(","));
+        try { app.graph?.afterChange?.(); } catch (_) {}
         this.render();
     }
 
