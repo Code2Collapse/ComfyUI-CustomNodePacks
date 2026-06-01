@@ -14,6 +14,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { buildPanel } from "./_c2c_window.js";
+import { c2cAlert } from "./_c2c_dialog.js";
 
 const TAB_ID = "c2c.ai";
 const RIGHT_DOCK_ID = "c2c.ai.right-dock";
@@ -117,6 +118,11 @@ async function runFirstRunWizard() {
 `<p>C2C v2.0 adds AI-powered helpers across many features. Every AI call goes
 through one router — pick <b>Cloud</b>, <b>Local</b>, or let it auto-choose
 per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends</i>.</p>
+<p style="background:var(--c2c-bg2);border-left:3px solid var(--c2c-mauve);
+         padding:8px 10px;margin:6px 0;border-radius:3px;">
+<b>Good news:</b> the built-in <b>error explainer</b> (82 hand-curated patterns + live
+tensor-shape introspection) is already active and needs <i>zero</i> setup. Adding
+a backend below just upgrades it from rule-based to plain-English AI replies.</p>
 <p style="color:var(--c2c-sub)">This wizard will:
  1. Detect any local AI servers (Ollama, LM Studio, llama.cpp).
  2. Offer to import any API keys you have in <code>All API Keys Of Comfy.txt</code>.
@@ -264,8 +270,12 @@ per feature. You can change this any time in <i>Settings → C2C ▸ AI Backends
     await modal({
         title: "Step 3 of 3 — Ready",
         body: `<p>Initial config saved:</p>
-               <ul>${startCfg.backends.map(b => `<li>${b.kind} — <code>${b.id}</code>${b.enabled ? "" : " (disabled)"}</li>`).join("") || "<li>(none yet)</li>"}</ul>
-               <p style="color:var(--c2c-sub)">Tweak any time under <i>Settings → C2C ▸ AI Backends</i>.</p>`,
+               <ul>${startCfg.backends.map(b => `<li>${b.kind} — <code>${b.id}</code>${b.enabled ? "" : " (disabled)"}</li>`).join("") || "<li>(none yet — the built-in explainer still works)</li>"}</ul>
+               <p style="color:var(--c2c-sub)">Tweak any time under <i>Settings → C2C ▸ AI Backends</i>.</p>
+               <p style="border-top:1px solid var(--c2c-border);padding-top:6px;margin-top:6px;
+                         color:var(--c2c-sub);font-size:11px;">
+               Tip: open <i>Doctor → Explain</i> at any time to see a plain-English
+               health report (works even with no backends configured).</p>`,
         buttons: [{ label: "Finish", value: true, primary: true }],
     });
     app.ui?.settings?.setSettingValue(SETTING_FIRSTRUN, true);
@@ -444,7 +454,7 @@ function buildSettingsView(root) {
                     e.target.disabled = false;
                     e.target.value = current;
                     console.error("[c2c.ai] model swap failed:", exc);
-                    alert(`Could not switch model: ${exc.message || exc}`);
+                    c2cAlert(`Could not switch model: ${exc.message || exc}`);
                 }
             });
             cell.innerHTML = "";
