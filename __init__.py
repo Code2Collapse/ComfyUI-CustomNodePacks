@@ -394,6 +394,12 @@ try:
     except Exception as _et:
         print(f"[MEC] error_translator deferred: {_et}")
     try:
+        from .nodes.error_introspector import register_routes as _register_error_introspector_routes
+        _register_error_introspector_routes(_ps)
+        print("[MEC] error_introspector routes registered.")
+    except Exception as _ei:
+        print(f"[MEC] error_introspector deferred: {_ei}")
+    try:
         from .nodes.flamegraph import register_routes as _register_flamegraph_routes
         _register_flamegraph_routes(_ps)
         print("[MEC] flamegraph routes registered.")

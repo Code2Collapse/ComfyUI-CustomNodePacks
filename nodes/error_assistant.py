@@ -108,12 +108,21 @@ def _load_patterns_from_json() -> List[Pattern]:
     import json
     out: List[Pattern] = []
     for path in _scan_pattern_files():
+        rel = os.path.relpath(path, _patterns_root()).replace("\\", "/")
+        # Skip i18n overlays — they use a different schema (patterns is a dict
+        # keyed by EN i18n_key/id, not a list). Loaded separately by
+        # error_translator._apply_locale_overlay().
+        if rel.startswith("i18n/") or "/i18n/" in rel:
+            continue
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            rel = os.path.relpath(path, _patterns_root())
-            for entry in data.get("patterns", []):
-                p = _parse_pattern_dict(entry, source=rel.replace("\\", "/"))
+            # Defensive: only iterate when patterns is a list (EN pack schema).
+            entries = data.get("patterns", [])
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                p = _parse_pattern_dict(entry, source=rel)
                 if p is not None:
                     out.append(p)
         except Exception as e:
@@ -342,7 +351,7 @@ _BOOTSTRAP_PATTERNS: List[Pattern] = [
         "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
         [
             "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
-            "If you bypassed the crop node intentionally, use InpaintCompositeMEC instead — it doesn't need stitch_data.",
+            "If you bypassed the crop node intentionally, use InpaintPasteBackMEC instead — it doesn't need stitch_data.",
         ],
     ),
 
@@ -662,8 +671,37 @@ def explain(exc: BaseException,
             },
         }
 
+    # --- Runtime tensor introspection (Tier 1.5) ---------------------
+    # Pulls live tensor shapes / dtypes / device from the exception's
+    # traceback frames. Always cheap; never raises. Augments tier1 when
+    # available, becomes the primary answer when no rule pack pattern
+    # fires.
+    introspection_envelope = None
+    try:
+        from . import error_introspector  # type: ignore
+        report = error_introspector.introspect_exception(
+            exc,
+            node_class=node_class,
+        )
+        introspection_envelope = error_introspector.format_report(report)
+    except Exception as _ie:
+        log.debug("[error_assistant] introspector skipped: %s", _ie)
+
+    if tier1 is not None and introspection_envelope is not None:
+        # Attach the runtime facts to the rule-pack hit so the UI can show
+        # both the pattern explanation and concrete tensor shapes.
+        tier1["introspection"] = introspection_envelope.get("introspection")
+        if introspection_envelope.get("model_family"):
+            tier1["model_family"] = introspection_envelope["model_family"]
+
     if mode == "deterministic_only":
-        return tier1 or _fallback(exc_type, msg)
+        if tier1 is not None:
+            return tier1
+        if introspection_envelope is not None and (
+                introspection_envelope.get("pattern_id") != "introspector_facts_only"
+                or (introspection_envelope.get("introspection") or {}).get("frames")):
+            return introspection_envelope
+        return _fallback(exc_type, msg)
 
     # --- Build LLM prompt only if we'll actually call one ---
     prompt = _build_prompt(exc_type, msg, node_class, inputs_summary, traceback_tail)
@@ -697,8 +735,14 @@ def explain(exc: BaseException,
                                       provider=t2_provider,
                                       model=t2_model)
 
-    # --- Fall back to Tier 1 ---
-    return tier1 or _fallback(exc_type, msg)
+    # --- Fall back to Tier 1, then introspector, then generic fallback ---
+    if tier1 is not None:
+        return tier1
+    if introspection_envelope is not None and (
+            introspection_envelope.get("pattern_id") != "introspector_facts_only"
+            or (introspection_envelope.get("introspection") or {}).get("frames")):
+        return introspection_envelope
+    return _fallback(exc_type, msg)
 
 
 def _fallback(exc_type: str, msg: str) -> Dict[str, Any]:
