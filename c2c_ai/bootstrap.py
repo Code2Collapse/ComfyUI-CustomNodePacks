@@ -370,6 +370,18 @@ def bootstrap() -> None:
         router.register(RulePackBackend())
     except Exception as exc:
         log.warning("c2c_ai: failed to register RulePackBackend: %s", exc)
+    # Track D.4 — optionally register the borrowed-encoder backend. Off by
+    # default; enable via ai_config.json {"borrowed_encoder_enabled": true}
+    # or the Settings toggle (which writes the same key). When ON, the
+    # router will route LOCAL-tier requests through whatever generative
+    # text encoder ComfyUI happens to have loaded for image/video gen.
+    if bool(cfg.get("borrowed_encoder_enabled", False)):
+        try:
+            from .backends.borrowed import BorrowedEncoderBackend
+            router.register(BorrowedEncoderBackend())
+            log.info("c2c_ai: BorrowedEncoderBackend enabled (experimental)")
+        except Exception as exc:
+            log.warning("c2c_ai: failed to register BorrowedEncoderBackend: %s", exc)
     registered = 0
     for entry in entries:
         try:

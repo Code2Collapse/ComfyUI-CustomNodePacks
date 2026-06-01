@@ -21,6 +21,7 @@ from .cohere import CohereBackend
 from .azure_openai import AzureOpenAIBackend
 from .llamacpp_local import LlamaCppBackend
 from .rulepack import RulePackBackend
+from .borrowed import BorrowedEncoderBackend
 
 __all__ = [
     "Backend",
@@ -31,4 +32,5 @@ __all__ = [
     "AzureOpenAIBackend",
     "LlamaCppBackend",
     "RulePackBackend",
+    "BorrowedEncoderBackend",
 ]
