@@ -903,7 +903,7 @@ class TimelineEditor {
         ctx.clearRect(0, 0, cssW, cssH);
 
         // Background tracks
-        ctx.fillStyle = "#0a0a10";
+        ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, 0, cssW, cssH);
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, RULER_H, cssW, IMG_TRACK_H);
@@ -935,7 +935,7 @@ class TimelineEditor {
     _drawRuler(ctx, cssW) {
         ctx.fillStyle = C.panelHi2;
         ctx.fillRect(0, 0, cssW, RULER_H);
-        ctx.fillStyle = "#5a5a78";
+        ctx.fillStyle = C.dim;
         ctx.font = "10px ui-monospace,monospace";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
@@ -944,7 +944,7 @@ class TimelineEditor {
         for (let f = 0; f <= this.visualDurFrames + step; f += step) {
             const x = this._frameToX(f);
             if (x > cssW + 50) break;
-            ctx.strokeStyle = "#2a2a40";
+            ctx.strokeStyle = C.panelHi2;
             ctx.beginPath();
             ctx.moveTo(x, RULER_H - 6);
             ctx.lineTo(x, RULER_H);
@@ -1005,6 +1005,8 @@ class TimelineEditor {
             }
             ctx.restore();
         } else if (seg.type === "text") {
+            // Darker mauve tone for image-segment fills. Literal hex —
+            // no semantic palette token exists for this specific shade.
             ctx.fillStyle = "#2d1f3a";
             ctx.fillRect(x1, y, w, h);
             ctx.fillStyle = C.pink;
@@ -1014,6 +1016,8 @@ class TimelineEditor {
             const txt = (seg.prompt || "Text").slice(0, 40);
             ctx.fillText(txt, x1 + w / 2, y + h / 2);
         } else if (seg.type === "audio") {
+            // Darker green tone for audio-segment fills. Literal hex —
+            // no semantic palette token exists for this specific shade.
             ctx.fillStyle = "#1a2a1a";
             ctx.fillRect(x1, y, w, h);
             // Waveform
@@ -1054,8 +1058,10 @@ class TimelineEditor {
             }
         }
 
-        // Border
-        ctx.strokeStyle = selected ? "var(--c2c-blue)" : "var(--c2c-panelHi2)";
+        // Border. Canvas can't resolve CSS variables on strokeStyle so use
+        // the literal hex from the C palette proxy (C.blue / C.panelHi2)
+        // instead of `var(--c2c-blue)` — previously stroked transparent.
+        ctx.strokeStyle = selected ? C.blue : C.panelHi2;
         ctx.lineWidth = selected ? 2 : 1;
         ctx.strokeRect(x1 + 0.5, y + 0.5, w - 1, h - 1);
     }
