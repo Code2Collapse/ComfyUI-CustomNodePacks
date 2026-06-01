@@ -58,6 +58,15 @@ let _chipLbl = null;
 let _slotMode = "full";
 let _unregisterSlot = null;
 
+// Phase E.3 — failed-import / auto-heal cache.
+// Shape: { ts, success, counts:{total,auto_safe,needs_review,blocked,unknown},
+//          uv_available, packs:[{name, recommended_action, safe_to_install,
+//          missing_modules, error_summary, ...}] } | null
+let _failedImports = null;
+let _failedImportsBusy = false;
+const _healingPacks = new Set();  // pack-name -> install in flight
+const _healStatusByPack = new Map(); // pack-name -> {ok,error,installed,...}
+
 function _getSetting(id, fallback) {
     try {
         const v = app?.ui?.settings?.getSettingValue?.(id, fallback);
@@ -518,6 +527,229 @@ function _openGraphHealthPanel() {
     } catch { /* */ }
 }
 
+// Phase E.3 — fetch failed-imports + heal endpoints.
+async function _refreshFailedImports({ rescan = false } = {}) {
+    if (_failedImportsBusy) return;
+    _failedImportsBusy = true;
+    try {
+        const url = "/c2c/integrity/failed_imports" + (rescan ? "?rescan=1" : "");
+        const r = await api.fetchApi(url);
+        if (!r.ok) {
+            _failedImports = { ts: Date.now(), success: false, error: `HTTP ${r.status}`,
+                               packs: [], counts: {}, uv_available: false };
+            return;
+        }
+        const j = await r.json();
+        const data = (j && j.data) || {};
+        _failedImports = {
+            ts: Date.now(),
+            success: !!j.success,
+            counts: data.counts || {},
+            uv_available: !!data.uv_available,
+            packs: Array.isArray(data.packs) ? data.packs : [],
+        };
+    } catch (e) {
+        _failedImports = { ts: Date.now(), success: false, error: String(e),
+                           packs: [], counts: {}, uv_available: false };
+    } finally {
+        _failedImportsBusy = false;
+        // Re-render if the popover is currently visible.
+        if (_popoverOpen && _lastHealth) _renderPopover(_lastHealth);
+    }
+}
+
+async function _healPack(packName, { force = false } = {}) {
+    if (!packName || _healingPacks.has(packName)) return;
+    _healingPacks.add(packName);
+    _healStatusByPack.set(packName, { ok: null, in_progress: true });
+    if (_popoverOpen && _lastHealth) _renderPopover(_lastHealth);
+    try {
+        const r = await api.fetchApi("/c2c/integrity/heal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pack: packName, force }),
+        });
+        const j = await r.json();
+        const data = (j && j.data) || {};
+        const result = data.result || j;
+        _healStatusByPack.set(packName, {
+            ok: !!j.success && !!result.ok,
+            stage: result.stage,
+            error: j.error || result.error,
+            message: j.message || "",
+            installed: result.installed || [],
+            rolled_back: !!result.rolled_back,
+            duration_s: result.duration_s,
+            http: r.status,
+            in_progress: false,
+        });
+        // If install actually succeeded, kick a rescan so the pack drops off.
+        if (j.success && result.ok) {
+            setTimeout(() => _refreshFailedImports({ rescan: true }), 1500);
+        }
+    } catch (e) {
+        _healStatusByPack.set(packName, {
+            ok: false, error: "network_error", message: String(e),
+            in_progress: false,
+        });
+    } finally {
+        _healingPacks.delete(packName);
+        if (_popoverOpen && _lastHealth) _renderPopover(_lastHealth);
+    }
+}
+
+// Phase E.3 — render the "Failed imports / Auto-heal" section.
+// Trust no input: every pack field is HTML-escaped before insertion.
+function _failedImportsSectionHtml(escape) {
+    const fi = _failedImports;
+    // First-time render: trigger a background fetch so the section
+    // populates without blocking the popover open.
+    if (!fi && !_failedImportsBusy) {
+        // Defer to next tick so we don't re-enter _renderPopover.
+        setTimeout(() => _refreshFailedImports({ rescan: false }), 0);
+    }
+    if (!fi) {
+        return `
+            <div class="int-sec" data-int-section="failed-imports">
+                <h4>Failed imports</h4>
+                <div style="opacity:0.55; font-size:11px;">scanning…</div>
+            </div>`;
+    }
+    if (fi.success === false) {
+        return `
+            <div class="int-sec" data-int-section="failed-imports">
+                <h4>Failed imports</h4>
+                <div style="opacity:0.55; font-size:11px;">unavailable (${escape(fi.error || "error")})</div>
+            </div>`;
+    }
+    const packs = Array.isArray(fi.packs) ? fi.packs : [];
+    if (!packs.length) {
+        return `
+            <div class="int-sec" data-int-section="failed-imports">
+                <h4>Failed imports</h4>
+                <div class="int-row"><span>All custom nodes imported cleanly.</span><span class="v">✓</span></div>
+            </div>`;
+    }
+    const counts = fi.counts || {};
+    const autoSafeN = counts.auto_safe || 0;
+    const reviewN = counts.needs_review || 0;
+    const blockedN = counts.blocked || 0;
+    const headerCls = autoSafeN > 0 ? "warn" : "";
+    const uvOK = !!fi.uv_available;
+
+    const reassure = `
+        <div style="margin-top:6px; padding:6px 8px; font-size:10px; line-height:1.4;
+                    background: color-mix(in srgb, var(--c2c-warnBright, var(--c2c-yellow)) 8%, transparent);
+                    border-left: 2px solid var(--c2c-warnBright, var(--c2c-yellow));
+                    border-radius: 3px;">
+            Your existing nodes are protected. Auto-heal only installs new packages
+            — it never upgrades or downgrades packages you already have, and CRITICAL
+            packages (torch, diffusers, transformers, …) are always refused.
+        </div>`;
+
+    const packRows = packs.slice(0, 12).map((p) => {
+        const name = escape(p.name || "?");
+        const action = String(p.recommended_action || "unknown");
+        const safe = Array.isArray(p.safe_to_install) ? p.safe_to_install : [];
+        const missing = Array.isArray(p.missing_modules) ? p.missing_modules : [];
+        const tagCls = action === "auto_safe" ? "warn"
+                    : action === "needs_review" ? "warn"
+                    : action === "blocked" ? "crit" : "";
+        const tagText = action === "auto_safe"   ? "✨ Auto-heal available"
+                      : action === "needs_review" ? "⚠ Needs review"
+                      : action === "blocked"      ? "🛑 Blocked"
+                      : "? Unknown";
+        const safePreview = safe.length
+            ? `<div style="opacity:0.7; font-size:10px; margin-top:2px;">would install: ${escape(safe.slice(0, 6).join(", "))}${safe.length > 6 ? "…" : ""}</div>`
+            : "";
+        const missingPreview = missing.length
+            ? `<div style="opacity:0.7; font-size:10px;">missing: ${escape(missing.join(", "))}</div>`
+            : "";
+
+        const status = _healStatusByPack.get(p.name);
+        const inFlight = _healingPacks.has(p.name);
+        let statusHtml = "";
+        if (inFlight) {
+            statusHtml = `<div style="opacity:0.85; font-size:10px; margin-top:3px;">⏳ installing…</div>`;
+        } else if (status) {
+            if (status.ok) {
+                const inst = (status.installed || []).join(", ");
+                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-okSoft, #6f6);">✓ healed: ${escape(inst)} (${status.duration_s || "?"}s)</div>`;
+            } else {
+                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-dangerTint, #f88);">✗ ${escape(status.error || "failed")}${status.rolled_back ? " — rolled back" : ""}</div>`;
+            }
+        }
+
+        // Heal button: only enabled for auto_safe (and needs_review w/ force).
+        let btnHtml = "";
+        if (action === "auto_safe" && uvOK && safe.length) {
+            btnHtml = `<button class="c2c-int-heal-btn" data-pack="${name}" data-force="0"
+                style="font-size:10px; padding:2px 8px; border-radius:3px; cursor:pointer;
+                border:1px solid var(--c2c-warnBright, var(--c2c-yellow));
+                background: color-mix(in srgb, var(--c2c-warnBright, var(--c2c-yellow)) 12%, transparent);
+                color: inherit;"
+                ${inFlight ? "disabled" : ""}>Heal</button>`;
+        } else if (action === "needs_review" && uvOK && safe.length) {
+            btnHtml = `<button class="c2c-int-heal-btn" data-pack="${name}" data-force="1"
+                style="font-size:10px; padding:2px 8px; border-radius:3px; cursor:pointer;
+                border:1px solid var(--c2c-warnSoft, var(--c2c-yellow));
+                background: transparent; color: inherit;"
+                title="Force-install risky pack (no CRITICAL changes)"
+                ${inFlight ? "disabled" : ""}>Force-heal</button>`;
+        } else if (!uvOK) {
+            btnHtml = `<span style="opacity:0.5; font-size:10px;">uv missing</span>`;
+        } else if (action === "blocked") {
+            btnHtml = `<span style="opacity:0.5; font-size:10px;">CRITICAL — manual</span>`;
+        }
+
+        return `
+            <div class="int-top" data-pack-row="${name}">
+                <span class="int-gh-tag ${tagCls}" style="font-size:10px;">${tagText}</span>
+                <b style="font-size:11px;">${name}</b>
+                ${btnHtml ? `<div style="float:right;">${btnHtml}</div>` : ""}
+                ${missingPreview}
+                ${safePreview}
+                ${statusHtml}
+            </div>`;
+    }).join("");
+
+    return `
+        <div class="int-sec" data-int-section="failed-imports">
+            <h4>Failed imports
+                <span style="font-weight:400; opacity:0.7; font-size:10px; margin-left:6px;">
+                    ${counts.total || 0} total · ${autoSafeN} auto-safe · ${reviewN} review · ${blockedN} blocked
+                </span>
+            </h4>
+            <div class="int-row ${headerCls}">
+                <span>${autoSafeN > 0 ? "✨ Auto-heal available" : "All packs triaged"}</span>
+                <span class="v">uv: ${uvOK ? "ready" : "missing"}</span>
+            </div>
+            ${packRows}
+            ${packs.length > 12 ? `<div style="opacity:0.55; font-size:10px;">…and ${packs.length - 12} more.</div>` : ""}
+            ${reassure}
+        </div>`;
+}
+
+function _wireFailedImportButtons(pop) {
+    try {
+        pop.querySelectorAll(".c2c-int-heal-btn").forEach((btn) => {
+            btn.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                const pack = btn.dataset.pack;
+                const force = btn.dataset.force === "1";
+                if (!pack || _healingPacks.has(pack)) return;
+                if (force && !window.confirm(
+                    `Force-heal "${pack}"?\n\nThis pack has 'risky' entries (e.g. unbounded version specs). ` +
+                    `Auto-heal will install only its safe packages — but the install may still pull a ` +
+                    `transitive dependency that mismatches your environment. CRITICAL packages will still ` +
+                    `be refused. Continue?`
+                )) return;
+                _healPack(pack, { force });
+            });
+        });
+    } catch (e) { console.warn("[c2c_int_badge] wire heal buttons:", e); }
+}
+
 function _renderPopover(health) {
     const pop = _ensurePopover();
     const lvl = (health && health.level) || "idle";
@@ -632,6 +864,8 @@ function _renderPopover(health) {
                 ` : `<div style="opacity:0.55; font-size:11px;">Integrity scan unavailable.</div>`}
             </div>
 
+            ${_failedImportsSectionHtml(escape)}
+
             <div class="int-sec">
                 <h4>Runtime</h4>
                 ${rt.available ? `
@@ -686,9 +920,10 @@ function _renderPopover(health) {
     pop.querySelector('[data-act="graph"]').addEventListener("click",
         () => { _openGraphHealthPanel(); });
     pop.querySelector('[data-act="refresh"]').addEventListener("click",
-        () => { _refreshNow(true); });
+        () => { _refreshNow(true); _refreshFailedImports({ rescan: true }); });
 
     _hydrateGraphHealthRows(pop);
+    _wireFailedImportButtons(pop);
 }
 
 function _hydrateGraphHealthRows(pop) {
@@ -800,6 +1035,12 @@ function _wireBackgroundEvents() {
                 _renderChip(_lastHealth);
                 if (_popoverOpen) _renderPopover(_lastHealth);
             }
+        });
+    } catch { /* */ }
+    // Phase E.3 — refresh failed-imports after a heal completes.
+    try {
+        api.addEventListener("heal_complete", () => {
+            setTimeout(() => _refreshFailedImports({ rescan: true }), 800);
         });
     } catch { /* */ }
 }
