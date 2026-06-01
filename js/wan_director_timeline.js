@@ -1005,9 +1005,10 @@ class TimelineEditor {
             }
             ctx.restore();
         } else if (seg.type === "text") {
-            // Darker mauve tone for image-segment fills. Literal hex —
-            // no semantic palette token exists for this specific shade.
-            ctx.fillStyle = "#2d1f3a";
+            // Mauve-tint background for text-segment fills. Uses the
+            // C.violetBgAlt palette token so the variant switcher
+            // (mocha/latte/oled) can recolour it.
+            ctx.fillStyle = C.violetBgAlt;
             ctx.fillRect(x1, y, w, h);
             ctx.fillStyle = C.pink;
             ctx.font = "11px ui-sans-serif";
@@ -1016,9 +1017,9 @@ class TimelineEditor {
             const txt = (seg.prompt || "Text").slice(0, 40);
             ctx.fillText(txt, x1 + w / 2, y + h / 2);
         } else if (seg.type === "audio") {
-            // Darker green tone for audio-segment fills. Literal hex —
-            // no semantic palette token exists for this specific shade.
-            ctx.fillStyle = "#1a2a1a";
+            // Dark-green tint for audio-segment fills via C.okBgDark3
+            // so it tracks the user's Catppuccin variant.
+            ctx.fillStyle = C.okBgDark3;
             ctx.fillRect(x1, y, w, h);
             // Waveform
             const peaks = seg.waveformPeaks || [];
