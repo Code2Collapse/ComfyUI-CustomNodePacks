@@ -7,7 +7,10 @@
       "category": "memory",
       "priority": 10,
       "confidence": 0.98,
-      "exc_types": ["RuntimeError", "torch.cuda.OutOfMemoryError"],
+      "exc_types": [
+        "RuntimeError",
+        "torch.cuda.OutOfMemoryError"
+      ],
       "regex": "out of memory|CUDA out of memory|alloc.*failed",
       "cause": "Your GPU ran out of VRAM while running this node.",
       "fixes": [
@@ -19,13 +22,88 @@
       ]
     },
     {
+      "id": "insightface_missing",
+      "category": "environment",
+      "priority": 12,
+      "confidence": 0.95,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError",
+        "FileNotFoundError"
+      ],
+      "regex": "insightface|antelopev2|buffalo_l|No module named ['\\\"]?insightface",
+      "headline": "InsightFace / antelopev2 weights missing.",
+      "cause": "A face-aware node (InstantID, PuLID, IP-Adapter FaceID) needs InsightFace and its model files (`antelopev2` or `buffalo_l`). One of them is missing.",
+      "fixes": [
+        "Install the package: `pip install insightface onnxruntime` (use `onnxruntime-gpu` if you have CUDA).",
+        "Download `antelopev2` from <https://github.com/deepinsight/insightface/releases> and place it at `ComfyUI/models/insightface/models/antelopev2/`.",
+        "Verify the folder structure — InsightFace needs the .onnx files directly inside the model folder."
+      ]
+    },
+    {
+      "id": "mediapipe_missing",
+      "category": "environment",
+      "priority": 12,
+      "confidence": 0.95,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError"
+      ],
+      "regex": "No module named ['\\\"]?mediapipe",
+      "headline": "MediaPipe is not installed.",
+      "cause": "A face-mesh, pose, or hand-landmark node needs Google's MediaPipe library, but it isn't installed in this Python environment.",
+      "fixes": [
+        "Install: `pip install mediapipe`.",
+        "On Python 3.12, you may need a pre-release: `pip install mediapipe-silicon` (Apple) or build from source.",
+        "If only one workflow needs it, consider a separate venv to avoid bloating your main environment."
+      ]
+    },
+    {
+      "id": "onnxruntime_missing",
+      "category": "environment",
+      "priority": 12,
+      "confidence": 0.93,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError"
+      ],
+      "regex": "No module named ['\\\"]?onnxruntime|cannot import name ['\\\"]?InferenceSession|onnxruntime\\.capi",
+      "headline": "onnxruntime is not installed.",
+      "cause": "A node (typically face/pose detection, rembg, or an ONNX model loader) requires onnxruntime but it isn't available in this Python environment.",
+      "fixes": [
+        "CPU only: `pip install onnxruntime`.",
+        "With CUDA: `pip install onnxruntime-gpu` (must match your CUDA version).",
+        "If both are installed they conflict — uninstall one: `pip uninstall onnxruntime onnxruntime-gpu` then reinstall just the one you need."
+      ]
+    },
+    {
+      "id": "sageattention_missing",
+      "category": "environment",
+      "priority": 12,
+      "confidence": 0.92,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError"
+      ],
+      "regex": "sageattention|No module named ['\\\"]?sage_attn",
+      "headline": "SageAttention is not installed — install it or disable the flag.",
+      "cause": "You launched ComfyUI with `--use-sage-attention`, or a custom node is requesting SageAttention, but the `sageattention` Python package isn't installed.",
+      "fixes": [
+        "Install: `pip install sageattention` (Linux/WSL recommended; Windows wheel exists for CUDA 12.x).",
+        "Or remove `--use-sage-attention` from your launch arguments and use `--use-pytorch-cross-attention`.",
+        "On RTX 40 series with fp8, SageAttention gives a real speedup — worth the install."
+      ]
+    },
+    {
       "id": "cuda_device_assert",
       "category": "cuda",
       "priority": 15,
       "confidence": 0.95,
-      "exc_types": ["RuntimeError"],
+      "exc_types": [
+        "RuntimeError"
+      ],
       "regex": "device-side assert triggered",
-      "cause": "A CUDA kernel hit an assertion \u2014 usually an out-of-range index (prompt token id \u2265 vocab size, or a bad pixel index).",
+      "cause": "A CUDA kernel hit an assertion — usually an out-of-range index (prompt token id ≥ vocab size, or a bad pixel index).",
       "fixes": [
         "Re-run with environment `CUDA_LAUNCH_BLOCKING=1` so the traceback points to the real call site.",
         "Check the prompt for unusual characters; some custom CLIP variants use a smaller vocab.",
@@ -37,9 +115,11 @@
       "category": "cuda",
       "priority": 15,
       "confidence": 0.95,
-      "exc_types": ["RuntimeError"],
+      "exc_types": [
+        "RuntimeError"
+      ],
       "regex": "CUDNN_STATUS|cuDNN error",
-      "cause": "cuDNN failed \u2014 most often a driver / torch / CUDA version mismatch.",
+      "cause": "cuDNN failed — most often a driver / torch / CUDA version mismatch.",
       "fixes": [
         "Confirm your torch build matches the installed CUDA: `python -c \"import torch; print(torch.version.cuda)\"`.",
         "Update the NVIDIA driver to a version compatible with this CUDA toolkit.",
@@ -47,58 +127,122 @@
       ]
     },
     {
+      "id": "key_stitch_data",
+      "category": "dataflow",
+      "priority": 15,
+      "confidence": 0.99,
+      "exc_types": [
+        "KeyError"
+      ],
+      "regex": "['\"]stitch_data['\"]",
+      "cause": "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
+      "fixes": [
+        "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
+        "If you bypassed the crop node intentionally, use InpaintCompositeMEC instead — it doesn't need stitch_data."
+      ]
+    },
+    {
+      "id": "module_not_found",
+      "category": "environment",
+      "priority": 15,
+      "confidence": 0.97,
+      "exc_types": [
+        "ModuleNotFoundError",
+        "ImportError"
+      ],
+      "regex": "No module named ['\"]?(?P<mod>[\\w.]+)",
+      "cause": "A Python package required by this node is not installed in the ComfyUI venv.",
+      "fixes": [
+        "From the ComfyUI portable folder run: `python_embeded\\python.exe -m pip install <module>`.",
+        "If on Linux/Mac venv: `<venv>/bin/pip install <module>`.",
+        "Some custom nodes ship a `requirements.txt` — `pip install -r requirements.txt`.",
+        "`<module>` was extracted from the error message above."
+      ]
+    },
+    {
+      "id": "lora_key_mismatch",
+      "category": "model_loading",
+      "priority": 18,
+      "confidence": 0.92,
+      "exc_types": [
+        "RuntimeError",
+        "KeyError"
+      ],
+      "regex": "lora_(?:up|down|A|B)|lora.*key.*not.*found|unexpected key.*lora",
+      "headline": "This LoRA was trained for a different base model.",
+      "cause": "The LoRA's key names don't match the checkpoint you have loaded — the most common cause is an SDXL LoRA applied to an SD1.5 model (or vice versa), or a Flux LoRA applied to an SDXL model.",
+      "fixes": [
+        "Open the LoRA's HuggingFace/Civitai page and confirm the base model — load that checkpoint instead.",
+        "If you have multiple LoRAs stacked, disable them one by one to find the culprit.",
+        "For Flux LoRAs, verify the `lora_format` in the LoRA loader (some Flux LoRAs use `diffusers`-style keys)."
+      ]
+    },
+    {
+      "id": "lora_rank_mismatch",
+      "category": "model_loading",
+      "priority": 18,
+      "confidence": 0.85,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "size mismatch for .*lora.*: copying a param.*shape",
+      "headline": "Two LoRAs of different ranks are being merged.",
+      "cause": "You're stacking LoRAs that have incompatible internal sizes (different `rank` / `network_dim`). One was trained at rank 64, another at rank 32, etc.",
+      "fixes": [
+        "Use only one LoRA at a time, or stick to LoRAs trained at the same rank.",
+        "Switch to `Power LoRA Loader` (rgthree) which handles rank differences more gracefully.",
+        "If you need both effects, train a merged LoRA at a single rank using `kohya_ss`."
+      ]
+    },
+    {
+      "id": "dll_load_windows",
+      "category": "environment",
+      "priority": 20,
+      "confidence": 0.9,
+      "exc_types": [
+        "OSError",
+        "ImportError"
+      ],
+      "regex": "DLL load failed|specified module could not be found.*\\.dll",
+      "cause": "A native DLL (CUDA, MSVC runtime, ffmpeg, opencv) couldn't be loaded.",
+      "fixes": [
+        "Reinstall the package that owns the DLL: `pip install --force-reinstall <package>`.",
+        "Install the latest Microsoft Visual C++ Redistributable.",
+        "If it's a CUDA DLL, your torch CUDA version may not match the driver."
+      ]
+    },
+    {
       "id": "matmul_shape",
       "category": "architecture_mismatch",
       "priority": 20,
       "confidence": 0.95,
-      "exc_types": ["RuntimeError"],
+      "exc_types": [
+        "RuntimeError"
+      ],
       "regex": "mat1 and mat2 shapes cannot be multiplied",
-      "cause": "Two tensors with incompatible inner dimensions were multiplied \u2014 almost always a model architecture mismatch (e.g. SDXL CLIP wired into an SD1.5 model, or a Flux VAE wired into an SDXL pipeline).",
+      "i18n_key": "matmul_shape",
+      "headline": "Wrong CLIP / text-encoder loaded — swap it.",
+      "cause": "The CLIP (text-encoder) does not match the diffusion model. Their hidden_size disagrees, so the prompt embedding cannot be multiplied with the model. Most common cause: an SDXL CLIP wired into an SD1.5 model, or vice-versa.",
       "fixes": [
-        "Check that every loader (CHECKPOINT, CLIP, VAE) is from the *same* model family.",
-        "If you used a custom CLIP/text-encoder, confirm its hidden_size matches the diffusion model.",
-        "If using LoRA, confirm the LoRA was trained for this base model."
+        "Open the Load CLIP / DualCLIPLoader node and pick a CLIP that matches your checkpoint (SD1.5 → sd1.5-clip, SDXL → sdxl-clip-l + sdxl-clip-g, Flux → t5xxl + clip-l).",
+        "If you used CheckpointLoaderSimple, it already provides the correct CLIP — wire its CLIP output directly into the prompt encoder.",
+        "If you used a LoRA, confirm the LoRA was trained for the same base family."
       ]
     },
     {
-      "id": "size_mismatch",
-      "category": "tensor_shape",
-      "priority": 25,
+      "id": "missing_model_file",
+      "category": "model_loading",
+      "priority": 20,
       "confidence": 0.9,
-      "exc_types": ["RuntimeError"],
-      "regex": "size of tensor.*must match|sizes? of tensors? must match|expected.*got.*size",
-      "cause": "Tensor sizes don't line up between two operations.",
+      "exc_types": [
+        "FileNotFoundError"
+      ],
+      "regex": "No such file or directory|cannot find file|does not exist",
+      "cause": "A model / weight file is missing from the expected folder.",
       "fixes": [
-        "Make sure upstream image/mask/latent has the resolution the consumer expects.",
-        "If you resized, did you also resize the mask?",
-        "ControlNet / IP-Adapter inputs must match the model's expected resolution."
-      ]
-    },
-    {
-      "id": "scalar_type_half",
-      "category": "dtype",
-      "priority": 25,
-      "confidence": 0.95,
-      "exc_types": ["RuntimeError"],
-      "regex": "expected scalar type Half but found Float|expected scalar type Float but found Half",
-      "cause": "A tensor's dtype (fp16 vs fp32) doesn't match the model \u2014 usually after wiring a half-precision model to a node that produces fp32 (or vice versa).",
-      "fixes": [
-        "Cast at the boundary: `tensor = tensor.half()` or `.float()`.",
-        "If the loader has a `precision` widget, set it to match downstream nodes.",
-        "Restart ComfyUI with `--force-fp16` (or `--force-fp32`) for consistency."
-      ]
-    },
-    {
-      "id": "dtype_bfloat16",
-      "category": "dtype",
-      "priority": 30,
-      "confidence": 0.85,
-      "exc_types": ["RuntimeError"],
-      "regex": "BFloat16|bf16",
-      "cause": "bf16 dtype mismatch. Some older GPUs (Turing and below) don't support bf16.",
-      "fixes": [
-        "Switch the model to fp16: change `precision` widget or pass `--force-fp16`.",
-        "Upgrade torch: `pip install -U torch` (bf16 path improved in 2.4+)."
+        "Check `ComfyUI/models/` for the file. Subfolders matter (`checkpoints/`, `vae/`, `loras/`, `clip/`, `controlnet/`).",
+        "If you use `extra_model_paths.yaml`, confirm the path resolves on this OS.",
+        "Manager → 'Install models' may have stalled mid-download — verify file size."
       ]
     },
     {
@@ -106,9 +250,11 @@
       "category": "model_loading",
       "priority": 20,
       "confidence": 0.97,
-      "exc_types": ["Exception"],
+      "exc_types": [
+        "Exception"
+      ],
       "regex": "PytorchStreamReader|safetensors_rust\\.SafetensorError|HeaderTooLarge|MetadataIncomplete",
-      "cause": "The model file is corrupt or truncated \u2014 almost always an interrupted download.",
+      "cause": "The model file is corrupt or truncated — almost always an interrupted download.",
       "fixes": [
         "Re-download the model. Compare file size against the source (HuggingFace / CivitAI lists exact bytes).",
         "If you used `git-lfs`, run `git lfs pull` to fetch the actual weights.",
@@ -120,56 +266,199 @@
       "category": "model_loading",
       "priority": 20,
       "confidence": 0.92,
-      "exc_types": ["RuntimeError", "KeyError"],
+      "exc_types": [
+        "RuntimeError",
+        "KeyError"
+      ],
       "regex": "Error\\(s\\) in loading state_dict|Missing key\\(s\\) in state_dict|Unexpected key",
-      "cause": "The model file structure does not match the loader's expected architecture \u2014 e.g. loading a Flux .safetensors into the SDXL Checkpoint Loader.",
+      "cause": "The model file structure does not match the loader's expected architecture — e.g. loading a Flux .safetensors into the SDXL Checkpoint Loader.",
       "fixes": [
         "Use the loader matching this model family (Flux loader for Flux, SDXL for SDXL, etc.).",
         "If the model has 'fp8' / 'gguf' / 'nf4' in its name, use the matching loader.",
-        "Some merged models save as VAE-baked-in \u2014 try a 'Checkpoint Loader (with config)' if you have a yaml."
+        "Some merged models save as VAE-baked-in — try a 'Checkpoint Loader (with config)' if you have a yaml."
       ]
     },
     {
-      "id": "missing_model_file",
-      "category": "model_loading",
-      "priority": 20,
-      "confidence": 0.9,
-      "exc_types": ["FileNotFoundError"],
-      "regex": "No such file or directory|cannot find file|does not exist",
-      "cause": "A model / weight file is missing from the expected folder.",
-      "fixes": [
-        "Check `ComfyUI/models/` for the file. Subfolders matter (`checkpoints/`, `vae/`, `loras/`, `clip/`, `controlnet/`).",
-        "If you use `extra_model_paths.yaml`, confirm the path resolves on this OS.",
-        "Manager \u2192 'Install models' may have stalled mid-download \u2014 verify file size."
-      ]
-    },
-    {
-      "id": "module_not_found",
+      "id": "ffmpeg_missing",
       "category": "environment",
-      "priority": 15,
-      "confidence": 0.97,
-      "exc_types": ["ModuleNotFoundError", "ImportError"],
-      "regex": "No module named ['\"]?(?P<mod>[\\w.]+)",
-      "cause": "A Python package required by this node is not installed in the ComfyUI venv.",
+      "priority": 25,
+      "confidence": 0.95,
+      "exc_types": [
+        "FileNotFoundError"
+      ],
+      "regex": "ffmpeg.*not found|imageio.*ffmpeg",
+      "cause": "The video pipeline needs ffmpeg, which isn't on PATH.",
       "fixes": [
-        "From the ComfyUI portable folder run: `python_embeded\\python.exe -m pip install <module>`.",
-        "If on Linux/Mac venv: `<venv>/bin/pip install <module>`.",
-        "Some custom nodes ship a `requirements.txt` \u2014 `pip install -r requirements.txt`.",
-        "`<module>` was extracted from the error message above."
+        "Install: `pip install imageio-ffmpeg` (downloads a static binary).",
+        "Or install ffmpeg system-wide and ensure `ffmpeg` is on PATH."
       ]
     },
     {
-      "id": "dll_load_windows",
-      "category": "environment",
-      "priority": 20,
+      "id": "none_bbox_attr",
+      "category": "dataflow",
+      "priority": 25,
       "confidence": 0.9,
-      "exc_types": ["OSError", "ImportError"],
-      "regex": "DLL load failed|specified module could not be found.*\\.dll",
-      "cause": "A native DLL (CUDA, MSVC runtime, ffmpeg, opencv) couldn't be loaded.",
+      "exc_types": [
+        "AttributeError"
+      ],
+      "regex": "'NoneType' object has no attribute 'bbox'|None.*\\.bbox",
+      "headline": "The bbox input is not connected.",
+      "cause": "A node expected a bounding-box (bbox) input but received None. The most common cause is that no detector/segmenter is wired into the bbox slot, or the upstream detector returned no objects.",
       "fixes": [
-        "Reinstall the package that owns the DLL: `pip install --force-reinstall <package>`.",
-        "Install the latest Microsoft Visual C++ Redistributable.",
-        "If it's a CUDA DLL, your torch CUDA version may not match the driver."
+        "Connect a detector (YOLO, SAM, FaceDetect, or any node with a BBOX output) into the failing node's `bbox` slot.",
+        "If a detector IS connected, lower its `confidence_threshold` — it may have returned an empty list because nothing was detected.",
+        "Insert an `Insight Status` node before the failing node to confirm what's flowing into it."
+      ]
+    },
+    {
+      "id": "none_conditioning_attr",
+      "category": "dataflow",
+      "priority": 25,
+      "confidence": 0.88,
+      "exc_types": [
+        "AttributeError",
+        "TypeError"
+      ],
+      "regex": "'NoneType' object.*conditioning|None.*\\[0\\]\\[0\\].*expected.*tensor",
+      "headline": "A CONDITIONING input is missing (likely positive/negative prompt).",
+      "cause": "KSampler / a guider node expected a CONDITIONING list (the encoded prompt) but received None. The text encoder ran but its output isn't wired in.",
+      "fixes": [
+        "Connect `CLIPTextEncode` (positive) → KSampler's `positive` input.",
+        "Connect a second `CLIPTextEncode` (negative, can be empty string) → KSampler's `negative` input.",
+        "Both prompt nodes must receive the CLIP from the same loader as the model."
+      ]
+    },
+    {
+      "id": "none_latent_samples",
+      "category": "dataflow",
+      "priority": 25,
+      "confidence": 0.92,
+      "exc_types": [
+        "AttributeError",
+        "TypeError"
+      ],
+      "regex": "'NoneType' object (?:has no attribute|is not subscriptable).*['\\\"]?samples['\\\"]?|None.*\\['samples'\\]",
+      "headline": "The LATENT input is not connected.",
+      "cause": "A node expected a LATENT (a dict with a `samples` tensor) but got None. Usually KSampler is missing an `Empty Latent Image` or `VAEEncode` upstream.",
+      "fixes": [
+        "Connect `Empty Latent Image` (for text-to-image) or `VAEEncode` (for image-to-image) into the failing node's latent input.",
+        "If the latent comes from a previous KSampler, confirm that sampler actually ran (check the queue history).",
+        "Add a `Preview Latent` / `Insight Status` node between to verify the tensor shape."
+      ]
+    },
+    {
+      "id": "none_mask_attr",
+      "category": "dataflow",
+      "priority": 25,
+      "confidence": 0.9,
+      "exc_types": [
+        "AttributeError"
+      ],
+      "regex": "'NoneType' object has no attribute 'mask'|None.*\\.mask\\b",
+      "headline": "The mask input is not connected.",
+      "cause": "A node expected a MASK tensor but received None. Either the mask input is unconnected, or an upstream mask generator failed silently.",
+      "fixes": [
+        "Connect a mask source (SAM, manual mask, or `Solid Mask` node) into the failing node's mask input.",
+        "If the mask comes from segmentation, verify the segmenter found the target class — add a `Preview Mask` node to inspect it.",
+        "Check the segmenter's confidence and prompt; an empty result yields None on most masking nodes."
+      ]
+    },
+    {
+      "id": "scalar_type_half",
+      "category": "dtype",
+      "priority": 25,
+      "confidence": 0.95,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "expected scalar type Half but found Float|expected scalar type Float but found Half",
+      "cause": "A tensor's dtype (fp16 vs fp32) doesn't match the model — usually after wiring a half-precision model to a node that produces fp32 (or vice versa).",
+      "fixes": [
+        "Cast at the boundary: `tensor = tensor.half()` or `.float()`.",
+        "If the loader has a `precision` widget, set it to match downstream nodes.",
+        "Restart ComfyUI with `--force-fp16` (or `--force-fp32`) for consistency."
+      ]
+    },
+    {
+      "id": "size_mismatch",
+      "category": "tensor_shape",
+      "priority": 25,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "size of tensor.*must match|sizes? of tensors? must match|expected.*got.*size",
+      "cause": "Tensor sizes don't line up between two operations.",
+      "fixes": [
+        "Make sure upstream image/mask/latent has the resolution the consumer expects.",
+        "If you resized, did you also resize the mask?",
+        "ControlNet / IP-Adapter inputs must match the model's expected resolution."
+      ]
+    },
+    {
+      "id": "vae_channel_mismatch",
+      "category": "architecture_mismatch",
+      "priority": 25,
+      "confidence": 0.93,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "Given groups=\\d+, weight of size \\[(?P<wc>\\d+), (?P<wi>\\d+),|expected input.*channels=(?P<ec>\\d+)|got input.*channels=(?P<gc>\\d+)",
+      "i18n_key": "vae_channel_mismatch",
+      "headline": "Wrong VAE for this checkpoint — swap it.",
+      "cause": "The VAE expects a latent with a different channel count than your diffusion model produces. SD1.5/SDXL use 4-channel latents; Flux/SD3 use 16-channel latents. Mixing them produces this convolution-channels error.",
+      "fixes": [
+        "Open the Load VAE node and pick the VAE that matches your checkpoint (SD1.5 → vae-ft-mse-840000, SDXL → sdxl_vae, Flux → ae.safetensors).",
+        "If you used CheckpointLoaderSimple it already provides the right VAE — connect its VAE output to the VAEDecode node directly.",
+        "Verify the LATENT cable goes from KSampler to VAEDecode (not crossed with another sampler's output)."
+      ]
+    },
+    {
+      "id": "comfy_validate_inputs",
+      "category": "workflow",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": [
+        "Exception"
+      ],
+      "regex": "Required input is missing|VALIDATE_INPUTS",
+      "cause": "ComfyUI rejected the graph because a required input slot is unconnected.",
+      "fixes": [
+        "Look for the red dashed input on the failing node — that's the missing wire.",
+        "If the input is optional in the docs but marked required in code, update the pack."
+      ]
+    },
+    {
+      "id": "dtype_bfloat16",
+      "category": "dtype",
+      "priority": 30,
+      "confidence": 0.85,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "BFloat16|bf16",
+      "cause": "bf16 dtype mismatch. Some older GPUs (Turing and below) don't support bf16.",
+      "fixes": [
+        "Switch the model to fp16: change `precision` widget or pass `--force-fp16`.",
+        "Upgrade torch: `pip install -U torch` (bf16 path improved in 2.4+)."
+      ]
+    },
+    {
+      "id": "latent_dim_not_divisible",
+      "category": "tensor_shape",
+      "priority": 30,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError"
+      ],
+      "regex": "must be divisible by (?:8|16|64)|height.*not.*multiple|width.*not.*multiple",
+      "headline": "Image size must be a multiple of 8 (or 64 for SDXL).",
+      "cause": "ComfyUI's UNet only works on resolutions that are a multiple of 8 (SD1.5/SDXL) or 16 (Flux). You set an odd width or height — usually because you typed a number like 513 or 1023.",
+      "fixes": [
+        "Set width/height to a multiple of 8: 512, 768, 1024, 1280, 1536. For SDXL prefer multiples of 64.",
+        "Add an `Image Resize` node before encoding to round dimensions safely.",
+        "If you used `Empty Latent Image`, its widget already enforces this — check upstream image loaders."
       ]
     },
     {
@@ -177,11 +466,13 @@
       "category": "dataflow",
       "priority": 30,
       "confidence": 0.85,
-      "exc_types": ["AttributeError"],
+      "exc_types": [
+        "AttributeError"
+      ],
       "regex": "'NoneType' object has no attribute",
-      "cause": "An upstream node returned `None` \u2014 most often a loader silently failed (missing model, wrong path) or a node has an unconnected required input.",
+      "cause": "An upstream node returned `None` — most often a loader silently failed (missing model, wrong path) or a node has an unconnected required input.",
       "fixes": [
-        "Look at the node *upstream* of this one \u2014 not this node. Errors propagate.",
+        "Look at the node *upstream* of this one — not this node. Errors propagate.",
         "Check every loader's filename widget actually selected a file.",
         "If a loader has a 'use_cache' option, try toggling it off."
       ]
@@ -191,39 +482,15 @@
       "category": "dataflow",
       "priority": 30,
       "confidence": 0.85,
-      "exc_types": ["TypeError"],
+      "exc_types": [
+        "TypeError"
+      ],
       "regex": "NoneType.*not iterable|object is not iterable",
-      "cause": "Code tried to loop over `None` \u2014 usually `stitch_data` from a crop node that didn't run, or a SAM mask list that came back empty.",
+      "cause": "Code tried to loop over `None` — usually `stitch_data` from a crop node that didn't run, or a SAM mask list that came back empty.",
       "fixes": [
         "If the message mentions `stitch_data`: the InpaintCropPro node above must run successfully first.",
-        "If SAM-related: the SAM loader / generator may have produced 0 masks \u2014 try a different prompt or lower threshold.",
+        "If SAM-related: the SAM loader / generator may have produced 0 masks — try a different prompt or lower threshold.",
         "Add an Insight Status node to confirm upstream actually executed."
-      ]
-    },
-    {
-      "id": "type_image_mask",
-      "category": "dataflow",
-      "priority": 35,
-      "confidence": 0.7,
-      "exc_types": ["TypeError"],
-      "regex": "got: \\[.*\\].*expected.*\\[.*\\]|argument.*to.*has invalid type",
-      "cause": "Wrong tensor type wired into an input \u2014 most often IMAGE wired into a MASK socket or vice versa.",
-      "fixes": [
-        "IMAGE tensors are `(B,H,W,3)` float; MASK tensors are `(B,H,W)` float.",
-        "Use a Convert IMAGE\u2192MASK or MASK\u2192IMAGE node at the boundary."
-      ]
-    },
-    {
-      "id": "key_stitch_data",
-      "category": "dataflow",
-      "priority": 15,
-      "confidence": 0.99,
-      "exc_types": ["KeyError"],
-      "regex": "['\"]stitch_data['\"]",
-      "cause": "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
-      "fixes": [
-        "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
-        "If you bypassed the crop node intentionally, use InpaintCompositeMEC instead \u2014 it doesn't need stitch_data."
       ]
     },
     {
@@ -231,7 +498,10 @@
       "category": "io",
       "priority": 30,
       "confidence": 0.95,
-      "exc_types": ["OSError", "IOError"],
+      "exc_types": [
+        "OSError",
+        "IOError"
+      ],
       "regex": "image file is truncated|cannot identify image file",
       "cause": "An input image is corrupt or has an unsupported format.",
       "fixes": [
@@ -240,29 +510,39 @@
       ]
     },
     {
-      "id": "ffmpeg_missing",
-      "category": "environment",
-      "priority": 25,
-      "confidence": 0.95,
-      "exc_types": ["FileNotFoundError"],
-      "regex": "ffmpeg.*not found|imageio.*ffmpeg",
-      "cause": "The video pipeline needs ffmpeg, which isn't on PATH.",
+      "id": "sampler_scheduler_combo",
+      "category": "workflow",
+      "priority": 32,
+      "confidence": 0.75,
+      "exc_types": [
+        "RuntimeError",
+        "KeyError",
+        "AttributeError"
+      ],
+      "regex": "scheduler.*not (?:found|supported)|sampler.*does not support|model_sampling.*incompatible",
+      "headline": "This sampler + scheduler combination isn't valid for this model.",
+      "cause": "Some samplers (e.g. LCM, DDIM-uniform) only work with specific schedulers. Flux/SD3 samplers also have constraints (rectified-flow scheduler required).",
       "fixes": [
-        "Install: `pip install imageio-ffmpeg` (downloads a static binary).",
-        "Or install ffmpeg system-wide and ensure `ffmpeg` is on PATH."
+        "For Flux: use sampler `euler` with scheduler `simple` or `sgm_uniform`.",
+        "For SDXL: try sampler `dpmpp_2m` with scheduler `karras`.",
+        "For LCM LoRA: use sampler `lcm` with scheduler `sgm_uniform`."
       ]
     },
     {
-      "id": "comfy_validate_inputs",
-      "category": "workflow",
-      "priority": 30,
-      "confidence": 0.85,
-      "exc_types": ["Exception"],
-      "regex": "Required input is missing|VALIDATE_INPUTS",
-      "cause": "ComfyUI rejected the graph because a required input slot is unconnected.",
+      "id": "device_mismatch",
+      "category": "dtype",
+      "priority": 35,
+      "confidence": 0.97,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "Expected all tensors to be on the same device|Expected object of (?:device )?cpu|tensors? .* expected to be on .* but (?:got|is on)",
+      "headline": "Some tensors are on CPU, others on GPU — they must all be on one device.",
+      "cause": "Two tensors fed into the same operation live on different devices (e.g. one was created on CPU and never moved to CUDA, or a custom node forgot a `.to(device)` call).",
       "fixes": [
-        "Look for the red dashed input on the failing node \u2014 that's the missing wire.",
-        "If the input is optional in the docs but marked required in code, update the pack."
+        "Restart ComfyUI cleanly so model unloading doesn't leave stale CPU copies behind.",
+        "If the failing node is a custom node, file an issue with the traceback — the node author needs to add `.to(model.device)` on its inputs.",
+        "As a workaround, insert an `Insight Status` or `Image Move To Device` node before the failing one."
       ]
     },
     {
@@ -270,12 +550,898 @@
       "category": "workflow",
       "priority": 35,
       "confidence": 0.7,
-      "exc_types": ["Exception"],
+      "exc_types": [
+        "Exception"
+      ],
       "regex": "sigma.*not.*found|scheduler.*not",
-      "cause": "The sampler couldn't build a sigma schedule \u2014 usually wrong scheduler/sampler combo.",
+      "cause": "The sampler couldn't build a sigma schedule — usually wrong scheduler/sampler combo.",
       "fixes": [
-        "Try `karras` or `normal` scheduler with `dpmpp_2m_sde` sampler \u2014 a safe default.",
+        "Try `karras` or `normal` scheduler with `dpmpp_2m_sde` sampler — a safe default.",
         "Some samplers (LCM, TCD) need their matching scheduler."
+      ]
+    },
+    {
+      "id": "type_image_mask",
+      "category": "dataflow",
+      "priority": 35,
+      "confidence": 0.7,
+      "exc_types": [
+        "TypeError"
+      ],
+      "regex": "got: \\[.*\\].*expected.*\\[.*\\]|argument.*to.*has invalid type",
+      "cause": "Wrong tensor type wired into an input — most often IMAGE wired into a MASK socket or vice versa.",
+      "fixes": [
+        "IMAGE tensors are `(B,H,W,3)` float; MASK tensors are `(B,H,W)` float.",
+        "Use a Convert IMAGE→MASK or MASK→IMAGE node at the boundary."
+      ]
+    },
+    {
+      "id": "input_weight_dtype",
+      "category": "dtype",
+      "priority": 40,
+      "confidence": 0.94,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "Input type .* and weight type .* should be the same|Input and weight must have the same dtype|input must match the type of weight",
+      "headline": "Input and weight dtypes don't match — usually fp16 vs fp32.",
+      "cause": "A layer's weights are in one dtype (e.g. half/fp16) but the tensor flowing in is in another (e.g. fp32). This happens after `--force-fp32` or when a custom node forces a cast mid-graph.",
+      "fixes": [
+        "Remove `--force-fp32` from your ComfyUI launch arguments.",
+        "If you added a `Model Cast` / `ModelType` node, set it back to the model's native dtype.",
+        "Restart ComfyUI — sometimes a previous workflow left the model in a mixed state."
+      ]
+    },
+    {
+      "id": "torch_cat_dtype",
+      "category": "dtype",
+      "priority": 45,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "torch\\.cat.*expected.*scalar type|Expected object of scalar type .* but got scalar type .* for sequence element",
+      "headline": "Tensors being joined have different dtypes.",
+      "cause": "`torch.cat` requires all tensors in the list to share the same dtype. One came in as fp16, another as fp32 (or bf16).",
+      "fixes": [
+        "If you're stacking latents from two samplers, run both through the same KSampler so their dtypes match.",
+        "Add a `Latent Cast` node between the two sources.",
+        "Reset all `Force FP32` toggles to default."
+      ]
+    },
+    {
+      "id": "controlnet_family_mismatch",
+      "category": "architecture_mismatch",
+      "priority": 60,
+      "confidence": 0.88,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "controlnet.*size mismatch|control_model.*shape|cnet.*channels?",
+      "headline": "ControlNet was trained for a different model family.",
+      "cause": "Your ControlNet weights expect a different latent/hidden size than the diffusion model. SD1.5 ControlNets won't work with SDXL, and SDXL ControlNets won't work with Flux.",
+      "fixes": [
+        "Download the ControlNet variant for your model family (search for `control-sdxl-canny` if you're on SDXL, `flux-controlnet` for Flux).",
+        "Verify in the `Load ControlNet` widget: the file name often contains `sd15`, `sdxl`, or `flux`.",
+        "If using `Apply ControlNet (Advanced)`, check the model preprocessor matches the ControlNet (canny→canny, depth→depth)."
+      ]
+    },
+    {
+      "id": "xformers_no_kernel",
+      "category": "environment",
+      "priority": 75,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError",
+        "ImportError",
+        "NotImplementedError"
+      ],
+      "regex": "No (?:operator|kernel) (?:found )?for.*xformers|xformers.*not (?:built|available)|memory_efficient_attention.*not.*supported",
+      "headline": "xFormers can't accelerate this op on your GPU.",
+      "cause": "Your xFormers build doesn't have a kernel compiled for this combination of dtype, head dimension, and GPU architecture. The op falls back to the slow path, or fails outright.",
+      "fixes": [
+        "Restart ComfyUI without `--use-xformers` and use `--use-pytorch-cross-attention` instead.",
+        "Update xFormers to the version matching your torch build: `pip install -U xformers --index-url https://download.pytorch.org/whl/cu121`.",
+        "On RTX 40 series, prefer `--use-sage-attention` if you have `sageattention` installed."
+      ]
+    },
+    {
+      "id": "hf_repo_not_found",
+      "category": "model_loading",
+      "priority": 85,
+      "confidence": 0.95,
+      "exc_types": [
+        "RepositoryNotFoundError",
+        "OSError",
+        "HTTPError"
+      ],
+      "regex": "RepositoryNotFoundError|404 Client Error.*huggingface\\.co|repo.*does not exist|EntryNotFoundError",
+      "headline": "HuggingFace can't find this model.",
+      "cause": "Either the repo ID is typo'd, the repo is private and your token has no access, or the specific file you asked for isn't in that repo.",
+      "fixes": [
+        "Open <https://huggingface.co/[org]/[model]> in a browser — does the URL load? If not, fix the spelling.",
+        "If the repo is private/gated, log in: `huggingface-cli login` (or set the `HF_TOKEN` env var) AND accept the model's terms on the website.",
+        "For specific files, check the repo's `Files and versions` tab to confirm the filename matches exactly."
+      ]
+    },
+    {
+      "id": "hf_offline_no_cache",
+      "category": "model_loading",
+      "priority": 87,
+      "confidence": 0.9,
+      "exc_types": [
+        "OSError",
+        "LocalEntryNotFoundError"
+      ],
+      "regex": "OfflineModeIsEnabled|HF_HUB_OFFLINE|Cannot find the requested files in the (?:cached|disk)",
+      "headline": "HuggingFace offline mode is on, but the file isn't cached yet.",
+      "cause": "Either `HF_HUB_OFFLINE=1` is set, or your machine has no internet — and the model file you need has never been downloaded to the local cache.",
+      "fixes": [
+        "Connect to the internet and re-run; HuggingFace will download and cache the file on first run.",
+        "If you must stay offline, manually download the file and place it under `~/.cache/huggingface/hub/`.",
+        "Or download to ComfyUI's models folder (e.g. `models/checkpoints/`) and use a local file loader instead of a HF repo-id loader."
+      ]
+    },
+    {
+      "id": "disk_full",
+      "category": "io",
+      "priority": 90,
+      "confidence": 0.97,
+      "exc_types": [
+        "OSError"
+      ],
+      "regex": "\\[Errno 28\\]|No space left on device|disk is full",
+      "headline": "Your disk is full.",
+      "cause": "The drive ComfyUI is writing to (output folder, HF cache, or temp) has no free space left.",
+      "fixes": [
+        "Delete old outputs from `ComfyUI/output/`.",
+        "Clear the HuggingFace cache: delete folders under `~/.cache/huggingface/hub/models--*` that you no longer need.",
+        "Move `ComfyUI/output/` to a larger drive and symlink the original location."
+      ]
+    },
+    {
+      "id": "permission_denied",
+      "category": "io",
+      "priority": 90,
+      "confidence": 0.97,
+      "exc_types": [
+        "PermissionError",
+        "OSError"
+      ],
+      "regex": "Permission denied|\\[Errno 13\\]|Access is denied",
+      "headline": "ComfyUI doesn't have permission to read/write this file.",
+      "cause": "The file or folder is owned by another user, is read-only, or is locked by another process (e.g. an open viewer).",
+      "fixes": [
+        "Close any program that has the file open (image viewers, video players, file explorers previewing the file).",
+        "On Windows: right-click the folder → Properties → Security → grant your user write access.",
+        "On Linux/macOS: `chmod -R u+rw <folder>`."
+      ]
+    },
+    {
+      "id": "pil_unidentified",
+      "category": "io",
+      "priority": 92,
+      "confidence": 0.95,
+      "exc_types": [
+        "UnidentifiedImageError"
+      ],
+      "regex": "cannot identify image file|UnidentifiedImageError",
+      "headline": "PIL can't recognise this file as an image.",
+      "cause": "The file's extension says .png/.jpg but its actual contents aren't a valid image — maybe it's an HTML error page, a partial download, or a video file with the wrong extension.",
+      "fixes": [
+        "Open the file in a normal image viewer to confirm it's actually viewable.",
+        "Re-download or re-export the source image.",
+        "If it's a video frame, use the `Load Video` / VHS nodes instead of `Load Image`."
+      ]
+    },
+    {
+      "id": "connection_error_api",
+      "category": "environment",
+      "priority": 95,
+      "confidence": 0.9,
+      "exc_types": [
+        "ConnectionError",
+        "ClientConnectorError",
+        "TimeoutError"
+      ],
+      "regex": "ConnectionError|ClientConnectorError|Failed to (?:connect|establish)|Connection refused|TimeoutError|Read timed out",
+      "headline": "Couldn't reach the remote server.",
+      "cause": "A node tried to call an external API (OpenAI, Anthropic, Ollama, your local LLM at :11434, or a HuggingFace download) and the connection failed.",
+      "fixes": [
+        "Check your internet connection.",
+        "If this is Ollama or a local LLM, confirm the server is running on the URL configured in Settings.",
+        "If a proxy/firewall is in the way, set `HTTP_PROXY` / `HTTPS_PROXY` environment variables before launching ComfyUI."
+      ]
+    },
+    {
+      "id": "index_out_of_range",
+      "category": "workflow",
+      "priority": 700,
+      "confidence": 0.55,
+      "exc_types": [
+        "IndexError"
+      ],
+      "regex": "list index out of range|tuple index out of range",
+      "headline": "A list/tuple was indexed past its end.",
+      "cause": "A node tried to read element N from a list that has fewer than N items. Very often: 'first detected face' on an image with zero detections.",
+      "fixes": [
+        "Lower the detector's confidence threshold so it returns at least one result.",
+        "Use a `Mask From Box` or `Conditional` node to gracefully skip when the list is empty.",
+        "Verify the upstream node actually produced a non-empty list — wire a Preview/Insight node between."
+      ]
+    },
+    {
+      "id": "json_decode_workflow",
+      "category": "workflow",
+      "priority": 750,
+      "confidence": 0.85,
+      "exc_types": [
+        "JSONDecodeError",
+        "ValueError"
+      ],
+      "regex": "json\\.decoder\\.JSONDecodeError|Expecting (?:value|property name).*line.*column|Unterminated string starting at",
+      "headline": "A JSON file (workflow or config) is malformed.",
+      "cause": "ComfyUI tried to parse a JSON file but it has a syntax error — usually an extra comma, a missing quote, or a corrupted save.",
+      "fixes": [
+        "Open the file in VS Code; it will highlight the exact line/column of the error.",
+        "If it's a workflow you just saved, restore from `ComfyUI/user/default/workflows/.backups/` (or the autosave folder).",
+        "Validate at <https://jsonlint.com> — paste the content, fix what it flags."
+      ]
+    },
+    {
+      "id": "flux_t5_missing",
+      "category": "model_loading",
+      "priority": 13,
+      "confidence": 0.94,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "t5xxl[_\\-]?(fp16|fp8|e4m3fn|bf16)?\\.safetensors|t5xxl.*not\\s*found",
+      "headline": "Flux T5-XXL text encoder file is missing.",
+      "cause": "Flux uses a dual encoder (clip_l + T5-XXL). The T5-XXL safetensors file (typically `t5xxl_fp16.safetensors` or `t5xxl_fp8_e4m3fn.safetensors`) was not found under `ComfyUI/models/text_encoders/` (or its alias `clip/`).",
+      "fixes": [
+        "Download from <https://huggingface.co/comfyanonymous/flux_text_encoders/tree/main> and place under `ComfyUI/models/text_encoders/`.",
+        "Use the `fp8_e4m3fn` variant on <16 GB VRAM, `fp16` on 24 GB+.",
+        "In the `DualCLIPLoader` node, set `type=flux` and pick both `clip_l.safetensors` and `t5xxl_*.safetensors`."
+      ]
+    },
+    {
+      "id": "flux_clip_l_missing",
+      "category": "model_loading",
+      "priority": 13,
+      "confidence": 0.93,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "clip_l\\.safetensors|clip_l.*not\\s*found",
+      "headline": "Flux/SD3 `clip_l.safetensors` text encoder is missing.",
+      "cause": "Flux and SD3/SD3.5 both need the OpenCLIP-L encoder file `clip_l.safetensors`. It is not present in `ComfyUI/models/text_encoders/`.",
+      "fixes": [
+        "Download `clip_l.safetensors` from <https://huggingface.co/comfyanonymous/flux_text_encoders> and drop it in `ComfyUI/models/text_encoders/`.",
+        "Wire it into `DualCLIPLoader` (Flux) or `TripleCLIPLoader` (SD3)."
+      ]
+    },
+    {
+      "id": "flux_vae_ae_missing",
+      "category": "model_loading",
+      "priority": 14,
+      "confidence": 0.92,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "\\bae\\.safetensors\\b|flux.*vae.*not\\s*found",
+      "headline": "Flux VAE (`ae.safetensors`) is missing.",
+      "cause": "Flux uses a dedicated VAE checkpoint named `ae.safetensors` (16-channel latents). It was not found under `ComfyUI/models/vae/`.",
+      "fixes": [
+        "Download `ae.safetensors` from the Flux release page (<https://huggingface.co/black-forest-labs/FLUX.1-dev/tree/main>) and put it in `ComfyUI/models/vae/`.",
+        "Wire it into `VAELoader` — Flux will NOT decode with the SD/SDXL VAE."
+      ]
+    },
+    {
+      "id": "flux_guidance_missing",
+      "category": "workflow",
+      "priority": 22,
+      "confidence": 0.85,
+      "exc_types": [
+        "KeyError",
+        "RuntimeError",
+        "AttributeError"
+      ],
+      "regex": "flux.*guidance|FluxGuidance|'guidance'.*not\\s*in",
+      "headline": "Flux conditioning is missing the `guidance` field.",
+      "cause": "Flux-dev expects each conditioning to carry a `guidance` scalar (CFG-distilled). Without a `FluxGuidance` node in the chain, the sampler raises or silently mis-conditions.",
+      "fixes": [
+        "Insert a `FluxGuidance` node between `CLIPTextEncode` and `KSampler` and set `guidance=3.5` (dev) or skip entirely for `schnell`.",
+        "If you are running Flux-schnell, set `steps=4`, `cfg=1.0`, `sampler=euler`, `scheduler=simple` — and skip `FluxGuidance`."
+      ]
+    },
+    {
+      "id": "flux_dev_schnell_step_mismatch",
+      "category": "workflow",
+      "priority": 24,
+      "confidence": 0.78,
+      "exc_types": [
+        "RuntimeError",
+        "ValueError",
+        "Exception"
+      ],
+      "regex": "flux.*schnell.*step|schnell.*\\bcfg\\b.*([2-9]|1\\d)",
+      "headline": "Flux-schnell sampler settings look wrong.",
+      "cause": "Flux-schnell is a 4-step distilled model. Running it with >8 steps or `cfg>1.5` produces over-saturated, washed-out, or noisy output — and burns time.",
+      "fixes": [
+        "Schnell: `steps=4`, `cfg=1.0`, `sampler=euler`, `scheduler=simple`. No `FluxGuidance` node needed.",
+        "Dev: `steps=20`, `cfg=1.0`, `FluxGuidance=3.5`, `sampler=euler`, `scheduler=simple` or `beta`."
+      ]
+    },
+    {
+      "id": "wan_umt5_missing",
+      "category": "model_loading",
+      "priority": 13,
+      "confidence": 0.94,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "umt5[_\\-]?xxl|umt5.*not\\s*found",
+      "headline": "Wan UMT5-XXL text encoder is missing.",
+      "cause": "All Wan variants (2.1, 2.1-VACE, 2.2, 2.2-Fun, 2.2-Animate) require the UMT5-XXL encoder, typically `umt5-xxl-enc-bf16.safetensors`. It was not found.",
+      "fixes": [
+        "Download from <https://huggingface.co/Kijai/WanVideo_comfy/tree/main> (look for `umt5-xxl-enc-bf16.safetensors` or `umt5-xxl-enc-fp8_e4m3fn.safetensors`) and place under `ComfyUI/models/text_encoders/`.",
+        "Wire it into `LoadWanVideoT5TextEncoder` (Kijai) or `CLIPLoader` with `type=wan` (native)."
+      ]
+    },
+    {
+      "id": "wan_vae_missing",
+      "category": "model_loading",
+      "priority": 13,
+      "confidence": 0.93,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "Wan2[_\\-]?1[_\\-]?VAE|wan.*vae.*not\\s*found|wan_2\\.1_vae",
+      "headline": "Wan VAE (`Wan2_1_VAE_*.safetensors`) is missing.",
+      "cause": "Wan video models use a dedicated 3D VAE (`Wan2_1_VAE_bf16.safetensors` or `_fp32`). The SD/Flux VAE will NOT decode Wan latents.",
+      "fixes": [
+        "Download `Wan2_1_VAE_bf16.safetensors` (or fp32 for max fidelity) from <https://huggingface.co/Kijai/WanVideo_comfy/tree/main> and place under `ComfyUI/models/vae/`.",
+        "Use `fp32` precision in the VAE loader for best quality — Wan latents are very sensitive to VAE rounding."
+      ]
+    },
+    {
+      "id": "wan_num_frames_invalid",
+      "category": "tensor_shape",
+      "priority": 18,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError",
+        "ValueError"
+      ],
+      "regex": "(num_frames|frame.*count).*(?:must|invalid|not\\s*divisible)|(4[ckn]\\+1)|temporal.*compress.*4",
+      "headline": "Wan frame count must satisfy `((n-1)//4)*4 + 1`.",
+      "cause": "Wan's temporal VAE compresses by 4×, so the input frame count must be of the form 4k+1 (i.e., 1, 5, 9, 13, 17, …, 81, 85). Other values raise a shape mismatch inside the sampler.",
+      "fixes": [
+        "Quantize: `num_frames = ((n - 1) // 4) * 4 + 1`.",
+        "Common safe values: 17, 33, 49, 65, 81. The Kijai default is 81 (~5s @ 16 fps)."
+      ]
+    },
+    {
+      "id": "wan_resolution_stride",
+      "category": "tensor_shape",
+      "priority": 18,
+      "confidence": 0.88,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError",
+        "ValueError"
+      ],
+      "regex": "(width|height).*(?:multiple|divisible).*(?:8|16)|wan.*resolution",
+      "headline": "Wan resolution must be a multiple of (8, 8) (Kijai recommends 16).",
+      "cause": "Wan's VAE stride is `(4, 8, 8)`. Width and height must be multiples of 8 (Kijai's wrapper prefers 16 for safety).",
+      "fixes": [
+        "Round to the nearest multiple of 16: `w = (w // 16) * 16`, same for h.",
+        "Reference safe pairs: 832×480 (16:9), 480×832 (9:16), 720×720 (1:1), 1280×720 (HD 16:9)."
+      ]
+    },
+    {
+      "id": "wan_dual_cfg_pair_required",
+      "category": "model_loading",
+      "priority": 16,
+      "confidence": 0.86,
+      "exc_types": [
+        "RuntimeError",
+        "KeyError",
+        "AssertionError"
+      ],
+      "regex": "wan2\\.2.*(?:high|low).*noise|dual.*cfg.*wan|in_dim.*48|wan.*expert",
+      "headline": "Wan 2.2 needs BOTH the high-noise and low-noise expert checkpoints.",
+      "cause": "Wan 2.2 is a two-expert MoE: a high-noise transformer for early steps and a low-noise transformer for late steps. Loading only one results in a missing-weights / dual-cfg error.",
+      "fixes": [
+        "Load `wan2.2_t2v_high_noise_14B.safetensors` AND `wan2.2_t2v_low_noise_14B.safetensors` (or the i2v / 5B equivalents).",
+        "In the Kijai sampler, set `cfg=[high_cfg, low_cfg]` as a 2-list, or use the dual-cfg node.",
+        "The auto-switch step is computed from the model `in_dim` (16 = T2V, 48 = I2V/5B)."
+      ]
+    },
+    {
+      "id": "wan_animate_pose_missing",
+      "category": "dataflow",
+      "priority": 20,
+      "confidence": 0.85,
+      "exc_types": [
+        "TypeError",
+        "AttributeError",
+        "KeyError",
+        "RuntimeError"
+      ],
+      "regex": "wan.*animate.*(?:pose|driver)|unianime.*pose.*(?:none|missing)|UNIANIMATE_POSE",
+      "headline": "Wan-Animate / UniAnimate needs a `UNIANIMATE_POSE` input.",
+      "cause": "The Wan 2.2-Animate (or UniAnimate) path requires a driving pose tensor (DWPose or OpenPose stack). Without it the embed assembler raises a `NoneType` error.",
+      "fixes": [
+        "Wire `DWPoseEstimator` (or `OpenposePreprocessor`) → `WanVideoUnianimeLoader` → the sampler's `unianimate_poses` input.",
+        "Pose video must match the target `num_frames` exactly (4k+1).",
+        "The reference image and pose video should be the same resolution as the target."
+      ]
+    },
+    {
+      "id": "sd3_text_encoders_incomplete",
+      "category": "model_loading",
+      "priority": 14,
+      "confidence": 0.9,
+      "exc_types": [
+        "FileNotFoundError",
+        "RuntimeError",
+        "KeyError"
+      ],
+      "regex": "sd3.*(?:clip_g|clip_l|t5).*missing|TripleCLIPLoader|sd3.*encoder.*not\\s*found",
+      "headline": "SD3 / SD3.5 needs all three text encoders.",
+      "cause": "SD3 / SD3.5 uses a triple encoder: `clip_l.safetensors`, `clip_g.safetensors`, and `t5xxl_*.safetensors`. At least one is missing.",
+      "fixes": [
+        "Download the trio from <https://huggingface.co/stabilityai/stable-diffusion-3.5-large/tree/main/text_encoders> and place in `ComfyUI/models/text_encoders/`.",
+        "Wire all three into `TripleCLIPLoader` in the exact order: `clip_l`, `clip_g`, `t5xxl`.",
+        "On <16 GB VRAM, use `t5xxl_fp8_e4m3fn.safetensors` instead of fp16."
+      ]
+    },
+    {
+      "id": "sd3_clip_dim_swap",
+      "category": "architecture_mismatch",
+      "priority": 19,
+      "confidence": 0.82,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "(?:1280|2048).*(?:768|1280).*mismatch|clip_g.*clip_l.*swap|expected.*1280.*got.*768",
+      "headline": "SD3 clip_l / clip_g were probably swapped in `TripleCLIPLoader`.",
+      "cause": "`clip_l` has hidden_dim=768, `clip_g` has hidden_dim=1280. Putting `clip_g` into the `clip_l` slot (or vice-versa) produces a shape mismatch when the conditioning is projected.",
+      "fixes": [
+        "Order in `TripleCLIPLoader` must be: `clip_l` (small, 768) → `clip_g` (big, 1280) → `t5xxl` (4096).",
+        "Filenames are usually self-documenting; check the file sizes if unsure (`clip_l` ≈ 246 MB, `clip_g` ≈ 1.39 GB)."
+      ]
+    },
+    {
+      "id": "gguf_loader_missing",
+      "category": "environment",
+      "priority": 13,
+      "confidence": 0.93,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError",
+        "KeyError"
+      ],
+      "regex": "No module named ['\\\"]?gguf|ComfyUI-GGUF|UnetLoaderGGUF|CLIPLoaderGGUF",
+      "headline": "ComfyUI-GGUF custom-node pack is not installed.",
+      "cause": "You are loading a `.gguf` quantized model (UNet or T5) but the loader nodes `UnetLoaderGGUF` / `CLIPLoaderGGUF` are not registered — the `city96/ComfyUI-GGUF` pack is missing.",
+      "fixes": [
+        "Install via Manager: search for `ComfyUI-GGUF` (city96) and click Install.",
+        "Or clone manually: `git clone https://github.com/city96/ComfyUI-GGUF` into `ComfyUI/custom_nodes/`.",
+        "Then: `pip install gguf` and restart ComfyUI."
+      ]
+    },
+    {
+      "id": "gguf_unsupported_quant",
+      "category": "model_loading",
+      "priority": 16,
+      "confidence": 0.85,
+      "exc_types": [
+        "RuntimeError",
+        "ValueError",
+        "NotImplementedError"
+      ],
+      "regex": "gguf.*(?:quant|qtype).*(?:unsupported|unknown|not.*implemented)|Q[2-8]_K.*not\\s*supported",
+      "headline": "This GGUF quantization variant is not supported by the loader.",
+      "cause": "ComfyUI-GGUF supports a subset of llama.cpp quant types. Newer variants like `IQ2_XXS`, `IQ3_S`, `Q4_K_XL` may not have dequant kernels in the bundled `gguf` package version.",
+      "fixes": [
+        "Update the pack: `cd custom_nodes/ComfyUI-GGUF && git pull` and `pip install -U gguf`.",
+        "Use a supported quant level: `Q4_K_S`, `Q5_K_M`, `Q6_K`, `Q8_0` are widely supported.",
+        "If you must use the unsupported quant, requantize with llama.cpp `quantize` to a supported type."
+      ]
+    },
+    {
+      "id": "gguf_dequant_oom",
+      "category": "memory",
+      "priority": 8,
+      "confidence": 0.8,
+      "exc_types": [
+        "RuntimeError",
+        "torch.cuda.OutOfMemoryError"
+      ],
+      "regex": "gguf.*(?:dequant|out of memory)|dequantize.*alloc",
+      "headline": "GGUF dequant ran out of VRAM.",
+      "cause": "GGUF saves VRAM at storage time but dequantizes back to fp16/bf16 at compute time. Large UNets (Flux, Wan) still need the full weight in VRAM during forward.",
+      "fixes": [
+        "Use a more aggressive quant (`Q3_K_M` instead of `Q5_K_M`).",
+        "Launch with `--lowvram` so layers are streamed.",
+        "Combine with `--use-sage-attention` and `--use-pytorch-cross-attention` to drop attention memory."
+      ]
+    },
+    {
+      "id": "qwen_image_clip_missing",
+      "category": "model_loading",
+      "priority": 14,
+      "confidence": 0.9,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "qwen[_\\-]?image.*(?:clip|vl|encoder)|Qwen2[_\\-]?VL.*not\\s*found|qwen2\\.5-vl",
+      "headline": "Qwen-Image needs the Qwen2-VL text encoder.",
+      "cause": "Qwen-Image (Alibaba) uses Qwen2-VL as its text+vision encoder, not OpenCLIP. The encoder weights (~2 GB) must be present under `ComfyUI/models/text_encoders/`.",
+      "fixes": [
+        "Download `qwen_2.5_vl_7b_fp8_scaled.safetensors` from <https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/text_encoders> and put it in `ComfyUI/models/text_encoders/`.",
+        "Use the `CLIPLoader` node with `type=qwen_image`.",
+        "Also need the Qwen-Image VAE under `ComfyUI/models/vae/`."
+      ]
+    },
+    {
+      "id": "qwen_processor_missing",
+      "category": "environment",
+      "priority": 14,
+      "confidence": 0.88,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError",
+        "AttributeError"
+      ],
+      "regex": "Qwen2VLProcessor|qwen.*tokenizer.*not\\s*found|cannot import name ['\\\"]?Qwen",
+      "headline": "Transformers version is too old for Qwen2-VL processor.",
+      "cause": "`Qwen2VLProcessor` / `Qwen2_5_VLProcessor` require `transformers>=4.45` (Qwen2-VL) or `>=4.49` (Qwen2.5-VL).",
+      "fixes": [
+        "Upgrade: `pip install -U transformers`. For Qwen2.5-VL: `pip install transformers>=4.49`.",
+        "Also: `pip install -U accelerate tokenizers`.",
+        "Restart ComfyUI after upgrade."
+      ]
+    },
+    {
+      "id": "teacache_unsupported_model",
+      "category": "model_loading",
+      "priority": 22,
+      "confidence": 0.8,
+      "exc_types": [
+        "KeyError",
+        "AttributeError",
+        "RuntimeError",
+        "NotImplementedError"
+      ],
+      "regex": "teacache|magcache|easycache.*(?:not.*support|unknown|unsupported)|cache.*coef.*missing",
+      "headline": "TeaCache / MagCache / EasyCache doesn't have coefficients for this model.",
+      "cause": "Each cache uses hand-tuned coefficients per model family (Flux, Wan 2.1, Wan 2.2, HunyuanVideo, LTX, ...). When you wire a cache to an unrecognised model, the coefficient lookup fails.",
+      "fixes": [
+        "Check the cache node's `model` dropdown — only models with a coefficient table are listed.",
+        "Update the cache pack: `cd custom_nodes/ComfyUI-WanVideoWrapper && git pull` for the latest Wan tables.",
+        "Disable the cache node (set threshold=0 or bypass) if your model is unsupported — you lose the 1.5-2× speedup but it will run."
+      ]
+    },
+    {
+      "id": "teacache_step_invalidation",
+      "category": "workflow",
+      "priority": 28,
+      "confidence": 0.65,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError"
+      ],
+      "regex": "teacache.*(?:invalid|reset|step.*mismatch)|cache.*length.*mismatch",
+      "headline": "TeaCache state was invalidated by a step-count change.",
+      "cause": "TeaCache stores per-step deltas. Changing `steps` mid-session without resetting the cache produces a length-mismatch on the next run.",
+      "fixes": [
+        "Toggle `rel_l1_thresh` to 0 once to flush, then back to your target threshold.",
+        "Or right-click the cache node → Reset.",
+        "Restarting the ComfyUI process is the nuclear option."
+      ]
+    },
+    {
+      "id": "ipadapter_v2_image_proj_missing",
+      "category": "model_loading",
+      "priority": 16,
+      "confidence": 0.85,
+      "exc_types": [
+        "KeyError",
+        "RuntimeError",
+        "AttributeError"
+      ],
+      "regex": "image_proj.*(?:not.*found|missing)|ip[_\\-]?adapter.*state_dict.*missing",
+      "headline": "IP-Adapter v2 weights are missing the `image_proj` block.",
+      "cause": "IP-Adapter v2 plus-models contain two sub-state-dicts: `image_proj` (Resampler) and `ip_adapter` (cross-attn). If only one is present, the loader fails.",
+      "fixes": [
+        "Re-download from <https://huggingface.co/h94/IP-Adapter/tree/main> — make sure you got the full `.bin` or `.safetensors` (not just an adapter shim).",
+        "FaceID variants (`ip-adapter-faceid-plusv2*.bin`) belong in a SEPARATE folder; use the `IPAdapterFaceID` loader, not the regular one.",
+        "Verify file size — IP-Adapter Plus weights are ~700 MB; if yours is <100 MB it's truncated."
+      ]
+    },
+    {
+      "id": "ipadapter_clip_vision_mismatch",
+      "category": "architecture_mismatch",
+      "priority": 18,
+      "confidence": 0.82,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError"
+      ],
+      "regex": "clip[_\\-]?vision.*(?:1024|1280).*(?:mismatch|expected)|ipadapter.*clip.*dim",
+      "headline": "IP-Adapter is paired with the wrong CLIP-Vision model.",
+      "cause": "IP-Adapter Plus (SDXL) needs `clip-vision-large` (1280 dim). IP-Adapter Plus (SD1.5) needs `clip-vision-h` (1024 dim). Pairing them wrong = shape mismatch.",
+      "fixes": [
+        "SDXL plus → `CLIP-ViT-H-14-laion2B-s32B-b79K` (the one labelled `ip-adapter` in the comfyanonymous repo).",
+        "SD1.5 plus → `CLIP-ViT-bigG-14-laion2B-39B-b160k`.",
+        "Recommended file source: <https://huggingface.co/h94/IP-Adapter/tree/main/models/image_encoder>."
+      ]
+    },
+    {
+      "id": "ipadapter_faceid_embeds_shape",
+      "category": "tensor_shape",
+      "priority": 20,
+      "confidence": 0.78,
+      "exc_types": [
+        "RuntimeError",
+        "ValueError"
+      ],
+      "regex": "faceid.*(?:embed|insightface).*(?:shape|dim)|expected.*512.*faceid",
+      "headline": "FaceID embeds have the wrong shape — InsightFace output isn't 512-dim.",
+      "cause": "IPAdapter-FaceID expects a 512-dim ArcFace embedding per face. If InsightFace returned 0 faces or a different model was used, the embed tensor is the wrong shape.",
+      "fixes": [
+        "Verify InsightFace detected a face: insert a `PreviewImage` after the cropper.",
+        "Use the `antelopev2` model pack (NOT `buffalo_l` — different embed dim for some variants).",
+        "If running multi-face, pass each face one-by-one or use `IPAdapterFaceIDBatch`."
+      ]
+    },
+    {
+      "id": "controlnet_union_type_invalid",
+      "category": "workflow",
+      "priority": 20,
+      "confidence": 0.82,
+      "exc_types": [
+        "KeyError",
+        "ValueError",
+        "IndexError",
+        "RuntimeError"
+      ],
+      "regex": "controlnet.*union.*(?:type|control_type).*(?:invalid|unknown)|union.*input_type.*out.*range",
+      "headline": "ControlNet-Union `control_type` is invalid.",
+      "cause": "ControlNet-Union (xinsir, SDXL) uses an integer `control_type` index (0=openpose, 1=depth, 2=hed/pidi/scribble/ted, 3=canny/lineart/anime_lineart/mlsd, 4=normal, 5=segment). An out-of-range value raises a KeyError inside the conditioning.",
+      "fixes": [
+        "Valid range for xinsir/controlnet-union-sdxl-1.0 is 0–5 (PRO version 0–7).",
+        "Use the `SetUnionControlNetType` node from `comfyui_controlnet_aux` instead of typing the int by hand.",
+        "Match `control_type` to the preprocessor you used (e.g. `DWPoseEstimator` → type 0)."
+      ]
+    },
+    {
+      "id": "fp8_unsupported_gpu",
+      "category": "dtype",
+      "priority": 16,
+      "confidence": 0.88,
+      "exc_types": [
+        "RuntimeError",
+        "NotImplementedError",
+        "AttributeError"
+      ],
+      "regex": "fp8|float8_e4m3|e5m2.*(?:not.*support|unsupported|requires.*ada|sm_89|sm_90)",
+      "headline": "FP8 needs an Ada (RTX 40xx) or Hopper (H100) GPU.",
+      "cause": "Native FP8 (E4M3 / E5M2) tensor cores only exist on sm_89 (Ada) and sm_90 (Hopper). On Ampere (RTX 30xx, A100) and older, FP8 ops fall back to slow emulation or raise.",
+      "fixes": [
+        "On Ampere/Turing: use the bf16 or fp16 variant of your model — file usually has `_bf16` / `_fp16` in the name.",
+        "On Pascal/Volta: stick to fp16; bf16 is unsupported, fp8 definitely is.",
+        "If you really want FP8 on a non-Ada card, you need PyTorch's emulation path: `pip install -U torch>=2.5` and accept the 3-5× slowdown."
+      ]
+    },
+    {
+      "id": "torchao_quant_missing",
+      "category": "environment",
+      "priority": 14,
+      "confidence": 0.9,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError",
+        "AttributeError"
+      ],
+      "regex": "No module named ['\\\"]?torchao|torchao.*quantize|cannot import.*Float8DynamicActivationFloat8WeightConfig",
+      "headline": "`torchao` is required for this FP8 / int4 model.",
+      "cause": "FP8 / INT4 model loaders (Flux fp8, Qwen-Image fp8, GGUF Q4_K) often delegate dequant to `torchao`. The package isn't installed.",
+      "fixes": [
+        "Install: `pip install torchao`.",
+        "On Windows: `pip install torchao --index-url https://download.pytorch.org/whl/cu124` (match your CUDA).",
+        "Verify: `python -c \"import torchao; print(torchao.__version__)\"`."
+      ]
+    },
+    {
+      "id": "sageattn2_arch_mismatch",
+      "category": "environment",
+      "priority": 17,
+      "confidence": 0.85,
+      "exc_types": [
+        "RuntimeError",
+        "ImportError",
+        "NotImplementedError"
+      ],
+      "regex": "sageattention.*(?:sm_|arch|requires|unsupported).*(?:80|86|87|89|90)|sage_attn.*kernel.*not.*found",
+      "headline": "SageAttention kernel doesn't match this GPU.",
+      "cause": "SageAttention 2.x ships per-arch kernels (sm_80 for A100, sm_89 for Ada, sm_90 for Hopper). If the installed wheel doesn't include your arch, the kernel call fails.",
+      "fixes": [
+        "Install the matching wheel from <https://github.com/thu-ml/SageAttention/releases>.",
+        "On RTX 30xx: use Sage 1.x (`pip install sageattention==1.0.6`) — Sage 2 is Ada+ only for full speed.",
+        "Or drop the flag and use `--use-pytorch-cross-attention` (sdpa) — slightly slower but universal."
+      ]
+    },
+    {
+      "id": "vae_tiled_decode_oom",
+      "category": "memory",
+      "priority": 8,
+      "confidence": 0.8,
+      "exc_types": [
+        "RuntimeError",
+        "torch.cuda.OutOfMemoryError"
+      ],
+      "regex": "(?:vae.*(?:tiled|decode)|tile_size|tiled.*decode).*(?:out\\s*of\\s*memory|outofmemoryerror|alloc.*fail)|(?:out\\s*of\\s*memory|outofmemoryerror|alloc.*fail).*(?:vae.*tiled|tiled.*decode|tile_size)",
+      "headline": "VAE tiled-decode still ran out of VRAM.",
+      "cause": "Tiled VAE decode lowers VRAM but each tile still needs ~tile²·channels memory. For Wan / HunyuanVideo at high resolution, even tile=512 can OOM.",
+      "fixes": [
+        "Reduce tile size in the `VAEDecodeTiled` node: try 256 or 128.",
+        "Increase `overlap` slightly (32 → 64) to hide seams from smaller tiles.",
+        "Use `TAESD` for previews (fast, low-VRAM) and only run full VAE decode at the end.",
+        "Move the VAE to CPU before decode: `vae.first_stage_model = vae.first_stage_model.cpu()` then decode (slow, but no GPU OOM)."
+      ]
+    },
+    {
+      "id": "taesd_missing",
+      "category": "model_loading",
+      "priority": 21,
+      "confidence": 0.85,
+      "exc_types": [
+        "FileNotFoundError",
+        "OSError",
+        "RuntimeError"
+      ],
+      "regex": "taesd|taesdxl|taesd3|taef1.*not\\s*found|vae_approx.*missing",
+      "headline": "TAESD preview decoder is missing.",
+      "cause": "TAESD is the tiny VAE used by ComfyUI's `--preview-method taesd` flag. The weights belong under `ComfyUI/models/vae_approx/`.",
+      "fixes": [
+        "Download from <https://github.com/madebyollin/taesd>: `taesd_decoder.safetensors` (SD1.5), `taesdxl_decoder.safetensors` (SDXL), `taesd3_decoder.safetensors` (SD3), `taef1_decoder.safetensors` (Flux).",
+        "Place all in `ComfyUI/models/vae_approx/`.",
+        "Restart with `--preview-method taesd` (or `auto`)."
+      ]
+    },
+    {
+      "id": "triton_windows_missing",
+      "category": "environment",
+      "priority": 11,
+      "confidence": 0.85,
+      "exc_types": [
+        "ImportError",
+        "ModuleNotFoundError",
+        "RuntimeError"
+      ],
+      "regex": "No module named ['\\\"]?triton|triton.*not.*available|triton_kernels?.*missing",
+      "headline": "Triton is required by this node and isn't installed (often Windows).",
+      "cause": "Some accelerators (SageAttention, Flash-Attn 2, certain torch.compile inductor paths) need Triton. On Linux it's a normal pip install; on Windows you need a community wheel.",
+      "fixes": [
+        "Linux/WSL: `pip install triton`.",
+        "Windows: install a community wheel — `pip install triton-windows` (woct0rdho/triton-windows) matching your Python+CUDA.",
+        "If the node just calls `torch.compile`, you can disable it (set `mode=eager` or wrap with `try/except`) — Triton becomes optional."
+      ]
+    },
+    {
+      "id": "xformers_torch_mismatch",
+      "category": "environment",
+      "priority": 16,
+      "confidence": 0.88,
+      "exc_types": [
+        "ImportError",
+        "RuntimeError",
+        "AttributeError"
+      ],
+      "regex": "xformers.*(?:built|compiled).*(?:different|torch).*(?:version|abi)|_C\\.so.*xformers|xformers.*undefined symbol",
+      "headline": "xformers was built for a different PyTorch version.",
+      "cause": "xformers C++ extensions are pinned to a specific torch ABI. Upgrading torch (or installing xformers built for the wrong torch) breaks the import.",
+      "fixes": [
+        "Match versions: `pip install --upgrade --force-reinstall xformers` (will pull the matching torch).",
+        "Or, if you must keep your torch version, look up the matching xformers wheel at <https://github.com/facebookresearch/xformers/releases>.",
+        "Workaround: drop `--use-xformers` from launch args and use `--use-pytorch-cross-attention` (sdpa)."
+      ]
+    },
+    {
+      "id": "torch_compile_inductor_fail",
+      "category": "workflow",
+      "priority": 30,
+      "confidence": 0.7,
+      "exc_types": [
+        "RuntimeError",
+        "Exception",
+        "BackendCompilerFailed"
+      ],
+      "regex": "BackendCompilerFailed|torch\\.compile.*(?:fail|error)|inductor.*(?:compile|backend).*error",
+      "headline": "`torch.compile` (Inductor) failed to compile the graph.",
+      "cause": "torch.compile / Inductor graph compilation failed — often because of an unsupported op (custom CUDA kernel, certain control-flow patterns), a Triton mismatch, or a Windows-specific compiler-driver gap.",
+      "fixes": [
+        "Easiest: disable the compile node (set `mode=eager`) — you keep correctness, lose 10-30 % speed.",
+        "If the error mentions `triton`, fix Triton first (see `triton_windows_missing`).",
+        "Try `mode=reduce-overhead` instead of `max-autotune`.",
+        "If you must compile: set `dynamic=True`, set `fullgraph=False`, and report the op in question to PyTorch."
+      ]
+    },
+    {
+      "id": "diffusers_version_too_old",
+      "category": "environment",
+      "priority": 18,
+      "confidence": 0.78,
+      "exc_types": [
+        "ImportError",
+        "AttributeError",
+        "ModuleNotFoundError"
+      ],
+      "regex": "cannot import name.*(?:FluxPipeline|Wan|Qwen).*from.*diffusers|diffusers.*has no attribute.*(?:Flux|Wan|Qwen)",
+      "headline": "`diffusers` is too old for this model family.",
+      "cause": "Newer model families (Flux, Wan, Qwen-Image, SD3.5) require recent `diffusers` releases. An older install raises `cannot import name`.",
+      "fixes": [
+        "Upgrade: `pip install -U diffusers`. Minimums: Flux >=0.31, SD3.5 >=0.31, Wan >=0.32, Qwen-Image >=0.33.",
+        "Pin to a known-good version if you use a fork: `pip install diffusers==0.33.1`.",
+        "Restart ComfyUI after upgrade so the new module is loaded."
+      ]
+    },
+    {
+      "id": "huggingface_token_required",
+      "category": "model_loading",
+      "priority": 17,
+      "confidence": 0.88,
+      "exc_types": [
+        "OSError",
+        "HTTPError",
+        "GatedRepoError",
+        "Exception"
+      ],
+      "regex": "GatedRepoError|gated.*repo|401.*Unauthorized|requires.*authentication|access.*gated",
+      "headline": "This Hugging Face repo is gated — you need an access token.",
+      "cause": "Some model weights (Flux-dev, SD3.5, certain Wan checkpoints) are gated. Downloading them requires accepting the licence on the HF page AND logging in with a token.",
+      "fixes": [
+        "Visit the model's HF page in a browser, click 'Agree and access repository'.",
+        "Generate a token at <https://huggingface.co/settings/tokens> (read scope is enough).",
+        "Run: `huggingface-cli login` and paste the token. Or set `HF_TOKEN` env var.",
+        "Restart ComfyUI so the new credentials are picked up."
+      ]
+    },
+    {
+      "id": "safetensors_metadata_missing",
+      "category": "model_loading",
+      "priority": 23,
+      "confidence": 0.7,
+      "exc_types": [
+        "KeyError",
+        "ValueError",
+        "RuntimeError"
+      ],
+      "regex": "safetensors.*metadata.*(?:missing|not.*found|None)|__metadata__.*KeyError",
+      "headline": "Safetensors file is missing its `__metadata__` header.",
+      "cause": "Some loaders (Kijai's wrapper, LoRA mergers) read `__metadata__` to know dtype / architecture / training config. An older or hand-built safetensors may omit it.",
+      "fixes": [
+        "Re-download from the original source — most modern checkpoints include metadata.",
+        "If you built the file yourself: `save_file(state_dict, path, metadata={'format': 'pt'})`.",
+        "As a workaround, some loaders accept an explicit `dtype=` arg to skip metadata lookup."
       ]
     },
     {
@@ -283,7 +1449,9 @@
       "category": "workflow",
       "priority": 999,
       "confidence": 0.3,
-      "exc_types": ["ValueError"],
+      "exc_types": [
+        "ValueError"
+      ],
       "regex": ".",
       "cause": "A widget value is outside its allowed range or has the wrong format.",
       "fixes": [
