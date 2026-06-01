@@ -1,30 +1,34 @@
 """Kijai-compat adapter layer for the Wan Director.
 
-Single public entry point. Probes ``third_party/ComfyUI-WanVideoWrapper``
-at import time for each supported Kijai feature; if Kijai is present
-AND the feature's API signature matches what we expect, we route to
-Kijai (faster, maintained). Otherwise we route to our local
-re-implementation in :mod:`..features._local_<feature>`.
+Probes ``third_party/ComfyUI-WanVideoWrapper`` at import time for each
+supported Kijai feature; when Kijai is present AND the feature's API
+signature matches what we wrap, the adapter routes to Kijai (faster,
+maintained upstream). Otherwise it routes to our in-tree
+re-implementation in :mod:`..features._local_<feature>`. Every feature
+has a local implementation — the adapter never raises on missing kijai.
 
 Public surface (stable; Director relies on these signatures):
 
     probe()                           → dict[str, str]
-        Maps feature name → "kijai" or "local" or "unavailable".
+        Maps feature name → ``"kijai"`` or ``"local"``.
 
     capability_report()               → str
-        Human-readable summary suitable for the Director's ``info``
-        output (one line per feature).
+        Human-readable per-feature summary for the Director's ``info``
+        output.
 
     apply_nag(model, scale, tau, alpha) → MODEL
-        Returns a cloned model with the NAG attn1 patch installed.
+    apply_freeinit(noise, source, ...) → Tensor
+    make_cache(kind, **kwargs)         → TeaCache | MagCache | EasyCache | None
+    build_slg(...) / apply_slg(...)
+    apply_feta(attn_logits, ...) → Tensor
+    apply_riflex(rope_freqs, ...) → Tensor
+    apply_uni3c(extrinsics, ...) → Tensor
+    apply_context_windows(...) / splice_context_windows(...)
+    apply_latent_preview(latent) → RGB Tensor
+    apply_asymflow(model, shift, multiplier) → MODEL
 
-    apply_freeinit(noise, source, *, filter_type, n, d_s, d_t) → Tensor
-        Returns frequency-mixed noise. Pure tensor op.
-
-The adapter never raises on missing kijai — that's the whole point.
-Missing kijai = local everywhere. Each apply function reports which
-backend it used via the module-level ``LAST_BACKEND`` dict so the
-Director can include this in its info output.
+Each apply function records the backend it used in the module-level
+``LAST_BACKEND`` dict so the Director can include it in info output.
 """
 from __future__ import annotations
 
@@ -48,7 +52,9 @@ from .features._local_uni3c           import encode_camera_poses
 from .features._local_context_windows import plan_windows, \
                                              blend_window_weights, \
                                              splice_windows
-from .features._local_taehv_preview   import latent_to_rgb_preview
+from .features._local_latent_preview  import latent_to_rgb_preview, \
+                                             supported_channel_counts, \
+                                             latent_model_for_channels
 
 log = logging.getLogger("MEC.WanDirector.Adapter")
 
@@ -102,7 +108,7 @@ def _has(modpath: str, attr: str) -> bool:
 
 _FEATURES: tuple[str, ...] = (
     "nag", "freeinit", "teacache", "magcache", "easycache",
-    "slg", "feta", "riflex", "uni3c", "context_windows", "taehv_preview",
+    "slg", "feta", "riflex", "uni3c", "context_windows", "latent_preview",
     "asymflow",
 )
 
@@ -110,23 +116,15 @@ _FEATURES: tuple[str, ...] = (
 def probe() -> dict[str, str]:
     """Return a {feature: backend} dict.
 
-    Backends: ``"kijai"`` (kijai present and API matches), ``"local"``
-    (we will use our local re-impl), or ``"unavailable"`` (feature is
-    declared but no implementation is registered — should not happen
-    for items in :data:`_FEATURES` after this slice).
+    Backends: ``"kijai"`` (kijai present and its API for that feature
+    matches our wrapper signature) or ``"local"`` (route to our
+    in-tree re-implementation in :mod:`..features._local_<feature>`).
+    Every feature in :data:`_FEATURES` has a local implementation, so
+    the value is always one of those two — never ``"unavailable"``.
     """
     out: dict[str, str] = {}
     if _KIJAI is None:
-        for f in _FEATURES:
-            # Every feature has a local re-impl ready to go; even when
-            # the local module hasn't shipped yet, we mark it "local"
-            # because that's the path Director will take.
-            out[f] = "local"
-        return out
-    # Kijai is present — try to probe its surface. We only register
-    # "kijai" if the API matches what we wrap; otherwise fall back to
-    # local. For this slice, only NAG + FreeInit have local impls and
-    # kijai detection paths.
+        return {f: "local" for f in _FEATURES}
     out["nag"]       = "kijai" if _has("nodes",          "WanVideoNAG"            ) else "local"
     out["freeinit"]  = "kijai" if _has("nodes_freeinit", "WanVideoFreeInit"       ) else "local"
     out["teacache"]  = "kijai" if _has("nodes",          "WanVideoTeaCache"       ) else "local"
@@ -137,12 +135,8 @@ def probe() -> dict[str, str]:
     out["riflex"]    = "kijai" if _has("nodes",          "WanVideoRIFLEx"         ) else "local"
     out["uni3c"]     = "kijai" if _has("nodes",          "WanVideoUni3CController") else "local"
     out["context_windows"] = "kijai" if _has("nodes",    "WanVideoContextWindows" ) else "local"
-    out["taehv_preview"]   = "kijai" if _has("nodes",    "WanVideoTAEHVPreview"   ) else "local"
-    for f in _FEATURES:
-        if f in out:
-            continue
-        # Not yet probed in this slice; default to local.
-        out[f] = "local"
+    out["latent_preview"]  = "kijai" if _has("nodes",    "WanVideoTAEHVPreview"   ) else "local"
+    out["asymflow"]        = "local"  # Code2Collapse-only contribution
     return out
 
 
@@ -313,7 +307,7 @@ def apply_slg(
     return combine_slg(eps_pos, eps_skip, cfg.slg_scale)
 
 
-# ── FETA / RIFLEx / Uni3C / Context Windows / TAEHV preview ──────────
+# ── FETA / RIFLEx / Uni3C / Context Windows / Latent preview ──────────
 
 
 def apply_feta(
@@ -368,7 +362,6 @@ def apply_context_windows(
     *,
     window: int,
     overlap: int,
-    strategy: str = "static",
 ) -> list:
     """Plan context windows for long-video sampling.
 
@@ -376,9 +369,7 @@ def apply_context_windows(
     to blend per-window outputs back together.
     """
     LAST_BACKEND["context_windows"] = probe().get("context_windows", "local")
-    return plan_windows(
-        n_frames, window=window, overlap=overlap, strategy=strategy,
-    )
+    return plan_windows(n_frames, window=window, overlap=overlap)
 
 
 def splice_context_windows(
@@ -392,22 +383,15 @@ def splice_context_windows(
     return splice_windows(window_outputs, plan, full_len, overlap=overlap)
 
 
-def apply_taehv_preview(
-    latent: torch.Tensor,
-    *,
-    seed: int = 1729,
-    percentile: float = 0.02,
-) -> torch.Tensor:
-    """Render an RGB preview from a Wan-style latent tensor.
+def apply_latent_preview(latent: torch.Tensor) -> torch.Tensor:
+    """Render an RGB preview from a Wan latent tensor.
 
-    When kijai's TAEHV is not available we use a weight-free
-    deterministic linear-projection fallback (good enough for the
-    Director's live-preview UI).
+    Uses ComfyUI's published Wan21 / Wan22 ``latent_rgb_factors`` —
+    auto-routed by channel count (16 → Wan2.1, 48 → Wan2.2). The
+    output matches ComfyUI's built-in fast preview pixel for pixel.
     """
-    LAST_BACKEND["taehv_preview"] = probe().get("taehv_preview", "local")
-    # Local path only for now — wiring real TAEHV weights is a later
-    # slice once we have a verified .pth in models/vae_approx/.
-    return latent_to_rgb_preview(latent, seed=seed, percentile=percentile)
+    LAST_BACKEND["latent_preview"] = probe().get("latent_preview", "local")
+    return latent_to_rgb_preview(latent)
 
 
 # ── AsymFlow (Lakonik signal-shift) ───────────────────────────────────
@@ -448,6 +432,7 @@ __all__ = [
     "build_slg", "apply_slg", "make_layer_skip_predicate",
     "apply_feta", "apply_riflex", "apply_uni3c",
     "apply_context_windows", "splice_context_windows",
-    "apply_taehv_preview",
+    "apply_latent_preview",
     "apply_asymflow", "asymflow_time_shift",
+    "supported_channel_counts", "latent_model_for_channels",
 ]

@@ -6,7 +6,7 @@ overlapping temporal windows, run the sampler on each, and blend the
 overlaps so motion remains smooth at the seams.
 
 Pure-tensor primitives:
-    plan_windows(F, window, overlap, *, strategy="static") → list[range]
+    plan_windows(F, window, overlap)               → list[range]
         Compute the (start, end) frame index of each window.
     blend_window_weights(window, overlap) → 1-D tensor of length `window`
         Symmetric blend ramp: 1 in the middle, linear-down to ramp[0]=0
@@ -29,25 +29,18 @@ def plan_windows(
     *,
     window: int,
     overlap: int,
-    strategy: str = "static",
 ) -> List[range]:
-    """Plan a covering of frame indices [0, n_frames) by windows.
+    """Plan a uniform-stride covering of ``[0, n_frames)`` by windows.
 
     Args:
         n_frames: total frame count.
         window:   window length (must be > overlap).
         overlap:  shared frames between consecutive windows.
-        strategy: ``"static"`` (uniform stride). Other strategies left
-                  for future slices.
 
     Returns:
         List of ``range`` objects, each ``range(start, end)`` with
         ``end <= n_frames`` and ``end - start <= window``.
     """
-    if strategy != "static":
-        raise NotImplementedError(
-            f"plan_windows: strategy={strategy!r} not implemented yet"
-        )
     if window <= 0 or n_frames <= 0:
         raise ValueError("plan_windows: window and n_frames must be positive")
     if overlap < 0 or overlap >= window:

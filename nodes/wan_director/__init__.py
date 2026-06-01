@@ -1,20 +1,22 @@
 """
-Wan Director v1 — multi-shot orchestration toolkit (C2C).
+Wan Director v2 — single-node visual timeline (C2C).
 
-A pragmatic, *model-agnostic* multi-shot director for video generation
-pipelines (Wan 2.x, AnimateDiff, HunyuanVideo, LTX, etc).  Rather than
-monkey-patching diffusion internals (which is fragile and breaks on
-every ComfyUI update), this pack provides composable graph utilities:
+ONE node, ALL Wan variants. The visual timeline (drag image / text /
+audio clips, scrub, ghost-preview), dual-backend dispatch (native
+ComfyUI + Kijai WanVideoWrapper), prompt-relay temporal cross-attention
+bias, and per-variant latent + conditioning assembly all live inside
+``WanDirectorC2C`` — there are NO helper sub-nodes to wire.
 
-  - WanShotListMEC     : JSON shot list -> SHOTLIST socket
-  - WanShotPickerMEC   : SHOTLIST + index -> per-shot parameters
-  - WanShotCountMEC    : SHOTLIST -> shot count (for batch iteration)
-  - WanFrameBridgeMEC  : IMAGE clip -> last frame (start-image of next shot)
-  - WanShotConcatMEC   : 1..6 IMAGE clips -> one IMAGE timeline (optional crossfade)
-  - WanPromptScheduleMEC: SHOTLIST -> frame-indexed prompt schedule string
+  - Variants: wan2.1_t2v / i2v, wan2.2_t2v / i2v (dual-CFG),
+              wan_fun_inp, wan_animate.
+  - Backends: native (MODEL + CLIP) or kijai (WANVIDEOMODEL + WANTEXTENCODER).
+  - PromptRelay: optional, works on both backbones + any third-party
+    diffusion model via the generic-introspection fallback patcher.
 
-These nodes share a single ``SHOTLIST`` custom socket type so they connect
-cleanly without stringly-typed data.
+Companion frontend extension: ``js/wan_director_timeline.js``.
+
+Forked-from inspiration: WhatDreamsCost-ComfyUI / LTX Director (MIT).
+See NOTICE.
 
 Author: Code2Collapse, May 2026.
 Licensed under the Apache License, Version 2.0.
