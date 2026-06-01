@@ -404,6 +404,230 @@ def _apply_kijai_branch(wan_model, wan_t5, pos_text, neg_text, local_list,
     return wan_model, text_embeds, relay_used, relay_note
 
 
+# ── Timeline schema v2 ───────────────────────────────────────────────
+#
+# v1 (legacy): {"segments": [...], "audioSegments": [...]}
+#              — no schema_version, only image/text/audio.
+#
+# v2 (current): adds four optional track arrays for downstream consumption.
+#               Image/text/audio handling is unchanged so v1 workflows keep
+#               working without any user action; the migration is automatic.
+#
+#   schema_version : 2
+#   segments       : image + text clips (UNCHANGED)
+#   audioSegments  : audio clips        (UNCHANGED)
+#   loraSegments   : [{name, strength, start, length, [easing]}]
+#   cameraSegments : [{type, start, length, params, [easing]}]
+#                    type ∈ {static, pan, zoom, orbit, dolly}
+#                    params is a free-form dict whose meaningful keys depend
+#                    on type (e.g. pan→dx/dy, zoom→from/to, orbit→radius/deg).
+#   seedSegments   : [{seed, start, length, mode}]
+#                    mode ∈ {fixed, increment, random_per_frame}
+#   poseSegments   : [{poseFile|poseB64, start, length, strength,
+#                      [interpolation]}]
+#                    interpolation ∈ {nearest, linear}
+#
+# The director itself does not *apply* LoRAs / cameras / seeds / poses (that
+# is the job of downstream applier nodes); it parses and validates the
+# program, then emits a single compact JSON STRING (`tracks_program`)
+# alongside the existing 10 outputs. Validation issues are surfaced via the
+# `info` JSON's `track_warnings` array and via Python warnings.
+
+_SCHEMA_VERSION = 2
+_TRACK_KEYS = ("loraSegments", "cameraSegments", "seedSegments", "poseSegments")
+_CAMERA_TYPES = frozenset(("static", "pan", "zoom", "orbit", "dolly"))
+_SEED_MODES = frozenset(("fixed", "increment", "random_per_frame"))
+_POSE_INTERP = frozenset(("nearest", "linear"))
+
+
+def _migrate_timeline(tdata: dict) -> tuple[dict, list[str]]:
+    """Upgrade a timeline dict to schema v2 in-place; return (dict, notes).
+
+    A v1 document (no ``schema_version`` field) is upgraded by adding the
+    version tag and ensuring every v2 track array exists (empty). No data
+    is lost. Already-v2 documents pass through.
+    """
+    notes: list[str] = []
+    if not isinstance(tdata, dict):
+        return ({"schema_version": _SCHEMA_VERSION,
+                 "segments": [], "audioSegments": [],
+                 "loraSegments": [], "cameraSegments": [],
+                 "seedSegments": [], "poseSegments": []},
+                ["timeline_data was not a JSON object; replaced with empty v2."])
+    version = int(tdata.get("schema_version", 1) or 1)
+    if version < 1:
+        version = 1
+    if version > _SCHEMA_VERSION:
+        notes.append(
+            f"timeline_data schema_version={version} is newer than this "
+            f"director (v{_SCHEMA_VERSION}); unknown fields will be ignored."
+        )
+    if version < 2:
+        notes.append(f"timeline_data migrated v{version} → v{_SCHEMA_VERSION}.")
+    tdata.setdefault("segments", [])
+    tdata.setdefault("audioSegments", [])
+    for k in _TRACK_KEYS:
+        tdata.setdefault(k, [])
+        if not isinstance(tdata[k], list):
+            notes.append(f"timeline_data.{k} was not a list; reset to [].")
+            tdata[k] = []
+    tdata["schema_version"] = _SCHEMA_VERSION
+    return tdata, notes
+
+
+def _clip_frames(start: Any, length: Any, total: int) -> tuple[int, int] | None:
+    """Coerce + clamp a (start, length) pair into [0, total). Returns None
+    if the segment lies entirely outside the timeline."""
+    try:
+        s = int(start)
+        n = int(length)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    s = max(0, s)
+    n = min(n, total - s)
+    if n <= 0:
+        return None
+    return s, n
+
+
+def _compile_lora_program(segs: list, total: int) -> tuple[list[dict], list[str]]:
+    """Validate LoRA segments and emit a normalised list.
+
+    Output entry: {"name": str, "strength": float, "start": int, "length": int}.
+    Out-of-range and malformed entries are dropped with a warning each.
+    Overlapping LoRAs are allowed (downstream stacker decides composition).
+    """
+    out: list[dict] = []
+    warns: list[str] = []
+    for idx, seg in enumerate(segs or []):
+        if not isinstance(seg, dict):
+            warns.append(f"loraSegments[{idx}] is not an object; skipped.")
+            continue
+        name = str(seg.get("name", "")).strip()
+        if not name:
+            warns.append(f"loraSegments[{idx}] missing 'name'; skipped.")
+            continue
+        clipped = _clip_frames(seg.get("start", 0), seg.get("length", 0), total)
+        if clipped is None:
+            warns.append(f"loraSegments[{idx}] ({name}) outside timeline; skipped.")
+            continue
+        s, n = clipped
+        try:
+            strength = float(seg.get("strength", 1.0))
+        except (TypeError, ValueError):
+            warns.append(f"loraSegments[{idx}] ({name}) bad strength; defaulting to 1.0.")
+            strength = 1.0
+        strength = max(-4.0, min(4.0, strength))
+        out.append({"name": name, "strength": strength, "start": s, "length": n})
+    return out, warns
+
+
+def _compile_camera_program(segs: list, total: int,
+                            frame_rate: float) -> tuple[list[dict], list[str]]:
+    """Validate camera segments. Emits normalised entries with the same
+    type+params the user supplied (the applier interprets params)."""
+    out: list[dict] = []
+    warns: list[str] = []
+    fps = max(1e-3, float(frame_rate))
+    for idx, seg in enumerate(segs or []):
+        if not isinstance(seg, dict):
+            warns.append(f"cameraSegments[{idx}] is not an object; skipped.")
+            continue
+        ctype = str(seg.get("type", "static")).strip().lower()
+        if ctype not in _CAMERA_TYPES:
+            warns.append(
+                f"cameraSegments[{idx}] type='{ctype}' unknown; falling back to 'static'."
+            )
+            ctype = "static"
+        clipped = _clip_frames(seg.get("start", 0), seg.get("length", 0), total)
+        if clipped is None:
+            warns.append(f"cameraSegments[{idx}] ({ctype}) outside timeline; skipped.")
+            continue
+        s, n = clipped
+        params = seg.get("params", {})
+        if not isinstance(params, dict):
+            warns.append(f"cameraSegments[{idx}] ({ctype}) params not an object; reset to {{}}.")
+            params = {}
+        out.append({
+            "type": ctype, "start": s, "length": n,
+            "duration_s": round(n / fps, 4),
+            "params": params,
+            "easing": str(seg.get("easing", "linear")),
+        })
+    return out, warns
+
+
+def _compile_seed_program(segs: list, total: int) -> tuple[list[dict], list[str]]:
+    """Validate seed segments. Emits normalised entries."""
+    out: list[dict] = []
+    warns: list[str] = []
+    for idx, seg in enumerate(segs or []):
+        if not isinstance(seg, dict):
+            warns.append(f"seedSegments[{idx}] is not an object; skipped.")
+            continue
+        mode = str(seg.get("mode", "fixed")).strip().lower()
+        if mode not in _SEED_MODES:
+            warns.append(
+                f"seedSegments[{idx}] mode='{mode}' unknown; using 'fixed'."
+            )
+            mode = "fixed"
+        clipped = _clip_frames(seg.get("start", 0), seg.get("length", 0), total)
+        if clipped is None:
+            warns.append(f"seedSegments[{idx}] outside timeline; skipped.")
+            continue
+        s, n = clipped
+        try:
+            seed = int(seg.get("seed", 0))
+        except (TypeError, ValueError):
+            warns.append(f"seedSegments[{idx}] non-int seed; using 0.")
+            seed = 0
+        # Mask to 64-bit signed range (downstream samplers).
+        seed = seed & 0x7FFFFFFFFFFFFFFF
+        out.append({"seed": seed, "start": s, "length": n, "mode": mode})
+    return out, warns
+
+
+def _compile_pose_program(segs: list, total: int) -> tuple[list[dict], list[str]]:
+    """Validate pose segments. Either ``poseFile`` (input-dir basename) or
+    ``poseB64`` (data URL or raw base64) must be present; both is OK
+    (file wins downstream)."""
+    out: list[dict] = []
+    warns: list[str] = []
+    for idx, seg in enumerate(segs or []):
+        if not isinstance(seg, dict):
+            warns.append(f"poseSegments[{idx}] is not an object; skipped.")
+            continue
+        has_src = bool(seg.get("poseFile")) or bool(seg.get("poseB64"))
+        if not has_src:
+            warns.append(f"poseSegments[{idx}] missing poseFile/poseB64; skipped.")
+            continue
+        clipped = _clip_frames(seg.get("start", 0), seg.get("length", 0), total)
+        if clipped is None:
+            warns.append(f"poseSegments[{idx}] outside timeline; skipped.")
+            continue
+        s, n = clipped
+        interp = str(seg.get("interpolation", "linear")).strip().lower()
+        if interp not in _POSE_INTERP:
+            warns.append(f"poseSegments[{idx}] interpolation='{interp}' unknown; using 'linear'.")
+            interp = "linear"
+        try:
+            strength = float(seg.get("strength", 1.0))
+        except (TypeError, ValueError):
+            warns.append(f"poseSegments[{idx}] bad strength; defaulting to 1.0.")
+            strength = 1.0
+        strength = max(0.0, min(2.0, strength))
+        entry = {"start": s, "length": n, "strength": strength,
+                 "interpolation": interp}
+        if seg.get("poseFile"):
+            entry["poseFile"] = str(seg["poseFile"])
+        if seg.get("poseB64"):
+            entry["poseB64"] = str(seg["poseB64"])
+        out.append(entry)
+    return out, warns
+
+
 # ── The node ─────────────────────────────────────────────────────────
 
 class WanDirectorC2C:
@@ -415,7 +639,7 @@ class WanDirectorC2C:
     serialised by the JS extension and parsed here on execute.
     """
 
-    CATEGORY = "C2C/wan_director"
+    CATEGORY = "C2C/Wan_Director"
     FUNCTION = "execute"
 
     DESCRIPTION = (
@@ -439,6 +663,7 @@ class WanDirectorC2C:
         "STRING",
         "WANVIDEOMODEL",
         "WANVIDEOTEXTEMBEDS",
+        "STRING",
     )
     RETURN_NAMES = (
         "model",
@@ -451,6 +676,7 @@ class WanDirectorC2C:
         "info",
         "wan_model",
         "wan_text_embeds",
+        "tracks_program",
     )
     OUTPUT_TOOLTIPS = (
         "Native MODEL (patched with PromptRelay if enabled). When backend='kijai', this is a straight passthrough of the input `model` socket if connected, else None — use `wan_model` instead.",
@@ -463,6 +689,7 @@ class WanDirectorC2C:
         "JSON: resolved backend, variant, latent shape, segment count, audio sample rate, prompt-relay status, warnings.",
         "Kijai WANVIDEOMODEL (only populated when backend='kijai'; PromptRelay-patched in place if enabled).",
         "Kijai WANVIDEOTEXTEMBEDS dict (only populated when backend='kijai'). Feed directly into WanVideoSampler.",
+        "JSON: timeline schema_version + normalised lora/camera/seed/pose tracks (one entry per validated segment) for downstream applier nodes. Empty arrays when no segments of that type exist.",
     )
 
     @classmethod
@@ -479,8 +706,6 @@ class WanDirectorC2C:
                         "falls back to the generic-introspection patcher for any third-party model."
                     ),
                 }),
-                "model": ("MODEL", {"tooltip": "Native Wan MODEL (2.1 / 2.2 / Fun / Animate). Required when backend='native'."}),
-                "clip":  ("CLIP",  {"tooltip": "Text encoder paired with the Wan model (UMT5 for 2.x). Required when backend='native'."}),
                 "model_variant": (VARIANT_KEYS, {
                     "default": "wan2.1_i2v",
                     "tooltip": "Which Wan family / mode this timeline targets. "
@@ -557,6 +782,8 @@ class WanDirectorC2C:
                 }),
             },
             "optional": {
+                "model":            ("MODEL", {"tooltip": "Native Wan MODEL (2.1 / 2.2 / Fun / Animate). Required when backend='native'."}),
+                "clip":             ("CLIP",  {"tooltip": "Text encoder paired with the Wan model (UMT5 for 2.x). Required when backend='native'."}),
                 "optional_latent":  ("LATENT", {"tooltip": "Override the auto-built empty latent."}),
                 "control_video":    ("IMAGE",  {"tooltip": "For Wan Fun / Animate: control sequence (depth/pose/canny)."}),
                 "control_mask":     ("MASK",   {"tooltip": "For Wan Fun Inpaint: per-frame mask track."}),
@@ -568,14 +795,35 @@ class WanDirectorC2C:
     # ── Execute ──────────────────────────────────────────────────────
 
     def execute(self,
-                backend, model, clip, model_variant, duration_frames, duration_seconds,
+                backend, model_variant, duration_frames, duration_seconds,
                 frame_rate, global_prompt, timeline_data, local_prompts,
                 negative_prompts, segment_lengths, guide_strength, display_mode,
                 custom_width, custom_height, resize_method,
                 cfg_high_noise, cfg_low_noise, ref_strength, audio_target,
                 enable_prompt_relay, prompt_relay_epsilon,
+                model=None, clip=None,
                 optional_latent=None, control_video=None, control_mask=None,
                 wan_model=None, wan_t5=None):
+
+        # Per-backend input validation — clearer than ComfyUI's generic
+        # "Required input is missing" because the user genuinely doesn't
+        # need both pairs at once.
+        if backend == "native":
+            missing = [n for n, v in (("model", model), ("clip", clip)) if v is None]
+            if missing:
+                raise ValueError(
+                    f"WanDirector: backend='native' requires {', '.join(missing)}. "
+                    "Either wire a native Wan MODEL + CLIP (UMT5) pair, or switch "
+                    "backend='kijai' and wire wan_model + wan_t5 instead."
+                )
+        elif backend == "kijai":
+            missing = [n for n, v in (("wan_model", wan_model), ("wan_t5", wan_t5)) if v is None]
+            if missing:
+                raise ValueError(
+                    f"WanDirector: backend='kijai' requires {', '.join(missing)}. "
+                    "Wire Kijai's WanVideoModelLoader + WanVideoTextEncode (or switch "
+                    "backend='native')."
+                )
 
         if model_variant not in VARIANT_TABLE:
             raise ValueError(f"Unknown model_variant '{model_variant}'. "
@@ -589,6 +837,22 @@ class WanDirectorC2C:
         except json.JSONDecodeError as exc:
             warnings.append(f"timeline_data JSON parse failed: {exc}; treating as empty.")
             tdata = {}
+
+        # Schema v1 → v2 migration (idempotent). After this, tdata has
+        # schema_version, segments, audioSegments, and all four v2 track
+        # arrays guaranteed to exist (possibly empty).
+        tdata, migration_notes = _migrate_timeline(tdata)
+        warnings.extend(migration_notes)
+
+        # Compile + validate the four v2 tracks. Each compiler returns
+        # (normalised_list, per_track_warnings) and never raises.
+        _total_frames = max(1, int(duration_frames))
+        lora_program,   _w_lora   = _compile_lora_program(tdata.get("loraSegments", []),   _total_frames)
+        camera_program, _w_cam    = _compile_camera_program(tdata.get("cameraSegments", []), _total_frames, float(frame_rate))
+        seed_program,   _w_seed   = _compile_seed_program(tdata.get("seedSegments", []),   _total_frames)
+        pose_program,   _w_pose   = _compile_pose_program(tdata.get("poseSegments", []),   _total_frames)
+        track_warnings = _w_lora + _w_cam + _w_seed + _w_pose
+        warnings.extend(track_warnings)
 
         img_segs = sorted(
             [s for s in tdata.get("segments", [])
@@ -716,6 +980,11 @@ class WanDirectorC2C:
             "n_text":       len(local_list),
             "n_neg":        len(neg_list),
             "n_image":      len(img_segs),
+            "n_lora":       len(lora_program),
+            "n_camera":     len(camera_program),
+            "n_seed":       len(seed_program),
+            "n_pose":       len(pose_program),
+            "schema_version": _SCHEMA_VERSION,
             "audio_sr":     audio_out["sample_rate"],
             "prompt_relay": {
                 "enabled":   bool(enable_prompt_relay),
@@ -723,8 +992,21 @@ class WanDirectorC2C:
                 "note":      relay_note,
                 "epsilon":   float(prompt_relay_epsilon),
             },
+            "track_warnings": track_warnings,
             "warnings":     warnings,
         }, indent=2)
 
+        # tracks_program: compact JSON for downstream applier nodes.
+        tracks_program = json.dumps({
+            "schema_version": _SCHEMA_VERSION,
+            "duration_frames": int(duration_frames),
+            "frame_rate": float(frame_rate),
+            "lora":   lora_program,
+            "camera": camera_program,
+            "seed":   seed_program,
+            "pose":   pose_program,
+        }, separators=(",", ":"))
+
         return (out_model_native, out_pos, out_neg, latent, float(frame_rate),
-                audio_out, ref_image, info, out_wan_model, out_text_embeds)
+                audio_out, ref_image, info, out_wan_model, out_text_embeds,
+                tracks_program)
