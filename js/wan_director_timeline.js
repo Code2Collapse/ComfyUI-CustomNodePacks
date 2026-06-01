@@ -1162,6 +1162,20 @@ app.registerExtension({
             setTimeout(() => {
                 try { self._wdTimeline = new TimelineEditor(self, host); }
                 catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }
+                // Re-flow node height after both DOM widgets (timeline +
+                // player) have registered and the width-clamp to 820 has
+                // been applied. Without this, the player's computeSize
+                // can read a stale size[0] before the clamp lands.
+                // Preserve the clamped width — computeSize() would return
+                // LiteGraph's minimum (sum of input/output rows) and
+                // collapse the node back to ~230 px.
+                try {
+                    const sz = self.computeSize?.();
+                    if (sz && sz.length === 2) {
+                        self.setSize([Math.max(self.size[0] || 0, sz[0]), sz[1]]);
+                    }
+                    self.setDirtyCanvas?.(true, true);
+                } catch {}
             }, 0);
             _wdInstances.add(self);
             return r;

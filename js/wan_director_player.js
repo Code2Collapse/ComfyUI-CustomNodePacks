@@ -223,7 +223,10 @@ app.registerExtension({
                 serialize: false,
                 hideOnZoom: false,
             });
-            widget.computeSize = () => [this.size?.[0] || 400, PLAYER_H + 8];
+            // Use the `width` LiteGraph passes (= inset widget-column width).
+            // Returning `node.size[0]` here would over-claim the full node
+            // width and produce dark gutters on both edges.
+            widget.computeSize = (width) => [width, PLAYER_H];
             this._wd_player = player;
 
             // Refresh thumbnails when timeline_data is updated.
