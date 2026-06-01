@@ -429,7 +429,7 @@ class TimelineEditor {
         };
 
         // Resize observer to redraw on container resize.
-        const ro = new ResizeObserver(() => this.render());
+        const ro = new ResizeObserver(() => this._renderRaf());
         ro.observe(this.container);
         this._resizeObs = ro;
     }
@@ -672,7 +672,7 @@ class TimelineEditor {
         const ds = this.dragState;
         if (ds.type === "playhead") {
             this.playhead = clamp(this._xToFrame(mx), 0, this.visualDurFrames);
-            this.render();
+            this._renderRaf();
             return;
         }
         if (ds.type === "seg") {
@@ -702,7 +702,7 @@ class TimelineEditor {
                 }
                 this._resolveCollisions(ds.segType, ds.idx);
             }
-            this.render();
+            this._renderRaf();
         }
     }
 
@@ -1103,10 +1103,34 @@ class TimelineEditor {
         try { this._resizeObs?.disconnect(); } catch {}
         if (this.audioCtx) try { this.audioCtx.close(); } catch {}
         this.audioCtx = null;
+        if (this._renderRafId) {
+            try { cancelAnimationFrame(this._renderRafId); } catch {}
+            this._renderRafId = 0;
+        }
+    }
+
+    /**
+     * Coalesce repeated render() calls into a single rAF tick. Cheap
+     * hot-loop callers (mousemove during drag, ResizeObserver bursts,
+     * image-load chains) should use this instead of render() directly.
+     */
+    _renderRaf() {
+        if (this._renderRafId) return;
+        this._renderRafId = requestAnimationFrame(() => {
+            this._renderRafId = 0;
+            try { this.render(); } catch (e) {
+                reportFailure("WanDirector._renderRaf", e, "wan_director_timeline");
+            }
+        });
     }
 }
 
 // ── Extension registration ──────────────────────────────────────────
+// Tracks every live WanDirector node so Ctrl+K palette actions can
+// pick the most-recently-created one as the target (matches user
+// expectation: "act on the thing I'm currently editing").
+const _wdInstances = new Set();
+
 app.registerExtension({
     name: "C2C.WanDirectorTimeline",
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -1139,6 +1163,7 @@ app.registerExtension({
                 try { self._wdTimeline = new TimelineEditor(self, host); }
                 catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }
             }, 0);
+            _wdInstances.add(self);
             return r;
         };
 
@@ -1158,7 +1183,42 @@ app.registerExtension({
         const origRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
             try { this._wdTimeline?.destroy(); } catch {}
+            _wdInstances.delete(this);
             return origRemoved?.apply(this, arguments);
         };
     },
 });
+
+// ── Ctrl+K command-palette actions ──────────────────────────────────
+// Registered via the global window.__C2C_ACTIONS__ contract from
+// _c2c_actions.js (loaded by c2c_command_palette.js). The palette is
+// disabled if no WanDirector node is on the graph.
+function _wdActive() {
+    // Most-recently-added instance wins; the Set preserves insertion order.
+    let last = null;
+    for (const n of _wdInstances) last = n;
+    return last?._wdTimeline || null;
+}
+function _wdRegisterActions() {
+    const reg = window.__C2C_ACTIONS__?.register;
+    if (typeof reg !== "function") return;
+    const enabled = () => _wdInstances.size > 0;
+    const actions = [
+        { id: "c2c.wanDirector.playToggle",   title: "WanDirector: Play / Pause",        icon: "▶︎", keywords: ["timeline","play","pause","preview"],     run: () => _wdActive()?.togglePlay()        },
+        { id: "c2c.wanDirector.deleteSel",    title: "WanDirector: Delete selected segment", icon: "✕", keywords: ["timeline","remove","delete"],         run: () => _wdActive()?.deleteSelected()    },
+        { id: "c2c.wanDirector.addText",      title: "WanDirector: Add text segment",     icon: "T",  keywords: ["timeline","text","prompt"],            run: () => _wdActive()?.addTextSegment()    },
+        { id: "c2c.wanDirector.addImage",     title: "WanDirector: Add image segment…",   icon: "🖼", keywords: ["timeline","image","picture","upload"], run: () => _wdActive()?.fileImg?.click()    },
+        { id: "c2c.wanDirector.addAudio",     title: "WanDirector: Add audio segment…",   icon: "♪", keywords: ["timeline","audio","sound","music","upload"], run: () => _wdActive()?.fileAud?.click() },
+    ];
+    for (const a of actions) {
+        try {
+            reg({ ...a, kind: "command", scope: "graph", enabled });
+        } catch (e) {
+            reportFailure("WanDirector.registerAction:" + a.id, e, "wan_director_timeline");
+        }
+    }
+}
+// Defer registration so the palette extension has time to expose
+// window.__C2C_ACTIONS__. Two passes in case load order differs.
+setTimeout(_wdRegisterActions, 0);
+setTimeout(_wdRegisterActions, 1000);
