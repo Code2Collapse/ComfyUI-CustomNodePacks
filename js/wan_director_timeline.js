@@ -25,7 +25,8 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { C } from './_c2c_theme.js';
+import { C, reducedMotion } from './_c2c_theme.js';
+import { reportFailure } from './_c2c_report.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 const RULER_H = 22;
@@ -106,7 +107,7 @@ async function uploadFile(file, type) {
         // returns { name, subfolder, type }
         return j;
     } catch (e) {
-        console.error("[WanDirector] upload failed", e);
+        reportFailure("WanDirector.uploadFile", e, "wan_director_timeline");
         return null;
     }
 }
@@ -528,7 +529,7 @@ class TimelineEditor {
     async addAudioSegmentFromFile(file) {
         let peaksInfo = null;
         try { peaksInfo = await decodeAudioPeaks(file, this.fps); }
-        catch (e) { console.error("[WanDirector] audio decode failed", e); return; }
+        catch (e) { reportFailure("WanDirector.addAudioSegmentFromFile", e, "wan_director_timeline"); return; }
         const res = await uploadFile(file, "audio");
         if (!res) return;
         const filename = res.subfolder ? `${res.subfolder}/${res.name}` : res.name;
@@ -845,7 +846,14 @@ class TimelineEditor {
             }
             this.render();
         }
-        requestAnimationFrame(() => this._tick());
+        // Honour OS prefers-reduced-motion: drop playhead refresh from rAF
+        // (~60fps) down to ~10fps via setTimeout. Audio scheduling is
+        // unaffected; only the visual playhead update slows.
+        if (reducedMotion()) {
+            setTimeout(() => this._tick(), 100);
+        } else {
+            requestAnimationFrame(() => this._tick());
+        }
     }
 
     // ── Properties panel sync ───────────────────────────────────────
@@ -1124,7 +1132,7 @@ app.registerExtension({
             const self = this;
             setTimeout(() => {
                 try { self._wdTimeline = new TimelineEditor(self, host); }
-                catch (err) { console.error("[WanDirector] timeline init failed:", err); }
+                catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }
             }, 0);
             return r;
         };
