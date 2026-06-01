@@ -410,6 +410,35 @@ def apply_taehv_preview(
     return latent_to_rgb_preview(latent, seed=seed, percentile=percentile)
 
 
+# ── AsymFlow (Lakonik signal-shift) ───────────────────────────────────
+
+
+def asymflow_time_shift(shift: float, t):
+    """Pure-tensor AsymFlow time→sigma mapping.
+
+    Re-exports the pure function from ``nodes.asymflow_sampler`` so
+    the Director can use it without importing the ComfyUI runtime
+    side of the node module.
+    """
+    # Late import to keep the adapter import-light and avoid pulling
+    # in ``comfy`` when this module is used in unit tests.
+    from ..asymflow_sampler import asymflow_time_shift as _f
+    return _f(shift, t)
+
+
+def apply_asymflow(model, *, shift: float = 3.0, multiplier: int = 1000):
+    """Install the AsymFlow shifted-flow schedule on a model.
+
+    Wraps :class:`nodes.asymflow_sampler.AsymFlowSamplerPatch` so the
+    Director sees a single interface. AsymFlow is a Code2Collapse
+    contribution (not vendored kijai), so this is always "local".
+    """
+    LAST_BACKEND["asymflow"] = "local"
+    from ..asymflow_sampler import AsymFlowSamplerPatch
+    out = AsymFlowSamplerPatch().patch(model, shift, multiplier)
+    return out[0] if isinstance(out, tuple) else out
+
+
 # Re-exported so the Director / sampler wrapper can use the predicate
 # inside its transformer-block iteration without re-importing.
 __all__ = [
@@ -420,4 +449,5 @@ __all__ = [
     "apply_feta", "apply_riflex", "apply_uni3c",
     "apply_context_windows", "splice_context_windows",
     "apply_taehv_preview",
+    "apply_asymflow", "asymflow_time_shift",
 ]
