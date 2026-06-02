@@ -111,8 +111,12 @@ VARIANT_TABLE: dict[str, dict[str, Any]] = {
         "ref_image":       False,
         "control_video":   True,
     },
+    # Wan Animate. EverAnimate (vita-epfl/EverAnimate) is opted into via
+    # the `enable_everanimate` toggle below — it's a rank-32 LoRA on top
+    # of Wan2.2-Animate-14B, not a different architecture, so it lives
+    # under the same variant rather than as a duplicate row.
     "wan_animate": {
-        "label":          "Wan Animate — Reference + Pose",
+        "label":          "Wan Animate — Reference + Pose (+ optional EverAnimate)",
         "latent_channels": 16,
         "spatial_div":     8,
         "temporal_div":    4,
@@ -122,26 +126,7 @@ VARIANT_TABLE: dict[str, dict[str, Any]] = {
         "dual_cfg":        False,
         "ref_image":       True,
         "control_video":   True,
-        "everanimate":    False,
-    },
-    # EverAnimate (vita-epfl/EverAnimate) — rank-32 LoRA on top of
-    # Wan2.2-Animate-14B that adds Persistent Latent Propagation +
-    # Restorative Flow Matching for minute-scale human animation. The
-    # director only emits the LoRA descriptor + chunking program in
-    # `tracks_program["everanimate"]`; an EverAnimate-runner node is
-    # responsible for loading the LoRA and executing chunked inference.
-    "wan2.2_animate_everanimate": {
-        "label":          "EverAnimate — Long-horizon (Wan2.2-Animate + rank-32 LoRA)",
-        "latent_channels": 16,
-        "spatial_div":     8,
-        "temporal_div":    4,
-        "default_fps":     16.0,
-        "needs_image":     False,
-        "supports_neg":    True,
-        "dual_cfg":        True,
-        "ref_image":       True,
-        "control_video":   True,
-        "everanimate":    True,
+        "everanimate_compatible": True,
     },
 }
 
@@ -784,7 +769,20 @@ class WanDirectorC2C:
                     "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
                     "tooltip": "Wan Animate reference-image influence. Ignored for other variants.",
                 }),
-                # EverAnimate (only meaningful when variant is wan2.2_animate_everanimate)
+                # EverAnimate opt-in toggle (only meaningful when variant=wan_animate).
+                # The JS variant gate hides this widget for non-animate variants, and
+                # the 5 EA widgets below are only shown when this is True.
+                "enable_everanimate": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Apply the EverAnimate rank-32 LoRA (vita-epfl/EverAnimate) on top of "
+                        "the Wan2.2-Animate-14B backbone for minute-scale human animation with "
+                        "Persistent Latent Propagation + Restorative Flow Matching. Only available "
+                        "when model_variant='wan_animate'. When off, the EverAnimate settings below "
+                        "are ignored and tracks_program['everanimate']['active'] is False."
+                    ),
+                }),
+                # EverAnimate settings (only meaningful when enable_everanimate=True)
                 "everanimate_stage": (list(EVERANIMATE_STAGES), {
                     "default": "stage2_480p",
                     "tooltip": (
@@ -866,6 +864,7 @@ class WanDirectorC2C:
                 negative_prompts, segment_lengths, guide_strength, display_mode,
                 custom_width, custom_height, resize_method,
                 cfg_high_noise, cfg_low_noise, ref_strength,
+                enable_everanimate,
                 everanimate_stage, everanimate_num_chunks,
                 everanimate_overlap_frames, everanimate_lora_strength,
                 everanimate_anchor_strategy,
@@ -1039,9 +1038,15 @@ class WanDirectorC2C:
         else:
             raise ValueError(f"Unknown backend '{backend}'. Choices: native, kijai.")
 
-        # EverAnimate descriptor — only populated when the variant opts in.
-        # Validated/clamped here so the runner can trust the values.
-        ea_active = bool(vcfg.get("everanimate", False))
+        # EverAnimate descriptor — active only when the variant supports it
+        # AND the user toggled it on. Validated/clamped so the runner can
+        # trust the values.
+        ea_active = bool(vcfg.get("everanimate_compatible", False)) and bool(enable_everanimate)
+        if bool(enable_everanimate) and not vcfg.get("everanimate_compatible", False):
+            warnings.append(
+                f"enable_everanimate=True but variant '{model_variant}' is not "
+                f"EverAnimate-compatible (requires wan_animate); ignoring the toggle."
+            )
         ea_stage = str(everanimate_stage)
         if ea_stage not in EVERANIMATE_STAGES:
             warnings.append(
