@@ -122,8 +122,34 @@ VARIANT_TABLE: dict[str, dict[str, Any]] = {
         "dual_cfg":        False,
         "ref_image":       True,
         "control_video":   True,
+        "everanimate":    False,
+    },
+    # EverAnimate (vita-epfl/EverAnimate) — rank-32 LoRA on top of
+    # Wan2.2-Animate-14B that adds Persistent Latent Propagation +
+    # Restorative Flow Matching for minute-scale human animation. The
+    # director only emits the LoRA descriptor + chunking program in
+    # `tracks_program["everanimate"]`; an EverAnimate-runner node is
+    # responsible for loading the LoRA and executing chunked inference.
+    "wan2.2_animate_everanimate": {
+        "label":          "EverAnimate — Long-horizon (Wan2.2-Animate + rank-32 LoRA)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        True,
+        "ref_image":       True,
+        "control_video":   True,
+        "everanimate":    True,
     },
 }
+
+# EverAnimate-specific constants (used by the runner; the director just
+# echoes them through tracks_program so different runners can implement
+# the chunking + anchor logic consistently).
+EVERANIMATE_STAGES = ("stage1_480p", "stage2_480p", "stage3_720p_beta")
+EVERANIMATE_ANCHOR_STRATEGIES = ("auto", "first_only", "first_plus_random_3")
 
 VARIANT_KEYS: list[str] = list(VARIANT_TABLE)
 
@@ -758,6 +784,46 @@ class WanDirectorC2C:
                     "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
                     "tooltip": "Wan Animate reference-image influence. Ignored for other variants.",
                 }),
+                # EverAnimate (only meaningful when variant is wan2.2_animate_everanimate)
+                "everanimate_stage": (list(EVERANIMATE_STAGES), {
+                    "default": "stage2_480p",
+                    "tooltip": (
+                        "Which EverAnimate LoRA checkpoint to apply on top of Wan2.2-Animate-14B:\n"
+                        "  stage1_480p     — base motion fidelity (480p training).\n"
+                        "  stage2_480p     — Restorative Flow Matching, sharper temporal coherence (recommended).\n"
+                        "  stage3_720p_beta — 720p beta with higher detail; needs more VRAM.\n"
+                        "Ignored for non-EverAnimate variants."
+                    ),
+                }),
+                "everanimate_num_chunks": ("INT", {
+                    "default": 1, "min": 1, "max": 50, "step": 1,
+                    "tooltip": (
+                        "Long-horizon chunk count. 1 = single ~5 s clip (standard Wan2.2-Animate). "
+                        "≥2 enables EverAnimate's Persistent Latent Propagation across anchor frames "
+                        "for minute-scale animation. Ignored for non-EverAnimate variants."
+                    ),
+                }),
+                "everanimate_overlap_frames": ("INT", {
+                    "default": 4, "min": 0, "max": 16, "step": 1,
+                    "tooltip": (
+                        "Frames of latent overlap between consecutive chunks (anchor padding). "
+                        "Higher = smoother seams but slower. Ignored if num_chunks=1 or non-EverAnimate variant."
+                    ),
+                }),
+                "everanimate_lora_strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
+                    "tooltip": "EverAnimate rank-32 LoRA strength. 1.0 = paper default. Ignored for non-EverAnimate variants.",
+                }),
+                "everanimate_anchor_strategy": (list(EVERANIMATE_ANCHOR_STRATEGIES), {
+                    "default": "auto",
+                    "tooltip": (
+                        "Anchor-frame selection for chunks 2+:\n"
+                        "  auto                 — first chunk uses first frame only, later chunks use first + 3 random.\n"
+                        "  first_only           — always 1 anchor (faster, slight quality loss).\n"
+                        "  first_plus_random_3  — always 4 anchors (paper-default; best quality).\n"
+                        "Ignored for non-EverAnimate variants."
+                    ),
+                }),
                 # Audio target
                 "audio_target": (["music_44k_stereo", "speech_16k_mono"], {
                     "default": "music_44k_stereo",
@@ -799,7 +865,11 @@ class WanDirectorC2C:
                 frame_rate, global_prompt, timeline_data, local_prompts,
                 negative_prompts, segment_lengths, guide_strength, display_mode,
                 custom_width, custom_height, resize_method,
-                cfg_high_noise, cfg_low_noise, ref_strength, audio_target,
+                cfg_high_noise, cfg_low_noise, ref_strength,
+                everanimate_stage, everanimate_num_chunks,
+                everanimate_overlap_frames, everanimate_lora_strength,
+                everanimate_anchor_strategy,
+                audio_target,
                 enable_prompt_relay, prompt_relay_epsilon,
                 model=None, clip=None,
                 optional_latent=None, control_video=None, control_mask=None,
@@ -969,6 +1039,39 @@ class WanDirectorC2C:
         else:
             raise ValueError(f"Unknown backend '{backend}'. Choices: native, kijai.")
 
+        # EverAnimate descriptor — only populated when the variant opts in.
+        # Validated/clamped here so the runner can trust the values.
+        ea_active = bool(vcfg.get("everanimate", False))
+        ea_stage = str(everanimate_stage)
+        if ea_stage not in EVERANIMATE_STAGES:
+            warnings.append(
+                f"everanimate_stage='{ea_stage}' not in {EVERANIMATE_STAGES}; "
+                f"falling back to 'stage2_480p'."
+            )
+            ea_stage = "stage2_480p"
+        ea_strategy = str(everanimate_anchor_strategy)
+        if ea_strategy not in EVERANIMATE_ANCHOR_STRATEGIES:
+            warnings.append(
+                f"everanimate_anchor_strategy='{ea_strategy}' not in "
+                f"{EVERANIMATE_ANCHOR_STRATEGIES}; falling back to 'auto'."
+            )
+            ea_strategy = "auto"
+        ea_num_chunks = max(1, min(50, int(everanimate_num_chunks)))
+        ea_overlap = max(0, min(16, int(everanimate_overlap_frames)))
+        ea_strength = max(0.0, min(2.0, float(everanimate_lora_strength)))
+        everanimate_program = {
+            "active":           ea_active,
+            "stage":            ea_stage,
+            "num_chunks":       ea_num_chunks,
+            "overlap_frames":   ea_overlap,
+            "lora_strength":    ea_strength,
+            "anchor_strategy":  ea_strategy,
+            # Hint to the runner where the LoRA file lives. Kept loose so
+            # users can drop the file in any folder_paths("loras") root.
+            "lora_filename":    f"everanimate_{ea_stage}.safetensors",
+            "base_model":       "Wan-AI/Wan2.2-Animate-14B",
+        }
+
         info = json.dumps({
             "backend":      backend,
             "variant":      model_variant,
@@ -992,6 +1095,7 @@ class WanDirectorC2C:
                 "note":      relay_note,
                 "epsilon":   float(prompt_relay_epsilon),
             },
+            "everanimate":  everanimate_program if ea_active else {"active": False},
             "track_warnings": track_warnings,
             "warnings":     warnings,
         }, indent=2)
@@ -1005,6 +1109,7 @@ class WanDirectorC2C:
             "camera": camera_program,
             "seed":   seed_program,
             "pose":   pose_program,
+            "everanimate": everanimate_program,
         }, separators=(",", ":"))
 
         return (out_model_native, out_pos, out_neg, latent, float(frame_rate),

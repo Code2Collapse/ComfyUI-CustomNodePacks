@@ -15,14 +15,23 @@ import { app } from "../../scripts/app.js";
 // Mirror of nodes/wan_director/director_node.py:VARIANT_TABLE flags
 // (only the ones that drive UI visibility).
 const VARIANT_FLAGS = {
-    "wan2.1_t2v":      { dual_cfg: false, ref_image: false, needs_image: false },
-    "wan2.1_i2v":      { dual_cfg: false, ref_image: false, needs_image: true  },
-    "wan2.2_t2v":      { dual_cfg: true,  ref_image: false, needs_image: false },
-    "wan2.2_i2v":      { dual_cfg: true,  ref_image: false, needs_image: true  },
-    "wan_fun_inp":     { dual_cfg: false, ref_image: false, needs_image: true  },
-    "wan_fun_control": { dual_cfg: false, ref_image: false, needs_image: false },
-    "wan_animate":     { dual_cfg: false, ref_image: true,  needs_image: false },
+    "wan2.1_t2v":      { dual_cfg: false, ref_image: false, needs_image: false, everanimate: false },
+    "wan2.1_i2v":      { dual_cfg: false, ref_image: false, needs_image: true,  everanimate: false },
+    "wan2.2_t2v":      { dual_cfg: true,  ref_image: false, needs_image: false, everanimate: false },
+    "wan2.2_i2v":      { dual_cfg: true,  ref_image: false, needs_image: true,  everanimate: false },
+    "wan_fun_inp":     { dual_cfg: false, ref_image: false, needs_image: true,  everanimate: false },
+    "wan_fun_control": { dual_cfg: false, ref_image: false, needs_image: false, everanimate: false },
+    "wan_animate":     { dual_cfg: false, ref_image: true,  needs_image: false, everanimate: false },
+    "wan2.2_animate_everanimate": { dual_cfg: true,  ref_image: true, needs_image: false, everanimate: true },
 };
+
+const EVERANIMATE_WIDGETS = [
+    "everanimate_stage",
+    "everanimate_num_chunks",
+    "everanimate_overlap_frames",
+    "everanimate_lora_strength",
+    "everanimate_anchor_strategy",
+];
 
 function hideWidget(w) {
     if (!w || w._wd_hidden) return;
@@ -65,6 +74,12 @@ function applyVariant(node, variant) {
 
     if (flags.dual_cfg) showWidget(wCfgLo); else hideWidget(wCfgLo);
     if (flags.ref_image) showWidget(wRef);  else hideWidget(wRef);
+
+    // EverAnimate widgets: only shown for the everanimate variant.
+    for (const wname of EVERANIMATE_WIDGETS) {
+        const w = findW(node, wname);
+        if (flags.everanimate) showWidget(w); else hideWidget(w);
+    }
 
     // Recompute node size and redraw.
     if (typeof node.setSize === "function" && node.computeSize) {
