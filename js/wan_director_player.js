@@ -223,9 +223,9 @@ app.registerExtension({
                 serialize: false,
                 hideOnZoom: false,
             });
-            // Use the `width` LiteGraph passes (= inset widget-column width).
-            // Returning `node.size[0]` here would over-claim the full node
-            // width and produce dark gutters on both edges.
+            // Use the inset `width` LiteGraph passes — never `this.size[0]`,
+            // which over-reserves the column and leaks the node bgcolor as
+            // dark gutters on both edges of the widget.
             widget.computeSize = (width) => [width, PLAYER_H];
             this._wd_player = player;
 
