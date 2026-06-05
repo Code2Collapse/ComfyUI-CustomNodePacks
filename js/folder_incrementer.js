@@ -5,8 +5,7 @@
  * - Accepts any link type on the "trigger" / "trigger_image" / "trigger_video" inputs
  * - Auto-extracts filename from the connected loader node (LoadImage,
  *   LoadVideo, VHS_LoadVideo, etc.) and writes it into the
- *   source_filename widget. The loader's filename IS what we want as
- *   our output versioning name.
+ *   source_filename widget (basename only — extension goes to source_extension).
  * - Traverses through Set/Get bus nodes, Reroute nodes, and arbitrary
  *   graph topologies to find the original source
  * - Honours the source_choice widget: "image" → trace trigger_image,
@@ -26,10 +25,37 @@ app.registerExtension({
 
         // Accept any type on trigger inputs
         nodeType.prototype.onConnectInput = function () { return true; };
+
+        if (nodeData.name === "FolderIncrementer") {
+            const _origVisible = nodeType.prototype.isWidgetVisible;
+            nodeType.prototype.isWidgetVisible = function (widget) {
+                if (widget?.name === "source_extension") return false;
+                return _origVisible ? _origVisible.call(this, widget) : true;
+            };
+
+            const _configure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (info) {
+                _configure?.apply(this, arguments);
+                requestAnimationFrame(() => {
+                    try { this._fiNormalizeSource?.(); this._fiSyncSource?.(); } catch (_) {}
+                });
+            };
+        }
+    },
+
+    loadedGraphNode(node) {
+        if (node.comfyClass !== "FolderIncrementer") return;
+        if (node._fiSetupDone) {
+            requestAnimationFrame(() => {
+                try { node._fiNormalizeSource?.(); node._fiSyncSource?.(); } catch (_) {}
+            });
+        }
     },
 
     nodeCreated(node) {
         if (node.comfyClass !== "FolderIncrementer") return;
+        if (node._fiSetupDone) return;
+        node._fiSetupDone = true;
 
         // Subgraph-aware graph accessor: when this node lives inside a
         // SubgraphNode wrapper, all of its links and siblings are in
@@ -232,31 +258,87 @@ app.registerExtension({
             return NAME_FORMATS.includes(v) ? v : "basename";
         }
 
+        const KNOWN_EXT_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|png|jpe?g|gif|webp|bmp|tiff?|tga|exr|hdr|heic|avif|wav|mp3|aac|flac|pdf|zip)$/i;
+
         function stripExt(filename) {
-            if (!filename) return filename;
-            const dot = filename.lastIndexOf(".");
-            if (dot <= 0) return filename;
-            return filename.slice(0, dot);
+            if (!filename) return { stem: "", ext: "" };
+            const m = String(filename).match(KNOWN_EXT_RE);
+            if (m) {
+                return { stem: filename.slice(0, -m[0].length), ext: m[0] };
+            }
+            return { stem: filename, ext: "" };
+        }
+
+        function splitFilename(filename) {
+            return stripExt(filename);
         }
 
         function formatSourceName(rawFilename, fmt) {
             // rawFilename may include extension; status display always strips it.
-            let stem = stripExt(rawFilename);
-            if (!stem) return rawFilename;
+            const { stem } = stripExt(rawFilename);
+            let base = stem || rawFilename;
+            if (!base) return rawFilename;
             if (fmt === "first_segment") {
-                const m = stem.split(/[._]/);
-                return (m && m[0]) ? m[0] : stem;
+                const m = base.split(/[._]/);
+                return (m && m[0]) ? m[0] : base;
             }
             if (fmt === "strip_tags") {
-                let cleaned = stem;
+                let cleaned = base;
                 for (let i = 0; i < 4; i++) {
                     const next = cleaned.replace(TRAILING_TAG_RE, "");
                     if (next === cleaned) break;
                     cleaned = next;
                 }
-                return cleaned || stem;
+                return cleaned || base;
             }
-            return stem; // basename
+            return base; // basename
+        }
+
+        function forceWidgetRefresh(w, value) {
+            if (!w) return;
+            const v = value !== undefined ? value : w.value;
+            w.value = v;
+            try { w.callback?.(v, app.canvas, node); } catch (_) {
+                try { w.callback?.(v); } catch (_2) {}
+            }
+            if (w.inputEl) {
+                w.inputEl.value = v;
+                try {
+                    w.inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+                    w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+                } catch (_) {}
+            }
+            try { node.onWidgetChanged?.(); } catch (_) {}
+        }
+
+        function writeSourceWidgets(fullFilename) {
+            const sfWidget = node.widgets?.find(w => w.name === "source_filename");
+            const extWidget = node.widgets?.find(w => w.name === "source_extension");
+            const { stem, ext } = splitFilename(fullFilename || "");
+            if (sfWidget) forceWidgetRefresh(sfWidget, stem);
+            if (extWidget) forceWidgetRefresh(extWidget, ext);
+            else if (ext) node._fiSourceExt = ext;
+            return { stem, ext };
+        }
+
+        function normalizeSourceFilename() {
+            const sfWidget = node.widgets?.find(w => w.name === "source_filename");
+            if (!sfWidget?.value) return;
+            const raw = String(sfWidget.value).trim();
+            if (!raw || !raw.includes(".")) return;
+            const { stem, ext } = splitFilename(raw);
+            if (stem === raw) return;
+            writeSourceWidgets(raw);
+        }
+
+        function hideExtensionWidget() {
+            const extWidget = node.widgets?.find(w => w.name === "source_extension");
+            if (!extWidget) return;
+            extWidget.hidden = true;
+            extWidget.type = "hidden";
+            if (extWidget.computeSize) {
+                extWidget.computeSize = () => [0, -4];
+            }
         }
 
         // ── Extract filename honouring source_choice ─────────────────
@@ -448,32 +530,50 @@ app.registerExtension({
             const result = extractFilename();
             const sfWidget = node.widgets?.find(w => w.name === "source_filename");
             if (result && result.filename) {
-                // Widget keeps the FULL filename (with ext) so Python
-                // can preserve the extension on output_filename.
-                if (sfWidget && sfWidget.value !== result.filename) {
-                    sfWidget.value = result.filename;
-                }
-                // Status display shows the FORMATTED preview that
-                // matches what Python will write to disk.
+                // source_filename = stem only; extension → source_extension
+                const { stem, ext } = writeSourceWidgets(result.filename);
                 const fmt      = getNameFormat();
-                const preview  = formatSourceName(result.filename, fmt);
+                const preview  = formatSourceName(stem, fmt);
                 const sfx      = (node.widgets?.find(w => w.name === "suffix")?.value || "").trim();
                 const sfxLabel = sfx ? `${sfx}` : "";
+                const extLabel = ext ? ` ${ext}` : "";
                 const tag = result.mode === "global" ? "\uD83C\uDF10"  // globe for global scan
                           : result.mode === "input"  ? "\uD83D\uDD0C"  // plug for non-trigger input
                           : result.mode === "custom" ? "\u270D\uFE0F"  // hand-writing for custom
                                                      : "\uD83D\uDCC4"; // page for trigger
-                setStatus(`${tag} ${preview}${sfxLabel}`);
+                setStatus(`${tag} ${preview}${extLabel}${sfxLabel}`);
                 G().setDirtyCanvas(true);
             } else {
                 const manual = sfWidget?.value && sfWidget.value.trim();
                 if (manual) {
+                    // Legacy workflows may still have ext in source_filename — normalize once.
+                    const { stem, ext } = splitFilename(manual);
+                    if (stem !== manual) writeSourceWidgets(manual);
                     const fmt = getNameFormat();
-                    setStatus(`\uD83D\uDCDD ${formatSourceName(manual, fmt)} (manual)`);
+                    const extW = node.widgets?.find(w => w.name === "source_extension");
+                    const extShown = ext || extW?.value || "";
+                    setStatus(`\uD83D\uDCDD ${formatSourceName(stem, fmt)}${extShown ? ` ${extShown}` : ""} (manual)`);
                 } else {
                     setStatus("\uD83D\uDCC4 (no source connected)");
                 }
             }
+        }
+
+        node._fiNormalizeSource = normalizeSourceFilename;
+        node._fiSyncSource = syncSourceFilename;
+
+        // Re-sync when source_filename edited manually — strip extension live
+        const sfWidgetHook = node.widgets?.find(w => w.name === "source_filename");
+        if (sfWidgetHook) {
+            const origSfCb = sfWidgetHook.callback;
+            sfWidgetHook.callback = function (v) {
+                origSfCb?.apply(this, arguments);
+                const raw = String(v ?? sfWidgetHook.value ?? "").trim();
+                if (raw.includes(".")) {
+                    writeSourceWidgets(raw);
+                }
+                setTimeout(syncSourceFilename, 0);
+            };
         }
 
         const origOnConnectionsChange = node.onConnectionsChange;
@@ -524,13 +624,16 @@ app.registerExtension({
         // Sync before serialization (prompt queue) so Python gets fresh value
         const origOnSerialize = node.onSerialize;
         node.onSerialize = function (o) {
+            normalizeSourceFilename();
             syncSourceFilename();
             origOnSerialize?.apply(this, arguments);
         };
 
         // Initial sync + periodic retry (graph may not be fully loaded yet)
-        setTimeout(syncSourceFilename, 500);
-        setTimeout(syncSourceFilename, 2000);
+        hideExtensionWidget();
+        normalizeSourceFilename();
+        setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 500);
+        setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 2000);
 
         // Slow polling: re-scan every 3s so changes elsewhere in a big
         // workflow (e.g. user picks a different file in a Load Video

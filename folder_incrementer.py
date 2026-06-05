@@ -106,6 +106,43 @@ _INPUT_FILE_PATTERNS = re.compile(
 )
 
 
+_KNOWN_EXT_RE = re.compile(
+    r"\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|"
+    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|hdr|heic|avif|"
+    r"wav|mp3|aac|flac|pdf|zip)$",
+    re.IGNORECASE,
+)
+
+
+def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
+    """Split a filename or path into (stem, extension).
+
+    *raw* may be a bare stem (``C1799.MP4 Comp 1``), a filename with a
+    real trailing extension (``clip.mp4``), or a path.  When the basename
+    contains interior dots (``C1799.MP4 Comp 1``), ``pathlib`` suffix
+    detection is unreliable — in that case *fallback_ext* from the JS
+    companion (``source_extension``) is authoritative.
+    """
+    if not raw or not str(raw).strip():
+        return "", ""
+    basename = Path(str(raw).strip().replace("\\", "/")).name
+
+    fb = str(fallback_ext or "").strip()
+    if fb and not fb.startswith("."):
+        fb = f".{fb}"
+
+    # Basename already ends with the companion extension → strip once.
+    if fb and len(fb) > 1 and basename.lower().endswith(fb.lower()):
+        return basename[: -len(fb)], fb
+
+    # Real trailing extension on the basename (e.g. clip_2160_25fps.mp4).
+    if _KNOWN_EXT_RE.search(basename):
+        return Path(basename).stem, Path(basename).suffix
+
+    # Interior dots only — keep full basename; extension from companion.
+    return basename, fb
+
+
 def _looks_like_input_file(filename: str) -> bool:
     """Return True if filename appears to be a ComfyUI input/temp file
     rather than a meaningful output name."""
@@ -245,8 +282,12 @@ class FolderIncrementer:
                     "tooltip": "Connect a LoadVideo / VHS_LoadVideo / video source here. "
                                "Used when source_choice = 'video' or 'auto' (preferred)."}),
                 "source_filename": ("STRING", {"default": "",
-                    "tooltip": "Auto-filled by JS from the connected node. "
-                               "Drives folder name + output filename."}),
+                    "tooltip": "Auto-filled from the connected loader (basename only, no extension). "
+                               "Drives folder name + output basename. Extension is stored separately "
+                               "in source_extension for output_filename."}),
+                "source_extension": ("STRING", {"default": "",
+                    "tooltip": "Auto-filled file extension from the connected loader (e.g. .mp4, .mov). "
+                               "Used only for output_filename — not part of the folder name."}),
                 "custom_name": ("STRING", {"default": "",
                     "tooltip": "Manual source name. Only used when source_choice='custom'. "
                                "May include an extension (e.g. 'my_shot.mp4'); if no "
@@ -296,7 +337,7 @@ class FolderIncrementer:
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", reserve_version=False,
-                  suffix=""):
+                  suffix="", source_extension=""):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -321,12 +362,12 @@ class FolderIncrementer:
             # else: keep source_filename as-is (manual entry honoured).
 
         # ── 1. Derive names from source file ──────────────────────────
-        if source_filename and source_filename.strip() and not _looks_like_input_file(source_filename.strip()):
-            # Normalize Windows backslashes when running on POSIX (and vice-versa).
-            raw = source_filename.strip().replace("\\", "/")
-            basename = Path(raw).name
-            raw_stem = Path(basename).stem          # "clip_2160_25fps"
-            ext = Path(basename).suffix             # ".mp4"
+        raw_source = (source_filename or "").strip()
+        if raw_source and _looks_like_input_file(raw_source):
+            raw_source = ""
+
+        if raw_source:
+            raw_stem, ext = _resolve_stem_and_ext(raw_source, source_extension)
             name_no_ext = _format_source_name(raw_stem, name_format)
             derived_folder = name_no_ext
         else:
