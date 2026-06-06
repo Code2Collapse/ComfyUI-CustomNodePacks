@@ -85,6 +85,19 @@ except Exception as _exc:  # pragma: no cover
     )
     _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
 
+# LocateAnything-3B grounding (open-vocabulary detection → SAM prompts)
+try:
+    from .nodes.locate_anything import (
+        NODE_CLASS_MAPPINGS as _LOCATE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LOCATE_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    import logging
+    logging.getLogger("MEC.LocateAnything").warning(
+        "LocateAnything unavailable: %s", _exc
+    )
+    _LOCATE_MAPPINGS, _LOCATE_DISPLAY = {}, {}
+
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
@@ -181,6 +194,7 @@ NODE_CLASS_MAPPINGS = {
     **_FACE_FIXER_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
     **_USEG_MAPPINGS,
+    **_LOCATE_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
 }
@@ -192,6 +206,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FACE_FIXER_DISPLAY,
     **_MASKMATTE_DISPLAY,
     **_USEG_DISPLAY,
+    **_LOCATE_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
 }
