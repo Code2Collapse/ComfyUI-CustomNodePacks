@@ -70,15 +70,36 @@ def list_keys(installed_only: bool = False):
     return out
 
 
+_HINT_BY_MODULE = {
+    "vitmatte_backend":       "Install `transformers` and download ViTMatte weights to models/vitmatte/.",
+    "rvm_backend":            "Install `torchvision` and download Robust Video Matting weights to models/rvm/.",
+    "bgmattingv2_backend":    "Install `torchvision` and download BackgroundMattingV2 weights to models/bgmatting/.",
+    "matanyone_backend":      "Install MatAnyone runtime and place weights under models/matanyone/.",
+    "salient_matter_backend": "Install `transformers` (BiRefNet/U2-Net) for salient-object matting.",
+}
+
+
 def _import_all() -> None:
     from importlib import import_module
+    try:
+        from ..._c2c_registry import record_failure
+    except Exception:
+        record_failure = None  # type: ignore
     for mod in ("vitmatte_backend", "rvm_backend",
                 "bgmattingv2_backend", "matanyone_backend",
                 "salient_matter_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:
-            logger.debug("[MaskMatting] matter %s import skipped: %s", mod, exc)
+            if record_failure is not None:
+                record_failure(
+                    f"matter:{mod}",
+                    exc,
+                    hint=_HINT_BY_MODULE.get(mod),
+                    group="mask_matting/matters",
+                )
+            else:
+                logger.warning("[MaskMatting] matter %s import skipped: %s", mod, exc)
 
 
 _import_all()

@@ -11,6 +11,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { c2cPrompt } from "./_c2c_dialog.js";
 
 const SEED_NAME_RE = /^(seed|noise_seed|rand_seed|sampling_seed)$/i;
 
@@ -125,8 +126,8 @@ function _patchNodeContextMenu() {
             });
             opts.push({
                 content: `🎲 Sweep ${w.name} — custom…`,
-                callback: () => {
-                    const ans = prompt(
+                callback: async () => {
+                    const ans = await c2cPrompt(
                         `Sweep ${w.name}: how many runs? (current value = ${w.value})`,
                         "8",
                     );

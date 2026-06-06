@@ -120,19 +120,89 @@ except Exception as _reg_exc:  # pragma: no cover
     def _c2c_reg_register_routes(_server):  # type: ignore
         return None
 
-# Unified Segmentation (SAM2/SAM3/SeC, single node)
+# Unified Segmentation — DEPRECATED (superseded by mask_matting + sam_model_loader
+# + sam_mask_generator). The file is kept on disk for reference only.
+_USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
+
+# SAM Model Loader + Mask Generator (standalone SAM2.1/SAM3 inference nodes)
 try:
-    from .nodes.unified_segmentation import (
-        NODE_CLASS_MAPPINGS as _USEG_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _USEG_DISPLAY,
-    )
+    from .nodes.sam_model_loader import SAMModelLoaderMEC
+    from .nodes.sam_mask_generator import SAMMaskGeneratorMEC
+    _SAM_MAPPINGS = {
+        "SAMModelLoaderMEC": SAMModelLoaderMEC,
+        "SAMMaskGeneratorMEC": SAMMaskGeneratorMEC,
+    }
+    _SAM_DISPLAY = {
+        "SAMModelLoaderMEC": "SAM Model Loader \u2014 SAM2.1 / SAM3",
+        "SAMMaskGeneratorMEC": "SAM Mask Generator \u2014 Points + BBox + Text",
+    }
 except Exception as _exc:  # pragma: no cover
     _c2c_rec_fail(
-        "UnifiedSegmentation", _exc,
-        hint="Install `sam2` (and optionally `sam-3`) plus weights under models/sam2/, models/sam3/.",
+        "SAM Loader/Generator", _exc,
+        hint="SAM nodes require the sam2 package and model weights under models/sam2/.",
         group="nodes",
     )
-    _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
+    _SAM_MAPPINGS, _SAM_DISPLAY = {}, {}
+
+# SAM + ViTMatte combined pipeline (highest-quality mask in one node)
+try:
+    from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
+    _SAMVIT_MAPPINGS = {"SAMViTMattePipelineMEC": SAMViTMattePipelineMEC}
+    _SAMVIT_DISPLAY = {
+        "SAMViTMattePipelineMEC": "SAM + ViTMatte Pipeline \u2014 Full Quality",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SAMViTMattePipeline", _exc,
+        hint="Requires sam2 package + transformers for ViTMatte refinement.",
+        group="nodes",
+    )
+    _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY = {}, {}
+
+# Luminance Keyer (Nuke-style luma key, pure tensor math)
+try:
+    from .nodes.luminance_keyer import LuminanceKeyerMEC
+    _LUMAKEY_MAPPINGS = {"LuminanceKeyerMEC": LuminanceKeyerMEC}
+    _LUMAKEY_DISPLAY = {
+        "LuminanceKeyerMEC": "Luminance Keyer \u2014 Highlights / Shadows / Custom",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "LuminanceKeyer", _exc,
+        hint="Luminance Keyer failed to import — check _interrupt_check / _progress helpers.",
+        group="nodes",
+    )
+    _LUMAKEY_MAPPINGS, _LUMAKEY_DISPLAY = {}, {}
+
+# Background Remover (RMBG-2.0 / BiRefNet one-click bg removal)
+try:
+    from .nodes.background_remover import BackgroundRemoverMEC
+    _BGREMOVE_MAPPINGS = {"BackgroundRemoverMEC": BackgroundRemoverMEC}
+    _BGREMOVE_DISPLAY = {
+        "BackgroundRemoverMEC": "Background Remover \u2014 RMBG / BiRefNet",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "BackgroundRemover", _exc,
+        hint="Requires transformers + model weights for RMBG or BiRefNet.",
+        group="nodes",
+    )
+    _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY = {}, {}
+
+# Semantic Segment (SegFormer face / clothes parsing)
+try:
+    from .nodes.semantic_segment import SemanticSegmentMEC
+    _SEMSEG_MAPPINGS = {"SemanticSegmentMEC": SemanticSegmentMEC}
+    _SEMSEG_DISPLAY = {
+        "SemanticSegmentMEC": "Semantic Segment \u2014 Face / Clothes Parsing",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SemanticSegment", _exc,
+        hint="Requires transformers + SegFormer model weights.",
+        group="nodes",
+    )
+    _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY = {}, {}
 
 # SAM Multi-Mask Picker — interactive 3-thumbnail mask chooser
 # (user-recalled feature: pick best of N SAM candidates by score)
@@ -206,6 +276,34 @@ except Exception as _exc:  # pragma: no cover
         group="nodes",
     )
     _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY = {}, {}
+
+# HDR Color Science nodes (ACES tonemap, VAE quality decode, color space)
+try:
+    from .nodes.hdr_color_science import (
+        NODE_CLASS_MAPPINGS as _HDR_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _HDR_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "HDR Color Science", _exc,
+        hint="HDR color science nodes for ACES tonemap, VAE quality decode, and color space conversion.",
+        group="nodes",
+    )
+    _HDR_MAPPINGS, _HDR_DISPLAY = {}, {}
+
+# LocateAnything-3B grounding (open-vocabulary object detection → SAM prompts)
+try:
+    from .nodes.locate_anything import (
+        NODE_CLASS_MAPPINGS as _LOCATE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LOCATE_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "LocateAnything", _exc,
+        hint="Requires transformers + nvidia/LocateAnything-3B weights for open-vocabulary grounding.",
+        group="nodes",
+    )
+    _LOCATE_MAPPINGS, _LOCATE_DISPLAY = {}, {}
 
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
@@ -313,12 +411,19 @@ NODE_CLASS_MAPPINGS = {
     **_MASKMATTE_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
+    **_SAM_MAPPINGS,
+    **_SAMVIT_MAPPINGS,
+    **_LUMAKEY_MAPPINGS,
+    **_BGREMOVE_MAPPINGS,
+    **_SEMSEG_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
     **_WANDIR_MAPPINGS,
     **_HELPERS_MAPPINGS,
     **_PROMPTRELAY_MAPPINGS,
     **_ASYMFLOW_MAPPINGS,
+    **_HDR_MAPPINGS,
+    **_LOCATE_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -330,12 +435,19 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MASKMATTE_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
+    **_SAM_DISPLAY,
+    **_SAMVIT_DISPLAY,
+    **_LUMAKEY_DISPLAY,
+    **_BGREMOVE_DISPLAY,
+    **_SEMSEG_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
     **_WANDIR_DISPLAY,
     **_HELPERS_DISPLAY,
     **_PROMPTRELAY_DISPLAY,
     **_ASYMFLOW_DISPLAY,
+    **_HDR_DISPLAY,
+    **_LOCATE_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"

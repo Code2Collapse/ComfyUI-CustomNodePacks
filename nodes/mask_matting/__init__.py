@@ -31,16 +31,28 @@ from .node import NODE_CLASS_MAPPINGS as _MO_MAPPINGS
 from .node import NODE_DISPLAY_NAME_MAPPINGS as _MO_DISPLAY
 
 try:
+    from .._c2c_registry import record_failure as _c2c_rec
+except Exception:  # pragma: no cover
+    _c2c_rec = None  # type: ignore
+
+try:
     from .temporal_node import (
         MaskTemporalMEC,
         NODE_CLASS_MAPPINGS as _MT_MAPPINGS,
         NODE_DISPLAY_NAME_MAPPINGS as _MT_DISPLAY,
     )
 except Exception as _exc:  # pragma: no cover
-    import logging
-    logging.getLogger("MEC.MaskMatting").warning(
-        "MaskTemporalMEC unavailable: %s", _exc
-    )
+    if _c2c_rec is not None:
+        _c2c_rec(
+            "MaskTemporalMEC", _exc,
+            hint="Install `opencv-python` and `scipy` for temporal mask consistency.",
+            group="mask_matting",
+        )
+    else:
+        import logging
+        logging.getLogger("MEC.MaskMatting").warning(
+            "MaskTemporalMEC unavailable: %s", _exc
+        )
     MaskTemporalMEC = None  # type: ignore
     _MT_MAPPINGS, _MT_DISPLAY = {}, {}
 
@@ -51,17 +63,31 @@ try:
         NODE_DISPLAY_NAME_MAPPINGS as _MR_DISPLAY,
     )
 except Exception as _exc:  # pragma: no cover
-    import logging
-    logging.getLogger("MEC.MaskMatting").warning(
-        "MaskRefineMEC unavailable: %s", _exc
-    )
+    if _c2c_rec is not None:
+        _c2c_rec(
+            "MaskRefineMEC", _exc,
+            hint="Install `pydensecrf` (or fallback path) and `scipy` for full mask refine stages.",
+            group="mask_matting",
+        )
+    else:
+        import logging
+        logging.getLogger("MEC.MaskMatting").warning(
+            "MaskRefineMEC unavailable: %s", _exc
+        )
     MaskRefineMEC = None  # type: ignore
     _MR_MAPPINGS, _MR_DISPLAY = {}, {}
 
-NODE_CLASS_MAPPINGS = {**_MO_MAPPINGS, **_MT_MAPPINGS, **_MR_MAPPINGS}
-NODE_DISPLAY_NAME_MAPPINGS = {**_MO_DISPLAY, **_MT_DISPLAY, **_MR_DISPLAY}
+NODE_CLASS_MAPPINGS = {
+    **_MO_MAPPINGS, **_MT_MAPPINGS, **_MR_MAPPINGS,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    **_MO_DISPLAY, **_MT_DISPLAY, **_MR_DISPLAY,
+}
 
 __all__ = [
     "MaskOpsMEC", "MaskTemporalMEC", "MaskRefineMEC",
     "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS",
+    "morph_erode", "morph_dilate", "morph_open", "morph_close", "morph_gradient",
 ]
+
+from .utils import morph_erode, morph_dilate, morph_open, morph_close, morph_gradient

@@ -1,4 +1,4 @@
-# FILE: nodes/video_stabilizer_mec.py
+﻿# FILE: nodes/video_stabilizer_mec.py
 # FEATURE: MEC wrappers around the vendored ComfyUI-Video-Stabilizer (MIT,
 # (c) 2025 ComfyUI Video Stabilizer Contributors, by nomadoor).
 # INTEGRATES WITH:
@@ -171,32 +171,188 @@ def _stable_result_to_image(result, frames_in: torch.Tensor) -> torch.Tensor:
     return torch.from_numpy(arr).clamp(0, 1)
 
 
-# =====================================================================
-# A. VideoStabilizerClassicMEC — feature-tracking (CPU)
-# =====================================================================
-class VideoStabilizerClassicMEC:
-    """Feature-tracking video stabilizer (sparse GFTT + LK optical flow).
 
-    Best for: well-textured footage, short to medium clips, CPU-only.
-    Outputs both stabilized frames AND a padding mask — the padding mask
-    is essential to feed into InpaintCropProMEC if you want the inpaint
-    pipeline to fill the introduced borders.
+# =====================================================================
+# Unified VideoStabilizerMEC (replaces VideoStabilizerClassic/Flow/Auto)
+# =====================================================================
+class VideoStabilizerMEC:
+    """Unified video stabilizer — pick a backend via the `method` dropdown.
 
-    Wraps upstream `VideoStabilizerClassic` (MIT, vendored).
+    Methods:
+      - auto       : pick classic vs raft_flow based on clip length + free VRAM
+      - classic    : feature-tracking (CPU, fast, well-textured footage)
+      - raft_flow  : RAFT dense optical flow (GPU, robust on texture-poor plates)
+
+    Outputs both stabilized frames AND a padding mask so the result can be
+    chained directly into InpaintCropProMEC to fill the introduced borders.
+
+    Wraps the vendored MIT ComfyUI-Video-Stabilizer (nomadoor et al., 2025).
     """
-    VRAM_TIER = 1
-    COLOR = "#7a4f9c"
+    VRAM_TIER = 2
+    COLOR = "#6a4d91"
+
+    PRESETS = {
+        "handheld_light": dict(transform_mode="similarity",  strength=0.7,  smooth=0.5,
+                               camera_lock=False, framing_mode="crop_and_pad", keep_fov=0.6),
+        "handheld_heavy": dict(transform_mode="perspective", strength=0.9,  smooth=0.7,
+                               camera_lock=False, framing_mode="crop_and_pad", keep_fov=0.5),
+        "vehicle":        dict(transform_mode="similarity",  strength=0.85, smooth=0.85,
+                               camera_lock=False, framing_mode="expand",      keep_fov=0.5),
+        "tripod_lock":    dict(transform_mode="translation", strength=1.0,  smooth=0.95,
+                               camera_lock=True,  framing_mode="crop_and_pad", keep_fov=0.8),
+        "manual":         None,  # honour the per-widget values below
+    }
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "frames":         ("IMAGE",),
+                "method":         (["auto", "classic", "raft_flow"], {"default": "auto"}),
+                "preset":         (["handheld_light", "handheld_heavy", "vehicle",
+                                    "tripod_lock", "manual"],
+                                   {"default": "handheld_light",
+                                    "tooltip": "Preset overrides the manual widgets below unless set to 'manual'."}),
                 "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1}),
+                "padding_color":  ("STRING", {"default": "127, 127, 127"}),
+                # Manual overrides (used when preset == 'manual')
                 "framing_mode":   (["crop", "crop_and_pad", "expand"],
                                    {"default": "crop_and_pad"}),
                 "transform_mode": (["translation", "similarity", "perspective"],
                                    {"default": "similarity"}),
+                "camera_lock":    ("BOOLEAN", {"default": False}),
+                "strength":       ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "keep_fov":       ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
+                # RAFT-flow-only
+                "raft_iters":     ("INT", {"default": 12, "min": 4, "max": 32,
+                                            "tooltip": "RAFT iterations. Used only by method=raft_flow (and auto when it picks flow)."}),
+                "use_half":       ("BOOLEAN", {"default": True,
+                                                "tooltip": "fp16 for RAFT. Used only by method=raft_flow."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
+    FUNCTION = "stabilize"
+    CATEGORY = "C2C/Stabilization"
+    DESCRIPTION = (
+        "Unified video stabilizer (auto / classic / raft_flow). Wraps the "
+        "vendored MIT ComfyUI-Video-Stabilizer. Outputs frames + padding mask "
+        "so it can chain straight into InpaintCropProMEC to fill borders."
+    )
+
+    # --------------------------------------------------------------
+    def _pick_backend(self, method: str, batch_size: int) -> str:
+        if method != "auto":
+            return method
+        backend = "classic"
+        if HAS_FLOW and torch.cuda.is_available():
+            try:
+                free, _total = torch.cuda.mem_get_info()
+                if free >= 4 * (1024 ** 3) and batch_size > 24:
+                    backend = "raft_flow"
+            except Exception:
+                pass
+        if not HAS_FLOW:
+            backend = "classic"
+        return backend
+
+    def _resolve_params(self, preset, framing_mode, transform_mode, camera_lock,
+                         strength, smooth, keep_fov):
+        cfg = self.PRESETS.get(preset)
+        if cfg is None:  # manual
+            return dict(framing_mode=framing_mode, transform_mode=transform_mode,
+                        camera_lock=camera_lock, strength=strength, smooth=smooth,
+                        keep_fov=keep_fov)
+        return dict(cfg)
+
+    # --------------------------------------------------------------
+    def stabilize(self, frames, method, preset, frame_rate, padding_color,
+                  framing_mode, transform_mode, camera_lock, strength, smooth,
+                  keep_fov, raft_iters, use_half):
+        _require_stabilizer()
+        if frames.dim() != 4 or frames.shape[-1] != 3:
+            raise ValueError(f"IMAGE shape (B,H,W,3) expected, got {tuple(frames.shape)}")
+        B, H, W, _ = frames.shape
+
+        backend = self._pick_backend(method, B)
+        if backend == "raft_flow" and not HAS_FLOW:
+            log.warning("[stabilizer] raft_flow unavailable, falling back to classic")
+            backend = "classic"
+
+        p = self._resolve_params(preset, framing_mode, transform_mode,
+                                  camera_lock, strength, smooth, keep_fov)
+
+        t0 = time.time()
+        try:
+            if backend == "raft_flow":
+                context = _flow_normalize(frames)
+                padding_rgb = _parse_padding_color(padding_color)
+                try:
+                    result = _flow_stabilize(
+                        context=context, framing_mode=p["framing_mode"],
+                        transform_mode=p["transform_mode"], camera_lock=p["camera_lock"],
+                        strength=p["strength"], smooth=p["smooth"], keep_fov=p["keep_fov"],
+                        padding_rgb=padding_rgb, frame_rate=frame_rate,
+                        raft_iters=raft_iters, use_half=use_half,
+                    )
+                except TypeError:
+                    result = _flow_stabilize(
+                        context=context, framing_mode=p["framing_mode"],
+                        transform_mode=p["transform_mode"], camera_lock=p["camera_lock"],
+                        strength=p["strength"], smooth=p["smooth"], keep_fov=p["keep_fov"],
+                        padding_rgb=padding_rgb, frame_rate=frame_rate,
+                    )
+            else:
+                context = _classic_normalize(frames)
+                padding_rgb = _parse_padding_color(padding_color)
+                result = _classic_stabilize(
+                    context=context, framing_mode=p["framing_mode"],
+                    transform_mode=p["transform_mode"], camera_lock=p["camera_lock"],
+                    strength=p["strength"], smooth=p["smooth"], keep_fov=p["keep_fov"],
+                    padding_rgb=padding_rgb, frame_rate=frame_rate,
+                )
+            out_frames = _stable_result_to_image(result, frames)
+            out_masks = _masks_list_to_tensor(result.masks, B, H, W)
+        finally:
+            _check_interrupt()
+
+        info = (f"method={method} picked={backend} preset={preset} "
+                f"frames={B} HxW={H}x{W} transform={p['transform_mode']} "
+                f"framing={p['framing_mode']} strength={p['strength']:.2f} "
+                f"smooth={p['smooth']:.2f} elapsed={time.time() - t0:.2f}s")
+        return (out_frames, out_masks, info)
+
+
+# =====================================================================
+# Deprecated alias shims — keep for ONE release (Batch 2 policy), then drop.
+# Each emits a one-time warning then delegates to VideoStabilizerMEC.
+# =====================================================================
+class _DeprecatedStabilizerBase:
+    _WARNED: set = set()
+
+    @classmethod
+    def _warn_once(cls, replacement_method: str):
+        if cls.__name__ in _DeprecatedStabilizerBase._WARNED:
+            return
+        _DeprecatedStabilizerBase._WARNED.add(cls.__name__)
+        log.warning(
+            "[stabilizer] %s is deprecated and will be removed next release. "
+            "Use VideoStabilizerMEC with method='%s'.",
+            cls.__name__, replacement_method,
+        )
+
+
+class VideoStabilizerClassicMEC(_DeprecatedStabilizerBase):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "frames":         ("IMAGE",),
+                "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1}),
+                "framing_mode":   (["crop", "crop_and_pad", "expand"], {"default": "crop_and_pad"}),
+                "transform_mode": (["translation", "similarity", "perspective"], {"default": "similarity"}),
                 "camera_lock":    ("BOOLEAN", {"default": False}),
                 "strength":       ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
@@ -209,67 +365,29 @@ class VideoStabilizerClassicMEC:
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
     CATEGORY = "C2C/Stabilization"
-    DESCRIPTION = "Feature-tracking video stabilizer (vendored MIT ComfyUI-Video-Stabilizer)."
+    DESCRIPTION = "DEPRECATED — use VideoStabilizerMEC (method=classic) instead."
 
-    def stabilize(self, frames: torch.Tensor, frame_rate: float,
-                  framing_mode: str, transform_mode: str, camera_lock: bool,
-                  strength: float, smooth: float, keep_fov: float,
-                  padding_color: str):
-        _require_stabilizer()
-        t0 = time.time()
-        if frames.dim() != 4 or frames.shape[-1] != 3:
-            raise ValueError(f"IMAGE shape (B,H,W,3) expected, got {tuple(frames.shape)}")
-        B, H, W, _ = frames.shape
-        try:
-            context = _classic_normalize(frames)
-            padding_rgb = _parse_padding_color(padding_color)
-            result = _classic_stabilize(
-                context=context,
-                framing_mode=framing_mode,
-                transform_mode=transform_mode,
-                camera_lock=camera_lock,
-                strength=strength,
-                smooth=smooth,
-                keep_fov=keep_fov,
-                padding_rgb=padding_rgb,
-                frame_rate=frame_rate,
-            )
-            out_frames = _stable_result_to_image(result, frames)
-            out_masks = _masks_list_to_tensor(result.masks, B, H, W)
-        finally:
-            _check_interrupt()
-        info = (f"backend=classic frames={B} HxW={H}x{W} "
-                f"transform={transform_mode} framing={framing_mode} "
-                f"strength={strength:.2f} smooth={smooth:.2f} "
-                f"elapsed={time.time() - t0:.2f}s")
-        return (out_frames, out_masks, info)
+    def stabilize(self, frames, frame_rate, framing_mode, transform_mode,
+                  camera_lock, strength, smooth, keep_fov, padding_color):
+        self._warn_once("classic")
+        return VideoStabilizerMEC().stabilize(
+            frames=frames, method="classic", preset="manual", frame_rate=frame_rate,
+            padding_color=padding_color, framing_mode=framing_mode,
+            transform_mode=transform_mode, camera_lock=camera_lock,
+            strength=strength, smooth=smooth, keep_fov=keep_fov,
+            raft_iters=12, use_half=True,
+        )
 
 
-# =====================================================================
-# B. VideoStabilizerFlowMEC — RAFT dense flow (GPU)
-# =====================================================================
-class VideoStabilizerFlowMEC:
-    """Dense optical-flow video stabilizer using RAFT.
-
-    Best for: texture-poor footage (smooth surfaces, blurred plates) where
-    sparse feature tracking fails. Requires GPU. Heavier than classic but
-    far more robust.
-
-    Wraps upstream `VideoStabilizerFlow` (MIT, vendored).
-    """
-    VRAM_TIER = 4
-    COLOR = "#5a3a8e"
-
+class VideoStabilizerFlowMEC(_DeprecatedStabilizerBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "frames":         ("IMAGE",),
                 "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1}),
-                "framing_mode":   (["crop", "crop_and_pad", "expand"],
-                                   {"default": "crop_and_pad"}),
-                "transform_mode": (["translation", "similarity", "perspective"],
-                                   {"default": "similarity"}),
+                "framing_mode":   (["crop", "crop_and_pad", "expand"], {"default": "crop_and_pad"}),
+                "transform_mode": (["translation", "similarity", "perspective"], {"default": "similarity"}),
                 "camera_lock":    ("BOOLEAN", {"default": False}),
                 "strength":       ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
@@ -284,76 +402,22 @@ class VideoStabilizerFlowMEC:
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
     CATEGORY = "C2C/Stabilization"
-    DESCRIPTION = "RAFT dense-flow video stabilizer (vendored MIT ComfyUI-Video-Stabilizer)."
+    DESCRIPTION = "DEPRECATED — use VideoStabilizerMEC (method=raft_flow) instead."
 
-    def stabilize(self, frames: torch.Tensor, frame_rate: float,
-                  framing_mode: str, transform_mode: str, camera_lock: bool,
-                  strength: float, smooth: float, keep_fov: float,
-                  padding_color: str, raft_iters: int, use_half: bool):
-        _require_stabilizer()
-        if not HAS_FLOW:
-            raise RuntimeError("Flow backend unavailable — falling back disabled. "
-                               "Use VideoStabilizerClassicMEC or check upstream errors.")
-        t0 = time.time()
-        if frames.dim() != 4 or frames.shape[-1] != 3:
-            raise ValueError(f"IMAGE shape (B,H,W,3) expected, got {tuple(frames.shape)}")
-        B, H, W, _ = frames.shape
-        try:
-            context = _flow_normalize(frames)
-            padding_rgb = _parse_padding_color(padding_color)
-            # Try the upstream signature; some flow backends accept extra kwargs.
-            try:
-                result = _flow_stabilize(
-                    context=context,
-                    framing_mode=framing_mode,
-                    transform_mode=transform_mode,
-                    camera_lock=camera_lock,
-                    strength=strength,
-                    smooth=smooth,
-                    keep_fov=keep_fov,
-                    padding_rgb=padding_rgb,
-                    frame_rate=frame_rate,
-                    raft_iters=raft_iters,
-                    use_half=use_half,
-                )
-            except TypeError:
-                result = _flow_stabilize(
-                    context=context,
-                    framing_mode=framing_mode,
-                    transform_mode=transform_mode,
-                    camera_lock=camera_lock,
-                    strength=strength,
-                    smooth=smooth,
-                    keep_fov=keep_fov,
-                    padding_rgb=padding_rgb,
-                    frame_rate=frame_rate,
-                )
-            out_frames = _stable_result_to_image(result, frames)
-            out_masks = _masks_list_to_tensor(result.masks, B, H, W)
-        finally:
-            _check_interrupt()
-        info = (f"backend=flow frames={B} HxW={H}x{W} "
-                f"transform={transform_mode} framing={framing_mode} "
-                f"strength={strength:.2f} smooth={smooth:.2f} "
-                f"raft_iters={raft_iters} half={use_half} "
-                f"elapsed={time.time() - t0:.2f}s")
-        return (out_frames, out_masks, info)
+    def stabilize(self, frames, frame_rate, framing_mode, transform_mode,
+                  camera_lock, strength, smooth, keep_fov, padding_color,
+                  raft_iters, use_half):
+        self._warn_once("raft_flow")
+        return VideoStabilizerMEC().stabilize(
+            frames=frames, method="raft_flow", preset="manual", frame_rate=frame_rate,
+            padding_color=padding_color, framing_mode=framing_mode,
+            transform_mode=transform_mode, camera_lock=camera_lock,
+            strength=strength, smooth=smooth, keep_fov=keep_fov,
+            raft_iters=raft_iters, use_half=use_half,
+        )
 
 
-# =====================================================================
-# C. VideoStabilizerAutoMEC — auto-picks backend
-# =====================================================================
-class VideoStabilizerAutoMEC:
-    """Auto-select stabilizer backend based on clip length and VRAM.
-
-    Heuristic:
-      - <= 24 frames OR no CUDA / <4 GB free  -> classic (CPU, fast)
-      - else                                  -> flow (GPU, robust)
-    Override with `force_backend`.
-    """
-    VRAM_TIER = 2
-    COLOR = "#6a4d91"
-
+class VideoStabilizerAutoMEC(_DeprecatedStabilizerBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -361,8 +425,7 @@ class VideoStabilizerAutoMEC:
                 "frames":         ("IMAGE",),
                 "frame_rate":     ("FLOAT", {"default": 16.0, "min": 1.0, "step": 0.1}),
                 "force_backend":  (["auto", "classic", "flow"], {"default": "auto"}),
-                "preset":         (["handheld_light", "handheld_heavy",
-                                    "vehicle", "tripod_lock"],
+                "preset":         (["handheld_light", "handheld_heavy", "vehicle", "tripod_lock"],
                                    {"default": "handheld_light"}),
                 "padding_color":  ("STRING", {"default": "127, 127, 127"}),
             },
@@ -372,70 +435,32 @@ class VideoStabilizerAutoMEC:
     RETURN_NAMES = ("stabilized_frames", "padding_mask", "info")
     FUNCTION = "stabilize"
     CATEGORY = "C2C/Stabilization"
-    DESCRIPTION = "Auto stabilizer that picks classic vs. flow backend based on clip length and VRAM."
+    DESCRIPTION = "DEPRECATED — use VideoStabilizerMEC (method=auto) instead."
 
-    PRESETS = {
-        "handheld_light": dict(transform_mode="similarity",  strength=0.7, smooth=0.5,
-                               camera_lock=False, framing_mode="crop_and_pad", keep_fov=0.6),
-        "handheld_heavy": dict(transform_mode="perspective", strength=0.9, smooth=0.7,
-                               camera_lock=False, framing_mode="crop_and_pad", keep_fov=0.5),
-        "vehicle":        dict(transform_mode="similarity",  strength=0.85, smooth=0.85,
-                               camera_lock=False, framing_mode="expand",      keep_fov=0.5),
-        "tripod_lock":    dict(transform_mode="translation", strength=1.0, smooth=0.95,
-                               camera_lock=True,  framing_mode="crop_and_pad", keep_fov=0.8),
-    }
-
-    def stabilize(self, frames: torch.Tensor, frame_rate: float,
-                  force_backend: str, preset: str, padding_color: str):
-        _require_stabilizer()
-        if frames.dim() != 4 or frames.shape[-1] != 3:
-            raise ValueError(f"IMAGE shape (B,H,W,3) expected, got {tuple(frames.shape)}")
-        B = frames.shape[0]
-
-        # Decide backend.
-        backend = force_backend
-        if backend == "auto":
-            backend = "classic"
-            if HAS_FLOW and torch.cuda.is_available():
-                try:
-                    free, _total = torch.cuda.mem_get_info()
-                    if free >= 4 * (1024 ** 3) and B > 24:
-                        backend = "flow"
-                except Exception:
-                    pass
-            if not HAS_FLOW:
-                backend = "classic"
-
-        cfg = self.PRESETS[preset]
-        if backend == "flow":
-            sub = VideoStabilizerFlowMEC()
-            out, m, info = sub.stabilize(
-                frames=frames, frame_rate=frame_rate,
-                framing_mode=cfg["framing_mode"], transform_mode=cfg["transform_mode"],
-                camera_lock=cfg["camera_lock"], strength=cfg["strength"],
-                smooth=cfg["smooth"], keep_fov=cfg["keep_fov"],
-                padding_color=padding_color, raft_iters=12, use_half=True,
-            )
-        else:
-            sub = VideoStabilizerClassicMEC()
-            out, m, info = sub.stabilize(
-                frames=frames, frame_rate=frame_rate,
-                framing_mode=cfg["framing_mode"], transform_mode=cfg["transform_mode"],
-                camera_lock=cfg["camera_lock"], strength=cfg["strength"],
-                smooth=cfg["smooth"], keep_fov=cfg["keep_fov"],
-                padding_color=padding_color,
-            )
-        return (out, m, f"auto picked={backend} preset={preset} | {info}")
+    def stabilize(self, frames, frame_rate, force_backend, preset, padding_color):
+        self._warn_once("auto")
+        method = "raft_flow" if force_backend == "flow" else force_backend
+        return VideoStabilizerMEC().stabilize(
+            frames=frames, method=method, preset=preset, frame_rate=frame_rate,
+            padding_color=padding_color,
+            # preset drives these — manual fields are placeholders
+            framing_mode="crop_and_pad", transform_mode="similarity",
+            camera_lock=False, strength=0.7, smooth=0.5, keep_fov=0.6,
+            raft_iters=12, use_half=True,
+        )
 
 
 # =====================================================================
 NODE_CLASS_MAPPINGS = {
+    "VideoStabilizerMEC":        VideoStabilizerMEC,
+    # Deprecated aliases — remove next release.
     "VideoStabilizerClassicMEC": VideoStabilizerClassicMEC,
     "VideoStabilizerFlowMEC":    VideoStabilizerFlowMEC,
     "VideoStabilizerAutoMEC":    VideoStabilizerAutoMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic",
-    "VideoStabilizerFlowMEC":    "Video Stabilizer — RAFT Flow (C2C)",
-    "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (C2C)",
+    "VideoStabilizerMEC":        "Video Stabilizer",
+    "VideoStabilizerClassicMEC": "Video Stabilizer — Classic (deprecated)",
+    "VideoStabilizerFlowMEC":    "Video Stabilizer — RAFT Flow (deprecated)",
+    "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (deprecated)",
 }

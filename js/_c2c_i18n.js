@@ -198,7 +198,7 @@ export const i18n = Object.freeze({
 });
 
 // ── ComfyUI setting registration ──────────────────────────────────────────
-try {
+if (!window.__C2C_I18N_REG__) { window.__C2C_I18N_REG__ = true; try {
     app.registerExtension({
         name: "C2C.I18n",
         settings: [
@@ -238,4 +238,4 @@ try {
             },
         ],
     });
-} catch (__c2cErr) { __c2cReport("_c2c_i18n", __c2cErr); }
+} catch (__c2cErr) { __c2cReport("_c2c_i18n", __c2cErr); } }

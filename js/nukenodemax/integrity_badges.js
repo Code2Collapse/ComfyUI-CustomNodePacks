@@ -17,6 +17,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { reportFailure as __c2cReport } from "../_c2c_report.js";
+import { c2cConfirm } from "../_c2c_dialog.js";
 
 // ── State ───────────────────────────────────────────────────────────
 const STATE = {
@@ -88,7 +89,7 @@ function ingest(d) {
 }
 
 async function reinstall(pkg) {
-    if (!confirm(`Reinstall package "${pkg}"?\nThis runs uv/pip install --reinstall.`)) return;
+    if (!(await c2cConfirm(`Reinstall package "${pkg}"?\nThis runs uv/pip install --reinstall.`))) return;
     const r = await fetch(`/nukenodemax/reinstall?package=${encodeURIComponent(pkg)}&confirm=yes`,
         { method: "POST" });
     const j = await r.json();

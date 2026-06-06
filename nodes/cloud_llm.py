@@ -7,6 +7,15 @@ Public API
 ----------
 generate(provider, model, prompt, max_tokens=512) -> str | None
     Synchronous. Returns the model's text or None on failure.
+
+AI-routing contract (MegaPlan §3.2)
+-----------------------------------
+Every AI call in the pack must flow through the unified C2C AI spine
+(`c2c_ai.router`) when a backend matching the caller's `provider` is
+registered. This file is the legacy back-compat path: it first tries
+the spine (so calls get redaction, cost gating, health metrics, and
+local-backend fallback for free), and only drops down to direct urllib
+HTTP if the spine has no matching backend or the call fails transiently.
 """
 from __future__ import annotations
 
@@ -27,6 +36,96 @@ SYSTEM_PROMPT = (
 )
 
 
+# ── Router (c2c_ai spine) integration ──────────────────────────────────────
+# Sentinel for "spine had no matching backend; caller should use legacy path".
+_ROUTER_MISS = object()
+
+
+def _try_router(provider: str, model: str, prompt: str, max_tokens: int,
+                system: Optional[str], **extra_kwargs) -> object:
+    """Route via the C2C AI spine if a backend matching `provider` is registered.
+
+    Returns:
+        - The response text (str), possibly empty, on a successful spine call.
+        - None on a hard failure (spine present, backend matched, but call
+          raised) — caller should still attempt legacy as a fallback so users
+          aren't broken by a transient spine error.
+        - _ROUTER_MISS sentinel if the spine has no backend matching `provider`,
+          which signals the caller to use the legacy direct-HTTP dispatch.
+    """
+    try:
+        from .. import c2c_ai  # type: ignore
+        from ..c2c_ai import router as router_mod  # type: ignore
+        from ..c2c_ai.types import (  # type: ignore
+            AskRequest, Capability, Message, Sensitivity,
+        )
+        from ..c2c_ai import redactor as redactor_mod  # type: ignore
+    except Exception as e:
+        log.debug("[cloud_llm] router path unavailable: %s", e)
+        return _ROUTER_MISS
+
+    try:
+        router = router_mod.get_router()
+    except Exception as e:
+        log.debug("[cloud_llm] get_router failed: %s", e)
+        return _ROUTER_MISS
+
+    backend_id = f"cloud.{(provider or '').strip().lower()}"
+    backend = router.get(backend_id)
+    if backend is None:
+        return _ROUTER_MISS
+
+    info = getattr(backend, "info", None)
+    if info is None or not getattr(info, "enabled", True):
+        return _ROUTER_MISS
+    health = getattr(backend, "health", None)
+    if health is not None and getattr(health, "ok", True) is False:
+        log.debug("[cloud_llm] router backend %s is unhealthy; using legacy",
+                  backend_id)
+        return _ROUTER_MISS
+
+    msgs = [
+        Message(role="system", content=system if system is not None else SYSTEM_PROMPT),
+        Message(role="user",   content=prompt),
+    ]
+    sensitivity = extra_kwargs.get("sensitivity") or Sensitivity.NORMAL
+    try:
+        redacted_msgs, redacted_flag = redactor_mod.redact_messages(msgs, sensitivity)
+    except Exception:
+        redacted_msgs, redacted_flag = msgs, False
+
+    req = AskRequest(
+        feature=extra_kwargs.get("feature") or "cloud_llm",
+        messages=redacted_msgs,
+        sensitivity=sensitivity,
+        required={Capability.CHAT},
+        max_tokens=int(max_tokens),
+        temperature=float(extra_kwargs.get("temperature", 0.2)),
+    )
+
+    try:
+        resp = backend.ask(req)
+    except Exception as e:
+        log.warning("[cloud_llm] spine call to %s failed: %s — falling back",
+                    backend_id, e)
+        return None  # signal legacy fallback
+
+    try:
+        from ..c2c_ai.cost_meter import get_meter, make_entry  # type: ignore
+        get_meter().record(make_entry(
+            feature=req.feature, backend_info=info, model=info.model,
+            input_tokens=getattr(resp, "input_tokens", 0),
+            output_tokens=getattr(resp, "output_tokens", 0),
+            latency_ms=getattr(resp, "latency_ms", 0.0),
+        ))
+    except Exception:
+        pass
+
+    text = getattr(resp, "text", "") or ""
+    return text.strip()
+
+
+# ── Legacy direct-HTTP dispatch ────────────────────────────────────────────
 def _http_post(url: str, headers: dict, body: dict, timeout: float = 30.0) -> Optional[dict]:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -336,14 +435,28 @@ def generate(provider: str, model: str, prompt: str,
              **extra_kwargs) -> Optional[str]:
     """Dispatch to the named provider.
 
+    Prefers the unified C2C AI spine (`c2c_ai.router`) so calls receive
+    redaction, cost-cap enforcement, health-aware fallback, and metrics. If
+    the spine has no backend registered for `provider`, falls back to a
+    direct urllib HTTP call (the legacy path). MegaPlan §3.2 compliance.
+
     `extra_kwargs` are forwarded to providers that accept them (azure_openai,
     custom). They are silently ignored by providers that don't.
     """
+    # 1) Spine-first path.
+    spine = _try_router(provider, model, prompt, max_tokens, system, **extra_kwargs)
+    if spine is not _ROUTER_MISS:
+        # spine attempted; spine returned text (possibly "") or None on failure.
+        if isinstance(spine, str):
+            return spine or None
+        # spine == None → backend matched but call failed; try legacy as a
+        # fallback so the caller still gets a response if the keys/URL work.
+
+    # 2) Legacy direct-HTTP dispatch.
     fn = _DISPATCH.get((provider or "").strip().lower())
     if fn is None:
         log.warning("[cloud_llm] unknown provider %r", provider)
         return None
-    # Filter kwargs by what the function accepts to remain backward-compatible.
     import inspect
     sig = inspect.signature(fn)
     accepted = {k: v for k, v in extra_kwargs.items() if k in sig.parameters}

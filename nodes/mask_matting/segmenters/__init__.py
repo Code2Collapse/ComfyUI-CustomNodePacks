@@ -95,16 +95,42 @@ def list_keys(installed_only: bool = False) -> List[str]:
 
 
 # Eager import each backend so they self-register. Wrapped in try so a
-# broken optional dep can't take down the whole pack.
+# broken optional dep can't take down the whole pack, but every failure
+# is forwarded to the C2C registry so the user can see exactly what is
+# missing (instead of nodes silently disappearing — the #1 cause of the
+# "everything is a stub" perception per ideas_summary.md §2.1).
+_HINT_BY_MODULE = {
+    "sam2_backend":         "Install `sam2` (Meta SAM 2) and place sam2 weights under models/sam2/.",
+    "sam3_backend":         "Install `sam-3` and place SAM 3 weights under models/sam3/.",
+    "sam31_backend":        "Install `sam-3.1` and place SAM 3.1 weights under models/sam3/ (or sam31/).",
+    "salient_backend":      "Install `transformers` (for BiRefNet/U2-Net) and download salient-object weights to models/saliency/.",
+    "experimental_backend": "Experimental backend — enable explicitly via the node widget; safe to ignore otherwise.",
+    "video_backend":        "Install SAM2 video-predictor support (sam2 ≥ 1.0) for video segmentation.",
+    "locate_anything_backend": "Install `transformers` (for LocateAnything-3B) — open-vocabulary grounding segmenter.",
+}
+
+
 def _import_all() -> None:
     from importlib import import_module
+    try:
+        from ..._c2c_registry import record_failure
+    except Exception:
+        record_failure = None  # type: ignore
     for mod in ("sam2_backend", "sam3_backend", "sam31_backend",
                 "salient_backend", "experimental_backend",
-                "video_backend"):
+                "video_backend", "locate_anything_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:
-            logger.debug("[MaskMatting] segmenter %s import skipped: %s", mod, exc)
+            if record_failure is not None:
+                record_failure(
+                    f"segmenter:{mod}",
+                    exc,
+                    hint=_HINT_BY_MODULE.get(mod),
+                    group="mask_matting/segmenters",
+                )
+            else:
+                logger.warning("[MaskMatting] segmenter %s import skipped: %s", mod, exc)
 
 
 _import_all()

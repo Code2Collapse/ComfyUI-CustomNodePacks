@@ -71,7 +71,7 @@ class SplineMaskMEC:
                 # ── shared spline payload ──
                 "spline_data": ("STRING", {
                     "default": "[]",
-                    "multiline": True,
+                    "multiline": False,
                     "tooltip": (
                         "Spline payload from the JS canvas.\n"
                         "edit/flow_path: single shape list.\n"

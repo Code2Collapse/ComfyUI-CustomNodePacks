@@ -29,6 +29,7 @@ import { findUpstreamFramesAsync } from "./_frame_finder.js";
 import { installModeGated } from "./_mode_gate.js";
 import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
 
 // Targets unified SplineMaskMEC (mode=track) and any legacy
 // SplineMaskTrackerMEC nodes on saved graphs.
@@ -393,6 +394,7 @@ function draw(state, ctx, vw, vh) {
 
 // ─── DOM build ──────────────────────────────────────────────────────
 function installEditor(node) {
+    if (node._mecSplineTrackHost) return;
     const state = new TrackerState(node);
 
     const hideWidget = (w) => {
@@ -545,9 +547,9 @@ function installEditor(node) {
     tb.appendChild(mkBtn("\u21BB Reload frames", "Re-scan upstream node for frames (after Queue)",
         () => { loadFrames(); }));
 
-    const btnClearAll = mkBtn("🗑 Clear All", "Remove all keyframes", () => {
+    const btnClearAll = mkBtn("🗑 Clear All", "Remove all keyframes", async () => {
         if (!state.keyframes.size) return;
-        if (!confirm(`Delete all ${state.keyframes.size} keyframes?`)) return;
+        if (!(await c2cConfirm(`Delete all ${state.keyframes.size} keyframes?`))) return;
         state.pushUndo();
         state.keyframes.clear();
         state.save();
@@ -555,15 +557,16 @@ function installEditor(node) {
     tb.appendChild(btnClearAll);
 
     let widgetH = 540;
-    node.addDOMWidget("tracker_editor", "canvas", root, {
+    const canvasWidget = node.addDOMWidget("tracker_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
 
-    // Stash root for the mode-gate helper.
     node._mecSplineTrackHost = root;
+    node._mecSplineTrackWidget = canvasWidget;
+    node._mecSplineTrackWidgetH = () => widgetH;
 
     if (!node.size || node.size[0] < 620) {
         const h = node.size?.[1] || 720;
@@ -885,6 +888,8 @@ app.registerExtension({
                     installerKey: "splineTrack",
                     installer: (n) => installEditor(n),
                     hostFinder: (n) => n._mecSplineTrackHost || null,
+                    widgetFinder: (n) => n._mecSplineTrackWidget || null,
+                    widgetHeight: 520,
                 });
             } else {
                 setTimeout(() => installEditor(node), 0);

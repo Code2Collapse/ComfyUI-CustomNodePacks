@@ -19,6 +19,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
 
@@ -26,18 +27,110 @@ const BTN_ID    = "mec-cost-btn";
 const PANEL_ID  = "mec-cost-panel";
 const STYLE_ID  = "mec-cost-style";
 
+const VRAM_HINTS = {
+    KSampler: 2400, KSamplerAdvanced: 2400, SamplerCustom: 2400, SamplerCustomAdvanced: 2400,
+    CheckpointLoaderSimple: 4000, UNETLoader: 3500, VAEDecode: 800, VAEEncode: 600,
+    CLIPTextEncode: 200, ControlNetApplyAdvanced: 1200, LoraLoader: 400,
+};
+
 const _state = {
     open: false,
-    data: null,       // backend estimate
-    workflow: null,   // last fetched API-format workflow
+    data: null,
+    workflow: null,
     busy: false,
     aiOutput: "",
     aiBusy: false,
     whatIf: { stepsMul: 1.0, resMul: 1.0, batchMul: 1.0 },
+    live: {
+        active: false,
+        startTs: 0,
+        elapsed: 0,
+        promptId: null,
+        nodeTimings: [],
+        currentNode: null,
+        nodeStartTs: 0,
+        timerHandle: null,
+    },
+    runHistory: [],
 };
 const _listeners = [];
 function _on(t, e, fn, opts) { t.addEventListener(e, fn, opts); _listeners.push(() => t.removeEventListener(e, fn, opts)); }
 function _clear() { while (_listeners.length) { try { _listeners.pop()(); } catch {} } }
+
+function _onExecStart(ev) {
+    const L = _state.live;
+    L.active = true;
+    L.startTs = performance.now();
+    L.elapsed = 0;
+    L.promptId = ev?.detail?.prompt_id || null;
+    L.nodeTimings = [];
+    L.currentNode = null;
+    L.nodeStartTs = 0;
+    clearInterval(L.timerHandle);
+    L.timerHandle = setInterval(() => {
+        if (!L.active) { clearInterval(L.timerHandle); return; }
+        L.elapsed = performance.now() - L.startTs;
+        if (_state.open) _renderLiveBar();
+    }, 250);
+    if (_state.open) _renderBody();
+}
+
+function _onExecuted(ev) {
+    const L = _state.live;
+    if (!L.active) return;
+    const d = ev?.detail;
+    const nodeId = d?.node;
+    if (L.currentNode) {
+        const dur = performance.now() - L.nodeStartTs;
+        L.nodeTimings.push({ ...L.currentNode, ms: dur });
+    }
+    const g = app.graph;
+    const gNode = g?.getNodeById?.(nodeId);
+    const classType = gNode?.type || gNode?.comfyClass || `node_${nodeId}`;
+    L.currentNode = { nodeId, classType, vram: VRAM_HINTS[classType] || 0 };
+    L.nodeStartTs = performance.now();
+    if (_state.open) _renderLiveBar();
+}
+
+function _onExecDone() {
+    const L = _state.live;
+    if (!L.active) return;
+    if (L.currentNode) {
+        const dur = performance.now() - L.nodeStartTs;
+        L.nodeTimings.push({ ...L.currentNode, ms: dur });
+        L.currentNode = null;
+    }
+    L.elapsed = performance.now() - L.startTs;
+    L.active = false;
+    clearInterval(L.timerHandle);
+    _state.runHistory.push({
+        ts: Date.now(),
+        total_ms: L.elapsed,
+        node_count: L.nodeTimings.length,
+        peak_vram: Math.max(0, ...L.nodeTimings.map(n => n.vram)),
+        nodes: L.nodeTimings.slice(),
+    });
+    if (_state.runHistory.length > 50) _state.runHistory.shift();
+    if (_state.open) _renderBody();
+}
+
+function _renderLiveBar() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    let bar = panel.querySelector('[data-role="live-bar"]');
+    if (!bar) return;
+    const L = _state.live;
+    const elapsed = L.active ? (performance.now() - L.startTs) : L.elapsed;
+    const done = L.nodeTimings.length;
+    const cur = L.currentNode ? ` → ${L.currentNode.classType}` : "";
+    const vramEst = L.nodeTimings.reduce((s, n) => s + n.vram, 0) + (L.currentNode?.vram || 0);
+    bar.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;">
+        <span style="color:var(--c2c-okSoft);font-weight:700;">${L.active ? "⏱ LIVE" : "✓ Done"}</span>
+        <span>${_fmtMs(elapsed)}</span>
+        <span style="color:var(--c2c-overlay0);">${done} node(s)${cur}</span>
+        <span style="color:var(--c2c-yellow);">~${(vramEst / 1024).toFixed(1)} GB VRAM</span>
+    </div>`;
+}
 
 function _injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -208,7 +301,28 @@ function _renderBody() {
     if (!body) return;
     _clear();
 
+    const L = _state.live;
+    const hist = _state.runHistory;
+    const avgMs = hist.length ? hist.reduce((s, r) => s + r.total_ms, 0) / hist.length : 0;
+
+    const liveSection = `<div data-role="live-bar" style="border-bottom:1px solid var(--c2c-surface0);margin-bottom:6px;">${
+        L.active
+            ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;">
+                <span style="color:var(--c2c-okSoft);font-weight:700;">⏱ LIVE</span>
+                <span>${_fmtMs(L.elapsed)}</span>
+                <span style="color:var(--c2c-overlay0);">${L.nodeTimings.length} node(s)${L.currentNode ? ` → ${L.currentNode.classType}` : ""}</span>
+               </div>`
+            : hist.length
+                ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;flex-wrap:wrap;">
+                    <span style="color:var(--c2c-peach);font-weight:600;">📊 ${hist.length} run(s)</span>
+                    <span>avg: ${_fmtMs(avgMs)}</span>
+                    <span style="color:var(--c2c-overlay0);">last: ${_fmtMs(hist[hist.length - 1].total_ms)} · ${hist[hist.length - 1].node_count} nodes</span>
+                   </div>`
+                : `<div style="padding:6px 0;color:var(--c2c-overlay0);font-style:italic;">Queue a prompt to start live tracking…</div>`
+    }</div>`;
+
     const tb = `
+        ${liveSection}
         <div class="ce-toolbar">
             <button data-act="refresh">🔄 Refresh</button>
             <button data-act="ai" ${_state.data?._error || !_state.data ? "disabled" : ""}>${_state.aiBusy ? "⌛ AI…" : "✨ Cheaper-alt"}</button>
@@ -413,6 +527,10 @@ app.registerExtension({
         })();
         const b = document.getElementById(BTN_ID);
         if (b) b.style.display = enabled ? "flex" : "none";
-        console.log("[C2C.CostEstimator] godlevel-rebuild loaded.");
+        api.addEventListener("execution_start", _onExecStart);
+        api.addEventListener("executed", _onExecuted);
+        api.addEventListener("execution_success", _onExecDone);
+        api.addEventListener("execution_error", _onExecDone);
+        console.log("[C2C.CostEstimator] live-tracking loaded.");
     },
 });

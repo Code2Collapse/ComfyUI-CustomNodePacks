@@ -13,6 +13,7 @@
 
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
 
 const STYLE_TAG_ID = "mec-diagnostics-style";
 
@@ -129,7 +130,7 @@ function _injectStyle() {
         color:var(--c2c-bg3); font-weight:800; font-size:14px;
         font-family: ui-monospace, 'Cascadia Mono', monospace;
         letter-spacing:-0.5px;
-        box-shadow: 0 2px 6px rgba(137, 180, 250, 0.25);
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--c2c-blue) 25%, transparent);
     }
     .c2c-diag-title-block {
         display:flex; flex-direction:column; gap:1px; flex:1; min-width:0;
@@ -156,11 +157,11 @@ function _injectStyle() {
         width:6px; height:6px; border-radius:50%;
         background: currentColor; flex-shrink:0;
     }
-    .c2c-diag-pill.ok    { color:var(--c2c-okSoft); background:rgba(166,227,161,0.10); border-color:rgba(166,227,161,0.25); }
-    .c2c-diag-pill.warn  { color:var(--c2c-yellow); background:rgba(249,226,175,0.10); border-color:rgba(249,226,175,0.25); }
-    .c2c-diag-pill.err   { color:var(--c2c-red); background:rgba(243,139,168,0.12); border-color:rgba(243,139,168,0.30); }
-    .c2c-diag-pill.info  { color:var(--c2c-blue); background:rgba(137,180,250,0.10); border-color:rgba(137,180,250,0.25); }
-    .c2c-diag-pill.muted { color:var(--c2c-overlay0); background:rgba(108,112,134,0.08); border-color:rgba(108,112,134,0.20); }
+    .c2c-diag-pill.ok    { color:var(--c2c-okSoft); background:color-mix(in srgb, var(--c2c-okSoft) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-okSoft) 25%, transparent); }
+    .c2c-diag-pill.warn  { color:var(--c2c-yellow); background:color-mix(in srgb, var(--c2c-yellow) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-yellow) 25%, transparent); }
+    .c2c-diag-pill.err   { color:var(--c2c-red); background:color-mix(in srgb, var(--c2c-red) 12%, transparent); border-color:color-mix(in srgb, var(--c2c-red) 30%, transparent); }
+    .c2c-diag-pill.info  { color:var(--c2c-blue); background:color-mix(in srgb, var(--c2c-blue) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-blue) 25%, transparent); }
+    .c2c-diag-pill.muted { color:var(--c2c-overlay0); background:color-mix(in srgb, var(--c2c-overlay0) 8%, transparent); border-color:color-mix(in srgb, var(--c2c-overlay0) 20%, transparent); }
     .c2c-diag-pill[role="button"] { cursor:pointer; }
     .c2c-diag-pill[role="button"]:hover { filter:brightness(1.2); }
 
@@ -1196,7 +1197,7 @@ async function _renderSettings(body) {
         for (const btn of customList.querySelectorAll("[data-rm]")) {
             btn.onclick = async () => {
                 const id = btn.dataset.rm;
-                if (!confirm(`Remove custom pattern "${id}"?`)) return;
+                if (!(await c2cConfirm(`Remove custom pattern "${id}"?`))) return;
                 const r2 = await _api(`/mec/diagnostics/patterns/custom?id=${encodeURIComponent(id)}`, { method: "DELETE" });
                 if (r2.success) { _toast(`Removed "${id}"`, "success"); await refreshCustomList(); }
                 else _toast("Remove failed: " + r2.message, "error");

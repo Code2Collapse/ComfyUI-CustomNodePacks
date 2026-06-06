@@ -1,4 +1,4 @@
-"""
+﻿"""
 InpaintSuiteMEC — Inpaint Crop Pro + Stitch Pro + Mask Prepare.
 
 Three nodes for professional inpainting workflows:
@@ -819,6 +819,19 @@ class InpaintCropProMEC:
         "ensure minimum and maximum resolution",
     ]
     OUTPUT_PADDING_CHOICES = ["0", "8", "16", "32", "64", "128", "256", "512"]
+    # P0.4: aspect presets. "Custom" preserves the legacy
+    # output_target_width/_height widgets exactly (back-compat default).
+    # "Auto" picks the closest of {Square, 16:9, 9:16, 4:3, 3:4} from the
+    # mask bbox shape. Named presets keep the SHORTER of (target_w,target_h)
+    # and recompute the longer side from the AR.
+    ASPECT_PRESETS = ["Custom", "Auto", "Square", "16:9", "9:16", "4:3", "3:4"]
+    ASPECT_RATIOS = {
+        "Square": 1.0,
+        "16:9": 16.0 / 9.0,
+        "9:16": 9.0 / 16.0,
+        "4:3":  4.0 / 3.0,
+        "3:4":  3.0 / 4.0,
+    }
     DEVICE_MODES = ["cpu (compatible)", "gpu (much faster)"]
     MASK_POLARITY = ["regenerate_subject", "preserve_subject"]
     INPAINT_MASK_MODES = ["hard_binary", "slight_feather", "soft_blend"]
@@ -860,8 +873,31 @@ class InpaintCropProMEC:
                 "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
 
                 "context_from_mask_extend_factor": ("FLOAT", {
-                    "default": 1.2, "min": 1.0, "max": 100.0, "step": 0.01,
-                    "tooltip": "Grow context bbox by this factor (1.5 = +50% on every side)."}),
+                    "default": 1.2, "min": 0.1, "max": 100.0, "step": 0.01,
+                    "tooltip": ("Resize context bbox around the mask. 1.0 = exact mask bbox. "
+                                ">1 grows outward (1.5 = +50% on every side). "
+                                "<1 shrinks INWARD so the crop is tighter than the mask bbox "
+                                "(0.7 = inset 15% on every side). Useful for 16:9 / portrait "
+                                "single-still crops where the mask bbox is larger than the "
+                                "subject you actually want sampled.")}),
+                "auto_context_factor": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": ("Override context_from_mask_extend_factor automatically so the "
+                                "mask fills ~70% of the resulting crop area. Uses actual mask "
+                                "AREA (not just bbox) to handle sparse / thin / non-convex "
+                                "masks. Result clamped to [0.30, 10.00]. OFF = use the manual "
+                                "slider above. Recommended ON for batch / unattended runs.")}),
+                "aspect_preset": (cls.ASPECT_PRESETS, {
+                    "default": "Custom",
+                    "tooltip": ("Force the output crop aspect ratio.\n"
+                                "  Custom : use output_target_width / _height as-is "
+                                "(legacy lquesada behaviour - DEFAULT).\n"
+                                "  Auto   : pick best of {Square, 16:9, 9:16, 4:3, 3:4} from "
+                                "the mask bbox aspect.\n"
+                                "  Square / 16:9 / 9:16 / 4:3 / 3:4 : keep the SHORTER of "
+                                "(output_target_width, output_target_height) and recompute the "
+                                "longer side from this AR. Multiple-of-padding rounding still "
+                                "applies downstream.")}),
 
                 "output_resize_to_target_size": ("BOOLEAN", {"default": True,
                     "tooltip": "Force output to a specific resolution for sampling."}),
@@ -939,6 +975,8 @@ class InpaintCropProMEC:
                      extend_up_factor, extend_down_factor,
                      extend_left_factor, extend_right_factor,
                      context_from_mask_extend_factor,
+                     auto_context_factor,
+                     aspect_preset,
                      output_resize_to_target_size,
                      output_target_width, output_target_height, output_padding,
                      device_mode,
@@ -1088,12 +1126,25 @@ class InpaintCropProMEC:
         # ── Step 4: per-frame (or stable) context bbox ─────────────────────
         # Always use *bbox_mask* (no blend feathering) so bbox is tight.
         bx_list, by_list, bw_list, bh_list = [], [], [], []
+        # P0.4 resolve aspect_preset → (tgt_w, tgt_h) used both for AUTO
+        # factor heuristic and for the actual crop step downstream. Falls
+        # back to the manual widget values when preset == "Custom".
+        resolved_tgt_w, resolved_tgt_h = self._resolve_target_aspect(
+            aspect_preset, int(output_target_width), int(output_target_height),
+            bbox_mask,
+        )
+        # P0.4 AUTO context factor — overrides manual slider when ON.
+        resolved_factor = float(context_from_mask_extend_factor)
+        if bool(auto_context_factor):
+            resolved_factor = self._compute_auto_factor(
+                bbox_mask, resolved_tgt_w, resolved_tgt_h, target_fill=0.70,
+            )
         if wan_stable_crop:
             sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
             if sw <= 0 or sh <= 0:
                 sx, sy, sw, sh = 0, 0, W, H
             sx, sy, sw, sh = self._grow_context(sx, sy, sw, sh,
-                                                context_from_mask_extend_factor, W, H)
+                                                resolved_factor, W, H)
             ox, oy, ow, oh = _compute_stable_bbox(optional_context_mask)
             if ow > 0 and oh > 0:
                 nx = min(sx, ox)
@@ -1112,7 +1163,7 @@ class InpaintCropProMEC:
                 if fw <= 0 or fh <= 0:
                     fx, fy, fw, fh = 0, 0, W, H
                 fx, fy, fw, fh = self._grow_context(fx, fy, fw, fh,
-                                                   context_from_mask_extend_factor, W, H)
+                                                   resolved_factor, W, H)
                 ox, oy, ow, oh = _compute_bbox_single(optional_context_mask[i])
                 if ow > 0 and oh > 0:
                     nx = min(fx, ox)
@@ -1127,7 +1178,7 @@ class InpaintCropProMEC:
 
         # ── Step 5: per-frame crop_magic ───────────────────────────────────
         if output_resize_to_target_size:
-            tgt_w, tgt_h = output_target_width, output_target_height
+            tgt_w, tgt_h = resolved_tgt_w, resolved_tgt_h
         else:
             tgt_w, tgt_h = -1, -1
 
@@ -1167,6 +1218,7 @@ class InpaintCropProMEC:
                 tgt_h if tgt_h > 0 else bh,
                 output_padding_int, downscale_algorithm, upscale_algorithm,
                 output_resize_to_target_size, wan_align_multiple,
+                context_factor=resolved_factor,
             )
 
             result_image_list.append(cropped_image.squeeze(0))
@@ -1234,7 +1286,9 @@ class InpaintCropProMEC:
             f"invert={mask_invert} blend={mask_blend_pixels}px hipass={mask_hipass_filter:.2f}\n"
             f"  bbox[0]: x={bx_list[0]} y={by_list[0]} w={bw_list[0]} h={bh_list[0]}  "
             f"(stable={wan_stable_crop})\n"
-            f"  context_factor={context_from_mask_extend_factor:.2f}\n"
+            f"  context_factor={context_from_mask_extend_factor:.2f}"
+            f"{'  (AUTO → ' + format(resolved_factor, '.2f') + ')' if auto_context_factor else ''}\n"
+            f"  aspect_preset={aspect_preset} → target {resolved_tgt_w}x{resolved_tgt_h}\n"
             f"  out: target={'on' if output_resize_to_target_size else 'off'} "
             f"{output_target_width}x{output_target_height} pad={output_padding} "
             f"align={wan_align_multiple}\n"
@@ -1303,21 +1357,119 @@ class InpaintCropProMEC:
         return image, mask.clamp(0.0, 1.0), opt_mask.clamp(0.0, 1.0)
 
     @staticmethod
+    @staticmethod
     def _grow_context(x, y, w, h, factor, img_w, img_h):
-        if factor <= 1.0:
+        # factor == 1.0  -> tight mask bbox (no change).
+        # factor >  1.0  -> grow outward by (factor-1)/2 on each side.
+        # factor <  1.0  -> shrink INWARD by (1-factor)/2 on each side
+        #                   (centre preserved). Used when the user wants a
+        #                   tighter crop than the raw mask bbox (single-still
+        #                   16:9 / portrait subjects, etc.).
+        if factor == 1.0 or w <= 0 or h <= 0:
             return x, y, w, h
-        gx = int(round(w * (factor - 1.0) / 2.0))
-        gy = int(round(h * (factor - 1.0) / 2.0))
-        nx = max(0, x - gx)
-        ny = max(0, y - gy)
-        nx2 = min(img_w, x + w + gx)
-        ny2 = min(img_h, y + h + gy)
-        return nx, ny, nx2 - nx, ny2 - ny
+        if factor > 1.0:
+            gx = int(round(w * (factor - 1.0) / 2.0))
+            gy = int(round(h * (factor - 1.0) / 2.0))
+            nx = max(0, x - gx)
+            ny = max(0, y - gy)
+            nx2 = min(img_w, x + w + gx)
+            ny2 = min(img_h, y + h + gy)
+            return nx, ny, nx2 - nx, ny2 - ny
+        # factor < 1.0  (shrink)
+        sx = int(round(w * (1.0 - factor) / 2.0))
+        sy = int(round(h * (1.0 - factor) / 2.0))
+        nx = x + sx
+        ny = y + sy
+        nw = max(1, w - 2 * sx)
+        nh = max(1, h - 2 * sy)
+        # Clamp to image and guarantee >=1 px on each axis
+        nx = max(0, min(nx, img_w - 1))
+        ny = max(0, min(ny, img_h - 1))
+        nw = max(1, min(nw, img_w - nx))
+        nh = max(1, min(nh, img_h - ny))
+        return nx, ny, nw, nh
+
+    @classmethod
+    def _resolve_target_aspect(cls, preset, manual_w, manual_h, bbox_mask):
+        """P0.4 — resolve aspect_preset → (target_w, target_h).
+
+        - "Custom"   : returns manual values unchanged (legacy behaviour).
+        - "Auto"     : picks the closest of the named ratios to the union
+                       mask bbox aspect ratio. Falls back to "Custom" if
+                       the mask is empty.
+        - named ARs  : keeps the SHORTER of (manual_w, manual_h) and
+                       recomputes the longer side from the AR. Floors at
+                       64 px on the short side to stay sampler-friendly.
+        """
+        if preset == "Custom" or preset not in (cls.ASPECT_PRESETS):
+            return int(manual_w), int(manual_h)
+        if preset == "Auto":
+            try:
+                sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
+            except Exception:
+                sw, sh = 0, 0
+            if sw <= 0 or sh <= 0:
+                return int(manual_w), int(manual_h)
+            ar = float(sw) / float(max(sh, 1))
+            # nearest neighbour in log-space (perceptual aspect distance)
+            import math
+            best = min(cls.ASPECT_RATIOS.items(),
+                       key=lambda kv: abs(math.log(kv[1]) - math.log(max(ar, 1e-6))))
+            target_ar = best[1]
+        else:
+            target_ar = cls.ASPECT_RATIOS[preset]
+        short = max(64, min(int(manual_w), int(manual_h)))
+        if target_ar >= 1.0:
+            return int(round(short * target_ar)), short
+        return short, int(round(short / target_ar))
+
+    @staticmethod
+    def _compute_auto_factor(bbox_mask, target_w, target_h, target_fill=0.70):
+        """P0.4 — compute context_factor so the mask fills ~target_fill of
+        the resulting crop. Uses actual mask AREA divided by mask-bbox area
+        as a sparsity estimate. Result clamped to the widget range
+        [0.30, 10.00]."""
+        import math
+        try:
+            sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
+        except Exception:
+            return 1.0
+        if sw <= 0 or sh <= 0:
+            return 1.0
+        # Mask area inside its bbox (use >0.5 binarisation for stability).
+        m = bbox_mask
+        if m.dim() == 4:
+            m = m.squeeze(1)
+        # union across the batch so AUTO matches the stable_crop union bbox.
+        try:
+            union = (m > 0.5).any(dim=0)
+            sub = union[sy:sy+sh, sx:sx+sw]
+            mask_area = float(sub.sum().item())
+        except Exception:
+            return 1.0
+        bbox_area = float(sw * sh)
+        if mask_area <= 0 or bbox_area <= 0:
+            return 1.0
+        fill_ratio = mask_area / bbox_area
+        # crop_area_after_factor ≈ bbox_area * factor² (square approximation).
+        # fill_in_crop = mask_area / crop_area = fill_ratio / factor².
+        # solve fill_in_crop = target_fill → factor = sqrt(fill_ratio / target_fill).
+        factor = math.sqrt(fill_ratio / max(target_fill, 1e-3))
+        return max(0.30, min(10.0, float(factor)))
 
     @staticmethod
     def _crop_magic(image, mask, x, y, w, h, target_w, target_h, padding,
-                    down_alg, up_alg, resize_output, align_multiple):
-        """Aspect-ratio fit + edge-replicate canvas + crop + (optional) resize."""
+                    down_alg, up_alg, resize_output, align_multiple,
+                    context_factor=1.0):
+        """Aspect-ratio fit + edge-replicate canvas + crop + (optional) resize.
+
+        When ``context_factor < 1.0`` the caller has deliberately shrunk the
+        bbox to request a TIGHTER crop. In that case the aspect-ratio step
+        must NOT grow the bbox back out (which would defeat the shrink and
+        leave the user wondering why values below 1.0 do nothing on a
+        non-square target aspect). Instead we SHRINK the longer axis to
+        match the target aspect, keeping the centre fixed.
+        """
         B, image_h, image_w, C = image.shape
 
         if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
@@ -1328,19 +1480,39 @@ class InpaintCropProMEC:
         target_w = _pad_to_multiple(target_w, m)
         target_h = _pad_to_multiple(target_h, m)
 
-        # 2. Grow bbox to match target aspect ratio
+        # 2. Fit bbox to target aspect ratio.
+        #    factor >= 1.0  → GROW shorter axis (lquesada-original behaviour;
+        #                    preserves all of the user's mask area).
+        #    factor <  1.0  → SHRINK longer axis (user asked for tighter crop;
+        #                    we honour that even at the cost of cropping a
+        #                    sliver of the original bbox).
         target_ar = target_w / max(target_h, 1)
         ctx_ar = w / max(h, 1)
-        if ctx_ar < target_ar:
-            new_w = int(h * target_ar)
-            new_h = h
-            new_x = x - (new_w - w) // 2
-            new_y = y
+        shrink_mode = (context_factor < 1.0)
+        if shrink_mode:
+            if ctx_ar > target_ar:
+                # Too wide → shrink width to match target aspect, keep h.
+                new_w = max(1, int(round(h * target_ar)))
+                new_h = h
+                new_x = x + (w - new_w) // 2
+                new_y = y
+            else:
+                # Too tall → shrink height to match target aspect, keep w.
+                new_w = w
+                new_h = max(1, int(round(w / target_ar)))
+                new_x = x
+                new_y = y + (h - new_h) // 2
         else:
-            new_w = w
-            new_h = int(w / target_ar)
-            new_x = x
-            new_y = y - (new_h - h) // 2
+            if ctx_ar < target_ar:
+                new_w = int(h * target_ar)
+                new_h = h
+                new_x = x - (new_w - w) // 2
+                new_y = y
+            else:
+                new_w = w
+                new_h = int(w / target_ar)
+                new_x = x
+                new_y = y - (new_h - h) // 2
 
         # 3. If not resizing output, ensure new dims >= target dims
         if not resize_output:
@@ -1884,63 +2056,6 @@ class InpaintPasteBackMEC:
         return (out, info)
 
 
-# ══════════════════════════════════════════════════════════════════════
-#  NODE 5: InpaintCompositeMEC  (mode dispatch over Stitch Pro / Paste Back)
-# ══════════════════════════════════════════════════════════════════════
-
-class InpaintCompositeMEC:
-    """Unified composite over the new STITCHER schema.
-
-    mode=stitch_pro -> alpha composite using the feathered mask stored in
-                       the stitcher (lquesada-style).
-    mode=paste_back -> hard rectangle paste with optional Gaussian feather.
-    """
-
-    VRAM_TIER = 1
-    MODES = ["stitch_pro", "paste_back"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "stitcher": ("STITCHER", {"tooltip": "Stitcher dict from InpaintCropProMEC"}),
-                "inpainted_image": ("IMAGE", {"tooltip": "Inpainted result (B,H,W,C)"}),
-                "mode": (cls.MODES, {"default": "stitch_pro"}),
-                "blend_mode_override": (InpaintStitchProMEC.BLEND_OVERRIDES, {
-                    "default": "from_crop",
-                    "tooltip": "[stitch_pro] Override blend mode or 'from_crop'"}),
-                "color_match": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "[stitch_pro] Apply mean+std color transfer"}),
-                "upscale_method": (InpaintPasteBackMEC.INTERP_METHODS, {
-                    "default": "bicubic",
-                    "tooltip": "[paste_back] Interpolation for resize"}),
-                "feather_edges": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "[paste_back] Gaussian-feather rectangle boundary"}),
-                "feather_radius": ("INT", {
-                    "default": 16, "min": 0, "max": 64, "step": 1,
-                    "tooltip": "[paste_back] Feather radius in pixels (0 disables)"}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
-    RETURN_NAMES = ("image", "mask", "info")
-    FUNCTION = "composite"
-    CATEGORY = "C2C/Inpaint"
-    DESCRIPTION = "Unified composite. mode=stitch_pro = lquesada feather blend with overrides; mode=paste_back = clean resize+paste."
-
-    def composite(self, stitcher, inpainted_image, mode,
-                  blend_mode_override, color_match,
-                  upscale_method, feather_edges, feather_radius):
-        if mode == "paste_back":
-            pb = InpaintPasteBackMEC()
-            img, info = pb.paste_back(stitcher, inpainted_image,
-                                      upscale_method, feather_edges, feather_radius)
-            B, H, W, _ = img.shape
-            mask = torch.zeros(B, H, W, device=img.device, dtype=img.dtype)
-            return (img, mask, info)
-        sp = InpaintStitchProMEC()
-        img, blend_mask, info = sp.inpaint_stitch(stitcher, inpainted_image,
-                                                  blend_mode_override, color_match)
-        return (img, blend_mask, info)
+# InpaintCompositeMEC removed 2026-05-18 — use InpaintStitchProMEC or
+# InpaintPasteBackMEC directly. They cover both blend modes cleanly without
+# the extra mode-dispatch indirection.

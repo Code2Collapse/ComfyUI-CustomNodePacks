@@ -450,9 +450,23 @@ class VideoComparerC2C:
         except Exception:
             files = [""]
         files = [""] + files if "" not in files else files
+        # Re-order so the live dual-video player appears first in the combo
+        # AND becomes the default — the previous "wipe" default left users
+        # with a static canvas and no obvious way to actually play the
+        # videos they had loaded. The player gives play/pause, seek,
+        # frame-step (1f forward / back), in/out points, loop and per-frame
+        # comparison out of the box.
+        _modes_ordered = ["synced_player"] + [m for m in _MODES if m != "synced_player"]
         return {
             "required": {
-                "mode": (_MODES, {"default": "wipe"}),
+                "mode": (_modes_ordered, {"default": "synced_player",
+                    "tooltip":
+                        "synced_player: dual <video> player with shared "
+                        "transport — play, pause, seek, frame-step (◀ 1f / "
+                        "1f ▶), in/out points, loop, playback rate. Use "
+                        "this for real-time A/B comparison of two videos. "
+                        "Switch to wipe / onion / diff / side_by_side / "
+                        "false_color / bit_depth_crush for overlay analysis."}),
                 "bit_depth": (_BIT_DEPTHS, {"default": "32",
                     "tooltip": "Quantization for bit_depth_crush mode."}),
                 "wipe_position": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
@@ -482,7 +496,20 @@ class VideoComparerC2C:
     FUNCTION = "execute"
     CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True
-    DESCRIPTION = "Nuke-grade A/B comparer for image / video / EXR / audio with wipe, onion, diff, scopes, bit-depth crush, and audio analysis."
+    DESCRIPTION = (
+        "Nuke-grade A/B comparer for image / video / EXR / audio.\n"
+        "• synced_player (default): dual <video> elements share one "
+        "transport — play/pause, seek, frame-step ◀ 1f / 1f ▶, in/out "
+        "points, loop, playback rate, live FPS. Frame-perfect via "
+        "requestVideoFrameCallback.\n"
+        "• Overlay modes: wipe, onion, diff, side_by_side, per_channel, "
+        "false_color, bit_depth_crush — all render LIVE in the browser, "
+        "no Queue needed (drag canvas to wipe, ←/→ to scrub).\n"
+        "• Queue-time modes: scopes (waveform/parade/vector/histogram), "
+        "audio waveform/spectrogram/loudness.\n"
+        "All comparer presets in one node. Switch between them via the "
+        "mode combo at any time."
+    )
 
     def execute(self, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,

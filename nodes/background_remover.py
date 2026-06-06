@@ -1,10 +1,10 @@
 ﻿"""
-BackgroundRemoverMEC â€“ One-click background removal using RMBG-2.0 or BiRefNet.
+BackgroundRemoverMEC – One-click background removal using RMBG-2.0 or BiRefNet.
 
 Models supported:
-  - **RMBG-2.0** (briaai | ISnet variant) â€“ General-purpose, fast
-  - **BiRefNet-General** â€“ Bilateral reference, high-detail edges
-  - **BiRefNet-Portrait** â€“ Optimized for human portraits
+  - **RMBG-2.0** (briaai | ISnet variant) – General-purpose, fast
+  - **BiRefNet-General** – Bilateral reference, high-detail edges
+  - **BiRefNet-Portrait** – Optimized for human portraits
 
 The node outputs a clean foreground (RGB pre-multiplied) and a high-quality
 alpha MASK. Ideal as a preprocessing step before compositing or inpainting.

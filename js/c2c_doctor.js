@@ -40,15 +40,6 @@ import { attachWindowChrome } from "./_c2c_window.js";
 const PANEL_ID  = "c2c-doctor-v3-panel";
 const STYLE_ID  = "c2c-doctor-v3-style";
 const BTN_ID    = "c2c-doctor-v3-btn";
-const LS_WIDTH  = "c2c.doctor.v3.width"; // legacy; superseded by attachWindowChrome's c2c.win.doctor:size
-// One-shot migration: if the legacy width key exists but chrome size doesn't,
-// migrate it forward so users keep their preferred width.
-try {
-    const legacy = parseInt(localStorage.getItem(LS_WIDTH) || "0", 10);
-    if (legacy >= 380 && legacy <= 1600 && !localStorage.getItem("c2c.win.doctor:size")) {
-        localStorage.setItem("c2c.win.doctor:size", JSON.stringify({ w: legacy, h: 540 }));
-    }
-} catch { /* localStorage unavailable */ }
 const LS_TAB    = "c2c.doctor.v3.tab";
 
 const TABS = [
@@ -251,7 +242,7 @@ function injectStyles() {
     el.textContent = `
 #${PANEL_ID} {
     position: fixed; top: 0; right: 0; height: 100vh;
-    width: var(--c2c-doc-w, 540px); min-width: 380px; max-width: 95vw;
+    width: 540px; min-width: 380px; max-width: 95vw;
     background: var(--c2c-bg, var(--c2c-bg2)); color: var(--c2c-fg, var(--c2c-accentBright));
     border-left: 1px solid var(--c2c-border, var(--c2c-gray800));
     box-shadow: -8px 0 32px rgba(0,0,0,.4);

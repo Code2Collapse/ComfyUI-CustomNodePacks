@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { findNodeAnywhere } from "./_subgraph_walk.js";
 import { C } from './_c2c_theme.js';
+import { c2cPrompt } from "./_c2c_dialog.js";
 
 /**
  * Parameter Memory v2 — Compact parameter tracking + named presets.
@@ -580,8 +581,8 @@ function _showDiffDialog(node) {
 //  Presets
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function _savePresetDialog(node) {
-  const name = prompt("Preset name:", "");
+async function _savePresetDialog(node) {
+  const name = await c2cPrompt("Preset name:", "");
   if (!name || !name.trim()) return;
   const clean = name.trim().slice(0, 64);
   const mem = _getMem(node);

@@ -497,6 +497,7 @@ function findRefImage(node) {
 }
 
 function installEditor(node) {
+    if (node._mecSplineEditHost) return;
     const ed = new Editor(node);
 
     const hideWidget = (w) => {
@@ -694,16 +695,16 @@ function installEditor(node) {
     }
 
     let widgetH = 460;
-    node.addDOMWidget("spline_editor", "canvas", root, {
+    const canvasWidget = node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
 
-    // Stash host DOM root for the mode-gate so it can hide/show this
-    // editor when the user toggles the unified node's `mode` widget.
     node._mecSplineEditHost = root;
+    node._mecSplineEditWidget = canvasWidget;
+    node._mecSplineEditWidgetH = () => widgetH;
 
     if (!node.size || node.size[0] < 600) {
         const h = node.size?.[1] || 640;
@@ -1024,6 +1025,14 @@ function installEditor(node) {
     };
     const refPoll = setInterval(() => { if (!ed.refImg) tryDiscoverRef(); }, 1500);
 
+    const origResize = node.onResize;
+    node.onResize = function(...args) {
+        origResize?.apply(this, args);
+        render();
+        node.setDirtyCanvas(true, true);
+        node.graph?.setDirtyCanvas(true, true);
+    };
+
     const origRemoved = node.onRemoved;
     node.onRemoved = function () {
         origRemoved?.apply(this, arguments);
@@ -1057,6 +1066,8 @@ app.registerExtension({
                 installerKey: "splineEdit",
                 installer: (n) => installEditor(n),
                 hostFinder: (n) => n._mecSplineEditHost || null,
+                widgetFinder: (n) => n._mecSplineEditWidget || null,
+                widgetHeight: (n) => (typeof n._mecSplineEditWidgetH === "function" ? n._mecSplineEditWidgetH() : 460),
             });
         } else {
             // Legacy direct binding (kept for backward graph loading only).

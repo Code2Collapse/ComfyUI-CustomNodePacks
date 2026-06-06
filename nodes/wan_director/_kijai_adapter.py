@@ -179,10 +179,15 @@ def apply_nag(model: Any, scale: float = 11.0, tau: float = 2.5,
         raise TypeError("apply_nag: model has no .clone() method")
     m = model.clone()
     patch = build_nag_patch(scale=scale, tau=tau, alpha=alpha)
-    opts = m.model_options
-    to   = opts.setdefault("transformer_options", {})
-    patches = to.setdefault("patches", {})
-    patches["attn1_patch"] = patch
+    # Use ComfyUI's proper API to install attn1 patch.
+    try:
+        m.set_model_attn1_patch(patch)
+    except AttributeError:
+        # Fallback: inject into model_options directly.
+        opts = m.model_options
+        to   = opts.setdefault("transformer_options", {})
+        patches_d = to.setdefault("patches", {})
+        patches_d["attn1_patch"] = patch
     return m
 
 

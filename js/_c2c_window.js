@@ -212,18 +212,7 @@ function _injectStyle() {
     gap: 8px;
     flex-shrink: 0;
 }
-.c2c-win-resize {
-    position: absolute;
-    right: 0; bottom: 0;
-    width: 14px; height: 14px;
-    cursor: nwse-resize;
-    background:
-        linear-gradient(135deg, transparent 0 6px, var(--c2c-dim) 6px 7px, transparent 7px 9px, var(--c2c-dim) 9px 10px, transparent 10px);
-    opacity: 0.7;
-}
-.c2c-win-resize:hover { opacity: 1; }
-/* 8-edge resize handles. The corner grip above stays as a visual hint;
-   the 4 edges + 4 corners listed here cover ALL drag directions. */
+/* 8-edge resize handles cover ALL drag directions. */
 .c2c-win-edge { position: absolute; z-index: 5; }
 .c2c-win-edge.n  { top:0;    left:8px;   right:8px;  height:5px; cursor: ns-resize; }
 .c2c-win-edge.s  { bottom:0; left:8px;   right:8px;  height:5px; cursor: ns-resize; }
@@ -244,15 +233,14 @@ function _injectStyle() {
 .c2c-win[data-minimized="true"] .c2c-win-tabs,
 .c2c-win[data-minimized="true"] .c2c-win-body,
 .c2c-win[data-minimized="true"] .c2c-win-footer { display: none !important; }
-.c2c-win[data-minimized="true"] > *:not([data-c2c-header]):not(.c2c-win-header):not(.c2c-win-tabs):not(.c2c-win-body):not(.c2c-win-footer):not(.c2c-win-edge):not(.c2c-win-resize) {
+.c2c-win[data-minimized="true"] > *:not([data-c2c-header]):not(.c2c-win-header):not(.c2c-win-tabs):not(.c2c-win-body):not(.c2c-win-footer):not(.c2c-win-edge) {
     display: none !important;
 }
 .c2c-win[data-minimized="true"] .c2c-win-edge.s,
 .c2c-win[data-minimized="true"] .c2c-win-edge.sw,
 .c2c-win[data-minimized="true"] .c2c-win-edge.se,
 .c2c-win[data-minimized="true"] .c2c-win-edge.e,
-.c2c-win[data-minimized="true"] .c2c-win-edge.w,
-.c2c-win[data-minimized="true"] .c2c-win-resize { display: none !important; }
+.c2c-win[data-minimized="true"] .c2c-win-edge.w { display: none !important; }
 /* attachWindowChrome injects a "–" button on a sibling header that was not
    originally a c2c-win-header. Style it so it visually matches the rest of
    the chrome instead of being a bare oversized minus sign. */
@@ -682,11 +670,7 @@ export function makeResizable(el, { key, minW = 280, minH = 160 } = {}) {
             el.style.height = `${saved.h}px`;
         }
     }
-    // Visual corner hint (purely decorative; the real handler is the SE edge).
-    const grip = document.createElement("div");
-    grip.className = "c2c-win-resize";
-    el.appendChild(grip);
-    // 8 invisible edge handles cover every drag direction.
+    // 8 edge handles cover every drag direction.
     const DIRS = ["n", "s", "e", "w", "nw", "ne", "sw", "se"];
     DIRS.forEach(dir => {
         const e = document.createElement("div");

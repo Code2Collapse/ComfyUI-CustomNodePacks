@@ -32,8 +32,10 @@ MANIFEST
 third_party/
 tasks/
 tests/
+_tests/
 autoresearch-nodepacks/
 autoresearch-nexus/
+_test_models/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

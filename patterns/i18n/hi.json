@@ -1,0 +1,431 @@
+{
+  "_schema": "MEC.error_patterns.i18n/1.0",
+  "_locale": "hi",
+  "_doc": "Hindi (हिन्दी) locale overlay for builtin error patterns. Keys must match pattern 'i18n_key' (preferred) or 'id' in patterns/builtin/core.json.",
+  "patterns": {
+    "matmul_shape": {
+      "headline": "गलत CLIP / text-encoder लोड हुआ है — बदलें।",
+      "cause": "आपका CLIP (text-encoder) diffusion model से मेल नहीं खाता। hidden_size अलग है, इसलिए prompt embedding model से गुणा नहीं हो पा रहा। सबसे आम कारण: SDXL CLIP को SD1.5 model में लगाना, या उल्टा।",
+      "fixes": [
+        "Load CLIP / DualCLIPLoader node खोलें और checkpoint से मेल खाने वाला CLIP चुनें (SD1.5 → sd1.5-clip, SDXL → sdxl-clip-l + sdxl-clip-g, Flux → t5xxl + clip-l)।",
+        "अगर CheckpointLoaderSimple इस्तेमाल किया है, तो उसी का CLIP output सीधे prompt encoder में लगाएं।",
+        "अगर LoRA लगाया है, सुनिश्चित करें कि वह इसी base family के लिए ट्रेन हुआ था।"
+      ]
+    },
+    "cuda_oom": {
+      "headline": "GPU की मेमोरी (VRAM) खत्म हो गई।",
+      "cause": "इस workflow को आपके GPU से ज़्यादा VRAM चाहिए। ये tile size, batch size, image resolution, या एक साथ बहुत सारे models load होने से होता है।",
+      "fixes": [
+        "Resolution या batch size कम करें।",
+        "VAE / KSampler nodes में tiled mode चालू करें।",
+        "ComfyUI को `--lowvram` या `--novram` flag के साथ चलाएँ।",
+        "जो models इस्तेमाल नहीं हो रहे उन्हें unload करें।"
+      ]
+    },
+    "size_mismatch": {
+      "headline": "Tensor आकार मेल नहीं खा रहे।",
+      "cause": "दो tensors जिनके आकार अलग हैं, उन्हें मिलाने की कोशिश हुई। आम तौर पर latent + conditioning, या mask + image का resolution मेल नहीं खाता।",
+      "fixes": [
+        "सभी images / masks को एक ही resolution पर resize करें।",
+        "जाँचें कि latent और conditioning दोनों एक ही model family से आ रहे हैं।",
+        "ControlNet preprocessor का output size उसके main image जैसा होना चाहिए।"
+      ]
+    },
+    "scalar_type_half": {
+      "headline": "Half / Float dtype mismatch।",
+      "cause": "कुछ operations FP16 और FP32 tensors को mix नहीं कर सकते। आमतौर पर model FP16 पर है पर input FP32 (या उल्टा) है।",
+      "fixes": [
+        "ComfyUI को `--force-fp16` या `--force-fp32` flag के साथ चलाएँ।",
+        "Manual VAE encode/decode में dtype align करें।",
+        "Custom node update करें — कई पुराने nodes में dtype handling टूटा हुआ है।"
+      ]
+    },
+    "cudnn_status": {
+      "headline": "cuDNN error — GPU driver या CUDA संस्करण असंगत।",
+      "cause": "PyTorch जिस cuDNN/CUDA को expect करता है वो आपके installed driver से मेल नहीं खाता।",
+      "fixes": [
+        "NVIDIA driver नवीनतम version पर update करें।",
+        "PyTorch को सही CUDA build के साथ reinstall करें (`pip install torch --index-url https://download.pytorch.org/whl/cu121`)।",
+        "ComfyUI portable इस्तेमाल कर रहे हैं तो latest release से reinstall करें।"
+      ]
+    },
+    "cuda_device_assert": {
+      "headline": "CUDA assertion — कोई index range से बाहर है।",
+      "cause": "एक CUDA kernel internal assertion से fail हुआ, आमतौर पर इसलिए कि कोई index (prompt token या pixel) expected size से ज़्यादा है।",
+      "fixes": [
+        "Environment में `CUDA_LAUNCH_BLOCKING=1` set करके दोबारा चलाएँ ताकि असली traceback मिले।",
+        "Prompt में unusual characters चेक करें; कुछ custom CLIP variants का vocabulary छोटा है।",
+        "Verify करें कि mask/latent indices अपने tensor shapes के अंदर हों।"
+      ]
+    },
+    "dtype_bfloat16": {
+      "headline": "आपकी GPU/torch यहाँ BFloat16 support नहीं करती।",
+      "cause": "Model या कोई node bfloat16 use करने की कोशिश कर रहा है, पर आपकी GPU या PyTorch version इस operation में support नहीं देती।",
+      "fixes": [
+        "ComfyUI को `--force-fp16` के साथ launch करें ताकि bf16 avoid हो।",
+        "PyTorch को latest version पर update करें।",
+        "Model loader में dtype को `fp16` या `fp32` पर force करें।"
+      ]
+    },
+    "safetensors_corrupt": {
+      "headline": "Model file corrupt है।",
+      "cause": ".safetensors (या .ckpt) file पढ़ी नहीं जा सकती — download टूटा था या file damage हो गई है।",
+      "fixes": [
+        "Model file को दोबारा download करें।",
+        "HuggingFace/Civitai पर दिए गए SHA-256 hash से मिलाएँ।",
+        "Disk full तो नहीं है, check करें (Linux/macOS: `df -h`, Windows: drive properties)।"
+      ]
+    },
+    "state_dict_load": {
+      "headline": "Weights model architecture से match नहीं हो रहे।",
+      "cause": "Weights file में ऐसी keys हैं जो model expect नहीं करता (या ज़रूरी keys गायब हैं)। आपने शायद किसी और family का checkpoint load किया है (SD1.5 ↔ SDXL ↔ Flux)।",
+      "fixes": [
+        "HuggingFace/Civitai पर confirm करें कि checkpoint किस family का है।",
+        "सही loader use करें: SD/SDXL के लिए `CheckpointLoaderSimple`, Flux के लिए `UNETLoader` + `DualCLIPLoader` + `VAELoader`।",
+        "अगर LoRA है, तो base model से match होना चाहिए (SDXL का LoRA SD1.5 पर मत लगाएँ)।"
+      ]
+    },
+    "missing_model_file": {
+      "headline": "Model file disk पर नहीं मिली।",
+      "cause": "एक node ने ऐसी file माँगी जो expected path (`ComfyUI/models/...`) पर मौजूद नहीं है।",
+      "fixes": [
+        "File download करके `ComfyUI/models/` के सही subfolder (`checkpoints/`, `loras/`, `controlnet/`) में रखें।",
+        "अगर `extra_model_paths.yaml` set है, confirm करें कि वो सही folder point करता है।",
+        "Widget के बगल वाले 🔄 button से model list reload करें।"
+      ]
+    },
+    "module_not_found": {
+      "headline": "एक Python package install नहीं है।",
+      "cause": "एक node (या ComfyUI) ऐसा module चाहता है जो इस Python environment में install नहीं है।",
+      "fixes": [
+        "`pip install <name>` से install करें। Name error message में quotes के बीच दिखता है।",
+        "अगर ComfyUI Manager use करते हैं, तो `Install Missing Dependencies` दबाएँ।",
+        "Confirm करें कि `pip` सही Python पर point कर रहा है (Linux: `which pip`, Windows: `where pip`)।"
+      ]
+    },
+    "dll_load_windows": {
+      "headline": "Windows पर एक DLL गायब है।",
+      "cause": "एक native library (CUDA, cuDNN, Visual C++ Redistributable) load नहीं हो सकी।",
+      "fixes": [
+        "Microsoft से Visual C++ Redistributable 2015-2022 install/update करें।",
+        "Confirm करें कि आपके torch की CUDA version system पर installed CUDA से match करती है।",
+        "अंतिम उपाय: affected dependencies को `pip install --force-reinstall <package>` से reinstall करें।"
+      ]
+    },
+    "none_attribute": {
+      "headline": "एक node को value की जगह `None` मिला।",
+      "cause": "इस node का कोई input unconnected है, या पिछले node ने बिना warning के None return किया।",
+      "fixes": [
+        "Failing node के connections check करें — सभी required inputs पर wire होना चाहिए।",
+        "पहले एक `Insight Status` node लगाकर देखें कि असल में क्या flow हो रहा है।",
+        "अगर पिछला node detector/segmenter है, तो उसका confidence threshold कम करें।"
+      ]
+    },
+    "none_iterable": {
+      "headline": "आपने `None` पर iterate करने की कोशिश की।",
+      "cause": "एक loop/list-comprehension को list की जगह None मिला। अक्सर इसलिए कि पिछले node ने कोई result नहीं दिया।",
+      "fixes": [
+        "Confirm करें कि पिछले node ने कम-से-कम एक element return किया।",
+        "Data की shape देखने के लिए `Insight Status` लगाएँ।",
+        "अगर detector है, तो `confidence_threshold` कम करें।"
+      ]
+    },
+    "type_image_mask": {
+      "headline": "गलत tensor type — IMAGE या MASK expected था।",
+      "cause": "एक node को required से अलग tensor type मिला (जैसे IMAGE [B,H,W,3] की जगह MASK [B,H,W])।",
+      "fixes": [
+        "पिछले node में tensor shape confirm करें (Insight Status)।",
+        "दोनों formats के बीच convert करने के लिए `Mask To Image` / `Image To Mask` use करें।",
+        "LiteGraph में cable colors check करें (हर type का अलग color है)।"
+      ]
+    },
+    "key_stitch_data": {
+      "headline": "`stitch_data` key missing — inpainting pipeline टूटा है।",
+      "cause": "एक stitch/composite node को उसके jumeau crop node से `stitch_data` expected है, पर wire connect नहीं है।",
+      "fixes": [
+        "Crop node का `stitch_data` output corresponding stitch node से connect करें।",
+        "Confirm करें कि दोनों nodes एक ही version के हैं (crop और stitch एक ही pack से)।",
+        "अगर आपने graph reorder किया है, तो `stitch_data` को manually reconnect करें।"
+      ]
+    },
+    "pil_truncated": {
+      "headline": "Image file truncated या corrupt है।",
+      "cause": "PIL ने detect किया कि file expected से पहले खत्म हुई — incomplete download या damaged file।",
+      "fixes": [
+        "Image दोबारा download करें।",
+        "Image viewer में open करके confirm करें कि सही दिखती है।",
+        "अगर API से आती है, तो request retry करें।"
+      ]
+    },
+    "ffmpeg_missing": {
+      "headline": "FFmpeg install नहीं है या PATH में नहीं मिल रहा।",
+      "cause": "एक video node FFmpeg use करता है encode/decode के लिए, पर binary available नहीं है।",
+      "fixes": [
+        "<https://ffmpeg.org/download.html> से FFmpeg download करके system PATH में जोड़ें।",
+        "Windows: `winget install ffmpeg` use करें या `ffmpeg.exe` को `ComfyUI/` में रखें।",
+        "Linux: `sudo apt install ffmpeg`; macOS: `brew install ffmpeg`।"
+      ]
+    },
+    "comfy_validate_inputs": {
+      "headline": "एक required input missing है।",
+      "cause": "ComfyUI के input-validator ने detect किया कि एक node के सभी required inputs connected नहीं हैं।",
+      "fixes": [
+        "Error में बताया गया है कौन सा node और कौन सा input गायब है — उसे connect करें।",
+        "अगर `INPUT_TYPES` में slot `optional` है, तो block नहीं होना चाहिए — उस pack को bug report करें।",
+        "Page reload करके workflow दोबारा load करें (कोई node inconsistent state में हो सकता है)।"
+      ]
+    },
+    "samplers_no_sigma": {
+      "headline": "Sampler valid sigma नहीं ढूँढ पा रहा।",
+      "cause": "Sampler/scheduler/model का combination usable sigma curve नहीं देता — अक्सर Flux/SD3 model SD1.5 scheduler के साथ।",
+      "fixes": [
+        "Flux के लिए: scheduler `simple` या `sgm_uniform` use करें।",
+        "SDXL के लिए: `karras` को `dpmpp_2m` के साथ try करें।",
+        "`steps` को 20-30 के बीच रखें।"
+      ]
+    },
+    "value_error_generic": {
+      "headline": "एक widget value अपनी allowed range के बाहर है।",
+      "cause": "एक widget को invalid value मिला (min/max के बाहर, या गलत format में)।",
+      "fixes": [
+        "Allowed min/max देखने के लिए widget की tooltip पढ़ें।",
+        "अगर text field है, तो शुरू/अंत में spaces check करें।",
+        "Widget को default value पर reset करके दोबारा configure करें।"
+      ]
+    },
+    "vae_channel_mismatch": {
+      "headline": "इस checkpoint के लिए गलत VAE — बदलें।",
+      "cause": "VAE को आपके model से अलग channel count का latent expected है। SD1.5/SDXL 4-channel latents use करते हैं; Flux/SD3 16-channel। Mix करने पर convolution-channels error आता है।",
+      "fixes": [
+        "Load VAE node खोलकर matching VAE चुनें (SD1.5 → vae-ft-mse-840000, SDXL → sdxl_vae, Flux → ae.safetensors)।",
+        "अगर CheckpointLoaderSimple use किया है, वो सही VAE provide करता है — उसका VAE output सीधे VAEDecode से connect करें।",
+        "Verify करें कि LATENT cable KSampler से VAEDecode तक जाता है (किसी और sampler से cross न हो)।"
+      ]
+    },
+    "latent_dim_not_divisible": {
+      "headline": "Image size 8 (SDXL के लिए 64) का multiple होना चाहिए।",
+      "cause": "ComfyUI का UNet सिर्फ 8 के multiple resolutions पर काम करता है (SD1.5/SDXL) या 16 (Flux). आपने odd width या height set किया है — आमतौर पर 513 या 1023 जैसी value।",
+      "fixes": [
+        "Width/height को 8 के multiple पर set करें: 512, 768, 1024, 1280, 1536. SDXL के लिए 64 के multiples prefer करें।",
+        "Encoding से पहले एक `Image Resize` node जोड़ें ताकि dimensions safely round हों।",
+        "अगर `Empty Latent Image` use किया है, widget पहले से enforce करता है — upstream image loaders check करें।"
+      ]
+    },
+    "device_mismatch": {
+      "headline": "कुछ tensors CPU पर हैं और कुछ GPU पर — सभी एक ही device पर होने चाहिए।",
+      "cause": "एक ही operation में जाने वाले दो tensors अलग devices पर हैं (एक CPU पर बना और कभी CUDA पर move नहीं हुआ)।",
+      "fixes": [
+        "ComfyUI को cleanly restart करें ताकि model unloading stale CPU copies न छोड़े।",
+        "अगर failing node एक custom node है, तो traceback के साथ issue file करें — author को `.to(model.device)` add करना चाहिए।",
+        "Workaround: failing node से पहले `Insight Status` या `Image Move To Device` node insert करें।"
+      ]
+    },
+    "input_weight_dtype": {
+      "headline": "Input और weight dtypes match नहीं — आमतौर पर fp16 vs fp32।",
+      "cause": "एक layer के weights एक dtype में हैं (जैसे fp16) पर tensor दूसरे में (fp32)। `--force-fp32` के बाद या जब कोई custom node mid-graph cast करता है, ऐसा होता है।",
+      "fixes": [
+        "ComfyUI launch arguments से `--force-fp32` हटाएँ।",
+        "अगर `Model Cast` / `ModelType` node add किया है, उसे model के native dtype पर वापस set करें।",
+        "ComfyUI restart करें — कोई previous workflow model को mixed state में छोड़ गया हो सकता है।"
+      ]
+    },
+    "torch_cat_dtype": {
+      "headline": "Join किए जा रहे tensors के dtypes अलग हैं।",
+      "cause": "`torch.cat` को list के सभी tensors का एक ही dtype चाहिए। एक fp16 के रूप में आया, दूसरा fp32 (या bf16) के रूप में।",
+      "fixes": [
+        "अगर दो samplers के latents stack कर रहे हैं, दोनों को एक ही KSampler से चलाएँ ताकि dtypes match हों।",
+        "दोनों sources के बीच `Latent Cast` node add करें।",
+        "सारे `Force FP32` toggles default पर reset करें।"
+      ]
+    },
+    "lora_key_mismatch": {
+      "headline": "यह LoRA किसी और base model के लिए train हुआ था।",
+      "cause": "LoRA की keys आपके loaded checkpoint से match नहीं — सबसे common cause: SDXL LoRA को SD1.5 model पर apply (या उल्टा), या Flux LoRA को SDXL पर।",
+      "fixes": [
+        "LoRA का HuggingFace/Civitai page खोलकर base model confirm करें — वही checkpoint load करें।",
+        "अगर multiple LoRAs stacked हैं, एक-एक करके disable करके culprit ढूँढें।",
+        "Flux LoRAs के लिए, LoRA loader में `lora_format` verify करें (कुछ Flux LoRAs `diffusers`-style keys use करते हैं)।"
+      ]
+    },
+    "lora_rank_mismatch": {
+      "headline": "अलग ranks के दो LoRAs merge हो रहे हैं।",
+      "cause": "आप ऐसे LoRAs stack कर रहे हैं जिनके internal sizes (अलग `rank` / `network_dim`) incompatible हैं। एक rank 64 पर trained है, दूसरा 32 पर।",
+      "fixes": [
+        "एक समय में एक LoRA use करें, या same rank पर trained LoRAs ही stack करें।",
+        "`Power LoRA Loader` (rgthree) switch करें जो rank differences gracefully handle करता है।",
+        "अगर दोनों effects चाहिए, `kohya_ss` से single rank पर merged LoRA train करें।"
+      ]
+    },
+    "controlnet_family_mismatch": {
+      "headline": "यह ControlNet किसी और model family के लिए trained है।",
+      "cause": "आपके ControlNet weights model से अलग latent/hidden size expect करते हैं। SD1.5 ControlNets SDXL के साथ काम नहीं करते, न SDXL वाले Flux के साथ।",
+      "fixes": [
+        "अपनी model family का ControlNet variant download करें (SDXL पर हैं तो `control-sdxl-canny`, Flux के लिए `flux-controlnet`)।",
+        "`Load ControlNet` widget में filename verify करें: usually `sd15`, `sdxl`, या `flux` contain करता है।",
+        "अगर `Apply ControlNet (Advanced)` use कर रहे हैं, preprocessor ControlNet से match होना चाहिए (canny→canny, depth→depth)।"
+      ]
+    },
+    "sampler_scheduler_combo": {
+      "headline": "यह sampler + scheduler combination इस model के लिए valid नहीं।",
+      "cause": "कुछ samplers (LCM, DDIM-uniform) सिर्फ specific schedulers के साथ काम करते हैं। Flux/SD3 samplers को rectified-flow scheduler चाहिए।",
+      "fixes": [
+        "Flux के लिए: sampler `euler` + scheduler `simple` या `sgm_uniform`।",
+        "SDXL के लिए: sampler `dpmpp_2m` + scheduler `karras`।",
+        "LCM LoRA के लिए: sampler `lcm` + scheduler `sgm_uniform`।"
+      ]
+    },
+    "none_bbox_attr": {
+      "headline": "`bbox` input connected नहीं है।",
+      "cause": "एक node को bounding-box (bbox) input expected था पर None मिला। सबसे common cause: कोई detector/segmenter bbox slot पर wired नहीं, या upstream detector ने कोई objects नहीं लौटाए।",
+      "fixes": [
+        "Failing node के `bbox` slot में एक detector connect करें (YOLO, SAM, FaceDetect, या कोई भी BBOX output वाला node)।",
+        "अगर detector connected है, तो उसका `confidence_threshold` कम करें — हो सकता है कुछ detect ही नहीं हुआ।",
+        "पहले `Insight Status` node लगाकर देखें कि क्या flow हो रहा है।"
+      ]
+    },
+    "none_mask_attr": {
+      "headline": "`mask` input connected नहीं है।",
+      "cause": "एक node को MASK tensor expected था पर None मिला। या तो mask input unconnected है, या एक upstream mask generator silently fail हुआ।",
+      "fixes": [
+        "Failing node के mask input में एक mask source (SAM, manual, या `Solid Mask`) connect करें।",
+        "अगर mask segmentation से आता है, verify करें segmenter ने target class ढूँढी — `Preview Mask` लगाएँ।",
+        "Segmenter का confidence और prompt check करें; empty result अधिकांश nodes पर None देता है।"
+      ]
+    },
+    "none_latent_samples": {
+      "headline": "LATENT input connected नहीं है।",
+      "cause": "एक node को LATENT (एक dict जिसमें `samples` tensor है) expected था पर None मिला। आमतौर पर KSampler के upstream में `Empty Latent Image` या `VAEEncode` missing है।",
+      "fixes": [
+        "Failing node के latent input में `Empty Latent Image` (txt2img) या `VAEEncode` (img2img) connect करें।",
+        "अगर latent पिछले KSampler से आता है, confirm करें वो sampler actually run हुआ (queue history check करें)।",
+        "बीच में `Preview Latent` / `Insight Status` node add करके tensor shape verify करें।"
+      ]
+    },
+    "none_conditioning_attr": {
+      "headline": "एक CONDITIONING input missing है (likely positive/negative prompt)।",
+      "cause": "KSampler / guider node को CONDITIONING list (encoded prompt) expected थी पर None मिली। Text encoder चला पर उसका output wired नहीं है।",
+      "fixes": [
+        "`CLIPTextEncode` (positive) → KSampler का `positive` input connect करें।",
+        "एक दूसरा `CLIPTextEncode` (negative, empty string हो सकता है) → KSampler का `negative` input।",
+        "दोनों prompt nodes को model वाले loader से ही CLIP receive करना चाहिए।"
+      ]
+    },
+    "xformers_no_kernel": {
+      "headline": "xFormers आपकी GPU पर इस op को accelerate नहीं कर सकता।",
+      "cause": "आपके xFormers build में इस dtype, head dimension, और GPU architecture combination के लिए compiled kernel नहीं है। Op slow path पर fallback करता है, या outright fail होता है।",
+      "fixes": [
+        "`--use-xformers` के बिना ComfyUI restart करें और `--use-pytorch-cross-attention` use करें।",
+        "xFormers को अपने torch build से matching version पर update करें: `pip install -U xformers --index-url https://download.pytorch.org/whl/cu121`।",
+        "RTX 40 series पर, अगर `sageattention` installed है तो `--use-sage-attention` prefer करें।"
+      ]
+    },
+    "sageattention_missing": {
+      "headline": "SageAttention install नहीं — install करें या flag हटाएँ।",
+      "cause": "आपने ComfyUI को `--use-sage-attention` से launch किया, या कोई custom node SageAttention माँग रहा है, पर `sageattention` Python package install नहीं है।",
+      "fixes": [
+        "Install: `pip install sageattention` (Linux/WSL recommended; Windows wheel CUDA 12.x के लिए मौजूद)।",
+        "या launch arguments से `--use-sage-attention` हटाएँ और `--use-pytorch-cross-attention` use करें।",
+        "RTX 40 series + fp8 पर SageAttention real speedup देता है — install करना worth है।"
+      ]
+    },
+    "insightface_missing": {
+      "headline": "InsightFace / antelopev2 weights गायब हैं।",
+      "cause": "एक face-aware node (InstantID, PuLID, IP-Adapter FaceID) को InsightFace और उसकी model files (`antelopev2` या `buffalo_l`) चाहिए। इनमें से एक missing है।",
+      "fixes": [
+        "Package install करें: `pip install insightface onnxruntime` (CUDA है तो `onnxruntime-gpu` use करें)।",
+        "<https://github.com/deepinsight/insightface/releases> से `antelopev2` download करके `ComfyUI/models/insightface/models/antelopev2/` में रखें।",
+        "Folder structure verify करें — InsightFace को .onnx files सीधे model folder के अंदर चाहिए।"
+      ]
+    },
+    "onnxruntime_missing": {
+      "headline": "onnxruntime install नहीं है।",
+      "cause": "एक node (आमतौर पर face/pose detection, rembg, या ONNX model loader) को onnxruntime चाहिए पर इस Python environment में available नहीं है।",
+      "fixes": [
+        "केवल CPU: `pip install onnxruntime`।",
+        "CUDA के साथ: `pip install onnxruntime-gpu` (आपकी CUDA version से match होना चाहिए)।",
+        "अगर दोनों installed हैं तो conflict होगा — एक uninstall करें: `pip uninstall onnxruntime onnxruntime-gpu`, फिर सिर्फ ज़रूरी वाला reinstall करें।"
+      ]
+    },
+    "mediapipe_missing": {
+      "headline": "MediaPipe install नहीं है।",
+      "cause": "एक face-mesh, pose, या hand-landmark node को Google की MediaPipe library चाहिए, पर यह Python environment में installed नहीं है।",
+      "fixes": [
+        "Install: `pip install mediapipe`।",
+        "Python 3.12 पर pre-release चाहिए: `pip install mediapipe-silicon` (Apple) या source से build करें।",
+        "अगर सिर्फ एक workflow को चाहिए, alag venv consider करें ताकि main environment bloat न हो।"
+      ]
+    },
+    "hf_repo_not_found": {
+      "headline": "HuggingFace को यह model नहीं मिल रहा।",
+      "cause": "या तो repo ID में typo है, repo private है और आपके token का access नहीं, या जो specific file माँगी वो repo में नहीं है।",
+      "fixes": [
+        "Browser में <https://huggingface.co/[org]/[model]> खोलें — क्या URL load होती है? नहीं तो spelling ठीक करें।",
+        "अगर repo private/gated है, login करें: `huggingface-cli login` (या `HF_TOKEN` env var) AND website पर model terms accept करें।",
+        "Specific files के लिए, repo के `Files and versions` tab में exact filename confirm करें।"
+      ]
+    },
+    "hf_offline_no_cache": {
+      "headline": "HuggingFace offline mode on है, पर file cached नहीं।",
+      "cause": "या तो `HF_HUB_OFFLINE=1` set है, या machine पर internet नहीं — और जो model file चाहिए वो कभी local cache में download नहीं हुई।",
+      "fixes": [
+        "Internet connect करके re-run करें; HuggingFace पहली बार file download और cache कर लेगा।",
+        "Offline रहना है तो file manually download करके `~/.cache/huggingface/hub/` में रखें।",
+        "या ComfyUI के models folder में download करें (जैसे `models/checkpoints/`) और HF repo-id loader की जगह local file loader use करें।"
+      ]
+    },
+    "permission_denied": {
+      "headline": "ComfyUI को इस file को read/write की permission नहीं।",
+      "cause": "File या folder किसी और user का है, read-only है, या दूसरे process द्वारा locked है (जैसे खुला image viewer)।",
+      "fixes": [
+        "जो भी program file को open किए है उसे बंद करें (image viewers, video players, file explorers जो preview दिखा रहे)।",
+        "Windows पर: folder पर right-click → Properties → Security → अपने user को write access दें।",
+        "Linux/macOS पर: `chmod -R u+rw <folder>`।"
+      ]
+    },
+    "disk_full": {
+      "headline": "आपका disk भर गया है।",
+      "cause": "जिस drive पर ComfyUI लिख रहा है (output folder, HF cache, या temp) पर free space नहीं बचा।",
+      "fixes": [
+        "`ComfyUI/output/` से पुराने outputs delete करें।",
+        "HuggingFace cache साफ करें: `~/.cache/huggingface/hub/models--*` के अंदर जो folders अब नहीं चाहिए उन्हें delete करें।",
+        "`ComfyUI/output/` को बड़े drive पर move करके original location पर symlink बनाएँ।"
+      ]
+    },
+    "pil_unidentified": {
+      "headline": "PIL इस file को image के रूप में पहचान नहीं पा रहा।",
+      "cause": "File extension .png/.jpg कहती है पर actual contents valid image नहीं — शायद HTML error page, partial download, या गलत extension वाली video file।",
+      "fixes": [
+        "File को normal image viewer में open करके confirm करें कि viewable है।",
+        "Source image को re-download या re-export करें।",
+        "अगर यह video frame है, तो `Load Image` की जगह `Load Video` / VHS nodes use करें।"
+      ]
+    },
+    "connection_error_api": {
+      "headline": "Remote server से connect नहीं हो सका।",
+      "cause": "एक node ने external API (OpenAI, Anthropic, Ollama, आपका local LLM :11434 पर, या HuggingFace download) call की और connection fail हुआ।",
+      "fixes": [
+        "अपना internet connection check करें।",
+        "अगर यह Ollama या local LLM है, confirm करें server Settings में configured URL पर चल रहा है।",
+        "अगर proxy/firewall बीच में है, ComfyUI launch करने से पहले `HTTP_PROXY` / `HTTPS_PROXY` environment variables set करें।"
+      ]
+    },
+    "index_out_of_range": {
+      "headline": "एक list/tuple को उसके end के पार index किया।",
+      "cause": "एक node ने list के N-वें element को पढ़ने की कोशिश की जिसमें N से कम items हैं। बहुत common: 'पहला detected face' एक image पर जिसमें zero detections हैं।",
+      "fixes": [
+        "Detector का confidence threshold कम करें ताकि कम-से-कम एक result मिले।",
+        "एक `Mask From Box` या `Conditional` node use करें ताकि list empty होने पर gracefully skip हो।",
+        "Verify करें upstream node ने actually non-empty list produce की — बीच में Preview/Insight node wire करें।"
+      ]
+    },
+    "json_decode_workflow": {
+      "headline": "एक JSON file (workflow या config) malformed है।",
+      "cause": "ComfyUI ने JSON parse करने की कोशिश की पर उसमें syntax error है — usually extra comma, missing quote, या corrupted save।",
+      "fixes": [
+        "VS Code में file open करें; वो exact line/column highlight करेगा।",
+        "अगर अभी-अभी save किया workflow है, `ComfyUI/user/default/workflows/.backups/` से restore करें।",
+        "<https://jsonlint.com> पर validate करें — content paste करके जो flag हो ठीक करें।"
+      ]
+    }
+  }
+}

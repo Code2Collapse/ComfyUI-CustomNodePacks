@@ -11,6 +11,7 @@
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { c2cAlert } from "./_c2c_dialog.js";
 // NOTE: do NOT import { C } from './_c2c_theme.js' here.
 // This module defines its OWN local `C` Proxy below (line ~46) that reads
 // live CSS custom properties so Canvas2D fillStyle / strokeStyle stays in
@@ -159,7 +160,7 @@ class VMEEditor {
     async loadFrames() {
         const urls = await findUpstreamFramesAsync(this.node, { maxVideoFrames: 32 });
         if (!urls.length) {
-            alert("[VideoMaskEditor]\n\nNo frames found upstream. " +
+            c2cAlert("[VideoMaskEditor]\n\nNo frames found upstream. " +
                   "Queue Prompt once so the upstream image source has " +
                   "previewable frames, then re-open the editor.");
             return false;
@@ -641,7 +642,7 @@ class VMEEditor {
             if (d[i] > 0) { any = true; break; }
         }
         if (!any) {
-            alert("Nothing to pin — paint a mask first.");
+            c2cAlert("Nothing to pin — paint a mask first.");
             return;
         }
         this.keyframes.set(this.curFrame,
@@ -1078,7 +1079,7 @@ function openModal(node) {
                 console.log(`[VME] saved ${n} keyframes for session ${ed.sessionId}`);
             } catch (e) {
                 console.error("[VME] save failed:", e);
-                alert("Save failed:\n" + (e?.message || e));
+                c2cAlert("Save failed:\n" + (e?.message || e));
                 closing = false;
                 btnSave.disabled = false;
                 btnSave.innerHTML = "💾 Save & Close";

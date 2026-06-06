@@ -25,6 +25,7 @@ import { app } from "../../scripts/app.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { capabilityFor, nodeColor } from "./c2c_node_taxonomy.js";
 import { renderGraphPreview, legendHTML } from "./c2c_graph_preview.js";
+import { c2cPrompt } from "./_c2c_dialog.js";
 
 const PANEL_ID = "c2c-library-panel";
 const STYLE_ID = "c2c-library-style";
@@ -70,6 +71,7 @@ function tok(text) {
     const m = String(text || "").toLowerCase().match(/[a-z0-9]+/g);
     return new Set(m || []);
 }
+export { tok };
 
 function fmtTs(ts) {
     if (!ts) return "";
@@ -122,6 +124,7 @@ function scoreLocal(fp, query) {
     if (fnHits.length) { score += fnHits.length * 1.5; fnHits.forEach((h) => matched.add(h)); }
     return { ...fp, score, matched_terms: [...matched].sort() };
 }
+export { scoreLocal };
 
 function passesPkgFilter(fp) {
     const req = fp.required_packages || [];
@@ -290,6 +293,15 @@ function buildPanel() {
 
 function ensurePanel() { return _refs || buildPanel(); }
 
+// Opens the merged Preset Hub on the Workflows tab (local + online in one
+// panel). Falls back to the standalone Library panel if the hub module did
+// not load.
+function openMerged() {
+    const hub = window.__C2C_PRESET_HUB__;
+    if (hub && typeof hub.open === "function") { hub.open({ tab: "workflows" }); return; }
+    openPanel();
+}
+
 function debounce(fn, ms) {
     let t = null;
     return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
@@ -344,8 +356,8 @@ async function saveLocations() {
     if (data.success) renderLocations(data.directories);
 }
 
-function addLocation() {
-    const p = window.prompt("Workflow folder path (absolute):", "");
+async function addLocation() {
+    const p = await c2cPrompt("Workflow folder path (absolute):", "");
     if (!p) return;
     _state.dirs = _state.dirs || [];
     _state.dirs.push({ path: p, enabled: true });
@@ -544,8 +556,8 @@ function ensureButton() {
     const b = document.createElement("button");
     b.id = BTN_ID;
     b.textContent = "Library";
-    b.title = "C2C Workflow Library — search your saved workflows";
-    b.addEventListener("click", openPanel);
+    b.title = "C2C Workflow Library — search local + online workflows";
+    b.addEventListener("click", openMerged);
     document.body.appendChild(b);
 }
 
@@ -561,7 +573,7 @@ function _hookOmniBar() {
             const pill = document.createElement("button");
             pill.id = "c2c-library-pill";
             pill.className = "c2c-omnibar-slot-pill";
-            pill.title = "C2C Workflow Library — search your saved workflows";
+            pill.title = "C2C Workflow Library — search local + online workflows";
             pill.style.cssText = "display:flex;align-items:center;gap:5px;";
             const icon = document.createElement("span");
             icon.textContent = "📚";
@@ -569,7 +581,7 @@ function _hookOmniBar() {
             const label = document.createElement("span");
             label.textContent = "Library";
             pill.append(icon, label);
-            pill.addEventListener("click", openPanel);
+            pill.addEventListener("click", openMerged);
 
             ob.register({
                 section: "tools",

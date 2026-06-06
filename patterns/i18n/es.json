@@ -1,0 +1,431 @@
+{
+  "_schema": "MEC.error_patterns.i18n/1.0",
+  "_locale": "es",
+  "_doc": "Spanish (Español) locale overlay for builtin error patterns. Keys must match pattern 'i18n_key' (preferred) or 'id' in patterns/builtin/core.json.",
+  "patterns": {
+    "matmul_shape": {
+      "headline": "CLIP / codificador de texto incorrecto — cámbialo.",
+      "cause": "Tu CLIP (codificador de texto) no coincide con el modelo de difusión. Su hidden_size es distinto, por lo que el embedding del prompt no se puede multiplicar con el modelo. Causa más común: CLIP de SDXL conectado a un modelo SD1.5, o viceversa.",
+      "fixes": [
+        "Abre el nodo Load CLIP / DualCLIPLoader y elige un CLIP que coincida con tu checkpoint (SD1.5 → sd1.5-clip, SDXL → sdxl-clip-l + sdxl-clip-g, Flux → t5xxl + clip-l).",
+        "Si usaste CheckpointLoaderSimple, ya provee el CLIP correcto — conecta su salida CLIP directamente al codificador de prompts.",
+        "Si usaste un LoRA, confirma que fue entrenado para la misma familia base."
+      ]
+    },
+    "cuda_oom": {
+      "headline": "Memoria de GPU (VRAM) agotada.",
+      "cause": "Este flujo de trabajo necesita más VRAM de la que tiene tu GPU. Suele deberse a tile size, batch size, resolución alta, o demasiados modelos cargados a la vez.",
+      "fixes": [
+        "Reduce la resolución o el batch size.",
+        "Activa el modo tiled en los nodos VAE / KSampler.",
+        "Ejecuta ComfyUI con `--lowvram` o `--novram`.",
+        "Descarga los modelos que no estés usando."
+      ]
+    },
+    "size_mismatch": {
+      "headline": "Las formas de los tensores no coinciden.",
+      "cause": "Se intentó combinar dos tensores con formas distintas. Normalmente latent + conditioning, o mask + image con resoluciones distintas.",
+      "fixes": [
+        "Redimensiona todas las imágenes / máscaras a la misma resolución.",
+        "Verifica que el latent y el conditioning vengan de la misma familia de modelo.",
+        "La salida del preprocesador ControlNet debe tener el mismo tamaño que su imagen principal."
+      ]
+    },
+    "scalar_type_half": {
+      "headline": "Conflicto de dtype Half / Float.",
+      "cause": "Algunas operaciones no permiten mezclar tensores FP16 y FP32. Normalmente el modelo está en FP16 pero el input está en FP32, o al revés.",
+      "fixes": [
+        "Ejecuta ComfyUI con `--force-fp16` o `--force-fp32`.",
+        "Alinea el dtype en codificaciones / decodificaciones manuales de VAE.",
+        "Actualiza el custom node — muchos nodos antiguos manejan mal los dtypes."
+      ]
+    },
+    "cudnn_status": {
+      "headline": "Error de cuDNN — driver de GPU o versión de CUDA incompatible.",
+      "cause": "PyTorch espera una versión de cuDNN/CUDA distinta a la del driver instalado.",
+      "fixes": [
+        "Actualiza el driver NVIDIA a la última versión.",
+        "Reinstala PyTorch con el build CUDA correcto (`pip install torch --index-url https://download.pytorch.org/whl/cu121`).",
+        "Si usas ComfyUI portable, reinstálalo desde el release más reciente."
+      ]
+    },
+    "cuda_device_assert": {
+      "headline": "Aserción CUDA — un índice está fuera de rango.",
+      "cause": "Un kernel CUDA falló por una aserción interna, normalmente porque un índice (token del prompt, píxel) sobrepasa el tamaño esperado.",
+      "fixes": [
+        "Re-ejecuta con la variable de entorno `CUDA_LAUNCH_BLOCKING=1` para ver la traza real.",
+        "Revisa el prompt por caracteres inusuales; algunas variantes de CLIP tienen un vocabulario reducido.",
+        "Verifica que los índices de máscara/latente entren en sus tensores."
+      ]
+    },
+    "dtype_bfloat16": {
+      "headline": "Tu GPU/torch no soporta BFloat16 aquí.",
+      "cause": "El modelo o un nodo intenta usar bfloat16 pero tu GPU o tu versión de PyTorch no lo admite en esta operación.",
+      "fixes": [
+        "Lanza ComfyUI con `--force-fp16` para evitar bf16.",
+        "Actualiza PyTorch a la última versión.",
+        "En el cargador del modelo, fuerza dtype `fp16` o `fp32`."
+      ]
+    },
+    "safetensors_corrupt": {
+      "headline": "El archivo del modelo está corrupto.",
+      "cause": "El archivo .safetensors (o .ckpt) no se puede leer — la descarga se interrumpió o el archivo está dañado.",
+      "fixes": [
+        "Re-descarga el archivo del modelo.",
+        "Verifica el hash SHA-256 contra el publicado en HuggingFace/Civitai.",
+        "Comprueba que el disco no esté lleno (`df -h` en Linux/macOS, Propiedades de la unidad en Windows)."
+      ]
+    },
+    "state_dict_load": {
+      "headline": "Pesos no coinciden con la arquitectura del modelo.",
+      "cause": "El archivo de pesos contiene claves que el modelo no espera (o le faltan claves). Probablemente cargaste un checkpoint de una familia distinta (SD1.5 ↔ SDXL ↔ Flux).",
+      "fixes": [
+        "Confirma en HuggingFace/Civitai a qué familia pertenece el checkpoint.",
+        "Usa el cargador adecuado: `CheckpointLoaderSimple` para SD/SDXL, `UNETLoader` + `DualCLIPLoader` + `VAELoader` para Flux.",
+        "Si es un LoRA, debe coincidir con el modelo base (no apliques LoRA de SDXL a un SD1.5)."
+      ]
+    },
+    "missing_model_file": {
+      "headline": "El archivo del modelo no se encuentra en disco.",
+      "cause": "Un nodo pidió un archivo que no existe en la ruta esperada (`ComfyUI/models/...`).",
+      "fixes": [
+        "Descarga el archivo y colócalo bajo `ComfyUI/models/` en la subcarpeta correcta (`checkpoints/`, `loras/`, `controlnet/`, etc.).",
+        "Si tienes `extra_model_paths.yaml`, confirma que apunta a la carpeta correcta.",
+        "Recarga la lista de modelos con el botón 🔄 al lado del widget."
+      ]
+    },
+    "module_not_found": {
+      "headline": "Falta un paquete de Python.",
+      "cause": "Un nodo (o ComfyUI) necesita un módulo que no está instalado en este entorno de Python.",
+      "fixes": [
+        "Instálalo con `pip install <nombre>`. El nombre aparece entre comillas en el error.",
+        "Si usaste ComfyUI Manager, abre la lista de nodos personalizados y pulsa `Install Missing Dependencies`.",
+        "Confirma que `pip` apunte al Python correcto (`which pip` en Linux, `where pip` en Windows)."
+      ]
+    },
+    "dll_load_windows": {
+      "headline": "Falta una DLL en Windows.",
+      "cause": "Una librería nativa (CUDA, cuDNN, Visual C++ Redistributable) no se pudo cargar.",
+      "fixes": [
+        "Instala/actualiza Visual C++ Redistributable 2015-2022 de Microsoft.",
+        "Verifica que la versión de CUDA en tu torch coincida con la instalada en el sistema.",
+        "Como último recurso: reinstala las dependencias afectadas con `pip install --force-reinstall <paquete>`."
+      ]
+    },
+    "none_attribute": {
+      "headline": "Un nodo recibió `None` donde esperaba un valor.",
+      "cause": "Una entrada de este nodo está sin conectar, o un nodo previo devolvió None sin previo aviso.",
+      "fixes": [
+        "Revisa las conexiones del nodo que falla — todas las entradas requeridas deben tener un cable.",
+        "Inserta un nodo `Insight Status` antes para ver qué fluye realmente.",
+        "Si el nodo previo es un detector/segmentador, baja su umbral de confianza."
+      ]
+    },
+    "none_iterable": {
+      "headline": "Intentaste iterar sobre `None`.",
+      "cause": "Un bucle/list-comprehension recibió None en lugar de una lista. Normalmente porque un nodo previo no produjo resultados.",
+      "fixes": [
+        "Verifica que el nodo anterior haya devuelto al menos un elemento.",
+        "Añade un `Insight Status` para confirmar la forma del dato.",
+        "Si es un detector, baja el `confidence_threshold`."
+      ]
+    },
+    "type_image_mask": {
+      "headline": "Tipo de tensor incorrecto — esperaba IMAGE o MASK.",
+      "cause": "Un nodo recibió un tipo de tensor distinto del que requiere (ej. IMAGE [B,H,W,3] en lugar de MASK [B,H,W]).",
+      "fixes": [
+        "Confirma la forma del tensor en el nodo previo (Insight Status).",
+        "Usa `Mask To Image` / `Image To Mask` para convertir entre los dos formatos.",
+        "Verifica que los colores del cable coincidan en LiteGraph (cada tipo tiene un color distinto)."
+      ]
+    },
+    "key_stitch_data": {
+      "headline": "Falta la clave `stitch_data` — pipeline de inpainting roto.",
+      "cause": "Un nodo de stitch/composite espera `stitch_data` de su nodo gemelo (crop), pero el cable no está conectado.",
+      "fixes": [
+        "Conecta la salida `stitch_data` del nodo de crop al nodo de stitch correspondiente.",
+        "Verifica que ambos nodos sean de la misma versión (crop y stitch deben ser del mismo pack).",
+        "Si reordenaste el grafo, reconectar `stitch_data` manualmente."
+      ]
+    },
+    "pil_truncated": {
+      "headline": "El archivo de imagen está truncado o corrupto.",
+      "cause": "PIL detectó que el archivo termina antes de lo esperado — descarga incompleta o archivo dañado.",
+      "fixes": [
+        "Re-descarga la imagen.",
+        "Abre el archivo en un visor de imágenes para confirmar que se ve correctamente.",
+        "Si proviene de una API, reintenta la solicitud."
+      ]
+    },
+    "ffmpeg_missing": {
+      "headline": "FFmpeg no está instalado o no se encuentra en el PATH.",
+      "cause": "Un nodo de video requiere FFmpeg para codificar/decodificar, pero el binario no está disponible.",
+      "fixes": [
+        "Descarga FFmpeg desde <https://ffmpeg.org/download.html> y añádelo al PATH del sistema.",
+        "Windows: usa `winget install ffmpeg` o coloca `ffmpeg.exe` en `ComfyUI/`.",
+        "Linux: `sudo apt install ffmpeg`; macOS: `brew install ffmpeg`."
+      ]
+    },
+    "comfy_validate_inputs": {
+      "headline": "Falta una entrada obligatoria.",
+      "cause": "ComfyUI's input-validator detectó que un nodo no tiene todas sus entradas requeridas conectadas.",
+      "fixes": [
+        "El error indica qué nodo y qué entrada falta — conéctala.",
+        "Si el slot es `optional` en `INPUT_TYPES`, no debería bloquear — reporta esto como un bug en ese pack.",
+        "Recarga la página y vuelve a cargar el workflow (puede haber un nodo cargado en estado inconsistente)."
+      ]
+    },
+    "samplers_no_sigma": {
+      "headline": "El sampler no encuentra una sigma válida.",
+      "cause": "La combinación sampler/scheduler/modelo no produjo una curva de sigma utilizable — frecuentemente un modelo Flux/SD3 con un scheduler de SD1.5.",
+      "fixes": [
+        "Para Flux: usa scheduler `simple` o `sgm_uniform`.",
+        "Para SDXL: prueba `karras` con `dpmpp_2m`.",
+        "Reduce `steps` a un valor entre 20-30."
+      ]
+    },
+    "value_error_generic": {
+      "headline": "Un valor de widget está fuera de su rango permitido.",
+      "cause": "Un widget recibió un valor inválido (fuera de min/max, o con formato incorrecto).",
+      "fixes": [
+        "Lee la tooltip del widget para ver el min/max permitido.",
+        "Si es un campo de texto, revisa que no haya espacios al inicio/final.",
+        "Restablece el widget a su valor por defecto y vuelve a configurarlo."
+      ]
+    },
+    "vae_channel_mismatch": {
+      "headline": "VAE incorrecto para este checkpoint — cámbialo.",
+      "cause": "El VAE espera un latente con un número de canales distinto del que produce tu modelo. SD1.5/SDXL usan 4 canales; Flux/SD3 usan 16 canales. Mezclarlos provoca este error de convolución.",
+      "fixes": [
+        "Abre el nodo Load VAE y elige el VAE que coincida (SD1.5 → vae-ft-mse-840000, SDXL → sdxl_vae, Flux → ae.safetensors).",
+        "Si usaste CheckpointLoaderSimple, ya provee el VAE correcto — conecta su salida VAE directamente al VAEDecode.",
+        "Verifica que el cable LATENT va del KSampler al VAEDecode (sin cruzarse con otro sampler)."
+      ]
+    },
+    "latent_dim_not_divisible": {
+      "headline": "El tamaño de imagen debe ser múltiplo de 8 (o 64 para SDXL).",
+      "cause": "El UNet de ComfyUI solo funciona en resoluciones múltiplo de 8 (SD1.5/SDXL) o 16 (Flux). Indicaste un ancho o alto que no lo cumple.",
+      "fixes": [
+        "Usa valores múltiplo de 8: 512, 768, 1024, 1280, 1536. Para SDXL prefiere múltiplos de 64.",
+        "Añade un nodo `Image Resize` antes del codificador para redondear dimensiones.",
+        "Si usaste `Empty Latent Image`, el widget ya lo aplica — revisa los cargadores de imagen."
+      ]
+    },
+    "device_mismatch": {
+      "headline": "Algunos tensores están en CPU y otros en GPU — deben estar todos en el mismo dispositivo.",
+      "cause": "Dos tensores que entran en la misma operación viven en dispositivos distintos (uno se creó en CPU y nadie lo movió a CUDA).",
+      "fixes": [
+        "Reinicia ComfyUI completamente para que la descarga de modelos no deje copias residuales.",
+        "Si el nodo que falla es un nodo personalizado, abre un issue con la traza — el autor necesita añadir `.to(model.device)`.",
+        "Como workaround, inserta un nodo `Insight Status` o `Image Move To Device` antes del nodo que falla."
+      ]
+    },
+    "input_weight_dtype": {
+      "headline": "El dtype de entrada y pesos no coinciden — típico fp16 vs fp32.",
+      "cause": "Los pesos de una capa están en un dtype (fp16) pero el tensor entrante está en otro (fp32). Suele pasar tras `--force-fp32` o con un nodo que fuerza un cast.",
+      "fixes": [
+        "Quita `--force-fp32` de los argumentos de lanzamiento.",
+        "Si añadiste un nodo `Model Cast`, devuélvelo al dtype nativo del modelo.",
+        "Reinicia ComfyUI — un workflow previo pudo dejar el modelo en estado mixto."
+      ]
+    },
+    "torch_cat_dtype": {
+      "headline": "Los tensores a concatenar tienen dtypes distintos.",
+      "cause": "`torch.cat` requiere que todos los tensores compartan el mismo dtype. Uno entró como fp16 y otro como fp32 (o bf16).",
+      "fixes": [
+        "Si estás apilando latentes de dos samplers, pásalos por el mismo KSampler para igualar dtypes.",
+        "Añade un nodo `Latent Cast` entre las dos fuentes.",
+        "Restablece los toggles `Force FP32` a sus valores por defecto."
+      ]
+    },
+    "lora_key_mismatch": {
+      "headline": "Este LoRA fue entrenado para otro modelo base.",
+      "cause": "Las claves del LoRA no coinciden con el checkpoint cargado — lo más común es aplicar un LoRA de SDXL a un modelo SD1.5 (o viceversa), o un LoRA de Flux a un modelo SDXL.",
+      "fixes": [
+        "Abre la página del LoRA en HuggingFace/Civitai y confirma el modelo base — carga ese checkpoint.",
+        "Si tienes varios LoRAs apilados, desactívalos uno a uno para encontrar el culpable.",
+        "Para LoRAs de Flux, verifica el `lora_format` en el cargador (algunos usan claves `diffusers`)."
+      ]
+    },
+    "lora_rank_mismatch": {
+      "headline": "Dos LoRAs de rank diferente se están combinando.",
+      "cause": "Apilas LoRAs con tamaños internos incompatibles (distinto `rank` / `network_dim`). Uno fue entrenado a rank 64 y otro a 32, por ejemplo.",
+      "fixes": [
+        "Usa solo un LoRA a la vez, o solo LoRAs entrenados al mismo rank.",
+        "Cambia al `Power LoRA Loader` (rgthree), que maneja diferencias mejor.",
+        "Si necesitas ambos efectos, entrena un LoRA combinado a un solo rank usando `kohya_ss`."
+      ]
+    },
+    "controlnet_family_mismatch": {
+      "headline": "Este ControlNet fue entrenado para otra familia de modelo.",
+      "cause": "Los pesos de ControlNet esperan un tamaño latente/oculto distinto del modelo de difusión. ControlNets de SD1.5 no funcionan con SDXL ni viceversa.",
+      "fixes": [
+        "Descarga la variante de ControlNet para tu familia de modelo (`control-sdxl-canny` para SDXL, `flux-controlnet` para Flux).",
+        "Revisa el nombre del archivo en `Load ControlNet`: suele contener `sd15`, `sdxl` o `flux`.",
+        "Si usas `Apply ControlNet (Advanced)`, comprueba que el preprocesador coincide con el ControlNet (canny→canny, depth→depth)."
+      ]
+    },
+    "sampler_scheduler_combo": {
+      "headline": "Esta combinación de sampler + scheduler no es válida para este modelo.",
+      "cause": "Algunos samplers (LCM, DDIM-uniform) solo funcionan con schedulers concretos. Flux/SD3 requieren scheduler de rectified flow.",
+      "fixes": [
+        "Para Flux: sampler `euler` con scheduler `simple` o `sgm_uniform`.",
+        "Para SDXL: sampler `dpmpp_2m` con scheduler `karras`.",
+        "Para LCM LoRA: sampler `lcm` con scheduler `sgm_uniform`."
+      ]
+    },
+    "none_bbox_attr": {
+      "headline": "La entrada `bbox` no está conectada.",
+      "cause": "Este nodo esperaba un bounding-box pero recibió None. Lo más común: ningún detector/segmentador está conectado, o el detector devolvió cero objetos.",
+      "fixes": [
+        "Conecta un detector (YOLO, SAM, FaceDetect, o cualquier nodo con salida BBOX) a la entrada `bbox`.",
+        "Si SÍ hay un detector conectado, baja su `confidence_threshold` — pudo no detectar nada.",
+        "Inserta un `Insight Status` antes para confirmar qué fluye realmente."
+      ]
+    },
+    "none_mask_attr": {
+      "headline": "La entrada `mask` no está conectada.",
+      "cause": "Este nodo esperaba un tensor MASK pero recibió None. La entrada está suelta o un generador de máscara previo falló sin avisar.",
+      "fixes": [
+        "Conecta una fuente de máscara (SAM, manual, o `Solid Mask`) a la entrada mask.",
+        "Si la máscara viene de segmentación, verifica que el segmentador encontró el objeto — añade `Preview Mask`.",
+        "Revisa la confianza y el prompt del segmentador; un resultado vacío produce None en la mayoría de nodos."
+      ]
+    },
+    "none_latent_samples": {
+      "headline": "La entrada LATENT no está conectada.",
+      "cause": "Un nodo esperaba un LATENT (dict con tensor `samples`) y recibió None. Suele faltar `Empty Latent Image` o `VAEEncode` arriba.",
+      "fixes": [
+        "Conecta `Empty Latent Image` (txt2img) o `VAEEncode` (img2img) a la entrada latent.",
+        "Si viene de otro KSampler, confirma que ese sampler corrió (revisa la historia de la cola).",
+        "Añade `Preview Latent` / `Insight Status` para verificar la forma."
+      ]
+    },
+    "none_conditioning_attr": {
+      "headline": "Falta una entrada CONDITIONING (prompt positivo/negativo).",
+      "cause": "KSampler/guider esperaba una lista CONDITIONING (prompt codificado) pero recibió None. El text-encoder corrió pero su salida no está conectada.",
+      "fixes": [
+        "Conecta `CLIPTextEncode` (positivo) → entrada `positive` del KSampler.",
+        "Conecta un segundo `CLIPTextEncode` (negativo, puede estar vacío) → entrada `negative`.",
+        "Ambos nodos deben recibir el CLIP del mismo cargador que el modelo."
+      ]
+    },
+    "xformers_no_kernel": {
+      "headline": "xFormers no tiene kernel para esta operación en tu GPU.",
+      "cause": "Tu build de xFormers no incluye un kernel para esta combinación de dtype/head dim/arquitectura GPU. Cae al camino lento o falla.",
+      "fixes": [
+        "Reinicia ComfyUI sin `--use-xformers` y usa `--use-pytorch-cross-attention`.",
+        "Actualiza xFormers al match de tu torch: `pip install -U xformers --index-url https://download.pytorch.org/whl/cu121`.",
+        "En RTX 40, prueba `--use-sage-attention` si tienes `sageattention` instalado."
+      ]
+    },
+    "sageattention_missing": {
+      "headline": "SageAttention no está instalado — instálalo o quita el flag.",
+      "cause": "Lanzaste ComfyUI con `--use-sage-attention`, o un nodo lo requiere, pero el paquete `sageattention` no está instalado.",
+      "fixes": [
+        "Instala: `pip install sageattention` (Linux/WSL recomendado; hay wheel de Windows para CUDA 12.x).",
+        "O quita `--use-sage-attention` y usa `--use-pytorch-cross-attention`.",
+        "En RTX 40 con fp8, SageAttention da un speedup real — vale la pena instalarlo."
+      ]
+    },
+    "insightface_missing": {
+      "headline": "Falta InsightFace o los pesos de antelopev2.",
+      "cause": "Un nodo de cara (InstantID, PuLID, IP-Adapter FaceID) necesita InsightFace y sus archivos de modelo (`antelopev2` o `buffalo_l`).",
+      "fixes": [
+        "Instala el paquete: `pip install insightface onnxruntime` (`onnxruntime-gpu` si tienes CUDA).",
+        "Descarga `antelopev2` desde <https://github.com/deepinsight/insightface/releases> y colócalo en `ComfyUI/models/insightface/models/antelopev2/`.",
+        "Verifica la estructura: los .onnx deben estar directamente dentro de la carpeta del modelo."
+      ]
+    },
+    "onnxruntime_missing": {
+      "headline": "onnxruntime no está instalado.",
+      "cause": "Un nodo (detección de caras/pose, rembg, o un cargador ONNX) requiere onnxruntime pero no está en este entorno.",
+      "fixes": [
+        "Solo CPU: `pip install onnxruntime`.",
+        "Con CUDA: `pip install onnxruntime-gpu` (debe coincidir con tu CUDA).",
+        "Si tienes ambos instalados se pisan — desinstala uno: `pip uninstall onnxruntime onnxruntime-gpu`, luego reinstala solo el que necesites."
+      ]
+    },
+    "mediapipe_missing": {
+      "headline": "MediaPipe no está instalado.",
+      "cause": "Un nodo de face-mesh, pose o hand-landmarks necesita la librería MediaPipe de Google, pero no está instalada.",
+      "fixes": [
+        "Instala: `pip install mediapipe`.",
+        "En Python 3.12 puede que necesites una pre-release: `pip install mediapipe-silicon` (Apple) o compilar desde fuente.",
+        "Si solo un workflow lo necesita, considera un venv separado para no inflar tu entorno principal."
+      ]
+    },
+    "hf_repo_not_found": {
+      "headline": "HuggingFace no encuentra este modelo.",
+      "cause": "El repo ID está mal escrito, el repo es privado y tu token no tiene acceso, o el archivo concreto no existe en ese repo.",
+      "fixes": [
+        "Abre <https://huggingface.co/[org]/[modelo]> en el navegador — ¿carga la URL? Si no, corrige la ortografía.",
+        "Si el repo es privado/gated, autentícate: `huggingface-cli login` (o variable `HF_TOKEN`) Y acepta los términos en la web.",
+        "Para archivos concretos, revisa `Files and versions` para confirmar el nombre exacto."
+      ]
+    },
+    "hf_offline_no_cache": {
+      "headline": "Modo offline de HuggingFace activo, pero el archivo no está en caché.",
+      "cause": "Hay `HF_HUB_OFFLINE=1` o no hay internet — y el archivo del modelo nunca se ha descargado a la caché local.",
+      "fixes": [
+        "Conéctate a internet y re-ejecuta; HuggingFace descargará y cacheará el archivo.",
+        "Si necesitas seguir offline, descarga el archivo manualmente y colócalo bajo `~/.cache/huggingface/hub/`.",
+        "O descárgalo a la carpeta `models/` de ComfyUI y usa un cargador de archivo local en vez de uno por repo-id."
+      ]
+    },
+    "permission_denied": {
+      "headline": "ComfyUI no tiene permiso para leer/escribir este archivo.",
+      "cause": "El archivo o carpeta pertenece a otro usuario, es de solo-lectura, o está bloqueado por otro proceso.",
+      "fixes": [
+        "Cierra cualquier programa que tenga el archivo abierto (visores, exploradores con vista previa).",
+        "Windows: clic derecho en la carpeta → Propiedades → Seguridad → da permiso de escritura a tu usuario.",
+        "Linux/macOS: `chmod -R u+rw <carpeta>`."
+      ]
+    },
+    "disk_full": {
+      "headline": "Tu disco está lleno.",
+      "cause": "La unidad donde ComfyUI está escribiendo (output, caché HF, o temp) no tiene espacio libre.",
+      "fixes": [
+        "Borra outputs antiguos de `ComfyUI/output/`.",
+        "Limpia la caché HuggingFace: borra carpetas `~/.cache/huggingface/hub/models--*` que ya no uses.",
+        "Mueve `ComfyUI/output/` a un disco más grande y haz un symlink en la ubicación original."
+      ]
+    },
+    "pil_unidentified": {
+      "headline": "PIL no reconoce este archivo como imagen.",
+      "cause": "La extensión dice .png/.jpg pero el contenido no es una imagen válida — quizá una página de error HTML, una descarga parcial, o un archivo de video con extensión equivocada.",
+      "fixes": [
+        "Abre el archivo en un visor de imágenes normal para confirmar que se ve.",
+        "Re-descarga o re-exporta la imagen fuente.",
+        "Si es un frame de video, usa nodos `Load Video` / VHS en vez de `Load Image`."
+      ]
+    },
+    "connection_error_api": {
+      "headline": "No se pudo contactar con el servidor remoto.",
+      "cause": "Un nodo intentó llamar a una API externa (OpenAI, Anthropic, Ollama, tu LLM local en :11434, o una descarga HuggingFace) y la conexión falló.",
+      "fixes": [
+        "Revisa tu conexión a internet.",
+        "Si es Ollama u otro LLM local, confirma que el servidor está corriendo en la URL configurada.",
+        "Si hay un proxy/firewall, define `HTTP_PROXY` / `HTTPS_PROXY` antes de lanzar ComfyUI."
+      ]
+    },
+    "index_out_of_range": {
+      "headline": "Se indexó más allá del final de una lista/tupla.",
+      "cause": "Un nodo pidió el elemento N de una lista con menos de N elementos. Muy frecuente: 'primer rostro detectado' en una imagen sin detecciones.",
+      "fixes": [
+        "Baja el umbral de confianza del detector para que devuelva al menos un resultado.",
+        "Usa un nodo `Mask From Box` o `Conditional` para saltar elegantemente cuando la lista está vacía.",
+        "Confirma que el nodo upstream realmente produjo una lista no vacía — conecta un Preview/Insight entre."
+      ]
+    },
+    "json_decode_workflow": {
+      "headline": "Un archivo JSON (workflow o config) está mal formado.",
+      "cause": "ComfyUI intentó parsear un JSON pero tiene un error de sintaxis — coma extra, comilla faltante o save corrupto.",
+      "fixes": [
+        "Abre el archivo en VS Code; te marcará la línea/columna exacta.",
+        "Si es un workflow que acabas de guardar, restaura desde `ComfyUI/user/default/workflows/.backups/`.",
+        "Valida en <https://jsonlint.com> — pega el contenido y corrige lo que marque."
+      ]
+    }
+  }
+}

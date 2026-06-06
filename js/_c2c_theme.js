@@ -631,7 +631,7 @@ export function listVariants() { return Object.keys(PALETTES); }
 applyThemeVars();
 
 // Register a setting so the user can switch variants from ComfyUI's Settings.
-try {
+if (!window.__C2C_THEME_REG__) { window.__C2C_THEME_REG__ = true; try {
     app.registerExtension({
         name: "C2C.Theme",
         settings: [
@@ -657,4 +657,4 @@ try {
             },
         ],
     });
-} catch (__c2cErr) { __c2cReport("_c2c_theme", __c2cErr); }
+} catch (__c2cErr) { __c2cReport("_c2c_theme", __c2cErr); } }

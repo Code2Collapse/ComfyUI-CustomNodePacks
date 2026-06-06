@@ -28,6 +28,7 @@ import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
 
 const BTN_ID   = "mec-wizard-btn";
 const PANEL_ID = "mec-wizard-panel";
@@ -395,13 +396,13 @@ function _renderHome(body) {
 async function _startWizard(id) {
     let tpl;
     try { tpl = await _fetchTemplate(id); }
-    catch (e) { console.warn("[C2C.Wizard] start failed:", e); alert("Could not load template."); return; }
+    catch (e) { console.warn("[C2C.Wizard] start failed:", e); c2cAlert("Could not load template."); return; }
     const saved = _readResume()[id];
     let resumeIdx = 0;
     let skipped = new Set();
     let done = new Set();
     if (saved && (saved.idx > 0 || (saved.done && saved.done.length))) {
-        if (confirm(`Resume "${tpl.title}" from step ${saved.idx + 1}?`)) {
+        if (await c2cConfirm(`Resume "${tpl.title}" from step ${saved.idx + 1}?`)) {
             resumeIdx = Math.min(saved.idx, (tpl.steps?.length || 1) - 1);
             skipped = new Set(saved.skipped || []);
             done = new Set(saved.done || []);

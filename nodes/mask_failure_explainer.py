@@ -1,5 +1,5 @@
 ﻿"""
-MaskFailureExplainerMEC â€“ Diagnose why a mask failed and suggest fixes.
+MaskFailureExplainerMEC – Diagnose why a mask failed and suggest fixes.
 
 Input: image (B,H,W,C), mask (B,H,W) of unknown quality.
 Runs a pure-tensor analysis pipeline:
@@ -27,7 +27,7 @@ import gc
 import torch
 import torch.nn.functional as F
 
-# â”€â”€ Optional cv2 with torch fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Optional cv2 with torch fallback ──────────────────────────────────
 from . import _progress as _PB
 try:
     import cv2
@@ -35,14 +35,14 @@ try:
 except ImportError:
     HAS_CV2 = False
 
-# â”€â”€ Device helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Device helper ─────────────────────────────────────────────────────
 
 def _get_device(tensor: torch.Tensor) -> torch.device:
-    """Return the device of the tensor â€” never hardcode 'cuda'."""
+    """Return the device of the tensor — never hardcode 'cuda'."""
     return tensor.device
 
 
-# â”€â”€ Laplacian kernel (3x3 standard) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Laplacian kernel (3x3 standard) ──────────────────────────────────
 
 _LAPLACIAN_KERNEL = torch.tensor(
     [[0.0, 1.0, 0.0],
@@ -50,7 +50,7 @@ _LAPLACIAN_KERNEL = torch.tensor(
      [0.0, 1.0, 0.0]], dtype=torch.float32
 ).unsqueeze(0).unsqueeze(0)  # (1,1,3,3)
 
-# â”€â”€ Sobel kernels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Sobel kernels ────────────────────────────────────────────────────
 
 _SOBEL_X = torch.tensor(
     [[-1.0, 0.0, 1.0],
@@ -65,12 +65,12 @@ _SOBEL_Y = torch.tensor(
 ).unsqueeze(0).unsqueeze(0)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  Analysis functions â€” pure torch, batch-aware
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
+#  Analysis functions — pure torch, batch-aware
+# ══════════════════════════════════════════════════════════════════════
 
 def _compute_luminance(image: torch.Tensor) -> torch.Tensor:
-    """BT.709 luminance from (B,H,W,C) image â†’ (B,H,W)."""
+    """BT.709 luminance from (B,H,W,C) image → (B,H,W)."""
     return 0.2126 * image[:, :, :, 0] + 0.7152 * image[:, :, :, 1] + 0.0722 * image[:, :, :, 2]
 
 
@@ -81,7 +81,7 @@ def _compute_brightness(image: torch.Tensor) -> torch.Tensor:
 
 
 def _compute_blur_score_torch(gray: torch.Tensor) -> torch.Tensor:
-    """Laplacian variance per frame via conv2d. gray: (B,H,W) â†’ (B,) scores.
+    """Laplacian variance per frame via conv2d. gray: (B,H,W) → (B,) scores.
 
     Convention: higher = sharper. Multiply by 1000 so threshold ~50 is meaningful.
     """
@@ -121,7 +121,7 @@ def _compute_blur_score(image: torch.Tensor) -> torch.Tensor:
 def _get_mask_edge_ring(mask: torch.Tensor, ring_width: int = 5) -> torch.Tensor:
     """Compute a binary edge ring around the mask boundary.
 
-    mask: (B,H,W) â†’ returns (B,H,W) binary ring.
+    mask: (B,H,W) → returns (B,H,W) binary ring.
     Uses morphological dilation minus erosion via max_pool2d.
     """
     B, H, W = mask.shape
@@ -237,9 +237,9 @@ def _compute_bg_complexity(image: torch.Tensor, mask: torch.Tensor) -> torch.Ten
         return _compute_bg_complexity_torch(image, mask)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Problem regions heatmap
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def _build_problem_heatmap(
     image: torch.Tensor,
@@ -253,10 +253,10 @@ def _build_problem_heatmap(
     """Build a (B,H,W) heatmap highlighting problematic regions.
 
     Combines:
-      - Low brightness regions â†’ heatmap where image is dark
-      - Blurry regions â†’ high-frequency deficit areas
-      - Boundary zone â†’ where contrast/color confusion is bad
-      - Complex bg â†’ edge-dense background areas
+      - Low brightness regions → heatmap where image is dark
+      - Blurry regions → high-frequency deficit areas
+      - Boundary zone → where contrast/color confusion is bad
+      - Complex bg → edge-dense background areas
     """
     B, H, W, C = image.shape
     device = _get_device(image)
@@ -302,9 +302,9 @@ def _build_problem_heatmap(
     return heatmap.clamp(0.0, 1.0)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Severity scoring
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 # MANUAL bug-fix (Apr 2026): severity-score component weights extracted as
 # named constants so they can be calibrated against a labeled set without
@@ -638,9 +638,9 @@ def _compute_severity(
     return round(min(max(score, 0.0), 100.0), 2)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Explanation + suggested method
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 _THRESHOLD_DARK = 0.15
 _THRESHOLD_BLUR = 50.0
@@ -661,7 +661,7 @@ def _build_explanation(
 ) -> str:
     """Build a detailed, per-frame explanation string with actionable advice."""
     lines = []
-    lines.append(f"[MEC] Mask Failure Analysis â€” {B} frame(s), {H}x{W}")
+    lines.append(f"[MEC] Mask Failure Analysis — {B} frame(s), {H}x{W}")
     lines.append(f"Overall severity: {severity:.1f}/100")
     lines.append("")
 
@@ -679,11 +679,11 @@ def _build_explanation(
         bg = bg_complexity[i].item()
 
         lines.append(f"--- {frame_prefix} ---")
-        lines.append(f"  Brightness:         {b:.4f}" + (" âš  DARK SCENE" if b < _THRESHOLD_DARK else " âœ“"))
-        lines.append(f"  Blur score:         {bl:.2f}" + (" âš  BLURRY" if bl < _THRESHOLD_BLUR else " âœ“"))
-        lines.append(f"  Boundary contrast:  {bc:.4f}" + (" âš  LOW CONTRAST" if bc < _THRESHOLD_CONTRAST else " âœ“"))
-        lines.append(f"  Color confusion:    {cc:.4f}" + (" âš  COLORS TOO SIMILAR" if cc < _THRESHOLD_COLOR else " âœ“"))
-        lines.append(f"  BG complexity:      {bg:.4f}" + (" âš  BUSY BACKGROUND" if bg > _THRESHOLD_BG else " âœ“"))
+        lines.append(f"  Brightness:         {b:.4f}" + (" âš  DARK SCENE" if b < _THRESHOLD_DARK else " ✓"))
+        lines.append(f"  Blur score:         {bl:.2f}" + (" âš  BLURRY" if bl < _THRESHOLD_BLUR else " ✓"))
+        lines.append(f"  Boundary contrast:  {bc:.4f}" + (" âš  LOW CONTRAST" if bc < _THRESHOLD_CONTRAST else " ✓"))
+        lines.append(f"  Color confusion:    {cc:.4f}" + (" âš  COLORS TOO SIMILAR" if cc < _THRESHOLD_COLOR else " ✓"))
+        lines.append(f"  BG complexity:      {bg:.4f}" + (" âš  BUSY BACKGROUND" if bg > _THRESHOLD_BG else " ✓"))
 
         if b < _THRESHOLD_DARK:
             frame_issues.append("dark_scene")
@@ -724,17 +724,17 @@ def _build_explanation(
     if unique_issues or mq_findings:
         lines.append("=== Recommendations ===")
         if "dark_scene" in unique_issues:
-            lines.append("â€¢ Dark scene: Try boosting image brightness/gamma before masking, or use a model with low-light capability (e.g., SAM2 with auto-point prompts).")
+            lines.append("• Dark scene: Try boosting image brightness/gamma before masking, or use a model with low-light capability (e.g., SAM2 with auto-point prompts).")
         if "blurry" in unique_issues:
-            lines.append("â€¢ Blurry image: Apply sharpening before mask generation, or use a matting model (ViTMatte) that handles soft edges.")
+            lines.append("• Blurry image: Apply sharpening before mask generation, or use a matting model (ViTMatte) that handles soft edges.")
         if "low_boundary_contrast" in unique_issues:
-            lines.append("â€¢ Low boundary contrast: The subject blends with background at the edge. Use trimap-based matting (ViTMatte) or manual boundary refinement.")
+            lines.append("• Low boundary contrast: The subject blends with background at the edge. Use trimap-based matting (ViTMatte) or manual boundary refinement.")
         if "color_confusion" in unique_issues:
-            lines.append("â€¢ Color confusion at boundary: Subject and background have similar colors. Use text-prompt segmentation (GroundingDINO/Florence2) or manual point prompts.")
+            lines.append("• Color confusion at boundary: Subject and background have similar colors. Use text-prompt segmentation (GroundingDINO/Florence2) or manual point prompts.")
         if "busy_background" in unique_issues:
-            lines.append("â€¢ Busy background: High edge density behind subject. Use a model with strong figure-ground separation (RMBG, BiRefNet) or hierarchical SAM2 segmenter.")
+            lines.append("• Busy background: High edge density behind subject. Use a model with strong figure-ground separation (RMBG, BiRefNet) or hierarchical SAM2 segmenter.")
         for _, advice in mq_findings:
-            lines.append(f"â€¢ {advice}")
+            lines.append(f"• {advice}")
     else:
         lines.append("=== No significant issues detected ===")
         lines.append("The image+mask combination appears healthy. If masking still fails, consider increasing model resolution or using manual prompts.")
@@ -804,7 +804,7 @@ def _suggest_method(
         suggestions.append("RMBG or BiRefNet (strong figure-ground separation)")
 
     if not suggestions:
-        return "auto (no significant issues â€” any segmentation method should work)"
+        return "auto (no significant issues — any segmentation method should work)"
 
     # Deduplicate while preserving order
     seen = set()
@@ -815,12 +815,12 @@ def _suggest_method(
             seen.add(key)
             unique.append(s)
 
-    return " â†’ ".join(unique[:4]) if unique else "auto"
+    return " → ".join(unique[:4]) if unique else "auto"
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Node class
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 class MaskFailureExplainerMEC:
     """Diagnose why a mask failed and suggest fixes.
@@ -837,10 +837,10 @@ class MaskFailureExplainerMEC:
         return {
             "required": {
                 "image": ("IMAGE", {
-                    "tooltip": "Input image(s) â€” (B,H,W,C) float32 [0,1].",
+                    "tooltip": "Input image(s) — (B,H,W,C) float32 [0,1].",
                 }),
                 "mask": ("MASK", {
-                    "tooltip": "Mask to diagnose â€” (B,H,W) float32 [0,1]. Can be from any segmentation method.",
+                    "tooltip": "Mask to diagnose — (B,H,W) float32 [0,1]. Can be from any segmentation method.",
                 }),
             },
             "optional": {
@@ -864,7 +864,7 @@ class MaskFailureExplainerMEC:
     OUTPUT_TOOLTIPS = (
         "Human-readable diagnosis explaining likely failure causes.",
         "Heatmap mask highlighting regions most likely to be problematic.",
-        "Overall severity score in [0, 1] (higher means more issues).",
+        "Overall severity score in [0, 100] (higher means more issues).",
         "Suggested masking method or refinement to try next.",
     )
     FUNCTION = "analyze"
@@ -939,7 +939,7 @@ class MaskFailureExplainerMEC:
             else:
                 image_a, mask_a = image, mask
 
-            # â”€â”€ Run all 5 analysis metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # ── Run all 5 analysis metrics ────────────────────────────
             brightness = _compute_brightness(image_a)                          # (B,)
             blur = _compute_blur_score(image_a)                                # (B,)
             boundary_contrast = _compute_boundary_contrast(image_a, mask_a)    # (B,)
@@ -961,7 +961,7 @@ class MaskFailureExplainerMEC:
                 bg_complexity, severity, B, H, W, mq=mq,
             )
 
-            # â”€â”€ Problem regions heatmap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # ── Problem regions heatmap ───────────────────────────────
             heatmap = _build_problem_heatmap(
                 image_a, mask_a, brightness, blur,
                 boundary_contrast, color_confusion, bg_complexity,
@@ -973,7 +973,7 @@ class MaskFailureExplainerMEC:
                     mode="bilinear", align_corners=False,
                 ).squeeze(1)
 
-            # â”€â”€ Suggested method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # ── Suggested method ──────────────────────────────────────
             method = _suggest_method(
                 brightness, blur, boundary_contrast, color_confusion, bg_complexity,
                 mq=mq,

@@ -23,7 +23,7 @@ ANY = _AnyType("*")
 
 # ─────────────────────────── 1. Image Batch Slice ────────────────────────
 class ImageBatchSliceMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "slice"
     RETURN_TYPES = ("IMAGE", "INT")
     RETURN_NAMES = ("images", "frame_count")
@@ -56,7 +56,7 @@ class ImageBatchSliceMEC:
 
 # ─────────────────────────── 2. Image Batch Split ────────────────────────
 class ImageBatchSplitMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "split"
     RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "INT")
     RETURN_NAMES = ("first_part", "remainder", "first_count", "remainder_count")
@@ -86,7 +86,7 @@ class ImageBatchSplitMEC:
 
 # ─────────────────────────── 3. Mask Batch Combine ───────────────────────
 class MaskBatchCombineMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "combine"
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("mask",)
@@ -121,7 +121,7 @@ class MaskBatchCombineMEC:
 
 # ─────────────────────────── 4. Seed List ────────────────────────────────
 class SeedListMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "build"
     RETURN_TYPES = ("INT", "STRING")
     RETURN_NAMES = ("first_seed", "csv_all_seeds")
@@ -157,7 +157,7 @@ class SeedListMEC:
 
 # ─────────────────────────── 5. Conditional Switch ───────────────────────
 class ConditionalSwitchMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "pick"
     RETURN_TYPES = (ANY,)
     RETURN_NAMES = ("out",)
@@ -180,7 +180,7 @@ class ConditionalSwitchMEC:
 
 # ─────────────────────────── 6. Text Template ────────────────────────────
 class TextTemplateMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "format"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)
@@ -213,7 +213,7 @@ class TextTemplateMEC:
 
 # ─────────────────────────── 7. Number Lerp ──────────────────────────────
 class NumberLerpMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "lerp"
     RETURN_TYPES = ("FLOAT", "INT")
     RETURN_NAMES = ("float", "int")
@@ -246,7 +246,7 @@ class NumberLerpMEC:
 
 # ─────────────────────────── 8. Dimensions Snap ──────────────────────────
 class DimensionsSnapMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "snap"
     RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("width", "height")
@@ -289,7 +289,7 @@ class AspectPresetMEC:
         "Wan 720p land":   (1280.0, 720.0),
         "Wan 720p port":   (720.0,  1280.0),
     }
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "pick"
     RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("width", "height")
@@ -328,7 +328,7 @@ class AspectPresetMEC:
 
 # ─────────────────────────── 10. Image Stats Probe ──────────────────────
 class ImageStatsProbeMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "probe"
     RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT", "FLOAT")
     RETURN_NAMES = ("images", "report", "mean", "std", "bright_pct")
@@ -357,7 +357,7 @@ class ImageStatsProbeMEC:
 
 # ─────────────────────────── 11. Mask Area Probe ─────────────────────────
 class MaskAreaProbeMEC:
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "probe"
     RETURN_TYPES = ("MASK", "STRING", "FLOAT", "FLOAT", "FLOAT")
     RETURN_NAMES = ("mask", "report", "coverage_mean_pct", "coverage_min_pct", "coverage_max_pct")
@@ -405,7 +405,7 @@ class ExecutionTimerMEC:
     """
     _last: dict[str, float] = {}
 
-    CATEGORY = "C2C/helpers"
+    CATEGORY = "C2C/Helpers"
     FUNCTION = "tick"
     RETURN_TYPES = (ANY, "STRING", "FLOAT")
     RETURN_NAMES = ("passthrough", "report", "elapsed_seconds")
@@ -425,8 +425,23 @@ class ExecutionTimerMEC:
 
     @classmethod
     def IS_CHANGED(cls, *args, **kw):
-        # Always re-run so the timer ticks every queue.
-        return float("nan")
+        h = hashlib.md5()
+        for v in args:
+            if hasattr(v, 'cpu'):
+                h.update(v.cpu().numpy().tobytes())
+            elif isinstance(v, str):
+                h.update(v.encode())
+            else:
+                h.update(str(v).encode())
+        for k, v in sorted(kw.items()):
+            h.update(k.encode())
+            if hasattr(v, 'cpu'):
+                h.update(v.cpu().numpy().tobytes())
+            elif isinstance(v, str):
+                h.update(v.encode())
+            else:
+                h.update(str(v).encode())
+        return h.hexdigest()
 
     def tick(self, passthrough, label, reset):
         now = time.perf_counter()

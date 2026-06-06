@@ -1,13 +1,13 @@
 ﻿"""
-DEPRECATED â€“ This module is superseded by unified_segmentation_node.py + model_manager.py.
+DEPRECATED – This module is superseded by unified_segmentation_node.py + model_manager.py.
 Kept for reference only. Do NOT import this module in production code.
 The canonical MODEL_REGISTRY and model loading live in model_manager.py.
 
 Original description:
-UnifiedSegmentation â€“ One node for SAM2/2.1, SAM3, and SeC segmentation.
+UnifiedSegmentation – One node for SAM2/2.1, SAM3, and SeC segmentation.
 
-Image mode (B=1):  point/bbox prompts â†’ mask
-Video mode (B>1):  prompts on frame 0 â†’ propagate to all frames via
+Image mode (B=1):  point/bbox prompts → mask
+Video mode (B>1):  prompts on frame 0 → propagate to all frames via
                    SAM2VideoPredictor / SAM3VideoPredictor.
 
 Features:
@@ -39,7 +39,7 @@ import torch.nn.functional as F
 from . import _progress as _PB
 logger = logging.getLogger("MEC")
 
-# â”€â”€ ComfyUI path helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── ComfyUI path helpers ──────────────────────────────────────────────
 try:
     import folder_paths
 
@@ -57,12 +57,12 @@ except ImportError:
 from .utils import parse_bbox_input, parse_points_json, points_to_arrays
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Model Registry
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 MODEL_REGISTRY: dict[str, dict] = {
-    # â”€â”€ SAM 2.0 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── SAM 2.0 ──────────────────────────────────────────────────────
     "sam2_hiera_tiny": {
         "family": "sam2",
         "repo_id": "Kijai/sam2-safetensors",
@@ -91,7 +91,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "config": "configs/sam2/sam2_hiera_l.yaml",
         "model_dir": "sam2",
     },
-    # â”€â”€ SAM 2.1 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── SAM 2.1 ──────────────────────────────────────────────────────
     "sam2.1_hiera_tiny": {
         "family": "sam2",
         "repo_id": "Kijai/sam2-safetensors",
@@ -120,7 +120,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "config": "configs/sam2.1/sam2.1_hiera_l.yaml",
         "model_dir": "sam2",
     },
-    # â”€â”€ SAM 3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── SAM 3 ────────────────────────────────────────────────────────
     "sam3": {
         "family": "sam3",
         "repo_id": "apozz/sam3-safetensors",
@@ -128,7 +128,7 @@ MODEL_REGISTRY: dict[str, dict] = {
         "config": None,  # SAM3 uses SAM2 large architecture
         "model_dir": "sam3",
     },
-    # â”€â”€ SeC (MLLM + SAM2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── SeC (MLLM + SAM2) ───────────────────────────────────────────
     "sec_4b_fp16": {
         "family": "sec",
         "repo_id": "OpenIXCLab/SeC-4B",
@@ -153,9 +153,9 @@ MODEL_REGISTRY: dict[str, dict] = {
 }
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Module-Level Model Cache  (one model at a time)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 _cache: dict = {"name": None, "model": None, "family": None,
                 "dtype": None, "device": None}
@@ -172,9 +172,9 @@ def _flush_cache() -> None:
         torch.cuda.empty_cache()
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Helpers
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 @contextmanager
 def _autocast(dtype: torch.dtype, device: str):
@@ -208,9 +208,9 @@ def _load_state_dict(path: str) -> dict:
     return sd
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Node
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 class UnifiedSegmentation:
     """Unified segmentation: SAM2 / 2.1 / SAM3 / SeC in one node.
@@ -219,7 +219,7 @@ class UnifiedSegmentation:
     has more than one frame.
     """
 
-    # â”€â”€ Scan available models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Scan available models ─────────────────────────────────────────
 
     @classmethod
     def _scan_models(cls) -> list[str]:
@@ -247,9 +247,9 @@ class UnifiedSegmentation:
         for name in sorted(MODEL_REGISTRY):
             if name not in found:
                 opts.append(f"[download] {name}")
-        return opts or ["(no models â€” select a [download] option)"]
+        return opts or ["(no models — select a [download] option)"]
 
-    # â”€â”€ INPUT_TYPES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── INPUT_TYPES ───────────────────────────────────────────────────
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -300,11 +300,11 @@ class UnifiedSegmentation:
                 }),
                 "neg_bbox_json": ("STRING", {
                     "default": "",
-                    "tooltip": "Negative bounding box [x1,y1,x2,y2] â€” SAM3 exclusive.",
+                    "tooltip": "Negative bounding box [x1,y1,x2,y2] — SAM3 exclusive.",
                 }),
                 "text_prompt": ("STRING", {
                     "default": "",
-                    "tooltip": "Text description of target â€” SeC models only.",
+                    "tooltip": "Text description of target — SeC models only.",
                 }),
                 "existing_mask": ("MASK", {
                     "tooltip": "Initial mask for refinement iterations.",
@@ -327,7 +327,7 @@ class UnifiedSegmentation:
         "Auto-downloads models from HuggingFace on first use."
     )
 
-    # â”€â”€ Main entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Main entry point ──────────────────────────────────────────────
 
     def segment(
         self,
@@ -396,9 +396,9 @@ class UnifiedSegmentation:
 
         return (masks, score, info)
 
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
     #  Model Loading
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
 
     def _ensure_model(self, name, reg, dtype, device, need_dl):
         global _cache
@@ -424,7 +424,7 @@ class UnifiedSegmentation:
                       dtype=dtype, device=device)
         return model
 
-    # â”€â”€ Path Resolution + Download â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Path Resolution + Download ────────────────────────────────────
 
     @staticmethod
     def _resolve(reg: dict, need_dl: bool) -> str:
@@ -469,7 +469,7 @@ class UnifiedSegmentation:
                 f"https://huggingface.co/{reg['repo_id']}"
             )
 
-        logger.info("[MEC] Downloading %s from %s â€¦", reg["filename"], reg["repo_id"])
+        logger.info("[MEC] Downloading %s from %s …", reg["filename"], reg["repo_id"])
         downloaded = hf_hub_download(
             repo_id=reg["repo_id"],
             filename=reg["filename"],
@@ -477,10 +477,10 @@ class UnifiedSegmentation:
         )
         if downloaded != dest and os.path.exists(downloaded):
             shutil.move(downloaded, dest)
-        logger.info("[MEC] Saved â†’ %s", dest)
+        logger.info("[MEC] Saved → %s", dest)
         return dest
 
-    # â”€â”€ SAM2 / SAM3 Builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── SAM2 / SAM3 Builder ───────────────────────────────────────────
 
     @staticmethod
     def _build_sam(path: str, reg: dict, dtype: torch.dtype, device: str):
@@ -586,9 +586,9 @@ class UnifiedSegmentation:
         )
         return {"__sec_fallback__": True, "sam3_model": sam3_model}
 
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
     #  Single-Image Segmentation
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
 
     def _image(
         self, model, family, frame, pt_coords, pt_labels,
@@ -654,9 +654,9 @@ class UnifiedSegmentation:
         mask_t = torch.from_numpy(masks_np[idx].astype(np.float32)).unsqueeze(0)
         return mask_t, best
 
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
     #  Video Segmentation (propagation)
-    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ══════════════════════════════════════════════════════════════════
 
     def _video(
         self, model, family, frames, pt_coords, pt_labels,
@@ -678,7 +678,7 @@ class UnifiedSegmentation:
             )
 
         # Fallback: per-frame image segmentation
-        logger.warning("[MEC] No video propagation for %s â€” running per-frame.", family)
+        logger.warning("[MEC] No video propagation for %s — running per-frame.", family)
         masks_list: list[torch.Tensor] = []
         best = 0.0
         for i in _PB.track(range(B), B, "UnifiedSeg"):

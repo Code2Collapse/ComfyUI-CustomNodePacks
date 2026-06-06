@@ -84,7 +84,7 @@ def register_routes(server) -> None:
         m = _re.search(r"([A-Za-z_][\w\.]*)\s*:\s*", raw)
         exc_type = m.group(1) if m else "Exception"
         try:
-            from nodes import error_assistant as _ea  # type: ignore[import-not-found]
+            from ..nodes import error_assistant as _ea  # type: ignore[import-not-found]
         except Exception:
             return None
         try:

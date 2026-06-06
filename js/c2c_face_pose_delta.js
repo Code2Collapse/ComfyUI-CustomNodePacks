@@ -23,6 +23,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
 
 // ─── MediaPipe FaceMesh landmark shortcuts ──────────────────────────────
 // Curated subset — the indices a beginner would most plausibly want to
@@ -332,9 +333,9 @@ function _openEditor(node, widget) {
         _refreshJson();
     });
 
-    modal.querySelector("#fpd-clear").addEventListener("click", () => {
+    modal.querySelector("#fpd-clear").addEventListener("click", async () => {
         if (!workingKfs.length) return;
-        if (!confirm("Remove all keyframes?")) return;
+        if (!(await c2cConfirm("Remove all keyframes?"))) return;
         workingKfs = [];
         _renderTable();
         _refreshJson();

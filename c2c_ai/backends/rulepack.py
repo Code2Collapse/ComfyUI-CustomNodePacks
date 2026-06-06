@@ -82,7 +82,7 @@ class RulePackBackend(Backend):
         # folder_paths and other ComfyUI bits. Importing at module top would
         # block c2c_ai from loading before ComfyUI is ready.
         try:
-            from nodes import error_assistant as _ea  # type: ignore[import-not-found]
+            from ...nodes import error_assistant as _ea  # type: ignore[import-not-found]
         except Exception:
             _ea = None  # rule pack unreachable — return no-match so router escalates
         match = _ea.match_pattern(exc_type or "Exception", raw) if _ea is not None else None
@@ -115,7 +115,7 @@ class RulePackBackend(Backend):
         """Lightweight: confirm the rule pack loads and returns >=1 pattern."""
         t0 = now_ms()
         try:
-            from nodes import error_assistant as _ea  # type: ignore[import-not-found]
+            from ...nodes import error_assistant as _ea  # type: ignore[import-not-found]
             count = len(_ea._get_patterns())  # noqa: SLF001 — module-private but stable
             self.health = HealthState(
                 ok=count > 0,

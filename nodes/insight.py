@@ -279,7 +279,7 @@ def install() -> bool:
 class InsightStatusMEC:
     DESCRIPTION = ("Reports whether the Insight executor wrap is installed, plus "
                    "the current torch/cuda memory snapshot.")
-    CATEGORY = "C2C/Diagnostic"
+    CATEGORY = "C2C/Diagnostics"
     FUNCTION = "report"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("status",)

@@ -1,4 +1,4 @@
-# Prompt Relay — node classes (refined port).
+﻿# Prompt Relay — node classes (refined port).
 #
 # Four nodes registered:
 #   - PromptRelayEncodeC2C        : native MODEL+CLIP path
@@ -121,65 +121,256 @@ def _encode_native(
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Node 1 — native encoder (manual segment lengths)
+# Unified Prompt Relay Encoder (Batch 2 — 2026-05-18)
+#
+# Replaces:
+#   - PromptRelayEncodeC2C       (native)        -> backend="native"
+#   - PromptRelayEncodeSmartC2C  (smart syntax)  -> backend="smart"
+#   - PromptRelayEncodeKijaiC2C  (Kijai Wan path) -> backend="kijai"
+#
+# One node, dynamic sockets. The JS extension (web/extensions/c2c/
+# prompt_relay_dyn.js) hides the inputs/outputs that don't apply to the
+# currently-selected backend. All sockets are declared as `optional` here so
+# the prompt validator accepts the node regardless of which inputs are wired.
 # ────────────────────────────────────────────────────────────────────────
 
+def _encode_kijai(model, t5, latent_frames, global_prompt, local_prompts,
+                  segment_lengths, negative_prompt, epsilon, encode_device,
+                  relay_options=None):
+    """Kijai WanVideoWrapper encode + cross-attn patch (extracted body)."""
+    import torch
+    try:
+        import comfy.model_management as mm  # type: ignore
+    except Exception:
+        mm = None
+
+    locals_list = [p.strip() for p in (local_prompts or "").split("|") if p.strip()]
+    if not locals_list:
+        raise ValueError("At least one local prompt is required (separate with |).")
+
+    encoder = t5["model"]
+    tokenizer = getattr(encoder, "tokenizer", None)
+    if tokenizer is None:
+        raise RuntimeError(
+            "Kijai T5 encoder is missing .tokenizer attribute. "
+            "Update ComfyUI-WanVideoWrapper to a recent version."
+        )
+
+    parsed_lengths = None
+    if (segment_lengths or "").strip():
+        pixel_lengths = [int(x.strip()) for x in segment_lengths.split(",") if x.strip()]
+        parsed_lengths = convert_pixel_to_latent_lengths(pixel_lengths, 4, latent_frames)
+
+    class _TokAdapter:
+        add_eos = True
+        def __call__(self_inner, text):
+            ids, _mask = tokenizer([text], return_mask=True, add_special_tokens=True)
+            return {"input_ids": ids}
+
+    full_prompt, token_ranges = map_token_indices(_TokAdapter(), global_prompt, locals_list)
+    log.info("Kijai path: token-ranges = %s", token_ranges)
+
+    effective_lengths = distribute_segment_lengths(len(locals_list), latent_frames, parsed_lengths)
+
+    transformer = getattr(getattr(model, "model", model), "diffusion_model", None)
+    if transformer is None:
+        raise RuntimeError("Kijai model patcher is missing .model.diffusion_model.")
+    patch_size = tuple(getattr(transformer, "patch_size", (1, 2, 2)))
+    fallback_tpf = max(1, 64 * 64 // (patch_size[1] * patch_size[2]))
+
+    q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, relay_options)
+    mask_fn = create_mask_fn(q_token_idx, fallback_tpf, latent_frames)
+
+    n_patched = patch_kijai(model, mask_fn)
+    log.info("Kijai path: patched %d cross_attn blocks", n_patched)
+
+    device_to = (mm.get_torch_device() if mm is not None else torch.device("cuda")) \
+        if encode_device == "gpu" else torch.device("cpu")
+    with torch.no_grad():
+        try:
+            context = encoder([full_prompt], device_to)
+            context_null = encoder([negative_prompt or ""], device_to)
+        finally:
+            if mm is not None:
+                try:
+                    mm.soft_empty_cache()
+                except Exception:
+                    pass
+
+    text_embeds = {
+        "prompt_embeds": context,
+        "negative_prompt_embeds": context_null,
+        "echoshot": False,
+    }
+    return model, text_embeds
+
+
+def _encode_smart(model, clip, latent, global_prompt, smart_prompt,
+                  normalize_by_tokens, epsilon, relay_options=None):
+    """Smart-syntax parser + native encode (extracted body)."""
+    parsed = parse_smart_prompt(smart_prompt or "")
+    valid = [s for s in parsed if s["text"].strip()]
+    if not valid:
+        valid = [{"text": " ", "weight": 1.0}]
+
+    raw_tokenizer = get_raw_tokenizer_native(clip) if normalize_by_tokens else None
+
+    locals_list, weights = [], []
+    for seg in valid:
+        text, w = seg["text"], seg["weight"]
+        if normalize_by_tokens and raw_tokenizer is not None:
+            try:
+                ids = raw_tokenizer(text)["input_ids"]
+                n = ids.shape[-1] if hasattr(ids, "shape") and len(ids.shape) >= 2 else len(ids)
+                n -= 1 if getattr(raw_tokenizer, "add_eos", False) else 0
+                w *= max(1, int(n))
+            except Exception as exc:
+                log.warning("Token counting failed for %r: %s", text, exc)
+        locals_list.append(text)
+        weights.append(w)
+
+    local_prompts_str = " | ".join(locals_list)
+    scale = 100000.0
+    segment_lengths_str = ", ".join(str(int(round(w * scale))) for w in weights)
+    global_prompt_str = (global_prompt or "").strip() or valid[0]["text"]
+
+    return _encode_native(
+        model, clip, latent, global_prompt_str, local_prompts_str,
+        segment_lengths_str, epsilon, relay_options,
+    )
+
+
 class PromptRelayEncodeC2C:
+    """Unified Prompt Relay encoder. Pick a backend via dropdown.
+
+    Backend modes:
+      - native  : ComfyUI MODEL + CLIP (manual `segment_lengths`).
+      - smart   : ComfyUI MODEL + CLIP, segments parsed from `smart_prompt`.
+      - kijai   : Kijai WANVIDEOMODEL + WANTEXTENCODER for the WanVideoWrapper.
+
+    Outputs are declared once but only two are populated per call. The JS
+    extension hides the slots that don't apply to the current backend so the
+    UI stays clean. Algorithm credit: Gordon Chen — see NOTICE.md.
+    """
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
-                "latent": ("LATENT", {"tooltip": "Empty latent video — dimensions are read from its shape."}),
+                "backend": (["native", "smart", "kijai"], {
+                    "default": "native",
+                    "tooltip": "native = MODEL+CLIP; smart = MODEL+CLIP with auto-segmented prompt; kijai = WanVideoWrapper.",
+                }),
                 "global_prompt": ("STRING", {
                     "multiline": True, "default": "",
-                    "tooltip": "Conditions the entire video — persistent characters, style, lighting.",
-                }),
-                "local_prompts": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "Per-segment prompts separated by '|'. One pipe per boundary.",
-                }),
-                "segment_lengths": ("STRING", {
-                    "default": "",
-                    "tooltip": "Comma-separated pixel-space frame counts. Empty = equal distribution.",
+                    "tooltip": "Persistent prompt across the whole video.",
                 }),
                 "epsilon": ("FLOAT", {
                     "default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4,
-                    "tooltip": "Penalty decay parameter. Below ~0.1 = sharp boundaries; ≥0.5 softer.",
+                    "tooltip": "Temporal penalty decay (sharpness of segment boundaries).",
                 }),
             },
             "optional": {
+                # MODEL+CLIP path (native / smart)
+                "model":  ("MODEL",  {"tooltip": "native/smart only."}),
+                "clip":   ("CLIP",   {"tooltip": "native/smart only."}),
+                "latent": ("LATENT", {"tooltip": "native/smart only — frame count read from shape."}),
+                # Kijai path
+                "wan_model": ("WANVIDEOMODEL", {"tooltip": "kijai only — from WanVideoModelLoader."}),
+                "wan_t5":    ("WANTEXTENCODER", {"tooltip": "kijai only — from LoadWanVideoT5TextEncoder."}),
+                # Shared widgets
+                "local_prompts":   ("STRING", {"multiline": True, "default": "",
+                                                "tooltip": "Per-segment prompts separated by '|' (native/kijai)."}),
+                "segment_lengths": ("STRING", {"default": "",
+                                                "tooltip": "Comma-separated pixel-space frame counts. Empty = equal (native/kijai)."}),
+                # Smart-only
+                "smart_prompt": ("STRING", {"multiline": True, "default": "",
+                                            "tooltip": "smart only — auto-parsed (`|` or `Scene N:`)."}),
+                "normalize_by_tokens": ("BOOLEAN", {"default": False,
+                                                    "tooltip": "smart only — scale segment weight by token count."}),
+                # Kijai-only
+                "latent_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1,
+                                          "tooltip": "kijai only — (pixel_frames-1)//4 + 1."}),
+                "negative_prompt": ("STRING", {"multiline": True, "default": "",
+                                                "tooltip": "kijai only — encoded once for negative_prompt_embeds."}),
+                "encode_device": (["gpu", "cpu"], {"default": "gpu",
+                                                    "tooltip": "kijai only — device for T5 encode."}),
+                # All backends
                 "relay_options": ("RELAY_OPTIONS", {
                     "tooltip": "Optional Prompt Relay Advanced Options bundle.",
                 }),
             },
         }
 
-    RETURN_TYPES = ("MODEL", "CONDITIONING")
-    RETURN_NAMES = ("model", "positive")
+    # Four outputs: native/smart populate (model, positive); kijai populates
+    # (wan_model, wan_text_embeds). The JS extension hides the unused pair.
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "WANVIDEOMODEL", "WANVIDEOTEXTEMBEDS")
+    RETURN_NAMES = ("model", "positive", "wan_model", "wan_text_embeds")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
-        "Native ComfyUI MODEL/CLIP path. Encodes a global prompt with temporal "
-        "local prompts and patches the model's cross-attention via "
-        "ModelPatcher.add_object_patch (compatible with every native sampler)."
+        "Unified Prompt Relay encoder (native / smart / kijai). Dynamic "
+        "sockets via the JS extension."
     )
 
-    def execute(self, model, clip, latent, global_prompt, local_prompts,
-                segment_lengths, epsilon, relay_options=None):
-        patched, conditioning = _encode_native(
-            model, clip, latent, global_prompt, local_prompts,
-            segment_lengths, epsilon, relay_options,
+    def execute(self, backend, global_prompt, epsilon,
+                model=None, clip=None, latent=None,
+                wan_model=None, wan_t5=None,
+                local_prompts="", segment_lengths="",
+                smart_prompt="", normalize_by_tokens=False,
+                latent_frames=81, negative_prompt="", encode_device="gpu",
+                relay_options=None):
+
+        if backend == "kijai":
+            if wan_model is None or wan_t5 is None:
+                raise ValueError(
+                    "Prompt Relay Encode (kijai): connect `wan_model` (WANVIDEOMODEL) "
+                    "and `wan_t5` (WANTEXTENCODER) inputs."
+                )
+            patched_model, text_embeds = _encode_kijai(
+                wan_model, wan_t5, latent_frames, global_prompt, local_prompts,
+                segment_lengths, negative_prompt, epsilon, encode_device, relay_options,
+            )
+            return (None, None, patched_model, text_embeds)
+
+        if model is None or clip is None or latent is None:
+            raise ValueError(
+                f"Prompt Relay Encode ({backend}): connect `model` (MODEL), "
+                "`clip` (CLIP), and `latent` (LATENT) inputs."
+            )
+
+        if backend == "smart":
+            patched, conditioning = _encode_smart(
+                model, clip, latent, global_prompt, smart_prompt,
+                normalize_by_tokens, epsilon, relay_options,
+            )
+        else:  # native
+            patched, conditioning = _encode_native(
+                model, clip, latent, global_prompt, local_prompts,
+                segment_lengths, epsilon, relay_options,
+            )
+        return (patched, conditioning, None, None)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Deprecated alias shims — keep for ONE release, then drop.
+# ────────────────────────────────────────────────────────────────────────
+class _DeprecatedPRBase:
+    _WARNED: set = set()
+
+    @classmethod
+    def _warn_once(cls, replacement_backend: str):
+        if cls.__name__ in _DeprecatedPRBase._WARNED:
+            return
+        _DeprecatedPRBase._WARNED.add(cls.__name__)
+        log.warning(
+            "[prompt_relay] %s is deprecated and will be removed next release. "
+            "Use PromptRelayEncodeC2C with backend='%s'.",
+            cls.__name__, replacement_backend,
         )
-        return (patched, conditioning)
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Node 2 — native smart-prompt encoder
-# ────────────────────────────────────────────────────────────────────────
-
-class PromptRelayEncodeSmartC2C:
+class PromptRelayEncodeSmartC2C(_DeprecatedPRBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -187,224 +378,74 @@ class PromptRelayEncodeSmartC2C:
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
                 "latent": ("LATENT",),
-                "global_prompt": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "Leave empty to auto-use the first parsed segment as the global anchor.",
-                }),
-                "smart_prompt": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": (
-                        "Smart syntax:\n"
-                        "  Inline: 'text one [0-50] | text two [50-150]'\n"
-                        "  Block:  'Scene 1:\\ntext one\\nScene 2:\\ntext two'\n"
-                        "Auto-detected; tags are stripped before encoding."
-                    ),
-                }),
-                "normalize_by_tokens": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Scale each segment's weight by its CLIP token count.",
-                }),
-                "epsilon": ("FLOAT", {
-                    "default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4,
-                }),
+                "global_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "smart_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "normalize_by_tokens": ("BOOLEAN", {"default": False}),
+                "epsilon": ("FLOAT", {"default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4}),
             },
-            "optional": {
-                "relay_options": ("RELAY_OPTIONS",),
-            },
+            "optional": {"relay_options": ("RELAY_OPTIONS",)},
         }
 
     RETURN_TYPES = ("MODEL", "CONDITIONING")
     RETURN_NAMES = ("model", "positive")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
-    DESCRIPTION = "Smart-syntax variant: '|' or 'Scene N:' headers auto-parsed into segments."
+    DESCRIPTION = "DEPRECATED — use PromptRelayEncodeC2C with backend='smart'."
 
     def execute(self, model, clip, latent, global_prompt, smart_prompt,
                 normalize_by_tokens, epsilon, relay_options=None):
-        parsed = parse_smart_prompt(smart_prompt)
-        valid = [s for s in parsed if s["text"].strip()]
-        if not valid:
-            valid = [{"text": " ", "weight": 1.0}]
-
-        raw_tokenizer = get_raw_tokenizer_native(clip) if normalize_by_tokens else None
-
-        locals_list = []
-        weights = []
-        for seg in valid:
-            text = seg["text"]
-            w = seg["weight"]
-            if normalize_by_tokens and raw_tokenizer is not None:
-                try:
-                    ids = raw_tokenizer(text)["input_ids"]
-                    n = ids.shape[-1] if hasattr(ids, "shape") and len(ids.shape) >= 2 else len(ids)
-                    n -= 1 if getattr(raw_tokenizer, "add_eos", False) else 0
-                    n = max(1, int(n))
-                    w *= n
-                except Exception as exc:
-                    log.warning("Token counting failed for %r: %s", text, exc)
-            locals_list.append(text)
-            weights.append(w)
-
-        local_prompts_str = " | ".join(locals_list)
-        scale = 100000.0
-        segment_lengths_str = ", ".join(str(int(round(w * scale))) for w in weights)
-
-        global_prompt_str = global_prompt.strip()
-        if not global_prompt_str:
-            global_prompt_str = valid[0]["text"]
-
-        patched, conditioning = _encode_native(
-            model, clip, latent, global_prompt_str, local_prompts_str,
-            segment_lengths_str, epsilon, relay_options,
+        self._warn_once("smart")
+        patched, conditioning = _encode_smart(
+            model, clip, latent, global_prompt, smart_prompt,
+            normalize_by_tokens, epsilon, relay_options,
         )
         return (patched, conditioning)
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Node 3 — Kijai WanVideoWrapper path
-# ────────────────────────────────────────────────────────────────────────
-
-class PromptRelayEncodeKijaiC2C:
+class PromptRelayEncodeKijaiC2C(_DeprecatedPRBase):
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", {
-                    "tooltip": "Kijai WanVideoWrapper model patcher (from WanVideoModelLoader).",
-                }),
-                "t5": ("WANTEXTENCODER", {
-                    "tooltip": "Kijai T5 text encoder (from LoadWanVideoT5TextEncoder).",
-                }),
-                "latent_frames": ("INT", {
-                    "default": 81, "min": 1, "max": 10000, "step": 1,
-                    "tooltip": (
-                        "Latent frame count Kijai's sampler will produce. For Wan: "
-                        "(pixel_frames - 1) // 4 + 1. Must match what you'll pass to "
-                        "WanVideoSampler."
-                    ),
-                }),
+                "model": ("WANVIDEOMODEL",),
+                "t5": ("WANTEXTENCODER",),
+                "latent_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1}),
                 "global_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "local_prompts": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "Per-segment prompts separated by '|'.",
-                }),
-                "segment_lengths": ("STRING", {
-                    "default": "",
-                    "tooltip": "Comma-separated pixel-space frame counts. Empty = equal distribution.",
-                }),
-                "negative_prompt": ("STRING", {
-                    "multiline": True, "default": "",
-                    "tooltip": "Sent through Kijai's T5 once; produces 'negative_prompt_embeds'.",
-                }),
-                "epsilon": ("FLOAT", {
-                    "default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4,
-                }),
+                "local_prompts": ("STRING", {"multiline": True, "default": ""}),
+                "segment_lengths": ("STRING", {"default": ""}),
+                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "epsilon": ("FLOAT", {"default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4}),
                 "encode_device": (["gpu", "cpu"], {"default": "gpu"}),
             },
-            "optional": {
-                "relay_options": ("RELAY_OPTIONS",),
-            },
+            "optional": {"relay_options": ("RELAY_OPTIONS",)},
         }
 
     RETURN_TYPES = ("WANVIDEOMODEL", "WANVIDEOTEXTEMBEDS")
     RETURN_NAMES = ("model", "text_embeds")
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
-    DESCRIPTION = (
-        "Kijai WanVideoWrapper path. Patches the live WanModel in place (Kijai's "
-        "sampler bypasses ModelPatcher.object_patches), and produces "
-        "WANVIDEOTEXTEMBEDS by encoding the concatenated prompt through Kijai's T5. "
-        "Restore with the 'Prompt Relay Restore (Kijai)' node if you want to revert."
-    )
+    DESCRIPTION = "DEPRECATED — use PromptRelayEncodeC2C with backend='kijai'."
 
     def execute(self, model, t5, latent_frames, global_prompt, local_prompts,
                 segment_lengths, negative_prompt, epsilon, encode_device,
                 relay_options=None):
-        import torch
-        try:
-            import comfy.model_management as mm  # type: ignore
-        except Exception:  # pragma: no cover
-            mm = None
-
-        locals_list = [p.strip() for p in local_prompts.split("|") if p.strip()]
-        if not locals_list:
-            raise ValueError("At least one local prompt is required (separate with |).")
-
-        # ── token ranges via Kijai's T5 tokenizer ──
-        encoder = t5["model"]
-        tokenizer = getattr(encoder, "tokenizer", None)
-        if tokenizer is None:
-            raise RuntimeError(
-                "Kijai T5 encoder is missing .tokenizer attribute. "
-                "Update ComfyUI-WanVideoWrapper to a recent version."
-            )
-
-        # ── segment scheduling (Wan stride = 4) ──
-        parsed_lengths = None
-        if segment_lengths.strip():
-            pixel_lengths = [int(x.strip()) for x in segment_lengths.split(",") if x.strip()]
-            parsed_lengths = convert_pixel_to_latent_lengths(pixel_lengths, 4, latent_frames)
-
-        # Adapt Kijai tokenizer to the (callable returning dict) interface map_token_indices expects.
-        class _TokAdapter:
-            add_eos = True  # Kijai's HuggingfaceTokenizer adds </s> by default.
-            def __call__(self_inner, text):
-                ids, _mask = tokenizer([text], return_mask=True, add_special_tokens=True)
-                return {"input_ids": ids}
-
-        full_prompt, token_ranges = map_token_indices(_TokAdapter(), global_prompt, locals_list)
-        log.info("Kijai path: full_prompt token-ranges = %s", token_ranges)
-
-        effective_lengths = distribute_segment_lengths(len(locals_list), latent_frames, parsed_lengths)
-        log.info("Kijai path: latent_frames=%d effective_lengths=%s", latent_frames, effective_lengths)
-
-        # tokens_per_frame for Wan with patch_size=(1,2,2): need diffusion model's patch_size.
-        transformer = getattr(getattr(model, "model", model), "diffusion_model", None)
-        if transformer is None:
-            raise RuntimeError("Kijai model patcher is missing .model.diffusion_model.")
-        patch_size = tuple(getattr(transformer, "patch_size", (1, 2, 2)))
-        # Without grid_sizes from transformer_options the mask_fn uses fallback tpf;
-        # Kijai's WanModel passes grid_sizes via transformer_options, so this is mostly a hint.
-        fallback_tpf = max(1, 64 * 64 // (patch_size[1] * patch_size[2]))
-
-        q_token_idx = build_segments(token_ranges, effective_lengths, epsilon, relay_options)
-        mask_fn = create_mask_fn(q_token_idx, fallback_tpf, latent_frames)
-
-        n_patched = patch_kijai(model, mask_fn)
-        log.info("Kijai path: patched %d cross_attn blocks", n_patched)
-
-        # ── encode positive (concatenated) + negative via Kijai T5 ──
-        device_to = (mm.get_torch_device() if mm is not None else torch.device("cuda")) \
-            if encode_device == "gpu" else torch.device("cpu")
-        with torch.no_grad():
-            try:
-                context = encoder([full_prompt], device_to)
-                context_null = encoder([negative_prompt or ""], device_to)
-            finally:
-                if mm is not None:
-                    try:
-                        mm.soft_empty_cache()
-                    except Exception:
-                        pass
-
-        text_embeds = {
-            "prompt_embeds": context,
-            "negative_prompt_embeds": context_null,
-            "echoshot": False,
-        }
-        return (model, text_embeds)
+        self._warn_once("kijai")
+        patched_model, text_embeds = _encode_kijai(
+            model, t5, latent_frames, global_prompt, local_prompts,
+            segment_lengths, negative_prompt, epsilon, encode_device, relay_options,
+        )
+        return (patched_model, text_embeds)
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Restore (Kijai) — unchanged
+# ────────────────────────────────────────────────────────────────────────
 class PromptRelayRestoreKijaiC2C:
     """Restore the original cross_attn.forward methods on a Kijai WanVideoModel."""
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("WANVIDEOMODEL",),
-            }
-        }
+        return {"required": {"model": ("WANVIDEOMODEL",)}}
 
     RETURN_TYPES = ("WANVIDEOMODEL",)
     RETURN_NAMES = ("model",)
@@ -419,9 +460,8 @@ class PromptRelayRestoreKijaiC2C:
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Node 4 — RELAY_OPTIONS bundle
+# Advanced Options bundle — unchanged
 # ────────────────────────────────────────────────────────────────────────
-
 class PromptRelayAdvancedOptionsC2C:
     @classmethod
     def INPUT_TYPES(cls):
@@ -461,3 +501,4 @@ class PromptRelayAdvancedOptionsC2C:
             "audio_window_scale": audio_window_scale,
         }
         return (opts,)
+

@@ -36,6 +36,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
 
 const STYLE_ID  = "mec-batch-style";
 const MODAL_ID  = "mec-batch-modal";
@@ -515,8 +516,13 @@ function _openModal(node) {
 
     function _close() {
         if (_activeRun) {
-            if (!confirm("A batch is running. Stop it and close?")) return;
-            _activeRun.stopRequested = true;
+            c2cConfirm("A batch is running. Stop it and close?").then((ok) => {
+                if (!ok) return;
+                _activeRun.stopRequested = true;
+                backdrop.remove();
+                _showToast("");
+            });
+            return;
         }
         backdrop.remove();
         _showToast("");

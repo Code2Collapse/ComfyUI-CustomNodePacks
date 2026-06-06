@@ -634,30 +634,33 @@ function _esc(s) {
 // Capture
 // ─────────────────────────────────────────────────────────────────────────────
 
-function _onSuccess(ev) {
-    const prompt_id = ev?.detail?.prompt_id;
-    if (!prompt_id) return;
-    api.fetchApi(`/history/${prompt_id}`).then(async (resp) => {
-        const data = await resp.json();
-        const entry = data?.[prompt_id];
-        if (!entry?.outputs) return;
-        for (const nid of Object.keys(entry.outputs)) {
-            const o = entry.outputs[nid];
-            if (Array.isArray(o?.images)) {
-                for (const img of o.images) {
-                    _items.push({ id: `${prompt_id}:${img.filename}`, ts: Date.now(), image: img, palette: null, k: 0 });
-                }
-            }
+function _onExecuted(ev) {
+    const d = ev?.detail;
+    if (!d?.output?.images || !Array.isArray(d.output.images)) return;
+    const nodeId = d.node;
+    let added = false;
+    for (const img of d.output.images) {
+        const id = `${nodeId}:${img.filename}`;
+        if (_items.some(it => it.id === id)) continue;
+        _items.push({ id, ts: Date.now(), image: img, palette: null, k: 0 });
+        added = true;
+    }
+    if (!added) return;
+    while (_items.length > MAX_THUMBS) {
+        _items.shift();
+        const newSel = new Set();
+        for (const idx of _state.selected) if (idx > 0) newSel.add(idx - 1);
+        _state.selected = newSel;
+    }
+    if (_state.open) _renderBody();
+    for (const img of d.output.images) {
+        const item = _items.find(it => it.id === `${nodeId}:${img.filename}`);
+        if (item && !item.palette) {
+            _ensurePalette(item, _state.k).then(() => {
+                if (_state.open) _renderBody();
+            }).catch(() => {});
         }
-        while (_items.length > MAX_THUMBS) {
-            const dropped = _items.shift();
-            // shift selected indices
-            const newSel = new Set();
-            for (const idx of _state.selected) if (idx > 0) newSel.add(idx - 1);
-            _state.selected = newSel;
-        }
-        if (_state.open) _renderBody();
-    }).catch(() => {});
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -681,7 +684,7 @@ app.registerExtension({
     async setup() {
         _injectStyle();
         _ensureUi();
-        api.addEventListener("execution_success", _onSuccess);
+        api.addEventListener("executed", _onExecuted);
         const enabled = (() => {
             try { return app.ui.settings.getSettingValue("c2c.mood_board.enabled", true); }
             catch { return true; }

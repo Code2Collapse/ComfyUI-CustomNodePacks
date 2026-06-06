@@ -24,7 +24,9 @@ import { streamAI } from "./_c2c_ai_client.js";
 
 const BTN_ID    = "mec-surprise-btn";
 const POP_ID    = "mec-surprise-pop";
+const LOG_ID    = "mec-surprise-log";
 const STYLE_ID  = "mec-surprise-style";
+let _lastResults = null;
 
 const SAMPLER_POOL    = ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_3m_sde", "uni_pc", "heun", "lms"];
 const SCHEDULER_POOL  = ["normal", "karras", "exponential", "sgm_uniform", "simple", "beta"];
@@ -75,6 +77,22 @@ function _injectStyle() {
 #${POP_ID} hr { border: none; border-top: 1px solid var(--c2c-surface0); margin: 6px 0; }
 #${POP_ID} .sm-opt { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 11px; color: var(--c2c-fg); }
 #${POP_ID} .sm-opt input { accent-color: var(--c2c-pink); }
+
+#${LOG_ID} {
+    position: fixed; bottom: 340px; right: 16px;
+    z-index: calc(var(--c2c-z-hud, 1000) + 1);
+    width: 320px; max-height: 280px; overflow: auto;
+    background: var(--c2c-bg); border: 1px solid var(--c2c-surface1); border-radius: 8px;
+    padding: 8px 10px; color: var(--c2c-fg); font-family: -apple-system, "Segoe UI", sans-serif;
+    font-size: 11px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    display: none; animation: sm-fade-in 0.3s ease;
+}
+#${LOG_ID}.visible { display: block; }
+#${LOG_ID} .sm-log-title { color: var(--c2c-pink); font-weight: 700; margin-bottom: 6px; font-size: 12px; }
+#${LOG_ID} .sm-log-row { padding: 2px 0; border-bottom: 1px solid var(--c2c-surface0); display: flex; gap: 6px; }
+#${LOG_ID} .sm-log-row .sm-log-node { color: var(--c2c-mauve); flex-shrink: 0; min-width: 60px; }
+#${LOG_ID} .sm-log-row .sm-log-val { color: var(--c2c-okSoft); font-family: monospace; }
+@keyframes sm-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     `.trim();
     document.head.appendChild(style);
 }
@@ -90,18 +108,34 @@ function _writeWidget(node, w, value) {
     }
 }
 
+const SAMPLER_TYPES = /^(KSampler|KSamplerAdvanced|SamplerCustom|SamplerCustomAdvanced)$/i;
+
+function _findSamplerNodes() {
+    const g = app.graph;
+    if (!g || !g._nodes) return [];
+    return g._nodes.filter(n => SAMPLER_TYPES.test(n.type || n.comfyClass || ""));
+}
+
 function _randomizeSeeds() {
     const g = app.graph;
-    if (!g || !g._nodes) return 0;
-    let n = 0;
+    if (!g || !g._nodes) return { count: 0, changes: [] };
+    const changes = [];
     for (const node of g._nodes) {
         for (const w of node.widgets || []) {
             if (!w || !w.name || !/seed/i.test(w.name) || typeof w.value !== "number") continue;
-            _writeWidget(node, w, Math.floor(Math.random() * 0xFFFFFFFF));
-            n++;
+            const oldVal = w.value;
+            const newVal = Math.floor(Math.random() * 0xFFFFFFFF);
+            _writeWidget(node, w, newVal);
+            changes.push({
+                nodeId: node.id,
+                nodeType: node.type || node.comfyClass || "?",
+                widget: w.name,
+                oldVal,
+                newVal,
+            });
         }
     }
-    return n;
+    return { count: changes.length, changes };
 }
 
 function _nudgeNumeric(name, factor, lo, hi) {
@@ -195,8 +229,10 @@ const PROFILES = {
 };
 
 async function _applyProfile(profile) {
-    const stats = { profile, seeds: 0, cfg: 0, steps: 0, sampler: 0, scheduler: 0, spice: null };
-    stats.seeds = _randomizeSeeds();
+    const stats = { profile, seeds: 0, cfg: 0, steps: 0, sampler: 0, scheduler: 0, spice: null, seedChanges: [] };
+    const seedResult = _randomizeSeeds();
+    stats.seeds = seedResult.count;
+    stats.seedChanges = seedResult.changes;
     if (profile === "wild") {
         stats.cfg     = _nudgeNumeric("cfg", 0.20, 1, 30);
         stats.sampler = _swapCombo("sampler_name", SAMPLER_POOL);
@@ -215,14 +251,50 @@ async function _surprise(profile) {
     profile = profile || _defaultProfile();
     const btn = document.getElementById(BTN_ID);
     if (btn) { btn.classList.remove("spinning"); void btn.offsetWidth; btn.classList.add("spinning"); }
+
+    const samplers = _findSamplerNodes();
     const stats = await _applyProfile(profile);
+    stats.samplerCount = samplers.length;
+    _lastResults = stats;
     console.log("[C2C.SurpriseMe]", stats);
+    _showResultsLog(stats);
+
     if (_dryRun()) {
         console.log("[C2C.SurpriseMe] Dry-run: skipped queueing prompt.");
         return;
     }
     try { await app.queuePrompt(0, 1); }
     catch (e) { console.warn("[C2C.SurpriseMe] queue failed:", e); }
+}
+
+function _showResultsLog(stats) {
+    let log = document.getElementById(LOG_ID);
+    if (!log) {
+        log = document.createElement("div");
+        log.id = LOG_ID;
+        document.body.appendChild(log);
+    }
+    const changes = stats.seedChanges || [];
+    const extras = [];
+    if (stats.cfg) extras.push(`CFG nudged: ${stats.cfg} node(s)`);
+    if (stats.steps) extras.push(`Steps nudged: ${stats.steps} node(s)`);
+    if (stats.sampler) extras.push(`Sampler swapped: ${stats.sampler}`);
+    if (stats.scheduler) extras.push(`Scheduler swapped: ${stats.scheduler}`);
+    if (stats.spice) extras.push(`AI tag: "${stats.spice.tag}"`);
+
+    log.innerHTML = `
+        <div class="sm-log-title">🎰 ${PROFILES[stats.profile]?.label || stats.profile} — ${stats.samplerCount} sampler(s) found</div>
+        ${changes.length ? changes.map(c => `
+            <div class="sm-log-row">
+                <span class="sm-log-node">#${c.nodeId} ${c.nodeType}</span>
+                <span class="sm-log-val">${c.widget}: ${c.newVal}</span>
+            </div>
+        `).join("") : `<div style="color:var(--c2c-overlay0);font-style:italic;">No seed widgets found.</div>`}
+        ${extras.length ? `<div style="margin-top:6px;color:var(--c2c-overlay0);">${extras.join(" · ")}</div>` : ""}
+        <div style="margin-top:6px;color:var(--c2c-pink);font-size:10px;">${_dryRun() ? "🚫 Dry-run (not queued)" : "✓ Queued"}</div>
+    `;
+    log.classList.add("visible");
+    setTimeout(() => log.classList.remove("visible"), 6000);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

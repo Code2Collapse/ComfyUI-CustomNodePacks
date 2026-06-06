@@ -1,4 +1,4 @@
-﻿/**
+/**
  * wan_director_variant_gate.js — show/hide WanDirectorC2C widgets based
  * on the selected `model_variant`.
  *
@@ -11,6 +11,13 @@
  */
 
 import { app } from "../../scripts/app.js";
+import {
+    capWdNode,
+    findWdWidget,
+    installWanDirectorPrototype,
+    wdHideWidget,
+    wdShowWidget,
+} from "./_wan_director_ui.js";
 
 // Mirror of nodes/wan_director/director_node.py:VARIANT_TABLE flags
 // (only the ones that drive UI visibility).
@@ -34,37 +41,21 @@ const EVERANIMATE_WIDGETS = [
 ];
 
 function hideWidget(w) {
-    if (!w || w._wd_hidden) return;
-    w._wd_orig_computeSize = w.computeSize;
-    w._wd_orig_type = w.type;
-    w.hidden = true;
-    if (!w.options) w.options = {};
-    w.options.hidden = true;
-    w.type = "hidden_" + (w._wd_orig_type || "");
-    w.computeSize = () => [0, -4];
+    wdHideWidget(w);
     w._wd_hidden = true;
 }
 
 function showWidget(w) {
-    if (!w || !w._wd_hidden) return;
-    w.hidden = false;
-    if (w.options) w.options.hidden = false;
-    if (w._wd_orig_type !== undefined) w.type = w._wd_orig_type;
-    if (w._wd_orig_computeSize) w.computeSize = w._wd_orig_computeSize;
-    else delete w.computeSize;
+    wdShowWidget(w);
     w._wd_hidden = false;
-}
-
-function findW(node, name) {
-    return (node.widgets || []).find(w => w.name === name);
 }
 
 function applyVariant(node, variant) {
     const flags = VARIANT_FLAGS[variant];
     if (!flags) return;
-    const wCfgHi = findW(node, "cfg_high_noise");
-    const wCfgLo = findW(node, "cfg_low_noise");
-    const wRef   = findW(node, "ref_strength");
+    const wCfgHi = findWdWidget(node, "cfg_high_noise");
+    const wCfgLo = findWdWidget(node, "cfg_low_noise");
+    const wRef   = findWdWidget(node, "ref_strength");
 
     // Rename cfg_high_noise → "cfg" label for single-cfg variants.
     if (wCfgHi) {
@@ -78,26 +69,17 @@ function applyVariant(node, variant) {
     // needs_image: hide VAE-related inputs for t2v / non-image variants.
     const IMAGE_WIDGETS = ["vae_fp32_decode"];
     for (const wn of IMAGE_WIDGETS) {
-        const w = findW(node, wn);
+        const w = findWdWidget(node, wn);
         if (flags.needs_image) showWidget(w); else hideWidget(w);
     }
 
     // EverAnimate widgets: only shown for the everanimate variant.
     for (const wname of EVERANIMATE_WIDGETS) {
-        const w = findW(node, wname);
+        const w = findWdWidget(node, wname);
         if (flags.everanimate) showWidget(w); else hideWidget(w);
     }
 
-    // Recompute node size and redraw (never expand past viewport cap).
-    const cap = Math.max(520, Math.floor((window.innerHeight || 1080) * 0.62));
-    if (typeof node.setSize === "function" && node.computeSize) {
-        const min = node.computeSize();
-        const cur = node.size || [0, 0];
-        node.setSize([
-            Math.max(cur[0], min[0]),
-            Math.min(Math.max(cur[1], min[1]), cap),
-        ]);
-    }
+    capWdNode(node);
     app.graph?.setDirtyCanvas?.(true, true);
 }
 
@@ -105,12 +87,13 @@ app.registerExtension({
     name: "C2C.WanDirector.VariantGate",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "WanDirectorC2C") return;
+        installWanDirectorPrototype(nodeType);
 
         const _onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = _onCreated?.apply(this, arguments);
             const node = this;
-            const wVariant = findW(node, "model_variant");
+            const wVariant = findWdWidget(node, "model_variant");
             if (!wVariant) return r;
 
             // Hook callback (preserve any existing one — linked_values may chain).
@@ -134,7 +117,7 @@ app.registerExtension({
             const r = _onConfigure?.apply(this, arguments);
             const node = this;
             queueMicrotask(() => {
-                const w = findW(node, "model_variant");
+                const w = findWdWidget(node, "model_variant");
                 if (w) { try { applyVariant(node, w.value); } catch {} }
             });
             return r;

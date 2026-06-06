@@ -18,8 +18,13 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { c2cPrompt, c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
+
+const USERDATA_DIR  = "c2c/group_presets";
+const USERDATA_INDEX = `${USERDATA_DIR}/index.json`;
 
 const STYLE_ID    = "mec-group-presets-style";
 const GALLERY_ID  = "mec-group-presets-gallery";
@@ -143,13 +148,39 @@ function _toggleGallery() {
     else { g.classList.remove("visible"); _clear(); }
 }
 
+async function _storeUserData(path, data) {
+    try {
+        const resp = await api.storeUserData(path, JSON.stringify(data), { stringify: false });
+        return resp?.status === 200 || resp?.ok;
+    } catch (e) {
+        console.warn("[C2C.GroupPresets] storeUserData failed:", path, e);
+        return false;
+    }
+}
+
+async function _getUserData(path) {
+    try {
+        const resp = await api.getUserData(path);
+        if (resp?.status === 404) return null;
+        const text = typeof resp?.json === "function" ? await resp.json() : resp;
+        return text;
+    } catch (e) {
+        console.warn("[C2C.GroupPresets] getUserData failed:", path, e);
+        return null;
+    }
+}
+
 async function _fetchPresets() {
     try {
-        const r = await fetch("/mec/presets");
-        const j = await r.json();
-        if (j.success) return j.data.presets || [];
+        const index = await _getUserData(USERDATA_INDEX);
+        if (!index || !Array.isArray(index.presets)) return [];
+        return index.presets;
     } catch (e) { console.warn("[C2C.GroupPresets] list failed:", e); }
     return [];
+}
+
+async function _saveIndex(presets) {
+    await _storeUserData(USERDATA_INDEX, { presets, updated: Date.now() });
 }
 
 async function _refreshGallery() {
@@ -255,13 +286,11 @@ function _renderList(body) {
             </div>
         </div>
     `).join("");
-    // Lazy thumbs
     list.querySelectorAll("img.gp-thumb").forEach(async (img) => {
         const id = img.getAttribute("data-id");
         try {
-            const r = await fetch(`/mec/presets/${id}`);
-            const j = await r.json();
-            if (j.success && j.data.thumbnail) img.src = j.data.thumbnail;
+            const d = await _getUserData(`${USERDATA_DIR}/${id}.json`);
+            if (d?.thumbnail) img.src = d.thumbnail;
         } catch {}
     });
     list.querySelectorAll(".gp-item").forEach((el) => {
@@ -276,9 +305,10 @@ function _renderList(body) {
 }
 
 async function _deletePreset(id) {
-    if (!confirm("Delete this preset?")) return;
+    if (!(await c2cConfirm("Delete this preset?"))) return;
     try {
-        await fetch(`/mec/presets/${id}`, { method: "DELETE" });
+        _state.presets = _state.presets.filter(p => p.id !== id);
+        await _saveIndex(_state.presets);
         _refreshGallery();
     } catch (e) {
         console.warn("[C2C.GroupPresets] delete failed:", e);
@@ -309,10 +339,8 @@ function _civitaiBlob(name, sub, thumbnail, tags = [], meta = {}) {
 
 async function _exportOne(id) {
     try {
-        const r = await fetch(`/mec/presets/${id}`);
-        const j = await r.json();
-        if (!j.success) throw new Error(j.error || "load");
-        const d = j.data;
+        const d = await _getUserData(`${USERDATA_DIR}/${id}.json`);
+        if (!d) throw new Error("load");
         const blob = _civitaiBlob(d.name || id, d.subgraph, d.thumbnail || null, d.tags || []);
         const text = JSON.stringify(blob, null, 2);
         await navigator.clipboard.writeText(text);
@@ -326,7 +354,7 @@ async function _exportOne(id) {
         console.log("[C2C.GroupPresets] Exported preset (civitai-format) & copied to clipboard.");
     } catch (e) {
         console.warn("[C2C.GroupPresets] export failed:", e);
-        alert("Export failed — see console.");
+        c2cAlert("Export failed — see console.");
     }
 }
 
@@ -334,9 +362,8 @@ async function _exportAll() {
     const detailed = [];
     for (const p of _state.presets) {
         try {
-            const r = await fetch(`/mec/presets/${p.id}`);
-            const j = await r.json();
-            if (j.success) detailed.push(_civitaiBlob(j.data.name || p.id, j.data.subgraph, j.data.thumbnail || null, j.data.tags || []));
+            const d = await _getUserData(`${USERDATA_DIR}/${p.id}.json`);
+            if (d) detailed.push(_civitaiBlob(d.name || p.id, d.subgraph, d.thumbnail || null, d.tags || []));
         } catch {}
     }
     const pack = { _schema: "c2c.preset.pack/1", count: detailed.length, presets: detailed, exportedAt: new Date().toISOString() };
@@ -352,7 +379,7 @@ async function _exportAll() {
 async function _importJson(text) {
     let obj;
     try { obj = JSON.parse(text); }
-    catch (e) { alert("Invalid JSON."); return; }
+    catch (e) { c2cAlert("Invalid JSON."); return; }
     const items = obj?._schema === "c2c.preset.pack/1" && Array.isArray(obj.presets)
         ? obj.presets
         : [obj];
@@ -364,16 +391,17 @@ async function _importJson(text) {
             if (!sub || !sub.nodes) { fail++; continue; }
             const thumbnail = it.thumbnail || null;
             const tags = it.tags || [];
-            const resp = await fetch("/mec/presets", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, subgraph: sub, thumbnail, tags }),
-            });
-            const j = await resp.json();
-            if (j.success) ok++; else fail++;
+            const id = `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const presetData = { id, name, subgraph: sub, thumbnail, tags, created: Date.now() / 1000, node_count: sub.nodes.length };
+            const stored = await _storeUserData(`${USERDATA_DIR}/${id}.json`, presetData);
+            if (stored) {
+                _state.presets.push({ id, name, tags, node_count: sub.nodes.length, created: presetData.created, has_thumb: !!thumbnail });
+                ok++;
+            } else { fail++; }
         } catch { fail++; }
     }
-    alert(`Imported ${ok} preset(s)${fail ? `, ${fail} failed` : ""}.`);
+    if (ok > 0) await _saveIndex(_state.presets);
+    c2cAlert(`Imported ${ok} preset(s)${fail ? `, ${fail} failed` : ""}.`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -400,7 +428,15 @@ function _serializeSubgraph(nodes) {
             }
         }
     }
-    return { nodes: ser, links };
+    const widgetValues = {};
+    for (const n of nodes) {
+        if (!n.widgets?.length) continue;
+        widgetValues[n.id] = {};
+        for (const w of n.widgets) {
+            if (w?.name) widgetValues[n.id][w.name] = w.value;
+        }
+    }
+    return { nodes: ser, links, widgetValues };
 }
 
 function _thumbnailFromCanvas() {
@@ -443,46 +479,43 @@ async function _aiSuggestNameAndTags(subgraph) {
 
 async function _savePreset() {
     const nodes = _selectedNodes();
-    if (nodes.length === 0) { alert("Select one or more nodes first."); return; }
+    if (nodes.length === 0) { c2cAlert("Select one or more nodes first."); return; }
     const subgraph = _serializeSubgraph(nodes);
     let defaultName = "My preset";
     let defaultTags = [];
-    const useAI = confirm(`Save ${nodes.length} node(s) as preset.\n\nUse AI to suggest a name + tags?`);
+    const useAI = await c2cConfirm(`Save ${nodes.length} node(s) as preset.\n\nUse AI to suggest a name + tags?`);
     if (useAI) {
         const ai = await _aiSuggestNameAndTags(subgraph);
         if (ai) { defaultName = ai.name || defaultName; defaultTags = ai.tags || []; }
     }
-    const name = prompt(`Preset name?`, defaultName);
+    const name = await c2cPrompt(`Preset name?`, defaultName);
     if (!name) return;
-    const tagsStr = prompt(`Tags (comma-separated, optional)?`, defaultTags.join(", "));
+    const tagsStr = await c2cPrompt(`Tags (comma-separated, optional)?`, defaultTags.join(", "));
     const tags = (tagsStr || "").split(",").map((s) => s.trim()).filter(Boolean);
     const thumbnail = _thumbnailFromCanvas();
     try {
-        const resp = await fetch("/mec/presets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, subgraph, thumbnail, tags }),
-        });
-        const json = await resp.json();
-        if (!json.success) { alert(`Save failed: ${json.error || "unknown"}`); return; }
-        console.log("[C2C.GroupPresets] Saved:", json.data);
+        const id = `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const presetData = { id, name, subgraph, thumbnail, tags, created: Date.now() / 1000, node_count: subgraph.nodes.length };
+        const stored = await _storeUserData(`${USERDATA_DIR}/${id}.json`, presetData);
+        if (!stored) { c2cAlert("Save failed: could not write userdata"); return; }
+        _state.presets.push({ id, name, tags, node_count: subgraph.nodes.length, created: presetData.created, has_thumb: !!thumbnail });
+        await _saveIndex(_state.presets);
+        console.log("[C2C.GroupPresets] Saved:", id);
         if (_state.open) _refreshGallery();
     } catch (e) {
         console.warn("[C2C.GroupPresets] save failed:", e);
-        alert("Save failed — see console.");
+        c2cAlert("Save failed — see console.");
     }
 }
 
 async function _loadPreset(id) {
     let data;
     try {
-        const r = await fetch(`/mec/presets/${id}`);
-        const j = await r.json();
-        if (!j.success) throw new Error(j.error || "load_failed");
-        data = j.data;
+        data = await _getUserData(`${USERDATA_DIR}/${id}.json`);
+        if (!data) throw new Error("load_failed");
     } catch (e) {
         console.warn("[C2C.GroupPresets] load failed:", e);
-        alert("Could not load preset.");
+        c2cAlert("Could not load preset.");
         return;
     }
     const sub = data.subgraph;
@@ -573,6 +606,7 @@ app.registerExtension({
         })();
         const b = document.getElementById(BTN_ID);
         if (b) b.style.display = enabled ? "flex" : "none";
-        console.log("[C2C.GroupPresets] godlevel-rebuild loaded.");
+        _fetchPresets().then(p => { _state.presets = p; }).catch(() => {});
+        console.log("[C2C.GroupPresets] userdata-backed loaded.");
     },
 });

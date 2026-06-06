@@ -59,6 +59,8 @@ app.registerExtension({
                 installerKey: "splineFlowPath",
                 installer: (n) => _installFlowEditor(n),
                 hostFinder: (n) => n._mecSplineEditHost || null,
+                widgetFinder: (n) => n._mecSplineEditWidget || null,
+                widgetHeight: (n) => (typeof n._mecSplineEditWidgetH === "function" ? n._mecSplineEditWidgetH() : 460),
             });
             return;
         }

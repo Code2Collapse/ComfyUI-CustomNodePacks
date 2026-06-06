@@ -28,14 +28,25 @@ const BTN_ID   = "mec-flamegraph-btn";
 
 const _state = {
     open: false,
-    current: null,    // latest fetched flamegraph data {rows, total_ms, node_count, prompt_id}
+    current: null,
     A: null,
     B: null,
-    mode: "current",  // "current" | "compare"
-    sortBy: "time",   // "time" | "class" | "vram"
+    mode: "current",
+    sortBy: "time",
     filter: "",
     aiOutput: "",
     aiBusy: false,
+    live: {
+        active: false,
+        promptId: null,
+        startTs: 0,
+        currentNodeId: null,
+        currentNodeClass: null,
+        nodeStartTs: 0,
+        completedRows: [],
+        progress: { node: null, value: 0, max: 0 },
+        timerHandle: null,
+    },
 };
 const _listeners = [];
 function _on(t, e, fn, opts) { t.addEventListener(e, fn, opts); _listeners.push(() => t.removeEventListener(e, fn, opts)); }
@@ -149,6 +160,79 @@ function _filterRows(rows) {
     );
 }
 
+function _liveExecStart(ev) {
+    const L = _state.live;
+    L.active = true;
+    L.promptId = ev?.detail?.prompt_id || null;
+    L.startTs = performance.now();
+    L.completedRows = [];
+    L.currentNodeId = null;
+    L.currentNodeClass = null;
+    L.nodeStartTs = 0;
+    L.progress = { node: null, value: 0, max: 0 };
+    clearInterval(L.timerHandle);
+    L.timerHandle = setInterval(() => {
+        if (!L.active) { clearInterval(L.timerHandle); return; }
+        if (_state.open) _renderPanel();
+    }, 500);
+    if (_state.open) _renderPanel();
+}
+
+function _liveExecuted(ev) {
+    const L = _state.live;
+    if (!L.active) return;
+    const d = ev?.detail;
+    const nodeId = d?.node;
+    if (L.currentNodeId != null) {
+        const dur = performance.now() - L.nodeStartTs;
+        L.completedRows.push({
+            node_id: String(L.currentNodeId),
+            node_class: L.currentNodeClass,
+            elapsed_ms: dur,
+            vram_peak_mb: 0,
+            error: false,
+        });
+    }
+    const g = app.graph;
+    const gNode = g?.getNodeById?.(nodeId);
+    L.currentNodeId = nodeId;
+    L.currentNodeClass = gNode?.type || gNode?.comfyClass || `node_${nodeId}`;
+    L.nodeStartTs = performance.now();
+    L.progress = { node: nodeId, value: 0, max: 0 };
+    if (_state.open) _renderPanel();
+}
+
+function _liveProgress(ev) {
+    const d = ev?.detail;
+    if (!d || !_state.live.active) return;
+    _state.live.progress = { node: d.node, value: d.value || 0, max: d.max || 0 };
+}
+
+function _liveExecDone(ev) {
+    const L = _state.live;
+    if (!L.active) return;
+    if (L.currentNodeId != null) {
+        const dur = performance.now() - L.nodeStartTs;
+        L.completedRows.push({
+            node_id: String(L.currentNodeId),
+            node_class: L.currentNodeClass,
+            elapsed_ms: dur,
+            vram_peak_mb: 0,
+            error: !!ev?.detail?.exception_message,
+        });
+    }
+    const totalMs = performance.now() - L.startTs;
+    L.active = false;
+    clearInterval(L.timerHandle);
+    _state.current = {
+        rows: L.completedRows.slice(),
+        total_ms: totalMs,
+        node_count: L.completedRows.length,
+        prompt_id: L.promptId,
+    };
+    if (_state.open) _renderPanel();
+}
+
 function _renderToolbar() {
     return `
         <div class="fg-tools">
@@ -173,6 +257,49 @@ function _renderToolbar() {
 }
 
 function _renderCurrent(body, data) {
+    const L = _state.live;
+    if (L.active) {
+        const elapsed = performance.now() - L.startTs;
+        const done = L.completedRows;
+        const allRows = [...done];
+        if (L.currentNodeId != null) {
+            allRows.push({
+                node_id: String(L.currentNodeId),
+                node_class: L.currentNodeClass,
+                elapsed_ms: performance.now() - L.nodeStartTs,
+                vram_peak_mb: 0,
+                error: false,
+                _live: true,
+            });
+        }
+        const maxMs = Math.max(1, ...allRows.map(r => r.elapsed_ms));
+        const prgPct = L.progress.max > 0 ? (L.progress.value / L.progress.max * 100).toFixed(0) : "";
+        let html = `<div style="padding:6px 0;border-bottom:1px solid var(--c2c-surface0);margin-bottom:6px;">
+            <span style="color:var(--c2c-okSoft);font-weight:700;">⏱ LIVE</span>
+            <span style="margin-left:8px;">${(elapsed / 1000).toFixed(1)}s elapsed · ${done.length} done${
+                L.currentNodeClass ? ` · executing: <b style="color:var(--c2c-yellow);">${_esc(L.currentNodeClass)}</b>${prgPct ? ` (${prgPct}%)` : ""}` : ""
+            }</span>
+        </div>`;
+        html += allRows.map((r) => {
+            const pct = Math.min(1, r.elapsed_ms / maxMs);
+            const isLive = r._live;
+            const color = isLive ? "var(--c2c-yellow)" : _heatColor(pct);
+            const label = `${_esc(r.node_class)} (#${_esc(r.node_id)})`;
+            const progBar = isLive && L.progress.max > 0
+                ? `<div style="position:absolute;top:0;left:0;height:100%;width:${(L.progress.value/L.progress.max*100).toFixed(1)}%;background:var(--c2c-mauve);opacity:0.3;border-radius:3px;"></div>`
+                : "";
+            return `<div class="fg-row" data-nid="${_esc(r.node_id)}">
+                <div class="fg-bar">
+                    <div class="fg-bar-fill" style="width:${(pct * 100).toFixed(1)}%;background:${color};${isLive ? "animation:pulse 1s infinite;" : ""}"></div>
+                    ${progBar}
+                    <div class="fg-bar-label">${label}${isLive ? " ⏳" : ""}</div>
+                </div>
+                <div class="fg-time">${r.elapsed_ms.toFixed(0)} ms</div>
+            </div>`;
+        }).join("");
+        body.insertAdjacentHTML("beforeend", `<div class="fg-rows">${html}</div>`);
+        return;
+    }
     if (!data || !data.rows || data.rows.length === 0) {
         body.insertAdjacentHTML("beforeend", `<div class="fg-empty">No completed runs yet — queue a prompt first.</div>`);
         return;
@@ -441,19 +568,21 @@ app.registerExtension({
         const btn = document.getElementById(BTN_ID);
         if (btn) btn.style.display = enabled ? "flex" : "none";
 
-        api.addEventListener("execution_success", () => {
+        api.addEventListener("execution_start", _liveExecStart);
+        api.addEventListener("executed", _liveExecuted);
+        api.addEventListener("progress", _liveProgress);
+        api.addEventListener("execution_success", (ev) => {
+            _liveExecDone(ev);
             const auto = (() => {
                 try { return app.ui.settings.getSettingValue("c2c.flamegraph.auto_show", false); }
                 catch { return false; }
             })();
-            if (_state.open) _refresh();
-            else if (auto) _openPanel();
+            if (!_state.open && auto) _openPanel();
+        });
+        api.addEventListener("execution_error", (ev) => {
+            _liveExecDone(ev);
         });
 
-        api.addEventListener("execution_error", () => {
-            if (_state.open) _refresh();
-        });
-
-        console.log("[C2C.FlameGraph] godlevel-rebuild loaded.");
+        console.log("[C2C.FlameGraph] live-tracking loaded.");
     },
 });

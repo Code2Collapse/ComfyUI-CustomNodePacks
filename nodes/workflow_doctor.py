@@ -108,6 +108,22 @@ RULES: List[Dict[str, str]] = [
     {"id": "multiframe_integrity_disabled", "severity": "error",
      "title": "Mask integrity check disabled on multi-frame workflow",
      "description": "MaskRefineMEC on a multi-frame batch with enable_integrity_check=False loses silent-failure detection. Enable it or add MaskTemporalMEC."},
+    # ---- v2 P0.5: deeper graph-shape rules
+    {"id": "type_mismatch",        "severity": "warning",
+     "title": "Wire connects mismatched types",
+     "description": "A link declares a source type that differs from the destination input type. The engine may silently coerce or fail at runtime."},
+    {"id": "vae_missing_for_decode", "severity": "error",
+     "title": "VAE decoder has no VAE input",
+     "description": "VAEDecode (or equivalent) is wired but its 'vae' socket is empty — execution will fail."},
+    {"id": "lora_strength_sum",    "severity": "warning",
+     "title": "Stacked LoRA strength sums above safe range",
+     "description": "Summed strength_model across LoraLoader nodes exceeds 2.0. Quality typically degrades; consider reducing per-LoRA strength."},
+    {"id": "sdxl_resolution_not_div64", "severity": "warning",
+     "title": "SDXL latent dimension not divisible by 64",
+     "description": "SDXL produces best results when width and height are multiples of 64."},
+    {"id": "vae_unet_family_mismatch", "severity": "error",
+     "title": "VAE model family differs from UNet/checkpoint family",
+     "description": "Wiring an SDXL VAE to an SD1.5 UNet (or vice-versa) yields broken latents."},
 ]
 
 _RULES_BY_ID = {r["id"]: r for r in RULES}
@@ -116,9 +132,10 @@ _RULES_BY_ID = {r["id"]: r for r in RULES}
 def _finding(rule_id: str, *, node_id: Optional[int] = None,
              node_type: Optional[str] = None, detail: str = "",
              fix_hint: str = "", severity_override: Optional[str] = None,
-             title_override: Optional[str] = None) -> Dict[str, Any]:
+             title_override: Optional[str] = None,
+             fix: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     rule = _RULES_BY_ID[rule_id]
-    return {
+    out: Dict[str, Any] = {
         "id": rule_id,
         "severity": severity_override or rule["severity"],
         "title": title_override or rule["title"],
@@ -127,6 +144,9 @@ def _finding(rule_id: str, *, node_id: Optional[int] = None,
         "detail": detail,
         "fix_hint": fix_hint,
     }
+    if fix is not None:
+        out["fix"] = fix
+    return out
 
 
 # ------------------------------------------------------------ graph helpers
@@ -318,7 +338,9 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
             findings.append(_finding(
                 "disabled_node", node_id=nid, node_type=ntype,
                 detail=f"Node {ntype} (id {nid}) is muted (mode=4).",
-                fix_hint="Right-click the node and unmute if you want it to run."))
+                fix_hint="Right-click the node and unmute if you want it to run.",
+                fix={"kind": "set_mode", "node_id": nid, "value": 0,
+                     "label": f"Unmute {ntype} #{nid}"}))
 
         # missing required inputs — collapsed into ONE finding per node so a
         # freshly-added node with 8 unwired sockets emits 1 entry, not 8.
@@ -374,17 +396,26 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
                 findings.append(_finding(
                     "cfg_extreme", node_id=nid, node_type=ntype,
                     detail=f"cfg = {cfg}",
-                    fix_hint="Try cfg between 4 and 9 for most samplers."))
+                    fix_hint="Try cfg between 4 and 9 for most samplers.",
+                    fix={"kind": "set_widget", "node_id": nid,
+                         "widget": "cfg", "value": 7.0,
+                         "label": f"Set cfg=7.0 on {ntype} #{nid}"}))
             if isinstance(steps, int) and (steps < 4 or steps > 150):
                 findings.append(_finding(
                     "steps_extreme", node_id=nid, node_type=ntype,
                     detail=f"steps = {steps}",
-                    fix_hint="Try 20–40 steps for most samplers."))
+                    fix_hint="Try 20–40 steps for most samplers.",
+                    fix={"kind": "set_widget", "node_id": nid,
+                         "widget": "steps", "value": 25,
+                         "label": f"Set steps=25 on {ntype} #{nid}"}))
             if isinstance(denoise, (int, float)) and denoise == 0:
                 findings.append(_finding(
                     "denoise_zero", node_id=nid, node_type=ntype,
                     detail="denoise = 0 will pass the latent through unchanged.",
-                    fix_hint="Set denoise > 0 (1.0 for txt2img, ~0.6 for img2img refine)."))
+                    fix_hint="Set denoise > 0 (1.0 for txt2img, ~0.6 for img2img refine).",
+                    fix={"kind": "set_widget", "node_id": nid,
+                         "widget": "denoise", "value": 1.0,
+                         "label": f"Set denoise=1.0 on {ntype} #{nid}"}))
             if isinstance(seed, int) and seed >= 0:
                 sampler_seeds.setdefault(seed, []).append(nid)
 
@@ -412,15 +443,29 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
             w = _widget_value(n, ("width",))
             h = _widget_value(n, ("height",))
             bad = []
+            fix_changes: List[Dict[str, Any]] = []
             for axis, val in (("width", w), ("height", h)):
                 if isinstance(val, int):
                     if val < 64 or val > 4096 or val % 8 != 0:
                         bad.append(f"{axis}={val}")
+                        clamped = max(64, min(4096, val))
+                        rounded = max(64, ((clamped + 4) // 8) * 8)
+                        if rounded != val:
+                            fix_changes.append({"widget": axis, "value": rounded})
             if bad:
+                fix_payload = None
+                if fix_changes:
+                    pretty = ", ".join(f"{c['widget']}={c['value']}" for c in fix_changes)
+                    fix_payload = {
+                        "kind": "set_widget_many", "node_id": nid,
+                        "changes": fix_changes,
+                        "label": f"Round latent size to {pretty} on #{nid}",
+                    }
                 findings.append(_finding(
                     "empty_latent_size", node_id=nid, node_type=ntype,
                     detail="Unusual latent size: " + ", ".join(bad),
-                    fix_hint="Use multiples of 8 between 64 and 4096."))
+                    fix_hint="Use multiples of 8 between 64 and 4096.",
+                    fix=fix_payload))
 
         if ntype in _OUTPUT_TYPES:
             stats["outputs"] += 1
@@ -506,6 +551,13 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
                 detail=f"Seed {seed} is shared by samplers: {sorted(sampler_ids)}",
                 fix_hint="Randomize one of them or use control_after_generate=randomize."))
 
+    # ---------- v2 P0.5: deeper graph-shape checks
+    findings.extend(_check_type_mismatch(nodes, links))
+    findings.extend(_check_vae_missing_for_decode(nodes, links))
+    findings.extend(_check_lora_strength_sum(nodes))
+    findings.extend(_check_sdxl_resolution(nodes, checkpoint_families))
+    findings.extend(_check_vae_unet_family(nodes, links))
+
     # ---------- LoRA stack depth
     if stats["loras"] > 5:
         findings.append(_finding(
@@ -553,6 +605,237 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
             summary["infos"] += 1
 
     return {"summary": summary, "findings": findings, "stats": stats}
+
+
+# ----------------------------------------------------- v2 P0.5 rule checks
+_GENERIC_TYPES = {"", "*", "any", "ANY"}
+_VAE_DECODER_TYPES = ("VAEDecode", "VAEDecodeTiled", "VAEDecodeAudio")
+_VAE_SOURCE_TYPES = ("VAELoader", "CheckpointLoaderSimple",
+                     "CheckpointLoader", "UNETLoader")
+
+
+def _check_type_mismatch(nodes: List[Dict[str, Any]],
+                         links: List[Tuple[int, int, int, int, int, str]]
+                         ) -> List[Dict[str, Any]]:
+    """Flag links where the LiteGraph-declared types on both ends are concrete
+    and differ. Skips wildcard, empty, or `any` types — those are legal."""
+    by_id: Dict[int, Dict[str, Any]] = {int(n.get("id", -1)): n for n in nodes}
+    out: List[Dict[str, Any]] = []
+    seen_pairs: set[tuple[int, int, int, int]] = set()
+    for _, sn, ss, dn, ds, link_type in links:
+        src = by_id.get(sn)
+        dst = by_id.get(dn)
+        if not src or not dst:
+            continue
+        s_outs = src.get("outputs") or []
+        d_ins = dst.get("inputs") or []
+        if ss >= len(s_outs) or ds >= len(d_ins):
+            continue
+        s_type = str((s_outs[ss] or {}).get("type", "") or "")
+        d_type = str((d_ins[ds] or {}).get("type", "") or "")
+        if s_type in _GENERIC_TYPES or d_type in _GENERIC_TYPES:
+            continue
+        if s_type == d_type:
+            continue
+        key = (sn, ss, dn, ds)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        out.append(_finding(
+            "type_mismatch", node_id=dn, node_type=str(dst.get("type", "")),
+            detail=f"Wire #{sn}.{s_type} → #{dn}.{(d_ins[ds] or {}).get('name', ds)}({d_type})",
+            fix_hint=f"Insert a converter between the two nodes, or pick a "
+                     f"compatible source for the {d_type} input."))
+    return out
+
+
+def _check_vae_missing_for_decode(nodes: List[Dict[str, Any]],
+                                  links: List[Tuple[int, int, int, int, int, str]]
+                                  ) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for n in nodes:
+        ntype = str(n.get("type", "") or n.get("class_type", ""))
+        if ntype not in _VAE_DECODER_TYPES:
+            continue
+        nid = int(n.get("id", -1))
+        # find the 'vae' input slot
+        ins = n.get("inputs") or []
+        vae_slot_idx = None
+        for i, inp in enumerate(ins):
+            if isinstance(inp, dict) and inp.get("name") == "vae":
+                vae_slot_idx = i
+                break
+        if vae_slot_idx is None:
+            continue
+        if not _has_incoming_link(links, nid, vae_slot_idx):
+            out.append(_finding(
+                "vae_missing_for_decode", node_id=nid, node_type=ntype,
+                detail=f"{ntype} #{nid} 'vae' input is empty.",
+                fix_hint="Wire a VAELoader output or the VAE socket of your "
+                         "CheckpointLoaderSimple into this node."))
+    return out
+
+
+def _check_lora_strength_sum(nodes: List[Dict[str, Any]]
+                             ) -> List[Dict[str, Any]]:
+    total = 0.0
+    contributing_ids: List[int] = []
+    for n in nodes:
+        ntype = str(n.get("type", "") or n.get("class_type", ""))
+        if not ntype.startswith("LoraLoader"):
+            continue
+        s = _widget_value(n, ("strength_model", "strength"))
+        if isinstance(s, (int, float)):
+            total += float(s)
+            try:
+                contributing_ids.append(int(n.get("id", -1)))
+            except (TypeError, ValueError):
+                pass
+    if total <= 2.0 or not contributing_ids:
+        return []
+    return [_finding(
+        "lora_strength_sum",
+        detail=f"Sum of LoRA strength_model across {len(contributing_ids)} "
+               f"loaders = {total:.2f} (ids {sorted(contributing_ids)}).",
+        fix_hint="Reduce per-LoRA strength so the sum stays at or below 2.0.")]
+
+
+def _check_sdxl_resolution(nodes: List[Dict[str, Any]],
+                           checkpoint_families: List[str]
+                           ) -> List[Dict[str, Any]]:
+    if "sdxl" not in {f for f in checkpoint_families}:
+        return []
+    out: List[Dict[str, Any]] = []
+    for n in nodes:
+        ntype = str(n.get("type", "") or n.get("class_type", ""))
+        if ntype != "EmptyLatentImage":
+            continue
+        nid = int(n.get("id", -1))
+        w = _widget_value(n, ("width",))
+        h = _widget_value(n, ("height",))
+        bad = []
+        changes: List[Dict[str, Any]] = []
+        for axis, val in (("width", w), ("height", h)):
+            if isinstance(val, int) and (val % 64 != 0):
+                bad.append(f"{axis}={val}")
+                clamped = max(64, min(4096, val))
+                rounded = max(64, ((clamped + 32) // 64) * 64)
+                if rounded != val:
+                    changes.append({"widget": axis, "value": rounded})
+        if bad:
+            fix_payload = None
+            if changes:
+                pretty = ", ".join(f"{c['widget']}={c['value']}" for c in changes)
+                fix_payload = {
+                    "kind": "set_widget_many", "node_id": nid,
+                    "changes": changes,
+                    "label": f"Round to SDXL grid ({pretty}) on #{nid}",
+                }
+            out.append(_finding(
+                "sdxl_resolution_not_div64", node_id=nid, node_type=ntype,
+                detail=f"SDXL workflow with EmptyLatentImage dims not on 64-grid: {', '.join(bad)}.",
+                fix_hint="SDXL expects width and height as multiples of 64 (e.g. 1024×1024, 832×1216).",
+                fix=fix_payload))
+    return out
+
+
+def _check_vae_unet_family(nodes: List[Dict[str, Any]],
+                           links: List[Tuple[int, int, int, int, int, str]]
+                           ) -> List[Dict[str, Any]]:
+    """For each VAEDecode whose VAE comes from a VAELoader, compare the
+    VAELoader's vae_name family to the model family that produced the latent
+    feeding the same decoder."""
+    by_id: Dict[int, Dict[str, Any]] = {int(n.get("id", -1)): n for n in nodes}
+    # Build dst → list of (slot_idx, src_node, src_slot) for fast lookup
+    incoming: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    for _, sn, ss, dn, ds, _ in links:
+        incoming[(dn, ds)] = (sn, ss)
+    out: List[Dict[str, Any]] = []
+    seen_keys: set[tuple[int, int]] = set()
+    for n in nodes:
+        ntype = str(n.get("type", "") or n.get("class_type", ""))
+        if ntype not in _VAE_DECODER_TYPES:
+            continue
+        nid = int(n.get("id", -1))
+        ins = n.get("inputs") or []
+        vae_slot = next((i for i, inp in enumerate(ins)
+                         if isinstance(inp, dict) and inp.get("name") == "vae"), None)
+        sam_slot = next((i for i, inp in enumerate(ins)
+                         if isinstance(inp, dict) and inp.get("name") in ("samples", "latent")),
+                        None)
+        if vae_slot is None or sam_slot is None:
+            continue
+        vae_src = incoming.get((nid, vae_slot))
+        sam_src = incoming.get((nid, sam_slot))
+        if not vae_src or not sam_src:
+            continue
+        vae_fam = _trace_vae_family(by_id, incoming, vae_src[0])
+        unet_fam = _trace_unet_family(by_id, incoming, sam_src[0])
+        if vae_fam and unet_fam and vae_fam != "unknown" and unet_fam != "unknown":
+            if vae_fam != unet_fam:
+                key = (nid, vae_slot)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out.append(_finding(
+                    "vae_unet_family_mismatch", node_id=nid, node_type=ntype,
+                    detail=f"{ntype} #{nid} mixes VAE family '{vae_fam}' with UNet family '{unet_fam}'.",
+                    fix_hint=f"Use a {unet_fam} VAE (or swap the model to {vae_fam})."))
+    return out
+
+
+def _trace_vae_family(by_id: Dict[int, Dict[str, Any]],
+                      incoming: Dict[Tuple[int, int], Tuple[int, int]],
+                      start: int, _depth: int = 0) -> str:
+    if _depth > 12:
+        return "unknown"
+    n = by_id.get(start)
+    if not n:
+        return "unknown"
+    t = str(n.get("type", "") or n.get("class_type", ""))
+    if t == "VAELoader":
+        name = _widget_value(n, ("vae_name",))
+        if isinstance(name, str):
+            return _guess_family(name) or "unknown"
+        return "unknown"
+    if t in _CHECKPOINT_TYPES:
+        name = _widget_value(n, ("ckpt_name", "unet_name"))
+        if isinstance(name, str):
+            return _guess_family(name) or "unknown"
+        return "unknown"
+    # Pass-through nodes: walk upstream via the first incoming link.
+    ins = n.get("inputs") or []
+    for i, _ in enumerate(ins):
+        src = incoming.get((start, i))
+        if src:
+            fam = _trace_vae_family(by_id, incoming, src[0], _depth + 1)
+            if fam and fam != "unknown":
+                return fam
+    return "unknown"
+
+
+def _trace_unet_family(by_id: Dict[int, Dict[str, Any]],
+                       incoming: Dict[Tuple[int, int], Tuple[int, int]],
+                       start: int, _depth: int = 0) -> str:
+    if _depth > 12:
+        return "unknown"
+    n = by_id.get(start)
+    if not n:
+        return "unknown"
+    t = str(n.get("type", "") or n.get("class_type", ""))
+    if t in _CHECKPOINT_TYPES:
+        name = _widget_value(n, ("ckpt_name", "unet_name"))
+        if isinstance(name, str):
+            return _guess_family(name) or "unknown"
+    # Walk upstream through samplers, conditioning nodes, etc.
+    ins = n.get("inputs") or []
+    for i, _ in enumerate(ins):
+        src = incoming.get((start, i))
+        if src:
+            fam = _trace_unet_family(by_id, incoming, src[0], _depth + 1)
+            if fam and fam != "unknown":
+                return fam
+    return "unknown"
 
 
 # ------------------------------------------------------------ helpers

@@ -12,6 +12,7 @@
 
 import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
+import { c2cPrompt } from "./_c2c_dialog.js";
 
 const COLORS = [
     { name: "Yellow", bg: "rgba(249, 226, 175, 0.20)", border: "var(--c2c-yellow)" },
@@ -97,8 +98,8 @@ function _wrapText(ctx, text, x, y, maxWidth, lineHeight) {
     }
 }
 
-function _editNote(note) {
-    const val = prompt("Edit sticky note:", note.text || "");
+async function _editNote(note) {
+    const val = await c2cPrompt("Edit sticky note:", note.text || "");
     if (val === null) return;
     note.text = val;
     app.canvas?.setDirty?.(true, true);

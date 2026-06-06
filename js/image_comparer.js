@@ -158,6 +158,17 @@ app.registerExtension({
                 return _origCompute?.apply(this, arguments) ?? [420, 380];
             };
             node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
+
+            const origResize = node.onResize;
+            node.onResize = function(...args) {
+                origResize?.apply(this, args);
+                node._render();
+            };
+            const origBounds = node.onBoundsChanged;
+            node.onBoundsChanged = function(...args) {
+                origBounds?.apply(this, args);
+                node._render();
+            };
         };
 
         /* ── onExecuted ────────────────────────────────── */

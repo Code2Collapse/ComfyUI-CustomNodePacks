@@ -22,8 +22,7 @@
  * also accessible via command "C2C: Open auto-checkpoint history".
  */
 import { app } from "../../scripts/app.js";
-
-const DB_NAME = "c2c_autocheckpoint";
+import { c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
 const STORE = "snapshots";
 const DB_VERSION = 1;
 const RING_MAX_DEFAULT = 20;
@@ -161,7 +160,7 @@ async function restore(id) {
         await app.loadGraphData(snap.graph);
         return true;
     } catch (exc) {
-        alert("Restore failed: " + exc.message);
+        c2cAlert("Restore failed: " + exc.message);
         return false;
     }
 }
@@ -227,11 +226,11 @@ async function openPicker() {
     back.querySelector("#close-x").onclick = closePicker;
     back.querySelector("#snap-now").onclick = async () => { await snapshot("manual"); closePicker(); openPicker(); };
     back.querySelector("#clear-all").onclick = async () => {
-        if (confirm("Delete all checkpoints?")) { await dbClear(); closePicker(); openPicker(); }
+        if (await c2cConfirm("Delete all checkpoints?")) { await dbClear(); closePicker(); openPicker(); }
     };
     back.addEventListener("click", e => { if (e.target === back) closePicker(); });
     card.querySelectorAll(".ckpt-restore").forEach(b => b.onclick = async () => {
-        if (confirm("Restore this checkpoint? Your current graph will be snapshotted first.")) {
+        if (await c2cConfirm("Restore this checkpoint? Your current graph will be snapshotted first.")) {
             const ok = await restore(b.dataset.id);
             if (ok) closePicker();
         }

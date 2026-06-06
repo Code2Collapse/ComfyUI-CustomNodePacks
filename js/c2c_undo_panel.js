@@ -21,6 +21,7 @@
 import { app } from "../../scripts/app.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { c2cPrompt, c2cAlert } from "./_c2c_dialog.js";
 
 const BTN_ID   = "mec-undo-btn";
 const PANEL_ID = "mec-undo-panel";
@@ -186,6 +187,52 @@ function _thumbnail() {
     } catch { return null; }
 }
 
+function _describeChange(prev, snap) {
+    if (!prev) return "Initial snapshot";
+    const prevNodes = new Map((prev.snap?.nodes || []).map(n => [n.id, n]));
+    const curNodes = new Map((snap?.nodes || []).map(n => [n.id, n]));
+    const parts = [];
+
+    const added = [...curNodes.keys()].filter(id => !prevNodes.has(id));
+    const removed = [...prevNodes.keys()].filter(id => !curNodes.has(id));
+
+    if (added.length) {
+        const types = added.map(id => curNodes.get(id)?.type || "?").slice(0, 3);
+        parts.push(`+${added.length} node${added.length > 1 ? "s" : ""} (${types.join(", ")})`);
+    }
+    if (removed.length) {
+        const types = removed.map(id => prevNodes.get(id)?.type || "?").slice(0, 3);
+        parts.push(`-${removed.length} node${removed.length > 1 ? "s" : ""} (${types.join(", ")})`);
+    }
+
+    let widgetChanges = 0;
+    for (const [id, cur] of curNodes) {
+        const old = prevNodes.get(id);
+        if (!old) continue;
+        const curW = cur.widgets_values || [];
+        const oldW = old.widgets_values || [];
+        for (let i = 0; i < Math.max(curW.length, oldW.length); i++) {
+            if (JSON.stringify(curW[i]) !== JSON.stringify(oldW[i])) widgetChanges++;
+        }
+    }
+    if (widgetChanges) parts.push(`${widgetChanges} widget change${widgetChanges > 1 ? "s" : ""}`);
+
+    const movedCount = [...curNodes.entries()].filter(([id, n]) => {
+        const old = prevNodes.get(id);
+        if (!old) return false;
+        return (old.pos?.[0] !== n.pos?.[0] || old.pos?.[1] !== n.pos?.[1]);
+    }).length;
+    if (movedCount && !added.length && !removed.length && !widgetChanges) {
+        parts.push(`${movedCount} node${movedCount > 1 ? "s" : ""} moved`);
+    }
+
+    const prevLinks = (prev.snap?.links || []).length;
+    const curLinks = (snap?.links || []).length;
+    if (curLinks !== prevLinks) parts.push(`Δ${curLinks - prevLinks >= 0 ? "+" : ""}${curLinks - prevLinks} links`);
+
+    return parts.length ? parts.join(", ") : "Minor change";
+}
+
 function _capture() {
     if (_suspend) return;
     const g = app.graph;
@@ -194,9 +241,10 @@ function _capture() {
     try { snap = g.serialize(); } catch { return; }
     const node_count = Array.isArray(snap?.nodes) ? snap.nodes.length : 0;
     const link_count = Array.isArray(snap?.links) ? snap.links.length : 0;
-    const entry = { id: ++_seq, ts: Date.now(), snap, node_count, link_count, thumb: _thumbnail() };
+    const prev = _state.stack.length > 0 ? _state.stack[_state.stack.length - 1] : null;
+    const desc = _describeChange(prev, snap);
+    const entry = { id: ++_seq, ts: Date.now(), snap, node_count, link_count, thumb: _thumbnail(), desc };
     _state.stack.push(entry);
-    // Evict oldest non-bookmarked beyond max
     const max = _maxStack();
     while (_state.stack.length > max) {
         const idx = _state.stack.findIndex((e) => !_state.bookmarks.has(e.id));
@@ -231,6 +279,22 @@ function _hookGraphChanges() {
     g.onGraphChanged = function () { if (oC) oC.apply(g, arguments); _scheduleCapture(); };
     const oA = g.afterChange?.bind(g);
     g.afterChange = function () { if (oA) oA.apply(g, arguments); _scheduleCapture(); };
+
+    const oNA = g.onNodeAdded?.bind(g);
+    g.onNodeAdded = function (node) { if (oNA) oNA.apply(g, arguments); _scheduleCapture(); };
+    const oNR = g.onNodeRemoved?.bind(g);
+    g.onNodeRemoved = function (node) { if (oNR) oNR.apply(g, arguments); _scheduleCapture(); };
+
+    if (app.canvas) {
+        const origPW = app.canvas.processWidgetChange;
+        if (origPW) {
+            app.canvas.processWidgetChange = function () {
+                const r = origPW.apply(this, arguments);
+                _scheduleCapture();
+                return r;
+            };
+        }
+    }
     _capture();
 }
 
@@ -295,6 +359,7 @@ function _renderList(body) {
                 <div class="ud-info">
                     <div class="ud-name">${bookmarked ? `<span class="ud-bookmark">★</span> ` : ""}${_esc(e.name || `Snapshot #${e.id}`)}</div>
                     <div class="ud-meta">${new Date(e.ts).toLocaleTimeString()} · ${e.node_count} nodes · ${e.link_count} links</div>
+                    ${e.desc ? `<div class="ud-delta" style="color:var(--c2c-mauve);">${_esc(e.desc)}</div>` : ""}
                     ${prev ? `<div class="ud-delta ${dn<0||dl<0?"neg":""}">Δ ${dn>=0?"+":""}${dn} nodes, ${dl>=0?"+":""}${dl} links</div>` : ""}
                 </div>
                 <div class="ud-actions">
@@ -342,10 +407,11 @@ function _toggleBookmark(id) {
 function _renameSnapshot(id) {
     const e = _state.stack.find((x) => x.id === id);
     if (!e) return;
-    const n = prompt("Snapshot name:", e.name || `Snapshot #${id}`);
-    if (n === null) return;
-    e.name = n;
-    _render();
+    c2cPrompt("Snapshot name:", e.name || `Snapshot #${id}`).then((n) => {
+        if (n === null) return;
+        e.name = n;
+        _render();
+    });
 }
 
 function _copyJson(id) {
@@ -353,7 +419,7 @@ function _copyJson(id) {
     if (!e) return;
     navigator.clipboard.writeText(JSON.stringify(e.snap, null, 2)).then(
         () => console.log("[C2C.UndoPanel] copied snapshot", id),
-        () => alert("Clipboard write blocked.")
+        () => c2cAlert("Clipboard write blocked.")
     );
 }
 
@@ -406,7 +472,7 @@ async function _aiCompare(body) {
     if (_state.aiBusy) return;
     const a = _state.stack.find((e) => e.id === _state.selA);
     const b = _state.stack.find((e) => e.id === _state.selB);
-    if (!a || !b) { alert("Pick both A and B."); return; }
+    if (!a || !b) { c2cAlert("Pick both A and B."); return; }
     const diff = _diffSummary(a, b);
     _state.aiBusy = true; _state.aiOutput = "";
     _renderAi(body);

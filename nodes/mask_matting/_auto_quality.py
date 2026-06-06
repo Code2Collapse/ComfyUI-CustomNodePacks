@@ -365,11 +365,13 @@ def polish_alpha(
                                  int(cfg["gf_r"]), float(cfg["gf_eps"]))
     a_gf = a_gf.clamp(0, 1)
 
-    # cheap edge snap via image-gradient-weighted blend in a thin band
+    # Edge snap: in the alpha boundary band, blend between the original
+    # alpha and the guided-filtered alpha weighted by image gradient
+    # magnitude.  Strong image edges → trust the guided filter; flat
+    # regions → preserve the original alpha to avoid attenuation.
     snap = float(cfg["snap"])
     band = int(cfg["band"])
     if snap > 0 and band > 0:
-        # gray gradient magnitude
         gray = (0.2126 * img_chw[:, 0:1] + 0.7152 * img_chw[:, 1:2]
                 + 0.0722 * img_chw[:, 2:3])
         gy = gray[:, :, 1:, :] - gray[:, :, :-1, :]
@@ -378,7 +380,6 @@ def polish_alpha(
         gx = F.pad(gx, (0, 1, 0, 0))
         gmag = torch.sqrt(gx * gx + gy * gy).clamp(0, 1)
         gmag = gmag / (gmag.amax(dim=(-2, -1), keepdim=True) + 1e-6)
-        # mask boundary band
         ay = a_gf[:, :, 1:, :] - a_gf[:, :, :-1, :]
         ax = a_gf[:, :, :, 1:] - a_gf[:, :, :, :-1]
         ay = F.pad(ay, (0, 0, 0, 1))
@@ -387,8 +388,32 @@ def polish_alpha(
         edge_band = F.max_pool2d(edge, kernel_size=band * 2 + 1,
                                   stride=1, padding=band)
         edge_band = (edge_band > 0.05).float()
-        blend = (1.0 - snap) + snap * gmag
-        a_gf = a_gf * (1.0 - edge_band) + (a_gf * blend) * edge_band
+        gf_weight = (1.0 - snap) + snap * gmag
+        a_snapped = a * (1.0 - gf_weight) + a_gf * gf_weight
+        a_gf = a_gf * (1.0 - edge_band) + a_snapped * edge_band
         a_gf = a_gf.clamp(0, 1)
 
     return a_gf.squeeze(1)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 5. TEMPORAL ALPHA MEDIAN (motion-blur flicker suppression)
+# ──────────────────────────────────────────────────────────────────────
+def temporal_alpha_median(alpha_bhw: torch.Tensor) -> torch.Tensor:
+    """3-tap temporal median on a per-frame alpha matte sequence.
+
+    Suppresses single-frame mask flicker caused by motion blur, brief
+    occlusions and SAM/SAM3 score jitter without smearing motion across
+    more than one frame.  Requires ``B >= 3``; returns the input
+    unchanged for shorter sequences.  Endpoint frames are clamped
+    (mirror padding), so the output shape is identical to the input.
+    """
+    if alpha_bhw.ndim != 3 or alpha_bhw.shape[0] < 3:
+        return alpha_bhw
+    a = alpha_bhw.float().clamp(0, 1)
+    prev = torch.cat([a[:1], a[:-1]], dim=0)
+    nxt  = torch.cat([a[1:], a[-1:]], dim=0)
+    stacked = torch.stack([prev, a, nxt], dim=0)  # (3,B,H,W)
+    return stacked.median(dim=0).values.clamp(0, 1)
+
+

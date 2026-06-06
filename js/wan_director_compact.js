@@ -3,18 +3,15 @@
  * Hides gated advanced widgets until their enable_* toggle is true; caps node height.
  */
 import { app } from "../../scripts/app.js";
-
-const WD_MAX_H = () => Math.max(520, Math.floor((window.innerHeight || 1080) * 0.62));
-const WD_DEFAULT_W = 640;
-
-function _writeNodeSize(node, w, h) {
-    if (!node) return;
-    if (!node.size) node.size = [w, h];
-    else {
-        node.size[0] = w;
-        node.size[1] = h;
-    }
-}
+import {
+    capWdNode,
+    findWdWidget,
+    getWdAdvancedOpen,
+    installWanDirectorPrototype,
+    setWdAdvancedOpen,
+    wdHideWidget,
+    wdShowWidget,
+} from "./_wan_director_ui.js";
 
 /** enable_* parent → child widget names hidden when parent is false. */
 const GATED = {
@@ -44,74 +41,49 @@ const ADVANCED_COLLAPSE = new Set([
     "everanimate_lora_strength", "everanimate_anchor_strategy",
 ]);
 
-let _advancedOpen = false;
-
 function hideW(w) {
-    if (!w || w._wd_compact_hidden) return;
-    w._wd_compact_orig_cs = w.computeSize;
-    w._wd_compact_orig_type = w.type;
-    w.hidden = true;
-    w.type = "hidden";
-    w.computeSize = () => [0, -4];
+    wdHideWidget(w);
     w._wd_compact_hidden = true;
 }
 
 function showW(w) {
-    if (!w || !w._wd_compact_hidden) return;
-    w.hidden = false;
-    if (w._wd_compact_orig_type) w.type = w._wd_compact_orig_type;
-    if (w._wd_compact_orig_cs) w.computeSize = w._wd_compact_orig_cs;
-    else delete w.computeSize;
+    wdShowWidget(w);
     w._wd_compact_hidden = false;
-}
-
-function findW(node, name) {
-    return (node.widgets || []).find((w) => w.name === name);
 }
 
 function applyGates(node) {
     for (const [gate, children] of Object.entries(GATED)) {
-        const gw = findW(node, gate);
+        const gw = findWdWidget(node, gate);
         const on = gw ? !!gw.value : false;
         for (const cn of children) {
-            const cw = findW(node, cn);
+            const cw = findWdWidget(node, cn);
             if (!cw) continue;
             if (on) showW(cw);
             else hideW(cw);
         }
     }
-    if (!_advancedOpen) {
+    if (!getWdAdvancedOpen(node)) {
         for (const cn of ADVANCED_COLLAPSE) {
-            const cw = findW(node, cn);
+            const cw = findWdWidget(node, cn);
             if (cw) hideW(cw);
+        }
+    } else {
+        for (const cn of ADVANCED_COLLAPSE) {
+            const cw = findWdWidget(node, cn);
+            if (cw) showW(cw);
         }
     }
 }
 
-function capNode(node) {
-    const cap = WD_MAX_H();
-    const w = Math.max(node.size?.[0] || WD_DEFAULT_W, WD_DEFAULT_W);
-    let h = node.size?.[1] || cap;
-    if (typeof node.computeSize === "function") {
-        try {
-            const cs = node.computeSize();
-            h = Math.min(cs[1] || h, cap);
-        } catch (_) {}
-    }
-    h = Math.min(h, cap);
-    _writeNodeSize(node, w, h);
-    node.setDirtyCanvas?.(true, true);
-}
-
 function wireGate(node, gateName) {
-    const gw = findW(node, gateName);
+    const gw = findWdWidget(node, gateName);
     if (!gw || gw._wd_compact_wired) return;
     gw._wd_compact_wired = true;
     const orig = gw.callback;
     gw.callback = function (v, ...rest) {
         const ret = orig ? orig.call(this, v, ...rest) : undefined;
         applyGates(node);
-        capNode(node);
+        capWdNode(node);
         return ret;
     };
 }
@@ -122,41 +94,24 @@ function compactNode(node) {
     }
     for (const gate of Object.keys(GATED)) wireGate(node, gate);
 
-    if (!findW(node, "show_advanced")) {
+    if (!findWdWidget(node, "show_advanced")) {
         const btn = node.addWidget("button", "show_advanced", "Show advanced ▼", () => {
-            _advancedOpen = !_advancedOpen;
-            btn.value = _advancedOpen ? "Hide advanced ▲" : "Show advanced ▼";
+            setWdAdvancedOpen(node, !getWdAdvancedOpen(node));
+            btn.value = getWdAdvancedOpen(node) ? "Hide advanced ▲" : "Show advanced ▼";
             applyGates(node);
-            capNode(node);
+            capWdNode(node);
         });
     }
 
     applyGates(node);
-    capNode(node);
+    capWdNode(node);
 }
 
 app.registerExtension({
     name: "C2C.WanDirector.Compact",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "WanDirectorC2C") return;
-
-        const _origSetSize = nodeType.prototype.setSize;
-        if (typeof _origSetSize === "function") {
-            nodeType.prototype.setSize = function (size) {
-                const cap = WD_MAX_H();
-                return _origSetSize.call(this, [
-                    Math.max(size?.[0] || WD_DEFAULT_W, WD_DEFAULT_W),
-                    Math.min(size?.[1] || cap, cap),
-                ]);
-            };
-        }
-
-        const _origCS = nodeType.prototype.computeSize;
-        nodeType.prototype.computeSize = function (outW) {
-            const cap = WD_MAX_H();
-            const sz = _origCS ? _origCS.call(this, outW) : [this.size?.[0] || WD_DEFAULT_W, cap];
-            return [Math.max(sz[0] || 0, WD_DEFAULT_W), Math.min(sz[1] || cap, cap)];
-        };
+        installWanDirectorPrototype(nodeType);
 
         const _onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {

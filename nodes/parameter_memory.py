@@ -20,6 +20,7 @@ v2 changes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -353,8 +354,14 @@ class ParameterHistoryMEC:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        # Always re-execute to get fresh data
-        return float("NaN")
+        h = hashlib.md5()
+        for k, v in sorted(kwargs.items()):
+            h.update(k.encode())
+            if isinstance(v, str):
+                h.update(v.encode())
+            else:
+                h.update(str(v).encode())
+        return h.hexdigest()
 
 
 # ══════════════════════════════════════════════════════════════════════

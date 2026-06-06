@@ -90,3 +90,58 @@ def combine_slg(eps_pos: torch.Tensor,
             f"{tuple(eps_skip.shape)}"
         )
     return eps_pos + slg_scale * (eps_pos - eps_skip)
+
+
+def apply_slg(model, layers: Sequence[int], scale: float = 0.7,
+              start_percent: float = 0.0, end_percent: float = 1.0):
+    """Patch a ComfyUI model to apply Skip-Layer Guidance.
+
+    Zeroes out (scales down by ``1 - scale``) the self-attention output
+    of the specified transformer layers during the active step window.
+    This effectively creates the "skip" branch inline without requiring
+    a second forward pass — a practical approximation that avoids the
+    memory cost of dual inference.
+
+    Args:
+        model:         ComfyUI model wrapper (must support ``.clone()``
+                       and ``.set_model_attn1_output_patch()``).
+        layers:        Transformer block indices to suppress.
+        scale:         How much of the layer's contribution to keep
+                       (0 = fully skip, 1 = no effect).
+        start_percent: Denoising fraction where SLG activates.
+        end_percent:   Denoising fraction where SLG deactivates.
+
+    Returns:
+        Cloned + patched model.
+    """
+    cfg = SLGConfig(
+        skip_layers=layers,
+        slg_scale=scale,
+        start_pct=start_percent,
+        end_pct=end_percent,
+    )
+    if not cfg.skip_layers:
+        return model
+
+    skip_set = frozenset(cfg.skip_layers)
+    m = model.clone()
+
+    def slg_attn1_output_patch(out, extra_options):
+        block_idx = extra_options.get("block_index", extra_options.get("block", -1))
+        if block_idx not in skip_set:
+            return out
+
+        sigma = extra_options.get("sigmas", None)
+        if sigma is not None:
+            model_sampling = model.get_model_object("model_sampling")
+            if model_sampling is not None:
+                pct = float(model_sampling.percent_through_sigma(sigma[0]))
+            else:
+                pct = 0.5
+            if not (cfg.start_pct <= pct < cfg.end_pct):
+                return out
+
+        return out * (1.0 - cfg.slg_scale)
+
+    m.set_model_attn1_output_patch(slg_attn1_output_patch)
+    return m

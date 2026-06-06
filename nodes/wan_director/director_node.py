@@ -111,12 +111,8 @@ VARIANT_TABLE: dict[str, dict[str, Any]] = {
         "ref_image":       False,
         "control_video":   True,
     },
-    # Wan Animate. EverAnimate (vita-epfl/EverAnimate) is opted into via
-    # the `enable_everanimate` toggle below — it's a rank-32 LoRA on top
-    # of Wan2.2-Animate-14B, not a different architecture, so it lives
-    # under the same variant rather than as a duplicate row.
     "wan_animate": {
-        "label":          "Wan Animate — Reference + Pose (+ optional EverAnimate)",
+        "label":          "Wan Animate — Reference + Pose",
         "latent_channels": 16,
         "spatial_div":     8,
         "temporal_div":    4,
@@ -126,7 +122,26 @@ VARIANT_TABLE: dict[str, dict[str, Any]] = {
         "dual_cfg":        False,
         "ref_image":       True,
         "control_video":   True,
-        "everanimate_compatible": True,
+        "everanimate":    False,
+    },
+    # EverAnimate (vita-epfl/EverAnimate) — rank-32 LoRA on top of
+    # Wan2.2-Animate-14B that adds Persistent Latent Propagation +
+    # Restorative Flow Matching for minute-scale human animation. The
+    # director only emits the LoRA descriptor + chunking program in
+    # `tracks_program["everanimate"]`; an EverAnimate-runner node is
+    # responsible for loading the LoRA and executing chunked inference.
+    "wan2.2_animate_everanimate": {
+        "label":          "EverAnimate — Long-horizon (Wan2.2-Animate + rank-32 LoRA)",
+        "latent_channels": 16,
+        "spatial_div":     8,
+        "temporal_div":    4,
+        "default_fps":     16.0,
+        "needs_image":     False,
+        "supports_neg":    True,
+        "dual_cfg":        True,
+        "ref_image":       True,
+        "control_video":   True,
+        "everanimate":    True,
     },
 }
 
@@ -675,6 +690,10 @@ class WanDirectorC2C:
         "WANVIDEOMODEL",
         "WANVIDEOTEXTEMBEDS",
         "STRING",
+        "IMAGE",
+        "MASK",
+        "STRING",
+        "STRING",
     )
     RETURN_NAMES = (
         "model",
@@ -688,19 +707,27 @@ class WanDirectorC2C:
         "wan_model",
         "wan_text_embeds",
         "tracks_program",
+        "control_video",
+        "control_mask",
+        "guide_data",
+        "quality_recipe",
     )
     OUTPUT_TOOLTIPS = (
-        "Native MODEL (patched with PromptRelay if enabled). When backend='kijai', this is a straight passthrough of the input `model` socket if connected, else None — use `wan_model` instead.",
-        "Positive CONDITIONING (native branch). Empty list when backend='kijai'.",
+        "Native MODEL (patched with PromptRelay + NAG + PAG + Dynamic CFG + AsymFlow as enabled). When backend='kijai', passthrough of input `model` if connected.",
+        "Positive CONDITIONING (native branch) with guide_strength embedded. Empty list when backend='kijai'.",
         "Negative CONDITIONING (native branch). Empty list when backend='kijai'.",
-        "Empty Wan latent sized to the timeline's resolved (W,H,frames). Channels=16, /8 spatial, /4 temporal.",
+        "Wan latent: VAE-encoded reference for i2v (if VAE connected) or empty latent. Channels=16, /8 spatial, /4 temporal.",
         "Frame rate echoed for downstream sampler/saver nodes.",
         "Audio waveform mixed from the timeline's audio segments.",
         "Reference image (first image clip) — used by Wan I2V/Animate as the start/reference frame. Black image if none.",
-        "JSON: resolved backend, variant, latent shape, segment count, audio sample rate, prompt-relay status, warnings.",
+        "JSON: resolved backend, variant, latent shape, segment count, audio sample rate, prompt-relay status, quality stack status, warnings.",
         "Kijai WANVIDEOMODEL (only populated when backend='kijai'; PromptRelay-patched in place if enabled).",
         "Kijai WANVIDEOTEXTEMBEDS dict (only populated when backend='kijai'). Feed directly into WanVideoSampler.",
-        "JSON: timeline schema_version + normalised lora/camera/seed/pose tracks (one entry per validated segment) for downstream applier nodes. Empty arrays when no segments of that type exist.",
+        "JSON: timeline schema_version + normalised lora/camera/seed/pose tracks for downstream applier nodes.",
+        "Control video passthrough (IMAGE) for Wan Fun/Animate. None if not connected.",
+        "Control mask passthrough (MASK) for Wan Fun Inpaint. None if not connected.",
+        "JSON: per-segment guide_strength values for downstream guide applier nodes.",
+        "JSON: quality recipe config (SLG, FETA, RIFLEx, cache, FreeInit, phase-shift) for downstream sampler.",
     )
 
     @classmethod
@@ -769,20 +796,7 @@ class WanDirectorC2C:
                     "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
                     "tooltip": "Wan Animate reference-image influence. Ignored for other variants.",
                 }),
-                # EverAnimate opt-in toggle (only meaningful when variant=wan_animate).
-                # The JS variant gate hides this widget for non-animate variants, and
-                # the 5 EA widgets below are only shown when this is True.
-                "enable_everanimate": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": (
-                        "Apply the EverAnimate rank-32 LoRA (vita-epfl/EverAnimate) on top of "
-                        "the Wan2.2-Animate-14B backbone for minute-scale human animation with "
-                        "Persistent Latent Propagation + Restorative Flow Matching. Only available "
-                        "when model_variant='wan_animate'. When off, the EverAnimate settings below "
-                        "are ignored and tracks_program['everanimate']['active'] is False."
-                    ),
-                }),
-                # EverAnimate settings (only meaningful when enable_everanimate=True)
+                # EverAnimate (only meaningful when variant is wan2.2_animate_everanimate)
                 "everanimate_stage": (list(EVERANIMATE_STAGES), {
                     "default": "stage2_480p",
                     "tooltip": (
@@ -844,13 +858,135 @@ class WanDirectorC2C:
                     "default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4,
                     "tooltip": "PromptRelay penalty decay. <0.1 = sharp boundaries; ≥0.5 softer.",
                 }),
+                # ── HDR / Advanced Guidance (Radiance-style) ──────────
+                "enable_dynamic_cfg": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Cosine-ramped dynamic CFG across denoising steps. "
+                        "Early steps get 1.2× CFG (stronger structure), late steps get 0.7× "
+                        "(softer detail). Prevents oversaturation and improves quality."
+                    ),
+                }),
+                "guidance_rescale_phi": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": (
+                        "Guidance rescale (phi). Rescales guided output to match conditional "
+                        "std-deviation, preventing color oversaturation at high CFG. "
+                        "0=off, 0.7=recommended for Wan 2.2. Requires enable_dynamic_cfg=True."
+                    ),
+                }),
+                "pag_scale": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 5.0, "step": 0.1,
+                    "tooltip": (
+                        "Perturbed Attention Guidance scale. Improves prompt adherence by "
+                        "guiding away from identity-attention outputs. 0=off, 1.0–3.0 typical."
+                    ),
+                }),
+                "enable_phase_shift": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Phase-shift sampling: Euler for early steps (structure), "
+                        "DPM++ 2M for late steps (detail). Uses smooth sigma crossfade."
+                    ),
+                }),
+                "phase_shift_pct": ("FLOAT", {
+                    "default": 0.70, "min": 0.3, "max": 0.95, "step": 0.05,
+                    "tooltip": "Step fraction where phase-shift transitions from Euler to DPM++.",
+                }),
+                "vae_fp32_decode": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": (
+                        "Force VAE decode in fp32 for maximum quality. Wan VAE produces "
+                        "significantly better results in fp32 (recommended by HuggingFace). "
+                        "Uses more VRAM during decode only."
+                    ),
+                }),
+                "enable_multi_clip": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Multi-slot CLIP conditioning. Split prompts into structure (early) "
+                        "and detail (late) phases for finer control over generation."
+                    ),
+                }),
+                "structure_prompt": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": (
+                        "Structure prompt (active during early denoising, 0–35%). "
+                        "Focus on composition, layout, camera angles, scene description. "
+                        "Only used when enable_multi_clip=True."
+                    ),
+                }),
+                "detail_prompt": ("STRING", {
+                    "multiline": True, "default": "",
+                    "tooltip": (
+                        "Detail prompt (active during late denoising, 55–100%). "
+                        "Focus on textures, materials, lighting, color grading. "
+                        "Only used when enable_multi_clip=True."
+                    ),
+                }),
+                # ── Quality Stack (model patches applied before sampling) ──
+                "enable_nag": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Normalized Attention Guidance: boosts prompt adherence via attention-space CFG.",
+                }),
+                "nag_scale": ("FLOAT", {
+                    "default": 11.0, "min": 0.0, "max": 30.0, "step": 0.5,
+                    "tooltip": "NAG guidance scale. Higher = stronger guidance.",
+                }),
+                "enable_asymflow": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "AsymFlow time-shift for improved temporal consistency.",
+                }),
+                "asymflow_shift": ("FLOAT", {
+                    "default": 3.0, "min": 0.1, "max": 20.0, "step": 0.1,
+                    "tooltip": "AsymFlow shift parameter.",
+                }),
+                # ── Quality recipe (config passed to downstream sampler) ──
+                "cache_type": (["none", "teacache", "magcache", "easycache"], {
+                    "default": "none",
+                    "tooltip": "Inference caching strategy. Speeds up generation by skipping redundant transformer passes.",
+                }),
+                "cache_threshold": ("FLOAT", {
+                    "default": 0.10, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Cache skip threshold. Lower = more aggressive caching (faster but less accurate).",
+                }),
+                "enable_slg": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Skip-Layer Guidance: run a second pass with layers removed for quality boost.",
+                }),
+                "slg_layers": ("STRING", {
+                    "default": "",
+                    "tooltip": "Comma-separated layer indices to skip (e.g. '7,8,9'). Empty = auto-select.",
+                }),
+                "slg_scale": ("FLOAT", {
+                    "default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05,
+                    "tooltip": "SLG guidance scale.",
+                }),
+                "enable_feta": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Frequency-Enhanced Temporal Attention for better frame coherence.",
+                }),
+                "feta_scale": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.05,
+                    "tooltip": "FETA scale. 0 = off.",
+                }),
+                "enable_riflex": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "RIFLEx RoPE rescaling for length extrapolation beyond training length.",
+                }),
+                "riflex_k": ("INT", {
+                    "default": 2, "min": 1, "max": 8, "step": 1,
+                    "tooltip": "Number of lowest RoPE frequencies to rescale.",
+                }),
             },
             "optional": {
                 "model":            ("MODEL", {"tooltip": "Native Wan MODEL (2.1 / 2.2 / Fun / Animate). Required when backend='native'."}),
                 "clip":             ("CLIP",  {"tooltip": "Text encoder paired with the Wan model (UMT5 for 2.x). Required when backend='native'."}),
+                "vae":              ("VAE",   {"tooltip": "Wan VAE. If connected, the Director encodes reference images for i2v and forces fp32 when vae_fp32_decode=True."}),
+                "clip_vision":      ("CLIP_VISION", {"tooltip": "CLIP Vision model for image embeddings (Kijai i2v/Animate). If not connected, image_embeds output is None."}),
                 "optional_latent":  ("LATENT", {"tooltip": "Override the auto-built empty latent."}),
-                "control_video":    ("IMAGE",  {"tooltip": "For Wan Fun / Animate: control sequence (depth/pose/canny)."}),
-                "control_mask":     ("MASK",   {"tooltip": "For Wan Fun Inpaint: per-frame mask track."}),
+                "control_video":    ("IMAGE",  {"tooltip": "For Wan Fun / Animate: control sequence (depth/pose/canny). Passed through to control_video output."}),
+                "control_mask":     ("MASK",   {"tooltip": "For Wan Fun Inpaint: per-frame mask track. Passed through to control_mask output."}),
                 "wan_model":        ("WANVIDEOMODEL",    {"tooltip": "Kijai WanVideoWrapper model patcher (required when backend='kijai')."}),
                 "wan_t5":           ("WANTEXTENCODER",   {"tooltip": "Kijai T5 text encoder (required when backend='kijai')."}),
             },
@@ -864,13 +1000,23 @@ class WanDirectorC2C:
                 negative_prompts, segment_lengths, guide_strength, display_mode,
                 custom_width, custom_height, resize_method,
                 cfg_high_noise, cfg_low_noise, ref_strength,
-                enable_everanimate,
                 everanimate_stage, everanimate_num_chunks,
                 everanimate_overlap_frames, everanimate_lora_strength,
                 everanimate_anchor_strategy,
                 audio_target,
                 enable_prompt_relay, prompt_relay_epsilon,
+                enable_dynamic_cfg=False, guidance_rescale_phi=0.0,
+                pag_scale=0.0, enable_phase_shift=False, phase_shift_pct=0.70,
+                vae_fp32_decode=True, enable_multi_clip=False,
+                structure_prompt="", detail_prompt="",
+                enable_nag=False, nag_scale=11.0,
+                enable_asymflow=False, asymflow_shift=3.0,
+                cache_type="none", cache_threshold=0.10,
+                enable_slg=False, slg_layers="", slg_scale=0.7,
+                enable_feta=False, feta_scale=0.5,
+                enable_riflex=False, riflex_k=2,
                 model=None, clip=None,
+                vae=None, clip_vision=None,
                 optional_latent=None, control_video=None, control_mask=None,
                 wan_model=None, wan_t5=None):
 
@@ -973,10 +1119,52 @@ class WanDirectorC2C:
             timeline_data, int(duration_frames), float(frame_rate), audio_target,
         )
 
+        # ── VAE: encode reference image for i2v ─────────────────────
+        vae_encoded = False
+        if vae is not None and vcfg["needs_image"] and optional_latent is None and img_segs:
+            try:
+                if vae_fp32_decode:
+                    from .features._local_vae_hdr import force_fp32_vae
+                    force_fp32_vae(vae)
+                    warnings.append("VAE forced to fp32 for encode/decode quality.")
+
+                ref_pixels = ref_image.permute(0, 3, 1, 2)  # [B,3,H,W]
+                # Wan VAE expects [B,C,T,H,W] — expand single frame
+                ref_5d = ref_pixels.unsqueeze(2)  # [B,3,1,H,W]
+                encoded = vae.encode(ref_5d)
+                if isinstance(encoded, dict):
+                    encoded_samples = encoded.get("samples", encoded.get("latent", None))
+                else:
+                    encoded_samples = encoded
+                if encoded_samples is not None:
+                    # Merge encoded first frame into the empty latent
+                    empty_s = latent["samples"]
+                    if encoded_samples.shape[2:] == empty_s.shape[2:]:
+                        # Copy encoded frame into frame 0 of the latent
+                        empty_s[:, :, :encoded_samples.shape[2]] = encoded_samples
+                    latent = {"samples": empty_s}
+                    vae_encoded = True
+                    warnings.append("VAE-encoded reference image into latent frame 0 for i2v.")
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"VAE encode failed ({exc}); using empty latent.")
+                log.warning("VAE encode failed: %s", exc)
+
+        # ── Parse guide_strength per-segment ──────────────────────────
+        guide_data_parsed = []
+        if guide_strength and guide_strength.strip():
+            try:
+                gs_values = [float(x.strip()) for x in guide_strength.split(",") if x.strip()]
+                guide_data_parsed = gs_values
+            except (ValueError, TypeError) as exc:
+                warnings.append(f"guide_strength parse failed ({exc}); using defaults.")
+
+        guide_data_json = json.dumps({
+            "per_segment": guide_data_parsed,
+            "n_segments": len(guide_data_parsed),
+            "duration_frames": int(duration_frames),
+        })
+
         # ── Backend dispatch ─────────────────────────────────────────
-        # Native and Kijai are both populated when possible; outputs not
-        # relevant to the active backend are returned as harmless empty
-        # values (the user just doesn't wire them).
         out_model_native = model
         out_pos = []
         out_neg = []
@@ -986,8 +1174,31 @@ class WanDirectorC2C:
         relay_used = False
         relay_note = ""
 
+        def _clone_model_once(mdl, original):
+            """Clone model if not already cloned."""
+            return mdl.clone() if mdl is original else mdl
+
         if backend == "native":
-            pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
+            # Multi-CLIP slot conditioning
+            if enable_multi_clip and clip and (structure_prompt.strip() or detail_prompt.strip()):
+                try:
+                    from .features._local_multi_clip import build_multi_slot_conditioning
+                    pos_cond = build_multi_slot_conditioning(
+                        clip,
+                        structure_prompt=structure_prompt or pos_text,
+                        detail_prompt=detail_prompt or pos_text,
+                        style_prompt=global_prompt,
+                    )
+                    if not pos_cond:
+                        pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
+                        warnings.append("Multi-CLIP produced empty conditioning; fell back to single prompt.")
+                    else:
+                        warnings.append(f"Multi-CLIP: {len(pos_cond)} conditioning slots active.")
+                except Exception as exc:
+                    pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
+                    warnings.append(f"Multi-CLIP failed ({exc}); fell back to single prompt.")
+            else:
+                pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
             neg_cond = clip.encode_from_tokens_scheduled(clip.tokenize(neg_text))
 
             if vcfg["dual_cfg"]:
@@ -1001,12 +1212,100 @@ class WanDirectorC2C:
                 for c in pos_cond:
                     c[1]["wan_ref_strength"] = float(ref_strength)
 
-            # Optional embedded PromptRelay on the native MODEL.
+            # Embed guide_strength into conditioning metadata
+            if guide_data_parsed:
+                for c in pos_cond:
+                    c[1]["wan_guide_strength"] = guide_data_parsed
+
+            # ── Model patching stack (applied in order) ──────────────
             out_model_native = model
+
+            # 1. Dynamic CFG + guidance rescale
+            if enable_dynamic_cfg and out_model_native is not None:
+                try:
+                    from .features._local_dynamic_guidance import build_dynamic_cfg_patch
+                    base_cfg = float(cfg_high_noise if vcfg["dual_cfg"] else 6.0)
+                    patch_fn = build_dynamic_cfg_patch(
+                        base_cfg=base_cfg, total_steps=0, denoise=1.0,
+                        phi=float(guidance_rescale_phi),
+                    )
+                    out_model_native = _clone_model_once(out_model_native, model)
+                    out_model_native.set_model_sampler_cfg_function(patch_fn)
+                    warnings.append(
+                        f"Dynamic CFG active (phi={guidance_rescale_phi:.2f}). "
+                        "CFG ramps adaptively based on sampler step count."
+                    )
+                except Exception as exc:
+                    warnings.append(f"Dynamic CFG failed ({exc}); using static CFG.")
+                    log.warning("Dynamic CFG setup failed: %s", exc)
+
+            # 2. PAG (Perturbed Attention Guidance)
+            if pag_scale > 0.0 and out_model_native is not None:
+                try:
+                    from .features._local_pag import apply_pag_to_model
+                    out_model_native = apply_pag_to_model(out_model_native, float(pag_scale))
+                    warnings.append(f"PAG active (scale={pag_scale:.1f}).")
+                except Exception as exc:
+                    warnings.append(f"PAG failed ({exc}); skipped.")
+                    log.warning("PAG setup failed: %s", exc)
+
+            # 3. NAG (Normalized Attention Guidance)
+            if enable_nag and out_model_native is not None:
+                try:
+                    from ._kijai_adapter import apply_nag
+                    out_model_native = _clone_model_once(out_model_native, model)
+                    out_model_native = apply_nag(out_model_native, scale=float(nag_scale))
+                    warnings.append(f"NAG active (scale={nag_scale:.1f}).")
+                except Exception as exc:
+                    warnings.append(f"NAG failed ({exc}); skipped.")
+                    log.warning("NAG setup failed: %s", exc)
+
+            # 4. AsymFlow time-shift
+            if enable_asymflow and out_model_native is not None:
+                try:
+                    from ._kijai_adapter import apply_asymflow
+                    out_model_native = _clone_model_once(out_model_native, model)
+                    out_model_native = apply_asymflow(
+                        out_model_native, shift=float(asymflow_shift),
+                    )
+                    warnings.append(f"AsymFlow active (shift={asymflow_shift:.1f}).")
+                except Exception as exc:
+                    warnings.append(f"AsymFlow failed ({exc}); skipped.")
+                    log.warning("AsymFlow setup failed: %s", exc)
+
+            # 5. SLG (Selective Layer Guidance)
+            if enable_slg and out_model_native is not None:
+                try:
+                    from .features._local_slg import apply_slg
+                    _slg_layers = [int(x.strip()) for x in slg_layers.split(",") if x.strip()] if slg_layers.strip() else []
+                    out_model_native = _clone_model_once(out_model_native, model)
+                    out_model_native = apply_slg(
+                        out_model_native, layers=_slg_layers,
+                        scale=float(slg_scale), start_percent=0.0, end_percent=1.0,
+                    )
+                    warnings.append(f"SLG active (layers={_slg_layers or 'auto'}, scale={slg_scale:.2f}).")
+                except Exception as exc:
+                    warnings.append(f"SLG failed ({exc}); config emitted in quality_recipe.")
+                    log.warning("SLG apply failed: %s", exc)
+
+            # 6. FETA (Frequency-Enhanced Temporal Attention)
+            if enable_feta and feta_scale > 0 and out_model_native is not None:
+                try:
+                    from .features._local_feta import apply_feta
+                    out_model_native = _clone_model_once(out_model_native, model)
+                    out_model_native = apply_feta(
+                        out_model_native, feta_scale=float(feta_scale),
+                    )
+                    warnings.append(f"FETA active (scale={feta_scale:.2f}).")
+                except Exception as exc:
+                    warnings.append(f"FETA failed ({exc}); config emitted in quality_recipe.")
+                    log.warning("FETA apply failed: %s", exc)
+
+            # 7. PromptRelay
             if enable_prompt_relay and len(local_list) >= 2:
                 try:
                     out_model_native, _pr_cond = _apply_prompt_relay_native(
-                        model, clip, latent, global_prompt, local_list,
+                        out_model_native, clip, latent, global_prompt, local_list,
                         segment_lengths, float(prompt_relay_epsilon),
                     )
                     relay_used = True
@@ -1032,21 +1331,14 @@ class WanDirectorC2C:
                     local_list, segment_lengths, int(duration_frames),
                     float(prompt_relay_epsilon), enable_prompt_relay,
                 )
-            # Native sockets get harmless empties so downstream wiring is optional.
             out_pos = []
             out_neg = []
         else:
             raise ValueError(f"Unknown backend '{backend}'. Choices: native, kijai.")
 
-        # EverAnimate descriptor — active only when the variant supports it
-        # AND the user toggled it on. Validated/clamped so the runner can
-        # trust the values.
-        ea_active = bool(vcfg.get("everanimate_compatible", False)) and bool(enable_everanimate)
-        if bool(enable_everanimate) and not vcfg.get("everanimate_compatible", False):
-            warnings.append(
-                f"enable_everanimate=True but variant '{model_variant}' is not "
-                f"EverAnimate-compatible (requires wan_animate); ignoring the toggle."
-            )
+        # EverAnimate descriptor — only populated when the variant opts in.
+        # Validated/clamped here so the runner can trust the values.
+        ea_active = bool(vcfg.get("everanimate", False))
         ea_stage = str(everanimate_stage)
         if ea_stage not in EVERANIMATE_STAGES:
             warnings.append(
@@ -1077,6 +1369,54 @@ class WanDirectorC2C:
             "base_model":       "Wan-AI/Wan2.2-Animate-14B",
         }
 
+        # ── Build quality_recipe for downstream sampler ─────────────
+        slg_layer_list = []
+        if enable_slg and slg_layers.strip():
+            try:
+                slg_layer_list = [int(x.strip()) for x in slg_layers.split(",") if x.strip()]
+            except (ValueError, TypeError):
+                warnings.append("slg_layers parse failed; SLG will auto-select layers.")
+
+        quality_recipe = {
+            "nag": {"enabled": bool(enable_nag), "scale": float(nag_scale), "tau": 2.5, "alpha": 0.25},
+            "slg": {
+                "enabled": bool(enable_slg),
+                "skip_layers": slg_layer_list,
+                "scale": float(slg_scale),
+                "start_pct": 0.0,
+                "end_pct": 1.0,
+            },
+            "feta": {"enabled": bool(enable_feta), "scale": float(feta_scale), "freq_center": 0.20, "freq_bandwidth": 0.15},
+            "riflex": {"enabled": bool(enable_riflex), "k": int(riflex_k), "source_len": 81, "target_len": int(duration_frames)},
+            "cache": {"type": str(cache_type), "threshold": float(cache_threshold), "max_skips": 5},
+            "freeinit": {"enabled": False, "filter_type": "butterworth", "d_s": 1.0, "d_t": 1.0},
+            "phase_shift": {
+                "enabled": bool(enable_phase_shift),
+                "split_pct": float(phase_shift_pct),
+                "scheduler_early": "simple",
+                "scheduler_late": "simple",
+                "shift": 8.0,
+            },
+            "vae": {
+                "fp32_decode": bool(vae_fp32_decode),
+                "spatial_tiling": True,
+                "tile_size": 256,
+                "overlap": 32,
+            },
+            "dynamic_cfg": {
+                "enabled": bool(enable_dynamic_cfg),
+                "phi": float(guidance_rescale_phi),
+            },
+            "pag": {"enabled": pag_scale > 0.0, "scale": float(pag_scale)},
+            "asymflow": {"enabled": bool(enable_asymflow), "shift": float(asymflow_shift)},
+            "multi_clip": {"enabled": bool(enable_multi_clip)},
+        }
+        quality_recipe_json = json.dumps(quality_recipe, separators=(",", ":"))
+
+        # Count active quality features
+        active_features = [k for k, v in quality_recipe.items()
+                           if isinstance(v, dict) and v.get("enabled")]
+
         info = json.dumps({
             "backend":      backend,
             "variant":      model_variant,
@@ -1085,6 +1425,7 @@ class WanDirectorC2C:
             "frames":       int(duration_frames),
             "fps":          float(frame_rate),
             "latent_shape": list(latent["samples"].shape),
+            "vae_encoded":  vae_encoded,
             "n_text":       len(local_list),
             "n_neg":        len(neg_list),
             "n_image":      len(img_segs),
@@ -1092,6 +1433,7 @@ class WanDirectorC2C:
             "n_camera":     len(camera_program),
             "n_seed":       len(seed_program),
             "n_pose":       len(pose_program),
+            "guide_strengths": guide_data_parsed,
             "schema_version": _SCHEMA_VERSION,
             "audio_sr":     audio_out["sample_rate"],
             "prompt_relay": {
@@ -1101,11 +1443,24 @@ class WanDirectorC2C:
                 "epsilon":   float(prompt_relay_epsilon),
             },
             "everanimate":  everanimate_program if ea_active else {"active": False},
+            "model_patches": {
+                "dynamic_cfg": bool(enable_dynamic_cfg),
+                "guidance_rescale_phi": float(guidance_rescale_phi),
+                "pag": pag_scale > 0.0,
+                "pag_scale": float(pag_scale),
+                "nag": bool(enable_nag),
+                "nag_scale": float(nag_scale),
+                "asymflow": bool(enable_asymflow),
+                "asymflow_shift": float(asymflow_shift),
+            },
+            "quality_features": active_features,
+            "quality_recipe": quality_recipe,
+            "control_video_connected": control_video is not None,
+            "control_mask_connected": control_mask is not None,
             "track_warnings": track_warnings,
             "warnings":     warnings,
         }, indent=2)
 
-        # tracks_program: compact JSON for downstream applier nodes.
         tracks_program = json.dumps({
             "schema_version": _SCHEMA_VERSION,
             "duration_frames": int(duration_frames),
@@ -1119,4 +1474,5 @@ class WanDirectorC2C:
 
         return (out_model_native, out_pos, out_neg, latent, float(frame_rate),
                 audio_out, ref_image, info, out_wan_model, out_text_embeds,
-                tracks_program)
+                tracks_program, control_video, control_mask,
+                guide_data_json, quality_recipe_json)

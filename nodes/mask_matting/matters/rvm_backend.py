@@ -54,6 +54,7 @@ class RVMMatter(BaseMatter):
         # Choose architecture from filename: rvm_mobilenetv3 / rvm_resnet50.
         stem = os.path.splitext(os.path.basename(self.model_name or ""))[0].lower()
         variant = "mobilenetv3" if "mobilenet" in stem else "resnet50"
+        self._variant = variant
         try:
             model = torch.hub.load("PeterL1n/RobustVideoMatting", variant, pretrained=(ckpt is None))
             if ckpt is not None and os.path.isfile(ckpt):
@@ -94,7 +95,7 @@ class RVMMatter(BaseMatter):
                     # (dilated slightly to keep hair detail)
                     grow = F.max_pool2d(m.unsqueeze(1), 9, 1, 4).squeeze(1)
                     alpha = torch.minimum(alpha, grow)
-            return {"alpha": alpha, "info": {"backend": self.KEY, "variant": stem or "auto"}}
+            return {"alpha": alpha, "info": {"backend": self.KEY, "variant": getattr(self, "_variant", None) or "auto"}}
         except Exception:
             free_vram()
             raise

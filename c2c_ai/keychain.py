@@ -16,6 +16,7 @@ separate entry so revoking one doesn't disturb the others.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Iterable
 
 log = logging.getLogger("c2c_ai.keychain")
@@ -47,6 +48,17 @@ KEY_HF = "HUGGINGFACE_API_KEY"
 KEY_AZURE_OPENAI = "AZURE_OPENAI_API_KEY"
 KEY_GEMINI = "GEMINI_API_KEY"
 KEY_COHERE = "COHERE_API_KEY"
+# 2026-05-18 — frontier model providers (all OpenAI-compatible)
+KEY_XAI = "XAI_API_KEY"
+KEY_GROQ = "GROQ_API_KEY"
+KEY_MISTRAL = "MISTRAL_API_KEY"
+KEY_DEEPSEEK = "DEEPSEEK_API_KEY"
+KEY_TOGETHER = "TOGETHER_API_KEY"
+KEY_FIREWORKS = "FIREWORKS_API_KEY"
+KEY_PERPLEXITY = "PERPLEXITY_API_KEY"
+# Aliases users may have stored under alternate canonical names
+KEY_DASHSCOPE = "DASHSCOPE_API_KEY"  # Alibaba's name for Qwen
+KEY_GOOGLE = "GOOGLE_API_KEY"        # Alternate Gemini name
 
 ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_ANTHROPIC,
@@ -57,16 +69,40 @@ ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_AZURE_OPENAI,
     KEY_GEMINI,
     KEY_COHERE,
+    KEY_XAI,
+    KEY_GROQ,
+    KEY_MISTRAL,
+    KEY_DEEPSEEK,
+    KEY_TOGETHER,
+    KEY_FIREWORKS,
+    KEY_PERPLEXITY,
+    KEY_DASHSCOPE,
+    KEY_GOOGLE,
 )
 
 
 def get(name: str) -> str | None:
-    """Return the secret, or ``None`` if not set. Never raises on missing."""
+    """Return the secret, or ``None`` if not set. Never raises on missing.
+
+    Lookup order:
+      1. OS keychain (preferred — survives shell restarts)
+      2. Process environment variable of the same name (fallback for
+         users who export ``OPENAI_API_KEY=...`` in their shell rc but
+         never imported it into the keychain). This is what
+         ``_auto_discover_backends`` relies on so the backend can
+         actually authenticate after bootstrap.
+    """
     try:
-        return _kr().get_password(SERVICE, name)
+        v = _kr().get_password(SERVICE, name)
+        if v:
+            return v
     except Exception as exc:
         log.warning("keychain get(%s) failed: %s", name, exc)
-        return None
+    # Env fallback (never logs the value)
+    env_v = os.environ.get(name)
+    if env_v:
+        return env_v
+    return None
 
 
 def set_(name: str, value: str) -> None:

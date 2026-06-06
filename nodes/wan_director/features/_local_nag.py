@@ -96,24 +96,51 @@ def build_nag_patch(
     head looks for, so guiding it produces the strongest semantic
     signal.
 
+    ComfyUI runs two forward passes per step: unconditional (negative)
+    then conditional (positive). We capture q from the uncond pass and
+    use it as the negative query during the cond pass.
+
     For tests / pure-tensor use, prefer ``apply_nag_to_attn_output``
     directly.
     """
+    # State: captured negative queries per transformer block.
+    # key = block index from extra_options, value = q tensor.
+    _neg_q_cache: dict[int, torch.Tensor] = {}
+    _call_count = [0]
 
     def _patch(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                extra_options: dict | None = None) -> tuple:
-        # The "negative" branch q is supplied by the caller via
-        # extra_options["nag_q_neg"] when running a paired forward; if
-        # absent we have nothing to guide against and return inputs as-is.
         if not extra_options:
             return q, k, v
-        q_neg = extra_options.get("nag_q_neg")
-        if q_neg is None or q_neg.shape != q.shape:
+
+        block_idx = extra_options.get("block_index", 0)
+        # Detect which CFG pass we're in via cond_or_uncond.
+        # ComfyUI sets this: [1] = uncond, [0] = cond.
+        cond_or_uncond = extra_options.get("cond_or_uncond", [0])
+
+        # Also check for explicit nag_q_neg (for test compatibility).
+        explicit_neg = extra_options.get("nag_q_neg")
+        if explicit_neg is not None and explicit_neg.shape == q.shape:
+            q_guided = apply_nag_to_attn_output(
+                q, explicit_neg, scale=scale, tau=tau, alpha=alpha,
+            )
+            return q_guided, k, v
+
+        is_uncond = 1 in cond_or_uncond if isinstance(cond_or_uncond, (list, tuple)) else cond_or_uncond == 1
+
+        if is_uncond:
+            # Uncond pass: cache q for use in cond pass.
+            _neg_q_cache[block_idx] = q.detach().clone()
             return q, k, v
-        q_guided = apply_nag_to_attn_output(
-            q, q_neg, scale=scale, tau=tau, alpha=alpha,
-        )
-        return q_guided, k, v
+        else:
+            # Cond pass: apply NAG using cached uncond q.
+            q_neg = _neg_q_cache.get(block_idx)
+            if q_neg is None or q_neg.shape != q.shape:
+                return q, k, v
+            q_guided = apply_nag_to_attn_output(
+                q, q_neg, scale=scale, tau=tau, alpha=alpha,
+            )
+            return q_guided, k, v
 
     _patch.__name__ = "nag_attn1_patch"
     _patch.nag_params = {"scale": scale, "tau": tau, "alpha": alpha}

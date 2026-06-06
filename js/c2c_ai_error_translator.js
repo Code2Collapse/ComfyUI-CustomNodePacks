@@ -19,6 +19,50 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 const PANEL_ID = "c2c-ai-errtrans-panel";
 const SETTING_AUTO = "c2c.ai.errorTranslator.auto";
 
+function _c2cHumanise(raw) {
+    if (!raw || typeof raw !== "string") return "Something went wrong.";
+    const rules = [
+        [/AttributeError.*NoneType/i, "A required input is not connected. Check all red sockets on the node."],
+        [/CUDA out of memory/i, "Not enough GPU memory. Lower the resolution or batch size, or restart ComfyUI."],
+        [/FileNotFoundError|No such file/i, "A model file is missing. Check the file path in the node."],
+        [/KeyError/i, "A setting is missing or misspelled. Check the node parameters."],
+        [/RuntimeError.*size|shape/i, "Image dimensions do not match. Check that connected images have compatible sizes."],
+        [/ConnectionError|HTTPError/i, "Could not reach the model server. Make sure the service is running."],
+        [/torch.*expected.*got/i, "Wrong tensor type. The connected output type does not match this input."],
+        [/ModuleNotFoundError|ImportError/i, "A required Python package is missing. Check requirements.txt and reinstall."],
+    ];
+    for (const [re, msg] of rules) if (re.test(raw)) return msg;
+    const line = raw.split("\n").find(l => l.trim() && !l.startsWith(" ") && !l.startsWith("\t")) || raw.slice(0, 120);
+    return "Error: " + line.trim();
+}
+
+function _friendlyEl(panel) {
+    const body = panel.querySelector(".body");
+    let el = body?.querySelector(".friendly");
+    if (!el && body) {
+        el = document.createElement("div");
+        el.className = "friendly";
+        body.prepend(el);
+    }
+    return el;
+}
+
+function _appendDetails(panel, raw) {
+    const body = panel.querySelector(".body");
+    if (!body) return;
+    let det = body.querySelector(".details");
+    if (!det) {
+        det = document.createElement("details");
+        det.className = "details";
+        det.style.cssText = "margin-top:8px;font-size:10px;color:var(--c2c-sub);";
+        det.innerHTML = '<summary style="cursor:pointer;color:var(--c2c-blue)">Technical details</summary><pre class="raw" style="margin:6px 0 0;padding:6px;background:var(--c2c-bg2);border-radius:4px;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto;font-family:monospace;font-size:10px;"></pre>';
+        body.appendChild(det);
+    }
+    const pre = det.querySelector(".raw");
+    if (pre) pre.textContent = raw;
+    det.open = false;
+}
+
 // All colors source from CSS custom properties emitted by _c2c_theme.js
 // (--c2c-bg, --c2c-fg, --c2c-red, etc.) so panel + toast repaint instantly
 // when setVariant() flips mocha/latte/oled. No hardcoded palette.
@@ -52,7 +96,10 @@ async function translate(errorText, context = "") {
     const panel = ensurePanel();
     panel.querySelector(".ctx").textContent = context || "execution error";
     const body = panel.querySelector(".body");
-    body.textContent = "";
+    body.querySelector(".details")?.remove();
+    const friendly = _friendlyEl(panel);
+    if (friendly) friendly.textContent = _c2cHumanise(errorText);
+    _appendDetails(panel, errorText);
     panel.querySelector(".status").textContent = "checking rule pack…";
 
     // Track D.1 — try the offline deterministic rule pack first. Zero cost,
@@ -76,7 +123,8 @@ async function translate(errorText, context = "") {
                     lines.push("Try this:");
                     for (const step of fixes) lines.push("\u2022 " + step);
                 }
-                body.textContent = lines.join("\n");
+                if (friendly) friendly.textContent = lines.join("\n");
+                _appendDetails(panel, errorText);
                 panel.querySelector(".status").textContent = "rule pack (offline)";
                 panel.querySelector(".backend").textContent = "deterministic";
                 return;
@@ -105,12 +153,16 @@ async function translate(errorText, context = "") {
         });
         if (!r.ok || !r.body) {
             const j = await r.json().catch(() => ({}));
-            body.textContent =
-                "AI helper unavailable: " + (j.message || ("HTTP " + r.status)) +
-                "\n\nTip: install Ollama and pull a Qwen3 GGUF, or set the policy for 'error_translator' to allow cloud in Settings.";
+            if (friendly) {
+                friendly.textContent = _c2cHumanise(errorText) + "\n\nAI helper unavailable: " +
+                    (j.message || ("HTTP " + r.status)) +
+                    ". Install Ollama and pull a Qwen3 GGUF, or allow cloud for error_translator in Settings.";
+            }
+            _appendDetails(panel, errorText);
             panel.querySelector(".status").textContent = "no backend";
             return;
         }
+        if (friendly) friendly.textContent = "";
         panel.querySelector(".status").textContent = "streaming…";
         const reader = r.body.getReader();
         const dec = new TextDecoder();
@@ -130,15 +182,16 @@ async function translate(errorText, context = "") {
                 });
                 if (!data) continue;
                 if (event === "error") {
-                    body.textContent += "\n[error] " + data;
+                    if (friendly) friendly.textContent += "\n[error] " + data;
                     panel.querySelector(".status").textContent = "error";
                 } else if (event === "done") {
+                    _appendDetails(panel, errorText);
                     panel.querySelector(".status").textContent = "done";
                 } else {
                     try {
                         const obj = JSON.parse(data);
-                        if (obj.chunk) {
-                            body.textContent += obj.chunk;
+                        if (obj.chunk && friendly) {
+                            friendly.textContent += obj.chunk;
                             body.scrollTop = body.scrollHeight;
                         }
                     } catch (__c2cErr) { __c2cReport("c2c_ai_error_translator", __c2cErr); }
@@ -147,7 +200,10 @@ async function translate(errorText, context = "") {
         }
         window.__C2C_AI_HUD__?.refresh?.();
     } catch (exc) {
-        body.textContent = "Error: " + exc.message;
+        if (friendly) {
+            friendly.textContent = _c2cHumanise(errorText) + "\n\nCould not reach the AI helper: " + exc.message;
+        }
+        _appendDetails(panel, errorText);
         panel.querySelector(".status").textContent = "error";
     }
 }
@@ -191,9 +247,10 @@ function _showInlinePrompt(text, ctx) {
          box-shadow:0 8px 32px color-mix(in srgb, var(--c2c-shadowBase) 60%, transparent);
          font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;
          display:flex;align-items:center;gap:10px;max-width:380px;`;
+    const friendly = _c2cHumanise(text);
     div.innerHTML =
         `<span style="color:var(--c2c-red);font-weight:600">⚠</span>
-         <span style="flex:1;color:var(--c2c-sub);font-size:11px">${ctx}: error caught.</span>
+         <span style="flex:1;color:var(--c2c-sub);font-size:11px">${ctx}: ${friendly.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>
          <button class="ai" style="background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Ask AI</button>
          <button class="dismiss" style="background:transparent;color:var(--c2c-sub);border:none;cursor:pointer;font-size:14px">×</button>`;
     div.querySelector(".ai").onclick = () => { div.remove(); translate(text, ctx); };
