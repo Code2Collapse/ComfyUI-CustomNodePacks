@@ -20,6 +20,7 @@ Unified RETURN_TYPES (5 ports):
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import torch
@@ -230,6 +231,25 @@ class SplineMaskMEC:
         "flow across video), flow_path (procedural ribbon/wave/dust). "
         "CPU + small VRAM. No models required."
     )
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, mode, image=None, **kwargs):
+        if mode == "track" and image is None:
+            return "[C2C] Connect a video/image to the Image input for track mode."
+        return True
+
+    @classmethod
+    def IS_CHANGED(cls, mode, spline_data, **kwargs):
+        h = hashlib.md5()
+        h.update(str(mode).encode())
+        h.update(str(spline_data).encode())
+        for k in sorted(kwargs):
+            v = kwargs[k]
+            if isinstance(v, torch.Tensor):
+                h.update(v.cpu().numpy().tobytes())
+            elif v is not None:
+                h.update(str(v).encode())
+        return h.hexdigest()
 
     # ──────────────────────────────────────────────────────────────────
     def execute(self, mode, spline_data, spline_type, closed,

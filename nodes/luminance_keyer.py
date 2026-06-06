@@ -21,6 +21,7 @@ from __future__ import annotations
 from . import _interrupt_check as _IC
 
 import gc
+import hashlib
 import torch
 
 # ITU-R BT.709 luminance coefficients
@@ -150,6 +151,13 @@ class LuminanceKeyerMEC:
         "using adjustable thresholds with smooth S-curve falloff and gamma.\n"
         "Modes: auto, highlights, midtones, shadows, custom."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, image, mode, low, high, falloff, gamma, invert, **kwargs):
+        h = hashlib.md5()
+        h.update(image.cpu().numpy().tobytes())
+        h.update(f"{mode}:{low}:{high}:{falloff}:{gamma}:{invert}".encode())
+        return h.hexdigest()
 
     def key_luminance(
         self,

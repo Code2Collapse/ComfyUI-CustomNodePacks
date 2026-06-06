@@ -44,7 +44,7 @@ function _collapseWidget(w) {
 function _restoreWidget(w, height) {
     if (!w) return;
     w.type = undefined;
-    const h = height || 460;
+    const h = height || 280;
     w.computeSize = () => [0, h];
     w.computeLayoutSize = undefined;
     if (typeof w.getMinHeight === "function") w.getMinHeight = () => h;

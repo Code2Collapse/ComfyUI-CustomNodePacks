@@ -694,21 +694,28 @@ function installEditor(node) {
         }
     }
 
-    let widgetH = 460;
+    let widgetH = 280;
     const canvasWidget = node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
+    canvasWidget.computeSize = function (width) {
+        const base = node.computeSize?.(width);
+        const chrome = Array.isArray(base) ? (base[1] || 0) : 0;
+        const extra = Math.max(0, (node.size?.[1] || 0) - chrome);
+        const h = extra > 100 ? Math.min(520, extra - 24) : widgetH;
+        return [width, Math.max(180, h)];
+    };
 
     node._mecSplineEditHost = root;
     node._mecSplineEditWidget = canvasWidget;
     node._mecSplineEditWidgetH = () => widgetH;
 
     if (!node.size || node.size[0] < 600) {
-        const h = node.size?.[1] || 640;
-        node.setSize?.([600, Math.max(h, 640)]);
+        const h = node.size?.[1] || 420;
+        node.setSize?.([600, Math.max(h, 420)]);
     }
 
     // When a backdrop image is loaded, grow the canvas widget so the
@@ -718,7 +725,7 @@ function installEditor(node) {
         const baseW = (node.size?.[0] || 600) - 24;
         if (baseW <= 0) return;
         const aspect = ed.canvasH / ed.canvasW;
-        const targetH = Math.max(360, Math.min(900, Math.round(baseW * aspect) + 80));
+        const targetH = Math.max(220, Math.min(520, Math.round(baseW * aspect) + 48));
         if (Math.abs(targetH - widgetH) >= 10) {
             widgetH = targetH;
             const curH = node.size?.[1] || widgetH;
