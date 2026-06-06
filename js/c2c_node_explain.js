@@ -148,7 +148,7 @@ function _injectStyle() {
     style.id    = STYLE_ID;
     style.textContent = `
 #${POPOVER_ID} {
-    position: fixed;
+    position: absolute;
     z-index: var(--c2c-z-popover, 9000);
     width: ${POPOVER_W}px;
     max-height: 380px;
@@ -157,7 +157,7 @@ function _injectStyle() {
     border: 1px solid var(--c2c-gray700);
     border-radius: 6px;
     padding: 8px 10px;
-    box-shadow: 0 6px 24px rgba(0,0,0,0.65);
+    box-shadow: 0 6px 24px color-mix(in srgb, var(--c2c-shadowBase) 65%, transparent);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 12px;
     line-height: 1.4;
@@ -467,6 +467,7 @@ function _applyGeom(el) {
 }
 function _disablePanelMode(el) {
     if (!el.classList.contains("c2c-ne-panel-mode")) return;
+    el.removeAttribute("data-c2c-dock");
     el.classList.remove("c2c-ne-panel-mode", "visible");
     // Restore native innerHTML setter (delete the per-instance shadow)
     try { delete el.innerHTML; } catch (_) {}
@@ -476,6 +477,7 @@ function _disablePanelMode(el) {
 function _enablePanelMode(el) {
     if (el._c2cPanelized) return;
     el._c2cPanelized = true;
+    el.setAttribute("data-c2c-dock", "inspector");
     el.classList.add("c2c-ne-panel-mode", "visible");
     // Build chrome: head + body + 8 resize edges/corners.
     // Use the prototype setter ONCE, before redirecting innerHTML on this instance.
@@ -725,8 +727,8 @@ function _positionPopover(el, node) {
     left = Math.max(margin, Math.min(left, vw - POPOVER_W - margin));
     top  = Math.max(margin, Math.min(top,  vh - popH      - margin));
 
-    el.style.left = `${left}px`;
-    el.style.top  = `${top}px`;
+    el.style.left = `${left + window.scrollX}px`;
+    el.style.top  = `${top  + window.scrollY}px`;
 }
 
 /** Position popover next to a specific slot dot. Inputs anchor on the left
@@ -759,8 +761,8 @@ function _positionPopoverSlot(el, node, isInput, slotIndex) {
     if (left + POPOVER_W + margin > vw) left = sx - POPOVER_W - margin;
     left = Math.max(margin, Math.min(left, vw - POPOVER_W - margin));
     top  = Math.max(margin, Math.min(top,  vh - popH      - margin));
-    el.style.left = `${left}px`;
-    el.style.top  = `${top}px`;
+    el.style.left = `${left + window.scrollX}px`;
+    el.style.top  = `${top  + window.scrollY}px`;
 }
 
 // --------------------------------------------------------------------------

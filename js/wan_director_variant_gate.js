@@ -15,13 +15,14 @@ import { app } from "../../scripts/app.js";
 // Mirror of nodes/wan_director/director_node.py:VARIANT_TABLE flags
 // (only the ones that drive UI visibility).
 const VARIANT_FLAGS = {
-    "wan2.1_t2v":      { dual_cfg: false, ref_image: false, needs_image: false, everanimate_compatible: false },
-    "wan2.1_i2v":      { dual_cfg: false, ref_image: false, needs_image: true,  everanimate_compatible: false },
-    "wan2.2_t2v":      { dual_cfg: true,  ref_image: false, needs_image: false, everanimate_compatible: false },
-    "wan2.2_i2v":      { dual_cfg: true,  ref_image: false, needs_image: true,  everanimate_compatible: false },
-    "wan_fun_inp":     { dual_cfg: false, ref_image: false, needs_image: true,  everanimate_compatible: false },
-    "wan_fun_control": { dual_cfg: false, ref_image: false, needs_image: false, everanimate_compatible: false },
-    "wan_animate":     { dual_cfg: false, ref_image: true,  needs_image: false, everanimate_compatible: true  },
+    "wan2.1_t2v":      { dual_cfg: false, ref_image: false, needs_image: false, everanimate: false },
+    "wan2.1_i2v":      { dual_cfg: false, ref_image: false, needs_image: true,  everanimate: false },
+    "wan2.2_t2v":      { dual_cfg: true,  ref_image: false, needs_image: false, everanimate: false },
+    "wan2.2_i2v":      { dual_cfg: true,  ref_image: false, needs_image: true,  everanimate: false },
+    "wan_fun_inp":     { dual_cfg: false, ref_image: false, needs_image: true,  everanimate: false },
+    "wan_fun_control": { dual_cfg: false, ref_image: false, needs_image: false, everanimate: false },
+    "wan_animate":     { dual_cfg: false, ref_image: true,  needs_image: false, everanimate: false },
+    "wan2.2_animate_everanimate": { dual_cfg: true,  ref_image: true, needs_image: false, everanimate: true },
 };
 
 const EVERANIMATE_WIDGETS = [
@@ -74,21 +75,28 @@ function applyVariant(node, variant) {
     if (flags.dual_cfg) showWidget(wCfgLo); else hideWidget(wCfgLo);
     if (flags.ref_image) showWidget(wRef);  else hideWidget(wRef);
 
-    // EverAnimate toggle is visible only for compatible variants (wan_animate).
-    // The 5 EA settings are visible only when toggle is also ON.
-    const wEnableEA = findW(node, "enable_everanimate");
-    if (flags.everanimate_compatible) showWidget(wEnableEA); else hideWidget(wEnableEA);
-    const eaOn = flags.everanimate_compatible && !!(wEnableEA && wEnableEA.value);
-    for (const wname of EVERANIMATE_WIDGETS) {
-        const w = findW(node, wname);
-        if (eaOn) showWidget(w); else hideWidget(w);
+    // needs_image: hide VAE-related inputs for t2v / non-image variants.
+    const IMAGE_WIDGETS = ["vae_fp32_decode"];
+    for (const wn of IMAGE_WIDGETS) {
+        const w = findW(node, wn);
+        if (flags.needs_image) showWidget(w); else hideWidget(w);
     }
 
-    // Recompute node size and redraw.
+    // EverAnimate widgets: only shown for the everanimate variant.
+    for (const wname of EVERANIMATE_WIDGETS) {
+        const w = findW(node, wname);
+        if (flags.everanimate) showWidget(w); else hideWidget(w);
+    }
+
+    // Recompute node size and redraw (never expand past viewport cap).
+    const cap = Math.max(520, Math.floor((window.innerHeight || 1080) * 0.62));
     if (typeof node.setSize === "function" && node.computeSize) {
         const min = node.computeSize();
         const cur = node.size || [0, 0];
-        node.setSize([Math.max(cur[0], min[0]), Math.max(cur[1], min[1])]);
+        node.setSize([
+            Math.max(cur[0], min[0]),
+            Math.min(Math.max(cur[1], min[1]), cap),
+        ]);
     }
     app.graph?.setDirtyCanvas?.(true, true);
 }
@@ -112,18 +120,6 @@ app.registerExtension({
                 try { applyVariant(node, v); } catch (e) { console.warn("[WanDirector] variant gate:", e); }
                 return ret;
             };
-
-            // Hook the EverAnimate toggle so flipping it reactively shows/hides
-            // the 5 EA setting widgets without needing to re-select the variant.
-            const wEnableEA = findW(node, "enable_everanimate");
-            if (wEnableEA) {
-                const origEA = wEnableEA.callback;
-                wEnableEA.callback = function (v, ...rest) {
-                    const ret = origEA ? origEA.call(this, v, ...rest) : undefined;
-                    try { applyVariant(node, wVariant.value); } catch (e) { console.warn("[WanDirector] EA toggle:", e); }
-                    return ret;
-                };
-            }
 
             // Apply once on creation (after widget order is finalised).
             queueMicrotask(() => {

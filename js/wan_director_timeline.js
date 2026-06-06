@@ -1131,10 +1131,49 @@ class TimelineEditor {
 // expectation: "act on the thing I'm currently editing").
 const _wdInstances = new Set();
 
+/** Cap WanDirector height so input sockets stay visible on first add. */
+const WD_MAX_VIEW_H = () => Math.max(480, Math.floor((window.innerHeight || 1080) * 0.62));
+const WD_DEFAULT_W = 640;
+
+function _wdCapNode(node) {
+    if (!node?.size) return;
+    const cap = WD_MAX_VIEW_H();
+    const w = Math.max(node.size[0] || 0, WD_DEFAULT_W);
+    const h = Math.min(node.size[1] || cap, cap);
+    _writeNodeSize(node, w, h);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function _writeNodeSize(node, w, h) {
+    if (!node) return;
+    if (!node.size) node.size = [w, h];
+    else {
+        node.size[0] = w;
+        node.size[1] = h;
+    }
+}
+
 app.registerExtension({
     name: "C2C.WanDirectorTimeline",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "WanDirectorC2C") return;
+
+        const _origComputeSize = nodeType.prototype.computeSize;
+        nodeType.prototype.computeSize = function (outW) {
+            const sz = _origComputeSize ? _origComputeSize.call(this, outW) : [this.size?.[0] || WD_DEFAULT_W, this.size?.[1] || 520];
+            const cap = WD_MAX_VIEW_H();
+            return [Math.max(sz[0] || 0, WD_DEFAULT_W), Math.min(sz[1] || cap, cap)];
+        };
+
+        const _origSetSize = nodeType.prototype.setSize;
+        if (typeof _origSetSize === "function") {
+            nodeType.prototype.setSize = function (size) {
+                const cap = WD_MAX_VIEW_H();
+                const w = Math.max(size?.[0] || WD_DEFAULT_W, WD_DEFAULT_W);
+                const h = Math.min(size?.[1] || cap, cap);
+                return _origSetSize.call(this, [w, h]);
+            };
+        }
 
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -1143,11 +1182,12 @@ app.registerExtension({
             for (const w of (this.widgets || [])) {
                 if (HIDDEN_NAMES.has(w.name)) hideWidget(w);
             }
-            // Set a wider default size.
+            // Moderate default width; height capped after DOM widgets register.
             if (!this._wdTimelineSizeApplied) {
-                this.size[0] = Math.max(this.size[0] || 0, 820);
+                this.size[0] = Math.max(this.size[0] || 0, WD_DEFAULT_W);
                 this._wdTimelineSizeApplied = true;
             }
+            _wdCapNode(this);
             const host = document.createElement("div");
             host.style.cssText = "width:100%;height:100%;";
             const widget = this.addDOMWidget("wd_timeline", "wd_timeline", host, {
@@ -1167,13 +1207,21 @@ app.registerExtension({
                 // and the node height fits both DOM widgets. Preserve the
                 // 820-min width clamp from above.
                 try {
-                    const minW = 820;
+                    _wdCapNode(self);
                     const cs = self.computeSize();
-                    self.setSize([Math.max(cs[0] || 0, minW), cs[1] || self.size[1]]);
+                    self.setSize([
+                        Math.max(cs[0] || 0, WD_DEFAULT_W),
+                        Math.min(cs[1] || WD_MAX_VIEW_H(), WD_MAX_VIEW_H()),
+                    ]);
+                    _wdCapNode(self);
                 } catch {}
                 self.setDirtyCanvas?.(true, true);
             }, 0);
             _wdInstances.add(self);
+            const _capLoop = () => { _wdCapNode(self); };
+            setTimeout(_capLoop, 0);
+            setTimeout(_capLoop, 200);
+            setTimeout(_capLoop, 800);
             return r;
         };
 
@@ -1181,6 +1229,7 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             const r = origConfigure?.apply(this, arguments);
             setTimeout(() => {
+                _wdCapNode(this);
                 if (this._wdTimeline) {
                     this._wdTimeline._loadFromWidgets();
                     this._wdTimeline._updatePropsPanel();

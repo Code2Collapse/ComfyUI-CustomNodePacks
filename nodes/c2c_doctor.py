@@ -469,6 +469,55 @@ def scan_file(filename: str, data: bytes) -> Dict[str, Any]:
     return out
 
 
+_WORKFLOW_PNG_KEYS = frozenset({"workflow", "Workflow", "prompt", "Prompt", "parameters"})
+
+
+def clean_png_metadata(data: bytes, *, workflow_keys_only: bool = True) -> Dict[str, Any]:
+    """Strip workflow-related tEXt/iTXt/zTXt chunks; preserve image data (IDAT)."""
+    import struct
+
+    if len(data) < 8 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return {"success": False, "error": "not_png"}
+    out = bytearray(data[:8])
+    removed: List[str] = []
+    i = 8
+    while i + 12 <= len(data):
+        ln = struct.unpack(">I", data[i:i + 4])[0]
+        if ln > len(data) - i - 12:
+            return {"success": False, "error": "png_chunk_length_overflow"}
+        ctype = data[i + 4:i + 8]
+        chunk = data[i:i + 12 + ln]
+        drop = False
+        if ctype in (b"tEXt", b"iTXt", b"zTXt"):
+            if not workflow_keys_only:
+                drop = True
+            else:
+                payload = data[i + 8:i + 8 + ln]
+                nul = payload.find(b"\x00")
+                if nul > 0:
+                    key = payload[:nul].decode("latin-1", errors="replace")
+                    if key in _WORKFLOW_PNG_KEYS:
+                        drop = True
+                elif ctype != b"tEXt":
+                    drop = False
+            if drop:
+                removed.append(ctype.decode("ascii", errors="replace"))
+        if not drop:
+            out.extend(chunk)
+        i += 12 + ln
+        if ctype == b"IEND":
+            break
+    cleaned = bytes(out)
+    return {
+        "success": True,
+        "removed_chunks": removed,
+        "removed_count": len(removed),
+        "bytes_before": len(data),
+        "bytes_after": len(cleaned),
+        "data_b64": __import__("base64").b64encode(cleaned).decode("ascii"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Aiohttp route registration
 # ---------------------------------------------------------------------------
@@ -728,6 +777,43 @@ def register_routes(server) -> None:
             return web.json_response(
                 {"success": False, "error": "exception",
                  "detail": str(exc)[:500]},
+                status=200,
+            )
+
+    @routes.post("/c2c/doctor/clean_png")
+    async def _clean_png(req):
+        """Remove damaged or unwanted workflow metadata chunks from a PNG."""
+        try:
+            reader = await req.multipart()
+            filename = "image.png"
+            buf = bytearray()
+            workflow_only = req.query.get("workflow_only", "1") not in ("0", "false", "no")
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                if part.name == "file":
+                    filename = part.filename or filename
+                    while True:
+                        chunk = await part.read_chunk(size=1 << 16)
+                        if not chunk:
+                            break
+                        buf.extend(chunk)
+                        if len(buf) > _MAX_UPLOAD:
+                            return web.json_response(
+                                {"success": False, "error": "file_too_large"},
+                                status=200,
+                            )
+            if not buf:
+                return web.json_response({"success": False, "error": "no_file_part"}, status=200)
+            result = await _run_blocking(
+                clean_png_metadata, bytes(buf), workflow_keys_only=workflow_only,
+            )
+            result["filename"] = filename
+            return web.json_response(result)
+        except Exception as exc:
+            return web.json_response(
+                {"success": False, "error": "exception", "detail": str(exc)[:500]},
                 status=200,
             )
 

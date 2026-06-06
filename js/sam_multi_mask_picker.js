@@ -29,12 +29,24 @@ function isDarkTheme() {
     return luminance < 128;
 }
 
+function _cssVar(name, fallback) {
+    // Custom-property computed values are returned as-written, before var() substitution.
+    // If the declaration itself is `var(...)`, addColorStop / canvas APIs will reject it.
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    if (!v || v.startsWith("var(")) return fallback;
+    return v;
+}
+
 function getThemeColors() {
     const dark = isDarkTheme();
     return {
         bg: dark ? "var(--c2c-bg)" : "var(--c2c-gray050)",
         cardBg: dark ? "var(--c2c-border)" : "var(--c2c-gray100)",
         cardSelectedBg: dark ? "var(--c2c-surface1)" : "var(--c2c-gray220)",
+        panelMid:  _cssVar("--c2c-panelMid",  dark ? "#3a5068" : "#d8dce8"),
+        panelMid2: _cssVar("--c2c-panelMid2", dark ? "#2a3040" : "#e8ebf2"),
+        panelMid3: _cssVar("--c2c-panelMid3", dark ? "#2a4058" : "#c8ced8"),
+        panelMid4: _cssVar("--c2c-panelMid4", dark ? "#1a2030" : "#b8bec8"),
         border: dark ? "var(--c2c-surface2)" : "var(--c2c-gray360)",
         selectedBorder: dark ? "var(--c2c-blue)" : "var(--c2c-blueAction)",
         text: dark ? "var(--c2c-fg)" : "var(--c2c-gray800)",
@@ -283,8 +295,8 @@ class SamMultiMaskPickerWidget {
                 roundRect(ctx, tx, ty, thumbW, thumbH, 4);
                 ctx.clip();
                 const grad = ctx.createLinearGradient(tx, ty, tx, ty + thumbH);
-                grad.addColorStop(0, isSelected ? "var(--c2c-panelMid)" : "var(--c2c-panelMid2)");
-                grad.addColorStop(1, isSelected ? "var(--c2c-panelMid3)" : "var(--c2c-panelMid4)");
+                grad.addColorStop(0, isSelected ? theme.panelMid : theme.panelMid2);
+                grad.addColorStop(1, isSelected ? theme.panelMid3 : theme.panelMid4);
                 ctx.fillStyle = grad;
                 ctx.fillRect(tx, ty, thumbW, thumbH);
                 // Draw mask index letter

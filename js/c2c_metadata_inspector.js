@@ -17,77 +17,21 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { readPngTextChunks, assessWorkflowMetadata } from "./c2c_png_metadata.js";
 
 const SETTING_ENABLED = "c2c.metaInspect.enabled";
 let _enabled = true;
 
-function readPngTextChunks(buffer) {
-    // Returns { key: value } for all tEXt / iTXt / zTXt chunks.
-    // buffer: ArrayBuffer.
-    const out = {};
-    const view = new DataView(buffer);
-    const sig = [137, 80, 78, 71, 13, 10, 26, 10];
-    for (let i = 0; i < 8; i++) if (view.getUint8(i) !== sig[i]) return out;
-    let off = 8;
-    while (off < view.byteLength - 8) {
-        const length = view.getUint32(off); off += 4;
-        const type = String.fromCharCode(view.getUint8(off), view.getUint8(off+1), view.getUint8(off+2), view.getUint8(off+3));
-        off += 4;
-        const data = new Uint8Array(buffer, off, length);
-        off += length + 4; // skip CRC
-        if (type === "tEXt") {
-            const nul = data.indexOf(0);
-            if (nul > 0) {
-                const key = utf8(data.subarray(0, nul));
-                const val = utf8(data.subarray(nul + 1));
-                out[key] = val;
-            }
-        } else if (type === "iTXt") {
-            const nul = data.indexOf(0);
-            if (nul > 0) {
-                const key = utf8(data.subarray(0, nul));
-                // iTXt: keyword \0 compFlag(1) compMethod(1) langTag \0 transKey \0 text
-                let p = nul + 1;
-                const compFlag = data[p]; p += 2;
-                const langEnd = data.indexOf(0, p); p = langEnd + 1;
-                const transEnd = data.indexOf(0, p); p = transEnd + 1;
-                let text;
-                if (compFlag === 0) text = utf8(data.subarray(p));
-                else { try { text = utf8(pako_inflate(data.subarray(p))); } catch { text = "<compressed>"; } }
-                out[key] = text;
-            }
-        } else if (type === "IEND") break;
-    }
-    return out;
-}
-
-function utf8(arr) {
-    try { return new TextDecoder("utf-8").decode(arr); } catch { return ""; }
-}
-
-// Minimal inflate fallback: prefer browser DecompressionStream if available.
-function pako_inflate(arr) {
-    if (typeof DecompressionStream === "undefined") throw new Error("no DecompressionStream");
-    // Build synchronously is tricky; fall back to "<compressed>" in caller.
-    throw new Error("sync inflate not supported");
-}
-
 function tryParseWorkflow(meta) {
-    // Common keys: "workflow", "prompt", "parameters" (A1111), "Comment"
-    for (const k of ["workflow", "Workflow"]) {
-        if (meta[k]) {
-            try { return { kind: "comfy-workflow", data: JSON.parse(meta[k]) }; } catch {}
-        }
-    }
-    for (const k of ["prompt", "Prompt"]) {
-        if (meta[k]) {
-            try { return { kind: "comfy-prompt", data: JSON.parse(meta[k]) }; } catch {}
-        }
-    }
-    if (meta.parameters) {
-        return { kind: "a1111", data: meta.parameters };
-    }
-    return null;
+    const a = assessWorkflowMetadata(meta);
+    if (a.status !== "valid") return null;
+    if (a.kind === "a1111") return { kind: "a1111", data: a.data };
+    return { kind: a.kind, data: a.data };
+}
+
+/** Legacy reader — delegates to shared safe parser. */
+function readPngTextChunksLegacy(buffer) {
+    return readPngTextChunks(buffer);
 }
 
 function openModal(meta, parsed, file) {
@@ -222,7 +166,7 @@ function escapeHtml(s) {
 
 async function handlePng(file, evt) {
     const buffer = await file.arrayBuffer();
-    const meta = readPngTextChunks(buffer);
+    const meta = readPngTextChunksLegacy(buffer);
     if (Object.keys(meta).length === 0) return false;
     const parsed = tryParseWorkflow(meta);
     const shouldLoad = await openModal(meta, parsed, file);
@@ -232,10 +176,24 @@ async function handlePng(file, evt) {
     return true;
 }
 
+/** Called from c2c_safe_image_drop when workflow metadata parses cleanly. */
+async function metaInspectPrompt(meta, assessment, file) {
+    if (!_enabled) return undefined;
+    const parsed = tryParseWorkflow(meta);
+    if (!parsed) return undefined;
+    const shouldLoad = await openModal(meta, parsed, file);
+    if (!shouldLoad) return false;
+    if (parsed.kind === "comfy-workflow") return "workflow";
+    return true;
+}
+
 function installDropInterceptor() {
+    // Drop handling moved to c2c_safe_image_drop.js (app.handleFile wrap).
+    // Legacy direct-drop path kept for environments without SafeImageDrop.
+    if (app.__c2cSafeDropInstalled) return;
     const handler = async (e) => {
         if (!_enabled) return;
-        if (e.shiftKey) return; // explicit bypass
+        if (e.shiftKey) return;
         const dt = e.dataTransfer;
         if (!dt || !dt.files || dt.files.length === 0) return;
         const file = dt.files[0];
@@ -244,9 +202,7 @@ function installDropInterceptor() {
         e.preventDefault();
         await handlePng(file, e);
     };
-    // capture phase to beat Comfy's own listener.
     window.addEventListener("drop", handler, { capture: true });
-    // Prevent the browser default for dragover so drop fires.
     window.addEventListener("dragover", (e) => {
         if (_enabled && e.dataTransfer && Array.from(e.dataTransfer.items || []).some(it => it.kind === "file")) {
             e.preventDefault();
@@ -263,6 +219,7 @@ app.registerExtension({
             onChange: v => { _enabled = !!v; },
         });
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
+        app.__c2cMetaInspectPrompt = metaInspectPrompt;
         installDropInterceptor();
     },
 });
