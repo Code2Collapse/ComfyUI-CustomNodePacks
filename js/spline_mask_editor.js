@@ -694,7 +694,7 @@ function installEditor(node) {
         }
     }
 
-    let widgetH = 280;
+    let widgetH = 220;
     const canvasWidget = node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
@@ -705,18 +705,16 @@ function installEditor(node) {
         const base = node.computeSize?.(width);
         const chrome = Array.isArray(base) ? (base[1] || 0) : 0;
         const extra = Math.max(0, (node.size?.[1] || 0) - chrome);
-        const h = extra > 100 ? Math.min(520, extra - 24) : widgetH;
-        return [width, Math.max(180, h)];
+        const h = extra > 120 ? Math.min(360, extra - 32) : widgetH;
+        widgetH = h;
+        return [width, Math.max(160, h)];
     };
 
     node._mecSplineEditHost = root;
     node._mecSplineEditWidget = canvasWidget;
     node._mecSplineEditWidgetH = () => widgetH;
 
-    if (!node.size || node.size[0] < 600) {
-        const h = node.size?.[1] || 420;
-        node.setSize?.([600, Math.max(h, 420)]);
-    }
+    node.setSize?.([Math.max(node.size?.[0] || 0, 600), Math.max(node.size?.[1] || 0, 380)]);
 
     // When a backdrop image is loaded, grow the canvas widget so the
     // image's aspect fits without huge empty bars. Mirrors points editor.
