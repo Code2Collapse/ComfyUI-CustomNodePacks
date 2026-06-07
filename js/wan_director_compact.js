@@ -39,6 +39,22 @@ const ADVANCED_COLLAPSE = new Set([
     "audio_target",
     "everanimate_stage", "everanimate_num_chunks", "everanimate_overlap_frames",
     "everanimate_lora_strength", "everanimate_anchor_strategy",
+    "duration_seconds", "display_mode",
+    "cfg_high_noise", "cfg_low_noise", "ref_strength",
+    "vae_fp32_decode",
+]);
+
+/** Quality-stack toggles — hidden until Advanced (compact node chrome). */
+const QUALITY_COLLAPSE = new Set([
+    "enable_prompt_relay", "prompt_relay_epsilon",
+    "enable_dynamic_cfg", "guidance_rescale_phi", "pag_scale",
+    "enable_phase_shift", "phase_shift_pct",
+    "enable_multi_clip", "structure_prompt", "detail_prompt",
+    "enable_nag", "nag_scale",
+    "enable_asymflow", "asymflow_shift",
+    "enable_slg", "slg_layers", "slg_scale",
+    "enable_feta", "feta_scale",
+    "enable_riflex", "riflex_k",
 ]);
 
 function hideW(w) {
@@ -61,6 +77,12 @@ function applyGates(node) {
             if (on) showW(cw);
             else hideW(cw);
         }
+    }
+    for (const cn of QUALITY_COLLAPSE) {
+        const cw = findWdWidget(node, cn);
+        if (!cw) continue;
+        if (getWdAdvancedOpen(node)) showW(cw);
+        else hideW(cw);
     }
     if (!getWdAdvancedOpen(node)) {
         for (const cn of ADVANCED_COLLAPSE) {

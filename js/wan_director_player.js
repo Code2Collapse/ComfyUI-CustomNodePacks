@@ -16,7 +16,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-const PLAYER_H = 280;          // total player widget height (px)
+const PLAYER_H = 140;          // total player widget height (px) — was 280, caused 2k+ node stack
 const STRIP_H  = 64;            // thumbnail strip height
 const BTN_H    = 28;
 const FPS_DEFAULT = 16;
@@ -39,6 +39,7 @@ function _resolveImage(seg) {
 
 function makePlayerDOM(node) {
     const root = document.createElement("div");
+    root.className = "wd-live-player-root";
     root.style.cssText = `
         position: relative; width: 100%; height: ${PLAYER_H}px;
         background: var(--c2c-gray950); border: 1px solid var(--c2c-gray700); border-radius: 4px;

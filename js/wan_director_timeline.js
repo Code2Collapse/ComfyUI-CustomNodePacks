@@ -37,9 +37,9 @@ import {
 
 // ── Constants ───────────────────────────────────────────────────────
 const RULER_H = 22;
-const IMG_TRACK_H = 150;
-const AUD_TRACK_H = 70;
-const PROPS_MIN_H = 140;
+const IMG_TRACK_H = 96;
+const AUD_TRACK_H = 48;
+const PROPS_MIN_H = 88;
 const TOOLBAR_H = 28;
 const PLAYER_BAR_H = 24;
 const PAD = 4;
@@ -178,6 +178,7 @@ class TimelineEditor {
     // ── DOM ─────────────────────────────────────────────────────────
     _buildDOM() {
         const root = this.container;
+        root.classList.add("wd-timeline-root");
         root.style.cssText = `
             display:flex;flex-direction:column;gap:4px;width:100%;height:100%;
             box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;
@@ -286,6 +287,7 @@ class TimelineEditor {
             if (seg && (seg.type === "image" || seg.type === "text")) {
                 seg.prompt = ta.value;
                 this.commitChanges();
+                this.render();
             }
         };
         this.promptArea = ta;
@@ -513,6 +515,7 @@ class TimelineEditor {
         this.selection = { type: "image", idx: this.segments.length - 1 };
         this.commitChanges();
         this._updatePropsPanel();
+        try { this.promptArea?.focus(); } catch (_) {}
     }
 
     async addImageSegmentFromFile(file) {
