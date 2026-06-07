@@ -309,6 +309,11 @@ class AspectPresetMEC:
         }}
 
     def pick(self, preset, base, multiple):
+        if preset not in self.PRESETS:
+            raise ValueError(
+                f"[AspectPresetMEC] Unknown preset '{preset}'. "
+                f"Valid presets: {list(self.PRESETS.keys())}"
+            )
         w_r, h_r = self.PRESETS[preset]
         m = max(1, int(multiple))
         if preset.startswith("Wan"):
