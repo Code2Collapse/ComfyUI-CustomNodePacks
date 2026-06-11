@@ -126,6 +126,11 @@ def _has_upper_bound(spec: List[Tuple[str, Tuple[int, ...], str]]) -> bool:
 
 
 # ── parsing ─────────────────────────────────────────────────────────
+_VCS_PREFIX_RE = re.compile(r"^(?:git|hg|svn|bzr)\+", re.IGNORECASE)
+_URL_PREFIX_RE = re.compile(r"^(?:https?|file|ftp)://", re.IGNORECASE)
+_EGG_NAME_RE = re.compile(r"[?&#]egg=([A-Za-z0-9][A-Za-z0-9._\-]*)")
+
+
 def _parse_requirements_file(path: Path) -> List[Tuple[str, str]]:
     """Read a requirements.txt and return ``[(canonical_name, spec_str), …]``."""
     out: List[Tuple[str, str]] = []
@@ -135,10 +140,30 @@ def _parse_requirements_file(path: Path) -> List[Tuple[str, str]]:
         if not line or line.startswith("#") or line.startswith("-"):
             # Skip blanks, comments, and pip flags (-r, --index-url, …)
             continue
+        # VCS / direct-URL requirements — extract project name from #egg=… if
+        # present, else skip. Never emit a bogus "git" / "https" package.
+        if _VCS_PREFIX_RE.match(line) or _URL_PREFIX_RE.match(line):
+            egg = _EGG_NAME_RE.search(line)
+            if egg:
+                name = egg.group(1).lower().replace("_", "-")
+                out.append((name, ""))  # no version spec — opaque URL
+            continue
+        # PEP 508 direct reference: "<name> @ <url>"
+        if " @ " in line:
+            name_part = line.split(" @ ", 1)[0].strip()
+            m_name = _REQ_LINE_RE.match(name_part)
+            if m_name:
+                name = m_name.group("name").lower().replace("_", "-")
+                out.append((name, ""))
+            continue
         m = _REQ_LINE_RE.match(line)
         if not m:
             continue
         name = m.group("name").lower().replace("_", "-")
+        # Refuse VCS schemes that slipped through (e.g. line starts with bare
+        # "git" with no `+` because of a typo) — these are never PyPI dists.
+        if name in {"git", "hg", "svn", "bzr", "http", "https", "file", "ftp"}:
+            continue
         spec = (m.group("spec") or "").strip()
         out.append((name, spec))
     return out

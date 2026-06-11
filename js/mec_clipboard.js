@@ -974,11 +974,11 @@ app.registerExtension({
     name: "MEC.Clipboard",
     settings: [
         {
-            id: "MEC.Clipboard.AutoCopy",
-            name: "Auto-copy node metadata on Ctrl+C",
+            id: "mec.clipboard.autoCopy",
+            name: "C2C Copy/Paste — auto-copy node metadata on Ctrl+C",
             tooltip: "When enabled, plain Ctrl+C also writes a portable JSON payload (with widget values, link metadata and source-pack info) to the OS clipboard. Disable to use only LiteGraph's native clipboard. The diagnostics sidebar's Clipboard tab still lets you re-copy any past payload manually.",
             type: "boolean",
-            defaultValue: true,
+            default: true,
             onChange: (v) => setAutoCopyEnabled(!!v),
         },
     ],
@@ -1002,15 +1002,15 @@ app.registerExtension({
         LGraphCanvas.prototype.getCanvasMenuOptions = function () {
             const opts = origMenu.apply(this, arguments) || [];
             opts.push(null);
-            opts.push({ content: "MEC: Copy node(s) with metadata (Ctrl+C / Ctrl+Alt+C)", callback: () => _copy() });
-            opts.push({ content: "MEC: Paste node(s) from clipboard (Ctrl+V / Ctrl+Alt+V)", callback: _paste });
+            opts.push({ content: "C2C: Copy node(s) with metadata (Ctrl+C / Ctrl+Alt+C)", callback: () => _copy() });
+            opts.push({ content: "C2C: Paste node(s) from clipboard (Ctrl+V / Ctrl+Alt+V)", callback: _paste });
             return opts;
         };
         const origNodeMenu = LGraphCanvas.prototype.getNodeMenuOptions;
         LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
             const opts = origNodeMenu.apply(this, arguments) || [];
             opts.push(null);
-            opts.push({ content: "MEC: Copy with metadata", callback: () => {
+            opts.push({ content: "C2C: Copy with metadata", callback: () => {
                 try { app.canvas.selectNode?.(node, true); } catch (_) {}
                 _copy(node);
             }});

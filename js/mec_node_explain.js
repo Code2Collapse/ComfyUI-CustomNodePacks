@@ -58,7 +58,13 @@ function _toGraph(e) {
 
 /** Find the node whose title bar contains the graph-space point (gx, gy). */
 function _nodeAtTitle(gx, gy) {
-    const nodes = app.graph._nodes;
+    // Subgraph-aware: when the user has drilled into a subgraph,
+    // `app.canvas.graph` is that inner LGraph, not `app.graph` (which
+    // remains the root). Hit-testing must use the actually-rendered
+    // graph or the click would resolve to nodes the user can't even
+    // see.
+    const g = app.canvas?.graph || app.graph;
+    const nodes = g?._nodes;
     if (!nodes) return null;
     // Iterate in reverse so topmost (highest index) node wins
     for (let i = nodes.length - 1; i >= 0; i--) {
@@ -447,7 +453,7 @@ app.registerExtension({
             tooltip: "Which backend to use for 'What does this node do?' hover tooltips.",
             type:    "combo",
             options: ["auto", "api", "gguf", "off"],
-            defaultValue: "auto",
+            default: "auto",
         },
         {
             id:      "mec.node_explain.gguf_quant",
@@ -455,7 +461,7 @@ app.registerExtension({
             tooltip: "Which Qwen3.5-2B quantisation to use for local inference.",
             type:    "combo",
             options: ["Q4_K_M", "Q5_K_M", "Q8_0"],
-            defaultValue: "Q4_K_M",
+            default: "Q4_K_M",
         },
     ],
 

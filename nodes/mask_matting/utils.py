@@ -36,6 +36,7 @@ _BACKEND_FOLDERS: Dict[str, str] = {
     "dis":            "dis",
     "xmem":           "xmem",
     "bgmattingv2":    "bgmattingv2",
+    "dino":           "dino",
 }
 
 
@@ -152,8 +153,16 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
          "url":  "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_resnet50.pth"},
     ],
     "matanyone": [
+        # Primary: GitHub release (public, no token). This is the original
+        # weight file shipped with v1.0.0 and used by the vendored
+        # MatAnyone2 hugging_face/app.py.
         {"name": "matanyone.pth",
-         "url":  "https://huggingface.co/PeiqingYang/MatAnyone/resolve/main/matanyone.pth"},
+         "url":  "https://github.com/pq-yang/MatAnyone/releases/download/v1.0.0/matanyone.pth"},
+        # Alt: HF mirror — same weights re-published as safetensors on the
+        # public PeiqingYang/MatAnyone repo (141 MB, 'model.safetensors').
+        # Saved under the matanyone backend root with its original HF name.
+        {"name": "model.safetensors",
+         "url":  "https://huggingface.co/PeiqingYang/MatAnyone/resolve/main/model.safetensors"},
     ],
     "birefnet": [
         {"name": "BiRefNet-general-epoch_244.pth",
@@ -381,29 +390,71 @@ def parse_bbox(bbox: Any) -> Optional[Tuple[int, int, int, int]]:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Morphological primitives (reflect-padded to prevent boundary artifacts)
+# ──────────────────────────────────────────────────────────────────────
+def _morph_pool(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
+    """Reflect-padded morphological pool for a (B,1,H,W) tensor.
+
+    Uses ``reflect`` padding instead of zero-padding to prevent erosion
+    from eating into mask regions that touch the image boundary.
+    """
+    if k <= 0:
+        return x
+    size = 2 * int(k) + 1
+    pad = int(k)
+    x_padded = F.pad(x, (pad, pad, pad, pad), mode="reflect")
+    if mode == "max":
+        return F.max_pool2d(x_padded, kernel_size=size, stride=1, padding=0)
+    return 1.0 - F.max_pool2d(
+        1.0 - x_padded, kernel_size=size, stride=1, padding=0,
+    )
+
+
+def morph_erode(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Morphological erosion with reflect padding.  Accepts (B,H,W) or (B,1,H,W)."""
+    m = to_mask(mask)
+    squeezed = m.unsqueeze(1)
+    out = _morph_pool(squeezed, radius, "min")
+    return out.squeeze(1).clamp(0, 1)
+
+
+def morph_dilate(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Morphological dilation with reflect padding.  Accepts (B,H,W) or (B,1,H,W)."""
+    m = to_mask(mask)
+    squeezed = m.unsqueeze(1)
+    out = _morph_pool(squeezed, radius, "max")
+    return out.squeeze(1).clamp(0, 1)
+
+
+def morph_open(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Morphological opening (erode → dilate).  Removes small bright spots."""
+    return morph_dilate(morph_erode(mask, radius), radius)
+
+
+def morph_close(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Morphological closing (dilate → erode).  Fills small dark holes."""
+    return morph_erode(morph_dilate(mask, radius), radius)
+
+
+def morph_gradient(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """Morphological gradient (dilate − erode).  Highlights edges."""
+    return (morph_dilate(mask, radius) - morph_erode(mask, radius)).clamp(0, 1)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Trimap generation
 # ──────────────────────────────────────────────────────────────────────
 def mask_to_trimap(mask: torch.Tensor, dilate: int = 8, erode: int = 8) -> torch.Tensor:
     """Build a 3-band trimap: 0=bg, 0.5=unknown, 1=fg from a binary mask.
 
-    Implemented with separable max/min pool so it stays differentiable-free
-    and fast on CUDA.
+    Uses reflect-padded morphological ops so boundary regions are handled
+    correctly even when the subject touches the image edge.
     """
     m = to_mask(mask)
     b = (m > 0.5).float().unsqueeze(1)  # (B,1,H,W)
 
-    def _pool(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
-        if k <= 0:
-            return x
-        size = 2 * int(k) + 1
-        pad = int(k)
-        if mode == "max":
-            return F.max_pool2d(x, kernel_size=size, stride=1, padding=pad)
-        # erode = -max-pool of (1-x)
-        return 1.0 - F.max_pool2d(1.0 - x, kernel_size=size, stride=1, padding=pad)
-
-    fg = _pool(b, int(erode), "min")            # eroded core
-    outer = _pool(b, int(dilate), "max")        # dilated outer
+    fg = _morph_pool(b, int(erode), "min")       # eroded core
+    outer = _morph_pool(b, int(dilate), "max")   # dilated outer
     unknown = (outer - fg).clamp(0, 1)
     trimap = fg + unknown * 0.5
     return trimap.squeeze(1).clamp(0, 1)
