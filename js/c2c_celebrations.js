@@ -85,10 +85,28 @@ const SHAPES = ["sq","rect","circle","tri"];
 
 function _rand(a, b) { return a + Math.random() * (b - a); }
 
+// Canvas 2D `fillStyle` CANNOT parse `var(--x)` — assigning it is silently
+// ignored and the context keeps its previous color (black by default), which
+// made every default-palette particle render BLACK ("all black confetti").
+// Resolve CSS custom properties to concrete colors before they hit the canvas.
+function _resolveColor(c) {
+  if (typeof c === "string" && c.startsWith("var(")) {
+    const name = c.slice(4, -1).split(",")[0].trim();
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      if (v) return v;
+    } catch (_) { /* fall through to fallback */ }
+    return "#89b4fa";  // legible fallback so a particle is never invisible/black
+  }
+  return c;
+}
+
 function _makeBurst(originX, originY, variant) {
-  const palette =
+  const paletteRaw =
     variant === "rainbow" ? PALETTE_RAINBOW :
     variant === "ghost"   ? PALETTE_GHOST   : PALETTE_DEFAULT;
+  // Resolve once per burst (≈7 entries) rather than per particle.
+  const palette = paletteRaw.map(_resolveColor);
   const count = variant === "rainbow" ? 220 : 140;
   const ps = [];
   for (let i = 0; i < count; i++) {
@@ -200,18 +218,26 @@ function _trigger(reason) {
   if (!_enabled.master) return;
   if (_reduceMotion) return;
 
-  // Confetti burst
+  // Confetti burst. When the Completion-FX style engine is loaded
+  // (c2c_completion_fx.js — 14 themed styles incl. saber-clash/tron/matrix),
+  // DELEGATE to it: both extensions listening to execution_success used to
+  // double-fire two confetti rains at once. Easter eggs map to 'random'.
   if (_enabled.confetti) {
-    _ensureCanvas();
-    // Two-origin sympathetic burst feels richer than a single point.
-    const w = window.innerWidth, h = window.innerHeight;
-    let variant = "default";
-    if (_enabled.easter && Math.random() < 0.018) {
-      variant = Math.random() < 0.5 ? "rainbow" : "ghost";
+    if (window.__C2C_FX?.play) {
+      const easter = _enabled.easter && Math.random() < 0.018;
+      window.__C2C_FX.play(easter ? "random" : undefined);
+    } else {
+      _ensureCanvas();
+      // Two-origin sympathetic burst feels richer than a single point.
+      const w = window.innerWidth, h = window.innerHeight;
+      let variant = "default";
+      if (_enabled.easter && Math.random() < 0.018) {
+        variant = Math.random() < 0.5 ? "rainbow" : "ghost";
+      }
+      _makeBurst(w * 0.30, h * 0.92, variant);
+      _makeBurst(w * 0.70, h * 0.92, variant);
+      if (!_rafId) _rafId = requestAnimationFrame(_step);
     }
-    _makeBurst(w * 0.30, h * 0.92, variant);
-    _makeBurst(w * 0.70, h * 0.92, variant);
-    if (!_rafId) _rafId = requestAnimationFrame(_step);
   }
 
   // Sound
@@ -257,6 +283,13 @@ function _refreshFlags() {
 
 /* ─── event wiring ─── */
 function _onSuccess(_evt) {
+  // The Completion-FX style engine (c2c_completion_fx.js) ALSO listens to
+  // execution_success and calls the same _play(). If it is present, let it
+  // OWN the success celebration — otherwise both fire _play() once each and
+  // the user gets a double confetti burst (+ possible double chime) per run.
+  // The manual window.C2CCelebrations.trigger() path is unaffected, and the
+  // fallback below still runs when Completion-FX is not loaded.
+  if (window.__C2C_FX?.play) return;
   const now = performance.now();
   if (now - _lastSuccessAt < 400) return;     // dedupe twin events
   _lastSuccessAt = now;

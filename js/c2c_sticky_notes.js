@@ -14,17 +14,23 @@ import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { c2cPrompt } from "./_c2c_dialog.js";
 
+// border values are assigned to ctx.strokeStyle (canvas 2D), which cannot
+// resolve CSS var() strings — use resolved-hex palette values instead.
 const COLORS = [
-    { name: "Yellow", bg: "rgba(249, 226, 175, 0.20)", border: "var(--c2c-yellow)" },
-    { name: "Green",  bg: "rgba(166, 227, 161, 0.20)", border: "var(--c2c-okSoft)" },
-    { name: "Blue",   bg: "rgba(137, 180, 250, 0.20)", border: "var(--c2c-blue)" },
-    { name: "Pink",   bg: "rgba(245, 194, 231, 0.20)", border: "var(--c2c-pink)" },
-    { name: "Mauve",  bg: "rgba(203, 166, 247, 0.20)", border: "var(--c2c-mauve)" },
-    { name: "Red",    bg: "rgba(243, 139, 168, 0.20)", border: "var(--c2c-red)" },
+    { name: "Yellow", bg: "rgba(249, 226, 175, 0.20)", border: C.yellow },
+    { name: "Green",  bg: "rgba(166, 227, 161, 0.20)", border: C.okSoft },
+    { name: "Blue",   bg: "rgba(137, 180, 250, 0.20)", border: C.blue },
+    { name: "Pink",   bg: "rgba(245, 194, 231, 0.20)", border: C.pink },
+    { name: "Mauve",  bg: "rgba(203, 166, 247, 0.20)", border: C.mauve },
+    { name: "Red",    bg: "rgba(243, 139, 168, 0.20)", border: C.red },
 ];
 
+// Perf: _draw() runs every frame via onDrawBackground; reading getSettingValue
+// there is a synchronous storage hit per repaint. Cache the flag (seeded at
+// setup + onChange) and use _enabled in the hot path.
+let _enabled = true;
 function _settingsEnabled() {
-    try { return app.ui.settings.getSettingValue("mec.sticky_notes.enabled", true); }
+    try { return app.ui.settings.getSettingValue("mec.sticky_notes.enabled", true) !== false; }
     catch { return true; }
 }
 
@@ -56,7 +62,7 @@ function _hit(note, x, y) {
 }
 
 function _draw(ctx) {
-    if (!_settingsEnabled()) return;
+    if (!_enabled) return;
     const notes = _store();
     if (!notes.length) return;
     ctx.save();
@@ -206,9 +212,14 @@ app.registerExtension({
             name: "Sticky Notes: right-click canvas → Add",
             type: "boolean",
             default: true,
+            onChange: (v) => {
+                _enabled = (v !== false);
+                app.canvas?.setDirty?.(true, true);
+            },
         },
     ],
     async setup() {
+        _enabled = _settingsEnabled();
         _patch();
         console.log("[MEC.StickyNotes] Loaded.");
     },

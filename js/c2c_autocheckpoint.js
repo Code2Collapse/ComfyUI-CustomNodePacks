@@ -23,6 +23,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
+const DB_NAME = "c2c_autocheckpoint";
 const STORE = "snapshots";
 const DB_VERSION = 1;
 const RING_MAX_DEFAULT = 20;

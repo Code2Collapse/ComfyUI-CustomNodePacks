@@ -439,12 +439,17 @@ function draw(ed, ctx, vw, vh) {
                     const hv = h[side];
                     if (!hv) continue;
                     const hx = p.x + hv.x, hy = p.y + hv.y;
-                    ctx.strokeStyle = "var(--c2c-peach)aa";
+                    // Canvas can't parse var(); use the theme-resolved color.
+                    // (was "var(--c2c-peach)aa" → silently rendered as default/black.)
+                    ctx.save();
+                    ctx.globalAlpha = 0.67;             // the intended ~"aa" alpha
+                    ctx.strokeStyle = C.peach;
                     ctx.lineWidth = 1 / z;
                     ctx.beginPath();
                     ctx.moveTo(p.x, p.y);
                     ctx.lineTo(hx, hy);
                     ctx.stroke();
+                    ctx.restore();
                     ctx.fillStyle = C.peach;
                     ctx.beginPath();
                     ctx.arc(hx, hy, 3.5 / z, 0, Math.PI * 2);

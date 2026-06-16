@@ -24,14 +24,44 @@ from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
 from .segmenters import list_keys as list_segmenter_keys
 from . import _vfx
-from ._reanchor import (
-    DINORelocator,
-    blend_masks,
-    compute_confidence,
-    compute_farneback_flow,
-    flow_warp_reanchor,
-    release_dinov2,
-)
+# Re-anchoring (DINOv2 / optical-flow mask tracking) is an OPTIONAL advanced
+# feature. Guard its import so a missing/unsynced `_reanchor.py` (or its lazy
+# deps) degrades this one feature to a clear runtime error instead of taking
+# down MaskOpsMEC — and, via the parent guards, the whole node pack.
+try:
+    from ._reanchor import (
+        DINORelocator,
+        blend_masks,
+        compute_confidence,
+        compute_farneback_flow,
+        flow_warp_reanchor,
+        release_dinov2,
+    )
+    _REANCHOR_OK = True
+    _REANCHOR_ERR = None
+except Exception as _reanchor_exc:  # noqa: BLE001 — any failure must not kill the node
+    _REANCHOR_OK = False
+    _REANCHOR_ERR = _reanchor_exc
+    logging.getLogger("MEC.MaskOps").warning(
+        "Mask re-anchoring unavailable (%s) — MaskOpsMEC loads, but the "
+        "DINOv2 / optical-flow re-anchor option will error if selected.",
+        _reanchor_exc,
+    )
+
+    def _reanchor_missing(*_a, **_k):
+        raise RuntimeError(
+            "Mask re-anchoring is unavailable in this install: "
+            f"{_REANCHOR_ERR}. Ensure nodes/mask_matting/_reanchor.py is "
+            "present and `opencv-python` + `transformers` are installed."
+        )
+
+    DINORelocator = _reanchor_missing            # type: ignore
+    blend_masks = _reanchor_missing              # type: ignore
+    compute_confidence = _reanchor_missing       # type: ignore
+    compute_farneback_flow = _reanchor_missing   # type: ignore
+    flow_warp_reanchor = _reanchor_missing       # type: ignore
+    def release_dinov2(*_a, **_k):               # type: ignore
+        return None  # safe no-op cleanup
 from .utils import (
     apply_subject_preset,
     bbox_from_mask,

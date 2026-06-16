@@ -224,6 +224,19 @@ app.registerExtension({
                 serialize: false,
                 hideOnZoom: false,
             });
+            // Clip to the widget slot — prevents the player DOM spilling
+            // outside the node bounds (same fix as the timeline widget).
+            // Retried: the Vue layer mounts the wrapper after onNodeCreated.
+            const _wdClipPlayer = () => {
+                try {
+                    const wrap = player.root.closest?.(".dom-widget");
+                    if (wrap && wrap !== player.root) { wrap.style.overflow = "hidden"; return true; }
+                } catch (_) {}
+                return false;
+            };
+            requestAnimationFrame(_wdClipPlayer);
+            setTimeout(_wdClipPlayer, 500);
+            setTimeout(_wdClipPlayer, 1500);
             // Use the inset `width` LiteGraph passes — never `this.size[0]`,
             // which over-reserves the column and leaks the node bgcolor as
             // dark gutters on both edges of the widget.

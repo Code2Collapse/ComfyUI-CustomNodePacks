@@ -39,6 +39,22 @@ const SETTINGS = {
     title_pct: true,
 };
 
+// Canvas 2D fillStyle cannot parse `var(--x)` — it silently keeps the
+// previous color, so the progress FILL was rendering as the dark track
+// color (invisible / "damaged bar"). Resolve theme vars to concrete colors,
+// cached so getComputedStyle isn't hit on every draw.
+const _cssColorCache = new Map();
+function _cssColor(varName, fallback) {
+    if (_cssColorCache.has(varName)) return _cssColorCache.get(varName);
+    let out = fallback;
+    try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+        if (v) out = v;
+    } catch (_) { /* keep fallback */ }
+    _cssColorCache.set(varName, out);
+    return out;
+}
+
 // Per-node WeakMap so lookups inside onDrawForeground are O(1) and don't
 // depend on whether the user is currently viewing the root graph or a
 // subgraph interior. Each entry is the same shape as the legacy
@@ -278,8 +294,11 @@ app.registerExtension({
             // Track
             ctx.fillStyle = "rgba(0,0,0,0.45)";
             ctx.fillRect(0, barY, W, barH);
-            // Fill colour: green → yellow → orange by percentage.
-            const fillCol = pct < 50 ? "var(--c2c-okSoft)" : pct < 85 ? "var(--c2c-yellow)" : "var(--c2c-peach)";
+            // Fill colour: green → yellow → orange by percentage. Theme vars
+            // resolved to concrete colors (canvas can't read var()).
+            const fillCol = pct < 50 ? _cssColor("--c2c-okSoft", "#a6e3a1")
+                          : pct < 85 ? _cssColor("--c2c-yellow", "#f9e2af")
+                          :            _cssColor("--c2c-peach",  "#fab387");
             ctx.fillStyle = fillCol;
             ctx.fillRect(0, barY, W * (pct / 100), barH);
             // Subtle moving shimmer ─ purely cosmetic.

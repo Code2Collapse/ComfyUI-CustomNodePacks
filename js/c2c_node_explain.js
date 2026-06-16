@@ -1260,10 +1260,32 @@ function _renderSlotsLocal(el, node) {
         <div class="mec-ne-headline">${_esc(title)}</div>
         <div class="mec-ne-purpose mec-ne-muted"><code>${_esc(cls)}</code></div>
         ${_capabilityBlock(cls)}
+        ${_recommendBlock(cls, node)}
         ${inputsBlock}
         ${outputsBlock}
         ${widgetsBlock}`.trim();
     el.classList.add("visible");
+}
+
+/** Rule-based (NO AI) sampler/scheduler/cfg recommendation, rendered INSIDE the
+ *  C2C node inspector for sampler-type nodes. Logic lives in
+ *  c2c_settings_recommender.js (window.__C2C_REC); this just formats it. */
+function _recommendBlock(cls, node) {
+    try {
+        const R = window.__C2C_REC;
+        if (!R || !R.isSamplerNode(node)) return "";
+        const rec = R.recFor(R.modelForSampler(node, R.detectedModels()));
+        const dd = R.deepFor(rec.label) || {};
+        const row = (k, v) => (v && v !== "—")
+            ? `<tr><td class="mec-ne-muted" style="white-space:nowrap;vertical-align:top">${_esc(k)}</td><td>${_esc(v)}</td></tr>` : "";
+        return `<div class="mec-ne-section-title">⚙ Recommended settings — ${_esc(rec.label)}</div>`
+            + `<table class="mec-ne-slots"><tbody>`
+            + row("sampler", rec.sampler) + row("scheduler", rec.scheduler)
+            + row("cfg", rec.cfg) + row("steps", rec.steps)
+            + row("resolution", dd.res) + row("VAE", dd.vae) + row("CLIP/encoder", dd.clip)
+            + row("negative", dd.neg) + row("alternatives", dd.alts) + row("⚠ pitfalls", dd.pitfalls)
+            + `</tbody></table>`;
+    } catch (_) { return ""; }
 }
 
 /** Instant capability summary derived from the shared node taxonomy

@@ -166,10 +166,14 @@ const OVERLAYS = [
     {
         id: "completionFx",
         selector: "#mec-confetti-canvas",
-        label: "Completion confetti effect",
+        label: "Completion FX celebration (14 styles)",
         category: ["C2C Overlays", "Canvas decorations"],
-        tip: "🎉 burst when a queue finishes successfully.",
-        defaultOn: false,
+        tip: "🎉 themed celebration when a queue finishes (confetti, saber-clash, tron, matrix…).",
+        // defaultOn was FALSE — that display:none !important silently hid the
+        // completion-FX canvas for everyone ("celebration never showed"). The
+        // FX module has its own enable setting; this layer must not
+        // double-gate it off by default.
+        defaultOn: true,
     },
     {
         id: "errorToast",

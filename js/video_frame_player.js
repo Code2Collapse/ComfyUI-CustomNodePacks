@@ -872,7 +872,7 @@ app.registerExtension({
 
                 // Border
                 ctx.save();
-                ctx.strokeStyle = this._isCropLocked?.() ? "var(--c2c-peachVivid)" : "var(--c2c-cyanBright)";
+                ctx.strokeStyle = this._isCropLocked?.() ? C.peachVivid : C.cyanBright;
                 ctx.lineWidth = CROP_LINE_W;
                 if (this._isCropLocked?.()) ctx.setLineDash([6, 4]);
                 ctx.strokeRect(cr.x + 0.5, cr.y + 0.5, cr.w - 1, cr.h - 1);

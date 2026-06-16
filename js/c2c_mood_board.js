@@ -505,7 +505,8 @@ function _exportPalettePng(palette) {
         const w = Math.max(8, W * p.pct);
         ctx.fillStyle = p.hex;
         ctx.fillRect(x, 0, w, H);
-        ctx.fillStyle = _luma(p.rgb) > 128 ? "var(--c2c-black)" : "var(--c2c-white)";
+        // Canvas 2D can't resolve CSS var(); black/white are theme-invariant.
+        ctx.fillStyle = _luma(p.rgb) > 128 ? "#000000" : "#ffffff";
         ctx.font = "14px monospace";
         ctx.fillText(p.hex, x + 6, H - 12);
         x += w;

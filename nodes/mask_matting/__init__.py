@@ -26,14 +26,35 @@ This pack contains ZERO Forbidden-Vision (AGPL) code.
 """
 from __future__ import annotations
 
-from .node import MaskOpsMEC
-from .node import NODE_CLASS_MAPPINGS as _MO_MAPPINGS
-from .node import NODE_DISPLAY_NAME_MAPPINGS as _MO_DISPLAY
-
 try:
     from .._c2c_registry import record_failure as _c2c_rec
 except Exception:  # pragma: no cover
     _c2c_rec = None  # type: ignore
+
+# The base MaskOpsMEC node — guarded so a failure here (e.g. a missing helper
+# module) records a clear diagnostic and lets the rest of the pack load,
+# instead of raising out of this package's __init__ and killing every node
+# in ComfyUI-CustomNodePacks.
+try:
+    from .node import MaskOpsMEC
+    from .node import NODE_CLASS_MAPPINGS as _MO_MAPPINGS
+    from .node import NODE_DISPLAY_NAME_MAPPINGS as _MO_DISPLAY
+except Exception as _exc:  # pragma: no cover
+    if _c2c_rec is not None:
+        _c2c_rec(
+            "MaskOpsMEC", _exc,
+            hint="A mask_matting helper failed to import. Check that "
+                 "nodes/mask_matting/_reanchor.py exists and opencv-python / "
+                 "transformers are installed.",
+            group="mask_matting",
+        )
+    else:
+        import logging
+        logging.getLogger("MEC.MaskMatting").warning(
+            "MaskOpsMEC unavailable: %s", _exc
+        )
+    MaskOpsMEC = None  # type: ignore
+    _MO_MAPPINGS, _MO_DISPLAY = {}, {}
 
 try:
     from .temporal_node import (

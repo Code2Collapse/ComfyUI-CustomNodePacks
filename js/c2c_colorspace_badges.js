@@ -14,17 +14,25 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { C } from "./_c2c_theme.js";
 
+// Canvas 2D cannot resolve CSS var() strings (renders black/invisible), so we
+// map each colorspace tag to the resolved-hex value from the theme palette.
 const CS_COLORS = {
-    "sRGB":     "var(--c2c-okSoft)",
-    "Linear":   "var(--c2c-blue)",
-    "ACEScg":   "var(--c2c-mauve)",
-    "ACES":     "var(--c2c-mauve)",
-    "Rec.709":  "var(--c2c-sapphire)",
-    "Log":      "var(--c2c-yellow)",
-    "Raw":      "var(--c2c-overlay0)",
-    "OCIO":     "var(--c2c-pink)",
+    "sRGB":     C.okSoft,
+    "Linear":   C.blue,
+    "ACEScg":   C.mauve,
+    "ACES":     C.mauve,
+    "Rec.709":  C.sapphire,
+    "Log":      C.yellow,
+    "Raw":      C.overlay0,
+    "OCIO":     C.pink,
 };
+
+// Perf: this enabled flag is read by _drawBadge(), which runs per node per
+// frame. Cache it (seeded at setup() + onChange) so getSettingValue is not a
+// synchronous storage hit in the render loop.
+let _enabled = true;
 
 function _settingsEnabled() {
     try { return app.ui.settings.getSettingValue("mec.colorspace_badges.enabled", true); }
@@ -56,11 +64,11 @@ function _hasImagePort(node) {
 }
 
 function _drawBadge(node, ctx) {
-    if (!_settingsEnabled()) return;
+    if (!_enabled) return;
     if (!_hasImagePort(node)) return;
     const tag = _inferTag(node);
     if (!tag) return;
-    const color = CS_COLORS[tag] || "var(--c2c-blue)";
+    const color = CS_COLORS[tag] || C.blue;
     const w = node.size?.[0] || 200;
     const padX = 6, padY = -16;  // sit above the node title bar
     // Measure
@@ -113,9 +121,11 @@ app.registerExtension({
             name: "Colorspace Badges: show inferred OCIO/colorspace on IMAGE nodes",
             type: "boolean",
             default: true,
+            onChange: (v) => { _enabled = (v !== false); },
         },
     ],
     async setup() {
+        _enabled = _settingsEnabled();
         _patch();
         console.log("[MEC.ColorspaceBadges] Loaded.");
     },

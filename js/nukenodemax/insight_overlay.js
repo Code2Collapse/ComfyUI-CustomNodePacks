@@ -20,6 +20,21 @@ const STATE = {
     maxMs: 1,
 };
 
+// Perf cache for the always-on setting (read in the per-node, per-frame
+// drawNodeShape hot path). Refresh at most once/second globally so the
+// settings store is hit ~1×/sec instead of nodes×fps times/sec.
+let _insightAlwaysOn = false;
+let _insightLastRead = 0;
+function _insightAlwaysOnCached() {
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - _insightLastRead > 1000) {
+        _insightLastRead = now;
+        try { _insightAlwaysOn = !!app.ui.settings.getSettingValue("mec.insight_overlay.always_on", false); }
+        catch (__c2cErr) { __c2cReport("insight_overlay", __c2cErr); }
+    }
+    return _insightAlwaysOn;
+}
+
 function ensureBadge(nodeOrId) {
     // Accepts either a resolved LiteGraph node or a node id. When given an id,
     // walks subgraphs to locate the owner.
@@ -177,9 +192,9 @@ app.registerExtension({
             // LiteGraph zoom — which the user described as "zooming in
             // and out when moving around the canvas". Gate behind a
             // setting (default OFF). Show on hover OR when enabled.
-            let alwaysOn = false;
-            try { alwaysOn = !!app.ui.settings.getSettingValue("mec.insight_overlay.always_on", false); } catch (__c2cErr) { __c2cReport("insight_overlay", __c2cErr); }
-            if (!alwaysOn && !mouseOver) return;
+            // Perf: getSettingValue ran once per node per frame (thousands/sec).
+            // Cache it and refresh at most once/second GLOBALLY (not per node).
+            if (!mouseOver && !_insightAlwaysOnCached()) return;
 
             const badge = node._mecInsightBadge;
             if (!badge || (!badge.line1 && !badge.line2)) return;

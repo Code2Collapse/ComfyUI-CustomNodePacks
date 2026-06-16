@@ -47,6 +47,40 @@ const MIN_SEG_FRAMES = 6;
 const HANDLE_PX = 12;
 const WAVE_PEAKS = 200;
 
+// ── v2 automation tracks (LoRA / camera / seed / pose) ──────────────
+// The backend (director_node.py schema v2) already parses + validates
+// these four arrays and emits them in `tracks_program`; this surfaces
+// them in the timeline so the "6-track" program can be authored here.
+const V2_LANE_H = 26;
+const V2_DEFS = [
+    {
+        key: "loraSegments", label: "LoRA", color: "#b4befe",
+        make: (s, l) => ({ id: nid(), name: "", strength: 1.0, start: s, length: l }),
+        summary: (x) => `${x.name || "lora"} · ${(+x.strength || 0).toFixed(2)}`,
+    },
+    {
+        key: "cameraSegments", label: "Cam", color: "#94e2d5",
+        make: (s, l) => ({ id: nid(), type: "static", start: s, length: l, params: {} }),
+        summary: (x) => x.type || "static",
+    },
+    {
+        key: "seedSegments", label: "Seed", color: "#f9e2af",
+        make: (s, l) => ({ id: nid(), seed: 0, mode: "fixed", start: s, length: l }),
+        summary: (x) => `${x.seed ?? 0} · ${x.mode || "fixed"}`,
+    },
+    {
+        key: "poseSegments", label: "Pose", color: "#f5c2e7",
+        make: (s, l) => ({ id: nid(), poseFile: "", strength: 1.0, interpolation: "linear", start: s, length: l }),
+        summary: (x) => `${x.poseFile || "pose"} · ${(+x.strength || 0).toFixed(2)}`,
+    },
+];
+const V2_KEYS = V2_DEFS.map(d => d.key);
+const V2_TOTAL_H = V2_LANE_H * V2_DEFS.length;
+const V2_LABEL_PX = 38;
+const CAMERA_TYPES = ["static", "pan", "zoom", "orbit", "dolly"];
+const SEED_MODES = ["fixed", "increment", "random_per_frame"];
+const POSE_INTERP = ["nearest", "linear"];
+
 const HIDDEN_NAMES = new Set([
     "timeline_data", "local_prompts", "negative_prompts",
     "segment_lengths", "guide_strength",
@@ -143,6 +177,12 @@ class TimelineEditor {
         this.container = container;
         this.segments = [];        // {id,type,start,length,prompt,imageFile,imageB64,guideStrength}
         this.audioSegments = [];   // {id,start,length,trimStart,audioDurationFrames,audioFile,fileName,waveformPeaks}
+        // v2 automation tracks (see V2_DEFS). Each is an array on `this`
+        // keyed by its schema name so _segArr() can resolve it generically.
+        this.loraSegments = [];
+        this.cameraSegments = [];
+        this.seedSegments = [];
+        this.poseSegments = [];
         this.selection = { type: null, idx: -1 };
         this.playhead = 0;          // frames
         this.playing = false;
@@ -228,7 +268,7 @@ class TimelineEditor {
         wrap.style.cssText = "position:relative;width:100%;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
-        this.cvs.style.cssText = "display:block;width:100%;height:" + (RULER_H + IMG_TRACK_H + AUD_TRACK_H) + "px;outline:none;cursor:default;";
+        this.cvs.style.cssText = "display:block;width:100%;height:" + (RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H) + "px;outline:none;cursor:default;";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
         dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:var(--c2c-white);font-size:14px;border:2px dashed var(--c2c-blue);border-radius:4px;";
@@ -447,6 +487,11 @@ class TimelineEditor {
             this.audioSegments = Array.isArray(tl.audioSegments) ? tl.audioSegments : [];
             for (const s of this.segments)      if (!s.id) s.id = nid();
             for (const s of this.audioSegments) if (!s.id) s.id = nid();
+            // v2 automation tracks (load, tolerate missing/legacy v1 docs).
+            for (const k of V2_KEYS) {
+                this[k] = Array.isArray(tl[k]) ? tl[k] : [];
+                for (const s of this[k]) if (!s.id) s.id = nid();
+            }
         }
         this.suppressCommit = false;
         // Async image preload
@@ -475,7 +520,12 @@ class TimelineEditor {
             fileName:  s.fileName  || "",
             waveformPeaks: s.waveformPeaks || [],
         }));
-        writeWidget(this.node, "timeline_data", JSON.stringify({ segments: segOut, audioSegments: audOut }));
+        // schema v2: preserve the four automation tracks so they survive an
+        // edit (and reach the backend's tracks_program). Without this, any
+        // image/audio edit would silently wipe the LoRA/camera/seed/pose data.
+        const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut };
+        for (const k of V2_KEYS) tlOut[k] = (this[k] || []).map(s => ({ ...s }));
+        writeWidget(this.node, "timeline_data", JSON.stringify(tlOut));
         // local_prompts: pipe-delimited, image+text segments sorted by start
         const sorted = [...this.segments].sort((a, b) => a.start - b.start);
         writeWidget(this.node, "local_prompts",
@@ -561,19 +611,19 @@ class TimelineEditor {
     deleteSelected() {
         const { type, idx } = this.selection;
         if (idx < 0) return;
-        const arr = type === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(type);
         if (idx < arr.length) {
             arr.splice(idx, 1);
             this.selection = { type: null, idx: -1 };
             this.commitChanges();
-            this._updatePropsPanel();
+            if (this._isV2(type)) this._updateV2Props(); else this._updatePropsPanel();
         }
     }
 
     _selSeg() {
         const { type, idx } = this.selection;
         if (idx < 0) return null;
-        const arr = type === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(type);
         return arr[idx] || null;
     }
 
@@ -606,9 +656,49 @@ class TimelineEditor {
     _frameToX(f) { return f * this._pxPerFrame() + PAD; }
     _xToFrame(x) { return Math.round((x - PAD) / Math.max(1e-3, this._pxPerFrame())); }
 
+    /** Mouse event → canvas CSS-pixel coords, undoing the LiteGraph zoom.
+     *  getBoundingClientRect() is post-transform (visual size); offsetWidth is
+     *  the unscaled layout size every draw/hit-test math uses. Without this
+     *  ratio, clicks at zoom≠1 land offset by 1/zoom — the "timeline doesn't
+     *  work unless at 100%" bug. (Same correction as points_bbox_editor.) */
+    _evtXY(e) {
+        const rect = this.cvs.getBoundingClientRect();
+        const kx = (this.cvs.offsetWidth  || rect.width)  / Math.max(1, rect.width);
+        const ky = (this.cvs.offsetHeight || rect.height) / Math.max(1, rect.height);
+        return [(e.clientX - rect.left) * kx, (e.clientY - rect.top) * ky];
+    }
+
+    // Generic segment-array resolver: "image" → segments, "audio" →
+    // audioSegments, otherwise a v2 track key (loraSegments, …).
+    _segArr(segType) {
+        if (segType === "audio") return this.audioSegments;
+        if (segType === "image") return this.segments;
+        return this[segType] || [];
+    }
+    _isV2(segType) { return V2_KEYS.includes(segType); }
+    _v2Base() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H; }
+    _v2LaneTop(li) { return this._v2Base() + li * V2_LANE_H; }
+    _v2DefForType(segType) { return V2_DEFS.find(d => d.key === segType) || null; }
+
     _hitTest(mx, my) {
         // Returns {kind, segType, idx, edge}
         if (my < RULER_H) return { kind: "ruler" };
+        const v2Base = this._v2Base();
+        // v2 automation lanes (below the audio track).
+        if (my >= v2Base) {
+            const li = Math.max(0, Math.min(V2_DEFS.length - 1, Math.floor((my - v2Base) / V2_LANE_H)));
+            const segType = V2_DEFS[li].key, arr = this._segArr(segType);
+            for (let i = 0; i < arr.length; i++) {
+                const s = arr[i];
+                const x1 = this._frameToX(s.start), x2 = this._frameToX(s.start + s.length);
+                if (mx >= x1 - HANDLE_PX/2 && mx <= x2 + HANDLE_PX/2) {
+                    if (Math.abs(mx - x1) <= HANDLE_PX/2) return { kind: "seg", segType, idx: i, edge: "left" };
+                    if (Math.abs(mx - x2) <= HANDLE_PX/2) return { kind: "seg", segType, idx: i, edge: "right" };
+                    if (mx >= x1 && mx <= x2) return { kind: "seg", segType, idx: i, edge: "mid" };
+                }
+            }
+            return { kind: "track", track: segType };
+        }
         const imgBot = RULER_H + IMG_TRACK_H;
         const track = (my < imgBot) ? "image" : "audio";
         const arr = track === "audio" ? this.audioSegments : this.segments;
@@ -628,9 +718,7 @@ class TimelineEditor {
     // ── Mouse handlers ──────────────────────────────────────────────
     _onMouseDown(e) {
         this.cvs.focus();
-        const rect = this.cvs.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        const [mx, my] = this._evtXY(e);
         if (e.button === 2) return; // handled by contextmenu
         const hit = this._hitTest(mx, my);
         if (hit.kind === "ruler") {
@@ -640,15 +728,15 @@ class TimelineEditor {
             return;
         }
         if (hit.kind === "seg") {
-            this.selection = { type: hit.segType === "audio" ? "audio" : "image", idx: hit.idx };
-            const arr = hit.segType === "audio" ? this.audioSegments : this.segments;
+            this.selection = { type: hit.segType === "audio" ? "audio" : hit.segType === "image" ? "image" : hit.segType, idx: hit.idx };
+            const arr = this._segArr(hit.segType);
             const seg = arr[hit.idx];
             this.dragState = {
                 type: "seg", edge: hit.edge, segType: hit.segType, idx: hit.idx,
                 startFrame: this._xToFrame(mx),
                 origStart: seg.start, origLength: seg.length, origTrim: seg.trimStart || 0,
             };
-            this._updatePropsPanel();
+            if (this._isV2(hit.segType)) this._updateV2Props(); else this._updatePropsPanel();
             this.render();
             return;
         }
@@ -659,9 +747,7 @@ class TimelineEditor {
     }
 
     _onMouseMove(e) {
-        const rect = this.cvs.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        const [mx, my] = this._evtXY(e);
         // Cursor feedback
         if (!this.dragState) {
             const hit = this._hitTest(mx, my);
@@ -681,7 +767,7 @@ class TimelineEditor {
             return;
         }
         if (ds.type === "seg") {
-            const arr = ds.segType === "audio" ? this.audioSegments : this.segments;
+            const arr = this._segArr(ds.segType);
             const seg = arr[ds.idx];
             const cur = this._xToFrame(mx);
             const delta = cur - ds.startFrame;
@@ -720,24 +806,34 @@ class TimelineEditor {
     }
 
     _onDblClick(e) {
-        const rect = this.cvs.getBoundingClientRect();
-        const my = e.clientY - rect.top;
-        const hit = this._hitTest(e.clientX - rect.left, my);
-        if (hit.kind === "seg") {
+        const [mx, my] = this._evtXY(e);
+        const hit = this._hitTest(mx, my);
+        if (hit.kind === "seg" && this._isV2(hit.segType)) {
+            this.selection = { type: hit.segType, idx: hit.idx };
+            this._updateV2Props(); this.render();
+            try { this.audioInfo.querySelector("input,select")?.focus(); } catch (_) {}
+        } else if (hit.kind === "track" && this._isV2(hit.track)) {
+            this.addV2Segment(hit.track, this._xToFrame(mx));
+        } else if (hit.kind === "seg") {
             this.promptArea.focus();
         }
     }
 
     _onContextMenu(e) {
         e.preventDefault();
-        const rect = this.cvs.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        const [mx, my] = this._evtXY(e);
         const hit = this._hitTest(mx, my);
         const items = [];
-        if (hit.kind === "seg") {
+        if (hit.kind === "seg" && this._isV2(hit.segType)) {
+            const def = this._v2DefForType(hit.segType);
+            items.push({ label: `Edit ${def?.label || "segment"}…`, action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this._updateV2Props(); this.render(); } });
+            items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
+        } else if (hit.kind === "seg") {
             items.push({ label: "Copy", action: () => this._copySegment(hit) });
             items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType === "audio" ? "audio" : "image", idx: hit.idx }; this.deleteSelected(); } });
+        } else if (hit.kind === "track" && this._isV2(hit.track)) {
+            const def = this._v2DefForType(hit.track);
+            items.push({ label: `+ ${def?.label || "segment"} here`, action: () => this.addV2Segment(hit.track, this._xToFrame(mx)) });
         } else if (hit.kind === "track") {
             items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
             items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
@@ -792,13 +888,121 @@ class TimelineEditor {
 
     // Avoid overlap on the same track. Push later segments rightwards.
     _resolveCollisions(track, idx) {
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(track);
         const sorted = [...arr].sort((a, b) => a.start - b.start);
         let cursor = -Infinity;
         for (const s of sorted) {
             if (s.start < cursor) s.start = cursor;
             cursor = s.start + s.length;
         }
+    }
+
+    // ── v2 automation tracks (LoRA / camera / seed / pose) ───────────
+    addV2Segment(key, atFrame) {
+        const def = V2_DEFS.find(d => d.key === key);
+        if (!def) return;
+        const length = Math.round(this.fps); // 1s default
+        const start = Math.max(0, atFrame == null ? this._findFreeSlot(length, key) : atFrame);
+        const seg = def.make(start, length);
+        this[key].push(seg);
+        this._resolveCollisions(key, this[key].length - 1);
+        this.selection = { type: key, idx: this[key].indexOf(seg) };
+        this.commitChanges();
+        this._updateV2Props();
+    }
+
+    _drawV2Lanes(ctx, cssW) {
+        const base = this._v2Base();
+        const durX = this._frameToX(this.durFrames);
+        for (let li = 0; li < V2_DEFS.length; li++) {
+            const def = V2_DEFS[li], top = base + li * V2_LANE_H, arr = this._segArr(def.key);
+            // lane background (alternating) + out-of-duration shadow
+            ctx.fillStyle = li % 2 ? C.scrimDark : C.bg3;
+            ctx.fillRect(0, top, cssW, V2_LANE_H);
+            if (durX < cssW) { ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(durX, top, cssW - durX, V2_LANE_H); }
+            // label gutter
+            ctx.fillStyle = C.panelHi2; ctx.fillRect(0, top, V2_LABEL_PX, V2_LANE_H);
+            ctx.fillStyle = def.color; ctx.font = "9px ui-sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+            ctx.fillText(def.label, 4, top + V2_LANE_H / 2);
+            ctx.strokeStyle = C.surface1Alt; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0, top + V2_LANE_H - 0.5); ctx.lineTo(cssW, top + V2_LANE_H - 0.5); ctx.stroke();
+            // segments
+            for (let i = 0; i < arr.length; i++) {
+                const s = arr[i];
+                const x1 = this._frameToX(s.start), x2 = this._frameToX(s.start + s.length);
+                const w = Math.max(3, x2 - x1), y = top + 3, h = V2_LANE_H - 6;
+                const selected = this.selection.type === def.key && this.selection.idx === i;
+                ctx.fillStyle = def.color;
+                ctx.globalAlpha = selected ? 0.95 : 0.7;
+                this._roundRect(ctx, x1, y, w, h, 3); ctx.fill();
+                ctx.globalAlpha = 1;
+                if (selected) { ctx.strokeStyle = C.fg || "#fff"; ctx.lineWidth = 1.5; this._roundRect(ctx, x1, y, w, h, 3); ctx.stroke(); }
+                if (w > 26) {
+                    ctx.save(); ctx.beginPath(); ctx.rect(x1 + 2, y, w - 4, h); ctx.clip();
+                    ctx.fillStyle = C.scrimDark; ctx.font = "8px ui-monospace,monospace"; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+                    ctx.fillText(def.summary(s), x1 + 4, y + h / 2);
+                    ctx.restore();
+                }
+            }
+        }
+    }
+    _roundRect(ctx, x, y, w, h, r) {
+        r = Math.min(r, w / 2, h / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+    }
+
+    _updateV2Props() {
+        const seg = this._selSeg(), def = this._v2DefForType(this.selection.type);
+        if (!seg || !def) { this._updatePropsPanel(); return; }
+        this.propTitle.textContent = `${def.label}: ${def.summary(seg)}`;
+        this.propBounds.textContent = `${fmtTime(seg.start, this.fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, this.fps, this.displayMode)} · ${seg.length}f`;
+        this.promptArea.style.display = "none";
+        this.gsSlider.parentElement.style.display = "none";
+        this.audioInfo.style.display = "block";
+        this.audioInfo.innerHTML = "";
+        this.audioInfo.appendChild(this._buildV2Editor(seg, def));
+    }
+
+    _buildV2Editor(seg, def) {
+        const wrap = document.createElement("div");
+        wrap.style.cssText = "display:flex;flex-direction:column;gap:5px;font:11px system-ui;";
+        const row = (label) => {
+            const r = document.createElement("div");
+            r.style.cssText = "display:flex;align-items:center;gap:6px;";
+            const l = document.createElement("span");
+            l.textContent = label; l.style.cssText = "width:72px;color:var(--c2c-dim,#9399b2);flex:0 0 auto;";
+            r.appendChild(l); return r;
+        };
+        const styleInput = (el) => { el.style.cssText = "flex:1;min-width:0;background:var(--c2c-surface0,#313244);color:var(--c2c-fg,#cdd6f4);border:1px solid var(--c2c-surface1,#45475a);border-radius:3px;padding:3px 5px;font:11px system-ui;"; return el; };
+        const commit = () => { this.commitChanges(); this.propTitle.textContent = `${def.label}: ${def.summary(seg)}`; };
+        const textIn = (val, on) => { const i = styleInput(document.createElement("input")); i.type = "text"; i.value = val ?? ""; i.oninput = () => { on(i.value); commit(); }; return i; };
+        const numIn = (val, min, max, step, on) => { const i = styleInput(document.createElement("input")); i.type = "number"; i.value = String(val); i.min = min; i.max = max; i.step = step; i.oninput = () => { on(parseFloat(i.value)); commit(); }; return i; };
+        const selIn = (val, opts, on) => { const s = styleInput(document.createElement("select")); for (const o of opts) { const op = document.createElement("option"); op.value = o; op.textContent = o; if (o === val) op.selected = true; s.appendChild(op); } s.onchange = () => { on(s.value); commit(); }; return s; };
+        const add = (label, input) => { const r = row(label); r.appendChild(input); wrap.appendChild(r); };
+
+        if (def.key === "loraSegments") {
+            add("Name", textIn(seg.name, v => seg.name = v));
+            add("Strength", numIn(seg.strength ?? 1.0, -2, 2, 0.05, v => seg.strength = isNaN(v) ? 0 : v));
+        } else if (def.key === "cameraSegments") {
+            add("Type", selIn(seg.type || "static", CAMERA_TYPES, v => seg.type = v));
+            const pj = textIn(JSON.stringify(seg.params || {}), v => { try { seg.params = JSON.parse(v || "{}"); } catch (_) {} });
+            add("Params", pj);
+            const hint = document.createElement("div");
+            hint.style.cssText = "font:9px ui-sans-serif;color:var(--c2c-dim,#9399b2);padding-left:78px;";
+            hint.textContent = "pan→{dx,dy} · zoom→{from,to} · orbit→{radius,deg} · dolly→{dz}";
+            wrap.appendChild(hint);
+        } else if (def.key === "seedSegments") {
+            add("Seed", numIn(seg.seed ?? 0, 0, 4294967295, 1, v => seg.seed = isNaN(v) ? 0 : Math.round(v)));
+            add("Mode", selIn(seg.mode || "fixed", SEED_MODES, v => seg.mode = v));
+        } else if (def.key === "poseSegments") {
+            add("Pose file", textIn(seg.poseFile, v => seg.poseFile = v));
+            add("Strength", numIn(seg.strength ?? 1.0, 0, 2, 0.05, v => seg.strength = isNaN(v) ? 0 : v));
+            add("Interp", selIn(seg.interpolation || "linear", POSE_INTERP, v => seg.interpolation = v));
+        }
+        return wrap;
     }
 
     // ── Playback ────────────────────────────────────────────────────
@@ -910,7 +1114,7 @@ class TimelineEditor {
     render() {
         const dpr = window.devicePixelRatio || 1;
         const cssW = this.cvs.clientWidth || 600;
-        const cssH = RULER_H + IMG_TRACK_H + AUD_TRACK_H;
+        const cssH = RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H;
         const w = Math.round(cssW * dpr);
         const h = Math.round(cssH * dpr);
         if (this.cvs.width !== w || this.cvs.height !== h) {
@@ -940,6 +1144,8 @@ class TimelineEditor {
         // Segments
         for (let i = 0; i < this.segments.length; i++) this._drawSegment(ctx, this.segments[i], i, "image");
         for (let i = 0; i < this.audioSegments.length; i++) this._drawSegment(ctx, this.audioSegments[i], i, "audio");
+        // v2 automation lanes
+        this._drawV2Lanes(ctx, cssW);
         // Playhead
         this._drawPlayhead(ctx, cssH);
 
@@ -947,7 +1153,9 @@ class TimelineEditor {
         const vd = this.visualDurFrames;
         this.seek.value = String(Math.round((this.playhead / Math.max(1, vd)) * 10000));
         this.timeReadout.textContent = `f ${this.playhead}/${this.durFrames} · ${fmtTime(this.playhead, this.fps, this.displayMode)}`;
-        this.statusEl.textContent = `${this.segments.length} clips · ${this.audioSegments.length} audio · ${this.durFrames}f @ ${this.fps}fps`;
+        const v2n = V2_KEYS.reduce((a, k) => a + (this[k]?.length || 0), 0);
+        this.statusEl.textContent = `${this.segments.length} clips · ${this.audioSegments.length} audio` +
+            (v2n ? ` · ${v2n} automation` : "") + ` · ${this.durFrames}f @ ${this.fps}fps`;
     }
 
     _drawRuler(ctx, cssW) {
@@ -1166,8 +1374,23 @@ app.registerExtension({
                 setValue: () => {},
                 serialize: false,
             });
+            // Clip to the widget slot — without this the timeline DOM spills
+            // OUTSIDE the node bounds over neighbouring nodes whenever its
+            // content height exceeds the node's layout slot (zoom/restore).
+            // Retried because the Vue layer mounts the .dom-widget wrapper
+            // AFTER onNodeCreated (a single rAF fires too early).
+            const _wdClipTimeline = () => {
+                try {
+                    const wrap = host.closest?.(".dom-widget");
+                    if (wrap && wrap !== host) { wrap.style.overflow = "hidden"; return true; }
+                } catch (_) {}
+                return false;
+            };
+            requestAnimationFrame(_wdClipTimeline);
+            setTimeout(_wdClipTimeline, 500);
+            setTimeout(_wdClipTimeline, 1500);
             widget.computeSize = function (width) {
-                return [width, RULER_H + IMG_TRACK_H + AUD_TRACK_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
+                return [width, RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
             };
             const self = this;
             setTimeout(() => {

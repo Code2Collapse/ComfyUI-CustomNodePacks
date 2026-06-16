@@ -199,7 +199,7 @@ function _drawPreview(node, ctx, x, y, w, h) {
         const cxd = dispX + cropX * scale;
         const cyd = dispY + cropY * scale;
         ctx.setLineDash([]);
-        ctx.strokeStyle = shrinkMode ? "var(--c2c-red)" : "var(--c2c-okSoft)";
+        ctx.strokeStyle = shrinkMode ? C.red : C.okSoft;
         ctx.lineWidth = 2;
         ctx.strokeRect(cxd + 0.5, cyd + 0.5, cropW * scale - 1, cropH * scale - 1);
 

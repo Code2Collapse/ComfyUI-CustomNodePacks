@@ -30,11 +30,22 @@ const STATE = {
 };
 
 const LS_MUTE_KEY = "MEC.integrity.muted";
-function isMuted() { return localStorage.getItem(LS_MUTE_KEY) === "1"; }
+// Perf: this is read in drawNodeShape (per node, per frame ≈ thousands of
+// localStorage.getItem/sec — a synchronous storage hit in the render loop).
+// Cache it in memory; the only writer is setMuted, and a cross-tab change
+// arrives via the 'storage' event.
+let _mutedCache = (() => { try { return localStorage.getItem(LS_MUTE_KEY) === "1"; } catch (_) { return false; } })();
+function isMuted() { return _mutedCache; }
 function setMuted(v) {
+    _mutedCache = !!v;
     if (v) localStorage.setItem(LS_MUTE_KEY, "1");
     else   localStorage.removeItem(LS_MUTE_KEY);
 }
+try {
+    window.addEventListener("storage", (e) => {
+        if (e.key === LS_MUTE_KEY) _mutedCache = (e.newValue === "1");
+    });
+} catch (_) { /* non-browser context */ }
 
 // Subscribers (sidebar uses this).
 const SUBSCRIBERS = new Set();

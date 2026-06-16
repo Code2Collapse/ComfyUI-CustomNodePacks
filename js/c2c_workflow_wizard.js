@@ -765,3 +765,146 @@ app.registerExtension({
         console.log("[C2C.WorkflowWizard] godlevel-rebuild loaded.");
     },
 });
+
+// ── P7: Live validator + auto-fix (Face-Director plan, Wizard tier 1) ────────
+// Scans the graph on every change for the two highest-value classes of silent
+// breakage: (a) COMBO widget values that no longer exist in the live options
+// (stale model filenames after a workflow reload), and (b) required link
+// inputs left unconnected. Issues surface as a bottom-left "⚠ N issues" pill;
+// clicking it opens a fix-it list with one-click actions.
+(function () {
+    const PILL_ID = "c2c-wizard-validator-pill";
+    const LIST_ID = "c2c-wizard-validator-list";
+    let _objInfo = null;
+    let _issues = [];
+    let _timer = 0;
+
+    async function _defs() {
+        if (_objInfo) return _objInfo;
+        try {
+            const r = await fetch("/object_info");
+            _objInfo = await r.json();
+        } catch (_) { _objInfo = {}; }
+        return _objInfo;
+    }
+
+    function _isLinkType(spec) {
+        const t = Array.isArray(spec) ? spec[0] : spec;
+        return typeof t === "string" && /^[A-Z][A-Z0-9_]*$/.test(t) &&
+            !["INT", "FLOAT", "STRING", "BOOLEAN"].includes(t);
+    }
+
+    async function _scan() {
+        const defs = await _defs();
+        const out = [];
+        for (const n of (app.graph?._nodes || [])) {
+            const def = defs[n.comfyClass || n.type];
+            if (!def) continue;
+            const req = (def.input && def.input.required) || {};
+            // (a) stale combo values
+            for (const w of (n.widgets || [])) {
+                const spec = req[w.name];
+                if (!spec || !Array.isArray(spec) || !Array.isArray(spec[0])) continue;
+                const opts = spec[0];
+                if (opts.length && w.value != null && !opts.includes(w.value)) {
+                    out.push({
+                        kind: "stale_combo", node: n, widget: w, opts,
+                        msg: `${n.title || n.type}: "${w.name}" is set to a file that no longer exists (${String(w.value).slice(0, 40)})`,
+                        fix: `Set to ${String(opts[0]).slice(0, 32)}`,
+                        apply: () => { w.value = opts[0]; try { w.callback?.(opts[0], app.canvas, n); } catch (_) {} n.setDirtyCanvas?.(true, true); },
+                    });
+                }
+            }
+            // (b) unconnected required link inputs
+            for (const [name, spec] of Object.entries(req)) {
+                if (!_isLinkType(spec)) continue;
+                const slot = (n.inputs || []).find((i) => i.name === name);
+                if (slot && slot.link == null) {
+                    out.push({
+                        kind: "missing_link", node: n,
+                        msg: `${n.title || n.type}: required input "${name}" is not connected`,
+                        fix: "Show node",
+                        apply: () => { try { app.canvas.centerOnNode(n); app.canvas.selectNode(n); } catch (_) {} },
+                    });
+                }
+            }
+        }
+        _issues = out;
+        _render();
+    }
+
+    function _pill() {
+        let p = document.getElementById(PILL_ID);
+        if (p) return p;
+        p = document.createElement("button");
+        p.id = PILL_ID;
+        p.style.cssText =
+            "position:fixed;left:74px;bottom:14px;z-index:9000;display:none;" +
+            "padding:4px 12px;border-radius:999px;border:1px solid var(--c2c-dangerBg,#3b2222);" +
+            "background:var(--c2c-bg2,#1a1a23);color:var(--c2c-red,#f38ba8);" +
+            "font:600 11px ui-sans-serif,system-ui;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);";
+        p.addEventListener("click", _toggleList);
+        document.body.appendChild(p);
+        return p;
+    }
+
+    function _toggleList() {
+        let l = document.getElementById(LIST_ID);
+        if (l) { l.remove(); return; }
+        l = document.createElement("div");
+        l.id = LIST_ID;
+        l.style.cssText =
+            "position:fixed;left:74px;bottom:44px;z-index:9001;width:380px;max-height:46vh;" +
+            "overflow:auto;background:var(--c2c-bg,#1a1a22);border:1px solid var(--c2c-surface2,#45475a);" +
+            "border-radius:10px;padding:8px;box-shadow:0 8px 28px rgba(0,0,0,.5);" +
+            "font:11px ui-sans-serif,system-ui;color:var(--c2c-fg,#cdd6f4);";
+        for (const iss of _issues) {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;gap:8px;align-items:center;padding:6px;border-bottom:1px solid var(--c2c-surface0,#2a2a35);";
+            const txt = document.createElement("div");
+            txt.style.cssText = "flex:1;line-height:1.4;";
+            txt.textContent = iss.msg;
+            const btn = document.createElement("button");
+            btn.textContent = iss.fix;
+            btn.style.cssText =
+                "flex:0 0 auto;padding:3px 10px;border-radius:6px;cursor:pointer;border:none;" +
+                "background:var(--c2c-blue,#89b4fa);color:var(--c2c-bg3,#11111b);font:600 10px ui-sans-serif;";
+            btn.addEventListener("click", () => { try { iss.apply(); } catch (_) {} setTimeout(_scan, 250); });
+            row.append(txt, btn);
+            l.appendChild(row);
+        }
+        if (!_issues.length) {
+            l.textContent = "No issues — workflow looks healthy.";
+            l.style.padding = "14px";
+        }
+        document.body.appendChild(l);
+    }
+
+    function _render() {
+        const p = _pill();
+        if (_issues.length) {
+            p.style.display = "block";
+            p.textContent = `⚠ ${_issues.length} workflow issue${_issues.length > 1 ? "s" : ""}`;
+        } else {
+            p.style.display = "none";
+            document.getElementById(LIST_ID)?.remove();
+        }
+    }
+
+    function _schedule() {
+        if (_timer) clearTimeout(_timer);
+        _timer = setTimeout(() => { _timer = 0; _scan().catch(() => {}); }, 700);
+    }
+
+    const _arm = () => {
+        try {
+            if (typeof app?.api?.addEventListener === "function") {
+                app.api.addEventListener("graphChanged", _schedule);
+            }
+        } catch (_) {}
+        // Safety-net poll: cheap (object_info cached; scan is O(nodes)).
+        setInterval(_schedule, 5000);
+        _schedule();
+    };
+    if (window.app?.graph) _arm(); else setTimeout(_arm, 1500);
+})();

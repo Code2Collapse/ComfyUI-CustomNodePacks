@@ -199,7 +199,13 @@ app.registerExtension({
         _injectStyle();
         _scanAll();
         // Store the handle so the interval can be torn down on page unload.
-        const _t = setInterval(_scanAll, 4000);  // catch nodes added by graph load
+        // Gate the periodic full-graph scan on the enabled setting so turning
+        // the feature OFF actually stops the work (not just hides the badge).
+        const _scanIfEnabled = () => {
+            try { if (app.ui.settings.getSettingValue("mec.token_counter.enabled", true) === false) return; } catch (_) {}
+            _scanAll();
+        };
+        const _t = setInterval(_scanIfEnabled, 4000);  // catch nodes added by graph load
         window.addEventListener("beforeunload", () => clearInterval(_t), { once: true });
         window.__MEC_TOKEN_COUNTER_INTERVAL = _t;
         console.log("[MEC.TokenCounter] Loaded.");

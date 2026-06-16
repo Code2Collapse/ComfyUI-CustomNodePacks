@@ -454,7 +454,7 @@ function _drawBtns(ctx, S, cw) {
         ctx.beginPath();
         ctx.roundRect(x, BTN_PAD, BTN_W, BTN_H, 4);
         ctx.fill();
-        ctx.fillStyle = active ? "var(--c2c-white)" : "var(--c2c-gray250)";
+        ctx.fillStyle = active ? C.white : C.gray250;
         ctx.fillText(MODES[i], x + BTN_W / 2, BTN_PAD + BTN_H / 2);
     }
     ctx.restore();

@@ -62,19 +62,36 @@ function shouldSkipNode(node) {
     return false;
 }
 
+// File/model combos whose options are filenames — resetting these would clobber
+// the user's selected checkpoint/LoRA/VAE, so we never auto-reset them.
+const _FILE_EXT_RE = /\.(safetensors|ckpt|pt|pth|bin|gguf|onnx|sft|vae|yaml|yml|json|pkl|npz|png|jpe?g|webp|gif|mp4|webm)$/i;
+function _looksLikeFileCombo(opts) {
+    return opts.some((o) => typeof o === "string" && (_FILE_EXT_RE.test(o) || o.includes("/") || o.includes("\\")));
+}
+
 // ---------------------------------------- pull default from /object_info entry
 function extractDefault(spec) {
     // Modern shape:  ["INT", { "default": 20, "min": 1, ... }]
     // Tuple shape:   ["INT", 20]                  (legacy)
-    // Combo shape:   [[ "opt1","opt2","opt3" ]]   — we do NOT reset combos
-    //                                              because the first option
-    //                                              isn't always the "default"
-    //                                              that the loader wants.
+    // Combo shape:   [[ "opt1","opt2","opt3" ], { "default": "opt2" }?]
     if (!Array.isArray(spec)) return { has: false };
     const t = spec[0];
-    if (Array.isArray(t)) return { has: false, isCombo: true };
-    if (spec.length < 2) return { has: false };
     const meta = spec[1];
+    if (Array.isArray(t)) {
+        // COMBO. The node-author "original" is the explicit `default` if given,
+        // otherwise the FIRST option — which is exactly the value a freshly
+        // created node shows (sampler_name→euler, scheduler→simple, etc.).
+        // We still skip dynamic file/model lists so a reset never silently
+        // re-points a loader at the first file on disk.
+        if (meta && typeof meta === "object" && "default" in meta && meta.default !== undefined) {
+            return { has: true, value: meta.default, isCombo: true };
+        }
+        if (t.length && !_looksLikeFileCombo(t)) {
+            return { has: true, value: t[0], isCombo: true };
+        }
+        return { has: false, isCombo: true };
+    }
+    if (spec.length < 2) return { has: false };
     if (meta && typeof meta === "object" && "default" in meta) {
         return { has: true, value: meta.default };
     }
@@ -187,6 +204,32 @@ app.registerExtension({
             function: resetSelectedOrAll,
         },
     ],
+    // Per-node right-click: reset THIS node to the ORIGINAL defaults declared by
+    // the node author in /object_info (NOT the values baked into a copied
+    // workflow). This is the "reset to original" the user asked for — it reads
+    // the node's own INPUT_TYPES defaults from the live ComfyUI registry, so it
+    // works for KSampler or any custom node, independent of the loaded workflow.
+    getNodeMenuItems(node) {
+        if (!node || shouldSkipNode(node)) return [];
+        return [{
+            content: "↺ Reset to ORIGINAL (node author / ComfyUI defaults)",
+            callback: async () => {
+                const oi = await getObjectInfo();
+                const r = resetNode(node, oi);
+                const det = r.skipped
+                    ? `Skipped: ${r.reason}`
+                    : (r.changed > 0 ? `Reset ${r.changed} widget(s) to ${node.type} originals.`
+                                     : "Already at the node's original defaults.");
+                try {
+                    app.extensionManager?.toast?.add?.({
+                        severity: r.changed > 0 ? "success" : "info",
+                        summary: "Reset to original",
+                        detail: det, life: 3500,
+                    });
+                } catch { /* best-effort */ }
+            },
+        }];
+    },
     // NOTE: No `keybindings:` entry — ComfyUI's registry conflict-checks
     // by `key` alone (ignoring modifiers), so { key:"r", ctrl:true }
     // collides with Comfy.RefreshNodeDefinitions' bare `r` and spams a

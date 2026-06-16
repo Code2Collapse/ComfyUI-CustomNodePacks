@@ -8,8 +8,13 @@ import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
 
 const SETTING_ID  = "c2c.focusMode.enabled";
-const DIM_OPACITY = 0.18;
-const NEIGHBOUR_OPACITY = 0.55;
+// DIM_OPACITY / NEIGHBOUR_OPACITY are the *remaining* visibility of a node
+// after the focus veil; the black overlay alpha drawn over it is (1 - this).
+// The old value 0.18 meant an ~82%-opaque black wash that made every dimmed
+// node look solid-black — the reported "black shadow damaging the entire node".
+// Keep dimmed nodes clearly legible so the veil can never read as "broken".
+const DIM_OPACITY = 0.60;
+const NEIGHBOUR_OPACITY = 0.85;
 
 const z = { focusOverlay: 1500 };
 
@@ -78,6 +83,13 @@ function _patchDraw() {
     if (!g || !g._nodes) return;
 
     const sel   = _getSelected();
+
+    // With nothing selected there is no focus target, so dimming every node
+    // painted the whole canvas black on idle (the reported "black shadow
+    // damaging the entire node"). Only engage the veil when something is
+    // actually selected.
+    if (sel.size === 0) return;
+
     const nb    = _getNeighbours(sel);
 
     // dim non-selected, non-neighbour nodes

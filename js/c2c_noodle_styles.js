@@ -35,17 +35,43 @@ const SETTING_ID = "mec.noodle.style";
 
 let _orig = null;
 
-// Catppuccin-keyed default link colors per type.
+// CRITICAL: Canvas2D CANNOT parse CSS var() — assigning "var(--x)" to
+// fillStyle/strokeStyle silently leaves it BLACK (the historic black-confetti /
+// black-dot bug). So every colour handed to the canvas MUST be a resolved
+// literal. _safeColor() resolves var() → the computed hex (cached), with
+// Catppuccin literal fallbacks if the var is unset.
+const _C2C_FALLBACK = {
+    "--c2c-red": "#f38ba8", "--c2c-blue": "#89b4fa", "--c2c-green": "#a6e3a1",
+    "--c2c-mauve": "#cba6f7", "--c2c-yellow": "#f9e2af", "--c2c-peach": "#fab387",
+    "--c2c-teal": "#94e2d5", "--c2c-lavender": "#b4befe",
+};
+const _cssCache = {};
+function _safeColor(c) {
+    if (!c || typeof c !== "string") return c || null;
+    const m = c.match(/var\(\s*(--[a-z0-9-]+)/i);
+    if (!m) return c;                       // already a literal
+    const name = m[1];
+    if (_cssCache[name]) return _cssCache[name];
+    let v = "";
+    try { v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch (_) {}
+    if (!v) { try { v = getComputedStyle(document.body).getPropertyValue(name).trim(); } catch (_) {} }
+    if (!v) v = _C2C_FALLBACK[name] || "#b4befe";
+    _cssCache[name] = v;
+    return v;
+}
+
+// Catppuccin-keyed default link colors per type (RESOLVED to literal hex —
+// canvas-safe; returning var() here rendered black links/glows/dots).
 function _typeColor(linkType) {
     const t = (linkType || "").toUpperCase();
-    if (t.includes("MODEL"))      return "var(--c2c-red)";      // red
-    if (t.includes("IMAGE"))      return "var(--c2c-blue)";      // blue
-    if (t.includes("MASK"))       return "var(--c2c-green)";      // green
-    if (t.includes("LATENT"))     return "var(--c2c-mauve)";      // mauve
-    if (t.includes("CLIP"))       return "var(--c2c-yellow)";      // yellow
-    if (t.includes("VAE"))        return "var(--c2c-peach)";      // peach
-    if (t.includes("CONDITION"))  return "var(--c2c-teal)";      // teal
-    return "var(--c2c-lavender)";                                    // lavender
+    if (t.includes("MODEL"))      return _safeColor("var(--c2c-red)");
+    if (t.includes("IMAGE"))      return _safeColor("var(--c2c-blue)");
+    if (t.includes("MASK"))       return _safeColor("var(--c2c-green)");
+    if (t.includes("LATENT"))     return _safeColor("var(--c2c-mauve)");
+    if (t.includes("CLIP"))       return _safeColor("var(--c2c-yellow)");
+    if (t.includes("VAE"))        return _safeColor("var(--c2c-peach)");
+    if (t.includes("CONDITION"))  return _safeColor("var(--c2c-teal)");
+    return _safeColor("var(--c2c-lavender)");
 }
 
 function _bezierPoints(a, b) {
@@ -60,15 +86,124 @@ function _bezierAt(t, a, cp1, cp2, b) {
 }
 
 // ── Style implementations ────────────────────────────────────────────
-function _renderSpiderWeb(ctx, a, b, color) {
+// Clean full-body Spider-Man with web strands already in both hands (transparent
+// PNG at js/assets/spiderman_cutout.png, from the user's "cutout_new" render —
+// arms outstretched, the web extends horizontally to frame edges). Lazy-loaded
+// once; until it loads (or if it's missing) the style degrades to webbing-only.
+let _spideyImg = null;   // ImageBitmap once loaded
+let _spideyTried = false;
+function _spidey() {
+    if (_spideyTried) return _spideyImg;
+    _spideyTried = true;
+    // fetch→createImageBitmap instead of new Image(): in this app shell the
+    // HTMLImageElement load stalled indefinitely while fetch() of the same
+    // URL returned the full JPEG — bitmap decoding sidesteps whatever
+    // intercepts element loads, and drawImage accepts ImageBitmap directly.
+    try {
+        const url = new URL("./assets/spiderman_cutout.png", import.meta.url).href;
+        fetch(url, { cache: "force-cache" })
+            .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
+            .then((b) => createImageBitmap(b))
+            .then((bmp) => {
+                _spideyImg = bmp;
+                try { app.graph?.setDirtyCanvas(true, true); } catch (_) {}
+            })
+            .catch(() => { _spideyImg = null; });
+    } catch (_) { _spideyImg = null; }
+    return _spideyImg;
+}
+// In the cutout the web strands run horizontally through his fists on the line
+// y≈19.4% of the image — anchoring that line ON the noodle puts the in-image web
+// (and his hands) right on the rope at any link angle.
+const _SPIDEY_W = 150;          // drawn width in graph units (image is wide: web spans edge-to-edge)
+const _SPIDEY_HANDS_Y = 0.194;  // hands/web line, fraction of image height (measured from cutout)
+
+function _renderSpiderWeb(ctx, a, b /*, color */) {
+    // Raimi train-scene WEBBING (user spec 2026-06-12, with reference still):
+    // a braided white web-rope — two wavy rails around a core filament,
+    // bound by X cross-ties, with splayed anchor strands at both ends.
+    // (Replaces the old single line + 🕷️ emoji, which read as "a spider on
+    // a wire", not Spider-Man webbing.)
     const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 26;
+    const pts = [], nrm = [];
+    for (let i = 0; i <= N; i++) {
+        const t = i / N;
+        const p = _bezierAt(t, a, cp1, cp2, b);
+        pts.push(p);
+        if (i > 0) {
+            const dx = p[0] - pts[i - 1][0], dy = p[1] - pts[i - 1][1];
+            const L = Math.hypot(dx, dy) || 1;
+            nrm.push([-dy / L, dx / L]);
+        }
+    }
+    nrm.push(nrm[nrm.length - 1] || [0, 1]);
+    const railAt = (i, side) => {
+        const wiggle = Math.sin(i * 1.25 + side * Math.PI) * 1.2;
+        const off = side * 3 + wiggle;
+        return [pts[i][0] + nrm[i][0] * off, pts[i][1] + nrm[i][1] * off];
+    };
     ctx.save();
-    ctx.strokeStyle = color; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
-    const [mx, my] = _bezierAt(0.5, a, cp1, cp2, b);
-    ctx.font = "18px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("🕷️", mx, my);
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#f4f6ff";
+    // core filament
+    ctx.globalAlpha = 0.95; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    // two wavy rails
+    ctx.lineWidth = 1.3; ctx.globalAlpha = 0.85;
+    for (const side of [-1, 1]) {
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+            const r = railAt(i, side);
+            i ? ctx.lineTo(r[0], r[1]) : ctx.moveTo(r[0], r[1]);
+        }
+        ctx.stroke();
+    }
+    // X cross-ties binding the rails (the braided web-rope look)
+    ctx.lineWidth = 1; ctx.globalAlpha = 0.7;
+    for (let i = 1; i < N - 1; i += 3) {
+        const a1 = railAt(i, -1), b1 = railAt(i + 1, 1);
+        const a2 = railAt(i, 1),  b2 = railAt(i + 1, -1);
+        ctx.beginPath(); ctx.moveTo(a1[0], a1[1]); ctx.lineTo(b1[0], b1[1]); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(a2[0], a2[1]); ctx.lineTo(b2[0], b2[1]); ctx.stroke();
+    }
+    // anchor splats: 3 short splayed strands where the web grips each socket
+    ctx.lineWidth = 1.2; ctx.globalAlpha = 0.8;
+    for (const [end, dirIdx] of [[a, 1], [b, N - 1]]) {
+        const base = nrm[dirIdx];
+        for (const spread of [-0.6, 0, 0.6]) {
+            const c = Math.cos(spread), s = Math.sin(spread);
+            const vx = base[0] * c - base[1] * s, vy = base[0] * s + base[1] * c;
+            ctx.beginPath(); ctx.moveTo(end[0], end[1]);
+            ctx.lineTo(end[0] + vx * 9, end[1] + vy * 9); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(end[0], end[1]);
+            ctx.lineTo(end[0] - vx * 9, end[1] - vy * 9); ctx.stroke();
+        }
+    }
+    // THE MEME: Tobey rides the midpoint of the link, the strand running
+    // through his fists. Rotated to the link tangent, flipped so he is
+    // never upside-down. Skipped gracefully until the still is loaded.
+    const img = _spidey();
+    const iw = img ? (img.width || img.naturalWidth || 0) : 0;
+    const ih = img ? (img.height || img.naturalHeight || 0) : 0;
+    if (img && iw > 0) {
+        const [mx, my] = _bezierAt(0.5, a, cp1, cp2, b);
+        const p1 = _bezierAt(0.46, a, cp1, cp2, b);
+        const p2 = _bezierAt(0.54, a, cp1, cp2, b);
+        let ang = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]);
+        if (ang > Math.PI / 2) ang -= Math.PI;
+        else if (ang < -Math.PI / 2) ang += Math.PI;
+        const w = _SPIDEY_W;
+        const h = w * (ih / iw);
+        ctx.globalAlpha = 1;
+        ctx.translate(mx, my);
+        ctx.rotate(ang);
+        // anchor the HANDS LINE (not the image centre) on the noodle
+        ctx.drawImage(img, -w / 2, -h * _SPIDEY_HANDS_Y, w, h);
+        ctx.rotate(-ang);
+        ctx.translate(-mx, -my);
+    }
     ctx.restore();
 }
 function _renderLightsaber(ctx, a, b, color, linkType) {
@@ -211,8 +346,35 @@ function _installRenderPatch() {
         }
         try {
             const linkType = link?.type || "";
-            const effColor = color || _typeColor(linkType);
+            // Resolve the incoming link colour too — ComfyUI may hand us a
+            // CSS var() which would render the noodle black on canvas.
+            const effColor = _safeColor(color) || _typeColor(linkType);
             _RENDER[style](ctx, a, b, effColor, linkType);
+            // ── Keep "the dot" working on EVERY custom noodle ──────────────
+            // The native renderLink stores link._pos (the bezier centre) and
+            // ComfyUI's separate link-marker pass draws + hit-tests the dot
+            // against it. Replacing renderLink dropped link._pos, so the dot
+            // "disappeared" on custom styles. Restoring it brings back the
+            // NATIVE dot (correct theme colour, clickable, menu) on every style
+            // — including pressing Spidey, who rides the centre.
+            // We draw a small affordance dot using a RESOLVED colour (never a
+            // raw var() → that was the black-dot bug). Skipped for spider-web
+            // (the figure IS the dot).
+            if (link) {
+                const [cp1m, cp2m] = _bezierPoints(a, b);
+                const mid = _bezierAt(0.5, a, cp1m, cp2m, b);
+                if (!link._pos) link._pos = new Float32Array(2);
+                link._pos[0] = mid[0]; link._pos[1] = mid[1];
+                if (style !== "spider-web") {
+                    ctx.save();
+                    ctx.beginPath(); ctx.arc(mid[0], mid[1], 5, 0, Math.PI * 2);
+                    ctx.fillStyle = effColor || "#cdd6f4";   // resolved literal, never var()
+                    ctx.globalAlpha = 0.95; ctx.fill();
+                    ctx.globalAlpha = 1; ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = "rgba(20,20,28,0.65)"; ctx.stroke();
+                    ctx.restore();
+                }
+            }
             // Force a continuous redraw for animated styles
             if (["dna-helix","rainbow-flow","dashed-march","lightning","pulse-packet"].includes(style)) {
                 this.dirty_canvas = true;

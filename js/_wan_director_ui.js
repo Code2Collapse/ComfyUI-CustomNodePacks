@@ -10,7 +10,12 @@
 export const WD_DEFAULT_W = 640;
 
 export function wdMaxH() {
-    return Math.max(520, Math.floor((window.innerHeight || 1080) * 0.62));
+    // 0.62 → 0.88: the 62%-viewport clamp cut the node ~240px shorter than its
+    // own widget stack (timeline + player + props), so the DOM spilled out of
+    // the node bounds over neighbouring nodes — the reported "UI coming out
+    // of the node" bug. The wrapper is also overflow-clipped as a belt-and-
+    // braces guard (wan_director_timeline/player).
+    return Math.max(520, Math.floor((window.innerHeight || 1080) * 0.88));
 }
 
 export function writeWdNodeSize(node, w, h) {

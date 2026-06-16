@@ -92,10 +92,30 @@ except Exception as _fpd_exc:  # pragma: no cover
             "[MEC] face_pose_delta import failed: %s", _fpd_exc,
         )
 # Mask + Matting (multi-backend: SAM2.1, SAM3 + ViTMatte, RVM, ...)
-from .nodes.mask_matting import (
-    NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
-)
+# Guarded: a failure inside mask_matting (e.g. a missing _reanchor.py helper
+# on an out-of-sync install) must NOT abort this __init__ — that would drop
+# every other node in the pack (NanoBanana, WanDirector, OmniPill, Wizard…).
+try:
+    from .nodes.mask_matting import (
+        NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
+    )
+except Exception as _mm_exc:  # pragma: no cover
+    _MASKMATTE_MAPPINGS, _MASKMATTE_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_mm
+        _c2c_rec_fail_mm(
+            "mask_matting", _mm_exc,
+            hint="Mask+Matting pack failed to import. Ensure "
+                 "nodes/mask_matting/_reanchor.py is present and "
+                 "opencv-python / transformers are installed.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] mask_matting import failed: %s", _mm_exc,
+        )
 # ── Central failure registry (surface silent drops to the user) ───────
 # Per ideas_summary.md §2.1: the #1 reason this pack "feels like stubs"
 # is that optional sub-imports were swallowed by `except: pass` / quiet
@@ -305,6 +325,20 @@ except Exception as _exc:  # pragma: no cover
     )
     _LOCATE_MAPPINGS, _LOCATE_DISPLAY = {}, {}
 
+# Nano Banana (Google Gemini image API: gemini-3-pro-image + 2.5-flash-image)
+try:
+    from .nodes.nano_banana import (
+        NODE_CLASS_MAPPINGS as _NANOBANANA_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _NANOBANANA_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "NanoBanana", _exc,
+        hint="Gemini image-generation node; needs only stdlib + PIL + a GEMINI_API_KEY.",
+        group="nodes",
+    )
+    _NANOBANANA_MAPPINGS, _NANOBANANA_DISPLAY = {}, {}
+
 # ── NukeNodeMax suite (P0..F7) ────────────────────────────────────────
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
@@ -424,6 +458,7 @@ NODE_CLASS_MAPPINGS = {
     **_ASYMFLOW_MAPPINGS,
     **_HDR_MAPPINGS,
     **_LOCATE_MAPPINGS,
+    **_NANOBANANA_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -448,6 +483,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_ASYMFLOW_DISPLAY,
     **_HDR_DISPLAY,
     **_LOCATE_DISPLAY,
+    **_NANOBANANA_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"

@@ -15,6 +15,15 @@ import { C } from './_c2c_theme.js';
 const STORE_KEY = "c2c_wire_labels"; // stored under graph.extra[STORE_KEY]
 const STYLE_ID  = "mec-wire-labels-style";
 
+// Perf: drawConnections runs every frame; reading getSettingValue there was a
+// synchronous storage hit per repaint. Cache the flag (seeded at setup +
+// onChange) instead.
+let _enabled = true;
+function _readEnabled() {
+    try { return app.ui.settings.getSettingValue("mec.wire_labels.enabled", true) !== false; }
+    catch { return true; }
+}
+
 function _injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement("style");
@@ -161,11 +170,7 @@ function _patchDblClick() {
     LGraphCanvas.prototype.processMouseDown = function (e) {
         const r = orig.call(this, e);
         try {
-            const enabled = (() => {
-                try { return app.ui.settings.getSettingValue("mec.wire_labels.enabled", true); }
-                catch { return true; }
-            })();
-            if (!enabled) return r;
+            if (!_enabled) return r;
             // Only react on left-button double-clicks that didn't hit a node.
             if (e.which !== 1 || !this.last_mouseclick) return r;
             const node = this.graph?.getNodeOnPos?.(e.canvasX, e.canvasY, this.visible_nodes);
@@ -191,11 +196,7 @@ function _patchDrawConnections() {
     LGraphCanvas.prototype.drawConnections = function (ctx) {
         const r = orig.call(this, ctx);
         try {
-            const enabled = (() => {
-                try { return app.ui.settings.getSettingValue("mec.wire_labels.enabled", true); }
-                catch { return true; }
-            })();
-            if (!enabled) return r;
+            if (!_enabled) return r;
             const graph = this.graph;
             if (!graph) return r;
             const store = (graph.extra && graph.extra[STORE_KEY]) || {};
@@ -248,10 +249,14 @@ app.registerExtension({
             name: "Wire Labels: double-click connection to name it",
             type: "boolean",
             default: true,
-            onChange: () => app.canvas?.setDirty?.(true, true),
+            onChange: (v) => {
+                _enabled = (v !== false);
+                app.canvas?.setDirty?.(true, true);
+            },
         },
     ],
     async setup() {
+        _enabled = _readEnabled();
         _injectStyle();
         _patchDblClick();
         _patchDrawConnections();
