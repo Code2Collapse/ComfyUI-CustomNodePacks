@@ -42,7 +42,7 @@ except Exception:
     _HAVE_CV2 = False
 
 _LUMA = (0.2126, 0.7152, 0.0722)
-_BLEND_MODES = ("screen", "lighten_max", "linear_dodge", "multiply", "average")
+_BLEND_MODES = ("screen", "lighten_max", "linear_dodge", "multiply", "average", "weighted_avg", "overlay")
 
 
 # ----------------------------------------------------------------- tensor utils
@@ -161,14 +161,15 @@ def _run_aux(class_name, image, target_res=512, overrides=None):
 
 
 # ----------------------------------------------------------------- vendored passes
-def _canny_pass(image_bhwc, low, high):
+def _canny_pass(image_bhwc, low, high, aperture=3):
     """OpenCV Canny per frame → white edges on black, [B,H,W,3]."""
     if not _HAVE_CV2:
         return None
+    ap = aperture if aperture in (3, 5, 7) else 3
     out = []
     for i in range(image_bhwc.shape[0]):
         g = cv2.cvtColor(_to_u8(image_bhwc[i]), cv2.COLOR_RGB2GRAY)
-        e = cv2.Canny(g, int(low), int(high))
+        e = cv2.Canny(g, int(low), int(high), apertureSize=ap)
         out.append(torch.from_numpy(e).float() / 255.0)
     e = torch.stack(out, 0).unsqueeze(-1).repeat(1, 1, 1, 3)
     return e.clamp(0, 1)
@@ -197,7 +198,7 @@ def _motion_pass(image_bhwc):
 
 
 # ----------------------------------------------------------------- the node
-class ControlAOVMEC:
+class ControlAOVC2C:
     CATEGORY = "C2C/Control"
     DESCRIPTION = ("VFX-AOV control fusion: emit depth/canny/pose/normal/motion/ID as separate passes, "
                    "a channel-packed image (depth=R/canny=G/pose=B), and a convenience blend. Runs Canny + "
@@ -242,6 +243,8 @@ class ControlAOVMEC:
                 "run_canny": ("BOOLEAN", {"default": True, "tooltip": "Used only when edge_model = internal_canny."}),
                 "canny_low": ("INT", {"default": 100, "min": 0, "max": 255}),
                 "canny_high": ("INT", {"default": 200, "min": 0, "max": 255}),
+                "canny_aperture": ([3, 5, 7], {"default": 3, "tooltip": "Sobel aperture for internal Canny (odd 3/5/7)."}),
+                "depth_invert": ("BOOLEAN", {"default": False, "tooltip": "Invert depth (1 - depth). Use when source is 'far=bright' but the ControlNet expects 'near=bright'."}),
                 "preproc_resolution": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8,
                                "tooltip": "Resolution passed to delegated preprocessors."}),
                 "run_motion": ("BOOLEAN", {"default": False,
@@ -260,14 +263,14 @@ class ControlAOVMEC:
     @classmethod
     def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", depth_size="small",
                    depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
-                   run_canny=True, canny_low=100, canny_high=200, preproc_resolution=512,
-                   run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
-                   depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0,
-                   match_to="largest", **_):
+                   run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
+                   preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
+                   normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
+                   normal_weight=0.0, match_to="largest", **_):
         h = hashlib.md5()
         h.update(repr((blend_mode, depth_model, depth_size, depth_custom_ckpt, pose_model, edge_model,
-                       run_canny, canny_low, canny_high, preproc_resolution, run_motion, depth_weight,
-                       canny_weight, pose_weight, normal_weight, match_to)).encode())
+                       run_canny, canny_low, canny_high, canny_aperture, depth_invert, preproc_resolution,
+                       run_motion, depth_weight, canny_weight, pose_weight, normal_weight, match_to)).encode())
         for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
             h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
         return h.hexdigest()
@@ -286,10 +289,10 @@ class ControlAOVMEC:
 
     def forge(self, blend_mode, image=None, depth_model="off", depth_size="small",
               depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
-              run_canny=True, canny_low=100, canny_high=200, preproc_resolution=512,
-              run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
-              depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0,
-              match_to="largest"):
+              run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
+              preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
+              normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
+              normal_weight=0.0, match_to="largest"):
         image = _as_bhwc3(image)
         notes = []
         res = int(preproc_resolution)
@@ -304,6 +307,8 @@ class ControlAOVMEC:
                 ov["ckpt_name"] = ckpt
             depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res, overrides=ov)
             notes.append(nt + (f"[{ov['ckpt_name']}]" if ov else ""))
+        if depth_invert and depth_t is not None:
+            depth_t = (1.0 - _as_bhwc3(depth_t)).clamp(0, 1)
         # POSE
         pose_t = _as_bhwc3(pose)
         if pose_t is None and image is not None and pose_model != "off":
@@ -313,7 +318,7 @@ class ControlAOVMEC:
         canny_t = _as_bhwc3(canny)
         if canny_t is None and image is not None:
             if edge_model == "internal_canny" and run_canny:
-                canny_t = _canny_pass(image, canny_low, canny_high)
+                canny_t = _canny_pass(image, canny_low, canny_high, canny_aperture)
             elif edge_model in _EDGE_MAP:
                 canny_t, nt = _run_aux(_EDGE_MAP[edge_model], image, res)
                 notes.append(nt)
@@ -359,7 +364,16 @@ class ControlAOVMEC:
             blended = active[0][1].clone()
             for _k, m in active[1:]:
                 blended = blended * m
-        else:
+        elif blend_mode == "weighted_avg":
+            tw = sum(weights[k] for k, _ in active) or 1.0
+            blended = sum(m for _k, m in active) / tw
+        elif blend_mode == "overlay":
+            blended = active[0][1].clone()
+            for _k, m in active[1:]:
+                lo = 2.0 * blended * m
+                hi = 1.0 - 2.0 * (1.0 - blended) * (1.0 - m)
+                blended = torch.where(blended < 0.5, lo, hi)
+        else:  # average
             blended = sum(m for _k, m in active) / float(len(active))
         blended = blended.clamp(0, 1).contiguous()
 
@@ -368,7 +382,7 @@ class ControlAOVMEC:
         names = [k for k in ("depth", "canny", "pose", "normal", "motion", "id_matte") if raw[k] is not None]
         run_notes = " ".join(n for n in notes if n)
         info = (
-            f"OmniControl Forge — passes: {', '.join(names) or 'none'} | blend: {blend_mode} | {w}x{h} x{B}\n"
+            f"Control AOV — passes: {', '.join(names) or 'none'} | blend: {blend_mode} | {w}x{h} x{B}\n"
             + (f"backends: {run_notes}\n" if run_notes else "")
             + "Internal (delegated to comfyui_controlnet_aux, its own model paths): DepthAnything v1/v2/metric/zoe, "
               "DWPose/OpenPose/Animal/DensePose, Canny/LineArt/HED/PiDiNet/TEED. "
@@ -383,5 +397,5 @@ class ControlAOVMEC:
                 norm["normal"], norm["motion"], norm["id_matte"], info)
 
 
-NODE_CLASS_MAPPINGS = {"ControlAOVMEC": ControlAOVMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"ControlAOVMEC": "Control AOV — Multi-Control Fusion (C2C)"}
+NODE_CLASS_MAPPINGS = {"ControlAOVC2C": ControlAOVC2C}
+NODE_DISPLAY_NAME_MAPPINGS = {"ControlAOVC2C": "Control AOV — Multi-Control Fusion (C2C)"}
