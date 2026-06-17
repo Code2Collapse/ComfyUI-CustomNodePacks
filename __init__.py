@@ -442,7 +442,7 @@ try:
     )
 except Exception as _cf_exc:  # pragma: no cover
     try:
-        _c2c_rec_fail("OmniControl Forge", _cf_exc,
+        _c2c_rec_fail("Control AOV", _cf_exc,
                       hint="control_forge needs numpy + torch (OpenCV optional for Canny/motion).",
                       group="nodes")
     except Exception:

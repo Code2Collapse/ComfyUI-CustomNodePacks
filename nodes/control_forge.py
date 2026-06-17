@@ -184,7 +184,7 @@ def _motion_pass(image_bhwc):
 
 
 # ----------------------------------------------------------------- the node
-class OmniControlForgeMEC:
+class ControlAOVMEC:
     CATEGORY = "C2C/Control"
     DESCRIPTION = ("VFX-AOV control fusion: emit depth/canny/pose/normal/motion/ID as separate passes, "
                    "a channel-packed image (depth=R/canny=G/pose=B), and a convenience blend. Runs Canny + "
@@ -346,8 +346,9 @@ class OmniControlForgeMEC:
             + (f"backends: {run_notes}\n" if run_notes else "")
             + "Internal (delegated to comfyui_controlnet_aux, its own model paths): DepthAnything v1/v2/metric/zoe, "
               "DWPose/OpenPose/Animal/DensePose, Canny/LineArt/HED/PiDiNet/TEED. "
-              "Wire as INPUTS (not in controlnet_aux / not installed): DepthAnything V3, ViTPose, DepthCrafter, "
-              "NormalCrafter, ID-matte (SAM).\n"
+              "Vendored in third_party (DepthCrafter, NormalCrafter — video depth/normals; enable via their backends "
+              "once diffusers + weights are present). Wire as INPUTS for now: DepthAnything V3, ViTPose "
+              "(WanV2 detect→draw), DepthCrafter, NormalCrafter, ID-matte (SAM).\n"
               "MAX CONTROL / no-drift: don't rely on 'blended'. Stack the separate AOV passes into Apply-ControlNet "
               "(or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) with start/end-step "
               "scheduling, and add a Tile ControlNet to lock layout. 'channel_packed' suits union nets."
@@ -356,5 +357,5 @@ class OmniControlForgeMEC:
                 norm["normal"], norm["motion"], norm["id_matte"], info)
 
 
-NODE_CLASS_MAPPINGS = {"OmniControlForgeMEC": OmniControlForgeMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"OmniControlForgeMEC": "OmniControl Forge — VFX Control Fusion (C2C)"}
+NODE_CLASS_MAPPINGS = {"ControlAOVMEC": ControlAOVMEC}
+NODE_DISPLAY_NAME_MAPPINGS = {"ControlAOVMEC": "Control AOV — Multi-Control Fusion (C2C)"}
