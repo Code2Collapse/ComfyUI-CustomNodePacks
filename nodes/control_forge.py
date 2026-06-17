@@ -74,6 +74,79 @@ def _to_u8(frame_hwc):
     return (frame_hwc.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
 
 
+# --------------------------------------------------------------- runtime delegation
+# "Run everything internally" without re-downloading: call the preprocessor nodes
+# already installed (comfyui_controlnet_aux etc.) via ComfyUI's global registry, so
+# they use THEIR OWN models/paths — the same paths every other repo uses.
+_DEPTH_MAP = {
+    "depth_anything_v2": "DepthAnythingV2Preprocessor",
+    "depth_anything_v1": "DepthAnythingPreprocessor",
+    "depth_anything_v2_metric": "Metric_DepthAnythingV2Preprocessor",
+    "zoe_depth_anything": "Zoe_DepthAnythingPreprocessor",
+}
+_POSE_MAP = {
+    "dwpose": "DWPreprocessor",
+    "openpose": "OpenposePreprocessor",
+    "animal_pose": "AnimalPosePreprocessor",
+    "densepose": "DensePosePreprocessor",
+}
+_EDGE_MAP = {
+    "lineart": "LineArtPreprocessor",
+    "anyline": "AnyLineArtPreprocessor_aux",
+    "hed": "HEDPreprocessor",
+    "pidinet": "PiDiNetPreprocessor",
+    "teed": "TEEDPreprocessor",
+}
+
+
+def _spec_default(spec):
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return None
+    t = spec[0]
+    opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if isinstance(t, (list, tuple)):
+        return t[0] if t else None
+    if isinstance(opts, dict) and "default" in opts:
+        return opts["default"]
+    return {"INT": 0, "FLOAT": 0.0, "BOOLEAN": False, "STRING": ""}.get(t, None)
+
+
+def _run_aux(class_name, image, target_res=512, overrides=None):
+    """Resolve + call an installed preprocessor node. Returns (IMAGE_or_None, note)."""
+    try:
+        import nodes as _cn  # ComfyUI global registry
+        cls = _cn.NODE_CLASS_MAPPINGS.get(class_name)
+        if cls is None:
+            return None, f"{class_name}=not-installed"
+        params = {}
+        it = cls.INPUT_TYPES()
+        params.update(it.get("required", {}) or {})
+        params.update(it.get("optional", {}) or {})
+        ov = overrides or {}
+        kwargs = {}
+        for name, spec in params.items():
+            if name == "image":
+                kwargs[name] = image
+            elif name in ov:
+                kwargs[name] = ov[name]
+            elif "resolution" in name:
+                kwargs[name] = int(target_res)
+            else:
+                kwargs[name] = _spec_default(spec)
+        out = getattr(cls(), cls.FUNCTION)(**kwargs)
+        if isinstance(out, dict):  # NodeOutput-style
+            out = out.get("result", ())
+        if isinstance(out, (list, tuple)):
+            for o in out:
+                if torch.is_tensor(o) and o.dim() == 4 and o.shape[-1] in (1, 3):
+                    return o, f"{class_name}=ok"
+            if out and torch.is_tensor(out[0]):
+                return out[0], f"{class_name}=ok"
+        return None, f"{class_name}=no-image-out"
+    except Exception as e:  # never crash the forge
+        return None, f"{class_name}=err:{type(e).__name__}"
+
+
 # ----------------------------------------------------------------- vendored passes
 def _canny_pass(image_bhwc, low, high):
     """OpenCV Canny per frame → white edges on black, [B,H,W,3]."""
@@ -139,10 +212,19 @@ class OmniControlForgeMEC:
                                "tooltip": "screen = least-destructive default; linear_dodge clips; multiply darkens."}),
             },
             "optional": {
-                "image": ("IMAGE", {"tooltip": "Source frames — used to run Canny + optical-flow motion internally."}),
-                "run_canny": ("BOOLEAN", {"default": True}),
+                "image": ("IMAGE", {"tooltip": "Source frames — preprocessors below run on this."}),
+                "depth_model": (["off"] + list(_DEPTH_MAP.keys()), {"default": "off",
+                                "tooltip": "Run a depth preprocessor internally (delegates to comfyui_controlnet_aux, "
+                                           "using its own models/paths). 'off' = wire an external depth map instead."}),
+                "pose_model": (["off"] + list(_POSE_MAP.keys()), {"default": "off",
+                               "tooltip": "Run a pose preprocessor internally (DWPose/OpenPose/...)."}),
+                "edge_model": (["internal_canny", "off"] + list(_EDGE_MAP.keys()), {"default": "internal_canny",
+                               "tooltip": "internal_canny = OpenCV (no model). Others delegate to controlnet_aux."}),
+                "run_canny": ("BOOLEAN", {"default": True, "tooltip": "Used only when edge_model = internal_canny."}),
                 "canny_low": ("INT", {"default": 100, "min": 0, "max": 255}),
                 "canny_high": ("INT", {"default": 200, "min": 0, "max": 255}),
+                "preproc_resolution": ("INT", {"default": 512, "min": 64, "max": 4096, "step": 8,
+                               "tooltip": "Resolution passed to delegated preprocessors."}),
                 "run_motion": ("BOOLEAN", {"default": False,
                                "tooltip": "Optical-flow motion-vector pass (needs an image batch ≥ 2 frames)."}),
                 "depth": ("IMAGE", {"tooltip": "Depth map (DepthAnything/DepthCrafter/ZoeDepth)."}),
@@ -157,12 +239,15 @@ class OmniControlForgeMEC:
         }
 
     @classmethod
-    def IS_CHANGED(cls, blend_mode, image=None, run_canny=True, canny_low=100, canny_high=200,
-                   run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
-                   depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0, match_to="largest"):
+    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", pose_model="off",
+                   edge_model="internal_canny", run_canny=True, canny_low=100, canny_high=200,
+                   preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
+                   normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0,
+                   pose_weight=1.0, normal_weight=0.0, match_to="largest", **_):
         h = hashlib.md5()
-        h.update(repr((blend_mode, run_canny, canny_low, canny_high, run_motion,
-                       depth_weight, canny_weight, pose_weight, normal_weight, match_to)).encode())
+        h.update(repr((blend_mode, depth_model, pose_model, edge_model, run_canny, canny_low,
+                       canny_high, preproc_resolution, run_motion, depth_weight, canny_weight,
+                       pose_weight, normal_weight, match_to)).encode())
         for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
             h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
         return h.hexdigest()
@@ -179,17 +264,36 @@ class OmniControlForgeMEC:
         best = max(cands, key=lambda t: t.shape[1] * t.shape[2])
         return best.shape[1], best.shape[2]
 
-    def forge(self, blend_mode, image=None, run_canny=True, canny_low=100, canny_high=200,
-              run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
-              depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0, match_to="largest"):
+    def forge(self, blend_mode, image=None, depth_model="off", pose_model="off",
+              edge_model="internal_canny", run_canny=True, canny_low=100, canny_high=200,
+              preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
+              normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0,
+              pose_weight=1.0, normal_weight=0.0, match_to="largest"):
         image = _as_bhwc3(image)
-        # Internal Canny (unless an external canny is supplied).
+        notes = []
+        res = int(preproc_resolution)
+
+        # DEPTH: external input wins; else delegate to the chosen preprocessor.
+        depth_t = _as_bhwc3(depth)
+        if depth_t is None and image is not None and depth_model != "off":
+            depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res)
+            notes.append(nt)
+        # POSE
+        pose_t = _as_bhwc3(pose)
+        if pose_t is None and image is not None and pose_model != "off":
+            pose_t, nt = _run_aux(_POSE_MAP[pose_model], image, res)
+            notes.append(nt)
+        # EDGE: external canny input wins; else internal Canny or a delegated edge model.
         canny_t = _as_bhwc3(canny)
-        if canny_t is None and image is not None and run_canny:
-            canny_t = _canny_pass(image, canny_low, canny_high)
+        if canny_t is None and image is not None:
+            if edge_model == "internal_canny" and run_canny:
+                canny_t = _canny_pass(image, canny_low, canny_high)
+            elif edge_model in _EDGE_MAP:
+                canny_t, nt = _run_aux(_EDGE_MAP[edge_model], image, res)
+                notes.append(nt)
         motion_t = _motion_pass(image) if (run_motion and image is not None) else None
 
-        raw = {"depth": _as_bhwc3(depth), "canny": canny_t, "pose": _as_bhwc3(pose),
+        raw = {"depth": depth_t, "canny": canny_t, "pose": pose_t,
                "normal": _as_bhwc3(normal), "motion": _as_bhwc3(motion_t),
                "id_matte": _as_bhwc3(id_matte), "image": image}
         h, w = self._target_size(raw, match_to)
@@ -236,12 +340,17 @@ class OmniControlForgeMEC:
         packed = torch.stack([_luma(norm["depth"]), _luma(norm["canny"]), _luma(norm["pose"])], dim=-1).clamp(0, 1).contiguous()
 
         names = [k for k in ("depth", "canny", "pose", "normal", "motion", "id_matte") if raw[k] is not None]
+        run_notes = " ".join(n for n in notes if n)
         info = (
             f"OmniControl Forge — passes: {', '.join(names) or 'none'} | blend: {blend_mode} | {w}x{h} x{B}\n"
-            "MAX CONTROL / no-drift: do NOT rely on 'blended'. Wire the separate AOV passes into stacked "
-            "Apply-ControlNet (or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) "
-            "with start/end-step scheduling, and add a Tile ControlNet to lock the layout. "
-            "'channel_packed' suits union nets; 'motion' aids temporal stability for Wan/LTX video."
+            + (f"backends: {run_notes}\n" if run_notes else "")
+            + "Internal (delegated to comfyui_controlnet_aux, its own model paths): DepthAnything v1/v2/metric/zoe, "
+              "DWPose/OpenPose/Animal/DensePose, Canny/LineArt/HED/PiDiNet/TEED. "
+              "Wire as INPUTS (not in controlnet_aux / not installed): DepthAnything V3, ViTPose, DepthCrafter, "
+              "NormalCrafter, ID-matte (SAM).\n"
+              "MAX CONTROL / no-drift: don't rely on 'blended'. Stack the separate AOV passes into Apply-ControlNet "
+              "(or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) with start/end-step "
+              "scheduling, and add a Tile ControlNet to lock layout. 'channel_packed' suits union nets."
         )
         return (blended, packed, norm["depth"], norm["canny"], norm["pose"],
                 norm["normal"], norm["motion"], norm["id_matte"], info)
