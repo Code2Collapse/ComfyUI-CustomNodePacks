@@ -435,6 +435,20 @@ _MEC_DISPLAY = {
 }
 
 # ── Merge all mappings ────────────────────────────────────────────────
+try:
+    from .nodes.control_forge import (
+        NODE_CLASS_MAPPINGS as _CONTROLFORGE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _CONTROLFORGE_DISPLAY,
+    )
+except Exception as _cf_exc:  # pragma: no cover
+    try:
+        _c2c_rec_fail("OmniControl Forge", _cf_exc,
+                      hint="control_forge needs numpy + torch (OpenCV optional for Canny/motion).",
+                      group="nodes")
+    except Exception:
+        pass
+    _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY = {}, {}
+
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
     **_MEC_MAPPINGS,
@@ -459,6 +473,7 @@ NODE_CLASS_MAPPINGS = {
     **_HDR_MAPPINGS,
     **_LOCATE_MAPPINGS,
     **_NANOBANANA_MAPPINGS,
+    **_CONTROLFORGE_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -484,6 +499,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_HDR_DISPLAY,
     **_LOCATE_DISPLAY,
     **_NANOBANANA_DISPLAY,
+    **_CONTROLFORGE_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
