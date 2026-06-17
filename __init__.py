@@ -21,6 +21,13 @@ from .folder_incrementer import (
 # ── Model Manager (shared cache / download) ───────────────────────────
 from .nodes import model_manager as _model_manager  # noqa: F401
 
+# ── Live-preview guard: force sampling previews on even if launched with
+#    --preview-method none (Latent2RGB fallback, cannot fail). Best-effort. ──
+try:
+    from .nodes import _c2c_preview_guard as _c2c_preview_guard  # noqa: F401
+except Exception:  # never block the pack on a preview tweak
+    pass
+
 # ── MaskEditControl nodes ─────────────────────────────────────────────
 # Unified composition wrappers — these replace 12 legacy node classes:
 #   MaskEditMEC      replaces MaskTransformXY, MaskDrawFrame, DrawShapeMEC,
