@@ -97,6 +97,19 @@ _EDGE_MAP = {
     "pidinet": "PiDiNetPreprocessor",
     "teed": "TEEDPreprocessor",
 }
+# DepthAnything backbone checkpoints by size (S/M/L/G). The delegated preprocessor
+# takes `ckpt_name`; a custom filename in its model dir overrides the size.
+_DEPTH_CKPT = {
+    "depth_anything_v2": {
+        "small": "depth_anything_v2_vits.pth", "medium": "depth_anything_v2_vitb.pth",
+        "large": "depth_anything_v2_vitl.pth", "giant": "depth_anything_v2_vitg.pth",
+    },
+    "depth_anything_v1": {
+        "small": "depth_anything_vits14.pth", "medium": "depth_anything_vitb14.pth",
+        "large": "depth_anything_vitl14.pth", "giant": "depth_anything_vitl14.pth",  # v1 has no giant
+    },
+}
+_DEPTH_SIZES = ("small", "medium", "large", "giant")
 
 
 def _spec_default(spec):
@@ -216,6 +229,12 @@ class ControlAOVMEC:
                 "depth_model": (["off"] + list(_DEPTH_MAP.keys()), {"default": "off",
                                 "tooltip": "Run a depth preprocessor internally (delegates to comfyui_controlnet_aux, "
                                            "using its own models/paths). 'off' = wire an external depth map instead."}),
+                "depth_size": (list(_DEPTH_SIZES), {"default": "small",
+                               "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default) → giant=ViT-G "
+                                          "(best). v1 has no giant (falls back to large). Ignored by metric/zoe."}),
+                "depth_custom_ckpt": ("STRING", {"default": "",
+                               "tooltip": "Custom DepthAnything .pth filename in the controlnet_aux model dir — "
+                                          "overrides depth_size when set (your own fine-tuned weights)."}),
                 "pose_model": (["off"] + list(_POSE_MAP.keys()), {"default": "off",
                                "tooltip": "Run a pose preprocessor internally (DWPose/OpenPose/...)."}),
                 "edge_model": (["internal_canny", "off"] + list(_EDGE_MAP.keys()), {"default": "internal_canny",
@@ -239,15 +258,16 @@ class ControlAOVMEC:
         }
 
     @classmethod
-    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", pose_model="off",
-                   edge_model="internal_canny", run_canny=True, canny_low=100, canny_high=200,
-                   preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
-                   normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0,
-                   pose_weight=1.0, normal_weight=0.0, match_to="largest", **_):
+    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", depth_size="small",
+                   depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
+                   run_canny=True, canny_low=100, canny_high=200, preproc_resolution=512,
+                   run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
+                   depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0,
+                   match_to="largest", **_):
         h = hashlib.md5()
-        h.update(repr((blend_mode, depth_model, pose_model, edge_model, run_canny, canny_low,
-                       canny_high, preproc_resolution, run_motion, depth_weight, canny_weight,
-                       pose_weight, normal_weight, match_to)).encode())
+        h.update(repr((blend_mode, depth_model, depth_size, depth_custom_ckpt, pose_model, edge_model,
+                       run_canny, canny_low, canny_high, preproc_resolution, run_motion, depth_weight,
+                       canny_weight, pose_weight, normal_weight, match_to)).encode())
         for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
             h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
         return h.hexdigest()
@@ -264,11 +284,12 @@ class ControlAOVMEC:
         best = max(cands, key=lambda t: t.shape[1] * t.shape[2])
         return best.shape[1], best.shape[2]
 
-    def forge(self, blend_mode, image=None, depth_model="off", pose_model="off",
-              edge_model="internal_canny", run_canny=True, canny_low=100, canny_high=200,
-              preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
-              normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0,
-              pose_weight=1.0, normal_weight=0.0, match_to="largest"):
+    def forge(self, blend_mode, image=None, depth_model="off", depth_size="small",
+              depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
+              run_canny=True, canny_low=100, canny_high=200, preproc_resolution=512,
+              run_motion=False, depth=None, canny=None, pose=None, normal=None, id_matte=None,
+              depth_weight=1.0, canny_weight=1.0, pose_weight=1.0, normal_weight=0.0,
+              match_to="largest"):
         image = _as_bhwc3(image)
         notes = []
         res = int(preproc_resolution)
@@ -276,8 +297,13 @@ class ControlAOVMEC:
         # DEPTH: external input wins; else delegate to the chosen preprocessor.
         depth_t = _as_bhwc3(depth)
         if depth_t is None and image is not None and depth_model != "off":
-            depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res)
-            notes.append(nt)
+            ov = {}
+            if depth_model in _DEPTH_CKPT:  # v1/v2 size or custom ckpt
+                ckpt = depth_custom_ckpt.strip() or _DEPTH_CKPT[depth_model].get(depth_size,
+                        _DEPTH_CKPT[depth_model]["large"])
+                ov["ckpt_name"] = ckpt
+            depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res, overrides=ov)
+            notes.append(nt + (f"[{ov['ckpt_name']}]" if ov else ""))
         # POSE
         pose_t = _as_bhwc3(pose)
         if pose_t is None and image is not None and pose_model != "off":
