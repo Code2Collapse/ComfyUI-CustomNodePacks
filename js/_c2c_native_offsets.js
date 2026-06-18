@@ -268,7 +268,14 @@ export function startNativeOffsets() {
     if (typeof MutationObserver !== "undefined") {
         try {
             _mutationObserver = new MutationObserver(_onResizeCoalesced);
-            _mutationObserver.observe(document.body, { childList: true, subtree: true });
+            // PERF: subtree:false. This module is imported by _c2c_theme.js (i.e.
+            // by EVERY C2C extension), so this observer is always live. With
+            // subtree:true it fired on every descendant mutation across ComfyUI's
+            // whole Vue/LiteGraph DOM (thousands/sec) → constant allocation →
+            // young-gen GC pressure (a real OOM contributor). We only need to catch
+            // native chrome mounting at the body level; the ResizeObserver on body +
+            // the window resize listener + the 1s polling backstop cover the rest.
+            _mutationObserver.observe(document.body, { childList: true, subtree: false });
         } catch (moErr) {
             _reportFailure("MutationObserver.observe", moErr);
             _mutationObserver = null;

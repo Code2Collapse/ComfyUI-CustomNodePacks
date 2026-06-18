@@ -225,7 +225,7 @@ app.registerExtension({
                 return r;
             };
         }
-        setInterval(render, 1500);  // cheap; only re-renders 9 cells
+        setInterval(() => { if (!document.hidden) render(); }, 1500);  // re-render 9 cells; skip while tab hidden
         render();
         console.log("[C2C.NodeBookmarks] ready.");
     },
