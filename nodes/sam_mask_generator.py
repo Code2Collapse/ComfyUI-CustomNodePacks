@@ -10,6 +10,7 @@ import numpy as np
 import json
 import gc
 
+from ._is_changed_util import hash_args_and_kwargs
 from .utils import (
     HAS_CV2,
     get_sam_predictor,
@@ -134,12 +135,52 @@ class SAMMaskGeneratorMEC:
         "iterative refinement, and VRAM offload support."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, sam_model, image, points_json, bbox_json,
+                   text_prompt, negative_text_prompt, grounding_model,
+                   text_threshold, text_box_threshold,
+                   multimask_output, mask_index, score_threshold,
+                   apply_bbox_crop, refine_iterations=1,
+                   auto_negative_points=False, bbox=None, existing_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            sam_model, image, points_json, bbox_json,
+            text_prompt, negative_text_prompt, grounding_model,
+            text_threshold, text_box_threshold,
+            multimask_output, mask_index, score_threshold,
+            apply_bbox_crop, refine_iterations,
+            auto_negative_points, bbox, existing_mask, **kwargs,
+        )
+
     def generate(self, sam_model, image, points_json, bbox_json,
                  text_prompt, negative_text_prompt, grounding_model,
                  text_threshold, text_box_threshold,
                  multimask_output, mask_index, score_threshold,
                  apply_bbox_crop, refine_iterations=1,
                  auto_negative_points=False, bbox=None, existing_mask=None):
+
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SAMMaskGeneratorMEC expects IMAGE tensor [B,H,W,C]")
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor) or existing_mask.ndim not in (2, 3)
+        ):
+            raise ValueError("SAMMaskGeneratorMEC existing_mask expects MASK [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._generate_impl(
+                sam_model, image, points_json, bbox_json,
+                text_prompt, negative_text_prompt, grounding_model,
+                text_threshold, text_box_threshold,
+                multimask_output, mask_index, score_threshold,
+                apply_bbox_crop, refine_iterations,
+                auto_negative_points, bbox, existing_mask,
+            )
+
+    def _generate_impl(self, sam_model, image, points_json, bbox_json,
+                       text_prompt, negative_text_prompt, grounding_model,
+                       text_threshold, text_box_threshold,
+                       multimask_output, mask_index, score_threshold,
+                       apply_bbox_crop, refine_iterations=1,
+                       auto_negative_points=False, bbox=None, existing_mask=None):
 
         model_info = sam_model
         model = model_info["model"]
