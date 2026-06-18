@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "templates": {
+    "node_explainer.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:0c559b3cda411c9c732944125ce0b91122cf74244e3d25944687e29653144320",
+      "description": "AI Node Explainer (c2c_ai_explainer.js) \u2014 explains a single ComfyUI node."
+    },
+    "error_translator.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:b69ec4b788d16c5f504e923b6bb0079aea40ae46e8c648e42aad61f857c18920",
+      "description": "AI Error Translator (c2c_ai_error_translator.js) \u2014 plain-English Python traceback explainer."
+    },
+    "prompt_wizard.sdxl.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:9aba51a5fb4be2236385f688abef327326eb66137647bb0ff716f99b7c5e5454",
+      "description": "Prompt Wizard system prompt for SDXL tag-style output."
+    },
+    "prompt_wizard.sd15.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:5471c3c443109aa02ed31c59543715f34ae4f5f0da190f857f3e69deac129bf8",
+      "description": "Prompt Wizard system prompt for SD1.5 weighted-token output."
+    },
+    "prompt_wizard.flux.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:9bab65dc669ed56992e43b965b942ff4db36cc90682b55bf1a17dd8c61f4de18",
+      "description": "Prompt Wizard system prompt for FLUX natural-language output."
+    },
+    "prompt_wizard.any.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:ea16c8c6571f9cfe2d6ad8605f7ad834d06c4126d0efa8cc581d246550067ab4",
+      "description": "Prompt Wizard generic fallback for unknown checkpoints."
+    },
+    "workflow_doctor.system": {
+      "version": "1.0.0",
+      "vars": [],
+      "default_vars": {},
+      "golden_sha256": "sha256:689481f8b25b5e3abb81ce972c499c5970c32c1ad57d990f17374a300746c7b1",
+      "description": "Workflow Doctor AI deep-review pass (c2c_workflow_doctor.js)."
+    }
+  }
+}

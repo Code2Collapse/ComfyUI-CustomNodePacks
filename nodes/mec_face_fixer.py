@@ -449,5 +449,5 @@ NODE_CLASS_MAPPINGS = {
     "MECFaceFixer": MECFaceFixer,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MECFaceFixer": "Face Fixer (C2C)",
+    "MECFaceFixer": "Face Fixer",
 }

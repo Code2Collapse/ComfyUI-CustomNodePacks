@@ -1,4 +1,4 @@
-import { app } from "../../scripts/app.js";
+﻿import { app } from "../../scripts/app.js";
 import { setWidgetVisible } from "./_widget_visibility.js";
 
 /**

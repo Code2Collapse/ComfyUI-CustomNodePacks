@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { C } from './_c2c_theme.js';
 
 /**
  * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
@@ -96,8 +98,8 @@ app.registerExtension({
 
             const el = document.createElement("div");
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:#15151c;pointer-events:auto;" +
-                "border-radius:8px;overflow:hidden;border:1px solid #2a2a35;display:flex;flex-direction:column;";
+                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:var(--c2c-panelDeep);pointer-events:auto;" +
+                "border-radius:8px;overflow:hidden;border:1px solid var(--c2c-panelBgAlt);display:flex;flex-direction:column;";
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
                 "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
@@ -107,20 +109,20 @@ app.registerExtension({
             const tb = document.createElement("div");
             tb.style.cssText =
                 "display:flex;align-items:center;justify-content:space-between;" +
-                "padding:6px 10px;background:#1e1e28;border-bottom:1px solid #2a2a35;" +
-                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:#cdd6f4;";
+                "padding:6px 10px;background:var(--c2c-panelDeep11);border-bottom:1px solid var(--c2c-panelBgAlt);" +
+                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:var(--c2c-fg);";
 
             // left side: Display Mode label + segmented toggle (Time | Frames)
             const left = document.createElement("div");
             left.style.cssText = "display:flex;align-items:center;gap:8px;";
             const dmLabel = document.createElement("span");
             dmLabel.textContent = "Display Mode";
-            dmLabel.style.cssText = "color:#7c5cff;font-weight:600;font-size:11px;";
+            dmLabel.style.cssText = "color:var(--c2c-accentVivid);font-weight:600;font-size:11px;";
             left.appendChild(dmLabel);
 
             const seg = document.createElement("div");
             seg.style.cssText =
-                "display:inline-flex;background:#15151c;border:1px solid #2a2a35;border-radius:4px;overflow:hidden;";
+                "display:inline-flex;background:var(--c2c-panelDeep);border:1px solid var(--c2c-panelBgAlt);border-radius:4px;overflow:hidden;";
             const mkSeg = (txt, mode) => {
                 const b = document.createElement("button");
                 b.type = "button";
@@ -128,7 +130,7 @@ app.registerExtension({
                 b.dataset.mode = mode;
                 b.style.cssText =
                     "border:0;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;" +
-                    "background:transparent;color:#cdd6f4;outline:none;";
+                    "background:transparent;color:var(--c2c-fg);outline:none;";
                 b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); setDisplayMode(mode); };
                 return b;
             };
@@ -146,14 +148,14 @@ app.registerExtension({
             cropBtn.type = "button";
             cropBtn.textContent = "Crop";
             cropBtn.style.cssText =
-                "border:1px solid #2a2a35;background:#15151c;color:#cdd6f4;" +
+                "border:1px solid var(--c2c-panelBgAlt);background:var(--c2c-panelDeep);color:var(--c2c-fg);" +
                 "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
             cropBtn.onclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
                 if (!w) return;
                 w.value = !w.value;
-                try { w.callback?.(w.value); } catch (_) {}
+                try { w.callback?.(w.value); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
                 refreshCropBtn();
                 node._render();
                 app.graph.setDirtyCanvas(true);
@@ -167,7 +169,7 @@ app.registerExtension({
             advBtn.textContent = "Advanced ▾";
             advBtn.title = "Show / hide all parameter widgets (frame_start, crop_x, etc.)";
             advBtn.style.cssText =
-                "border:1px solid #2a2a35;background:#15151c;color:#cdd6f4;" +
+                "border:1px solid var(--c2c-panelBgAlt);background:var(--c2c-panelDeep);color:var(--c2c-fg);" +
                 "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
             advBtn.onclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
@@ -178,8 +180,8 @@ app.registerExtension({
 
             const trimBadge = document.createElement("div");
             trimBadge.style.cssText =
-                "background:#15151c;border:1px solid #2a2a35;border-radius:4px;" +
-                "padding:3px 10px;font:600 11px sans-serif;color:#cdd6f4;";
+                "background:var(--c2c-panelDeep);border:1px solid var(--c2c-panelBgAlt);border-radius:4px;" +
+                "padding:3px 10px;font:600 11px sans-serif;color:var(--c2c-fg);";
             trimBadge.textContent = "Trimmed: 0";
             right.appendChild(trimBadge);
             tb.appendChild(right);
@@ -194,18 +196,18 @@ app.registerExtension({
             // displayMode persists via a hidden widget so it survives save/load.
             const setDisplayMode = (mode) => {
                 S.displayMode = (mode === "time") ? "time" : "frames";
-                segTime.style.background   = S.displayMode === "time"   ? "#7c5cff" : "transparent";
-                segTime.style.color        = S.displayMode === "time"   ? "#ffffff" : "#cdd6f4";
-                segFrames.style.background = S.displayMode === "frames" ? "#7c5cff" : "transparent";
-                segFrames.style.color      = S.displayMode === "frames" ? "#ffffff" : "#cdd6f4";
+                segTime.style.background   = S.displayMode === "time"   ? "var(--c2c-accentVivid)" : "transparent";
+                segTime.style.color        = S.displayMode === "time"   ? "var(--c2c-white)" : "var(--c2c-fg)";
+                segFrames.style.background = S.displayMode === "frames" ? "var(--c2c-accentVivid)" : "transparent";
+                segFrames.style.color      = S.displayMode === "frames" ? "var(--c2c-white)" : "var(--c2c-fg)";
                 node._render?.();
             };
             const refreshCropBtn = () => {
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
                 const on = !!w?.value;
-                cropBtn.style.background = on ? "#7c5cff" : "#15151c";
-                cropBtn.style.borderColor = on ? "#7c5cff" : "#2a2a35";
-                cropBtn.style.color = on ? "#ffffff" : "#cdd6f4";
+                cropBtn.style.background = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
+                cropBtn.style.borderColor = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
+                cropBtn.style.color = on ? "var(--c2c-white)" : "var(--c2c-fg)";
             };
             const refreshTrimBadge = () => {
                 const stride = Number(node.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
@@ -267,7 +269,7 @@ app.registerExtension({
                 const w = node.widgets?.find((w) => w.name === "frame_index");
                 if (w) {
                     w.value = S.idx;
-                    if (w.callback) try { w.callback(S.idx); } catch (_) {}
+                    if (w.callback) try { w.callback(S.idx); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
                 }
                 node._render();
                 app.graph.setDirtyCanvas(true);
@@ -288,8 +290,8 @@ app.registerExtension({
                 hi = Math.max(lo, Math.min(total - 1, hi | 0));
                 const wS = node.widgets?.find(w => w.name === "frame_start");
                 const wE = node.widgets?.find(w => w.name === "frame_end");
-                if (wS) { wS.value = lo; try { wS.callback?.(lo); } catch (_) {} }
-                if (wE) { wE.value = hi; try { wE.callback?.(hi); } catch (_) {} }
+                if (wS) { wS.value = lo; try { wS.callback?.(lo); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); } }
+                if (wE) { wE.value = hi; try { wE.callback?.(hi); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); } }
                 S.trimStart = lo;
                 S.trimEnd = hi;
                 if (S.idx < lo || S.idx > hi) setIdx(Math.max(lo, Math.min(hi, S.idx)));
@@ -312,7 +314,7 @@ app.registerExtension({
                     const w = node.widgets?.find(w => w.name === n);
                     if (!w) return;
                     w.value = +v.toFixed(4);
-                    if (w.callback) try { w.callback(w.value); } catch (_) {}
+                    if (w.callback) try { w.callback(w.value); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
                 };
                 set("crop_x", cx); set("crop_y", cy);
                 set("crop_w", cw); set("crop_h", ch);
@@ -516,7 +518,7 @@ app.registerExtension({
             const up = (e) => {
                 S.drag = null;
                 S._dragStart = null;
-                try { cvs.releasePointerCapture(e.pointerId); } catch (_) {}
+                try { cvs.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
             };
             cvs.addEventListener("pointerup", up);
             cvs.addEventListener("pointercancel", up);
@@ -642,9 +644,9 @@ app.registerExtension({
                 node._advancedOpen = open;
                 if (node._advBtn) {
                     node._advBtn.textContent = open ? "Advanced ▴" : "Advanced ▾";
-                    node._advBtn.style.background = open ? "#7c5cff" : "#15151c";
-                    node._advBtn.style.borderColor = open ? "#7c5cff" : "#2a2a35";
-                    node._advBtn.style.color = open ? "#ffffff" : "#cdd6f4";
+                    node._advBtn.style.background = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
+                    node._advBtn.style.borderColor = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
+                    node._advBtn.style.color = open ? "var(--c2c-white)" : "var(--c2c-fg)";
                 }
                 // Adjust locked size so node shrinks/grows accordingly.
                 if (open) {
@@ -696,7 +698,7 @@ app.registerExtension({
                     if (!w) continue;
                     const _cb = w.callback;
                     w.callback = function (v) {
-                        try { _cb?.call(this, v); } catch (_) {}
+                        try { _cb?.call(this, v); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
                         // When aspect_ratio changes, snap the current crop.
                         if (wn === "aspect_ratio" || wn === "custom_aspect_w" || wn === "custom_aspect_h") {
                             const a = getAspect(node, S);
@@ -825,7 +827,7 @@ app.registerExtension({
                 ctx.closePath();
             };
             ctx.save();
-            ctx.fillStyle = "#000";
+            ctx.fillStyle = C.black;
             roundRect(px - 2, py - 2, pw + 4, ph + 4, 6);
             ctx.fill();
             ctx.restore();
@@ -834,7 +836,7 @@ app.registerExtension({
             if (cur && cur.complete && cur.naturalWidth > 0) {
                 ctx.drawImage(cur, px, py, pw, ph);
             } else {
-                ctx.fillStyle = "#444";
+                ctx.fillStyle = C.gray700;
                 ctx.font = "12px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
@@ -843,7 +845,7 @@ app.registerExtension({
 
             // Preview border
             ctx.save();
-            ctx.strokeStyle = "#3a3a48";
+            ctx.strokeStyle = C.surface2Alt;
             ctx.lineWidth = 1;
             ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
             ctx.restore();
@@ -870,7 +872,7 @@ app.registerExtension({
 
                 // Border
                 ctx.save();
-                ctx.strokeStyle = this._isCropLocked?.() ? "#f80" : "#5bf";
+                ctx.strokeStyle = this._isCropLocked?.() ? C.peachVivid : C.cyanBright;
                 ctx.lineWidth = CROP_LINE_W;
                 if (this._isCropLocked?.()) ctx.setLineDash([6, 4]);
                 ctx.strokeRect(cr.x + 0.5, cr.y + 0.5, cr.w - 1, cr.h - 1);
@@ -888,8 +890,8 @@ app.registerExtension({
 
                 // Handles (suppressed when locked)
                 if (!this._isCropLocked?.()) {
-                    ctx.fillStyle = "#fff";
-                    ctx.strokeStyle = "#222";
+                    ctx.fillStyle = C.white;
+                    ctx.strokeStyle = C.neutral920;
                     ctx.lineWidth = 1;
                     const drawHandle = (hx, hy) => {
                         ctx.fillRect(hx - CROP_HANDLE_S/2, hy - CROP_HANDLE_S/2, CROP_HANDLE_S, CROP_HANDLE_S);
@@ -915,7 +917,7 @@ app.registerExtension({
                 ctx.font = "11px sans-serif";
                 const tw = ctx.measureText(txt).width + 8;
                 ctx.fillRect(cr.x + 2, cr.y + 2, tw, 16);
-                ctx.fillStyle = "#fff";
+                ctx.fillStyle = C.white;
                 ctx.textAlign = "left";
                 ctx.textBaseline = "top";
                 ctx.fillText(txt, cr.x + 6, cr.y + 4);
@@ -947,24 +949,24 @@ app.registerExtension({
                 `trim ${S.trimStart}\u2013${S.trimEnd}` + (stride > 1 ? `/${stride}` : ""),
             ];
             ctx.font = "600 12px sans-serif";
-            ctx.fillStyle = "#cdd6f4";
+            ctx.fillStyle = C.fg;
             ctx.textAlign = "left";
             ctx.textBaseline = "middle";
             ctx.fillText(primary, 12, 13);
             const primaryW = ctx.measureText(primary).width;
             ctx.font = "11px sans-serif";
-            ctx.fillStyle = "#7f849c";
+            ctx.fillStyle = C.overlay1;
             ctx.fillText("\u00b7  " + secondaryParts.join("  \u00b7  "), 12 + primaryW + 8, 13);
             ctx.restore();
 
             // Timeline bar
-            ctx.fillStyle = "#1a1a1a";
+            ctx.fillStyle = C.gray950;
             ctx.fillRect(tl.x, tl.y, tl.w, tl.h);
 
             // Play/pause button
-            ctx.fillStyle = "#2a2a2a";
+            ctx.fillStyle = C.neutral900;
             ctx.fillRect(tl.playBtnX, tl.y, tl.playBtnW, tl.h);
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = C.white;
             ctx.beginPath();
             const cxp = tl.playBtnX + tl.playBtnW / 2;
             const cyp = tl.y + tl.h / 2;
@@ -981,7 +983,7 @@ app.registerExtension({
 
             // Track
             const trackY = tl.y + tl.h / 2;
-            ctx.strokeStyle = "#333";
+            ctx.strokeStyle = C.gray800;
             ctx.lineWidth = 4;
             ctx.beginPath();
             ctx.moveTo(tl.barX, trackY);
@@ -989,7 +991,7 @@ app.registerExtension({
             ctx.stroke();
 
             // Ticks
-            ctx.strokeStyle = "#444";
+            ctx.strokeStyle = C.gray700;
             ctx.lineWidth = 1;
             const tickEvery = S.frameCount <= 20 ? 1 : Math.max(1, Math.floor(S.frameCount / 20));
             for (let i = 0; i < S.frameCount; i += tickEvery) {
@@ -1002,7 +1004,7 @@ app.registerExtension({
 
             // Progress fill
             const progT = S.frameCount > 1 ? S.idx / (S.frameCount - 1) : 0;
-            ctx.strokeStyle = "#5bf";
+            ctx.strokeStyle = C.cyanBright;
             ctx.lineWidth = 4;
             ctx.beginPath();
             ctx.moveTo(tl.barX, trackY);
@@ -1013,9 +1015,9 @@ app.registerExtension({
             const hxp = tl.barX + tl.barW * progT;
             ctx.beginPath();
             ctx.arc(hxp, trackY, HANDLE_R, 0, Math.PI * 2);
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = C.white;
             ctx.fill();
-            ctx.strokeStyle = "#5bf";
+            ctx.strokeStyle = C.cyanBright;
             ctx.lineWidth = 2;
             ctx.stroke();
 
@@ -1034,18 +1036,18 @@ app.registerExtension({
                 ctx.fillStyle = "rgba(120,220,120,0.18)";
                 ctx.fillRect(x0, trackY - 6, x1 - x0, 12);
                 // Start marker (green) + end marker (red)
-                ctx.fillStyle = "#5d5";
+                ctx.fillStyle = C.okBrightAlt;
                 ctx.fillRect(x0 - 2, tl.y + 2, 3, tl.h - 4);
-                ctx.fillStyle = "#e55";
+                ctx.fillStyle = C.dangerHotAlt;
                 ctx.fillRect(x1 - 1, tl.y + 2, 3, tl.h - 4);
                 // tiny grip dots
-                ctx.fillStyle = "#fff";
+                ctx.fillStyle = C.white;
                 ctx.fillRect(x0 - 1, tl.y + tl.h / 2 - 1, 1, 2);
                 ctx.fillRect(x1, tl.y + tl.h / 2 - 1, 1, 2);
                 // Stride visualisation
                 const stride = Number(this.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
                 if (stride > 1 && S.frameCount > 1) {
-                    ctx.fillStyle = "#fc6";
+                    ctx.fillStyle = C.amberHotAlt;
                     for (let f = S.trimStart; f <= S.trimEnd; f += stride) {
                         const tx = tl.barX + (f / (S.frameCount - 1)) * tl.barW;
                         ctx.fillRect(tx - 0.5, trackY - 8, 1, 4);
@@ -1057,7 +1059,7 @@ app.registerExtension({
 
         const _onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
-            try { this._stopPlay?.(); } catch (_) {}
+            try { this._stopPlay?.(); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
             _onRemoved?.apply(this, arguments);
         };
     },

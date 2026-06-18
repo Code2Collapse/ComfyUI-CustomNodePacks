@@ -337,5 +337,5 @@ class ModelMetadataExtractorMEC:
 
 NODE_CLASS_MAPPINGS = {"ModelMetadataExtractorMEC": ModelMetadataExtractorMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)"
+    "ModelMetadataExtractorMEC": "Model Metadata Extractor"
 }

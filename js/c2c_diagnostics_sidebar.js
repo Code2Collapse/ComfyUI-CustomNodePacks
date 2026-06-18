@@ -1,0 +1,1790 @@
+// C2C Diagnostics — sidebar tab.
+//
+// Coexists with rookiestar28/ComfyUI-Doctor. We register our OWN sidebar
+// entry under id `mec.diagnostics` with a distinct icon, so both panels
+// are visible in ComfyUI's left sidebar.
+//
+// Tabs:
+//   1. Diagnostics      Live error feed from /mec/diagnostics/recent.
+//   2. Statistics       Pattern + category counters from /mec/diagnostics/statistics.
+//   3. Clipboard        History of MEC-clipboard payloads in this tab + replay.
+//   4. Settings         error_assistant tier mode + reload patterns button.
+//   5. Patterns         Read-only listing of loaded patterns (id/category/priority/source).
+
+import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
+
+const STYLE_TAG_ID = "mec-diagnostics-style";
+
+// -----------------------------------------------------------------------
+// Stylesheet (injected once)
+// -----------------------------------------------------------------------
+function _injectStyle() {
+    if (document.getElementById(STYLE_TAG_ID)) return;
+    const s = document.createElement("style");
+    s.id = STYLE_TAG_ID;
+    s.textContent = `
+    .mec-diag-root {
+        display:flex; flex-direction:column; height:100%;
+        font-family: var(--p-font-family, system-ui), sans-serif;
+        font-size: 12px; color: var(--fg-color, var(--c2c-fg));
+        background: var(--bg-color, var(--c2c-bg));
+    }
+    .mec-diag-tabs {
+        display:flex; gap:0; border-bottom:1px solid var(--border-color, var(--c2c-surface0));
+        flex-shrink:0;
+    }
+    .mec-diag-tab {
+        flex:1; padding:6px 4px; text-align:center; cursor:pointer;
+        background:transparent; border:none; color: inherit;
+        border-bottom:2px solid transparent;
+        font-size:11px;
+    }
+    .mec-diag-tab.active {
+        border-bottom-color: var(--p-primary-color, var(--c2c-blue));
+        color: var(--p-primary-color, var(--c2c-blue));
+        font-weight:600;
+    }
+    .mec-diag-body {
+        flex:1; overflow:auto; padding:8px;
+    }
+    .mec-diag-empty {
+        color: var(--descriptions-text-color, var(--c2c-sub));
+        text-align:center; padding:24px 8px; font-style:italic;
+    }
+    .mec-diag-card {
+        border:1px solid var(--border-color, var(--c2c-surface0));
+        border-radius:6px; padding:8px; margin-bottom:6px;
+        background: var(--p-content-background, var(--c2c-bg2));
+    }
+    .mec-diag-card.error  { border-left:3px solid var(--c2c-red); }
+    .mec-diag-card.warn   { border-left:3px solid var(--c2c-peach); }
+    .mec-diag-card.info   { border-left:3px solid var(--c2c-blue); }
+    .mec-diag-card.ok     { border-left:3px solid var(--c2c-okSoft); }
+    .mec-diag-row { display:flex; justify-content:space-between; gap:6px;
+                    align-items:baseline; }
+    .mec-diag-id  { font-weight:600; color: var(--fg-color, var(--c2c-fg)); }
+    .mec-diag-meta { color: var(--descriptions-text-color, var(--c2c-sub));
+                     font-size:10px; }
+    .mec-diag-msg {
+        font-family: ui-monospace, "Cascadia Mono", monospace;
+        font-size:11px; word-break: break-word;
+        color: var(--fg-color, var(--c2c-fg)); margin-top:4px;
+    }
+    .mec-diag-tag {
+        display:inline-block; padding:1px 6px; border-radius:10px;
+        font-size:10px; background:var(--c2c-surface0); color:var(--c2c-fg);
+        margin-right:4px;
+    }
+    .mec-diag-tag.cat-memory   { background:var(--c2c-red); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-cuda     { background:var(--c2c-mauve); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-dtype    { background:var(--c2c-peach); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-model_loading { background:var(--c2c-teal); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-environment   { background:var(--c2c-yellow); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-dataflow      { background:var(--c2c-sapphire); color:var(--c2c-bg3); }
+    .mec-diag-tag.cat-workflow      { background:var(--c2c-blue); color:var(--c2c-bg3); }
+    .mec-diag-btn {
+        padding:4px 10px; border-radius:4px;
+        border:1px solid var(--border-color, var(--c2c-surface1));
+        background: var(--p-button-secondary-bg, var(--c2c-surface0));
+        color: var(--fg-color, var(--c2c-fg));
+        cursor:pointer; font-size:11px;
+    }
+    .mec-diag-btn:hover { background: var(--p-button-secondary-hover-bg, var(--c2c-surface1)); }
+    .mec-diag-btn.primary {
+        background: var(--p-primary-color, var(--c2c-blue));
+        color: var(--p-primary-color-text, var(--c2c-bg3));
+        border-color: transparent; font-weight:600;
+    }
+    .mec-diag-toolbar {
+        display:flex; gap:6px; padding-bottom:6px; flex-wrap:wrap;
+    }
+    .mec-diag-bar {
+        height:4px; border-radius:2px; background:var(--c2c-surface0); overflow:hidden;
+        margin-top:3px;
+    }
+    .mec-diag-bar > div { height:100%; background:var(--p-primary-color, var(--c2c-blue)); }
+    .mec-diag-kv { display:grid; grid-template-columns: 1fr auto; gap:4px 8px; }
+    .mec-diag-kv .k { color: var(--descriptions-text-color, var(--c2c-sub)); }
+    .mec-diag-kv .v { font-family: ui-monospace, monospace; }
+    .mec-diag-input, .mec-diag-select {
+        width:100%; padding:4px 6px; border-radius:4px;
+        border:1px solid var(--border-color, var(--c2c-surface1));
+        background: var(--p-content-background, var(--c2c-bg2));
+        color: var(--fg-color, var(--c2c-fg)); font-size:11px;
+    }
+
+    /* ---- C2C header banner ---- */
+    .c2c-diag-header {
+        flex-shrink:0;
+        display:flex; align-items:center; gap:10px;
+        padding:10px 12px 10px 12px;
+        background: linear-gradient(135deg, var(--c2c-bg2) 0%, var(--c2c-bg) 60%, var(--c2c-bg2) 100%);
+        border-bottom:1px solid var(--border-color, var(--c2c-surface0));
+    }
+    .c2c-diag-logo {
+        width:32px; height:32px; border-radius:8px; flex-shrink:0;
+        display:flex; align-items:center; justify-content:center;
+        background: linear-gradient(135deg, var(--c2c-blue) 0%, var(--c2c-mauve) 100%);
+        color:var(--c2c-bg3); font-weight:800; font-size:14px;
+        font-family: ui-monospace, 'Cascadia Mono', monospace;
+        letter-spacing:-0.5px;
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--c2c-blue) 25%, transparent);
+    }
+    .c2c-diag-title-block {
+        display:flex; flex-direction:column; gap:1px; flex:1; min-width:0;
+    }
+    .c2c-diag-title {
+        font-size:13px; font-weight:600; color:var(--c2c-fg); line-height:1.1;
+    }
+    .c2c-diag-sub {
+        font-size:10px; color:var(--c2c-overlay0); letter-spacing:0.04em;
+        text-transform:uppercase;
+    }
+    .c2c-diag-pills {
+        display:flex; gap:5px; flex-shrink:0; align-items:center;
+    }
+    .c2c-diag-pill {
+        display:inline-flex; align-items:center; gap:4px;
+        padding:3px 8px; border-radius:10px;
+        font-size:10px; font-weight:600;
+        border:1px solid transparent;
+        font-family: ui-monospace, monospace;
+        cursor:default; user-select:none;
+    }
+    .c2c-diag-pill .dot {
+        width:6px; height:6px; border-radius:50%;
+        background: currentColor; flex-shrink:0;
+    }
+    .c2c-diag-pill.ok    { color:var(--c2c-okSoft); background:color-mix(in srgb, var(--c2c-okSoft) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-okSoft) 25%, transparent); }
+    .c2c-diag-pill.warn  { color:var(--c2c-yellow); background:color-mix(in srgb, var(--c2c-yellow) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-yellow) 25%, transparent); }
+    .c2c-diag-pill.err   { color:var(--c2c-red); background:color-mix(in srgb, var(--c2c-red) 12%, transparent); border-color:color-mix(in srgb, var(--c2c-red) 30%, transparent); }
+    .c2c-diag-pill.info  { color:var(--c2c-blue); background:color-mix(in srgb, var(--c2c-blue) 10%, transparent); border-color:color-mix(in srgb, var(--c2c-blue) 25%, transparent); }
+    .c2c-diag-pill.muted { color:var(--c2c-overlay0); background:color-mix(in srgb, var(--c2c-overlay0) 8%, transparent); border-color:color-mix(in srgb, var(--c2c-overlay0) 20%, transparent); }
+    .c2c-diag-pill[role="button"] { cursor:pointer; }
+    .c2c-diag-pill[role="button"]:hover { filter:brightness(1.2); }
+
+    /* Pretty empty state */
+    .mec-diag-empty {
+        color: var(--descriptions-text-color, var(--c2c-sub));
+        text-align:center; padding:32px 12px;
+        font-style:italic; font-size:11px;
+        display:flex; flex-direction:column; align-items:center; gap:8px;
+    }
+    .mec-diag-empty::before {
+        content:'◌'; font-size:24px; opacity:0.4; font-style:normal;
+    }
+    `;
+    document.head.appendChild(s);
+}
+
+// -----------------------------------------------------------------------
+// Backend helpers
+// -----------------------------------------------------------------------
+async function _api(path, opts = {}) {
+    try {
+        const r = await fetch(path, opts);
+        const j = await r.json().catch(() => ({ success: false, error: "bad_json", message: "Non-JSON reply" }));
+        return j;
+    } catch (e) {
+        return { success: false, error: "network", message: String(e) };
+    }
+}
+
+function _fmtTs(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString();
+}
+
+function _toast(msg, severity = "info") {
+    try {
+        app.extensionManager?.toast?.add({
+            severity, summary: "C2C Diagnostics", detail: msg, life: 3000,
+        });
+    } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
+}
+
+// -----------------------------------------------------------------------
+// Tab renderers
+// -----------------------------------------------------------------------
+async function _renderDiagnostics(body) {
+    body.innerHTML = "";
+    const toolbar = document.createElement("div");
+    toolbar.className = "mec-diag-toolbar";
+    const refresh = document.createElement("button");
+    refresh.className = "mec-diag-btn primary";
+    refresh.textContent = "Refresh";
+    const clear = document.createElement("button");
+    clear.className = "mec-diag-btn";
+    clear.textContent = "Clear";
+    const onlyErr = document.createElement("label");
+    onlyErr.style.cssText = "display:flex;align-items:center;gap:4px;font-size:11px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    onlyErr.appendChild(cb);
+    onlyErr.appendChild(document.createTextNode("Errors only"));
+    toolbar.append(refresh, clear, onlyErr);
+    body.appendChild(toolbar);
+
+    const list = document.createElement("div");
+    body.appendChild(list);
+
+    async function load() {
+        list.innerHTML = `<div class="mec-diag-empty">Loading…</div>`;
+        const j = await _api(
+            `/mec/diagnostics/recent?limit=200${cb.checked ? "&kind=error" : ""}`);
+        list.innerHTML = "";
+        if (!j.success) {
+            list.innerHTML = `<div class="mec-diag-empty">Backend unavailable: ${j.message || j.error}</div>`;
+            return;
+        }
+        const items = j.data || [];
+        if (!items.length) {
+            list.innerHTML = `<div class="mec-diag-empty">No events yet — run a workflow.</div>`;
+            return;
+        }
+        for (const ev of items) {
+            const card = document.createElement("div");
+            const sev = (ev.type === "node_error" || ev.severity === "error") ? "error"
+                      : (ev.severity === "warn" ? "warn" : "info");
+            card.className = `mec-diag-card ${sev}`;
+            const head = document.createElement("div");
+            head.className = "mec-diag-row";
+            const id = document.createElement("span");
+            id.className = "mec-diag-id";
+            id.textContent = ev.exc_type || ev.kind || ev.type || "event";
+            const meta = document.createElement("span");
+            meta.className = "mec-diag-meta";
+            meta.textContent = `${_fmtTs(ev.ts)}${ev.node_id ? " · node " + ev.node_id : ""}`;
+            head.append(id, meta);
+            card.appendChild(head);
+            if (ev.category || ev.pattern_id) {
+                const tags = document.createElement("div");
+                tags.style.marginTop = "3px";
+                if (ev.category) {
+                    const t = document.createElement("span");
+                    t.className = `mec-diag-tag cat-${ev.category}`;
+                    t.textContent = ev.category;
+                    tags.appendChild(t);
+                }
+                if (ev.pattern_id) {
+                    const t2 = document.createElement("span");
+                    t2.className = "mec-diag-tag";
+                    t2.textContent = ev.pattern_id;
+                    tags.appendChild(t2);
+                }
+                card.appendChild(tags);
+            }
+            const msg = ev.exc_msg || ev.message || ev.hint;
+            if (msg) {
+                const m = document.createElement("div");
+                m.className = "mec-diag-msg";
+                m.textContent = msg;
+                card.appendChild(m);
+            }
+            list.appendChild(card);
+        }
+    }
+    refresh.onclick = load;
+    cb.onchange = load;
+    clear.onclick = async () => {
+        const j = await _api("/mec/diagnostics/clear", { method: "POST" });
+        if (j.success) { _toast("Cleared", "success"); load(); }
+        else _toast("Clear failed: " + j.message, "error");
+    };
+    load();
+}
+
+async function _renderStatistics(body) {
+    body.innerHTML = `<div class="mec-diag-empty">Loading…</div>`;
+    const j = await _api("/mec/diagnostics/statistics");
+    if (!j.success) {
+        body.innerHTML = `<div class="mec-diag-empty">Backend unavailable: ${j.message || j.error}</div>`;
+        return;
+    }
+    const d = j.data || { patterns: [], categories: [], total_events: 0 };
+    body.innerHTML = "";
+    const total = document.createElement("div");
+    total.className = "mec-diag-card info";
+    total.innerHTML = `<div class="mec-diag-row"><b>Total matched events</b><span>${d.total_events}</span></div>`;
+    body.appendChild(total);
+
+    if (d.categories.length) {
+        const h = document.createElement("h4");
+        h.textContent = "By category";
+        h.style.cssText = "margin:8px 0 4px 0;";
+        body.appendChild(h);
+        const max = Math.max(...d.categories.map(c => c.count));
+        for (const c of d.categories) {
+            const card = document.createElement("div");
+            card.className = "mec-diag-card";
+            card.innerHTML = `<div class="mec-diag-row">
+                <span><span class="mec-diag-tag cat-${c.category}">${c.category}</span></span>
+                <span>${c.count}</span></div>
+                <div class="mec-diag-bar"><div style="width:${(c.count / max * 100).toFixed(1)}%;"></div></div>`;
+            body.appendChild(card);
+        }
+    }
+    if (d.patterns.length) {
+        const h2 = document.createElement("h4");
+        h2.textContent = "Top patterns";
+        h2.style.cssText = "margin:10px 0 4px 0;";
+        body.appendChild(h2);
+        for (const p of d.patterns.slice(0, 20)) {
+            const card = document.createElement("div");
+            card.className = "mec-diag-card";
+            card.innerHTML = `<div class="mec-diag-row">
+                <span class="mec-diag-id">${p.pattern_id}</span>
+                <span>${p.count}×</span></div>
+                <div class="mec-diag-meta">first ${_fmtTs(p.first_seen)} · last ${_fmtTs(p.last_seen)}</div>`;
+            body.appendChild(card);
+        }
+    }
+    if (!d.patterns.length && !d.categories.length) {
+        body.appendChild(Object.assign(document.createElement("div"),
+            { className: "mec-diag-empty", textContent: "No events recorded yet." }));
+    }
+}
+
+async function _renderPatterns(body) {
+    body.innerHTML = `<div class="mec-diag-empty">Loading…</div>`;
+    const tb = document.createElement("div");
+    tb.className = "mec-diag-toolbar";
+    const reload = document.createElement("button");
+    reload.className = "mec-diag-btn primary";
+    reload.textContent = "Hot-reload patterns";
+    tb.appendChild(reload);
+    const j = await _api("/mec/diagnostics/patterns");
+    body.innerHTML = "";
+    body.appendChild(tb);
+    if (!j.success) {
+        body.appendChild(Object.assign(document.createElement("div"),
+            { className: "mec-diag-empty", textContent: `Backend unavailable: ${j.message || j.error}` }));
+        return;
+    }
+    const total = document.createElement("div");
+    total.className = "mec-diag-card info";
+    total.innerHTML = `<div class="mec-diag-row"><b>Loaded</b><span>${j.data.count} patterns</span></div>`;
+    body.appendChild(total);
+    for (const p of j.data.patterns) {
+        const card = document.createElement("div");
+        card.className = "mec-diag-card";
+        card.innerHTML = `<div class="mec-diag-row">
+            <span class="mec-diag-id">${p.id}</span>
+            <span class="mec-diag-meta">prio ${p.priority} · conf ${p.confidence}</span></div>
+            <div style="margin-top:3px;">
+                <span class="mec-diag-tag cat-${p.category}">${p.category}</span>
+                ${p.exc_types.length ? p.exc_types.map(t => `<span class="mec-diag-tag">${t}</span>`).join("") : ""}
+            </div>
+            <div class="mec-diag-meta" style="margin-top:3px;">${p.source}</div>`;
+        body.appendChild(card);
+    }
+    reload.onclick = async () => {
+        reload.disabled = true; reload.textContent = "Reloading…";
+        const r = await _api("/mec/diagnostics/reload_patterns", { method: "POST" });
+        reload.disabled = false; reload.textContent = "Hot-reload patterns";
+        if (r.success) { _toast(`Reloaded ${r.data.count} patterns`, "success"); _renderPatterns(body); }
+        else _toast("Reload failed: " + r.message, "error");
+    };
+}
+
+// =====================================================================
+//  MODEL CATALOG — verified May 2026 against Ollama library, HuggingFace
+//  Qwen org, Microsoft, Google, Meta, IBM, Mistral, DeepSeek, Liquid AI.
+//  Free-typing is allowed everywhere; these are quick-pick suggestions.
+// =====================================================================
+
+// GGUF stubs for llama-cpp-python (Tier 2 fallback backend). Each row has
+// approximate VRAM at Q4_K_M plus a one-line "best for" hint. The user can
+// drop a GGUF file in ComfyUI/models/llm/ and pick it from this list.
+// Curated GGUF model catalog. Each entry maps to a REAL, downloadable HuggingFace
+// repo + filename. Selecting an entry that is not installed reveals a Download
+// button which POSTs to /mec/diagnostics/local_llm/download.
+//
+// Verified May 2026 against https://huggingface.co/<repo>/blob/main/<file>.
+// Entries dropped if the upstream GGUF does not actually exist (no aspirational
+// names like qwen3.6, qwen3.5, gemma-4, granite-4.1, lfm2.5, smollm3, etc.).
+const _LOCAL_MODEL_SUGGESTIONS = [
+    // Qwen 3 (official Qwen GGUFs) — note: small variants only ship Q8_0 upstream.
+    { id: "qwen3-0.6b-instruct-q8_0",              ram: "~700 MB",  note: "Qwen3 0.6B — fastest (Q8_0)",
+      repo: "Qwen/Qwen3-0.6B-GGUF",                  file: "Qwen3-0.6B-Q8_0.gguf" },
+    { id: "qwen3-1.7b-instruct-q8_0",              ram: "~1.8 GB",  note: "Qwen3 1.7B — balanced (Q8_0)",
+      repo: "Qwen/Qwen3-1.7B-GGUF",                  file: "Qwen3-1.7B-Q8_0.gguf" },
+    { id: "qwen3-4b-instruct-q4_k_m",              ram: "~2.5 GB",  note: "Qwen3 4B — recommended default",
+      repo: "Qwen/Qwen3-4B-GGUF",                    file: "Qwen3-4B-Q4_K_M.gguf" },
+    { id: "qwen3-8b-instruct-q4_k_m",              ram: "~5.0 GB",  note: "Qwen3 8B",
+      repo: "Qwen/Qwen3-8B-GGUF",                    file: "Qwen3-8B-Q4_K_M.gguf" },
+    { id: "qwen3-14b-instruct-q4_k_m",             ram: "~8.5 GB",  note: "Qwen3 14B",
+      repo: "Qwen/Qwen3-14B-GGUF",                   file: "Qwen3-14B-Q4_K_M.gguf" },
+    // Qwen 2.5 (bartowski Q4_K_M)
+    { id: "qwen2.5-0.5b-instruct-q4_k_m",          ram: "~400 MB",  note: "Qwen2.5 0.5B — micro",
+      repo: "bartowski/Qwen2.5-0.5B-Instruct-GGUF",  file: "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf" },
+    { id: "qwen2.5-1.5b-instruct-q4_k_m",          ram: "~1.0 GB",  note: "Qwen2.5 1.5B",
+      repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF",  file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" },
+    { id: "qwen2.5-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "Qwen2.5 3B",
+      repo: "bartowski/Qwen2.5-3B-Instruct-GGUF",    file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf" },
+    { id: "qwen2.5-7b-instruct-q4_k_m",            ram: "~4.5 GB",  note: "Qwen2.5 7B",
+      repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",    file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf" },
+    // Qwen 2.5 Coder
+    { id: "qwen2.5-coder-1.5b-instruct-q4_k_m",    ram: "~1.0 GB",  note: "Qwen2.5-Coder 1.5B — code errors",
+      repo: "bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF", file: "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf" },
+    { id: "qwen2.5-coder-7b-instruct-q4_k_m",      ram: "~4.5 GB",  note: "Qwen2.5-Coder 7B — code errors",
+      repo: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",   file: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" },
+    // Google Gemma 3
+    { id: "gemma-3-1b-it-q4_k_m",                  ram: "~750 MB",  note: "Gemma 3 1B — fast",
+      repo: "lmstudio-community/gemma-3-1b-it-GGUF", file: "gemma-3-1b-it-Q4_K_M.gguf" },
+    { id: "gemma-3-4b-it-q4_k_m",                  ram: "~2.5 GB",  note: "Gemma 3 4B",
+      repo: "lmstudio-community/gemma-3-4b-it-GGUF", file: "gemma-3-4b-it-Q4_K_M.gguf" },
+    { id: "gemma-3-12b-it-q4_k_m",                 ram: "~7.0 GB",  note: "Gemma 3 12B",
+      repo: "lmstudio-community/gemma-3-12b-it-GGUF",file: "gemma-3-12b-it-Q4_K_M.gguf" },
+    // Microsoft Phi
+    { id: "phi-3.5-mini-instruct-q4_k_m",          ram: "~2.3 GB",  note: "Phi-3.5-Mini 3.8B",
+      repo: "bartowski/Phi-3.5-mini-instruct-GGUF",  file: "Phi-3.5-mini-instruct-Q4_K_M.gguf" },
+    // Meta Llama 3.2
+    { id: "llama-3.2-1b-instruct-q4_k_m",          ram: "~770 MB",  note: "Llama 3.2 1B",
+      repo: "bartowski/Llama-3.2-1B-Instruct-GGUF",  file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf" },
+    { id: "llama-3.2-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Llama 3.2 3B",
+      repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",  file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" },
+    // IBM Granite 3.x (4.x not yet on HF as GGUF)
+    { id: "granite-3.3-2b-instruct-q4_k_m",        ram: "~1.4 GB",  note: "Granite 3.3 2B — RAG/tools",
+      repo: "ibm-granite/granite-3.3-2b-instruct-GGUF", file: "granite-3.3-2b-instruct-Q4_K_M.gguf" },
+    { id: "granite-3.3-8b-instruct-q4_k_m",        ram: "~5.0 GB",  note: "Granite 3.3 8B — RAG/tools",
+      repo: "ibm-granite/granite-3.3-8b-instruct-GGUF", file: "granite-3.3-8b-instruct-Q4_K_M.gguf" },
+    // DeepSeek-R1 distills
+    { id: "deepseek-r1-distill-qwen-1.5b-q4_k_m",  ram: "~1.0 GB",  note: "DeepSeek-R1 1.5B — CoT",
+      repo: "bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF", file: "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf" },
+    { id: "deepseek-r1-distill-qwen-7b-q4_k_m",    ram: "~4.5 GB",  note: "DeepSeek-R1 7B",
+      repo: "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",   file: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf" },
+    { id: "deepseek-r1-distill-llama-8b-q4_k_m",   ram: "~5.0 GB",  note: "DeepSeek-R1 Llama 8B",
+      repo: "bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF",  file: "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf" },
+    { id: "deepseek-r1-distill-qwen-14b-q4_k_m",   ram: "~8.5 GB",  note: "DeepSeek-R1 14B",
+      repo: "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",  file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf" },
+    // HuggingFace SmolLM2 (360M only ships Q8_0 upstream)
+    { id: "smollm2-360m-instruct-q8_0",            ram: "~400 MB",  note: "SmolLM2 360M — tiny (Q8_0)",
+      repo: "HuggingFaceTB/SmolLM2-360M-Instruct-GGUF", file: "smollm2-360m-instruct-q8_0.gguf" },
+    { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "SmolLM2 1.7B",
+      repo: "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF", file: "smollm2-1.7b-instruct-q4_k_m.gguf" },
+    // Mistral Nemo
+    { id: "mistral-nemo-instruct-2407-q4_k_m",     ram: "~7.5 GB",  note: "Mistral Nemo 12B — 128k ctx",
+      repo: "bartowski/Mistral-Nemo-Instruct-2407-GGUF", file: "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf" },
+    // Hermes-3 (NousResearch)
+    { id: "hermes-3-llama-3.2-3b-q4_k_m",          ram: "~2.0 GB",  note: "Hermes-3 3B — tool use",
+      repo: "bartowski/Hermes-3-Llama-3.2-3B-GGUF",  file: "Hermes-3-Llama-3.2-3B-Q4_K_M.gguf" },
+    { id: "hermes-3-llama-3.1-8b-q4_k_m",          ram: "~5.0 GB",  note: "Hermes-3 8B — agentic",
+      repo: "bartowski/Hermes-3-Llama-3.1-8B-GGUF",  file: "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf" },
+    // Yi-1.5
+    { id: "yi-1.5-6b-chat-q4_k_m",                 ram: "~3.8 GB",  note: "Yi-1.5 6B — bilingual",
+      repo: "bartowski/Yi-1.5-6B-Chat-GGUF",         file: "Yi-1.5-6B-Chat-Q4_K_M.gguf" },
+    { id: "yi-1.5-9b-chat-q4_k_m",                 ram: "~5.5 GB",  note: "Yi-1.5 9B",
+      repo: "bartowski/Yi-1.5-9B-Chat-GGUF",         file: "Yi-1.5-9B-Chat-Q4_K_M.gguf" },
+    // InternLM 2.5
+    { id: "internlm2.5-1.8b-chat-q4_k_m",          ram: "~1.2 GB",  note: "InternLM2.5 1.8B",
+      repo: "bartowski/internlm2_5-1_8b-chat-GGUF",  file: "internlm2_5-1_8b-chat-Q4_K_M.gguf" },
+    { id: "internlm2.5-7b-chat-q4_k_m",            ram: "~4.5 GB",  note: "InternLM2.5 7B",
+      repo: "bartowski/internlm2_5-7b-chat-GGUF",    file: "internlm2_5-7b-chat-Q4_K_M.gguf" },
+    // Coding specialised
+    { id: "codegemma-7b-instruct-q4_k_m",          ram: "~4.5 GB",  note: "CodeGemma 7B",
+      repo: "bartowski/codegemma-1.1-7b-it-GGUF",    file: "codegemma-1.1-7b-it-Q4_K_M.gguf" },
+    // Vision-language
+    { id: "llava-1.6-mistral-7b-q4_k_m",           ram: "~5.5 GB",  note: "LLaVA-1.6 7B — vision (needs mmproj)",
+      repo: "cjpais/llava-1.6-mistral-7b-gguf",      file: "llava-v1.6-mistral-7b.Q4_K_M.gguf" },
+    // Legacy / misc (verified)
+    { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "TinyLlama (legacy)",
+      repo: "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", file: "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" },
+    { id: "stablelm-zephyr-3b-q4_k_m",             ram: "~2.0 GB",  note: "StableLM-Zephyr 3B",
+      repo: "TheBloke/stablelm-zephyr-3b-GGUF",      file: "stablelm-zephyr-3b.Q4_K_M.gguf" },
+    { id: "neural-chat-7b-v3.3-q4_k_m",            ram: "~4.5 GB",  note: "Intel Neural-Chat 7B",
+      repo: "TheBloke/neural-chat-7B-v3-3-GGUF",     file: "neural-chat-7b-v3-3.Q4_K_M.gguf" },
+];
+
+// Ollama model suggestions are NOT hardcoded — they are populated live
+// from the running daemon's /api/tags endpoint (via
+// /mec/diagnostics/ollama/tags) when the Tier 2 panel opens or when the
+// user clicks "Refresh installed".  If the daemon is not reachable, the
+// datalist stays empty and the user can free-type a tag (the input is a
+// `list=`-bound text input, so this works fine).
+
+// Rough cost estimate per 1 invocation (~512 in + 512 out tokens) per model.
+// Pulled from public pricing pages May 2026 — verify yourself before bulk use.
+const _CLOUD_COST_HINT = {
+    // OpenAI
+    "openai/gpt-4o-mini":              "~$0.0002 / error",
+    "openai/gpt-4o":                   "~$0.005 / error",
+    "openai/gpt-4.1-mini":             "~$0.0003 / error",
+    "openai/gpt-4.1":                  "~$0.004 / error",
+    "openai/o4-mini":                  "~$0.0008 / error (reasoning)",
+    // Anthropic
+    "anthropic/claude-3-5-haiku":      "~$0.0008 / error",
+    "anthropic/claude-3-5-sonnet":     "~$0.0095 / error",
+    "anthropic/claude-3-7-sonnet":     "~$0.012 / error",
+    "anthropic/claude-sonnet-4":       "~$0.015 / error",
+    // Google Gemini
+    "gemini/gemini-1.5-flash":         "~$0.0001 / error",
+    "gemini/gemini-1.5-pro":           "~$0.0035 / error",
+    "gemini/gemini-2.0-flash":         "~$0.0002 / error",
+    "gemini/gemini-2.5-flash":         "~$0.0003 / error",
+    "gemini/gemini-2.5-pro":           "~$0.004 / error",
+    // OpenRouter
+    "openrouter/auto":                 "varies by route",
+    "openrouter/openai/gpt-4o-mini":   "~$0.0002 / error",
+    // Groq (free tier with rate limits)
+    "groq/llama-3.3-70b-versatile":    "FREE tier (rate-limited)",
+    "groq/llama-3.1-8b-instant":       "FREE tier (rate-limited)",
+    "groq/mixtral-8x7b-32768":         "FREE tier (rate-limited)",
+    "groq/gemma2-9b-it":               "FREE tier (rate-limited)",
+    "groq/qwen-qwq-32b":               "FREE tier (rate-limited)",
+    // DeepSeek (cheapest paid)
+    "deepseek/deepseek-chat":          "~$0.00007 / error",
+    "deepseek/deepseek-reasoner":      "~$0.0006 / error",
+};
+
+// Tier-3 model datalist per provider. Updated May 2026.
+const _CLOUD_MODEL_SUGGESTIONS = {
+    openai: [
+        "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1",
+        "o4-mini", "o3-mini",
+    ],
+    anthropic: [
+        "claude-3-5-haiku-latest", "claude-3-5-sonnet-latest",
+        "claude-3-7-sonnet-latest", "claude-sonnet-4-latest", "claude-opus-4-latest",
+    ],
+    gemini: [
+        "gemini-1.5-flash-latest", "gemini-1.5-pro-latest",
+        "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro",
+    ],
+    openrouter: [
+        "auto", "openai/gpt-4o-mini", "anthropic/claude-3-5-haiku",
+        "google/gemini-flash-1.5", "deepseek/deepseek-chat",
+        "qwen/qwen-2.5-72b-instruct", "meta-llama/llama-3.3-70b-instruct",
+    ],
+    groq: [
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768", "gemma2-9b-it", "qwen-qwq-32b",
+    ],
+    deepseek: [
+        "deepseek-chat", "deepseek-reasoner",
+    ],
+};
+
+function _statusPill(state /* 'ready' | 'warn' | 'error' | 'idle' */, text) {
+    const colors = {
+        ready: { bg: "var(--c2c-okBgDark2)", fg: "var(--c2c-okBright2)", dot: "var(--c2c-okBright)" },
+        warn:  { bg: "var(--c2c-warnBg3)", fg: "var(--c2c-amberSoft)", dot: "var(--c2c-amberStrong)" },
+        error: { bg: "var(--c2c-dangerBgDark)", fg: "var(--c2c-dangerSoft3)", dot: "var(--c2c-dangerMid2)" },
+        idle:  { bg: "var(--c2c-gray900)", fg: "var(--c2c-gray360)",    dot: "var(--c2c-gray500)"   },
+    }[state] || { bg: "var(--c2c-gray900)", fg: "var(--c2c-gray360)", dot: "var(--c2c-gray500)" };
+    return `<span style="display:inline-flex;align-items:center;gap:6px;background:${colors.bg};color:${colors.fg};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:500;line-height:1.4;max-width:100%;overflow-wrap:anywhere;white-space:normal;">
+        <span style="width:7px;height:7px;border-radius:50%;background:${colors.dot};flex:0 0 auto;"></span><span style="overflow-wrap:anywhere;">${text}</span>
+    </span>`;
+}
+
+function _tierCardHTML(opts) {
+    const { tierNum, title, subtitle, color, bodyHTML } = opts;
+    return `
+    <div class="mec-diag-card" data-tier="${tierNum}" style="border-left:3px solid ${color};margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1;min-width:0;">
+                <input type="checkbox" data-k="tier${tierNum}_enabled" style="margin:0;flex:0 0 auto;"/>
+                <span style="font-weight:600;color:${color};font-size:13px;white-space:nowrap;">Tier ${tierNum}</span>
+                <span style="opacity:0.9;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">— ${title}</span>
+            </label>
+            <button class="mec-diag-btn" data-action="test-tier" data-tier="${tierNum}" style="font-size:11px;padding:3px 10px;flex:0 0 auto;">Test</button>
+        </div>
+        <div style="margin:0 0 4px 24px;">
+            <span class="mec-diag-tier-status" data-tier-status="${tierNum}" style="display:block;">${_statusPill("idle", "checking…")}</span>
+        </div>
+        <div style="font-size:11px;opacity:0.7;line-height:1.4;margin:0 0 6px 24px;">${subtitle}</div>
+        <div style="padding-left:24px;">${bodyHTML}</div>
+    </div>`;
+}
+
+async function _renderSettings(body) {
+    body.innerHTML = `<div class="mec-diag-empty">Loading…</div>`;
+    const j = await _api("/mec/diagnostics/settings");
+    if (!j.success) {
+        body.innerHTML = `<div class="mec-diag-empty">Backend unavailable: ${j.message || j.error}</div>`;
+        return;
+    }
+    const s = j.data;
+    body.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Error Assistant</div>
+        <div class="mec-diag-meta" style="font-size:11px;opacity:0.7;margin-bottom:12px;">
+            Pick which tiers run when an error fires. Multiple tiers can be enabled — Tier 1 always runs first to provide context, then the highest-priority enabled LLM tier (Tier 3 if available, else Tier 2).
+        </div>
+
+        ${_tierCardHTML({
+            tierNum: 1,
+            title: "Patterns (offline, instant)",
+            subtitle: "Regex/heuristic matcher. Zero VRAM, &lt;1 ms. Always recommended ON — feeds context to the LLM tiers.",
+            color: "var(--c2c-okBright)",
+            bodyHTML: `
+                <div class="mec-diag-toolbar" style="margin:0;padding:0;gap:6px;">
+                    <button class="mec-diag-btn" data-action="reload" style="font-size:11px;padding:3px 10px;">Reload patterns</button>
+                    <button class="mec-diag-btn" data-action="toggle-custom" style="font-size:11px;padding:3px 10px;">Custom patterns ▾</button>
+                </div>
+                <div data-custom-patterns style="display:none;margin-top:8px;border-top:1px dashed var(--c2c-gray800);padding-top:8px;">
+                    <div style="font-size:11px;font-weight:600;margin-bottom:4px;">Add your own pattern</div>
+                    <div class="mec-diag-kv" style="grid-template-columns:90px 1fr;">
+                        <span class="k">ID</span>
+                        <input class="mec-diag-input" data-cp="id" placeholder="my_custom_oom" style="font-family:monospace;"/>
+                        <span class="k">Regex</span>
+                        <input class="mec-diag-input" data-cp="regex" placeholder="(?i)my custom error message" style="font-family:monospace;"/>
+                        <span class="k">Category</span>
+                        <select class="mec-diag-select" data-cp="category">
+                            <option value="user">user</option>
+                            <option value="vram">vram</option>
+                            <option value="shape">shape</option>
+                            <option value="missing">missing</option>
+                            <option value="network">network</option>
+                            <option value="config">config</option>
+                            <option value="uncategorized">uncategorized</option>
+                        </select>
+                        <span class="k">Cause</span>
+                        <input class="mec-diag-input" data-cp="cause" placeholder="One-sentence explanation"/>
+                        <span class="k">Fixes</span>
+                        <textarea class="mec-diag-input" data-cp="fixes" rows="3" placeholder="One fix per line"></textarea>
+                    </div>
+                    <div class="mec-diag-toolbar" style="margin:6px 0 0 0;padding:0;justify-content:flex-end;">
+                        <button class="mec-diag-btn primary" data-action="add-pattern" style="font-size:11px;padding:3px 10px;">Add pattern</button>
+                    </div>
+                    <div data-custom-list style="margin-top:10px;font-size:11px;"></div>
+                </div>`,
+        })}
+
+        ${_tierCardHTML({
+            tierNum: 2,
+            title: "Local LLM (Ollama or llama.cpp)",
+            subtitle: "Runs on your machine. Private, free, no API key. Ollama is recommended — supports Qwen3.6 / Qwen3.5 / Gemma 4 / Granite 4 / DeepSeek-R1 out of the box.",
+            color: "var(--c2c-blueDim)",
+            bodyHTML: `
+                <div class="mec-diag-kv">
+                    <span class="k">Backend</span>
+                    <select class="mec-diag-select" data-k="tier2_backend">
+                        <option value="ollama">ollama (recommended)</option>
+                        <option value="llamacpp">llama.cpp + GGUF</option>
+                    </select>
+                </div>
+                <div data-tier2-ollama style="margin-top:6px;">
+                    <div class="mec-diag-kv">
+                        <span class="k">Server URL</span>
+                        <input class="mec-diag-input" data-k="ollama_url" placeholder="http://localhost:11434"/>
+                        <span class="k">Model</span>
+                        <input class="mec-diag-input" data-k="ollama_model" list="mec-ollama-model-list" placeholder="qwen3.5:4b"/>
+                    </div>
+                    <datalist id="mec-ollama-model-list"></datalist>
+                    <div class="mec-diag-toolbar" style="margin:6px 0 0 0;padding:0;gap:6px;">
+                        <button class="mec-diag-btn" data-action="ollama-refresh" type="button" style="font-size:11px;padding:3px 10px;">Refresh installed</button>
+                        <span data-ollama-info style="font-size:10.5px;opacity:0.7;align-self:center;">—</span>
+                    </div>
+                    <div data-ollama-chips style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:6px;line-height:1.5;">
+                        Install Ollama: <a href="https://ollama.com/download" target="_blank" style="color:var(--c2c-accentSoft);">ollama.com/download</a><br/>
+                        Browse models: <a href="https://ollama.com/library" target="_blank" style="color:var(--c2c-accentSoft);">ollama.com/library</a> · pull a recommended one: <code>ollama pull qwen3.5:4b</code> or <code>ollama pull qwen3.6:27b</code>
+                    </div>
+                </div>
+                <div data-tier2-llamacpp style="margin-top:6px;display:none;">
+                    <div class="mec-diag-kv">
+                        <span class="k">GGUF model</span>
+                        <select class="mec-diag-select" data-k="local_model" style="font-family:monospace;font-size:11px;">
+                            <option value="">— scanning installed models…</option>
+                        </select>
+                    </div>
+                    <div style="margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button class="mec-diag-btn" data-action="llm-scan" type="button" style="font-size:11px;padding:3px 10px;">Scan installed</button>
+                        <button class="mec-diag-btn primary" data-action="llm-download" type="button" style="font-size:11px;padding:3px 10px;display:none;">⇩ Download selected</button>
+                        <span data-llm-scan-info style="font-size:10.5px;opacity:0.7;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>
+                    </div>
+                    <div data-llm-dl-progress style="display:none;margin-top:6px;font-size:10.5px;line-height:1.5;background:var(--c2c-panelDeep5);border:1px solid var(--c2c-panelDeep6);border-radius:3px;padding:5px 8px;">
+                        <div data-llm-dl-label style="opacity:0.85;"></div>
+                        <div style="background:var(--c2c-panelDeep7);height:6px;border-radius:3px;overflow:hidden;margin-top:3px;">
+                            <div data-llm-dl-bar style="height:100%;width:0%;background:linear-gradient(90deg,var(--c2c-blueDim),var(--c2c-accentSoft));transition:width 200ms ease;"></div>
+                        </div>
+                        <div data-llm-dl-stats style="opacity:0.6;margin-top:3px;display:flex;justify-content:space-between;"></div>
+                    </div>
+                    <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.7;margin-top:6px;line-height:1.6;">
+                        <div style="background:var(--c2c-panelDeep8);border-left:2px solid var(--c2c-blueDim);padding:4px 8px;margin-bottom:6px;border-radius:3px;">
+                            <b style="color:var(--c2c-accentSoft);">No Ollama needed.</b> Select any catalog entry and click <b>Download</b> — files land in your ComfyUI <code>models/llm/</code> folder. Smallest picks: <code>smollm2-135m</code> (~120 MB RAM), <code>qwen3-0.6b</code> (~450 MB).
+                        </div>
+                        Install runtime: <code>pip install llama-cpp-python</code> · Windows / no compiler: <code>pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu</code> (CPU) or <code>/cu124</code> (CUDA 12.4)<br/>
+                        Catalog repos: <a href="https://huggingface.co/bartowski" target="_blank" style="color:var(--c2c-accentSoft);">bartowski</a> · <a href="https://huggingface.co/lmstudio-community" target="_blank" style="color:var(--c2c-accentSoft);">lmstudio-community</a> · <a href="https://huggingface.co/Qwen" target="_blank" style="color:var(--c2c-accentSoft);">Qwen</a> · <a href="https://huggingface.co/HuggingFaceTB" target="_blank" style="color:var(--c2c-accentSoft);">HuggingFaceTB</a> · <a href="https://huggingface.co/ibm-granite" target="_blank" style="color:var(--c2c-accentSoft);">ibm-granite</a>
+                    </div>
+                    <!-- Live HuggingFace GGUF discovery — searches HF Hub in real-time -->
+                    <details data-hf-search-block style="margin-top:8px;background:var(--c2c-panelDeep5);border:1px solid var(--c2c-panelDeep6);border-radius:3px;">
+                        <summary style="cursor:pointer;padding:5px 8px;font-size:11px;font-weight:600;color:var(--c2c-accentSoft);">🔍 Search HuggingFace for more GGUFs (live)</summary>
+                        <div style="padding:6px 8px;">
+                            <div class="mec-diag-toolbar" style="margin:0 0 6px 0;padding:0;gap:6px;">
+                                <input class="mec-diag-input" data-hf-search-q placeholder="e.g. qwen3, llama-3, gemma, mistral…" style="flex:1;font-family:monospace;font-size:11px;"/>
+                                <button class="mec-diag-btn" data-action="hf-search" type="button" style="font-size:11px;padding:3px 10px;">Search</button>
+                                <span data-hf-search-info style="font-size:10.5px;opacity:0.7;align-self:center;">—</span>
+                            </div>
+                            <div data-hf-search-results style="max-height:240px;overflow-y:auto;font-size:11px;"></div>
+                            <div data-hf-files-block style="display:none;margin-top:6px;border-top:1px dashed var(--c2c-neutral900);padding-top:6px;">
+                                <div data-hf-files-header style="font-size:10.5px;opacity:0.85;margin-bottom:4px;font-family:monospace;"></div>
+                                <select class="mec-diag-select" data-hf-files-select style="font-family:monospace;font-size:11px;width:100%;">
+                                    <option value="">— pick a .gguf file —</option>
+                                </select>
+                                <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+                                    <button class="mec-diag-btn primary" data-action="hf-download" type="button" style="font-size:11px;padding:3px 10px;">⇩ Download</button>
+                                    <span data-hf-file-info style="font-size:10.5px;opacity:0.7;flex:1;"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>`,
+        })}
+
+        ${_tierCardHTML({
+            tierNum: 3,
+            title: "Cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter / Groq / DeepSeek)",
+            subtitle: "Fastest and strongest. Groq has a free tier; OpenRouter and DeepSeek are cheapest paid. Keys are stored encrypted.",
+            color: "var(--c2c-peachMid)",
+            bodyHTML: `
+                <div class="mec-diag-kv">
+                    <span class="k">Provider</span>
+                    <select class="mec-diag-select" data-k="cloud_provider">
+                        <option value="openai">openai</option>
+                        <option value="anthropic">anthropic</option>
+                        <option value="gemini">gemini</option>
+                        <option value="openrouter">openrouter</option>
+                        <option value="groq">groq (free tier)</option>
+                        <option value="deepseek">deepseek (cheap)</option>
+                    </select>
+                    <span class="k">Model</span>
+                    <input class="mec-diag-input" data-k="cloud_model" list="mec-cloud-model-list" placeholder="gpt-4o-mini"/>
+                    <span class="k">API key</span>
+                    <span style="display:flex;gap:4px;align-items:center;">
+                        <input class="mec-diag-input" data-k-secret="api_key" type="password"
+                               style="flex:1;font-family:monospace;" placeholder="(not set)" autocomplete="off"/>
+                        <button class="mec-diag-btn" data-action="show-key" type="button" title="Show/hide" style="font-size:11px;padding:3px 8px;">👁</button>
+                        <button class="mec-diag-btn" data-action="save-key" type="button" style="font-size:11px;padding:3px 10px;">Save key</button>
+                    </span>
+                </div>
+                <datalist id="mec-cloud-model-list"></datalist>
+                <div class="mec-diag-meta" data-cost-hint style="font-size:10.5px;opacity:0.6;margin-top:4px;">
+                    Cost: —
+                </div>`,
+        })}
+
+        <div class="mec-diag-card" style="margin-top:4px;">
+            <div style="font-weight:600;font-size:12px;margin-bottom:6px;">Shared</div>
+            <div class="mec-diag-kv">
+                <span class="k">Max tokens</span>
+                <input class="mec-diag-input" data-k="max_tokens" type="number" min="64" max="4096" step="64"/>
+            </div>
+            <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.6;margin-top:4px;">
+                Output cap for Tier 2 / Tier 3. 512 is a good default.
+            </div>
+        </div>
+
+        <div class="mec-diag-toolbar" style="padding-top:10px;justify-content:flex-end;">
+            <button class="mec-diag-btn primary" data-action="save">Save settings</button>
+        </div>
+    `;
+    body.appendChild(wrap);
+
+    // Hydrate non-secret fields.
+    for (const el of wrap.querySelectorAll("[data-k]")) {
+        const k = el.dataset.k;
+        if (s[k] === undefined) continue;
+        if (el.type === "checkbox") el.checked = !!s[k];
+        else el.value = s[k];
+    }
+
+    // Update cost-hint helper.
+    const costHint = wrap.querySelector("[data-cost-hint]");
+    const updateCostHint = () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const model = (wrap.querySelector('[data-k="cloud_model"]').value || "").trim();
+        const k = `${prov}/${model}`;
+        const direct = _CLOUD_COST_HINT[k];
+        const fallback = Object.entries(_CLOUD_COST_HINT).find(([key]) => key.startsWith(prov + "/"));
+        costHint.textContent = "Cost: " + (direct || (fallback ? fallback[1] + " (closest match)" : "varies"));
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", updateCostHint);
+    wrap.querySelector('[data-k="cloud_model"]').addEventListener("input", updateCostHint);
+    updateCostHint();
+
+    // ----- Cloud model datalist updates with provider -----
+    const cloudModelDL = wrap.querySelector("#mec-cloud-model-list");
+    const cloudModelInput = wrap.querySelector('[data-k="cloud_model"]');
+    const refreshCloudDatalist = () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const opts = _CLOUD_MODEL_SUGGESTIONS[prov] || [];
+        cloudModelDL.innerHTML = opts.map(m => `<option value="${m}"></option>`).join("");
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", refreshCloudDatalist);
+    refreshCloudDatalist();
+
+    // ----- Tier 2 backend toggle (ollama vs llama.cpp) -----
+    const backendSel = wrap.querySelector('[data-k="tier2_backend"]');
+    const ollamaPane = wrap.querySelector("[data-tier2-ollama]");
+    const llamaPane  = wrap.querySelector("[data-tier2-llamacpp]");
+    const syncTier2Pane = () => {
+        const isOl = backendSel.value === "ollama";
+        ollamaPane.style.display = isOl ? "" : "none";
+        llamaPane.style.display  = isOl ? "none" : "";
+    };
+    backendSel.addEventListener("change", syncTier2Pane);
+    syncTier2Pane();
+
+    // ----- Tier 2 / llama.cpp: grouped <select> with 75-model catalog + installed scanner -----
+    const _GGUF_GROUPS = [
+        ["Qwen 3",                            /^qwen3-/],
+        ["Qwen 2.5 / Coder",                  /^qwen2\.5-/],
+        ["Google Gemma 3",                    /^gemma-3-/],
+        ["Microsoft Phi-4 / 3.5",             /^phi-/],
+        ["Meta Llama 3.2",                    /^llama-/],
+        ["IBM Granite 3.x",                   /^granite-3/],
+        ["DeepSeek-R1 (reasoning)",           /^deepseek-r1-/],
+        ["HuggingFace SmolLM2",               /^smollm2-/i],
+        ["Mistral",                           /^mistral-/i],
+        ["Hermes-3",                          /^hermes-/i],
+        ["Yi / InternLM",                     /^(yi-|internlm)/i],
+        ["Coding Specialized",                /^(codegemma|starcoder|granite-code)/i],
+        ["Vision",                            /^(llava|moondream)/i],
+        ["Legacy / Misc",                     /.*/],
+    ];
+    function _ggufGroup(id) {
+        for (const [label, rx] of _GGUF_GROUPS) if (rx.test(id)) return label;
+        return "Other";
+    }
+
+    const localModelSel = llamaPane.querySelector('[data-k="local_model"]');
+    const llmScanInfo   = llamaPane.querySelector("[data-llm-scan-info]");
+
+    function _rebuildLocalModelSelect(installedSet) {
+        // Group catalog into buckets in declared order.
+        const groups = new Map(_GGUF_GROUPS.map(([l]) => [l, []]));
+        for (const m of _LOCAL_MODEL_SUGGESTIONS) {
+            const g = _ggufGroup(m.id);
+            if (!groups.has(g)) groups.set(g, []);
+            groups.get(g).push(m);
+        }
+        const currentVal = localModelSel.value || s.local_model || "";
+        localModelSel.innerHTML = "";
+
+        // "✓ Installed" group first if anything is present.
+        if (installedSet && installedSet.size > 0) {
+            const og = document.createElement("optgroup");
+            og.label = `✓ Installed (${installedSet.size})`;
+            for (const fn of [...installedSet].sort()) {
+                const stem = fn.replace(/\.gguf$/i, "");
+                const opt = document.createElement("option");
+                opt.value = stem;
+                const meta = _LOCAL_MODEL_SUGGESTIONS.find(m => m.id === stem);
+                opt.textContent = meta ? `✓ ${stem}  (${meta.ram})` : `✓ ${stem}`;
+                og.appendChild(opt);
+            }
+            localModelSel.appendChild(og);
+        }
+
+        // Full catalog groups.
+        for (const [label, models] of groups) {
+            if (!models.length) continue;
+            const og = document.createElement("optgroup");
+            og.label = label;
+            for (const m of models) {
+                const isInst = installedSet && (installedSet.has(m.id + ".gguf") || installedSet.has(m.id));
+                const opt = document.createElement("option");
+                opt.value = m.id;
+                opt.textContent = `${m.id}  (${m.ram})  — ${m.note}`;
+                if (isInst) opt.style.fontWeight = "700";
+                og.appendChild(opt);
+            }
+            localModelSel.appendChild(og);
+        }
+
+        // Restore saved selection.
+        if (currentVal) localModelSel.value = currentVal;
+    }
+
+    async function _scanLocalModels() {
+        llmScanInfo.textContent = "scanning…";
+        const r = await _api("/mec/diagnostics/local_llm/scan");
+        if (!r.success) {
+            llmScanInfo.textContent = "scan failed: " + (r.message || r.error);
+            _rebuildLocalModelSelect(null);
+            _installedSet = new Set();
+            if (typeof _updateDownloadButton === "function") _updateDownloadButton();
+            return;
+        }
+        const installed = r.data?.installed || [];
+        const dirs = r.data?.dirs || [];
+        const installedSet = new Set(installed.map(f => f.filename));
+        _installedSet = installedSet;
+        _rebuildLocalModelSelect(installedSet);
+        const primaryDir = dirs.find(d => /llm/i.test(d)) || dirs[0] || "ComfyUI/models/llm/";
+        llmScanInfo.innerHTML = `${installed.length} installed · target dir <code style="font-size:10px;">${primaryDir}</code>`;
+        if (typeof _updateDownloadButton === "function") _updateDownloadButton();
+    }
+
+    llamaPane.querySelector('[data-action="llm-scan"]').onclick = _scanLocalModels;
+
+    // ----- Tier 2 / llama.cpp: Download selected catalog entry from HF -----
+    const dlBtn       = llamaPane.querySelector('[data-action="llm-download"]');
+    const dlProgress  = llamaPane.querySelector("[data-llm-dl-progress]");
+    const dlLabel     = llamaPane.querySelector("[data-llm-dl-label]");
+    const dlBar       = llamaPane.querySelector("[data-llm-dl-bar]");
+    const dlStats     = llamaPane.querySelector("[data-llm-dl-stats]");
+    let _installedSet = new Set();
+    let _dlPollTimer = null;
+
+    function _fmtBytes(b) {
+        if (!b) return "0 B";
+        const u = ["B", "KB", "MB", "GB"]; let i = 0;
+        while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+        return b.toFixed(b < 10 ? 2 : 1) + " " + u[i];
+    }
+    function _meta(id) {
+        return _LOCAL_MODEL_SUGGESTIONS.find(m => m.id === id);
+    }
+    function _updateDownloadButton() {
+        const id = localModelSel.value;
+        const m = _meta(id);
+        const isInstalled = _installedSet && (_installedSet.has(id + ".gguf") || _installedSet.has(id));
+        const haveMeta = m && m.repo && m.file;
+        dlBtn.style.display = (haveMeta && !isInstalled) ? "" : "none";
+        if (haveMeta && !isInstalled) {
+            dlBtn.textContent = `⇩ Download ${m.ram}`;
+            dlBtn.title = `${m.repo}/${m.file}`;
+        }
+    }
+    localModelSel.addEventListener("change", _updateDownloadButton);
+
+    async function _startDownload() {
+        const id = localModelSel.value;
+        const m = _meta(id);
+        if (!m || !m.repo || !m.file) return;
+        dlBtn.disabled = true;
+        dlProgress.style.display = "";
+        dlLabel.textContent = `Downloading ${m.file} from ${m.repo}…`;
+        dlBar.style.width = "0%";
+        dlStats.innerHTML = "<span>starting…</span><span></span>";
+        const r = await _api("/mec/diagnostics/local_llm/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, repo: m.repo, file: m.file }),
+        });
+        if (!r.success) {
+            dlLabel.textContent = "Error: " + (r.message || r.error);
+            dlBtn.disabled = false;
+            return;
+        }
+        const jobId = r.data.job_id;
+        if (_dlPollTimer) { clearInterval(_dlPollTimer); _dlPollTimer = null; }
+        _dlPollTimer = setInterval(async () => {
+            const p = await _api(`/mec/diagnostics/local_llm/download_progress?job_id=${jobId}`);
+            if (!p.success) return;
+            const d = p.data;
+            const pct = Number(d.percent || 0);
+            dlBar.style.width = Math.min(100, pct) + "%";
+            dlStats.innerHTML =
+                `<span>${_fmtBytes(d.bytes_done)} / ${_fmtBytes(d.total)} (${pct.toFixed(1)}%)</span>` +
+                `<span style="opacity:0.6;">${d.status}</span>`;
+            if (d.status === "done" || d.status === "exists") {
+                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                dlLabel.textContent = (d.status === "exists" ? "Already present: " : "Downloaded: ") + d.dest_path;
+                dlBtn.disabled = false;
+                _scanLocalModels(); // refresh installed markers and dropdown
+            } else if (d.status === "error") {
+                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                dlLabel.textContent = "Download failed: " + (d.error || "(unknown)");
+                dlBtn.disabled = false;
+            }
+        }, 800);
+    }
+    dlBtn.onclick = _startDownload;
+
+    // ----- Tier 2 / llama.cpp: Live HuggingFace GGUF discovery -----
+    const hfBlock     = llamaPane.querySelector("[data-hf-search-block]");
+    const hfQ         = llamaPane.querySelector("[data-hf-search-q]");
+    const hfInfo      = llamaPane.querySelector("[data-hf-search-info]");
+    const hfResults   = llamaPane.querySelector("[data-hf-search-results]");
+    const hfFilesBox  = llamaPane.querySelector("[data-hf-files-block]");
+    const hfFilesHdr  = llamaPane.querySelector("[data-hf-files-header]");
+    const hfFilesSel  = llamaPane.querySelector("[data-hf-files-select]");
+    const hfFileInfo  = llamaPane.querySelector("[data-hf-file-info]");
+    const hfDlBtn     = llamaPane.querySelector('[data-action="hf-download"]');
+    let _hfSelectedRepo = "";
+    let _hfFilesMap = new Map();
+
+    async function _runHfSearch() {
+        const q = (hfQ.value || "").trim();
+        hfInfo.textContent = "searching…";
+        hfResults.innerHTML = "";
+        hfFilesBox.style.display = "none";
+        const r = await _api(`/mec/diagnostics/hf_gguf_search?q=${encodeURIComponent(q)}&limit=20`);
+        if (!r.success) { hfInfo.textContent = "error: " + (r.message || r.error); return; }
+        const results = r.data?.results || [];
+        hfInfo.textContent = results.length
+            ? `${results.length} repos${r.data.cached ? " (cached)" : ""}`
+            : "no results";
+        if (!results.length) {
+            hfResults.innerHTML = `<em style="opacity:0.6;">No GGUF repos matched. Try a broader query.</em>`;
+            return;
+        }
+        hfResults.innerHTML = results.map(row => {
+            const tags = (row.tags || []).slice(0, 5).map(t => `<span style="background:var(--c2c-surface0);color:var(--c2c-sub);padding:1px 5px;border-radius:2px;font-size:9.5px;">${t}</span>`).join(" ");
+            const safe = row.id.replace(/"/g, "&quot;");
+            return `<div data-hf-row="${safe}" style="padding:5px 6px;border-top:1px solid var(--c2c-panelDeep6);cursor:pointer;font-family:monospace;line-height:1.4;">
+                <div style="display:flex;justify-content:space-between;gap:8px;">
+                    <span style="color:var(--c2c-accentSoft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">${row.id}</span>
+                    <span style="opacity:0.55;font-size:10px;white-space:nowrap;">⇩ ${row.downloads.toLocaleString()} · ♥ ${row.likes}</span>
+                </div>
+                <div style="margin-top:2px;display:flex;gap:3px;flex-wrap:wrap;">${tags}</div>
+            </div>`;
+        }).join("");
+        for (const el of hfResults.querySelectorAll("[data-hf-row]")) {
+            el.onclick = () => _loadHfFiles(el.getAttribute("data-hf-row"));
+            el.onmouseenter = () => { el.style.background = "var(--c2c-panelHi)"; };
+            el.onmouseleave = () => { el.style.background = ""; };
+        }
+    }
+
+    async function _loadHfFiles(repo) {
+        _hfSelectedRepo = repo;
+        hfFilesBox.style.display = "";
+        hfFilesHdr.textContent = `Loading files for ${repo}…`;
+        hfFilesSel.innerHTML = `<option value="">— loading —</option>`;
+        hfFileInfo.textContent = "";
+        const r = await _api(`/mec/diagnostics/hf_gguf_files?repo=${encodeURIComponent(repo)}`);
+        if (!r.success) {
+            hfFilesHdr.textContent = "Error: " + (r.message || r.error);
+            hfFilesSel.innerHTML = `<option value="">—</option>`;
+            return;
+        }
+        const files = r.data?.files || [];
+        const desc = r.data?.description || "";
+        hfFilesHdr.innerHTML = `<b style="color:var(--c2c-accentSoft);">${repo}</b>${desc ? ` — <span style="opacity:0.7;">${desc.slice(0,140)}${desc.length>140?"…":""}</span>` : ""}`;
+        _hfFilesMap.clear();
+        if (!files.length) {
+            hfFilesSel.innerHTML = `<option value="">— no .gguf files in this repo —</option>`;
+            return;
+        }
+        hfFilesSel.innerHTML = `<option value="">— pick a .gguf file —</option>` +
+            files.map(f => {
+                _hfFilesMap.set(f.file, f);
+                const sz = f.size ? ` (${_fmtBytes(f.size)})` : "";
+                return `<option value="${f.file.replace(/"/g,"&quot;")}">${f.file}${sz}</option>`;
+            }).join("");
+    }
+
+    hfFilesSel.onchange = () => {
+        const f = _hfFilesMap.get(hfFilesSel.value);
+        hfFileInfo.textContent = f ? `${_fmtBytes(f.size)} · destination: models/llm/${f.file}` : "";
+    };
+
+    async function _hfStartDownload() {
+        const repo = _hfSelectedRepo;
+        const file = hfFilesSel.value;
+        if (!repo || !file) { hfFileInfo.textContent = "pick a file first"; return; }
+        // Reuse the existing progress UI elements.
+        hfDlBtn.disabled = true;
+        dlProgress.style.display = "";
+        dlLabel.textContent = `Downloading ${file} from ${repo}…`;
+        dlBar.style.width = "0%";
+        dlStats.innerHTML = "<span>starting…</span><span></span>";
+        const id = file.replace(/\.gguf$/i, "");
+        const r = await _api("/mec/diagnostics/local_llm/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, repo, file }),
+        });
+        if (!r.success) {
+            dlLabel.textContent = "Error: " + (r.message || r.error);
+            hfDlBtn.disabled = false;
+            return;
+        }
+        const jobId = r.data.job_id;
+        if (_dlPollTimer) { clearInterval(_dlPollTimer); _dlPollTimer = null; }
+        _dlPollTimer = setInterval(async () => {
+            const p = await _api(`/mec/diagnostics/local_llm/download_progress?job_id=${jobId}`);
+            if (!p.success) return;
+            const d = p.data;
+            const pct = Number(d.percent || 0);
+            dlBar.style.width = Math.min(100, pct) + "%";
+            dlStats.innerHTML =
+                `<span>${_fmtBytes(d.bytes_done)} / ${_fmtBytes(d.total)} (${pct.toFixed(1)}%)</span>` +
+                `<span style="opacity:0.6;">${d.status}</span>`;
+            if (d.status === "done" || d.status === "exists") {
+                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                dlLabel.textContent = (d.status === "exists" ? "Already present: " : "Downloaded: ") + d.dest_path;
+                hfDlBtn.disabled = false;
+                _scanLocalModels();
+            } else if (d.status === "error") {
+                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                dlLabel.textContent = "Download failed: " + (d.error || "(unknown)");
+                hfDlBtn.disabled = false;
+            }
+        }, 800);
+    }
+    hfDlBtn.onclick = _hfStartDownload;
+    llamaPane.querySelector('[data-action="hf-search"]').onclick = _runHfSearch;
+    hfQ.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); _runHfSearch(); } });
+
+    // Populate catalog immediately, then scan for installed markers.
+    _rebuildLocalModelSelect(null);
+    _updateDownloadButton();
+    if (backendSel.value === "llamacpp") _scanLocalModels();
+    backendSel.addEventListener("change", () => { if (backendSel.value === "llamacpp") _scanLocalModels(); });
+
+    // ----- Tier 2 / Ollama: refresh installed models -----
+    const ollamaInfo = ollamaPane.querySelector("[data-ollama-info]");
+    const ollamaChips = ollamaPane.querySelector("[data-ollama-chips]");
+    const ollamaModelInput = ollamaPane.querySelector('[data-k="ollama_model"]');
+    const ollamaDatalist = ollamaPane.querySelector('#mec-ollama-model-list');
+    const refreshOllama = async () => {
+        const url = ollamaPane.querySelector('[data-k="ollama_url"]').value || "http://localhost:11434";
+        ollamaInfo.textContent = "checking…";
+        ollamaChips.innerHTML = "";
+        if (ollamaDatalist) ollamaDatalist.innerHTML = "";
+        const r = await _api(`/mec/diagnostics/ollama/tags?url=${encodeURIComponent(url)}`);
+        if (!r.success) { ollamaInfo.textContent = "error: " + (r.message || r.error); return; }
+        if (!r.data.available) { ollamaInfo.textContent = "daemon unreachable — start Ollama and click Refresh"; return; }
+        const models = r.data.models || [];
+        ollamaInfo.textContent = models.length ? `${models.length} installed` : "no models pulled — try `ollama pull qwen3.5:4b`";
+        if (ollamaDatalist) {
+            ollamaDatalist.innerHTML = models.map(m => `<option value="${m}"></option>`).join("");
+        }
+        for (const m of models) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "mec-diag-btn";
+            chip.style.cssText = "font-size:10.5px;padding:2px 8px;background:var(--c2c-panelDeep9);";
+            chip.textContent = m;
+            chip.onclick = () => { ollamaModelInput.value = m; };
+            ollamaChips.appendChild(chip);
+        }
+    };
+    ollamaPane.querySelector('[data-action="ollama-refresh"]').onclick = refreshOllama;
+    // Auto-probe once on first reveal — populate the datalist with live tags so the
+    // user sees real installed models instead of an empty list.  Subsequent refreshes
+    // are explicit-click only to avoid network churn.
+    if (backendSel.value === "ollama") { refreshOllama().catch(() => {}); }
+    backendSel.addEventListener("change", () => {
+        if (backendSel.value === "ollama" && !ollamaDatalist?.children.length) {
+            refreshOllama().catch(() => {});
+        }
+    });
+
+    // ----- Tier 1: custom-pattern toggle + list + add/remove -----
+    const customWrap = wrap.querySelector("[data-custom-patterns]");
+    const customList = wrap.querySelector("[data-custom-list]");
+    wrap.querySelector('[data-action="toggle-custom"]').onclick = async () => {
+        const showing = customWrap.style.display !== "none";
+        customWrap.style.display = showing ? "none" : "";
+        if (!showing) await refreshCustomList();
+    };
+    const refreshCustomList = async () => {
+        customList.innerHTML = "loading…";
+        const r = await _api("/mec/diagnostics/patterns/custom");
+        if (!r.success) { customList.textContent = "error: " + r.message; return; }
+        const items = (r.data && r.data.patterns) || [];
+        if (!items.length) { customList.innerHTML = `<em style="opacity:0.6;">No custom patterns yet.</em>`; return; }
+        customList.innerHTML = `<div style="font-weight:600;margin-bottom:4px;">Current custom patterns (${items.length})</div>` +
+            items.map(p => `
+                <div style="display:flex;gap:6px;align-items:center;padding:3px 0;border-top:1px dashed var(--c2c-neutral900);">
+                    <code style="flex:0 0 auto;">${p.id}</code>
+                    <span style="flex:1;opacity:0.75;font-size:10px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.regex}</span>
+                    <span style="opacity:0.6;font-size:10px;">${p.category}</span>
+                    <button class="mec-diag-btn" data-rm="${p.id}" style="font-size:10.5px;padding:1px 6px;">✕</button>
+                </div>`).join("");
+        for (const btn of customList.querySelectorAll("[data-rm]")) {
+            btn.onclick = async () => {
+                const id = btn.dataset.rm;
+                if (!(await c2cConfirm(`Remove custom pattern "${id}"?`))) return;
+                const r2 = await _api(`/mec/diagnostics/patterns/custom?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+                if (r2.success) { _toast(`Removed "${id}"`, "success"); await refreshCustomList(); }
+                else _toast("Remove failed: " + r2.message, "error");
+            };
+        }
+    };
+    wrap.querySelector('[data-action="add-pattern"]').onclick = async () => {
+        const get = (name) => (wrap.querySelector(`[data-cp="${name}"]`).value || "").trim();
+        const payload = {
+            id: get("id"),
+            regex: get("regex"),
+            category: get("category") || "user",
+            cause: get("cause"),
+            fixes: get("fixes").split("\n").map(s => s.trim()).filter(Boolean),
+        };
+        if (!payload.id || !payload.regex) { _toast("ID and regex are required", "warn"); return; }
+        const r = await _api("/mec/diagnostics/patterns/custom", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (r.success) {
+            _toast(`Added "${payload.id}". Total patterns: ${r.data.total_patterns}`, "success");
+            for (const cp of wrap.querySelectorAll("[data-cp]")) cp.value = cp.tagName === "SELECT" ? cp.options[0].value : "";
+            await refreshCustomList();
+            await refreshStatus();
+        } else { _toast("Add failed: " + r.message, "error"); }
+    };
+
+    // Status pill loader.
+    const setStatus = (n, html) => {
+        const el = wrap.querySelector(`[data-tier-status="${n}"]`);
+        if (el) el.innerHTML = html;
+    };
+    const refreshStatus = async () => {
+        for (const n of [1, 2, 3]) setStatus(n, _statusPill("idle", "checking…"));
+        const r = await _api("/mec/diagnostics/error_assistant/status");
+        if (!r.success) {
+            for (const n of [1, 2, 3]) setStatus(n, _statusPill("error", "backend down"));
+            return;
+        }
+        for (const n of [1, 2, 3]) {
+            const t = r.data[`tier${n}`] || {};
+            const state = t.ready ? "ready" : (n === 1 ? "error" : "warn");
+            const txt = t.ready ? "ready" : (t.detail || "not ready");
+            setStatus(n, _statusPill(state, txt));
+        }
+    };
+    refreshStatus();
+
+    // API-key field: load masked preview, show/hide, save.
+    const keyInput = wrap.querySelector('[data-k-secret="api_key"]');
+    let _keyVisible = false;
+    let _keyDirty = false;
+    keyInput.addEventListener("input", () => { _keyDirty = true; });
+    const loadKeyPreview = async () => {
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const r = await _api(`/mec/diagnostics/error_assistant/secrets?provider=${encodeURIComponent(prov)}`);
+        if (r.success) {
+            keyInput.value = r.data.set ? r.data.preview : "";
+            keyInput.placeholder = r.data.set ? "(stored — type to replace)" : "(not set)";
+            _keyDirty = false;
+        }
+    };
+    wrap.querySelector('[data-k="cloud_provider"]').addEventListener("change", loadKeyPreview);
+    loadKeyPreview();
+    wrap.querySelector('[data-action="show-key"]').onclick = () => {
+        _keyVisible = !_keyVisible;
+        keyInput.type = _keyVisible ? "text" : "password";
+    };
+    wrap.querySelector('[data-action="save-key"]').onclick = async () => {
+        if (!_keyDirty) {
+            _toast("Type a key first (current value is the masked preview)", "warn");
+            return;
+        }
+        const prov = wrap.querySelector('[data-k="cloud_provider"]').value;
+        const r = await _api("/mec/diagnostics/error_assistant/secrets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: prov, api_key: keyInput.value }),
+        });
+        if (r.success) {
+            _toast(r.data.set ? `API key saved for ${prov}` : `API key cleared for ${prov}`, "success");
+            await loadKeyPreview();
+            await refreshStatus();
+        } else {
+            _toast("Save failed: " + r.message, "error");
+        }
+    };
+
+    // Per-tier Test buttons.
+    for (const btn of wrap.querySelectorAll('[data-action="test-tier"]')) {
+        btn.onclick = async () => {
+            const n = Number(btn.dataset.tier);
+            btn.disabled = true; const orig = btn.textContent; btn.textContent = "Testing…";
+            const r = await _api("/mec/diagnostics/error_assistant/test_tier", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tier: n }),
+            });
+            btn.disabled = false; btn.textContent = orig;
+            if (!r.success) { _toast(`Tier ${n} test failed: ${r.message}`, "error"); return; }
+            const ok = r.data.ok;
+            _toast(
+                `Tier ${n} ${ok ? "OK" : "fell back to T" + r.data.tier_returned} — ${r.data.elapsed_ms}ms`,
+                ok ? "success" : "warn",
+            );
+        };
+    }
+
+    // Save settings (non-secret fields).
+    wrap.querySelector('[data-action="save"]').onclick = async () => {
+        const payload = {};
+        for (const el of wrap.querySelectorAll("[data-k]")) {
+            let v;
+            if (el.type === "checkbox") v = el.checked;
+            else if (el.type === "number") v = Number(el.value);
+            else v = el.value;
+            payload[el.dataset.k] = v;
+        }
+        const r = await _api("/mec/diagnostics/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (r.success) { _toast("Saved", "success"); await refreshStatus(); }
+        else _toast("Save failed: " + r.message, "error");
+    };
+
+    // Reload patterns (Tier 1).
+    wrap.querySelector('[data-action="reload"]').onclick = async () => {
+        const r = await _api("/mec/diagnostics/reload_patterns", { method: "POST" });
+        if (r.success) { _toast(`Reloaded ${r.data.count} patterns`, "success"); await refreshStatus(); }
+        else _toast("Reload failed: " + r.message, "error");
+    };
+}
+
+// Clipboard tab — purely client-side history of payloads our clipboard
+// has copied during this tab's lifetime (mec_clipboard.js writes here).
+window.__MEC_CLIPBOARD_HISTORY__ = window.__MEC_CLIPBOARD_HISTORY__ || [];
+
+async function _renderClipboard(body) {
+    body.innerHTML = "";
+
+    // Auto-copy toggle (mirrors the ComfyUI setting + localStorage flag
+    // owned by mec_clipboard.js). Same key, same event \u2014 either control
+    // updates the other.
+    const AUTOCOPY_KEY = "mec.clipboard.autoCopy";
+    const isOn = () => {
+        try {
+            const v = localStorage.getItem(AUTOCOPY_KEY);
+            return v === null ? true : v === "1" || v === "true";
+        } catch (_) { return true; }
+    };
+    const setOn = (on) => {
+        try { localStorage.setItem(AUTOCOPY_KEY, on ? "1" : "0"); } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
+        window.dispatchEvent(new CustomEvent("mec-clipboard-autocopy-changed", { detail: { enabled: !!on } }));
+        try { app.ui?.settings?.setSettingValue?.("MEC.Clipboard.AutoCopy", !!on); } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
+    };
+    const toggleRow = document.createElement("div");
+    toggleRow.className = "mec-diag-card info";
+    toggleRow.style.cssText = "margin-bottom:8px;display:flex;align-items:center;gap:8px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "mec-autocopy-toggle";
+    cb.checked = isOn();
+    cb.onchange = () => setOn(cb.checked);
+    const lbl = document.createElement("label");
+    lbl.htmlFor = "mec-autocopy-toggle";
+    lbl.textContent = "Auto-copy on Ctrl+C";
+    lbl.style.cssText = "cursor:pointer;flex:1;";
+    const hint = document.createElement("div");
+    hint.className = "mec-diag-meta";
+    hint.style.cssText = "flex-basis:100%;font-size:11px;opacity:0.75;";
+    hint.textContent = "When ON, plain Ctrl+C also writes the portable JSON payload to your OS clipboard. When OFF, only LiteGraph's native in-tab clipboard runs \u2014 use the buttons below to re-copy any past payload.";
+    toggleRow.append(cb, lbl, hint);
+    body.appendChild(toggleRow);
+    // Sync with the ComfyUI settings panel.
+    window.addEventListener("mec-clipboard-autocopy-changed", (e) => {
+        cb.checked = !!(e.detail?.enabled);
+    });
+
+    const tb = document.createElement("div");
+    tb.className = "mec-diag-toolbar";
+    const refresh = document.createElement("button");
+    refresh.className = "mec-diag-btn primary";
+    refresh.textContent = "Refresh";
+    const pasteOS = document.createElement("button");
+    pasteOS.className = "mec-diag-btn";
+    pasteOS.textContent = "Paste node from clipboard";
+    pasteOS.title = "Read the current OS clipboard and, if it contains a MEC payload, paste those nodes into the graph (same as Ctrl+Alt+V).";
+    pasteOS.onclick = async () => {
+        const api = window.__MEC_CLIPBOARD_API__;
+        if (!api?.pasteFromOSClipboard) {
+            _toast("MEC clipboard module not loaded", "error");
+            return;
+        }
+        try { await api.pasteFromOSClipboard(); }
+        catch (e) { _toast("Paste failed: " + e, "error"); }
+    };
+    const clear = document.createElement("button");
+    clear.className = "mec-diag-btn";
+    clear.textContent = "Clear history";
+    tb.append(refresh, pasteOS, clear);
+    body.appendChild(tb);
+    const list = document.createElement("div");
+    body.appendChild(list);
+
+    function render() {
+        list.innerHTML = "";
+        const h = window.__MEC_CLIPBOARD_HISTORY__ || [];
+        if (!h.length) {
+            list.innerHTML = `<div class="mec-diag-empty">No copies yet. Press Ctrl+C on selected nodes.</div>`;
+            return;
+        }
+        for (let i = h.length - 1; i >= 0; i--) {
+            const entry = h[i];
+            const card = document.createElement("div");
+            card.className = "mec-diag-card info";
+            const node_count = entry.payload?.nodes?.length || 0;
+            const pack_count = entry.payload?.packs?.length || 0;
+            card.innerHTML = `<div class="mec-diag-row">
+                <span class="mec-diag-id">${node_count} node(s)</span>
+                <span class="mec-diag-meta">${new Date(entry.ts).toLocaleTimeString()}</span></div>
+                <div class="mec-diag-meta">${pack_count} pack(s) · v${entry.payload?.version || "?"}</div>`;
+            const replay = document.createElement("button");
+            replay.className = "mec-diag-btn";
+            replay.style.marginTop = "4px";
+            replay.textContent = "Copy this payload to clipboard";
+            replay.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(entry.text);
+                    _toast("Re-copied", "success");
+                } catch (e) { _toast("Clipboard write denied", "error"); }
+            };
+            const pasteBtn = document.createElement("button");
+            pasteBtn.className = "mec-diag-btn primary";
+            pasteBtn.style.cssText = "margin-top:4px;margin-left:6px;";
+            pasteBtn.textContent = "Paste into graph";
+            pasteBtn.title = "Drop this payload's nodes into the current workflow without touching the OS clipboard.";
+            pasteBtn.onclick = async () => {
+                const api = window.__MEC_CLIPBOARD_API__;
+                if (!api?.pasteFromText) {
+                    _toast("MEC clipboard module not loaded", "error");
+                    return;
+                }
+                try { await api.pasteFromText(entry.text); }
+                catch (e) { _toast("Paste failed: " + e, "error"); }
+            };
+            card.appendChild(replay);
+            card.appendChild(pasteBtn);
+            list.appendChild(card);
+        }
+    }
+    refresh.onclick = render;
+    clear.onclick = () => { window.__MEC_CLIPBOARD_HISTORY__ = []; render(); };
+    render();
+}
+
+// -----------------------------------------------------------------------
+// Integrity tab — mirrors the topbar button's modal but inline.
+// Reads live state from window.__MEC_INTEGRITY__ (set by
+// js/nukenodemax/integrity_badges.js). Survives if that script
+// hasn't loaded yet by falling back to a direct /nukenodemax/
+// integrity_report fetch.
+// -----------------------------------------------------------------------
+function _extractPkg(msg) {
+    let m = msg.match(/^The package [`"]([A-Za-z0-9_.\-]+)[`"]/);
+    if (m) return m[1];
+    m = msg.match(/^([A-Za-z0-9_.\-]+)\s+\S+\s+(?:has requirement|requires|depends)/i);
+    if (m) return m[1];
+    return null;
+}
+
+async function _renderIntegrity(body) {
+    body.innerHTML = "";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "mec-diag-toolbar";
+    const refresh = document.createElement("button");
+    refresh.className = "mec-diag-btn primary";
+    refresh.textContent = "Refresh";
+    const openDlg = document.createElement("button");
+    openDlg.className = "mec-diag-btn";
+    openDlg.textContent = "Open full dialog";
+    openDlg.onclick = () => window.__MEC_INTEGRITY__?.open?.();
+    const muteLabel = document.createElement("label");
+    muteLabel.style.cssText = "display:flex;align-items:center;gap:4px;font-size:11px;margin-left:auto;";
+    const muteCb = document.createElement("input");
+    muteCb.type = "checkbox";
+    muteCb.checked = !!window.__MEC_INTEGRITY__?.isMuted?.();
+    muteCb.onchange = () => {
+        window.__MEC_INTEGRITY__?.setMuted?.(muteCb.checked);
+        _toast(muteCb.checked ? "Integrity warnings muted" : "Integrity warnings un-muted");
+    };
+    muteLabel.append(muteCb, document.createTextNode("Mute warnings"));
+    toolbar.append(refresh, openDlg, muteLabel);
+    body.appendChild(toolbar);
+
+    const meta = document.createElement("div");
+    meta.className = "mec-diag-meta";
+    meta.style.cssText = "padding:0 2px 6px;";
+    body.appendChild(meta);
+
+    const list = document.createElement("div");
+    body.appendChild(list);
+
+    function render(state) {
+        const events = state?.events || [];
+        meta.textContent =
+            `pip_check: ${state?.pipOk ? "ok" : "conflicts"} · ` +
+            `checksum drift: ${state?.drift ?? 0} · ` +
+            `backend: ${state?.usedUv ? "uv" : "pip"}` +
+            (state?.fromCache ? " (cached)" : " (fresh)") +
+            (state?.lastUpdated ? ` · ${new Date(state.lastUpdated).toLocaleTimeString()}` : "");
+
+        list.innerHTML = "";
+        if (!events.length) {
+            list.innerHTML = `<div class="mec-diag-empty">No integrity events. Environment looks clean.</div>`;
+            return;
+        }
+
+        // Group by kind for readability.
+        const groups = {};
+        for (const e of events) (groups[e.kind] = groups[e.kind] || []).push(e);
+
+        for (const [kind, items] of Object.entries(groups)) {
+            const h = document.createElement("div");
+            h.style.cssText = "font-weight:600;opacity:0.8;margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;";
+            h.textContent = `${kind.replace(/_/g, " ")} (${items.length})`;
+            list.appendChild(h);
+
+            for (const e of items) {
+                const sev = (e.severity || "warn").toLowerCase();
+                const card = document.createElement("div");
+                card.className = `mec-diag-card ${sev === "error" ? "error" : "warn"}`;
+                const row = document.createElement("div");
+                row.className = "mec-diag-row";
+                const id = document.createElement("span");
+                id.className = "mec-diag-id";
+                id.textContent = sev;
+                const metaR = document.createElement("span");
+                metaR.className = "mec-diag-meta";
+                metaR.textContent = e.file || "";
+                row.append(id, metaR);
+                card.appendChild(row);
+                const msg = document.createElement("div");
+                msg.className = "mec-diag-msg";
+                msg.textContent = e.message;
+                card.appendChild(msg);
+                const pkg = e.kind === "dependency_conflict" ? _extractPkg(e.message) : null;
+                if (pkg) {
+                    const act = document.createElement("button");
+                    act.className = "mec-diag-btn primary";
+                    act.style.cssText = "margin-top:6px;";
+                    act.textContent = `Reinstall ${pkg}`;
+                    act.onclick = () => window.__MEC_INTEGRITY__?.reinstall?.(pkg);
+                    card.appendChild(act);
+                }
+                list.appendChild(card);
+            }
+        }
+    }
+
+    // Subscribe to live state if available; otherwise fetch once.
+    let unsub = null;
+    if (window.__MEC_INTEGRITY__) {
+        unsub = window.__MEC_INTEGRITY__.subscribe(render);
+    } else {
+        const j = await _api("/nukenodemax/integrity_report");
+        render({
+            events: j.events || [],
+            pipOk: j.pip_check ? !!j.pip_check.ok : true,
+            drift: (j.checksum_drift || []).length,
+            usedUv: !!j.used_uv,
+            fromCache: !!j.from_cache,
+            lastUpdated: Date.now(),
+        });
+    }
+
+    refresh.onclick = async () => {
+        if (window.__MEC_INTEGRITY__) {
+            await window.__MEC_INTEGRITY__.refresh();
+            _toast("Integrity report refreshed");
+        } else {
+            const j = await _api("/nukenodemax/integrity_report");
+            render({
+                events: j.events || [],
+                pipOk: j.pip_check ? !!j.pip_check.ok : true,
+                drift: (j.checksum_drift || []).length,
+                usedUv: !!j.used_uv,
+                fromCache: !!j.from_cache,
+                lastUpdated: Date.now(),
+            });
+        }
+    };
+
+    // Tear down the subscription when this body is re-rendered (tab swap).
+    const teardownObs = new MutationObserver(() => {
+        if (!document.body.contains(list)) {
+            if (unsub) { try { unsub(); } catch {} }
+            teardownObs.disconnect();
+        }
+    });
+    teardownObs.observe(body.parentNode || document.body, { childList: true });
+}
+
+// -----------------------------------------------------------------------
+// Tab manager
+// -----------------------------------------------------------------------
+const TABS = [
+    { id: "diag",  label: "Diagnostics", render: _renderDiagnostics },
+    { id: "stats", label: "Statistics",  render: _renderStatistics },
+    { id: "clip",  label: "Clipboard",   render: _renderClipboard  },
+    { id: "intg",  label: "Integrity",   render: _renderIntegrity  },
+    { id: "set",   label: "Settings",    render: _renderSettings   },
+    { id: "pat",   label: "Patterns",    render: _renderPatterns   },
+];
+
+function _buildHeader(root) {
+    const header = document.createElement("div");
+    header.className = "c2c-diag-header";
+
+    const logo = document.createElement("div");
+    logo.className = "c2c-diag-logo";
+    logo.textContent = "C2C";
+    logo.title = "Code2Collapse — Likhith";
+
+    const titleBlock = document.createElement("div");
+    titleBlock.className = "c2c-diag-title-block";
+    const title = document.createElement("div");
+    title.className = "c2c-diag-title";
+    title.textContent = "Diagnostics";
+    const sub = document.createElement("div");
+    sub.className = "c2c-diag-sub";
+    sub.textContent = "Code2Collapse";
+    titleBlock.append(title, sub);
+
+    const pills = document.createElement("div");
+    pills.className = "c2c-diag-pills";
+
+    // Integrity pill — clickable, opens the integrity dialog.
+    const intgPill = document.createElement("span");
+    intgPill.className = "c2c-diag-pill muted";
+    intgPill.setAttribute("role", "button");
+    intgPill.title = "Integrity status — click for details";
+    intgPill.innerHTML = `<span class="dot"></span><span class="lbl">INT —</span>`;
+    intgPill.addEventListener("click", () => {
+        try { window.__MEC_INTEGRITY__?.open?.(); }
+        catch (e) { console.warn("[C2C.diag] integrity open failed:", e); }
+    });
+
+    // Live events pill — populated by the diagnostics feed.
+    const eventsPill = document.createElement("span");
+    eventsPill.className = "c2c-diag-pill info";
+    eventsPill.innerHTML = `<span class="dot"></span><span class="lbl">0 evt</span>`;
+    eventsPill.title = "Recent diagnostic events (last 200)";
+
+    pills.append(intgPill, eventsPill);
+    header.append(logo, titleBlock, pills);
+    root.appendChild(header);
+
+    // Subscribe to integrity bus for live updates.
+    let unsub = null;
+    function applyIntegrity(s) {
+        if (!s) return;
+        const errCount = (s.events || []).filter(e => (e.severity || "") === "error").length;
+        const warnCount = (s.events || []).filter(e => (e.severity || "") === "warn").length;
+        const driftCount = s.drift || 0;
+        const pipBad = s.pipOk === false;
+        intgPill.classList.remove("ok", "warn", "err", "muted", "info");
+        let cls = "ok", lbl = "INT OK";
+        if (errCount > 0 || pipBad) { cls = "err"; lbl = `INT ${errCount + (pipBad ? 1 : 0)}`; }
+        else if (warnCount > 0 || driftCount > 0) { cls = "warn"; lbl = `INT ${warnCount + driftCount}`; }
+        intgPill.classList.add(cls);
+        intgPill.querySelector(".lbl").textContent = lbl;
+    }
+    try {
+        if (window.__MEC_INTEGRITY__?.subscribe) {
+            unsub = window.__MEC_INTEGRITY__.subscribe(applyIntegrity);
+        } else {
+            // Fallback — single fetch.
+            _api("/nukenodemax/integrity_report").then(j => {
+                if (j && j.success !== false) applyIntegrity({
+                    events: j.events || [],
+                    pipOk: j.pip_check ? !!j.pip_check.ok : true,
+                    drift: (j.checksum_drift || []).length,
+                });
+            });
+        }
+    } catch (e) { __c2cReport("c2c_diagnostics_sidebar", e); }
+
+    // Poll events pill from diagnostics feed (cheap, every 6s).
+    let stopped = false;
+    async function pollEvents() {
+        if (stopped) return;
+        const j = await _api("/mec/diagnostics/recent?limit=200");
+        if (j && j.success !== false) {
+            const all = j.data || [];
+            const errs = all.filter(e => (e.type === "node_error" || e.severity === "error")).length;
+            eventsPill.classList.remove("ok", "warn", "err", "info");
+            if (errs > 0)       { eventsPill.classList.add("err");  }
+            else if (all.length){ eventsPill.classList.add("info"); }
+            else                { eventsPill.classList.add("ok");   }
+            eventsPill.querySelector(".lbl").textContent =
+                `${all.length} evt${errs ? " · " + errs + " err" : ""}`;
+        }
+        setTimeout(pollEvents, 6000);
+    }
+    pollEvents();
+
+    // Cleanup when header is removed.
+    // PERF 2026-05-26: rAF-coalesce. Without this, every DOM mutation in the
+    // sidebar parent (which fires frequently as diagnostics rows update)
+    // triggers a containment walk.
+    let rafPending = false;
+    const raf = (typeof requestAnimationFrame !== "undefined")
+        ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+    const obs = new MutationObserver(() => {
+        if (rafPending) return;
+        rafPending = true;
+        raf(() => {
+            rafPending = false;
+            if (!document.body.contains(header)) {
+                stopped = true;
+                if (unsub) { try { unsub(); } catch {} }
+                obs.disconnect();
+            }
+        });
+    });
+    obs.observe(root.parentNode || document.body, { childList: true, subtree: true });
+}
+
+function _mountSidebar(el) {
+    _injectStyle();
+    el.innerHTML = "";
+    const root = document.createElement("div");
+    root.className = "mec-diag-root";
+
+    _buildHeader(root);
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "mec-diag-tabs";
+    const body = document.createElement("div");
+    body.className = "mec-diag-body";
+
+    let active = TABS[0].id;
+    const buttons = {};
+    function setActive(id) {
+        active = id;
+        for (const t of TABS) buttons[t.id].classList.toggle("active", t.id === id);
+        const def = TABS.find(t => t.id === id);
+        if (def) def.render(body);
+    }
+    for (const t of TABS) {
+        const b = document.createElement("button");
+        b.className = "mec-diag-tab";
+        b.textContent = t.label;
+        b.onclick = () => setActive(t.id);
+        tabBar.appendChild(b);
+        buttons[t.id] = b;
+    }
+
+    root.appendChild(tabBar);
+    root.appendChild(body);
+    el.appendChild(root);
+    setActive(active);
+}
+
+// -----------------------------------------------------------------------
+// Registration
+// -----------------------------------------------------------------------
+app.registerExtension({
+    name: "C2C.DiagnosticsSidebar",
+    async setup() {
+        try {
+            app.extensionManager?.registerSidebarTab?.({
+                id: "mec.diagnostics",
+                icon: "pi pi-shield",
+                title: "C2C Diagnostics",
+                tooltip: "Code2Collapse — diagnostics, statistics, clipboard history, integrity & error patterns",
+                type: "custom",
+                render(el) { _mountSidebar(el); },
+            });
+            console.log("[MEC.diagnostics] sidebar registered (id=mec.diagnostics)");
+        } catch (e) {
+            console.warn("[MEC.diagnostics] sidebar register failed:", e);
+        }
+    },
+});

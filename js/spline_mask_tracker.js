@@ -27,6 +27,9 @@
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
 import { installModeGated } from "./_mode_gate.js";
+import { C, bg3, border, peach } from "./_c2c_theme.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
 
 // Targets unified SplineMaskMEC (mode=track) and any legacy
 // SplineMaskTrackerMEC nodes on saved graphs.
@@ -34,15 +37,15 @@ const NODE_NAMES = ["SplineMaskMEC", "SplineMaskTrackerMEC"];
 const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
-    bg:     "#181825",
-    border: "#313244",
-    text:   "#cdd6f4",
-    sub:    "#7f849c",
-    accent: "#a6e3a1",   // pinned keyframe color
-    interp: "#89b4fa",   // interpolated preview color
-    onion:  "#f9e2af",
-    pin:    "#fab387",
-    danger: "#f38ba8",
+    bg:     "var(--c2c-bg2)",
+    border: "var(--c2c-border)",
+    text:   "var(--c2c-fg)",
+    sub:    "var(--c2c-overlay1)",
+    accent: "var(--c2c-green)",   // pinned keyframe color
+    interp: "var(--c2c-blue)",   // interpolated preview color
+    onion:  "var(--c2c-yellow)",
+    pin:    "var(--c2c-peach)",
+    danger: "var(--c2c-red)",
 };
 
 const POINT_HIT_PX  = 8;
@@ -239,7 +242,7 @@ class TrackerState {
                     .map(p => ({ x: +p[0], y: +p[1] }));
                 if (pts.length) this.keyframes.set(kf.frame | 0, pts);
             }
-        } catch (_) {}
+        } catch (__c2cErr) { __c2cReport("spline_mask_tracker", __c2cErr); }
     }
 }
 
@@ -312,12 +315,12 @@ function draw(state, ctx, vw, vh) {
     const frame = state.frames[state.curFrame];
     if (frame?.img?.complete) {
         ctx.imageSmoothingEnabled = true;
-        try { ctx.drawImage(frame.img, 0, 0, state.canvasW, state.canvasH); } catch (_) {}
+        try { ctx.drawImage(frame.img, 0, 0, state.canvasW, state.canvasH); } catch (__c2cErr) { __c2cReport("spline_mask_tracker", __c2cErr); }
     } else {
-        ctx.fillStyle = "#11111b";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, state.canvasW, state.canvasH);
     }
-    ctx.strokeStyle = "#45475a";
+    ctx.strokeStyle = C.surface1;
     ctx.lineWidth = 1 / z;
     ctx.strokeRect(0, 0, state.canvasW, state.canvasH);
 
@@ -374,11 +377,11 @@ function draw(state, ctx, vw, vh) {
             const r = (hov ? 6 : 4) / z;
             ctx.fillStyle = pinned ? COLOR.accent : COLOR.interp;
             ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-            ctx.strokeStyle = "#000a";
+            ctx.strokeStyle = C.black;
             ctx.lineWidth = 1.5 / z;
             ctx.stroke();
             if (pinned && i === 0) {
-                ctx.strokeStyle = "#fff";
+                ctx.strokeStyle = C.white;
                 ctx.lineWidth = 1 / z;
                 ctx.beginPath(); ctx.arc(p.x, p.y, r + 2 / z, 0, Math.PI * 2); ctx.stroke();
             }
@@ -391,6 +394,7 @@ function draw(state, ctx, vw, vh) {
 
 // ─── DOM build ──────────────────────────────────────────────────────
 function installEditor(node) {
+    if (node._mecSplineTrackHost) return;
     const state = new TrackerState(node);
 
     const hideWidget = (w) => {
@@ -432,7 +436,7 @@ function installEditor(node) {
     const tb = document.createElement("div");
     tb.style.cssText = `
         display:flex;align-items:center;gap:4px;padding:4px 6px;flex-wrap:wrap;
-        background:linear-gradient(#22223a,#1a1a2e);
+        background:linear-gradient(var(--c2c-panelTint),var(--c2c-panelHi));
         border-bottom:1px solid ${COLOR.border};
         flex:0 0 auto;font-size:11px;line-height:1;
         pointer-events:auto;
@@ -440,7 +444,7 @@ function installEditor(node) {
     root.appendChild(tb);
 
     const canvasWrap = document.createElement("div");
-    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;pointer-events:auto;";
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:var(--c2c-bg3);pointer-events:auto;";
     root.appendChild(canvasWrap);
 
     const canvas = document.createElement("canvas");
@@ -451,7 +455,7 @@ function installEditor(node) {
     const status = document.createElement("div");
     status.style.cssText = `
         position:absolute;left:6px;bottom:${SCRUB_HEIGHT + 6}px;padding:3px 7px;
-        background:#1e1e2ed8;border:1px solid ${COLOR.border};border-radius:4px;
+        background:var(--c2c-bg)d8;border:1px solid ${COLOR.border};border-radius:4px;
         font-size:10px;color:${COLOR.sub};pointer-events:none;
         font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
     `;
@@ -461,7 +465,7 @@ function installEditor(node) {
     const scrub = document.createElement("div");
     scrub.style.cssText = `
         position:absolute;left:0;right:0;bottom:0;height:${SCRUB_HEIGHT}px;
-        background:#11111be0;border-top:1px solid ${COLOR.border};
+        background:var(--c2c-bg3)e0;border-top:1px solid ${COLOR.border};
         cursor:pointer;
     `;
     canvasWrap.appendChild(scrub);
@@ -480,14 +484,14 @@ function installEditor(node) {
         b.style.cssText = `
             min-width:26px;height:24px;padding:0 9px;
             border:1px solid ${COLOR.border};border-radius:4px;
-            background:${opts.bg || "#313244"};color:${opts.fg || COLOR.text};
+            background:${opts.bg || "var(--c2c-border)"};color:${opts.fg || COLOR.text};
             font-size:11px;font-weight:500;cursor:pointer;
             display:inline-flex;align-items:center;justify-content:center;
             white-space:nowrap;line-height:1;flex:0 0 auto;
             transition:background .12s,border-color .12s;
         `;
-        b.onmouseenter = () => { b.style.background = opts.hover || "#45475a"; };
-        b.onmouseleave = () => { b.style.background = opts.bg || "#313244"; };
+        b.onmouseenter = () => { b.style.background = opts.hover || "var(--c2c-surface1)"; };
+        b.onmouseleave = () => { b.style.background = opts.bg || "var(--c2c-border)"; };
         b.onmousedown = (e) => e.stopPropagation();
         b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(b); render(); };
         return b;
@@ -497,7 +501,7 @@ function installEditor(node) {
     counter.style.cssText = `
         color:${COLOR.text};font-size:10px;flex:0 0 auto;
         font-family:ui-monospace,Menlo,monospace;
-        padding:3px 8px;background:#11111b;border:1px solid ${COLOR.border};
+        padding:3px 8px;background:var(--c2c-bg3);border:1px solid ${COLOR.border};
         border-radius:4px;letter-spacing:.3px;min-width:130px;
     `;
     tb.appendChild(counter);
@@ -511,7 +515,7 @@ function installEditor(node) {
         state.pushUndo();
         state.pinCurrent(pts);
         state.save();
-    }, { bg: "#2d4a3e", hover: "#3a5f50", fg: COLOR.accent });
+    }, { bg: "var(--c2c-okBg2)", hover: "var(--c2c-okBg)", fg: COLOR.accent });
     tb.appendChild(btnPin);
 
     const btnUnpin = mkBtn("✖ Clear Keyframe", "Remove the keyframe at this frame", () => {
@@ -522,7 +526,7 @@ function installEditor(node) {
         state.pushUndo();
         state.unpinCurrent();
         state.save();
-    }, { bg: "#4a2d2d", hover: "#5f3a3a", fg: COLOR.danger });
+    }, { bg: "var(--c2c-dangerBg2)", hover: "var(--c2c-dangerBg3)", fg: COLOR.danger });
     tb.appendChild(btnUnpin);
 
     tb.appendChild(mkBtn("↶", "Undo (Ctrl+Z)", () => { if (state.undo()) state.save(); }));
@@ -530,9 +534,9 @@ function installEditor(node) {
 
     const btnOnion = mkBtn("🧅 Onion", "Toggle onion-skin overlay", () => {
         state.onionEnabled = !state.onionEnabled;
-        btnOnion.style.background = state.onionEnabled ? "#3a5f50" : "#313244";
+        btnOnion.style.background = state.onionEnabled ? "var(--c2c-okBg)" : "var(--c2c-border)";
     });
-    btnOnion.style.background = "#3a5f50";
+    btnOnion.style.background = "var(--c2c-okBg)";
     tb.appendChild(btnOnion);
 
     tb.appendChild(mkBtn("\u2B1B Fit", "Fit image to view (F)", () => {
@@ -543,9 +547,9 @@ function installEditor(node) {
     tb.appendChild(mkBtn("\u21BB Reload frames", "Re-scan upstream node for frames (after Queue)",
         () => { loadFrames(); }));
 
-    const btnClearAll = mkBtn("🗑 Clear All", "Remove all keyframes", () => {
+    const btnClearAll = mkBtn("🗑 Clear All", "Remove all keyframes", async () => {
         if (!state.keyframes.size) return;
-        if (!confirm(`Delete all ${state.keyframes.size} keyframes?`)) return;
+        if (!(await c2cConfirm(`Delete all ${state.keyframes.size} keyframes?`))) return;
         state.pushUndo();
         state.keyframes.clear();
         state.save();
@@ -553,15 +557,16 @@ function installEditor(node) {
     tb.appendChild(btnClearAll);
 
     let widgetH = 540;
-    node.addDOMWidget("tracker_editor", "canvas", root, {
+    const canvasWidget = node.addDOMWidget("tracker_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
 
-    // Stash root for the mode-gate helper.
     node._mecSplineTrackHost = root;
+    node._mecSplineTrackWidget = canvasWidget;
+    node._mecSplineTrackWidgetH = () => widgetH;
 
     if (!node.size || node.size[0] < 620) {
         const h = node.size?.[1] || 720;
@@ -649,15 +654,15 @@ function installEditor(node) {
         const w = Math.max(1, sr.width);
         const h = Math.max(1, sr.height);
         if (sc.width !== w || sc.height !== h) { sc.width = w; sc.height = h; }
-        scrubCtx.fillStyle = "#11111b";
+        scrubCtx.fillStyle = C.bg3;
         scrubCtx.fillRect(0, 0, w, h);
         const n = state.frames.length || 1;
         // Track.
-        scrubCtx.fillStyle = "#313244";
+        scrubCtx.fillStyle = C.border;
         scrubCtx.fillRect(8, h / 2 - 2, w - 16, 4);
         // Frame ticks.
         if (n <= 100) {
-            scrubCtx.fillStyle = "#45475a";
+            scrubCtx.fillStyle = C.surface1;
             for (let i = 0; i < n; i++) {
                 const x = 8 + (w - 16) * (i / Math.max(1, n - 1));
                 scrubCtx.fillRect(x - 0.5, h / 2 - 4, 1, 8);
@@ -676,13 +681,13 @@ function installEditor(node) {
         }
         // Current frame indicator.
         const cx = 8 + (w - 16) * (state.curFrame / Math.max(1, n - 1));
-        scrubCtx.strokeStyle = "#fab387";
+        scrubCtx.strokeStyle = C.peach;
         scrubCtx.lineWidth = 2;
         scrubCtx.beginPath();
         scrubCtx.moveTo(cx, 4);
         scrubCtx.lineTo(cx, h - 4);
         scrubCtx.stroke();
-        scrubCtx.fillStyle = "#fab387";
+        scrubCtx.fillStyle = C.peach;
         scrubCtx.beginPath();
         scrubCtx.arc(cx, h / 2, 5, 0, Math.PI * 2);
         scrubCtx.fill();
@@ -839,7 +844,7 @@ function installEditor(node) {
     };
     app.api.addEventListener("executed", onExecuted);
     node.onRemoved = (orig => function () {
-        try { app.api.removeEventListener("executed", onExecuted); } catch (_) {}
+        try { app.api.removeEventListener("executed", onExecuted); } catch (__c2cErr) { __c2cReport("spline_mask_tracker", __c2cErr); }
         orig?.call(this);
     })(node.onRemoved);
 
@@ -883,6 +888,8 @@ app.registerExtension({
                     installerKey: "splineTrack",
                     installer: (n) => installEditor(n),
                     hostFinder: (n) => n._mecSplineTrackHost || null,
+                    widgetFinder: (n) => n._mecSplineTrackWidget || null,
+                    widgetHeight: 520,
                 });
             } else {
                 setTimeout(() => installEditor(node), 0);

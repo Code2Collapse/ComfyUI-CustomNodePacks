@@ -1,4 +1,4 @@
-"""
+﻿"""
 mec_diagnostics_api.py — Backend for the MEC Diagnostics sidebar.
 
 Doctor-style endpoints exposed under `/mec/diagnostics/*`:
@@ -78,13 +78,47 @@ def _envelope_err(error_key: str, message: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------
+class _DualRoutes:
+    """Wraps aiohttp routes to register each /mec/* path also under /c2c/*.
+
+    Back-compat: existing /mec/diagnostics/* URLs keep working forever.
+    Forward: the C2C UI rebrand can call /c2c/diagnostics/* identically.
+    """
+    def __init__(self, inner):
+        self._inner = inner
+
+    def _decorator(self, method_name, path, **kwargs):
+        inner_method = getattr(self._inner, method_name)
+        primary = inner_method(path, **kwargs)
+        alias = None
+        if path.startswith("/mec/"):
+            alias_path = "/c2c/" + path[len("/mec/"):]
+            alias = inner_method(alias_path, **kwargs)
+
+        def register(fn):
+            primary(fn)
+            if alias is not None:
+                alias(fn)
+            return fn
+        return register
+
+    def get(self, path, **kw):    return self._decorator("get", path, **kw)
+    def post(self, path, **kw):   return self._decorator("post", path, **kw)
+    def put(self, path, **kw):    return self._decorator("put", path, **kw)
+    def delete(self, path, **kw): return self._decorator("delete", path, **kw)
+    def patch(self, path, **kw):  return self._decorator("patch", path, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 def register_routes(server) -> None:
     try:
         from aiohttp import web
     except Exception as e:
         log.warning("[mec_diagnostics] aiohttp unavailable: %s", e)
         return
-    routes = server.routes
+    routes = _DualRoutes(server.routes)
 
     @routes.get("/mec/diagnostics/health")
     async def _health(_req):  # noqa: ARG001
@@ -485,7 +519,7 @@ def register_routes(server) -> None:
                 dirs = [os.path.join(pack_root, "user", "models")]
                 try:
                     import folder_paths  # type: ignore  # noqa: F401
-                    for _k in ("llm", "LLM", "language_models"):
+                    for _k in ("llm", "LLM", "language_models", "text_encoders", "clip"):
                         try:
                             dirs.extend(folder_paths.get_folder_paths(_k))
                         except Exception:
@@ -726,6 +760,135 @@ def register_routes(server) -> None:
                     "unknown_job", "no such job_id"), status=404)
             rec["cancel"] = True
         return web.json_response(_envelope_ok({"job_id": job_id, "cancelling": True}))
+
+    # -----------------------------------------------------------------
+    # Tier 2 — HuggingFace GGUF discovery (live search + file listing)
+    # -----------------------------------------------------------------
+    # Server-side proxy to https://huggingface.co/api/models so the JS
+    # avoids CORS hassles and we can cache + sanity-filter the response.
+    _HF_SEARCH_CACHE: Dict[str, Any] = {}
+    _HF_FILES_CACHE: Dict[str, Any] = {}
+    _HF_CACHE_LOCK = threading.Lock()
+    _HF_CACHE_TTL = 300.0  # 5 min
+
+    def _hf_get_json(url: str, timeout: float = 12.0):
+        import json as _json
+        import urllib.request as _ur
+        import urllib.error as _ue
+        req = _ur.Request(url, headers={
+            "User-Agent": "MEC-Diagnostics/1.0 (+huggingface-gguf-search)",
+            "Accept": "application/json",
+        })
+        try:
+            with _ur.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            return _json.loads(raw)
+        except _ue.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code} from {url}") from e
+        except Exception as e:
+            raise RuntimeError(f"{type(e).__name__}: {e}") from e
+
+    @routes.get("/mec/diagnostics/hf_gguf_search")
+    async def _hf_search(req):
+        import asyncio
+        q = (req.query.get("q") or "").strip()
+        try:
+            limit = max(1, min(50, int(req.query.get("limit") or "20")))
+        except Exception:
+            limit = 20
+        cache_key = f"{q.lower()}|{limit}"
+        now = time.time()
+        with _HF_CACHE_LOCK:
+            ent = _HF_SEARCH_CACHE.get(cache_key)
+            if ent and (now - ent["ts"]) < _HF_CACHE_TTL:
+                return web.json_response(_envelope_ok({**ent["data"], "cached": True}))
+        params = [
+            "filter=gguf",
+            "sort=downloads",
+            "direction=-1",
+            f"limit={limit}",
+            "full=false",
+        ]
+        if q:
+            from urllib.parse import quote
+            params.insert(0, f"search={quote(q)}")
+        url = "https://huggingface.co/api/models?" + "&".join(params)
+        try:
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, _hf_get_json, url)
+        except Exception as e:
+            return web.json_response(_envelope_err(
+                "hf_search_failed", str(e)), status=502)
+        if not isinstance(raw, list):
+            return web.json_response(_envelope_err(
+                "hf_search_bad_shape", "expected list response from HF Hub"),
+                status=502)
+        results = []
+        for r in raw[:limit]:
+            if not isinstance(r, dict):
+                continue
+            results.append({
+                "id": r.get("id") or r.get("modelId") or "",
+                "downloads": int(r.get("downloads") or 0),
+                "likes": int(r.get("likes") or 0),
+                "last_modified": r.get("lastModified") or "",
+                "pipeline_tag": r.get("pipeline_tag") or "",
+                "tags": [t for t in (r.get("tags") or []) if isinstance(t, str)][:20],
+            })
+        out = {"query": q, "count": len(results), "results": results, "cached": False}
+        with _HF_CACHE_LOCK:
+            _HF_SEARCH_CACHE[cache_key] = {"ts": now, "data": out}
+        return web.json_response(_envelope_ok(out))
+
+    @routes.get("/mec/diagnostics/hf_gguf_files")
+    async def _hf_files(req):
+        import asyncio
+        repo = (req.query.get("repo") or "").strip()
+        if not repo or "/" not in repo or ".." in repo:
+            return web.json_response(_envelope_err(
+                "bad_repo", "repo must look like 'owner/name'"), status=400)
+        now = time.time()
+        with _HF_CACHE_LOCK:
+            ent = _HF_FILES_CACHE.get(repo)
+            if ent and (now - ent["ts"]) < _HF_CACHE_TTL:
+                return web.json_response(_envelope_ok({**ent["data"], "cached": True}))
+        url = f"https://huggingface.co/api/models/{repo}"
+        try:
+            raw = await asyncio.get_event_loop().run_in_executor(
+                None, _hf_get_json, url)
+        except Exception as e:
+            return web.json_response(_envelope_err(
+                "hf_files_failed", str(e)), status=502)
+        if not isinstance(raw, dict):
+            return web.json_response(_envelope_err(
+                "hf_files_bad_shape", "expected object response"), status=502)
+        siblings = raw.get("siblings") or []
+        files = []
+        for s in siblings:
+            if not isinstance(s, dict):
+                continue
+            fn = s.get("rfilename") or ""
+            if not fn.lower().endswith(".gguf"):
+                continue
+            if "/" in fn or "\\" in fn:
+                continue  # skip nested files; download POST refuses them anyway
+            files.append({
+                "file": fn,
+                "size": int(s.get("size") or 0) if isinstance(s.get("size"), (int, float)) else 0,
+            })
+        files.sort(key=lambda r: (r["size"] or 1 << 62, r["file"]))
+        out = {
+            "repo": repo,
+            "description": (raw.get("description") or "")[:400],
+            "downloads": int(raw.get("downloads") or 0),
+            "likes": int(raw.get("likes") or 0),
+            "last_modified": raw.get("lastModified") or "",
+            "files": files,
+            "cached": False,
+        }
+        with _HF_CACHE_LOCK:
+            _HF_FILES_CACHE[repo] = {"ts": now, "data": out}
+        return web.json_response(_envelope_ok(out))
 
     # -----------------------------------------------------------------
     # Tier 1 — custom user patterns (add / list / remove / hot-reload)

@@ -43,13 +43,31 @@ from typing import Any, Dict, Optional
 log = logging.getLogger("MEC.node_explain")
 
 # ── HuggingFace GGUF constants ─────────────────────────────────────────────
-_HF_REPO = "unsloth/Qwen3.5-2B-GGUF"
-_QUANT_FILES: Dict[str, str] = {
-    "Q4_K_M": "Qwen3.5-2B-Q4_K_M.gguf",   # 1.28 GB — recommended
-    "Q5_K_M": "Qwen3.5-2B-Q5_K_M.gguf",   # 1.44 GB
-    "Q8_0":   "Qwen3.5-2B-Q8_0.gguf",      # 2.01 GB
-}
-_DEFAULT_QUANT = "Q4_K_M"
+# Sourced from c2c_ai.gguf_registry so we share the curated, hand-verified
+# list of models with the rest of the spine (settings UI, doctor, etc.).
+# Fallback path keeps node_explain importable even if c2c_ai is missing
+# (e.g., during partial install).
+try:
+    from ..c2c_ai import gguf_registry as _GGUF_REG  # type: ignore
+    _DEFAULT_MODEL = _GGUF_REG.default_model()
+    _HF_REPO = _DEFAULT_MODEL.hf_repo
+    _QUANT_FILES: Dict[str, str] = dict(_DEFAULT_MODEL.quant_files)
+    _DEFAULT_QUANT = _DEFAULT_MODEL.default_quant
+    _DEFAULT_CHAT_FORMAT = _DEFAULT_MODEL.chat_format
+    _DEFAULT_N_GPU_LAYERS = _DEFAULT_MODEL.recommended_n_gpu_layers
+    _DEFAULT_N_CTX = min(8192, _DEFAULT_MODEL.context_window)
+except Exception:  # pragma: no cover - safety net only
+    _GGUF_REG = None  # type: ignore
+    _HF_REPO = "bartowski/Qwen3-4B-Instruct-GGUF"
+    _QUANT_FILES = {
+        "Q4_K_M": "Qwen3-4B-Instruct-Q4_K_M.gguf",
+        "Q5_K_M": "Qwen3-4B-Instruct-Q5_K_M.gguf",
+        "Q8_0":   "Qwen3-4B-Instruct-Q8_0.gguf",
+    }
+    _DEFAULT_QUANT = "Q4_K_M"
+    _DEFAULT_CHAT_FORMAT = "chatml"
+    _DEFAULT_N_GPU_LAYERS = -1
+    _DEFAULT_N_CTX = 4096
 
 # ── LLM system / user prompts ──────────────────────────────────────────────
 _EXPLAIN_SYSTEM = (
@@ -126,7 +144,8 @@ def _gguf_path(quant: str = _DEFAULT_QUANT) -> Optional[str]:
     # Also scan all llm dirs (user may have placed it elsewhere)
     try:
         import folder_paths  # type: ignore
-        for key in ("llm", "LLM", "language_models"):
+        # Also scan text_encoders/ + clip/: Qwen-style users park GGUFs there.
+        for key in ("llm", "LLM", "language_models", "text_encoders", "clip"):
             try:
                 for d in folder_paths.get_folder_paths(key):
                     candidate = os.path.join(d, filename)
@@ -227,8 +246,13 @@ def _build_prompt(ctx: dict) -> str:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # JSON parsing (strips Qwen3 <think> blocks, extracts first valid JSON)
-# ═══════════════════════════════════════════════════════════════════════════
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# The regex is sourced from the shared helper in c2c_ai.utils so every
+# tier in the spine uses identical strip semantics.
+# ══════════════════════════════════════════════════════════════════════════
+try:
+    from ..c2c_ai.utils.qwen3_filter import THINK_RE as _THINK_RE  # type: ignore
+except Exception:  # pragma: no cover - safety net
+    _THINK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.DOTALL | re.IGNORECASE)
 _REQUIRED_KEYS = {"headline", "purpose", "inputs", "outputs"}
 
 
@@ -309,14 +333,40 @@ def _try_cloud(ctx: dict) -> Optional[dict]:
     return None
 
 
-def _try_gguf(ctx: dict, quant: str = _DEFAULT_QUANT) -> Optional[dict]:
-    """Try the local Qwen3.5-2B GGUF via llama-cpp-python."""
+def _try_gguf(ctx: dict, quant: str = _DEFAULT_QUANT,
+              n_gpu_layers: int | None = None,
+              n_ctx: int | None = None,
+              chat_format: str | None = None) -> Optional[dict]:
+    """Try the local GGUF model via llama-cpp-python.
+
+    Parameters
+    ----------
+    quant : str
+        Quant label (``Q4_K_M`` / ``Q5_K_M`` / ``Q8_0``). Falls back to the
+        registry default.
+    n_gpu_layers : int | None
+        ``-1`` = offload every layer (default on GPU systems), ``0`` = CPU only,
+        positive = offload exactly that many layers. ``None`` uses the
+        registry recommendation (``-1`` for the curated picks).
+    n_ctx : int | None
+        Context window. Falls back to ``min(8192, model.context_window)``.
+    chat_format : str | None
+        Override llama-cpp's chat template; defaults to the registry value
+        (``chatml`` for Qwen, ``llama-3`` for Llama, ``phi-3`` for Phi).
+    """
     global _GGUF_BACKEND
 
     path = _gguf_path(quant)
     if not path:
         log.debug("[node_explain] GGUF not found on disk (quant=%s)", quant)
         return None
+
+    if n_gpu_layers is None:
+        n_gpu_layers = _DEFAULT_N_GPU_LAYERS
+    if n_ctx is None:
+        n_ctx = _DEFAULT_N_CTX
+    if chat_format is None:
+        chat_format = _DEFAULT_CHAT_FORMAT
 
     # Load or reuse singleton
     with _GGUF_LOCK:
@@ -327,12 +377,14 @@ def _try_gguf(ctx: dict, quant: str = _DEFAULT_QUANT) -> Optional[dict]:
                 log.debug("[node_explain] llama-cpp-python not installed")
                 return None
             try:
-                log.info("[node_explain] Loading GGUF: %s", path)
+                log.info("[node_explain] Loading GGUF: %s (n_gpu_layers=%d, n_ctx=%d, chat=%s)",
+                         path, n_gpu_layers, n_ctx, chat_format)
                 llm = Llama(
                     model_path=path,
-                    n_ctx=2048,
+                    n_ctx=n_ctx,
                     n_threads=max(1, (os.cpu_count() or 4) - 1),
-                    n_gpu_layers=0,   # CPU-only; keeps it off the VRAM budget
+                    n_gpu_layers=n_gpu_layers,
+                    chat_format=chat_format,
                     verbose=False,
                 )
                 _GGUF_BACKEND = _GGUFBackend(llm=llm, model_path=path)
@@ -360,7 +412,12 @@ def _try_gguf(ctx: dict, quant: str = _DEFAULT_QUANT) -> Optional[dict]:
 
     parsed = _parse_llm_json(raw)
     if parsed:
-        parsed["tier"] = "gguf/qwen3.5-2b"
+        # tier label uses the resolved model id when available; falls back to
+        # the legacy literal if the registry isn't importable.
+        if _GGUF_REG is not None:
+            parsed["tier"] = f"gguf/{_DEFAULT_MODEL.model_id}"
+        else:
+            parsed["tier"] = "gguf/local"
         parsed["cached"] = False
         return parsed
     log.debug("[node_explain] GGUF output was not valid JSON:\n%s", raw[:400])

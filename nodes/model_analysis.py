@@ -253,6 +253,6 @@ NODE_CLASS_MAPPINGS = {
     "VAEBlockInspectorMEC": VAEBlockInspectorMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VAESimilarityAnalyserMEC": "VAE Similarity Analyser (C2C)",
-    "VAEBlockInspectorMEC": "VAE Block Inspector (C2C)",
+    "VAESimilarityAnalyserMEC": "VAE Similarity Analyser",
+    "VAEBlockInspectorMEC": "VAE Block Inspector",
 }

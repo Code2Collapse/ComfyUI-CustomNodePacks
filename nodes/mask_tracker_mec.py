@@ -331,5 +331,5 @@ class MaskTrackerMEC:
 
 NODE_CLASS_MAPPINGS = {"MaskTrackerMEC": MaskTrackerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (C2C)",
+    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency",
 }

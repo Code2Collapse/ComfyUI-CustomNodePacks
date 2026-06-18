@@ -1,3 +1,5 @@
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+
 // =====================================================================
 // _mode_gate.js — Shared helper for the unified-mode MEC nodes.
 //
@@ -23,12 +25,47 @@ function _modeValue(node) {
     return w ? String(w.value ?? "") : "";
 }
 
-function _hideHost(host) {
-    if (host && host.style) host.style.display = "none";
+function _collapseWidget(w) {
+    if (!w) return;
+    w.type = "hidden";
+    w.computeSize = () => [0, -4];
+    w.computeLayoutSize = () => ({ minHeight: 0, maxHeight: 0 });
+    if (typeof w.getMinHeight === "function") w.getMinHeight = () => 0;
+    if (typeof w.getHeight === "function") w.getHeight = () => 0;
+    const el = w.element || w.inputEl;
+    if (el) {
+        el.hidden = true;
+        el.style.display = "none";
+        const wrap = el.parentElement;
+        if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
+    }
 }
 
-function _showHost(host) {
+function _restoreWidget(w, height) {
+    if (!w) return;
+    w.type = undefined;
+    const h = height || 280;
+    w.computeSize = () => [0, h];
+    w.computeLayoutSize = undefined;
+    if (typeof w.getMinHeight === "function") w.getMinHeight = () => h;
+    if (typeof w.getHeight === "function") w.getHeight = () => h;
+    const el = w.element || w.inputEl;
+    if (el) {
+        el.hidden = false;
+        el.style.display = "";
+        const wrap = el.parentElement;
+        if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "";
+    }
+}
+
+function _hideHost(host, widget) {
+    if (host && host.style) host.style.display = "none";
+    _collapseWidget(widget);
+}
+
+function _showHost(host, widget, height) {
     if (host && host.style) host.style.display = "";
+    _restoreWidget(widget, height);
 }
 
 export function installModeGated(node, opts) {
@@ -40,10 +77,16 @@ export function installModeGated(node, opts) {
     const hostFinder = typeof opts.hostFinder === "function"
         ? opts.hostFinder
         : (() => null);
+    const widgetFinder = typeof opts.widgetFinder === "function"
+        ? opts.widgetFinder
+        : (() => null);
+    const widgetHeight = opts.widgetHeight ?? 460;
 
     const evaluate = () => {
         const mode = _modeValue(node);
         const isActive = (mode === activeWhen);
+        const wh = typeof widgetHeight === "function" ? widgetHeight(node)
+            : (typeof node._mecSplineEditWidgetH === "function" ? node._mecSplineEditWidgetH() : widgetHeight);
         if (isActive) {
             if (!node[tag]) {
                 try {
@@ -53,9 +96,15 @@ export function installModeGated(node, opts) {
                     console.error(`[MEC._mode_gate:${key}] installer failed:`, err);
                 }
             }
-            _showHost(hostFinder(node));
+            _showHost(hostFinder(node), widgetFinder(node), wh);
         } else {
-            _hideHost(hostFinder(node));
+            _hideHost(hostFinder(node), widgetFinder(node));
+        }
+        if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
+            try {
+                const sz = node.computeSize();
+                if (Array.isArray(sz) && sz.length >= 2) node.setSize(sz);
+            } catch (e) { __c2cReport("_mode_gate", e); }
         }
         if (typeof node.setDirtyCanvas === "function") {
             node.setDirtyCanvas(true, true);
@@ -73,7 +122,7 @@ export function installModeGated(node, opts) {
                 // Re-run ALL registered gate evaluators for this node.
                 const evals = node._mecGateEvaluators || [];
                 for (const fn of evals) {
-                    try { fn(); } catch (e) { /* swallow */ }
+                    try { fn(); } catch (e) { __c2cReport("_mode_gate", e); }
                 }
                 return r;
             };

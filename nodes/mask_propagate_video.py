@@ -1,5 +1,5 @@
 ﻿"""
-MaskPropagateVideo â€“ Draw/define a mask on one frame and propagate it
+MaskPropagateVideo – Draw/define a mask on one frame and propagate it
 across a video sequence.  Supports static copy, motion-compensated
 propagation (optical flow), and SAM2 video-propagation mode.
 """
@@ -87,7 +87,7 @@ class MaskPropagateVideo:
                 size=(H, W), mode="bilinear", align_corners=False
             ).squeeze(0).squeeze(0)
 
-        # â”€â”€ Dispatch by mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Dispatch by mode ───────────────────────────────────────────
         if mode == "static":
             out_masks = self._static(src_mask, B)
         elif mode == "optical_flow":
@@ -108,7 +108,7 @@ class MaskPropagateVideo:
 
         return (out_masks, preview)
 
-    # â”€â”€ Mode implementations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Mode implementations ─────────────────────────────────────────
 
     @staticmethod
     def _static(mask, num_frames):

@@ -1,5 +1,5 @@
 ﻿"""
-TrimapGeneratorMEC â€“ Standalone trimap generation from segmentation masks.
+TrimapGeneratorMEC – Standalone trimap generation from segmentation masks.
 
 Converts a coarse segmentation mask into a 3-region trimap:
   - Foreground (white, 1.0)

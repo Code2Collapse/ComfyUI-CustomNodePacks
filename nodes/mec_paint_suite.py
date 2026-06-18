@@ -1114,8 +1114,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MECAdvancedPaintCanvas": "Advanced Paint Canvas (C2C)",
-    "MECContextInpainter":    "Context Inpainter / Fixer (C2C)",
-    "MECToneRefiner":         "Tone Refiner (C2C)",
-    "MECBuilderSampler":      "Builder Sampler (C2C)",
+    "MECAdvancedPaintCanvas": "Advanced Paint Canvas",
+    "MECContextInpainter":    "Context Inpainter / Fixer",
+    "MECToneRefiner":         "Tone Refiner",
+    "MECBuilderSampler":      "Builder Sampler",
 }

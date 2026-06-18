@@ -1,8 +1,14 @@
-"""VideoComparerMEC — Nuke-grade A/B media comparer.
+"""VideoComparerC2C — Nuke-grade A/B media comparer.
 
 Replaces ImageComparerMEC. Accepts IMAGE tensors, AUDIO dicts, or uploaded
 files of any common type (PNG/JPG/WEBP/TIFF/EXR/HDR/MP4/MOV/MKV/WEBM/GIF/
 WAV/MP3/FLAC/OGG/AAC/M4A).
+
+Note on naming: the class was originally ``VideoComparerMEC`` because it
+shipped in the MEC pack. Per the project naming rule (MEC = mask-only
+nodes, C2C = everything else) it has been renamed to ``VideoComparerC2C``.
+The old key ``VideoComparerMEC`` is still registered as an alias so saved
+workflows continue to load.
 
 All visualisations are computed server-side in float32 so 8 vs 16 vs 32-bit
 precision differences survive. Output is one preview frame per Queue plus
@@ -54,6 +60,11 @@ _MODES = [
     "audio_waveform",
     "audio_spectro",
     "audio_loudness",
+    # Client-side dual-<video> synced player. The server emits the
+    # A-frame unchanged so the queued preview is still valid; the JS
+    # widget swaps the canvas for two real <video> elements wired to a
+    # shared transport (play/pause/seek mirrored between them).
+    "synced_player",
 ]
 
 _BIT_DEPTHS = ["8", "10", "12", "16", "32"]
@@ -428,7 +439,7 @@ def _resolve_source(image: Optional[torch.Tensor], audio: Optional[dict],
 # ──────────────────────────────────────────────────────────────────────────
 # Node
 # ──────────────────────────────────────────────────────────────────────────
-class VideoComparerMEC:
+class VideoComparerC2C:
     """Universal A/B comparer for image / video / EXR / HDR / audio."""
 
     @classmethod
@@ -439,9 +450,23 @@ class VideoComparerMEC:
         except Exception:
             files = [""]
         files = [""] + files if "" not in files else files
+        # Re-order so the live dual-video player appears first in the combo
+        # AND becomes the default — the previous "wipe" default left users
+        # with a static canvas and no obvious way to actually play the
+        # videos they had loaded. The player gives play/pause, seek,
+        # frame-step (1f forward / back), in/out points, loop and per-frame
+        # comparison out of the box.
+        _modes_ordered = ["synced_player"] + [m for m in _MODES if m != "synced_player"]
         return {
             "required": {
-                "mode": (_MODES, {"default": "wipe"}),
+                "mode": (_modes_ordered, {"default": "synced_player",
+                    "tooltip":
+                        "synced_player: dual <video> player with shared "
+                        "transport — play, pause, seek, frame-step (◀ 1f / "
+                        "1f ▶), in/out points, loop, playback rate. Use "
+                        "this for real-time A/B comparison of two videos. "
+                        "Switch to wipe / onion / diff / side_by_side / "
+                        "false_color / bit_depth_crush for overlay analysis."}),
                 "bit_depth": (_BIT_DEPTHS, {"default": "32",
                     "tooltip": "Quantization for bit_depth_crush mode."}),
                 "wipe_position": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
@@ -471,7 +496,20 @@ class VideoComparerMEC:
     FUNCTION = "execute"
     CATEGORY = "C2C/Preview"
     OUTPUT_NODE = True
-    DESCRIPTION = "Nuke-grade A/B comparer for image / video / EXR / audio with wipe, onion, diff, scopes, bit-depth crush, and audio analysis."
+    DESCRIPTION = (
+        "Nuke-grade A/B comparer for image / video / EXR / audio.\n"
+        "• synced_player (default): dual <video> elements share one "
+        "transport — play/pause, seek, frame-step ◀ 1f / 1f ▶, in/out "
+        "points, loop, playback rate, live FPS. Frame-perfect via "
+        "requestVideoFrameCallback.\n"
+        "• Overlay modes: wipe, onion, diff, side_by_side, per_channel, "
+        "false_color, bit_depth_crush — all render LIVE in the browser, "
+        "no Queue needed (drag canvas to wipe, ←/→ to scrub).\n"
+        "• Queue-time modes: scopes (waveform/parade/vector/histogram), "
+        "audio waveform/spectrogram/loudness.\n"
+        "All comparer presets in one node. Switch between them via the "
+        "mode combo at any time."
+    )
 
     def execute(self, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
@@ -508,7 +546,7 @@ class VideoComparerMEC:
         if a_frame is None and b_frame is None:
             blank = np.zeros((360, 640, 3), dtype=np.float32)
             return self._wrap(blank, np.zeros(blank.shape[:2], np.float32), blank,
-                              "VideoComparerMEC: no inputs (provide image_a/b, audio_a/b, or file_a/b)")
+                              "VideoComparerC2C: no inputs (provide image_a/b, audio_a/b, or file_a/b)")
         if a_frame is None:
             a_frame = np.zeros_like(b_frame)
         if b_frame is None:
@@ -568,5 +606,17 @@ class VideoComparerMEC:
         return (preview_t, mask_t, scope_t, info)
 
 
-NODE_CLASS_MAPPINGS = {"VideoComparerMEC": VideoComparerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)"}
+# Back-compat alias: old saved workflows reference "VideoComparerMEC"; map
+# that key to the renamed class so they still resolve.
+VideoComparerMEC = VideoComparerC2C  # noqa: F841 — export for back-compat imports
+
+NODE_CLASS_MAPPINGS = {
+    "VideoComparerC2C": VideoComparerC2C,
+    # Legacy "VideoComparerMEC" key intentionally NOT registered here — it
+    # would surface as a duplicate entry in the node search palette. Saved
+    # workflows that reference the old type are migrated at graph-load time
+    # by js/video_comparer_c2c.js (LiteGraph type-rewrite hook).
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
+}

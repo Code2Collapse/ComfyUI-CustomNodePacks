@@ -1,4 +1,4 @@
-"""
+﻿"""
 ComfyUI-CustomNodePacks
 =======================
 A growing collection of custom nodes:
@@ -21,6 +21,13 @@ from .folder_incrementer import (
 # ── Model Manager (shared cache / download) ───────────────────────────
 from .nodes import model_manager as _model_manager  # noqa: F401
 
+# ── Live-preview guard: force sampling previews on even if launched with
+#    --preview-method none (Latent2RGB fallback, cannot fail). Best-effort. ──
+try:
+    from .nodes import _c2c_preview_guard as _c2c_preview_guard  # noqa: F401
+except Exception:  # never block the pack on a preview tweak
+    pass
+
 # ── MaskEditControl nodes ─────────────────────────────────────────────
 # Unified composition wrappers — these replace 12 legacy node classes:
 #   MaskEditMEC      replaces MaskTransformXY, MaskDrawFrame, DrawShapeMEC,
@@ -41,12 +48,14 @@ from .nodes.inpaint_suite import (
     InpaintCropProMEC,
     InpaintStitchProMEC,
     InpaintPasteBackMEC,
-    InpaintCompositeMEC,
+    InpaintMaskPrepareMEC,
 )
-# VideoComparerMEC replaces ImageComparerMEC. The old image_comparer.py is
-# retained on disk as an importable helper (ImageComparerMEC class), but only
-# VideoComparerMEC is registered.
-from .nodes.video_comparer import VideoComparerMEC
+# VideoComparerC2C (renamed from VideoComparerMEC) replaces the deprecated
+# ImageComparerMEC. The old image_comparer.py is retained on disk as an
+# importable helper (ImageComparerMEC class), but only VideoComparerC2C is
+# registered — with "VideoComparerMEC" kept as a back-compat alias key so
+# saved workflows still load.
+from .nodes.video_comparer import VideoComparerC2C
 from .nodes.video_frame_player import VideoFramePlayerMEC
 from .nodes.video_mask_editor import (
     VideoMaskEditorMEC,
@@ -56,6 +65,7 @@ from .nodes.vae_merge import VAEMergeMEC
 from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
+from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
 # ── MEC Paint Suite (Advanced Paint Canvas + Fixer + Refiner + Builder) ───
 from .nodes.mec_paint_suite import (
@@ -67,23 +77,274 @@ from .nodes.mec_face_fixer import (
     NODE_CLASS_MAPPINGS as _FACE_FIXER_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _FACE_FIXER_DISPLAY,
 )
-# Mask + Matting (multi-backend: SAM2.1, SAM3 + ViTMatte, RVM, ...)
-from .nodes.mask_matting import (
-    NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
-)
-# Unified Segmentation (SAM2/SAM3/SeC, single node)
+# Face/Pose Delta Editor (anchor-relative landmark deltas, multi-keyframe)
 try:
-    from .nodes.unified_segmentation import (
-        NODE_CLASS_MAPPINGS as _USEG_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _USEG_DISPLAY,
+    from .nodes.face_pose_delta import (
+        NODE_CLASS_MAPPINGS as _FPDELTA_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _FPDELTA_DISPLAY,
+    )
+except Exception as _fpd_exc:  # pragma: no cover
+    _FPDELTA_MAPPINGS, _FPDELTA_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_fpd
+        _c2c_rec_fail_fpd(
+            "face_pose_delta", _fpd_exc,
+            hint="Face/Pose Delta Editor failed to import. "
+                 "Ensure NumPy is installed and temporal_anchor.py is intact.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] face_pose_delta import failed: %s", _fpd_exc,
+        )
+# Mask + Matting (multi-backend: SAM2.1, SAM3 + ViTMatte, RVM, ...)
+# Guarded: a failure inside mask_matting (e.g. a missing _reanchor.py helper
+# on an out-of-sync install) must NOT abort this __init__ — that would drop
+# every other node in the pack (NanoBanana, WanDirector, OmniPill, Wizard…).
+try:
+    from .nodes.mask_matting import (
+        NODE_CLASS_MAPPINGS as _MASKMATTE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MASKMATTE_DISPLAY,
+    )
+except Exception as _mm_exc:  # pragma: no cover
+    _MASKMATTE_MAPPINGS, _MASKMATTE_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_mm
+        _c2c_rec_fail_mm(
+            "mask_matting", _mm_exc,
+            hint="Mask+Matting pack failed to import. Ensure "
+                 "nodes/mask_matting/_reanchor.py is present and "
+                 "opencv-python / transformers are installed.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] mask_matting import failed: %s", _mm_exc,
+        )
+# ── Central failure registry (surface silent drops to the user) ───────
+# Per ideas_summary.md §2.1: the #1 reason this pack "feels like stubs"
+# is that optional sub-imports were swallowed by `except: pass` / quiet
+# logger.debug() calls. From here on every optional-import block routes
+# its failure through _c2c_registry.record_failure() so the user sees
+# (a) a console line in the ComfyUI log, (b) a boot toast in the UI, and
+# (c) a queryable /c2c/registry/status endpoint listing every miss with
+# an actionable hint.
+try:
+    from .nodes._c2c_registry import (
+        record_failure as _c2c_rec_fail,
+        register_routes as _c2c_reg_register_routes,
+    )
+except Exception as _reg_exc:  # pragma: no cover
+    import logging
+    logging.getLogger("C2C").error(
+        "c2c registry helper missing — falling back to plain logging: %s", _reg_exc
+    )
+    def _c2c_rec_fail(key, exc, *, hint=None, group="root", severity="warning"):  # type: ignore
+        import logging
+        logging.getLogger("C2C").warning("%s unavailable: %s (hint=%s)", key, exc, hint)
+    def _c2c_reg_register_routes(_server):  # type: ignore
+        return None
+
+# Unified Segmentation — DEPRECATED (superseded by mask_matting + sam_model_loader
+# + sam_mask_generator). The file is kept on disk for reference only.
+_USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
+
+# SAM Model Loader + Mask Generator (standalone SAM2.1/SAM3 inference nodes)
+try:
+    from .nodes.sam_model_loader import SAMModelLoaderMEC
+    from .nodes.sam_mask_generator import SAMMaskGeneratorMEC
+    _SAM_MAPPINGS = {
+        "SAMModelLoaderMEC": SAMModelLoaderMEC,
+        "SAMMaskGeneratorMEC": SAMMaskGeneratorMEC,
+    }
+    _SAM_DISPLAY = {
+        "SAMModelLoaderMEC": "SAM Model Loader \u2014 SAM2.1 / SAM3",
+        "SAMMaskGeneratorMEC": "SAM Mask Generator \u2014 Points + BBox + Text",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SAM Loader/Generator", _exc,
+        hint="SAM nodes require the sam2 package and model weights under models/sam2/.",
+        group="nodes",
+    )
+    _SAM_MAPPINGS, _SAM_DISPLAY = {}, {}
+
+# SAM + ViTMatte combined pipeline (highest-quality mask in one node)
+try:
+    from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
+    _SAMVIT_MAPPINGS = {"SAMViTMattePipelineMEC": SAMViTMattePipelineMEC}
+    _SAMVIT_DISPLAY = {
+        "SAMViTMattePipelineMEC": "SAM + ViTMatte Pipeline \u2014 Full Quality",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SAMViTMattePipeline", _exc,
+        hint="Requires sam2 package + transformers for ViTMatte refinement.",
+        group="nodes",
+    )
+    _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY = {}, {}
+
+# Luminance Keyer (Nuke-style luma key, pure tensor math)
+try:
+    from .nodes.luminance_keyer import LuminanceKeyerMEC
+    _LUMAKEY_MAPPINGS = {"LuminanceKeyerMEC": LuminanceKeyerMEC}
+    _LUMAKEY_DISPLAY = {
+        "LuminanceKeyerMEC": "Luminance Keyer \u2014 Highlights / Shadows / Custom",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "LuminanceKeyer", _exc,
+        hint="Luminance Keyer failed to import — check _interrupt_check / _progress helpers.",
+        group="nodes",
+    )
+    _LUMAKEY_MAPPINGS, _LUMAKEY_DISPLAY = {}, {}
+
+# Background Remover (RMBG-2.0 / BiRefNet one-click bg removal)
+try:
+    from .nodes.background_remover import BackgroundRemoverMEC
+    _BGREMOVE_MAPPINGS = {"BackgroundRemoverMEC": BackgroundRemoverMEC}
+    _BGREMOVE_DISPLAY = {
+        "BackgroundRemoverMEC": "Background Remover \u2014 RMBG / BiRefNet",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "BackgroundRemover", _exc,
+        hint="Requires transformers + model weights for RMBG or BiRefNet.",
+        group="nodes",
+    )
+    _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY = {}, {}
+
+# Semantic Segment (SegFormer face / clothes parsing)
+try:
+    from .nodes.semantic_segment import SemanticSegmentMEC
+    _SEMSEG_MAPPINGS = {"SemanticSegmentMEC": SemanticSegmentMEC}
+    _SEMSEG_DISPLAY = {
+        "SemanticSegmentMEC": "Semantic Segment \u2014 Face / Clothes Parsing",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SemanticSegment", _exc,
+        hint="Requires transformers + SegFormer model weights.",
+        group="nodes",
+    )
+    _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY = {}, {}
+
+# SAM Multi-Mask Picker — interactive 3-thumbnail mask chooser
+# (user-recalled feature: pick best of N SAM candidates by score)
+try:
+    from .nodes.sam_multi_mask_picker import SamMultiMaskPickerMEC
+    _SAMPICKER_MAPPINGS = {"SamMultiMaskPickerMEC": SamMultiMaskPickerMEC}
+    _SAMPICKER_DISPLAY = {
+        "SamMultiMaskPickerMEC": "SAM Multi-Mask Picker \u2014 3 candidates + scores",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "SamMultiMaskPickerMEC", _exc,
+        hint="Install SAM (sam2 or segment-anything) so candidate masks can be scored.",
+        group="nodes",
+    )
+    _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY = {}, {}
+
+# Wan Director (P9) — multi-shot orchestration utilities
+try:
+    from .nodes.wan_director import (
+        NODE_CLASS_MAPPINGS as _WANDIR_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _WANDIR_DISPLAY,
     )
 except Exception as _exc:  # pragma: no cover
-    import logging
-    logging.getLogger("MEC.UnifiedSeg").warning(
-        "UnifiedSegmentation unavailable: %s", _exc
+    _c2c_rec_fail(
+        "WanDirector", _exc,
+        hint="Install `av` (PyAV) for audio mixing and ensure Wan 2.x model nodes are available.",
+        group="nodes",
     )
-    _USEG_MAPPINGS, _USEG_DISPLAY = {}, {}
+    _WANDIR_MAPPINGS, _WANDIR_DISPLAY = {}, {}
+
+# C2C helpers (12 tiny utilities)
+try:
+    from .nodes.helpers import (
+        NODE_CLASS_MAPPINGS as _HELPERS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _HELPERS_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "C2C helpers", _exc,
+        hint="Helper utilities should always load — report this traceback as a bug.",
+        group="nodes", severity="error",
+    )
+    _HELPERS_MAPPINGS, _HELPERS_DISPLAY = {}, {}
+
+# Prompt Relay — refined port (native + Kijai + generic-fallback backends).
+# Algorithm credit: Gordon Chen & contributors. See nodes/prompt_relay/NOTICE.md.
+try:
+    from .nodes.prompt_relay import (
+        NODE_CLASS_MAPPINGS as _PROMPTRELAY_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _PROMPTRELAY_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "PromptRelay", _exc,
+        hint="Prompt Relay requires Wan 2.x or compatible video model nodes for full backends.",
+        group="nodes",
+    )
+    _PROMPTRELAY_MAPPINGS, _PROMPTRELAY_DISPLAY = {}, {}
+
+# AsymFlow sampler patch — Apache-2.0; algorithm by Lakonik/LakonLab.
+try:
+    from .nodes.asymflow_sampler import (
+        NODE_CLASS_MAPPINGS as _ASYMFLOW_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _ASYMFLOW_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "AsymFlow sampler", _exc,
+        hint="AsymFlow patches ComfyUI's sampler module; a Comfy upgrade may have broken the patch surface.",
+        group="nodes",
+    )
+    _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY = {}, {}
+
+# HDR Color Science nodes (ACES tonemap, VAE quality decode, color space)
+try:
+    from .nodes.hdr_color_science import (
+        NODE_CLASS_MAPPINGS as _HDR_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _HDR_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "HDR Color Science", _exc,
+        hint="HDR color science nodes for ACES tonemap, VAE quality decode, and color space conversion.",
+        group="nodes",
+    )
+    _HDR_MAPPINGS, _HDR_DISPLAY = {}, {}
+
+# LocateAnything-3B grounding (open-vocabulary object detection → SAM prompts)
+try:
+    from .nodes.locate_anything import (
+        NODE_CLASS_MAPPINGS as _LOCATE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LOCATE_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "LocateAnything", _exc,
+        hint="Requires transformers + nvidia/LocateAnything-3B weights for open-vocabulary grounding.",
+        group="nodes",
+    )
+    _LOCATE_MAPPINGS, _LOCATE_DISPLAY = {}, {}
+
+# Nano Banana (Google Gemini image API: gemini-3-pro-image + 2.5-flash-image)
+try:
+    from .nodes.nano_banana import (
+        NODE_CLASS_MAPPINGS as _NANOBANANA_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _NANOBANANA_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "NanoBanana", _exc,
+        hint="Gemini image-generation node; needs only stdlib + PIL + a GEMINI_API_KEY.",
+        group="nodes",
+    )
+    _NANOBANANA_MAPPINGS, _NANOBANANA_DISPLAY = {}, {}
 
 # LocateAnything-3B grounding (open-vocabulary detection → SAM prompts)
 try:
@@ -130,9 +391,9 @@ _NUKEMAX_MAPPINGS = {
     "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
-    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (C2C)",
-    "InsightStatusMEC": "Insight Status (C2C)",
-    "IntegrityStatusMEC": "Integrity Status (C2C)",
+    "ProPainterMEC": "ProPainter \u2014 Temporal / Remove / Stitch / Refine / Flow",
+    "InsightStatusMEC": "Insight Status",
+    "IntegrityStatusMEC": "Integrity Status",
 }
 
 # ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────
@@ -154,49 +415,85 @@ _MEC_MAPPINGS = {
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
-    "InpaintCompositeMEC": InpaintCompositeMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
-    "VideoComparerMEC": VideoComparerMEC,
+    "InpaintMaskPrepareMEC": InpaintMaskPrepareMEC,
+    "VideoComparerC2C": VideoComparerC2C,
+    # NOTE: "VideoComparerMEC" was the legacy class key. To prevent it from
+    # showing up as a separate (duplicate) entry in the node search palette,
+    # it is NO LONGER registered here. Saved workflows that reference the old
+    # type are migrated at graph-load time by js/video_comparer_c2c.js, which
+    # rewrites `type: "VideoComparerMEC"` -> `"VideoComparerC2C"` before
+    # LiteGraph instantiates the node.
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "VAELatentInspectorMEC": VAELatentInspectorMEC,
     "BatchVersionManagerMEC": BatchVersionManagerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
+    "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
 }
 
 _MEC_DISPLAY = {
-    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox (MEC)",
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path (C2C)",
-    "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency (C2C)",
-    "ParameterHistoryMEC": "Parameter History (C2C)",
-    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline (C2C)",
-    "InpaintCropProMEC": "Inpaint Crop Pro (C2C)",
-    "InpaintCompositeMEC": "Inpaint Composite (C2C)",
-    "InpaintStitchProMEC": "Inpaint Stitch Pro — legacy (C2C)",
-    "InpaintPasteBackMEC": "Inpaint Paste Back — legacy (C2C)",
-    "VideoComparerMEC": "Video Comparer — Wipe/Diff/Scopes/Audio (C2C)",
-    "VideoFramePlayerMEC": "Video Frame Player (C2C)",
-    "VideoMaskEditorMEC": "Video Mask Editor (C2C)",
-    "VAEMergeMEC": "VAE Merge (C2C)",
-    "VAELatentInspectorMEC": "VAE Latent Inspector (C2C)",
-    "BatchVersionManagerMEC": "Batch Version Manager (C2C)",
-    "ModelMetadataExtractorMEC": "Model Metadata Extractor (C2C)",
+    "MaskEditMEC": "Mask Edit \u2014 Transform/Draw/Points/BBox",
+    "SplineMaskMEC": "Spline Mask \u2014 Edit/Track/Flow-Path",
+    "MaskTrackerMEC": "Mask Tracker \u2014 Motion/Propagate/Anchor/Consistency",
+    "ParameterHistoryMEC": "Parameter History",
+    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline",
+    "InpaintCropProMEC": "Inpaint Crop Pro",
+    "InpaintStitchProMEC": "Inpaint Stitch Pro",
+    "InpaintPasteBackMEC": "Inpaint Paste Back",
+    "InpaintMaskPrepareMEC": "Inpaint Mask Prepare",
+    "VideoComparerC2C": "Video Comparer \u2014 Player + Wipe/Diff/Scopes",
+    "VideoFramePlayerMEC": "Video Frame Player",
+    "VideoMaskEditorMEC": "Video Mask Editor",
+    "VAEMergeMEC": "VAE Merge",
+    "VAELatentInspectorMEC": "VAE Latent Inspector",
+    "BatchVersionManagerMEC": "Batch Version Manager",
+    "ModelMetadataExtractorMEC": "Model Metadata Extractor",
+    "MaskFailureExplainerMEC": "Mask Failure Explainer \u2014 Diagnostics",
 }
 
 # ── Merge all mappings ────────────────────────────────────────────────
+try:
+    from .nodes.control_forge import (
+        NODE_CLASS_MAPPINGS as _CONTROLFORGE_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _CONTROLFORGE_DISPLAY,
+    )
+except Exception as _cf_exc:  # pragma: no cover
+    try:
+        _c2c_rec_fail("Control AOV", _cf_exc,
+                      hint="control_forge needs numpy + torch (OpenCV optional for Canny/motion).",
+                      group="nodes")
+    except Exception:
+        pass
+    _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY = {}, {}
+
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
     **_FACE_FIXER_MAPPINGS,
+    **_FPDELTA_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
     **_USEG_MAPPINGS,
-    **_LOCATE_MAPPINGS,
+    **_SAMPICKER_MAPPINGS,
+    **_SAM_MAPPINGS,
+    **_SAMVIT_MAPPINGS,
+    **_LUMAKEY_MAPPINGS,
+    **_BGREMOVE_MAPPINGS,
+    **_SEMSEG_MAPPINGS,
     **_NUKEMAX_MAPPINGS,
     **_STABILIZER_MAPPINGS,
+    **_WANDIR_MAPPINGS,
+    **_HELPERS_MAPPINGS,
+    **_PROMPTRELAY_MAPPINGS,
+    **_ASYMFLOW_MAPPINGS,
+    **_HDR_MAPPINGS,
+    **_LOCATE_MAPPINGS,
+    **_NANOBANANA_MAPPINGS,
+    **_CONTROLFORGE_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -204,11 +501,25 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MA_DISPLAY,
     **_PAINT_DISPLAY,
     **_FACE_FIXER_DISPLAY,
+    **_FPDELTA_DISPLAY,
     **_MASKMATTE_DISPLAY,
     **_USEG_DISPLAY,
-    **_LOCATE_DISPLAY,
+    **_SAMPICKER_DISPLAY,
+    **_SAM_DISPLAY,
+    **_SAMVIT_DISPLAY,
+    **_LUMAKEY_DISPLAY,
+    **_BGREMOVE_DISPLAY,
+    **_SEMSEG_DISPLAY,
     **_NUKEMAX_DISPLAY,
     **_STABILIZER_DISPLAY,
+    **_WANDIR_DISPLAY,
+    **_HELPERS_DISPLAY,
+    **_PROMPTRELAY_DISPLAY,
+    **_ASYMFLOW_DISPLAY,
+    **_HDR_DISPLAY,
+    **_LOCATE_DISPLAY,
+    **_NANOBANANA_DISPLAY,
+    **_CONTROLFORGE_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
@@ -235,6 +546,12 @@ except Exception:
 try:
     import server as _comfy_server  # noqa: F811
     _ps = _comfy_server.PromptServer.instance
+    # Surface the central failure registry FIRST so it's queryable even if
+    # everything below fails to register.
+    try:
+        _c2c_reg_register_routes(_ps)
+    except Exception as _re:
+        print(f"[C2C] registry routes deferred: {_re}")
     _register_integrity_routes(_ps)
     _start_integrity_scan()
     _install_insight_hook()
@@ -260,6 +577,12 @@ try:
         print("[MEC] error_translator routes registered.")
     except Exception as _et:
         print(f"[MEC] error_translator deferred: {_et}")
+    try:
+        from .nodes.error_introspector import register_routes as _register_error_introspector_routes
+        _register_error_introspector_routes(_ps)
+        print("[MEC] error_introspector routes registered.")
+    except Exception as _ei:
+        print(f"[MEC] error_introspector deferred: {_ei}")
     try:
         from .nodes.flamegraph import register_routes as _register_flamegraph_routes
         _register_flamegraph_routes(_ps)
@@ -296,6 +619,90 @@ try:
         print("[MEC] wizard routes registered.")
     except Exception as _wz:
         print(f"[MEC] wizard deferred: {_wz}")
+    try:
+        from .nodes.workflow_doctor import register_routes as _register_workflow_doctor_routes
+        _register_workflow_doctor_routes(_ps)
+        print("[C2C] workflow_doctor routes registered.")
+    except Exception as _wd:
+        print(f"[C2C] workflow_doctor deferred: {_wd}")
+    try:
+        from .nodes.c2c_int_aggregator import register_routes as _register_c2c_int_routes
+        _register_c2c_int_routes(_ps)
+        print("[C2C] int aggregator routes registered (/c2c/int/*).")
+    except Exception as _int:
+        print(f"[C2C] int aggregator deferred: {_int}")
+    try:
+        from .nodes.c2c_doctor import register_routes as _register_c2c_doctor_routes
+        _register_c2c_doctor_routes(_ps)
+        print("[C2C] doctor routes registered (/c2c/doctor/{pyenv,disk,scan_file}).")
+    except Exception as _doc:
+        print(f"[C2C] doctor deferred: {_doc}")
+    try:
+        from .nodes.c2c_workflow_library import register_routes as _register_c2c_library_routes
+        _register_c2c_library_routes(_ps)
+        print("[C2C] workflow library routes registered (/c2c/library/{locations,scan,load}).")
+    except Exception as _lib:
+        print(f"[C2C] workflow library deferred: {_lib}")
+    try:
+        from .nodes._c2c_autoconnect import register_routes as _register_c2c_autoconnect_routes
+        _register_c2c_autoconnect_routes(_ps)
+        print("[C2C] autoconnect routes registered (/c2c/autoconnect/*).")
+    except Exception as _ac:
+        print(f"[C2C] autoconnect deferred: {_ac}")
+    try:
+        from .nodes.c2c_sys_metrics import register_routes as _register_c2c_sys_metrics_routes
+        _register_c2c_sys_metrics_routes(_ps)
+        print("[C2C] sys metrics routes registered (/c2c/sys/metrics).")
+    except Exception as _sm:
+        print(f"[C2C] sys metrics deferred: {_sm}")
+    try:
+        from .nodes._c2c_secrets import register_routes as _register_c2c_secrets_routes, backend_name as _c2c_secrets_backend
+        _register_c2c_secrets_routes(_ps)
+        print(f"[C2C] secrets vault routes registered (/c2c/secrets/*) backend={_c2c_secrets_backend()}.")
+    except Exception as _sec:
+        print(f"[C2C] secrets vault deferred: {_sec}")
+    try:
+        from .nodes.style_presets import register_routes as _register_style_presets_routes
+        _register_style_presets_routes(_ps)
+        print("[C2C] style_presets routes registered.")
+    except Exception as _sp:
+        print(f"[C2C] style_presets deferred: {_sp}")
+    # ── C2C Preset Hub (live aggregator: lexica/civitai/hf/openart/pdexter/issues) ─
+    try:
+        from .nodes._c2c_preset_hub import register_routes as _register_preset_hub_routes
+        _register_preset_hub_routes(_ps)
+        print("[C2C] preset hub routes registered (/c2c/presets/*).")
+    except Exception as _ph:
+        print(f"[C2C] preset hub deferred: {_ph}")
+    try:
+        from .nodes.mask_matting.integrity_bridge import register_routes as _register_integrity_bridge_routes
+        _register_integrity_bridge_routes(_ps)
+        print("[C2C] mask_integrity bridge routes registered.")
+    except Exception as _ib:
+        print(f"[C2C] mask_integrity bridge deferred: {_ib}")
+    # ── C2C AI spine (v2.0-dev) ────────────────────────────────────
+    try:
+        from .c2c_ai.api_routes import register_routes as _register_c2c_ai_routes
+        from .c2c_ai.bootstrap import bootstrap as _c2c_ai_bootstrap
+        _register_c2c_ai_routes(_ps)
+        _c2c_ai_bootstrap()
+        print("[C2C AI] spine registered (/c2c/ai/*).")
+    except Exception as _ai:
+        print(f"[C2C AI] spine deferred: {_ai}")
+    # ── C2C prompt library (Gallery sources: lexica today; civitai/openart next) ─
+    try:
+        from .c2c_ai.prompt_library import register_routes as _register_c2c_prompts_routes
+        _register_c2c_prompts_routes(_ps)
+        print("[C2C AI] prompt library registered (/c2c/prompts/*).")
+    except Exception as _pl:
+        print(f"[C2C AI] prompt library deferred: {_pl}")
+    # ── C2C dep-conflict checker (Manager integration) ─────────────
+    try:
+        from .nodes.dep_check_routes import register_routes as _register_depcheck_routes
+        _register_depcheck_routes(_ps)
+        print("[C2C] depcheck routes registered (/c2c/depcheck/*).")
+    except Exception as _dc:
+        print(f"[C2C] depcheck routes deferred: {_dc}")
     print("[MEC] NukeNodeMax routes + hooks registered.")
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")

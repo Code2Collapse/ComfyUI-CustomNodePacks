@@ -195,7 +195,8 @@ function refreshVisibility(node) {
     if (!segWidget || !matWidget) return;
     const seg  = stripBadge(segWidget.value);
     const mat  = stripBadge(matWidget.value);
-    const mode = "auto";
+    const modeW = widgetMap.input_mode;
+    const mode = modeW ? String(modeW.value || "auto").toLowerCase() : "auto";
     const sup  = SEGMENTER_MODES[seg] || new Set(["auto"]);
 
     // Per-backend filtered model dropdowns. The Python side ships ONE big
@@ -229,13 +230,20 @@ app.registerExtension({
     name: "MEC.MaskMatting.DynamicWidgets",
     async beforeRegisterNodeDef(nodeType, nodeData, _appRef) {
         if (nodeData?.name !== "MaskOpsMEC") return;
+
+        const _origIsWidgetVisible = nodeType.prototype.isWidgetVisible;
+        nodeType.prototype.isWidgetVisible = function (widget) {
+            if (widget?.__mec_origType === "hidden" || widget?.type === "hidden") return false;
+            return _origIsWidgetVisible ? _origIsWidgetVisible.call(this, widget) : true;
+        };
+
         const onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onCreated?.apply(this, arguments);
             // Hook each control widget so any change refreshes visibility.
             const node = this;
             const triggers = [
-                "segmenter", "matter", "subject_preset",
+                "segmenter", "matter", "input_mode", "subject_preset",
                 "enable_luma_key", "luma_mode",
                 "enable_advanced_trimap",
                 "enable_diagnose",

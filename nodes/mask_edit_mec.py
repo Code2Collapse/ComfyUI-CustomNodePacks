@@ -383,5 +383,5 @@ class MaskEditMEC:
 
 NODE_CLASS_MAPPINGS = {"MaskEditMEC": MaskEditMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox (MEC)",
+    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox",
 }

@@ -310,5 +310,5 @@ class ProPainterMEC:
 
 NODE_CLASS_MAPPINGS = {"ProPainterMEC": ProPainterMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow (C2C)",
+    "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow",
 }

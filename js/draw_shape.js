@@ -1,4 +1,4 @@
-// DrawShapeMEC / MaskEditMEC(mode=draw_shape):
+﻿// DrawShapeMEC / MaskEditMEC(mode=draw_shape):
 // conditional widget visibility based on `shape` dropdown.
 // Only runs when the active node mode is draw_shape on the unified node.
 import { app } from "../../scripts/app.js";
@@ -55,7 +55,7 @@ function applyShapeVisibility(node) {
 }
 
 app.registerExtension({
-    name: "MEC.DrawShapeMEC.ConditionalUI",
+    name: "MEC.DrawShape.ConditionalUI",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (!TARGET_NODES.includes(nodeData.name)) return;
 

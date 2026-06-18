@@ -34,7 +34,11 @@ def _candidate_dirs() -> list:
     out = [os.path.join(pack_root, "user", "models")]
     try:
         import folder_paths  # type: ignore
-        for k in ("llm", "LLM", "language_models"):
+        # Honour every folder ComfyUI considers an LLM/text-encoder store.
+        # `text_encoders` is added because many users (Qwen/Wan workflows)
+        # park GGUF text-encoder/LLM files there and expect them to be
+        # picked up by the AI Spine.
+        for k in ("llm", "LLM", "language_models", "text_encoders", "clip"):
             try:
                 out.extend(folder_paths.get_folder_paths(k))
             except Exception:
@@ -42,7 +46,18 @@ def _candidate_dirs() -> list:
         out.append(os.path.join(folder_paths.models_dir, "llm"))
     except Exception:
         pass
-    return [p for p in out if p and os.path.isdir(p)]
+    # De-duplicate while preserving order.
+    seen = set(); uniq = []
+    for p in out:
+        if not p:
+            continue
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        if os.path.isdir(ap):
+            uniq.append(ap)
+    return uniq
 
 
 def _resolve_model_path(model_id: str) -> Optional[str]:

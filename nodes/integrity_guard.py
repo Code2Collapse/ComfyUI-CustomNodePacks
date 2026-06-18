@@ -34,12 +34,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("MEC.integrity")
 
@@ -175,6 +176,94 @@ def _walk_py_files() -> List[str]:
             if f.endswith(".py"):
                 out.append(os.path.join(dirpath, f))
     return out
+
+
+# Suspicious-pattern signatures for the lightweight custom_nodes virus
+# heuristic. Kept in sync with c2c_doctor._SUSPICIOUS_PY (single source
+# of truth is c2c_doctor when it's importable; otherwise this fallback
+# list is used).
+_SUSP_PATTERNS_FALLBACK = [
+    (re.compile(r"\beval\s*\(", re.IGNORECASE),                "eval()"),
+    (re.compile(r"\bexec\s*\(", re.IGNORECASE),                "exec()"),
+    (re.compile(r"base64\.b64decode\s*\(", re.IGNORECASE),     "base64.b64decode()"),
+    (re.compile(r"urllib\.request\.urlopen\(\s*['\"]http",     re.IGNORECASE), "remote URL fetch"),
+    (re.compile(r"subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True", re.IGNORECASE), "shell=True"),
+    (re.compile(r"os\.system\s*\(", re.IGNORECASE),            "os.system()"),
+    (re.compile(r"compile\s*\(\s*['\"][^'\"]+['\"]\s*,",       re.IGNORECASE), "dynamic compile()"),
+    (re.compile(r"marshal\.loads\s*\(", re.IGNORECASE),        "marshal.loads()"),
+]
+
+def _susp_patterns():
+    try:
+        from . import c2c_doctor as _cd
+        if getattr(_cd, "_SUSPICIOUS_PY", None):
+            return _cd._SUSPICIOUS_PY
+    except Exception:
+        pass
+    return _SUSP_PATTERNS_FALLBACK
+
+def _custom_nodes_root() -> Optional[str]:
+    """Locate the ComfyUI/custom_nodes/ folder by walking up from this file."""
+    p = os.path.dirname(_PACK_ROOT)
+    # _PACK_ROOT is .../ComfyUI/custom_nodes/<this-pack>/nodes/integrity_guard.py
+    # so dirname(_PACK_ROOT) is .../ComfyUI/custom_nodes
+    if os.path.basename(p).lower() == "custom_nodes" and os.path.isdir(p):
+        return p
+    return None
+
+def _scan_suspicious_custom_nodes(max_files: int = 4000,
+                                  max_bytes_per_file: int = 256 * 1024) -> List[Dict[str, Any]]:
+    """Scan every .py under ComfyUI/custom_nodes/ (except OUR pack) for known
+    high-risk patterns. Returns one event per offending file (capped). Each
+    event has severity=warn so it surfaces under Doctor → Package integrity.
+    """
+    findings: List[Dict[str, Any]] = []
+    root = _custom_nodes_root()
+    if not root:
+        return findings
+    patterns = _susp_patterns()
+    seen = 0
+    own_root = os.path.abspath(_PACK_ROOT)
+    for dirpath, _dirs, files in os.walk(root):
+        if any(seg in dirpath for seg in (".git", "__pycache__", "node_modules",
+                                          ".pytest_cache", ".ruff_cache")):
+            continue
+        # Skip our own pack (we trust ourselves; avoid noise).
+        try:
+            if os.path.commonpath([os.path.abspath(dirpath), own_root]) == own_root:
+                continue
+        except Exception:
+            pass
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            seen += 1
+            if seen > max_files:
+                return findings
+            full = os.path.join(dirpath, fn)
+            try:
+                with open(full, "rb") as fh:
+                    data = fh.read(max_bytes_per_file)
+            except Exception:
+                continue
+            hits: List[str] = []
+            for rx, name in patterns:
+                try:
+                    if rx.search(data.decode("utf-8", errors="replace")):
+                        hits.append(name)
+                except Exception:
+                    continue
+            if hits:
+                rel = os.path.relpath(full, root).replace("\\", "/")
+                findings.append({
+                    "kind": "suspicious_pattern",
+                    "severity": "warn",
+                    "message": f"{rel}: {', '.join(hits[:6])}",
+                    "file": rel,
+                    "patterns": hits[:6],
+                })
+    return findings
+
 
 
 # =====================================================================
@@ -525,6 +614,17 @@ def _worker_impl(force: bool = False, delay: float = 0.0):
             "file": d["file"],
         })
 
+    # ---- suspicious-pattern scan across ALL custom_nodes (lightweight virus heuristic) ----
+    try:
+        susp = _scan_suspicious_custom_nodes()
+        report["suspicious_files"] = len(susp)
+        # Only push the first 50 into events to keep the report bounded.
+        for ev in susp[:50]:
+            report["events"].append(ev)
+    except Exception as e:
+        log.warning("[integrity] suspicious scan failed: %s", e)
+        report["suspicious_files"] = 0
+
     with _LOCK:
         _LAST_REPORT.clear()
         _LAST_REPORT.update(report)
@@ -552,6 +652,167 @@ def start_background_scan(force: bool = False, delay: Optional[float] = None) ->
         daemon=True,
     )
     t.start()
+
+
+# =====================================================================
+# Phase E.2 — Safety-belt uv installer for failed-import auto-heal
+# =====================================================================
+# Distribution-name regex: matches PEP 503 normalisation plus version
+# specifiers we accept on input (no shell metacharacters).
+_SAFE_DIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
+
+# Critical packages we refuse to upgrade/downgrade under any heal path,
+# even with force=True. Mirrors dependency_checker.CRITICAL_PACKAGES;
+# duplicated here so this module stays import-safe even if
+# dependency_checker is unavailable.
+_HEAL_CRITICAL = frozenset({
+    "torch", "torchvision", "torchaudio", "numpy", "transformers",
+    "diffusers", "xformers", "accelerate", "timm", "safetensors",
+})
+
+# Hard cap on heal subprocess time. Anything longer almost certainly
+# means uv is pulling a torch wheel — abort + roll back per plan.md E.4.
+_HEAL_INSTALL_TIMEOUT = 120
+_HEAL_CHECK_TIMEOUT = 30
+
+
+def _heal_validate_packages(packages: List[str]) -> Tuple[List[str], Optional[str]]:
+    """Reject anything that's a CRITICAL package or has unsafe characters.
+
+    Returns ``(accepted, refusal_reason_or_None)``. If any package is
+    rejected the entire batch is refused — partial install is never safe.
+    """
+    accepted: List[str] = []
+    # Names that look superficially valid but never represent a real PyPI
+    # distribution. These appear when a requirements.txt parser mis-handles
+    # a `git+https://…` line and emits a literal "git" entry.
+    _BOGUS = {"git", "hg", "svn", "bzr", "http", "https", "file", "ftp"}
+    for pkg in packages:
+        if not isinstance(pkg, str):
+            return ([], f"non-string package entry: {pkg!r}")
+        # Strip version specifier for the critical-package check.
+        bare = re.split(r"[\[<>=!~]", pkg, maxsplit=1)[0].strip().lower()
+        if not bare:
+            return ([], f"empty package name in {pkg!r}")
+        if not _SAFE_DIST_RE.match(pkg):
+            return ([], f"unsafe characters in package name: {pkg!r}")
+        if bare in _HEAL_CRITICAL:
+            return ([], f"refusing to touch CRITICAL package: {bare}")
+        if bare in _BOGUS:
+            return ([], f"refusing bogus dist name (likely VCS-URL parse artefact): {bare}")
+        accepted.append(pkg)
+    return (accepted, None)
+
+
+def install_missing(
+    packages: List[str],
+    *,
+    force: bool = False,
+    timeout: int = _HEAL_INSTALL_TIMEOUT,
+) -> Dict[str, Any]:
+    """Install ``packages`` using uv with the auto-heal safety belt.
+
+    Refuses (`ok=False`) when:
+      * ``_UV_BIN`` is None (uv not installed),
+      * any package is in ``_HEAL_CRITICAL`` (even with ``force=True``),
+      * any package name contains unsafe characters,
+      * post-install ``uv pip check`` reports NEW conflicts (auto-rolls back).
+
+    Returns a dict with keys:
+      ``ok`` (bool), ``installed`` (list[str]), ``rolled_back`` (bool),
+      ``stage`` (str: "validate" | "install" | "post_check" | "done"),
+      ``stdout``, ``stderr``, ``rc``, ``duration_s``, ``error`` (optional).
+
+    The ``force`` flag currently affects only the user-facing "risky"
+    bucket discrimination in the caller (E.3); CRITICAL packages remain
+    refused unconditionally per the G1 guardrail.
+    """
+    t0 = time.time()
+    if not packages:
+        return {"ok": False, "stage": "validate", "error": "no packages requested",
+                "installed": [], "rolled_back": False, "rc": -1,
+                "stdout": "", "stderr": "", "duration_s": 0.0}
+
+    if _UV_BIN is None:
+        return {"ok": False, "stage": "validate",
+                "error": "uv is not installed — auto-heal requires uv. "
+                         "Install via Doctor → 'Install uv' or "
+                         "https://docs.astral.sh/uv/",
+                "installed": [], "rolled_back": False, "rc": -1,
+                "stdout": "", "stderr": "", "duration_s": 0.0}
+
+    accepted, refusal = _heal_validate_packages(packages)
+    if refusal is not None or not accepted:
+        return {"ok": False, "stage": "validate",
+                "error": refusal or "no installable packages after validation",
+                "installed": [], "rolled_back": False, "rc": -1,
+                "stdout": "", "stderr": "", "duration_s": round(time.time() - t0, 2)}
+
+    # Snapshot pre-install conflicts so we know what's "new" later.
+    # We compare the set of "requires X" lines — the trailing
+    # "Checked N packages in Xms" line will differ after install
+    # (153 -> 154 etc.), so a raw string compare is too strict.
+    def _conflict_lines(text: str) -> frozenset:
+        lines = set()
+        for ln in (text or "").splitlines():
+            ln = ln.strip()
+            if ln.startswith("The package ") and " requires " in ln:
+                lines.add(ln)
+        return frozenset(lines)
+
+    pre_check = _run([_UV_BIN, "pip", "check", "--python", sys.executable],
+                     timeout=_HEAL_CHECK_TIMEOUT)
+    pre_text = (pre_check.get("stderr") or "") + (pre_check.get("stdout") or "")
+    pre_conflicts = _conflict_lines(pre_text)
+
+    # Run a single uv invocation — one resolver run, one cache scan.
+    install_cmd = [
+        _UV_BIN, "pip", "install",
+        "--python", sys.executable,
+        "--link-mode", "copy",   # safer across drives than hardlink
+        # NOTE: no --upgrade, no --reinstall, no --no-cache-dir.
+        # uv's strict resolver is enabled by default; --strict alters
+        # script-vs-module handling on some uv versions, so we omit it
+        # and rely on the post-check + rollback to detect conflicts.
+        *accepted,
+    ]
+    install = _run(install_cmd, timeout=timeout)
+    if not install["ok"]:
+        return {"ok": False, "stage": "install",
+                "error": f"uv pip install failed (rc={install['rc']})",
+                "installed": [], "rolled_back": False,
+                "rc": install["rc"],
+                "stdout": install["stdout"], "stderr": install["stderr"],
+                "duration_s": round(time.time() - t0, 2)}
+
+    # Post-install conflict check. If uv reports NEW problems, roll back.
+    post_check = _run([_UV_BIN, "pip", "check", "--python", sys.executable],
+                      timeout=_HEAL_CHECK_TIMEOUT)
+    post_text = (post_check.get("stderr") or "") + (post_check.get("stdout") or "")
+    post_conflicts = _conflict_lines(post_text)
+    new_conflicts = post_conflicts - pre_conflicts
+    if new_conflicts:
+        # Auto-rollback: uninstall the packages we just added.
+        uninstall = _run(
+            [_UV_BIN, "pip", "uninstall", "--python", sys.executable, *accepted],
+            timeout=timeout,
+        )
+        return {"ok": False, "stage": "post_check",
+                "error": "post-install uv pip check reported new conflicts; "
+                         "rolled back the newly installed packages",
+                "installed": [], "rolled_back": uninstall["ok"],
+                "rc": post_check["rc"],
+                "stdout": post_check["stdout"], "stderr": post_check["stderr"],
+                "new_conflicts": sorted(new_conflicts),
+                "duration_s": round(time.time() - t0, 2)}
+
+    # Success. Re-emit an integrity event so the UI refreshes its INT pill.
+    _emit({"type": "heal_complete", "packages": accepted})
+
+    return {"ok": True, "stage": "done", "installed": list(accepted),
+            "rolled_back": False, "rc": install["rc"],
+            "stdout": install["stdout"], "stderr": install["stderr"],
+            "duration_s": round(time.time() - t0, 2)}
 
 
 # =====================================================================
@@ -603,6 +864,91 @@ def register_routes(server) -> None:
         start_background_scan(force=True, delay=0.0)
         return web.json_response({"ok": result["ok"], **result})
 
+    # -------------------------------------------------------------- E.3
+    # Phase E.3 — Failed-import discovery + heal routes
+    @routes.get("/c2c/integrity/failed_imports")
+    async def _failed_imports(req):  # noqa: ARG001
+        try:
+            from ..c2c_ai.import_heal import collect_failed_imports
+        except Exception as exc:
+            return web.json_response(
+                {"success": False, "error": "import_heal_unavailable",
+                 "message": str(exc)}, status=500)
+        rescan = (req.query.get("rescan", "") or "").lower() in ("1", "true", "yes")
+        try:
+            packs = collect_failed_imports(rescan=rescan)
+        except Exception as exc:
+            log.exception("[integrity] failed_imports harvester crashed")
+            return web.json_response(
+                {"success": False, "error": "harvester_failed",
+                 "message": str(exc)}, status=500)
+        data = {
+            "packs": [p.to_dict() for p in packs],
+            "counts": {
+                "total": len(packs),
+                "auto_safe": sum(1 for p in packs
+                                 if p.recommended_action == "auto_safe"),
+                "needs_review": sum(1 for p in packs
+                                    if p.recommended_action == "needs_review"),
+                "blocked": sum(1 for p in packs
+                               if p.recommended_action == "blocked"),
+                "unknown": sum(1 for p in packs
+                               if p.recommended_action == "unknown"),
+            },
+            "uv_available": bool(_UV_BIN),
+        }
+        return web.json_response({"success": True, "data": data})
+
+    @routes.post("/c2c/integrity/heal")
+    async def _heal(req):
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        pack_name = (body or {}).get("pack")
+        force = bool((body or {}).get("force", False))
+        if not pack_name or not isinstance(pack_name, str):
+            return web.json_response(
+                {"success": False, "error": "missing_pack",
+                 "message": "body must include 'pack': <pack name>"},
+                status=400)
+        try:
+            from ..c2c_ai.import_heal import (
+                collect_failed_imports,
+                ACTION_AUTO_SAFE, ACTION_NEEDS_REVIEW, ACTION_BLOCKED,
+            )
+        except Exception as exc:
+            return web.json_response(
+                {"success": False, "error": "import_heal_unavailable",
+                 "message": str(exc)}, status=500)
+        packs = collect_failed_imports(rescan=False)
+        pack = next((p for p in packs if p.name == pack_name), None)
+        if pack is None:
+            return web.json_response(
+                {"success": False, "error": "pack_not_failed",
+                 "message": f"no failed-import pack named {pack_name!r}"},
+                status=404)
+        if pack.recommended_action == ACTION_BLOCKED:
+            return web.json_response(
+                {"success": False, "error": "blocked",
+                 "message": "this pack requires manual review — "
+                            "a CRITICAL package would be modified",
+                 "report": pack.report}, status=409)
+        if pack.recommended_action == ACTION_NEEDS_REVIEW and not force:
+            return web.json_response(
+                {"success": False, "error": "needs_review",
+                 "message": "this pack has risky entries — "
+                            "POST with 'force': true to install anyway",
+                 "report": pack.report}, status=409)
+        result = install_missing(pack.safe_to_install, force=force)
+        # On success, rescan integrity so the INT pill clears the warning.
+        if result.get("ok"):
+            start_background_scan(force=True, delay=0.0)
+        return web.json_response({
+            "success": bool(result.get("ok")),
+            "data": {"pack": pack_name, "result": result},
+        })
+
     log.info("[integrity] routes registered")
 
 
@@ -611,7 +957,7 @@ def register_routes(server) -> None:
 # =====================================================================
 class IntegrityStatusMEC:
     DESCRIPTION = "Returns the latest integrity scan as a string."
-    CATEGORY = "C2C/Diagnostic"
+    CATEGORY = "C2C/Diagnostics"
     FUNCTION = "status"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("report",)
@@ -640,4 +986,4 @@ class IntegrityStatusMEC:
 
 
 NODE_CLASS_MAPPINGS = {"IntegrityStatusMEC": IntegrityStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status"}

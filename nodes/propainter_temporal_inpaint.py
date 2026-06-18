@@ -1,6 +1,6 @@
 # FILE: nodes/propainter_temporal_inpaint.py
-# FEATURE: P1 — ProPainterTemporalMEC (temporal video inpaint between InpaintCropProMEC and InpaintCompositeMEC)
-# INTEGRATES WITH: nodes/inpaint_suite.py (consumes stitch_data, feeds InpaintCompositeMEC)
+# FEATURE: P1 — ProPainterTemporalMEC (temporal video inpaint between InpaintCropProMEC and downstream compositor)
+# INTEGRATES WITH: nodes/inpaint_suite.py (consumes stitch_data, feeds InpaintPasteBackMEC / InpaintStitchProMEC)
 """
 ProPainterTemporalMEC — drop-in temporal inpainter.
 
@@ -356,7 +356,7 @@ def _boundary_blend(filled: torch.Tensor, original_crop: torch.Tensor,
 class ProPainterTemporalMEC:
     DESCRIPTION = (
         "Temporal video inpaint via ProPainter (RAFT + RFC + InpaintGenerator). "
-        "Drop in between InpaintCropProMEC and InpaintCompositeMEC."
+        "Drop in between InpaintCropProMEC and InpaintPasteBackMEC / InpaintStitchProMEC."
     )
     CATEGORY = "C2C/Inpaint"
     FUNCTION = "inpaint_temporal"
@@ -493,4 +493,4 @@ class ProPainterTemporalMEC:
 
 
 NODE_CLASS_MAPPINGS = {"ProPainterTemporalMEC": ProPainterTemporalMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint (C2C)"}
+NODE_DISPLAY_NAME_MAPPINGS = {"ProPainterTemporalMEC": "ProPainter Temporal Inpaint"}

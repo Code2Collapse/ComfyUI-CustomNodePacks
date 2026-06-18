@@ -159,16 +159,19 @@ def edge_inside_outside(alpha_bhw: torch.Tensor, edge_radius: int = 4
     inside  = eroded(alpha > 0.99, r)   — safe to colour-grade
     outside = eroded(alpha < 0.01, r)   — safe to defocus
     edge    = everything else (soft band where matting matters)
+
+    Uses reflect padding so subjects touching the image boundary retain
+    correct inside/outside classification instead of being eroded to zero.
     """
     a = alpha_bhw.unsqueeze(1)
     r = max(1, int(edge_radius))
     k = 2 * r + 1
-    kernel = torch.ones((1, 1, k, k), device=a.device, dtype=a.dtype)
-    # Max-pool acts as binary dilation; -max(-x) acts as erosion.
     fg = (a > 0.99).float()
     bg = (a < 0.01).float()
-    fg_erode = -F.max_pool2d(-fg, kernel_size=k, stride=1, padding=r)
-    bg_erode = -F.max_pool2d(-bg, kernel_size=k, stride=1, padding=r)
+    fg_padded = F.pad(fg, (r, r, r, r), mode="reflect")
+    bg_padded = F.pad(bg, (r, r, r, r), mode="reflect")
+    fg_erode = -F.max_pool2d(-fg_padded, kernel_size=k, stride=1, padding=0)
+    bg_erode = -F.max_pool2d(-bg_padded, kernel_size=k, stride=1, padding=0)
     inside = fg_erode.squeeze(1).clamp(0, 1)
     outside = bg_erode.squeeze(1).clamp(0, 1)
     edge = (1.0 - inside - outside).clamp(0, 1)

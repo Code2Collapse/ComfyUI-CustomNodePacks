@@ -24,19 +24,21 @@
  */
 import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { C } from './_c2c_theme.js';
 
 // Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
 const TARGET_NODES = ["MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC"];
 
 const COLOR = {
-    bg: "#181825",
-    border: "#313244",
-    pos: "#22d65a",
-    neg: "#ff4466",
+    bg: "var(--c2c-bg2)",
+    border: "var(--c2c-surface0)",
+    pos: "var(--c2c-okStrong)",
+    neg: "var(--c2c-dangerHot)",
     posFill: "rgba(34,214,90,0.12)",
     negFill: "rgba(255,68,102,0.12)",
-    text: "#cdd6f4",
-    sub: "#7f849c",
+    text: "var(--c2c-fg)",
+    sub: "var(--c2c-overlay1)",
 };
 
 const HISTORY_LIMIT = 80;
@@ -71,9 +73,7 @@ function _refIdentityKey(url) {
             const sub = params.get("subfolder") || "";
             const type = params.get("type") || "";
             return `view:${type}/${sub}/${fn}`;
-        } catch (_) {
-            // fall through
-        }
+        } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
     }
     return url;
 }
@@ -243,7 +243,7 @@ class Editor {
                 }));
                 this.bboxes = (o.bboxes || []).map(b => [+b[0], +b[1], +b[2], +b[3], (b[4] != null ? b[4] | 0 : 1)]);
             }
-        } catch (_) { /* ignore */ }
+        } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
     }
 
     setRefImage(url, origW, origH) {
@@ -296,12 +296,12 @@ function draw(ed, ctx, vw, vh) {
     if (ed.refImg && ed.refImg.complete) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (_) {}
+        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
     } else {
-        ctx.fillStyle = "#11111b";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);
     }
-    ctx.strokeStyle = "#45475a";
+    ctx.strokeStyle = C.surface1;
     ctx.lineWidth = 1 / z;
     ctx.strokeRect(0, 0, ed.canvasW, ed.canvasH);
 
@@ -347,13 +347,13 @@ function draw(ed, ctx, vw, vh) {
         const dotR = (isHov ? 6 : 4) / z;
         ctx.fillStyle = c;
         ctx.beginPath(); ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#000a";
+        ctx.strokeStyle = C.black;
         ctx.lineWidth = 1.5 / z;
         ctx.stroke();
     }
 
     if (ed.cursor.visible && !ed.drag) {
-        ctx.strokeStyle = "#ffffff66";
+        ctx.strokeStyle = C.white;
         ctx.lineWidth = 1 / z;
         ctx.beginPath();
         ctx.arc(ed.cursor.x, ed.cursor.y, ed.radius, 0, Math.PI * 2);
@@ -368,7 +368,9 @@ function findRefImage(node) {
     const linkedInput = node.inputs.find(i =>
         (i.name === "reference_image" || i.name === "image") && i.link != null);
     if (!linkedInput) return null;
-    const link = app.graph.links[linkedInput.link];
+    // Resolve links within the node's owning graph (subgraph-safe).
+    const ownerGraph = node.graph || app.graph;
+    const link = ownerGraph?.links?.[linkedInput.link];
     if (!link) return null;
 
     const visited = new Set();
@@ -377,7 +379,7 @@ function findRefImage(node) {
         const { id, depth } = queue.shift();
         if (visited.has(id)) continue;
         visited.add(id);
-        const n = app.graph.getNodeById(id);
+        const n = ownerGraph.getNodeById?.(id);
         if (!n) continue;
         if (n.imgs?.length) return { url: n.imgs[0].src };
         const w = n.widgets?.find(w => w.name === "image");
@@ -390,7 +392,7 @@ function findRefImage(node) {
         if (depth < 3 && n.inputs) {
             for (const inp of n.inputs) {
                 if (inp.link == null) continue;
-                const li = app.graph.links[inp.link];
+                const li = ownerGraph.links?.[inp.link];
                 if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
             }
         }
@@ -448,7 +450,7 @@ function installEditor(node) {
     const tb = document.createElement("div");
     tb.style.cssText = `
         display:flex;align-items:center;gap:4px;padding:4px 6px;
-        background:linear-gradient(#22223a,#1a1a2e);
+        background:linear-gradient(var(--c2c-panelTint),var(--c2c-panelHi));
         border-bottom:1px solid ${COLOR.border};
         flex:0 0 auto;font-size:11px;line-height:1;
         pointer-events:auto;
@@ -456,7 +458,7 @@ function installEditor(node) {
     root.appendChild(tb);
 
     const canvasWrap = document.createElement("div");
-    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;pointer-events:auto;";
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:var(--c2c-bg3);pointer-events:auto;";
     root.appendChild(canvasWrap);
 
     const canvas = document.createElement("canvas");
@@ -468,7 +470,7 @@ function installEditor(node) {
     const status = document.createElement("div");
     status.style.cssText = `
         position:absolute;left:6px;bottom:6px;padding:3px 7px;
-        background:#1e1e2ed8;border:1px solid ${COLOR.border};border-radius:4px;
+        background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:4px;
         font-size:10px;color:${COLOR.sub};pointer-events:none;
         font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
     `;
@@ -482,14 +484,14 @@ function installEditor(node) {
         b.style.cssText = `
             min-width:26px;height:24px;padding:0 7px;
             border:1px solid ${COLOR.border};border-radius:4px;
-            background:#313244;color:${COLOR.text};
+            background:var(--c2c-surface0);color:${COLOR.text};
             font-size:11px;font-weight:500;cursor:pointer;
             display:inline-flex;align-items:center;justify-content:center;
             white-space:nowrap;line-height:1;flex:0 0 auto;
             transition:background .12s,border-color .12s;
         `;
-        b.onmouseenter = () => { b.style.background = "#45475a"; b.style.borderColor = "#585b70"; };
-        b.onmouseleave = () => { b.style.background = "#313244"; b.style.borderColor = COLOR.border; };
+        b.onmouseenter = () => { b.style.background = "var(--c2c-surface1)"; b.style.borderColor = "var(--c2c-surface2)"; };
+        b.onmouseleave = () => { b.style.background = "var(--c2c-surface0)"; b.style.borderColor = COLOR.border; };
         b.onmousedown = (e) => e.stopPropagation();
         b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(); render(); };
         return b;
@@ -499,7 +501,7 @@ function installEditor(node) {
     counter.style.cssText = `
         color:${COLOR.text};font-size:10px;flex:1 1 auto;
         font-family:ui-monospace,Menlo,monospace;
-        padding:3px 8px;background:#11111b;border:1px solid ${COLOR.border};
+        padding:3px 8px;background:var(--c2c-bg3);border:1px solid ${COLOR.border};
         border-radius:4px;letter-spacing:.3px;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     `;
@@ -525,9 +527,9 @@ function installEditor(node) {
     // (Ctrl+drag temporarily forces this regardless of toggle state.)
     const singleBtn = mkIcon("1\u25A1", "Single bbox mode (replace previous). Ctrl+drag does this once without toggling.", () => {
         ed.singleBbox = !ed.singleBbox;
-        singleBtn.style.background = ed.singleBbox ? "#7c5cff" : "#313244";
-        singleBtn.style.borderColor = ed.singleBbox ? "#7c5cff" : COLOR.border;
-        singleBtn.style.color = ed.singleBbox ? "#ffffff" : COLOR.text;
+        singleBtn.style.background = ed.singleBbox ? "var(--c2c-accentVivid)" : "var(--c2c-surface0)";
+        singleBtn.style.borderColor = ed.singleBbox ? "var(--c2c-accentVivid)" : COLOR.border;
+        singleBtn.style.color = ed.singleBbox ? "var(--c2c-white)" : COLOR.text;
         // If toggling ON with multiple boxes already, keep only the latest.
         if (ed.singleBbox && ed.bboxes.length > 1) {
             ed.pushUndo();
@@ -545,8 +547,8 @@ function installEditor(node) {
         ed.bboxes = [];
         ed.save();
     });
-    clearBtn.style.color = "#f38ba8";
-    clearBtn.style.borderColor = "#583444";
+    clearBtn.style.color = "var(--c2c-red)";
+    clearBtn.style.borderColor = "var(--c2c-violetBg)";
     tb.appendChild(clearBtn);
 
     // Dropdown menu (≡)
@@ -555,9 +557,9 @@ function installEditor(node) {
 
     const menu = document.createElement("div");
     menu.style.cssText = `
-        position:absolute;top:34px;right:6px;z-index:50;
-        background:#1e1e2e;border:1px solid ${COLOR.border};border-radius:6px;
-        box-shadow:0 6px 20px #000a;padding:4px;display:none;
+        position:absolute;top:34px;right:6px;z-index:var(--c2c-z-panel);
+        background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
+        box-shadow:0 6px 20px var(--c2c-black);padding:4px;display:none;
         min-width:180px;font-size:11px;
     `;
     root.style.position = "relative";
@@ -568,9 +570,9 @@ function installEditor(node) {
         it.textContent = label;
         it.style.cssText = `
             padding:7px 12px;border-radius:4px;cursor:pointer;
-            color:${danger ? "#f38ba8" : COLOR.text};white-space:nowrap;
+            color:${danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
         `;
-        it.onmouseenter = () => it.style.background = "#313244";
+        it.onmouseenter = () => it.style.background = "var(--c2c-surface0)";
         it.onmouseleave = () => it.style.background = "";
         it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
         return it;
@@ -832,7 +834,7 @@ function installEditor(node) {
     });
 
     canvas.addEventListener("pointerup", (e) => {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
         const c = eventCanvas(e);
 
         if (ed.drag?.kind === "pan") {

@@ -1,4 +1,4 @@
-// Shared widget show/hide helper for MEC nodes.
+﻿// Shared widget show/hide helper for MEC nodes.
 //
 // Modern ComfyUI renders many widgets via DOM (number inputs, textareas,
 // combo selects). Setting ``widget.type = "hidden"`` and collapsing

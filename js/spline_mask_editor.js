@@ -22,6 +22,8 @@
  */
 import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
+import { C, bg3, border, peach } from "./_c2c_theme.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 // Targets both the unified SplineMaskMEC (mode=edit) node and any
 // legacy SplineMaskEditorMEC references that may still live on saved
@@ -30,11 +32,11 @@ const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC"];
 const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
-    bg: "#181825",
-    border: "#313244",
-    text: "#cdd6f4",
-    sub: "#7f849c",
-    paths: ["#a6e3a1", "#89b4fa", "#f9e2af", "#fab387", "#f5c2e7", "#94e2d5"],
+    bg: "var(--c2c-bg2)",
+    border: "var(--c2c-border)",
+    text: "var(--c2c-fg)",
+    sub: "var(--c2c-overlay1)",
+    paths: ["var(--c2c-green)", "var(--c2c-blue)", "var(--c2c-yellow)", "var(--c2c-peach)", "var(--c2c-pink)", "var(--c2c-teal)"],
 };
 
 const HISTORY_LIMIT = 80;
@@ -166,6 +168,48 @@ class Editor {
         }
         return { shape: -1, point: -1 };
     }
+    // Hit-test Bezier handle endpoints on the active shape only.
+    // Returns {shape, point, side:"in"|"out"} or null.
+    findHandle(cx, cy) {
+        if (this.active < 0) return null;
+        const sh = this.shapes[this.active];
+        if (!sh || sh.type !== "bezier" || !Array.isArray(sh.handles)) return null;
+        const r = POINT_HIT_PX / this.zoom;
+        const r2 = r * r;
+        for (let i = 0; i < sh.points.length; i++) {
+            const h = sh.handles[i];
+            if (!h) continue;
+            const p = sh.points[i];
+            for (const side of ["in", "out"]) {
+                const hv = h[side];
+                if (!hv) continue;
+                const hx = p.x + hv.x, hy = p.y + hv.y;
+                const d = (hx - cx) ** 2 + (hy - cy) ** 2;
+                if (d < r2) return { shape: this.active, point: i, side };
+            }
+        }
+        return null;
+    }
+    // Ensure shape.handles is sized to match shape.points; create symmetric
+    // tangents from neighbours when missing. Idempotent.
+    ensureHandles(sh) {
+        if (sh.type !== "bezier") return;
+        if (!Array.isArray(sh.handles)) sh.handles = [];
+        const n = sh.points.length;
+        for (let i = 0; i < n; i++) {
+            if (sh.handles[i] && sh.handles[i].in && sh.handles[i].out) continue;
+            const p = sh.points[i];
+            const prev = sh.points[i - 1] || (sh.closed ? sh.points[n - 1] : null);
+            const next = sh.points[i + 1] || (sh.closed ? sh.points[0]     : null);
+            let tx = 0, ty = 0;
+            if (prev && next) { tx = (next.x - prev.x) * 0.25; ty = (next.y - prev.y) * 0.25; }
+            else if (prev)    { tx = (p.x - prev.x) * 0.33;    ty = (p.y - prev.y) * 0.33; }
+            else if (next)    { tx = (next.x - p.x) * 0.33;    ty = (next.y - p.y) * 0.33; }
+            else              { tx = 40; ty = 0; }
+            sh.handles[i] = { in: { x: -tx, y: -ty }, out: { x: tx, y: ty } };
+        }
+        sh.handles.length = n;
+    }
 
     save() {
         const w = this.node.widgets?.find(w => w.name === "spline_data");
@@ -192,8 +236,9 @@ class Editor {
                     ...(sh.handles ? { handles: sh.handles } : {}),
                 }));
                 this.active = this.shapes.length ? 0 : -1;
+                for (const sh of this.shapes) if (sh.type === "bezier") this.ensureHandles(sh);
             }
-        } catch (_) {}
+        } catch (__c2cErr) { __c2cReport("spline_mask_editor", __c2cErr); }
     }
 
     setRefImage(url, ow, oh) {
@@ -291,10 +336,39 @@ function catmullRom(points, samplesPerSeg, closed, alpha) {
     return out;
 }
 
+function bezierCubic(points, samplesPerSeg, closed, handles) {
+    const n = points.length;
+    if (n < 2 || !Array.isArray(handles) || handles.length < n) return points.slice();
+    const out = [];
+    const segs = closed ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const h1 = handles[i];
+        const h2 = handles[(i + 1) % n];
+        if (!h1 || !h2) continue;
+        const c1x = p1.x + (h1.out?.x ?? 0), c1y = p1.y + (h1.out?.y ?? 0);
+        const c2x = p2.x + (h2.in?.x  ?? 0), c2y = p2.y + (h2.in?.y  ?? 0);
+        const last = i === segs - 1;
+        const steps = samplesPerSeg + (last ? 1 : 0);
+        for (let s = 0; s < steps; s++) {
+            const t = s / samplesPerSeg;
+            const u = 1 - t;
+            const b0 = u * u * u, b1 = 3 * u * u * t, b2 = 3 * u * t * t, b3 = t * t * t;
+            out.push({
+                x: b0 * p1.x + b1 * c1x + b2 * c2x + b3 * p2.x,
+                y: b0 * p1.y + b1 * c1y + b2 * c2y + b3 * p2.y,
+            });
+        }
+    }
+    return out;
+}
+
 function sampleShape(sh, samplesPerSeg, alpha) {
     const pts = sh.points;
     if (pts.length < 2) return pts.slice();
     if (sh.type === "polyline") return pts.slice();
+    if (sh.type === "bezier")   return bezierCubic(pts, samplesPerSeg, sh.closed, sh.handles);
     return catmullRom(pts, samplesPerSeg, sh.closed, alpha);
 }
 
@@ -310,12 +384,12 @@ function draw(ed, ctx, vw, vh) {
     if (ed.refImg && ed.refImg.complete) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (_) {}
+        try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (__c2cErr) { __c2cReport("spline_mask_editor", __c2cErr); }
     } else {
-        ctx.fillStyle = "#11111b";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);
     }
-    ctx.strokeStyle = "#45475a";
+    ctx.strokeStyle = C.surface1;
     ctx.lineWidth = 1 / z;
     ctx.strokeRect(0, 0, ed.canvasW, ed.canvasH);
 
@@ -345,13 +419,45 @@ function draw(ed, ctx, vw, vh) {
             const r = (isHov ? 6 : 4) / z;
             ctx.fillStyle = c;
             ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-            ctx.strokeStyle = "#000a";
+            ctx.strokeStyle = C.black;
             ctx.lineWidth = 1.5 / z;
             ctx.stroke();
             if (isActive && i === 0) {
-                ctx.strokeStyle = "#fff";
+                ctx.strokeStyle = C.white;
                 ctx.lineWidth = 1 / z;
                 ctx.beginPath(); ctx.arc(p.x, p.y, r + 2 / z, 0, Math.PI * 2); ctx.stroke();
+            }
+        }
+
+        // Bezier handle endpoints + connector lines (active shape only).
+        if (isActive && sh.type === "bezier" && Array.isArray(sh.handles)) {
+            for (let i = 0; i < sh.points.length; i++) {
+                const p = sh.points[i];
+                const h = sh.handles[i];
+                if (!h) continue;
+                for (const side of ["in", "out"]) {
+                    const hv = h[side];
+                    if (!hv) continue;
+                    const hx = p.x + hv.x, hy = p.y + hv.y;
+                    // Canvas can't parse var(); use the theme-resolved color.
+                    // (was "var(--c2c-peach)aa" → silently rendered as default/black.)
+                    ctx.save();
+                    ctx.globalAlpha = 0.67;             // the intended ~"aa" alpha
+                    ctx.strokeStyle = C.peach;
+                    ctx.lineWidth = 1 / z;
+                    ctx.beginPath();
+                    ctx.moveTo(p.x, p.y);
+                    ctx.lineTo(hx, hy);
+                    ctx.stroke();
+                    ctx.restore();
+                    ctx.fillStyle = C.peach;
+                    ctx.beginPath();
+                    ctx.arc(hx, hy, 3.5 / z, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = C.black;
+                    ctx.lineWidth = 1 / z;
+                    ctx.stroke();
+                }
             }
         }
     }
@@ -363,7 +469,9 @@ function findRefImage(node) {
     if (!node.inputs) return null;
     const linkedInput = node.inputs.find(i => i.name === "image" && i.link != null);
     if (!linkedInput) return null;
-    const link = app.graph.links[linkedInput.link];
+    // Resolve links within the node's owning graph (subgraph-safe).
+    const ownerGraph = node.graph || app.graph;
+    const link = ownerGraph?.links?.[linkedInput.link];
     if (!link) return null;
 
     const visited = new Set();
@@ -372,7 +480,7 @@ function findRefImage(node) {
         const { id, depth } = queue.shift();
         if (visited.has(id)) continue;
         visited.add(id);
-        const n = app.graph.getNodeById(id);
+        const n = ownerGraph.getNodeById?.(id);
         if (!n) continue;
         if (n.imgs?.length) return { url: n.imgs[0].src };
         const w = n.widgets?.find(w => w.name === "image");
@@ -385,7 +493,7 @@ function findRefImage(node) {
         if (depth < 3 && n.inputs) {
             for (const inp of n.inputs) {
                 if (inp.link == null) continue;
-                const li = app.graph.links[inp.link];
+                const li = ownerGraph.links?.[inp.link];
                 if (li) queue.push({ id: li.origin_id, depth: depth + 1 });
             }
         }
@@ -394,6 +502,7 @@ function findRefImage(node) {
 }
 
 function installEditor(node) {
+    if (node._mecSplineEditHost) return;
     const ed = new Editor(node);
 
     const hideWidget = (w) => {
@@ -444,7 +553,7 @@ function installEditor(node) {
     const tb = document.createElement("div");
     tb.style.cssText = `
         display:flex;align-items:center;gap:4px;padding:4px 6px;
-        background:linear-gradient(#22223a,#1a1a2e);
+        background:linear-gradient(var(--c2c-panelTint),var(--c2c-panelHi));
         border-bottom:1px solid ${COLOR.border};
         flex:0 0 auto;font-size:11px;line-height:1;
         pointer-events:auto;
@@ -452,7 +561,7 @@ function installEditor(node) {
     root.appendChild(tb);
 
     const canvasWrap = document.createElement("div");
-    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:#11111b;pointer-events:auto;";
+    canvasWrap.style.cssText = "position:relative;flex:1 1 auto;min-height:0;overflow:hidden;cursor:crosshair;background:var(--c2c-bg3);pointer-events:auto;";
     root.appendChild(canvasWrap);
 
     const canvas = document.createElement("canvas");
@@ -463,7 +572,7 @@ function installEditor(node) {
     const status = document.createElement("div");
     status.style.cssText = `
         position:absolute;left:6px;bottom:6px;padding:3px 7px;
-        background:#1e1e2ed8;border:1px solid ${COLOR.border};border-radius:4px;
+        background:var(--c2c-bg)d8;border:1px solid ${COLOR.border};border-radius:4px;
         font-size:10px;color:${COLOR.sub};pointer-events:none;
         font-family:ui-monospace,Menlo,monospace;letter-spacing:.2px;
     `;
@@ -477,14 +586,14 @@ function installEditor(node) {
         b.style.cssText = `
             min-width:26px;height:24px;padding:0 7px;
             border:1px solid ${COLOR.border};border-radius:4px;
-            background:#313244;color:${COLOR.text};
+            background:var(--c2c-border);color:${COLOR.text};
             font-size:11px;font-weight:500;cursor:pointer;
             display:inline-flex;align-items:center;justify-content:center;
             white-space:nowrap;line-height:1;flex:0 0 auto;
             transition:background .12s,border-color .12s;
         `;
-        b.onmouseenter = () => { b.style.background = "#45475a"; b.style.borderColor = "#585b70"; };
-        b.onmouseleave = () => { b.style.background = "#313244"; b.style.borderColor = COLOR.border; };
+        b.onmouseenter = () => { b.style.background = "var(--c2c-surface1)"; b.style.borderColor = "var(--c2c-surface2)"; };
+        b.onmouseleave = () => { b.style.background = C.border; b.style.borderColor = COLOR.border; };
         b.onmousedown = (e) => e.stopPropagation();
         b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(b); render(); };
         return b;
@@ -494,7 +603,7 @@ function installEditor(node) {
     counter.style.cssText = `
         color:${COLOR.text};font-size:10px;flex:1 1 auto;
         font-family:ui-monospace,Menlo,monospace;
-        padding:3px 8px;background:#11111b;border:1px solid ${COLOR.border};
+        padding:3px 8px;background:var(--c2c-bg3);border:1px solid ${COLOR.border};
         border-radius:4px;letter-spacing:.3px;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     `;
@@ -529,9 +638,9 @@ function installEditor(node) {
 
     const menu = document.createElement("div");
     menu.style.cssText = `
-        position:absolute;top:34px;right:6px;z-index:50;
-        background:#1e1e2e;border:1px solid ${COLOR.border};border-radius:6px;
-        box-shadow:0 6px 20px #000a;padding:4px;display:none;
+        position:absolute;top:34px;right:6px;z-index:var(--c2c-z-hud);
+        background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
+        box-shadow:0 6px 20px var(--c2c-black);padding:4px;display:none;
         min-width:200px;font-size:11px;
     `;
     root.style.position = "relative";
@@ -542,9 +651,9 @@ function installEditor(node) {
         it.textContent = label;
         it.style.cssText = `
             padding:7px 12px;border-radius:4px;cursor:pointer;
-            color:${danger ? "#f38ba8" : COLOR.text};white-space:nowrap;
+            color:${danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
         `;
-        it.onmouseenter = () => it.style.background = "#313244";
+        it.onmouseenter = () => it.style.background = C.border;
         it.onmouseleave = () => it.style.background = "";
         it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
         return it;
@@ -590,22 +699,27 @@ function installEditor(node) {
         }
     }
 
-    let widgetH = 460;
-    node.addDOMWidget("spline_editor", "canvas", root, {
+    let widgetH = 220;
+    const canvasWidget = node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
+    canvasWidget.computeSize = function (width) {
+        const base = node.computeSize?.(width);
+        const chrome = Array.isArray(base) ? (base[1] || 0) : 0;
+        const extra = Math.max(0, (node.size?.[1] || 0) - chrome);
+        const h = extra > 120 ? Math.min(360, extra - 32) : widgetH;
+        widgetH = h;
+        return [width, Math.max(160, h)];
+    };
 
-    // Stash host DOM root for the mode-gate so it can hide/show this
-    // editor when the user toggles the unified node's `mode` widget.
     node._mecSplineEditHost = root;
+    node._mecSplineEditWidget = canvasWidget;
+    node._mecSplineEditWidgetH = () => widgetH;
 
-    if (!node.size || node.size[0] < 600) {
-        const h = node.size?.[1] || 640;
-        node.setSize?.([600, Math.max(h, 640)]);
-    }
+    node.setSize?.([Math.max(node.size?.[0] || 0, 600), Math.max(node.size?.[1] || 0, 380)]);
 
     // When a backdrop image is loaded, grow the canvas widget so the
     // image's aspect fits without huge empty bars. Mirrors points editor.
@@ -614,7 +728,7 @@ function installEditor(node) {
         const baseW = (node.size?.[0] || 600) - 24;
         if (baseW <= 0) return;
         const aspect = ed.canvasH / ed.canvasW;
-        const targetH = Math.max(360, Math.min(900, Math.round(baseW * aspect) + 80));
+        const targetH = Math.max(220, Math.min(520, Math.round(baseW * aspect) + 48));
         if (Math.abs(targetH - widgetH) >= 10) {
             widgetH = targetH;
             const curH = node.size?.[1] || widgetH;
@@ -715,6 +829,14 @@ function installEditor(node) {
             canvas.style.cursor = "grabbing";
             return;
         }
+        // Bezier handle drag takes priority over point hit, on active shape only.
+        const handleHit = (e.button === 0 && !e.shiftKey) ? ed.findHandle(c.x, c.y) : null;
+        if (handleHit) {
+            ed.pushUndo();
+            ed.drag = { kind: "handle", shape: handleHit.shape, point: handleHit.point, side: handleHit.side,
+                        mirror: !e.altKey };
+            return;
+        }
         const hit = ed.findPoint(c.x, c.y);
 
         if (e.button === 2) {
@@ -745,6 +867,7 @@ function installEditor(node) {
         ed.pushUndo();
         if (ed.active < 0 || ed.active >= ed.shapes.length) ed.newPath();
         ed.shapes[ed.active].points.push({ x: +c.x.toFixed(2), y: +c.y.toFixed(2) });
+        ed.ensureHandles(ed.shapes[ed.active]);
         ed.save(); render();
     });
 
@@ -767,6 +890,25 @@ function installEditor(node) {
             }
             return;
         }
+        if (ed.drag?.kind === "handle") {
+            const sh = ed.shapes[ed.drag.shape];
+            if (sh && Array.isArray(sh.handles)) {
+                const p = sh.points[ed.drag.point];
+                const h = sh.handles[ed.drag.point];
+                if (p && h) {
+                    const nx = +(c.x - p.x).toFixed(2);
+                    const ny = +(c.y - p.y).toFixed(2);
+                    h[ed.drag.side] = { x: nx, y: ny };
+                    // Symmetric mirror unless Alt held when drag started.
+                    if (ed.drag.mirror) {
+                        const other = ed.drag.side === "in" ? "out" : "in";
+                        h[other] = { x: -nx, y: -ny };
+                    }
+                    render();
+                }
+            }
+            return;
+        }
         const hit = ed.findPoint(c.x, c.y);
         if (hit.shape !== ed.hover.shape || hit.point !== ed.hover.point) {
             ed.hover = hit;
@@ -778,11 +920,14 @@ function installEditor(node) {
     });
 
     canvas.addEventListener("pointerup", (e) => {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("spline_mask_editor", __c2cErr); }
         if (ed.drag?.kind === "pan") {
             ed.drag = null; canvas.style.cursor = "crosshair"; return;
         }
         if (ed.drag?.kind === "point") {
+            ed.drag = null; ed.save(); render(); return;
+        }
+        if (ed.drag?.kind === "handle") {
             ed.drag = null; ed.save(); render(); return;
         }
     });
@@ -852,7 +997,10 @@ function installEditor(node) {
             syncFromWidgets();
             // Apply spline_type / closed change to ALL existing shapes
             if (wn === "spline_type") {
-                for (const sh of ed.shapes) sh.type = ed.splineType;
+                for (const sh of ed.shapes) {
+                    sh.type = ed.splineType;
+                    if (sh.type === "bezier") ed.ensureHandles(sh);
+                }
                 ed.save();
             } else if (wn === "closed") {
                 // do not clobber per-shape closed flag automatically; only newly added paths use it
@@ -887,6 +1035,14 @@ function installEditor(node) {
     };
     const refPoll = setInterval(() => { if (!ed.refImg) tryDiscoverRef(); }, 1500);
 
+    const origResize = node.onResize;
+    node.onResize = function(...args) {
+        origResize?.apply(this, args);
+        render();
+        node.setDirtyCanvas(true, true);
+        node.graph?.setDirtyCanvas(true, true);
+    };
+
     const origRemoved = node.onRemoved;
     node.onRemoved = function () {
         origRemoved?.apply(this, arguments);
@@ -920,6 +1076,8 @@ app.registerExtension({
                 installerKey: "splineEdit",
                 installer: (n) => installEditor(n),
                 hostFinder: (n) => n._mecSplineEditHost || null,
+                widgetFinder: (n) => n._mecSplineEditWidget || null,
+                widgetHeight: (n) => (typeof n._mecSplineEditWidgetH === "function" ? n._mecSplineEditWidgetH() : 460),
             });
         } else {
             // Legacy direct binding (kept for backward graph loading only).

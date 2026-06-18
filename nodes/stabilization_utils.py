@@ -1,5 +1,5 @@
 ﻿"""
-stabilization_utils â€” Shared camera/motion stabilization primitives.
+stabilization_utils — Shared camera/motion stabilization primitives.
 
 Provides:
   - estimate_homography(): ORB feature matching + RANSAC homography
@@ -36,9 +36,9 @@ except ImportError:
 logger = logging.getLogger("MEC")
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Homography / affine estimation via feature matching
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def _to_gray_uint8(frame: np.ndarray) -> np.ndarray:
     """Convert (H,W,C) float32 [0,1] or uint8 frame to grayscale uint8."""
@@ -100,7 +100,7 @@ def estimate_homography(
 
     # Validate: a reasonable homography should not have extreme perspective
     if abs(H[2, 0]) > 0.01 or abs(H[2, 1]) > 0.01:
-        # Extreme perspective â€” likely bad match, fall back to affine
+        # Extreme perspective — likely bad match, fall back to affine
         return estimate_affine(frame_a, frame_b, max_features, match_ratio)
 
     return H
@@ -162,7 +162,7 @@ def estimate_translation_torch(
 ) -> Tuple[float, float]:
     """Estimate (dx, dy) translation between two (H,W,C) frames via phase correlation.
 
-    Pure torch â€” no cv2. Returns (dx, dy) pixel shift.
+    Pure torch — no cv2. Returns (dx, dy) pixel shift.
     """
     # Convert to grayscale
     if frame_a.dim() == 3 and frame_a.shape[-1] >= 3:
@@ -194,9 +194,9 @@ def estimate_translation_torch(
     return (float(dx), float(dy))
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Frame warping
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def warp_frame_cv2(
     frame: np.ndarray,
@@ -205,7 +205,7 @@ def warp_frame_cv2(
 ) -> np.ndarray:
     """Warp frame using 3x3 homography/affine matrix. cv2 required.
 
-    frame: (H, W, C) or (H, W) â€” any dtype
+    frame: (H, W, C) or (H, W) — any dtype
     H_matrix: 3x3 numpy array
     output_size: (W, H) or None to keep same size
     Returns warped frame same shape/dtype.
@@ -237,7 +237,7 @@ def warp_frame_torch(
 ) -> torch.Tensor:
     """Warp (H,W,C) tensor by translation (dx, dy) using grid_sample.
 
-    Pure torch fallback â€” translation only.
+    Pure torch fallback — translation only.
     """
     H, W = frame.shape[0], frame.shape[1]
     C = frame.shape[2] if frame.dim() == 3 else 1
@@ -263,9 +263,9 @@ def warp_frame_torch(
     return warped.squeeze(0).permute(1, 2, 0)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Camera motion compensation for frame sequences
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def compensate_camera_motion(
     images: torch.Tensor,
@@ -279,7 +279,7 @@ def compensate_camera_motion(
     reference: 'previous' (align each to prior frame) | 'first' (align all to frame 0)
 
     Returns:
-      aligned_images: (B, H, W, C) â€” camera-compensated
+      aligned_images: (B, H, W, C) — camera-compensated
       transforms: list of 3x3 numpy arrays (or None for frame 0 / failures)
     """
     B, H, W, C = images.shape
@@ -362,7 +362,7 @@ def compute_motion_magnitudes(
 ) -> List[float]:
     """Extract per-frame motion magnitude from transform list.
 
-    Returns list of floats â€” magnitude of camera displacement per frame.
+    Returns list of floats — magnitude of camera displacement per frame.
     """
     magnitudes = []
     for t in transforms:
@@ -383,9 +383,9 @@ def compute_motion_magnitudes(
     return magnitudes
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Motion-adaptive temporal smoothing
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def _gauss_kernel_1d(sigma: float, device: torch.device,
                      dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -431,14 +431,14 @@ def motion_adaptive_temporal_smooth(
         smoothed = F.conv1d(padded, kernel)
         return smoothed.squeeze(1).permute(1, 0).reshape(B, H, W).clamp(0.0, 1.0)
 
-    # â”€â”€ Adaptive: per-frame varying sigma â”€â”€
+    # ── Adaptive: per-frame varying sigma ──
     # Normalize motion magnitudes to [0, 1]
     max_mag = max(motion_magnitudes) if motion_magnitudes else 1.0
     if max_mag < 1e-6:
         max_mag = 1.0
     norm_mags = [m / max_mag for m in motion_magnitudes]
 
-    # Per-frame sigma: high motion â†’ low sigma, low motion â†’ high sigma
+    # Per-frame sigma: high motion → low sigma, low motion → high sigma
     # sigma_frame = sigma_base * (1 - sensitivity * norm_mag)
     # Clamp sigma_min to 0.3 to avoid zero-width kernel
     sigmas = [max(0.3, sigma_base * (1.0 - motion_sensitivity * nm))
@@ -465,9 +465,9 @@ def motion_adaptive_temporal_smooth(
     return result.clamp(0.0, 1.0)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Smooth bounding box trajectory
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def smooth_bbox_trajectory(
     bboxes: List[Tuple[int, int, int, int]],
@@ -478,7 +478,7 @@ def smooth_bbox_trajectory(
     """Smooth a sequence of (x, y, w, h) bboxes for stable video cropping.
 
     Methods:
-      'median_then_exponential': median filter for outlier rejection â†’ exponential smooth
+      'median_then_exponential': median filter for outlier rejection → exponential smooth
       'median': pure median filter (good for removing jumps)
       'exponential': exponential moving average only
 
@@ -525,7 +525,7 @@ def compute_stable_bbox_trajectory(
     Instead of simple union, computes per-frame bbox then smooths the trajectory,
     returning the bbox that covers the smoothed trajectory range.
 
-    Returns (x, y, w, h) â€” single bbox for the whole sequence.
+    Returns (x, y, w, h) — single bbox for the whole sequence.
     """
     B, H, W = mask.shape
 
@@ -569,9 +569,9 @@ def compute_stable_bbox_trajectory(
             min(H, y_max) - max(0, y_min))
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Ronin-gimbal cinema trajectory
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def _median_filter_1d(arr: np.ndarray, radius: int) -> np.ndarray:
     """1D median filter along axis 0 with edge replication."""
@@ -640,8 +640,8 @@ def ronin_filter_1d(
 ) -> np.ndarray:
     """Two-stage Ronin gimbal filter.
 
-    Stage 1: EMA low-pass (cutoff 4 Hz at strength=1.0) â†’ kills HF jitter.
-    Stage 2: Critically-damped spring â†’ adds inertia + tiny settle.
+    Stage 1: EMA low-pass (cutoff 4 Hz at strength=1.0) → kills HF jitter.
+    Stage 2: Critically-damped spring → adds inertia + tiny settle.
 
     A pre-warmup pass on the first ``warmup_frames`` is run to settle the
     integrator so frames 1..N don't have a visible snap-to.
@@ -687,14 +687,14 @@ def compute_ronin_bbox_trajectory(
 
     Pipeline per dimension:
       1. Per-frame bbox extraction from mask, gap-filled by linear interp.
-      2. Median filter (radius 2) â†’ reject single-frame outlier spikes.
-      3. EMA low-pass (4 Hz Ã— strength cutoff) â†’ kill HF jitter.
-      4. Critically-damped 2nd-order spring â†’ inertia, glide, ~0 overshoot.
+      2. Median filter (radius 2) → reject single-frame outlier spikes.
+      3. EMA low-pass (4 Hz × strength cutoff) → kill HF jitter.
+      4. Critically-damped 2nd-order spring → inertia, glide, ~0 overshoot.
       5. Pre-warm pass so frames 1..N have no snap-to.
 
     Crop SIZE is locked to a uniform (crop_w, crop_h) sized to the 99th
     percentile center displacement plus subject size + padding (NOT the
-    full envelope â€” that over-crops on big subject moves and gives WAN
+    full envelope — that over-crops on big subject moves and gives WAN
     too much hallucination room).
 
     Args:
@@ -800,7 +800,7 @@ def compute_ronin_bbox_trajectory(
         for i in range(B)
     ]
 
-    # Envelope (union of all per-frame crop rects) â€” for canvas sizing
+    # Envelope (union of all per-frame crop rects) — for canvas sizing
     env_x0 = min(c[0] - crop_w // 2 for c in centers_int)
     env_y0 = min(c[1] - crop_h // 2 for c in centers_int)
     env_x1 = max(c[0] - crop_w // 2 + crop_w for c in centers_int)

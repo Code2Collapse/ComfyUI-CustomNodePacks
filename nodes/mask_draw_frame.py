@@ -1,5 +1,5 @@
 """
-MaskDrawFrame â€“ Draw shapes onto a mask for a specific frame in a sequence.
+MaskDrawFrame – Draw shapes onto a mask for a specific frame in a sequence.
 Supports: circle, rectangle, ellipse, polygon, line, triangle, star, diamond,
 cross, rounded_rectangle, heart, arrow.  All shapes support rotation.
 """
@@ -136,7 +136,7 @@ class MaskDrawFrame:
     CATEGORY = "C2C/Draw"
     DESCRIPTION = "Draw precise geometric shapes onto a mask with feathering, rotation, and blend operations."
 
-    # â”€â”€ Rotation helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Rotation helper ───────────────────────────────────────────────
     @staticmethod
     def _rotate_grid(xx: torch.Tensor, yy: torch.Tensor,
                      cx: float, cy: float, angle_deg: float):
@@ -152,7 +152,7 @@ class MaskDrawFrame:
         ry = -dx * sin_a + dy * cos_a
         return rx + cx, ry + cy
 
-    # â”€â”€ Polygon-to-SDF helper (for feathered polygon shapes) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Polygon-to-SDF helper (for feathered polygon shapes) ─────────
     @staticmethod
     def _polygon_sdf(pts_list: list, xx: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:
         """Signed distance field for a convex/concave polygon.
@@ -160,9 +160,9 @@ class MaskDrawFrame:
 
         Implementation note (MANUAL-5, v1.7.1+):
         Uses ``cv2.distanceTransform`` for an O(H*W) vectorized SDF instead of
-        the previous O(H*W*N) numpy edge-loop. At 4096Â² with N=8 vertices the
-        old path allocated ~5â€¯GB of float64 temporaries and timed out; this
-        path stays under ~250â€¯MB and finishes in <200â€¯ms.
+        the previous O(H*W*N) numpy edge-loop. At 4096² with N=8 vertices the
+        old path allocated ~5 GB of float64 temporaries and timed out; this
+        path stays under ~250 MB and finishes in <200 ms.
         """
         n = len(pts_list)
         if n < 3:
@@ -220,7 +220,7 @@ class MaskDrawFrame:
         sign = np.where(winding != 0, -1.0, 1.0).astype(np.float32)
         return torch.from_numpy(sign * np.sqrt(min_dist, dtype=np.float32))
 
-    # â”€â”€ Generate regular polygon vertices â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Generate regular polygon vertices ─────────────────────────────
     @staticmethod
     def _regular_polygon_pts(cx: float, cy: float, r: float, n: int,
                              start_angle: float = -math.pi / 2) -> list:
@@ -269,7 +269,7 @@ class MaskDrawFrame:
         # that pass strict_validation through; not exposed via INPUT_TYPES yet.
         params = _validate_shape_params(shape, params, strict=False)
 
-        # â”€â”€ Normalise params: list â†’ dict based on shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Normalise params: list → dict based on shape ──────────────
         # MANUAL bug-fix (Apr 2026): if params is a list-of-dicts (keyframe
         # array as accepted by MaskDrawFrameBatch), pick the first dict as
         # the single-frame fallback. Without this guard, the numeric-array
@@ -626,7 +626,7 @@ class MaskDrawFrame:
         """Polygon fill (no cv2 dependency).
 
         MANUAL-5 (v1.7.1+): replaces the old per-row Python scanline loop
-        (which did 4096 Python iterations at 4096Â² and timed out) with a
+        (which did 4096 Python iterations at 4096² and timed out) with a
         vectorized fully-numpy scanline rasterizer. cv2 path is preferred
         when available (see callers).
         """
@@ -670,17 +670,17 @@ class MaskDrawFrame:
         return torch.from_numpy(canvas)
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Helper: Parse coords_json for per-frame batch tracking
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 def _parse_coords_for_batch(coords_json: str, batch_size: int) -> list:
     """Parse coords JSON and expand to per-frame list.
 
     Accepts:
-      - Single dict: {"cx":256,"cy":256,...} â†’ same coords for all frames
-      - List of dicts: [{"cx":256,...}, {"cx":300,...}] â†’ one per frame (cycles)
-      - SAM-style list: [{"x":256,"y":256},...] â†’ extracts first as center
+      - Single dict: {"cx":256,"cy":256,...} → same coords for all frames
+      - List of dicts: [{"cx":256,...}, {"cx":300,...}] → one per frame (cycles)
+      - SAM-style list: [{"x":256,"y":256},...] → extracts first as center
 
     Returns: list of dicts, length = batch_size.
     """
@@ -702,13 +702,13 @@ def _parse_coords_for_batch(coords_json: str, batch_size: int) -> list:
     return [{}] * batch_size
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 #  Shape Draw Wrapper Nodes
 #  Simplified interfaces delegating to MaskDrawFrame.draw()
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ══════════════════════════════════════════════════════════════════════
 
 class DrawShapeMEC:
-    """Unified shape drawing node â€” one dropdown for all 12 shapes.
+    """Unified shape drawing node — one dropdown for all 12 shapes.
     Parameters for all shapes visible; irrelevant ones are ignored per shape.
     Accepts coords_json from Points Mask Editor for per-frame positioning."""
 
@@ -728,61 +728,61 @@ class DrawShapeMEC:
                     "tooltip": "Canvas height in pixels."}),
                 "shape": (cls.SHAPES, {"default": "circle",
                     "tooltip": "Shape type to draw. Parameters below adapt per shape."}),
-                # â”€â”€ Position (used by most shapes) â”€â”€
+                # ── Position (used by most shapes) ──
                 "cx": ("FLOAT", {"default": 256.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Center X â€” used by: circle, ellipse, triangle, star, diamond, cross, heart, arrow."}),
+                    "tooltip": "Center X — used by: circle, ellipse, triangle, star, diamond, cross, heart, arrow."}),
                 "cy": ("FLOAT", {"default": 256.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Center Y â€” used by: circle, ellipse, triangle, star, diamond, cross, heart, arrow."}),
-                # â”€â”€ Size params â”€â”€
+                    "tooltip": "Center Y — used by: circle, ellipse, triangle, star, diamond, cross, heart, arrow."}),
+                # ── Size params ──
                 "radius": ("FLOAT", {"default": 50.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Radius â€” circle. Also used as 'size' for triangle/heart."}),
+                    "tooltip": "Radius — circle. Also used as 'size' for triangle/heart."}),
                 "size_w": ("FLOAT", {"default": 200.0, "min": 0.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Width â€” rectangle, rounded_rectangle, diamond, arrow(width)."}),
+                    "tooltip": "Width — rectangle, rounded_rectangle, diamond, arrow(width)."}),
                 "size_h": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Height â€” rectangle, rounded_rectangle, diamond."}),
+                    "tooltip": "Height — rectangle, rounded_rectangle, diamond."}),
                 "rx": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Radius X â€” ellipse."}),
+                    "tooltip": "Radius X — ellipse."}),
                 "ry": ("FLOAT", {"default": 50.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Radius Y â€” ellipse."}),
+                    "tooltip": "Radius Y — ellipse."}),
                 "top_left_x": ("FLOAT", {"default": 100.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Top-left X â€” rectangle, rounded_rectangle. Also line start X."}),
+                    "tooltip": "Top-left X — rectangle, rounded_rectangle. Also line start X."}),
                 "top_left_y": ("FLOAT", {"default": 100.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Top-left Y â€” rectangle, rounded_rectangle. Also line start Y."}),
-                # â”€â”€ Line params â”€â”€
+                    "tooltip": "Top-left Y — rectangle, rounded_rectangle. Also line start Y."}),
+                # ── Line params ──
                 "x2": ("FLOAT", {"default": 400.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
                     "tooltip": "Line end X."}),
                 "y2": ("FLOAT", {"default": 400.0, "min": -16384.0, "max": 16384.0, "step": 0.5,
                     "tooltip": "Line end Y."}),
                 "thickness": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 500.0, "step": 0.5,
-                    "tooltip": "Thickness â€” line, cross."}),
-                # â”€â”€ Star params â”€â”€
+                    "tooltip": "Thickness — line, cross."}),
+                # ── Star params ──
                 "outer_r": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Outer radius â€” star."}),
+                    "tooltip": "Outer radius — star."}),
                 "inner_r": ("FLOAT", {"default": 40.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Inner radius â€” star."}),
+                    "tooltip": "Inner radius — star."}),
                 "num_points": ("INT", {"default": 5, "min": 3, "max": 50,
-                    "tooltip": "Number of points/sides â€” star, polygon."}),
-                # â”€â”€ Rounded rect / cross â”€â”€
+                    "tooltip": "Number of points/sides — star, polygon."}),
+                # ── Rounded rect / cross ──
                 "corner_radius": ("FLOAT", {"default": 20.0, "min": 0.0, "max": 4096.0, "step": 0.5,
-                    "tooltip": "Corner radius â€” rounded_rectangle."}),
+                    "tooltip": "Corner radius — rounded_rectangle."}),
                 "cross_size": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Arm length â€” cross."}),
-                # â”€â”€ Arrow params â”€â”€
+                    "tooltip": "Arm length — cross."}),
+                # ── Arrow params ──
                 "arrow_length": ("FLOAT", {"default": 200.0, "min": 0.0, "max": 16384.0, "step": 0.5,
-                    "tooltip": "Total length â€” arrow."}),
+                    "tooltip": "Total length — arrow."}),
                 "head_length": ("FLOAT", {"default": 60.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Head length â€” arrow."}),
+                    "tooltip": "Head length — arrow."}),
                 "head_width": ("FLOAT", {"default": 80.0, "min": 0.0, "max": 8192.0, "step": 0.5,
-                    "tooltip": "Head width â€” arrow."}),
-                # â”€â”€ Polygon points (JSON) â”€â”€
+                    "tooltip": "Head width — arrow."}),
+                # ── Polygon points (JSON) ──
                 "points_json": ("STRING", {
                     "default": '[[100,100],[400,100],[400,400],[100,400]]',
                     "multiline": True,
                     "tooltip": "Vertex list for polygon: [[x1,y1],[x2,y2],...]. Only used when shape=polygon.",
                 }),
-                # â”€â”€ Common â”€â”€
+                # ── Common ──
                 "value": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Fill intensity (0.0â€“1.0)."}),
+                    "tooltip": "Fill intensity (0.0–1.0)."}),
                 "feather": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 128.0, "step": 0.5,
                     "tooltip": "Soft edge feathering in pixels."}),
                 "rotation": ("FLOAT", {"default": 0.0, "min": -360.0, "max": 360.0, "step": 0.5,
@@ -807,7 +807,7 @@ class DrawShapeMEC:
     CATEGORY = "C2C/Draw"
     DESCRIPTION = (
         "Unified shape drawing: pick any of 12 shapes from the dropdown.\n"
-        "Parameters adapt per shape â€” unused ones are simply ignored.\n"
+        "Parameters adapt per shape — unused ones are simply ignored.\n"
         "Shapes: circle, rectangle, ellipse, polygon, line, triangle, star,\n"
         "diamond, cross, rounded_rectangle, heart, arrow."
     )

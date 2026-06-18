@@ -15,6 +15,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 // All graph traversal uses an explicit `graph` argument (the LGraph the
 // caller's node lives in). This is critical for subgraph support: when
@@ -109,7 +110,7 @@ export async function findUpstreamFramesAsync(node, opts = {}) {
                 try {
                     const frames = await _sampleVideoFrames(vid, maxVideoFrames);
                     if (frames.length) return frames;
-                } catch (e) { /* fall through */ }
+                } catch (e) { __c2cReport("_frame_finder", e); }
             }
 
             if (depth < 6 && n.inputs) {

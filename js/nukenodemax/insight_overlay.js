@@ -12,6 +12,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { findNodeAnywhere } from "../_subgraph_walk.js";
+import { reportFailure as __c2cReport } from "../_c2c_report.js";
 
 const STATE = {
     nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, cpu_ms, ram_delta_mb, error?}
@@ -19,8 +20,30 @@ const STATE = {
     maxMs: 1,
 };
 
-function ensureBadge(nodeId) {
-    const node = app.graph?._nodes_by_id?.[nodeId];
+// Perf cache for the always-on setting (read in the per-node, per-frame
+// drawNodeShape hot path). Refresh at most once/second globally so the
+// settings store is hit ~1×/sec instead of nodes×fps times/sec.
+let _insightAlwaysOn = false;
+let _insightLastRead = 0;
+function _insightAlwaysOnCached() {
+    const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (now - _insightLastRead > 1000) {
+        _insightLastRead = now;
+        try { _insightAlwaysOn = !!app.ui.settings.getSettingValue("mec.insight_overlay.always_on", false); }
+        catch (__c2cErr) { __c2cReport("insight_overlay", __c2cErr); }
+    }
+    return _insightAlwaysOn;
+}
+
+function ensureBadge(nodeOrId) {
+    // Accepts either a resolved LiteGraph node or a node id. When given an id,
+    // walks subgraphs to locate the owner.
+    let node = null;
+    if (nodeOrId && typeof nodeOrId === "object") {
+        node = nodeOrId;
+    } else {
+        node = findNodeAnywhere(nodeOrId)?.node || app.graph?._nodes_by_id?.[nodeOrId] || null;
+    }
     if (!node) return null;
     let badge = node._mecInsightBadge;
     if (!badge) {
@@ -58,7 +81,7 @@ function refresh() {
         const resolved = findNodeAnywhere(id);
         const node = resolved?.node || app.graph._nodes_by_id?.[id];
         if (!node) continue;
-        const badge = ensureBadge(id);
+        const badge = ensureBadge(node);
         if (!badge) continue;
         if (info.error) {
             badge.line1 = "✕ " + (info.exc_type || "err");
@@ -66,8 +89,9 @@ function refresh() {
             badge.color = colorFor(0, STATE.maxVram, true);
             badge.tooltip = `${info.exc_type}: ${info.exc_msg || ""}\n${info.hint || ""}`;
         } else {
-            badge.line1 = `${fmtMs(info.elapsed_ms || 0)} · ${fmtMb(info.vram_delta_mb || 0)}`;
-            badge.line2 = `cpu ${fmtMs(info.cpu_ms || 0)} · ram ${fmtMb(info.ram_delta_mb || 0)}`;
+            // Single compact line: "12ms · 4MB · cpu 8ms · ram 1MB"
+            badge.line1 = `${fmtMs(info.elapsed_ms || 0)} · ${fmtMb(info.vram_delta_mb || 0)} · cpu ${fmtMs(info.cpu_ms || 0)} · ram ${fmtMb(info.ram_delta_mb || 0)}`;
+            badge.line2 = "";
             badge.color = colorFor(info.vram_delta_mb || 0, STATE.maxVram, false);
             const parts = [
                 `elapsed=${(info.elapsed_ms || 0).toFixed(1)}ms`,
@@ -147,6 +171,15 @@ function onInsight(ev) {
 
 app.registerExtension({
     name: "nukenodemax.insight_overlay",
+    settings: [
+        {
+            id: "mec.insight_overlay.always_on",
+            name: "Insight Overlay: always-on badges",
+            tooltip: "Paint VRAM/timing badges below every node continuously. When OFF (default), badges are still computed and visible on right-click → Insight, but the canvas stays clean. Disable this if the badges scale awkwardly when you zoom the canvas.",
+            type: "boolean",
+            default: false,
+        },
+    ],
     setup() {
         api.addEventListener("nukenodemax.insight", onInsight);
 
@@ -154,27 +187,48 @@ app.registerExtension({
         const origDraw = LGraphCanvas.prototype.drawNodeShape;
         LGraphCanvas.prototype.drawNodeShape = function (node, ctx, size, fgColor, bgColor, selected, mouseOver) {
             origDraw.apply(this, arguments);
+            // Per user mandate 2026-05-19: do NOT always-paint. These
+            // badges live in graph space and therefore scale with the
+            // LiteGraph zoom — which the user described as "zooming in
+            // and out when moving around the canvas". Gate behind a
+            // setting (default OFF). Show on hover OR when enabled.
+            // Perf: getSettingValue ran once per node per frame (thousands/sec).
+            // Cache it and refresh at most once/second GLOBALLY (not per node).
+            if (!mouseOver && !_insightAlwaysOnCached()) return;
+
             const badge = node._mecInsightBadge;
             if (!badge || (!badge.line1 && !badge.line2)) return;
 
             ctx.save();
             ctx.font = "10px monospace";
             const lines = badge.line2 ? [badge.line1, badge.line2] : [badge.line1];
-            const widths = lines.map((s) => ctx.measureText(s).width);
-            const w = Math.max(...widths) + 12;
             const lineH = 12;
             const h = lineH * lines.length + 4;
 
-            // Anchored just below the node bottom edge.
-            const x = Math.max(0, size[0] - w);
+            // Full node-width strip just below the node, so it never
+            // expands the visual footprint horizontally.
+            const x = 0;
+            const w = size[0];
             const y = size[1] + 4;
+
+            // Auto-shrink the font if the text is wider than the node.
+            let fontPx = 10;
+            const maxTextWidth = w - 8;
+            let textWidth = Math.max(...lines.map((s) => ctx.measureText(s).width));
+            while (textWidth > maxTextWidth && fontPx > 7) {
+                fontPx -= 1;
+                ctx.font = `${fontPx}px monospace`;
+                textWidth = Math.max(...lines.map((s) => ctx.measureText(s).width));
+            }
 
             ctx.fillStyle = badge.color;
             ctx.fillRect(x, y, w, h);
             ctx.fillStyle = "#fff";
             ctx.textBaseline = "middle";
+            ctx.textAlign = "center";
+            const cx = x + w / 2;
             for (let i = 0; i < lines.length; i++) {
-                ctx.fillText(lines[i], x + 6, y + 2 + lineH * (i + 0.5));
+                ctx.fillText(lines[i], cx, y + 2 + lineH * (i + 0.5));
             }
             ctx.restore();
         };
