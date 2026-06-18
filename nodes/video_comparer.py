@@ -44,6 +44,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from ._is_changed_util import hash_args_and_kwargs
+
 
 _MODES = [
     "wipe",
@@ -511,11 +513,43 @@ class VideoComparerC2C:
         "mode combo at any time."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+                   diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+                   label_a, label_b, image_a=None, image_b=None, audio_a=None, audio_b=None,
+                   file_a="", file_b="", **kwargs):
+        return hash_args_and_kwargs(
+            mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+            diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+            label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b, **kwargs,
+        )
+
     def execute(self, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
                 label_a, label_b,
                 image_a=None, image_b=None, audio_a=None, audio_b=None,
                 file_a="", file_b=""):
+
+        for name, img in (("image_a", image_a), ("image_b", image_b)):
+            if img is not None and (not isinstance(img, torch.Tensor) or img.ndim != 4):
+                raise ValueError(
+                    f"VideoComparerC2C: {name} must be IMAGE tensor [B,H,W,C], "
+                    f"got {type(img).__name__}"
+                    + (f" shape {tuple(img.shape)}" if hasattr(img, "shape") else "")
+                )
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+                diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+                label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b,
+            )
+
+    def _execute_impl(self, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+                      diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+                      label_a, label_b,
+                      image_a=None, image_b=None, audio_a=None, audio_b=None,
+                      file_a="", file_b=""):
 
         a_frame, a_audio, a_sr, a_info = _resolve_source(image_a, audio_a, file_a, frame_index)
         b_frame, b_audio, b_sr, b_info = _resolve_source(image_b, audio_b, file_b, frame_index)
