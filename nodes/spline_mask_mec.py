@@ -20,11 +20,11 @@ Unified RETURN_TYPES (5 ports):
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
 from .spline_mask_editor import SplineMaskEditorMEC
 from .spline_mask_tracker import SplineMaskTrackerMEC
 from .spline_path_flow_mask import SplinePathFlowMaskMEC
@@ -240,16 +240,7 @@ class SplineMaskMEC:
 
     @classmethod
     def IS_CHANGED(cls, mode, spline_data, **kwargs):
-        h = hashlib.md5()
-        h.update(str(mode).encode())
-        h.update(str(spline_data).encode())
-        for k in sorted(kwargs):
-            v = kwargs[k]
-            if isinstance(v, torch.Tensor):
-                h.update(v.cpu().numpy().tobytes())
-            elif v is not None:
-                h.update(str(v).encode())
-        return h.hexdigest()
+        return hash_args_and_kwargs(mode, spline_data, **kwargs)
 
     # ──────────────────────────────────────────────────────────────────
     def execute(self, mode, spline_data, spline_type, closed,
@@ -263,31 +254,36 @@ class SplineMaskMEC:
                 flow_direction, mod_decay, seed, use_embedded_editor,
                 image=None, node_id=None):
 
-        if mode == "edit":
-            return self._mode_edit(
-                image, spline_data, spline_type, closed, smoothing,
-                samples_per_segment, feather_radius, invert,
-                centripetal_alpha, width, height, mask_color,
-                mask_opacity, node_id,
-            )
-        if mode == "track":
-            return self._mode_track(
-                image, spline_data, closed, samples_per_segment,
-                tracking_weight, klt_window, feather_radius,
-                stroke_width,
-            )
-        if mode == "flow_path":
-            return self._mode_flow_path(
-                spline_data, pattern, width, height, thickness,
-                amplitude, frequency, turbulence, turbulence_scale,
-                edge_softness, taper_start, taper_end, frames,
-                animation_speed, spline_type, samples_per_segment,
-                closed, invert, seed, flow_direction, mod_decay,
-                use_embedded_editor, image,
-            )
-        # Fallback
-        return (_empty_mask_from_image(image), "[]", spline_data,
-                "{}", _EMPTY_BBOX)
+        if image is not None and (
+            not isinstance(image, torch.Tensor) or image.ndim != 4
+        ):
+            raise ValueError("SplineMaskMEC image expects IMAGE tensor [B,H,W,C]")
+
+        with torch.inference_mode():
+            if mode == "edit":
+                return self._mode_edit(
+                    image, spline_data, spline_type, closed, smoothing,
+                    samples_per_segment, feather_radius, invert,
+                    centripetal_alpha, width, height, mask_color,
+                    mask_opacity, node_id,
+                )
+            if mode == "track":
+                return self._mode_track(
+                    image, spline_data, closed, samples_per_segment,
+                    tracking_weight, klt_window, feather_radius,
+                    stroke_width,
+                )
+            if mode == "flow_path":
+                return self._mode_flow_path(
+                    spline_data, pattern, width, height, thickness,
+                    amplitude, frequency, turbulence, turbulence_scale,
+                    edge_softness, taper_start, taper_end, frames,
+                    animation_speed, spline_type, samples_per_segment,
+                    closed, invert, seed, flow_direction, mod_decay,
+                    use_embedded_editor, image,
+                )
+            return (_empty_mask_from_image(image), "[]", spline_data,
+                    "{}", _EMPTY_BBOX)
 
     # ── edit ─────────────────────────────────────────────────────────
     def _mode_edit(self, image, spline_data, spline_type, closed,
