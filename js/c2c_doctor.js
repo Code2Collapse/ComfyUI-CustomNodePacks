@@ -204,7 +204,9 @@ function _gpuPollOnce() {
 function _ensureGpuPolling() {
     if (_gpuPollTimer != null) return;
     _gpuPollOnce();
-    _gpuPollTimer = setInterval(_gpuPollOnce, 2000);
+    // Skip the /system_stats fetch while the tab is hidden — no point polling
+    // (and allocating sample objects) when nobody's looking. Resumes on focus.
+    _gpuPollTimer = setInterval(() => { if (!document.hidden) _gpuPollOnce(); }, 2000);
 }
 
 // ---------------------------------------------------------------------------
