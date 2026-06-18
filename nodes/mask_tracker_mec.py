@@ -24,6 +24,7 @@ import json
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
 from .motion_mask_tracker import MotionMaskTrackerMEC
 from .mask_propagate_video import MaskPropagateVideo
 from .temporal_anchor import TemporalAnchorMEC
@@ -204,8 +205,70 @@ class MaskTrackerMEC:
         "Heavy work is chunked/vectorized; CPU fallback always available."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, mode, camera_compensation, stabilization_method,
+                   detection_mode, pixel_diff_enabled, pixel_diff_threshold,
+                   flow_enabled, flow_threshold, flow_algorithm,
+                   bg_sub_enabled, bg_model_frames, bg_sub_threshold,
+                   hist_enabled, hist_grid_size, hist_threshold,
+                   combine_method, grow_pixels, min_region_size,
+                   temporal_smooth, source_frame, propagate_mode,
+                   prop_flow_threshold, fade_start, fade_end, bidirectional,
+                   anchor_frames, total_frames, easing, sdf_iterations,
+                   flow_refinement, metric, binarize_threshold,
+                   mask=None, video=None, sam_model=None, points_json="",
+                   **kwargs):
+        return hash_args_and_kwargs(
+            mode, camera_compensation, stabilization_method, detection_mode,
+            pixel_diff_enabled, pixel_diff_threshold, flow_enabled,
+            flow_threshold, flow_algorithm, bg_sub_enabled, bg_model_frames,
+            bg_sub_threshold, hist_enabled, hist_grid_size, hist_threshold,
+            combine_method, grow_pixels, min_region_size, temporal_smooth,
+            source_frame, propagate_mode, prop_flow_threshold, fade_start,
+            fade_end, bidirectional, anchor_frames, total_frames, easing,
+            sdf_iterations, flow_refinement, metric, binarize_threshold,
+            mask, video, sam_model, points_json, **kwargs,
+        )
+
     # ──────────────────────────────────────────────────────────────────
     def execute(self, mode,
+                camera_compensation, stabilization_method, detection_mode,
+                pixel_diff_enabled, pixel_diff_threshold,
+                flow_enabled, flow_threshold, flow_algorithm,
+                bg_sub_enabled, bg_model_frames, bg_sub_threshold,
+                hist_enabled, hist_grid_size, hist_threshold,
+                combine_method, grow_pixels, min_region_size,
+                temporal_smooth,
+                source_frame, propagate_mode, prop_flow_threshold,
+                fade_start, fade_end, bidirectional,
+                anchor_frames, total_frames, easing, sdf_iterations,
+                flow_refinement,
+                metric, binarize_threshold,
+                mask=None, video=None, sam_model=None, points_json=""):
+
+        if video is not None and (
+            not isinstance(video, torch.Tensor) or video.ndim != 4
+        ):
+            raise ValueError("MaskTrackerMEC expects video IMAGE tensor [B,H,W,C]")
+        if mask is not None and (
+            not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3)
+        ):
+            raise ValueError("MaskTrackerMEC expects MASK tensor [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                mode, camera_compensation, stabilization_method, detection_mode,
+                pixel_diff_enabled, pixel_diff_threshold, flow_enabled,
+                flow_threshold, flow_algorithm, bg_sub_enabled, bg_model_frames,
+                bg_sub_threshold, hist_enabled, hist_grid_size, hist_threshold,
+                combine_method, grow_pixels, min_region_size, temporal_smooth,
+                source_frame, propagate_mode, prop_flow_threshold, fade_start,
+                fade_end, bidirectional, anchor_frames, total_frames, easing,
+                sdf_iterations, flow_refinement, metric, binarize_threshold,
+                mask, video, sam_model, points_json,
+            )
+
+    def _execute_impl(self, mode,
                 camera_compensation, stabilization_method, detection_mode,
                 pixel_diff_enabled, pixel_diff_threshold,
                 flow_enabled, flow_threshold, flow_algorithm,
