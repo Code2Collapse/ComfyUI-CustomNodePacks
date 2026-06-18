@@ -19,6 +19,7 @@ Pure tensor SDF — no scipy dependency. VRAM Tier 2.
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import math
@@ -498,6 +499,14 @@ class TemporalAnchorMEC:
     )
     OUTPUT_IS_LIST = (False, True, False)
 
+    @classmethod
+    def IS_CHANGED(cls, anchor_masks, anchor_frames, total_frames, easing,
+                   sdf_iterations, flow_refinement, images=None, **kwargs):
+        return hash_args_and_kwargs(
+            anchor_masks, anchor_frames, total_frames, easing,
+            sdf_iterations, flow_refinement, images, **kwargs,
+        )
+
     def execute(
         self,
         anchor_masks: torch.Tensor,
@@ -508,15 +517,23 @@ class TemporalAnchorMEC:
         flow_refinement: bool,
         images: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, List[float], str]:
-        try:
-            return self._execute_inner(
-                anchor_masks, anchor_frames, total_frames,
-                easing, sdf_iterations, flow_refinement, images,
-            )
-        finally:
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        if not isinstance(anchor_masks, torch.Tensor) or anchor_masks.ndim not in (2, 3):
+            raise ValueError("TemporalAnchorMEC anchor_masks expects MASK [H,W] or [B,H,W]")
+        if images is not None and (
+            not isinstance(images, torch.Tensor) or images.ndim != 4
+        ):
+            raise ValueError("TemporalAnchorMEC images expects IMAGE [B,H,W,C]")
+
+        with torch.inference_mode():
+            try:
+                return self._execute_inner(
+                    anchor_masks, anchor_frames, total_frames,
+                    easing, sdf_iterations, flow_refinement, images,
+                )
+            finally:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     def _execute_inner(
         self,
