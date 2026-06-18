@@ -36,6 +36,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from ._is_changed_util import hash_args_and_kwargs
+
 try:
     import cv2
     HAS_CV2 = True
@@ -704,6 +706,17 @@ class SplineMaskEditorMEC:
         "SAM-compatible coords, and spline data for downstream nodes."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, spline_data, spline_type, closed, smoothing,
+                   samples_per_segment, feather_radius, invert,
+                   centripetal_alpha=0.5, width=0, height=0,
+                   mask_color="#ff00ff", mask_opacity=0.4, node_id=None, **kwargs):
+        return hash_args_and_kwargs(
+            image, spline_data, spline_type, closed, smoothing,
+            samples_per_segment, feather_radius, invert, centripetal_alpha,
+            width, height, mask_color, mask_opacity, **kwargs,
+        )
+
     def execute(self, image: torch.Tensor, spline_data: str,
                 spline_type: str, closed: bool, smoothing: bool,
                 samples_per_segment: int, feather_radius: float,
@@ -712,6 +725,27 @@ class SplineMaskEditorMEC:
                 width: int = 0, height: int = 0,
                 mask_color: str = "#ff00ff", mask_opacity: float = 0.4,
                 node_id=None) -> tuple:
+
+        if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"SplineMaskEditorMEC: image must be IMAGE [B,H,W,C], got {tuple(image.shape)}"
+            )
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, spline_data, spline_type, closed, smoothing,
+                samples_per_segment, feather_radius, invert, centripetal_alpha,
+                width, height, mask_color, mask_opacity, node_id,
+            )
+
+    def _execute_impl(self, image: torch.Tensor, spline_data: str,
+                      spline_type: str, closed: bool, smoothing: bool,
+                      samples_per_segment: int, feather_radius: float,
+                      invert: bool,
+                      centripetal_alpha: float = 0.5,
+                      width: int = 0, height: int = 0,
+                      mask_color: str = "#ff00ff", mask_opacity: float = 0.4,
+                      node_id=None) -> tuple:
 
         B, img_H, img_W, C = image.shape
         device = image.device
