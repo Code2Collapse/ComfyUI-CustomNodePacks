@@ -1,12 +1,13 @@
 """C2C Helpers — 12 utility nodes.  See package __init__ for the index."""
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from typing import Any
 
 import torch
+
+from .._is_changed_util import hash_args_and_kwargs
 
 log = logging.getLogger("C2C.helpers")
 
@@ -430,23 +431,7 @@ class ExecutionTimerMEC:
 
     @classmethod
     def IS_CHANGED(cls, *args, **kw):
-        h = hashlib.md5()
-        for v in args:
-            if hasattr(v, 'cpu'):
-                h.update(v.cpu().numpy().tobytes())
-            elif isinstance(v, str):
-                h.update(v.encode())
-            else:
-                h.update(str(v).encode())
-        for k, v in sorted(kw.items()):
-            h.update(k.encode())
-            if hasattr(v, 'cpu'):
-                h.update(v.cpu().numpy().tobytes())
-            elif isinstance(v, str):
-                h.update(v.encode())
-            else:
-                h.update(str(v).encode())
-        return h.hexdigest()
+        return hash_args_and_kwargs(*args, **kw)
 
     def tick(self, passthrough, label, reset):
         now = time.perf_counter()
