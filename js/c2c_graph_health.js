@@ -57,6 +57,52 @@ function analyze() {
         }
     }
 
+    // ── Virtual routing buses (KJNodes / rgthree Set→Get, Use-Everywhere) ──
+    // These carry a value with NO literal link: a Set publishes a variable and a
+    // matching Get pulls it by key. Without modelling that edge, every Set node
+    // looks "dead" (its output connects to nothing) — a false positive the user hit.
+    // Detect Set/Get by class/title + key widget and add Set→Get edges so the bus
+    // is reachable exactly like a real wire. OS-agnostic (pure graph logic).
+    const _BUS_KEY_WIDGETS = ["Constant", "constant", "value", "Key", "key",
+                              "Name", "name", "variable", "Variable", "label", "Label"];
+    const _busKey = (n) => {
+        const w = (n.widgets || []).find((x) => _BUS_KEY_WIDGETS.includes(x.name));
+        if (w && w.value != null && String(w.value).trim()) return String(w.value).trim().toLowerCase();
+        const m = (n.title || "").match(/^(?:set|get)[\s_:\-]+(.+)$/i);
+        return m ? m[1].trim().toLowerCase() : "";
+    };
+    const _isSet = (n) => {
+        const c = (n.comfyClass || n.type || "").toLowerCase(), t = (n.title || "").toLowerCase();
+        return c === "setnode" || c.includes("setnode") || t.startsWith("set ") || t.startsWith("set_") || t.startsWith("set:");
+    };
+    const _isGet = (n) => {
+        const c = (n.comfyClass || n.type || "").toLowerCase(), t = (n.title || "").toLowerCase();
+        return c === "getnode" || c.includes("getnode") || t.startsWith("get ") || t.startsWith("get_") || t.startsWith("get:");
+    };
+    // Routing/virtual nodes that are NEVER "dead" or "dangling" (they have no
+    // literal wires by design): Set/Get buses, reroutes, Use-Everywhere, primitives, notes.
+    const _isVirtual = (n) => {
+        if (_isSet(n) || _isGet(n)) return true;
+        const blob = ((n.comfyClass || n.type || "") + " " + (n.title || "")).toLowerCase();
+        return /reroute|everywhere|primitivenode|^note$|\bnote\b|\bnotenode\b/.test(blob);
+    };
+    const _setsByKey = new Map();
+    for (const n of nodes) {
+        if (!_isSet(n)) continue;
+        const k = _busKey(n);
+        if (!k) continue;
+        if (!_setsByKey.has(k)) _setsByKey.set(k, []);
+        _setsByKey.get(k).push(n.id);
+    }
+    for (const n of nodes) {
+        if (!_isGet(n)) continue;
+        const srcs = _setsByKey.get(_busKey(n));
+        if (!srcs) continue;
+        for (const sid of srcs) {
+            if (succ.has(sid) && pred.has(n.id)) { succ.get(sid).add(n.id); pred.get(n.id).add(sid); }
+        }
+    }
+
     // ── ① Dead-node = STRICT: a node whose outputs are not connected
     // to ANY other node AND the node itself is not an OUTPUT_NODE/preview/save.
     // (Old reachability heuristic over-flagged useful upstream nodes when no
@@ -68,9 +114,10 @@ function analyze() {
     };
     const dead = nodes.filter((n) => {
         if ((n.mode || 0) === 4) return false;     // muted/bypass
+        if (_isVirtual(n)) return false;           // Set/Get/reroute/UE/primitive/note route via the bus, not links
         if (isOutputish(n)) return false;          // terminals are alive by definition
         if (!(n.outputs || []).length) return false; // pure-sink node — not dead, just terminal
-        // Has outputs but NONE are connected anywhere → dead.
+        // Has outputs but NONE are connected anywhere (incl. virtual bus) → dead.
         const succs = succ.get(n.id);
         return !succs || succs.size === 0;
     }).map((n) => n.id);
@@ -114,6 +161,7 @@ function analyze() {
     const dangling = [];
     for (const n of nodes) {
         if ((n.mode || 0) === 4) continue;
+        if (_isVirtual(n)) continue;   // Get nodes are sources; Set inputs come via the bus — never dangling
         for (let i = 0; i < (n.inputs || []).length; i++) {
             const inp = n.inputs[i];
             if (!inp) continue;
