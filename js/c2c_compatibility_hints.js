@@ -101,20 +101,26 @@ function _patchCanvas() {
 }
 
 function _setupRedrawWhileConnecting() {
-    // While a link drag is in progress we want continuous redraws so the
-    // pulse animates. Hook onto the global animation loop already running
-    // inside LiteGraph by triggering dirty_canvas every frame while
-    // connecting_node is set.
+    // While a link drag is in progress we want continuous redraws so the pulse
+    // animates. PERF: the old version reran requestAnimationFrame(tick) FOREVER
+    // (a permanent 60fps loop even when idle — pure wasted CPU, and many such
+    // always-on loops across extensions stack up to peg a core). Now the loop
+    // exists ONLY during an actual link drag: a pointerdown starts it, and tick
+    // self-terminates the moment the drag ends or the tab is hidden.
+    let _running = false;
     const tick = () => {
-        try {
-            const canvas = app.canvas;
-            if (canvas && canvas.connecting_node && canvas.connecting_output && _enabled) {
-                canvas.setDirty(true, true);
-            }
-        } catch { /* swallow */ }
+        const canvas = app.canvas;
+        if (document.hidden || !_enabled || !canvas ||
+            !canvas.connecting_node || !canvas.connecting_output) {
+            _running = false;          // stop — no rescheduling while idle
+            return;
+        }
+        try { canvas.setDirty(true, true); } catch { /* swallow */ }
         requestAnimationFrame(tick);
     };
-    requestAnimationFrame(tick);
+    const start = () => { if (!_running) { _running = true; requestAnimationFrame(tick); } };
+    // A link drag can only begin on a pointer press; only then do we spin up.
+    window.addEventListener("pointerdown", () => { if (_enabled) start(); }, true);
 }
 
 app.registerExtension({
