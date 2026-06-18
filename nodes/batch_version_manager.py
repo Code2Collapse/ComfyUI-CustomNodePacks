@@ -27,6 +27,8 @@ import hashlib
 import datetime
 from pathlib import Path
 
+from ._is_changed_util import dir_version_fingerprint, hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.BatchVersionManager")
 
 _VERSION_DIR_RE = re.compile(r"^v(\d{1,6})$")
@@ -132,6 +134,19 @@ class BatchVersionManagerMEC:
         "Compute (and optionally atomically reserve) the next v### directory under "
         "<root>/<show>/<shot>/<task>/. Forward-slash output paths."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        h = hashlib.md5(hash_args_and_kwargs(**kwargs).encode())
+        root = (kwargs.get("root") or "").strip()
+        if root:
+            show_s = _safe(kwargs.get("show", "show"), "show")
+            shot_s = _safe(kwargs.get("shot", "sh010"), "shot")
+            task_s = _safe(kwargs.get("task", "comp"), "comp")
+            padding = int(kwargs.get("padding", 3))
+            task_dir = Path(root).expanduser() / show_s / shot_s / task_s
+            h.update(dir_version_fingerprint(task_dir, "v", padding).encode())
+        return h.hexdigest()
 
     def allocate(
         self,
