@@ -42,10 +42,9 @@ import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
+import torch
 
-# Easing functions are deliberately reused from temporal_anchor so the
-# delta-editor blend looks identical to the SDF anchor blend the rest of
-# the pack already uses.
+from ._is_changed_util import hash_args_and_kwargs
 from .temporal_anchor import _EASING_MAP  # noqa: WPS437 (intentional re-export)
 
 log = logging.getLogger("MEC.FacePoseDelta")
@@ -487,6 +486,14 @@ class FacePoseDeltaCoreMEC:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, landmarks, keyframe_edits_json, anchor_mode, left_eye_idx,
+                   right_eye_idx, external_anchors_json="", **kwargs):
+        return hash_args_and_kwargs(
+            landmarks, keyframe_edits_json, anchor_mode, left_eye_idx,
+            right_eye_idx, external_anchors_json, **kwargs,
+        )
+
     def execute(
         self,
         landmarks,
@@ -496,30 +503,31 @@ class FacePoseDeltaCoreMEC:
         right_eye_idx: int,
         external_anchors_json: str = "",
     ):
-        kfs, ease, extrap = _parse_keyframes(keyframe_edits_json)
+        with torch.inference_mode():
+            kfs, ease, extrap = _parse_keyframes(keyframe_edits_json)
 
-        ext_centers = ext_scales = None
-        if external_anchors_json and external_anchors_json.strip():
-            try:
-                ed = json.loads(external_anchors_json)
-                if isinstance(ed, dict):
-                    if "centers" in ed:
-                        ext_centers = np.asarray(ed["centers"], dtype=np.float32)
-                    if "scales" in ed:
-                        ext_scales = np.asarray(ed["scales"], dtype=np.float32)
-            except json.JSONDecodeError as e:
-                log.warning("[FacePoseDelta] external_anchors_json invalid: %s", e)
+            ext_centers = ext_scales = None
+            if external_anchors_json and external_anchors_json.strip():
+                try:
+                    ed = json.loads(external_anchors_json)
+                    if isinstance(ed, dict):
+                        if "centers" in ed:
+                            ext_centers = np.asarray(ed["centers"], dtype=np.float32)
+                        if "scales" in ed:
+                            ext_scales = np.asarray(ed["scales"], dtype=np.float32)
+                except json.JSONDecodeError as e:
+                    log.warning("[FacePoseDelta] external_anchors_json invalid: %s", e)
 
-        out, info = edit_landmarks(
-            landmarks, kfs,
-            anchor_mode=anchor_mode,
-            left_eye_idx=int(left_eye_idx),
-            right_eye_idx=int(right_eye_idx),
-            ease=ease, extrapolate=extrap,
-            external_centers=ext_centers,
-            external_scales=ext_scales,
-        )
-        return (out, json.dumps(info, ensure_ascii=False, indent=2))
+            out, info = edit_landmarks(
+                landmarks, kfs,
+                anchor_mode=anchor_mode,
+                left_eye_idx=int(left_eye_idx),
+                right_eye_idx=int(right_eye_idx),
+                ease=ease, extrapolate=extrap,
+                external_centers=ext_centers,
+                external_scales=ext_scales,
+            )
+            return (out, json.dumps(info, ensure_ascii=False, indent=2))
 
 
 NODE_CLASS_MAPPINGS = {"FacePoseDeltaCoreMEC": FacePoseDeltaCoreMEC}
