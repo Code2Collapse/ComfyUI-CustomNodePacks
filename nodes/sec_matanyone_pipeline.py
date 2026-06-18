@@ -20,6 +20,7 @@ Key differences from SAM + ViTMatte Pipeline:
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import json
@@ -174,7 +175,52 @@ class SeCMatAnyonePipelineMEC:
         "Best for video scenes with occlusions, re-appearances, and complex motion."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, segmentation_model, text_prompt, points_json, bbox_json,
+                   matting_backend, edge_radius, n_warmup, precision,
+                   fill_holes_enabled, min_region_size,
+                   positive_coords=None, negative_coords=None, bbox=None,
+                   edge_refine_method="none", keep_model_loaded=True, **kwargs):
+        return hash_args_and_kwargs(
+            image, segmentation_model, text_prompt, points_json, bbox_json,
+            matting_backend, edge_radius, n_warmup, precision,
+            fill_holes_enabled, min_region_size,
+            positive_coords, negative_coords, bbox,
+            edge_refine_method, keep_model_loaded, **kwargs,
+        )
+
     def process(
+        self,
+        image: torch.Tensor,
+        segmentation_model: str,
+        text_prompt: str,
+        points_json: str,
+        bbox_json: str,
+        matting_backend: str,
+        edge_radius: int,
+        n_warmup: int,
+        precision: str,
+        fill_holes_enabled: bool,
+        min_region_size: int,
+        positive_coords: str | None = None,
+        negative_coords: str | None = None,
+        bbox=None,
+        edge_refine_method: str = "none",
+        keep_model_loaded: bool = True,
+    ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SeCMatAnyonePipelineMEC expects IMAGE tensor [B,H,W,C]")
+
+        with torch.inference_mode():
+            return self._process_impl(
+                image, segmentation_model, text_prompt, points_json, bbox_json,
+                matting_backend, edge_radius, n_warmup, precision,
+                fill_holes_enabled, min_region_size,
+                positive_coords, negative_coords, bbox,
+                edge_refine_method, keep_model_loaded,
+            )
+
+    def _process_impl(
         self,
         image: torch.Tensor,
         segmentation_model: str,
@@ -371,7 +417,7 @@ class SeCMatAnyonePipelineMEC:
             inputs = processor(images=pil_img, trimaps=pil_tri, return_tensors="pt")
             inputs = {k: v.to(dev) for k, v in inputs.items()}
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 out = model(**inputs)
 
             a = out.alphas[0, 0].cpu()
