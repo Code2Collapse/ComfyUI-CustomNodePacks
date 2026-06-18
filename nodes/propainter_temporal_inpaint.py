@@ -32,6 +32,7 @@ from .propainter_bridge import (
     to_propainter_mask,
     to_propainter_video,
 )
+from ._is_changed_util import hash_args_and_kwargs
 
 log = logging.getLogger("MEC.propainter_temporal")
 
@@ -384,6 +385,16 @@ class ProPainterTemporalMEC:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, images, masks, stitch_data, neighbor_stride, ref_stride,
+                   raft_iter, subvideo_length, use_half, blend_boundary,
+                   color_match_mode, raft_chunk=16, **kwargs):
+        return hash_args_and_kwargs(
+            images, masks, stitch_data, neighbor_stride, ref_stride,
+            raft_iter, subvideo_length, use_half, blend_boundary,
+            color_match_mode, raft_chunk, **kwargs,
+        )
+
     # ---------- main entry ----------
     def inpaint_temporal(self, images: torch.Tensor, masks: torch.Tensor,
                          stitch_data: Dict, neighbor_stride: int, ref_stride: int,
@@ -391,6 +402,27 @@ class ProPainterTemporalMEC:
                          use_half: bool,
                          blend_boundary: bool, color_match_mode: str,
                          raft_chunk: int = 16):
+        if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[-1] != 3:
+            raise ValueError(
+                f"ProPainterTemporalMEC expects IMAGE [B,H,W,3], got {tuple(getattr(images, 'shape', ()))}"
+            )
+        if not isinstance(masks, torch.Tensor) or masks.ndim not in (3, 4):
+            raise ValueError(
+                f"ProPainterTemporalMEC expects MASK [B,H,W] or [B,H,W,1], got {tuple(getattr(masks, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._inpaint_temporal_impl(
+                images, masks, stitch_data, neighbor_stride, ref_stride,
+                raft_iter, subvideo_length, use_half, blend_boundary,
+                color_match_mode, raft_chunk,
+            )
+
+    def _inpaint_temporal_impl(self, images: torch.Tensor, masks: torch.Tensor,
+                               stitch_data: Dict, neighbor_stride: int, ref_stride: int,
+                               raft_iter: int, subvideo_length: int,
+                               use_half: bool,
+                               blend_boundary: bool, color_match_mode: str,
+                               raft_chunk: int = 16):
         if not HAS_PROPAINTER:
             require_propainter()  # raises ProPainterMissingError with install hint
         # Free any other models (SD checkpoint, VAE, encoders) sitting in VRAM
