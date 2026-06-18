@@ -255,14 +255,11 @@ app.registerExtension({
             };
             window.LGraph.prototype._c2c_expr_patched = true;
         }
-        // Periodic re-eval (cheap; only nodes with _expr do work).
-        let last = 0;
-        function tick() {
-            const now = performance.now();
-            if (now - last > 250) { reevalAll(); last = now; }
-            requestAnimationFrame(tick);
-        }
-        tick();
+        // Periodic re-eval (only nodes with _expr do work). PERF: this used to
+        // run as a 60fps requestAnimationFrame loop FOREVER just to do work every
+        // 250ms — 60 wakeups/sec for a 4/sec task, even when idle/hidden. A plain
+        // 250ms interval that pauses while the tab is hidden is 15x fewer wakeups.
+        setInterval(() => { if (!document.hidden) reevalAll(); }, 250);
         console.log("[C2C.ExpressionFields] ready (type =expr in any numeric widget).");
     },
 });
