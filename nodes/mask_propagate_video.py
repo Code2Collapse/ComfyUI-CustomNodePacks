@@ -5,6 +5,7 @@ propagation (optical flow), and SAM2 video-propagation mode.
 """
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import torch
 import torch.nn.functional as F
@@ -59,6 +60,15 @@ class MaskPropagateVideo:
     CATEGORY = "C2C/Video"
     DESCRIPTION = "Propagate a single-frame mask across all video frames using static copy, optical flow, SAM2 video, or fade modes."
 
+    @classmethod
+    def IS_CHANGED(cls, images, mask, source_frame, mode, flow_threshold,
+                   fade_start, fade_end, bidirectional, sam_model=None,
+                   points_json="", **kwargs):
+        return hash_args_and_kwargs(
+            images, mask, source_frame, mode, flow_threshold,
+            fade_start, fade_end, bidirectional, sam_model, points_json, **kwargs,
+        )
+
     def propagate(self, images, mask, source_frame, mode, flow_threshold,
                   fade_start, fade_end, bidirectional, sam_model=None, points_json=""):
         with _PB.session("MaskPropagate"):
@@ -67,6 +77,20 @@ class MaskPropagateVideo:
                                         bidirectional, sam_model, points_json)
 
     def _propagate_impl(self, images, mask, source_frame, mode, flow_threshold,
+                  fade_start, fade_end, bidirectional, sam_model=None, points_json=""):
+
+        if not isinstance(images, torch.Tensor) or images.ndim != 4:
+            raise ValueError("MaskPropagateVideo expects IMAGE tensor [B,H,W,C]")
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("MaskPropagateVideo expects MASK tensor [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._propagate_core(
+                images, mask, source_frame, mode, flow_threshold,
+                fade_start, fade_end, bidirectional, sam_model, points_json,
+            )
+
+    def _propagate_core(self, images, mask, source_frame, mode, flow_threshold,
                   fade_start, fade_end, bidirectional, sam_model=None, points_json=""):
 
         B, H, W, C = images.shape
