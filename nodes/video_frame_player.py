@@ -41,6 +41,8 @@ from PIL import Image
 
 import folder_paths
 
+from ._is_changed_util import hash_args_and_kwargs
+
 
 from . import _progress as _PB
 _PREVIEW_QUALITY = 80
@@ -322,6 +324,25 @@ class VideoFramePlayerMEC:
         "Set output_mode = all_frames to process the whole batch."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, frames, frame_index=0, output_mode="current_frame",
+                   frame_start=0, frame_end=-1, frame_stride=1,
+                   playback_fps=24.0, loop_mode="loop", crop_enabled=False,
+                   crop_locked=False, aspect_ratio="free", custom_aspect_w=16.0,
+                   custom_aspect_h=9.0, crop_x=0.0, crop_y=0.0, crop_w=1.0,
+                   crop_h=1.0, resize_method="none", target_width=0,
+                   target_height=0, upscale_factor=1.0, preview_width=480,
+                   preview_format=_PREVIEW_FORMAT_DEFAULT, preview_quality=95,
+                   **kwargs):
+        return hash_args_and_kwargs(
+            frames, frame_index, output_mode, frame_start, frame_end,
+            frame_stride, playback_fps, loop_mode, crop_enabled, crop_locked,
+            aspect_ratio, custom_aspect_w, custom_aspect_h, crop_x, crop_y,
+            crop_w, crop_h, resize_method, target_width, target_height,
+            upscale_factor, preview_width, preview_format, preview_quality,
+            **kwargs,
+        )
+
     @staticmethod
     def _compute_target_size(crop_w_px: int, crop_h_px: int,
                              target_w: int, target_h: int,
@@ -370,6 +391,45 @@ class VideoFramePlayerMEC:
     ):
         if frames is None or not hasattr(frames, "shape"):
             raise ValueError("VideoFramePlayerMEC: 'frames' input is missing or invalid (expected IMAGE B,H,W,C).")
+        if not isinstance(frames, torch.Tensor) or frames.ndim != 4:
+            raise ValueError(f"VideoFramePlayerMEC: expected 4D IMAGE (B,H,W,C), got shape {tuple(frames.shape)}.")
+        with torch.inference_mode():
+            return self._play_impl(
+                frames, frame_index, output_mode, frame_start, frame_end,
+                frame_stride, playback_fps, loop_mode, crop_enabled,
+                crop_locked, aspect_ratio, custom_aspect_w, custom_aspect_h,
+                crop_x, crop_y, crop_w, crop_h, resize_method, target_width,
+                target_height, upscale_factor, preview_width, preview_format,
+                preview_quality,
+            )
+
+    def _play_impl(
+        self,
+        frames: torch.Tensor,
+        frame_index: int = 0,
+        output_mode: str = "current_frame",
+        frame_start: int = 0,
+        frame_end: int = -1,
+        frame_stride: int = 1,
+        playback_fps: float = 24.0,
+        loop_mode: str = "loop",
+        crop_enabled: bool = False,
+        crop_locked: bool = False,
+        aspect_ratio: str = "free",
+        custom_aspect_w: float = 16.0,
+        custom_aspect_h: float = 9.0,
+        crop_x: float = 0.0,
+        crop_y: float = 0.0,
+        crop_w: float = 1.0,
+        crop_h: float = 1.0,
+        resize_method: str = "none",
+        target_width: int = 0,
+        target_height: int = 0,
+        upscale_factor: float = 1.0,
+        preview_width: int = 480,
+        preview_format: str = _PREVIEW_FORMAT_DEFAULT,
+        preview_quality: int = 95,
+    ):
         if frames.dim() != 4:
             raise ValueError(f"VideoFramePlayerMEC: expected 4D IMAGE (B,H,W,C), got shape {tuple(frames.shape)}.")
 
