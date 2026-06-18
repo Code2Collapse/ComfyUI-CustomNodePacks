@@ -66,5 +66,52 @@ def ensure_previews_enabled() -> str:
     return PREVIEW_GUARD_STATUS
 
 
+def _install_previewer_fallback() -> None:
+    """Bulletproof layer: patch latent_preview.get_previewer so it can NEVER
+    return None. Core returns None only when previews are off — in that case we
+    re-run core's own resolver with preview_method forced to Auto (Latent2RGB,
+    no model, cannot fail). This survives the method being reset per-prompt or
+    read differently across versions, so the live HUD always gets frames.
+    Fully guarded: any API change just no-ops and leaves core untouched."""
+    try:
+        import latent_preview
+        from comfy.cli_args import args, LatentPreviewMethod
+    except Exception:
+        return
+    if getattr(latent_preview, "_c2c_previewer_patched", False):
+        return
+    orig = getattr(latent_preview, "get_previewer", None)
+    if not callable(orig):
+        return
+
+    def _patched_get_previewer(device, latent_format):
+        try:
+            prev = orig(device, latent_format)
+        except Exception:
+            prev = None
+        if prev is not None:
+            return prev
+        # Core gave nothing (previews off) -> force Auto for one resolve.
+        saved = getattr(args, "preview_method", None)
+        try:
+            args.preview_method = LatentPreviewMethod.Auto
+            return orig(device, latent_format)
+        except Exception:
+            return prev
+        finally:
+            try:
+                args.preview_method = saved
+            except Exception:
+                pass
+
+    try:
+        latent_preview.get_previewer = _patched_get_previewer
+        latent_preview._c2c_previewer_patched = True
+        log.info("[c2c.preview] installed get_previewer fallback (previews can never be None).")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] previewer patch skipped: %s", exc)
+
+
 # Run at import (custom_nodes load after core, so latent_preview already exists).
 ensure_previews_enabled()
+_install_previewer_fallback()
