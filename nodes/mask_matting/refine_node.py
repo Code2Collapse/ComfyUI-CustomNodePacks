@@ -47,6 +47,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from .._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MEC.MaskRefineMEC")
 
 # ── Optional deps (degrade gracefully) ───────────────────────────────
@@ -691,7 +693,75 @@ class MaskRefineMEC:
     }
 
     # -----------------------------------------------------------------
+    @classmethod
+    def IS_CHANGED(cls, image, mask, preset, auto_edge_lock, subject_class,
+                   enable_hole_fill, morph_op, enable_thin_recover,
+                   enable_joint_bilateral, enable_guided_filter, enable_dense_crf,
+                   enable_edge_snap, cascade_passes, feather_sigma, gamma,
+                   threshold, enable_domain_transform=False,
+                   enable_color_decontaminate=False, enable_unsharp_alpha=False,
+                   enable_anti_alias=False, enable_chroma_lock=False,
+                   enable_speck_removal=False, enable_temporal_smooth=False,
+                   advanced_overrides_json="", enable_integrity_check=False,
+                   integrity_drop_threshold=0.40, integrity_jump_threshold=0.15,
+                   **kwargs):
+        return hash_args_and_kwargs(
+            image, mask, preset, auto_edge_lock, subject_class,
+            enable_hole_fill, morph_op, enable_thin_recover,
+            enable_joint_bilateral, enable_guided_filter, enable_dense_crf,
+            enable_edge_snap, cascade_passes, feather_sigma, gamma, threshold,
+            enable_domain_transform, enable_color_decontaminate,
+            enable_unsharp_alpha, enable_anti_alias, enable_chroma_lock,
+            enable_speck_removal, enable_temporal_smooth,
+            advanced_overrides_json, enable_integrity_check,
+            integrity_drop_threshold, integrity_jump_threshold, **kwargs,
+        )
+
     def execute(
+        self,
+        image, mask,
+        preset,
+        auto_edge_lock,
+        subject_class,
+        enable_hole_fill,
+        morph_op,
+        enable_thin_recover,
+        enable_joint_bilateral,
+        enable_guided_filter,
+        enable_dense_crf,
+        enable_edge_snap,
+        cascade_passes,
+        feather_sigma, gamma, threshold,
+        enable_domain_transform=False,
+        enable_color_decontaminate=False,
+        enable_unsharp_alpha=False,
+        enable_anti_alias=False,
+        enable_chroma_lock=False,
+        enable_speck_removal=False,
+        enable_temporal_smooth=False,
+        advanced_overrides_json="",
+        enable_integrity_check: bool = False,
+        integrity_drop_threshold: float = 0.40,
+        integrity_jump_threshold: float = 0.15,
+    ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("MaskRefineMEC expects IMAGE tensor [B,H,W,C]")
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("MaskRefineMEC expects MASK tensor [H,W] or [B,H,W]")
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, mask, preset, auto_edge_lock, subject_class,
+                enable_hole_fill, morph_op, enable_thin_recover,
+                enable_joint_bilateral, enable_guided_filter, enable_dense_crf,
+                enable_edge_snap, cascade_passes, feather_sigma, gamma, threshold,
+                enable_domain_transform, enable_color_decontaminate,
+                enable_unsharp_alpha, enable_anti_alias, enable_chroma_lock,
+                enable_speck_removal, enable_temporal_smooth,
+                advanced_overrides_json, enable_integrity_check,
+                integrity_drop_threshold, integrity_jump_threshold,
+            )
+
+    def _execute_impl(
         self,
         image, mask,
         preset,
