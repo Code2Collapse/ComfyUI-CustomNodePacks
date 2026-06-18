@@ -25,6 +25,8 @@ import logging
 import numpy as np
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.TemporalConsistencyChecker")
 
 try:
@@ -116,7 +118,36 @@ class TemporalConsistencyCheckerMEC:
         "Returns flicker_score in [0, 1] (lower = more stable) and a per-pair JSON report."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, metric, image=None, mask=None, binarize_threshold=0.5,
+                   **kwargs):
+        return hash_args_and_kwargs(
+            metric, image, mask, binarize_threshold, **kwargs,
+        )
+
     def check(
+        self,
+        metric: str,
+        image: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        binarize_threshold: float = 0.5,
+    ):
+        if image is not None and (
+            not isinstance(image, torch.Tensor) or image.ndim != 4
+        ):
+            raise ValueError(
+                "TemporalConsistencyCheckerMEC expects IMAGE tensor [B,H,W,C]"
+            )
+        if mask is not None and (
+            not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3)
+        ):
+            raise ValueError(
+                "TemporalConsistencyCheckerMEC expects MASK tensor [H,W] or [B,H,W]"
+            )
+        with torch.inference_mode():
+            return self._check_impl(metric, image, mask, binarize_threshold)
+
+    def _check_impl(
         self,
         metric: str,
         image: torch.Tensor | None = None,
