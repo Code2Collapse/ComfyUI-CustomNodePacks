@@ -23,6 +23,7 @@ Features:
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import json
@@ -327,9 +328,47 @@ class UnifiedSegmentation:
         "Auto-downloads models from HuggingFace on first use."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, model_name, points_json, bbox_json,
+                   multimask, mask_index, precision, bbox=None,
+                   neg_bbox_json="", text_prompt="", existing_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            image, model_name, points_json, bbox_json,
+            multimask, mask_index, precision, bbox,
+            neg_bbox_json, text_prompt, existing_mask, **kwargs,
+        )
+
     # ── Main entry point ──────────────────────────────────────────────
 
     def segment(
+        self,
+        image: torch.Tensor,
+        model_name: str,
+        points_json: str,
+        bbox_json: str,
+        multimask: bool,
+        mask_index: int,
+        precision: str,
+        bbox=None,
+        neg_bbox_json: str = "",
+        text_prompt: str = "",
+        existing_mask: torch.Tensor | None = None,
+    ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("UnifiedSegmentation expects IMAGE tensor [B,H,W,C]")
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor) or existing_mask.ndim not in (2, 3)
+        ):
+            raise ValueError("UnifiedSegmentation existing_mask expects MASK [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._segment_impl(
+                image, model_name, points_json, bbox_json,
+                multimask, mask_index, precision, bbox,
+                neg_bbox_json, text_prompt, existing_mask,
+            )
+
+    def _segment_impl(
         self,
         image: torch.Tensor,
         model_name: str,
