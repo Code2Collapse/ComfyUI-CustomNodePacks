@@ -1,8 +1,14 @@
+import hashlib
 import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+try:
+    from .nodes._is_changed_util import dir_version_fingerprint, hash_kwargs
+except ImportError:  # standalone / test import
+    from nodes._is_changed_util import dir_version_fingerprint, hash_kwargs
 
 
 # Date format selector → strftime mapping
@@ -328,8 +334,29 @@ class FolderIncrementer:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        # Re-execute every queue so the filesystem scan is up-to-date.
-        return float("NaN")
+        # Assumption: inputs + on-disk version dirs determine the next counter.
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        prefix = kwargs.get("prefix", "v")
+        padding = int(kwargs.get("padding", 3))
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        folder_name_override = (kwargs.get("folder_name_override") or "").strip()
+        source_filename = (kwargs.get("source_filename") or "").strip()
+        name_format = kwargs.get("name_format", "basename")
+        if folder_name_override:
+            folder_name = _sanitize_folder_name(folder_name_override, fallback=label or "output")
+        elif source_filename and not _looks_like_input_file(source_filename):
+            raw_stem, _ext = _resolve_stem_and_ext(source_filename, kwargs.get("source_extension", ""))
+            folder_name = _sanitize_folder_name(_format_source_name(raw_stem, name_format), fallback=label or "output")
+        else:
+            folder_name = _sanitize_folder_name(label, fallback="default")
+        scan_dir = base_dir / folder_name / today_date
+        h.update(dir_version_fingerprint(scan_dir, prefix, padding).encode())
+        return h.hexdigest()
 
     def increment(self, prefix="v", padding=3, label="default",
                   date_format="MM-DD-YYYY", path_style="auto",
@@ -482,7 +509,16 @@ class FolderIncrementerReset:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("NaN")
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        h.update(dir_version_fingerprint(base_dir / safe_label / today_date, "v", 3).encode())
+        return h.hexdigest()
 
     def check(self, label="default", date_format="MM-DD-YYYY",
                trigger=None, base_path=""):
@@ -541,7 +577,18 @@ class FolderIncrementerSet:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("NaN")
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        prefix = kwargs.get("prefix", "v")
+        padding = int(kwargs.get("padding", 3))
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        h.update(dir_version_fingerprint(base_dir / safe_label / today_date, prefix, padding).encode())
+        return h.hexdigest()
 
     def set_version(self, label="default", value=1, trigger=None,
                     prefix="v", padding=3, base_path="",
