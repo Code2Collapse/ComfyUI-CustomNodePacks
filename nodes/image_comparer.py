@@ -23,6 +23,8 @@ from PIL import Image
 
 import folder_paths
 
+from ._is_changed_util import hash_args_and_kwargs
+
 
 _DIFF_MODES = ["absolute", "signed", "luminance", "per-channel"]
 
@@ -72,6 +74,14 @@ class ImageComparerMEC:
     OUTPUT_NODE = True
     DESCRIPTION = "Nuke-style A/B comparer: wipe slider, overlay, and HDR-aware diff (gain + gamma) that preserves 8-vs-16-bit precision differences."
 
+    @classmethod
+    def IS_CHANGED(cls, image_a, image_b, label_a="A", label_b="B", diff_mode="absolute",
+                   diff_gain=16.0, diff_gamma=1.0, diff_threshold=0.0, **kwargs):
+        return hash_args_and_kwargs(
+            image_a, image_b, label_a, label_b, diff_mode,
+            diff_gain, diff_gamma, diff_threshold, **kwargs,
+        )
+
     def compare(
         self,
         image_a: torch.Tensor,
@@ -82,6 +92,27 @@ class ImageComparerMEC:
         diff_gain: float = 16.0,
         diff_gamma: float = 1.0,
         diff_threshold: float = 0.0,
+    ):
+        if not isinstance(image_a, torch.Tensor) or image_a.ndim != 4:
+            raise ValueError("ImageComparerMEC image_a must be IMAGE tensor [B,H,W,C]")
+        if not isinstance(image_b, torch.Tensor) or image_b.ndim != 4:
+            raise ValueError("ImageComparerMEC image_b must be IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            return self._compare_impl(
+                image_a, image_b, label_a, label_b, diff_mode,
+                diff_gain, diff_gamma, diff_threshold,
+            )
+
+    def _compare_impl(
+        self,
+        image_a: torch.Tensor,
+        image_b: torch.Tensor,
+        label_a: str,
+        label_b: str,
+        diff_mode: str,
+        diff_gain: float,
+        diff_gamma: float,
+        diff_threshold: float,
     ):
         B, H, W, C = image_a.shape
 
