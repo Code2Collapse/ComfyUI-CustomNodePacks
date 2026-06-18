@@ -1681,6 +1681,13 @@ app.registerExtension({
         _injectStyle();
         _getPopover();   // pre-create so listeners are attached
 
+        // Let the Memory Guard flush these growing caches under heap pressure.
+        try {
+            window.__C2C_MEM__?.register?.("node_explain", () => {
+                _CACHE.clear(); _SUGGEST_CACHE.clear(); _AI_WIDGET_CACHE.clear();
+            });
+        } catch (_) { /* guard not present — fine */ }
+
         const canvas = app.canvas?.canvas;
         if (!canvas) {
             console.warn("[MEC.NodeExplain] canvas not available at setup() — retrying…");
