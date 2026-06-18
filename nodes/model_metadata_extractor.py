@@ -29,6 +29,8 @@ import pickletools
 import struct
 import zipfile
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.ModelMetadataExtractor")
 
 
@@ -291,6 +293,17 @@ class ModelMetadataExtractorMEC:
         "Safe to run on untrusted .ckpt files. Reports tensor count, params, "
         "training metadata, and a quick fingerprint."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, file_path, compute_fingerprint=True, **kwargs):
+        fp = file_path or ""
+        if file_path and os.path.isfile(file_path):
+            try:
+                st = os.stat(file_path)
+                fp = f"{file_path}:{st.st_mtime_ns}:{st.st_size}"
+            except OSError:
+                fp = file_path
+        return hash_args_and_kwargs(fp, compute_fingerprint, **kwargs)
 
     def extract(self, file_path: str, compute_fingerprint: bool = True):
         if not file_path or not os.path.isfile(file_path):
