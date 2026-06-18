@@ -17,6 +17,8 @@ import math
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.VAELatentInspector")
 
 
@@ -89,6 +91,11 @@ class VAELatentInspectorMEC:
         "and a one-word verdict (healthy/low_contrast/saturated/corrupt). "
         "Latent is passed through unchanged."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, latent, fail_on_corrupt=False, **kwargs):
+        samples = latent.get("samples") if isinstance(latent, dict) else None
+        return hash_args_and_kwargs(samples, fail_on_corrupt, **kwargs)
 
     def inspect(self, latent, fail_on_corrupt: bool = False):
         if not isinstance(latent, dict) or "samples" not in latent:
