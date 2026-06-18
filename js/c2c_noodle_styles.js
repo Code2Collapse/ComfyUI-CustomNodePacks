@@ -375,9 +375,20 @@ function _installRenderPatch() {
                     ctx.restore();
                 }
             }
-            // Force a continuous redraw for animated styles
-            if (["dna-helix","rainbow-flow","dashed-march","lightning","pulse-packet"].includes(style)) {
-                this.dirty_canvas = true;
+            // Force a continuous redraw for animated styles — THROTTLED (~20fps)
+            // and PAUSED while the tab is hidden. Previously this set
+            // dirty_canvas=true on every render, forcing a full-canvas repaint of
+            // EVERY link at max FPS forever — the idle "FPS:44" + ~46% CPU the user
+            // hit (each repaint re-runs these heavy per-link renderers ×N links).
+            // 50ms throttle ≈ 20fps: smooth shimmer at a fraction of the cost, and
+            // zero CPU in the background.
+            if (style === "dna-helix" || style === "rainbow-flow" || style === "dashed-march" ||
+                style === "lightning" || style === "pulse-packet") {
+                const _now = performance.now();
+                if (!document.hidden && _now - (this._c2cNoodleAnimTick || 0) > 50) {
+                    this._c2cNoodleAnimTick = _now;
+                    this.dirty_canvas = true;
+                }
             }
         } catch (e) {
             console.warn("[MEC.NoodleStyles] render error, falling back:", e);
