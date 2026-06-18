@@ -48,6 +48,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from .._is_changed_util import hash_args_and_kwargs
 from .utils import free_vram
 
 log = logging.getLogger("MEC.MaskTemporal")
@@ -277,8 +278,28 @@ class MaskTemporalMEC:
             }
         }
 
+    @classmethod
+    def IS_CHANGED(cls, image, mask, temporal_mode, blend, sigma, device,
+                   drop_threshold, jump_threshold, **kwargs):
+        return hash_args_and_kwargs(
+            image, mask, temporal_mode, blend, sigma, device,
+            drop_threshold, jump_threshold, **kwargs,
+        )
+
     def run(self, image, mask, temporal_mode, blend, sigma, device,
              drop_threshold, jump_threshold):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("MaskTemporalMEC expects IMAGE tensor [B,H,W,C]")
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3, 4):
+            raise ValueError("MaskTemporalMEC expects MASK tensor [H,W] or [B,H,W]")
+        with torch.inference_mode():
+            return self._run_impl(
+                image, mask, temporal_mode, blend, sigma, device,
+                drop_threshold, jump_threshold,
+            )
+
+    def _run_impl(self, image, mask, temporal_mode, blend, sigma, device,
+                  drop_threshold, jump_threshold):
         # Normalize tensor shapes.
         m = mask
         if m.dim() == 4:  # (B,H,W,1)
