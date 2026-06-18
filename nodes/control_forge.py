@@ -111,6 +111,18 @@ _DEPTH_CKPT = {
 }
 _DEPTH_SIZES = ("small", "medium", "large", "giant")
 
+# Vendored, self-contained model backends (run inside this pack; lazy + guarded).
+try:
+    from . import _control_backends as _cb
+except Exception:  # pragma: no cover
+    try:
+        import _control_backends as _cb  # type: ignore
+    except Exception:
+        _cb = None
+# depth_model values that route to the vendored runners (vs controlnet_aux delegation).
+_VENDORED_DEPTH = ("da_v2", "da_v1", "midas", "da3", "depth_pro", "depthcrafter")
+_NORMAL_MODELS = ("off", "sobel_from_depth", "normalcrafter")
+
 
 def _spec_default(spec):
     if not isinstance(spec, (list, tuple)) or not spec:
@@ -227,9 +239,14 @@ class ControlAOVC2C:
             },
             "optional": {
                 "image": ("IMAGE", {"tooltip": "Source frames — preprocessors below run on this."}),
-                "depth_model": (["off"] + list(_DEPTH_MAP.keys()), {"default": "off",
-                                "tooltip": "Run a depth preprocessor internally (delegates to comfyui_controlnet_aux, "
-                                           "using its own models/paths). 'off' = wire an external depth map instead."}),
+                "depth_model": (["off"] + list(_VENDORED_DEPTH) + list(_DEPTH_MAP.keys()), {"default": "off",
+                                "tooltip": "Depth backend. VENDORED (self-contained, run inside this pack): da_v2/da_v1/"
+                                           "midas (transformers), da3 (Depth-Anything-3), depth_pro, depthcrafter (video). "
+                                           "The depth_anything_* options delegate to comfyui_controlnet_aux instead. "
+                                           "'off' = wire an external depth map."}),
+                "normal_model": (list(_NORMAL_MODELS), {"default": "off",
+                                "tooltip": "Normal backend (vendored): sobel_from_depth (no model) or normalcrafter (video). "
+                                           "'off' = wire an external normal map."}),
                 "depth_size": (list(_DEPTH_SIZES), {"default": "small",
                                "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default) → giant=ViT-G "
                                           "(best). v1 has no giant (falls back to large). Ignored by metric/zoe."}),
@@ -261,16 +278,17 @@ class ControlAOVC2C:
         }
 
     @classmethod
-    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", depth_size="small",
+    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
                    depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
                    run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
                    preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
                    normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
                    normal_weight=0.0, match_to="largest", **_):
         h = hashlib.md5()
-        h.update(repr((blend_mode, depth_model, depth_size, depth_custom_ckpt, pose_model, edge_model,
-                       run_canny, canny_low, canny_high, canny_aperture, depth_invert, preproc_resolution,
-                       run_motion, depth_weight, canny_weight, pose_weight, normal_weight, match_to)).encode())
+        h.update(repr((blend_mode, depth_model, normal_model, depth_size, depth_custom_ckpt, pose_model,
+                       edge_model, run_canny, canny_low, canny_high, canny_aperture, depth_invert,
+                       preproc_resolution, run_motion, depth_weight, canny_weight, pose_weight,
+                       normal_weight, match_to)).encode())
         for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
             h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
         return h.hexdigest()
@@ -287,7 +305,7 @@ class ControlAOVC2C:
         best = max(cands, key=lambda t: t.shape[1] * t.shape[2])
         return best.shape[1], best.shape[2]
 
-    def forge(self, blend_mode, image=None, depth_model="off", depth_size="small",
+    def forge(self, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
               depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
               run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
               preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
@@ -297,16 +315,31 @@ class ControlAOVC2C:
         notes = []
         res = int(preproc_resolution)
 
-        # DEPTH: external input wins; else delegate to the chosen preprocessor.
+        # DEPTH: external input wins; else vendored backend, else controlnet_aux delegation.
         depth_t = _as_bhwc3(depth)
         if depth_t is None and image is not None and depth_model != "off":
-            ov = {}
-            if depth_model in _DEPTH_CKPT:  # v1/v2 size or custom ckpt
-                ckpt = depth_custom_ckpt.strip() or _DEPTH_CKPT[depth_model].get(depth_size,
-                        _DEPTH_CKPT[depth_model]["large"])
-                ov["ckpt_name"] = ckpt
-            depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res, overrides=ov)
-            notes.append(nt + (f"[{ov['ckpt_name']}]" if ov else ""))
+            if depth_model in _VENDORED_DEPTH and _cb is not None:
+                if depth_model == "da_v2":
+                    depth_t, nt = _cb.run_hf_depth(image, "v2", depth_size, depth_custom_ckpt)
+                elif depth_model == "da_v1":
+                    depth_t, nt = _cb.run_hf_depth(image, "v1", depth_size, depth_custom_ckpt)
+                elif depth_model == "midas":
+                    depth_t, nt = _cb.run_hf_depth(image, "midas", depth_size, depth_custom_ckpt)
+                elif depth_model == "da3":
+                    depth_t, nt = _cb.run_da3(image, depth_size, depth_custom_ckpt)
+                elif depth_model == "depth_pro":
+                    depth_t, nt = _cb.run_depth_pro(image)
+                else:  # depthcrafter
+                    depth_t, nt = _cb.run_depthcrafter(image)
+                notes.append(nt)
+            elif depth_model in _DEPTH_MAP:  # controlnet_aux delegation
+                ov = {}
+                if depth_model in _DEPTH_CKPT:
+                    ckpt = depth_custom_ckpt.strip() or _DEPTH_CKPT[depth_model].get(depth_size,
+                            _DEPTH_CKPT[depth_model]["large"])
+                    ov["ckpt_name"] = ckpt
+                depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res, overrides=ov)
+                notes.append(nt + (f"[{ov['ckpt_name']}]" if ov else ""))
         if depth_invert and depth_t is not None:
             depth_t = (1.0 - _as_bhwc3(depth_t)).clamp(0, 1)
         # POSE
@@ -324,8 +357,17 @@ class ControlAOVC2C:
                 notes.append(nt)
         motion_t = _motion_pass(image) if (run_motion and image is not None) else None
 
+        # NORMAL: external wins; else vendored backend (sobel-from-depth or NormalCrafter).
+        normal_t = _as_bhwc3(normal)
+        if normal_t is None and normal_model != "off" and _cb is not None:
+            if normal_model == "sobel_from_depth" and depth_t is not None:
+                normal_t = _cb.normals_from_depth(depth_t)
+            elif normal_model == "normalcrafter" and image is not None:
+                normal_t, nt = _cb.run_normalcrafter(image)
+                notes.append(nt)
+
         raw = {"depth": depth_t, "canny": canny_t, "pose": pose_t,
-               "normal": _as_bhwc3(normal), "motion": _as_bhwc3(motion_t),
+               "normal": normal_t, "motion": _as_bhwc3(motion_t),
                "id_matte": _as_bhwc3(id_matte), "image": image}
         h, w = self._target_size(raw, match_to)
         present = [v for v in raw.values() if v is not None]
@@ -384,11 +426,10 @@ class ControlAOVC2C:
         info = (
             f"Control AOV — passes: {', '.join(names) or 'none'} | blend: {blend_mode} | {w}x{h} x{B}\n"
             + (f"backends: {run_notes}\n" if run_notes else "")
-            + "Internal (delegated to comfyui_controlnet_aux, its own model paths): DepthAnything v1/v2/metric/zoe, "
-              "DWPose/OpenPose/Animal/DensePose, Canny/LineArt/HED/PiDiNet/TEED. "
-              "Vendored in third_party (DepthCrafter, NormalCrafter — video depth/normals; enable via their backends "
-              "once diffusers + weights are present). Wire as INPUTS for now: DepthAnything V3, ViTPose "
-              "(WanV2 detect→draw), DepthCrafter, NormalCrafter, ID-matte (SAM).\n"
+            + "VENDORED depth (self-contained, weights download on first use): da_v2/da_v1/midas (transformers), "
+              "da3 (Depth-Anything-3), depth_pro, depthcrafter (video). VENDORED normal: sobel_from_depth, normalcrafter. "
+              "DELEGATED to comfyui_controlnet_aux: depth_anything_* depth, DWPose/OpenPose pose, Canny/LineArt/HED/etc. "
+              "Wire as INPUTS: ViTPose (WanV2 detect->draw), ID-matte (SAM).\n"
               "MAX CONTROL / no-drift: don't rely on 'blended'. Stack the separate AOV passes into Apply-ControlNet "
               "(or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) with start/end-step "
               "scheduling, and add a Tile ControlNet to lock layout. 'channel_packed' suits union nets."
