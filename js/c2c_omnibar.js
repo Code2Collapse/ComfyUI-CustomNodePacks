@@ -107,7 +107,10 @@ function _reportFailure(where, err) {
 // ── Setting helpers ─────────────────────────────────────────────────────────
 function _getSetting(id, fallback) {
     try {
-        const v = app?.ui?.settings?.getSettingValue?.(id, fallback);
+        // NOTE: do NOT pass a 2nd arg — recent ComfyUI deprecates the
+        // defaultValue parameter and logs a warning on EVERY call (this ran
+        // hundreds of times at startup via the section re-render path).
+        const v = app?.ui?.settings?.getSettingValue?.(id);
         return (v === undefined || v === null) ? fallback : v;
     } catch (err) {
         _reportFailure("getSetting:" + id, err);
@@ -902,11 +905,23 @@ function _clearInlineEdges(root) {
 }
 
 // ── Mount / re-mount / apply position ──────────────────────────────────────
+let _applyRAF = 0;
 function _applyPositionAndMode() {
+    // PERF: every C2C setting's onChange used to call this synchronously, and
+    // each call re-renders ALL sections (each reading many settings). At startup
+    // ~50 settings register back-to-back → hundreds of full re-renders in one
+    // tick, which froze the tab (reported "Brave crashing"). Coalesce into one
+    // render per animation frame.
+    if (_applyRAF) return;
+    _applyRAF = requestAnimationFrame(() => {
+        _applyRAF = 0;
+        try { _applyPositionAndModeNow(); }
+        catch (err) { _reportFailure("_applyPositionAndModeNow", err); }
+    });
+}
+function _applyPositionAndModeNow() {
     // New architecture: the OmniBar surface is (1) a single pill injected
-    // into the Manager bar, and (2) an anchored dropdown panel. Position /
-    // density settings no longer affect the bar layout (kept for backward
-    // compat only). This function:
+    // into the Manager bar, and (2) an anchored dropdown panel. This:
     //   • ensures the pill is in the Manager bar (or removed if hidden)
     //   • re-renders all sections so newly-registered slots appear
     //   • if the panel is open, repositions it under the pill
