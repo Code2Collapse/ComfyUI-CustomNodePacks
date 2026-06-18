@@ -10,6 +10,8 @@ import json
 import logging
 import math
 
+from ._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MaskEditControl.draw")
 
 try:
@@ -136,6 +138,14 @@ class MaskDrawFrame:
     CATEGORY = "C2C/Draw"
     DESCRIPTION = "Draw precise geometric shapes onto a mask with feathering, rotation, and blend operations."
 
+    @classmethod
+    def IS_CHANGED(cls, width, height, shape, shape_params_json, value, feather,
+                   rotation, operation, existing_mask=None, reference_image=None, **kwargs):
+        return hash_args_and_kwargs(
+            width, height, shape, shape_params_json, value, feather,
+            rotation, operation, existing_mask, reference_image, **kwargs,
+        )
+
     # ── Rotation helper ───────────────────────────────────────────────
     @staticmethod
     def _rotate_grid(xx: torch.Tensor, yy: torch.Tensor,
@@ -232,6 +242,30 @@ class MaskDrawFrame:
 
     def draw(self, width, height, shape, shape_params_json, value, feather,
              rotation, operation, existing_mask=None, reference_image=None):
+
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor) or reference_image.ndim != 4
+        ):
+            raise ValueError(
+                f"MaskDrawFrame: reference_image must be IMAGE [B,H,W,C], "
+                f"got {tuple(getattr(reference_image, 'shape', ()))}"
+            )
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor) or existing_mask.ndim not in (3, 4)
+        ):
+            raise ValueError(
+                f"MaskDrawFrame: existing_mask must be MASK [B,H,W], "
+                f"got {tuple(getattr(existing_mask, 'shape', ()))}"
+            )
+
+        with torch.inference_mode():
+            return self._draw_impl(
+                width, height, shape, shape_params_json, value, feather,
+                rotation, operation, existing_mask, reference_image,
+            )
+
+    def _draw_impl(self, width, height, shape, shape_params_json, value, feather,
+                   rotation, operation, existing_mask=None, reference_image=None):
 
         if reference_image is not None:
             _, h, w, _ = reference_image.shape
@@ -811,6 +845,22 @@ class DrawShapeMEC:
         "Shapes: circle, rectangle, ellipse, polygon, line, triangle, star,\n"
         "diamond, cross, rounded_rectangle, heart, arrow."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, width, height, shape, cx, cy, radius, size_w, size_h,
+                   rx, ry, top_left_x, top_left_y, x2, y2, thickness,
+                   outer_r, inner_r, num_points, corner_radius, cross_size,
+                   arrow_length, head_length, head_width, points_json,
+                   value, feather, rotation, operation, batch_size,
+                   coords_json="", existing_mask=None, reference_image=None, **kwargs):
+        return hash_args_and_kwargs(
+            width, height, shape, cx, cy, radius, size_w, size_h,
+            rx, ry, top_left_x, top_left_y, x2, y2, thickness,
+            outer_r, inner_r, num_points, corner_radius, cross_size,
+            arrow_length, head_length, head_width, points_json,
+            value, feather, rotation, operation, batch_size,
+            coords_json, existing_mask, reference_image, **kwargs,
+        )
 
     def _build_params(self, shape, fc, **kw):
         """Build shape_params_json dict from widget values + per-frame overrides."""
