@@ -265,16 +265,17 @@ class ControlAOVC2C:
                    "optical-flow motion internally; accepts depth/pose/normal/ID maps as inputs. Feeds any "
                    "ControlNet / union / control-video. Stack the separate passes for maximum spatial lock.")
     FUNCTION = "forge"
-    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "STRING")
-    RETURN_NAMES = ("blended", "channel_packed", "depth", "canny", "pose", "normal", "motion", "id_matte", "info")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "STRING")
+    RETURN_NAMES = ("blended", "combined", "channel_packed", "depth", "canny", "pose", "normal", "motion", "id_matte", "info")
     OUTPUT_TOOLTIPS = (
-        "Convenience single image (chosen blend mode).",
+        "Single image, all passes OVERLAID via the chosen blend mode.",
+        "Single image, depth | pose | canny shown SIDE-BY-SIDE (or grid) — the clearest 'all 3 at once' view.",
         "depth=R, canny=G, pose=B — lossless packing for union ControlNets.",
         "Depth AOV (passthrough).", "Canny AOV (run internally if 'image' wired).",
         "Pose AOV (passthrough).", "Normal AOV (passthrough).",
         "Motion-vector AOV (optical flow, run internally on a frame batch).",
         "ID / segmentation matte AOV (passthrough).",
-        "Present passes + recommended max-control wiring.",
+        "Per-pass STATUS + recommended max-control wiring.",
     )
 
     @classmethod
@@ -283,7 +284,11 @@ class ControlAOVC2C:
         return {
             "required": {
                 "blend_mode": (_BLEND_MODES, {"default": "screen",
-                               "tooltip": "screen = least-destructive default; linear_dodge clips; multiply darkens."}),
+                               "tooltip": "How the 'blended' overlay combines passes. screen = least-destructive; "
+                                          "linear_dodge clips; multiply darkens."}),
+                "preview_layout": (("horizontal_3", "vertical_3", "grid_2x2"), {"default": "horizontal_3",
+                               "tooltip": "Layout for the 'combined' output: horizontal_3 = depth | pose | canny; "
+                                          "grid_2x2 = depth|pose // canny|original."}),
             },
             "optional": {
                 "image": ("IMAGE", {"tooltip": "Source frames — preprocessors below run on this."}),
@@ -330,14 +335,14 @@ class ControlAOVC2C:
         }
 
     @classmethod
-    def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
+    def IS_CHANGED(cls, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",
                    depth_custom_ckpt="", pose_model="off", id_matte_model="off", edge_model="internal_canny",
                    run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
                    preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
                    normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
                    normal_weight=0.0, match_to="largest", **_):
         h = hashlib.md5()
-        h.update(repr((blend_mode, depth_model, normal_model, depth_size, depth_custom_ckpt, pose_model,
+        h.update(repr((blend_mode, preview_layout, depth_model, normal_model, depth_size, depth_custom_ckpt, pose_model,
                        id_matte_model, edge_model, run_canny, canny_low, canny_high, canny_aperture,
                        depth_invert, preproc_resolution, run_motion, depth_weight, canny_weight,
                        pose_weight, normal_weight, match_to)).encode())
@@ -357,7 +362,7 @@ class ControlAOVC2C:
         best = max(cands, key=lambda t: t.shape[1] * t.shape[2])
         return best.shape[1], best.shape[2]
 
-    def forge(self, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
+    def forge(self, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",
               depth_custom_ckpt="", pose_model="off", id_matte_model="off", edge_model="internal_canny",
               run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
               preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
@@ -482,6 +487,19 @@ class ControlAOVC2C:
 
         packed = torch.stack([_luma(norm["depth"]), _luma(norm["canny"]), _luma(norm["pose"])], dim=-1).clamp(0, 1).contiguous()
 
+        # 'combined' panel — see depth + pose + canny in ONE image, side-by-side/grid.
+        d3, p3, c3 = norm["depth"], norm["pose"], norm["canny"]
+        orig3 = norm["image"]
+        if preview_layout == "vertical_3":
+            combined = torch.cat([d3, p3, c3], dim=1)
+        elif preview_layout == "grid_2x2":
+            top = torch.cat([d3, p3], dim=2)
+            bot = torch.cat([c3, orig3], dim=2)
+            combined = torch.cat([top, bot], dim=1)
+        else:  # horizontal_3
+            combined = torch.cat([d3, p3, c3], dim=2)
+        combined = combined.clamp(0, 1).contiguous()
+
         # Per-pass health so you can SEE all 3 are working (not silently dropped).
         requested = {
             "depth": (depth_model != "off") or (depth is not None),
@@ -519,7 +537,7 @@ class ControlAOVC2C:
               "(or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) with start/end-step "
               "scheduling, and add a Tile ControlNet to lock layout. 'channel_packed' suits union nets."
         )
-        return (blended, packed, norm["depth"], norm["canny"], norm["pose"],
+        return (blended, combined, packed, norm["depth"], norm["canny"], norm["pose"],
                 norm["normal"], norm["motion"], norm["id_matte"], info)
 
 
