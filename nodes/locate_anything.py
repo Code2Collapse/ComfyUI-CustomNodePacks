@@ -108,6 +108,15 @@ class LocateAnythingGroundingMEC:
     ):
         from PIL import Image
 
+        # Cross-platform safety: the device widget defaults to "cuda", but on a
+        # CPU-only box (no NVIDIA driver / hardware accel off) `.to("cuda")` raises.
+        # Resolve to CPU when CUDA is unavailable so the node degrades gracefully
+        # instead of crashing — and both the model and the input tensors use the
+        # same resolved device. Verified statically; no GPU needed to confirm.
+        # Source: https://pytorch.org/docs/stable/generated/torch.cuda.is_available.html
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+
         B = image.shape[0]
         all_bboxes: List[List[Dict[str, Any]]] = []
         all_annotated: List[np.ndarray] = []
