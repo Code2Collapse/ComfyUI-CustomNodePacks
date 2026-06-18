@@ -21,7 +21,6 @@ English — no raw tracebacks.
 from __future__ import annotations
 
 import base64
-import hashlib
 import io
 import json
 import logging
@@ -33,6 +32,8 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import torch
+
+from ._is_changed_util import hash_args_and_kwargs
 
 try:
     from comfy.utils import ProgressBar  # type: ignore
@@ -270,20 +271,12 @@ class NanoBananaC2C:
                    resolution, temperature, batch_count, seed,
                    enhance_prompt=False, response_modalities="IMAGE+TEXT",
                    api_key="", system_instruction="", image_1=None,
-                   image_2=None, image_3=None, image_4=None, **_kw):
-        h = hashlib.md5()
-        for v in (prompt, model, mode, prompt_style, aspect_ratio, resolution,
-                  temperature, batch_count, seed, enhance_prompt,
-                  response_modalities, system_instruction):
-            h.update(str(v).encode())
-        for t in (image_1, image_2, image_3, image_4):
-            if t is not None:
-                try:
-                    h.update(np.ascontiguousarray(
-                        t.detach().cpu().numpy()[..., ::8, ::8, :]).tobytes())
-                except Exception:
-                    h.update(str(getattr(t, "shape", "?")).encode())
-        return h.hexdigest()
+                   image_2=None, image_3=None, image_4=None, **kwargs):
+        return hash_args_and_kwargs(
+            prompt, model, mode, prompt_style, aspect_ratio, resolution,
+            temperature, batch_count, seed, enhance_prompt, response_modalities,
+            system_instruction, image_1, image_2, image_3, image_4, **kwargs,
+        )
 
     @classmethod
     def VALIDATE_INPUTS(cls, mode="text_to_image", **kw):
