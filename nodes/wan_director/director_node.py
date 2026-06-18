@@ -27,6 +27,8 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .._is_changed_util import hash_args_and_kwargs
+
 import folder_paths  # type: ignore
 
 log = logging.getLogger("MEC.WanDirector")
@@ -991,6 +993,10 @@ class WanDirectorC2C:
                 "wan_t5":           ("WANTEXTENCODER",   {"tooltip": "Kijai T5 text encoder (required when backend='kijai')."}),
             },
         }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return hash_args_and_kwargs(**kwargs)
 
     # ── Execute ──────────────────────────────────────────────────────
 
