@@ -33,6 +33,7 @@ import torch.nn.functional as F
 
 import folder_paths
 
+from ._is_changed_util import hash_args_and_kwargs
 from .mec_paint_suite import (
     _gaussian_blur_2d,
     _morph_2d,
@@ -224,6 +225,22 @@ class MECFaceFixer:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, image, model, positive, negative, vae,
+                   face_model, confidence, max_faces, crop_padding, crop_resolution,
+                   denoise, steps, cfg, sampler_name, scheduler, seed,
+                   blend_softness, mask_dilate, color_match, lightness_rescue,
+                   differential_diffusion, mask=None, upscale_model=None,
+                   face_positive_prompt="", face_negative_prompt="", **kwargs):
+        return hash_args_and_kwargs(
+            image, model, positive, negative, vae,
+            face_model, confidence, max_faces, crop_padding, crop_resolution,
+            denoise, steps, cfg, sampler_name, scheduler, seed,
+            blend_softness, mask_dilate, color_match, lightness_rescue,
+            differential_diffusion, mask, upscale_model,
+            face_positive_prompt, face_negative_prompt, **kwargs,
+        )
+
     # ---- detection -------------------------------------------------
     def _detect(self, frame_np: np.ndarray, face_model: str, conf: float, max_faces: int,
                 fallback_mask: Optional[np.ndarray]) -> List[Tuple[int, int, int, int, float]]:
@@ -261,6 +278,31 @@ class MECFaceFixer:
 
     # ---- main ------------------------------------------------------
     def execute(self, image, model, positive, negative, vae,
+                face_model, confidence, max_faces, crop_padding, crop_resolution,
+                denoise, steps, cfg, sampler_name, scheduler, seed,
+                blend_softness, mask_dilate, color_match, lightness_rescue,
+                differential_diffusion,
+                mask=None, upscale_model=None,
+                face_positive_prompt: str = "", face_negative_prompt: str = ""):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("MECFaceFixer expects IMAGE tensor [B,H,W,C]")
+        if mask is not None and (
+            not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3)
+        ):
+            raise ValueError("MECFaceFixer mask expects MASK [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, model, positive, negative, vae,
+                face_model, confidence, max_faces, crop_padding, crop_resolution,
+                denoise, steps, cfg, sampler_name, scheduler, seed,
+                blend_softness, mask_dilate, color_match, lightness_rescue,
+                differential_diffusion,
+                mask, upscale_model,
+                face_positive_prompt, face_negative_prompt,
+            )
+
+    def _execute_impl(self, image, model, positive, negative, vae,
                 face_model, confidence, max_faces, crop_padding, crop_resolution,
                 denoise, steps, cfg, sampler_name, scheduler, seed,
                 blend_softness, mask_dilate, color_match, lightness_rescue,
