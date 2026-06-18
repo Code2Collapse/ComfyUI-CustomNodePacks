@@ -29,11 +29,11 @@ STAGING (this file = Stage 1):
 """
 from __future__ import annotations
 
-import hashlib
-
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+from ._is_changed_util import hash_args_and_kwargs
 
 try:
     import cv2
@@ -340,15 +340,14 @@ class ControlAOVC2C:
                    run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
                    preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
                    normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
-                   normal_weight=0.0, match_to="largest", **_):
-        h = hashlib.md5()
-        h.update(repr((blend_mode, preview_layout, depth_model, normal_model, depth_size, depth_custom_ckpt, pose_model,
-                       id_matte_model, edge_model, run_canny, canny_low, canny_high, canny_aperture,
-                       depth_invert, preproc_resolution, run_motion, depth_weight, canny_weight,
-                       pose_weight, normal_weight, match_to)).encode())
-        for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
-            h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
-        return h.hexdigest()
+                   normal_weight=0.0, match_to="largest", **kwargs):
+        return hash_args_and_kwargs(
+            blend_mode, preview_layout, image, depth_model, normal_model, depth_size,
+            depth_custom_ckpt, pose_model, id_matte_model, edge_model, run_canny, canny_low,
+            canny_high, canny_aperture, depth_invert, preproc_resolution, run_motion, depth,
+            canny, pose, normal, id_matte, depth_weight, canny_weight, pose_weight,
+            normal_weight, match_to, **kwargs,
+        )
 
     def _target_size(self, present, match_to):
         if not present:
