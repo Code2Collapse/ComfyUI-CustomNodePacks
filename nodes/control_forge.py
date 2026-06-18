@@ -482,9 +482,33 @@ class ControlAOVC2C:
 
         packed = torch.stack([_luma(norm["depth"]), _luma(norm["canny"]), _luma(norm["pose"])], dim=-1).clamp(0, 1).contiguous()
 
+        # Per-pass health so you can SEE all 3 are working (not silently dropped).
+        requested = {
+            "depth": (depth_model != "off") or (depth is not None),
+            "canny": (edge_model != "off") or (canny is not None),
+            "pose": (pose_model != "off") or (pose is not None),
+            "normal": (normal_model != "off") or (normal is not None),
+        }
+
+        def _stat(k):
+            if raw[k] is None:
+                return "FAIL" if requested.get(k) else "off"
+            try:
+                mx = float(norm[k].max())
+            except Exception:
+                mx = 0.0
+            return "OK" if mx > 0.02 else "EMPTY"
+
+        core = {k: _stat(k) for k in ("depth", "canny", "pose")}
+        core_ok = all(v == "OK" for v in core.values())
+        status = ("ALL 3 OK" if core_ok else "CHECK BELOW") + \
+            " | " + " ".join(f"{k}={v}" for k, v in core.items()) + \
+            f" | normal={_stat('normal')} id={_stat('id_matte') if raw['id_matte'] is not None else 'off'}"
+
         names = [k for k in ("depth", "canny", "pose", "normal", "motion", "id_matte") if raw[k] is not None]
         run_notes = " ".join(n for n in notes if n)
         info = (
+            f"STATUS: {status}\n"
             f"Control AOV — passes: {', '.join(names) or 'none'} | blend: {blend_mode} | {w}x{h} x{B}\n"
             + (f"backends: {run_notes}\n" if run_notes else "")
             + "VENDORED depth (self-contained, weights download on first use): da_v2/da_v1/midas (transformers), "
