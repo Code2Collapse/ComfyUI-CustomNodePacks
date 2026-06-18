@@ -172,6 +172,54 @@ def _run_aux(class_name, image, target_res=512, overrides=None):
         return None, f"{class_name}=err:{type(e).__name__}"
 
 
+def _call_node(cls, fixed):
+    """Run a registered node class, filling its INPUT_TYPES defaults and injecting
+    `fixed` kwargs. Returns the node's output tuple."""
+    it = cls.INPUT_TYPES()
+    params = {}
+    params.update(it.get("required", {}) or {})
+    params.update(it.get("optional", {}) or {})
+    kw = {}
+    for name, spec in params.items():
+        kw[name] = fixed[name] if name in fixed else _spec_default(spec)
+    return getattr(cls(), cls.FUNCTION)(**kw)
+
+
+def _run_vitpose(image, target_res=512):
+    """ViTPose pose via WanV2's 3-node chain (loader -> detect -> draw) → skeleton IMAGE.
+    Uses the ViTPose + YOLO .onnx files already in models/detection/."""
+    try:
+        import nodes as _cn
+        Loader = _cn.NODE_CLASS_MAPPINGS.get("OnnxDetectionModelLoaderV2")
+        Detect = _cn.NODE_CLASS_MAPPINGS.get("WanPoseDetectViTPoseV2")
+        Draw = _cn.NODE_CLASS_MAPPINGS.get("DrawViTPoseV2")
+        if not (Loader and Detect and Draw):
+            return None, "vitpose=WanAnimatePreprocessV2 not installed"
+        files = (Loader.INPUT_TYPES().get("required", {}).get("vitpose_model", [None]) or [None])[0] or []
+        if not files:
+            return None, "vitpose=no .onnx in models/detection/"
+        vit = next((f for f in files if "vitpose" in f.lower()), files[0])
+        yolo = next((f for f in files if "yolo" in f.lower()), None)
+        if yolo is None:
+            return None, "vitpose=need a YOLO .onnx in models/detection/"
+        dev = "CUDAExecutionProvider" if _cuda() else "CPUExecutionProvider"
+        model = _call_node(Loader, {"vitpose_model": vit, "yolo_model": yolo, "onnx_device": dev})[0]
+        bundle = _call_node(Detect, {"images": image, "model": model})[0]
+        H, W = int(image.shape[1]), int(image.shape[2])
+        out = _call_node(Draw, {"pose_data": bundle, "width": W, "height": H})
+        img = next((o for o in out if torch.is_tensor(o) and o.dim() == 4), out[0])
+        return img, f"vitpose=ok [{vit}]"
+    except Exception as e:
+        return None, f"vitpose=err:{type(e).__name__}"
+
+
+def _cuda():
+    try:
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
 # ----------------------------------------------------------------- vendored passes
 def _canny_pass(image_bhwc, low, high, aperture=3):
     """OpenCV Canny per frame → white edges on black, [B,H,W,3]."""
@@ -253,8 +301,12 @@ class ControlAOVC2C:
                 "depth_custom_ckpt": ("STRING", {"default": "",
                                "tooltip": "Custom DepthAnything .pth filename in the controlnet_aux model dir — "
                                           "overrides depth_size when set (your own fine-tuned weights)."}),
-                "pose_model": (["off"] + list(_POSE_MAP.keys()), {"default": "off",
-                               "tooltip": "Run a pose preprocessor internally (DWPose/OpenPose/...)."}),
+                "pose_model": (["off", "vitpose"] + list(_POSE_MAP.keys()), {"default": "off",
+                               "tooltip": "Pose backend. vitpose = WanV2 ViTPose chain (uses models/detection/*.onnx). "
+                                          "dwpose/openpose/... delegate to comfyui_controlnet_aux."}),
+                "id_matte_model": (["off", "sam_auto"], {"default": "off",
+                               "tooltip": "ID/segmentation matte. sam_auto = automatic SAM segmentation (controlnet_aux "
+                                          "SAMPreprocessor). 'off' = wire an external matte."}),
                 "edge_model": (["internal_canny", "off"] + list(_EDGE_MAP.keys()), {"default": "internal_canny",
                                "tooltip": "internal_canny = OpenCV (no model). Others delegate to controlnet_aux."}),
                 "run_canny": ("BOOLEAN", {"default": True, "tooltip": "Used only when edge_model = internal_canny."}),
@@ -279,16 +331,16 @@ class ControlAOVC2C:
 
     @classmethod
     def IS_CHANGED(cls, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
-                   depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
+                   depth_custom_ckpt="", pose_model="off", id_matte_model="off", edge_model="internal_canny",
                    run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
                    preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
                    normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
                    normal_weight=0.0, match_to="largest", **_):
         h = hashlib.md5()
         h.update(repr((blend_mode, depth_model, normal_model, depth_size, depth_custom_ckpt, pose_model,
-                       edge_model, run_canny, canny_low, canny_high, canny_aperture, depth_invert,
-                       preproc_resolution, run_motion, depth_weight, canny_weight, pose_weight,
-                       normal_weight, match_to)).encode())
+                       id_matte_model, edge_model, run_canny, canny_low, canny_high, canny_aperture,
+                       depth_invert, preproc_resolution, run_motion, depth_weight, canny_weight,
+                       pose_weight, normal_weight, match_to)).encode())
         for nm, t in (("i", image), ("d", depth), ("c", canny), ("p", pose), ("n", normal), ("m", id_matte)):
             h.update(nm.encode() if t is None else t.detach().cpu().numpy().tobytes())
         return h.hexdigest()
@@ -306,7 +358,7 @@ class ControlAOVC2C:
         return best.shape[1], best.shape[2]
 
     def forge(self, blend_mode, image=None, depth_model="off", normal_model="off", depth_size="small",
-              depth_custom_ckpt="", pose_model="off", edge_model="internal_canny",
+              depth_custom_ckpt="", pose_model="off", id_matte_model="off", edge_model="internal_canny",
               run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
               preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
               normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
@@ -345,7 +397,10 @@ class ControlAOVC2C:
         # POSE
         pose_t = _as_bhwc3(pose)
         if pose_t is None and image is not None and pose_model != "off":
-            pose_t, nt = _run_aux(_POSE_MAP[pose_model], image, res)
+            if pose_model == "vitpose":
+                pose_t, nt = _run_vitpose(image, res)
+            else:
+                pose_t, nt = _run_aux(_POSE_MAP[pose_model], image, res)
             notes.append(nt)
         # EDGE: external canny input wins; else internal Canny or a delegated edge model.
         canny_t = _as_bhwc3(canny)
@@ -366,9 +421,15 @@ class ControlAOVC2C:
                 normal_t, nt = _cb.run_normalcrafter(image)
                 notes.append(nt)
 
+        # ID-MATTE: external wins; else automatic SAM segmentation.
+        id_t = _as_bhwc3(id_matte)
+        if id_t is None and image is not None and id_matte_model == "sam_auto":
+            id_t, nt = _run_aux("SAMPreprocessor", image, res)
+            notes.append(nt)
+
         raw = {"depth": depth_t, "canny": canny_t, "pose": pose_t,
                "normal": normal_t, "motion": _as_bhwc3(motion_t),
-               "id_matte": _as_bhwc3(id_matte), "image": image}
+               "id_matte": id_t, "image": image}
         h, w = self._target_size(raw, match_to)
         present = [v for v in raw.values() if v is not None]
         B = max((t.shape[0] for t in present), default=1)
