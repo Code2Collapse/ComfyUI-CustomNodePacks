@@ -200,18 +200,31 @@ function patchDraw() {
             if (!isDead && !isCycle && !isDang) return r;
             ctx.save();
             ctx.lineWidth = 2.0;
+            // Box must track the COLLAPSED pill, not the (still-full) node.size.
+            // LiteGraph keeps node.size at the expanded size when collapsed and
+            // renders only the title bar — so use the collapsed width + title
+            // height, otherwise the dashed box stays full-size on minimise.
+            const collapsed = !!node.flags?.collapsed;
+            const TITLE_H = (window.LiteGraph?.NODE_TITLE_HEIGHT) || 30;
+            const boxW = collapsed
+                ? (node._collapsed_width || (window.LiteGraph?.NODE_COLLAPSED_WIDTH) || 80)
+                : node.size[0];
+            // For a collapsed node the visible pill spans y = -TITLE_H .. 0;
+            // expanded spans the body 0 .. size[1].
+            const boxY = collapsed ? -TITLE_H - 3 : -3;
+            const boxH = collapsed ? TITLE_H : node.size[1];
             if (isCycle) {
                 ctx.strokeStyle = tok("--c2c-danger", 85);
-                ctx.strokeRect(-3, -3, node.size[0] + 6, node.size[1] + 6);
+                ctx.strokeRect(-3, boxY, boxW + 6, boxH + 6);
                 ctx.fillStyle = tok("--c2c-danger", 85);
                 ctx.font = "12px sans-serif";
-                ctx.fillText("↻", node.size[0] - 14, -8);
+                ctx.fillText("↻", boxW - 14, collapsed ? -TITLE_H + 8 : -8);
             } else if (isDead) {
                 ctx.strokeStyle = tok("--c2c-warn", 65);
                 ctx.setLineDash([6, 4]);
-                ctx.strokeRect(-3, -3, node.size[0] + 6, node.size[1] + 6);
+                ctx.strokeRect(-3, boxY, boxW + 6, boxH + 6);
             }
-            if (isDang) {
+            if (isDang && !collapsed) {
                 const slots = _result.dangling.filter((d) => d.id === node.id);
                 ctx.setLineDash([]);
                 ctx.fillStyle = tok("--c2c-danger", 95);
