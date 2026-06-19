@@ -331,10 +331,21 @@ const _RENDER = {
     "neon-tube":    _renderNeonTube,
 };
 
-function _currentStyle() {
-    try { return app.ui.settings.getSettingValue(SETTING_ID, "default"); }
-    catch (_) { return "default"; }
+// PERF: renderLink runs PER LINK, PER FRAME (145 links × 60fps = ~8,700/s).
+// _currentStyle() used to call getSettingValue() there — 8,700 reactive
+// settings-store reads/sec, AND (because it passed the deprecated 2nd arg)
+// 8,700 "defaultValue is deprecated" warnings/sec, which c2c_doctor's patched
+// console.warn then processed 8,700×/sec. That pegged a core for ANY style,
+// because it ran before the `default` early-return. Cache it; refresh only on
+// change. getSettingValue is now called ~once, not per link per frame.
+let _styleCache = "default";
+function _refreshStyleCache() {
+    try {
+        const v = app.ui.settings.getSettingValue(SETTING_ID);   // no deprecated 2nd arg
+        _styleCache = (v === undefined || v === null) ? "default" : v;
+    } catch (_) { _styleCache = "default"; }
 }
+function _currentStyle() { return _styleCache; }
 
 function _installRenderPatch() {
     if (_orig || !window.LGraphCanvas) return;
@@ -406,6 +417,7 @@ function _installMenuPatch() {
         const submenu = STYLES.map(s => ({
             content: `${s === cur ? "✓ " : "  "}${s}`,
             callback: () => {
+                _styleCache = s;   // update cache immediately (don't rely on onChange firing)
                 try { app.ui.settings.setSettingValue(SETTING_ID, s); } catch (__c2cErr) { __c2cReport("c2c_noodle_styles", __c2cErr); }
                 this.setDirty(true, true);
             },
@@ -437,9 +449,11 @@ app.registerExtension({
             type: "combo",
             options: STYLES,
             defaultValue: "default",
+            onChange: (v) => { _styleCache = (v === undefined || v === null) ? "default" : v; },
         },
     ],
     async setup() {
+        _refreshStyleCache();   // seed the per-frame style cache once at startup
         // LiteGraph is loaded before extensions, but be defensive.
         const tryInstall = () => {
             if (window.LGraphCanvas) {
