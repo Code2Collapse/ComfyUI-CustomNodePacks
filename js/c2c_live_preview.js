@@ -36,6 +36,7 @@ const S = {
 };
 
 let _runningId = null;          // node id currently executing
+let _haveMeta = false;          // saw b_preview_with_metadata (supersedes b_preview)
 
 function _get(id, def) {
     try { const v = app.ui?.settings?.getSettingValue?.(id, def); return v === undefined ? def : v; }
@@ -107,9 +108,9 @@ function _draw(node, ctx) {
     ctx.restore();
 }
 
-function _setPreview(blob) {
+function _setPreview(blob, explicitId) {
     if (!_get(S.enabled, true)) return;
-    const node = _node(_runningId);
+    const node = _node(explicitId != null ? explicitId : _runningId);
     if (!node) return;
     // Decode off the main thread; swap the bitmap in atomically when ready.
     createImageBitmap(blob).then((bmp) => {
@@ -145,8 +146,24 @@ function _install_listeners() {
             _runningId = (d && typeof d === "object") ? (d.node ?? d.id ?? null) : (d ?? null);
         } catch { _runningId = null; }
     });
+    // Newer ComfyUI: carries the node id directly (correct in subgraphs, no
+    // executing-event race). Preferred when present.
+    api.addEventListener("b_preview_with_metadata", (e) => {
+        try {
+            const d = e?.detail;
+            if (!d) return;
+            const blob = d.blob instanceof Blob ? d.blob
+                : (d.image instanceof Blob ? d.image : null);
+            if (!blob) return;
+            _haveMeta = true;
+            const id = d.displayNodeId ?? d.nodeId ?? d.node ?? _runningId;
+            _setPreview(blob, id);
+        } catch {}
+    });
+    // Classic event (the metadata variant above supersedes it where present).
     api.addEventListener("b_preview", (e) => {
         try {
+            if (_haveMeta) return;          // already handled with a node id
             const d = e?.detail;
             if (d instanceof Blob) _setPreview(d);
             else if (d?.image instanceof Blob) _setPreview(d.image);
