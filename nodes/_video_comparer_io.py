@@ -125,21 +125,26 @@ def _load_video_frames(path: str, max_frames: int = 0) -> tuple[np.ndarray, floa
             if max_frames and len(frames) >= max_frames:
                 break
     except Exception:
-        # fallback: imageio v2 + ffmpeg
+        # fallback: imageio v2 + ffmpeg. This path spawns an ffmpeg SUBPROCESS;
+        # it MUST be closed even if decoding raises mid-loop, or the ffmpeg child
+        # is orphaned and keeps consuming CPU (a leaked process under ComfyUI).
+        # try/finally guarantees rd.close() reaps it on every exit path.
         import imageio as iio2  # type: ignore
         rd = iio2.get_reader(path)
         try:
-            md = rd.get_meta_data()
-            fps = float(md.get("fps", fps) or fps)
-        except Exception:
-            pass
-        for i, fr in enumerate(rd):
-            f01, sb = _to_float01(np.asarray(fr))
-            src_bits = max(src_bits, sb)
-            frames.append(f01)
-            if max_frames and len(frames) >= max_frames:
-                break
-        rd.close()
+            try:
+                md = rd.get_meta_data()
+                fps = float(md.get("fps", fps) or fps)
+            except Exception:
+                pass
+            for i, fr in enumerate(rd):
+                f01, sb = _to_float01(np.asarray(fr))
+                src_bits = max(src_bits, sb)
+                frames.append(f01)
+                if max_frames and len(frames) >= max_frames:
+                    break
+        finally:
+            rd.close()
     if not frames:
         raise RuntimeError(f"No frames decoded from {path}")
     return np.stack(frames, axis=0), fps, src_bits
