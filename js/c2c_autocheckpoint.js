@@ -119,7 +119,10 @@ function _makeThumbnail() {
         const bg2 = _cssVar("--c2c-bg2");
         if (bg2) { ctx.fillStyle = bg2; ctx.fillRect(0, 0, 256, 144); }
         ctx.drawImage(canvas, 0, 0, 256, 144);
-        return tmp.toDataURL("image/png");
+        // JPEG (entropy-coded) encodes ~5-10x faster than PNG (lossless deflate).
+        // The profiler showed PNG toDataURL at ~28% main-thread self-time; the
+        // thumbnail is only ever shown scaled-down in the picker, so lossy is fine.
+        return tmp.toDataURL("image/jpeg", 0.6);
     } catch (_) { return ""; }
 }
 
