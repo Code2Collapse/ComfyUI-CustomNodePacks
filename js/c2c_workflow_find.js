@@ -26,7 +26,7 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
-import Fuse from "./vendor/fuse.min.mjs";
+import Fuse from "./_fuse.mjs";
 import { capabilityFor } from "./c2c_node_taxonomy.js";
 
 const STYLE_ID = "c2c-workflow-find-style";

@@ -17,8 +17,13 @@ What this does (defensive, update-proof):
     nodes should work").
   - Opt out with env var C2C_NO_FORCE_PREVIEW=1.
 
-This pairs with js/c2c_live_preview.js, which renders a resilient HUD from the
-`b_preview` / `progress` websocket events the server now emits.
+No frontend overlap: this is BACKEND ONLY. It does not draw anything and does
+not touch any node — it merely ensures ComfyUI's OWN previewer runs, so the
+NATIVE in-node latent preview (latent_preview.py) displays during sampling.
+There is deliberately no custom JS preview; ComfyUI core renders the preview
+on the node. The get_previewer wrapper is purely additive (returns core's own
+result untouched whenever core produces one) and fully guarded, so a bad
+ComfyUI update can never break or be damaged by it.
 """
 from __future__ import annotations
 
