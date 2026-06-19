@@ -29,15 +29,32 @@ import numpy as np
 import torch
 
 _THIRD_PARTY = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "third_party"))
+# The depthcrafter/ and normalcrafter/ inference packages live directly in this
+# repo (nodes/depthcrafter, nodes/normalcrafter) so they work on every machine —
+# third_party/ is gitignored and only exists on the dev box. Put this nodes/ dir
+# on sys.path so `import depthcrafter` / `import normalcrafter` resolve in-repo.
+_NODES_DIR = os.path.dirname(__file__)
+if _NODES_DIR not in sys.path:
+    sys.path.insert(0, _NODES_DIR)
+# Repo-dir name (third_party) → in-repo package name, for runners shipped in-repo.
+# DA3 / depth-pro are too large to ship in-repo → third_party clone only.
+_IN_REPO = {"DepthCrafter": "depthcrafter", "NormalCrafter": "normalcrafter"}
 _CACHE = {}
 
 
 # ----------------------------------------------------------------- helpers
 def _ensure_path(rel):
+    # Prefer a third_party clone if present (dev machines).
     p = os.path.join(_THIRD_PARTY, rel)
-    if os.path.isdir(p) and p not in sys.path:
-        sys.path.insert(0, p)
-    return os.path.isdir(p)
+    if os.path.isdir(p):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+        return True
+    # Otherwise use the in-repo package (nodes/ is already on sys.path).
+    pkg = _IN_REPO.get(rel)
+    if pkg and os.path.isdir(os.path.join(_NODES_DIR, pkg)):
+        return True
+    return False
 
 
 def _bhwc(t):
