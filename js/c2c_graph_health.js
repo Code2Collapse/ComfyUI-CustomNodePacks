@@ -28,6 +28,14 @@ const SETTING_ID = "c2c.graphHealth.enabled";
 const PULSE_MS = 1100;
 
 let _result = { dead: [], cycles: [], dangling: [] };
+// Derived O(1) lookups, rebuilt ONLY when _result changes (in analyze()).
+// drawNode runs per-node, per-frame during drag/pan; the old array
+// .includes()/.some() there was O(nodes × cycles × len) and pegged the renderer
+// (~151% CPU on a 130-node graph while moving the canvas). Sets/Map make each
+// per-node test O(1).
+let _deadSet = new Set();
+let _cycleSet = new Set();
+let _dangByNode = new Map();   // nodeId -> [{ id, slot, name }, ...]
 let _scheduled = 0;
 let _enabled = true;
 
@@ -178,12 +186,37 @@ function analyze() {
         }
     }
     _result = { dead, cycles: sccs, dangling };
+
+    // Rebuild O(1) lookups ONCE here (on graph change), never per frame.
+    _deadSet = new Set(dead);
+    _cycleSet = new Set();
+    for (const comp of sccs) for (const id of comp) _cycleSet.add(id);
+    _dangByNode = new Map();
+    for (const d of dangling) {
+        let arr = _dangByNode.get(d.id);
+        if (!arr) { arr = []; _dangByNode.set(d.id, arr); }
+        arr.push(d);
+    }
 }
 // ── Canvas paint helper: resolve CSS var so color-mix() works in canvas ──
 function tok(name, pct) {
     const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "var(--c2c-black)";
     return `color-mix(in srgb, ${v} ${pct}%, transparent)`;
 }
+// Cache the three resolved overlay colors. tok() calls getComputedStyle (a
+// forced style/layout read) — doing that per flagged node per frame was a second
+// hot-path cost. Resolve once; invalidate on theme change.
+let _colCache = null;
+function _colors() {
+    if (_colCache) return _colCache;
+    _colCache = {
+        cycle: tok("--c2c-danger", 85),
+        dead:  tok("--c2c-warn", 65),
+        dang:  tok("--c2c-danger", 95),
+    };
+    return _colCache;
+}
+try { window.addEventListener("c2c:theme-changed", () => { _colCache = null; }); } catch (_) { /* no-op */ }
 // ── Canvas paint hook ────────────────────────────────────────────────
 function patchDraw() {
     const c = app.canvas;
@@ -192,43 +225,40 @@ function patchDraw() {
     const orig = c.drawNode;
     c.drawNode = function (node, ctx) {
         const r = orig.apply(this, arguments);
-        if (!_result) return r;
+        // O(1) fast bail: healthy graph → zero per-node work (the common case).
+        if (_deadSet.size === 0 && _cycleSet.size === 0 && _dangByNode.size === 0) return r;
         try {
-            const isDead   = _result.dead.includes(node.id);
-            const isCycle  = _result.cycles.some((cc) => cc.includes(node.id));
-            const isDang   = _result.dangling.some((d) => d.id === node.id);
-            if (!isDead && !isCycle && !isDang) return r;
+            const id = node.id;
+            const isCycle = _cycleSet.has(id);     // O(1)  (was O(cycles × len))
+            const isDead  = _deadSet.has(id);      // O(1)  (was O(dead))
+            const dangArr = _dangByNode.get(id);   // O(1)  (was O(dangling) ×2)
+            if (!isDead && !isCycle && !dangArr) return r;
+            const COL = _colors();                 // colors resolved once, not per node
             ctx.save();
             ctx.lineWidth = 2.0;
             // Box must track the COLLAPSED pill, not the (still-full) node.size.
-            // LiteGraph keeps node.size at the expanded size when collapsed and
-            // renders only the title bar — so use the collapsed width + title
-            // height, otherwise the dashed box stays full-size on minimise.
             const collapsed = !!node.flags?.collapsed;
             const TITLE_H = (window.LiteGraph?.NODE_TITLE_HEIGHT) || 30;
             const boxW = collapsed
                 ? (node._collapsed_width || (window.LiteGraph?.NODE_COLLAPSED_WIDTH) || 80)
                 : node.size[0];
-            // For a collapsed node the visible pill spans y = -TITLE_H .. 0;
-            // expanded spans the body 0 .. size[1].
             const boxY = collapsed ? -TITLE_H - 3 : -3;
             const boxH = collapsed ? TITLE_H : node.size[1];
             if (isCycle) {
-                ctx.strokeStyle = tok("--c2c-danger", 85);
+                ctx.strokeStyle = COL.cycle;
                 ctx.strokeRect(-3, boxY, boxW + 6, boxH + 6);
-                ctx.fillStyle = tok("--c2c-danger", 85);
+                ctx.fillStyle = COL.cycle;
                 ctx.font = "12px sans-serif";
                 ctx.fillText("↻", boxW - 14, collapsed ? -TITLE_H + 8 : -8);
             } else if (isDead) {
-                ctx.strokeStyle = tok("--c2c-warn", 65);
+                ctx.strokeStyle = COL.dead;
                 ctx.setLineDash([6, 4]);
                 ctx.strokeRect(-3, boxY, boxW + 6, boxH + 6);
             }
-            if (isDang && !collapsed) {
-                const slots = _result.dangling.filter((d) => d.id === node.id);
+            if (dangArr && !collapsed) {
                 ctx.setLineDash([]);
-                ctx.fillStyle = tok("--c2c-danger", 95);
-                for (const d of slots) {
+                ctx.fillStyle = COL.dang;
+                for (const d of dangArr) {
                     const sy = 14 + d.slot * 14 + 6;
                     ctx.beginPath(); ctx.arc(-6, sy, 3, 0, Math.PI * 2); ctx.fill();
                 }
