@@ -1,4 +1,4 @@
-﻿"""
+"""
 stabilization_utils — Shared camera/motion stabilization primitives.
 
 Provides:

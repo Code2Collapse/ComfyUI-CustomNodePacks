@@ -1,4 +1,4 @@
-﻿"""
+"""
 DEPRECATED – This module is superseded by unified_segmentation_node.py + model_manager.py.
 Kept for reference only. Do NOT import this module in production code.
 The canonical MODEL_REGISTRY and model loading live in model_manager.py.

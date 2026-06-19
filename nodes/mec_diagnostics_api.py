@@ -1,4 +1,4 @@
-﻿"""
+"""
 mec_diagnostics_api.py — Backend for the MEC Diagnostics sidebar.
 
 Doctor-style endpoints exposed under `/mec/diagnostics/*`:

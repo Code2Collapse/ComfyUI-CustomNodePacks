@@ -1,4 +1,4 @@
-﻿"""
+"""
 _c2c_registry.py — central record of every optional component the pack
 tried to load, why it failed, and how a user could fix it.
 

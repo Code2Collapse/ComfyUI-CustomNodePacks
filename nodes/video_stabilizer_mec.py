@@ -1,4 +1,4 @@
-﻿# FILE: nodes/video_stabilizer_mec.py
+# FILE: nodes/video_stabilizer_mec.py
 # FEATURE: MEC wrappers around the vendored ComfyUI-Video-Stabilizer (MIT,
 # (c) 2025 ComfyUI Video Stabilizer Contributors, by nomadoor).
 # INTEGRATES WITH:

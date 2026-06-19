@@ -1,4 +1,4 @@
-﻿"""
+"""
 BackgroundRemoverMEC – One-click background removal using RMBG-2.0 or BiRefNet.
 
 Models supported:

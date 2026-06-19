@@ -1,4 +1,4 @@
-﻿# Prompt Relay — node classes (refined port).
+# Prompt Relay — node classes (refined port).
 #
 # Four nodes registered:
 #   - PromptRelayEncodeC2C        : native MODEL+CLIP path

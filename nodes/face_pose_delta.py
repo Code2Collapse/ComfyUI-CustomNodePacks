@@ -1,4 +1,4 @@
-﻿"""face_pose_delta.py — Flagship #2: Face / Pose Delta Editor backend.
+"""face_pose_delta.py — Flagship #2: Face / Pose Delta Editor backend.
 
 The user's vision (see ``third_party/ideas_summary.md §5``):
 
