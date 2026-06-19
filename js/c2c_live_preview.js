@@ -1,21 +1,29 @@
 /**
- * c2c_live_preview.js — resilient live sampling/denoising preview HUD.
+ * c2c_live_preview.js — live sampling preview drawn ON the sampler node.
  *
- * Pairs with nodes/_c2c_preview_guard.py (which forces the server to emit
- * previews even when launched with --preview-method none). This renders a
- * floating, persistent preview from the server's `b_preview` frames + `progress`
- * events, and — by design — KEEPS THE LAST GOOD FRAME through errors,
- * interruptions, and node failures, so the preview never blanks mid-run.
+ * Renders the server's `b_preview` latent-preview frames directly inside the
+ * body of whichever node is currently executing — i.e. on the KSampler /
+ * SamplerCustom / KSampler (Efficient) / KijaiSampler / ClownsharKSampler /
+ * any sampler — exactly like native ComfyUI's in-node preview. NOT a separate
+ * floating window.
  *
- * Robust / update-proof:
- *   - Listens ONLY to the long-stable public `api` websocket events
- *     (b_preview, progress, executing, execution_error/_interrupted, status).
- *   - Every handler is wrapped; if any event shape changes in a future ComfyUI
- *     it no-ops instead of throwing. Independent of ComfyUI's own node-preview UI.
- *   - Does not touch sampling or the graph — display only.
+ * Why it still works when "ComfyUI preview doesn't work":
+ *   - It decodes the b_preview Blob ITSELF and draws it in onDrawForeground,
+ *     so it does not depend on native's node-preview display path or any
+ *     "show preview" setting being on.
+ *   - It pairs with nodes/_c2c_preview_guard.py, which forces the server to
+ *     emit previews even when launched with --preview-method none.
  *
- * Methods: the actual decode (auto / latent2rgb / taesd) happens server-side per
- * the preview method; latent2rgb (Auto's fallback) needs no model and cannot fail.
+ * Why it does not damage native:
+ *   - It never touches node.imgs, node.imageIndex, or any native handler. It
+ *     only CHAINS onto the node's onDrawForeground + computeSize (calling the
+ *     originals first). If native's own preview also shows, ours sits in its
+ *     own reserved strip below the widgets; remove our strip and the node is
+ *     byte-for-byte the native node again.
+ *
+ * Robust / update-proof: listens only to the long-stable public api events
+ * (executing, b_preview, progress, execution_*). Every handler is wrapped; a
+ * future event-shape change no-ops instead of throwing.
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
@@ -23,105 +31,120 @@ import { api } from "../../scripts/api.js";
 const NS = "C2C.LivePreview";
 const S = {
     enabled: "c2c.livePreview.enabled",
-    size: "c2c.livePreview.size",
+    maxH: "c2c.livePreview.maxHeight",
     opacity: "c2c.livePreview.opacity",
-    keepLast: "c2c.livePreview.keepLast",
 };
 
-let _root = null, _img = null, _bar = null, _label = null;
-let _lastUrl = null;
-let _pos = JSON.parse(localStorage.getItem("c2c.livePreview.pos") || "null");
+let _runningId = null;          // node id currently executing
 
 function _get(id, def) {
     try { const v = app.ui?.settings?.getSettingValue?.(id, def); return v === undefined ? def : v; }
     catch { return def; }
 }
 
-function _ensureHud() {
-    if (_root) return _root;
-    const root = document.createElement("div");
-    root.id = "c2c-live-preview";
-    const size = Number(_get(S.size, 256)) || 256;
-    root.style.cssText = [
-        "position:fixed", "z-index:1300", "width:" + size + "px",
-        "background:var(--c2c-bg2,#1a1a22)", "border:1px solid var(--c2c-border,#333)",
-        "border-radius:8px", "box-shadow:0 6px 24px rgba(0,0,0,.5)",
-        "overflow:hidden", "user-select:none", "font:11px ui-sans-serif",
-        "opacity:" + (Number(_get(S.opacity, 0.96)) || 0.96),
-    ].join(";");
-    const p = _pos || { right: 16, bottom: 64 };
-    if (p.left != null) { root.style.left = p.left + "px"; } else { root.style.right = (p.right ?? 16) + "px"; }
-    if (p.top != null) { root.style.top = p.top + "px"; } else { root.style.bottom = (p.bottom ?? 64) + "px"; }
-
-    const bar = document.createElement("div");
-    bar.style.cssText = "display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:move;background:var(--c2c-bg,#12121a);color:var(--c2c-fg,#ddd)";
-    bar.innerHTML = `<span style="font-weight:600">⚡ Live Preview</span><span data-role="lbl" style="margin-left:auto;opacity:.7"></span>
-        <span data-role="close" title="Hide" style="cursor:pointer;padding:0 4px;opacity:.6">✕</span>`;
-
-    const imgWrap = document.createElement("div");
-    imgWrap.style.cssText = "position:relative;background:#000;line-height:0";
-    const img = document.createElement("img");
-    img.style.cssText = "display:block;width:100%;height:auto;image-rendering:auto";
-    imgWrap.appendChild(img);
-
-    const prog = document.createElement("div");
-    prog.style.cssText = "height:3px;background:#000";
-    const fill = document.createElement("div");
-    fill.style.cssText = "height:100%;width:0%;background:var(--c2c-mauve,#89b4fa);transition:width .1s";
-    prog.appendChild(fill);
-
-    root.append(bar, imgWrap, prog);
-    document.body.appendChild(root);
-
-    // drag
-    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
-    bar.addEventListener("mousedown", (e) => {
-        if (e.target?.dataset?.role === "close") return;
-        dragging = true; sx = e.clientX; sy = e.clientY;
-        const r = root.getBoundingClientRect(); ox = r.left; oy = r.top;
-        root.style.left = ox + "px"; root.style.top = oy + "px"; root.style.right = ""; root.style.bottom = "";
-        e.preventDefault();
-    });
-    window.addEventListener("mousemove", (e) => {
-        if (!dragging) return;
-        root.style.left = (ox + e.clientX - sx) + "px";
-        root.style.top = (oy + e.clientY - sy) + "px";
-    });
-    window.addEventListener("mouseup", () => {
-        if (!dragging) return; dragging = false;
-        const r = root.getBoundingClientRect();
-        _pos = { left: Math.round(r.left), top: Math.round(r.top) };
-        try { localStorage.setItem("c2c.livePreview.pos", JSON.stringify(_pos)); } catch {}
-    });
-    bar.querySelector('[data-role="close"]').addEventListener("click", () => { root.style.display = "none"; });
-
-    _root = root; _img = img; _bar = bar; _label = bar.querySelector('[data-role="lbl"]'); _bar._fill = fill;
-    return root;
+function _node(id) {
+    if (id == null) return null;
+    try { return app.graph?.getNodeById?.(Number(id)) || app.graph?.getNodeById?.(id) || null; }
+    catch { return null; }
 }
 
-function _show() { const r = _ensureHud(); r.style.display = ""; return r; }
+// ── per-node preview install (only on nodes that actually stream previews) ──
+function _install(node) {
+    if (!node || node._c2cPrevInstalled) return;
+    node._c2cPrevInstalled = true;
+
+    // Chain computeSize so the reserved preview strip is part of the node's
+    // natural height — survives any setSize(computeSize()) from other code.
+    const origCompute = node.computeSize?.bind(node);
+    node._c2cOrigCompute = origCompute;
+    node.computeSize = function (out) {
+        const sz = origCompute ? origCompute(out) : [this.size[0], this.size[1]];
+        if (this._c2cPrev && _get(S.enabled, true) && !this.flags?.collapsed) {
+            const w = Math.max(32, this.size[0] - 12);
+            const maxH = Number(_get(S.maxH, 320)) || 320;
+            const ph = Math.min(maxH, w / (this._c2cPrevAR || 1));
+            sz[1] += ph + 10;
+        }
+        return sz;
+    };
+
+    // Chain onDrawForeground to paint the preview below the widgets.
+    const origDraw = node.onDrawForeground;
+    node.onDrawForeground = function (ctx) {
+        origDraw?.apply(this, arguments);
+        try { _draw(this, ctx); } catch { /* never break canvas paint */ }
+    };
+}
+
+function _draw(node, ctx) {
+    const bmp = node._c2cPrev;
+    if (!bmp || node.flags?.collapsed || !_get(S.enabled, true)) return;
+    const pad = 6;
+    const w = Math.max(32, node.size[0] - pad * 2);
+    const maxH = Number(_get(S.maxH, 320)) || 320;
+    const ar = node._c2cPrevAR || (bmp.width / bmp.height) || 1;
+    const ph = Math.min(maxH, w / ar);
+    // Top of the preview strip = the node's natural (widgets-only) height.
+    const naturalH = node._c2cOrigCompute ? node._c2cOrigCompute()[1] : 0;
+    const y = Math.max(naturalH + 2, node.size[1] - ph - pad);
+
+    ctx.save();
+    ctx.globalAlpha = Number(_get(S.opacity, 1)) || 1;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(pad, y, w, ph);
+    try { ctx.drawImage(bmp, pad, y, w, ph); } catch { /* bitmap gone */ }
+    ctx.globalAlpha = 1;
+
+    // Progress bar across the bottom of the strip.
+    const pr = node._c2cProg;
+    if (pr && pr.max) {
+        const f = Math.max(0, Math.min(1, pr.value / pr.max));
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(pad, y + ph - 4, w, 4);
+        ctx.fillStyle = "#89b4fa";
+        ctx.fillRect(pad, y + ph - 4, w * f, 4);
+    }
+    ctx.restore();
+}
 
 function _setPreview(blob) {
-    if (!(_get(S.enabled, true))) return;
-    try {
-        _show();
-        const url = URL.createObjectURL(blob);
-        _img.onload = () => { if (_lastUrl) URL.revokeObjectURL(_lastUrl); _lastUrl = url; };
-        _img.src = url;
-    } catch { /* keep last frame */ }
+    if (!_get(S.enabled, true)) return;
+    const node = _node(_runningId);
+    if (!node) return;
+    // Decode off the main thread; swap the bitmap in atomically when ready.
+    createImageBitmap(blob).then((bmp) => {
+        if (!bmp) return;
+        const prev = node._c2cPrev;
+        const firstFrame = !prev;
+        node._c2cPrev = bmp;
+        node._c2cPrevAR = (bmp.width / bmp.height) || 1;
+        try { prev?.close?.(); } catch {}
+        _install(node);
+        // Grow the node once so the strip has room (keeps last frame after).
+        if (firstFrame) {
+            try {
+                const want = node.computeSize();
+                if (node.size[1] < want[1]) node.setSize([node.size[0], want[1]]);
+            } catch {}
+        }
+        node.setDirtyCanvas?.(true, true);
+    }).catch(() => { /* keep last frame */ });
 }
 
-function _setProgress(value, max, node) {
-    try {
-        if (!_root) return;
-        const pct = max ? Math.round((value / max) * 100) : 0;
-        _root.querySelector("div > div")?.style && (_bar._fill.style.width = pct + "%");
-        if (_label) _label.textContent = max ? `${value}/${max} (${pct}%)` : "";
-    } catch {}
+function _setProgress(value, max, nodeId) {
+    const node = _node(nodeId != null ? nodeId : _runningId);
+    if (!node) return;
+    node._c2cProg = { value, max };
+    node.setDirtyCanvas?.(true, false);
 }
 
-function _install() {
-    // Binary preview frames (the decoded latent preview the server streams).
+function _install_listeners() {
+    api.addEventListener("executing", (e) => {
+        try {
+            const d = e?.detail;
+            _runningId = (d && typeof d === "object") ? (d.node ?? d.id ?? null) : (d ?? null);
+        } catch { _runningId = null; }
+    });
     api.addEventListener("b_preview", (e) => {
         try {
             const d = e?.detail;
@@ -132,29 +155,24 @@ function _install() {
     api.addEventListener("progress", (e) => {
         try { const d = e?.detail || {}; _setProgress(d.value, d.max, d.node); } catch {}
     });
-    // RESILIENCE: on error / interruption, do NOT blank — keep the last frame,
-    // just mark the state so the user still sees where sampling reached.
-    const _mark = (txt) => { try { if (_label) _label.textContent = txt; } catch {} };
-    api.addEventListener("execution_error", () => _mark("⚠ error — last frame kept"));
-    api.addEventListener("execution_interrupted", () => _mark("⏹ interrupted — last frame kept"));
-    api.addEventListener("execution_success", () => _mark("✓ done"));
-    api.addEventListener("execution_start", () => { try { if (_bar?._fill) _bar._fill.style.width = "0%"; } catch {} });
+    // Resilience: keep the last frame through errors/interruptions.
+    api.addEventListener("execution_interrupted", () => { _runningId = null; });
+    api.addEventListener("execution_error", () => { _runningId = null; });
+    api.addEventListener("execution_success", () => { _runningId = null; });
 }
 
 app.registerExtension({
     name: NS,
     settings: [
-        { id: S.enabled, name: "C2C ▸ Live Preview ▸ Enabled", type: "boolean", default: true,
-          tooltip: "Floating, resilient sampling/denoising preview that keeps the last frame through errors." },
-        { id: S.size, name: "C2C ▸ Live Preview ▸ Width (px)", type: "slider",
-          attrs: { min: 128, max: 640, step: 16 }, default: 256,
-          onChange: (v) => { if (_root) _root.style.width = (Number(v) || 256) + "px"; } },
+        { id: S.enabled, name: "C2C ▸ Live Preview ▸ On-node preview", type: "boolean", default: true,
+          tooltip: "Draw the live sampling preview inside the sampler node (works even if ComfyUI's own preview display is off)." },
+        { id: S.maxH, name: "C2C ▸ Live Preview ▸ Max height (px)", type: "slider",
+          attrs: { min: 128, max: 640, step: 16 }, default: 320 },
         { id: S.opacity, name: "C2C ▸ Live Preview ▸ Opacity", type: "slider",
-          attrs: { min: 0.3, max: 1, step: 0.02 }, default: 0.96,
-          onChange: (v) => { if (_root) _root.style.opacity = String(v); } },
+          attrs: { min: 0.3, max: 1, step: 0.02 }, default: 1.0 },
     ],
     async setup() {
-        _install();
-        console.log("[C2C.LivePreview] ready — resilient HUD on b_preview/progress (keeps last frame).");
+        _install_listeners();
+        console.log("[C2C.LivePreview] ready — on-node sampler preview from b_preview.");
     },
 });
