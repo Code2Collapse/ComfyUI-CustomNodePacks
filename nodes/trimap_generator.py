@@ -1,4 +1,4 @@
-﻿"""
+"""
 TrimapGeneratorMEC – Standalone trimap generation from segmentation masks.
 
 Converts a coarse segmentation mask into a 3-region trimap:

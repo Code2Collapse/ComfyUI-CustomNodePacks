@@ -1,4 +1,4 @@
-﻿"""
+"""
 MaskPropagateVideo – Draw/define a mask on one frame and propagate it
 across a video sequence.  Supports static copy, motion-compensated
 propagation (optical flow), and SAM2 video-propagation mode.

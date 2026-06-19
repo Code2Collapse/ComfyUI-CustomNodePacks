@@ -1,4 +1,4 @@
-﻿"""
+"""
 SeCMatAnyonePipelineMEC – SeC segmentation + MatAnyone2 alpha matting pipeline.
 
 Pipeline stages:

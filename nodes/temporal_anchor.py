@@ -1,4 +1,4 @@
-﻿"""
+"""
 TemporalAnchorMEC – Temporal Anchor System for mask interpolation over time.
 
 Given anchor frames with their masks, computes signed distance fields (SDF)

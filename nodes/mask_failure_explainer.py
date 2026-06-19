@@ -1,4 +1,4 @@
-﻿"""
+"""
 MaskFailureExplainerMEC – Diagnose why a mask failed and suggest fixes.
 
 Input: image (B,H,W,C), mask (B,H,W) of unknown quality.

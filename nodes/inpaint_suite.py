@@ -1,4 +1,4 @@
-﻿"""
+"""
 InpaintSuiteMEC — Inpaint Crop Pro + Stitch Pro + Mask Prepare.
 
 Three nodes for professional inpainting workflows:

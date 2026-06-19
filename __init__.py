@@ -1,4 +1,4 @@
-﻿"""
+"""
 ComfyUI-CustomNodePacks
 =======================
 A growing collection of custom nodes:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 SemanticSegmentMEC – Face / Body / Clothes semantic parsing using SegFormer.
 
 Models supported:

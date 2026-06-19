@@ -1,4 +1,4 @@
-﻿"""
+"""
 LuminanceKeyerMEC – Professional luminance keyer inspired by Nuke's LumaKeyer.
 
 Computes ITU-R BT.709 luminance from an input image, then extracts a matte
