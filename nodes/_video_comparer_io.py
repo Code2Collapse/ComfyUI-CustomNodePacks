@@ -116,14 +116,27 @@ def _load_video_frames(path: str, max_frames: int = 0) -> tuple[np.ndarray, floa
         fps = 24.0
     frames: list[np.ndarray] = []
     src_bits = 8
-    # Use pyav-backed reader (handles mp4/mov/mkv reliably)
+    # Use pyav-backed reader (handles mp4/mov/mkv reliably). imiter() returns a
+    # generator wrapping a PyAV container; on `break` (max_frames) or a mid-loop
+    # exception the generator is abandoned, and PyAV's C-level __dealloc__ is NOT
+    # a reliable close (GC timing / circular refs / libav build differ across
+    # platforms — worse on Linux), leaking the open container. Explicitly
+    # gen.close() in finally raises GeneratorExit at the suspension point so the
+    # container is released deterministically on every exit path.
     try:
-        for i, fr in enumerate(iio.imiter(path, plugin="pyav")):
-            f01, sb = _to_float01(np.asarray(fr))
-            src_bits = max(src_bits, sb)
-            frames.append(f01)
-            if max_frames and len(frames) >= max_frames:
-                break
+        _gen = iio.imiter(path, plugin="pyav")
+        try:
+            for i, fr in enumerate(_gen):
+                f01, sb = _to_float01(np.asarray(fr))
+                src_bits = max(src_bits, sb)
+                frames.append(f01)
+                if max_frames and len(frames) >= max_frames:
+                    break
+        finally:
+            try:
+                _gen.close()
+            except Exception:
+                pass
     except Exception:
         # fallback: imageio v2 + ffmpeg. This path spawns an ffmpeg SUBPROCESS;
         # it MUST be closed even if decoding raises mid-loop, or the ffmpeg child
