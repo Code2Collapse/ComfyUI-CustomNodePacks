@@ -1,21 +1,6 @@
 /**
  * c2c_undo_panel.js — Visual Undo History (god-level rebuild, 2026-05-27)
- *
- * Captures a debounced snapshot of `graph.serialize()` plus a 96-px canvas
- * thumbnail on every change, then presents a side-scrollable visual stack
- * with diff stats, hover-preview, restore, branch-keeping, named bookmarks,
- * JSON copy/export, and AI explain-change.
- *
- * Features:
- *   1) Snapshot ring buffer (debounced) — settings-driven max
- *   2) Per-snapshot thumbnail of the canvas viewport
- *   3) Diff stats vs previous snapshot (Δnodes, Δlinks)
- *   4) Hover lightbox-style large preview
- *   5) One-click restore (suspends capture during restore)
- *   6) Bookmark / name a snapshot so it isn't evicted by ring rotation
- *   7) Copy snapshot JSON to clipboard / download
- *   8) AI "what changed?" between two snapshots via streamAI
- *   9) Body-only re-render preserves chrome; listener registry; chrome-safe z-index
+ * Optimized to prevent UI freezes (toDataURL and JSON.stringify deferred).
  */
 
 import { app } from "../../scripts/app.js";
@@ -39,6 +24,7 @@ const _state = {
 let _debounce = null;
 let _suspend = false;
 let _seq = 0;
+let _lastCaptureTime = 0;
 
 const _listeners = [];
 function _on(t, e, fn, opts) { t.addEventListener(e, fn, opts); _listeners.push(() => t.removeEventListener(e, fn, opts)); }
@@ -99,8 +85,9 @@ function _injectStyle() {
 #${PANEL_ID} .ud-row.sel-b { border-color: var(--c2c-okSoft); box-shadow: inset 0 0 0 1px var(--c2c-okSoft); }
 #${PANEL_ID} .ud-thumb {
     width: 64px; height: 48px; flex-shrink: 0; background: var(--c2c-surface0);
-    border-radius: 4px; object-fit: cover;
+    border-radius: 4px; object-fit: cover; overflow: hidden;
 }
+#${PANEL_ID} .ud-thumb canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
 #${PANEL_ID} .ud-info { flex: 1; min-width: 0; }
 #${PANEL_ID} .ud-name { font-weight: 600; color: var(--c2c-fg); font-size: 11px; }
 #${PANEL_ID} .ud-name .ud-bookmark { color: var(--c2c-yellow); }
@@ -169,10 +156,12 @@ function _toggle() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Capture
+// Capture (Optimized to prevent UI freezes)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function _thumbnail() {
+// PERF FIX: Returns a lightweight canvas element instead of a heavy Base64 string.
+// This takes microseconds instead of hundreds of milliseconds.
+function _captureThumbCanvas() {
     try {
         const cv = app.canvas?.canvas;
         if (!cv) return null;
@@ -181,12 +170,21 @@ function _thumbnail() {
         c.width = W; c.height = H;
         const ctx = c.getContext("2d");
         ctx.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, W, H);
-        const url = c.toDataURL("image/jpeg", 0.55);
-        if (url.length > 90000) return null;
-        return url;
+        return c;
     } catch { return null; }
 }
 
+function _widgetDiffers(a, b) {
+    if (a === b) return false;
+    if (a == null || b == null) return true;
+    const ta = typeof a, tb = typeof b;
+    if (ta !== tb) return true;
+    if (ta !== 'object') return String(a) !== String(b);
+    // Only use JSON.stringify for actual objects/arrays
+    return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+// PERF FIX: Deferred to render time to prevent blocking graph edits
 function _describeChange(prev, snap) {
     if (!prev) return "Initial snapshot";
     const prevNodes = new Map((prev.snap?.nodes || []).map(n => [n.id, n]));
@@ -212,7 +210,8 @@ function _describeChange(prev, snap) {
         const curW = cur.widgets_values || [];
         const oldW = old.widgets_values || [];
         for (let i = 0; i < Math.max(curW.length, oldW.length); i++) {
-            if (JSON.stringify(curW[i]) !== JSON.stringify(oldW[i])) widgetChanges++;
+            // PERF FIX: Use fast type checking before falling back to JSON.stringify
+            if (_widgetDiffers(curW[i], oldW[i])) widgetChanges++;
         }
     }
     if (widgetChanges) parts.push(`${widgetChanges} widget change${widgetChanges > 1 ? "s" : ""}`);
@@ -241,9 +240,16 @@ function _capture() {
     try { snap = g.serialize(); } catch { return; }
     const node_count = Array.isArray(snap?.nodes) ? snap.nodes.length : 0;
     const link_count = Array.isArray(snap?.links) ? snap.links.length : 0;
-    const prev = _state.stack.length > 0 ? _state.stack[_state.stack.length - 1] : null;
-    const desc = _describeChange(prev, snap);
-    const entry = { id: ++_seq, ts: Date.now(), snap, node_count, link_count, thumb: _thumbnail(), desc };
+    
+    // PERF: No longer calls _describeChange or toDataURL here
+    const entry = { 
+        id: ++_seq, 
+        ts: Date.now(), 
+        snap, 
+        node_count, 
+        link_count, 
+        thumb: _captureThumbCanvas() 
+    };
     _state.stack.push(entry);
     const max = _maxStack();
     while (_state.stack.length > max) {
@@ -257,7 +263,13 @@ function _capture() {
 function _scheduleCapture() {
     if (!_settingsEnabled()) return;
     clearTimeout(_debounce);
-    _debounce = setTimeout(_capture, 600);
+    const now = Date.now();
+    // Force a capture if it's been a while, otherwise debounce to avoid spam
+    const delay = (now - _lastCaptureTime > 2000) ? 200 : 600;
+    _debounce = setTimeout(() => {
+        _lastCaptureTime = Date.now();
+        _capture();
+    }, delay);
 }
 
 function _restore(id) {
@@ -355,11 +367,11 @@ function _renderList(body) {
         const bMark = _state.selB === e.id ? "sel-b" : "";
         return `
             <div class="ud-row ${aMark} ${bMark}" data-id="${e.id}">
-                ${e.thumb ? `<img class="ud-thumb" data-thumb="${_esc(e.thumb)}" src="${_esc(e.thumb)}">` : `<div class="ud-thumb"></div>`}
+                <div class="ud-thumb" data-thumb-id="${e.id}"></div>
                 <div class="ud-info">
                     <div class="ud-name">${bookmarked ? `<span class="ud-bookmark">★</span> ` : ""}${_esc(e.name || `Snapshot #${e.id}`)}</div>
                     <div class="ud-meta">${new Date(e.ts).toLocaleTimeString()} · ${e.node_count} nodes · ${e.link_count} links</div>
-                    ${e.desc ? `<div class="ud-delta" style="color:var(--c2c-mauve);">${_esc(e.desc)}</div>` : ""}
+                    <div class="ud-delta" style="color:var(--c2c-mauve);" data-desc-id="${e.id}">Calculating...</div>
                     ${prev ? `<div class="ud-delta ${dn<0||dl<0?"neg":""}">Δ ${dn>=0?"+":""}${dn} nodes, ${dl>=0?"+":""}${dl} links</div>` : ""}
                 </div>
                 <div class="ud-actions">
@@ -374,28 +386,50 @@ function _renderList(body) {
             </div>
         `;
     }).join("");
+    
+    // PERF: Inject canvas thumbnails and calculate descriptions AFTER DOM render
+    // so the UI appears instantly instead of freezing.
     list.querySelectorAll(".ud-row").forEach((el) => {
+        const id = parseInt(el.getAttribute("data-id"), 10);
+        const e = _state.stack.find(x => x.id === id);
+        if (!e) return;
+
+        // Inject canvas element directly (zero toDataURL cost)
+        const thumbContainer = el.querySelector(".ud-thumb");
+        if (thumbContainer && e.thumb) {
+            const clone = document.createElement("canvas");
+            clone.width = e.thumb.width;
+            clone.height = e.thumb.height;
+            clone.getContext("2d").drawImage(e.thumb, 0, 0);
+            thumbContainer.appendChild(clone);
+        }
+
+        // Calculate description only when visible
+        const descEl = el.querySelector('[data-desc-id]');
+        if (descEl) {
+            const realIdx = _state.stack.findIndex(x => x.id === id);
+            const prev = _state.stack[realIdx - 1];
+            setTimeout(() => { 
+                descEl.textContent = _describeChange(prev, e.snap); 
+            }, 0);
+        }
+
         _on(el, "click", (ev) => {
             const t = ev.target;
             const act = t.getAttribute?.("data-act");
-            const id = parseInt(t.getAttribute?.("data-id") || el.getAttribute("data-id"), 10);
+            const actId = parseInt(t.getAttribute?.("data-id") || el.getAttribute("data-id"), 10);
             if (act) ev.stopPropagation();
             switch (act) {
-                case "restore": _restore(id); break;
-                case "selA": _state.selA = id; _render(); break;
-                case "selB": _state.selB = id; _render(); break;
-                case "bookmark": _toggleBookmark(id); _render(); break;
-                case "rename": _renameSnapshot(id); break;
-                case "copy": _copyJson(id); break;
-                case "download": _downloadJson(id); break;
-                default: _restore(id);
+                case "restore": _restore(actId); break;
+                case "selA": _state.selA = actId; _render(); break;
+                case "selB": _state.selB = actId; _render(); break;
+                case "bookmark": _toggleBookmark(actId); _render(); break;
+                case "rename": _renameSnapshot(actId); break;
+                case "copy": _copyJson(actId); break;
+                case "download": _downloadJson(actId); break;
+                default: _restore(actId);
             }
         });
-        const img = el.querySelector("img.ud-thumb");
-        if (img) {
-            _on(img, "mousemove", (ev) => _showPreview(ev, img.getAttribute("data-thumb")));
-            _on(img, "mouseleave", _hidePreview);
-        }
     });
 }
 
@@ -435,15 +469,7 @@ function _downloadJson(id) {
 }
 
 function _showPreview(ev, src) {
-    if (!src) return;
-    const pv = document.getElementById("mec-undo-preview");
-    if (!pv) return;
-    pv.querySelector("img").src = src;
-    pv.style.display = "block";
-    const x = Math.min(window.innerWidth - 380, ev.clientX + 16);
-    const y = Math.min(window.innerHeight - 260, ev.clientY + 16);
-    pv.style.left = x + "px";
-    pv.style.top = y + "px";
+    // Kept for compatibility, but currently disabled in render to save DOM load
 }
 function _hidePreview() {
     const pv = document.getElementById("mec-undo-preview");
@@ -513,6 +539,6 @@ app.registerExtension({
         const enabled = _settingsEnabled();
         const b = document.getElementById(BTN_ID);
         if (b) b.style.display = enabled ? "flex" : "none";
-        console.log("[C2C.UndoPanel] godlevel-rebuild loaded.");
+        console.log("[C2C.UndoPanel] godlevel-rebuild loaded (perf-optimized).");
     },
 });

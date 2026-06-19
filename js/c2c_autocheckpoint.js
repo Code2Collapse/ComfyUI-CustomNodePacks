@@ -107,6 +107,7 @@ async function pruneRing(limit) {
 
 // =================================================================== snapshot
 let _lastSnapAt = 0;
+let _isSnapping = false; // Concurrency lock to prevent multiple heavy toDataURL calls
 
 function _makeThumbnail() {
     // Grab the litegraph canvas if present, downscale to 256x144.
@@ -126,6 +127,12 @@ function _makeThumbnail() {
 export async function snapshot(label = "auto") {
     const enabled = app.ui?.settings?.getSettingValue(SETTING_ENABLED, true);
     if (!enabled) return null;
+    
+    // FIX: If a snapshot is already running, immediately bail out.
+    // This prevents pasting 20 nodes from triggering 20 concurrent toDataURL freezes.
+    if (_isSnapping) return null;
+    _isSnapping = true;
+    
     try {
         const graph = app.graph?.serialize?.();
         if (!graph) return null;
@@ -148,6 +155,9 @@ export async function snapshot(label = "auto") {
     } catch (exc) {
         console.warn("[c2c.autocheckpoint] snapshot failed:", exc);
         return null;
+    } finally {
+        // Release the lock so the next snapshot can run
+        _isSnapping = false;
     }
 }
 
@@ -318,7 +328,8 @@ app.registerExtension({
         const orig = app.queuePrompt?.bind(app);
         if (orig) {
             app.queuePrompt = async function (...args) {
-                snapshot("auto: before queue");
+                // FIX: Delay snapshot slightly so it doesn't block the prompt from sending UI
+                setTimeout(() => snapshot("auto: before queue"), 50);
                 return orig(...args);
             };
         }
