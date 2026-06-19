@@ -465,22 +465,19 @@ app.registerExtension({
                 // auto: prefer video > image > other
                 return c.isVideo ? 2 : (c.isImage ? 1 : 0);
             };
-            candidates.sort((a, b) => {
-                const s = score(b) - score(a);
-                if (s !== 0) return s;
-                return (b.node.id || 0) - (a.node.id || 0);
-            });
-            candidates.sort((a, b) => {
-                const s = score(b) - score(a);
-                if (s !== 0) return s;
-                return (b.node.id || 0) - (a.node.id || 0);
-            });
-            pool.sort((a, b) => {
-                const s = score(b) - score(a);
-                if (s !== 0) return s;
-                return (b.node.id || 0) - (a.node.id || 0);
-            });
-            return { filename: pool[0].filename, mode: "global" };
+            // Single pass O(N): pick the highest-scoring candidate, tie-broken
+            // by the largest node id (newest). Replaces three redundant full
+            // sorts (two of which operated on `candidates`, whose result was
+            // never used — the function returns the best of `pool`).
+            let bestFilename = null, bestScore = -Infinity, bestId = -Infinity;
+            for (const c of pool) {
+                const s = score(c);
+                const id = c.node.id || 0;
+                if (s > bestScore || (s === bestScore && id > bestId)) {
+                    bestFilename = c.filename; bestScore = s; bestId = id;
+                }
+            }
+            return bestFilename ? { filename: bestFilename, mode: "global" } : null;
         }
 
         // ── Status display widget (read-only label on the node) ──────
