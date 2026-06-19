@@ -29,6 +29,11 @@ const CS_COLORS = {
     "OCIO":     C.pink,
 };
 
+// Per-frame perf: constant font + cached measured widths so measureText() runs
+// once per distinct tag instead of once per image node per frame.
+const _BADGE_FONT = "bold 10px -apple-system, Segoe UI, sans-serif";
+const _BADGE_W = new Map();   // tag -> measured boxW (px)
+
 // Perf: this enabled flag is read by _drawBadge(), which runs per node per
 // frame. Cache it (seeded at setup() + onChange) so getSettingValue is not a
 // synchronous storage hit in the render loop.
@@ -73,10 +78,17 @@ function _drawBadge(node, ctx) {
     const padX = 6, padY = -16;  // sit above the node title bar
     // Measure
     ctx.save();
-    ctx.font = "bold 10px -apple-system, Segoe UI, sans-serif";
+    ctx.font = _BADGE_FONT;
     const text = tag;
-    const metrics = ctx.measureText(text);
-    const boxW = metrics.width + 10;
+    // PERF: drawNode runs per-node per-frame; measureText() is a text-layout op.
+    // The font is constant and there are only a handful of distinct tags, so the
+    // measured width is cached per tag — measureText now runs once per tag total
+    // instead of once per image node per frame.
+    let boxW = _BADGE_W.get(text);
+    if (boxW === undefined) {
+        boxW = ctx.measureText(text).width + 10;
+        _BADGE_W.set(text, boxW);
+    }
     const boxH = 14;
     const x = w - boxW - padX;
     const y = padY;
