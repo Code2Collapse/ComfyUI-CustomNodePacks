@@ -29,22 +29,28 @@ app.registerExtension({
             id: SETTING_ID,
             name: "C2C ▸ Sampler latent preview",
             tooltip:
-                "Show the live denoising preview inside the sampler node (native " +
-                "ComfyUI preview). Auto = Latent2RGB (fast, no model). TAESD = sharper " +
-                "(needs a models/vae_approx decoder). Off = no preview.",
+                "Live denoising preview inside the sampler node — works for core " +
+                "KSampler AND Kijai WanVideoSampler. 'Wan/video-aware' uses the " +
+                "TAESD path, which routes Wan samplers to their own video previewer " +
+                "(taehv if you drop taew2_1/taew2_2.safetensors in models/vae_approx, " +
+                "otherwise a Wan-factor Latent2RGB fallback) — this is the one that " +
+                "makes Wan/Kijai previews actually appear. 'Fast' is core Latent2RGB " +
+                "(good for SD/Flux, blank for Wan). 'Off' = no preview.",
             type: "combo",
             options: [
-                { text: "Auto (Latent2RGB — fast, no model)", value: "auto" },
-                { text: "TAESD (sharper, needs vae_approx model)", value: "taesd" },
+                { text: "On — Wan/video-aware (recommended)", value: "taesd" },
+                { text: "On — fast, SD/Flux only (Latent2RGB)", value: "latent2rgb" },
                 { text: "Off", value: "off" },
             ],
-            defaultValue: "auto",
-            onChange: (v) => { applyMethod(v || "auto"); },
+            defaultValue: "taesd",
+            onChange: (v) => { applyMethod(v || "taesd"); },
         },
     ],
     async setup() {
         // Push the saved choice to the server on load so it persists across restarts.
-        const v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "auto") || "auto";
+        // Default TAESD so Wan/Kijai samplers route to their own video previewer
+        // (core Auto/Latent2RGB shows nothing for Wan latents).
+        const v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "taesd") || "taesd";
         applyMethod(v);
     },
 });
