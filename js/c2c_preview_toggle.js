@@ -13,13 +13,24 @@ import { api } from "../../scripts/api.js";
 const SETTING_ID = "c2c.preview.method";
 
 async function applyMethod(method) {
+    // 1) Drive ComfyUI's NATIVE per-queue preview setting. This is the
+    //    authoritative path on current ComfyUI (PR #11261): the value is sent as
+    //    extra_data.preview_method on every prompt and overrides args.preview_method.
+    //    "default" (the stock value) means "use the CLI flag" = --preview-method
+    //    none = no preview, which is why nothing showed. Force a real method here.
+    try {
+        const native = (method === "off") ? "none" : method;  // taesd | latent2rgb | none
+        app.ui?.settings?.setSettingValue?.("Comfy.Execution.PreviewMethod", native);
+    } catch (_) { /* older ComfyUI without the per-queue setting */ }
+    // 2) Also hit our backend route (sets args + default_preview_method) — covers
+    //    older ComfyUI without the per-queue override, and keeps both in sync.
     try {
         await api.fetchApi("/c2c/preview_method", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ method }),
         });
-    } catch (_) { /* server route missing / older ComfyUI — native default applies */ }
+    } catch (_) { /* server route missing / older ComfyUI */ }
 }
 
 app.registerExtension({
