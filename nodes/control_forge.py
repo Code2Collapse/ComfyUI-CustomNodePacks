@@ -91,6 +91,7 @@ _POSE_MAP = {
     "densepose": "DensePosePreprocessor",
 }
 _EDGE_MAP = {
+    "canny": "CannyEdgePreprocessor",   # controlnet_aux Canny (cleaner than internal OpenCV)
     "lineart": "LineArtPreprocessor",
     "anyline": "AnyLineArtPreprocessor_aux",
     "hed": "HEDPreprocessor",
@@ -122,6 +123,64 @@ except Exception:  # pragma: no cover
 # depth_model values that route to the vendored runners (vs controlnet_aux delegation).
 _VENDORED_DEPTH = ("da_v2", "da_v1", "midas", "da3", "depth_pro", "depthcrafter")
 _NORMAL_MODELS = ("off", "sobel_from_depth", "normalcrafter")
+
+
+# ---- model-file pickers: surface the user's OWN installed models as dropdowns ----
+# Read the actual model lists the delegated preprocessors expose, so the dropdown
+# shows exactly what's on disk. Fully guarded: if a pack isn't installed the list
+# is empty and the field falls back to a free-text STRING (never an empty combo).
+def _aux_combo(class_name, *fields):
+    try:
+        import nodes as _cn  # ComfyUI global registry
+        cls = _cn.NODE_CLASS_MAPPINGS.get(class_name)
+        if cls is None:
+            return []
+        it = cls.INPUT_TYPES()
+        allp = {**(it.get("required") or {}), **(it.get("optional") or {})}
+        for f in fields:
+            spec = allp.get(f)
+            if isinstance(spec, (list, tuple)) and spec and isinstance(spec[0], (list, tuple)):
+                return list(spec[0])
+        return []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _dedupe(seq):
+    seen, out = set(), []
+    for x in seq:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _depth_ckpt_options():
+    opts = []
+    opts += _aux_combo("DepthAnythingV2Preprocessor", "ckpt_name")
+    opts += _aux_combo("DepthAnythingPreprocessor", "ckpt_name")
+    opts += _aux_combo("Metric_DepthAnythingV2Preprocessor", "ckpt_name")
+    for m in _DEPTH_CKPT.values():
+        opts += list(m.values())
+    return _dedupe(opts)
+
+
+def _pose_ckpt_options():
+    return _dedupe(_aux_combo("OnnxDetectionModelLoaderV2", "vitpose_model"))
+
+
+def _ckpt_field(options, what):
+    """A COMBO of ['(auto)'] + on-disk models, or a free-text STRING fallback if
+    nothing was detected (so the field is never a broken empty dropdown)."""
+    if options:
+        return (["(auto)"] + options, {
+            "default": "(auto)",
+            "tooltip": f"Pick your own {what} model, or '(auto)' = use the backend/size default.",
+        })
+    return ("STRING", {
+        "default": "",
+        "tooltip": f"Custom {what} model filename (none auto-detected; type one or leave blank for default).",
+    })
 
 
 def _spec_default(spec):
@@ -185,9 +244,10 @@ def _call_node(cls, fixed):
     return getattr(cls(), cls.FUNCTION)(**kw)
 
 
-def _run_vitpose(image, target_res=512):
+def _run_vitpose(image, target_res=512, pose_ckpt=""):
     """ViTPose pose via WanV2's 3-node chain (loader -> detect -> draw) → skeleton IMAGE.
-    Uses the ViTPose + YOLO .onnx files already in models/detection/."""
+    Uses the ViTPose + YOLO .onnx files already in models/detection/. ``pose_ckpt``
+    (if given and present in the list) picks a specific ViTPose .onnx; else auto."""
     try:
         import nodes as _cn
         Loader = _cn.NODE_CLASS_MAPPINGS.get("OnnxDetectionModelLoaderV2")
@@ -198,7 +258,8 @@ def _run_vitpose(image, target_res=512):
         files = (Loader.INPUT_TYPES().get("required", {}).get("vitpose_model", [None]) or [None])[0] or []
         if not files:
             return None, "vitpose=no .onnx in models/detection/"
-        vit = next((f for f in files if "vitpose" in f.lower()), files[0])
+        vit = pose_ckpt if (pose_ckpt and pose_ckpt in files) else \
+            next((f for f in files if "vitpose" in f.lower()), files[0])
         yolo = next((f for f in files if "yolo" in f.lower()), None)
         if yolo is None:
             return None, "vitpose=need a YOLO .onnx in models/detection/"
@@ -303,12 +364,11 @@ class ControlAOVC2C:
                 "depth_size": (list(_DEPTH_SIZES), {"default": "small",
                                "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default) → giant=ViT-G "
                                           "(best). v1 has no giant (falls back to large). Ignored by metric/zoe."}),
-                "depth_custom_ckpt": ("STRING", {"default": "",
-                               "tooltip": "Custom DepthAnything .pth filename in the controlnet_aux model dir — "
-                                          "overrides depth_size when set (your own fine-tuned weights)."}),
+                "depth_custom_ckpt": _ckpt_field(_depth_ckpt_options(), "depth"),
                 "pose_model": (["off", "vitpose"] + list(_POSE_MAP.keys()), {"default": "off",
                                "tooltip": "Pose backend. vitpose = WanV2 ViTPose chain (uses models/detection/*.onnx). "
                                           "dwpose/openpose/... delegate to comfyui_controlnet_aux."}),
+                "pose_ckpt": _ckpt_field(_pose_ckpt_options(), "ViTPose .onnx pose"),
                 "id_matte_model": (["off", "sam_auto"], {"default": "off",
                                "tooltip": "ID/segmentation matte. sam_auto = automatic SAM segmentation (controlnet_aux "
                                           "SAMPreprocessor). 'off' = wire an external matte."}),
@@ -362,14 +422,18 @@ class ControlAOVC2C:
         return best.shape[1], best.shape[2]
 
     def forge(self, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",
-              depth_custom_ckpt="", pose_model="off", id_matte_model="off", edge_model="internal_canny",
+              depth_custom_ckpt="", pose_model="off", pose_ckpt="(auto)", id_matte_model="off", edge_model="internal_canny",
               run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
               preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,
               normal=None, id_matte=None, depth_weight=1.0, canny_weight=1.0, pose_weight=1.0,
-              normal_weight=0.0, match_to="largest"):
+              normal_weight=0.0, match_to="largest", **kwargs):
         image = _as_bhwc3(image)
         notes = []
         res = int(preproc_resolution)
+        # Normalise the dropdown sentinel: "(auto)" means "use the backend default".
+        if depth_custom_ckpt in ("(auto)", None):
+            depth_custom_ckpt = ""
+        _pose_ckpt = "" if pose_ckpt in ("(auto)", None) else str(pose_ckpt)
 
         # DEPTH: external input wins; else vendored backend, else controlnet_aux delegation.
         depth_t = _as_bhwc3(depth)
@@ -402,7 +466,7 @@ class ControlAOVC2C:
         pose_t = _as_bhwc3(pose)
         if pose_t is None and image is not None and pose_model != "off":
             if pose_model == "vitpose":
-                pose_t, nt = _run_vitpose(image, res)
+                pose_t, nt = _run_vitpose(image, res, _pose_ckpt)
             else:
                 pose_t, nt = _run_aux(_POSE_MAP[pose_model], image, res)
             notes.append(nt)
@@ -412,7 +476,9 @@ class ControlAOVC2C:
             if edge_model == "internal_canny" and run_canny:
                 canny_t = _canny_pass(image, canny_low, canny_high, canny_aperture)
             elif edge_model in _EDGE_MAP:
-                canny_t, nt = _run_aux(_EDGE_MAP[edge_model], image, res)
+                ov = ({"low_threshold": int(canny_low), "high_threshold": int(canny_high)}
+                      if edge_model == "canny" else None)
+                canny_t, nt = _run_aux(_EDGE_MAP[edge_model], image, res, overrides=ov)
                 notes.append(nt)
         motion_t = _motion_pass(image) if (run_motion and image is not None) else None
 
