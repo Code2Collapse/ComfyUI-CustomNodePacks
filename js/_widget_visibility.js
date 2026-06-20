@@ -25,10 +25,11 @@ export function setWidgetVisible(widget, visible) {
             const cs = widget.__mec_origComputeSize;
             if (cs === undefined) delete widget.computeSize; else widget.computeSize = cs;
             delete widget.__mec_origComputeSize;
-        } else {
-            // No saved original: drop any forced [0,-4] so the prototype default returns.
-            delete widget.computeSize;
         }
+        // No else: if no original was saved we never hid this widget, so its
+        // computeSize is already the legitimate one. Deleting it here would
+        // destroy DOM-widget sizing (multiline/preview widgets) on widgets that
+        // were only ever shown. (Mirrors the `type` branch above — no else.)
         widget.hidden = false;
         const el = widget.element;
         if (el) {
