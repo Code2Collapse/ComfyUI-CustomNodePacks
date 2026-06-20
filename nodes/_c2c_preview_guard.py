@@ -56,18 +56,22 @@ def ensure_previews_enabled() -> str:
     try:
         cur = getattr(args, "preview_method", None)
         if cur == LatentPreviewMethod.NoPreviews:
-            # Prefer the module helper if present (handles its own state).
+            # Force TAESD, not Auto. TAESD is the universal method: core samplers
+            # use the taesd decoder (or fall back to Latent2RGB), and — crucially —
+            # Kijai's WanVideoSampler routes TAESD to its OWN video previewer
+            # (taehv / Wan-factor Latent2RGB), so Wan/video previews actually show.
+            # Auto resolves to core Latent2RGB, which is BLANK for Wan latents.
             try:
                 import latent_preview  # noqa: F401
                 if hasattr(latent_preview, "set_preview_method"):
-                    latent_preview.set_preview_method("auto")
+                    latent_preview.set_preview_method("taesd")
                 else:
-                    args.preview_method = LatentPreviewMethod.Auto
+                    args.preview_method = LatentPreviewMethod.TAESD
             except Exception:
-                args.preview_method = LatentPreviewMethod.Auto
-            PREVIEW_GUARD_STATUS = "forced_auto (was none)"
-            log.info("[c2c.preview] previews were OFF (--preview-method none) -> forced to Auto "
-                     "(Latent2RGB; no model, cannot fail). Set C2C_NO_FORCE_PREVIEW=1 to opt out.")
+                args.preview_method = LatentPreviewMethod.TAESD
+            PREVIEW_GUARD_STATUS = "forced_taesd (was none)"
+            log.info("[c2c.preview] previews were OFF (--preview-method none) -> forced to TAESD "
+                     "(works for core AND Kijai/Wan samplers). Set C2C_NO_FORCE_PREVIEW=1 to opt out.")
         else:
             PREVIEW_GUARD_STATUS = f"already_on ({getattr(cur, 'value', cur)})"
             log.debug("[c2c.preview] previews already enabled: %s", cur)
