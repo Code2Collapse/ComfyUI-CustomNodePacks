@@ -54,27 +54,28 @@ def ensure_previews_enabled() -> str:
         log.debug("[c2c.preview] cli_args unavailable: %s", exc)
         return PREVIEW_GUARD_STATUS
     try:
-        cur = getattr(args, "preview_method", None)
-        if cur == LatentPreviewMethod.NoPreviews:
-            # Force TAESD, not Auto. TAESD is the universal method: core samplers
-            # use the taesd decoder (or fall back to Latent2RGB), and — crucially —
-            # Kijai's WanVideoSampler routes TAESD to its OWN video previewer
-            # (taehv / Wan-factor Latent2RGB), so Wan/video previews actually show.
-            # Auto resolves to core Latent2RGB, which is BLANK for Wan latents.
+        import latent_preview  # noqa: F401
+        # THE PR #11261 GOTCHA: newer ComfyUI resets args.preview_method on EVERY
+        # prompt (execution.py: set_preview_method(extra_data['preview_method'])).
+        # When the frontend sends "default"/None, set_preview_method falls back to
+        # latent_preview.default_preview_method — which is whatever --preview-method
+        # was (NoPreviews here). So setting args.preview_method alone is WIPED every
+        # run; we must override default_preview_method itself. TAESD is universal:
+        # core samplers use the taesd decoder / Latent2RGB, and Kijai's WanVideoSampler
+        # routes TAESD to its OWN video previewer (Auto/Latent2RGB are blank for Wan).
+        dflt = getattr(latent_preview, "default_preview_method", None)
+        if dflt == LatentPreviewMethod.NoPreviews:
+            latent_preview.default_preview_method = LatentPreviewMethod.TAESD
+        # Also set it live for the current run.
+        if getattr(args, "preview_method", None) == LatentPreviewMethod.NoPreviews:
             try:
-                import latent_preview  # noqa: F401
-                if hasattr(latent_preview, "set_preview_method"):
-                    latent_preview.set_preview_method("taesd")
-                else:
-                    args.preview_method = LatentPreviewMethod.TAESD
+                latent_preview.set_preview_method("taesd")
             except Exception:
                 args.preview_method = LatentPreviewMethod.TAESD
-            PREVIEW_GUARD_STATUS = "forced_taesd (was none)"
-            log.info("[c2c.preview] previews were OFF (--preview-method none) -> forced to TAESD "
-                     "(works for core AND Kijai/Wan samplers). Set C2C_NO_FORCE_PREVIEW=1 to opt out.")
-        else:
-            PREVIEW_GUARD_STATUS = f"already_on ({getattr(cur, 'value', cur)})"
-            log.debug("[c2c.preview] previews already enabled: %s", cur)
+        PREVIEW_GUARD_STATUS = "forced_taesd (+per-queue default override)"
+        log.info("[c2c.preview] forced live preview to TAESD AND overrode the per-queue "
+                 "'default' fallback (PR #11261) so it survives every prompt — works for "
+                 "core AND Kijai/Wan samplers. Set C2C_NO_FORCE_PREVIEW=1 to opt out.")
     except Exception as exc:
         PREVIEW_GUARD_STATUS = f"error ({type(exc).__name__})"
         log.warning("[c2c.preview] could not ensure previews: %s", exc)
@@ -146,14 +147,15 @@ def set_preview_method(method: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"cli_args/latent_preview unavailable: {exc!r}"}
     try:
-        if method in ("off", "none"):
-            args.preview_method = LatentPreviewMethod.NoPreviews
-        elif hasattr(latent_preview, "set_preview_method"):
-            # Core's own setter understands "auto"/"latent2rgb"/"taesd".
-            latent_preview.set_preview_method(method)
-        else:
-            args.preview_method = LatentPreviewMethod.Auto
-        log.info("[c2c.preview] preview method set to %r by user.", method)
+        # Resolve the target enum (enum values are "none"/"auto"/"latent2rgb"/"taesd").
+        target = LatentPreviewMethod.NoPreviews if method in ("off", "none") \
+            else LatentPreviewMethod(method if method in ("auto", "latent2rgb", "taesd") else "taesd")
+        args.preview_method = target
+        # CRUCIAL: also set default_preview_method — the value the per-queue override
+        # (PR #11261) RESETS to every prompt. Without this the choice is wiped on the
+        # next queue and the preview silently stops.
+        latent_preview.default_preview_method = target
+        log.info("[c2c.preview] preview method set to %r (+per-queue default) by user.", method)
         return {"ok": True, "method": method}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": repr(exc)}
