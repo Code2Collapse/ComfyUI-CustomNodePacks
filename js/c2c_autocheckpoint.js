@@ -12,7 +12,7 @@
  *     ts:    Date.now(),
  *     label: "auto: before queue" | "auto: graph edit" | "manual",
  *     graph: <result of app.graph.serialize()>,
- *     thumb: <PNG dataURL 256x144 of canvas at snapshot time>,
+ *     thumb: <JPEG Blob 256x144 of canvas, encoded off-thread; legacy entries may be a dataURL string>,
  *     node_count, link_count, size_bytes
  *   }
  *
@@ -109,22 +109,32 @@ async function pruneRing(limit) {
 let _lastSnapAt = 0;
 let _isSnapping = false; // Concurrency lock to prevent multiple heavy toDataURL calls
 
-function _makeThumbnail() {
-    // Grab the litegraph canvas if present, downscale to 256x144.
+async function _makeThumbnailBlob() {
+    // Downscale the litegraph canvas to 256x144 and encode OFF the main thread.
+    // toDataURL/toBlob encode synchronously on the main thread — the profiler
+    // showed toDataURL as the #1 self-time (~18-28%), enough to stutter/crash.
+    // OffscreenCanvas.convertToBlob runs the encode off-thread (a Promise), so
+    // it never blocks rendering. Returns a Blob (stored directly in IndexedDB,
+    // smaller than a base64 dataURL); the picker uses URL.createObjectURL.
     const canvas = app.canvas?.canvas;
-    if (!canvas) return "";
+    if (!canvas) return null;
+    const bg2 = _cssVar("--c2c-bg2");
     try {
+        if (typeof OffscreenCanvas !== "undefined") {
+            const off = new OffscreenCanvas(256, 144);
+            const ctx = off.getContext("2d");
+            if (bg2) { ctx.fillStyle = bg2; ctx.fillRect(0, 0, 256, 144); }
+            ctx.drawImage(canvas, 0, 0, 256, 144);
+            return await off.convertToBlob({ type: "image/jpeg", quality: 0.6 });
+        }
+        // Fallback (older engines): toBlob is async — non-blocking to the frame.
         const tmp = document.createElement("canvas");
         tmp.width = 256; tmp.height = 144;
         const ctx = tmp.getContext("2d");
-        const bg2 = _cssVar("--c2c-bg2");
         if (bg2) { ctx.fillStyle = bg2; ctx.fillRect(0, 0, 256, 144); }
         ctx.drawImage(canvas, 0, 0, 256, 144);
-        // JPEG (entropy-coded) encodes ~5-10x faster than PNG (lossless deflate).
-        // The profiler showed PNG toDataURL at ~28% main-thread self-time; the
-        // thumbnail is only ever shown scaled-down in the picker, so lossy is fine.
-        return tmp.toDataURL("image/jpeg", 0.6);
-    } catch (_) { return ""; }
+        return await new Promise((res) => tmp.toBlob((b) => res(b), "image/jpeg", 0.6));
+    } catch (_) { return null; }
 }
 
 export async function snapshot(label = "auto") {
@@ -145,7 +155,7 @@ export async function snapshot(label = "auto") {
             ts: Date.now(),
             label,
             graph,
-            thumb: _makeThumbnail(),
+            thumb: await _makeThumbnailBlob(),
             node_count: (graph.nodes || []).length,
             link_count: (graph.links || []).length,
             size_bytes: json.length,
@@ -182,6 +192,7 @@ async function restore(id) {
 // =================================================================== picker UI
 const PICKER_ID = "c2c-autockpt-picker";
 const BTN_ID = "c2c-autockpt-btn";
+let _pickerUrls = [];   // object URLs for Blob thumbs, revoked on closePicker
 
 async function openPicker() {
     closePicker();
@@ -221,8 +232,11 @@ async function openPicker() {
             card2.onmouseenter = () => card2.style.borderColor = "var(--c2c-mauve)";
             card2.onmouseleave = () => card2.style.borderColor = "var(--c2c-border)";
             const dt = new Date(snap.ts);
+            let thumbSrc = "";
+            if (typeof snap.thumb === "string") thumbSrc = snap.thumb;   // legacy dataURL snapshots
+            else if (snap.thumb instanceof Blob) { thumbSrc = URL.createObjectURL(snap.thumb); _pickerUrls.push(thumbSrc); }
             card2.innerHTML =
-                `<img src="${snap.thumb || ""}" style="width:100%;height:120px;object-fit:cover;background:var(--c2c-bg);border-radius:3px"/>
+                `<img src="${thumbSrc}" style="width:100%;height:120px;object-fit:cover;background:var(--c2c-bg);border-radius:3px"/>
                  <div style="margin-top:4px;font-size:11px">${snap.label}</div>
                  <div style="color:var(--c2c-sub);font-size:10px">${dt.toLocaleString()}</div>
                  <div style="color:var(--c2c-sub);font-size:10px">${snap.node_count} nodes · ${(snap.size_bytes/1024).toFixed(1)} KB</div>
@@ -256,6 +270,8 @@ async function openPicker() {
 
 function closePicker() {
     document.getElementById(PICKER_ID)?.remove();
+    for (const u of _pickerUrls) { try { URL.revokeObjectURL(u); } catch (_) { /* ignore */ } }
+    _pickerUrls = [];
 }
 
 function ensureButton() {
