@@ -35,6 +35,12 @@ log = logging.getLogger("c2c.preview")
 # Recorded so the frontend can query what happened (via /object_info-independent log).
 PREVIEW_GUARD_STATUS = "unknown"
 
+# User preference set live from the frontend setting (js/c2c_preview_toggle.js)
+# via POST /c2c/preview_method. None = no explicit choice (guard forces Auto so
+# previews work by default). "off"/"none" = user disabled previews -> the
+# get_previewer fallback below must NOT force them back on.
+_USER_PREF = None
+
 
 def ensure_previews_enabled() -> str:
     global PREVIEW_GUARD_STATUS
@@ -96,6 +102,8 @@ def _install_previewer_fallback() -> None:
             prev = None
         if prev is not None:
             return prev
+        if _USER_PREF in ("off", "none"):
+            return None  # user explicitly turned the sampler preview OFF
         # Core gave nothing (previews off) -> force Auto for one resolve.
         saved = getattr(args, "preview_method", None)
         try:
@@ -117,6 +125,64 @@ def _install_previewer_fallback() -> None:
         log.debug("[c2c.preview] previewer patch skipped: %s", exc)
 
 
+def set_preview_method(method: str) -> dict:
+    """Apply a preview-method choice live (called by the HTTP route below).
+
+    method: "auto" | "latent2rgb" | "taesd" | "off"/"none".
+    `get_previewer` reads args.preview_method live on every sampler callback,
+    so this takes effect on the NEXT queue with no restart. Backend-only —
+    drives ComfyUI's OWN native previewer; no overlay, no core damage.
+    """
+    global _USER_PREF
+    method = str(method or "auto").lower()
+    _USER_PREF = method
+    try:
+        from comfy.cli_args import args, LatentPreviewMethod
+        import latent_preview
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"cli_args/latent_preview unavailable: {exc!r}"}
+    try:
+        if method in ("off", "none"):
+            args.preview_method = LatentPreviewMethod.NoPreviews
+        elif hasattr(latent_preview, "set_preview_method"):
+            # Core's own setter understands "auto"/"latent2rgb"/"taesd".
+            latent_preview.set_preview_method(method)
+        else:
+            args.preview_method = LatentPreviewMethod.Auto
+        log.info("[c2c.preview] preview method set to %r by user.", method)
+        return {"ok": True, "method": method}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": repr(exc)}
+
+
+def _register_routes() -> None:
+    """Expose POST /c2c/preview_method so the frontend toggle can enable/disable
+    the native sampler preview. Fully guarded: if the server API changes this
+    just no-ops and the pack is unaffected."""
+    if getattr(_register_routes, "_done", False):
+        return
+    try:
+        from server import PromptServer
+        from aiohttp import web
+        routes = PromptServer.instance.routes
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] route registration skipped: %s", exc)
+        return
+
+    @routes.post("/c2c/preview_method")
+    async def _c2c_set_preview_method(request):  # noqa: ANN001
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        result = set_preview_method(data.get("method", "auto"))
+        return web.json_response(result, status=200 if result.get("ok") else 500)
+
+    _register_routes._done = True
+    log.info("[c2c.preview] registered POST /c2c/preview_method (enable/disable sampler preview).")
+
+
 # Run at import (custom_nodes load after core, so latent_preview already exists).
 ensure_previews_enabled()
 _install_previewer_fallback()
+_register_routes()
