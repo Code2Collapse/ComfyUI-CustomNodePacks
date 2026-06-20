@@ -469,6 +469,44 @@ except Exception as _cf_exc:  # pragma: no cover
         pass
     _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY = {}, {}
 
+# Clipboard TCL — Nuke-style copy/paste of node graphs (F5). Restored 2026-06-20
+# (was removed in a 2026-05 "deprecated cleanup"; it has no replacement).
+try:
+    from .nodes.clipboard_tcl import (
+        NODE_CLASS_MAPPINGS as _TCL_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _TCL_DISPLAY,
+        register_routes as _register_tcl_routes,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "ClipboardTCL", _exc,
+        hint="Nuke-style TCL copy/paste of node graphs (F5); stdlib only.",
+        group="nodes",
+    )
+    _TCL_MAPPINGS, _TCL_DISPLAY = {}, {}
+    def _register_tcl_routes(_server):  # type: ignore
+        return None
+
+
+# ── Restored VFX / utility nodes (removed in a 2026-05 "deprecated cleanup";
+#    verified they have NO replacement in the current pack, so brought back).
+#    Each module is guarded independently so one failure never drops the rest.
+_RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
+for _rmod in ("color_science", "exr_io", "exr_metadata_reader", "geometry_nodes",
+              "metadata_nodes", "plate_tools", "render_pass", "video_frame_extractor",
+              "optical_flow", "roto", "shuffle"):
+    try:
+        _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
+        _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})
+        _RESTORED_DISPLAY.update(getattr(_rm, "NODE_DISPLAY_NAME_MAPPINGS", {}) or {})
+    except Exception as _rexc:  # pragma: no cover
+        _c2c_rec_fail(
+            f"restored:{_rmod}", _rexc,
+            hint="VFX/utility node restored from git history; may need cv2/OpenEXR.",
+            group="nodes",
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
     **_MEC_MAPPINGS,
@@ -494,6 +532,8 @@ NODE_CLASS_MAPPINGS = {
     **_LOCATE_MAPPINGS,
     **_NANOBANANA_MAPPINGS,
     **_CONTROLFORGE_MAPPINGS,
+    **_TCL_MAPPINGS,
+    **_RESTORED_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
@@ -520,6 +560,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_LOCATE_DISPLAY,
     **_NANOBANANA_DISPLAY,
     **_CONTROLFORGE_DISPLAY,
+    **_TCL_DISPLAY,
+    **_RESTORED_DISPLAY,
 }
 
 WEB_DIRECTORY = "./js"
@@ -539,6 +581,14 @@ except Exception:
 try:
     import server as _comfy_server_vme
     _register_vme_routes(_comfy_server_vme.PromptServer.instance)
+except Exception:
+    pass  # Server not available
+
+# ── Register Clipboard TCL (Nuke-style copy/paste) routes ────────────
+try:
+    import server as _comfy_server_tcl
+    _register_tcl_routes(_comfy_server_tcl.PromptServer.instance)
+    print("[MEC] Clipboard TCL (Nuke-style copy/paste) routes registered.")
 except Exception:
     pass  # Server not available
 
