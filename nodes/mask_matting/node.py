@@ -1070,7 +1070,10 @@ class MaskOpsMEC:
                             _auto_route_reasons.append(
                                 f"text_grounding:{tr_la.get('backend', 'la')}({s_la:.2f})")
 
-                # First pass — also captures score metadata.
+                # First pass — also captures score metadata. seg_out starts empty: when
+                # text grounding already produced the mask the segmenter never runs, and
+                # the multi-object matte gate below still reads it.
+                seg_out: dict = {}
                 if not _la_done:
                     seg_out = seg_inst.segment(
                         seg_image, mode=mode,
@@ -1357,10 +1360,28 @@ class MaskOpsMEC:
                         device=device, precision=precision,
                         attention=attention, offload=offload,
                     )
-                    mat_out = mat_inst.matte(
-                        img_bhwc, mask_t, trimap=trimap_t,
-                        edge_radius=edge, memory_size=int(memory_size),
+                    # Multi-object path: activates when the segmenter returns
+                    # per-object masks/boxes, B==1, and the backend has matte_multi.
+                    # Falls back silently to the single-object path otherwise.
+                    obj_masks_raw = seg_out.get("object_masks")  # [N,H,W] or None
+                    obj_boxes_raw = seg_out.get("object_boxes", [])
+                    use_multi = (
+                        obj_masks_raw is not None
+                        and len(obj_boxes_raw) > 0
+                        and B == 1
+                        and hasattr(mat_inst, "matte_multi")
                     )
+                    if use_multi:
+                        om_list = [obj_masks_raw[i].unsqueeze(0) for i in range(len(obj_boxes_raw))]
+                        mat_out = mat_inst.matte_multi(
+                            img_bhwc, om_list, obj_boxes_raw,
+                            edge_radius=edge, memory_size=int(memory_size),
+                        )
+                    else:
+                        mat_out = mat_inst.matte(
+                            img_bhwc, mask_t, trimap=trimap_t,
+                            edge_radius=edge, memory_size=int(memory_size),
+                        )
                     alpha_t = mat_out["alpha"].float().clamp(0, 1)
                 else:
                     alpha_t = mask_t
