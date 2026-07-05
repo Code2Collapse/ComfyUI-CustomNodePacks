@@ -41,11 +41,13 @@ const EVERANIMATE_WIDGETS = [
 ];
 
 function hideWidget(w) {
+    if (!w) return;   // widget may live on the WanDirectorExtraArgs node now (advanced split)
     wdHideWidget(w);
     w._wd_hidden = true;
 }
 
 function showWidget(w) {
+    if (!w) return;   // ditto — never crash on a moved/renamed widget
     wdShowWidget(w);
     w._wd_hidden = false;
 }
@@ -83,7 +85,8 @@ function applyVariant(node, variant) {
     app.graph?.setDirtyCanvas?.(true, true);
 }
 
-app.registerExtension({
+// Guard against double-registration when WanNodeExperiments ships the same extension.
+if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.VariantGate")) app.registerExtension({
     name: "C2C.WanDirector.VariantGate",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "WanDirectorC2C") return;

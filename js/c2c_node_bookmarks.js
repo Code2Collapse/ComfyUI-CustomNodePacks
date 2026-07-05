@@ -1,7 +1,12 @@
-// c2c_node_bookmarks.js — Ctrl+B toggle bookmark, Ctrl+Shift+1..9 jump (C2C)
+// c2c_node_bookmarks.js — Ctrl+Alt+B toggle bookmark, Ctrl+Shift+1..9 jump (C2C)
 // ---------------------------------------------------------------------
+// NOTE: This shortcut deliberately does NOT use plain Ctrl+B. ComfyUI core
+// already binds Ctrl+B to "Bypass selected nodes", and rgthree's Bookmark
+// node auto-assigns single-letter shortcuts that can land on "b" — so a
+// plain Ctrl+B / B binding here collided with both. We use Ctrl+Alt+B.
+//
 // What it does:
-//   • Ctrl+B on a selected node → adds/removes a bookmark slot (1..9).
+//   • Ctrl+Alt+B on a selected node → adds/removes a bookmark slot (1..9).
 //     Bookmark slot is auto-assigned to the lowest free index 1..9.
 //   • Ctrl+Shift+1..9 → pan + zoom to that bookmark, pulse the node.
 //   • Bookmarks persist in workflow JSON under
@@ -184,9 +189,18 @@ function isEditingField() {
 
 function onKey(ev) {
     if (isEditingField()) return;
+    // Respect the on/off setting — switching it OFF must also disable the
+    // keyboard shortcuts. (Previously only the strip was hidden in render();
+    // this handler ignored the setting, so Ctrl+B still fired — the
+    // "bookmark won't switch off" bug.)
+    try {
+        if (app.ui?.settings?.getSettingValue?.(SETTING_ID, true) === false) return;
+    } catch { /* settings not ready */ }
     if (!(ev.ctrlKey || ev.metaKey)) return;
-    // Ctrl+B → toggle bookmark on selected node
-    if ((ev.key === "b" || ev.key === "B") && !ev.shiftKey) {
+    // Ctrl+Alt+B → toggle bookmark on selected node. (Moved off Ctrl+B, which
+    // collides with other Comfy/browser bindings.) ev.code is independent of
+    // layout and of the Alt modifier (Alt+b can change ev.key on some OSes).
+    if (ev.altKey && ev.code === "KeyB" && !ev.shiftKey) {
         ev.preventDefault();
         toggleBookmark();
         return;
@@ -204,7 +218,7 @@ app.registerExtension({
         try {
             app.ui.settings.addSetting({
                 id: SETTING_ID,
-                name: "Node bookmarks strip (Ctrl+B, Ctrl+Shift+1..9)",
+                name: "Node bookmarks strip (Ctrl+Alt+B, Ctrl+Shift+1..9)",
                 type: "boolean", defaultValue: true,
                 category: ["c2c", "Overlays", "Bookmarks"],
                 onChange: render,

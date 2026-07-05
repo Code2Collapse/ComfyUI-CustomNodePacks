@@ -42,6 +42,14 @@ SOURCE_CHOICE_CHOICES = ["auto", "image", "video", "custom"]
 # what Python writes to disk.
 NAME_FORMAT_CHOICES = ["basename", "strip_tags", "first_segment"]
 
+# Where the `suffix` lands. Lets a user route mask/wan/etc outputs into
+# SEPARATE folders instead of only tagging the filename — the
+# "ATG_..._v002/mask" vs "ATG_..._mask/date/version" request.
+#   filename  — append to the output basename  (.../v001/clip_mask.mov)  [legacy default]
+#   subfolder — nest a folder AFTER the version (.../v001/mask/clip.mov)
+#   folder    — append to the TOP folder name  (ATG_..._mask/date/v001/clip.mov)
+SUFFIX_MODE_CHOICES = ["filename", "subfolder", "folder"]
+
 _TRAILING_TAG_RE = re.compile(
     r"[._\-](\d{3,4}p?|\d{2,3}fps|[248]k|uhd|hd|sd|sdr|hdr|raw|proxy|final|wip)$",
     re.IGNORECASE,
@@ -242,11 +250,22 @@ class FolderIncrementer:
                 "padding": ("INT", {"default": 3, "min": 1, "max": 10,
                     "tooltip": "Zero-pad width (3 → 001)"}),
                 "suffix": ("STRING", {"default": "",
-                    "tooltip": "Optional suffix appended to the BASENAME of the "
-                               "filename_prefix and output_filename outputs. Example: "
-                               "suffix='_Inpaint' → '.../v001/clip_Inpaint.mov'. "
-                               "Leave empty to disable. Sanitized for cross-platform "
-                               "safety. Does NOT affect the version_string or folder_name."}),
+                    "tooltip": "Optional tag like '_mask' or '_wan'. WHERE it lands is "
+                               "controlled by suffix_mode:\n"
+                               "  filename  → '.../v001/clip_mask.mov'\n"
+                               "  subfolder → '.../v001/mask/clip.mov'  (separate folder per run)\n"
+                               "  folder    → 'ATG_..._mask/<date>/v001/clip.mov'  (separate top folder)\n"
+                               "Leave empty to disable. Sanitized for cross-platform safety."}),
+                "suffix_mode": (SUFFIX_MODE_CHOICES, {
+                    "default": "filename",
+                    "tooltip": "Where the `suffix` is applied:\n"
+                               "  filename  — append to the output basename (legacy behaviour)\n"
+                               "  subfolder — nest a folder AFTER the version, e.g. v001/mask/ — "
+                               "keeps mask vs wan outputs of the SAME run side by side, same version\n"
+                               "  folder    — append to the TOP folder name, e.g. ATG_..._mask/ — "
+                               "fully separate folder tree with its own versioning.\n"
+                               "For subfolder/folder a leading '_' or '-' is stripped from the folder "
+                               "name (so '_mask' → 'mask') and the basename is left clean."}),
                 "label": ("STRING", {"default": "default",
                     "tooltip": "Fallback folder name (used only when no source file is connected)"}),
                 "date_format": (DATE_FORMAT_CHOICES, {
@@ -354,6 +373,14 @@ class FolderIncrementer:
             folder_name = _sanitize_folder_name(_format_source_name(raw_stem, name_format), fallback=label or "output")
         else:
             folder_name = _sanitize_folder_name(label, fallback="default")
+        # `folder` suffix_mode versions in a SEPARATE top folder — fingerprint
+        # that one so the cache key tracks the right v### counter.
+        suffix = str(kwargs.get("suffix", "") or "").strip()
+        smode = str(kwargs.get("suffix_mode", "filename") or "filename").strip().lower()
+        if smode == "folder" and suffix:
+            safe_suffix = _sanitize_folder_name(suffix, fallback="")
+            if safe_suffix:
+                folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
         scan_dir = base_dir / folder_name / today_date
         h.update(dir_version_fingerprint(scan_dir, prefix, padding).encode())
         return h.hexdigest()
@@ -364,7 +391,7 @@ class FolderIncrementer:
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", reserve_version=False,
-                  suffix="", source_extension=""):
+                  suffix="", suffix_mode="filename", source_extension=""):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -408,6 +435,25 @@ class FolderIncrementer:
         else:
             folder_name = _sanitize_folder_name(derived_folder, fallback=label or "output")
 
+        # ── 1b. Resolve the suffix + where it lands ───────────────────
+        #    `suffix` (e.g. "_mask"/"_wan") is routed by `suffix_mode`:
+        #      filename  → appended to the output basename (legacy)
+        #      subfolder → a folder nested AFTER the version (v001/mask/)
+        #      folder    → appended to the TOP folder name (..._mask/)
+        #    `folder` must be applied BEFORE the version scan so the
+        #    separate tree gets its own independent v### counter.
+        safe_suffix = ""
+        if suffix and str(suffix).strip():
+            safe_suffix = _sanitize_folder_name(str(suffix).strip(), fallback="")
+        smode = str(suffix_mode or "filename").strip().lower()
+        if smode not in SUFFIX_MODE_CHOICES:
+            smode = "filename"
+        # For folder/subfolder a leading separator reads as a join hint,
+        # not part of the name → "_mask" becomes the folder "mask".
+        suffix_as_folder = safe_suffix.lstrip("_-. ") if safe_suffix else ""
+        if smode == "folder" and safe_suffix:
+            folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
+
         # ── 2. Resolve base directory ─────────────────────────────────
         if base_path and base_path.strip():
             base_dir = Path(base_path.strip())
@@ -448,15 +494,19 @@ class FolderIncrementer:
                 print(f"[MEC] FolderIncrementer: reserve_version failed: {exc}")
 
         # ── 6. Build output paths using chosen separator ──────────────
-        subfolder_path = sep.join([folder_name, today_date, version_string])
+        #    subfolder mode nests `suffix_as_folder` right after the version
+        #    dir, so masks/wan outputs of the SAME run sit side by side under
+        #    one shared version (…/v001/mask/, …/v001/wan/).
+        path_parts = [folder_name, today_date, version_string]
+        if smode == "subfolder" and suffix_as_folder:
+            path_parts.append(suffix_as_folder)
+        subfolder_path = sep.join(path_parts)
 
-        # Suffix is appended to the BASENAME (not the folder). Sanitized so it
-        # cannot escape the directory or break the file system. Empty string
-        # (the default) is a no-op.
-        safe_suffix = ""
-        if suffix and str(suffix).strip():
-            safe_suffix = _sanitize_folder_name(str(suffix).strip(), fallback="")
-        basename_no_ext = (name_no_ext or version_string) + safe_suffix
+        # In `filename` mode the suffix tags the basename; in subfolder/folder
+        # mode it has already shaped the path, so the basename stays clean.
+        basename_no_ext = (name_no_ext or version_string)
+        if smode == "filename" and safe_suffix:
+            basename_no_ext = basename_no_ext + safe_suffix
 
         filename_prefix = sep.join([subfolder_path, basename_no_ext])
 

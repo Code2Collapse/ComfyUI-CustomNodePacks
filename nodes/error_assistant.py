@@ -436,7 +436,10 @@ _DEFAULTS = {
     "cloud_provider": "openai",               # openai|anthropic|gemini|openrouter|groq|deepseek
     "cloud_model": "gpt-4o-mini",
     # API keys are stored encrypted via secrets_store.py — never in this dict
-    "local_model": "qwen2.5-0.5b-instruct-q4_k_m",
+    # W5a: default local model is now Qwen3.5-4B Q4_K_M (Opus-reasoning distill,
+    # Apache-2.0, ~2.5 GB CPU). local_llm's resolver also accepts any GGUF the
+    # user already has; the C2C AI settings panel offers a one-click download.
+    "local_model": "qwen3.5-4b",
     "local_threads": 0,                        # 0 = llama.cpp default
     # Tier 2 backend: "llamacpp" (local GGUF) or "ollama" (HTTP daemon).
     "tier2_backend": "llamacpp",

@@ -148,11 +148,56 @@ a backend below just upgrades it from rule-based to plain-English AI replies.</p
     const localList = detect.servers || [];
     const localBody = document.createElement("div");
     if (localList.length === 0) {
+        // W5a: no external server needed — the pack ships a built-in llama.cpp
+        // Tier-2. Offer the one-click Qwen3.5-4B download right here.
         localBody.innerHTML =
             `<p>No local AI servers detected on the usual ports
              (Ollama:11434, LM Studio:1234, llama.cpp:8080, vLLM:8000).</p>
-             <p style="color:var(--c2c-sub)">If you have Ollama installed, start it and re-run this
-             wizard from <i>Settings → C2C ▸ AI Backends → Re-run wizard</i>.</p>`;
+             <p><b>Built-in local AI (no server needed):</b> download
+             <b>Qwen3.5-4B</b> (Opus-reasoning distill, Apache-2.0, ~2.5&nbsp;GB,
+             runs on CPU — zero VRAM) and error explanations, node help and
+             workflow suggestions work fully offline.</p>`;
+        const dlRow = document.createElement("div");
+        dlRow.style.cssText = "margin:8px 0;display:flex;gap:8px;align-items:center;";
+        const dlBtn = document.createElement("button");
+        dlBtn.textContent = "⬇ Download local AI model (2.5 GB)";
+        dlBtn.style.cssText = "padding:6px 12px;border-radius:6px;cursor:pointer;";
+        const dlStat = document.createElement("span");
+        dlStat.style.cssText = "color:var(--c2c-sub);font-size:11px;";
+        dlRow.appendChild(dlBtn); dlRow.appendChild(dlStat);
+        localBody.appendChild(dlRow);
+        let pollTimer = null;
+        dlBtn.onclick = async () => {
+            dlBtn.disabled = true;
+            try {
+                const r = await apiPost("/c2c/ai/local_model/download", {});
+                if (r.status === "already_present") {
+                    dlStat.textContent = "✓ already installed: " + (r.path || "");
+                    return;
+                }
+                dlStat.textContent = "starting…";
+                pollTimer = setInterval(async () => {
+                    try {
+                        const s = await apiGet("/c2c/ai/local_model/status");
+                        const d = s.download || {};
+                        if (d.error) {
+                            dlStat.textContent = "✗ " + d.error;
+                            clearInterval(pollTimer); dlBtn.disabled = false;
+                        } else if (s.model_present && !d.downloading) {
+                            dlStat.textContent = "✓ installed — local AI is ready";
+                            clearInterval(pollTimer);
+                        } else if (d.downloading) {
+                            const pct = Math.round((d.progress || 0) * 100);
+                            const gb = ((d.bytes_done || 0) / 1e9).toFixed(2);
+                            dlStat.textContent = `downloading… ${pct}% (${gb} GB)`;
+                        }
+                    } catch (_) {}
+                }, 1500);
+            } catch (e) {
+                dlStat.textContent = "✗ " + (e && e.message || "request failed");
+                dlBtn.disabled = false;
+            }
+        };
     } else {
         localBody.innerHTML =
             `<p>Local AI servers detected:</p>

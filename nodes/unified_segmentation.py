@@ -209,6 +209,64 @@ def _load_state_dict(path: str) -> dict:
     return sd
 
 
+def _parse_bboxes(s):
+    """Parse a JSON list of boxes → list of [x1,y1,x2,y2] floats.
+    Accepts ``[[x1,y1,x2,y2], ...]`` or a single ``[x1,y1,x2,y2]``.
+    Empty / invalid input → ``[]`` (never raises)."""
+    if not s or not str(s).strip():
+        return []
+    try:
+        data = json.loads(s)
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(data, list) or not data:
+        return []
+    # a bare single box [x1,y1,x2,y2]
+    if len(data) == 4 and all(isinstance(v, (int, float)) for v in data):
+        return [[float(v) for v in data]]
+    out = []
+    for b in data:
+        if isinstance(b, (list, tuple)) and len(b) >= 4 and all(isinstance(v, (int, float)) for v in b[:4]):
+            out.append([float(b[0]), float(b[1]), float(b[2]), float(b[3])])
+    return out
+
+
+def _parse_spline(spline_json):
+    """Parse SplineMask spline_data into SAM prompts. Accepts
+    ``[{"points":[{"x":..,"y":..}, ...], ...}, ...]`` (or a single shape, or a
+    bare ``[[x,y], ...]``). Returns ``(coords Nx2 float, labels N ones, bbox
+    [x1,y1,x2,y2])`` — the polygon vertices as positive points + their bounding
+    box — or ``None`` when empty/invalid. Never raises."""
+    if not spline_json or not str(spline_json).strip():
+        return None
+    try:
+        data = json.loads(spline_json)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return None
+    pts = []
+    for shape in data:
+        if isinstance(shape, dict):
+            for p in shape.get("points", []):
+                if isinstance(p, dict) and "x" in p and "y" in p:
+                    pts.append([float(p["x"]), float(p["y"])])
+                elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                    pts.append([float(p[0]), float(p[1])])
+        elif isinstance(shape, (list, tuple)) and len(shape) >= 2 and isinstance(shape[0], (int, float)):
+            pts.append([float(shape[0]), float(shape[1])])  # bare [x,y]
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    coords = np.array(pts, dtype=float)
+    labels = np.ones(len(pts), dtype=int)   # all foreground
+    bbox = [min(xs), min(ys), max(xs), max(ys)]
+    return coords, labels, bbox
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Node
 # ══════════════════════════════════════════════════════════════════════
@@ -294,10 +352,49 @@ class UnifiedSegmentation:
                     "default": "fp16",
                     "tooltip": "Inference precision. fp16 saves VRAM, bf16 for newer GPUs.",
                 }),
+                "edge_refine": (["none", "guided", "guided_strong", "matte"], {
+                    "default": "guided",
+                    "tooltip": (
+                        "Edge-perfect refinement of the SAM mask. SAM gives a blocky/binary mask; "
+                        "these snap it to the true object boundary and emit a soft, roto-grade alpha "
+                        "— robust to motion blur and dull/over-bright colours.\n"
+                        "  none          — raw binary SAM mask (legacy)\n"
+                        "  guided        — fast edge-aware guided filter (recommended, no model)\n"
+                        "  guided_strong — wider, softer for hair / fine detail (no model)\n"
+                        "  matte         — AI alpha matting (ViTMatte / BiRefNet) for the hardest "
+                        "hair + motion-blur edges. Needs a matte model in models/vitmatte|birefnet; "
+                        "auto-falls back to 'guided' if none is installed."
+                    ),
+                }),
+                "edge_radius": ("INT", {
+                    "default": 8, "min": 1, "max": 64,
+                    "tooltip": "Guided-filter radius (px). Larger = smoother/softer edges; smaller "
+                               "hugs fine detail. Ignored when edge_refine = none.",
+                }),
             },
             "optional": {
                 "bbox": ("BBOX", {
                     "tooltip": "Bounding box from upstream node (overrides bbox_json).",
+                }),
+                "bboxes_json": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": (
+                        "MULTIPLE boxes to select several regions at once: "
+                        '[[x1,y1,x2,y2], [x1,y1,x2,y2], ...]. Each box is segmented '
+                        "and the results are unioned into one mask. Leave empty to use "
+                        "the single bbox / points instead."
+                    ),
+                }),
+                "spline_json": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": (
+                        "Draw the region with a SPLINE and paste/connect its data here "
+                        "(SplineMaskMEC spline_data: [{\"points\":[{\"x\":..,\"y\":..}], ...}]). "
+                        "The polygon's vertices become positive point prompts + a bounding box, "
+                        "so SAM snaps to the object you outlined. Combines with points/bbox."
+                    ),
                 }),
                 "neg_bbox_json": ("STRING", {
                     "default": "",
@@ -349,7 +446,11 @@ class UnifiedSegmentation:
         multimask: bool,
         mask_index: int,
         precision: str,
+        edge_refine: str = "guided",
+        edge_radius: int = 8,
         bbox=None,
+        bboxes_json: str = "",
+        spline_json: str = "",
         neg_bbox_json: str = "",
         text_prompt: str = "",
         existing_mask: torch.Tensor | None = None,
@@ -366,6 +467,7 @@ class UnifiedSegmentation:
                 image, model_name, points_json, bbox_json,
                 multimask, mask_index, precision, bbox,
                 neg_bbox_json, text_prompt, existing_mask,
+                edge_refine, edge_radius, bboxes_json, spline_json,
             )
 
     def _segment_impl(
@@ -381,6 +483,10 @@ class UnifiedSegmentation:
         neg_bbox_json: str = "",
         text_prompt: str = "",
         existing_mask: torch.Tensor | None = None,
+        edge_refine: str = "guided",
+        edge_radius: int = 8,
+        bboxes_json: str = "",
+        spline_json: str = "",
     ):
         clean = model_name.replace("[download] ", "")
         need_dl = model_name.startswith("[download] ")
@@ -412,17 +518,76 @@ class UnifiedSegmentation:
         B, H, W, _C = image.shape
         is_video = B > 1
 
+        boxes_multi = _parse_bboxes(bboxes_json)
+
+        # ── SPLINE prompt ─────────────────────────────────────────────
+        # A drawn spline's polygon → positive point prompts + its bounding box,
+        # merged with any existing points/box so SAM snaps to the outlined object.
+        spline = _parse_spline(spline_json)
+        if spline is not None:
+            s_coords, s_labels, s_bbox = spline
+            if pt_coords is None:
+                pt_coords, pt_labels = s_coords, s_labels
+            else:
+                pt_coords = np.concatenate([pt_coords, s_coords], axis=0)
+                pt_labels = np.concatenate([pt_labels, s_labels], axis=0)
+            if box_np is None and not boxes_multi:
+                box_np = np.array(s_bbox, dtype=float)
+
+        # ── TEXT prompt (non-SeC families) ────────────────────────────
+        # SeC handles text natively (passed to _image). For SAM2/SAM3, delegate to
+        # the grounding detector → boxes → SAM, ONLY when no box/point already
+        # narrows the target. Never fatal: if the detector/model is missing, the
+        # text is ignored and the other prompts (or a warning) still segment.
+        if (text_prompt and text_prompt.strip() and family in ("sam2", "sam3")
+                and box_np is None and not boxes_multi and pt_coords is None):
+            try:
+                tboxes = self._text_to_boxes(image, text_prompt, device)
+                if tboxes:
+                    boxes_multi = tboxes
+                    logger.info("[MEC] UnifiedSegmentation text '%s' → %d box(es).",
+                                text_prompt, len(tboxes))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[MEC] text_prompt grounding unavailable (%s) — "
+                               "ignoring text; use points/bbox or a SeC model.", exc)
+
         if is_video:
             masks, score = self._video(
                 model, family, image, pt_coords, pt_labels,
                 box_np, neg_box, torch_dtype, device, existing_mask,
             )
+        elif len(boxes_multi) >= 2:
+            # "bboxes" prompting: segment each box, then UNION into one mask so a
+            # single node can select several regions at once. Reuses the proven
+            # single-box path (multimask off per box → clean binary union).
+            acc = None
+            score = 0.0
+            for bx in boxes_multi:
+                mk, sc = self._image(
+                    model, family, image[0], pt_coords, pt_labels,
+                    np.array(bx, dtype=float), neg_box, text_prompt, False, mask_index,
+                    torch_dtype, device, existing_mask, H, W,
+                )
+                acc = mk if acc is None else torch.maximum(acc, mk)
+                score = max(score, sc)
+            masks = acc if acc is not None else torch.zeros(1, H, W, dtype=torch.float32)
         else:
+            # single box: explicit bbox/bbox_json wins; else a lone box in bboxes_json.
+            single_box = box_np
+            if single_box is None and len(boxes_multi) == 1:
+                single_box = np.array(boxes_multi[0], dtype=float)
             masks, score = self._image(
                 model, family, image[0], pt_coords, pt_labels,
-                box_np, neg_box, text_prompt, multimask, mask_index,
+                single_box, neg_box, text_prompt, multimask, mask_index,
                 torch_dtype, device, existing_mask, H, W,
             )
+
+        # ── Edge-perfect refinement ───────────────────────────────────
+        # Snap the (binary, often blocky) SAM mask to the true image edges and
+        # emit a soft, roto-grade alpha. Robust to motion blur + dull/bright
+        # colours because it follows the IMAGE's local structure, not colour.
+        if edge_refine and edge_refine != "none":
+            masks = self._refine_edges(masks, image, edge_refine, int(edge_radius))
 
         info = json.dumps({
             "model": clean,
@@ -431,9 +596,139 @@ class UnifiedSegmentation:
             "frames": B,
             "best_score": round(score, 4),
             "precision": precision,
+            "edge_refine": edge_refine,
         }, indent=2)
 
         return (masks, score, info)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  Edge refinement — guided filter (pure torch, no extra deps)
+    # ══════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _box(x, r):
+        """Reflect-padded mean (box) filter. x: [1,1,H,W]."""
+        k = 2 * r + 1
+        x = F.pad(x, (r, r, r, r), mode="reflect")
+        return F.avg_pool2d(x, k, stride=1)
+
+    @classmethod
+    def _guided_filter(cls, guide, src, r, eps):
+        """Edge-aware guided filter (He et al. 2010), single-channel guide.
+        guide, src: [H,W] float on the same device → returns [H,W] float.
+        The output follows the GUIDE's edges, so a coarse binary mask becomes a
+        soft alpha that hugs the real object boundary."""
+        g = guide[None, None]
+        p = src[None, None]
+        mean_g = cls._box(g, r)
+        mean_p = cls._box(p, r)
+        var_g = cls._box(g * g, r) - mean_g * mean_g
+        cov_gp = cls._box(g * p, r) - mean_g * mean_p
+        a = cov_gp / (var_g + eps)
+        b = mean_p - a * mean_g
+        return (cls._box(a, r) * g + cls._box(b, r))[0, 0]
+
+    @classmethod
+    def _refine_edges(cls, masks, image, mode, radius):
+        """Edge-snap a [B,H,W] (or [H,W]) mask against the image luma guide.
+        Returns a soft 0..1 alpha matching the input rank. Never raises — on any
+        failure it returns the original mask so segmentation still succeeds."""
+        if masks is None:
+            return masks
+        if mode == "matte":
+            # AI alpha matting (ViTMatte/BiRefNet) for the hardest hair/blur edges.
+            try:
+                return cls._matte_refine(masks, image, radius)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[MEC] UnifiedSegmentation matte refine unavailable "
+                               "(%s) — falling back to the guided filter.", exc)
+                mode = "guided"   # graceful, no-model fallback
+        try:
+            was2d = masks.ndim == 2
+            m = masks.unsqueeze(0) if was2d else masks
+            Bm, H, W = m.shape
+            img = image
+            if img.ndim == 4:
+                guide_all = (0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2])
+            else:
+                guide_all = img if img.ndim == 3 else img.unsqueeze(0)
+            r = max(1, int(radius)) * (2 if mode == "guided_strong" else 1)
+            eps = 1e-4
+            out = torch.empty((Bm, H, W), dtype=torch.float32, device=m.device)
+            for i in range(Bm):
+                gi = min(i, guide_all.shape[0] - 1)
+                guide = guide_all[gi].to(m.device, torch.float32)
+                if guide.shape != (H, W):
+                    guide = F.interpolate(guide[None, None], size=(H, W),
+                                          mode="bilinear", align_corners=False)[0, 0]
+                src = m[i].to(torch.float32).clamp(0, 1)
+                out[i] = cls._guided_filter(guide, src, r, eps).clamp(0, 1)
+            out = out.to(masks.dtype)
+            return out[0] if was2d else out
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[MEC] UnifiedSegmentation edge_refine failed (%s) — using raw mask", exc)
+            return masks
+
+    @classmethod
+    def _matte_refine(cls, masks, image, radius):
+        """Roto-grade alpha matting of the coarse SAM mask using the existing
+        mask_matting backends (ViTMatte → BiRefNet/RMBG2 → RVM …). ViTMatte builds
+        a 3-zone trimap (FG/BG/unknown) from the coarse mask internally, then a
+        transformer recovers true hair/edge alpha. Raises if no backend is
+        installed so the caller can fall back to the guided filter."""
+        from .mask_matting.matters import get_matter_cls, list_keys
+
+        ready = list_keys(installed_only=True)
+        if not ready:
+            raise RuntimeError("no matte backend installed (ViTMatte/BiRefNet/…)")
+        # Preference: trimap matting (sharpest edges) → salient → video matting.
+        order = [k for k in ("vitmatte", "rmbg2", "birefnet", "rvm", "bgmattingv2") if k in ready]
+        key = order[0] if order else ready[0]
+        Matter = get_matter_cls(key)
+        if Matter is None:
+            raise RuntimeError(f"matte backend '{key}' not resolvable")
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        matter = Matter(device=device)
+
+        was2d = masks.ndim == 2
+        m = (masks.unsqueeze(0) if was2d else masks).float()
+        img = (image if image.ndim == 4 else image.unsqueeze(0)).float()
+        # Backends expect the guide image to match the mask frame count.
+        if img.shape[0] != m.shape[0]:
+            img = img[:1].repeat(m.shape[0], 1, 1, 1) if img.shape[0] == 1 else img[: m.shape[0]]
+
+        res = matter.matte(img, m, trimap=None, edge_radius=int(radius))
+        alpha = res.get("alpha") if isinstance(res, dict) else None
+        if alpha is None:
+            raise RuntimeError(f"matte backend '{key}' returned no alpha")
+        alpha = alpha.to(masks.device, masks.dtype).clamp(0, 1)
+        logger.info("[MEC] UnifiedSegmentation matte edge via '%s'.", key)
+        return alpha[0] if was2d else alpha
+
+    @classmethod
+    def _text_to_boxes(cls, image, text, device):
+        """Text → bounding boxes via the existing LocateAnything grounding node
+        (reused so the detector isn't duplicated). Returns [[x1,y1,x2,y2], ...]
+        (frame 0 for video). Raises if the detector/model isn't installed so the
+        caller can fall back."""
+        from .locate_anything import LocateAnythingGroundingMEC
+
+        img = image if image.ndim == 4 else image.unsqueeze(0)
+        node = LocateAnythingGroundingMEC()
+        result = node.run(img[:1], text, device=device)
+        bbox_list = result[0] if isinstance(result, (list, tuple)) and result else result
+        frame0 = bbox_list[0] if isinstance(bbox_list, (list, tuple)) and bbox_list else []
+        boxes = []
+        for d in frame0:
+            try:
+                if isinstance(d, dict) and all(k in d for k in ("x1", "y1", "x2", "y2")):
+                    boxes.append([float(d["x1"]), float(d["y1"]), float(d["x2"]), float(d["y2"])])
+                elif isinstance(d, (list, tuple)) and len(d) >= 4:
+                    boxes.append([float(d[0]), float(d[1]), float(d[2]), float(d[3])])
+            except Exception:  # noqa: BLE001
+                continue
+        return boxes
 
     # ══════════════════════════════════════════════════════════════════
     #  Model Loading

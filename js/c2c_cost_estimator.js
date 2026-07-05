@@ -19,6 +19,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
@@ -503,7 +504,7 @@ function _exportJson() {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.CostEstimator",
     settings: [
         {

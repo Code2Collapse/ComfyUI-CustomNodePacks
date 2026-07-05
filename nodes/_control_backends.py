@@ -85,6 +85,28 @@ def _gray_to_bhwc3(arr_or_t):
     return t.unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 3).clamp(0, 1)
 
 
+def _comfy_models_dir(sub):
+    """Path to ComfyUI/models/<sub> if resolvable, else ''."""
+    try:
+        import folder_paths  # type: ignore
+        return os.path.join(folder_paths.models_dir, sub)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _write_mp4(image_bhwc, path, fps=16):
+    """Write a [T,H,W,3] 0..1 batch to an mp4 (RGB→BGR). Used for video-model roundtrips."""
+    import cv2
+    arr = (image_bhwc[..., :3].detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+    T, H, W = arr.shape[0], arr.shape[1], arr.shape[2]
+    vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (W, H))
+    if not vw.isOpened():
+        raise RuntimeError("cv2.VideoWriter could not open mp4 writer")
+    for i in range(T):
+        vw.write(cv2.cvtColor(arr[i], cv2.COLOR_RGB2BGR))
+    vw.release()
+
+
 # ----------------------------------------------------------------- transformers depth
 _HF_DEPTH_MODELS = {
     ("v2", "small"): "depth-anything/Depth-Anything-V2-Small-hf",
@@ -226,6 +248,100 @@ def run_depthcrafter(image_bhwc, num_inference_steps=5, guidance_scale=1.0,
         return depth.clamp(0, 1), "depthcrafter ok"
     except Exception as e:
         return None, f"depthcrafter err: {type(e).__name__}: {e}"
+
+
+# ----------------------------------------------------------------- DVD (Wan2.1 deterministic video depth)
+def run_dvd(image_bhwc, window_size=81, overlap=21, height=480, width=640, ckpt_dir=""):
+    """DVD — EnVision-Research/DVD: deterministic single-pass *video* depth built on
+    Wan 2.1 (DiffSynth). Relative depth, temporally stable.
+
+    Code: third_party/DVD (Apache-2.0) — too large to ship in-repo (like DA3 /
+    depth-pro), so it is a third_party clone that must be synced to the Linux box.
+    Weights: HF ``FayeHongfeiZhang/DVD`` (model_config.yaml + model.safetensors,
+    **CC BY-NC 4.0 — non-commercial only**). Place them in ComfyUI/models/DVD/ or
+    set DVD_CKPT_DIR. Heavy: needs DiffSynth + the Wan 2.1 base model + a big GPU.
+    """
+    image_bhwc = _bhwc(image_bhwc)
+    if image_bhwc is None:
+        return None, "dvd: no image"
+    dvd_root = os.path.join(_THIRD_PARTY, "DVD")
+    if not os.path.isdir(dvd_root):
+        return None, ("dvd: third_party/DVD missing — clone EnVision-Research/DVD into "
+                      "ComfyUI-CustomNodePacks/third_party/DVD (too large to ship in-repo; sync to Linux).")
+    # Resolve the checkpoint dir (must contain model_config.yaml + model.safetensors).
+    cands = [c for c in [
+        (ckpt_dir or "").strip(),
+        os.environ.get("DVD_CKPT_DIR", ""),
+        _comfy_models_dir("DVD"),
+        os.path.join(dvd_root, "ckpt"),
+    ] if c]
+    def _has_ckpt(c):
+        return (c and os.path.isfile(os.path.join(c, "model.safetensors"))
+                and os.path.isfile(os.path.join(c, "model_config.yaml")))
+    ckpt = next((c for c in cands if _has_ckpt(c)), None)
+    if ckpt is None:
+        # AUTO-DOWNLOAD the DVD checkpoint from HF (CC BY-NC 4.0 — non-commercial
+        # use only). One-time, ~GBs. Lands in ComfyUI/models/DVD (or repo ckpt/).
+        dest = _comfy_models_dir("DVD") or os.path.join(dvd_root, "ckpt")
+        try:
+            from huggingface_hub import snapshot_download
+            os.makedirs(dest, exist_ok=True)
+            print(f"[control_aov] DVD weights not found -> auto-downloading "
+                  f"FayeHongfeiZhang/DVD into {dest} (one-time, large; CC BY-NC 4.0 "
+                  f"non-commercial) ...", flush=True)
+            snapshot_download(
+                repo_id="FayeHongfeiZhang/DVD", local_dir=dest,
+                allow_patterns=["model_config.yaml", "model.safetensors"],
+            )
+            ckpt = dest if _has_ckpt(dest) else None
+        except Exception as exc:  # noqa: BLE001
+            return None, (f"dvd: auto-download failed ({type(exc).__name__}: {exc}). "
+                          f"Install huggingface_hub / check network, or manually place "
+                          f"FayeHongfeiZhang/DVD weights in ComfyUI/models/DVD/.")
+        if ckpt is None:
+            return None, "dvd: weights still missing after auto-download attempt."
+    try:
+        # DVD imports `diffsynth`, `examples` and test_script/test_single_video —
+        # put the repo root + test_script on sys.path.
+        for p in (dvd_root, os.path.join(dvd_root, "test_script")):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        from omegaconf import OmegaConf
+        from argparse import Namespace
+        import test_single_video as _dvd  # type: ignore
+        if "dvd" not in _CACHE:
+            yaml_args = OmegaConf.load(os.path.join(ckpt, "model_config.yaml"))
+            _CACHE["dvd"] = _dvd.load_model(ckpt, yaml_args)
+        model = _CACHE["dvd"]
+        # Temp-video roundtrip so DVD's own read_video + resize preprocessing is used
+        # verbatim (least error-prone, mirrors the depthcrafter pattern).
+        import tempfile
+        tmp = os.path.join(tempfile.gettempdir(), "c2c_dvd_in.mp4")
+        _write_mp4(image_bhwc, tmp, fps=16)
+        try:
+            input_tensor, orig_size, _fps = _dvd.load_video_data(
+                Namespace(input_video=tmp, height=int(height), width=int(width)))
+            depth = _dvd.predict_depth(
+                model, input_tensor, orig_size,
+                Namespace(window_size=int(window_size), overlap=int(overlap)))
+        finally:
+            try:
+                os.remove(tmp)
+            except Exception:  # noqa: BLE001
+                pass
+        # depth: [T,H,W,1] float (unnormalised) → BHWC 3-channel, normalised 0..1.
+        d = torch.as_tensor(np.asarray(depth)).float()
+        if d.dim() == 4 and d.shape[-1] == 1:
+            d = d[..., 0]
+        while d.dim() > 3:
+            d = d[0]
+        mn, mx = float(d.min()), float(d.max())
+        if mx - mn > 1e-6:
+            d = (d - mn) / (mx - mn)
+        d = d.unsqueeze(-1).repeat(1, 1, 1, 3).clamp(0, 1)
+        return d, f"dvd ok [{os.path.basename(ckpt.rstrip(os.sep)) or ckpt}]"
+    except Exception as e:  # noqa: BLE001
+        return None, f"dvd err: {type(e).__name__}: {e}"
 
 
 # ----------------------------------------------------------------- NormalCrafter (video normals)

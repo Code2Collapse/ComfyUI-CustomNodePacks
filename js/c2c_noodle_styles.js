@@ -24,14 +24,36 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const STYLES = [
     "default","spider-web","lightsaber","dna-helix","rainbow-flow",
     "dashed-march","lightning","pulse-packet","neon-tube",
+    // new (2026-06-30)
+    "rgb-spectrum","gradient","fire","comet","candy","aurora","heartbeat",
+    // franchise styles (2026-06-30)
+    "matrix","tron","portal","pacman","hyperspace","upside-down","ki-blast","rainbow-road",
+    // franchise games/movies (batch 2 — implemented earlier, now exposed 2026-07)
+    "pokemon","minecraft","sonic","zelda","halo","among-us",
+    "avatar-bending","john-wick","ghostbusters","jurassic",
+    // game classics (batch 3 — arcade + console, 2026-07)
+    "gta","space-invaders","tetris","street-fighter","mega-man",
+    "mortal-kombat","metroid","doom","elden-ring","galaga",
 ];
 const SETTING_ID = "mec.noodle.style";
+
+// Styles that need a continuous (throttled ~20fps) redraw to animate. Static
+// styles (neon-tube, gradient, minecraft voxel trail, spider-web figure) are
+// intentionally absent so they don't force idle repaints.
+const _ANIMATED = new Set([
+    "dna-helix", "rainbow-flow", "dashed-march", "lightning", "pulse-packet",
+    "rgb-spectrum", "fire", "comet", "candy", "aurora", "heartbeat",
+    "matrix", "tron", "portal", "pacman", "hyperspace", "upside-down", "ki-blast", "rainbow-road",
+    "pokemon", "sonic", "zelda", "halo", "among-us", "avatar-bending", "john-wick", "ghostbusters", "jurassic",
+    "gta", "space-invaders", "tetris", "street-fighter", "mega-man", "mortal-kombat", "metroid", "doom", "elden-ring", "galaga",
+]);
 
 let _orig = null;
 
@@ -75,8 +97,21 @@ function _typeColor(linkType) {
 }
 
 function _bezierPoints(a, b) {
-    const dist = Math.max(20, Math.abs(a[0] - b[0]) * 0.5);
-    return [[a[0]+dist, a[1]], [b[0]-dist, b[1]]];
+    // Geometry-aware control points. The classic form (cp1 = a+right, cp2 =
+    // b-left) only reads well for normal left→right flow; when the endpoints are
+    // vertically stacked or the target sits to the LEFT (e.g. with floating
+    // ports sliding the exit to a node's bottom/right edge), forcing horizontal
+    // tangents makes the curve loop back on itself. So extend the tangents along
+    // whichever axis actually dominates, sign following the direction to the
+    // other endpoint. Normal forward (a left of b) wires are unchanged.
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (adx >= ady) {
+        const d = Math.max(20, adx * 0.5) * (dx >= 0 ? 1 : -1);
+        return [[a[0] + d, a[1]], [b[0] - d, b[1]]];
+    }
+    const d = Math.max(20, ady * 0.5) * (dy >= 0 ? 1 : -1);
+    return [[a[0], a[1] + d], [b[0], b[1] - d]];
 }
 function _bezierAt(t, a, cp1, cp2, b) {
     const u = 1 - t;
@@ -320,6 +355,723 @@ function _renderNeonTube(ctx, a, b, color) {
     ctx.restore();
 }
 
+// ── NEW unique noodle designs (2026-06-30) ──────────────────────────────────
+// Full-RGB spectrum flowing along the wire — "millions of colours". Each segment
+// gets its own hue; the whole band scrolls so it reads as living RGB.
+function _renderRgbSpectrum(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 48, off = (performance.now() / 1000) % 1;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3;
+    let prev = _bezierAt(0, a, cp1, cp2, b);
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        ctx.strokeStyle = `hsl(${((t + off) * 360) % 360}, 100%, 56%)`;
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    ctx.restore();
+}
+// Smooth two-stop gradient from the OUTPUT type colour to the INPUT type colour,
+// with a soft glow — clean and "pro" (think Nuke pipe colour-coding).
+function _renderGradient(ctx, a, b, color, linkType) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const grad = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, _typeColor(linkType));
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3.5; ctx.strokeStyle = grad;
+    ctx.shadowBlur = 6; ctx.shadowColor = color;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    ctx.restore();
+}
+// Flame: red→orange→yellow gradient that flickers + tapers, with ember glow.
+function _renderFire(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 40, time = performance.now() / 120;
+    ctx.save(); ctx.lineCap = "round"; ctx.shadowBlur = 10; ctx.shadowColor = "#ff6a00";
+    let prev = _bezierAt(0, a, cp1, cp2, b);
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        const flick = 0.5 + 0.5 * Math.sin(time + i * 0.6);
+        ctx.strokeStyle = `hsl(${8 + t * 48 + flick * 8}, 100%, ${50 + flick * 10}%)`;
+        ctx.lineWidth = 4 - t * 1.6;
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    ctx.restore();
+}
+// Comet: a glowing head races along a faint base line, leaving a fading trail.
+function _renderComet(ctx, a, b, color) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    ctx.strokeStyle = color; ctx.globalAlpha = 0.22; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    const head = (performance.now() / 900) % 1, TRAIL = 14;
+    for (let i = 0; i < TRAIL; i++) {
+        const t = head - i * 0.025; if (t < 0) continue;
+        const p = _bezierAt(t, a, cp1, cp2, b), k = 1 - i / TRAIL;
+        ctx.globalAlpha = k; ctx.fillStyle = color; ctx.shadowBlur = 12; ctx.shadowColor = color;
+        ctx.beginPath(); ctx.arc(p[0], p[1], 3.6 * (1 - i / TRAIL * 0.7), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+// Candy cane: white rope with marching coloured diagonal stripes.
+function _renderCandy(ctx, a, b, color) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const off = (performance.now() / 60) % 16;
+    ctx.save(); ctx.lineCap = "butt"; ctx.lineWidth = 4.5;
+    ctx.strokeStyle = "#ffffff";
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = 4.5; ctx.setLineDash([8, 8]); ctx.lineDashOffset = -off;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+}
+// Aurora: soft green↔blue↔purple ribbon that breathes along the wire.
+function _renderAurora(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 40, t0 = (performance.now() / 1400) % 1;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3.5; ctx.shadowBlur = 9;
+    let prev = _bezierAt(0, a, cp1, cp2, b);
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        const col = `hsl(${180 + 70 * Math.sin((t + t0) * Math.PI * 2)}, 85%, 62%)`;
+        ctx.strokeStyle = col; ctx.shadowColor = col;
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    ctx.restore();
+}
+// Heartbeat: an ECG spike races along the wire on a glowing baseline.
+function _renderHeartbeat(ctx, a, b, color) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 60, beat = (performance.now() / 700) % 1;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 2;
+    ctx.strokeStyle = color; ctx.shadowBlur = 6; ctx.shadowColor = color;
+    ctx.beginPath();
+    let pnrm = [0, 1];
+    for (let i = 0; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        if (i > 0) { const q = _bezierAt((i - 1) / N, a, cp1, cp2, b); const dx = p[0] - q[0], dy = p[1] - q[1], L = Math.hypot(dx, dy) || 1; pnrm = [-dy / L, dx / L]; }
+        const d = Math.abs(((t - beat + 1) % 1));
+        const spike = d < 0.05 ? (d < 0.025 ? Math.sin(d / 0.025 * Math.PI) * 16 : -Math.sin((d - 0.025) / 0.025 * Math.PI) * 9) : 0;
+        const x = p[0] + pnrm[0] * spike, y = p[1] + pnrm[1] * spike;
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke(); ctx.restore();
+}
+
+// ─────────────────────── Franchise styles (2026-06-30) ───────────────────────
+// All Canvas2D-literal colours (no var()). Lean per-link work; animated ones
+// piggy-back the existing 20fps throttle. Each is instantly recognisable.
+
+// Helper: draw the bezier trunk once.
+function _trunk(ctx, a, cp1, cp2, b, color, w, glow) {
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]);
+    if (glow) { ctx.shadowBlur = glow; ctx.shadowColor = color; }
+    ctx.lineWidth = w; ctx.strokeStyle = color; ctx.stroke();
+    ctx.shadowBlur = 0;
+}
+
+// THE MATRIX — green digital rain cascading output→input.
+function _renderMatrix(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#0c3", 1.5, 0);
+    const N = 16, head = (performance.now() / 650) % 1;
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1;
+        const p = _bezierAt(t, a, cp1, cp2, b);
+        const lead = i === N - 1;
+        ctx.fillStyle = lead ? "#dcffe0" : "#39ff5a";
+        ctx.globalAlpha = lead ? 1 : (0.25 + 0.55 * (i / N));
+        ctx.shadowBlur = lead ? 8 : 3; ctx.shadowColor = "#39ff5a";
+        ctx.fillRect(p[0] - 1.5, p[1] - 2.5, 3, 5);
+    }
+    ctx.restore();
+}
+
+// TRON — neon cyan light-trace with a racing light cycle + glow.
+function _renderTron(ctx, a, b, color) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const cyan = "#7df9ff", orange = "#ffae42";
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#0a2a30", 5, 0);          // dark conduit
+    _trunk(ctx, a, cp1, cp2, b, cyan, 1.6, 10);             // bright trace
+    const t = (performance.now() / 900) % 1;
+    const p = _bezierAt(t, a, cp1, cp2, b);
+    ctx.shadowBlur = 14; ctx.shadowColor = orange;
+    ctx.fillStyle = orange;
+    ctx.fillRect(p[0] - 3, p[1] - 1.5, 6, 3);               // the light cycle
+    ctx.restore();
+}
+
+// PORTAL — blue exit, orange entry, with a shimmering energy core.
+function _renderPortal(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 40;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3;
+    let prev = a;
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        // orange (entry, near a) → blue (exit, near b)
+        const r = Math.round(0x05 + (0xff - 0x05) * (1 - t));
+        const g = Math.round(0x99 + (0x5e - 0x99) * Math.abs(0.5 - t) * 0);
+        const bl = Math.round(0xff * t + 0x42 * (1 - t));
+        ctx.strokeStyle = `rgb(${r},${110 + Math.round(60 * Math.sin(t * 6 + performance.now() / 200))},${bl})`;
+        ctx.shadowBlur = 6; ctx.shadowColor = t > 0.5 ? "#3b8dff" : "#ff8a1e";
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    ctx.restore();
+}
+
+// PAC-MAN — yellow chomper eats a trail of pellets along the wire.
+function _renderPacman(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save();
+    // pellet trail
+    const N = 12;
+    ctx.fillStyle = "#ffd54a"; ctx.globalAlpha = 0.8;
+    for (let i = 1; i < N; i++) {
+        const p = _bezierAt(i / N, a, cp1, cp2, b);
+        ctx.beginPath(); ctx.arc(p[0], p[1], 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+    // pac-man travelling, mouth chomping
+    const t = (performance.now() / 1400) % 1;
+    const p = _bezierAt(t, a, cp1, cp2, b);
+    const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+    const ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
+    const mouth = (Math.abs(Math.sin(performance.now() / 120)) * 0.5 + 0.05) * Math.PI;
+    ctx.globalAlpha = 1; ctx.fillStyle = "#ffe14d";
+    ctx.shadowBlur = 8; ctx.shadowColor = "#ffe14d";
+    ctx.beginPath();
+    ctx.moveTo(p[0], p[1]);
+    ctx.arc(p[0], p[1], 6, ang + mouth, ang - mouth + Math.PI * 2);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+}
+
+// HYPERSPACE — Star Wars jump: blue-white streaks racing to the target.
+function _renderHyperspace(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#0b1b3a", 4, 0);
+    const streaks = 5, base = performance.now() / 350;
+    for (let s = 0; s < streaks; s++) {
+        const head = ((base + s / streaks) % 1);
+        const tail = Math.max(0, head - 0.18);
+        const ph = _bezierAt(head, a, cp1, cp2, b);
+        const pt = _bezierAt(tail, a, cp1, cp2, b);
+        const grd = ctx.createLinearGradient(pt[0], pt[1], ph[0], ph[1]);
+        grd.addColorStop(0, "rgba(120,170,255,0)");
+        grd.addColorStop(1, "#eaf2ff");
+        ctx.strokeStyle = grd; ctx.lineWidth = 2; ctx.shadowBlur = 8; ctx.shadowColor = "#9ec5ff";
+        ctx.beginPath(); ctx.moveTo(pt[0], pt[1]); ctx.lineTo(ph[0], ph[1]); ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// THE UPSIDE DOWN — Stranger Things: dark-red tendril, drifting spores, red glow.
+function _renderUpsideDown(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#7a0d12", 2.2, 9);
+    _trunk(ctx, a, cp1, cp2, b, "#ff3b3b", 0.8, 6);
+    const N = 9, now = performance.now();
+    for (let i = 0; i < N; i++) {
+        const t = (i + 0.5) / N;
+        const p = _bezierAt(t, a, cp1, cp2, b);
+        const fx = Math.sin(now / 700 + i * 1.7) * 6;
+        const fy = Math.cos(now / 900 + i * 2.1) * 5;
+        ctx.fillStyle = "#ffd0d0"; ctx.globalAlpha = 0.45 + 0.4 * Math.abs(Math.sin(now / 600 + i));
+        ctx.shadowBlur = 5; ctx.shadowColor = "#ff5a5a";
+        ctx.beginPath(); ctx.arc(p[0] + fx, p[1] + fy, 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// KI BLAST — Dragon Ball: thick golden aura that flickers/charges.
+function _renderKi(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const flick = 0.7 + 0.3 * Math.abs(Math.sin(performance.now() / 90));
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#ffcc33", 6 * flick, 18);   // outer aura
+    _trunk(ctx, a, cp1, cp2, b, "#fff6c2", 2, 8);            // hot core
+    // sparks
+    const N = 6, now = performance.now();
+    for (let i = 0; i < N; i++) {
+        const t = ((i / N) + (now / 1000)) % 1;
+        const p = _bezierAt(t, a, cp1, cp2, b);
+        ctx.fillStyle = "#fff2a8"; ctx.globalAlpha = 0.8;
+        ctx.shadowBlur = 10; ctx.shadowColor = "#ffd14d";
+        ctx.beginPath(); ctx.arc(p[0], p[1], 1.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// RAINBOW ROAD — Mario Kart: rainbow band with travelling star sparkles.
+function _renderRainbowRoad(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 48, shift = performance.now() / 600;
+    ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 4;
+    let prev = a;
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        const hue = ((t * 360 + shift * 360) % 360);
+        ctx.strokeStyle = `hsl(${hue},95%,62%)`;
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    // travelling sparkle star
+    const ts = (performance.now() / 900) % 1;
+    const sp = _bezierAt(ts, a, cp1, cp2, b);
+    ctx.fillStyle = "#ffffff"; ctx.shadowBlur = 10; ctx.shadowColor = "#fff";
+    ctx.beginPath();
+    for (let k = 0; k < 10; k++) {
+        const ang = (Math.PI / 5) * k - Math.PI / 2;
+        const rr = k % 2 ? 1.8 : 4.2;
+        const x = sp[0] + Math.cos(ang) * rr, y = sp[1] + Math.sin(ang) * rr;
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+}
+
+// ─────────────────── More franchise styles (2026-06-30 batch 2) ───────────────────
+// All Canvas2D-literal colours. Lean per-link work; animated ones piggy-back the
+// existing 20fps throttle. Each is an instantly-recognisable franchise.
+
+// POKEMON — Pikachu yellow rope crackling with electric arcs (Thunderbolt).
+function _renderPokemon(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#ffcb05", 3, 8);            // Pikachu yellow core
+    // jagged electric arcs branching off the rope (re-jitter every 3rd frame)
+    const N = 12, phase = Math.floor(performance.now() / 90);
+    const rand = (i) => { const s = Math.sin(i * 91.7 + phase * 53.3) * 43758.5; return s - Math.floor(s); };
+    ctx.strokeStyle = "#fff6b0"; ctx.lineWidth = 1.2; ctx.shadowBlur = 6; ctx.shadowColor = "#ffe14d";
+    for (let i = 1; i < N; i += 2) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        const q = _bezierAt((i - 1) / N, a, cp1, cp2, b);
+        const dx = p[0] - q[0], dy = p[1] - q[1], L = Math.hypot(dx, dy) || 1;
+        const nx = -dy / L, ny = dx / L, side = rand(i) > 0.5 ? 1 : -1;
+        ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+        ctx.lineTo(p[0] + nx * 5 * side, p[1] + ny * 5 * side);
+        ctx.lineTo(p[0] + nx * 9 * side - dx * 0.4, p[1] + ny * 9 * side - dy * 0.4);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// MINECRAFT — blocky, pixelated stair-stepped trail of cubes (no smooth curve).
+function _renderMinecraft(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 26, S = 5;   // S = block grid size
+    ctx.save();
+    const COLS = ["#5d8a40", "#7caa4d", "#8b5a2b", "#6b6b6b"];  // grass/dirt/stone
+    let last = null;
+    for (let i = 0; i <= N; i++) {
+        const p = _bezierAt(i / N, a, cp1, cp2, b);
+        // snap to a block grid so the trail looks voxel/pixelated
+        const gx = Math.round(p[0] / S) * S, gy = Math.round(p[1] / S) * S;
+        if (last && gx === last[0] && gy === last[1]) continue;
+        last = [gx, gy];
+        ctx.fillStyle = COLS[i % COLS.length];
+        ctx.fillRect(gx - S / 2, gy - S / 2, S, S);
+        ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 0.6;
+        ctx.strokeRect(gx - S / 2, gy - S / 2, S, S);
+    }
+    ctx.restore();
+}
+
+// SONIC — blue speed-blur streak with spinning gold rings travelling along it.
+function _renderSonic(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#1a6dff", 4, 10);          // Sonic blue blur
+    _trunk(ctx, a, cp1, cp2, b, "#bcd8ff", 1.2, 4);         // speed highlight
+    const N = 4, head = (performance.now() / 700) % 1;
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        const wob = Math.abs(Math.cos(performance.now() / 100 + i));  // ring spin
+        ctx.strokeStyle = "#ffd54a"; ctx.lineWidth = 1.6;
+        ctx.shadowBlur = 6; ctx.shadowColor = "#ffd54a";
+        ctx.beginPath(); ctx.ellipse(p[0], p[1], 4.5 * (0.25 + 0.75 * wob), 4.5, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// ZELDA — green Hero rope with a golden Triforce that sparkles at the midpoint.
+function _renderZelda(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#2e7d32", 3, 6);           // Link green
+    _trunk(ctx, a, cp1, cp2, b, "#7bd17f", 1, 3);
+    // golden Triforce (3 small triangles) pulsing at the centre
+    const m = _bezierAt(0.5, a, cp1, cp2, b);
+    const pulse = 0.8 + 0.2 * Math.sin(performance.now() / 250);
+    const R = 6 * pulse;
+    ctx.fillStyle = "#ffd700"; ctx.shadowBlur = 10; ctx.shadowColor = "#ffe97a";
+    const tri = (ox, oy) => {
+        ctx.beginPath();
+        ctx.moveTo(m[0] + ox, m[1] + oy - R);
+        ctx.lineTo(m[0] + ox - R * 0.866, m[1] + oy + R * 0.5);
+        ctx.lineTo(m[0] + ox + R * 0.866, m[1] + oy + R * 0.5);
+        ctx.closePath(); ctx.fill();
+    };
+    tri(0, -R * 0.5); tri(-R * 0.866, R * 0.5); tri(R * 0.866, R * 0.5);
+    ctx.restore();
+}
+
+// HALO — energy-sword cyan plasma: twin tapered blades + bright white core.
+function _renderHalo(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const cyan = "#2ad4ff";
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, cyan, 6, 16);               // plasma glow
+    _trunk(ctx, a, cp1, cp2, b, "#bff4ff", 3, 8);           // inner plasma
+    _trunk(ctx, a, cp1, cp2, b, "#ffffff", 1.2, 0);         // white-hot core
+    // shimmering energy flecks
+    const N = 5, now = performance.now();
+    for (let i = 0; i < N; i++) {
+        const t = ((i / N) + (now / 1300)) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        ctx.fillStyle = "#dffaff"; ctx.globalAlpha = 0.7 + 0.3 * Math.sin(now / 120 + i);
+        ctx.shadowBlur = 8; ctx.shadowColor = cyan;
+        ctx.beginPath(); ctx.arc(p[0], p[1], 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// AVATAR-BENDING — half water (blue), half fire (orange): the rope transitions
+// from cool bending energy to roaring flame along its length.
+function _renderAvatarBending(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 40, time = performance.now() / 150;
+    ctx.save(); ctx.lineCap = "round";
+    let prev = _bezierAt(0, a, cp1, cp2, b);
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        // hue 200 (water blue) → 25 (fire orange); flicker on the fire half
+        const flick = t > 0.5 ? 0.5 + 0.5 * Math.sin(time + i * 0.7) : 0;
+        const hue = 200 - t * 175;
+        ctx.strokeStyle = `hsl(${hue}, 95%, ${52 + flick * 12}%)`;
+        ctx.lineWidth = 3.4; ctx.shadowBlur = 7;
+        ctx.shadowColor = t > 0.5 ? "#ff7a1e" : "#3aa0ff";
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    ctx.restore();
+}
+
+// JOHN-WICK — a sleek gold coin spins along a dark continental rope.
+function _renderJohnWick(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#1c1c22", 3, 0);           // dark suit-black rope
+    _trunk(ctx, a, cp1, cp2, b, "#c9a227", 0.8, 4);         // thin gold pinstripe
+    // the gold coin, spinning (x-scale = |cos|) as it travels
+    const t = (performance.now() / 1500) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+    const spin = Math.abs(Math.cos(performance.now() / 200));
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(Math.max(0.12, spin), 1);
+    ctx.fillStyle = "#e8c14a"; ctx.shadowBlur = 9; ctx.shadowColor = "#ffe27a";
+    ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#8a6d1b"; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.restore();
+    ctx.restore();
+}
+
+// GHOSTBUSTERS — green/red proton stream: a wild crackling beam that wobbles.
+function _renderGhostbusters(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 24, phase = Math.floor(performance.now() / 70);
+    const rand = (i) => { const s = Math.sin(i * 17.3 + phase * 61.1) * 43758.5; return s - Math.floor(s); };
+    ctx.save(); ctx.lineCap = "round";
+    // two intertwined streams: proton green + containment red
+    for (const [col, seed, w] of [["#39ff7a", 0, 2.4], ["#ff4d4d", 50, 1.6]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = w; ctx.shadowBlur = 9; ctx.shadowColor = col;
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+            const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+            const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+            const dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy) || 1;
+            const nx = -dy / L, ny = dx / L;
+            const j = (rand(i + seed) - 0.5) * 9 * Math.sin(t * Math.PI);  // 0 at ends
+            i ? ctx.lineTo(p[0] + nx * j, p[1] + ny * j) : ctx.moveTo(p[0] + nx * j, p[1] + ny * j);
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// JURASSIC — fossilised amber rope with a frozen DNA double-helix inside.
+function _renderJurassic(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#c97a16", 5, 8);           // amber resin
+    _trunk(ctx, a, cp1, cp2, b, "#ffd98a", 2, 4);           // honey highlight
+    // suspended DNA strands inside the amber
+    const N = 36, phase = (performance.now() / 600) % (Math.PI * 2);
+    for (let strand = 0; strand < 2; strand++) {
+        ctx.strokeStyle = "#5a3408"; ctx.lineWidth = 1; ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+            const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+            const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+            const dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy) || 1;
+            const nx = -dy / L, ny = dx / L;
+            const off = Math.sin(t * Math.PI * 5 + phase + strand * Math.PI) * 3.5;
+            i ? ctx.lineTo(p[0] + nx * off, p[1] + ny * off) : ctx.moveTo(p[0] + nx * off, p[1] + ny * off);
+        }
+        ctx.stroke();
+    }
+    ctx.globalAlpha = 1; ctx.restore();
+}
+
+// AMONG-US — a little crewmate (with visor + backpack) sliding along the wire.
+function _renderAmongUs(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const COLS = ["#c51111", "#132ed1", "#117f2d", "#ed54ba", "#f07d0d", "#f6f657"];
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#3a3f55", 2, 0);           // wire / vent line
+    const t = (performance.now() / 1700) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+    const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+    const dir = q[0] - p[0] >= 0 ? 1 : -1;                  // face travel direction
+    const col = COLS[Math.floor(t * COLS.length) % COLS.length];
+    ctx.save(); ctx.translate(p[0], p[1]);
+    const wob = Math.sin(performance.now() / 130) * 0.6;    // little waddle
+    ctx.shadowBlur = 5; ctx.shadowColor = "rgba(0,0,0,0.5)";
+    // backpack
+    ctx.fillStyle = col;
+    ctx.fillRect(-dir * 6.5, -1 + wob, 3.5, 6);
+    // body (rounded capsule)
+    ctx.beginPath();
+    ctx.arc(0, -1.5 + wob, 5, Math.PI, 0);
+    ctx.lineTo(5, 5 + wob); ctx.lineTo(-5, 5 + wob); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#2a2f44"; ctx.fillRect(-1.5, 4.5 + wob, 1.6, 2.5);   // legs
+    ctx.fillRect(0.4, 4.5 + wob, 1.6, 2.5);
+    // visor
+    ctx.fillStyle = "#a9d3e8"; ctx.shadowBlur = 0;
+    ctx.beginPath(); ctx.ellipse(dir * 1.5, -2 + wob, 2.6, 1.8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath(); ctx.ellipse(dir * 2.3, -2.6 + wob, 0.8, 0.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    ctx.restore();
+}
+
+// ── GAME BATCH 3 (arcade + console classics) ─────────────────────────
+
+// GTA — Rockstar Vice City neon: a hot-pink→cyan rope with a spinning
+// wanted-level star pulsing at the midpoint.
+function _renderGta(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 30, time = performance.now() / 200;
+    ctx.save(); ctx.lineCap = "round";
+    let prev = _bezierAt(0, a, cp1, cp2, b);
+    for (let i = 1; i <= N; i++) {
+        const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+        const hue = 320 - t * 130;                            // pink → cyan
+        ctx.strokeStyle = `hsl(${hue}, 100%, ${58 + 8 * Math.sin(time + i)}%)`;
+        ctx.lineWidth = 3.2; ctx.shadowBlur = 8; ctx.shadowColor = ctx.strokeStyle;
+        ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        prev = p;
+    }
+    const m = _bezierAt(0.5, a, cp1, cp2, b);
+    ctx.translate(m[0], m[1]); ctx.rotate(performance.now() / 500);
+    ctx.fillStyle = "#ffe14d"; ctx.shadowBlur = 10; ctx.shadowColor = "#fff2a0";
+    ctx.beginPath();
+    for (let k = 0; k < 10; k++) {
+        const r = k % 2 ? 3 : 7, ang = (Math.PI / 5) * k - Math.PI / 2;
+        const x = Math.cos(ang) * r, y = Math.sin(ang) * r;
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+}
+
+// SPACE INVADERS — a row of blocky green aliens marching along the wire,
+// legs twitching between two frames like the arcade original.
+function _renderSpaceInvaders(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save();
+    _trunk(ctx, a, cp1, cp2, b, "#0f3d12", 1.5, 0);          // faint scan rail
+    const N = 5, frame = Math.floor(performance.now() / 300) % 2;
+    const head = (performance.now() / 2600) % 1, s = 1.4;
+    const rows = frame ? ["01110", "11111", "10101", "01010"]
+                       : ["01110", "11111", "10101", "10001"];
+    ctx.fillStyle = "#4dff5a"; ctx.shadowBlur = 6; ctx.shadowColor = "#39ff7a";
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        for (let r = 0; r < rows.length; r++)
+            for (let c = 0; c < 5; c++)
+                if (rows[r][c] === "1")
+                    ctx.fillRect(p[0] + (c - 2.5) * s, p[1] + (r - 2) * s, s, s);
+    }
+    ctx.restore();
+}
+
+// TETRIS — coloured tetromino clusters tumbling (rotating) along the wire.
+function _renderTetris(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const COLS = ["#00f0f0", "#f0f000", "#a000f0", "#00f000", "#f00000", "#0000f0", "#f0a000"];
+    const N = 7, S = 4, head = (performance.now() / 1400) % 1;
+    ctx.save();
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        const col = COLS[i % COLS.length];
+        ctx.save(); ctx.translate(p[0], p[1]);
+        ctx.rotate((Math.floor(performance.now() / 200 + i) % 4) * Math.PI / 2);
+        ctx.fillStyle = col; ctx.shadowBlur = 5; ctx.shadowColor = col;
+        ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 0.6;
+        for (const [ox, oy] of [[-S, -S], [0, -S], [-S, 0]]) {   // simple L cluster
+            ctx.fillRect(ox, oy, S, S); ctx.strokeRect(ox, oy, S, S);
+        }
+        ctx.restore();
+    }
+    ctx.restore();
+}
+
+// STREET FIGHTER — a Hadouken: white-hot core in a cyan energy orb hurtling
+// output→input, leaving a fading motion streak.
+function _renderStreetFighter(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#1e90ff", 2, 6);            // ki trail
+    const t = (performance.now() / 900) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+    for (let k = 1; k <= 5; k++) {
+        const q = _bezierAt(Math.max(0, t - k * 0.03), a, cp1, cp2, b);
+        ctx.globalAlpha = 0.5 - k * 0.08; ctx.fillStyle = "#9fd8ff";
+        ctx.beginPath(); ctx.arc(q[0], q[1], 4 - k * 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 14; ctx.shadowColor = "#39c0ff"; ctx.fillStyle = "#39c0ff";
+    ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(p[0], p[1], 2.6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+}
+
+// MEGA MAN — the Mega Buster: a stream of pale-cyan plasma pellets firing.
+function _renderMegaMan(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#0a3a6b", 2, 0);            // armour-blue rail
+    const N = 4, head = (performance.now() / 650) % 1;
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        ctx.fillStyle = "#8ff0ff"; ctx.shadowBlur = 8; ctx.shadowColor = "#28c8ff";
+        ctx.beginPath(); ctx.arc(p[0], p[1], 3.4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#ffffff"; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(p[0], p[1], 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// MORTAL KOMBAT — a jagged blood-red lightning arc crackling down the wire.
+function _renderMortalKombat(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const N = 22, phase = Math.floor(performance.now() / 60);
+    const rand = (i) => { const s = Math.sin(i * 33.7 + phase * 47.1) * 43758.5; return s - Math.floor(s); };
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#3a0000", 4, 4);            // dark aura
+    for (const [col, w, amp] of [["#ff2b1f", 2.2, 10], ["#ffd24d", 1, 5]]) {
+        ctx.strokeStyle = col; ctx.lineWidth = w; ctx.shadowBlur = 9; ctx.shadowColor = "#ff3b2f";
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+            const t = i / N, p = _bezierAt(t, a, cp1, cp2, b);
+            const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+            const dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy) || 1;
+            const nx = -dy / L, ny = dx / L, j = (rand(i) - 0.5) * amp * Math.sin(t * Math.PI);
+            i ? ctx.lineTo(p[0] + nx * j, p[1] + ny * j) : ctx.moveTo(p[0] + nx * j, p[1] + ny * j);
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+// METROID — Samus's charge beam: an orange energy tube with a pulsing charge
+// orb + orbiting particles near the tip.
+function _renderMetroid(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#ff7a18", 4, 10);           // beam glow
+    _trunk(ctx, a, cp1, cp2, b, "#ffe08a", 1.4, 4);          // hot core
+    const m = _bezierAt(0.82, a, cp1, cp2, b), now = performance.now();
+    ctx.shadowBlur = 12; ctx.shadowColor = "#ffb03a"; ctx.fillStyle = "#fff0c8";
+    ctx.beginPath(); ctx.arc(m[0], m[1], 4 * (0.7 + 0.3 * Math.sin(now / 160)), 0, Math.PI * 2); ctx.fill();
+    for (let k = 0; k < 3; k++) {
+        const ang = now / 120 + k * (Math.PI * 2 / 3);
+        ctx.beginPath(); ctx.arc(m[0] + Math.cos(ang) * 7, m[1] + Math.sin(ang) * 7, 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// DOOM — hellfire plasma: green BFG bolts racing over a molten-red rail.
+function _renderDoom(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#7a1010", 4, 8);            // molten rail
+    _trunk(ctx, a, cp1, cp2, b, "#ff5a2a", 1.4, 4);          // lava highlight
+    const N = 3, head = (performance.now() / 500) % 1;
+    for (let i = 0; i < N; i++) {
+        const t = (i / N + head) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+        ctx.fillStyle = "#7cff4d"; ctx.shadowBlur = 12; ctx.shadowColor = "#39ff14";
+        ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#eaffea"; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(p[0], p[1], 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
+// ELDEN RING — the Erdtree's grace: a gilded rope shedding golden embers.
+function _renderEldenRing(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#b8860b", 3, 6);            // gilded rope
+    _trunk(ctx, a, cp1, cp2, b, "#ffe9a8", 1, 3);            // grace highlight
+    const N = 10, now = performance.now();
+    for (let i = 0; i < N; i++) {
+        const base = _bezierAt((i + 0.5) / N, a, cp1, cp2, b);
+        const life = ((now / 1400) + i * 0.13) % 1;          // rise + fade
+        ctx.globalAlpha = (1 - life) * 0.9;
+        ctx.fillStyle = "#ffdf7e"; ctx.shadowBlur = 7; ctx.shadowColor = "#ffcf4d";
+        ctx.beginPath();
+        ctx.arc(base[0] + Math.sin(now / 300 + i) * 4, base[1] - life * 14, 1.6 * (1 - life * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1; ctx.restore();
+}
+
+// GALAGA — a white arcade fighter flies the wire firing twin blue bolts.
+function _renderGalaga(ctx, a, b) {
+    const [cp1, cp2] = _bezierPoints(a, b);
+    ctx.save(); ctx.lineCap = "round";
+    _trunk(ctx, a, cp1, cp2, b, "#12123a", 1.5, 0);          // starfield rail
+    const t = (performance.now() / 1500) % 1, p = _bezierAt(t, a, cp1, cp2, b);
+    const q = _bezierAt(Math.min(1, t + 0.01), a, cp1, cp2, b);
+    const ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
+    const boltT = (performance.now() / 250) % 1;
+    ctx.strokeStyle = "#66e0ff"; ctx.lineWidth = 1.4; ctx.shadowBlur = 6; ctx.shadowColor = "#66e0ff";
+    for (const s of [-2.5, 2.5]) {
+        const bp = _bezierAt(Math.min(1, t + 0.04 + boltT * 0.08), a, cp1, cp2, b);
+        ctx.beginPath();
+        ctx.moveTo(bp[0] - Math.sin(ang) * s, bp[1] + Math.cos(ang) * s);
+        ctx.lineTo(bp[0] - Math.sin(ang) * s + Math.cos(ang) * 4, bp[1] + Math.cos(ang) * s + Math.sin(ang) * 4);
+        ctx.stroke();
+    }
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(ang);
+    ctx.fillStyle = "#eef4ff"; ctx.shadowBlur = 5; ctx.shadowColor = "#cfe4ff";
+    ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(-4, -4); ctx.lineTo(-2, 0); ctx.lineTo(-4, 4); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#ff4d4d"; ctx.beginPath(); ctx.arc(-1, 0, 1.2, 0, Math.PI * 2); ctx.fill();  // cockpit
+    ctx.restore();
+    ctx.restore();
+}
+
 const _RENDER = {
     "spider-web":   _renderSpiderWeb,
     "lightsaber":   _renderLightsaber,
@@ -329,6 +1081,44 @@ const _RENDER = {
     "lightning":    _renderLightning,
     "pulse-packet": _renderPulsePacket,
     "neon-tube":    _renderNeonTube,
+    "rgb-spectrum": _renderRgbSpectrum,
+    "gradient":     _renderGradient,
+    "fire":         _renderFire,
+    "comet":        _renderComet,
+    "candy":        _renderCandy,
+    "aurora":       _renderAurora,
+    "heartbeat":    _renderHeartbeat,
+    // franchise styles
+    "matrix":       _renderMatrix,
+    "tron":         _renderTron,
+    "portal":       _renderPortal,
+    "pacman":       _renderPacman,
+    "hyperspace":   _renderHyperspace,
+    "upside-down":  _renderUpsideDown,
+    "ki-blast":     _renderKi,
+    "rainbow-road": _renderRainbowRoad,
+    // franchise styles (batch 2)
+    "pokemon":          _renderPokemon,
+    "minecraft":        _renderMinecraft,
+    "sonic":            _renderSonic,
+    "zelda":            _renderZelda,
+    "halo":             _renderHalo,
+    "avatar-bending":   _renderAvatarBending,
+    "john-wick":        _renderJohnWick,
+    "ghostbusters":     _renderGhostbusters,
+    "jurassic":         _renderJurassic,
+    "among-us":         _renderAmongUs,
+    // game classics (batch 3)
+    "gta":              _renderGta,
+    "space-invaders":   _renderSpaceInvaders,
+    "tetris":           _renderTetris,
+    "street-fighter":   _renderStreetFighter,
+    "mega-man":         _renderMegaMan,
+    "mortal-kombat":    _renderMortalKombat,
+    "metroid":          _renderMetroid,
+    "doom":             _renderDoom,
+    "elden-ring":       _renderEldenRing,
+    "galaga":           _renderGalaga,
 };
 
 // PERF: renderLink runs PER LINK, PER FRAME (145 links × 60fps = ~8,700/s).
@@ -393,8 +1183,7 @@ function _installRenderPatch() {
             // hit (each repaint re-runs these heavy per-link renderers ×N links).
             // 50ms throttle ≈ 20fps: smooth shimmer at a fraction of the cost, and
             // zero CPU in the background.
-            if (style === "dna-helix" || style === "rainbow-flow" || style === "dashed-march" ||
-                style === "lightning" || style === "pulse-packet") {
+            if (_ANIMATED.has(style)) {
                 const _now = performance.now();
                 if (!document.hidden && _now - (this._c2cNoodleAnimTick || 0) > 50) {
                     this._c2cNoodleAnimTick = _now;
@@ -436,7 +1225,7 @@ function _installMenuPatch() {
     };
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.NoodleStyles",
     settings: [
         {

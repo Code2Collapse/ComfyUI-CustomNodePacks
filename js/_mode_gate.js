@@ -25,6 +25,23 @@ function _modeValue(node) {
     return w ? String(w.value ?? "") : "";
 }
 
+// Run every registered gate evaluator for a node, but ALWAYS run the one whose
+// activeWhen matches the current mode LAST. Several editors can legitimately share
+// a single host/DOM widget (e.g. the spline `edit` and `flow_path` editors both
+// bind _mecSplineEditHost/_mecSplineEditWidget). If the inactive editors run after
+// the active one, their _hideHost collapses the shared widget the active editor
+// just restored — leaving the canvas blank in the active mode. Active-last ordering
+// guarantees the visible editor's _showHost is the final word on the shared widget.
+function _runEvaluators(node) {
+    const mode = _modeValue(node);
+    const evals = node._mecGateEvaluators || [];
+    const ordered = [...evals].sort(
+        (a, b) => (a.activeWhen === mode ? 1 : 0) - (b.activeWhen === mode ? 1 : 0));
+    for (const e of ordered) {
+        try { e.run(); } catch (err) { __c2cReport("_mode_gate", err); }
+    }
+}
+
 function _collapseWidget(w) {
     if (!w) return;
     w.type = "hidden";
@@ -119,20 +136,19 @@ export function installModeGated(node, opts) {
             const orig = modeW.callback;
             modeW.callback = (v, ...rest) => {
                 const r = orig?.call(modeW, v, ...rest);
-                // Re-run ALL registered gate evaluators for this node.
-                const evals = node._mecGateEvaluators || [];
-                for (const fn of evals) {
-                    try { fn(); } catch (e) { __c2cReport("_mode_gate", e); }
-                }
+                // Re-run ALL registered gate evaluators (active-mode one last).
+                _runEvaluators(node);
                 return r;
             };
         }
     }
     node._mecGateEvaluators = node._mecGateEvaluators || [];
-    node._mecGateEvaluators.push(evaluate);
+    node._mecGateEvaluators.push({ activeWhen, run: evaluate });
 
-    // First evaluation after widgets settle.
-    setTimeout(evaluate, 0);
+    // First evaluation after widgets settle. All installModeGated() calls for a
+    // node run synchronously within nodeCreated, so by this tick every evaluator
+    // is registered — run them ordered so the active editor wins the shared widget.
+    setTimeout(() => _runEvaluators(node), 0);
 }
 
 export function getModeValue(node) { return _modeValue(node); }

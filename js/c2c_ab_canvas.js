@@ -27,6 +27,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
@@ -1129,7 +1130,7 @@ function _onExecutionSuccess(ev) {
 // Extension entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.ABSplit",
     settings: [
         {

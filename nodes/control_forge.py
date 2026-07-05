@@ -35,6 +35,23 @@ import torch.nn.functional as F
 
 from ._is_changed_util import hash_args_and_kwargs
 
+# Real LayerStyle (MIT) resize/scale/aspect code, vendored — gives ControlAOV the
+# same width/height/scale/aspect/fit power as the dedicated resize nodes.
+try:
+    from ._vendored_resize import (
+        resize_wh_or_scale as _resize_wh,
+        SIZING_MODES as _RESIZE_MODES,
+        FIT_WH as _RESIZE_FITS,
+        RESAMPLE_METHODS as _RESIZE_METHODS,
+    )
+    _HAVE_RESIZE = True
+except Exception:  # noqa: BLE001 - never let a resize-helper import break the node
+    _resize_wh = None
+    _RESIZE_MODES = ["off", "width/height", "scale"]
+    _RESIZE_FITS = ["stretch", "pad", "crop"]
+    _RESIZE_METHODS = ["lanczos", "bicubic", "hamming", "bilinear", "box", "nearest"]
+    _HAVE_RESIZE = False
+
 try:
     import cv2
     _HAVE_CV2 = True
@@ -121,7 +138,7 @@ except Exception:  # pragma: no cover
     except Exception:
         _cb = None
 # depth_model values that route to the vendored runners (vs controlnet_aux delegation).
-_VENDORED_DEPTH = ("da_v2", "da_v1", "midas", "da3", "depth_pro", "depthcrafter")
+_VENDORED_DEPTH = ("da_v2", "da_v1", "midas", "da3", "depth_pro", "depthcrafter", "dvd")
 _NORMAL_MODELS = ("off", "sobel_from_depth", "normalcrafter")
 
 
@@ -258,11 +275,24 @@ def _run_vitpose(image, target_res=512, pose_ckpt=""):
         files = (Loader.INPUT_TYPES().get("required", {}).get("vitpose_model", [None]) or [None])[0] or []
         if not files:
             return None, "vitpose=no .onnx in models/detection/"
-        vit = pose_ckpt if (pose_ckpt and pose_ckpt in files) else \
-            next((f for f in files if "vitpose" in f.lower()), files[0])
-        yolo = next((f for f in files if "yolo" in f.lower()), None)
+        onnx = [f for f in files if f.lower().endswith(".onnx")]
+        lf = lambda s: s.lower()
+        # ViTPose: prefer the HUMAN wholebody model; never an animal (apt36k) model
+        # (those expect a different keypoint set → empty/garbage skeleton on people).
+        vit = pose_ckpt if (pose_ckpt and pose_ckpt in files) else (
+            next((f for f in onnx if "wholebody" in lf(f)), None)
+            or next((f for f in onnx if "vitpose" in lf(f)
+                     and "apt" not in lf(f) and "animal" not in lf(f)), None)
+            or next((f for f in onnx if "vitpose" in lf(f)), None)
+            or (onnx[0] if onnx else files[0]))
+        # YOLO: a real PERSON detector ([N,C,640,640]); avoid pose/face/.pt files.
+        yolo = (next((f for f in onnx if "yolov10" in lf(f)), None)
+                or next((f for f in onnx if ("yolov8" in lf(f) or "yolox" in lf(f) or "yolo11" in lf(f))
+                         and "face" not in lf(f) and "pose" not in lf(f)), None)
+                or next((f for f in onnx if "yolo" in lf(f)
+                         and "face" not in lf(f) and "pose" not in lf(f) and "vitpose" not in lf(f)), None))
         if yolo is None:
-            return None, "vitpose=need a YOLO .onnx in models/detection/"
+            return None, "vitpose=need a YOLO person-detector .onnx (e.g. yolov10m.onnx) in models/detection/"
         dev = "CUDAExecutionProvider" if _cuda() else "CPUExecutionProvider"
         model = _call_node(Loader, {"vitpose_model": vit, "yolo_model": yolo, "onnx_device": dev})[0]
         bundle = _call_node(Detect, {"images": image, "model": model})[0]
@@ -354,10 +384,11 @@ class ControlAOVC2C:
             "optional": {
                 "image": ("IMAGE", {"tooltip": "Source frames — preprocessors below run on this."}),
                 "depth_model": (["off"] + list(_VENDORED_DEPTH) + list(_DEPTH_MAP.keys()), {"default": "off",
-                                "tooltip": "Depth backend. VENDORED (self-contained, run inside this pack): da_v2/da_v1/"
-                                           "midas (transformers), da3 (Depth-Anything-3), depth_pro, depthcrafter (video). "
-                                           "The depth_anything_* options delegate to comfyui_controlnet_aux instead. "
-                                           "'off' = wire an external depth map."}),
+                                "tooltip": "Depth backend. VENDORED (run inside this pack): da_v2/da_v1/"
+                                           "midas (transformers), da3 (Depth-Anything-3), depth_pro, depthcrafter (video), "
+                                           "dvd (DVD — deterministic Wan-2.1 VIDEO depth, EnVision-Research; needs the "
+                                           "DVD ckpt in models/DVD/, CC BY-NC). The depth_anything_* options delegate to "
+                                           "comfyui_controlnet_aux. 'off' = wire an external depth map."}),
                 "normal_model": (list(_NORMAL_MODELS), {"default": "off",
                                 "tooltip": "Normal backend (vendored): sobel_from_depth (no model) or normalcrafter (video). "
                                            "'off' = wire an external normal map."}),
@@ -383,14 +414,30 @@ class ControlAOVC2C:
                                "tooltip": "Resolution passed to delegated preprocessors."}),
                 "run_motion": ("BOOLEAN", {"default": False,
                                "tooltip": "Optical-flow motion-vector pass (needs an image batch ≥ 2 frames)."}),
-                "depth": ("IMAGE", {"tooltip": "Depth map (DepthAnything/DepthCrafter/ZoeDepth)."}),
-                "canny": ("IMAGE", {"tooltip": "External edge map; overrides internal Canny if provided."}),
-                "pose": ("IMAGE", {"tooltip": "Pose render (DWPose/OpenPose/ViTPose)."}),
-                "normal": ("IMAGE", {"tooltip": "Surface normals (NormalCrafter)."}),
-                "id_matte": ("IMAGE", {"tooltip": "Segmentation/ID matte (SAM/cryptomatte-style)."}),
                 "depth_weight": wf(1.0), "canny_weight": wf(1.0),
                 "pose_weight": wf(1.0), "normal_weight": wf(0.0),
-                "match_to": (("depth", "canny", "pose", "image", "largest"), {"default": "largest"}),
+                "match_to": (("depth", "canny", "pose", "image", "largest"), {"default": "image",
+                                "tooltip": "Internal: align every AOV pass to this source's size before resize/output."}),
+                # ── In-node resize / scale / smart-resize (real LayerStyle code, MIT —
+                #    nodes/_vendored_resize.py). One dropdown: width/height OR scale. ──
+                "resize": (_RESIZE_MODES, {"default": "off",
+                                "tooltip": "Resize ALL outputs in-node. off = keep source size; "
+                                           "width/height = resize to an exact width x height; scale = multiply size by 'scale'."}),
+                "width": ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 8,
+                                "tooltip": "Target width (resize=width/height). 0 = derive from height + aspect."}),
+                "height": ("INT", {"default": 1024, "min": 0, "max": 16384, "step": 8,
+                                "tooltip": "Target height (resize=width/height). 0 = derive from width + aspect."}),
+                "scale": ("FLOAT", {"default": 1.0, "min": 0.05, "max": 8.0, "step": 0.05,
+                                "tooltip": "Scale factor applied to source size (resize=scale)."}),
+                "divisible_by": ("INT", {"default": 16, "min": 1, "max": 512, "step": 1,
+                                "tooltip": "Snap output W/H to a multiple (VAE-safe: 16=Wan, 64=SD). 1 = no snapping."}),
+                "fit": (_RESIZE_FITS, {"default": "crop",
+                                "tooltip": "Aspect handling: stretch = distort to fit; pad = letterbox with pad_color; "
+                                           "crop = centre-crop to fill."}),
+                "resize_filter": (_RESIZE_METHODS, {"default": "lanczos",
+                                "tooltip": "Resample filter. lanczos = sharpest; nearest = hard pixels."}),
+                "pad_color": ("STRING", {"default": "#000000",
+                                "tooltip": "Pad colour (hex), used only when fit=pad."}),
             },
         }
 
@@ -449,6 +496,8 @@ class ControlAOVC2C:
                     depth_t, nt = _cb.run_da3(image, depth_size, depth_custom_ckpt)
                 elif depth_model == "depth_pro":
                     depth_t, nt = _cb.run_depth_pro(image)
+                elif depth_model == "dvd":
+                    depth_t, nt = _cb.run_dvd(image)
                 else:  # depthcrafter
                     depth_t, nt = _cb.run_depthcrafter(image)
                 notes.append(nt)
@@ -460,6 +509,12 @@ class ControlAOVC2C:
                     ov["ckpt_name"] = ckpt
                 depth_t, nt = _run_aux(_DEPTH_MAP[depth_model], image, res, overrides=ov)
                 notes.append(nt + (f"[{ov['ckpt_name']}]" if ov else ""))
+                if depth_t is None and _cb is not None:
+                    # controlnet_aux unavailable → fall back to the in-repo
+                    # transformers DepthAnything-V2 runner so depth still works
+                    # (no silent black output).
+                    depth_t, nt2 = _cb.run_hf_depth(image, "v2", depth_size, "")
+                    notes.append(f"[fallback->da_v2: {nt2}]")
         if depth_invert and depth_t is not None:
             depth_t = (1.0 - _as_bhwc3(depth_t)).clamp(0, 1)
         # POSE
@@ -469,6 +524,11 @@ class ControlAOVC2C:
                 pose_t, nt = _run_vitpose(image, res, _pose_ckpt)
             else:
                 pose_t, nt = _run_aux(_POSE_MAP[pose_model], image, res)
+                if pose_t is None:
+                    # controlnet_aux unavailable → fall back to our own ViTPose
+                    # detector (no external preprocessor dependency).
+                    pose_t, nt2 = _run_vitpose(image, res, "")
+                    nt = f"{nt} [fallback->vitpose: {nt2}]"
             notes.append(nt)
         # EDGE: external canny input wins; else internal Canny or a delegated edge model.
         canny_t = _as_bhwc3(canny)
@@ -480,6 +540,10 @@ class ControlAOVC2C:
                       if edge_model == "canny" else None)
                 canny_t, nt = _run_aux(_EDGE_MAP[edge_model], image, res, overrides=ov)
                 notes.append(nt)
+                if canny_t is None:
+                    # controlnet_aux unavailable → fall back to internal OpenCV Canny.
+                    canny_t = _canny_pass(image, canny_low, canny_high, canny_aperture)
+                    notes.append("[fallback->internal_canny]")
         motion_t = _motion_pass(image) if (run_motion and image is not None) else None
 
         # NORMAL: external wins; else vendored backend (sobel-from-depth or NormalCrafter).
@@ -602,8 +666,37 @@ class ControlAOVC2C:
               "(or a union ControlNet per-type) at STAGGERED weights (~0.6-0.9, not equal) with start/end-step "
               "scheduling, and add a Tile ControlNet to lock layout. 'channel_packed' suits union nets."
         )
-        return (blended, combined, packed, norm["depth"], norm["canny"], norm["pose"],
-                norm["normal"], norm["motion"], norm["id_matte"], info)
+        # ── Output sizing: resize EVERY AOV with the real LayerStyle scale code ──
+        out_imgs = [blended, combined, packed, norm["depth"], norm["canny"], norm["pose"],
+                    norm["normal"], norm["motion"], norm["id_matte"]]
+        _resize_mode = str(kwargs.get("resize", "off"))
+        if _resize_mode != "off" and _HAVE_RESIZE:
+            try:
+                rk = dict(
+                    mode=_resize_mode,
+                    width=int(kwargs.get("width", 1024)),
+                    height=int(kwargs.get("height", 1024)),
+                    scale=float(kwargs.get("scale", 1.0)),
+                    divisible_by=int(kwargs.get("divisible_by", 16)),
+                    fit=str(kwargs.get("fit", "crop")),
+                    method=str(kwargs.get("resize_filter", "lanczos")),
+                    pad_color=str(kwargs.get("pad_color", "#000000")),
+                )
+                resized, rtw, rth = [], None, None
+                for t in out_imgs:
+                    if t is None:
+                        resized.append(None); continue
+                    rt, rtw, rth = _resize_wh(t, **rk)
+                    resized.append(rt)
+                out_imgs = resized
+                if rtw:
+                    _by = f"scale x{rk['scale']}" if _resize_mode == "scale" else f"{rk['width']}x{rk['height']}"
+                    info += f"\nOutput resized -> {rtw}x{rth} ({_by}, fit={rk['fit']}, /{rk['divisible_by']})."
+            except Exception as _rz_exc:  # noqa: BLE001 - resize must never break the forge
+                info += f"\n[output resize skipped: {_rz_exc}]"
+
+        return (out_imgs[0], out_imgs[1], out_imgs[2], out_imgs[3], out_imgs[4],
+                out_imgs[5], out_imgs[6], out_imgs[7], out_imgs[8], info)
 
 
 NODE_CLASS_MAPPINGS = {"ControlAOVC2C": ControlAOVC2C}

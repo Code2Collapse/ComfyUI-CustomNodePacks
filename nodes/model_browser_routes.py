@@ -43,32 +43,89 @@ def _cache_set(key: tuple, val: Any) -> None:
     _search_cache[key] = (_now(), val)
 
 
+# Civitai's API sits behind Cloudflare, which 403-blocks the default
+# `Python/aiohttp` User-Agent with a human-check page, and 401s restricted
+# content without a token. Always send a browser-like UA, attach the user's
+# CIVITAI_API_KEY when present, and translate the common failures into plain
+# English so the panel shows something actionable instead of "HTTP 403".
+_BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+
+def _friendly_http_error(status: int, url: str) -> str:
+    host = urllib.parse.urlparse(url).netloc
+    if "civitai" in host:
+        if status in (401, 403):
+            return ("Civitai blocked the request (HTTP %d — Cloudflare/auth). "
+                    "Create an API key at civitai.com → Account Settings → API Keys, "
+                    "then set the CIVITAI_API_KEY environment variable and restart ComfyUI."
+                    % status)
+        if status == 429:
+            return "Civitai rate limit hit (HTTP 429). Wait a minute and try again."
+    if "huggingface" in host and status in (401, 403):
+        return ("HuggingFace denied the request (HTTP %d). For gated models set the "
+                "HF_TOKEN environment variable and restart ComfyUI." % status)
+    return f"HTTP {status} from {host}"
+
+
 async def _http_get(url: str, headers: dict | None = None) -> Any:
     import aiohttp
+    hdrs = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
+    host = urllib.parse.urlparse(url).netloc
+    if "civitai" in host:
+        key = os.environ.get("CIVITAI_API_KEY", "").strip()
+        if key:
+            hdrs["Authorization"] = f"Bearer {key}"
+    elif "huggingface" in host:
+        tok = os.environ.get("HF_TOKEN", "").strip()
+        if tok:
+            hdrs["Authorization"] = f"Bearer {tok}"
+    if headers:
+        hdrs.update(headers)
     async with aiohttp.ClientSession() as sess:
-        async with sess.get(url, headers=headers or {}, timeout=aiohttp.ClientTimeout(total=15)) as r:
+        async with sess.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status != 200:
-                raise RuntimeError(f"HTTP {r.status} from {url}")
-            return await r.json(content_type=None)
+                raise RuntimeError(_friendly_http_error(r.status, url))
+            try:
+                return await r.json(content_type=None)
+            except Exception:
+                # Cloudflare human-check pages return HTML with a 200 on some paths
+                raise RuntimeError(_friendly_http_error(403, url))
 
 
 # ── Civitai search ────────────────────────────────────────────────────────────
 
+# Civitai rejects `page` combined with `query` (HTTP 400: "Cannot use page param
+# with query search. Use cursor-based pagination.") and silently IGNORES `page`
+# on browse (page 2 returns page-1 items). So ALL Civitai paging is cursor-based:
+# page 1 sends no cursor, and each response's metadata.nextCursor is remembered so
+# the panel's Next button reaches page N sequentially.
+_civitai_cursors: dict[tuple, str] = {}   # (q, type, page) -> cursor that REACHES that page
+
+
 async def _civitai_search(q: str, model_type: str, page: int) -> dict:
     params: dict[str, Any] = {
         "limit": 20,
-        "page": page,
         "sort": "Most Downloaded",
     }
     if q:
         params["query"] = q
+    if page > 1:
+        cur = _civitai_cursors.get((q, model_type, page))
+        if cur:
+            params["cursor"] = cur
+        # Cold jump to page N without a recorded cursor falls back to page 1
+        # results — the UI only pages sequentially, so this stays consistent.
     if model_type:
         params["types"] = model_type
     qs = urllib.parse.urlencode(params, doseq=True)
     url = f"{_CIVITAI_BASE}/models?{qs}"
-    data = await _http_get(url, {"Content-Type": "application/json"})
+    data = await _http_get(url)
     items = data.get("items", [])
-    return {"items": items, "total": data.get("metadata", {}).get("totalItems", len(items))}
+    meta = data.get("metadata", {}) or {}
+    if meta.get("nextCursor"):
+        _civitai_cursors[(q, model_type, page + 1)] = str(meta["nextCursor"])
+    return {"items": items, "total": meta.get("totalItems", len(items))}
 
 
 # ── HuggingFace search ────────────────────────────────────────────────────────
@@ -179,10 +236,18 @@ async def _download_model(source: str, model_id: str, file_id: str, dest_dir: st
     # Fire-and-forget background download task
     async def _download_task():
         try:
+            # Same browser UA + auth as _http_get — a bare aiohttp UA gets
+            # Cloudflare-blocked on Civitai, and gated HF files need the token.
+            hdrs = {"User-Agent": _BROWSER_UA}
+            if source == "huggingface":
+                tok = os.environ.get("HF_TOKEN", "").strip()
+                if tok:
+                    hdrs["Authorization"] = f"Bearer {tok}"
             async with aiohttp.ClientSession() as sess:
-                async with sess.get(url, timeout=aiohttp.ClientTimeout(total=3600)) as r:
+                async with sess.get(url, headers=hdrs,
+                                    timeout=aiohttp.ClientTimeout(total=3600)) as r:
                     if r.status != 200:
-                        log.error("Download failed %s → HTTP %d", url, r.status)
+                        log.error("Download failed %s → %s", url, _friendly_http_error(r.status, url))
                         return
                     with open(dest_file, "wb") as fh:
                         async for chunk in r.content.iter_chunked(65536):

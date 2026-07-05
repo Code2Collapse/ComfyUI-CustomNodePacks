@@ -53,7 +53,21 @@ const TYPE_COLORS = {
   "*":          "var(--c2c-gray400)",
 };
 
-function typeColor(t) { return TYPE_COLORS[t] || TYPE_COLORS["*"]; }
+// TYPE_COLORS holds var() strings. They're drawn on the reroute dot's canvas
+// (ring/inner-dot/web-strands), and Canvas2D CANNOT parse var() — it renders
+// BLACK. Resolve each to a literal hex once (cached). See var-in-canvas-bug.
+const _typeColorCache = {};
+function typeColor(t) {
+  const raw = TYPE_COLORS[t] || TYPE_COLORS["*"];
+  const m = String(raw).match(/var\(\s*(--[a-z0-9-]+)\s*\)/i);
+  if (!m) return raw;
+  if (_typeColorCache[m[1]]) return _typeColorCache[m[1]];
+  let v = "";
+  try { v = getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim(); } catch (_) {}
+  if (!v) v = "#89b4fa";
+  _typeColorCache[m[1]] = v;
+  return v;
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 app.registerExtension({

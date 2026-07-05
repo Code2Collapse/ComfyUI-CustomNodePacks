@@ -51,6 +51,11 @@ const MODE_WIDGETS = {
     points_bbox: [
         "width", "height", "editor_data", "default_radius", "softness",
         "normalize",
+        // The interactive canvas DOM widget (added by points_bbox_editor.js).
+        // MUST be listed here — applyMaskEditVisibility() hides EVERY widget not
+        // in the active mode's set, so omitting it collapsed the editor canvas to
+        // a 1x1 / display:none void (the "MaskEdit points_bbox shows no UI" bug).
+        "points_editor",
     ],
     bbox_smooth: [
         "bboxes_json", "smoothing_radius", "smoothing_method", "alpha",

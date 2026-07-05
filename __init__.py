@@ -621,6 +621,15 @@ try:
     except Exception as _ei:
         print(f"[MEC] error_introspector deferred: {_ei}")
     try:
+        # Model Browser backend (/c2c/models/search|download|dest_dirs). The JS
+        # panel (c2c_model_browser.js) has shipped for a while but this
+        # registration was missing — every search 404'd ("Error: check console").
+        from .nodes.model_browser_routes import register_routes as _register_model_browser_routes
+        _register_model_browser_routes(_ps)
+        print("[MEC] model_browser routes registered.")
+    except Exception as _mb:
+        print(f"[MEC] model_browser deferred: {_mb}")
+    try:
         from .nodes.flamegraph import register_routes as _register_flamegraph_routes
         _register_flamegraph_routes(_ps)
         print("[MEC] flamegraph routes registered.")

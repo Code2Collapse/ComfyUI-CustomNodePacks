@@ -201,8 +201,14 @@ async function _doSearch() {
       results.appendChild(_buildCard(item, destDirs));
     }
   } catch (err) {
-    results.innerHTML = `<div style="text-align:center;padding:30px;color:var(--c2c-dangerSoft);">
-      Error: ${err.message}<br><small style="color:var(--c2c-gray500);">Check ComfyUI console for details.</small></div>`;
+    // The backend replies {"error": "<plain-English reason>"} — surface THAT,
+    // not raw JSON braces or a blank line (a network fail has no message).
+    let msg = err?.message || "";
+    try { const j = JSON.parse(msg); if (j && j.error) msg = j.error; } catch (_) {}
+    if (!msg.trim()) msg = "Could not reach the ComfyUI server (network error).";
+    const esc = msg.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    results.innerHTML = `<div style="text-align:center;padding:30px 40px;color:var(--c2c-dangerSoft);line-height:1.55;">
+      ${esc}<br><small style="color:var(--c2c-gray500);">Details are in the ComfyUI console.</small></div>`;
   }
 }
 

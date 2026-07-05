@@ -10,6 +10,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 
 const HUD_ID   = "mec-complexity-hud";
 const STYLE_ID = "mec-complexity-hud-style";
@@ -348,7 +349,7 @@ function _hookGraphMutations() {
     if (typeof g.onConnectionChange !== "function") g.onConnectionChange = _scheduleUpdate;
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.ComplexityHUD",
     settings: [
         {

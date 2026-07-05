@@ -780,7 +780,7 @@ app.registerExtension({
             cvs.addEventListener("pointerdown", (e) => {
                 const mode = getVal(node, "mode", "wipe");
                 if (mode !== "wipe" && mode !== "onion") { cvs.focus(); return; }
-                cvs.setPointerCapture(e.pointerId);
+                try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                 cvs.focus();
                 S.drag = true;
                 const [cx] = xy(e);

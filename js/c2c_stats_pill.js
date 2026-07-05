@@ -25,6 +25,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { z as Z } from "./_c2c_theme.js";
 
 const PILL_ID    = "c2c-stats-pill";
@@ -675,7 +676,7 @@ if (typeof window !== "undefined") {
     });
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.StatsPill",
     settings: [
         {

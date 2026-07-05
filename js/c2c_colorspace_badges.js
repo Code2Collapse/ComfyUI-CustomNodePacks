@@ -14,6 +14,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { C } from "./_c2c_theme.js";
 
 // Canvas 2D cannot resolve CSS var() strings (renders black/invisible), so we
@@ -125,7 +126,7 @@ function _patch() {
     };
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.ColorspaceBadges",
     settings: [
         {

@@ -1134,20 +1134,27 @@ class WanDirectorC2C:
                     force_fp32_vae(vae)
                     warnings.append("VAE forced to fp32 for encode/decode quality.")
 
-                ref_pixels = ref_image.permute(0, 3, 1, 2)  # [B,3,H,W]
-                # Wan VAE expects [B,C,T,H,W] — expand single frame
-                ref_5d = ref_pixels.unsqueeze(2)  # [B,3,1,H,W]
-                encoded = vae.encode(ref_5d)
+                # ComfyUI VAE.encode expects (B,H,W,C) float32 [0,1] and does
+                # its own movedim(-1,1) + temporal handling internally — do NOT
+                # pre-permute or unsqueeze (a 5D input corrupts the encode).
+                # ref_image is already [B,H,W,3] from _load_image_tensor.
+                encoded = vae.encode(ref_image[:, :, :, :3])
                 if isinstance(encoded, dict):
                     encoded_samples = encoded.get("samples", encoded.get("latent", None))
                 else:
                     encoded_samples = encoded
                 if encoded_samples is not None:
-                    # Merge encoded first frame into the empty latent
+                    # Merge encoded reference frame(s) into the empty latent.
+                    # Wan latent is 5D (B,C,T,H/8,W/8); the encode of a single
+                    # frame may come back 5D (B,C,T',H/8,W/8) or 4D (B,C,H/8,W/8).
                     empty_s = latent["samples"]
-                    if encoded_samples.shape[2:] == empty_s.shape[2:]:
-                        # Copy encoded frame into frame 0 of the latent
-                        empty_s[:, :, :encoded_samples.shape[2]] = encoded_samples
+                    if encoded_samples.ndim == 5 and empty_s.ndim == 5:
+                        nt = min(encoded_samples.shape[2], empty_s.shape[2])
+                        empty_s[:, :, :nt] = encoded_samples[:, :, :nt]
+                    elif encoded_samples.ndim == 4 and empty_s.ndim == 5:
+                        empty_s[:, :, 0] = encoded_samples
+                    elif encoded_samples.shape == empty_s.shape:
+                        empty_s[:] = encoded_samples
                     latent = {"samples": empty_s}
                     vae_encoded = True
                     warnings.append("VAE-encoded reference image into latent frame 0 for i2v.")
@@ -1308,21 +1315,39 @@ class WanDirectorC2C:
                     log.warning("FETA apply failed: %s", exc)
 
             # 7. PromptRelay
+            relay_cond = None
             if enable_prompt_relay and len(local_list) >= 2:
                 try:
-                    out_model_native, _pr_cond = _apply_prompt_relay_native(
+                    out_model_native, relay_cond = _apply_prompt_relay_native(
                         out_model_native, clip, latent, global_prompt, local_list,
                         segment_lengths, float(prompt_relay_epsilon),
                     )
                     relay_used = True
                     relay_note = f"native PromptRelay applied ({len(local_list)} segments)"
                 except Exception as exc:                            # noqa: BLE001
+                    relay_cond = None
                     warnings.append(f"PromptRelay (native) skipped: {exc}")
                     log.warning("PromptRelay native failed: %s", exc)
             elif enable_prompt_relay:
                 relay_note = "skipped (need 2+ local prompts)"
 
-            out_pos = pos_cond
+            # Use the relay-produced segment-aware conditioning when it was
+            # built (previously discarded — the relay only half-worked). Carry
+            # over the metadata we attached to pos_cond (dual-CFG, ref strength,
+            # guide strength) so switching to relay_cond doesn't lose it.
+            if relay_cond:
+                meta_src = pos_cond[0][1] if (pos_cond and len(pos_cond[0]) > 1
+                                              and isinstance(pos_cond[0][1], dict)) else {}
+                carry = {k: meta_src[k] for k in (
+                    "wan_cfg_high_noise", "wan_cfg_low_noise",
+                    "wan_ref_strength", "wan_guide_strength") if k in meta_src}
+                if carry:
+                    for c in relay_cond:
+                        if len(c) > 1 and isinstance(c[1], dict):
+                            c[1].update(carry)
+                out_pos = relay_cond
+            else:
+                out_pos = pos_cond
             out_neg = neg_cond
 
         elif backend == "kijai":

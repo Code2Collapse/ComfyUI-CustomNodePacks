@@ -11,6 +11,7 @@ import json
 import gc
 
 from ._is_changed_util import hash_args_and_kwargs
+from ._mask_edge_refine import refine_edges, parse_bboxes, parse_spline, EDGE_MODES
 from .utils import (
     HAS_CV2,
     get_sam_predictor,
@@ -110,9 +111,38 @@ class SAMMaskGeneratorMEC:
                         "Helps in cluttered scenes and similar-color backgrounds."
                     ),
                 }),
+                "edge_refine": (EDGE_MODES, {
+                    "default": "guided",
+                    "tooltip": (
+                        "Edge-perfect refinement of the SAM mask. SAM gives a blocky/binary mask; "
+                        "these snap it to the true object boundary → a soft, roto-grade alpha, robust "
+                        "to motion blur and dull/over-bright colours.\n"
+                        "  none          — raw binary SAM mask\n"
+                        "  guided        — fast edge-aware guided filter (recommended, no model)\n"
+                        "  guided_strong — wider/softer for hair + fine detail (no model)\n"
+                        "  matte         — AI alpha matting (ViTMatte/BiRefNet) for the hardest hair + "
+                        "motion-blur edges; auto-falls back to 'guided' if no matte model installed."
+                    ),
+                }),
+                "edge_radius": ("INT", {
+                    "default": 8, "min": 1, "max": 64,
+                    "tooltip": "Guided-filter radius (px). Larger = smoother/softer; smaller hugs "
+                               "fine detail. Ignored when edge_refine = none.",
+                }),
             },
             "optional": {
                 "bbox": ("BBOX", {"tooltip": "Bounding box from BBox node (overrides bbox_json)"}),
+                "bboxes_json": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": "MULTIPLE boxes to select several regions at once: "
+                               "[[x1,y1,x2,y2], ...]. Each is segmented and unioned into one mask.",
+                }),
+                "spline_json": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": "Outline the target with a SPLINE and connect/paste its data here "
+                               "(SplineMaskMEC spline_data). Its polygon becomes positive points + a "
+                               "bounding box so SAM snaps to what you drew.",
+                }),
                 "existing_mask": ("MASK", {
                     "tooltip": "Use this mask as the starting point instead of running SAM from scratch",
                 }),
@@ -156,7 +186,8 @@ class SAMMaskGeneratorMEC:
                  text_threshold, text_box_threshold,
                  multimask_output, mask_index, score_threshold,
                  apply_bbox_crop, refine_iterations=1,
-                 auto_negative_points=False, bbox=None, existing_mask=None):
+                 auto_negative_points=False, edge_refine="guided", edge_radius=8,
+                 bbox=None, bboxes_json="", spline_json="", existing_mask=None):
 
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SAMMaskGeneratorMEC expects IMAGE tensor [B,H,W,C]")
@@ -173,6 +204,7 @@ class SAMMaskGeneratorMEC:
                 multimask_output, mask_index, score_threshold,
                 apply_bbox_crop, refine_iterations,
                 auto_negative_points, bbox, existing_mask,
+                edge_refine, edge_radius, bboxes_json, spline_json,
             )
 
     def _generate_impl(self, sam_model, image, points_json, bbox_json,
@@ -180,7 +212,9 @@ class SAMMaskGeneratorMEC:
                        text_threshold, text_box_threshold,
                        multimask_output, mask_index, score_threshold,
                        apply_bbox_crop, refine_iterations=1,
-                       auto_negative_points=False, bbox=None, existing_mask=None):
+                       auto_negative_points=False, bbox=None, existing_mask=None,
+                       edge_refine="guided", edge_radius=8,
+                       bboxes_json="", spline_json=""):
 
         model_info = sam_model
         model = model_info["model"]
@@ -213,18 +247,68 @@ class SAMMaskGeneratorMEC:
                     neg_bbox, num_points=5
                 )
 
+        # ── SPLINE prompt → positive points + bbox ─────────────────────
+        # Outline the target with a spline; its polygon vertices become positive
+        # point prompts and its bounding box seeds SAM, merged with points_json.
+        spline = parse_spline(spline_json)
+        if spline is not None:
+            s_coords, _s_labels, s_bbox = spline
+            try:
+                existing = parse_points_json(points_json) or []
+            except Exception:
+                existing = []
+            merged = list(existing) + [{"x": float(x), "y": float(y), "label": 1} for x, y in s_coords]
+            points_json = json.dumps(merged)
+            if (not bbox_json or not bbox_json.strip()) and bbox is None:
+                bbox_json = json.dumps([float(v) for v in s_bbox])
+
+        # ── MULTI-BBOX prompt → union of per-box SAM masks ─────────────
+        # Select several disjoint elements at once: run SAM once per box and OR
+        # the results into a single mask (a lone box just seeds bbox_json).
+        boxes = parse_bboxes(bboxes_json)
+        if len(boxes) == 1 and (not bbox_json or not bbox_json.strip()) and bbox is None:
+            bbox_json = json.dumps(boxes[0])
+            boxes = []
+
         # ── Move model to GPU if offloaded ─────────────────────────────
         if offload and hasattr(model, "to"):
             model.to(target_device)
 
         try:
-            result = self._run_inference(
-                model, model_type, model_info, image, points_json, bbox_json, bbox,
-                multimask_output, mask_index, score_threshold,
-                apply_bbox_crop, target_device, model_dtype,
-                refine_iterations, auto_negative_points, existing_mask,
-                negative_points_from_text,
-            )
+            if len(boxes) >= 2:
+                union_mask, best_all, det, best_score = None, None, None, 0.0
+                for bx in boxes:
+                    r = self._run_inference(
+                        model, model_type, model_info, image, "",
+                        json.dumps(bx), None,
+                        multimask_output, mask_index, score_threshold,
+                        False, target_device, model_dtype,
+                        refine_iterations, auto_negative_points, existing_mask,
+                        negative_points_from_text, edge_refine, edge_radius,
+                    )
+                    union_mask = r[0] if union_mask is None else torch.maximum(union_mask, r[0])
+                    if best_all is None:
+                        best_all = r[1]
+                    if float(r[3]) > best_score:
+                        best_score, det = float(r[3]), r[2]
+                # Recompute bbox over the union
+                if union_mask is not None:
+                    nz = torch.nonzero(union_mask[0] > 0.5, as_tuple=False)
+                    if nz.shape[0] > 0:
+                        y0, y1 = int(nz[:, 0].min()), int(nz[:, 0].max())
+                        x0, x1 = int(nz[:, 1].min()), int(nz[:, 1].max())
+                        det = [x0, y0, x1 - x0 + 1, y1 - y0 + 1]
+                result = (union_mask, best_all if best_all is not None else union_mask,
+                          det or [0, 0, int(image.shape[2]), int(image.shape[1])],
+                          best_score, f"Union of {len(boxes)} boxes")
+            else:
+                result = self._run_inference(
+                    model, model_type, model_info, image, points_json, bbox_json, bbox,
+                    multimask_output, mask_index, score_threshold,
+                    apply_bbox_crop, target_device, model_dtype,
+                    refine_iterations, auto_negative_points, existing_mask,
+                    negative_points_from_text, edge_refine, edge_radius,
+                )
         finally:
             # ── Offload back to CPU ────────────────────────────────────
             if offload and hasattr(model, "to"):
@@ -239,7 +323,8 @@ class SAMMaskGeneratorMEC:
                        bbox_input, multimask_output, mask_index, score_threshold,
                        apply_bbox_crop, device, dtype,
                        refine_iterations=1, auto_negative_points=False,
-                       existing_mask=None, negative_points_from_text=None):
+                       existing_mask=None, negative_points_from_text=None,
+                       edge_refine="guided", edge_radius=8):
 
         # Convert image: (B, H, W, C) float [0,1] → numpy uint8
         img_tensor = image[0]  # first image in batch
@@ -377,6 +462,12 @@ class SAMMaskGeneratorMEC:
 
         selected_mask = all_masks_t[idx:idx+1]
         selected_score = float(scores_list[idx])
+
+        # ── Edge-perfect refinement ───────────────────────────────────
+        # SAM emits a blocky/binary mask; snap it to the true image edges → a
+        # soft, roto-grade alpha (robust to motion blur + dull/bright colours).
+        if edge_refine and edge_refine != "none":
+            selected_mask = refine_edges(selected_mask, image[:1], edge_refine, int(edge_radius))
 
         # Detect bbox from selected mask
         coords = torch.nonzero(selected_mask[0] > 0.5, as_tuple=False)

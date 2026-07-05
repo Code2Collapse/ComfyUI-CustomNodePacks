@@ -399,6 +399,26 @@ app.registerExtension({
                 null,
                 () => _openEditor(this, widget),
             );
+
+            // The raw keyframe_edits_json textarea is authored ENTIRELY by the
+            // modal above — showing the raw JSON is just clutter. Collapse it to
+            // a hidden state-carrier (value still saves with the workflow).
+            const node = this;
+            const _collapse = () => {
+                widget.type = "hidden";
+                widget.computeSize = () => [0, -4];
+                widget.hidden = true;
+                const el = widget.element || widget.inputEl;
+                if (el) {
+                    el.style.display = "none";
+                    const wrap = el.parentElement;
+                    if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
+                }
+                try { node.setSize(node.computeSize()); } catch (e) { /* noop */ }
+                node.setDirtyCanvas?.(true, true);
+            };
+            // run after the DOM widget mounts
+            setTimeout(_collapse, 0);
             return r;
         };
     },

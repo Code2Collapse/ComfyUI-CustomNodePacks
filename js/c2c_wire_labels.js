@@ -10,6 +10,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
 
 const STORE_KEY = "c2c_wire_labels"; // stored under graph.extra[STORE_KEY]
@@ -241,7 +242,7 @@ function _patchDrawConnections() {
     LGraphCanvas.prototype.drawConnections._mecWireLabelsPatched = true;
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.WireLabels",
     settings: [
         {

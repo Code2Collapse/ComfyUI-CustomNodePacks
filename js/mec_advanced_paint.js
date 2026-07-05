@@ -105,7 +105,9 @@ class PaintCanvasController {
 
     _onDown(e) {
         e.preventDefault();
-        this.draw.setPointerCapture?.(e.pointerId);
+        // ?. only guards method existence — setPointerCapture still THROWS
+        // NotFoundError when the pointer is already inactive. try/catch it.
+        try { this.draw.setPointerCapture?.(e.pointerId); } catch (_) {}
         this._down = true;
         this._eraser = e.button === 2;          // right-button erases
         this._last = this._localPos(e);

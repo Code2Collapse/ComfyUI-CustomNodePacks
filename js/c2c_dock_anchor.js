@@ -47,6 +47,7 @@
  * ──────────────────────────────────────────────────────────────────── */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const NATIVE_STATUS_BAR_PX = 52;   // ComfyUI Vue status bar default
@@ -195,7 +196,7 @@ function _boot() {
 
 window.__mecDock = { register, unregister, recompute };
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.DockAnchor",
     async setup() {
         _boot();

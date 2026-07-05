@@ -20,6 +20,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { streamAI } from "./_c2c_ai_client.js";
 
 const BTN_ID    = "mec-surprise-btn";
@@ -389,7 +390,7 @@ function _ensureButton() {
     });
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.SurpriseMe",
     settings: [
         {

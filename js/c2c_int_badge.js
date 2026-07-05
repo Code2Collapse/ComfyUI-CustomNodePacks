@@ -33,6 +33,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 
 const CHIP_ID = "int";
@@ -1071,7 +1072,7 @@ function _registerChip() {
     return true;
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.IntBadge",
     settings: [
         {

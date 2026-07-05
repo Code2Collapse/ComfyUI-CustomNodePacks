@@ -2,7 +2,7 @@
  * wan_director_compact.js — collapse WanDirectorC2C to a usable default height.
  * Hides gated advanced widgets until their enable_* toggle is true; caps node height.
  */
-import { app } from "../../scripts/app.js";
+import { app } from "/scripts/app.js";
 import {
     capWdNode,
     findWdWidget,
@@ -68,32 +68,14 @@ function showW(w) {
 }
 
 function applyGates(node) {
-    for (const [gate, children] of Object.entries(GATED)) {
-        const gw = findWdWidget(node, gate);
-        const on = gw ? !!gw.value : false;
-        for (const cn of children) {
-            const cw = findWdWidget(node, cn);
-            if (!cw) continue;
-            if (on) showW(cw);
-            else hideW(cw);
-        }
-    }
-    for (const cn of QUALITY_COLLAPSE) {
-        const cw = findWdWidget(node, cn);
-        if (!cw) continue;
-        if (getWdAdvancedOpen(node)) showW(cw);
-        else hideW(cw);
-    }
-    if (!getWdAdvancedOpen(node)) {
-        for (const cn of ADVANCED_COLLAPSE) {
-            const cw = findWdWidget(node, cn);
-            if (cw) hideW(cw);
-        }
-    } else {
-        for (const cn of ADVANCED_COLLAPSE) {
-            const cw = findWdWidget(node, cn);
-            if (cw) showW(cw);
-        }
+    // The advanced quality stack was split out to the WanDirectorExtraArgs node,
+    // so everything that REMAINS on WanDirector is now visible at all times
+    // (user 2026-06-29: "show-advanced params must be visible at all times,
+    // remove the advanced button"). Only the timeline / JSON state blobs that the
+    // timeline editor owns stay hidden.
+    for (const w of node.widgets || []) {
+        if (ALWAYS_HIDDEN.has(w.name)) hideW(w);
+        else if (w._wd_compact_hidden) showW(w);
     }
 }
 
@@ -114,22 +96,21 @@ function compactNode(node) {
     for (const w of node.widgets || []) {
         if (ALWAYS_HIDDEN.has(w.name)) hideW(w);
     }
-    for (const gate of Object.keys(GATED)) wireGate(node, gate);
-
-    if (!findWdWidget(node, "show_advanced")) {
-        const btn = node.addWidget("button", "show_advanced", "Show advanced ▼", () => {
-            setWdAdvancedOpen(node, !getWdAdvancedOpen(node));
-            btn.value = getWdAdvancedOpen(node) ? "Hide advanced ▲" : "Show advanced ▼";
-            applyGates(node);
-            capWdNode(node);
-        });
+    // The "Show advanced" button was removed — its remaining params are always
+    // visible now, and the quality stack lives on the WanDirectorExtraArgs node.
+    // Remove any stale button from graphs saved before this change.
+    const stale = (node.widgets || []).find(w => w.name === "show_advanced");
+    if (stale) {
+        const i = node.widgets.indexOf(stale);
+        if (i >= 0) node.widgets.splice(i, 1);
     }
 
     applyGates(node);
     capWdNode(node);
 }
 
-app.registerExtension({
+// Guard against double-registration when CustomNodePacks ships the same extension.
+if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.Compact")) app.registerExtension({
     name: "C2C.WanDirector.Compact",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "WanDirectorC2C") return;

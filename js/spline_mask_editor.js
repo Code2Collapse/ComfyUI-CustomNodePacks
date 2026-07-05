@@ -374,7 +374,12 @@ function sampleShape(sh, samplesPerSeg, alpha) {
 
 function draw(ed, ctx, vw, vh) {
     ctx.save();
-    ctx.fillStyle = COLOR.bg;
+    // Outer fill MUST be a resolved literal — Canvas2D cannot parse the raw
+    // `var(--c2c-bg2)` that COLOR.bg holds, so it silently rendered BLACK: that
+    // was the "dead space" letterbox the user saw. With no backdrop image the
+    // whole area IS the drawing surface (bg3); with an image we letterbox
+    // against a soft neutral (bg2) instead of harsh black.
+    ctx.fillStyle = ed.refImg ? C.bg2 : C.bg3;
     ctx.fillRect(0, 0, vw, vh);
 
     const z = ed.zoom;
@@ -541,6 +546,7 @@ function installEditor(node) {
     // Inset from node body — leaves a hit area for LiteGraph border / resize
     // corner so the user can grab edges and the bottom-right grip.
     root.style.cssText = `
+        position:relative;
         display:flex;flex-direction:column;
         width:calc(100% - 12px);height:calc(100% - 18px);
         margin:2px 6px 16px 6px;
@@ -549,6 +555,10 @@ function installEditor(node) {
         box-sizing:border-box;user-select:none;
         pointer-events:none;
     `;
+    // ^ position:relative is REQUIRED: the ≡ actions menu is position:absolute
+    //   (top:34px;right:6px) and must anchor to THIS root — without it the menu
+    //   resolved against a higher positioned ancestor and appeared OFFSET from
+    //   the button (worse at graph zoom).
 
     const tb = document.createElement("div");
     tb.style.cssText = `
@@ -699,46 +709,118 @@ function installEditor(node) {
         }
     }
 
-    let widgetH = 220;
+    let widgetH = 300;
+    const EDIT_MIN_H = 200, EDIT_MAX_H = 860;
     const canvasWidget = node.addDOMWidget("spline_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
+        getMaxHeight: () => EDIT_MAX_H,
     });
+    // Size the DOM widget the proven way (mirrors the working FaceController3D
+    // editor): modern ComfyUI lays DOM widgets out via `computeLayoutSize`
+    // (min/max) + `getHeight`, and the element's OWN style.height must be set
+    // directly — otherwise the widget stays pinned to its min height and the node
+    // leaves empty body below it (the "tiny image + dead space" bug). `widgetH`
+    // is the single source of truth, driven by the image aspect in resizeForImage.
+    canvasWidget.computeLayoutSize = () => ({ minHeight: EDIT_MIN_H, maxHeight: EDIT_MAX_H });
     canvasWidget.computeSize = function (width) {
-        const base = node.computeSize?.(width);
-        const chrome = Array.isArray(base) ? (base[1] || 0) : 0;
-        const extra = Math.max(0, (node.size?.[1] || 0) - chrome);
-        const h = extra > 120 ? Math.min(360, extra - 32) : widgetH;
-        widgetH = h;
-        return [width, Math.max(160, h)];
+        return [width, Math.max(EDIT_MIN_H, widgetH)];
     };
+    try { root.style.height = widgetH + "px"; } catch (_) {}
 
     node._mecSplineEditHost = root;
     node._mecSplineEditWidget = canvasWidget;
     node._mecSplineEditWidgetH = () => widgetH;
 
+    // Keep the node wide enough for a USABLE editor canvas while an editing mode
+    // is active. The mode-gate calls `node.setSize(node.computeSize())`, and the
+    // node's own computeSize returns the narrow widget-driven width (~280px) —
+    // which snapped the node back from 600→280 and collapsed the canvas to
+    // ~186px / "zoom 21%" (the "spline editor doesn't work" report). Enforce a
+    // minimum width via computeSize so BOTH our setSize and the mode-gate's keep
+    // the editor roomy. Only in editor modes, so non-editing modes stay compact.
+    const MIN_EDIT_W = 600;
+    const _editorModeActive = () => {
+        const mv = node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "";
+        // All three modes embed a full-width canvas editor (edit = spline draw,
+        // track = keyframe frame-viewer, flow_path = flow editor) — each needs
+        // the roomy width or its canvas collapses to ~186px. "track" was missing,
+        // which is why track mode snapped back to ~281px / dead space.
+        return mv === "edit" || mv === "flow_path" || mv === "track";
+    };
+    if (!node._mecSplineCSPatched) {
+        node._mecSplineCSPatched = true;
+        const _origCS = typeof node.computeSize === "function" ? node.computeSize.bind(node) : null;
+        node.computeSize = function (w) {
+            const sz = _origCS ? _origCS(w) : [MIN_EDIT_W, 380];
+            try { if (_editorModeActive()) sz[0] = Math.max(sz[0] || 0, MIN_EDIT_W); } catch (_) {}
+            return sz;
+        };
+    }
+
     node.setSize?.([Math.max(node.size?.[0] || 0, 600), Math.max(node.size?.[1] || 0, 380)]);
 
-    // When a backdrop image is loaded, grow the canvas widget so the
-    // image's aspect fits without huge empty bars. Mirrors points editor.
+    // Grow the node so the editor's aspect matches the backdrop image → the photo
+    // FILLS the editor (contain-fit fills both dims, no big margins). Uses the
+    // proven FaceController3D height-sync: set the widget height + the element's
+    // own style.height, then setSize the node to (top chrome + editor), guarded
+    // against the onResize→setSize→onResize runaway.
+    let _syncInFlight = false;
+    function _syncEditorHeight() {
+        if (_syncInFlight || !root) return;
+        _syncInFlight = true;
+        try {
+            const cur = node.size || [0, 0];
+            // Node height ABOVE the editor = current total minus the editor's
+            // current footprint. Measure BEFORE we change the element height so the
+            // math is stable (no circular reflow read).
+            const topPx = Math.max(0, (cur[1] || 0) - (root.offsetHeight || widgetH));
+            const h = Math.max(EDIT_MIN_H, Math.min(EDIT_MAX_H, Math.round(widgetH)));
+            widgetH = h;
+            root.style.height = h + "px";
+            const target = Math.round(topPx + h + 18);   // +18 = root's 2px top / 16px bottom margin
+            if (Math.abs(target - (cur[1] || 0)) > 3) {
+                node.__mecSplineSyncing = true;
+                try { node.setSize([cur[0], target]); } finally { node.__mecSplineSyncing = false; }
+            }
+            node.setDirtyCanvas?.(true, true);
+        } catch (_) { /* never break the editor */ }
+        finally { _syncInFlight = false; }
+        // ComfyUI's DOM-widget wrapper grows a frame or two AFTER setSize; a single
+        // immediate re-fit locks the image into the small INTERMEDIATE size (the
+        // "zoom 37%" report). Staggered re-fits once the wrapper settles — same
+        // proven pattern as the points editor. Idempotent + cheap.
+        for (const d of [0, 60, 200, 400]) setTimeout(() => { ed._fitted = false; render(); }, d);
+    }
     function resizeForImage() {
         if (!ed.canvasW || !ed.canvasH) return;
         const baseW = (node.size?.[0] || 600) - 24;
         if (baseW <= 0) return;
         const aspect = ed.canvasH / ed.canvasW;
-        const targetH = Math.max(220, Math.min(520, Math.round(baseW * aspect) + 48));
-        if (Math.abs(targetH - widgetH) >= 10) {
-            widgetH = targetH;
-            const curH = node.size?.[1] || widgetH;
-            const minH = (node.computeSize?.()?.[1]) || widgetH;
-            if (curH < minH) node.setSize?.([node.size[0], minH]);
-        }
+        // editor height that makes the editor aspect == image aspect at full width
+        // (+40 for the toolbar strip). Clamped so an extreme portrait stays sane.
+        widgetH = Math.max(EDIT_MIN_H, Math.min(EDIT_MAX_H, Math.round(baseW * aspect) + 40));
+        _syncEditorHeight();
     }
 
     let lastW = 0, lastH = 0;
     function syncCanvasPx() {
+        // canvasWrap is flex:1 1 auto inside the flex-column root, but ComfyUI's
+        // DOM-widget layout does NOT reliably distribute height to a <canvas>
+        // child — the wrap collapses to the canvas's intrinsic height, so the
+        // image auto-fit ran against a ~266px viewport ("zoom 37%") even though
+        // the editor root was 530px+. Size it EXPLICITLY = root minus toolbar,
+        // exactly like the points editor / tracker fix (see memory: the flex-fill
+        // bug). Uses unscaled layout px (offsetHeight), transform-safe.
+        try {
+            const availH = (root.offsetHeight || 0) - (tb.offsetHeight || 0);
+            if (availH > 40 && Math.abs((canvasWrap.offsetHeight || 0) - availH) > 2) {
+                canvasWrap.style.height = availH + "px";
+                canvasWrap.style.flex = "0 0 auto";
+            }
+        } catch (_) {}
         const r = canvasWrap.getBoundingClientRect();
         // Parent ComfyUI canvas applies CSS transform: scale(zoom) to DOM
         // widgets. Use offsetWidth/Height (unscaled layout pixels) to keep
@@ -755,6 +837,18 @@ function installEditor(node) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // No backdrop image + auto output dims + nothing drawn yet → make the
+        // logical drawing surface EQUAL the viewport so it FILLS the node body
+        // instead of letterboxing a fixed 512² into a wide, short strip. Frozen
+        // the moment a shape exists so the user's points never rescale.
+        if (!ed.refImg && ed.shapes.length === 0) {
+            const wW = node.widgets?.find(x => x.name === "width");
+            const hW = node.widgets?.find(x => x.name === "height");
+            if ((!wW || +wW.value <= 0) && (!hW || +hW.value <= 0)) {
+                ed.canvasW = w; ed.canvasH = h;
+                ed.zoom = 1; ed.panX = 0; ed.panY = 0; ed._fitted = true;
+            }
+        }
         // Auto-fit ONLY on first sizing or when a new image set _fitted=false.
         // Previously we re-fit on every resize → any container reflow snapped
         // the user's zoom/pan back to "fit", which is the "bouncy image"
@@ -820,7 +914,7 @@ function installEditor(node) {
 
     canvas.addEventListener("pointerdown", (e) => {
         e.preventDefault(); canvas.focus();
-        canvas.setPointerCapture(e.pointerId);
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive (pen/touch/synthetic)
         const c = eventCanvas(e);
 
         if (e.button === 1 || (e.button === 0 && e.altKey)) {
@@ -920,7 +1014,7 @@ function installEditor(node) {
     });
 
     canvas.addEventListener("pointerup", (e) => {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("spline_mask_editor", __c2cErr); }
+        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("spline_mask_editor.releaseCapture", __c2cErr, { level: "info" }); } // expected when pointer already inactive
         if (ed.drag?.kind === "pan") {
             ed.drag = null; canvas.style.cursor = "crosshair"; return;
         }

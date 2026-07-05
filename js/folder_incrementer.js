@@ -163,17 +163,27 @@ app.registerExtension({
             return INPUT_LOADER_TYPES.some(t => cls.includes(t) || title.includes(t));
         }
 
-        // ── BFS chain traversal to find a filename ───────────────────
-        //    Walks upstream from a starting node, fanning out across
-        //    every connected input of every intermediate node. Follows
-        //    reroutes and Get→Set bus pairs transparently. Stops a
-        //    branch when it hits a loader (whether or not it has a
-        //    filename) so we don't escape the source island.
+        // ── BFS chain traversal: COLLECT every filename in the source island ─
+        //    Walks upstream from a starting node, fanning out across every
+        //    connected input of every intermediate node. Follows reroutes and
+        //    Get→Set bus pairs transparently. Stops a branch when it hits a
+        //    loader (whether or not it has a filename) so we don't escape the
+        //    source island.
         //
-        //    Returns the first filename found (BFS ⇒ closest in graph
-        //    distance to ``startNode``), or null.
-        function findFilenameFromChain(startNode, maxNodes = 200) {
-            if (!startNode) return null;
+        //    Returns an array of { filename, cls } in BFS order (closest in
+        //    graph distance to ``startNode`` first). cls ∈ image|video|unknown.
+        //
+        //    WHY collect-all (not return-first): a decode/sampler chain reaches
+        //    BOTH a ref-image loader AND the real video loader. The ref image is
+        //    usually FEWER hops away, so a return-first walk always picked the
+        //    image — that is the "shows ref image name but not video name" bug,
+        //    and the reason switching source_choice to 'video' felt "stuck"
+        //    (the walk never consulted the choice). We now gather every
+        //    candidate and let pickFilenameByChoice() honour source_choice.
+        function collectFilenamesFromChain(startNode, maxNodes = 200) {
+            const found = [];
+            if (!startNode) return found;
+            const seenFn = new Set();
             const visited = new Set();
             const queue = [startNode];
 
@@ -197,9 +207,17 @@ app.registerExtension({
                     continue;
                 }
 
-                // Filename present on this node? Done.
+                // Filename present on this node? Record it (dedup), then stop
+                // this branch — but keep draining the queue so sibling branches
+                // (e.g. the video branch alongside a ref-image branch) are seen.
                 const fn = getFilenameFromNode(current);
-                if (fn) return fn;
+                if (fn) {
+                    if (!seenFn.has(fn)) {
+                        seenFn.add(fn);
+                        found.push({ filename: fn, cls: classifyFilename(fn) });
+                    }
+                    continue;
+                }
 
                 // Loader with no filename widget → don't escape past it
                 if (isInputLoader(current)) continue;
@@ -217,7 +235,27 @@ app.registerExtension({
                     }
                 }
             }
-            return null;
+            return found;
+        }
+
+        // Pick the best filename from a collected chain, honouring source_choice.
+        //   video → first video; else first unknown; else first found (closest).
+        //   image → first image; else first unknown; else first found.
+        //   auto  → prefer video, then image, then first found.
+        // This is what makes "select video/image after connecting" actually
+        // re-pick (was stuck), and a wired decode resolve to the VIDEO name.
+        function pickFilenameByChoice(found, choice) {
+            if (!found || !found.length) return null;
+            const firstOf = (c) => { const m = found.find(f => f.cls === c); return m ? m.filename : null; };
+            if (choice === "video") return firstOf("video") || firstOf("unknown") || found[0].filename;
+            if (choice === "image") return firstOf("image") || firstOf("unknown") || found[0].filename;
+            // auto
+            return firstOf("video") || firstOf("image") || found[0].filename;
+        }
+
+        // Thin wrapper kept for the call sites below.
+        function findFilenameFromChain(startNode, choice = "auto") {
+            return pickFilenameByChoice(collectFilenamesFromChain(startNode), choice);
         }
 
         // ── Resolve which input(s) to traverse ───────────────────────
@@ -415,7 +453,7 @@ app.registerExtension({
                 // candidates.
                 for (const src of order) {
                     if (!src) continue;
-                    const fn = findFilenameFromChain(src);
+                    const fn = findFilenameFromChain(src, choice);
                     if (fn) {
                         return { filename: fn, mode: "trigger" };
                     }
@@ -431,7 +469,7 @@ app.registerExtension({
                     if (!linkInfo) continue;
                     const src = G().getNodeById(linkInfo.origin_id);
                     if (!src) continue;
-                    const fn = findFilenameFromChain(src);
+                    const fn = findFilenameFromChain(src, choice);
                     if (fn) {
                         return { filename: fn, mode: "input" };
                     }
@@ -448,7 +486,11 @@ app.registerExtension({
                 const blob = ((n.comfyClass || "") + " " + (n.title || "")).toLowerCase();
                 const isVideo = /video|vhs/.test(blob) || classifyFilename(fn) === "video";
                 const isImage = (/image/.test(blob) || classifyFilename(fn) === "image") && !isVideo;
-                candidates.push({ node: n, filename: fn, isVideo, isImage });
+                // "many LoadVideo nodes" disambiguator: a loader whose output is
+                // actually wired into the pipeline is far more likely to be the
+                // one the user cares about than an orphaned/spare loader.
+                const isConnected = (n.outputs || []).some(o => o && o.links && o.links.length);
+                candidates.push({ node: n, filename: fn, isVideo, isImage, isConnected });
             }
             // BUG-FIX (Apr 2026): when explicit choice is set, drop
             // mismatched candidates entirely so we don't return the
@@ -460,10 +502,13 @@ app.registerExtension({
             if (pool.length === 0) return null;
 
             const score = (c) => {
-                if (choice === "video") return c.isVideo ? 2 : (c.isImage ? 0 : 1);
-                if (choice === "image") return c.isImage ? 2 : (c.isVideo ? 0 : 1);
-                // auto: prefer video > image > other
-                return c.isVideo ? 2 : (c.isImage ? 1 : 0);
+                // Connected (wired-in) loaders outrank orphans by a wide margin
+                // so "many LoadVideo nodes" resolves to the one in the pipeline.
+                let s = c.isConnected ? 10 : 0;
+                if (choice === "video")      s += c.isVideo ? 2 : (c.isImage ? 0 : 1);
+                else if (choice === "image") s += c.isImage ? 2 : (c.isVideo ? 0 : 1);
+                else                         s += c.isVideo ? 2 : (c.isImage ? 1 : 0); // auto
+                return s;
             };
             // Single pass O(N): pick the highest-scoring candidate, tie-broken
             // by the largest node id (newest). Replaces three redundant full
@@ -532,7 +577,14 @@ app.registerExtension({
                 const fmt      = getNameFormat();
                 const preview  = formatSourceName(stem, fmt);
                 const sfx      = (node.widgets?.find(w => w.name === "suffix")?.value || "").trim();
-                const sfxLabel = sfx ? `${sfx}` : "";
+                const smode    = (node.widgets?.find(w => w.name === "suffix_mode")?.value || "filename").toString();
+                let sfxLabel = "";
+                if (sfx) {
+                    const asFolder = sfx.replace(/^[_\-. ]+/, "");
+                    if (smode === "subfolder")   sfxLabel = ` → /${asFolder}`;
+                    else if (smode === "folder") sfxLabel = ` ⊞ ${sfx}`;
+                    else                          sfxLabel = ` ${sfx}`;
+                }
                 const extLabel = ext ? ` ${ext}` : "";
                 const tag = result.mode === "global" ? "\uD83C\uDF10"  // globe for global scan
                           : result.mode === "input"  ? "\uD83D\uDD0C"  // plug for non-trigger input
@@ -607,6 +659,18 @@ app.registerExtension({
         if (customWidget) {
             const origCb = customWidget.callback;
             customWidget.callback = function (v) {
+                origCb?.apply(this, arguments);
+                setTimeout(syncSourceFilename, 0);
+            };
+        }
+
+        // Re-sync when suffix / suffix_mode change so the on-node status preview
+        // reflects where the tag lands (filename vs subfolder vs folder) live.
+        for (const wName of ["suffix", "suffix_mode"]) {
+            const w = node.widgets?.find(x => x.name === wName);
+            if (!w) continue;
+            const origCb = w.callback;
+            w.callback = function (v) {
                 origCb?.apply(this, arguments);
                 setTimeout(syncSourceFilename, 0);
             };

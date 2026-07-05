@@ -525,6 +525,23 @@ def register_routes(server: Any) -> None:
 
     routes = server.routes
 
+    # ── W5a: local AI model management (Tier-2 Qwen3.5-4B) ──────────────
+    @routes.get("/c2c/ai/local_model/status")
+    async def _local_model_status(_req: web.Request) -> web.Response:
+        try:
+            from .local_llm import get_status
+            return web.json_response(get_status())
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"error": str(e)}, status=500)
+
+    @routes.post("/c2c/ai/local_model/download")
+    async def _local_model_download(_req: web.Request) -> web.Response:
+        try:
+            from .local_llm import start_download
+            return web.json_response(start_download())
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"error": str(e)}, status=500)
+
     @routes.post("/mec/translate_error")
     async def _translate(req: web.Request) -> web.Response:
         try:

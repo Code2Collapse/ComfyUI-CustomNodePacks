@@ -27,13 +27,20 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const CANVAS_ID = "mec-confetti-canvas";
 const STYLES = ["confetti", "fireworks", "starwars", "tron", "spiderman",
     "spiderman-swing", "matrix", "portal", "mario", "saber-clash", "saber-duel",
-    "stranger", "dragonball", "trophy", "level-up", "sparkles", "balloons", "random"];
+    "stranger", "dragonball", "trophy", "level-up", "sparkles", "balloons",
+    // franchise FX (2026-07)
+    "pokemon", "minecraft", "pacman", "sonic", "zelda",
+    // game FX batch 2 — arcade + console (2026-07)
+    "halo", "gta", "tetris", "space-invaders", "street-fighter",
+    "mortal-kombat", "doom", "metroid", "elden-ring", "among-us",
+    "random"];
 
 // Catppuccin-mocha literals (canvas-safe).
 const PAL = { red: "#f38ba8", peach: "#fab387", yellow: "#f9e2af", green: "#a6e3a1",
@@ -794,6 +801,384 @@ _MAP["balloons"] = {
     },
 };
 
+// 19 · pokemon — Pikachu-yellow electric bolts + a bouncing Poké Ball.
+_MAP["pokemon"] = {
+    dur: 2600,
+    init(s, W, H, I) {
+        s.bolts = Array.from({ length: Math.round(16 * I) }, () => ({
+            x: _rand(0, W), y: _rand(0, H * 0.6),
+            len: _rand(40, 100), ang: _rand(0, Math.PI * 2), seed: Math.random() * 99,
+        }));
+        s.ball = { x: W / 2, y: H * 0.35, vy: -2, vx: _rand(-3, 3) };
+    },
+    frame(s, ctx, W, H, p, now) {
+        for (const b of s.bolts) {
+            if (((now / 90 + b.seed) % 1) > 0.6) continue;          // flicker
+            ctx.save();
+            ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = 2.4;
+            ctx.shadowColor = "#ffd400"; ctx.shadowBlur = 10;
+            ctx.globalAlpha = 0.9 * (1 - p * 0.5);
+            ctx.beginPath();
+            let x = b.x, y = b.y; ctx.moveTo(x, y);
+            for (let k = 0; k < 5; k++) { x += Math.cos(b.ang) * b.len / 5 + _rand(-9, 9); y += Math.sin(b.ang) * b.len / 5 + _rand(-9, 9); ctx.lineTo(x, y); }
+            ctx.stroke(); ctx.restore();
+        }
+        const bl = s.ball; bl.vy += 0.35; bl.x += bl.vx; bl.y += bl.vy;
+        if (bl.y > H * 0.72) { bl.y = H * 0.72; bl.vy *= -0.62; }
+        ctx.save(); ctx.translate(bl.x, bl.y); ctx.globalAlpha = 1 - p * 0.25;
+        const r = 24;
+        ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, 0); ctx.fillStyle = "#ee3b3b"; ctx.fill();
+        ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI); ctx.fillStyle = "#f2f2f2"; ctx.fill();
+        ctx.fillStyle = "#1a1a1a"; ctx.fillRect(-r, -3, 2 * r, 6);
+        ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
+        ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = 2.5; ctx.stroke();
+        ctx.restore();
+    },
+};
+
+// 20 · minecraft — pixelated blocks (grass/dirt/gold/diamond) tumble down.
+_MAP["minecraft"] = {
+    dur: 2600,
+    init(s, W, H, I) {
+        const COLS = ["#7CB342", "#8D6E63", "#FDD835", "#4DD0E1", "#B0BEC5", "#E53935"];
+        s.bs = Array.from({ length: Math.round(46 * I) }, () => ({
+            x: Math.random() * W, y: -20 - Math.random() * 260,
+            vy: _rand(2, 5), size: Math.round(_rand(10, 22) / 2) * 2, // even → crisp pixels
+            color: _pick(COLS),
+        }));
+    },
+    frame(s, ctx, W, H) {
+        ctx.imageSmoothingEnabled = false;
+        for (const b of s.bs) {
+            b.vy += 0.06; b.y += b.vy;
+            const g = b.size;
+            ctx.fillStyle = b.color;
+            ctx.fillRect(Math.round(b.x), Math.round(b.y), g, g);
+            // simple pixel shading (darker bottom-right quarter)
+            ctx.fillStyle = "rgba(0,0,0,0.22)";
+            ctx.fillRect(Math.round(b.x) + g / 2, Math.round(b.y) + g / 2, g / 2, g / 2);
+            ctx.fillStyle = "rgba(255,255,255,0.18)";
+            ctx.fillRect(Math.round(b.x), Math.round(b.y), g / 2, g / 2);
+        }
+    },
+};
+
+// 21 · pacman — Pac-Man chomps across the screen eating a row of pellets.
+_MAP["pacman"] = {
+    dur: 2600,
+    init(s, W, H) {
+        s.y = H * 0.5;
+        s.pellets = Array.from({ length: 16 }, (_, i) => ({ x: W * (0.08 + i * 0.058), eaten: false }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        const px = W * (-0.05 + p * 1.12);
+        for (const pel of s.pellets) {
+            if (pel.x < px) pel.eaten = true;
+            if (pel.eaten) continue;
+            ctx.fillStyle = "#ffd54a"; ctx.beginPath(); ctx.arc(pel.x, s.y, 5, 0, Math.PI * 2); ctx.fill();
+        }
+        const mouth = (Math.abs(Math.sin(now / 90)) * 0.5 + 0.06) * Math.PI;
+        ctx.save(); ctx.translate(px, s.y);
+        ctx.fillStyle = "#ffe14d"; ctx.shadowColor = "#ffe14d"; ctx.shadowBlur = 14;
+        ctx.beginPath(); ctx.moveTo(0, 0);
+        ctx.arc(0, 0, 26, mouth, Math.PI * 2 - mouth); ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0; ctx.fillStyle = "#1a1a1a";
+        ctx.beginPath(); ctx.arc(4, -11, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+    },
+};
+
+// 22 · sonic — spinning gold rings + blue speed streaks.
+_MAP["sonic"] = {
+    dur: 2600,
+    init(s, W, H, I) {
+        s.rings = Array.from({ length: Math.round(14 * I) }, () => ({
+            x: _rand(W * 0.1, W * 0.9), y: _rand(H * 0.15, H * 0.85),
+            r: _rand(10, 20), ph: _rand(0, Math.PI * 2), sp: _rand(4, 8), vy: _rand(-1, -3),
+        }));
+        s.streaks = Array.from({ length: Math.round(10 * I) }, () => ({ y: _rand(0, H), x: _rand(0, W), len: _rand(60, 160) }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        for (const st of s.streaks) {
+            st.x -= 26; if (st.x < -st.len) st.x = W + _rand(0, 80);
+            const grd = ctx.createLinearGradient(st.x, st.y, st.x + st.len, st.y);
+            grd.addColorStop(0, "rgba(41,120,255,0)"); grd.addColorStop(1, "rgba(120,190,255,0.7)");
+            ctx.strokeStyle = grd; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(st.x, st.y); ctx.lineTo(st.x + st.len, st.y); ctx.stroke();
+        }
+        for (const rg of s.rings) {
+            rg.y += rg.vy; rg.ph += 0.25;
+            const sx = Math.abs(Math.cos(rg.ph)) * rg.r + 3;      // spin → ellipse squash
+            ctx.save(); ctx.translate(rg.x, rg.y); ctx.globalAlpha = 1 - p * 0.4;
+            ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 4; ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.ellipse(0, 0, sx, rg.r, 0, 0, Math.PI * 2); ctx.stroke();
+            ctx.restore();
+        }
+    },
+};
+
+// 23 · zelda — the golden Triforce rises with a burst of green sparkles.
+_MAP["zelda"] = {
+    dur: 2800,
+    init(s, W, H, I) {
+        s.sp = Array.from({ length: Math.round(40 * I) }, () => ({
+            x: W / 2 + _rand(-40, 40), y: H * 0.6 + _rand(-20, 20),
+            a: _rand(0, Math.PI * 2), sp: _rand(1.5, 5), life: _rand(0.5, 1),
+        }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        // triforce (3 stacked triangles) rising + shimmering
+        const cy = H * 0.62 - p * H * 0.18, cx = W / 2, T = 46 * (0.6 + p * 0.6);
+        const glow = 0.6 + 0.4 * Math.sin(now / 120);
+        ctx.save(); ctx.globalAlpha = Math.min(1, p * 2);
+        ctx.fillStyle = "#ffe14d"; ctx.strokeStyle = "#fff6c2"; ctx.lineWidth = 2;
+        ctx.shadowColor = "#ffd400"; ctx.shadowBlur = 20 * glow;
+        const tri = (ox, oy) => { ctx.beginPath(); ctx.moveTo(cx + ox, cy + oy - T); ctx.lineTo(cx + ox - T * 0.87, cy + oy + T * 0.5); ctx.lineTo(cx + ox + T * 0.87, cy + oy + T * 0.5); ctx.closePath(); ctx.fill(); ctx.stroke(); };
+        tri(0, -T * 0.5); tri(-T * 0.87, T * 0.5); tri(T * 0.87, T * 0.5);
+        ctx.restore();
+        // green + gold sparkles
+        for (const q of s.sp) {
+            q.x += Math.cos(q.a) * q.sp; q.y += Math.sin(q.a) * q.sp - 0.4;
+            const al = Math.max(0, q.life - p);
+            ctx.fillStyle = Math.random() < 0.5 ? "#8cff66" : "#ffe14d";
+            ctx.globalAlpha = al; ctx.shadowColor = "#8cff66"; ctx.shadowBlur = 6;
+            ctx.beginPath(); ctx.arc(q.x, q.y, 2.2, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    },
+};
+
+// 24 · halo — an energy shockwave + Halo ring arc + plasma sparks.
+_MAP["halo"] = {
+    dur: 2600,
+    init(s, W, H, I) {
+        s.sparks = Array.from({ length: Math.round(50 * I) }, () => ({ a: _rand(0, Math.PI * 2), sp: _rand(3, 9), life: _rand(0.6, 1) }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        p = p < 0 ? 0 : p > 1 ? 1 : p;   // driver can pass a lead-in p<0 → negative arc radius
+        const cx = W / 2, cy = H / 2;
+        ctx.save();
+        ctx.strokeStyle = "#39d0ff"; ctx.lineWidth = Math.max(0.5, 6 * (1 - p)); ctx.globalAlpha = 1 - p;
+        ctx.shadowColor = "#39d0ff"; ctx.shadowBlur = 24;
+        ctx.beginPath(); ctx.arc(cx, cy, p * Math.min(W, H) * 0.55, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = Math.min(1, p * 1.5) * 0.8; ctx.strokeStyle = "#bff4ff"; ctx.lineWidth = 10; ctx.shadowBlur = 12;
+        ctx.beginPath(); ctx.arc(cx, cy + H * 0.5, W * 0.7, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+        for (const q of s.sparks) {
+            const r = q.sp * p * 40, al = Math.max(0, q.life - p);
+            ctx.globalAlpha = al; ctx.fillStyle = "#8ff0ff"; ctx.shadowColor = "#39d0ff"; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.arc(cx + Math.cos(q.a) * r, cy + Math.sin(q.a) * r, 2.4, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+    },
+};
+
+// 25 · gta — "MISSION PASSED" in gold with neon + wanted stars lighting up.
+_MAP["gta"] = {
+    dur: 3000,
+    init(s) { s.n = 6; },
+    frame(s, ctx, W, H, p, now) {
+        const cx = W / 2, cy = H * 0.42;
+        ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+        ctx.font = "800 42px Impact, system-ui, sans-serif";
+        ctx.shadowColor = "#ff43a4"; ctx.shadowBlur = 18; ctx.globalAlpha = Math.min(1, p * 2);
+        ctx.fillStyle = "#ffe14d"; ctx.fillText("MISSION PASSED", cx, cy);
+        ctx.font = "700 20px Impact, system-ui, sans-serif"; ctx.shadowColor = "#39c0ff"; ctx.shadowBlur = 10;
+        ctx.fillStyle = "#8fe9ff"; ctx.fillText("RESPECT ++", cx, cy + 30);
+        const cy2 = cy + 64;
+        for (let i = 0; i < s.n; i++) {
+            const lit = p > 0.3 + i * 0.09, x = cx + (i - (s.n - 1) / 2) * 34;
+            ctx.fillStyle = lit ? "#ffe14d" : "#3a3a3a"; ctx.shadowBlur = lit ? 12 : 0; ctx.shadowColor = "#fff2a0";
+            ctx.beginPath();
+            for (let k = 0; k < 10; k++) { const r = k % 2 ? 4 : 9, ang = Math.PI / 5 * k - Math.PI / 2, px = x + Math.cos(ang) * r, py = cy2 + Math.sin(ang) * r; k ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+            ctx.closePath(); ctx.fill();
+        }
+        ctx.restore();
+    },
+};
+
+// 26 · tetris — tetrominoes rain down, the bottom row flashes then clears.
+_MAP["tetris"] = {
+    dur: 2600,
+    init(s, W, H) {
+        s.cell = Math.max(16, Math.floor(W / 26));
+        s.cols = Math.max(6, Math.floor(W / s.cell));
+        const C = ["#00f0f0", "#f0f000", "#a000f0", "#00f000", "#f00000", "#0000f0", "#f0a000"];
+        s.blocks = Array.from({ length: Math.round(s.cols * 1.6) }, () => ({ c: (Math.random() * s.cols) | 0, col: _pick(C), delay: _rand(0, 0.5) }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        const cell = s.cell, floorY = H - cell;
+        for (const bl of s.blocks) {
+            const fp = Math.min(1, Math.max(0, (p - bl.delay) / 0.5));
+            ctx.fillStyle = bl.col; ctx.shadowColor = bl.col; ctx.shadowBlur = 6;
+            ctx.fillRect(bl.c * cell + 1, -cell + fp * (floorY + cell) + 1, cell - 2, cell - 2);
+        }
+        ctx.shadowBlur = 0;
+        if (p > 0.6) {
+            ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.5 * ((Math.sin(now / 60) + 1) / 2)})`;
+            ctx.fillRect(0, floorY, (p - 0.6) / 0.4 * W, cell);
+        }
+    },
+};
+
+// 27 · space-invaders — a squadron descends, then bursts into pixel confetti.
+_MAP["space-invaders"] = {
+    dur: 2800,
+    init(s) { s.rows = 3; s.cols = 8; s.exploded = false; s.bits = []; },
+    frame(s, ctx, W, H, p, now) {
+        const unit = Math.min(W, H) * 0.045, frame = Math.floor(now / 300) % 2;
+        const rows = frame ? ["01110", "11111", "10101", "01010"] : ["01110", "11111", "10101", "10001"];
+        if (p < 0.6) {
+            const descend = p / 0.6;
+            ctx.fillStyle = "#4dff5a"; ctx.shadowColor = "#39ff7a"; ctx.shadowBlur = 8;
+            for (let r = 0; r < s.rows; r++) for (let c = 0; c < s.cols; c++) {
+                const ox = W * 0.5 + (c - (s.cols - 1) / 2) * unit * 6.5;
+                const oy = H * 0.14 + r * unit * 6 + descend * H * 0.24;
+                for (let br = 0; br < 4; br++) for (let bc = 0; bc < 5; bc++) if (rows[br][bc] === "1")
+                    ctx.fillRect(ox + (bc - 2.5) * unit, oy + (br - 2) * unit, unit, unit);
+            }
+        } else {
+            if (!s.exploded) {
+                s.exploded = true;
+                for (let i = 0; i < 130; i++) s.bits.push({ x: _rand(W * 0.2, W * 0.8), y: _rand(H * 0.3, H * 0.7), vx: _rand(-6, 6), vy: _rand(-9, 2), col: _pick(["#4dff5a", "#ffffff", "#39ff7a"]) });
+            }
+            for (const bt of s.bits) { bt.x += bt.vx; bt.y += bt.vy; bt.vy += 0.4; ctx.fillStyle = bt.col; ctx.fillRect(bt.x, bt.y, unit, unit); }
+        }
+        ctx.shadowBlur = 0;
+    },
+};
+
+// 28 · street-fighter — a Hadouken shockwave detonates a big "K.O.".
+_MAP["street-fighter"] = {
+    dur: 2600,
+    init() {},
+    frame(s, ctx, W, H, p, now) {
+        const cx = W / 2, cy = H / 2;
+        ctx.save();
+        for (let k = 0; k < 3; k++) {
+            const rp = p * 1.4 - k * 0.18; if (rp < 0 || rp > 1) continue;
+            ctx.globalAlpha = (1 - rp) * 0.8; ctx.strokeStyle = "#39c0ff"; ctx.lineWidth = 8 * (1 - rp);
+            ctx.shadowColor = "#39c0ff"; ctx.shadowBlur = 20;
+            ctx.beginPath(); ctx.arc(cx, cy, rp * Math.min(W, H) * 0.5, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.globalAlpha = Math.min(1, (p - 0.2) * 3);
+        const sc = 1 + Math.max(0, 0.4 - p) * 2;
+        ctx.translate(cx, cy); ctx.scale(sc, sc); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "900 90px Impact, system-ui, sans-serif";
+        ctx.lineWidth = 5; ctx.strokeStyle = "#0a1a3a"; ctx.strokeText("K.O.", 0, 0);
+        ctx.fillStyle = "#ffe14d"; ctx.shadowColor = "#ff8c1a"; ctx.shadowBlur = 22; ctx.fillText("K.O.", 0, 0);
+        ctx.restore();
+    },
+};
+
+// 29 · mortal-kombat — red lightning bolts + "FLAWLESS VICTORY".
+_MAP["mortal-kombat"] = {
+    dur: 3000,
+    init(s) { s.bolts = Array.from({ length: 5 }, () => ({ x: _rand(0.15, 0.85) })); },
+    frame(s, ctx, W, H, p, now) {
+        const phase = Math.floor(now / 60);
+        const rnd = (i) => { const v = Math.sin(i * 12.9 + phase * 7.1) * 43758.5; return v - Math.floor(v); };
+        ctx.save(); ctx.strokeStyle = "#ff2b1f"; ctx.lineWidth = 2; ctx.shadowColor = "#ff3b2f"; ctx.shadowBlur = 10;
+        s.bolts.forEach((bl, bi) => {
+            ctx.beginPath(); let x = bl.x * W;
+            for (let y = 0; y <= H; y += 24) { x += (rnd(bi * 10 + y) - 0.5) * 26; y ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+            ctx.stroke();
+        });
+        ctx.globalAlpha = Math.min(1, p * 2); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "900 46px 'Times New Roman', Georgia, serif";
+        ctx.fillStyle = "#c1121f"; ctx.shadowColor = "#ff5a4d"; ctx.shadowBlur = 20;
+        ctx.fillText("FLAWLESS", W / 2, H / 2 - 26);
+        ctx.fillText("VICTORY", W / 2, H / 2 + 26);
+        ctx.restore();
+    },
+};
+
+// 30 · doom — green plasma burst + blood-red flash + "RIP AND TEAR".
+_MAP["doom"] = {
+    dur: 2600,
+    init(s, W, H, I) { s.ps = Array.from({ length: Math.round(60 * I) }, () => ({ a: _rand(0, Math.PI * 2), sp: _rand(4, 11), life: _rand(0.5, 1) })); },
+    frame(s, ctx, W, H, p, now) {
+        p = p < 0 ? 0 : p > 1 ? 1 : p;   // guard: p<0 lead-in would make plasma radii negative
+        const cx = W / 2, cy = H / 2;
+        ctx.save();
+        ctx.fillStyle = `rgba(140,10,10,${Math.max(0, 0.5 - p)})`; ctx.fillRect(0, 0, W, H);
+        for (const q of s.ps) {
+            const r = q.sp * p * 42, al = Math.max(0, q.life - p);
+            ctx.globalAlpha = al; ctx.fillStyle = "#7cff4d"; ctx.shadowColor = "#39ff14"; ctx.shadowBlur = 10;
+            ctx.beginPath(); ctx.arc(cx + Math.cos(q.a) * r, cy + Math.sin(q.a) * r, 3, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = Math.min(1, p * 2); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "900 44px Impact, system-ui, sans-serif";
+        ctx.fillStyle = "#ff3b1f"; ctx.shadowColor = "#ff7a1e"; ctx.shadowBlur = 18;
+        ctx.fillText("RIP AND TEAR", cx, cy);
+        ctx.restore();
+    },
+};
+
+// 31 · metroid — Samus's charge blast rings out in orange energy.
+_MAP["metroid"] = {
+    dur: 2600,
+    init(s) { s.rings = 3; },
+    frame(s, ctx, W, H, p, now) {
+        p = p < 0 ? 0 : p > 1 ? 1 : p;   // guard: p<0 lead-in would make ring/orb radii negative
+        const cx = W / 2, cy = H / 2;
+        ctx.save();
+        for (let k = 0; k < s.rings; k++) {
+            const rp = p * 1.3 - k * 0.15; if (rp < 0 || rp > 1) continue;
+            ctx.globalAlpha = 1 - rp; ctx.strokeStyle = "#ff9a3a"; ctx.lineWidth = 7 * (1 - rp);
+            ctx.shadowColor = "#ffb03a"; ctx.shadowBlur = 20;
+            ctx.beginPath(); ctx.arc(cx, cy, rp * Math.min(W, H) * 0.5, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.fillStyle = "#fff0c8"; ctx.shadowColor = "#ffb03a"; ctx.shadowBlur = 26;
+        ctx.beginPath(); ctx.arc(cx, cy, 16 * (0.6 + 0.4 * Math.sin(now / 90)) * (1 - p * 0.5), 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+    },
+};
+
+// 32 · elden-ring — golden "ENEMY FELLED" with rising erdtree embers.
+_MAP["elden-ring"] = {
+    dur: 3200,
+    init(s, W, H, I) { s.emb = Array.from({ length: Math.round(60 * I) }, () => ({ x: _rand(0, W), y: _rand(H * 0.5, H), sp: _rand(0.4, 1.4), ph: _rand(0, 6) })); },
+    frame(s, ctx, W, H, p, now) {
+        for (const e of s.emb) {
+            e.y -= e.sp * 2.2;
+            ctx.globalAlpha = 0.8; ctx.fillStyle = "#ffdf7e"; ctx.shadowColor = "#ffcf4d"; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.arc(e.x + Math.sin(now / 400 + e.ph) * 6, e.y, 1.8, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = Math.min(1, p * 1.6); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "600 40px 'Times New Roman', Georgia, serif";
+        ctx.fillStyle = "#e8c14a"; ctx.shadowColor = "#ffe27a"; ctx.shadowBlur = 22;
+        ctx.fillText("ENEMY FELLED", W / 2, H / 2);
+        ctx.globalAlpha = Math.min(1, p * 1.6) * 0.8; ctx.strokeStyle = "#c9a227"; ctx.lineWidth = 1.5; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.moveTo(W * 0.3, H / 2 + 26); ctx.lineTo(W * 0.7, H / 2 + 26); ctx.stroke();
+        ctx.globalAlpha = 1;
+    },
+};
+
+// 33 · among-us — a crewmate parade slides across under "VICTORY".
+_MAP["among-us"] = {
+    dur: 2800,
+    init(s, W, H) {
+        const C = ["#c51111", "#132ed1", "#117f2d", "#ed54ba", "#f07d0d", "#f6f657", "#3f474e", "#d6e0f0"];
+        s.crew = Array.from({ length: 6 }, (_, i) => ({ x: -_rand(0, W * 0.5) - i * 60, y: H * (0.55 + (i % 2) * 0.12), col: C[i % C.length], sp: _rand(3, 5) }));
+    },
+    frame(s, ctx, W, H, p, now) {
+        for (const cm of s.crew) {
+            cm.x += cm.sp; const wob = Math.sin(now / 130 + cm.x / 40) * 2, R = Math.min(W, H) * 0.05;
+            ctx.save(); ctx.translate(cm.x, cm.y + wob);
+            ctx.fillStyle = cm.col; ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 6;
+            ctx.fillRect(-R * 1.3, -R * 0.4, R * 0.7, R * 1.2);
+            ctx.beginPath(); ctx.arc(0, -R * 0.3, R, Math.PI, 0); ctx.lineTo(R, R); ctx.lineTo(-R, R); ctx.closePath(); ctx.fill();
+            ctx.fillStyle = "#a9d3e8"; ctx.shadowBlur = 0;
+            ctx.beginPath(); ctx.ellipse(R * 0.35, -R * 0.4, R * 0.55, R * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+        }
+        ctx.globalAlpha = Math.min(1, p * 2); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "800 46px system-ui, sans-serif";
+        ctx.fillStyle = "#f6f657"; ctx.shadowColor = "#fff7a0"; ctx.shadowBlur = 16;
+        ctx.fillText("VICTORY", W / 2, H * 0.28);
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    },
+};
+
 /* ════════════════════ chimes ════════════════════ */
 let _audioCtx = null;
 function _tone(type, freq, t, dur, vol) {
@@ -843,7 +1228,7 @@ function _onSuccess() {
     } catch { /* ignore */ }
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.CompletionFX",
     // NOTE: ComfyUI's settings panel reads `defaultValue` — registering with
     // only `default` rendered every combo EMPTY (the reported "celebration

@@ -71,12 +71,27 @@ def apply_pag_to_model(model, pag_scale: float = 0.0,
         # identity-attention output. We use this to compute PAG direction.
         _scale = float(pag_scale)
 
+        # ComfyUI exposes a single `sampler_cfg_function` slot, so calling
+        # set_model_sampler_cfg_function REPLACES whatever was there. If an
+        # upstream patch (e.g. Dynamic CFG) already installed one, capture it
+        # and chain it so both take effect instead of PAG silently clobbering it.
+        _prior_cfg_fn = None
+        try:
+            _prior_cfg_fn = model_pag.model_options.get("sampler_cfg_function", None)
+        except Exception:  # noqa: BLE001
+            _prior_cfg_fn = None
+
         def _pag_cfg_function(args):
             cond = args["cond_denoised"]
             uncond = args["uncond_denoised"]
             cfg = args["cond_scale"]
 
-            guided = uncond + cfg * (cond - uncond)
+            if _prior_cfg_fn is not None:
+                # Build the guided base from the upstream cfg function so its
+                # adjustment (dynamic CFG ramp, rescale, etc.) is preserved.
+                guided = _prior_cfg_fn(args)
+            else:
+                guided = uncond + cfg * (cond - uncond)
 
             # PAG direction: push away from the perturbed (identity-attn) output.
             # Since the attn patch is installed, uncond already carries the

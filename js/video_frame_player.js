@@ -427,7 +427,7 @@ app.registerExtension({
                 // crop handle / drag inside crop
                 const hit = handleHit(mx, my);
                 if (hit) {
-                    cvs.setPointerCapture(e.pointerId);
+                    try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                     S.drag = hit;
                     const [cx, cy, cw, ch] = getCropNorm();
                     S._dragStart = { mx, my, cx, cy, cw, ch };
@@ -450,15 +450,17 @@ app.registerExtension({
                     const x0 = r.barX + t0 * r.barW;
                     const x1 = r.barX + t1 * r.barW;
                     if (Math.abs(mx - x0) <= TRIM_HANDLE_W) {
-                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-start"; return;
+                        try { cvs.setPointerCapture(e.pointerId); } catch (_) {}
+                        S.drag = "trim-start"; return;
                     }
                     if (Math.abs(mx - x1) <= TRIM_HANDLE_W) {
-                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-end"; return;
+                        try { cvs.setPointerCapture(e.pointerId); } catch (_) {}
+                        S.drag = "trim-end"; return;
                     }
                 }
                 // Timeline scrub
                 if (my >= r.y && my <= r.y + r.h && mx >= r.barX) {
-                    cvs.setPointerCapture(e.pointerId);
+                    try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                     S.drag = "tl";
                     const t = (mx - r.barX) / Math.max(1, r.barW);
                     setIdx(t * (S.frameCount - 1));
@@ -518,7 +520,7 @@ app.registerExtension({
             const up = (e) => {
                 S.drag = null;
                 S._dragStart = null;
-                try { cvs.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
+                try { cvs.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("video_frame_player.releaseCapture", __c2cErr, { level: "info" }); } // expected when pointer already inactive
             };
             cvs.addEventListener("pointerup", up);
             cvs.addEventListener("pointercancel", up);
@@ -835,12 +837,21 @@ app.registerExtension({
             const cur = S.images?.[S.idx];
             if (cur && cur.complete && cur.naturalWidth > 0) {
                 ctx.drawImage(cur, px, py, pw, ph);
+            } else if (!S.images || !S.images.length) {
+                // Nothing connected/queued yet → a helpful empty state (matches the
+                // spline tracker) instead of a permanent "loading..." on a black
+                // void, which read as broken. Literal hex — canvas-safe.
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillStyle = "#aab2c0"; ctx.font = "600 13px sans-serif";
+                ctx.fillText("Connect a video or image batch, then Queue once", px + pw / 2, py + ph / 2 - 9);
+                ctx.fillStyle = "#7a828e"; ctx.font = "11px sans-serif";
+                ctx.fillText("frames appear here to scrub, trim & crop", px + pw / 2, py + ph / 2 + 11);
             } else {
-                ctx.fillStyle = C.gray700;
+                ctx.fillStyle = "#8b93a0";
                 ctx.font = "12px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                ctx.fillText("loading...", px + pw / 2, py + ph / 2);
+                ctx.fillText("loading…", px + pw / 2, py + ph / 2);
             }
 
             // Preview border

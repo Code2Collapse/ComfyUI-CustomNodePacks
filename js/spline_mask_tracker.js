@@ -48,6 +48,22 @@ const COLOR = {
     danger: "var(--c2c-red)",
 };
 
+// Canvas2D CANNOT parse var() — it silently renders BLACK (the dead-space bug).
+// These COLOR values are drawn on the tracker's canvas (bg, keyframes, onion
+// skins, scrub bar), so resolve each var() to a literal hex once. CSS accepts
+// literals too, so DOM uses are unaffected. See var-in-canvas-bug.
+(() => {
+    let cs; try { cs = getComputedStyle(document.documentElement); } catch (_) { return; }
+    const FB = { "--c2c-bg2": "#181825", "--c2c-border": "#313244", "--c2c-fg": "#cdd6f4",
+        "--c2c-overlay1": "#7f849c", "--c2c-green": "#a6e3a1", "--c2c-blue": "#89b4fa",
+        "--c2c-yellow": "#f9e2af", "--c2c-peach": "#fab387", "--c2c-red": "#f38ba8" };
+    for (const k in COLOR) {
+        const m = String(COLOR[k]).match(/var\(\s*(--[a-z0-9-]+)\s*\)/i);
+        if (!m) continue;
+        COLOR[k] = ((cs.getPropertyValue(m[1]) || "").trim()) || FB[m[1]] || "#cdd6f4";
+    }
+})();
+
 const POINT_HIT_PX  = 8;
 const SCRUB_HEIGHT  = 28;
 const HISTORY_LIMIT = 80;
@@ -320,6 +336,24 @@ function draw(state, ctx, vw, vh) {
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, state.canvasW, state.canvasH);
     }
+
+    // No frames loaded yet → fill the empty canvas with a clear prompt instead
+    // of a blank black void (which read as "broken UI"). Drawn in screen space
+    // so it stays centred and legible regardless of zoom/pan.
+    if (!state.frames.length) {
+        ctx.restore();           // undo the zoom/pan transform from above
+        ctx.save();
+        ctx.fillStyle = "#9aa6b2";   // literal: canvas can't parse var(--…)
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const cx = vw / 2, cy = vh / 2;
+        ctx.font = "600 13px Inter, system-ui, sans-serif";
+        ctx.fillText("Connect a video / image batch, then Queue once", cx, cy - 10);
+        ctx.font = "11px Inter, system-ui, sans-serif";
+        ctx.fillText("…and click  ↻ Reload frames  to scrub + set keyframes.", cx, cy + 12);
+        ctx.restore();
+        return;
+    }
     ctx.strokeStyle = C.surface1;
     ctx.lineWidth = 1 / z;
     ctx.strokeRect(0, 0, state.canvasW, state.canvasH);
@@ -557,12 +591,23 @@ function installEditor(node) {
     tb.appendChild(btnClearAll);
 
     let widgetH = 540;
+    const TRK_MIN_H = 260, TRK_MAX_H = 900;
     const canvasWidget = node.addDOMWidget("tracker_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
+        getMaxHeight: () => TRK_MAX_H,
     });
+    // Size the DOM widget the ComfyUI-blessed way (confirmed against the frontend
+    // domWidget source): `computeLayoutSize` reads getMinHeight/getHeight/getMaxHeight
+    // and the node auto-expands to fit — no dead space. The OLD code recomputed the
+    // height from node.size and CLAMPED it (min(640, extra-24)), which pinned the
+    // frame canvas small / left a black band. `widgetH` is now the single source of
+    // truth, and the element's own style.height is set so the wrapper matches.
+    canvasWidget.computeLayoutSize = () => ({ minHeight: TRK_MIN_H, maxHeight: TRK_MAX_H });
+    canvasWidget.computeSize = function (width) { return [width, Math.max(TRK_MIN_H, widgetH)]; };
+    try { root.style.height = widgetH + "px"; } catch (_) {}
 
     node._mecSplineTrackHost = root;
     node._mecSplineTrackWidget = canvasWidget;
@@ -571,6 +616,27 @@ function installEditor(node) {
     if (!node.size || node.size[0] < 620) {
         const h = node.size?.[1] || 720;
         node.setSize?.([620, Math.max(h, 720)]);
+    }
+
+    // Keep the node wide enough for a usable frame-viewer while an editing mode
+    // is active. The mode-gate calls node.setSize(node.computeSize()); the node's
+    // own computeSize returns the narrow widget-driven width, which snapped track
+    // mode back to ~281px (collapsed frame canvas + dead space). The edit editor
+    // installs the same guard — but if the node opens straight into track mode
+    // that installer never ran, so re-assert it here (idempotent via the flag).
+    const MIN_EDIT_W = 600;
+    const _editorModeActive = () => {
+        const mv = node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "";
+        return mv === "edit" || mv === "flow_path" || mv === "track";
+    };
+    if (!node._mecSplineCSPatched) {
+        node._mecSplineCSPatched = true;
+        const _origCS = typeof node.computeSize === "function" ? node.computeSize.bind(node) : null;
+        node.computeSize = function (w) {
+            const sz = _origCS ? _origCS(w) : [MIN_EDIT_W, 380];
+            try { if (_editorModeActive()) sz[0] = Math.max(sz[0] || 0, MIN_EDIT_W); } catch (_) {}
+            return sz;
+        };
     }
 
     // ── Frame loading ───────────────────────────────────────────────
@@ -625,6 +691,13 @@ function installEditor(node) {
 
     // ── Render ──────────────────────────────────────────────────────
     function render() {
+        // Explicitly fill the host height. `canvasWrap` is flex:1 1 auto, but
+        // ComfyUI's DOM-widget layout does NOT reliably distribute height to a
+        // <canvas> child — it collapsed to 1px, leaving the frame viewer a dead
+        // black band. Size it = host height − toolbar (same fix as points_bbox).
+        const hostH = root.clientHeight || root.offsetHeight || 0;
+        const tbH = tb.offsetHeight || 0;
+        if (hostH > tbH + 60) canvasWrap.style.height = (hostH - tbH) + "px";
         const r = canvasWrap.getBoundingClientRect();
         const vw = Math.max(1, r.width);
         const vh = Math.max(1, r.height - SCRUB_HEIGHT);
@@ -889,7 +962,12 @@ app.registerExtension({
                     installer: (n) => installEditor(n),
                     hostFinder: (n) => n._mecSplineTrackHost || null,
                     widgetFinder: (n) => n._mecSplineTrackWidget || null,
-                    widgetHeight: 520,
+                    // MUST be a function: the mode-gate only honours a function
+                    // here. A static number is ignored in favour of the spline
+                    // EDIT editor's height (node._mecSplineEditWidgetH ≈ 220),
+                    // which collapsed the track frame-canvas to ~186px / 1px.
+                    widgetHeight: (n) => (typeof n._mecSplineTrackWidgetH === "function"
+                        ? n._mecSplineTrackWidgetH() : 540),
                 });
             } else {
                 setTimeout(() => installEditor(node), 0);

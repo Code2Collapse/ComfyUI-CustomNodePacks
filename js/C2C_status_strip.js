@@ -23,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 
 const HOST_ID = "c2c-status-strip";
 
@@ -201,7 +202,7 @@ function _start() {
     _ensureHost();
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.StatusStrip",
     settings: [
         {

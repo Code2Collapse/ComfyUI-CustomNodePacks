@@ -11,6 +11,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { forAllNodes } from "./_subgraph_walk.js";
 
@@ -180,7 +181,7 @@ function _scanAll() {
     forAllNodes((n) => { _attachToNode(n); });
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.TokenCounter",
     settings: [
         {

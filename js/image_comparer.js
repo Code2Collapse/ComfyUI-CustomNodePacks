@@ -90,7 +90,7 @@ app.registerExtension({
                 }
 
                 // Start drag
-                cvs.setPointerCapture(e.pointerId);
+                try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                 S.drag = true;
                 S.labelOpacity = 0.15;
                 if (S._fadeTimer) clearTimeout(S._fadeTimer);

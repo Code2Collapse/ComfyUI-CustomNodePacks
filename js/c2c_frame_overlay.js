@@ -16,6 +16,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 
 const STYLE_ID = "mec-frame-overlay-style";
@@ -220,7 +221,7 @@ function _onExecuted(node, output) {
     if (state.update) state.update();
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.FrameOverlay",
     settings: [
         {

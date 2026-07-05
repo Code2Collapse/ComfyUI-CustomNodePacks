@@ -23,8 +23,8 @@
  *   - Restore from saved timeline_data on graph load
  */
 
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "/scripts/app.js";
+import { api } from "/scripts/api.js";
 import { C, reducedMotion } from './_c2c_theme.js';
 import { reportFailure } from './_c2c_report.js';
 import {
@@ -39,6 +39,7 @@ import {
 const RULER_H = 22;
 const IMG_TRACK_H = 96;
 const AUD_TRACK_H = 48;
+const VID_TRACK_H = 76;          // Control-Video track (filmstrip of imported clips)
 const PROPS_MIN_H = 88;
 const TOOLBAR_H = 28;
 const PLAYER_BAR_H = 24;
@@ -80,6 +81,12 @@ const V2_LABEL_PX = 38;
 const CAMERA_TYPES = ["static", "pan", "zoom", "orbit", "dolly"];
 const SEED_MODES = ["fixed", "increment", "random_per_frame"];
 const POSE_INTERP = ["nearest", "linear"];
+
+// Total canvas height for all stacked tracks (ruler + image + audio + video +
+// the four v2 automation lanes). Single source of truth so a new track can't
+// be added in one layout site and forgotten in another.
+const TRACKS_CANVAS_H = RULER_H + IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H + V2_TOTAL_H;
+const VID_THUMBS = 8;            // filmstrip thumbnails decoded per video clip
 
 const HIDDEN_NAMES = new Set([
     "timeline_data", "local_prompts", "negative_prompts",
@@ -135,17 +142,40 @@ async function uploadFile(file, type) {
     fd.append("image", file);     // ComfyUI's /upload/image accepts "image"
     fd.append("overwrite", "true");
     fd.append("type", "input");
-    const url = type === "audio" ? "/upload/audio" : "/upload/image";
+    // BUG FIX (2026-07): ComfyUI has NO /upload/audio route (POST → HTTP 405),
+    // so "+ Audio" uploads always failed silently and nothing appeared on the
+    // track. /upload/image stores ANY file type into input/ (verified: it 200s
+    // for .wav/.mp3 too), so route BOTH audio and video through it.
     try {
-        const r = await api.fetchApi(url, { method: "POST", body: fd });
-        if (!r.ok) return null;
+        const r = await api.fetchApi("/upload/image", { method: "POST", body: fd });
+        if (!r.ok) {
+            reportFailure("WanDirector.uploadFile",
+                new Error(`upload HTTP ${r.status} for ${file && file.name}`),
+                "wan_director_timeline");
+            _uploadToast(file, `the server refused the upload (HTTP ${r.status})`);
+            return null;
+        }
         const j = await r.json();
         // returns { name, subfolder, type }
         return j;
     } catch (e) {
         reportFailure("WanDirector.uploadFile", e, "wan_director_timeline");
+        _uploadToast(file, String((e && e.message) || e || "network error"));
         return null;
     }
+}
+
+// A failed import must NEVER be silent — that reads as "the button is broken".
+function _uploadToast(file, why) {
+    try {
+        app.extensionManager.toast.add({
+            severity: "error",
+            summary: "WanDirector — import failed",
+            detail: `${file && file.name ? file.name : "file"}: ${why}. ` +
+                    "The clip was not added to the timeline.",
+            life: 7000,
+        });
+    } catch (_) { /* toast API absent on very old frontends — console has it */ }
 }
 
 // Decode audio to peaks + duration. Returns {durFrames, peaks[]}.
@@ -177,6 +207,7 @@ class TimelineEditor {
         this.container = container;
         this.segments = [];        // {id,type,start,length,prompt,imageFile,imageB64,guideStrength}
         this.audioSegments = [];   // {id,start,length,trimStart,audioDurationFrames,audioFile,fileName,waveformPeaks}
+        this.motionSegments = [];  // {id,type:"video",start,length,trimStart,videoFile,fileName,srcDurationFrames}; backend → control_video
         // v2 automation tracks (see V2_DEFS). Each is an array on `this`
         // keyed by its schema name so _segArr() can resolve it generically.
         this.loraSegments = [];
@@ -201,7 +232,28 @@ class TimelineEditor {
         this._buildDOM();
         this._loadFromWidgets();
         this._wireEvents();
+        this._wireWidgetSync();   // live-refresh when duration/fps/variant widgets change
         this.render();
+    }
+
+    /** Re-render the timeline whenever a driving litegraph widget changes, so
+     *  values like duration_frames / frame_rate / variant update in real time
+     *  (the getters are live; this just triggers the repaint). */
+    _wireWidgetSync() {
+        const names = ["duration_frames", "frame_rate", "duration_seconds",
+                       "model_variant", "display_mode"];
+        for (const name of names) {
+            const w = (this.node.widgets || []).find((x) => x.name === name);
+            if (!w || w.__wdSynced) continue;
+            const orig = w.callback;
+            const self = this;
+            w.callback = function (...a) {
+                const r = orig ? orig.apply(this, a) : undefined;
+                (self.scheduleRender ? self.scheduleRender() : self.render());
+                return r;
+            };
+            w.__wdSynced = true;
+        }
     }
 
     // ── Convenience widget accessors ──
@@ -212,6 +264,7 @@ class TimelineEditor {
         let mx = 0;
         for (const s of this.segments)      mx = Math.max(mx, s.start + s.length);
         for (const s of this.audioSegments) mx = Math.max(mx, s.start + s.length);
+        for (const s of this.motionSegments) mx = Math.max(mx, s.start + s.length);
         return Math.max(mx, Math.round(this.durFrames * 1.30));
     }
 
@@ -242,7 +295,9 @@ class TimelineEditor {
         };
         this.btnAddText  = mkBtn("+ Text",  "Add a text-only segment");
         this.btnAddImage = mkBtn("+ Image", "Upload an image segment");
+        this.btnAddVideo = mkBtn("+ Video", "Import a video clip onto the Control-Video track (mp4/mov/webm…)");
         this.btnAddAudio = mkBtn("+ Audio", "Upload an audio segment");
+        this.btnSplit    = mkBtn("Split ✂", "Split the selected clip at the playhead (S)");
         this.btnDelete   = mkBtn("Delete",  "Delete selected segment (Delete key)");
         this.btnPlay     = mkBtn("▶",       "Play / Pause (Space)");
         this.btnZoomOut  = mkBtn("−",       "Zoom out");
@@ -257,7 +312,8 @@ class TimelineEditor {
         const status = document.createElement("span");
         status.style.cssText = "margin-left:auto;font-size:10.5px;color:var(--c2c-sub);font-family:ui-monospace,monospace;";
         this.statusEl = status;
-        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddAudio, this.btnDelete,
+        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddAudio,
+                          this.btnSplit, this.btnDelete,
                           this.btnPlay, this.btnZoomOut, this.btnZoomIn, this.btnFit, modeSel, status]) {
             tb.appendChild(el);
         }
@@ -268,11 +324,11 @@ class TimelineEditor {
         wrap.style.cssText = "position:relative;width:100%;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
-        this.cvs.style.cssText = "display:block;width:100%;height:" + (RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H) + "px;outline:none;cursor:default;";
+        this.cvs.style.cssText = "display:block;width:100%;height:" + TRACKS_CANVAS_H + "px;outline:none;cursor:default;";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
         dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:var(--c2c-white);font-size:14px;border:2px dashed var(--c2c-blue);border-radius:4px;";
-        dropHint.textContent = "Drop image or audio file here";
+        dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
         root.appendChild(wrap);
@@ -368,16 +424,25 @@ class TimelineEditor {
         // Hidden file inputs
         this.fileImg = document.createElement("input");
         this.fileImg.type = "file"; this.fileImg.accept = "image/*"; this.fileImg.style.display = "none";
+        this.fileVid = document.createElement("input");
+        this.fileVid.type = "file";
+        // Any format: web video + pro/cinema (EXR, DPX, ProRes, DNxHD, MXF/DCP,
+        // JPEG2000). image/* is included because EXR/DPX carry no video MIME type.
+        this.fileVid.accept = "video/*,image/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,.gif,.mxf,.mts,.m2ts,.exr,.dpx,.hdr,.dnxhd,.prores,.j2k,.jp2,.jpc";
+        this.fileVid.style.display = "none";
         this.fileAud = document.createElement("input");
         this.fileAud.type = "file"; this.fileAud.accept = "audio/*"; this.fileAud.style.display = "none";
         root.appendChild(this.fileImg);
+        root.appendChild(this.fileVid);
         root.appendChild(this.fileAud);
     }
 
     _wireEvents() {
         this.btnAddText.onclick  = () => this.addTextSegment();
         this.btnAddImage.onclick = () => this.fileImg.click();
+        this.btnAddVideo.onclick = () => this.fileVid.click();
         this.btnAddAudio.onclick = () => this.fileAud.click();
+        this.btnSplit.onclick    = () => this.splitSelectedAtPlayhead();
         this.btnDelete.onclick   = () => this.deleteSelected();
         this.btnPlay.onclick     = () => this.togglePlay();
         this.btnZoomIn.onclick   = () => this.setZoom(this.zoom * 1.4);
@@ -387,6 +452,10 @@ class TimelineEditor {
         this.fileImg.onchange = async () => {
             for (const f of this.fileImg.files) await this.addImageSegmentFromFile(f);
             this.fileImg.value = "";
+        };
+        this.fileVid.onchange = async () => {
+            for (const f of this.fileVid.files) await this.addVideoSegmentFromFile(f);
+            this.fileVid.value = "";
         };
         this.fileAud.onchange = async () => {
             for (const f of this.fileAud.files) await this.addAudioSegmentFromFile(f);
@@ -425,7 +494,9 @@ class TimelineEditor {
             const files = Array.from(e.dataTransfer?.files || []);
             let accepted = 0;
             for (const f of files) {
-                if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
+                if (f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi|m4v|mxf|mts|m2ts|exr|dpx|hdr|dnxhd|prores|j2k|jp2|jpc)$/i.test(f.name)) {
+                    await this.addVideoSegmentFromFile(f); accepted += 1;
+                } else if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
                 else if (f.type.startsWith("audio/")) { await this.addAudioSegmentFromFile(f); accepted += 1; }
             }
             if (accepted === 0 && files.length > 0) {
@@ -458,6 +529,7 @@ class TimelineEditor {
         // Keyboard (canvas focused)
         this.cvs.addEventListener("keydown", (e) => {
             if (e.key === "Delete" || e.key === "Backspace") { this.deleteSelected(); e.preventDefault(); }
+            else if (e.key === "s" || e.key === "S") { this.splitSelectedAtPlayhead(); e.preventDefault(); }
             else if (e.code === "Space") { this.togglePlay(); e.preventDefault(); }
             else if (e.key === "ArrowLeft")  { this.stepPlayhead(-1); e.preventDefault(); }
             else if (e.key === "ArrowRight") { this.stepPlayhead(+1); e.preventDefault(); }
@@ -485,8 +557,10 @@ class TimelineEditor {
         if (tl) {
             this.segments = Array.isArray(tl.segments) ? tl.segments : [];
             this.audioSegments = Array.isArray(tl.audioSegments) ? tl.audioSegments : [];
+            this.motionSegments = Array.isArray(tl.motionSegments) ? tl.motionSegments : [];
             for (const s of this.segments)      if (!s.id) s.id = nid();
             for (const s of this.audioSegments) if (!s.id) s.id = nid();
+            for (const s of this.motionSegments) { if (!s.id) s.id = nid(); s.type = "video"; }
             // v2 automation tracks (load, tolerate missing/legacy v1 docs).
             for (const k of V2_KEYS) {
                 this[k] = Array.isArray(tl[k]) ? tl[k] : [];
@@ -496,6 +570,9 @@ class TimelineEditor {
         this.suppressCommit = false;
         // Async image preload
         for (const s of this.segments) this._preloadImage(s);
+        // Thumbnails for video clips aren't stored in the JSON (would bloat the
+        // workflow); regenerate them from the uploaded file on load.
+        for (const s of this.motionSegments) this._regenVideoThumbs(s);
     }
 
     commitChanges() {
@@ -520,10 +597,23 @@ class TimelineEditor {
             fileName:  s.fileName  || "",
             waveformPeaks: s.waveformPeaks || [],
         }));
+        // Control-Video track: the backend's _build_control_video reads
+        // `motionSegments` (videoFile + start/length/trimStart in frames) and
+        // decodes them into the control_video output. Thumbnails are NOT
+        // persisted (they're regenerated from the file on load) to keep the
+        // workflow JSON small.
+        const motionOut = this.motionSegments.map(s => ({
+            id: s.id, type: "video", start: s.start, length: s.length,
+            trimStart: s.trimStart || 0,
+            videoFile: s.videoFile || "",
+            fileName:  s.fileName  || "",
+            srcDurationFrames: s.srcDurationFrames || 0,
+            prompt: s.prompt || "",
+        }));
         // schema v2: preserve the four automation tracks so they survive an
         // edit (and reach the backend's tracks_program). Without this, any
         // image/audio edit would silently wipe the LoRA/camera/seed/pose data.
-        const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut };
+        const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut, motionSegments: motionOut };
         for (const k of V2_KEYS) tlOut[k] = (this[k] || []).map(s => ({ ...s }));
         writeWidget(this.node, "timeline_data", JSON.stringify(tlOut));
         // local_prompts: pipe-delimited, image+text segments sorted by start
@@ -546,7 +636,7 @@ class TimelineEditor {
     // ── Segment creation ────────────────────────────────────────────
     _findFreeSlot(length, track) {
         // Try to place at the end of the existing segments, else fall back to 0.
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(track);
         let cursor = 0;
         for (const s of arr.sort((a, b) => a.start - b.start)) {
             cursor = Math.max(cursor, s.start + s.length);
@@ -604,6 +694,163 @@ class TimelineEditor {
         this.audioBuffers.set(filename, peaksInfo.audio);
         this.audioSegments.push(seg);
         this.selection = { type: "audio", idx: this.audioSegments.length - 1 };
+        this.commitChanges();
+        this._updatePropsPanel();
+    }
+
+    // ── Control-Video clips ─────────────────────────────────────────
+    /** Load a video src (object URL or /view URL) just far enough to read its
+     *  duration/size and grab a strip of poster thumbnails. */
+    _decodeVideoMeta(src) {
+        return new Promise((resolve, reject) => {
+            const v = document.createElement("video");
+            v.muted = true; v.crossOrigin = "anonymous"; v.preload = "auto";
+            v.playsInline = true; v.src = src;
+            let done = false;
+            const fail = (e) => { if (!done) { done = true; reject(e || new Error("video decode failed")); } };
+            v.onerror = () => fail(new Error("video load error"));
+            v.onloadedmetadata = async () => {
+                const durationSec = isFinite(v.duration) ? v.duration : 0;
+                const width = v.videoWidth, height = v.videoHeight;
+                let thumbs = [];
+                try { thumbs = await this._captureThumbs(v, VID_THUMBS); } catch (_) {}
+                if (!done) { done = true; resolve({ durationSec, width, height, thumbs }); }
+            };
+            setTimeout(() => fail(new Error("video decode timeout")), 15000);
+        });
+    }
+
+    /** Seek a loaded <video> to `count` evenly-spaced times and snapshot each
+     *  frame to a small JPEG <img> for the timeline filmstrip. */
+    _captureThumbs(v, count) {
+        return new Promise((resolve) => {
+            const dur = (isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
+            if (!dur) { resolve([]); return; }
+            const ch = 64;
+            const ar = (v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
+            const cw = Math.max(1, Math.round(ch * ar));
+            const cvs = document.createElement("canvas");
+            cvs.width = cw; cvs.height = ch;
+            const ctx = cvs.getContext("2d");
+            const times = [];
+            for (let k = 0; k < count; k++) times.push(Math.min(dur - 0.01, (dur * (k + 0.5)) / count));
+            const thumbs = [];
+            let i = 0, guard = null;
+            const cleanup = () => { v.removeEventListener("seeked", onSeeked); if (guard) clearTimeout(guard); };
+            const arm = () => { guard = setTimeout(() => { cleanup(); resolve(thumbs); }, 4000); };
+            const grab = () => {
+                try { ctx.drawImage(v, 0, 0, cw, ch); const img = new Image(); img.src = cvs.toDataURL("image/jpeg", 0.6); thumbs.push(img); } catch (_) {}
+                i += 1;
+                if (i < times.length) { v.currentTime = times[i]; }
+                else { cleanup(); resolve(thumbs); }
+            };
+            const onSeeked = () => { if (guard) { clearTimeout(guard); guard = null; } grab(); arm(); };
+            v.addEventListener("seeked", onSeeked);
+            v.currentTime = times[0];
+            arm();
+        });
+    }
+
+    /** Probe an uploaded media file on the SERVER (ffmpeg / OpenCV) — works for
+     *  ANY format incl. EXR / DPX / ProRes / DNxHD / MXF-DCP / 4K, returning
+     *  metadata + downscaled thumbnails the browser could never decode itself.
+     *  This is the universal path; the client <video> decode is only a fallback
+     *  for web-friendly formats when this endpoint is unavailable. */
+    async _probeMediaServer(inputName, opts = {}) {
+        try {
+            const q = new URLSearchParams({ file: inputName, count: String(VID_THUMBS), height: "80" });
+            if (opts.exrView) q.set("exr_view", opts.exrView);
+            const r = await api.fetchApi("/wne/media_probe?" + q.toString());
+            if (!r.ok) return null;
+            const j = await r.json();
+            if (!j || !j.ok) return null;
+            const thumbs = (j.thumbs || []).map((d) => { const im = new Image(); im.src = d; return im; });
+            return { durationSec: j.durationSec || 0, fps: j.fps || 0, frameCount: j.frameCount || 0,
+                     width: j.width || 0, height: j.height || 0, thumbs, kind: j.kind };
+        } catch (e) { return null; }
+    }
+
+    /** Re-decode thumbnails for a saved clip from its uploaded input file. */
+    _regenVideoThumbs(seg) {
+        if (!seg.videoFile) return;
+        this._probeMediaServer(seg.videoFile).then((meta) => {
+            if (meta && meta.thumbs && meta.thumbs.length) {
+                seg._thumbs = meta.thumbs;
+                if (!seg.srcDurationFrames && meta.frameCount > 1) seg.srcDurationFrames = meta.frameCount;
+                seg._thumbs.forEach((im) => { im.onload = () => this.render(); });
+                this.render();
+                return;
+            }
+            // fallback: client <video> decode for web-friendly formats only
+            if (/\.(mp4|webm|m4v|mov|ogg|gif)$/i.test(seg.videoFile)) {
+                const parts = seg.videoFile.split("/");
+                const name = parts.pop(); const sub = parts.join("/");
+                const url = `/view?filename=${encodeURIComponent(name)}&subfolder=${encodeURIComponent(sub)}&type=input`;
+                this._decodeVideoMeta(url).then((m) => { seg._thumbs = m.thumbs || []; this.render(); }).catch(() => {});
+            }
+        });
+    }
+
+    async addVideoSegmentFromFile(file) {
+        // Upload first (the server probe reads from input/), then decode on the
+        // SERVER — that path handles EVERY format (EXR/DCP/ProRes/DNxHD/4K). A
+        // client <video> decode is only a fallback for web-friendly formats when
+        // the endpoint is missing, so we never hang on an undecodable pro file.
+        const res = await uploadFile(file, "image");   // /upload/image stores ANY file in input/
+        if (!res) return;
+        const filename = res.subfolder ? `${res.subfolder}/${res.name}` : res.name;
+        const fps = this.fps;
+        let meta = await this._probeMediaServer(filename);
+        if (!meta && /\.(mp4|webm|m4v|mov|ogg|gif)$/i.test(file.name)) {
+            const objUrl = URL.createObjectURL(file);
+            try { meta = await this._decodeVideoMeta(objUrl); } catch (_) {}
+            URL.revokeObjectURL(objUrl);
+        }
+        meta = meta || { durationSec: 0, fps: 0, frameCount: 0, width: 0, height: 0, thumbs: [] };
+        // A single still (EXR/DPX with no duration) is holdable for any length, so
+        // leave srcDurationFrames=0 (the resize clamp only applies when it's >0).
+        const still = (meta.frameCount || 0) <= 1 && (meta.durationSec || 0) <= 0;
+        const srcFrames = still ? 0
+            : (meta.frameCount > 0 ? meta.frameCount
+               : Math.max(1, Math.round((meta.durationSec || 2) * (meta.fps || fps))));
+        const length = still
+            ? Math.min(this.durFrames, Math.max(MIN_SEG_FRAMES, Math.round(fps * 2)))
+            : Math.max(MIN_SEG_FRAMES, Math.min(srcFrames, this.durFrames));
+        const start = this._findFreeSlot(length, "video");
+        const seg = {
+            id: nid(), type: "video", start, length, trimStart: 0,
+            videoFile: filename, fileName: file.name,
+            srcDurationFrames: srcFrames, srcDurationSec: meta.durationSec || 0,
+            srcW: meta.width || 0, srcH: meta.height || 0, kind: meta.kind || "video",
+            prompt: "", _thumbs: meta.thumbs || [],
+        };
+        this.motionSegments.push(seg);
+        this.selection = { type: "video", idx: this.motionSegments.length - 1 };
+        this.commitChanges();
+        this._updatePropsPanel();
+        (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
+    }
+
+    /** Split the selected clip at the playhead into two clips. For media clips
+     *  (video/audio) the second half's source in-point (trimStart) advances so
+     *  playback is continuous across the cut. */
+    splitSelectedAtPlayhead() {
+        const seg = this._selSeg();
+        if (!seg) return;
+        const { type } = this.selection;
+        const ph = this.playhead;
+        if (ph <= seg.start + MIN_SEG_FRAMES || ph >= seg.start + seg.length - MIN_SEG_FRAMES) return;
+        const arr = this._segArr(type);
+        const firstLen = ph - seg.start;
+        const secondLen = seg.length - firstLen;
+        const clone = { ...seg };                       // shallow → shares _thumbs/_imgUrl for display
+        clone.id = nid();
+        clone.start = ph;
+        clone.length = secondLen;
+        if (type === "video" || type === "audio") clone.trimStart = (seg.trimStart || 0) + firstLen;
+        seg.length = firstLen;
+        arr.push(clone);
+        if (type === "image") this._preloadImage(clone);
         this.commitChanges();
         this._updatePropsPanel();
     }
@@ -673,10 +920,12 @@ class TimelineEditor {
     _segArr(segType) {
         if (segType === "audio") return this.audioSegments;
         if (segType === "image") return this.segments;
+        if (segType === "video") return this.motionSegments;
         return this[segType] || [];
     }
     _isV2(segType) { return V2_KEYS.includes(segType); }
-    _v2Base() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H; }
+    _vidTop() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H; }
+    _v2Base() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H; }
     _v2LaneTop(li) { return this._v2Base() + li * V2_LANE_H; }
     _v2DefForType(segType) { return V2_DEFS.find(d => d.key === segType) || null; }
 
@@ -700,8 +949,9 @@ class TimelineEditor {
             return { kind: "track", track: segType };
         }
         const imgBot = RULER_H + IMG_TRACK_H;
-        const track = (my < imgBot) ? "image" : "audio";
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const audBot = imgBot + AUD_TRACK_H;          // === _vidTop()
+        const track = (my < imgBot) ? "image" : (my < audBot) ? "audio" : "video";
+        const arr = this._segArr(track);
         for (let i = 0; i < arr.length; i++) {
             const s = arr[i];
             const x1 = this._frameToX(s.start);
@@ -739,6 +989,13 @@ class TimelineEditor {
             if (this._isV2(hit.segType)) this._updateV2Props(); else this._updatePropsPanel();
             this.render();
             return;
+        }
+        // Empty-track "+" add-affordance click → add a clip there (LTX-style).
+        if (this._addHints) {
+            const img = this._addHints.image, aud = this._addHints.audio, vid = this._addHints.video;
+            if (img && Math.hypot(mx - img.cx, my - img.cy) <= img.r) { this.fileImg?.click(); return; }
+            if (vid && Math.hypot(mx - vid.cx, my - vid.cy) <= vid.r) { this.fileVid?.click(); return; }
+            if (aud && Math.hypot(mx - aud.cx, my - aud.cy) <= aud.r) { this.fileAud?.click(); return; }
         }
         // Empty track click — clear selection
         this.selection = { type: null, idx: -1 };
@@ -778,6 +1035,8 @@ class TimelineEditor {
                 seg.length = Math.max(MIN_SEG_FRAMES, ds.origLength + delta);
                 if (ds.segType === "audio" && seg.audioDurationFrames) {
                     seg.length = Math.min(seg.length, seg.audioDurationFrames - (seg.trimStart || 0));
+                } else if (ds.segType === "video" && seg.srcDurationFrames) {
+                    seg.length = Math.min(seg.length, seg.srcDurationFrames - (seg.trimStart || 0));
                 }
                 this._resolveCollisions(ds.segType, ds.idx);
             } else if (ds.edge === "left") {
@@ -787,7 +1046,7 @@ class TimelineEditor {
                 if (newLen >= MIN_SEG_FRAMES) {
                     seg.start = newStart;
                     seg.length = newLen;
-                    if (ds.segType === "audio") {
+                    if (ds.segType === "audio" || ds.segType === "video") {
                         seg.trimStart = Math.max(0, ds.origTrim + trim);
                     }
                 }
@@ -830,14 +1089,20 @@ class TimelineEditor {
             items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "seg") {
             items.push({ label: "Copy", action: () => this._copySegment(hit) });
-            items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType === "audio" ? "audio" : "image", idx: hit.idx }; this.deleteSelected(); } });
+            items.push({ label: "Split at playhead", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.splitSelectedAtPlayhead(); } });
+            items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "track" && this._isV2(hit.track)) {
             const def = this._v2DefForType(hit.track);
             items.push({ label: `+ ${def?.label || "segment"} here`, action: () => this.addV2Segment(hit.track, this._xToFrame(mx)) });
         } else if (hit.kind === "track") {
-            items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
-            items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
-            items.push({ label: "+ Audio…",       action: () => this.fileAud.click() });
+            if (hit.track === "video") {
+                items.push({ label: "+ Video…", action: () => this.fileVid.click() });
+            } else {
+                items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
+                items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
+                items.push({ label: "+ Video…",       action: () => this.fileVid.click() });
+                items.push({ label: "+ Audio…",       action: () => this.fileAud.click() });
+            }
             if (this.clipboard) items.push({ label: "Paste", action: () => this._pasteAt(this._xToFrame(mx), hit.track) });
         }
         if (!items.length) return;
@@ -872,17 +1137,24 @@ class TimelineEditor {
     }
 
     _copySegment(hit) {
-        const arr = hit.segType === "audio" ? this.audioSegments : this.segments;
-        this.clipboard = { track: hit.segType, seg: JSON.parse(JSON.stringify(arr[hit.idx])) };
+        const arr = this._segArr(hit.segType);
+        const src = arr[hit.idx];
+        if (!src) return;
+        // Strip runtime-only underscore keys (decoded thumbs/images aren't JSON-safe).
+        const clean = {};
+        for (const k in src) if (!k.startsWith("_")) clean[k] = src[k];
+        this.clipboard = { track: hit.segType, seg: JSON.parse(JSON.stringify(clean)) };
     }
     _pasteAt(frame, track) {
         if (!this.clipboard || this.clipboard.track !== track) return;
         const seg = JSON.parse(JSON.stringify(this.clipboard.seg));
         seg.id = nid();
         seg.start = Math.max(0, frame);
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(track);
         arr.push(seg);
         this._resolveCollisions(track, arr.length - 1);
+        if (track === "video") this._regenVideoThumbs(seg);
+        else if (track === "image") this._preloadImage(seg);
         this.commitChanges();
     }
 
@@ -1096,6 +1368,19 @@ class TimelineEditor {
                 `Source length: ${(seg.audioDurationFrames / fps).toFixed(2)}s<br>` +
                 `Output length: ${(seg.length / fps).toFixed(2)}s<br>` +
                 `Trim-in: ${trimIn.toFixed(2)}s · Trim-out: ${Math.max(0, trimOut).toFixed(2)}s`;
+        } else if (seg.type === "video") {
+            this.propTitle.textContent = `Video: ${seg.fileName || seg.videoFile || "(clip)"}`;
+            this.promptArea.style.display = "none";
+            this.gsSlider.parentElement.style.display = "none";
+            this.audioInfo.style.display = "block";
+            const srcSec = (seg.srcDurationFrames || 0) / fps;
+            const trimInF = seg.trimStart || 0;
+            this.audioInfo.innerHTML =
+                `File: ${seg.fileName || seg.videoFile}<br>` +
+                `Source: ${srcSec.toFixed(2)}s · ${seg.srcDurationFrames || "?"}f` +
+                    (seg.srcW ? ` · ${seg.srcW}×${seg.srcH}` : "") + `<br>` +
+                `On timeline: ${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f<br>` +
+                `Trim-in: ${trimInF}f → feeds <b>control_video</b>`;
         } else {
             this.propTitle.textContent = (seg.type === "text" ? "Text segment" : "Image segment");
             this.promptArea.style.display = "block";
@@ -1112,9 +1397,14 @@ class TimelineEditor {
 
     // ── Render ──────────────────────────────────────────────────────
     render() {
+        // Liveness self-clean: if this node was removed WITHOUT onRemoved firing
+        // (some graph.clear/workflow-load paths), the dead UI would linger in the
+        // DOM and swallow the user's clicks. Detect and self-remove.
+        if (this._destroyed) return;
+        if (this.node && this.node.graph == null) { this.destroy(); return; }
         const dpr = window.devicePixelRatio || 1;
         const cssW = this.cvs.clientWidth || 600;
-        const cssH = RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H;
+        const cssH = TRACKS_CANVAS_H;
         const w = Math.round(cssW * dpr);
         const h = Math.round(cssH * dpr);
         if (this.cvs.width !== w || this.cvs.height !== h) {
@@ -1125,18 +1415,21 @@ class TimelineEditor {
         ctx.clearRect(0, 0, cssW, cssH);
 
         // Background tracks
+        const vidTop = this._vidTop();
         ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, 0, cssW, cssH);
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, RULER_H, cssW, IMG_TRACK_H);
         ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, RULER_H + IMG_TRACK_H, cssW, AUD_TRACK_H);
+        ctx.fillStyle = C.bg3;                                  // Control-Video band (media tone)
+        ctx.fillRect(0, vidTop, cssW, VID_TRACK_H);
 
-        // Out-of-duration shadow
+        // Out-of-duration shadow (covers image + audio + video bands)
         const durX = this._frameToX(this.durFrames);
         if (durX < cssW) {
             ctx.fillStyle = "rgba(0,0,0,0.5)";
-            ctx.fillRect(durX, RULER_H, cssW - durX, IMG_TRACK_H + AUD_TRACK_H);
+            ctx.fillRect(durX, RULER_H, cssW - durX, IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H);
         }
 
         // Ruler
@@ -1144,6 +1437,12 @@ class TimelineEditor {
         // Segments
         for (let i = 0; i < this.segments.length; i++) this._drawSegment(ctx, this.segments[i], i, "image");
         for (let i = 0; i < this.audioSegments.length; i++) this._drawSegment(ctx, this.audioSegments[i], i, "audio");
+        for (let i = 0; i < this.motionSegments.length; i++) this._drawSegment(ctx, this.motionSegments[i], i, "video");
+        // Empty-track "+" add-affordances (LTX-style): inviting, clickable hot-spots.
+        this._addHints = {};
+        if (this.segments.length === 0) this._drawAddHint(ctx, cssW, RULER_H, IMG_TRACK_H, "image");
+        if (this.audioSegments.length === 0) this._drawAddHint(ctx, cssW, RULER_H + IMG_TRACK_H, AUD_TRACK_H, "audio");
+        if (this.motionSegments.length === 0) this._drawAddHint(ctx, cssW, vidTop, VID_TRACK_H, "video");
         // v2 automation lanes
         this._drawV2Lanes(ctx, cssW);
         // Playhead
@@ -1154,7 +1453,7 @@ class TimelineEditor {
         this.seek.value = String(Math.round((this.playhead / Math.max(1, vd)) * 10000));
         this.timeReadout.textContent = `f ${this.playhead}/${this.durFrames} · ${fmtTime(this.playhead, this.fps, this.displayMode)}`;
         const v2n = V2_KEYS.reduce((a, k) => a + (this[k]?.length || 0), 0);
-        this.statusEl.textContent = `${this.segments.length} clips · ${this.audioSegments.length} audio` +
+        this.statusEl.textContent = `${this.segments.length} clips · ${this.motionSegments.length} video · ${this.audioSegments.length} audio` +
             (v2n ? ` · ${v2n} automation` : "") + ` · ${this.durFrames}f @ ${this.fps}fps`;
     }
 
@@ -1180,13 +1479,41 @@ class TimelineEditor {
         }
     }
 
+    _drawAddHint(ctx, cssW, top, trackH, kind) {
+        // LTX-style centered "+" inviting a clip into an empty track. The hot-zone
+        // is recorded in this._addHints[kind] for click-to-add in _onMouseDown.
+        const durX = this._frameToX(this.durFrames);
+        const cx = Math.max(36, Math.min(cssW - 36, (Math.min(cssW, durX) || cssW) / 2));
+        const cy = top + trackH / 2 - 6;
+        const r = 14;
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(150,165,210,0.55)";
+        ctx.fillStyle = "rgba(255,255,255,0.045)";
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy);
+        ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(160,172,205,0.7)";
+        ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(kind === "audio" ? "+ add audio  ·  or drop a file"
+                   : kind === "video" ? "+ add video  ·  or drop a clip"
+                                      : "+ add image  ·  or drop a file", cx, cy + r + 11);
+        ctx.restore();
+        this._addHints[kind] = { cx, cy, r: r + 6 };
+    }
+
     _drawSegment(ctx, seg, idx, track) {
         const x1 = this._frameToX(seg.start);
         const x2 = this._frameToX(seg.start + seg.length);
-        const y = track === "audio" ? RULER_H + IMG_TRACK_H + 4 : RULER_H + 4;
-        const h = (track === "audio" ? AUD_TRACK_H : IMG_TRACK_H) - 8;
+        let y, h, selType;
+        if (track === "audio")      { y = RULER_H + IMG_TRACK_H + 4; h = AUD_TRACK_H - 8; selType = "audio"; }
+        else if (track === "video") { y = this._vidTop() + 4;        h = VID_TRACK_H - 8; selType = "video"; }
+        else                        { y = RULER_H + 4;               h = IMG_TRACK_H - 8; selType = "image"; }
         const w = Math.max(2, x2 - x1);
-        const selected = this.selection.type === (track === "audio" ? "audio" : "image") && this.selection.idx === idx;
+        const selected = this.selection.type === selType && this.selection.idx === idx;
 
         // Body
         if (seg.type === "image") {
@@ -1283,6 +1610,47 @@ class TimelineEditor {
                 }
                 ctx.fillText(n, x1 + 3, y + 3);
             }
+        } else if (seg.type === "video") {
+            ctx.save();
+            ctx.beginPath(); ctx.rect(x1, y, w, h); ctx.clip();
+            const thumbs = (seg._thumbs || []).filter(t => t.complete && t.naturalWidth > 0);
+            if (thumbs.length) {
+                // Tile the poster strip across the clip so it reads as a filmstrip;
+                // pick which thumb by horizontal position within the clip.
+                const ar = thumbs[0].naturalWidth / thumbs[0].naturalHeight || (16 / 9);
+                const tileW = Math.max(10, h * ar);
+                for (let dx = x1; dx < x1 + w; dx += tileW) {
+                    const frac = (dx - x1) / Math.max(1, w);
+                    const t = thumbs[Math.min(thumbs.length - 1, Math.floor(frac * thumbs.length))];
+                    ctx.drawImage(t, dx, y, tileW, h);
+                }
+            } else {
+                ctx.fillStyle = C.surface1Alt;
+                ctx.fillRect(x1, y, w, h);
+                ctx.fillStyle = C.slateMute;
+                ctx.font = "10px ui-sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText("decoding video…", x1 + w / 2, y + h / 2);
+            }
+            // Title bar (film glyph + filename)
+            if (w > 28) {
+                ctx.fillStyle = "rgba(0,0,0,0.55)";
+                ctx.fillRect(x1, y, w, 14);
+                ctx.fillStyle = C.fg;
+                ctx.font = "10px ui-sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                let n = "🎞 " + (seg.fileName || seg.videoFile || "video");
+                const maxW = w - 6;
+                if (ctx.measureText(n).width > maxW) {
+                    while (n.length > 1 && ctx.measureText(n + "…").width > maxW) n = n.slice(0, -1);
+                    n = n + "…";
+                }
+                ctx.fillText(n, x1 + 3, y + 7);
+            }
+            // Trim-in indicator (amber underline)
+            if (seg.trimStart) {
+                ctx.fillStyle = C.amber || "#fbbf24";
+                ctx.fillRect(x1, y + h - 3, w, 3);
+            }
+            ctx.restore();
         }
 
         // Border. Canvas can't resolve CSS variables on strokeStyle so use
@@ -1320,6 +1688,12 @@ class TimelineEditor {
             try { cancelAnimationFrame(this._renderRafId); } catch {}
             this._renderRafId = 0;
         }
+        // CRITICAL: remove the UI from the DOM. Without this, workflow loads
+        // (graph.clear) leave a DEAD timeline stacked on the page — its "+ Video"
+        // button still catches clicks and uploads into a node that no longer
+        // exists = the user's "clicking does nothing gets uploaded".
+        try { this.container?.remove(); } catch {}
+        this._destroyed = true;
     }
 
     /**
@@ -1348,7 +1722,9 @@ function _wdCapNode(node) {
     capWdNode(node);
 }
 
-app.registerExtension({
+// Guard: CustomNodePacks ships the same WanDirector extensions. Whichever pack
+// loads first registers; the other skips silently (no "already registered" error).
+if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) app.registerExtension({
     name: "C2C.WanDirectorTimeline",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "WanDirectorC2C") return;
@@ -1390,12 +1766,22 @@ app.registerExtension({
             setTimeout(_wdClipTimeline, 500);
             setTimeout(_wdClipTimeline, 1500);
             widget.computeSize = function (width) {
-                return [width, RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
+                return [width, TRACKS_CANVAS_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
             };
             const self = this;
             setTimeout(() => {
                 try { self._wdTimeline = new TimelineEditor(self, host); }
                 catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }
+                // Liveness self-clean (idle-safe): a dead-idle timeline never
+                // calls render(), so poll cheaply and remove the UI when the
+                // node has left the graph without onRemoved firing.
+                const _aliveTimer = setInterval(() => {
+                    if (self.graph == null) {
+                        try { self._wdTimeline?.destroy(); } catch (_) {}
+                        try { host.remove(); } catch (_) {}
+                        clearInterval(_aliveTimer);
+                    }
+                }, 2000);
                 // Re-flow once after all DOM widgets (timeline + player) have
                 // registered so the player's computeSize sees a stable width
                 // and the node height fits both DOM widgets. Preserve the

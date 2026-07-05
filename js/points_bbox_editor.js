@@ -41,6 +41,20 @@ const COLOR = {
     sub: "var(--c2c-overlay1)",
 };
 
+// Canvas2D CANNOT parse var() — it silently renders BLACK (the dead-space bug).
+// COLOR.bg (+ others) fill this node's canvas, so resolve each var() to a literal
+// hex once. CSS accepts literals too. See var-in-canvas-bug.
+(() => {
+    let cs; try { cs = getComputedStyle(document.documentElement); } catch (_) { return; }
+    const FB = { "--c2c-bg2": "#181825", "--c2c-surface0": "#313244", "--c2c-fg": "#cdd6f4",
+        "--c2c-overlay1": "#7f849c", "--c2c-okStrong": "#22d65a", "--c2c-dangerHot": "#ff4466" };
+    for (const k in COLOR) {
+        const m = String(COLOR[k]).match(/var\(\s*(--[a-z0-9-]+)\s*\)/i);
+        if (!m) continue;
+        COLOR[k] = ((cs.getPropertyValue(m[1]) || "").trim()) || FB[m[1]] || "#cdd6f4";
+    }
+})();
+
 const HISTORY_LIMIT = 80;
 const POINT_HIT_PX = 8;
 const BBOX_EDGE_PX = 6;
@@ -215,8 +229,7 @@ class Editor {
     }
 
     save() {
-        const w = this.node.widgets?.find(w => w.name === "editor_data");
-        if (!w) return;
+        const find = (n) => this.node.widgets?.find(w => w.name === n);
         const data = {
             points: this.points.map(p => ({
                 x: +p.x.toFixed(2), y: +p.y.toFixed(2),
@@ -225,25 +238,64 @@ class Editor {
             })),
             bboxes: this.bboxes.map(b => [b[0] | 0, b[1] | 0, b[2] | 0, b[3] | 0, b[4] | 0]),
         };
-        w.value = JSON.stringify(data);
+        const ed = find("editor_data");
+        if (ed) ed.value = JSON.stringify(data);
+        // Also sync to the backend's points_json / bbox_json fields. Nodes like
+        // SAMMaskGeneratorMEC read those DIRECTLY (parse_points_json/parse_bbox_input)
+        // and have no editor_data widget — without this the canvas edits never
+        // reach the backend. points_json = [{x,y,label}]; bbox_json = [x1,y1,x2,y2].
+        const pj = find("points_json");
+        if (pj) {
+            pj.value = JSON.stringify(this.points.map(p => ({
+                x: +p.x.toFixed(2), y: +p.y.toFixed(2), label: p.label | 0,
+            })));
+            pj.callback?.(pj.value);
+        }
+        const bb = find("bbox_json");
+        if (bb) {
+            bb.value = this.bboxes.length
+                ? JSON.stringify([this.bboxes[0][0] | 0, this.bboxes[0][1] | 0, this.bboxes[0][2] | 0, this.bboxes[0][3] | 0])
+                : "";
+            bb.callback?.(bb.value);
+        }
         if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
     }
 
     load() {
-        const w = this.node.widgets?.find(w => w.name === "editor_data");
-        if (!w?.value) return;
-        try {
-            const o = JSON.parse(w.value);
-            if (Array.isArray(o)) {
-                this.points = o; this.bboxes = [];
-            } else {
-                this.points = (o.points || []).map(p => ({
-                    x: +p.x, y: +p.y, label: p.label | 0,
-                    radius: +(p.radius || this.radius),
+        const find = (n) => this.node.widgets?.find(w => w.name === n);
+        const ed = find("editor_data");
+        if (ed?.value) {
+            try {
+                const o = JSON.parse(ed.value);
+                if (Array.isArray(o)) {
+                    this.points = o; this.bboxes = [];
+                } else {
+                    this.points = (o.points || []).map(p => ({
+                        x: +p.x, y: +p.y, label: p.label | 0,
+                        radius: +(p.radius || this.radius),
+                    }));
+                    this.bboxes = (o.bboxes || []).map(b => [+b[0], +b[1], +b[2], +b[3], (b[4] != null ? b[4] | 0 : 1)]);
+                }
+            } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
+            return;
+        }
+        // Fallback: reconstruct from points_json / bbox_json (SAMMaskGeneratorMEC etc.)
+        const pj = find("points_json");
+        if (pj?.value) {
+            try {
+                const arr = JSON.parse(pj.value);
+                this.points = (Array.isArray(arr) ? arr : []).map(p => ({
+                    x: +p.x, y: +p.y, label: p.label | 0, radius: this.radius,
                 }));
-                this.bboxes = (o.bboxes || []).map(b => [+b[0], +b[1], +b[2], +b[3], (b[4] != null ? b[4] | 0 : 1)]);
-            }
-        } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
+            } catch (e) { /* ignore bad paste */ }
+        }
+        const bb = find("bbox_json");
+        if (bb?.value) {
+            try {
+                const b = JSON.parse(bb.value);
+                if (Array.isArray(b) && b.length >= 4) this.bboxes = [[+b[0], +b[1], +b[2], +b[3], 1]];
+            } catch (e) { /* ignore bad paste */ }
+        }
     }
 
     setRefImage(url, origW, origH) {
@@ -417,6 +469,11 @@ function installEditor(node) {
         }
     };
     hideWidget(node.widgets?.find(w => w.name === "editor_data"));
+    // The canvas now authors points_json / bbox_json directly (see save()), so the
+    // raw JSON textareas are redundant clutter — collapse them. The input sockets
+    // remain, so wiring points/bbox from another node still works.
+    hideWidget(node.widgets?.find(w => w.name === "points_json"));
+    hideWidget(node.widgets?.find(w => w.name === "bbox_json"));
 
     const syncDims = () => {
         const w = node.widgets?.find(x => x.name === "width");
@@ -617,39 +674,66 @@ function installEditor(node) {
 
     const TOOLBAR_H = 36;
     const STATUS_PAD = 8;
-    const MIN_WIDGET_H = 240;
-    const MAX_WIDGET_H = 1100;
+    const MIN_WIDGET_H = 320;
+    const MAX_WIDGET_H = 560;   // cap: portrait images letterbox, node stays sane
     let widgetH = 460;
-    node.addDOMWidget("points_editor", "canvas", root, {
+    const canvasWidget = node.addDOMWidget("points_editor", "canvas", root, {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => widgetH,
         getHeight: () => widgetH,
     });
+    // ComfyUI lays out DOM widgets from computeSize(); without it the wrapper
+    // collapses to a default ~280px while node.size stays tall, leaving a big
+    // dead black band below the canvas (the "slop"). Returning [width, widgetH]
+    // makes the wrapper exactly the editor height → canvas fills it, no void.
+    canvasWidget.computeSize = function (width) { return [width, widgetH]; };
 
     // Stash host root for mode-gate hide/show on the unified node.
     node._mecPointsHost = root;
 
-    // Resize the widget so the image canvas matches the input image's
-    // aspect ratio. Called after a new image loads.
+    // Size the editor to the image aspect (capped), then let node.computeSize()
+    // drive the TOTAL node height so it ends exactly at the canvas — no manual
+    // height math, no dead space.
     function resizeForImage() {
         const nodeW = (node.size?.[0] || 600);
-        const innerW = Math.max(64, nodeW - 24); // node padding
+        const innerW = Math.max(64, nodeW - 24);
         const aspect = ed.canvasH / Math.max(1, ed.canvasW); // h/w
         const targetCanvasH = Math.round(innerW * aspect);
         const target = Math.max(MIN_WIDGET_H, Math.min(MAX_WIDGET_H,
                                                        targetCanvasH + TOOLBAR_H + STATUS_PAD));
-        if (Math.abs(target - widgetH) < 4) return;
-        widgetH = target;
-        // Recompute total node height from the bottom-up so other widgets
-        // (height, width, default_radius...) stay visible above ours.
-        const cur = node.size || [nodeW, 620];
-        const delta = target - 460;
-        node.setSize?.([cur[0], Math.max(620 + delta, target + 220)]);
-        node.graph?.setDirtyCanvas(true, true);
+        if (Math.abs(target - widgetH) >= 4) {
+            widgetH = target;
+            try {
+                const sz = node.computeSize();
+                node.setSize?.([Math.max(sz[0] || 0, nodeW), sz[1]]);
+            } catch (_) { node.setSize?.([nodeW, target + 240]); }
+            node.graph?.setDirtyCanvas(true, true);
+        }
+        // The ComfyUI DOM-widget wrapper grows a frame or two AFTER setSize, so a
+        // single fit during the small intermediate size left the image tiny (zoom
+        // 39%) inside a black band. Force a re-fit once the wrapper has settled to
+        // its final height so the image fills the canvas. Idempotent + cheap.
+        for (const d of [0, 60, 200]) setTimeout(() => { ed._fitted = false; render(); }, d);
     }
 
     // Ensure a sensible default node width so the toolbar fits without scrolling.
+    // Enforce it via computeSize too: the mode-gate calls
+    // node.setSize(node.computeSize()), and the node's own computeSize returns
+    // the narrow widget-driven width (~280px), which otherwise snaps the node
+    // back and collapses the point/bbox editor canvas (same bug as the spline
+    // editor). Only while the points_bbox editing mode is active.
+    const _pbEditorActive = () =>
+        (node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "") === "points_bbox";
+    if (!node._mecPointsCSPatched) {
+        node._mecPointsCSPatched = true;
+        const _origCS = typeof node.computeSize === "function" ? node.computeSize.bind(node) : null;
+        node.computeSize = function (w) {
+            const sz = _origCS ? _origCS(w) : [600, 620];
+            try { if (_pbEditorActive()) sz[0] = Math.max(sz[0] || 0, 600); } catch (_) {}
+            return sz;
+        };
+    }
     if (!node.size || node.size[0] < 600) {
         const h = node.size?.[1] || 620;
         node.setSize?.([600, Math.max(h, 620)]);
@@ -657,6 +741,13 @@ function installEditor(node) {
 
     let lastW = 0, lastH = 0;
     function syncCanvasPx() {
+        // Force the canvas area to FILL the editor host. `canvasWrap` is flex:1
+        // but ComfyUI's DOM-widget layout doesn't always distribute height, so it
+        // collapsed to the canvas's intrinsic ~283px inside a 526px host → a dead
+        // black band below (the "slop"). Size it explicitly: host minus toolbar.
+        const hostH = root.clientHeight || root.offsetHeight || 0;
+        const tbH = (tb.offsetHeight || 36);
+        if (hostH > tbH + 40) canvasWrap.style.height = (hostH - tbH) + "px";
         const r = canvasWrap.getBoundingClientRect();
         // Parent ComfyUI canvas applies CSS transform: scale(zoom) to DOM
         // widgets. Divide by the layout-vs-visual ratio to recover the
@@ -711,7 +802,10 @@ function installEditor(node) {
 
     canvas.addEventListener("pointerdown", (e) => {
         e.preventDefault(); canvas.focus();
-        canvas.setPointerCapture(e.pointerId);
+        // Guard: setPointerCapture throws NotFoundError when the pointer is no
+        // longer active (pen lift / touch cancel between event and capture, or
+        // synthetic events). Capture is an optimisation, not a requirement.
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
         const c = eventCanvas(e);
 
         // Pan: middle button or Alt+drag (without Shift/Ctrl)
@@ -834,7 +928,10 @@ function installEditor(node) {
     });
 
     canvas.addEventListener("pointerup", (e) => {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
+        // NotFoundError here is EXPECTED (pointer already inactive — pen lift,
+        // touch cancel, synthetic events). info-level: no red console, no server
+        // POST, no registry toast.
+        try { canvas.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("points_bbox_editor.releaseCapture", __c2cErr, { level: "info" }); }
         const c = eventCanvas(e);
 
         if (ed.drag?.kind === "pan") {
