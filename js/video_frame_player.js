@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
@@ -643,6 +644,7 @@ app.registerExtension({
                         w.draw = () => {};
                     }
                 }
+                vueSyncNodeWidgets(node);
                 node._advancedOpen = open;
                 if (node._advBtn) {
                     node._advBtn.textContent = open ? "Advanced ▴" : "Advanced ▾";

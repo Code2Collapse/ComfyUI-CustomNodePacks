@@ -1,4 +1,5 @@
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 // =====================================================================
 // _mode_gate.js — Shared helper for the unified-mode MEC nodes.
@@ -40,10 +41,17 @@ function _runEvaluators(node) {
     for (const e of ordered) {
         try { e.run(); } catch (err) { __c2cReport("_mode_gate", err); }
     }
+    // Nodes 2.0: mirror the batch's hidden state into options.hidden and
+    // nudge the Vue widget-row snapshot rebuild.
+    try { vueSyncNodeWidgets(node); } catch (err) { __c2cReport("_mode_gate", err); }
 }
 
 function _collapseWidget(w) {
     if (!w) return;
+    // Remember the widget's real type so _restoreWidget can put it back.
+    // Vue nodes (Comfy.VueNodes.Enabled) picks the render component by
+    // widget.type — restoring to undefined leaves the widget unmounted there.
+    if (w.type !== "hidden") w._mecOrigType = w.type;
     w.type = "hidden";
     w.computeSize = () => [0, -4];
     w.computeLayoutSize = () => ({ minHeight: 0, maxHeight: 0 });
@@ -60,7 +68,9 @@ function _collapseWidget(w) {
 
 function _restoreWidget(w, height) {
     if (!w) return;
-    w.type = undefined;
+    // Only touch type if we collapsed it; a freshly-installed widget keeps
+    // the type addDOMWidget gave it (Vue nodes needs it to mount the element).
+    if (w.type === "hidden") w.type = w._mecOrigType;
     const h = height || 280;
     w.computeSize = () => [0, h];
     w.computeLayoutSize = undefined;

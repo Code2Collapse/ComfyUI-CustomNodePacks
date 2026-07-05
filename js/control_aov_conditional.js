@@ -7,6 +7,7 @@
 //   run_canny/aperture-> only internal OpenCV Canny
 //   canny_low/high    -> internal Canny + delegated "canny" preprocessor
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 const DEPTH_SIZE_MODELS = ["da_v2", "da_v1", "midas", "da3"];
 
@@ -73,6 +74,7 @@ function applyVisibility(node) {
     for (const w of node.widgets) {
         setHidden(w, (w.name in visible) ? !visible[w.name] : false);
     }
+    vueSyncNodeWidgets(node);
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);
     node.size[1] = sz[1];

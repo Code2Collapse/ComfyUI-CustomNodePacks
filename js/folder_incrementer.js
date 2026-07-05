@@ -1,4 +1,5 @@
 ﻿import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 /**
  * FolderIncrementer JS companion
@@ -377,6 +378,7 @@ app.registerExtension({
             if (extWidget.computeSize) {
                 extWidget.computeSize = () => [0, -4];
             }
+            vueSyncNodeWidgets(node);
         }
 
         // ── Extract filename honouring source_choice ─────────────────

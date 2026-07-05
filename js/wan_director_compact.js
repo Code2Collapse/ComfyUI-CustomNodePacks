@@ -11,6 +11,7 @@ import {
     setWdAdvancedOpen,
     wdHideWidget,
     wdShowWidget,
+    wdVueNudge,
 } from "./_wan_director_ui.js";
 
 /** enable_* parent → child widget names hidden when parent is false. */
@@ -77,6 +78,7 @@ function applyGates(node) {
         if (ALWAYS_HIDDEN.has(w.name)) hideW(w);
         else if (w._wd_compact_hidden) showW(w);
     }
+    wdVueNudge(node);
 }
 
 function wireGate(node, gateName) {

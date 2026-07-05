@@ -297,6 +297,9 @@ app.registerExtension({
             dataW.computeSize = () => [0, -4];
             dataW.type = "hidden";
             dataW.draw = () => {};
+            // Nodes 2.0: the Vue renderer reads options.hidden for row
+            // visibility (create-time set, so no snapshot nudge needed).
+            dataW.options.hidden = true;
             // Hide the backing DOM element + its dom-widget wrapper too —
             // ComfyUI keeps these visible even when widget.type === "hidden".
             {

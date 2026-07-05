@@ -18,6 +18,7 @@
 //   side_by_side / histogram_scope / audio_* → none (only the always-on set)
 // Always shown: mode, frame_index, label_a, label_b, and the comparer_view canvas.
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 // widget -> modes it applies to. Anything not listed here is always shown and is
 // never touched (notably the comparer_view COMPARER canvas, which the node's own
@@ -65,6 +66,7 @@ function applyVisibility(node) {
         if (!modes) continue;
         setHidden(w, !modes.includes(mode));
     }
+    vueSyncNodeWidgets(node);
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);
     node.size[1] = sz[1];

@@ -31,8 +31,10 @@ import {
     WD_DEFAULT_W,
     capWdNode,
     installWanDirectorPrototype,
+    wdEnsureDomWidgetsAttached,
     wdHideWidget,
     wdMaxH,
+    wdVueNudge,
 } from "./_wan_director_ui.js";
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -1737,6 +1739,7 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
             for (const w of (this.widgets || [])) {
                 if (HIDDEN_NAMES.has(w.name)) hideWidget(w);
             }
+            wdVueNudge(this);
             // Moderate default width; height capped after DOM widgets register.
             if (!this._wdTimelineSizeApplied) {
                 this.size[0] = Math.max(this.size[0] || 0, WD_DEFAULT_W);
@@ -1780,7 +1783,11 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
                         try { self._wdTimeline?.destroy(); } catch (_) {}
                         try { host.remove(); } catch (_) {}
                         clearInterval(_aliveTimer);
+                        return;
                     }
+                    // Nodes 2.0 self-heal: re-register DOM widgets Vue lost
+                    // during the first-instance mount race (timeline + player).
+                    try { wdEnsureDomWidgetsAttached(self); } catch (_) {}
                 }, 2000);
                 // Re-flow once after all DOM widgets (timeline + player) have
                 // registered so the player's computeSize sees a stable width

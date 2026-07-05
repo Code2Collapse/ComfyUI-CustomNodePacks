@@ -4,6 +4,7 @@
 // at once is the "wall of params" clutter; this collapses to just the relevant
 // set per mode and resizes the node. Re-applied whenever `mode` changes.
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 // widget -> modes it applies to. Anything not listed is always shown
 // (mode, spline_data, image, closed, samples_per_segment, the spline_editor canvas).
@@ -69,6 +70,7 @@ function applyVisibility(node) {
         if (!modes) continue;
         setHidden(w, !modes.includes(mode));
     }
+    vueSyncNodeWidgets(node);
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);
     node.size[1] = sz[1];

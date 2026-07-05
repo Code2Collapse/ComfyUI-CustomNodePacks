@@ -24,6 +24,7 @@
 
 import { app } from "../../scripts/app.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 // ─── MediaPipe FaceMesh landmark shortcuts ──────────────────────────────
 // Curated subset — the indices a beginner would most plausibly want to
@@ -414,6 +415,7 @@ app.registerExtension({
                     const wrap = el.parentElement;
                     if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
                 }
+                vueSyncNodeWidgets(node);
                 try { node.setSize(node.computeSize()); } catch (e) { /* noop */ }
                 node.setDirtyCanvas?.(true, true);
             };

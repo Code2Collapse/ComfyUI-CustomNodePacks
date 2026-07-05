@@ -8,6 +8,7 @@
  * ``__mec_origType``.
  */
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports,vals) -> bool.
 // ``vals`` is a flat {widgetName: value} snapshot, allowing toggle-gated widgets.
@@ -222,6 +223,7 @@ function refreshVisibility(node) {
         const visible = !!pred(seg, mat, mode, sup, vals);
         setHidden(w, !visible);
     }
+    vueSyncNodeWidgets(node);
     node.setSize(node.computeSize());
     node.setDirtyCanvas(true, true);
 }
