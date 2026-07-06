@@ -15,6 +15,7 @@
 
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
+import { wdEnsureProxy } from "./_wan_director_ui.js";
 
 const PLAYER_H = 168;          // total player widget height (px) — was 280 (node-stack bloat); 168 keeps stage usable + transport
 const STRIP_H  = 56;            // thumbnail strip height
@@ -230,7 +231,28 @@ function makePlayerDOM(node) {
 
     // Video-driven scrubber + in/out + loop enforcement.
     stageVideo.addEventListener("timeupdate", () => {
-        if (state.mode !== "video") return;
+        if (state.mode !== "video") {
+            // Clips mode: enforce the active video clip's trim window and
+            // auto-advance to the next clip at its end (respecting in/out).
+            const cur = state.clips[state.active];
+            if (cur?.isVideo && state.playing) {
+                const { t1 } = _clipWindow(cur);
+                if (stageVideo.currentTime >= t1 - 1e-3) {
+                    const n = state.clips.length;
+                    const loIdx = state.inFrac  == null ? 0     : Math.floor(state.inFrac  * n);
+                    const hiIdx = state.outFrac == null ? n - 1 : Math.min(n - 1, Math.floor(state.outFrac * n));
+                    let nxt = state.active + 1;
+                    if (nxt > hiIdx) {
+                        if (state.loop) nxt = loIdx;
+                        else { pause(); return; }
+                    }
+                    selectClip(nxt);
+                    if (!state.clips[nxt]?.isVideo) _imageTick();
+                }
+            }
+            updateScrub();
+            return;
+        }
         const d = vidDur();
         if (d > 0) {
             const hi = (state.outFrac == null ? 1 : state.outFrac) * d;
@@ -242,8 +264,10 @@ function makePlayerDOM(node) {
         }
         updateScrub();
     });
-    stageVideo.addEventListener("play",  () => { state.playing = true;  btnPlay.textContent = "⏸"; });
-    stageVideo.addEventListener("pause", () => { state.playing = false; btnPlay.textContent = "▶"; });
+    // Gated on executed-render mode: in clips mode the <video> is paused and
+    // reused when hopping video→image clips, which must not stop playback.
+    stageVideo.addEventListener("play",  () => { if (state.mode === "video") { state.playing = true;  btnPlay.textContent = "⏸"; } });
+    stageVideo.addEventListener("pause", () => { if (state.mode === "video") { state.playing = false; btnPlay.textContent = "▶"; } });
     stageVideo.addEventListener("loadedmetadata", () => { syncSpeed(); updateScrub(); });
 
     // Scrubber pointer interaction (click + drag to seek).
@@ -256,12 +280,62 @@ function makePlayerDOM(node) {
     scrub.addEventListener("pointermove", (ev) => { if (scrubbing) scrubToEvent(ev); });
     scrub.addEventListener("pointerup",   (ev) => { scrubbing = false; try { scrub.releasePointerCapture(ev.pointerId); } catch {} });
 
+    // ── Real-time playback of Control-Video clips (proxy-backed) ──
+    const _proxyUrls = new Map();          // videoFile → playable url (or "pending")
+    function _clipWindow(clip) {
+        const fps = Math.max(1, state.fps);
+        const t0 = (clip.trimStart || 0) / fps;
+        return { t0, t1: t0 + clip.length / fps };
+    }
+    async function showVideoClip(clip, idx) {
+        stageImg.style.display = "none";
+        const cached = _proxyUrls.get(clip.file);
+        if (typeof cached === "string" && cached !== "pending") {
+            const { t0 } = _clipWindow(clip);
+            stageMsg.style.display = "none";
+            stageVideo.style.display = "block";
+            const applyStart = () => {
+                stageVideo.currentTime = t0;
+                if (state.playing) stageVideo.play().catch(() => {});
+            };
+            if (stageVideo.dataset.src === cached) applyStart();
+            else {
+                stageVideo.dataset.src = cached;
+                stageVideo.src = cached;
+                stageVideo.addEventListener("loadedmetadata", applyStart, { once: true });
+            }
+            syncSpeed();
+            return;
+        }
+        // Proxy not resolved yet — kick it off once per file, show progress.
+        stageVideo.pause(); stageVideo.style.display = "none";
+        stageMsg.style.display = "block";
+        stageMsg.textContent = `Preparing ${clip.text} for playback…`;
+        if (cached === "pending") return;
+        _proxyUrls.set(clip.file, "pending");
+        const url = await wdEnsureProxy(clip.file, {
+            onProgress: (p) => {
+                if (state.active === idx) {
+                    stageMsg.textContent = `Building edit proxy for ${clip.text}… ${Math.round(p * 100)}%`;
+                }
+            },
+        });
+        if (!url) {
+            _proxyUrls.delete(clip.file);
+            if (state.active === idx) showMessage(`Could not prepare ${clip.text} for playback.`);
+            return;
+        }
+        _proxyUrls.set(clip.file, url);
+        if (state.active === idx) showVideoClip(clip, idx);
+    }
+
     function selectClip(i) {
-        if (state.clips.length === 0) { showMessage("No image clips on the timeline."); return; }
+        if (state.clips.length === 0) { showMessage("No clips on the timeline."); return; }
         i = ((i % state.clips.length) + state.clips.length) % state.clips.length;
         state.active = i;
         const clip = state.clips[i];
-        showImage(clip.url);
+        if (clip.isVideo) showVideoClip(clip, i);
+        else showImage(clip.url);
         status.textContent = `clip ${i + 1}/${state.clips.length} · frame ${clip.start}\u2013${clip.start + clip.length}`;
         // highlight thumb
         strip.querySelectorAll("[data-thumb]").forEach((el, idx) => {
@@ -277,9 +351,17 @@ function makePlayerDOM(node) {
             tile.setAttribute("data-thumb", String(i));
             tile.style.cssText = `
                 flex: 0 0 ${Math.max(48, STRIP_H - 16)}px; height: ${STRIP_H - 16}px;
-                background: var(--c2c-black) center/contain no-repeat url("${clip.url}");
+                background: var(--c2c-black) center/contain no-repeat url("${clip.url || ""}");
                 border-radius: 2px; cursor: pointer; outline: 1px solid var(--c2c-gray700);
             `;
+            if (clip.isVideo) {
+                tile.style.display = "flex";
+                tile.style.alignItems = "center";
+                tile.style.justifyContent = "center";
+                tile.style.fontSize = "16px";
+                tile.style.color = "var(--c2c-gray300)";
+                tile.textContent = "🎞";
+            }
             tile.title = `${clip.start}–${clip.start + clip.length}f${clip.text ? ` · ${clip.text}` : ""}`;
             tile.onclick = () => selectClip(i);
             strip.appendChild(tile);
@@ -296,12 +378,26 @@ function makePlayerDOM(node) {
             .filter(s => (s.type || "image") === "image")
             .filter(s => s.imageFile || s.imageB64)
             .sort((a, b) => (a.start || 0) - (b.start || 0));
-        state.clips = segs.map(s => ({
+        const imgClips = segs.map(s => ({
             url: _resolveImage(s),
             start: parseInt(s.start || 0, 10),
             length: parseInt(s.length || 1, 10),
             text: (s.text || "").slice(0, 64),
         })).filter(c => c.url);
+        // Control-Video clips play for real: web-safe files directly, VFX
+        // formats (ProRes/EXR/MXF/…) through the server-built edit proxy.
+        const vidClips = (td.motionSegments || [])
+            .filter(s => s.videoFile)
+            .map(s => ({
+                isVideo: true,
+                file: s.videoFile,
+                url: null,                 // resolved lazily via wdEnsureProxy
+                start: parseInt(s.start || 0, 10),
+                length: parseInt(s.length || 1, 10),
+                trimStart: parseInt(s.trimStart || 0, 10),
+                text: (s.fileName || s.videoFile || "").split("/").pop().slice(0, 64),
+            }));
+        state.clips = [...imgClips, ...vidClips].sort((a, b) => a.start - b.start);
         rebuildStrip();
         if (state.clips.length > 0) {
             // Only drop into clip-preview mode if we're not already showing an
@@ -310,7 +406,7 @@ function makePlayerDOM(node) {
             const keep = Math.min(state.active, state.clips.length - 1);
             selectClip(Math.max(0, keep));
         } else {
-            if (state.mode !== "video") showMessage("No image clips on the timeline.");
+            if (state.mode !== "video") showMessage("No clips on the timeline.");
             status.textContent = "idle";
         }
         updateScrub();
@@ -327,31 +423,41 @@ function makePlayerDOM(node) {
             stageVideo.play().catch(() => {});
             return;
         }
-        if (state.playing || state.clips.length < 2) return;
+        const anyVideo = state.clips.some(c => c.isVideo);
+        if (state.playing || state.clips.length === 0 || (!anyVideo && state.clips.length < 2)) return;
         state.playing = true;
         btnPlay.textContent = "⏸";
-        const tick = () => {
-            if (!state.playing) return;
-            const cur = state.clips[state.active] || state.clips[0];
-            const spd = SPEEDS[state.speedIdx] || 1;
-            const dwellMs = Math.max(60, (cur.length / Math.max(1, state.fps)) * 1000 / spd);
-            state.timer = setTimeout(() => {
-                const n = state.clips.length;
-                const loIdx = state.inFrac  == null ? 0     : Math.floor(state.inFrac  * n);
-                const hiIdx = state.outFrac == null ? n - 1 : Math.min(n - 1, Math.floor(state.outFrac * n));
-                let nxt = state.active + 1;
-                if (nxt > hiIdx) { if (state.loop) nxt = loIdx; else { pause(); return; } }
-                selectClip(nxt);
-                tick();
-            }, dwellMs);
-        };
-        tick();
+        const cur = state.clips[state.active] || state.clips[0];
+        if (cur?.isVideo) {
+            showVideoClip(cur, state.active);       // (re)arms playback; window advance via timeupdate
+            stageVideo.play().catch(() => {});
+        } else {
+            _imageTick();
+        }
+    }
+    function _imageTick() {
+        if (!state.playing) return;
+        const cur = state.clips[state.active] || state.clips[0];
+        if (!cur || cur.isVideo) return;            // video clips advance via timeupdate
+        const spd = SPEEDS[state.speedIdx] || 1;
+        const dwellMs = Math.max(60, (cur.length / Math.max(1, state.fps)) * 1000 / spd);
+        state.timer = setTimeout(() => {
+            const n = state.clips.length;
+            const loIdx = state.inFrac  == null ? 0     : Math.floor(state.inFrac  * n);
+            const hiIdx = state.outFrac == null ? n - 1 : Math.min(n - 1, Math.floor(state.outFrac * n));
+            let nxt = state.active + 1;
+            if (nxt > hiIdx) { if (state.loop) nxt = loIdx; else { pause(); return; } }
+            selectClip(nxt);
+            if (state.clips[nxt]?.isVideo) stageVideo.play().catch(() => {});
+            else _imageTick();
+        }, dwellMs);
     }
     function pause() {
         if (state.mode === "video") { stageVideo.pause(); return; }
         state.playing = false;
         btnPlay.textContent = "▶";
         if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+        stageVideo.pause();
     }
 
     btnPrev.onclick  = () => { pause(); state.mode === "video" ? seekToFrac(state.inFrac == null ? 0 : state.inFrac) : selectClip(state.active - 1); root.focus(); };

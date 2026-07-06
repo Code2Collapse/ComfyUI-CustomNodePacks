@@ -131,6 +131,41 @@ export function wdEnsureDomWidgetsAttached(node) {
     }, 150);
 }
 
+// ── Edit-proxy client (pairs with GET /wne/media_proxy) ─────────────
+// The browser can only PLAY web codecs; ProRes/EXR/MXF/… need the server
+// to transcode a frame-accurate H.264 proxy once (Resolve/Premiere
+// pattern). wdEnsureProxy() returns a playable URL: the original when the
+// container is web-safe, else the proxy (polling while it builds).
+
+export function wdViewUrl(file, type = "input") {
+    const parts = String(file || "").split("/");
+    const name = parts.pop();
+    const sub = parts.join("/");
+    return `/view?filename=${encodeURIComponent(name)}&subfolder=${encodeURIComponent(sub)}&type=${type}`;
+}
+
+export function wdIsWebSafe(file) {
+    return /\.(mp4|webm|m4v|ogv)$/i.test(String(file || ""));
+}
+
+export async function wdEnsureProxy(file, { height = 720, onProgress, signal } = {}) {
+    if (!file) return null;
+    if (wdIsWebSafe(file)) return wdViewUrl(file);
+    for (let i = 0; i < 400; i++) {            // ~10 min ceiling
+        if (signal?.aborted) return null;
+        let r = null;
+        try {
+            r = await (await fetch(
+                `/wne/media_proxy?file=${encodeURIComponent(file)}&height=${height}`)).json();
+        } catch (_) { return null; }
+        if (!r || r.ok === false || r.status === "error") return null;
+        if (r.status === "ready" && r.url) return r.url;
+        try { onProgress?.(r.progress ?? 0); } catch (_) {}
+        await new Promise((res) => setTimeout(res, 1500));
+    }
+    return null;
+}
+
 export function wdHideWidget(w) {
     if (!w || w._wd_ui_hidden) return;
     if (w._wd_ui_orig_cs === undefined) w._wd_ui_orig_cs = w.computeSize;

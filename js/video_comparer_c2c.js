@@ -19,6 +19,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
+import { wdEnsureProxy } from './_wan_director_ui.js';
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -73,8 +74,11 @@ async function uploadFile(file) {
     return sub + (data.name || file.name);
 }
 
-const VIDEO_EXT = /\.(mp4|mov|mkv|webm|m4v|avi|gif)$/i;
+const VIDEO_EXT = /\.(mp4|mov|mkv|webm|m4v|avi|gif|mxf|mpg|mpeg|wmv|ts|mts)$/i;
 const AUDIO_EXT = /\.(wav|mp3|flac|ogg|aac|m4a)$/i;
+// Containers the browser can (usually) decode natively; everything else goes
+// straight to the server edit proxy (ProRes/DNxHD/MXF/…).
+const NATIVE_EXT = /\.(mp4|webm|m4v|ogv|gif|mov|mkv)$/i;
 
 function mediaURL(filename) {
     if (!filename) return null;
@@ -83,22 +87,40 @@ function mediaURL(filename) {
     );
 }
 
-/** Load a file path as Image or Video element. Returns {kind, el, w, h, dur}. */
+/** Load a file path as Image or Video element. Returns {kind, el, w, h, dur}.
+ *  Native-first: the original file is tried in a <video>; if the browser
+ *  can't decode it (ProRes .mov, MXF, …) we fall back once to the
+ *  frame-accurate H.264 edit proxy from /wne/media_proxy. */
 function loadSource(filename) {
     return new Promise((resolve) => {
         if (!filename) { resolve(null); return; }
         const url = mediaURL(filename);
         if (VIDEO_EXT.test(filename)) {
-            const v = document.createElement("video");
-            v.src = url;
-            v.muted = true;
-            v.crossOrigin = "anonymous";
-            v.preload = "auto";
-            v.playsInline = true;
-            v.addEventListener("loadeddata", () => {
-                resolve({ kind: "video", el: v, w: v.videoWidth, h: v.videoHeight, dur: v.duration });
-            }, { once: true });
-            v.addEventListener("error", () => resolve(null), { once: true });
+            const attach = (src, allowProxyRetry) => {
+                const v = document.createElement("video");
+                v.src = src;
+                v.muted = true;
+                v.crossOrigin = "anonymous";
+                v.preload = "auto";
+                v.playsInline = true;
+                v.addEventListener("loadeddata", () => {
+                    resolve({ kind: "video", el: v, w: v.videoWidth, h: v.videoHeight, dur: v.duration });
+                }, { once: true });
+                v.addEventListener("error", async () => {
+                    if (!allowProxyRetry) { resolve(null); return; }
+                    const proxy = await wdEnsureProxy(filename).catch(() => null);
+                    if (proxy) attach(proxy, false);
+                    else resolve(null);
+                }, { once: true });
+            };
+            if (NATIVE_EXT.test(filename)) attach(url, true);
+            else {
+                // Known-unplayable container: skip the doomed native attempt.
+                wdEnsureProxy(filename).then((proxy) => {
+                    if (proxy) attach(proxy, false);
+                    else resolve(null);
+                }).catch(() => resolve(null));
+            }
         } else if (AUDIO_EXT.test(filename)) {
             resolve({ kind: "audio", el: null, w: 0, h: 0 });
         } else {
