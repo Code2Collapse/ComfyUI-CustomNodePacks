@@ -1065,6 +1065,21 @@ class WanDirectorC2C:
         tdata, migration_notes = _migrate_timeline(tdata)
         warnings.extend(migration_notes)
 
+        # Track mutes (timeline UI left-gutter dots): a muted track is
+        # excluded from the build entirely — same semantics as LTX Director's
+        # toggleable tracks. Keys mirror the JS: image/audio/video + v2 keys.
+        _muted = tdata.get("trackMuted") or {}
+        if isinstance(_muted, dict) and any(_muted.values()):
+            _mute_map = {"image": "segments", "audio": "audioSegments", "video": "motionSegments"}
+            for _mk, _arr_key in _mute_map.items():
+                if _muted.get(_mk):
+                    tdata[_arr_key] = []
+                    warnings.append(f"track '{_mk}' muted in timeline; skipped.")
+            for _tk in _TRACK_KEYS:
+                if _muted.get(_tk):
+                    tdata[_tk] = []
+                    warnings.append(f"track '{_tk}' muted in timeline; skipped.")
+
         # Compile + validate the four v2 tracks. Each compiler returns
         # (normalised_list, per_track_warnings) and never raises.
         _total_frames = max(1, int(duration_frames))

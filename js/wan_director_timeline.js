@@ -78,6 +78,21 @@ const V2_DEFS = [
     },
 ];
 const V2_KEYS = V2_DEFS.map(d => d.key);
+
+// Camera motion presets (LTX-Director-style one-click moves). type must be
+// one of the backend's _CAMERA_TYPES (static/pan/zoom/orbit/dolly); params
+// is the free-form dict the downstream applier interprets.
+const CAMERA_PRESETS = [
+    { label: "Static",     type: "static", params: {} },
+    { label: "Pan ←",      type: "pan",    params: { direction: "left",  speed: 1.0 } },
+    { label: "Pan →",      type: "pan",    params: { direction: "right", speed: 1.0 } },
+    { label: "Dolly In",   type: "dolly",  params: { direction: "in",    speed: 1.0 } },
+    { label: "Dolly Out",  type: "dolly",  params: { direction: "out",   speed: 1.0 } },
+    { label: "Zoom In",    type: "zoom",   params: { direction: "in",    amount: 1.25 } },
+    { label: "Zoom Out",   type: "zoom",   params: { direction: "out",   amount: 1.25 } },
+    { label: "Orbit ↺",    type: "orbit",  params: { direction: "ccw",   speed: 1.0 } },
+    { label: "Orbit ↻",    type: "orbit",  params: { direction: "cw",    speed: 1.0 } },
+];
 const V2_TOTAL_H = V2_LANE_H * V2_DEFS.length;
 const V2_LABEL_PX = 38;
 const CAMERA_TYPES = ["static", "pan", "zoom", "orbit", "dolly"];
@@ -219,6 +234,12 @@ class TimelineEditor {
         this.selection = { type: null, idx: -1 };
         this.playhead = 0;          // frames
         this.playing = false;
+        // LTX-Director-style editing state: loop/work region (I/O keys),
+        // per-track mutes (persisted), and Shift-to-bypass clip snapping.
+        this.inPoint = null;
+        this.outPoint = null;
+        this.trackMuted = {};
+        this._snapDisabled = false;
         this.audioCtx = null;
         this.audioBuffers = new Map(); // file → AudioBuffer
         this.activeSources = [];
@@ -530,8 +551,44 @@ class TimelineEditor {
 
         // Keyboard (canvas focused)
         this.cvs.addEventListener("keydown", (e) => {
+            const sel = this.selection;
             if (e.key === "Delete" || e.key === "Backspace") { this.deleteSelected(); e.preventDefault(); }
+            else if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
+                if (sel.type && sel.idx >= 0) this._copySegment({ segType: sel.type, idx: sel.idx });
+                e.preventDefault();
+            }
+            else if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey)) {
+                if (this.clipboard) this._pasteAt(this.playhead, this.clipboard.track);
+                e.preventDefault();
+            }
+            else if (e.key === "d" || e.key === "D") {
+                // Duplicate the selected clip right after itself.
+                if (sel.type && sel.idx >= 0) {
+                    const src = this._segArr(sel.type)[sel.idx];
+                    if (src) {
+                        this._copySegment({ segType: sel.type, idx: sel.idx });
+                        this._pasteAt(src.start + src.length, sel.type);
+                    }
+                }
+                e.preventDefault();
+            }
             else if (e.key === "s" || e.key === "S") { this.splitSelectedAtPlayhead(); e.preventDefault(); }
+            else if (e.key === "i" || e.key === "I") {
+                this.inPoint = (this.inPoint === this.playhead) ? null : this.playhead;
+                if (this.inPoint != null && this.outPoint != null && this.outPoint <= this.inPoint) this.outPoint = null;
+                this.commitChanges(); e.preventDefault();
+            }
+            else if (e.key === "o" || e.key === "O") {
+                this.outPoint = (this.outPoint === this.playhead) ? null : this.playhead;
+                if (this.inPoint != null && this.outPoint != null && this.outPoint <= this.inPoint) this.inPoint = null;
+                this.commitChanges(); e.preventDefault();
+            }
+            else if (e.key === "x" || e.key === "X") {
+                if (this.inPoint != null || this.outPoint != null) { this.inPoint = null; this.outPoint = null; this.commitChanges(); }
+                e.preventDefault();
+            }
+            else if (e.key === "+" || e.key === "=") { this.setZoom(this.zoom * 1.4); e.preventDefault(); }
+            else if (e.key === "-" || e.key === "_") { this.setZoom(this.zoom / 1.4); e.preventDefault(); }
             else if (e.code === "Space") { this.togglePlay(); e.preventDefault(); }
             else if (e.key === "ArrowLeft")  { this.stepPlayhead(-1); e.preventDefault(); }
             else if (e.key === "ArrowRight") { this.stepPlayhead(+1); e.preventDefault(); }
@@ -568,6 +625,9 @@ class TimelineEditor {
                 this[k] = Array.isArray(tl[k]) ? tl[k] : [];
                 for (const s of this[k]) if (!s.id) s.id = nid();
             }
+            this.inPoint  = Number.isFinite(tl.inPoint)  ? tl.inPoint  : null;
+            this.outPoint = Number.isFinite(tl.outPoint) ? tl.outPoint : null;
+            this.trackMuted = (tl.trackMuted && typeof tl.trackMuted === "object") ? tl.trackMuted : {};
         }
         this.suppressCommit = false;
         // Async image preload
@@ -617,6 +677,11 @@ class TimelineEditor {
         // image/audio edit would silently wipe the LoRA/camera/seed/pose data.
         const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut, motionSegments: motionOut };
         for (const k of V2_KEYS) tlOut[k] = (this[k] || []).map(s => ({ ...s }));
+        // Work region + track mutes (additive keys; backend tolerates extras
+        // and skips muted tracks — see director_node timeline parse).
+        if (this.inPoint  != null) tlOut.inPoint  = this.inPoint;
+        if (this.outPoint != null) tlOut.outPoint = this.outPoint;
+        if (Object.values(this.trackMuted || {}).some(Boolean)) tlOut.trackMuted = { ...this.trackMuted };
         writeWidget(this.node, "timeline_data", JSON.stringify(tlOut));
         // local_prompts: pipe-delimited, image+text segments sorted by start
         const sorted = [...this.segments].sort((a, b) => a.start - b.start);
@@ -935,6 +1000,19 @@ class TimelineEditor {
         // Returns {kind, segType, idx, edge}
         if (my < RULER_H) return { kind: "ruler" };
         const v2Base = this._v2Base();
+        // Left-gutter mute dots (one per lane).
+        if (mx <= 16) {
+            const imgB = RULER_H + IMG_TRACK_H, audB = imgB + AUD_TRACK_H, vidB = audB + VID_TRACK_H;
+            let track = null;
+            if (my < imgB) track = "image";
+            else if (my < audB) track = "audio";
+            else if (my < vidB) track = "video";
+            else {
+                const li = Math.floor((my - v2Base) / V2_LANE_H);
+                if (li >= 0 && li < V2_DEFS.length) track = V2_DEFS[li].key;
+            }
+            if (track) return { kind: "mute", track };
+        }
         // v2 automation lanes (below the audio track).
         if (my >= v2Base) {
             const li = Math.max(0, Math.min(V2_DEFS.length - 1, Math.floor((my - v2Base) / V2_LANE_H)));
@@ -977,6 +1055,12 @@ class TimelineEditor {
             this.playhead = clamp(this._xToFrame(mx), 0, this.visualDurFrames);
             this.dragState = { type: "playhead" };
             this.render();
+            return;
+        }
+        if (hit.kind === "mute") {
+            this.trackMuted[hit.track] = !this.trackMuted[hit.track];
+            if (hit.track === "audio" && this.playing) { this._stopAudio(); if (!this.trackMuted.audio) this._startAudio(); }
+            this.commitChanges();
             return;
         }
         if (hit.kind === "seg") {
@@ -1030,11 +1114,24 @@ class TimelineEditor {
             const seg = arr[ds.idx];
             const cur = this._xToFrame(mx);
             const delta = cur - ds.startFrame;
+            this._snapDisabled = !!e.shiftKey;
             if (ds.edge === "mid") {
-                seg.start = Math.max(0, ds.origStart + delta);
+                const raw = Math.max(0, ds.origStart + delta);
+                // Snap whichever end actually hits a target; when both do,
+                // take the closer snap. (Comparing raw distances alone would
+                // always prefer the unsnapped candidate at distance 0.)
+                const byStart = this._snapFrame(raw, seg);
+                const byEnd = this._snapFrame(raw + seg.length, seg) - seg.length;
+                const sHit = byStart !== raw, eHit = byEnd !== raw;
+                let v = raw;
+                if (sHit && eHit) v = (Math.abs(byStart - raw) <= Math.abs(byEnd - raw)) ? byStart : byEnd;
+                else if (sHit) v = byStart;
+                else if (eHit) v = byEnd;
+                seg.start = Math.max(0, v);
                 this._resolveCollisions(ds.segType, ds.idx);
             } else if (ds.edge === "right") {
-                seg.length = Math.max(MIN_SEG_FRAMES, ds.origLength + delta);
+                const rawEnd = seg.start + Math.max(MIN_SEG_FRAMES, ds.origLength + delta);
+                seg.length = Math.max(MIN_SEG_FRAMES, this._snapFrame(rawEnd, seg) - seg.start);
                 if (ds.segType === "audio" && seg.audioDurationFrames) {
                     seg.length = Math.min(seg.length, seg.audioDurationFrames - (seg.trimStart || 0));
                 } else if (ds.segType === "video" && seg.srcDurationFrames) {
@@ -1042,7 +1139,7 @@ class TimelineEditor {
                 }
                 this._resolveCollisions(ds.segType, ds.idx);
             } else if (ds.edge === "left") {
-                const newStart = Math.max(0, ds.origStart + delta);
+                const newStart = Math.max(0, this._snapFrame(ds.origStart + delta, seg));
                 const trim = newStart - ds.origStart;
                 const newLen = ds.origLength - trim;
                 if (newLen >= MIN_SEG_FRAMES) {
@@ -1088,10 +1185,26 @@ class TimelineEditor {
         if (hit.kind === "seg" && this._isV2(hit.segType)) {
             const def = this._v2DefForType(hit.segType);
             items.push({ label: `Edit ${def?.label || "segment"}…`, action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this._updateV2Props(); this.render(); } });
+            if (hit.segType === "cameraSegments") {
+                for (const p of CAMERA_PRESETS) {
+                    items.push({ label: `🎥 ${p.label}`, action: () => {
+                        const s = this._segArr(hit.segType)[hit.idx];
+                        if (!s) return;
+                        s.type = p.type;
+                        s.params = { ...p.params };
+                        this.selection = { type: hit.segType, idx: hit.idx };
+                        this.commitChanges();
+                        this._updateV2Props();
+                    } });
+                }
+            }
             items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "seg") {
             items.push({ label: "Copy", action: () => this._copySegment(hit) });
             items.push({ label: "Split at playhead", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.splitSelectedAtPlayhead(); } });
+            if (hit.segType === "image" || hit.segType === "video") {
+                items.push({ label: "🎲 Retake span (new seed)", action: () => this._retakeSpan(hit) });
+            }
             items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "track" && this._isV2(hit.track)) {
             const def = this._v2DefForType(hit.track);
@@ -1169,6 +1282,51 @@ class TimelineEditor {
             if (s.start < cursor) s.start = cursor;
             cursor = s.start + s.length;
         }
+    }
+
+    // ── Snapping (LTX-style) ────────────────────────────────────────
+    // Snap a frame to the playhead, region marks, clip edges on every track,
+    // and the timeline bounds — within an 8-CSS-px tolerance. Hold Shift
+    // while dragging to bypass.
+    _snapFrame(f, skipSeg) {
+        if (this._snapDisabled) return f;
+        const tol = 8 / Math.max(1e-3, this._pxPerFrame());
+        const targets = [0, this.durFrames, this.playhead];
+        if (this.inPoint  != null) targets.push(this.inPoint);
+        if (this.outPoint != null) targets.push(this.outPoint);
+        for (const t of ["image", "audio", "video", ...V2_KEYS]) {
+            for (const s of this._segArr(t)) {
+                if (s === skipSeg) continue;
+                targets.push(s.start, s.start + s.length);
+            }
+        }
+        let best = f, bd = tol;
+        for (const t of targets) {
+            const d = Math.abs(t - f);
+            if (d < bd) { bd = d; best = t; }
+        }
+        return best;
+    }
+
+    // ── Retake (LTX-2-style): re-roll the seed for one clip's span ──
+    _retakeSpan(hit) {
+        const seg = this._segArr(hit.segType)[hit.idx];
+        if (!seg) return;
+        const a = seg.start, b = seg.start + seg.length;
+        // Drop seed segments whose midpoint falls inside the span, then lay
+        // a fresh fixed seed exactly over it.
+        this.seedSegments = this.seedSegments.filter(s => {
+            const mid = s.start + s.length / 2;
+            return mid < a || mid >= b;
+        });
+        const fresh = {
+            id: nid(), seed: Math.floor(Math.random() * 0x7fffffff),
+            mode: "fixed", start: a, length: seg.length,
+        };
+        this.seedSegments.push(fresh);
+        this.selection = { type: "seedSegments", idx: this.seedSegments.indexOf(fresh) };
+        this.commitChanges();
+        this._updateV2Props();
     }
 
     // ── v2 automation tracks (LoRA / camera / seed / pose) ───────────
@@ -1284,7 +1442,13 @@ class TimelineEditor {
     stepPlayhead(n) { this.playhead = clamp(this.playhead + n, 0, this.visualDurFrames); this.render(); }
     togglePlay() {
         if (this.playing) { this._stopAudio(); this.playing = false; this.btnPlay.textContent = "▶"; }
-        else { this._startAudio(); this.playing = true; this.btnPlay.textContent = "❚❚"; this._tick(); }
+        else {
+            // With a work region set, start playback from its in-point when
+            // the playhead sits outside the region.
+            const li = this.inPoint, lo = this.outPoint;
+            if (li != null && lo != null && lo > li && (this.playhead < li || this.playhead >= lo)) this.playhead = li;
+            this._startAudio(); this.playing = true; this.btnPlay.textContent = "❚❚"; this._tick();
+        }
     }
     _ensureAudioCtx() {
         if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1297,6 +1461,7 @@ class TimelineEditor {
         this.playStartedAt = ac.currentTime;
         this.playStartFrame = this.playhead;
         const fps = this.fps;
+        if (this.trackMuted?.audio) return;   // muted lane: silent preview
         for (const seg of this.audioSegments) {
             const buf = this.audioBuffers.get(seg.audioFile);
             if (!buf) continue;
@@ -1327,7 +1492,13 @@ class TimelineEditor {
         if (ac) {
             const dt = ac.currentTime - this.playStartedAt;
             this.playhead = this.playStartFrame + Math.round(dt * this.fps);
-            if (this.playhead >= this.visualDurFrames) {
+            // Work region (I/O points): loop playback inside [in, out).
+            const loopIn = this.inPoint, loopOut = this.outPoint;
+            if (loopIn != null && loopOut != null && loopOut > loopIn && this.playhead >= loopOut) {
+                this._stopAudio();
+                this.playhead = loopIn;
+                this._startAudio();
+            } else if (this.playhead >= this.visualDurFrames) {
                 this.playhead = this.visualDurFrames;
                 this.togglePlay();
                 return;
@@ -1447,6 +1618,8 @@ class TimelineEditor {
         if (this.motionSegments.length === 0) this._drawAddHint(ctx, cssW, vidTop, VID_TRACK_H, "video");
         // v2 automation lanes
         this._drawV2Lanes(ctx, cssW);
+        // Track mute dots + muted-lane dimming (left gutter, every lane)
+        this._drawMuteDots(ctx, cssW);
         // Playhead
         this._drawPlayhead(ctx, cssH);
 
@@ -1478,6 +1651,42 @@ class TimelineEditor {
             ctx.stroke();
             ctx.fillStyle = C.slateMute;
             ctx.fillText(fmtTime(f, this.fps, this.displayMode), x + 3, RULER_H / 2);
+        }
+        // Work region (I/O points): amber band on the ruler + edge flags.
+        const li = this.inPoint, lo = this.outPoint;
+        if (li != null || lo != null) {
+            const x1 = this._frameToX(li != null ? li : 0);
+            const x2 = this._frameToX(lo != null ? lo : this.visualDurFrames);
+            ctx.fillStyle = "rgba(249,226,175,0.22)";
+            ctx.fillRect(x1, 0, Math.max(2, x2 - x1), RULER_H);
+            ctx.fillStyle = "#f9e2af";
+            if (li != null) { ctx.fillRect(x1, 0, 2, RULER_H); ctx.fillText("I", x1 + 4, RULER_H / 2); }
+            if (lo != null) { ctx.fillRect(x2 - 2, 0, 2, RULER_H); ctx.textAlign = "right"; ctx.fillText("O", x2 - 4, RULER_H / 2); ctx.textAlign = "left"; }
+        }
+    }
+
+    // Per-lane mute dots in the left gutter + dim overlay on muted lanes.
+    _drawMuteDots(ctx, cssW) {
+        const lanes = [
+            { key: "image", top: RULER_H, h: IMG_TRACK_H },
+            { key: "audio", top: RULER_H + IMG_TRACK_H, h: AUD_TRACK_H },
+            { key: "video", top: this._vidTop(), h: VID_TRACK_H },
+            ...V2_DEFS.map((d, i) => ({ key: d.key, top: this._v2LaneTop(i), h: V2_LANE_H })),
+        ];
+        for (const ln of lanes) {
+            const muted = !!this.trackMuted?.[ln.key];
+            if (muted) {
+                ctx.fillStyle = "rgba(0,0,0,0.45)";
+                ctx.fillRect(0, ln.top, cssW, ln.h);
+            }
+            const cx = 8, cy = ln.top + Math.min(12, ln.h / 2), r = 4;
+            ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            if (muted) {
+                ctx.strokeStyle = "rgba(200,205,220,0.8)"; ctx.lineWidth = 1.4; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r); ctx.stroke();
+            } else {
+                ctx.fillStyle = "rgba(140,220,160,0.9)"; ctx.fill();
+            }
         }
     }
 
