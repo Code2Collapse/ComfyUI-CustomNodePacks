@@ -406,6 +406,21 @@ app.registerExtension({
             // a hidden state-carrier (value still saves with the workflow).
             const node = this;
             const _collapse = () => {
+                // external_anchors_json is the same kind of raw-JSON state
+                // carrier (optional per-frame anchor override) — collapse it
+                // too; wiring it from another node still works via its socket.
+                const extW = (node.widgets || []).find(w => w.name === "external_anchors_json");
+                for (const jw of [extW].filter(Boolean)) {
+                    jw.type = "hidden";
+                    jw.computeSize = () => [0, -4];
+                    jw.hidden = true;
+                    const jel = jw.element || jw.inputEl;
+                    if (jel) {
+                        jel.style.display = "none";
+                        const jwrap = jel.parentElement;
+                        if (jwrap?.classList?.contains("dom-widget")) jwrap.style.display = "none";
+                    }
+                }
                 widget.type = "hidden";
                 widget.computeSize = () => [0, -4];
                 widget.hidden = true;

@@ -474,6 +474,11 @@ function installEditor(node) {
     // remain, so wiring points/bbox from another node still works.
     hideWidget(node.widgets?.find(w => w.name === "points_json"));
     hideWidget(node.widgets?.find(w => w.name === "bbox_json"));
+    // Same for the multi-prompt-family carriers on SAMMaskGeneratorMEC —
+    // bboxes_json (plural) and spline_json are JSON state fed by the editor
+    // or by upstream connections, never hand-typed.
+    hideWidget(node.widgets?.find(w => w.name === "bboxes_json"));
+    hideWidget(node.widgets?.find(w => w.name === "spline_json"));
 
     const syncDims = () => {
         const w = node.widgets?.find(x => x.name === "width");
