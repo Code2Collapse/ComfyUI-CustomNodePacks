@@ -26,6 +26,7 @@ import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
+import { drawEditorEmptyState } from "./_editor_empty_state.js";
 
 // Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
 const TARGET_NODES = ["MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC"];
@@ -349,6 +350,12 @@ function draw(ed, ctx, vw, vh) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
         try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (__c2cErr) { __c2cReport("points_bbox_editor", __c2cErr); }
+    } else if (ed.points.length === 0 && ed.bboxes.length === 0 && !ed.drag) {
+        drawEditorEmptyState(ctx, ed.canvasW, ed.canvasH, z, "⊹", [
+            "Click to add a point · drag to draw a box",
+            "Right-click adds a negative point",
+            "Connect an image for a reference backdrop",
+        ]);
     } else {
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);

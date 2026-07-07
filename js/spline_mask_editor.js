@@ -24,6 +24,7 @@ import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
 import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { drawEditorEmptyState } from "./_editor_empty_state.js";
 
 // Targets both the unified SplineMaskMEC (mode=edit) node and any
 // legacy SplineMaskEditorMEC references that may still live on saved
@@ -390,6 +391,12 @@ function draw(ed, ctx, vw, vh) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
         try { ctx.drawImage(ed.refImg, 0, 0, ed.canvasW, ed.canvasH); } catch (__c2cErr) { __c2cReport("spline_mask_editor", __c2cErr); }
+    } else if (!ed.shapes.some(s => s.points.length > 0)) {
+        drawEditorEmptyState(ctx, ed.canvasW, ed.canvasH, z, "✎", [
+            "Click to place spline points",
+            "Drag points to shape the mask · + Path starts another shape",
+            "Connect an image for a reference backdrop",
+        ]);
     } else {
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, ed.canvasW, ed.canvasH);

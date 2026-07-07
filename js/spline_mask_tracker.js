@@ -30,6 +30,7 @@ import { installModeGated } from "./_mode_gate.js";
 import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
+import { drawEditorEmptyState } from "./_editor_empty_state.js";
 
 // Targets unified SplineMaskMEC (mode=track) and any legacy
 // SplineMaskTrackerMEC nodes on saved graphs.
@@ -332,6 +333,9 @@ function draw(state, ctx, vw, vh) {
     if (frame?.img?.complete) {
         ctx.imageSmoothingEnabled = true;
         try { ctx.drawImage(frame.img, 0, 0, state.canvasW, state.canvasH); } catch (__c2cErr) { __c2cReport("spline_mask_tracker", __c2cErr); }
+    } else if (!state.frames.length) {
+        // Checkerboard artboard behind the screen-space prompt below.
+        drawEditorEmptyState(ctx, state.canvasW, state.canvasH, z, "", []);
     } else {
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, state.canvasW, state.canvasH);

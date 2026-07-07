@@ -224,7 +224,10 @@ function refreshVisibility(node) {
         setHidden(w, !visible);
     }
     vueSyncNodeWidgets(node);
-    node.setSize(node.computeSize());
+    const sz = node.computeSize();
+    // 30+ visible params: LiteGraph's title-derived default width (~253px)
+    // truncates almost every label. 340px fits the longest label + value.
+    node.setSize([Math.max(node.size[0], sz[0], 340), sz[1]]);
     node.setDirtyCanvas(true, true);
 }
 
