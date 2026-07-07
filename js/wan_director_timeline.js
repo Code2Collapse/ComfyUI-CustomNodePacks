@@ -299,10 +299,11 @@ class TimelineEditor {
             display:flex;flex-direction:column;gap:4px;width:100%;height:100%;
             box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;
             color:var(--c2c-gray100);background:var(--c2c-scrimDark7);border-radius:6px;padding:6px;
+            overflow:hidden;min-height:0;
         `;
         // Toolbar
         const tb = document.createElement("div");
-        tb.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;height:auto;";
+        tb.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;height:auto;flex:0 0 auto;";
         const mkBtn = (label, title) => {
             const b = document.createElement("button");
             b.type = "button";
@@ -344,7 +345,9 @@ class TimelineEditor {
 
         // Canvas wrap (for drag-drop overlay)
         const wrap = document.createElement("div");
-        wrap.style.cssText = "position:relative;width:100%;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
+        // flex:0 0 auto — the tracks canvas must never be flex-squished when
+        // the node height is capped (it compressed the lanes to slivers).
+        wrap.style.cssText = "position:relative;width:100%;flex:0 0 auto;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
         this.cvs.style.cssText = "display:block;width:100%;height:" + TRACKS_CANVAS_H + "px;outline:none;cursor:default;";
@@ -361,7 +364,7 @@ class TimelineEditor {
         const pbar = document.createElement("div");
         pbar.style.cssText = `
             display:flex;align-items:center;gap:6px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;
+            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;flex:0 0 auto;
         `;
         this.seek = document.createElement("input");
         this.seek.type = "range";
@@ -378,9 +381,13 @@ class TimelineEditor {
 
         // Properties panel
         const props = document.createElement("div");
+        // flex:1 1 auto + overflow-y:auto — when the node is height-capped
+        // the PROPS panel absorbs the shortage by scrolling, instead of the
+        // whole stack squishing/spilling out of the node.
         props.style.cssText = `
             display:flex;flex-direction:column;gap:4px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;min-height:${PROPS_MIN_H}px;
+            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;
+            flex:1 1 auto;min-height:0;overflow-y:auto;
         `;
         const labelRow = document.createElement("div");
         labelRow.style.cssText = "display:flex;gap:8px;align-items:center;font-size:11px;color:var(--c2c-sub);";
@@ -1956,7 +1963,10 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
             }
             _wdCapNode(this);
             const host = document.createElement("div");
-            host.style.cssText = "width:100%;height:100%;";
+            // overflow:hidden is load-bearing: when wdMaxH caps the node
+            // shorter than the timeline stack, the DOM used to spill out of
+            // the node over the graph (the "damaged node" screenshots).
+            host.style.cssText = "width:100%;height:100%;overflow:hidden;min-height:0;";
             const widget = this.addDOMWidget("wd_timeline", "wd_timeline", host, {
                 getValue: () => "",
                 setValue: () => {},
@@ -1977,10 +1987,14 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
             requestAnimationFrame(_wdClipTimeline);
             setTimeout(_wdClipTimeline, 500);
             setTimeout(_wdClipTimeline, 1500);
+            const self = this;
+            // Full fixed height. Node height is no longer viewport-capped
+            // (see _wan_director_ui capWd* — the cap made LiteGraph's slot
+            // stack exceed the node and the timeline hung over the graph),
+            // so the slot always fits the content by construction.
             widget.computeSize = function (width) {
                 return [width, TRACKS_CANVAS_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
             };
-            const self = this;
             setTimeout(() => {
                 try { self._wdTimeline = new TimelineEditor(self, host); }
                 catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }

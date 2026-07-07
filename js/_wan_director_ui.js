@@ -27,21 +27,25 @@ export function writeWdNodeSize(node, w, h) {
     }
 }
 
+// Height is intentionally NOT capped any more. Capping node height in DOC
+// pixels by VIEWPORT pixels is meaningless across zoom levels, and whenever
+// the cap bit, LiteGraph still stacked the widget slots at full height — the
+// timeline/player DOM hung out of the node over the graph (the "damaged
+// node" screenshots). Tall nodes are normal ComfyUI UX (zoom/pan); the
+// timeline widget additionally self-shrinks if anything ever caps again.
 export function capWdComputeSize(sz) {
-    const cap = wdMaxH();
     return [
         Math.max(sz?.[0] || WD_DEFAULT_W, WD_DEFAULT_W),
-        Math.min(sz?.[1] || cap, cap),
+        sz?.[1] || 520,
     ];
 }
 
 export function capWdNode(node) {
     if (!node?.size) return;
-    const cap = wdMaxH();
     writeWdNodeSize(
         node,
         Math.max(node.size[0] || 0, WD_DEFAULT_W),
-        Math.min(node.size[1] || cap, cap),
+        node.size[1] || 520,
     );
     node.setDirtyCanvas?.(true, true);
 }
