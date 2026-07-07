@@ -2040,6 +2040,18 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
             const r = origConfigure?.apply(this, arguments);
             setTimeout(() => {
                 _wdCapNode(this);
+                // Workflows SAVED while the old viewport-height cap was live
+                // carry the truncated size (e.g. 640x879) in their JSON, and
+                // LiteGraph keeps the saved size on load — so the timeline
+                // kept hanging out of the node for existing workflows even
+                // after the cap was removed. Height is dictated by the
+                // widget stack for this node; re-assert it (keep user width).
+                try {
+                    const need = this.computeSize();
+                    if (Array.isArray(need) && this.size[1] < need[1] - 4) {
+                        this.setSize([Math.max(this.size[0], need[0]), need[1]]);
+                    }
+                } catch (_) {}
                 if (this._wdTimeline) {
                     this._wdTimeline._loadFromWidgets();
                     this._wdTimeline._updatePropsPanel();
