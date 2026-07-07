@@ -624,64 +624,77 @@ function installEditor(node) {
     const menuBtn = mkIcon("≡", "More actions", () => toggleMenu());
     tb.appendChild(menuBtn);
 
-    const menu = document.createElement("div");
-    menu.style.cssText = `
-        position:absolute;top:34px;right:6px;z-index:var(--c2c-z-panel);
-        background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
-        box-shadow:0 6px 20px var(--c2c-black);padding:4px;display:none;
-        min-width:180px;font-size:11px;
-    `;
+    // ≡ menu — mounted on document.body with position:fixed and a top-level
+    // z-index. Inside the node it sat UNDER third-party overlays (rgthree's
+    // <rgthree-progress-bar> intercepted the clicks — "menu does nothing").
+    // Items act on pointerdown so nothing downstream can swallow them.
     root.style.position = "relative";
-    root.appendChild(menu);
+    const MENU_ITEMS = () => [
+        { label: "Reset zoom (100%)", run: () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; } },
+        { label: "Fit to view", run: () => {
+            const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
+        } },
+        { sep: true },
+        { label: "Clear points", danger: true, run: () => {
+            if (!ed.points.length) return;
+            ed.pushUndo(); ed.points = []; ed.save();
+        } },
+        { label: "Clear bounding boxes", danger: true, run: () => {
+            if (!ed.bboxes.length) return;
+            ed.pushUndo(); ed.bboxes = []; ed.save();
+        } },
+        { label: "Clear everything", danger: true, run: () => {
+            if (!ed.points.length && !ed.bboxes.length) return;
+            ed.pushUndo(); ed.points = []; ed.bboxes = []; ed.save();
+        } },
+    ];
 
-    const mkMenuItem = (label, onClick, danger) => {
-        const it = document.createElement("div");
-        it.textContent = label;
-        it.style.cssText = `
-            padding:7px 12px;border-radius:4px;cursor:pointer;
-            color:${danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
-        `;
-        it.onmouseenter = () => it.style.background = "var(--c2c-surface0)";
-        it.onmouseleave = () => it.style.background = "";
-        it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
-        return it;
-    };
-    const mkMenuSep = () => {
-        const s = document.createElement("div");
-        s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
-        return s;
-    };
-
-    menu.appendChild(mkMenuItem("Reset zoom (100%)", () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; }));
-    menu.appendChild(mkMenuItem("Fit to view", () => {
-        const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
-    }));
-    menu.appendChild(mkMenuSep());
-    menu.appendChild(mkMenuItem("Clear points", () => {
-        if (!ed.points.length) return;
-        ed.pushUndo(); ed.points = []; ed.save();
-    }, true));
-    menu.appendChild(mkMenuItem("Clear bounding boxes", () => {
-        if (!ed.bboxes.length) return;
-        ed.pushUndo(); ed.bboxes = []; ed.save();
-    }, true));
-    menu.appendChild(mkMenuItem("Clear everything", () => {
-        if (!ed.points.length && !ed.bboxes.length) return;
-        ed.pushUndo(); ed.points = []; ed.bboxes = []; ed.save();
-    }, true));
-
+    let _openMenuEl = null;
+    function _closeMenu() {
+        if (_openMenuEl) { try { _openMenuEl.remove(); } catch (_) {} _openMenuEl = null; }
+    }
     function toggleMenu() {
-        const open = menu.style.display === "none" || !menu.style.display;
-        menu.style.display = open ? "block" : "none";
-        if (open) {
-            const off = (e) => {
-                if (!menu.contains(e.target) && e.target !== menuBtn) {
-                    menu.style.display = "none";
-                    document.removeEventListener("mousedown", off, true);
-                }
+        if (_openMenuEl) { _closeMenu(); return; }
+        const menu = document.createElement("div");
+        const br = menuBtn.getBoundingClientRect();
+        menu.style.cssText = `
+            position:fixed;top:${Math.round(br.bottom + 4)}px;z-index:2147483000;
+            background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
+            box-shadow:0 6px 20px rgba(0,0,0,0.6);padding:4px;
+            min-width:180px;font-size:11px;
+        `;
+        menu.style.left = Math.max(8, Math.round(br.right - 188)) + "px";
+        for (const item of MENU_ITEMS()) {
+            if (item.sep) {
+                const s = document.createElement("div");
+                s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
+                menu.appendChild(s);
+                continue;
+            }
+            const it = document.createElement("div");
+            it.textContent = item.label;
+            it.style.cssText = `
+                padding:7px 12px;border-radius:4px;cursor:pointer;
+                color:${item.danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
+            `;
+            it.onmouseenter = () => it.style.background = "var(--c2c-surface0)";
+            it.onmouseleave = () => it.style.background = "";
+            it.onpointerdown = (e) => {
+                e.stopPropagation(); e.preventDefault();
+                _closeMenu();
+                item.run(); render();
             };
-            setTimeout(() => document.addEventListener("mousedown", off, true), 0);
+            menu.appendChild(it);
         }
+        document.body.appendChild(menu);
+        _openMenuEl = menu;
+        const off = (e) => {
+            if (!menu.contains(e.target) && e.target !== menuBtn) {
+                _closeMenu();
+                document.removeEventListener("pointerdown", off, true);
+            }
+        };
+        setTimeout(() => document.addEventListener("pointerdown", off, true), 0);
     }
 
     const TOOLBAR_H = 36;

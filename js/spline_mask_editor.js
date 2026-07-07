@@ -407,20 +407,31 @@ function draw(ed, ctx, vw, vh) {
 
     for (let s = 0; s < ed.shapes.length; s++) {
         const sh = ed.shapes[s];
-        const c = COLOR.paths[s % COLOR.paths.length];
+        // Resolved literals — COLOR.paths holds var(--…) strings which canvas
+        // cannot parse (strokeStyle/fillStyle silently keep their previous
+        // value). C.* resolves to real hex from the active theme.
+        const PATHC = [C.green, C.blue, C.yellow, C.peach, C.pink, C.teal];
+        const c = PATHC[s % PATHC.length];
         const isActive = s === ed.active;
 
         if (sh.points.length >= 2) {
             const sampled = sampleShape(sh, ed.samplesPerSegment, ed.centripetalAlpha);
             ctx.strokeStyle = c;
             ctx.lineWidth = (isActive ? 2.0 : 1.5) / z;
-            ctx.fillStyle = c + "22";
             ctx.beginPath();
             ctx.moveTo(sampled[0].x, sampled[0].y);
             for (let i = 1; i < sampled.length; i++) ctx.lineTo(sampled[i].x, sampled[i].y);
             if (sh.closed) {
                 ctx.closePath();
+                // globalAlpha instead of `c + "22"`: COLOR.paths entries were
+                // var(--…) strings, so the concatenated fillStyle was INVALID
+                // and canvas silently kept the LAST valid fill — the dark
+                // backdrop — filling the whole shape opaque black over the
+                // image (the reported bug). Nuke-style: image stays visible.
+                ctx.fillStyle = c;
+                ctx.globalAlpha = 0.14;
                 ctx.fill();
+                ctx.globalAlpha = 1.0;
             }
             ctx.stroke();
         }
@@ -441,9 +452,15 @@ function draw(ed, ctx, vw, vh) {
             }
         }
 
-        // Bezier handle endpoints + connector lines (active shape only).
+        // Bezier handle endpoints + connector lines — Nuke behaviour: the
+        // tangents always shape the curve, but the handle UI only appears
+        // for the point you are working with (hovered or mid-drag), not
+        // splayed across every vertex.
         if (isActive && sh.type === "bezier" && Array.isArray(sh.handles)) {
             for (let i = 0; i < sh.points.length; i++) {
+                const engaged = (ed.hover.shape === s && ed.hover.point === i)
+                    || (ed.drag && ed.drag.point === i);
+                if (!engaged) continue;
                 const p = sh.points[i];
                 const h = sh.handles[i];
                 if (!h) continue;
@@ -653,67 +670,82 @@ function installEditor(node) {
     const menuBtn = mkIcon("≡", "More actions", () => toggleMenu());
     tb.appendChild(menuBtn);
 
-    const menu = document.createElement("div");
-    menu.style.cssText = `
-        position:absolute;top:34px;right:6px;z-index:var(--c2c-z-hud);
-        background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
-        box-shadow:0 6px 20px var(--c2c-black);padding:4px;display:none;
-        min-width:200px;font-size:11px;
-    `;
+    // ≡ menu — mounted on document.body with position:fixed and a top-level
+    // z-index. Mounted inside the node it sat UNDER third-party overlays
+    // (rgthree's <rgthree-progress-bar> intercepted every click at the menu's
+    // coordinates — the reported "menu buttons do nothing"). Items act on
+    // pointerdown so nothing downstream can swallow the interaction.
     root.style.position = "relative";
-    root.appendChild(menu);
+    const MENU_ITEMS = () => [
+        { label: "Reset zoom (100%)", run: () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; } },
+        { label: "Fit to view", run: () => {
+            const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
+        } },
+        { sep: true },
+        { label: "Clear active path", danger: true, run: () => {
+            if (ed.active < 0) return;
+            ed.pushUndo(); ed.shapes[ed.active].points = []; ed.save();
+        } },
+        { label: "Delete active path", danger: true, run: () => {
+            if (ed.active < 0) return;
+            ed.pushUndo();
+            ed.shapes.splice(ed.active, 1);
+            ed.active = ed.shapes.length ? Math.min(ed.active, ed.shapes.length - 1) : -1;
+            ed.save();
+        } },
+        { label: "Clear all paths", danger: true, run: () => {
+            if (!ed.shapes.length) return;
+            ed.pushUndo(); ed.shapes = []; ed.active = -1; ed.save();
+        } },
+    ];
 
-    const mkMenuItem = (label, onClick, danger) => {
-        const it = document.createElement("div");
-        it.textContent = label;
-        it.style.cssText = `
-            padding:7px 12px;border-radius:4px;cursor:pointer;
-            color:${danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
-        `;
-        it.onmouseenter = () => it.style.background = C.border;
-        it.onmouseleave = () => it.style.background = "";
-        it.onclick = (e) => { e.stopPropagation(); menu.style.display = "none"; onClick(); render(); };
-        return it;
-    };
-    const mkMenuSep = () => {
-        const s = document.createElement("div");
-        s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
-        return s;
-    };
-
-    menu.appendChild(mkMenuItem("Reset zoom (100%)", () => { ed.zoom = 1; ed.panX = 0; ed.panY = 0; }));
-    menu.appendChild(mkMenuItem("Fit to view", () => {
-        const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
-    }));
-    menu.appendChild(mkMenuSep());
-    menu.appendChild(mkMenuItem("Clear active path", () => {
-        if (ed.active < 0) return;
-        ed.pushUndo(); ed.shapes[ed.active].points = []; ed.save();
-    }, true));
-    menu.appendChild(mkMenuItem("Delete active path", () => {
-        if (ed.active < 0) return;
-        ed.pushUndo();
-        ed.shapes.splice(ed.active, 1);
-        ed.active = ed.shapes.length ? Math.min(ed.active, ed.shapes.length - 1) : -1;
-        ed.save();
-    }, true));
-    menu.appendChild(mkMenuItem("Clear all paths", () => {
-        if (!ed.shapes.length) return;
-        ed.pushUndo(); ed.shapes = []; ed.active = -1; ed.save();
-    }, true));
-
+    let _openMenuEl = null;
+    function _closeMenu() {
+        if (_openMenuEl) { try { _openMenuEl.remove(); } catch (_) {} _openMenuEl = null; }
+    }
     function toggleMenu() {
-        const open = menu.style.display === "none" || !menu.style.display;
-        menu.style.display = open ? "block" : "none";
-        if (open) {
-            const off = (e) => {
-                if (!menu.contains(e.target) && e.target !== menuBtn) {
-                    menu.style.display = "none";
-                    document.removeEventListener("mousedown", off, true);
-                }
+        if (_openMenuEl) { _closeMenu(); return; }
+        const menu = document.createElement("div");
+        const br = menuBtn.getBoundingClientRect();
+        menu.style.cssText = `
+            position:fixed;top:${Math.round(br.bottom + 4)}px;z-index:2147483000;
+            background:var(--c2c-bg);border:1px solid ${COLOR.border};border-radius:6px;
+            box-shadow:0 6px 20px rgba(0,0,0,0.6);padding:4px;
+            min-width:200px;font-size:11px;
+        `;
+        // right-align to the button, clamped to the viewport
+        menu.style.left = Math.max(8, Math.round(br.right - 208)) + "px";
+        for (const item of MENU_ITEMS()) {
+            if (item.sep) {
+                const s = document.createElement("div");
+                s.style.cssText = `height:1px;background:${COLOR.border};margin:4px 2px;`;
+                menu.appendChild(s);
+                continue;
+            }
+            const it = document.createElement("div");
+            it.textContent = item.label;
+            it.style.cssText = `
+                padding:7px 12px;border-radius:4px;cursor:pointer;
+                color:${item.danger ? "var(--c2c-red)" : COLOR.text};white-space:nowrap;
+            `;
+            it.onmouseenter = () => it.style.background = C.border;
+            it.onmouseleave = () => it.style.background = "";
+            it.onpointerdown = (e) => {
+                e.stopPropagation(); e.preventDefault();
+                _closeMenu();
+                item.run(); render();
             };
-            setTimeout(() => document.addEventListener("mousedown", off, true), 0);
+            menu.appendChild(it);
         }
+        document.body.appendChild(menu);
+        _openMenuEl = menu;
+        const off = (e) => {
+            if (!menu.contains(e.target) && e.target !== menuBtn) {
+                _closeMenu();
+                document.removeEventListener("pointerdown", off, true);
+            }
+        };
+        setTimeout(() => document.addEventListener("pointerdown", off, true), 0);
     }
 
     let widgetH = 300;
