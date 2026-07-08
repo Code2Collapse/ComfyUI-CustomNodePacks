@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { installCanvasWidget } from "./_vue_canvas.js";
 
 /**
  * MEC – SAM Multi-Mask Picker Widget
@@ -463,7 +464,7 @@ app.registerExtension({
                 },
             };
 
-            this.addCustomWidget(pickerWidget);
+            installCanvasWidget(this, pickerWidget, 300);   // classic unchanged; Vue DOM canvas
 
             // Increase node size to fit picker
             const minH = 320;
