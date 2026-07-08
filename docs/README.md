@@ -26,10 +26,22 @@
 | Composite render passes | [`render-pass.md`](render-pass.md) |
 | Match grain / build clean plates | [`plate-tools.md`](plate-tools.md) |
 | Scrub / trim / crop a video in-graph | [`video-frame-player.md`](video-frame-player.md) |
+| **Build a graph from a description / diagnose an error** | [`ai-spine.md`](ai-spine.md) |
+| **Direct a multi-shot video on a timeline** | [`wan-director.md`](wan-director.md) |
+| **Fix an anamorphic / non-square-pixel plate** | [`anamorphic-par.md`](anamorphic-par.md) |
+| **Get live sampler previews (incl. Wan)** | [`live-preview.md`](live-preview.md) |
 
 ---
 
 ## Pack-by-pack reference
+
+### 🤖 AI-Spine, Direction & Workflow
+| Doc | Key nodes / features | What it covers |
+|---|---|---|
+| [**`ai-spine.md`**](ai-spine.md) ★ new | Workflow builder (Ctrl+Alt+B), error diagnosis card, C2C AI settings | Build a runnable graph from plain English (validated against the live registry), diagnose a failed run with a one-click apply-fix, local (Qwen GGUF / Ollama) or cloud backends |
+| [**`wan-director.md`**](wan-director.md) ★ new | **WanDirectorC2C**, **WanDirectorExtraArgs** | Timeline direction: image/audio/video + LoRA/camera/seed/pose lanes, snapping, I/O work region, track mutes, camera presets, retake, real-time ProRes/EXR playback via the proxy workflow |
+| [**`live-preview.md`**](live-preview.md) ★ new | C2C sampler preview setting | Smart per-model Auto (video→TAESD, image→core Auto) so SD/Flux/Wan all preview |
+| [**`anamorphic-par.md`**](anamorphic-par.md) ★ new | **PARDesqueezeMEC**, **PARResqueezeMEC** | Anamorphic plate ↔ square-pixel round trip (the 4448×3840 @ 1.7266 case) for undistorted AI
 
 ### 🎯 Segmentation, Matting & Mask Pipelines
 | Doc | Key nodes | What it covers |
