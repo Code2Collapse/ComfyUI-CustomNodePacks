@@ -615,6 +615,12 @@ try:
     except Exception as _et:
         print(f"[MEC] error_translator deferred: {_et}")
     try:
+        from .nodes.ai_workflow_builder import register_routes as _register_wf_builder_routes
+        _register_wf_builder_routes(_ps)
+        print("[MEC] ai_workflow_builder routes registered.")
+    except Exception as _wb:
+        print(f"[MEC] ai_workflow_builder deferred: {_wb}")
+    try:
         from .nodes.error_introspector import register_routes as _register_error_introspector_routes
         _register_error_introspector_routes(_ps)
         print("[MEC] error_introspector routes registered.")
