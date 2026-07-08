@@ -623,7 +623,8 @@ def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
             return None
     try:
         return _local_backend.generate(prompt,
-                                       max_tokens=settings.get("max_tokens", 512))
+                                       max_tokens=settings.get("max_tokens", 512),
+                                       system=settings.get("system_prompt"))
     except Exception as e:
         _record_tier_failure("tier2.llamacpp", e,
                              hint="Check the GGUF path / llama-cpp-python install.")

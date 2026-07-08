@@ -297,8 +297,13 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return best
 
 
-def _complete(prompt: str) -> Tuple[Optional[str], str]:
-    """Try tier2 (local/ollama) then tier3 (cloud). Returns (text, provider)."""
+def _complete(prompt: str, system: Optional[str] = None) -> Tuple[Optional[str], str]:
+    """Try tier2 (local/ollama) then tier3 (cloud). Returns (text, provider).
+
+    `system` replaces the local backend's default CAUSE:/FIXES: persona —
+    required whenever the caller wants a different output contract (JSON),
+    or the two format instructions fight and the model wastes its budget.
+    """
     try:
         from . import error_assistant as ea
         from . import local_llm
@@ -309,6 +314,8 @@ def _complete(prompt: str) -> Tuple[Optional[str], str]:
     settings = ea.load_settings()
     settings = dict(settings)
     settings["max_tokens"] = 1600
+    if system is not None:
+        settings["system_prompt"] = system
     if settings.get("tier2_enabled"):
         txt = ea._explain_local(prompt, settings)
         if txt:
@@ -346,10 +353,10 @@ def build_workflow(request: str, plan_override: Optional[Dict[str, Any]] = None)
     if plan is None:
         cands = pick_candidates(request)
         catalog = "\n".join(compact_schema(n) for n in cands)
-        base_prompt = f"{_SYSTEM}\n\nRequest: {request}\n\nNode catalog:\n{catalog}\n\nJSON:"
+        base_prompt = f"Request: {request}\n\nNode catalog:\n{catalog}\n\nJSON:"
         prompt = base_prompt
         for attempt in range(2):
-            text, provider = _complete(prompt)
+            text, provider = _complete(prompt, system=_SYSTEM)
             if not text:
                 break
             cand = _extract_json(text)

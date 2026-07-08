@@ -239,14 +239,21 @@ class Backend:
     model_path: str
     n_ctx: int = 4096
 
-    def generate(self, prompt: str, max_tokens: int = 512) -> str:
+    def generate(self, prompt: str, max_tokens: int = 512,
+                 system: Optional[str] = None) -> str:
+        """`system=None` keeps the historical CAUSE:/FIXES: error-explainer
+        persona. Callers with their OWN output contract (workflow builder,
+        diagnose — both want strict JSON) MUST pass a system prompt, or this
+        baked-in format instruction fights theirs and the reasoning distill
+        burns its whole token budget arguing with itself (observed live)."""
+        sys_msg = system if system is not None else (
+            "You explain Python tracebacks for ComfyUI users. "
+            "Be concise. Always answer with two sections "
+            "labelled exactly CAUSE: and FIXES: (bulleted).")
         try:
             res = self.llm.create_chat_completion(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system",
-                     "content": "You explain Python tracebacks for ComfyUI users. "
-                                "Be concise. Always answer with two sections "
-                                "labelled exactly CAUSE: and FIXES: (bulleted)."},
+                    {"role": "system", "content": sys_msg},
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=int(max_tokens),
