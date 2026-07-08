@@ -82,13 +82,49 @@ def ensure_previews_enabled() -> str:
     return PREVIEW_GUARD_STATUS
 
 
+def _is_video_latent(latent_format) -> bool:
+    """True for temporal (video) latent formats — Wan / Hunyuan-Video / LTXV /
+    Mochi / Cosmos. Robust across ComfyUI versions:
+      1. `latent_dimensions >= 3` (video formats set 3; images 2) — the primary,
+         version-stable signal,
+      2. the TAESD decoder name (`taew*` / `taehv*` = video approx decoders),
+      3. a class-name keyword fallback.
+    Any lookup failure just falls through to "not video" (image path)."""
+    try:
+        if int(getattr(latent_format, "latent_dimensions", 2)) >= 3:
+            return True
+    except Exception:
+        pass
+    try:
+        deco = str(getattr(latent_format, "taesd_decoder_name", "")).lower()
+        if deco.startswith(("taew", "taehv")):
+            return True
+        name = type(latent_format).__name__.lower()
+        return any(k in name for k in ("wan", "hunyuan", "ltx", "mochi", "cosmos", "video"))
+    except Exception:
+        return False
+
+
+def _auto_method_for(latent_format) -> str:
+    """The heart of "Auto": pick the previewer per MODEL.
+      video  -> TAESD  (Kijai/Wan samplers route TAESD to their own video
+                         previewer; core falls back to Wan-factor Latent2RGB
+                         if the taew decoder file is absent — never blank),
+      image  -> "auto" (core Auto = TAESD when the decoder is present, else
+                         Latent2RGB — the best-looking image preview)."""
+    return "taesd" if _is_video_latent(latent_format) else "auto"
+
+
 def _install_previewer_fallback() -> None:
-    """Bulletproof layer: patch latent_preview.get_previewer so it can NEVER
-    return None. Core returns None only when previews are off — in that case we
-    re-run core's own resolver with preview_method forced to Auto (Latent2RGB,
-    no model, cannot fail). This survives the method being reset per-prompt or
-    read differently across versions, so the live HUD always gets frames.
-    Fully guarded: any API change just no-ops and leaves core untouched."""
+    """Patch latent_preview.get_previewer with (a) smart per-model Auto and
+    (b) a never-None safety net.
+
+    In Auto mode (the default, and when the user picks "Auto") we OVERRIDE
+    core's method choice per call based on the latent format — because core's
+    own Auto resolves to Latent2RGB for Wan/video latents, which is blank. For
+    explicit taesd/latent2rgb we respect the user's choice; for off we return
+    None. Fully guarded: any ComfyUI API change just no-ops and leaves core
+    untouched."""
     try:
         import latent_preview
         from comfy.cli_args import args, LatentPreviewMethod
@@ -100,32 +136,50 @@ def _install_previewer_fallback() -> None:
     if not callable(orig):
         return
 
-    def _patched_get_previewer(device, latent_format):
-        try:
-            prev = orig(device, latent_format)
-        except Exception:
-            prev = None
-        if prev is not None:
-            return prev
-        if _USER_PREF in ("off", "none"):
-            return None  # user explicitly turned the sampler preview OFF
-        # Core gave nothing (previews off) -> force Auto for one resolve.
+    def _resolve_with(method_str, device, latent_format):
+        """Run core's resolver with args.preview_method forced to method_str,
+        then restore it. Returns core's previewer (or None)."""
         saved = getattr(args, "preview_method", None)
         try:
-            args.preview_method = LatentPreviewMethod.Auto
+            args.preview_method = LatentPreviewMethod(method_str)
             return orig(device, latent_format)
         except Exception:
-            return prev
+            return None
         finally:
             try:
                 args.preview_method = saved
             except Exception:
                 pass
 
+    def _patched_get_previewer(device, latent_format):
+        # Smart Auto: default (None) and explicit "auto" both get per-model
+        # selection. This is authoritative on EVERY sampler callback, so the
+        # per-prompt reset in PR #11261 can't undo it.
+        if _USER_PREF in (None, "auto"):
+            prev = _resolve_with(_auto_method_for(latent_format), device, latent_format)
+            if prev is not None:
+                return prev
+            # video TAESD came back empty (no taew file AND no rgb factors?) —
+            # fall through to the never-None net below.
+
+        if _USER_PREF in ("off", "none"):
+            return None  # user explicitly turned the sampler preview OFF
+
+        try:
+            prev = orig(device, latent_format)
+        except Exception:
+            prev = None
+        if prev is not None:
+            return prev
+        # Core gave nothing -> force Auto for one resolve (Latent2RGB, no model,
+        # cannot fail) so the live preview always gets frames.
+        return _resolve_with("auto", device, latent_format) or prev
+
     try:
         latent_preview.get_previewer = _patched_get_previewer
         latent_preview._c2c_previewer_patched = True
-        log.info("[c2c.preview] installed get_previewer fallback (previews can never be None).")
+        log.info("[c2c.preview] installed smart-Auto + never-None get_previewer wrapper "
+                 "(video->TAESD, image->Auto, per model).")
     except Exception as exc:  # noqa: BLE001
         log.debug("[c2c.preview] previewer patch skipped: %s", exc)
 
