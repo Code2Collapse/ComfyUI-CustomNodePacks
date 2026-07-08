@@ -481,7 +481,7 @@ except Exception as _exc:  # pragma: no cover
 _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
 for _rmod in ("color_science", "exr_io", "exr_metadata_reader", "geometry_nodes",
               "metadata_nodes", "plate_tools", "render_pass", "video_frame_extractor",
-              "optical_flow", "roto", "shuffle"):
+              "optical_flow", "roto", "shuffle", "pixel_aspect"):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
         _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})
