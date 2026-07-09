@@ -297,6 +297,16 @@ function _ensureWdStyles() {
 .wd-field{flex:1;min-width:0;background:#171717;color:var(--wd-fg);border:1px solid var(--wd-line);
   border-radius:5px;padding:4px 7px;font-size:11px;}
 .wd-field:focus{outline:none;border-color:#4d6a86;}
+.wd-menu{position:fixed;z-index:2147483000;background:#1c1c1c;border:1px solid #333;border-radius:9px;
+  padding:5px;box-shadow:0 10px 30px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:1px;min-width:176px;}
+.wd-menu-head{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#666;padding:5px 10px 3px;}
+.wd-menu-btn{display:flex;align-items:center;gap:9px;background:none;border:none;color:#e6e6e6;
+  font:12px ui-sans-serif,system-ui;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer;
+  transition:background .12s ease;width:100%;box-sizing:border-box;}
+.wd-menu-btn:hover:not(:disabled){background:#2c2c2c;}
+.wd-menu-btn:disabled{opacity:.4;cursor:not-allowed;}
+.wd-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:#9aa;}
+.wd-menu-sep{height:1px;background:#2c2c2c;margin:3px 4px;}
 `;
     document.head.appendChild(el);
 }
@@ -1148,17 +1158,88 @@ class TimelineEditor {
             this.render();
             return;
         }
-        // Empty-track "+" add-affordance click → add a clip there (LTX-style).
+        // Empty-track "+" add-affordance click → open an add MENU (LTX-style):
+        // Scene → Text / Image / Paste / Video, Audio → upload, Control → Video.
         if (this._addHints) {
             const img = this._addHints.image, aud = this._addHints.audio, vid = this._addHints.video;
-            if (img && Math.hypot(mx - img.cx, my - img.cy) <= img.r) { this.fileImg?.click(); return; }
-            if (vid && Math.hypot(mx - vid.cx, my - vid.cy) <= vid.r) { this.fileVid?.click(); return; }
-            if (aud && Math.hypot(mx - aud.cx, my - aud.cy) <= aud.r) { this.fileAud?.click(); return; }
+            if (img && Math.hypot(mx - img.cx, my - img.cy) <= img.r) { this._showAddMenu(e.clientX, e.clientY, "image"); return; }
+            if (vid && Math.hypot(mx - vid.cx, my - vid.cy) <= vid.r) { this._showAddMenu(e.clientX, e.clientY, "video"); return; }
+            if (aud && Math.hypot(mx - aud.cx, my - aud.cy) <= aud.r) { this._showAddMenu(e.clientX, e.clientY, "audio"); return; }
         }
         // Empty track click — clear selection
         this.selection = { type: null, idx: -1 };
         this._updatePropsPanel();
         this.render();
+    }
+
+    // ── Add menu (LTX-style "+" popover) ────────────────────────────
+    _showAddMenu(clientX, clientY, track) {
+        this._dismissAddMenu();
+        const menu = document.createElement("div");
+        menu.className = "wd-menu";
+        const head = document.createElement("div");
+        head.className = "wd-menu-head";
+        head.textContent = track === "audio" ? "Add to Audio"
+                         : track === "video" ? "Add to Control video" : "Add to Scene";
+        menu.appendChild(head);
+        const mkItem = (label, glyph, fn, opts = {}) => {
+            const b = document.createElement("button");
+            b.className = "wd-menu-btn";
+            b.innerHTML = `<span class="g">${glyph}</span>${label}`;
+            if (opts.disabled) { b.disabled = true; if (opts.title) b.title = opts.title; }
+            else b.addEventListener("pointerdown", (ev) => {
+                ev.preventDefault(); ev.stopPropagation(); this._dismissAddMenu();
+                try { fn(); } catch (err) { __c2cReport("wanDirector.addMenu", err); }
+            });
+            menu.appendChild(b);
+        };
+        if (track === "image") {
+            mkItem("Text segment", "T", () => this.addTextSegment());
+            mkItem("Image — upload", "🖼", () => this.fileImg?.click());
+            mkItem("Paste image", "📋", () => this._pasteImage());
+            const sep = document.createElement("div"); sep.className = "wd-menu-sep"; menu.appendChild(sep);
+            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+        } else if (track === "audio") {
+            mkItem("Audio — upload", "♪", () => this.fileAud?.click());
+        } else if (track === "video") {
+            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+        }
+        document.body.appendChild(menu);
+        // Clamp to viewport.
+        const vw = window.innerWidth, vh = window.innerHeight, r = menu.getBoundingClientRect();
+        let px = clientX + 4, py = clientY - 6;
+        if (px + r.width > vw - 6) px = vw - r.width - 6;
+        if (py + r.height > vh - 6) py = vh - r.height - 6;
+        menu.style.left = Math.max(6, px) + "px";
+        menu.style.top = Math.max(6, py) + "px";
+        this._addMenu = menu;
+        setTimeout(() => {
+            this._addMenuDismiss = (ev) => { if (!menu.contains(ev.target)) this._dismissAddMenu(); };
+            document.addEventListener("pointerdown", this._addMenuDismiss, true);
+            document.addEventListener("wheel", this._addMenuDismiss, true);
+        }, 0);
+    }
+    _dismissAddMenu() {
+        if (this._addMenu) { try { this._addMenu.remove(); } catch (_) {} this._addMenu = null; }
+        if (this._addMenuDismiss) {
+            document.removeEventListener("pointerdown", this._addMenuDismiss, true);
+            document.removeEventListener("wheel", this._addMenuDismiss, true);
+            this._addMenuDismiss = null;
+        }
+    }
+    async _pasteImage() {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const t = item.types.find((x) => x.startsWith("image/"));
+                if (t) {
+                    const blob = await item.getType(t);
+                    const file = new File([blob], "clipboard.png", { type: blob.type });
+                    await this.addImageSegmentFromFile(file);
+                    break;
+                }
+            }
+        } catch (_) { _uploadToast?.({ name: "clipboard" }, "Clipboard image paste was blocked by the browser."); }
     }
 
     _onMouseMove(e) {
@@ -2036,6 +2117,7 @@ class TimelineEditor {
 
     destroy() {
         this._stopAudio();
+        this._dismissAddMenu();
         try { this._resizeObs?.disconnect(); } catch {}
         if (this.audioCtx) try { this.audioCtx.close(); } catch {}
         this.audioCtx = null;
