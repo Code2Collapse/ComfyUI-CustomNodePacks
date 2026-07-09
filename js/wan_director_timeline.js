@@ -95,6 +95,21 @@ const CAMERA_PRESETS = [
 ];
 const V2_TOTAL_H = V2_LANE_H * V2_DEFS.length;
 const V2_LABEL_PX = 38;
+
+// Left sidebar (track-label column). Widening the timeline origin to this
+// gives every track a clean, readable label gutter — the LTX-Director look —
+// while segments start clear of the labels. All x-positioning flows through
+// _frameToX / _xToFrame, so this single origin shift is consistent everywhere.
+const LANE_X0 = 60;
+const TRACK_LABELS = {
+    image:          { name: "SCENE",   glyph: "🎬", color: "#89b4fa" },
+    audio:          { name: "AUDIO",   glyph: "♪",  color: "#a6e3a1" },
+    video:          { name: "CONTROL", glyph: "🎞", color: "#f9e2af" },
+    loraSegments:   { name: "LoRA",    glyph: "◆" },
+    cameraSegments: { name: "Cam",     glyph: "🎥" },
+    seedSegments:   { name: "Seed",    glyph: "⬡" },
+    poseSegments:   { name: "Pose",    glyph: "🕺" },
+};
 const CAMERA_TYPES = ["static", "pan", "zoom", "orbit", "dolly"];
 const SEED_MODES = ["fixed", "increment", "random_per_frame"];
 const POSE_INTERP = ["nearest", "linear"];
@@ -972,10 +987,11 @@ class TimelineEditor {
     // ── Hit testing & coords ────────────────────────────────────────
     _pxPerFrame() {
         const w = this.cvs.width / (window.devicePixelRatio || 1);
-        return (w * this.zoom) / Math.max(1, this.visualDurFrames);
+        // Timeline occupies the area to the RIGHT of the label sidebar.
+        return (Math.max(1, w - LANE_X0) * this.zoom) / Math.max(1, this.visualDurFrames);
     }
-    _frameToX(f) { return f * this._pxPerFrame() + PAD; }
-    _xToFrame(x) { return Math.round((x - PAD) / Math.max(1e-3, this._pxPerFrame())); }
+    _frameToX(f) { return f * this._pxPerFrame() + LANE_X0; }
+    _xToFrame(x) { return Math.round((x - LANE_X0) / Math.max(1e-3, this._pxPerFrame())); }
 
     /** Mouse event → canvas CSS-pixel coords, undoing the LiteGraph zoom.
      *  getBoundingClientRect() is post-transform (visual size); offsetWidth is
@@ -1007,8 +1023,8 @@ class TimelineEditor {
         // Returns {kind, segType, idx, edge}
         if (my < RULER_H) return { kind: "ruler" };
         const v2Base = this._v2Base();
-        // Left-gutter mute dots (one per lane).
-        if (mx <= 16) {
+        // Left sidebar (labels + mute toggles) — one row per lane.
+        if (mx < LANE_X0) {
             const imgB = RULER_H + IMG_TRACK_H, audB = imgB + AUD_TRACK_H, vidB = audB + VID_TRACK_H;
             let track = null;
             if (my < imgB) track = "image";
@@ -1359,10 +1375,7 @@ class TimelineEditor {
             ctx.fillStyle = li % 2 ? C.scrimDark : C.bg3;
             ctx.fillRect(0, top, cssW, V2_LANE_H);
             if (durX < cssW) { ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(durX, top, cssW - durX, V2_LANE_H); }
-            // label gutter
-            ctx.fillStyle = C.panelHi2; ctx.fillRect(0, top, V2_LABEL_PX, V2_LANE_H);
-            ctx.fillStyle = def.color; ctx.font = "9px ui-sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-            ctx.fillText(def.label, 4, top + V2_LANE_H / 2);
+            // (label + mute toggle are drawn by _drawSidebar)
             ctx.strokeStyle = C.surface1Alt; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(0, top + V2_LANE_H - 0.5); ctx.lineTo(cssW, top + V2_LANE_H - 0.5); ctx.stroke();
             // segments
@@ -1625,8 +1638,10 @@ class TimelineEditor {
         if (this.motionSegments.length === 0) this._drawAddHint(ctx, cssW, vidTop, VID_TRACK_H, "video");
         // v2 automation lanes
         this._drawV2Lanes(ctx, cssW);
-        // Track mute dots + muted-lane dimming (left gutter, every lane)
+        // Muted-lane dimming (over the timeline area)
         this._drawMuteDots(ctx, cssW);
+        // LTX-style left label sidebar (labels + mute toggles), over everything
+        this._drawSidebar(ctx, cssW, cssH);
         // Playhead
         this._drawPlayhead(ctx, cssH);
 
@@ -1640,25 +1655,46 @@ class TimelineEditor {
     }
 
     _drawRuler(ctx, cssW) {
-        ctx.fillStyle = C.panelHi2;
+        // Ruler bar + a slightly darker sidebar corner so the label column
+        // reads as one continuous gutter from the ruler down.
+        ctx.fillStyle = "#1c1e28";
         ctx.fillRect(0, 0, cssW, RULER_H);
-        ctx.fillStyle = C.dim;
-        ctx.font = "10px ui-monospace,monospace";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#16171f";
+        ctx.fillRect(0, 0, LANE_X0, RULER_H);
+        // Corner label.
+        ctx.fillStyle = C.slateMute || "#7f849c";
+        ctx.font = "9px ui-sans-serif,system-ui";
+        ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(this.displayMode === "frames" ? "FRAME" : "TIME", 8, RULER_H / 2);
+
         const pxF = this._pxPerFrame();
         const step = pickRulerStep(this.visualDurFrames, this.fps, pxF, this.displayMode);
+        const minorStep = step / (this.displayMode === "frames" ? 5 : 4);
+        // Minor ticks — short, faint.
+        ctx.strokeStyle = "rgba(255,255,255,0.07)"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let f = 0; f <= this.visualDurFrames + step; f += minorStep) {
+            const x = this._frameToX(f);
+            if (x < LANE_X0 - 1) continue;
+            if (x > cssW + 2) break;
+            ctx.moveTo(x, RULER_H - 4); ctx.lineTo(x, RULER_H);
+        }
+        ctx.stroke();
+        // Major ticks + labels.
+        ctx.fillStyle = C.dim || "#a6adc8";
+        ctx.font = "10px ui-monospace,monospace";
+        ctx.strokeStyle = "rgba(255,255,255,0.16)"; ctx.lineWidth = 1;
         for (let f = 0; f <= this.visualDurFrames + step; f += step) {
             const x = this._frameToX(f);
+            if (x < LANE_X0 - 1) continue;
             if (x > cssW + 50) break;
-            ctx.strokeStyle = C.panelHi2;
-            ctx.beginPath();
-            ctx.moveTo(x, RULER_H - 6);
-            ctx.lineTo(x, RULER_H);
-            ctx.stroke();
-            ctx.fillStyle = C.slateMute;
+            ctx.beginPath(); ctx.moveTo(x, RULER_H - 8); ctx.lineTo(x, RULER_H); ctx.stroke();
             ctx.fillText(fmtTime(f, this.fps, this.displayMode), x + 3, RULER_H / 2);
         }
+        // Crisp baseline under the ruler.
+        ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(cssW, RULER_H - 0.5); ctx.stroke();
+
         // Work region (I/O points): amber band on the ruler + edge flags.
         const li = this.inPoint, lo = this.outPoint;
         if (li != null || lo != null) {
@@ -1666,13 +1702,67 @@ class TimelineEditor {
             const x2 = this._frameToX(lo != null ? lo : this.visualDurFrames);
             ctx.fillStyle = "rgba(249,226,175,0.22)";
             ctx.fillRect(x1, 0, Math.max(2, x2 - x1), RULER_H);
-            ctx.fillStyle = "#f9e2af";
+            ctx.fillStyle = "#f9e2af"; ctx.textAlign = "left";
             if (li != null) { ctx.fillRect(x1, 0, 2, RULER_H); ctx.fillText("I", x1 + 4, RULER_H / 2); }
             if (lo != null) { ctx.fillRect(x2 - 2, 0, 2, RULER_H); ctx.textAlign = "right"; ctx.fillText("O", x2 - 4, RULER_H / 2); ctx.textAlign = "left"; }
         }
     }
 
-    // Per-lane mute dots in the left gutter + dim overlay on muted lanes.
+    // LTX-style left label column: one readable row per track (glyph + name +
+    // mute toggle), drawn over the track backgrounds. Click handling for the
+    // mute toggles is in _hitTest (mx < LANE_X0).
+    _drawSidebar(ctx, cssW, cssH) {
+        // Column background + right divider.
+        ctx.fillStyle = "#16171f";
+        ctx.fillRect(0, RULER_H, LANE_X0, cssH - RULER_H);
+        ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(LANE_X0 - 0.5, RULER_H); ctx.lineTo(LANE_X0 - 0.5, cssH); ctx.stroke();
+
+        const rows = [
+            { key: "image", top: RULER_H, h: IMG_TRACK_H, big: true },
+            { key: "audio", top: RULER_H + IMG_TRACK_H, h: AUD_TRACK_H, big: true },
+            { key: "video", top: this._vidTop(), h: VID_TRACK_H, big: true },
+            ...V2_DEFS.map((d, i) => ({ key: d.key, top: this._v2LaneTop(i), h: V2_LANE_H, big: false, color: d.color })),
+        ];
+        for (const r of rows) {
+            const meta = TRACK_LABELS[r.key] || { name: r.key, glyph: "•" };
+            const color = meta.color || r.color || "#cdd6f4";
+            const muted = !!this.trackMuted?.[r.key];
+            const cy = r.top + r.h / 2;
+            // Accent tab on the left edge of the track (its identity colour).
+            ctx.fillStyle = color;
+            ctx.globalAlpha = muted ? 0.3 : 0.9;
+            ctx.fillRect(0, r.top + 1, 3, r.h - 2);
+            ctx.globalAlpha = 1;
+            // Mute toggle dot.
+            const mx = 13, my = r.big ? r.top + 13 : cy;
+            ctx.beginPath(); ctx.arc(mx, my, 4, 0, Math.PI * 2);
+            if (muted) {
+                ctx.strokeStyle = "rgba(200,205,220,0.8)"; ctx.lineWidth = 1.3; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(mx - 4, my + 4); ctx.lineTo(mx + 4, my - 4); ctx.stroke();
+            } else {
+                ctx.fillStyle = color; ctx.fill();
+            }
+            // Glyph + name.
+            ctx.globalAlpha = muted ? 0.45 : 1;
+            if (r.big) {
+                ctx.fillStyle = color; ctx.font = "13px ui-sans-serif,system-ui";
+                ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                ctx.fillText(meta.glyph, 24, r.top + 13);
+                ctx.fillStyle = "#cdd6f4"; ctx.font = "600 10px ui-sans-serif,system-ui";
+                ctx.fillText(meta.name, 8, r.top + 30);
+            } else {
+                ctx.fillStyle = color; ctx.font = "10px ui-sans-serif,system-ui";
+                ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                ctx.fillText(meta.glyph, 24, cy);
+                ctx.fillStyle = "#bac2de"; ctx.font = "9px ui-sans-serif,system-ui";
+                ctx.fillText(meta.name, 34, cy);
+            }
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    // Dim overlay on muted lanes (the mute TOGGLE + label live in _drawSidebar).
     _drawMuteDots(ctx, cssW) {
         const lanes = [
             { key: "image", top: RULER_H, h: IMG_TRACK_H },
@@ -1681,18 +1771,9 @@ class TimelineEditor {
             ...V2_DEFS.map((d, i) => ({ key: d.key, top: this._v2LaneTop(i), h: V2_LANE_H })),
         ];
         for (const ln of lanes) {
-            const muted = !!this.trackMuted?.[ln.key];
-            if (muted) {
+            if (this.trackMuted?.[ln.key]) {
                 ctx.fillStyle = "rgba(0,0,0,0.45)";
-                ctx.fillRect(0, ln.top, cssW, ln.h);
-            }
-            const cx = 8, cy = ln.top + Math.min(12, ln.h / 2), r = 4;
-            ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            if (muted) {
-                ctx.strokeStyle = "rgba(200,205,220,0.8)"; ctx.lineWidth = 1.4; ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r); ctx.stroke();
-            } else {
-                ctx.fillStyle = "rgba(140,220,160,0.9)"; ctx.fill();
+                ctx.fillRect(LANE_X0, ln.top, cssW - LANE_X0, ln.h);
             }
         }
     }
@@ -1701,7 +1782,7 @@ class TimelineEditor {
         // LTX-style centered "+" inviting a clip into an empty track. The hot-zone
         // is recorded in this._addHints[kind] for click-to-add in _onMouseDown.
         const durX = this._frameToX(this.durFrames);
-        const cx = Math.max(36, Math.min(cssW - 36, (Math.min(cssW, durX) || cssW) / 2));
+        const cx = Math.max(LANE_X0 + 36, Math.min(cssW - 36, (LANE_X0 + Math.min(cssW, durX)) / 2));
         const cy = top + trackH / 2 - 6;
         const r = 14;
         ctx.save();

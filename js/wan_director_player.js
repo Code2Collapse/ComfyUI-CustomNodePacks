@@ -60,8 +60,11 @@ function makePlayerDOM(node) {
     // ── Video / image preview area ────────────────────────────────
     const stage = document.createElement("div");
     stage.style.cssText = `
-        flex: 1 1 auto; min-height: 0; position: relative;
-        background: var(--c2c-black); display: flex; align-items: center; justify-content: center;
+        flex: 1 1 auto; min-height: 0; position: relative; border-radius: 6px; overflow: hidden;
+        background:
+            radial-gradient(120% 90% at 50% 12%, rgba(137,180,250,0.06), transparent 60%),
+            linear-gradient(180deg, #14151d 0%, #0e0f16 100%);
+        display: flex; align-items: center; justify-content: center;
     `;
     const stageImg = document.createElement("img");
     stageImg.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
@@ -70,8 +73,14 @@ function makePlayerDOM(node) {
     stageVideo.playsInline = true;
     stageVideo.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
     const stageMsg = document.createElement("div");
-    stageMsg.style.cssText = "color:var(--c2c-gray400); font-size:12px; padding:8px; text-align:center;";
-    stageMsg.textContent = "No preview yet — add image/video clips or run the workflow.";
+    stageMsg.style.cssText = `
+        display:flex; flex-direction:column; align-items:center; gap:6px;
+        color:var(--c2c-gray400,#9399b2); font: 12px ui-sans-serif,system-ui; text-align:center; padding:8px;
+    `;
+    stageMsg.innerHTML =
+        `<div style="font-size:30px;line-height:1;opacity:0.6">🎬</div>` +
+        `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">Preview stage</div>` +
+        `<div style="opacity:0.8">Add image / video clips below, or run the workflow.</div>`;
     stage.append(stageImg, stageVideo, stageMsg);
 
     // ── Scrubber / seek bar (click + drag to seek; shows in/out region) ──
@@ -169,8 +178,13 @@ function makePlayerDOM(node) {
         stageImg.style.display = "none";
         stageVideo.pause();
         stageVideo.style.display = "none";
-        stageMsg.style.display = "block";
-        stageMsg.textContent = msg;
+        stageMsg.style.display = "flex";
+        // Keep the framed empty-state look for any status message.
+        const empty = /no clips|no preview/i.test(msg);
+        stageMsg.innerHTML =
+            `<div style="font-size:30px;line-height:1;opacity:0.6">${empty ? "🎬" : "⏳"}</div>` +
+            `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">${empty ? "Preview stage" : "Working…"}</div>` +
+            `<div style="opacity:0.8">${msg}</div>`;
     }
 
     // ── transport core (works for both video + image-clip modes) ──
