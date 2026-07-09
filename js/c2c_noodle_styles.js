@@ -27,6 +27,7 @@ import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { api } from "/scripts/api.js";
 
 const STYLES = [
     "default","spider-web","lightsaber","dna-helix","rainbow-flow",
@@ -1137,13 +1138,131 @@ function _refreshStyleCache() {
 }
 function _currentStyle() { return _styleCache; }
 
+/* ════════════════ COMPLETION FX — game sprites ride the wires ════════════
+ * On `execution_success` a game-themed sprite travels every link output→input
+ * once (~1.4s), then clears. Independent of the noodle STYLE (works on
+ * `default` too). Reuses _bezierPoints/_bezierAt so the sprite follows the
+ * exact wire path. Setting: mec.noodle.completion_fx (off/pacman/coin/ring/
+ * star/invader/random). A rAF pump forces redraws for the duration.
+ * ────────────────────────────────────────────────────────────────────── */
+const FX_SETTING_ID = "mec.noodle.completion_fx";
+const FX_DUR_MS = 1400;
+const _FX_THEMES = ["pacman", "coin", "ring", "star", "invader"];
+const _fx = { active: false, start: 0, base: "random" };
+
+function _fxSetting() {
+    try {
+        const v = app.ui.settings.getSettingValue(FX_SETTING_ID);
+        return (v === undefined || v === null) ? "random" : v;
+    } catch (_) { return "random"; }
+}
+function _fxThemeFor(link) {
+    if (_fx.base !== "random") return _fx.base;
+    const id = Math.abs((link && (link.id ?? 0)) | 0);
+    return _FX_THEMES[id % _FX_THEMES.length];
+}
+
+// ── sprites (drawn centred at x,y; dir=+1/-1 travel; ts=seconds for phase) ──
+function _fxPacman(ctx, x, y, dir, ts) {
+    const r = 11, m = 0.30 * (0.5 + 0.5 * Math.sin(ts * 16));
+    ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+    ctx.fillStyle = "#ffd54a";
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.arc(0, 0, r, m * Math.PI, (2 - m) * Math.PI); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#1a1a22";
+    ctx.beginPath(); ctx.arc(2, -r * 0.45, 1.7, 0, 7); ctx.fill();
+    ctx.restore();
+}
+function _fxCoin(ctx, x, y, dir, ts) {
+    const r = 10, sx = Math.abs(Math.cos(ts * 6)) * 0.82 + 0.18;
+    ctx.save(); ctx.translate(x, y); ctx.scale(sx, 1);
+    ctx.fillStyle = "#ffcf33"; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#c9971a"; ctx.stroke();
+    if (sx > 0.5) { ctx.fillStyle = "#a8790f"; ctx.font = "bold 12px ui-sans-serif,system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("$", 0, 1); }
+    ctx.restore();
+}
+function _fxRing(ctx, x, y, dir, ts) {
+    const r = 10, sx = Math.abs(Math.cos(ts * 6)) * 0.9 + 0.1;
+    ctx.save(); ctx.translate(x, y); ctx.scale(sx, 1);
+    ctx.lineWidth = 3.6; ctx.strokeStyle = "#ffd54a"; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = "#fff3b0"; ctx.beginPath(); ctx.arc(0, 0, r * 0.7, 0, 7); ctx.stroke();
+    ctx.restore();
+}
+function _fxStar(ctx, x, y, dir, ts) {
+    const R = 12; ctx.save(); ctx.translate(x, y); ctx.rotate(ts * 3);
+    ctx.fillStyle = "#ffe34a"; ctx.strokeStyle = "#e0a815"; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+        const a1 = -Math.PI / 2 + i * 2 * Math.PI / 5, a2 = a1 + Math.PI / 5;
+        ctx.lineTo(Math.cos(a1) * R, Math.sin(a1) * R);
+        ctx.lineTo(Math.cos(a2) * R * 0.45, Math.sin(a2) * R * 0.45);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#1a1a22";
+    ctx.beginPath(); ctx.arc(-3, -1, 1.4, 0, 7); ctx.arc(3, -1, 1.4, 0, 7); ctx.fill();
+    ctx.restore();
+}
+const _INV_A = ["..X.X..", "..XXX..", ".XXXXX.", "X.XXX.X", "X.X.X.X"];
+const _INV_B = ["..X.X..", "X.XXX.X", "XXXXXXX", ".XXXXX.", ".X...X."];
+function _fxInvader(ctx, x, y, dir, ts) {
+    const s = 2.4, g = (Math.sin(ts * 9) > 0) ? _INV_A : _INV_B, w = 7, h = 5;
+    ctx.save(); ctx.fillStyle = "#a6e3a1"; ctx.translate(x - w * s / 2, y - h * s / 2);
+    for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) if (g[r][c] === "X") ctx.fillRect(c * s, r * s, s - 0.3, s - 0.3);
+    ctx.restore();
+}
+const _FX_SPRITES = { pacman: _fxPacman, coin: _fxCoin, ring: _fxRing, star: _fxStar, invader: _fxInvader };
+
+function _triggerFxAnim() {
+    const theme = _fxSetting();
+    if (theme === "off") return;
+    _fx.base = theme; _fx.active = true; _fx.start = performance.now();
+    // Links are drawn on the background canvas and the graph loop may be idle
+    // after a run finishes, so setting dirty flags alone won't repaint. Force a
+    // real draw each frame for the (short) animation window; one final draw
+    // clears the last sprite. Paused while the tab is hidden.
+    const pump = () => {
+        if (!_fx.active) return;
+        const done = performance.now() - _fx.start >= FX_DUR_MS;
+        if (done) _fx.active = false;
+        try { if (app.canvas && !document.hidden) app.canvas.draw(true, true); } catch (_) {}
+        if (!done) requestAnimationFrame(pump);
+    };
+    requestAnimationFrame(pump);
+}
+
+// Draw the travelling sprite for one link (called from renderLink, any style).
+function _maybeFx(canvas, ctx, a, b, link) {
+    if (!_fx.active) return;
+    const p = (performance.now() - _fx.start) / FX_DUR_MS;
+    if (p >= 1) { _fx.active = false; return; }
+    const [cp1, cp2] = _bezierPoints(a, b);
+    const t = p;                                   // linear head; sprite at the front
+    const pos = _bezierAt(t, a, cp1, cp2, b);
+    const ah = _bezierAt(Math.min(1, t + 0.02), a, cp1, cp2, b);
+    const dir = (ah[0] - pos[0]) >= 0 ? 1 : -1;
+    // short fading trail
+    ctx.save();
+    for (let k = 1; k <= 3; k++) {
+        const tt = t - k * 0.035; if (tt < 0) break;
+        const tp = _bezierAt(tt, a, cp1, cp2, b);
+        ctx.globalAlpha = 0.18 * (3 - k) / 3;
+        ctx.fillStyle = "#fff3b0";
+        ctx.beginPath(); ctx.arc(tp[0], tp[1], 3.2, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    (_FX_SPRITES[_fxThemeFor(link)] || _fxStar)(ctx, pos[0], pos[1], dir, performance.now() / 1000);
+    ctx.restore();
+}
+
 function _installRenderPatch() {
     if (_orig || !window.LGraphCanvas) return;
     _orig = LGraphCanvas.prototype.renderLink;
     LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines) {
         const style = _currentStyle();
         if (style === "default" || !_RENDER[style]) {
-            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+            const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+            if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
+            return _r;
         }
         try {
             const linkType = link?.type || "";
@@ -1190,6 +1309,8 @@ function _installRenderPatch() {
                     this.dirty_canvas = true;
                 }
             }
+            // completion FX sprite rides this wire too
+            if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
         } catch (e) {
             console.warn("[MEC.NoodleStyles] render error, falling back:", e);
             return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
@@ -1240,9 +1361,21 @@ if (!LITE) app.registerExtension({
             defaultValue: "default",
             onChange: (v) => { _styleCache = (v === undefined || v === null) ? "default" : v; },
         },
+        {
+            id: FX_SETTING_ID,
+            name: "Noodle completion FX",
+            tooltip:
+                "When a run finishes, a game sprite travels every wire once. " +
+                "`random` gives each wire a different sprite. `off` disables it.",
+            type: "combo",
+            options: ["off", "random", ..._FX_THEMES],
+            defaultValue: "random",
+        },
     ],
     async setup() {
         _refreshStyleCache();   // seed the per-frame style cache once at startup
+        // Game-sprite completion animation: ride every wire when a run finishes.
+        try { api.addEventListener("execution_success", () => { try { _triggerFxAnim(); } catch (_) {} }); } catch (_) {}
         // LiteGraph is loaded before extensions, but be defensive.
         const tryInstall = () => {
             if (window.LGraphCanvas) {
