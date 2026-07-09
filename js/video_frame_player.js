@@ -3,6 +3,7 @@ import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 /**
  * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
@@ -97,10 +98,12 @@ app.registerExtension({
             _created?.apply(this, arguments);
             const node = this;
 
+            ensureC2CKit();
             const el = document.createElement("div");
+            el.className = "c2ck";
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:var(--c2c-panelDeep);pointer-events:auto;" +
-                "border-radius:8px;overflow:hidden;border:1px solid var(--c2c-panelBgAlt);display:flex;flex-direction:column;";
+                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:#161616;pointer-events:auto;" +
+                "border-radius:8px;overflow:hidden;border:1px solid #111;display:flex;flex-direction:column;color:#e6e6e6;";
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
                 "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
@@ -110,8 +113,8 @@ app.registerExtension({
             const tb = document.createElement("div");
             tb.style.cssText =
                 "display:flex;align-items:center;justify-content:space-between;" +
-                "padding:6px 10px;background:var(--c2c-panelDeep11);border-bottom:1px solid var(--c2c-panelBgAlt);" +
-                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:var(--c2c-fg);";
+                "padding:6px 10px;background:#1e1e1e;border-bottom:1px solid #111;" +
+                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:#e6e6e6;";
 
             // left side: Display Mode label + segmented toggle (Time | Frames)
             const left = document.createElement("div");
@@ -148,9 +151,7 @@ app.registerExtension({
             const cropBtn = document.createElement("button");
             cropBtn.type = "button";
             cropBtn.textContent = "Crop";
-            cropBtn.style.cssText =
-                "border:1px solid var(--c2c-panelBgAlt);background:var(--c2c-panelDeep);color:var(--c2c-fg);" +
-                "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
+            cropBtn.className = "c2ck-btn";
             cropBtn.onclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
@@ -205,10 +206,7 @@ app.registerExtension({
             };
             const refreshCropBtn = () => {
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
-                const on = !!w?.value;
-                cropBtn.style.background = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
-                cropBtn.style.borderColor = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
-                cropBtn.style.color = on ? "var(--c2c-white)" : "var(--c2c-fg)";
+                cropBtn.classList.toggle("on", !!w?.value);
             };
             const refreshTrimBadge = () => {
                 const stride = Number(node.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
