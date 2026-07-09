@@ -20,6 +20,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
 import { wdEnsureProxy } from './_wan_director_ui.js';
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -264,14 +265,16 @@ app.registerExtension({
             cvs.setAttribute("role", "img");
             wrap.appendChild(cvs);
 
+            ensureC2CKit();
             const overlay = document.createElement("div");
-            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:4px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;font:11px system-ui,sans-serif;color:var(--c2c-fg);text-shadow:0 1px 2px rgba(0,0,0,0.8);";
+            overlay.className = "c2ck";
+            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;";
             const modeBadge = document.createElement("div");
+            modeBadge.className = "c2ck-pill";
             modeBadge.textContent = "wipe";
-            modeBadge.style.cssText = "background:rgba(0,0,0,0.55);padding:2px 8px;border-radius:10px;";
             const liveBadge = document.createElement("div");
+            liveBadge.className = "c2ck-pill on";
             liveBadge.textContent = "● LIVE";
-            liveBadge.style.cssText = "background:rgba(40,180,80,0.85);color:var(--c2c-white);padding:2px 8px;border-radius:10px;font-weight:600;";
             overlay.appendChild(modeBadge);
             overlay.appendChild(liveBadge);
             wrap.appendChild(overlay);
