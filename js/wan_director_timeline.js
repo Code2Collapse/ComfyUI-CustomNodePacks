@@ -233,6 +233,74 @@ async function decodeAudioPeaks(blob, fps) {
 }
 
 // ── TimelineEditor ──────────────────────────────────────────────────
+// ── Design system ───────────────────────────────────────────────────
+// A dedicated stylesheet (injected once) is what gives LTX Director its crisp,
+// "authentic" feel vs ad-hoc inline styles: consistent radii, transitions,
+// hover states, floating uppercase labels and sub-status pills. We mirror that
+// language here with a neutral-dark palette so the node reads as a finished
+// pro tool, not a canvas sketch.
+function _ensureWdStyles() {
+    if (document.getElementById("wd-timeline-styles")) return;
+    const el = document.createElement("style");
+    el.id = "wd-timeline-styles";
+    el.textContent = `
+.wd-root{--wd-bg:#161616;--wd-panel:#1e1e1e;--wd-panel2:#222;--wd-line:#111;
+  --wd-line2:#2c2c2c;--wd-fg:#e6e6e6;--wd-dim:#8a8a8a;--wd-dim2:#666;--wd-acc:#5b9dd9;
+  font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--wd-fg);
+  background:var(--wd-bg);border-radius:8px;padding:8px;display:flex;flex-direction:column;
+  gap:7px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;min-height:0;}
+.wd-toolbar{display:flex;gap:5px;align-items:center;flex-wrap:wrap;flex:0 0 auto;}
+.wd-btn{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:5px 11px;font-size:11px;font-weight:500;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;transition:background .15s ease,border-color .15s ease,transform .05s ease;}
+.wd-btn:hover{background:#2e2e2e;border-color:#4a4a4a;}
+.wd-btn:active{transform:translateY(1px);}
+.wd-btn.on{background:#1c2733;border-color:#2f4a63;color:#cfe6ff;}
+.wd-btn-danger:hover{background:#3a1717;border-color:#a44;color:#ffb4b4;}
+.wd-btn-icon{padding:5px 8px;font-size:12px;}
+.wd-sep{width:1px;align-self:stretch;background:var(--wd-line2);margin:2px 3px;}
+.wd-select{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:4px 6px;font-size:11px;cursor:pointer;}
+.wd-status{margin-left:auto;font:11px ui-monospace,monospace;color:var(--wd-dim);letter-spacing:.2px;}
+.wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:#141414;
+  border:1px solid var(--wd-line);border-radius:7px;overflow:hidden;}
+.wd-canvas{display:block;width:100%;outline:none;cursor:default;}
+.wd-playerbar{display:flex;align-items:center;gap:9px;background:var(--wd-panel);
+  border:1px solid var(--wd-line);border-radius:7px;padding:6px 10px;flex:0 0 auto;}
+.wd-transport{display:flex;align-items:center;gap:3px;}
+.wd-tbtn{background:none;border:none;color:#cfcfcf;cursor:pointer;font-size:13px;
+  width:26px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s ease,color .12s ease;}
+.wd-tbtn:hover{background:#2c2c2c;color:#fff;}
+.wd-seek{flex:1 1 auto;accent-color:var(--wd-acc);height:4px;}
+.wd-readout{font:11px ui-monospace,monospace;color:var(--wd-dim);white-space:nowrap;letter-spacing:.3px;}
+.wd-panel{background:var(--wd-panel);border:1px solid var(--wd-line);border-radius:7px;
+  box-sizing:border-box;position:relative;}
+.wd-props{display:flex;flex-direction:column;gap:7px;flex:1 1 auto;min-height:0;overflow-y:auto;padding:2px;}
+.wd-prompt-wrap{position:relative;width:100%;background:var(--wd-panel);border:1px solid var(--wd-line);
+  border-radius:7px;box-sizing:border-box;overflow:hidden;transition:border-color .2s ease;min-height:74px;}
+.wd-prompt-wrap:focus-within{border-color:#4d6a86;}
+.wd-plabel{position:absolute;top:6px;left:9px;font-size:9px;font-weight:700;color:var(--wd-dim2);
+  text-transform:uppercase;letter-spacing:.6px;pointer-events:none;user-select:none;z-index:2;}
+.wd-pmeta{position:absolute;top:6px;right:9px;font:9px ui-monospace,monospace;color:var(--wd-dim2);
+  pointer-events:none;z-index:2;}
+.wd-parea{width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);border:none;
+  padding:22px 9px 9px;resize:none;font-size:12px;line-height:1.45;outline:none;min-height:74px;}
+.wd-parea::placeholder{color:#555;}
+.wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:7px;
+  padding:10px 11px;font-size:11.5px;line-height:1.6;}
+.wd-info b,.wd-info span{color:#fff;font-weight:600;}
+.wd-itag{display:block;font-size:9px;font-weight:700;color:var(--wd-dim2);text-transform:uppercase;
+  letter-spacing:.6px;margin-bottom:6px;}
+.wd-gsrow{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wd-dim);}
+.wd-gsrow input[type=range]{flex:1 1 auto;accent-color:var(--wd-acc);}
+.wd-field{flex:1;min-width:0;background:#171717;color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:4px 7px;font-size:11px;}
+.wd-field:focus{outline:none;border-color:#4d6a86;}
+`;
+    document.head.appendChild(el);
+}
+
 class TimelineEditor {
     constructor(node, container) {
         this.node = node;
@@ -308,51 +376,44 @@ class TimelineEditor {
 
     // ── DOM ─────────────────────────────────────────────────────────
     _buildDOM() {
+        _ensureWdStyles();
         const root = this.container;
-        root.classList.add("wd-timeline-root");
-        root.style.cssText = `
-            display:flex;flex-direction:column;gap:4px;width:100%;height:100%;
-            box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;
-            color:var(--c2c-gray100);background:var(--c2c-scrimDark7);border-radius:6px;padding:6px;
-            overflow:hidden;min-height:0;
-        `;
+        root.classList.add("wd-root");
+        root.style.cssText = "width:100%;height:100%;";
         // Toolbar
         const tb = document.createElement("div");
-        tb.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;height:auto;flex:0 0 auto;";
-        const mkBtn = (label, title) => {
+        tb.className = "wd-toolbar";
+        const mkBtn = (label, title, extra) => {
             const b = document.createElement("button");
             b.type = "button";
             b.textContent = label;
             b.title = title;
-            b.style.cssText = `
-                background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);
-                border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;
-            `;
-            b.onmouseenter = () => { b.style.background = "var(--c2c-surface1Alt)"; };
-            b.onmouseleave = () => { b.style.background = "var(--c2c-panelBg)"; };
+            b.className = "wd-btn" + (extra ? " " + extra : "");
             return b;
         };
-        this.btnAddText  = mkBtn("+ Text",  "Add a text-only segment");
-        this.btnAddImage = mkBtn("+ Image", "Upload an image segment");
-        this.btnAddVideo = mkBtn("+ Video", "Import a video clip onto the Control-Video track (mp4/mov/webm…)");
-        this.btnAddAudio = mkBtn("+ Audio", "Upload an audio segment");
+        this.btnAddText  = mkBtn("＋ Text",  "Add a text-only segment");
+        this.btnAddImage = mkBtn("＋ Image", "Upload an image segment");
+        this.btnAddVideo = mkBtn("＋ Video", "Import a video clip onto the Control-Video track (mp4/mov/webm…)");
+        this.btnAddAudio = mkBtn("＋ Audio", "Upload an audio segment");
+        const sep1 = document.createElement("div"); sep1.className = "wd-sep";
         this.btnSplit    = mkBtn("Split ✂", "Split the selected clip at the playhead (S)");
-        this.btnDelete   = mkBtn("Delete",  "Delete selected segment (Delete key)");
-        this.btnPlay     = mkBtn("▶",       "Play / Pause (Space)");
-        this.btnZoomOut  = mkBtn("−",       "Zoom out");
-        this.btnZoomIn   = mkBtn("+",       "Zoom in");
+        this.btnDelete   = mkBtn("Delete",  "Delete selected segment (Delete key)", "wd-btn-danger");
+        const sep2 = document.createElement("div"); sep2.className = "wd-sep";
+        this.btnPlay     = mkBtn("▶",       "Play / Pause (Space)", "wd-btn-icon");
+        this.btnZoomOut  = mkBtn("−",       "Zoom out", "wd-btn-icon");
+        this.btnZoomIn   = mkBtn("+",       "Zoom in", "wd-btn-icon");
         this.btnFit      = mkBtn("Fit",     "Fit timeline to view");
         const modeSel = document.createElement("select");
-        modeSel.style.cssText = "background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);border-radius:4px;padding:3px;font-size:11px;";
+        modeSel.className = "wd-select";
         modeSel.innerHTML = '<option value="seconds">Seconds</option><option value="frames">Frames</option>';
         modeSel.value = this.displayMode;
         modeSel.onchange = () => { writeWidget(this.node, "display_mode", modeSel.value); this.render(); };
         this.modeSel = modeSel;
         const status = document.createElement("span");
-        status.style.cssText = "margin-left:auto;font-size:10.5px;color:var(--c2c-sub);font-family:ui-monospace,monospace;";
+        status.className = "wd-status";
         this.statusEl = status;
-        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddAudio,
-                          this.btnSplit, this.btnDelete,
+        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddAudio, sep1,
+                          this.btnSplit, this.btnDelete, sep2,
                           this.btnPlay, this.btnZoomOut, this.btnZoomIn, this.btnFit, modeSel, status]) {
             tb.appendChild(el);
         }
@@ -360,15 +421,14 @@ class TimelineEditor {
 
         // Canvas wrap (for drag-drop overlay)
         const wrap = document.createElement("div");
-        // flex:0 0 auto — the tracks canvas must never be flex-squished when
-        // the node height is capped (it compressed the lanes to slivers).
-        wrap.style.cssText = "position:relative;width:100%;flex:0 0 auto;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
+        wrap.className = "wd-canvas-wrap";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
-        this.cvs.style.cssText = "display:block;width:100%;height:" + TRACKS_CANVAS_H + "px;outline:none;cursor:default;";
+        this.cvs.className = "wd-canvas";
+        this.cvs.style.height = TRACKS_CANVAS_H + "px";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
-        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:var(--c2c-white);font-size:14px;border:2px dashed var(--c2c-blue);border-radius:4px;";
+        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:#fff;font-size:13px;font-weight:600;border:2px dashed #5b9dd9;border-radius:7px;";
         dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
@@ -377,18 +437,15 @@ class TimelineEditor {
 
         // Player bar (seekbar + readout)
         const pbar = document.createElement("div");
-        pbar.style.cssText = `
-            display:flex;align-items:center;gap:6px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;flex:0 0 auto;
-        `;
+        pbar.className = "wd-playerbar";
         this.seek = document.createElement("input");
         this.seek.type = "range";
         this.seek.min = "0";
         this.seek.max = "10000";
         this.seek.value = "0";
-        this.seek.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-blue);";
+        this.seek.className = "wd-seek";
         this.timeReadout = document.createElement("span");
-        this.timeReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:var(--c2c-sub);min-width:120px;text-align:right;";
+        this.timeReadout.className = "wd-readout";
         this.timeReadout.textContent = "f 0 / 0";
         pbar.appendChild(this.seek);
         pbar.appendChild(this.timeReadout);
@@ -396,33 +453,21 @@ class TimelineEditor {
 
         // Properties panel
         const props = document.createElement("div");
-        // flex:1 1 auto + overflow-y:auto — when the node is height-capped
-        // the PROPS panel absorbs the shortage by scrolling, instead of the
-        // whole stack squishing/spilling out of the node.
-        props.style.cssText = `
-            display:flex;flex-direction:column;gap:4px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;
-            flex:1 1 auto;min-height:0;overflow-y:auto;
-        `;
-        const labelRow = document.createElement("div");
-        labelRow.style.cssText = "display:flex;gap:8px;align-items:center;font-size:11px;color:var(--c2c-sub);";
-        this.propTitle = document.createElement("span");
-        this.propTitle.textContent = "No segment selected";
-        this.propBounds = document.createElement("span");
-        this.propBounds.style.cssText = "margin-left:auto;color:var(--c2c-slateMute);font-family:ui-monospace,monospace;";
-        labelRow.appendChild(this.propTitle);
-        labelRow.appendChild(this.propBounds);
-        props.appendChild(labelRow);
-
+        props.className = "wd-props";
+        // Floating-label prompt wrapper (LTX-style): SEGMENT PROMPT label +
+        // bounds meta pinned in the corners, textarea fills the box.
+        const promptWrap = document.createElement("div");
+        promptWrap.className = "wd-prompt-wrap";
+        const plabel = document.createElement("div");
+        plabel.className = "wd-plabel";
+        plabel.textContent = "SEGMENT PROMPT";
+        this.propTitle = plabel;
+        const pmeta = document.createElement("div");
+        pmeta.className = "wd-pmeta";
+        this.propBounds = pmeta;
         const ta = document.createElement("textarea");
-        ta.placeholder = "Prompt for this segment (select an image or text clip)";
-        ta.style.cssText = `
-            background:var(--c2c-scrimDark3);color:var(--c2c-gray100);border:1px solid var(--c2c-panelBg);border-radius:4px;
-            padding:6px;font-size:12px;font-family:ui-sans-serif,system-ui,sans-serif;
-            resize:vertical;min-height:60px;outline:none;width:100%;box-sizing:border-box;
-        `;
-        ta.onfocus = () => { ta.style.borderColor = "var(--c2c-blue)"; };
-        ta.onblur  = () => { ta.style.borderColor = "var(--c2c-panelBg)"; };
+        ta.className = "wd-parea";
+        ta.placeholder = "Select an image or text clip, then describe it here…";
         ta.oninput = () => {
             const seg = this._selSeg();
             if (seg && (seg.type === "image" || seg.type === "text")) {
@@ -432,18 +477,21 @@ class TimelineEditor {
             }
         };
         this.promptArea = ta;
-        props.appendChild(ta);
+        promptWrap.appendChild(plabel);
+        promptWrap.appendChild(pmeta);
+        promptWrap.appendChild(ta);
+        props.appendChild(promptWrap);
+        this.promptWrap = promptWrap;
 
         const gsRow = document.createElement("div");
-        gsRow.style.cssText = "display:flex;gap:6px;align-items:center;font-size:11px;color:var(--c2c-sub);";
+        gsRow.className = "wd-gsrow";
         const gsLabel = document.createElement("span");
-        gsLabel.textContent = "Guide strength:";
+        gsLabel.textContent = "Guide strength";
         this.gsSlider = document.createElement("input");
         this.gsSlider.type = "range";
         this.gsSlider.min = "0"; this.gsSlider.max = "200"; this.gsSlider.value = "100";
-        this.gsSlider.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-okSoft);";
         this.gsVal = document.createElement("span");
-        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:var(--c2c-fg);min-width:40px;text-align:right;";
+        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:#e6e6e6;min-width:40px;text-align:right;";
         this.gsVal.textContent = "1.00";
         this.gsSlider.oninput = () => {
             const v = parseInt(this.gsSlider.value) / 100;
@@ -461,7 +509,8 @@ class TimelineEditor {
 
         // Audio info box (visible only when audio segment selected)
         this.audioInfo = document.createElement("div");
-        this.audioInfo.style.cssText = "display:none;background:var(--c2c-scrimDark3);border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;font-size:11px;color:var(--c2c-sub);line-height:1.5;font-family:ui-monospace,monospace;";
+        this.audioInfo.className = "wd-info";
+        this.audioInfo.style.display = "none";
         props.appendChild(this.audioInfo);
 
         root.appendChild(props);
@@ -1409,12 +1458,15 @@ class TimelineEditor {
     _updateV2Props() {
         const seg = this._selSeg(), def = this._v2DefForType(this.selection.type);
         if (!seg || !def) { this._updatePropsPanel(); return; }
-        this.propTitle.textContent = `${def.label}: ${def.summary(seg)}`;
         this.propBounds.textContent = `${fmtTime(seg.start, this.fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, this.fps, this.displayMode)} · ${seg.length}f`;
-        this.promptArea.style.display = "none";
+        this.promptWrap.style.display = "none";
         this.gsSlider.parentElement.style.display = "none";
         this.audioInfo.style.display = "block";
         this.audioInfo.innerHTML = "";
+        const _vtag = document.createElement("span");
+        _vtag.className = "wd-itag";
+        _vtag.textContent = `${def.label} · ${def.summary(seg)}`;
+        this.audioInfo.appendChild(_vtag);
         this.audioInfo.appendChild(this._buildV2Editor(seg, def));
     }
 
@@ -1539,10 +1591,12 @@ class TimelineEditor {
     _updatePropsPanel() {
         const seg = this._selSeg();
         if (!seg) {
-            this.propTitle.textContent = "No segment selected";
+            this.propTitle.textContent = "SEGMENT PROMPT";
             this.propBounds.textContent = "";
+            this.promptWrap.style.display = "";
             this.promptArea.value = "";
             this.promptArea.disabled = true;
+            this.gsSlider.parentElement.style.display = "none";
             this.gsSlider.disabled = true;
             this.audioInfo.style.display = "none";
             return;
@@ -1551,32 +1605,34 @@ class TimelineEditor {
         this.propBounds.textContent = `${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f`;
         if (seg.type === "audio") {
             this.propTitle.textContent = `Audio: ${seg.fileName || seg.audioFile || "(unknown)"}`;
-            this.promptArea.style.display = "none";
+            this.promptWrap.style.display = "none";
             this.gsSlider.parentElement.style.display = "none";
             this.audioInfo.style.display = "block";
             const trimIn = (seg.trimStart || 0) / fps;
             const trimOut = ((seg.audioDurationFrames || 0) - (seg.trimStart || 0) - seg.length) / fps;
             this.audioInfo.innerHTML =
-                `File: ${seg.fileName || seg.audioFile}<br>` +
+                `<span class="wd-itag">Audio clip</span>` +
+                `File: <b>${seg.fileName || seg.audioFile}</b><br>` +
                 `Source length: ${(seg.audioDurationFrames / fps).toFixed(2)}s<br>` +
                 `Output length: ${(seg.length / fps).toFixed(2)}s<br>` +
                 `Trim-in: ${trimIn.toFixed(2)}s · Trim-out: ${Math.max(0, trimOut).toFixed(2)}s`;
         } else if (seg.type === "video") {
             this.propTitle.textContent = `Video: ${seg.fileName || seg.videoFile || "(clip)"}`;
-            this.promptArea.style.display = "none";
+            this.promptWrap.style.display = "none";
             this.gsSlider.parentElement.style.display = "none";
             this.audioInfo.style.display = "block";
             const srcSec = (seg.srcDurationFrames || 0) / fps;
             const trimInF = seg.trimStart || 0;
             this.audioInfo.innerHTML =
-                `File: ${seg.fileName || seg.videoFile}<br>` +
+                `<span class="wd-itag">Control video</span>` +
+                `File: <b>${seg.fileName || seg.videoFile}</b><br>` +
                 `Source: ${srcSec.toFixed(2)}s · ${seg.srcDurationFrames || "?"}f` +
                     (seg.srcW ? ` · ${seg.srcW}×${seg.srcH}` : "") + `<br>` +
                 `On timeline: ${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f<br>` +
                 `Trim-in: ${trimInF}f → feeds <b>control_video</b>`;
         } else {
-            this.propTitle.textContent = (seg.type === "text" ? "Text segment" : "Image segment");
-            this.promptArea.style.display = "block";
+            this.propTitle.textContent = (seg.type === "text" ? "TEXT SEGMENT" : "IMAGE SEGMENT");
+            this.promptWrap.style.display = "";
             this.promptArea.disabled = false;
             this.promptArea.value = seg.prompt || "";
             this.gsSlider.parentElement.style.display = "flex";
