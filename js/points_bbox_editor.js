@@ -27,6 +27,7 @@ import { installModeGated } from "./_mode_gate.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import { drawEditorEmptyState } from "./_editor_empty_state.js";
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
 const TARGET_NODES = ["MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC"];
@@ -500,7 +501,9 @@ function installEditor(node) {
     syncDims(); syncRadius();
     ed.load();
 
+    ensureC2CKit();
     const root = document.createElement("div");
+    root.className = "c2ck";
     // Inset the editor from the node body so LiteGraph keeps a hit area for
     // its border / resize corner. Without this the DOM widget swallows every
     // pointer event and the user cannot grab the node edge or the bottom-
@@ -509,18 +512,18 @@ function installEditor(node) {
         display:flex;flex-direction:column;
         width:calc(100% - 12px);height:calc(100% - 18px);
         margin:2px 6px 16px 6px;
-        background:${COLOR.bg};border:1px solid ${COLOR.border};border-radius:6px;
-        overflow:hidden;font-family:Inter,system-ui,sans-serif;color:${COLOR.text};
+        background:#161616;border:1px solid #111;border-radius:7px;
+        overflow:hidden;color:#e6e6e6;
         box-sizing:border-box;user-select:none;
         pointer-events:none;
     `;
 
     // --- Compact toolbar (icon buttons + dropdown menu) ----------------
     const tb = document.createElement("div");
+    tb.className = "c2ck-toolbar";
     tb.style.cssText = `
-        display:flex;align-items:center;gap:4px;padding:4px 6px;
-        background:linear-gradient(var(--c2c-panelTint),var(--c2c-panelHi));
-        border-bottom:1px solid ${COLOR.border};
+        display:flex;align-items:center;gap:4px;padding:5px 7px;
+        background:#1e1e1e;border-bottom:1px solid #111;
         flex:0 0 auto;font-size:11px;line-height:1;
         pointer-events:auto;
     `;
@@ -550,17 +553,7 @@ function installEditor(node) {
     const mkIcon = (label, title, onClick) => {
         const b = document.createElement("button");
         b.textContent = label; b.title = title;
-        b.style.cssText = `
-            min-width:26px;height:24px;padding:0 7px;
-            border:1px solid ${COLOR.border};border-radius:4px;
-            background:var(--c2c-surface0);color:${COLOR.text};
-            font-size:11px;font-weight:500;cursor:pointer;
-            display:inline-flex;align-items:center;justify-content:center;
-            white-space:nowrap;line-height:1;flex:0 0 auto;
-            transition:background .12s,border-color .12s;
-        `;
-        b.onmouseenter = () => { b.style.background = "var(--c2c-surface1)"; b.style.borderColor = "var(--c2c-surface2)"; };
-        b.onmouseleave = () => { b.style.background = "var(--c2c-surface0)"; b.style.borderColor = COLOR.border; };
+        b.className = "c2ck-btn c2ck-btn-icon";
         b.onmousedown = (e) => e.stopPropagation();
         b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(); render(); };
         return b;
