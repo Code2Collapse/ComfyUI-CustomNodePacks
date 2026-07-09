@@ -96,11 +96,10 @@ const CAMERA_PRESETS = [
 const V2_TOTAL_H = V2_LANE_H * V2_DEFS.length;
 const V2_LABEL_PX = 38;
 
-// Left sidebar (track-label column). Widening the timeline origin to this
-// gives every track a clean, readable label gutter — the LTX-Director look —
-// while segments start clear of the labels. All x-positioning flows through
-// _frameToX / _xToFrame, so this single origin shift is consistent everywhere.
-const LANE_X0 = 60;
+// Left sidebar width. The canvas reserves this via _frameToX/_xToFrame; a
+// crisp DOM sidebar (track labels + eye toggles + sub-status pills, LTX-style)
+// is overlaid on top of it so the labels render as real text, not canvas paint.
+const LANE_X0 = 110;
 const TRACK_LABELS = {
     image:          { name: "SCENE",   glyph: "🎬", color: "#89b4fa" },
     audio:          { name: "AUDIO",   glyph: "♪",  color: "#a6e3a1" },
@@ -265,6 +264,27 @@ function _ensureWdStyles() {
 .wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:#141414;
   border:1px solid var(--wd-line);border-radius:7px;overflow:hidden;}
 .wd-canvas{display:block;width:100%;outline:none;cursor:default;}
+/* DOM track sidebar overlaid on the canvas's reserved left column */
+.wd-sb{position:absolute;left:0;top:0;height:100%;background:#171717;border-right:1px solid #0b0b0b;
+  display:flex;flex-direction:column;z-index:3;overflow:hidden;box-sizing:border-box;}
+.wd-sb-ruler{display:flex;align-items:center;padding:0 8px;font-size:9px;color:#666;letter-spacing:.6px;
+  border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;}
+.wd-sb-row{position:relative;display:flex;flex-direction:column;justify-content:center;gap:3px;
+  padding:0 7px 0 12px;border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;overflow:hidden;}
+.wd-sb-row.sm{flex-direction:row;align-items:center;gap:6px;padding:0 6px 0 12px;}
+.wd-sb-row::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;background:var(--acc);opacity:.85;}
+.wd-sb-row.muted{opacity:.4;}
+.wd-sb-top{display:flex;align-items:center;gap:6px;}
+.wd-sb-eye{background:none;border:none;color:var(--acc);cursor:pointer;font-size:12px;padding:0;line-height:1;
+  width:16px;text-align:left;flex:0 0 auto;transition:opacity .12s ease;}
+.wd-sb-eye:hover{opacity:.7;}
+.wd-sb-name{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:#d4d4d4;letter-spacing:.3px;}
+.wd-sb-row.sm .wd-sb-name{font-size:9.5px;font-weight:500;}
+.wd-sb-g{color:var(--acc);font-size:13px;}
+.wd-sb-row.sm .wd-sb-g{font-size:11px;}
+.wd-sb-pill{align-self:flex-start;display:inline-flex;align-items:center;font-size:8.5px;font-weight:600;
+  padding:1px 7px;border-radius:999px;background:#242424;border:1px solid #303030;color:#9a9a9a;letter-spacing:.2px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;}
 .wd-playerbar{display:flex;align-items:center;gap:9px;background:var(--wd-panel);
   border:1px solid var(--wd-line);border-radius:7px;padding:6px 10px;flex:0 0 auto;}
 .wd-transport{display:flex;align-items:center;gap:3px;}
@@ -442,6 +462,9 @@ class TimelineEditor {
         dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
+        // Crisp DOM track sidebar (labels + eye toggles + status pills) overlaid
+        // on the canvas's reserved left column — the LTX-Director look, real text.
+        wrap.appendChild(this._buildSidebarOverlay());
         root.appendChild(wrap);
         this.cvsWrap = wrap;
 
@@ -522,6 +545,27 @@ class TimelineEditor {
         this.audioInfo.className = "wd-info";
         this.audioInfo.style.display = "none";
         props.appendChild(this.audioInfo);
+
+        // Global prompt (LTX parity) — mirrors the node's global_prompt widget,
+        // which we hide from the widget stack so it lives here instead.
+        const gWrap = document.createElement("div");
+        gWrap.className = "wd-prompt-wrap";
+        gWrap.style.flex = "0 0 auto";
+        const gLabel = document.createElement("div");
+        gLabel.className = "wd-plabel";
+        gLabel.textContent = "GLOBAL PROMPT";
+        const gTa = document.createElement("textarea");
+        gTa.className = "wd-parea";
+        gTa.placeholder = "Prompt applied to the whole clip…";
+        gTa.value = readWidget(this.node, "global_prompt", "") || "";
+        gTa.oninput = () => { writeWidget(this.node, "global_prompt", gTa.value); };
+        gWrap.append(gLabel, gTa);
+        props.appendChild(gWrap);
+        this.globalPromptTa = gTa;
+        try {
+            const gw = (this.node.widgets || []).find((w) => w.name === "global_prompt");
+            if (gw) { gw.hidden = true; gw.computeSize = () => [0, -4]; gw.type = "hidden"; }
+        } catch (_) { /* best-effort */ }
 
         root.appendChild(props);
 
@@ -1777,8 +1821,9 @@ class TimelineEditor {
         this._drawV2Lanes(ctx, cssW);
         // Muted-lane dimming (over the timeline area)
         this._drawMuteDots(ctx, cssW);
-        // LTX-style left label sidebar (labels + mute toggles), over everything
-        this._drawSidebar(ctx, cssW, cssH);
+        // Sync the DOM sidebar (labels/pills/mute state) — the crisp overlay
+        // replaces the old canvas-drawn column.
+        this._syncSidebar();
         // Playhead
         this._drawPlayhead(ctx, cssH);
 
@@ -1845,9 +1890,86 @@ class TimelineEditor {
         }
     }
 
-    // LTX-style left label column: one readable row per track (glyph + name +
-    // mute toggle), drawn over the track backgrounds. Click handling for the
-    // mute toggles is in _hitTest (mx < LANE_X0).
+    // Build the crisp DOM sidebar (real text labels + eye toggles + pills).
+    _buildSidebarOverlay() {
+        const sb = document.createElement("div");
+        sb.className = "wd-sb";
+        sb.style.width = LANE_X0 + "px";
+        const rc = document.createElement("div");
+        rc.className = "wd-sb-ruler";
+        rc.textContent = "TIME";
+        rc.style.height = RULER_H + "px";
+        sb.appendChild(rc);
+        this._sbRows = {};
+        const defs = [
+            { key: "image", h: IMG_TRACK_H, big: true },
+            { key: "audio", h: AUD_TRACK_H, big: true },
+            { key: "video", h: VID_TRACK_H, big: true },
+            ...V2_DEFS.map((d) => ({ key: d.key, h: V2_LANE_H, big: false, color: d.color })),
+        ];
+        for (const d of defs) {
+            const meta = TRACK_LABELS[d.key] || { name: d.key, glyph: "•" };
+            const acc = meta.color || d.color || "#cdd6f4";
+            const row = document.createElement("div");
+            row.className = "wd-sb-row" + (d.big ? "" : " sm");
+            row.style.height = d.h + "px";
+            row.style.setProperty("--acc", acc);
+            const eye = document.createElement("button");
+            eye.type = "button";
+            eye.className = "wd-sb-eye";
+            eye.title = "Mute / unmute this track";
+            eye.onmousedown = (e) => e.stopPropagation();
+            eye.onclick = (e) => {
+                e.stopPropagation();
+                this.trackMuted[d.key] = !this.trackMuted[d.key];
+                if (d.key === "audio" && this.playing) { this._stopAudio(); if (!this.trackMuted.audio) this._startAudio(); }
+                this._syncSidebar(); this.render();
+            };
+            const name = document.createElement("div");
+            name.className = "wd-sb-name";
+            name.innerHTML = `<span class="wd-sb-g">${meta.glyph}</span>${meta.name}`;
+            if (d.big) {
+                const top = document.createElement("div");
+                top.className = "wd-sb-top";
+                top.append(eye, name);
+                row.appendChild(top);
+                const pill = document.createElement("div");
+                pill.className = "wd-sb-pill";
+                pill.style.display = "none";
+                row.appendChild(pill);
+                this._sbRows[d.key] = { row, eye, pill, big: true };
+            } else {
+                row.append(eye, name);
+                this._sbRows[d.key] = { row, eye, big: false };
+            }
+            sb.appendChild(row);
+        }
+        this._sidebarEl = sb;
+        return sb;
+    }
+    // Reflect mute state + status pills onto the DOM sidebar.
+    _syncSidebar() {
+        if (!this._sbRows) return;
+        for (const key in this._sbRows) {
+            const r = this._sbRows[key];
+            const muted = !!this.trackMuted?.[key];
+            r.row.classList.toggle("muted", muted);
+            r.eye.textContent = muted ? "⊘" : (r.big ? "👁" : "●");
+        }
+        const setPill = (key, text) => {
+            const r = this._sbRows[key];
+            if (!r || !r.pill) return;
+            r.pill.textContent = text || "";
+            r.pill.style.display = text ? "inline-flex" : "none";
+        };
+        const n = (a) => (a && a.length) ? `${a.length} clip${a.length > 1 ? "s" : ""}` : "";
+        setPill("image", n(this.segments));
+        setPill("audio", readWidget(this.node, "audio_target", "") || "");
+        setPill("video", n(this.motionSegments));
+    }
+
+    // (legacy) canvas sidebar — replaced by the DOM overlay; kept as a no-op-safe
+    // helper in case an old render path calls it.
     _drawSidebar(ctx, cssW, cssH) {
         // Column background + right divider.
         ctx.fillStyle = "#16171f";
