@@ -23,22 +23,25 @@
  *   - Restore from saved timeline_data on graph load
  */
 
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "/scripts/app.js";
+import { api } from "/scripts/api.js";
 import { C, reducedMotion } from './_c2c_theme.js';
 import { reportFailure } from './_c2c_report.js';
 import {
     WD_DEFAULT_W,
     capWdNode,
     installWanDirectorPrototype,
+    wdEnsureDomWidgetsAttached,
     wdHideWidget,
     wdMaxH,
+    wdVueNudge,
 } from "./_wan_director_ui.js";
 
 // ── Constants ───────────────────────────────────────────────────────
 const RULER_H = 22;
 const IMG_TRACK_H = 96;
 const AUD_TRACK_H = 48;
+const VID_TRACK_H = 76;          // Control-Video track (filmstrip of imported clips)
 const PROPS_MIN_H = 88;
 const TOOLBAR_H = 28;
 const PLAYER_BAR_H = 24;
@@ -75,11 +78,46 @@ const V2_DEFS = [
     },
 ];
 const V2_KEYS = V2_DEFS.map(d => d.key);
+
+// Camera motion presets (LTX-Director-style one-click moves). type must be
+// one of the backend's _CAMERA_TYPES (static/pan/zoom/orbit/dolly); params
+// is the free-form dict the downstream applier interprets.
+const CAMERA_PRESETS = [
+    { label: "Static",     type: "static", params: {} },
+    { label: "Pan ←",      type: "pan",    params: { direction: "left",  speed: 1.0 } },
+    { label: "Pan →",      type: "pan",    params: { direction: "right", speed: 1.0 } },
+    { label: "Dolly In",   type: "dolly",  params: { direction: "in",    speed: 1.0 } },
+    { label: "Dolly Out",  type: "dolly",  params: { direction: "out",   speed: 1.0 } },
+    { label: "Zoom In",    type: "zoom",   params: { direction: "in",    amount: 1.25 } },
+    { label: "Zoom Out",   type: "zoom",   params: { direction: "out",   amount: 1.25 } },
+    { label: "Orbit ↺",    type: "orbit",  params: { direction: "ccw",   speed: 1.0 } },
+    { label: "Orbit ↻",    type: "orbit",  params: { direction: "cw",    speed: 1.0 } },
+];
 const V2_TOTAL_H = V2_LANE_H * V2_DEFS.length;
 const V2_LABEL_PX = 38;
+
+// Left sidebar width. The canvas reserves this via _frameToX/_xToFrame; a
+// crisp DOM sidebar (track labels + eye toggles + sub-status pills, LTX-style)
+// is overlaid on top of it so the labels render as real text, not canvas paint.
+const LANE_X0 = 110;
+const TRACK_LABELS = {
+    image:          { name: "SCENE",   glyph: "🎬", color: "#89b4fa" },
+    audio:          { name: "AUDIO",   glyph: "♪",  color: "#a6e3a1" },
+    video:          { name: "CONTROL", glyph: "🎞", color: "#f9e2af" },
+    loraSegments:   { name: "LoRA",    glyph: "◆" },
+    cameraSegments: { name: "Cam",     glyph: "🎥" },
+    seedSegments:   { name: "Seed",    glyph: "⬡" },
+    poseSegments:   { name: "Pose",    glyph: "🕺" },
+};
 const CAMERA_TYPES = ["static", "pan", "zoom", "orbit", "dolly"];
 const SEED_MODES = ["fixed", "increment", "random_per_frame"];
 const POSE_INTERP = ["nearest", "linear"];
+
+// Total canvas height for all stacked tracks (ruler + image + audio + video +
+// the four v2 automation lanes). Single source of truth so a new track can't
+// be added in one layout site and forgotten in another.
+const TRACKS_CANVAS_H = RULER_H + IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H + V2_TOTAL_H;
+const VID_THUMBS = 8;            // filmstrip thumbnails decoded per video clip
 
 const HIDDEN_NAMES = new Set([
     "timeline_data", "local_prompts", "negative_prompts",
@@ -135,17 +173,40 @@ async function uploadFile(file, type) {
     fd.append("image", file);     // ComfyUI's /upload/image accepts "image"
     fd.append("overwrite", "true");
     fd.append("type", "input");
-    const url = type === "audio" ? "/upload/audio" : "/upload/image";
+    // BUG FIX (2026-07): ComfyUI has NO /upload/audio route (POST → HTTP 405),
+    // so "+ Audio" uploads always failed silently and nothing appeared on the
+    // track. /upload/image stores ANY file type into input/ (verified: it 200s
+    // for .wav/.mp3 too), so route BOTH audio and video through it.
     try {
-        const r = await api.fetchApi(url, { method: "POST", body: fd });
-        if (!r.ok) return null;
+        const r = await api.fetchApi("/upload/image", { method: "POST", body: fd });
+        if (!r.ok) {
+            reportFailure("WanDirector.uploadFile",
+                new Error(`upload HTTP ${r.status} for ${file && file.name}`),
+                "wan_director_timeline");
+            _uploadToast(file, `the server refused the upload (HTTP ${r.status})`);
+            return null;
+        }
         const j = await r.json();
         // returns { name, subfolder, type }
         return j;
     } catch (e) {
         reportFailure("WanDirector.uploadFile", e, "wan_director_timeline");
+        _uploadToast(file, String((e && e.message) || e || "network error"));
         return null;
     }
+}
+
+// A failed import must NEVER be silent — that reads as "the button is broken".
+function _uploadToast(file, why) {
+    try {
+        app.extensionManager.toast.add({
+            severity: "error",
+            summary: "WanDirector — import failed",
+            detail: `${file && file.name ? file.name : "file"}: ${why}. ` +
+                    "The clip was not added to the timeline.",
+            life: 7000,
+        });
+    } catch (_) { /* toast API absent on very old frontends — console has it */ }
 }
 
 // Decode audio to peaks + duration. Returns {durFrames, peaks[]}.
@@ -171,12 +232,112 @@ async function decodeAudioPeaks(blob, fps) {
 }
 
 // ── TimelineEditor ──────────────────────────────────────────────────
+// ── Design system ───────────────────────────────────────────────────
+// A dedicated stylesheet (injected once) is what gives LTX Director its crisp,
+// "authentic" feel vs ad-hoc inline styles: consistent radii, transitions,
+// hover states, floating uppercase labels and sub-status pills. We mirror that
+// language here with a neutral-dark palette so the node reads as a finished
+// pro tool, not a canvas sketch.
+function _ensureWdStyles() {
+    if (document.getElementById("wd-timeline-styles")) return;
+    const el = document.createElement("style");
+    el.id = "wd-timeline-styles";
+    el.textContent = `
+.wd-root{--wd-bg:#161616;--wd-panel:#1e1e1e;--wd-panel2:#222;--wd-line:#111;
+  --wd-line2:#2c2c2c;--wd-fg:#e6e6e6;--wd-dim:#8a8a8a;--wd-dim2:#666;--wd-acc:#5b9dd9;
+  font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--wd-fg);
+  background:var(--wd-bg);border-radius:8px;padding:8px;display:flex;flex-direction:column;
+  gap:7px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;min-height:0;}
+.wd-toolbar{display:flex;gap:5px;align-items:center;flex-wrap:wrap;flex:0 0 auto;}
+.wd-btn{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:5px 11px;font-size:11px;font-weight:500;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;transition:background .15s ease,border-color .15s ease,transform .05s ease;}
+.wd-btn:hover{background:#2e2e2e;border-color:#4a4a4a;}
+.wd-btn:active{transform:translateY(1px);}
+.wd-btn.on{background:#1c2733;border-color:#2f4a63;color:#cfe6ff;}
+.wd-btn-danger:hover{background:#3a1717;border-color:#a44;color:#ffb4b4;}
+.wd-btn-icon{padding:5px 8px;font-size:12px;}
+.wd-sep{width:1px;align-self:stretch;background:var(--wd-line2);margin:2px 3px;}
+.wd-select{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:4px 6px;font-size:11px;cursor:pointer;}
+.wd-status{margin-left:auto;font:11px ui-monospace,monospace;color:var(--wd-dim);letter-spacing:.2px;}
+.wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:#141414;
+  border:1px solid var(--wd-line);border-radius:7px;overflow:hidden;}
+.wd-canvas{display:block;width:100%;outline:none;cursor:default;}
+/* DOM track sidebar overlaid on the canvas's reserved left column */
+.wd-sb{position:absolute;left:0;top:0;height:100%;background:#171717;border-right:1px solid #0b0b0b;
+  display:flex;flex-direction:column;z-index:3;overflow:hidden;box-sizing:border-box;}
+.wd-sb-ruler{display:flex;align-items:center;padding:0 8px;font-size:9px;color:#666;letter-spacing:.6px;
+  border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;}
+.wd-sb-row{position:relative;display:flex;flex-direction:column;justify-content:center;gap:3px;
+  padding:0 7px 0 12px;border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;overflow:hidden;}
+.wd-sb-row.sm{flex-direction:row;align-items:center;gap:6px;padding:0 6px 0 12px;}
+.wd-sb-row::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;background:var(--acc);opacity:.85;}
+.wd-sb-row.muted{opacity:.4;}
+.wd-sb-top{display:flex;align-items:center;gap:6px;}
+.wd-sb-eye{background:none;border:none;color:var(--acc);cursor:pointer;font-size:12px;padding:0;line-height:1;
+  width:16px;text-align:left;flex:0 0 auto;transition:opacity .12s ease;}
+.wd-sb-eye:hover{opacity:.7;}
+.wd-sb-name{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:#d4d4d4;letter-spacing:.3px;}
+.wd-sb-row.sm .wd-sb-name{font-size:9.5px;font-weight:500;}
+.wd-sb-g{color:var(--acc);font-size:13px;}
+.wd-sb-row.sm .wd-sb-g{font-size:11px;}
+.wd-sb-pill{align-self:flex-start;display:inline-flex;align-items:center;font-size:8.5px;font-weight:600;
+  padding:1px 7px;border-radius:999px;background:#242424;border:1px solid #303030;color:#9a9a9a;letter-spacing:.2px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;}
+.wd-playerbar{display:flex;align-items:center;gap:9px;background:var(--wd-panel);
+  border:1px solid var(--wd-line);border-radius:7px;padding:6px 10px;flex:0 0 auto;}
+.wd-transport{display:flex;align-items:center;gap:3px;}
+.wd-tbtn{background:none;border:none;color:#cfcfcf;cursor:pointer;font-size:13px;
+  width:26px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s ease,color .12s ease;}
+.wd-tbtn:hover{background:#2c2c2c;color:#fff;}
+.wd-seek{flex:1 1 auto;accent-color:var(--wd-acc);height:4px;}
+.wd-readout{font:11px ui-monospace,monospace;color:var(--wd-dim);white-space:nowrap;letter-spacing:.3px;}
+.wd-panel{background:var(--wd-panel);border:1px solid var(--wd-line);border-radius:7px;
+  box-sizing:border-box;position:relative;}
+.wd-props{display:flex;flex-direction:column;gap:7px;flex:1 1 auto;min-height:0;overflow-y:auto;padding:2px;}
+.wd-prompt-wrap{position:relative;width:100%;background:var(--wd-panel);border:1px solid var(--wd-line);
+  border-radius:7px;box-sizing:border-box;overflow:hidden;transition:border-color .2s ease;min-height:74px;}
+.wd-prompt-wrap:focus-within{border-color:#4d6a86;}
+.wd-plabel{position:absolute;top:6px;left:9px;font-size:9px;font-weight:700;color:var(--wd-dim2);
+  text-transform:uppercase;letter-spacing:.6px;pointer-events:none;user-select:none;z-index:2;}
+.wd-pmeta{position:absolute;top:6px;right:9px;font:9px ui-monospace,monospace;color:var(--wd-dim2);
+  pointer-events:none;z-index:2;}
+.wd-parea{width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);border:none;
+  padding:22px 9px 9px;resize:none;font-size:12px;line-height:1.45;outline:none;min-height:74px;}
+.wd-parea::placeholder{color:#555;}
+.wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:7px;
+  padding:10px 11px;font-size:11.5px;line-height:1.6;}
+.wd-info b,.wd-info span{color:#fff;font-weight:600;}
+.wd-itag{display:block;font-size:9px;font-weight:700;color:var(--wd-dim2);text-transform:uppercase;
+  letter-spacing:.6px;margin-bottom:6px;}
+.wd-gsrow{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wd-dim);}
+.wd-gsrow input[type=range]{flex:1 1 auto;accent-color:var(--wd-acc);}
+.wd-field{flex:1;min-width:0;background:#171717;color:var(--wd-fg);border:1px solid var(--wd-line);
+  border-radius:5px;padding:4px 7px;font-size:11px;}
+.wd-field:focus{outline:none;border-color:#4d6a86;}
+.wd-menu{position:fixed;z-index:2147483000;background:#1c1c1c;border:1px solid #333;border-radius:9px;
+  padding:5px;box-shadow:0 10px 30px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:1px;min-width:176px;}
+.wd-menu-head{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#666;padding:5px 10px 3px;}
+.wd-menu-btn{display:flex;align-items:center;gap:9px;background:none;border:none;color:#e6e6e6;
+  font:12px ui-sans-serif,system-ui;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer;
+  transition:background .12s ease;width:100%;box-sizing:border-box;}
+.wd-menu-btn:hover:not(:disabled){background:#2c2c2c;}
+.wd-menu-btn:disabled{opacity:.4;cursor:not-allowed;}
+.wd-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:#9aa;}
+.wd-menu-sep{height:1px;background:#2c2c2c;margin:3px 4px;}
+`;
+    document.head.appendChild(el);
+}
+
 class TimelineEditor {
     constructor(node, container) {
         this.node = node;
         this.container = container;
         this.segments = [];        // {id,type,start,length,prompt,imageFile,imageB64,guideStrength}
         this.audioSegments = [];   // {id,start,length,trimStart,audioDurationFrames,audioFile,fileName,waveformPeaks}
+        this.motionSegments = [];  // {id,type:"video",start,length,trimStart,videoFile,fileName,srcDurationFrames}; backend → control_video
         // v2 automation tracks (see V2_DEFS). Each is an array on `this`
         // keyed by its schema name so _segArr() can resolve it generically.
         this.loraSegments = [];
@@ -186,6 +347,12 @@ class TimelineEditor {
         this.selection = { type: null, idx: -1 };
         this.playhead = 0;          // frames
         this.playing = false;
+        // LTX-Director-style editing state: loop/work region (I/O keys),
+        // per-track mutes (persisted), and Shift-to-bypass clip snapping.
+        this.inPoint = null;
+        this.outPoint = null;
+        this.trackMuted = {};
+        this._snapDisabled = false;
         this.audioCtx = null;
         this.audioBuffers = new Map(); // file → AudioBuffer
         this.activeSources = [];
@@ -201,7 +368,28 @@ class TimelineEditor {
         this._buildDOM();
         this._loadFromWidgets();
         this._wireEvents();
+        this._wireWidgetSync();   // live-refresh when duration/fps/variant widgets change
         this.render();
+    }
+
+    /** Re-render the timeline whenever a driving litegraph widget changes, so
+     *  values like duration_frames / frame_rate / variant update in real time
+     *  (the getters are live; this just triggers the repaint). */
+    _wireWidgetSync() {
+        const names = ["duration_frames", "frame_rate", "duration_seconds",
+                       "model_variant", "display_mode"];
+        for (const name of names) {
+            const w = (this.node.widgets || []).find((x) => x.name === name);
+            if (!w || w.__wdSynced) continue;
+            const orig = w.callback;
+            const self = this;
+            w.callback = function (...a) {
+                const r = orig ? orig.apply(this, a) : undefined;
+                (self.scheduleRender ? self.scheduleRender() : self.render());
+                return r;
+            };
+            w.__wdSynced = true;
+        }
     }
 
     // ── Convenience widget accessors ──
@@ -212,52 +400,50 @@ class TimelineEditor {
         let mx = 0;
         for (const s of this.segments)      mx = Math.max(mx, s.start + s.length);
         for (const s of this.audioSegments) mx = Math.max(mx, s.start + s.length);
+        for (const s of this.motionSegments) mx = Math.max(mx, s.start + s.length);
         return Math.max(mx, Math.round(this.durFrames * 1.30));
     }
 
     // ── DOM ─────────────────────────────────────────────────────────
     _buildDOM() {
+        _ensureWdStyles();
         const root = this.container;
-        root.classList.add("wd-timeline-root");
-        root.style.cssText = `
-            display:flex;flex-direction:column;gap:4px;width:100%;height:100%;
-            box-sizing:border-box;font-family:ui-sans-serif,system-ui,sans-serif;
-            color:var(--c2c-gray100);background:var(--c2c-scrimDark7);border-radius:6px;padding:6px;
-        `;
+        root.classList.add("wd-root");
+        root.style.cssText = "width:100%;height:100%;";
         // Toolbar
         const tb = document.createElement("div");
-        tb.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;height:auto;";
-        const mkBtn = (label, title) => {
+        tb.className = "wd-toolbar";
+        const mkBtn = (label, title, extra) => {
             const b = document.createElement("button");
             b.type = "button";
             b.textContent = label;
             b.title = title;
-            b.style.cssText = `
-                background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);
-                border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;
-            `;
-            b.onmouseenter = () => { b.style.background = "var(--c2c-surface1Alt)"; };
-            b.onmouseleave = () => { b.style.background = "var(--c2c-panelBg)"; };
+            b.className = "wd-btn" + (extra ? " " + extra : "");
             return b;
         };
-        this.btnAddText  = mkBtn("+ Text",  "Add a text-only segment");
-        this.btnAddImage = mkBtn("+ Image", "Upload an image segment");
-        this.btnAddAudio = mkBtn("+ Audio", "Upload an audio segment");
-        this.btnDelete   = mkBtn("Delete",  "Delete selected segment (Delete key)");
-        this.btnPlay     = mkBtn("▶",       "Play / Pause (Space)");
-        this.btnZoomOut  = mkBtn("−",       "Zoom out");
-        this.btnZoomIn   = mkBtn("+",       "Zoom in");
+        this.btnAddText  = mkBtn("＋ Text",  "Add a text-only segment");
+        this.btnAddImage = mkBtn("＋ Image", "Upload an image segment");
+        this.btnAddVideo = mkBtn("＋ Video", "Import a video clip onto the Control-Video track (mp4/mov/webm…)");
+        this.btnAddAudio = mkBtn("＋ Audio", "Upload an audio segment");
+        const sep1 = document.createElement("div"); sep1.className = "wd-sep";
+        this.btnSplit    = mkBtn("Split ✂", "Split the selected clip at the playhead (S)");
+        this.btnDelete   = mkBtn("Delete",  "Delete selected segment (Delete key)", "wd-btn-danger");
+        const sep2 = document.createElement("div"); sep2.className = "wd-sep";
+        this.btnPlay     = mkBtn("▶",       "Play / Pause (Space)", "wd-btn-icon");
+        this.btnZoomOut  = mkBtn("−",       "Zoom out", "wd-btn-icon");
+        this.btnZoomIn   = mkBtn("+",       "Zoom in", "wd-btn-icon");
         this.btnFit      = mkBtn("Fit",     "Fit timeline to view");
         const modeSel = document.createElement("select");
-        modeSel.style.cssText = "background:var(--c2c-panelBg);color:var(--c2c-fg);border:1px solid var(--c2c-surface1Alt);border-radius:4px;padding:3px;font-size:11px;";
+        modeSel.className = "wd-select";
         modeSel.innerHTML = '<option value="seconds">Seconds</option><option value="frames">Frames</option>';
         modeSel.value = this.displayMode;
         modeSel.onchange = () => { writeWidget(this.node, "display_mode", modeSel.value); this.render(); };
         this.modeSel = modeSel;
         const status = document.createElement("span");
-        status.style.cssText = "margin-left:auto;font-size:10.5px;color:var(--c2c-sub);font-family:ui-monospace,monospace;";
+        status.className = "wd-status";
         this.statusEl = status;
-        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddAudio, this.btnDelete,
+        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddAudio, sep1,
+                          this.btnSplit, this.btnDelete, sep2,
                           this.btnPlay, this.btnZoomOut, this.btnZoomIn, this.btnFit, modeSel, status]) {
             tb.appendChild(el);
         }
@@ -265,33 +451,34 @@ class TimelineEditor {
 
         // Canvas wrap (for drag-drop overlay)
         const wrap = document.createElement("div");
-        wrap.style.cssText = "position:relative;width:100%;background:var(--c2c-scrimDark3);border-radius:4px;border:1px solid var(--c2c-panelBg);";
+        wrap.className = "wd-canvas-wrap";
         this.cvs = document.createElement("canvas");
         this.cvs.tabIndex = 0;
-        this.cvs.style.cssText = "display:block;width:100%;height:" + (RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H) + "px;outline:none;cursor:default;";
+        this.cvs.className = "wd-canvas";
+        this.cvs.style.height = TRACKS_CANVAS_H + "px";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
-        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.25);color:var(--c2c-white);font-size:14px;border:2px dashed var(--c2c-blue);border-radius:4px;";
-        dropHint.textContent = "Drop image or audio file here";
+        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:#fff;font-size:13px;font-weight:600;border:2px dashed #5b9dd9;border-radius:7px;";
+        dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
+        // Crisp DOM track sidebar (labels + eye toggles + status pills) overlaid
+        // on the canvas's reserved left column — the LTX-Director look, real text.
+        wrap.appendChild(this._buildSidebarOverlay());
         root.appendChild(wrap);
         this.cvsWrap = wrap;
 
         // Player bar (seekbar + readout)
         const pbar = document.createElement("div");
-        pbar.style.cssText = `
-            display:flex;align-items:center;gap:6px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:2px 6px;height:${PLAYER_BAR_H}px;
-        `;
+        pbar.className = "wd-playerbar";
         this.seek = document.createElement("input");
         this.seek.type = "range";
         this.seek.min = "0";
         this.seek.max = "10000";
         this.seek.value = "0";
-        this.seek.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-blue);";
+        this.seek.className = "wd-seek";
         this.timeReadout = document.createElement("span");
-        this.timeReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:var(--c2c-sub);min-width:120px;text-align:right;";
+        this.timeReadout.className = "wd-readout";
         this.timeReadout.textContent = "f 0 / 0";
         pbar.appendChild(this.seek);
         pbar.appendChild(this.timeReadout);
@@ -299,29 +486,21 @@ class TimelineEditor {
 
         // Properties panel
         const props = document.createElement("div");
-        props.style.cssText = `
-            display:flex;flex-direction:column;gap:4px;background:var(--c2c-bg3);
-            border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;min-height:${PROPS_MIN_H}px;
-        `;
-        const labelRow = document.createElement("div");
-        labelRow.style.cssText = "display:flex;gap:8px;align-items:center;font-size:11px;color:var(--c2c-sub);";
-        this.propTitle = document.createElement("span");
-        this.propTitle.textContent = "No segment selected";
-        this.propBounds = document.createElement("span");
-        this.propBounds.style.cssText = "margin-left:auto;color:var(--c2c-slateMute);font-family:ui-monospace,monospace;";
-        labelRow.appendChild(this.propTitle);
-        labelRow.appendChild(this.propBounds);
-        props.appendChild(labelRow);
-
+        props.className = "wd-props";
+        // Floating-label prompt wrapper (LTX-style): SEGMENT PROMPT label +
+        // bounds meta pinned in the corners, textarea fills the box.
+        const promptWrap = document.createElement("div");
+        promptWrap.className = "wd-prompt-wrap";
+        const plabel = document.createElement("div");
+        plabel.className = "wd-plabel";
+        plabel.textContent = "SEGMENT PROMPT";
+        this.propTitle = plabel;
+        const pmeta = document.createElement("div");
+        pmeta.className = "wd-pmeta";
+        this.propBounds = pmeta;
         const ta = document.createElement("textarea");
-        ta.placeholder = "Prompt for this segment (select an image or text clip)";
-        ta.style.cssText = `
-            background:var(--c2c-scrimDark3);color:var(--c2c-gray100);border:1px solid var(--c2c-panelBg);border-radius:4px;
-            padding:6px;font-size:12px;font-family:ui-sans-serif,system-ui,sans-serif;
-            resize:vertical;min-height:60px;outline:none;width:100%;box-sizing:border-box;
-        `;
-        ta.onfocus = () => { ta.style.borderColor = "var(--c2c-blue)"; };
-        ta.onblur  = () => { ta.style.borderColor = "var(--c2c-panelBg)"; };
+        ta.className = "wd-parea";
+        ta.placeholder = "Select an image or text clip, then describe it here…";
         ta.oninput = () => {
             const seg = this._selSeg();
             if (seg && (seg.type === "image" || seg.type === "text")) {
@@ -331,18 +510,21 @@ class TimelineEditor {
             }
         };
         this.promptArea = ta;
-        props.appendChild(ta);
+        promptWrap.appendChild(plabel);
+        promptWrap.appendChild(pmeta);
+        promptWrap.appendChild(ta);
+        props.appendChild(promptWrap);
+        this.promptWrap = promptWrap;
 
         const gsRow = document.createElement("div");
-        gsRow.style.cssText = "display:flex;gap:6px;align-items:center;font-size:11px;color:var(--c2c-sub);";
+        gsRow.className = "wd-gsrow";
         const gsLabel = document.createElement("span");
-        gsLabel.textContent = "Guide strength:";
+        gsLabel.textContent = "Guide strength";
         this.gsSlider = document.createElement("input");
         this.gsSlider.type = "range";
         this.gsSlider.min = "0"; this.gsSlider.max = "200"; this.gsSlider.value = "100";
-        this.gsSlider.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-okSoft);";
         this.gsVal = document.createElement("span");
-        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:var(--c2c-fg);min-width:40px;text-align:right;";
+        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:#e6e6e6;min-width:40px;text-align:right;";
         this.gsVal.textContent = "1.00";
         this.gsSlider.oninput = () => {
             const v = parseInt(this.gsSlider.value) / 100;
@@ -360,24 +542,55 @@ class TimelineEditor {
 
         // Audio info box (visible only when audio segment selected)
         this.audioInfo = document.createElement("div");
-        this.audioInfo.style.cssText = "display:none;background:var(--c2c-scrimDark3);border:1px solid var(--c2c-panelBg);border-radius:4px;padding:6px;font-size:11px;color:var(--c2c-sub);line-height:1.5;font-family:ui-monospace,monospace;";
+        this.audioInfo.className = "wd-info";
+        this.audioInfo.style.display = "none";
         props.appendChild(this.audioInfo);
+
+        // Global prompt (LTX parity) — mirrors the node's global_prompt widget,
+        // which we hide from the widget stack so it lives here instead.
+        const gWrap = document.createElement("div");
+        gWrap.className = "wd-prompt-wrap";
+        gWrap.style.flex = "0 0 auto";
+        const gLabel = document.createElement("div");
+        gLabel.className = "wd-plabel";
+        gLabel.textContent = "GLOBAL PROMPT";
+        const gTa = document.createElement("textarea");
+        gTa.className = "wd-parea";
+        gTa.placeholder = "Prompt applied to the whole clip…";
+        gTa.value = readWidget(this.node, "global_prompt", "") || "";
+        gTa.oninput = () => { writeWidget(this.node, "global_prompt", gTa.value); };
+        gWrap.append(gLabel, gTa);
+        props.appendChild(gWrap);
+        this.globalPromptTa = gTa;
+        try {
+            const gw = (this.node.widgets || []).find((w) => w.name === "global_prompt");
+            if (gw) { gw.hidden = true; gw.computeSize = () => [0, -4]; gw.type = "hidden"; }
+        } catch (_) { /* best-effort */ }
 
         root.appendChild(props);
 
         // Hidden file inputs
         this.fileImg = document.createElement("input");
         this.fileImg.type = "file"; this.fileImg.accept = "image/*"; this.fileImg.style.display = "none";
+        this.fileVid = document.createElement("input");
+        this.fileVid.type = "file";
+        // Any format: web video + pro/cinema (EXR, DPX, ProRes, DNxHD, MXF/DCP,
+        // JPEG2000). image/* is included because EXR/DPX carry no video MIME type.
+        this.fileVid.accept = "video/*,image/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,.gif,.mxf,.mts,.m2ts,.exr,.dpx,.hdr,.dnxhd,.prores,.j2k,.jp2,.jpc";
+        this.fileVid.style.display = "none";
         this.fileAud = document.createElement("input");
         this.fileAud.type = "file"; this.fileAud.accept = "audio/*"; this.fileAud.style.display = "none";
         root.appendChild(this.fileImg);
+        root.appendChild(this.fileVid);
         root.appendChild(this.fileAud);
     }
 
     _wireEvents() {
         this.btnAddText.onclick  = () => this.addTextSegment();
         this.btnAddImage.onclick = () => this.fileImg.click();
+        this.btnAddVideo.onclick = () => this.fileVid.click();
         this.btnAddAudio.onclick = () => this.fileAud.click();
+        this.btnSplit.onclick    = () => this.splitSelectedAtPlayhead();
         this.btnDelete.onclick   = () => this.deleteSelected();
         this.btnPlay.onclick     = () => this.togglePlay();
         this.btnZoomIn.onclick   = () => this.setZoom(this.zoom * 1.4);
@@ -387,6 +600,10 @@ class TimelineEditor {
         this.fileImg.onchange = async () => {
             for (const f of this.fileImg.files) await this.addImageSegmentFromFile(f);
             this.fileImg.value = "";
+        };
+        this.fileVid.onchange = async () => {
+            for (const f of this.fileVid.files) await this.addVideoSegmentFromFile(f);
+            this.fileVid.value = "";
         };
         this.fileAud.onchange = async () => {
             for (const f of this.fileAud.files) await this.addAudioSegmentFromFile(f);
@@ -425,7 +642,9 @@ class TimelineEditor {
             const files = Array.from(e.dataTransfer?.files || []);
             let accepted = 0;
             for (const f of files) {
-                if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
+                if (f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi|m4v|mxf|mts|m2ts|exr|dpx|hdr|dnxhd|prores|j2k|jp2|jpc)$/i.test(f.name)) {
+                    await this.addVideoSegmentFromFile(f); accepted += 1;
+                } else if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
                 else if (f.type.startsWith("audio/")) { await this.addAudioSegmentFromFile(f); accepted += 1; }
             }
             if (accepted === 0 && files.length > 0) {
@@ -457,7 +676,44 @@ class TimelineEditor {
 
         // Keyboard (canvas focused)
         this.cvs.addEventListener("keydown", (e) => {
+            const sel = this.selection;
             if (e.key === "Delete" || e.key === "Backspace") { this.deleteSelected(); e.preventDefault(); }
+            else if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
+                if (sel.type && sel.idx >= 0) this._copySegment({ segType: sel.type, idx: sel.idx });
+                e.preventDefault();
+            }
+            else if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey)) {
+                if (this.clipboard) this._pasteAt(this.playhead, this.clipboard.track);
+                e.preventDefault();
+            }
+            else if (e.key === "d" || e.key === "D") {
+                // Duplicate the selected clip right after itself.
+                if (sel.type && sel.idx >= 0) {
+                    const src = this._segArr(sel.type)[sel.idx];
+                    if (src) {
+                        this._copySegment({ segType: sel.type, idx: sel.idx });
+                        this._pasteAt(src.start + src.length, sel.type);
+                    }
+                }
+                e.preventDefault();
+            }
+            else if (e.key === "s" || e.key === "S") { this.splitSelectedAtPlayhead(); e.preventDefault(); }
+            else if (e.key === "i" || e.key === "I") {
+                this.inPoint = (this.inPoint === this.playhead) ? null : this.playhead;
+                if (this.inPoint != null && this.outPoint != null && this.outPoint <= this.inPoint) this.outPoint = null;
+                this.commitChanges(); e.preventDefault();
+            }
+            else if (e.key === "o" || e.key === "O") {
+                this.outPoint = (this.outPoint === this.playhead) ? null : this.playhead;
+                if (this.inPoint != null && this.outPoint != null && this.outPoint <= this.inPoint) this.inPoint = null;
+                this.commitChanges(); e.preventDefault();
+            }
+            else if (e.key === "x" || e.key === "X") {
+                if (this.inPoint != null || this.outPoint != null) { this.inPoint = null; this.outPoint = null; this.commitChanges(); }
+                e.preventDefault();
+            }
+            else if (e.key === "+" || e.key === "=") { this.setZoom(this.zoom * 1.4); e.preventDefault(); }
+            else if (e.key === "-" || e.key === "_") { this.setZoom(this.zoom / 1.4); e.preventDefault(); }
             else if (e.code === "Space") { this.togglePlay(); e.preventDefault(); }
             else if (e.key === "ArrowLeft")  { this.stepPlayhead(-1); e.preventDefault(); }
             else if (e.key === "ArrowRight") { this.stepPlayhead(+1); e.preventDefault(); }
@@ -485,17 +741,25 @@ class TimelineEditor {
         if (tl) {
             this.segments = Array.isArray(tl.segments) ? tl.segments : [];
             this.audioSegments = Array.isArray(tl.audioSegments) ? tl.audioSegments : [];
+            this.motionSegments = Array.isArray(tl.motionSegments) ? tl.motionSegments : [];
             for (const s of this.segments)      if (!s.id) s.id = nid();
             for (const s of this.audioSegments) if (!s.id) s.id = nid();
+            for (const s of this.motionSegments) { if (!s.id) s.id = nid(); s.type = "video"; }
             // v2 automation tracks (load, tolerate missing/legacy v1 docs).
             for (const k of V2_KEYS) {
                 this[k] = Array.isArray(tl[k]) ? tl[k] : [];
                 for (const s of this[k]) if (!s.id) s.id = nid();
             }
+            this.inPoint  = Number.isFinite(tl.inPoint)  ? tl.inPoint  : null;
+            this.outPoint = Number.isFinite(tl.outPoint) ? tl.outPoint : null;
+            this.trackMuted = (tl.trackMuted && typeof tl.trackMuted === "object") ? tl.trackMuted : {};
         }
         this.suppressCommit = false;
         // Async image preload
         for (const s of this.segments) this._preloadImage(s);
+        // Thumbnails for video clips aren't stored in the JSON (would bloat the
+        // workflow); regenerate them from the uploaded file on load.
+        for (const s of this.motionSegments) this._regenVideoThumbs(s);
     }
 
     commitChanges() {
@@ -520,11 +784,29 @@ class TimelineEditor {
             fileName:  s.fileName  || "",
             waveformPeaks: s.waveformPeaks || [],
         }));
+        // Control-Video track: the backend's _build_control_video reads
+        // `motionSegments` (videoFile + start/length/trimStart in frames) and
+        // decodes them into the control_video output. Thumbnails are NOT
+        // persisted (they're regenerated from the file on load) to keep the
+        // workflow JSON small.
+        const motionOut = this.motionSegments.map(s => ({
+            id: s.id, type: "video", start: s.start, length: s.length,
+            trimStart: s.trimStart || 0,
+            videoFile: s.videoFile || "",
+            fileName:  s.fileName  || "",
+            srcDurationFrames: s.srcDurationFrames || 0,
+            prompt: s.prompt || "",
+        }));
         // schema v2: preserve the four automation tracks so they survive an
         // edit (and reach the backend's tracks_program). Without this, any
         // image/audio edit would silently wipe the LoRA/camera/seed/pose data.
-        const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut };
+        const tlOut = { schema_version: 2, segments: segOut, audioSegments: audOut, motionSegments: motionOut };
         for (const k of V2_KEYS) tlOut[k] = (this[k] || []).map(s => ({ ...s }));
+        // Work region + track mutes (additive keys; backend tolerates extras
+        // and skips muted tracks — see director_node timeline parse).
+        if (this.inPoint  != null) tlOut.inPoint  = this.inPoint;
+        if (this.outPoint != null) tlOut.outPoint = this.outPoint;
+        if (Object.values(this.trackMuted || {}).some(Boolean)) tlOut.trackMuted = { ...this.trackMuted };
         writeWidget(this.node, "timeline_data", JSON.stringify(tlOut));
         // local_prompts: pipe-delimited, image+text segments sorted by start
         const sorted = [...this.segments].sort((a, b) => a.start - b.start);
@@ -546,7 +828,7 @@ class TimelineEditor {
     // ── Segment creation ────────────────────────────────────────────
     _findFreeSlot(length, track) {
         // Try to place at the end of the existing segments, else fall back to 0.
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(track);
         let cursor = 0;
         for (const s of arr.sort((a, b) => a.start - b.start)) {
             cursor = Math.max(cursor, s.start + s.length);
@@ -608,6 +890,163 @@ class TimelineEditor {
         this._updatePropsPanel();
     }
 
+    // ── Control-Video clips ─────────────────────────────────────────
+    /** Load a video src (object URL or /view URL) just far enough to read its
+     *  duration/size and grab a strip of poster thumbnails. */
+    _decodeVideoMeta(src) {
+        return new Promise((resolve, reject) => {
+            const v = document.createElement("video");
+            v.muted = true; v.crossOrigin = "anonymous"; v.preload = "auto";
+            v.playsInline = true; v.src = src;
+            let done = false;
+            const fail = (e) => { if (!done) { done = true; reject(e || new Error("video decode failed")); } };
+            v.onerror = () => fail(new Error("video load error"));
+            v.onloadedmetadata = async () => {
+                const durationSec = isFinite(v.duration) ? v.duration : 0;
+                const width = v.videoWidth, height = v.videoHeight;
+                let thumbs = [];
+                try { thumbs = await this._captureThumbs(v, VID_THUMBS); } catch (_) {}
+                if (!done) { done = true; resolve({ durationSec, width, height, thumbs }); }
+            };
+            setTimeout(() => fail(new Error("video decode timeout")), 15000);
+        });
+    }
+
+    /** Seek a loaded <video> to `count` evenly-spaced times and snapshot each
+     *  frame to a small JPEG <img> for the timeline filmstrip. */
+    _captureThumbs(v, count) {
+        return new Promise((resolve) => {
+            const dur = (isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
+            if (!dur) { resolve([]); return; }
+            const ch = 64;
+            const ar = (v.videoWidth && v.videoHeight) ? v.videoWidth / v.videoHeight : 16 / 9;
+            const cw = Math.max(1, Math.round(ch * ar));
+            const cvs = document.createElement("canvas");
+            cvs.width = cw; cvs.height = ch;
+            const ctx = cvs.getContext("2d");
+            const times = [];
+            for (let k = 0; k < count; k++) times.push(Math.min(dur - 0.01, (dur * (k + 0.5)) / count));
+            const thumbs = [];
+            let i = 0, guard = null;
+            const cleanup = () => { v.removeEventListener("seeked", onSeeked); if (guard) clearTimeout(guard); };
+            const arm = () => { guard = setTimeout(() => { cleanup(); resolve(thumbs); }, 4000); };
+            const grab = () => {
+                try { ctx.drawImage(v, 0, 0, cw, ch); const img = new Image(); img.src = cvs.toDataURL("image/jpeg", 0.6); thumbs.push(img); } catch (_) {}
+                i += 1;
+                if (i < times.length) { v.currentTime = times[i]; }
+                else { cleanup(); resolve(thumbs); }
+            };
+            const onSeeked = () => { if (guard) { clearTimeout(guard); guard = null; } grab(); arm(); };
+            v.addEventListener("seeked", onSeeked);
+            v.currentTime = times[0];
+            arm();
+        });
+    }
+
+    /** Probe an uploaded media file on the SERVER (ffmpeg / OpenCV) — works for
+     *  ANY format incl. EXR / DPX / ProRes / DNxHD / MXF-DCP / 4K, returning
+     *  metadata + downscaled thumbnails the browser could never decode itself.
+     *  This is the universal path; the client <video> decode is only a fallback
+     *  for web-friendly formats when this endpoint is unavailable. */
+    async _probeMediaServer(inputName, opts = {}) {
+        try {
+            const q = new URLSearchParams({ file: inputName, count: String(VID_THUMBS), height: "80" });
+            if (opts.exrView) q.set("exr_view", opts.exrView);
+            const r = await api.fetchApi("/wne/media_probe?" + q.toString());
+            if (!r.ok) return null;
+            const j = await r.json();
+            if (!j || !j.ok) return null;
+            const thumbs = (j.thumbs || []).map((d) => { const im = new Image(); im.src = d; return im; });
+            return { durationSec: j.durationSec || 0, fps: j.fps || 0, frameCount: j.frameCount || 0,
+                     width: j.width || 0, height: j.height || 0, thumbs, kind: j.kind };
+        } catch (e) { return null; }
+    }
+
+    /** Re-decode thumbnails for a saved clip from its uploaded input file. */
+    _regenVideoThumbs(seg) {
+        if (!seg.videoFile) return;
+        this._probeMediaServer(seg.videoFile).then((meta) => {
+            if (meta && meta.thumbs && meta.thumbs.length) {
+                seg._thumbs = meta.thumbs;
+                if (!seg.srcDurationFrames && meta.frameCount > 1) seg.srcDurationFrames = meta.frameCount;
+                seg._thumbs.forEach((im) => { im.onload = () => this.render(); });
+                this.render();
+                return;
+            }
+            // fallback: client <video> decode for web-friendly formats only
+            if (/\.(mp4|webm|m4v|mov|ogg|gif)$/i.test(seg.videoFile)) {
+                const parts = seg.videoFile.split("/");
+                const name = parts.pop(); const sub = parts.join("/");
+                const url = `/view?filename=${encodeURIComponent(name)}&subfolder=${encodeURIComponent(sub)}&type=input`;
+                this._decodeVideoMeta(url).then((m) => { seg._thumbs = m.thumbs || []; this.render(); }).catch(() => {});
+            }
+        });
+    }
+
+    async addVideoSegmentFromFile(file) {
+        // Upload first (the server probe reads from input/), then decode on the
+        // SERVER — that path handles EVERY format (EXR/DCP/ProRes/DNxHD/4K). A
+        // client <video> decode is only a fallback for web-friendly formats when
+        // the endpoint is missing, so we never hang on an undecodable pro file.
+        const res = await uploadFile(file, "image");   // /upload/image stores ANY file in input/
+        if (!res) return;
+        const filename = res.subfolder ? `${res.subfolder}/${res.name}` : res.name;
+        const fps = this.fps;
+        let meta = await this._probeMediaServer(filename);
+        if (!meta && /\.(mp4|webm|m4v|mov|ogg|gif)$/i.test(file.name)) {
+            const objUrl = URL.createObjectURL(file);
+            try { meta = await this._decodeVideoMeta(objUrl); } catch (_) {}
+            URL.revokeObjectURL(objUrl);
+        }
+        meta = meta || { durationSec: 0, fps: 0, frameCount: 0, width: 0, height: 0, thumbs: [] };
+        // A single still (EXR/DPX with no duration) is holdable for any length, so
+        // leave srcDurationFrames=0 (the resize clamp only applies when it's >0).
+        const still = (meta.frameCount || 0) <= 1 && (meta.durationSec || 0) <= 0;
+        const srcFrames = still ? 0
+            : (meta.frameCount > 0 ? meta.frameCount
+               : Math.max(1, Math.round((meta.durationSec || 2) * (meta.fps || fps))));
+        const length = still
+            ? Math.min(this.durFrames, Math.max(MIN_SEG_FRAMES, Math.round(fps * 2)))
+            : Math.max(MIN_SEG_FRAMES, Math.min(srcFrames, this.durFrames));
+        const start = this._findFreeSlot(length, "video");
+        const seg = {
+            id: nid(), type: "video", start, length, trimStart: 0,
+            videoFile: filename, fileName: file.name,
+            srcDurationFrames: srcFrames, srcDurationSec: meta.durationSec || 0,
+            srcW: meta.width || 0, srcH: meta.height || 0, kind: meta.kind || "video",
+            prompt: "", _thumbs: meta.thumbs || [],
+        };
+        this.motionSegments.push(seg);
+        this.selection = { type: "video", idx: this.motionSegments.length - 1 };
+        this.commitChanges();
+        this._updatePropsPanel();
+        (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
+    }
+
+    /** Split the selected clip at the playhead into two clips. For media clips
+     *  (video/audio) the second half's source in-point (trimStart) advances so
+     *  playback is continuous across the cut. */
+    splitSelectedAtPlayhead() {
+        const seg = this._selSeg();
+        if (!seg) return;
+        const { type } = this.selection;
+        const ph = this.playhead;
+        if (ph <= seg.start + MIN_SEG_FRAMES || ph >= seg.start + seg.length - MIN_SEG_FRAMES) return;
+        const arr = this._segArr(type);
+        const firstLen = ph - seg.start;
+        const secondLen = seg.length - firstLen;
+        const clone = { ...seg };                       // shallow → shares _thumbs/_imgUrl for display
+        clone.id = nid();
+        clone.start = ph;
+        clone.length = secondLen;
+        if (type === "video" || type === "audio") clone.trimStart = (seg.trimStart || 0) + firstLen;
+        seg.length = firstLen;
+        arr.push(clone);
+        if (type === "image") this._preloadImage(clone);
+        this.commitChanges();
+        this._updatePropsPanel();
+    }
+
     deleteSelected() {
         const { type, idx } = this.selection;
         if (idx < 0) return;
@@ -651,10 +1090,11 @@ class TimelineEditor {
     // ── Hit testing & coords ────────────────────────────────────────
     _pxPerFrame() {
         const w = this.cvs.width / (window.devicePixelRatio || 1);
-        return (w * this.zoom) / Math.max(1, this.visualDurFrames);
+        // Timeline occupies the area to the RIGHT of the label sidebar.
+        return (Math.max(1, w - LANE_X0) * this.zoom) / Math.max(1, this.visualDurFrames);
     }
-    _frameToX(f) { return f * this._pxPerFrame() + PAD; }
-    _xToFrame(x) { return Math.round((x - PAD) / Math.max(1e-3, this._pxPerFrame())); }
+    _frameToX(f) { return f * this._pxPerFrame() + LANE_X0; }
+    _xToFrame(x) { return Math.round((x - LANE_X0) / Math.max(1e-3, this._pxPerFrame())); }
 
     /** Mouse event → canvas CSS-pixel coords, undoing the LiteGraph zoom.
      *  getBoundingClientRect() is post-transform (visual size); offsetWidth is
@@ -673,10 +1113,12 @@ class TimelineEditor {
     _segArr(segType) {
         if (segType === "audio") return this.audioSegments;
         if (segType === "image") return this.segments;
+        if (segType === "video") return this.motionSegments;
         return this[segType] || [];
     }
     _isV2(segType) { return V2_KEYS.includes(segType); }
-    _v2Base() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H; }
+    _vidTop() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H; }
+    _v2Base() { return RULER_H + IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H; }
     _v2LaneTop(li) { return this._v2Base() + li * V2_LANE_H; }
     _v2DefForType(segType) { return V2_DEFS.find(d => d.key === segType) || null; }
 
@@ -684,6 +1126,19 @@ class TimelineEditor {
         // Returns {kind, segType, idx, edge}
         if (my < RULER_H) return { kind: "ruler" };
         const v2Base = this._v2Base();
+        // Left sidebar (labels + mute toggles) — one row per lane.
+        if (mx < LANE_X0) {
+            const imgB = RULER_H + IMG_TRACK_H, audB = imgB + AUD_TRACK_H, vidB = audB + VID_TRACK_H;
+            let track = null;
+            if (my < imgB) track = "image";
+            else if (my < audB) track = "audio";
+            else if (my < vidB) track = "video";
+            else {
+                const li = Math.floor((my - v2Base) / V2_LANE_H);
+                if (li >= 0 && li < V2_DEFS.length) track = V2_DEFS[li].key;
+            }
+            if (track) return { kind: "mute", track };
+        }
         // v2 automation lanes (below the audio track).
         if (my >= v2Base) {
             const li = Math.max(0, Math.min(V2_DEFS.length - 1, Math.floor((my - v2Base) / V2_LANE_H)));
@@ -700,8 +1155,9 @@ class TimelineEditor {
             return { kind: "track", track: segType };
         }
         const imgBot = RULER_H + IMG_TRACK_H;
-        const track = (my < imgBot) ? "image" : "audio";
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const audBot = imgBot + AUD_TRACK_H;          // === _vidTop()
+        const track = (my < imgBot) ? "image" : (my < audBot) ? "audio" : "video";
+        const arr = this._segArr(track);
         for (let i = 0; i < arr.length; i++) {
             const s = arr[i];
             const x1 = this._frameToX(s.start);
@@ -727,6 +1183,12 @@ class TimelineEditor {
             this.render();
             return;
         }
+        if (hit.kind === "mute") {
+            this.trackMuted[hit.track] = !this.trackMuted[hit.track];
+            if (hit.track === "audio" && this.playing) { this._stopAudio(); if (!this.trackMuted.audio) this._startAudio(); }
+            this.commitChanges();
+            return;
+        }
         if (hit.kind === "seg") {
             this.selection = { type: hit.segType === "audio" ? "audio" : hit.segType === "image" ? "image" : hit.segType, idx: hit.idx };
             const arr = this._segArr(hit.segType);
@@ -740,10 +1202,88 @@ class TimelineEditor {
             this.render();
             return;
         }
+        // Empty-track "+" add-affordance click → open an add MENU (LTX-style):
+        // Scene → Text / Image / Paste / Video, Audio → upload, Control → Video.
+        if (this._addHints) {
+            const img = this._addHints.image, aud = this._addHints.audio, vid = this._addHints.video;
+            if (img && Math.hypot(mx - img.cx, my - img.cy) <= img.r) { this._showAddMenu(e.clientX, e.clientY, "image"); return; }
+            if (vid && Math.hypot(mx - vid.cx, my - vid.cy) <= vid.r) { this._showAddMenu(e.clientX, e.clientY, "video"); return; }
+            if (aud && Math.hypot(mx - aud.cx, my - aud.cy) <= aud.r) { this._showAddMenu(e.clientX, e.clientY, "audio"); return; }
+        }
         // Empty track click — clear selection
         this.selection = { type: null, idx: -1 };
         this._updatePropsPanel();
         this.render();
+    }
+
+    // ── Add menu (LTX-style "+" popover) ────────────────────────────
+    _showAddMenu(clientX, clientY, track) {
+        this._dismissAddMenu();
+        const menu = document.createElement("div");
+        menu.className = "wd-menu";
+        const head = document.createElement("div");
+        head.className = "wd-menu-head";
+        head.textContent = track === "audio" ? "Add to Audio"
+                         : track === "video" ? "Add to Control video" : "Add to Scene";
+        menu.appendChild(head);
+        const mkItem = (label, glyph, fn, opts = {}) => {
+            const b = document.createElement("button");
+            b.className = "wd-menu-btn";
+            b.innerHTML = `<span class="g">${glyph}</span>${label}`;
+            if (opts.disabled) { b.disabled = true; if (opts.title) b.title = opts.title; }
+            else b.addEventListener("pointerdown", (ev) => {
+                ev.preventDefault(); ev.stopPropagation(); this._dismissAddMenu();
+                try { fn(); } catch (err) { __c2cReport("wanDirector.addMenu", err); }
+            });
+            menu.appendChild(b);
+        };
+        if (track === "image") {
+            mkItem("Text segment", "T", () => this.addTextSegment());
+            mkItem("Image — upload", "🖼", () => this.fileImg?.click());
+            mkItem("Paste image", "📋", () => this._pasteImage());
+            const sep = document.createElement("div"); sep.className = "wd-menu-sep"; menu.appendChild(sep);
+            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+        } else if (track === "audio") {
+            mkItem("Audio — upload", "♪", () => this.fileAud?.click());
+        } else if (track === "video") {
+            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+        }
+        document.body.appendChild(menu);
+        // Clamp to viewport.
+        const vw = window.innerWidth, vh = window.innerHeight, r = menu.getBoundingClientRect();
+        let px = clientX + 4, py = clientY - 6;
+        if (px + r.width > vw - 6) px = vw - r.width - 6;
+        if (py + r.height > vh - 6) py = vh - r.height - 6;
+        menu.style.left = Math.max(6, px) + "px";
+        menu.style.top = Math.max(6, py) + "px";
+        this._addMenu = menu;
+        setTimeout(() => {
+            this._addMenuDismiss = (ev) => { if (!menu.contains(ev.target)) this._dismissAddMenu(); };
+            document.addEventListener("pointerdown", this._addMenuDismiss, true);
+            document.addEventListener("wheel", this._addMenuDismiss, true);
+        }, 0);
+    }
+    _dismissAddMenu() {
+        if (this._addMenu) { try { this._addMenu.remove(); } catch (_) {} this._addMenu = null; }
+        if (this._addMenuDismiss) {
+            document.removeEventListener("pointerdown", this._addMenuDismiss, true);
+            document.removeEventListener("wheel", this._addMenuDismiss, true);
+            this._addMenuDismiss = null;
+        }
+    }
+    async _pasteImage() {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const t = item.types.find((x) => x.startsWith("image/"));
+                if (t) {
+                    const blob = await item.getType(t);
+                    const file = new File([blob], "clipboard.png", { type: blob.type });
+                    await this.addImageSegmentFromFile(file);
+                    break;
+                }
+            }
+        } catch (_) { _uploadToast?.({ name: "clipboard" }, "Clipboard image paste was blocked by the browser."); }
     }
 
     _onMouseMove(e) {
@@ -771,23 +1311,38 @@ class TimelineEditor {
             const seg = arr[ds.idx];
             const cur = this._xToFrame(mx);
             const delta = cur - ds.startFrame;
+            this._snapDisabled = !!e.shiftKey;
             if (ds.edge === "mid") {
-                seg.start = Math.max(0, ds.origStart + delta);
+                const raw = Math.max(0, ds.origStart + delta);
+                // Snap whichever end actually hits a target; when both do,
+                // take the closer snap. (Comparing raw distances alone would
+                // always prefer the unsnapped candidate at distance 0.)
+                const byStart = this._snapFrame(raw, seg);
+                const byEnd = this._snapFrame(raw + seg.length, seg) - seg.length;
+                const sHit = byStart !== raw, eHit = byEnd !== raw;
+                let v = raw;
+                if (sHit && eHit) v = (Math.abs(byStart - raw) <= Math.abs(byEnd - raw)) ? byStart : byEnd;
+                else if (sHit) v = byStart;
+                else if (eHit) v = byEnd;
+                seg.start = Math.max(0, v);
                 this._resolveCollisions(ds.segType, ds.idx);
             } else if (ds.edge === "right") {
-                seg.length = Math.max(MIN_SEG_FRAMES, ds.origLength + delta);
+                const rawEnd = seg.start + Math.max(MIN_SEG_FRAMES, ds.origLength + delta);
+                seg.length = Math.max(MIN_SEG_FRAMES, this._snapFrame(rawEnd, seg) - seg.start);
                 if (ds.segType === "audio" && seg.audioDurationFrames) {
                     seg.length = Math.min(seg.length, seg.audioDurationFrames - (seg.trimStart || 0));
+                } else if (ds.segType === "video" && seg.srcDurationFrames) {
+                    seg.length = Math.min(seg.length, seg.srcDurationFrames - (seg.trimStart || 0));
                 }
                 this._resolveCollisions(ds.segType, ds.idx);
             } else if (ds.edge === "left") {
-                const newStart = Math.max(0, ds.origStart + delta);
+                const newStart = Math.max(0, this._snapFrame(ds.origStart + delta, seg));
                 const trim = newStart - ds.origStart;
                 const newLen = ds.origLength - trim;
                 if (newLen >= MIN_SEG_FRAMES) {
                     seg.start = newStart;
                     seg.length = newLen;
-                    if (ds.segType === "audio") {
+                    if (ds.segType === "audio" || ds.segType === "video") {
                         seg.trimStart = Math.max(0, ds.origTrim + trim);
                     }
                 }
@@ -827,17 +1382,39 @@ class TimelineEditor {
         if (hit.kind === "seg" && this._isV2(hit.segType)) {
             const def = this._v2DefForType(hit.segType);
             items.push({ label: `Edit ${def?.label || "segment"}…`, action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this._updateV2Props(); this.render(); } });
+            if (hit.segType === "cameraSegments") {
+                for (const p of CAMERA_PRESETS) {
+                    items.push({ label: `🎥 ${p.label}`, action: () => {
+                        const s = this._segArr(hit.segType)[hit.idx];
+                        if (!s) return;
+                        s.type = p.type;
+                        s.params = { ...p.params };
+                        this.selection = { type: hit.segType, idx: hit.idx };
+                        this.commitChanges();
+                        this._updateV2Props();
+                    } });
+                }
+            }
             items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "seg") {
             items.push({ label: "Copy", action: () => this._copySegment(hit) });
-            items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType === "audio" ? "audio" : "image", idx: hit.idx }; this.deleteSelected(); } });
+            items.push({ label: "Split at playhead", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.splitSelectedAtPlayhead(); } });
+            if (hit.segType === "image" || hit.segType === "video") {
+                items.push({ label: "🎲 Retake span (new seed)", action: () => this._retakeSpan(hit) });
+            }
+            items.push({ label: "Delete", action: () => { this.selection = { type: hit.segType, idx: hit.idx }; this.deleteSelected(); } });
         } else if (hit.kind === "track" && this._isV2(hit.track)) {
             const def = this._v2DefForType(hit.track);
             items.push({ label: `+ ${def?.label || "segment"} here`, action: () => this.addV2Segment(hit.track, this._xToFrame(mx)) });
         } else if (hit.kind === "track") {
-            items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
-            items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
-            items.push({ label: "+ Audio…",       action: () => this.fileAud.click() });
+            if (hit.track === "video") {
+                items.push({ label: "+ Video…", action: () => this.fileVid.click() });
+            } else {
+                items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
+                items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
+                items.push({ label: "+ Video…",       action: () => this.fileVid.click() });
+                items.push({ label: "+ Audio…",       action: () => this.fileAud.click() });
+            }
             if (this.clipboard) items.push({ label: "Paste", action: () => this._pasteAt(this._xToFrame(mx), hit.track) });
         }
         if (!items.length) return;
@@ -872,17 +1449,24 @@ class TimelineEditor {
     }
 
     _copySegment(hit) {
-        const arr = hit.segType === "audio" ? this.audioSegments : this.segments;
-        this.clipboard = { track: hit.segType, seg: JSON.parse(JSON.stringify(arr[hit.idx])) };
+        const arr = this._segArr(hit.segType);
+        const src = arr[hit.idx];
+        if (!src) return;
+        // Strip runtime-only underscore keys (decoded thumbs/images aren't JSON-safe).
+        const clean = {};
+        for (const k in src) if (!k.startsWith("_")) clean[k] = src[k];
+        this.clipboard = { track: hit.segType, seg: JSON.parse(JSON.stringify(clean)) };
     }
     _pasteAt(frame, track) {
         if (!this.clipboard || this.clipboard.track !== track) return;
         const seg = JSON.parse(JSON.stringify(this.clipboard.seg));
         seg.id = nid();
         seg.start = Math.max(0, frame);
-        const arr = track === "audio" ? this.audioSegments : this.segments;
+        const arr = this._segArr(track);
         arr.push(seg);
         this._resolveCollisions(track, arr.length - 1);
+        if (track === "video") this._regenVideoThumbs(seg);
+        else if (track === "image") this._preloadImage(seg);
         this.commitChanges();
     }
 
@@ -895,6 +1479,51 @@ class TimelineEditor {
             if (s.start < cursor) s.start = cursor;
             cursor = s.start + s.length;
         }
+    }
+
+    // ── Snapping (LTX-style) ────────────────────────────────────────
+    // Snap a frame to the playhead, region marks, clip edges on every track,
+    // and the timeline bounds — within an 8-CSS-px tolerance. Hold Shift
+    // while dragging to bypass.
+    _snapFrame(f, skipSeg) {
+        if (this._snapDisabled) return f;
+        const tol = 8 / Math.max(1e-3, this._pxPerFrame());
+        const targets = [0, this.durFrames, this.playhead];
+        if (this.inPoint  != null) targets.push(this.inPoint);
+        if (this.outPoint != null) targets.push(this.outPoint);
+        for (const t of ["image", "audio", "video", ...V2_KEYS]) {
+            for (const s of this._segArr(t)) {
+                if (s === skipSeg) continue;
+                targets.push(s.start, s.start + s.length);
+            }
+        }
+        let best = f, bd = tol;
+        for (const t of targets) {
+            const d = Math.abs(t - f);
+            if (d < bd) { bd = d; best = t; }
+        }
+        return best;
+    }
+
+    // ── Retake (LTX-2-style): re-roll the seed for one clip's span ──
+    _retakeSpan(hit) {
+        const seg = this._segArr(hit.segType)[hit.idx];
+        if (!seg) return;
+        const a = seg.start, b = seg.start + seg.length;
+        // Drop seed segments whose midpoint falls inside the span, then lay
+        // a fresh fixed seed exactly over it.
+        this.seedSegments = this.seedSegments.filter(s => {
+            const mid = s.start + s.length / 2;
+            return mid < a || mid >= b;
+        });
+        const fresh = {
+            id: nid(), seed: Math.floor(Math.random() * 0x7fffffff),
+            mode: "fixed", start: a, length: seg.length,
+        };
+        this.seedSegments.push(fresh);
+        this.selection = { type: "seedSegments", idx: this.seedSegments.indexOf(fresh) };
+        this.commitChanges();
+        this._updateV2Props();
     }
 
     // ── v2 automation tracks (LoRA / camera / seed / pose) ───────────
@@ -920,10 +1549,7 @@ class TimelineEditor {
             ctx.fillStyle = li % 2 ? C.scrimDark : C.bg3;
             ctx.fillRect(0, top, cssW, V2_LANE_H);
             if (durX < cssW) { ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(durX, top, cssW - durX, V2_LANE_H); }
-            // label gutter
-            ctx.fillStyle = C.panelHi2; ctx.fillRect(0, top, V2_LABEL_PX, V2_LANE_H);
-            ctx.fillStyle = def.color; ctx.font = "9px ui-sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-            ctx.fillText(def.label, 4, top + V2_LANE_H / 2);
+            // (label + mute toggle are drawn by _drawSidebar)
             ctx.strokeStyle = C.surface1Alt; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(0, top + V2_LANE_H - 0.5); ctx.lineTo(cssW, top + V2_LANE_H - 0.5); ctx.stroke();
             // segments
@@ -957,12 +1583,15 @@ class TimelineEditor {
     _updateV2Props() {
         const seg = this._selSeg(), def = this._v2DefForType(this.selection.type);
         if (!seg || !def) { this._updatePropsPanel(); return; }
-        this.propTitle.textContent = `${def.label}: ${def.summary(seg)}`;
         this.propBounds.textContent = `${fmtTime(seg.start, this.fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, this.fps, this.displayMode)} · ${seg.length}f`;
-        this.promptArea.style.display = "none";
+        this.promptWrap.style.display = "none";
         this.gsSlider.parentElement.style.display = "none";
         this.audioInfo.style.display = "block";
         this.audioInfo.innerHTML = "";
+        const _vtag = document.createElement("span");
+        _vtag.className = "wd-itag";
+        _vtag.textContent = `${def.label} · ${def.summary(seg)}`;
+        this.audioInfo.appendChild(_vtag);
         this.audioInfo.appendChild(this._buildV2Editor(seg, def));
     }
 
@@ -1010,7 +1639,13 @@ class TimelineEditor {
     stepPlayhead(n) { this.playhead = clamp(this.playhead + n, 0, this.visualDurFrames); this.render(); }
     togglePlay() {
         if (this.playing) { this._stopAudio(); this.playing = false; this.btnPlay.textContent = "▶"; }
-        else { this._startAudio(); this.playing = true; this.btnPlay.textContent = "❚❚"; this._tick(); }
+        else {
+            // With a work region set, start playback from its in-point when
+            // the playhead sits outside the region.
+            const li = this.inPoint, lo = this.outPoint;
+            if (li != null && lo != null && lo > li && (this.playhead < li || this.playhead >= lo)) this.playhead = li;
+            this._startAudio(); this.playing = true; this.btnPlay.textContent = "❚❚"; this._tick();
+        }
     }
     _ensureAudioCtx() {
         if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1023,6 +1658,7 @@ class TimelineEditor {
         this.playStartedAt = ac.currentTime;
         this.playStartFrame = this.playhead;
         const fps = this.fps;
+        if (this.trackMuted?.audio) return;   // muted lane: silent preview
         for (const seg of this.audioSegments) {
             const buf = this.audioBuffers.get(seg.audioFile);
             if (!buf) continue;
@@ -1053,7 +1689,13 @@ class TimelineEditor {
         if (ac) {
             const dt = ac.currentTime - this.playStartedAt;
             this.playhead = this.playStartFrame + Math.round(dt * this.fps);
-            if (this.playhead >= this.visualDurFrames) {
+            // Work region (I/O points): loop playback inside [in, out).
+            const loopIn = this.inPoint, loopOut = this.outPoint;
+            if (loopIn != null && loopOut != null && loopOut > loopIn && this.playhead >= loopOut) {
+                this._stopAudio();
+                this.playhead = loopIn;
+                this._startAudio();
+            } else if (this.playhead >= this.visualDurFrames) {
                 this.playhead = this.visualDurFrames;
                 this.togglePlay();
                 return;
@@ -1074,10 +1716,12 @@ class TimelineEditor {
     _updatePropsPanel() {
         const seg = this._selSeg();
         if (!seg) {
-            this.propTitle.textContent = "No segment selected";
+            this.propTitle.textContent = "SEGMENT PROMPT";
             this.propBounds.textContent = "";
+            this.promptWrap.style.display = "";
             this.promptArea.value = "";
             this.promptArea.disabled = true;
+            this.gsSlider.parentElement.style.display = "none";
             this.gsSlider.disabled = true;
             this.audioInfo.style.display = "none";
             return;
@@ -1086,19 +1730,34 @@ class TimelineEditor {
         this.propBounds.textContent = `${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f`;
         if (seg.type === "audio") {
             this.propTitle.textContent = `Audio: ${seg.fileName || seg.audioFile || "(unknown)"}`;
-            this.promptArea.style.display = "none";
+            this.promptWrap.style.display = "none";
             this.gsSlider.parentElement.style.display = "none";
             this.audioInfo.style.display = "block";
             const trimIn = (seg.trimStart || 0) / fps;
             const trimOut = ((seg.audioDurationFrames || 0) - (seg.trimStart || 0) - seg.length) / fps;
             this.audioInfo.innerHTML =
-                `File: ${seg.fileName || seg.audioFile}<br>` +
+                `<span class="wd-itag">Audio clip</span>` +
+                `File: <b>${seg.fileName || seg.audioFile}</b><br>` +
                 `Source length: ${(seg.audioDurationFrames / fps).toFixed(2)}s<br>` +
                 `Output length: ${(seg.length / fps).toFixed(2)}s<br>` +
                 `Trim-in: ${trimIn.toFixed(2)}s · Trim-out: ${Math.max(0, trimOut).toFixed(2)}s`;
+        } else if (seg.type === "video") {
+            this.propTitle.textContent = `Video: ${seg.fileName || seg.videoFile || "(clip)"}`;
+            this.promptWrap.style.display = "none";
+            this.gsSlider.parentElement.style.display = "none";
+            this.audioInfo.style.display = "block";
+            const srcSec = (seg.srcDurationFrames || 0) / fps;
+            const trimInF = seg.trimStart || 0;
+            this.audioInfo.innerHTML =
+                `<span class="wd-itag">Control video</span>` +
+                `File: <b>${seg.fileName || seg.videoFile}</b><br>` +
+                `Source: ${srcSec.toFixed(2)}s · ${seg.srcDurationFrames || "?"}f` +
+                    (seg.srcW ? ` · ${seg.srcW}×${seg.srcH}` : "") + `<br>` +
+                `On timeline: ${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f<br>` +
+                `Trim-in: ${trimInF}f → feeds <b>control_video</b>`;
         } else {
-            this.propTitle.textContent = (seg.type === "text" ? "Text segment" : "Image segment");
-            this.promptArea.style.display = "block";
+            this.propTitle.textContent = (seg.type === "text" ? "TEXT SEGMENT" : "IMAGE SEGMENT");
+            this.promptWrap.style.display = "";
             this.promptArea.disabled = false;
             this.promptArea.value = seg.prompt || "";
             this.gsSlider.parentElement.style.display = "flex";
@@ -1112,9 +1771,14 @@ class TimelineEditor {
 
     // ── Render ──────────────────────────────────────────────────────
     render() {
+        // Liveness self-clean: if this node was removed WITHOUT onRemoved firing
+        // (some graph.clear/workflow-load paths), the dead UI would linger in the
+        // DOM and swallow the user's clicks. Detect and self-remove.
+        if (this._destroyed) return;
+        if (this.node && this.node.graph == null) { this.destroy(); return; }
         const dpr = window.devicePixelRatio || 1;
         const cssW = this.cvs.clientWidth || 600;
-        const cssH = RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H;
+        const cssH = TRACKS_CANVAS_H;
         const w = Math.round(cssW * dpr);
         const h = Math.round(cssH * dpr);
         if (this.cvs.width !== w || this.cvs.height !== h) {
@@ -1125,18 +1789,21 @@ class TimelineEditor {
         ctx.clearRect(0, 0, cssW, cssH);
 
         // Background tracks
+        const vidTop = this._vidTop();
         ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, 0, cssW, cssH);
         ctx.fillStyle = C.bg3;
         ctx.fillRect(0, RULER_H, cssW, IMG_TRACK_H);
         ctx.fillStyle = C.scrimDark;
         ctx.fillRect(0, RULER_H + IMG_TRACK_H, cssW, AUD_TRACK_H);
+        ctx.fillStyle = C.bg3;                                  // Control-Video band (media tone)
+        ctx.fillRect(0, vidTop, cssW, VID_TRACK_H);
 
-        // Out-of-duration shadow
+        // Out-of-duration shadow (covers image + audio + video bands)
         const durX = this._frameToX(this.durFrames);
         if (durX < cssW) {
             ctx.fillStyle = "rgba(0,0,0,0.5)";
-            ctx.fillRect(durX, RULER_H, cssW - durX, IMG_TRACK_H + AUD_TRACK_H);
+            ctx.fillRect(durX, RULER_H, cssW - durX, IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H);
         }
 
         // Ruler
@@ -1144,8 +1811,19 @@ class TimelineEditor {
         // Segments
         for (let i = 0; i < this.segments.length; i++) this._drawSegment(ctx, this.segments[i], i, "image");
         for (let i = 0; i < this.audioSegments.length; i++) this._drawSegment(ctx, this.audioSegments[i], i, "audio");
+        for (let i = 0; i < this.motionSegments.length; i++) this._drawSegment(ctx, this.motionSegments[i], i, "video");
+        // Empty-track "+" add-affordances (LTX-style): inviting, clickable hot-spots.
+        this._addHints = {};
+        if (this.segments.length === 0) this._drawAddHint(ctx, cssW, RULER_H, IMG_TRACK_H, "image");
+        if (this.audioSegments.length === 0) this._drawAddHint(ctx, cssW, RULER_H + IMG_TRACK_H, AUD_TRACK_H, "audio");
+        if (this.motionSegments.length === 0) this._drawAddHint(ctx, cssW, vidTop, VID_TRACK_H, "video");
         // v2 automation lanes
         this._drawV2Lanes(ctx, cssW);
+        // Muted-lane dimming (over the timeline area)
+        this._drawMuteDots(ctx, cssW);
+        // Sync the DOM sidebar (labels/pills/mute state) — the crisp overlay
+        // replaces the old canvas-drawn column.
+        this._syncSidebar();
         // Playhead
         this._drawPlayhead(ctx, cssH);
 
@@ -1154,39 +1832,246 @@ class TimelineEditor {
         this.seek.value = String(Math.round((this.playhead / Math.max(1, vd)) * 10000));
         this.timeReadout.textContent = `f ${this.playhead}/${this.durFrames} · ${fmtTime(this.playhead, this.fps, this.displayMode)}`;
         const v2n = V2_KEYS.reduce((a, k) => a + (this[k]?.length || 0), 0);
-        this.statusEl.textContent = `${this.segments.length} clips · ${this.audioSegments.length} audio` +
+        this.statusEl.textContent = `${this.segments.length} clips · ${this.motionSegments.length} video · ${this.audioSegments.length} audio` +
             (v2n ? ` · ${v2n} automation` : "") + ` · ${this.durFrames}f @ ${this.fps}fps`;
     }
 
     _drawRuler(ctx, cssW) {
-        ctx.fillStyle = C.panelHi2;
+        // Ruler bar + a slightly darker sidebar corner so the label column
+        // reads as one continuous gutter from the ruler down.
+        ctx.fillStyle = "#1c1e28";
         ctx.fillRect(0, 0, cssW, RULER_H);
-        ctx.fillStyle = C.dim;
-        ctx.font = "10px ui-monospace,monospace";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#16171f";
+        ctx.fillRect(0, 0, LANE_X0, RULER_H);
+        // Corner label.
+        ctx.fillStyle = C.slateMute || "#7f849c";
+        ctx.font = "9px ui-sans-serif,system-ui";
+        ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(this.displayMode === "frames" ? "FRAME" : "TIME", 8, RULER_H / 2);
+
         const pxF = this._pxPerFrame();
         const step = pickRulerStep(this.visualDurFrames, this.fps, pxF, this.displayMode);
+        const minorStep = step / (this.displayMode === "frames" ? 5 : 4);
+        // Minor ticks — short, faint.
+        ctx.strokeStyle = "rgba(255,255,255,0.07)"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let f = 0; f <= this.visualDurFrames + step; f += minorStep) {
+            const x = this._frameToX(f);
+            if (x < LANE_X0 - 1) continue;
+            if (x > cssW + 2) break;
+            ctx.moveTo(x, RULER_H - 4); ctx.lineTo(x, RULER_H);
+        }
+        ctx.stroke();
+        // Major ticks + labels.
+        ctx.fillStyle = C.dim || "#a6adc8";
+        ctx.font = "10px ui-monospace,monospace";
+        ctx.strokeStyle = "rgba(255,255,255,0.16)"; ctx.lineWidth = 1;
         for (let f = 0; f <= this.visualDurFrames + step; f += step) {
             const x = this._frameToX(f);
+            if (x < LANE_X0 - 1) continue;
             if (x > cssW + 50) break;
-            ctx.strokeStyle = C.panelHi2;
-            ctx.beginPath();
-            ctx.moveTo(x, RULER_H - 6);
-            ctx.lineTo(x, RULER_H);
-            ctx.stroke();
-            ctx.fillStyle = C.slateMute;
+            ctx.beginPath(); ctx.moveTo(x, RULER_H - 8); ctx.lineTo(x, RULER_H); ctx.stroke();
             ctx.fillText(fmtTime(f, this.fps, this.displayMode), x + 3, RULER_H / 2);
         }
+        // Crisp baseline under the ruler.
+        ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, RULER_H - 0.5); ctx.lineTo(cssW, RULER_H - 0.5); ctx.stroke();
+
+        // Work region (I/O points): amber band on the ruler + edge flags.
+        const li = this.inPoint, lo = this.outPoint;
+        if (li != null || lo != null) {
+            const x1 = this._frameToX(li != null ? li : 0);
+            const x2 = this._frameToX(lo != null ? lo : this.visualDurFrames);
+            ctx.fillStyle = "rgba(249,226,175,0.22)";
+            ctx.fillRect(x1, 0, Math.max(2, x2 - x1), RULER_H);
+            ctx.fillStyle = "#f9e2af"; ctx.textAlign = "left";
+            if (li != null) { ctx.fillRect(x1, 0, 2, RULER_H); ctx.fillText("I", x1 + 4, RULER_H / 2); }
+            if (lo != null) { ctx.fillRect(x2 - 2, 0, 2, RULER_H); ctx.textAlign = "right"; ctx.fillText("O", x2 - 4, RULER_H / 2); ctx.textAlign = "left"; }
+        }
+    }
+
+    // Build the crisp DOM sidebar (real text labels + eye toggles + pills).
+    _buildSidebarOverlay() {
+        const sb = document.createElement("div");
+        sb.className = "wd-sb";
+        sb.style.width = LANE_X0 + "px";
+        const rc = document.createElement("div");
+        rc.className = "wd-sb-ruler";
+        rc.textContent = "TIME";
+        rc.style.height = RULER_H + "px";
+        sb.appendChild(rc);
+        this._sbRows = {};
+        const defs = [
+            { key: "image", h: IMG_TRACK_H, big: true },
+            { key: "audio", h: AUD_TRACK_H, big: true },
+            { key: "video", h: VID_TRACK_H, big: true },
+            ...V2_DEFS.map((d) => ({ key: d.key, h: V2_LANE_H, big: false, color: d.color })),
+        ];
+        for (const d of defs) {
+            const meta = TRACK_LABELS[d.key] || { name: d.key, glyph: "•" };
+            const acc = meta.color || d.color || "#cdd6f4";
+            const row = document.createElement("div");
+            row.className = "wd-sb-row" + (d.big ? "" : " sm");
+            row.style.height = d.h + "px";
+            row.style.setProperty("--acc", acc);
+            const eye = document.createElement("button");
+            eye.type = "button";
+            eye.className = "wd-sb-eye";
+            eye.title = "Mute / unmute this track";
+            eye.onmousedown = (e) => e.stopPropagation();
+            eye.onclick = (e) => {
+                e.stopPropagation();
+                this.trackMuted[d.key] = !this.trackMuted[d.key];
+                if (d.key === "audio" && this.playing) { this._stopAudio(); if (!this.trackMuted.audio) this._startAudio(); }
+                this._syncSidebar(); this.render();
+            };
+            const name = document.createElement("div");
+            name.className = "wd-sb-name";
+            name.innerHTML = `<span class="wd-sb-g">${meta.glyph}</span>${meta.name}`;
+            if (d.big) {
+                const top = document.createElement("div");
+                top.className = "wd-sb-top";
+                top.append(eye, name);
+                row.appendChild(top);
+                const pill = document.createElement("div");
+                pill.className = "wd-sb-pill";
+                pill.style.display = "none";
+                row.appendChild(pill);
+                this._sbRows[d.key] = { row, eye, pill, big: true };
+            } else {
+                row.append(eye, name);
+                this._sbRows[d.key] = { row, eye, big: false };
+            }
+            sb.appendChild(row);
+        }
+        this._sidebarEl = sb;
+        return sb;
+    }
+    // Reflect mute state + status pills onto the DOM sidebar.
+    _syncSidebar() {
+        if (!this._sbRows) return;
+        for (const key in this._sbRows) {
+            const r = this._sbRows[key];
+            const muted = !!this.trackMuted?.[key];
+            r.row.classList.toggle("muted", muted);
+            r.eye.textContent = muted ? "⊘" : (r.big ? "👁" : "●");
+        }
+        const setPill = (key, text) => {
+            const r = this._sbRows[key];
+            if (!r || !r.pill) return;
+            r.pill.textContent = text || "";
+            r.pill.style.display = text ? "inline-flex" : "none";
+        };
+        const n = (a) => (a && a.length) ? `${a.length} clip${a.length > 1 ? "s" : ""}` : "";
+        setPill("image", n(this.segments));
+        setPill("audio", readWidget(this.node, "audio_target", "") || "");
+        setPill("video", n(this.motionSegments));
+    }
+
+    // (legacy) canvas sidebar — replaced by the DOM overlay; kept as a no-op-safe
+    // helper in case an old render path calls it.
+    _drawSidebar(ctx, cssW, cssH) {
+        // Column background + right divider.
+        ctx.fillStyle = "#16171f";
+        ctx.fillRect(0, RULER_H, LANE_X0, cssH - RULER_H);
+        ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(LANE_X0 - 0.5, RULER_H); ctx.lineTo(LANE_X0 - 0.5, cssH); ctx.stroke();
+
+        const rows = [
+            { key: "image", top: RULER_H, h: IMG_TRACK_H, big: true },
+            { key: "audio", top: RULER_H + IMG_TRACK_H, h: AUD_TRACK_H, big: true },
+            { key: "video", top: this._vidTop(), h: VID_TRACK_H, big: true },
+            ...V2_DEFS.map((d, i) => ({ key: d.key, top: this._v2LaneTop(i), h: V2_LANE_H, big: false, color: d.color })),
+        ];
+        for (const r of rows) {
+            const meta = TRACK_LABELS[r.key] || { name: r.key, glyph: "•" };
+            const color = meta.color || r.color || "#cdd6f4";
+            const muted = !!this.trackMuted?.[r.key];
+            const cy = r.top + r.h / 2;
+            // Accent tab on the left edge of the track (its identity colour).
+            ctx.fillStyle = color;
+            ctx.globalAlpha = muted ? 0.3 : 0.9;
+            ctx.fillRect(0, r.top + 1, 3, r.h - 2);
+            ctx.globalAlpha = 1;
+            // Mute toggle dot.
+            const mx = 13, my = r.big ? r.top + 13 : cy;
+            ctx.beginPath(); ctx.arc(mx, my, 4, 0, Math.PI * 2);
+            if (muted) {
+                ctx.strokeStyle = "rgba(200,205,220,0.8)"; ctx.lineWidth = 1.3; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(mx - 4, my + 4); ctx.lineTo(mx + 4, my - 4); ctx.stroke();
+            } else {
+                ctx.fillStyle = color; ctx.fill();
+            }
+            // Glyph + name.
+            ctx.globalAlpha = muted ? 0.45 : 1;
+            if (r.big) {
+                ctx.fillStyle = color; ctx.font = "13px ui-sans-serif,system-ui";
+                ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                ctx.fillText(meta.glyph, 24, r.top + 13);
+                ctx.fillStyle = "#cdd6f4"; ctx.font = "600 10px ui-sans-serif,system-ui";
+                ctx.fillText(meta.name, 8, r.top + 30);
+            } else {
+                ctx.fillStyle = color; ctx.font = "10px ui-sans-serif,system-ui";
+                ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                ctx.fillText(meta.glyph, 24, cy);
+                ctx.fillStyle = "#bac2de"; ctx.font = "9px ui-sans-serif,system-ui";
+                ctx.fillText(meta.name, 34, cy);
+            }
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    // Dim overlay on muted lanes (the mute TOGGLE + label live in _drawSidebar).
+    _drawMuteDots(ctx, cssW) {
+        const lanes = [
+            { key: "image", top: RULER_H, h: IMG_TRACK_H },
+            { key: "audio", top: RULER_H + IMG_TRACK_H, h: AUD_TRACK_H },
+            { key: "video", top: this._vidTop(), h: VID_TRACK_H },
+            ...V2_DEFS.map((d, i) => ({ key: d.key, top: this._v2LaneTop(i), h: V2_LANE_H })),
+        ];
+        for (const ln of lanes) {
+            if (this.trackMuted?.[ln.key]) {
+                ctx.fillStyle = "rgba(0,0,0,0.45)";
+                ctx.fillRect(LANE_X0, ln.top, cssW - LANE_X0, ln.h);
+            }
+        }
+    }
+
+    _drawAddHint(ctx, cssW, top, trackH, kind) {
+        // LTX-style centered "+" inviting a clip into an empty track. The hot-zone
+        // is recorded in this._addHints[kind] for click-to-add in _onMouseDown.
+        const durX = this._frameToX(this.durFrames);
+        const cx = Math.max(LANE_X0 + 36, Math.min(cssW - 36, (LANE_X0 + Math.min(cssW, durX)) / 2));
+        const cy = top + trackH / 2 - 6;
+        const r = 14;
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(150,165,210,0.55)";
+        ctx.fillStyle = "rgba(255,255,255,0.045)";
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy);
+        ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(160,172,205,0.7)";
+        ctx.font = "10px ui-sans-serif,system-ui,sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(kind === "audio" ? "+ add audio  ·  or drop a file"
+                   : kind === "video" ? "+ add video  ·  or drop a clip"
+                                      : "+ add image  ·  or drop a file", cx, cy + r + 11);
+        ctx.restore();
+        this._addHints[kind] = { cx, cy, r: r + 6 };
     }
 
     _drawSegment(ctx, seg, idx, track) {
         const x1 = this._frameToX(seg.start);
         const x2 = this._frameToX(seg.start + seg.length);
-        const y = track === "audio" ? RULER_H + IMG_TRACK_H + 4 : RULER_H + 4;
-        const h = (track === "audio" ? AUD_TRACK_H : IMG_TRACK_H) - 8;
+        let y, h, selType;
+        if (track === "audio")      { y = RULER_H + IMG_TRACK_H + 4; h = AUD_TRACK_H - 8; selType = "audio"; }
+        else if (track === "video") { y = this._vidTop() + 4;        h = VID_TRACK_H - 8; selType = "video"; }
+        else                        { y = RULER_H + 4;               h = IMG_TRACK_H - 8; selType = "image"; }
         const w = Math.max(2, x2 - x1);
-        const selected = this.selection.type === (track === "audio" ? "audio" : "image") && this.selection.idx === idx;
+        const selected = this.selection.type === selType && this.selection.idx === idx;
 
         // Body
         if (seg.type === "image") {
@@ -1283,6 +2168,47 @@ class TimelineEditor {
                 }
                 ctx.fillText(n, x1 + 3, y + 3);
             }
+        } else if (seg.type === "video") {
+            ctx.save();
+            ctx.beginPath(); ctx.rect(x1, y, w, h); ctx.clip();
+            const thumbs = (seg._thumbs || []).filter(t => t.complete && t.naturalWidth > 0);
+            if (thumbs.length) {
+                // Tile the poster strip across the clip so it reads as a filmstrip;
+                // pick which thumb by horizontal position within the clip.
+                const ar = thumbs[0].naturalWidth / thumbs[0].naturalHeight || (16 / 9);
+                const tileW = Math.max(10, h * ar);
+                for (let dx = x1; dx < x1 + w; dx += tileW) {
+                    const frac = (dx - x1) / Math.max(1, w);
+                    const t = thumbs[Math.min(thumbs.length - 1, Math.floor(frac * thumbs.length))];
+                    ctx.drawImage(t, dx, y, tileW, h);
+                }
+            } else {
+                ctx.fillStyle = C.surface1Alt;
+                ctx.fillRect(x1, y, w, h);
+                ctx.fillStyle = C.slateMute;
+                ctx.font = "10px ui-sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText("decoding video…", x1 + w / 2, y + h / 2);
+            }
+            // Title bar (film glyph + filename)
+            if (w > 28) {
+                ctx.fillStyle = "rgba(0,0,0,0.55)";
+                ctx.fillRect(x1, y, w, 14);
+                ctx.fillStyle = C.fg;
+                ctx.font = "10px ui-sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                let n = "🎞 " + (seg.fileName || seg.videoFile || "video");
+                const maxW = w - 6;
+                if (ctx.measureText(n).width > maxW) {
+                    while (n.length > 1 && ctx.measureText(n + "…").width > maxW) n = n.slice(0, -1);
+                    n = n + "…";
+                }
+                ctx.fillText(n, x1 + 3, y + 7);
+            }
+            // Trim-in indicator (amber underline)
+            if (seg.trimStart) {
+                ctx.fillStyle = C.amber || "#fbbf24";
+                ctx.fillRect(x1, y + h - 3, w, 3);
+            }
+            ctx.restore();
         }
 
         // Border. Canvas can't resolve CSS variables on strokeStyle so use
@@ -1313,6 +2239,7 @@ class TimelineEditor {
 
     destroy() {
         this._stopAudio();
+        this._dismissAddMenu();
         try { this._resizeObs?.disconnect(); } catch {}
         if (this.audioCtx) try { this.audioCtx.close(); } catch {}
         this.audioCtx = null;
@@ -1320,6 +2247,12 @@ class TimelineEditor {
             try { cancelAnimationFrame(this._renderRafId); } catch {}
             this._renderRafId = 0;
         }
+        // CRITICAL: remove the UI from the DOM. Without this, workflow loads
+        // (graph.clear) leave a DEAD timeline stacked on the page — its "+ Video"
+        // button still catches clicks and uploads into a node that no longer
+        // exists = the user's "clicking does nothing gets uploaded".
+        try { this.container?.remove(); } catch {}
+        this._destroyed = true;
     }
 
     /**
@@ -1348,7 +2281,9 @@ function _wdCapNode(node) {
     capWdNode(node);
 }
 
-app.registerExtension({
+// Guard: CustomNodePacks ships the same WanDirector extensions. Whichever pack
+// loads first registers; the other skips silently (no "already registered" error).
+if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) app.registerExtension({
     name: "C2C.WanDirectorTimeline",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "WanDirectorC2C") return;
@@ -1361,6 +2296,7 @@ app.registerExtension({
             for (const w of (this.widgets || [])) {
                 if (HIDDEN_NAMES.has(w.name)) hideWidget(w);
             }
+            wdVueNudge(this);
             // Moderate default width; height capped after DOM widgets register.
             if (!this._wdTimelineSizeApplied) {
                 this.size[0] = Math.max(this.size[0] || 0, WD_DEFAULT_W);
@@ -1368,7 +2304,10 @@ app.registerExtension({
             }
             _wdCapNode(this);
             const host = document.createElement("div");
-            host.style.cssText = "width:100%;height:100%;";
+            // overflow:hidden is load-bearing: when wdMaxH caps the node
+            // shorter than the timeline stack, the DOM used to spill out of
+            // the node over the graph (the "damaged node" screenshots).
+            host.style.cssText = "width:100%;height:100%;overflow:hidden;min-height:0;";
             const widget = this.addDOMWidget("wd_timeline", "wd_timeline", host, {
                 getValue: () => "",
                 setValue: () => {},
@@ -1389,13 +2328,31 @@ app.registerExtension({
             requestAnimationFrame(_wdClipTimeline);
             setTimeout(_wdClipTimeline, 500);
             setTimeout(_wdClipTimeline, 1500);
-            widget.computeSize = function (width) {
-                return [width, RULER_H + IMG_TRACK_H + AUD_TRACK_H + V2_TOTAL_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
-            };
             const self = this;
+            // Full fixed height. Node height is no longer viewport-capped
+            // (see _wan_director_ui capWd* — the cap made LiteGraph's slot
+            // stack exceed the node and the timeline hung over the graph),
+            // so the slot always fits the content by construction.
+            widget.computeSize = function (width) {
+                return [width, TRACKS_CANVAS_H + TOOLBAR_H + PLAYER_BAR_H + PROPS_MIN_H + 40];
+            };
             setTimeout(() => {
                 try { self._wdTimeline = new TimelineEditor(self, host); }
                 catch (err) { reportFailure("WanDirector.timelineInit", err, "wan_director_timeline"); }
+                // Liveness self-clean (idle-safe): a dead-idle timeline never
+                // calls render(), so poll cheaply and remove the UI when the
+                // node has left the graph without onRemoved firing.
+                const _aliveTimer = setInterval(() => {
+                    if (self.graph == null) {
+                        try { self._wdTimeline?.destroy(); } catch (_) {}
+                        try { host.remove(); } catch (_) {}
+                        clearInterval(_aliveTimer);
+                        return;
+                    }
+                    // Nodes 2.0 self-heal: re-register DOM widgets Vue lost
+                    // during the first-instance mount race (timeline + player).
+                    try { wdEnsureDomWidgetsAttached(self); } catch (_) {}
+                }, 2000);
                 // Re-flow once after all DOM widgets (timeline + player) have
                 // registered so the player's computeSize sees a stable width
                 // and the node height fits both DOM widgets. Preserve the
@@ -1424,6 +2381,18 @@ app.registerExtension({
             const r = origConfigure?.apply(this, arguments);
             setTimeout(() => {
                 _wdCapNode(this);
+                // Workflows SAVED while the old viewport-height cap was live
+                // carry the truncated size (e.g. 640x879) in their JSON, and
+                // LiteGraph keeps the saved size on load — so the timeline
+                // kept hanging out of the node for existing workflows even
+                // after the cap was removed. Height is dictated by the
+                // widget stack for this node; re-assert it (keep user width).
+                try {
+                    const need = this.computeSize();
+                    if (Array.isArray(need) && this.size[1] < need[1] - 4) {
+                        this.setSize([Math.max(this.size[0], need[0]), need[1]]);
+                    }
+                } catch (_) {}
                 if (this._wdTimeline) {
                     this._wdTimeline._loadFromWidgets();
                     this._wdTimeline._updatePropsPanel();

@@ -1,7 +1,9 @@
 import { app } from "../../scripts/app.js";
+import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 /**
  * VideoFramePlayerMEC - frame scrubber + drag-crop + aspect-lock overlay.
@@ -96,10 +98,12 @@ app.registerExtension({
             _created?.apply(this, arguments);
             const node = this;
 
+            ensureC2CKit();
             const el = document.createElement("div");
+            el.className = "c2ck";
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:var(--c2c-panelDeep);pointer-events:auto;" +
-                "border-radius:8px;overflow:hidden;border:1px solid var(--c2c-panelBgAlt);display:flex;flex-direction:column;";
+                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:#161616;pointer-events:auto;" +
+                "border-radius:8px;overflow:hidden;border:1px solid #111;display:flex;flex-direction:column;color:#e6e6e6;";
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
                 "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
@@ -109,8 +113,8 @@ app.registerExtension({
             const tb = document.createElement("div");
             tb.style.cssText =
                 "display:flex;align-items:center;justify-content:space-between;" +
-                "padding:6px 10px;background:var(--c2c-panelDeep11);border-bottom:1px solid var(--c2c-panelBgAlt);" +
-                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:var(--c2c-fg);";
+                "padding:6px 10px;background:#1e1e1e;border-bottom:1px solid #111;" +
+                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:#e6e6e6;";
 
             // left side: Display Mode label + segmented toggle (Time | Frames)
             const left = document.createElement("div");
@@ -147,9 +151,7 @@ app.registerExtension({
             const cropBtn = document.createElement("button");
             cropBtn.type = "button";
             cropBtn.textContent = "Crop";
-            cropBtn.style.cssText =
-                "border:1px solid var(--c2c-panelBgAlt);background:var(--c2c-panelDeep);color:var(--c2c-fg);" +
-                "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
+            cropBtn.className = "c2ck-btn";
             cropBtn.onclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
@@ -204,10 +206,7 @@ app.registerExtension({
             };
             const refreshCropBtn = () => {
                 const w = node.widgets?.find(w => w.name === "crop_enabled");
-                const on = !!w?.value;
-                cropBtn.style.background = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
-                cropBtn.style.borderColor = on ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
-                cropBtn.style.color = on ? "var(--c2c-white)" : "var(--c2c-fg)";
+                cropBtn.classList.toggle("on", !!w?.value);
             };
             const refreshTrimBadge = () => {
                 const stride = Number(node.widgets?.find(w => w.name === "frame_stride")?.value ?? 1);
@@ -427,7 +426,7 @@ app.registerExtension({
                 // crop handle / drag inside crop
                 const hit = handleHit(mx, my);
                 if (hit) {
-                    cvs.setPointerCapture(e.pointerId);
+                    try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                     S.drag = hit;
                     const [cx, cy, cw, ch] = getCropNorm();
                     S._dragStart = { mx, my, cx, cy, cw, ch };
@@ -450,15 +449,17 @@ app.registerExtension({
                     const x0 = r.barX + t0 * r.barW;
                     const x1 = r.barX + t1 * r.barW;
                     if (Math.abs(mx - x0) <= TRIM_HANDLE_W) {
-                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-start"; return;
+                        try { cvs.setPointerCapture(e.pointerId); } catch (_) {}
+                        S.drag = "trim-start"; return;
                     }
                     if (Math.abs(mx - x1) <= TRIM_HANDLE_W) {
-                        cvs.setPointerCapture(e.pointerId); S.drag = "trim-end"; return;
+                        try { cvs.setPointerCapture(e.pointerId); } catch (_) {}
+                        S.drag = "trim-end"; return;
                     }
                 }
                 // Timeline scrub
                 if (my >= r.y && my <= r.y + r.h && mx >= r.barX) {
-                    cvs.setPointerCapture(e.pointerId);
+                    try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                     S.drag = "tl";
                     const t = (mx - r.barX) / Math.max(1, r.barW);
                     setIdx(t * (S.frameCount - 1));
@@ -518,7 +519,7 @@ app.registerExtension({
             const up = (e) => {
                 S.drag = null;
                 S._dragStart = null;
-                try { cvs.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("video_frame_player", __c2cErr); }
+                try { cvs.releasePointerCapture(e.pointerId); } catch (__c2cErr) { __c2cReport("video_frame_player.releaseCapture", __c2cErr, { level: "info" }); } // expected when pointer already inactive
             };
             cvs.addEventListener("pointerup", up);
             cvs.addEventListener("pointercancel", up);
@@ -641,6 +642,7 @@ app.registerExtension({
                         w.draw = () => {};
                     }
                 }
+                vueSyncNodeWidgets(node);
                 node._advancedOpen = open;
                 if (node._advBtn) {
                     node._advBtn.textContent = open ? "Advanced ▴" : "Advanced ▾";
@@ -835,12 +837,21 @@ app.registerExtension({
             const cur = S.images?.[S.idx];
             if (cur && cur.complete && cur.naturalWidth > 0) {
                 ctx.drawImage(cur, px, py, pw, ph);
+            } else if (!S.images || !S.images.length) {
+                // Nothing connected/queued yet → a helpful empty state (matches the
+                // spline tracker) instead of a permanent "loading..." on a black
+                // void, which read as broken. Literal hex — canvas-safe.
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillStyle = "#aab2c0"; ctx.font = "600 13px sans-serif";
+                ctx.fillText("Connect a video or image batch, then Queue once", px + pw / 2, py + ph / 2 - 9);
+                ctx.fillStyle = "#7a828e"; ctx.font = "11px sans-serif";
+                ctx.fillText("frames appear here to scrub, trim & crop", px + pw / 2, py + ph / 2 + 11);
             } else {
-                ctx.fillStyle = C.gray700;
+                ctx.fillStyle = "#8b93a0";
                 ctx.font = "12px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
-                ctx.fillText("loading...", px + pw / 2, py + ph / 2);
+                ctx.fillText("loading…", px + pw / 2, py + ph / 2);
             }
 
             // Preview border

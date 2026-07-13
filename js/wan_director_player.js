@@ -13,13 +13,23 @@
 //
 // No external deps. Works on any browser ComfyUI runs in.
 
-import { app } from "../../scripts/app.js";
-import { api } from "../../scripts/api.js";
+import { app } from "/scripts/app.js";
+import { api } from "/scripts/api.js";
+import { wdEnsureProxy } from "./_wan_director_ui.js";
 
-const PLAYER_H = 140;          // total player widget height (px) — was 280, caused 2k+ node stack
-const STRIP_H  = 64;            // thumbnail strip height
+const PLAYER_H = 168;          // total player widget height (px) — was 280 (node-stack bloat); 168 keeps stage usable + transport
+const STRIP_H  = 56;            // thumbnail strip height
+const SCRUB_H  = 12;            // scrubber/seek-bar row height
 const BTN_H    = 28;
 const FPS_DEFAULT = 16;
+const SPEEDS   = [0.5, 1, 2, 4];
+
+function _fmtTime(sec) {
+    if (!isFinite(sec) || sec < 0) sec = 0;
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 function _b64Url(s) {
     if (!s) return null;
@@ -50,38 +60,76 @@ function makePlayerDOM(node) {
     // ── Video / image preview area ────────────────────────────────
     const stage = document.createElement("div");
     stage.style.cssText = `
-        flex: 1 1 auto; min-height: 0; position: relative;
-        background: var(--c2c-black); display: flex; align-items: center; justify-content: center;
+        flex: 1 1 auto; min-height: 0; position: relative; border-radius: 6px; overflow: hidden;
+        background:
+            radial-gradient(120% 90% at 50% 12%, rgba(137,180,250,0.06), transparent 60%),
+            linear-gradient(180deg, #14151d 0%, #0e0f16 100%);
+        display: flex; align-items: center; justify-content: center;
     `;
     const stageImg = document.createElement("img");
     stageImg.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
     const stageVideo = document.createElement("video");
-    stageVideo.controls = true;
+    stageVideo.controls = false;        // we provide our own transport (scrubber/step/loop/speed/in-out)
+    stageVideo.playsInline = true;
     stageVideo.style.cssText = "max-width: 100%; max-height: 100%; display: none;";
     const stageMsg = document.createElement("div");
-    stageMsg.style.cssText = "color:var(--c2c-gray400); font-size:12px; padding:8px; text-align:center;";
-    stageMsg.textContent = "No preview yet — add image/video clips or run the workflow.";
+    stageMsg.style.cssText = `
+        display:flex; flex-direction:column; align-items:center; gap:6px;
+        color:var(--c2c-gray400,#9399b2); font: 12px ui-sans-serif,system-ui; text-align:center; padding:8px;
+    `;
+    stageMsg.innerHTML =
+        `<div style="font-size:30px;line-height:1;opacity:0.6">🎬</div>` +
+        `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">Preview stage</div>` +
+        `<div style="opacity:0.8">Add image / video clips below, or run the workflow.</div>`;
     stage.append(stageImg, stageVideo, stageMsg);
+
+    // ── Scrubber / seek bar (click + drag to seek; shows in/out region) ──
+    const scrub = document.createElement("div");
+    scrub.style.cssText = `
+        flex: 0 0 ${SCRUB_H}px; position: relative; cursor: pointer;
+        background: var(--c2c-gray900); border-top: 1px solid var(--c2c-gray800);
+    `;
+    const scrubRegion = document.createElement("div");   // shaded in→out region
+    scrubRegion.style.cssText = "position:absolute;top:0;bottom:0;left:0;right:0;background:var(--c2c-cyanBright2);opacity:0.14;pointer-events:none;";
+    const scrubFill = document.createElement("div");      // played portion
+    scrubFill.style.cssText = "position:absolute;top:0;bottom:0;left:0;width:0%;background:var(--c2c-cyanBright2);opacity:0.55;pointer-events:none;";
+    const scrubHead = document.createElement("div");      // playhead
+    scrubHead.style.cssText = "position:absolute;top:-2px;bottom:-2px;left:0;width:2px;background:var(--c2c-gray50);box-shadow:0 0 3px var(--c2c-black);pointer-events:none;";
+    const mkMark = (color) => { const m = document.createElement("div"); m.style.cssText = `position:absolute;top:0;bottom:0;width:2px;background:${color};display:none;pointer-events:none;`; return m; };
+    const markIn  = mkMark("var(--c2c-green, #4ade80)");
+    const markOut = mkMark("var(--c2c-amber, #fbbf24)");
+    scrub.append(scrubRegion, scrubFill, scrubHead, markIn, markOut);
 
     // ── Controls row ──────────────────────────────────────────────
     const controls = document.createElement("div");
     controls.style.cssText = `
-        flex: 0 0 ${BTN_H}px; display: flex; align-items: center; gap: 6px;
+        flex: 0 0 ${BTN_H}px; display: flex; align-items: center; gap: 4px;
         padding: 0 6px; background: var(--c2c-neutral910); border-top: 1px solid var(--c2c-gray800);
     `;
     const mkBtn = (label, title) => {
         const b = document.createElement("button");
         b.textContent = label; b.title = title;
-        b.style.cssText = "background:var(--c2c-gray800);color:var(--c2c-gray150);border:1px solid var(--c2c-gray600);border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px;";
+        b.style.cssText = "background:var(--c2c-gray800);color:var(--c2c-gray150);border:1px solid var(--c2c-gray600);border-radius:3px;padding:2px 6px;cursor:pointer;font-size:12px;line-height:1;";
         return b;
     };
-    const btnPrev = mkBtn("⏮", "Previous clip");
-    const btnPlay = mkBtn("▶", "Play / pause");
-    const btnNext = mkBtn("⏭", "Next clip");
+    const btnPrev  = mkBtn("⏮", "Previous clip");
+    const btnFprev = mkBtn("◀ǀ", "Step back 1 frame  (←)");
+    const btnPlay  = mkBtn("▶", "Play / pause  (Space)");
+    const btnFnext = mkBtn("ǀ▶", "Step forward 1 frame  (→)");
+    const btnNext  = mkBtn("⏭", "Next clip");
+    const btnLoop  = mkBtn("🔁", "Loop  (off)");
+    btnLoop.style.opacity = "0.45";
+    const btnSpeed = mkBtn("1×", "Playback speed");
+    const btnIn    = mkBtn("[", "Set IN point  (i)");
+    const btnOut   = mkBtn("]", "Set OUT point  (o)");
+    const btnClr   = mkBtn("⌫", "Clear IN/OUT trim");
+    const tc = document.createElement("span");      // timecode + frame readout
+    tc.style.cssText = "font-size:11px;color:var(--c2c-gray200);margin-left:4px;font-variant-numeric:tabular-nums;white-space:nowrap;";
+    tc.textContent = "0:00";
     const status  = document.createElement("span");
-    status.style.cssText = "flex:1 1 auto;font-size:11px;color:var(--c2c-gray300);margin-left:8px;";
+    status.style.cssText = "flex:1 1 auto;font-size:11px;color:var(--c2c-gray300);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     status.textContent = "idle";
-    controls.append(btnPrev, btnPlay, btnNext, status);
+    controls.append(btnPrev, btnFprev, btnPlay, btnFnext, btnNext, btnLoop, btnSpeed, btnIn, btnOut, btnClr, tc, status);
 
     // ── Thumbnail strip ───────────────────────────────────────────
     const strip = document.createElement("div");
@@ -91,7 +139,9 @@ function makePlayerDOM(node) {
         border-top: 1px solid var(--c2c-gray800);
     `;
 
-    root.append(stage, controls, strip);
+    root.tabIndex = 0;                          // focusable → keyboard transport
+    root.style.outline = "none";
+    root.append(stage, scrub, controls, strip);
 
     // ── State ─────────────────────────────────────────────────────
     const state = {
@@ -100,6 +150,11 @@ function makePlayerDOM(node) {
         playing: false,
         timer: null,
         fps: FPS_DEFAULT,
+        mode: "clips",        // "clips" (image strip) | "video" (executed render) | "image" (single)
+        loop: false,
+        speedIdx: 1,          // index into SPEEDS, default 1×
+        inFrac: null,         // trim IN  as 0..1 fraction of timeline
+        outFrac: null,        // trim OUT as 0..1 fraction of timeline
     };
 
     function showImage(url) {
@@ -109,32 +164,198 @@ function makePlayerDOM(node) {
         stageImg.src = url;
         stageImg.style.display = "block";
     }
-    function showVideo(url) {
+    function showVideo(url) {            // executed render → full video transport
+        state.mode = "video";
+        state.inFrac = state.outFrac = null;     // fresh source → clear trim
         stageImg.style.display = "none";
         stageMsg.style.display = "none";
         stageVideo.src = url;
         stageVideo.style.display = "block";
+        syncSpeed();
         stageVideo.play().catch(() => {});
     }
     function showMessage(msg) {
         stageImg.style.display = "none";
         stageVideo.pause();
         stageVideo.style.display = "none";
+        stageMsg.style.display = "flex";
+        // Keep the framed empty-state look for any status message.
+        const empty = /no clips|no preview/i.test(msg);
+        stageMsg.innerHTML =
+            `<div style="font-size:30px;line-height:1;opacity:0.6">${empty ? "🎬" : "⏳"}</div>` +
+            `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">${empty ? "Preview stage" : "Working…"}</div>` +
+            `<div style="opacity:0.8">${msg}</div>`;
+    }
+
+    // ── transport core (works for both video + image-clip modes) ──
+    const vidDur = () => (state.mode === "video" && isFinite(stageVideo.duration)) ? stageVideo.duration : 0;
+    function curFrac() {
+        if (state.mode === "video") { const d = vidDur(); return d > 0 ? Math.min(1, stageVideo.currentTime / d) : 0; }
+        const n = state.clips.length; return n > 0 ? Math.max(0, state.active) / n : 0;
+    }
+    function updateScrub() {
+        const frac = curFrac();
+        scrubFill.style.width = (frac * 100) + "%";
+        scrubHead.style.left  = (frac * 100) + "%";
+        const setMark = (m, f) => { if (f == null) m.style.display = "none"; else { m.style.display = "block"; m.style.left = (f * 100) + "%"; } };
+        setMark(markIn, state.inFrac);
+        setMark(markOut, state.outFrac);
+        const lo = state.inFrac == null ? 0 : state.inFrac, hi = state.outFrac == null ? 1 : state.outFrac;
+        scrubRegion.style.left = (lo * 100) + "%";
+        scrubRegion.style.right = ((1 - hi) * 100) + "%";
+        scrubRegion.style.display = (state.inFrac != null || state.outFrac != null) ? "block" : "none";
+        if (state.mode === "video") {
+            tc.textContent = `${_fmtTime(stageVideo.currentTime)} / ${_fmtTime(vidDur())} · f${Math.round(stageVideo.currentTime * state.fps)}`;
+        } else if (state.clips.length) {
+            tc.textContent = `clip ${state.active + 1}/${state.clips.length}`;
+        } else {
+            tc.textContent = "0:00";
+        }
+    }
+    function seekToFrac(frac) {
+        frac = Math.min(1, Math.max(0, frac));
+        if (state.mode === "video") { const d = vidDur(); if (d > 0) stageVideo.currentTime = frac * d; }
+        else if (state.clips.length) selectClip(Math.min(state.clips.length - 1, Math.floor(frac * state.clips.length)));
+        updateScrub();
+    }
+    function frameStep(dir) {
+        pause();
+        if (state.mode === "video") {
+            const d = vidDur();
+            if (d > 0) stageVideo.currentTime = Math.min(d, Math.max(0, stageVideo.currentTime + dir / Math.max(1, state.fps)));
+            updateScrub();
+        } else {
+            selectClip(state.active + dir);
+        }
+    }
+    function syncSpeed() {
+        const spd = SPEEDS[state.speedIdx] || 1;
+        btnSpeed.textContent = spd + "×";
+        if (state.mode === "video") stageVideo.playbackRate = spd;
+    }
+    function cycleSpeed() { state.speedIdx = (state.speedIdx + 1) % SPEEDS.length; syncSpeed(); }
+    function toggleLoop() {
+        state.loop = !state.loop;
+        btnLoop.style.opacity = state.loop ? "1" : "0.45";
+        btnLoop.title = "Loop  (" + (state.loop ? "on" : "off") + ")";
+    }
+    function setIn()  { state.inFrac  = curFrac(); if (state.outFrac != null && state.outFrac <= state.inFrac) state.outFrac = null; updateScrub(); }
+    function setOut() { state.outFrac = curFrac(); if (state.inFrac  != null && state.inFrac  >= state.outFrac) state.inFrac  = null; updateScrub(); }
+    function clearTrim() { state.inFrac = state.outFrac = null; updateScrub(); }
+
+    // Video-driven scrubber + in/out + loop enforcement.
+    stageVideo.addEventListener("timeupdate", () => {
+        if (state.mode !== "video") {
+            // Clips mode: enforce the active video clip's trim window and
+            // auto-advance to the next clip at its end (respecting in/out).
+            const cur = state.clips[state.active];
+            if (cur?.isVideo && state.playing) {
+                const { t1 } = _clipWindow(cur);
+                if (stageVideo.currentTime >= t1 - 1e-3) {
+                    const n = state.clips.length;
+                    const loIdx = state.inFrac  == null ? 0     : Math.floor(state.inFrac  * n);
+                    const hiIdx = state.outFrac == null ? n - 1 : Math.min(n - 1, Math.floor(state.outFrac * n));
+                    let nxt = state.active + 1;
+                    if (nxt > hiIdx) {
+                        if (state.loop) nxt = loIdx;
+                        else { pause(); return; }
+                    }
+                    selectClip(nxt);
+                    if (!state.clips[nxt]?.isVideo) _imageTick();
+                }
+            }
+            updateScrub();
+            return;
+        }
+        const d = vidDur();
+        if (d > 0) {
+            const hi = (state.outFrac == null ? 1 : state.outFrac) * d;
+            const lo = (state.inFrac  == null ? 0 : state.inFrac)  * d;
+            if (stageVideo.currentTime >= hi - 1e-3) {
+                if (state.loop) { stageVideo.currentTime = lo; stageVideo.play().catch(() => {}); }
+                else { stageVideo.pause(); }
+            }
+        }
+        updateScrub();
+    });
+    // Gated on executed-render mode: in clips mode the <video> is paused and
+    // reused when hopping video→image clips, which must not stop playback.
+    stageVideo.addEventListener("play",  () => { if (state.mode === "video") { state.playing = true;  btnPlay.textContent = "⏸"; } });
+    stageVideo.addEventListener("pause", () => { if (state.mode === "video") { state.playing = false; btnPlay.textContent = "▶"; } });
+    stageVideo.addEventListener("loadedmetadata", () => { syncSpeed(); updateScrub(); });
+
+    // Scrubber pointer interaction (click + drag to seek).
+    function scrubToEvent(ev) {
+        const r = scrub.getBoundingClientRect();
+        seekToFrac((ev.clientX - r.left) / Math.max(1, r.width));
+    }
+    let scrubbing = false;
+    scrub.addEventListener("pointerdown", (ev) => { scrubbing = true; try { scrub.setPointerCapture(ev.pointerId); } catch {} pause(); scrubToEvent(ev); });
+    scrub.addEventListener("pointermove", (ev) => { if (scrubbing) scrubToEvent(ev); });
+    scrub.addEventListener("pointerup",   (ev) => { scrubbing = false; try { scrub.releasePointerCapture(ev.pointerId); } catch {} });
+
+    // ── Real-time playback of Control-Video clips (proxy-backed) ──
+    const _proxyUrls = new Map();          // videoFile → playable url (or "pending")
+    function _clipWindow(clip) {
+        const fps = Math.max(1, state.fps);
+        const t0 = (clip.trimStart || 0) / fps;
+        return { t0, t1: t0 + clip.length / fps };
+    }
+    async function showVideoClip(clip, idx) {
+        stageImg.style.display = "none";
+        const cached = _proxyUrls.get(clip.file);
+        if (typeof cached === "string" && cached !== "pending") {
+            const { t0 } = _clipWindow(clip);
+            stageMsg.style.display = "none";
+            stageVideo.style.display = "block";
+            const applyStart = () => {
+                stageVideo.currentTime = t0;
+                if (state.playing) stageVideo.play().catch(() => {});
+            };
+            if (stageVideo.dataset.src === cached) applyStart();
+            else {
+                stageVideo.dataset.src = cached;
+                stageVideo.src = cached;
+                stageVideo.addEventListener("loadedmetadata", applyStart, { once: true });
+            }
+            syncSpeed();
+            return;
+        }
+        // Proxy not resolved yet — kick it off once per file, show progress.
+        stageVideo.pause(); stageVideo.style.display = "none";
         stageMsg.style.display = "block";
-        stageMsg.textContent = msg;
+        stageMsg.textContent = `Preparing ${clip.text} for playback…`;
+        if (cached === "pending") return;
+        _proxyUrls.set(clip.file, "pending");
+        const url = await wdEnsureProxy(clip.file, {
+            onProgress: (p) => {
+                if (state.active === idx) {
+                    stageMsg.textContent = `Building edit proxy for ${clip.text}… ${Math.round(p * 100)}%`;
+                }
+            },
+        });
+        if (!url) {
+            _proxyUrls.delete(clip.file);
+            if (state.active === idx) showMessage(`Could not prepare ${clip.text} for playback.`);
+            return;
+        }
+        _proxyUrls.set(clip.file, url);
+        if (state.active === idx) showVideoClip(clip, idx);
     }
 
     function selectClip(i) {
-        if (state.clips.length === 0) { showMessage("No image clips on the timeline."); return; }
+        if (state.clips.length === 0) { showMessage("No clips on the timeline."); return; }
         i = ((i % state.clips.length) + state.clips.length) % state.clips.length;
         state.active = i;
         const clip = state.clips[i];
-        showImage(clip.url);
+        if (clip.isVideo) showVideoClip(clip, i);
+        else showImage(clip.url);
         status.textContent = `clip ${i + 1}/${state.clips.length} · frame ${clip.start}\u2013${clip.start + clip.length}`;
         // highlight thumb
         strip.querySelectorAll("[data-thumb]").forEach((el, idx) => {
             el.style.outline = (idx === i) ? "2px solid var(--c2c-cyanBright2)" : "1px solid var(--c2c-gray700)";
         });
+        updateScrub();
     }
 
     function rebuildStrip() {
@@ -144,9 +365,17 @@ function makePlayerDOM(node) {
             tile.setAttribute("data-thumb", String(i));
             tile.style.cssText = `
                 flex: 0 0 ${Math.max(48, STRIP_H - 16)}px; height: ${STRIP_H - 16}px;
-                background: var(--c2c-black) center/contain no-repeat url("${clip.url}");
+                background: var(--c2c-black) center/contain no-repeat url("${clip.url || ""}");
                 border-radius: 2px; cursor: pointer; outline: 1px solid var(--c2c-gray700);
             `;
+            if (clip.isVideo) {
+                tile.style.display = "flex";
+                tile.style.alignItems = "center";
+                tile.style.justifyContent = "center";
+                tile.style.fontSize = "16px";
+                tile.style.color = "var(--c2c-gray300)";
+                tile.textContent = "🎞";
+            }
             tile.title = `${clip.start}–${clip.start + clip.length}f${clip.text ? ` · ${clip.text}` : ""}`;
             tile.onclick = () => selectClip(i);
             strip.appendChild(tile);
@@ -163,52 +392,123 @@ function makePlayerDOM(node) {
             .filter(s => (s.type || "image") === "image")
             .filter(s => s.imageFile || s.imageB64)
             .sort((a, b) => (a.start || 0) - (b.start || 0));
-        state.clips = segs.map(s => ({
+        const imgClips = segs.map(s => ({
             url: _resolveImage(s),
             start: parseInt(s.start || 0, 10),
             length: parseInt(s.length || 1, 10),
             text: (s.text || "").slice(0, 64),
         })).filter(c => c.url);
+        // Control-Video clips play for real: web-safe files directly, VFX
+        // formats (ProRes/EXR/MXF/…) through the server-built edit proxy.
+        const vidClips = (td.motionSegments || [])
+            .filter(s => s.videoFile)
+            .map(s => ({
+                isVideo: true,
+                file: s.videoFile,
+                url: null,                 // resolved lazily via wdEnsureProxy
+                start: parseInt(s.start || 0, 10),
+                length: parseInt(s.length || 1, 10),
+                trimStart: parseInt(s.trimStart || 0, 10),
+                text: (s.fileName || s.videoFile || "").split("/").pop().slice(0, 64),
+            }));
+        state.clips = [...imgClips, ...vidClips].sort((a, b) => a.start - b.start);
         rebuildStrip();
         if (state.clips.length > 0) {
+            // Only drop into clip-preview mode if we're not already showing an
+            // executed video (rescan fires on timeline edits, not just init).
+            if (state.mode !== "video") state.mode = "clips";
             const keep = Math.min(state.active, state.clips.length - 1);
             selectClip(Math.max(0, keep));
         } else {
-            showMessage("No image clips on the timeline.");
+            if (state.mode !== "video") showMessage("No clips on the timeline.");
             status.textContent = "idle";
         }
+        updateScrub();
     }
 
     function play() {
-        if (state.playing || state.clips.length < 2) return;
+        if (state.mode === "video") {
+            const d = vidDur();
+            if (d > 0) {                          // resume inside the [in,out] region
+                const hi = (state.outFrac == null ? 1 : state.outFrac) * d;
+                const lo = (state.inFrac  == null ? 0 : state.inFrac)  * d;
+                if (stageVideo.currentTime >= hi - 1e-3 || stageVideo.currentTime < lo) stageVideo.currentTime = lo;
+            }
+            stageVideo.play().catch(() => {});
+            return;
+        }
+        const anyVideo = state.clips.some(c => c.isVideo);
+        if (state.playing || state.clips.length === 0 || (!anyVideo && state.clips.length < 2)) return;
         state.playing = true;
         btnPlay.textContent = "⏸";
-        const tick = () => {
-            if (!state.playing) return;
-            const cur = state.clips[state.active] || state.clips[0];
-            const dwellMs = Math.max(120, (cur.length / Math.max(1, state.fps)) * 1000);
-            state.timer = setTimeout(() => {
-                selectClip(state.active + 1);
-                tick();
-            }, dwellMs);
-        };
-        tick();
+        const cur = state.clips[state.active] || state.clips[0];
+        if (cur?.isVideo) {
+            showVideoClip(cur, state.active);       // (re)arms playback; window advance via timeupdate
+            stageVideo.play().catch(() => {});
+        } else {
+            _imageTick();
+        }
+    }
+    function _imageTick() {
+        if (!state.playing) return;
+        const cur = state.clips[state.active] || state.clips[0];
+        if (!cur || cur.isVideo) return;            // video clips advance via timeupdate
+        const spd = SPEEDS[state.speedIdx] || 1;
+        const dwellMs = Math.max(60, (cur.length / Math.max(1, state.fps)) * 1000 / spd);
+        state.timer = setTimeout(() => {
+            const n = state.clips.length;
+            const loIdx = state.inFrac  == null ? 0     : Math.floor(state.inFrac  * n);
+            const hiIdx = state.outFrac == null ? n - 1 : Math.min(n - 1, Math.floor(state.outFrac * n));
+            let nxt = state.active + 1;
+            if (nxt > hiIdx) { if (state.loop) nxt = loIdx; else { pause(); return; } }
+            selectClip(nxt);
+            if (state.clips[nxt]?.isVideo) stageVideo.play().catch(() => {});
+            else _imageTick();
+        }, dwellMs);
     }
     function pause() {
+        if (state.mode === "video") { stageVideo.pause(); return; }
         state.playing = false;
         btnPlay.textContent = "▶";
         if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+        stageVideo.pause();
     }
 
-    btnPrev.onclick = () => { pause(); selectClip(state.active - 1); };
-    btnNext.onclick = () => { pause(); selectClip(state.active + 1); };
-    btnPlay.onclick = () => { state.playing ? pause() : play(); };
+    btnPrev.onclick  = () => { pause(); state.mode === "video" ? seekToFrac(state.inFrac == null ? 0 : state.inFrac) : selectClip(state.active - 1); root.focus(); };
+    btnNext.onclick  = () => { pause(); state.mode === "video" ? seekToFrac(state.outFrac == null ? 1 : state.outFrac) : selectClip(state.active + 1); root.focus(); };
+    btnFprev.onclick = () => { frameStep(-1); root.focus(); };
+    btnFnext.onclick = () => { frameStep(+1); root.focus(); };
+    btnPlay.onclick  = () => { state.playing ? pause() : play(); root.focus(); };
+    btnLoop.onclick  = () => toggleLoop();
+    btnSpeed.onclick = () => cycleSpeed();
+    btnIn.onclick    = () => setIn();
+    btnOut.onclick   = () => setOut();
+    btnClr.onclick   = () => clearTrim();
+
+    // Keyboard transport when the player has focus (does not leak to the canvas).
+    root.addEventListener("keydown", (ev) => {
+        let handled = true;
+        switch (ev.key) {
+            case " ": case "k": state.playing ? pause() : play(); break;
+            case "ArrowLeft":  frameStep(-1); break;
+            case "ArrowRight": frameStep(+1); break;
+            case "i": case "I": setIn(); break;
+            case "o": case "O": setOut(); break;
+            case "l": case "L": toggleLoop(); break;
+            default: handled = false;
+        }
+        if (handled) { ev.preventDefault(); ev.stopPropagation(); }
+    });
+
+    syncSpeed();
+    updateScrub();
 
     return { root, rescan, showVideo, showImage, showMessage,
              setStatus: (s) => status.textContent = s };
 }
 
-app.registerExtension({
+// Guard against double-registration when CustomNodePacks ships the same extension.
+if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.Player")) app.registerExtension({
     name: "C2C.WanDirector.Player",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -237,6 +537,17 @@ app.registerExtension({
             requestAnimationFrame(_wdClipPlayer);
             setTimeout(_wdClipPlayer, 500);
             setTimeout(_wdClipPlayer, 1500);
+            // Liveness self-clean: when the node is removed WITHOUT onRemoved
+            // firing (some graph.clear/workflow-load paths), the dead player UI
+            // would linger and swallow clicks. Poll cheaply; remove ourselves.
+            const _self = this;
+            const _aliveTimer = setInterval(() => {
+                if (_self.graph == null) {
+                    try { player.root.remove(); } catch (_) {}
+                    try { player.destroy?.(); } catch (_) {}
+                    clearInterval(_aliveTimer);
+                }
+            }, 2000);
             // Use the inset `width` LiteGraph passes — never `this.size[0]`,
             // which over-reserves the column and leaks the node bgcolor as
             // dark gutters on both edges of the widget.

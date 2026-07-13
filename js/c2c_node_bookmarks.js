@@ -1,7 +1,11 @@
-// c2c_node_bookmarks.js — Ctrl+B toggle bookmark, Ctrl+Shift+1..9 jump (C2C)
+// c2c_node_bookmarks.js — Alt+B toggle bookmark, Ctrl+Shift+1..9 jump (C2C)
 // ---------------------------------------------------------------------
+// NOTE: This shortcut deliberately does NOT use plain Ctrl+B (ComfyUI core
+// binds it to "Bypass selected nodes") NOR Ctrl+Alt+B (the C2C AI workflow
+// builder / "build workflow" owns that). So the bookmark toggle is Alt+B.
+//
 // What it does:
-//   • Ctrl+B on a selected node → adds/removes a bookmark slot (1..9).
+//   • Alt+B on a selected node → adds/removes a bookmark slot (1..9).
 //     Bookmark slot is auto-assigned to the lowest free index 1..9.
 //   • Ctrl+Shift+1..9 → pan + zoom to that bookmark, pulse the node.
 //   • Bookmarks persist in workflow JSON under
@@ -184,15 +188,24 @@ function isEditingField() {
 
 function onKey(ev) {
     if (isEditingField()) return;
-    if (!(ev.ctrlKey || ev.metaKey)) return;
-    // Ctrl+B → toggle bookmark on selected node
-    if ((ev.key === "b" || ev.key === "B") && !ev.shiftKey) {
+    // Respect the on/off setting — switching it OFF must also disable the
+    // keyboard shortcuts. (Previously only the strip was hidden in render();
+    // this handler ignored the setting, so Ctrl+B still fired — the
+    // "bookmark won't switch off" bug.)
+    try {
+        if (app.ui?.settings?.getSettingValue?.(SETTING_ID, true) === false) return;
+    } catch { /* settings not ready */ }
+    // Alt+B (NO Ctrl/Meta/Shift) → toggle bookmark on selected node.
+    // Moved off Ctrl+Alt+B because that collided with the AI workflow builder
+    // ("build workflow"). ev.code is layout-independent and unaffected by Alt
+    // (Alt+b can change ev.key on some OSes).
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && ev.code === "KeyB") {
         ev.preventDefault();
         toggleBookmark();
         return;
     }
     // Ctrl+Shift+1..9 → jump to slot
-    if (ev.shiftKey && /^[1-9]$/.test(ev.key)) {
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && /^[1-9]$/.test(ev.key)) {
         ev.preventDefault();
         jumpToSlot(ev.key);
     }
@@ -204,7 +217,7 @@ app.registerExtension({
         try {
             app.ui.settings.addSetting({
                 id: SETTING_ID,
-                name: "Node bookmarks strip (Ctrl+B, Ctrl+Shift+1..9)",
+                name: "Node bookmarks strip (Alt+B, Ctrl+Shift+1..9)",
                 type: "boolean", defaultValue: true,
                 category: ["c2c", "Overlays", "Bookmarks"],
                 onChange: render,

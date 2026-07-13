@@ -19,6 +19,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
+import { wdEnsureProxy } from './_wan_director_ui.js';
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -73,8 +75,11 @@ async function uploadFile(file) {
     return sub + (data.name || file.name);
 }
 
-const VIDEO_EXT = /\.(mp4|mov|mkv|webm|m4v|avi|gif)$/i;
+const VIDEO_EXT = /\.(mp4|mov|mkv|webm|m4v|avi|gif|mxf|mpg|mpeg|wmv|ts|mts)$/i;
 const AUDIO_EXT = /\.(wav|mp3|flac|ogg|aac|m4a)$/i;
+// Containers the browser can (usually) decode natively; everything else goes
+// straight to the server edit proxy (ProRes/DNxHD/MXF/…).
+const NATIVE_EXT = /\.(mp4|webm|m4v|ogv|gif|mov|mkv)$/i;
 
 function mediaURL(filename) {
     if (!filename) return null;
@@ -83,22 +88,40 @@ function mediaURL(filename) {
     );
 }
 
-/** Load a file path as Image or Video element. Returns {kind, el, w, h, dur}. */
+/** Load a file path as Image or Video element. Returns {kind, el, w, h, dur}.
+ *  Native-first: the original file is tried in a <video>; if the browser
+ *  can't decode it (ProRes .mov, MXF, …) we fall back once to the
+ *  frame-accurate H.264 edit proxy from /wne/media_proxy. */
 function loadSource(filename) {
     return new Promise((resolve) => {
         if (!filename) { resolve(null); return; }
         const url = mediaURL(filename);
         if (VIDEO_EXT.test(filename)) {
-            const v = document.createElement("video");
-            v.src = url;
-            v.muted = true;
-            v.crossOrigin = "anonymous";
-            v.preload = "auto";
-            v.playsInline = true;
-            v.addEventListener("loadeddata", () => {
-                resolve({ kind: "video", el: v, w: v.videoWidth, h: v.videoHeight, dur: v.duration });
-            }, { once: true });
-            v.addEventListener("error", () => resolve(null), { once: true });
+            const attach = (src, allowProxyRetry) => {
+                const v = document.createElement("video");
+                v.src = src;
+                v.muted = true;
+                v.crossOrigin = "anonymous";
+                v.preload = "auto";
+                v.playsInline = true;
+                v.addEventListener("loadeddata", () => {
+                    resolve({ kind: "video", el: v, w: v.videoWidth, h: v.videoHeight, dur: v.duration });
+                }, { once: true });
+                v.addEventListener("error", async () => {
+                    if (!allowProxyRetry) { resolve(null); return; }
+                    const proxy = await wdEnsureProxy(filename).catch(() => null);
+                    if (proxy) attach(proxy, false);
+                    else resolve(null);
+                }, { once: true });
+            };
+            if (NATIVE_EXT.test(filename)) attach(url, true);
+            else {
+                // Known-unplayable container: skip the doomed native attempt.
+                wdEnsureProxy(filename).then((proxy) => {
+                    if (proxy) attach(proxy, false);
+                    else resolve(null);
+                }).catch(() => resolve(null));
+            }
         } else if (AUDIO_EXT.test(filename)) {
             resolve({ kind: "audio", el: null, w: 0, h: 0 });
         } else {
@@ -242,14 +265,16 @@ app.registerExtension({
             cvs.setAttribute("role", "img");
             wrap.appendChild(cvs);
 
+            ensureC2CKit();
             const overlay = document.createElement("div");
-            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:4px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;font:11px system-ui,sans-serif;color:var(--c2c-fg);text-shadow:0 1px 2px rgba(0,0,0,0.8);";
+            overlay.className = "c2ck";
+            overlay.style.cssText = "position:absolute;top:0;left:0;right:0;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;";
             const modeBadge = document.createElement("div");
+            modeBadge.className = "c2ck-pill";
             modeBadge.textContent = "wipe";
-            modeBadge.style.cssText = "background:rgba(0,0,0,0.55);padding:2px 8px;border-radius:10px;";
             const liveBadge = document.createElement("div");
+            liveBadge.className = "c2ck-pill on";
             liveBadge.textContent = "● LIVE";
-            liveBadge.style.cssText = "background:rgba(40,180,80,0.85);color:var(--c2c-white);padding:2px 8px;border-radius:10px;font-weight:600;";
             overlay.appendChild(modeBadge);
             overlay.appendChild(liveBadge);
             wrap.appendChild(overlay);
@@ -780,7 +805,7 @@ app.registerExtension({
             cvs.addEventListener("pointerdown", (e) => {
                 const mode = getVal(node, "mode", "wipe");
                 if (mode !== "wipe" && mode !== "onion") { cvs.focus(); return; }
-                cvs.setPointerCapture(e.pointerId);
+                try { cvs.setPointerCapture(e.pointerId); } catch (_) {} // pointer may already be inactive
                 cvs.focus();
                 S.drag = true;
                 const [cx] = xy(e);
