@@ -683,8 +683,10 @@ class TimelineEditor {
                 e.preventDefault();
             }
             else if ((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey)) {
-                if (this.clipboard) this._pasteAt(this.playhead, this.clipboard.track);
-                e.preventDefault();
+                // Segment paste only preventDefaults when there IS a copied clip —
+                // otherwise let the browser 'paste' event fire so a clipboard
+                // IMAGE can drop onto the Scene track (LTX-Director parity).
+                if (this.clipboard) { this._pasteAt(this.playhead, this.clipboard.track); e.preventDefault(); }
             }
             else if (e.key === "d" || e.key === "D") {
                 // Duplicate the selected clip right after itself.
@@ -719,6 +721,20 @@ class TimelineEditor {
             else if (e.key === "ArrowRight") { this.stepPlayhead(+1); e.preventDefault(); }
             else if (e.key === "Home") { this.playhead = 0; this.render(); e.preventDefault(); }
             else if (e.key === "End")  { this.playhead = this.durFrames; this.render(); e.preventDefault(); }
+        });
+
+        // Ctrl+V of a clipboard IMAGE → add an image segment (LTX-Director
+        // parity: LTX binds a document 'paste' handler). Scoped to the canvas
+        // (tabIndex focusable), so it only fires when the timeline is focused.
+        this.cvs.addEventListener("paste", (e) => {
+            const items = e.clipboardData?.items || [];
+            for (const it of items) {
+                if (it.type && it.type.startsWith("image/")) {
+                    const file = it.getAsFile();
+                    if (file) { e.preventDefault(); this.addImageSegmentFromFile(file); }
+                    return;
+                }
+            }
         });
 
         // Seek bar
