@@ -494,8 +494,22 @@ for _rmod in ("color_science", "exr_io", "exr_metadata_reader", "geometry_nodes"
         )
 
 
+# ── Fluid Shots & Audio FX (temporal normalizer pair + audio reverser) ──
+_FLUID_MAPPINGS, _FLUID_DISPLAY = {}, {}
+try:
+    from .nodes import fluid_shots_audio as _fluid
+    _FLUID_MAPPINGS.update(_fluid.NODE_CLASS_MAPPINGS)
+    _FLUID_DISPLAY.update(_fluid.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _fexc:  # pragma: no cover
+    _c2c_rec_fail(
+        "fluid_shots_audio", _fexc,
+        hint="Fluid Shot Encoder/Decoder + Audio Reverser; needs cv2 for optical flow.",
+        group="nodes",
+    )
+
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
+    **_FLUID_MAPPINGS,
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
@@ -524,6 +538,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
+    **_FLUID_DISPLAY,
     **_MEC_DISPLAY,
     **_MA_DISPLAY,
     **_PAINT_DISPLAY,
