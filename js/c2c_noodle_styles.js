@@ -48,6 +48,312 @@ const SETTING_ID = "mec.noodle.style";
 // Styles that need a continuous (throttled ~20fps) redraw to animate. Static
 // styles (neon-tube, gradient, minecraft voxel trail, spider-web figure) are
 // intentionally absent so they don't force idle repaints.
+// ── UNIQUE per-skin animation overlays ─────────────────────────────────
+// Every animated skin gets its OWN signature motion (user spec 2026-07-15),
+// drawn as a light overlay AFTER the skin base render. Positions sample
+// _bezierAt, so overlays follow whatever pipe SHAPE is active. All overlays
+// ride the existing 20fps dirty-throttle and pause when the tab is hidden.
+function _apt(t, a, b) {
+    const [c1, c2] = _bezierPoints(a, b);
+    return _bezierAt(Math.max(0, Math.min(1, t)), a, c1, c2, b);
+}
+const _TAU = Math.PI * 2;
+function _aDot(ctx, p, r, col, glow) {
+    ctx.save(); if (glow) { ctx.shadowColor = col; ctx.shadowBlur = glow; }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, _TAU); ctx.fill(); ctx.restore();
+}
+function _aRing(ctx, p, r, col, w, glow) {
+    ctx.save(); if (glow) { ctx.shadowColor = col; ctx.shadowBlur = glow; }
+    ctx.strokeStyle = col; ctx.lineWidth = w || 2;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, _TAU); ctx.stroke(); ctx.restore();
+}
+function _aGlyph(ctx, p, txt, size, col, rot) {
+    ctx.save(); ctx.translate(p[0], p[1]); if (rot) ctx.rotate(rot);
+    ctx.fillStyle = col; ctx.font = size + "px monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(txt, 0, 0); ctx.restore();
+}
+// Identity-disc: a ring with a bright rim + dark core (tron).
+function _aDisc(ctx, p, r, col) {
+    ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 10;
+    ctx.strokeStyle = col; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, _TAU); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.fillStyle = "rgba(10,12,18,0.9)";
+    ctx.beginPath(); ctx.arc(p[0], p[1], r - 2.5, 0, _TAU); ctx.fill(); ctx.restore();
+}
+const _ANIM_OVERLAYS = {
+    "tron": (ctx, a, b, col, now) => {           // red & blue identity discs fly, clash white
+        const ph = (now / 1400) % 1;
+        const pr = _apt(ph * 0.5, a, b), pb = _apt(1 - ph * 0.5, a, b);
+        _aDisc(ctx, pr, 6, "#ff3b30"); _aDisc(ctx, pb, 6, "#4da6ff");
+        if (ph > 0.9) { const m = _apt(0.5, a, b); _aRing(ctx, m, 6 + (ph - 0.9) * 90, "#ffffff", 2.5, 14); }
+    },
+    "matrix": (ctx, a, b, col, now) => {         // glyphs rain OFF the wire
+        for (let i = 0; i < 5; i++) {
+            const t = (i * 0.19 + 0.08), p = _apt(t, a, b);
+            const drop = ((now / 700) + i * 0.37) % 1;
+            _aGlyph(ctx, [p[0], p[1] + drop * 26], "01"[i % 2], 9, "rgba(57,255,20," + (1 - drop) + ")");
+        }
+    },
+    "pacman": (ctx, a, b, col, now) => {         // ghosts chase the pac
+        const ph = (now / 1600) % 1;
+        for (const gc of [[0.10, "#ff4d4d"], [0.18, "#4dc3ff"]]) {
+            const p = _apt(ph - gc[0], a, b);
+            ctx.save(); ctx.fillStyle = gc[1]; ctx.beginPath();
+            ctx.arc(p[0], p[1] - 1, 5, Math.PI, 0);
+            ctx.lineTo(p[0] + 5, p[1] + 4); ctx.lineTo(p[0] - 5, p[1] + 4); ctx.closePath(); ctx.fill();
+            ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(p[0] - 2, p[1] - 2, 1.4, 0, _TAU); ctx.arc(p[0] + 2, p[1] - 2, 1.4, 0, _TAU); ctx.fill();
+            ctx.restore();
+        }
+    },
+    "sonic": (ctx, a, b, col, now) => {          // gold rings pop + spin along the run
+        for (let i = 0; i < 3; i++) {
+            const t = ((now / 1100) + i * 0.33) % 1, p = _apt(t, a, b);
+            const sx = Math.abs(Math.cos(now / 180 + i));
+            ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(Math.max(0.15, sx), 1);
+            _aRing(ctx, [0, 0], 5.5, "#ffd54a", 2.5, 8); ctx.restore();
+        }
+    },
+    "portal": (ctx, a, b, col, now) => {         // dot enters orange portal, exits blue
+        const pA = _apt(0.22, a, b), pB = _apt(0.78, a, b);
+        const ell = (p, c) => { ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(0.45, 1);
+            _aRing(ctx, [0, 0], 9, c, 3, 10); ctx.restore(); };
+        ell(pA, "#ff9f1c"); ell(pB, "#4da6ff");
+        const ph = (now / 1300) % 1;
+        if (ph < 0.4) _aDot(ctx, _apt(ph * 0.55, a, b), 3.5, "#fff", 6);
+        else if (ph > 0.6) _aDot(ctx, _apt(0.78 + (ph - 0.6) * 0.55, a, b), 3.5, "#fff", 6);
+    },
+    "lightning": (ctx, a, b, col, now) => {      // side-forks crackle off the bolt
+        const seed = Math.floor(now / 160);
+        for (let i = 0; i < 2; i++) {
+            const t = (((seed * 37 + i * 53) % 89) / 89), p = _apt(t, a, b);
+            const ang = ((seed * 61 + i * 97) % 360) / 180 * Math.PI, L = 10 + ((seed + i) % 3) * 5;
+            ctx.save(); ctx.strokeStyle = "#e8f4ff"; ctx.lineWidth = 1.2; ctx.shadowColor = "#7cc4ff"; ctx.shadowBlur = 8;
+            ctx.beginPath(); ctx.moveTo(p[0], p[1]);
+            ctx.lineTo(p[0] + Math.cos(ang) * L * 0.6, p[1] + Math.sin(ang) * L * 0.6);
+            ctx.lineTo(p[0] + Math.cos(ang + 0.5) * L, p[1] + Math.sin(ang + 0.5) * L); ctx.stroke(); ctx.restore();
+        }
+    },
+    "heartbeat": (ctx, a, b, col, now) => {      // an ECG blip sweeps the line
+        const t = (now / 1500) % 1, p = _apt(t, a, b);
+        ctx.save(); ctx.strokeStyle = "#ff4d6d"; ctx.lineWidth = 2; ctx.shadowColor = "#ff4d6d"; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.moveTo(p[0] - 10, p[1]);
+        ctx.lineTo(p[0] - 4, p[1]); ctx.lineTo(p[0] - 1, p[1] - 9); ctx.lineTo(p[0] + 2, p[1] + 7); ctx.lineTo(p[0] + 5, p[1]); ctx.lineTo(p[0] + 11, p[1]);
+        ctx.stroke(); ctx.restore();
+    },
+    "dna-helix": (ctx, a, b, col, now) => {      // base-pair rungs light up in sequence
+        const idx = Math.floor(now / 260) % 5;
+        const p = _apt(0.14 + idx * 0.18, a, b);
+        _aRing(ctx, p, 6, "#7cf5d4", 1.8, 9);
+    },
+    "rainbow-flow": (ctx, a, b, col, now) => {   // white comet rides the rainbow
+        const t = (now / 1000) % 1, p = _apt(t, a, b);
+        _aDot(ctx, p, 3.2, "#ffffff", 10);
+        _aDot(ctx, _apt(t - 0.04, a, b), 2.2, "rgba(255,255,255,0.5)", 0);
+    },
+    "dashed-march": (ctx, a, b, col, now) => {   // counter-marching ticks both ways
+        const t1 = (now / 900) % 1, t2 = 1 - ((now / 1300) % 1);
+        _aGlyph(ctx, _apt(t1, a, b), ">", 11, col);
+        _aGlyph(ctx, _apt(t2, a, b), "<", 11, "rgba(200,210,235,0.8)");
+    },
+    "pulse-packet": (ctx, a, b, col, now) => {   // packet drops expanding data ripples
+        const t = (now / 1200) % 1, p = _apt(t, a, b);
+        const rip = (now / 400) % 1;
+        _aRing(ctx, p, 4 + rip * 10, "rgba(120,200,255," + (1 - rip) + ")", 1.5, 0);
+    },
+    "rgb-spectrum": (ctx, a, b, col, now) => {   // R/G/B convoy in file
+        const base = (now / 1100) % 1;
+        for (const co of [["#ff3b30", 0], ["#34c759", 0.06], ["#4da6ff", 0.12]])
+            _aDot(ctx, _apt(base - co[1], a, b), 2.6, co[0], 7);
+    },
+    "fire": (ctx, a, b, col, now) => {           // embers rise off the flame
+        for (let i = 0; i < 4; i++) {
+            const t = (i * 0.23 + 0.1), p = _apt(t, a, b);
+            const rise = ((now / 800) + i * 0.41) % 1;
+            _aDot(ctx, [p[0] + Math.sin(rise * 9 + i) * 3, p[1] - rise * 20], 1.8, "rgba(255," + (140 + i * 20) + ",40," + (1 - rise) + ")", 0);
+        }
+    },
+    "comet": (ctx, a, b, col, now) => {          // meteor + spark shards
+        const t = (now / 1000) % 1, p = _apt(t, a, b);
+        _aDot(ctx, p, 3.5, "#fff8e1", 12);
+        for (let i = 1; i <= 3; i++) _aDot(ctx, _apt(t - i * 0.03, a, b), 2.5 - i * 0.6, "rgba(255,220,150," + (0.8 - i * 0.22) + ")", 0);
+    },
+    "candy": (ctx, a, b, col, now) => {          // pastel gumballs bobbing
+        const cols = ["#ffb3d9", "#b3e5ff", "#fff3b0"];
+        for (let i = 0; i < 3; i++) {
+            const t = ((now / 1600) + i * 0.33) % 1, p = _apt(t, a, b);
+            _aDot(ctx, [p[0], p[1] + Math.sin(now / 200 + i * 2) * 3], 3, cols[i], 5);
+        }
+    },
+    "aurora": (ctx, a, b, col, now) => {         // soft curtains shimmer above
+        for (let i = 0; i < 3; i++) {
+            const t = 0.2 + i * 0.3, p = _apt(t, a, b);
+            const h = 8 + Math.sin(now / 500 + i * 1.7) * 5;
+            ctx.save(); ctx.strokeStyle = "rgba(" + (120 + i * 40) + ",255," + (200 - i * 30) + ",0.35)"; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0], p[1] - h); ctx.stroke(); ctx.restore();
+        }
+    },
+    "hyperspace": (ctx, a, b, col, now) => {     // star-streaks overtake at warp
+        for (let i = 0; i < 3; i++) {
+            const t = ((now / 500) + i * 0.33) % 1;
+            const p = _apt(t, a, b), q = _apt(t - 0.06, a, b);
+            ctx.save(); ctx.strokeStyle = "rgba(220,235,255," + (0.9 - i * 0.25) + ")"; ctx.lineWidth = 1.6;
+            ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); ctx.restore();
+        }
+    },
+    "upside-down": (ctx, a, b, col, now) => {    // spores drift down, flashlight flickers
+        for (let i = 0; i < 4; i++) {
+            const t = i * 0.23 + 0.1, p = _apt(t, a, b);
+            const dr = ((now / 1400) + i * 0.31) % 1;
+            _aDot(ctx, [p[0] + Math.sin(dr * 5 + i) * 4, p[1] + dr * 18], 1.5, "rgba(220,200,255," + (0.7 - dr * 0.6) + ")", 0);
+        }
+        if (Math.floor(now / 90) % 7 === 0) _aDot(ctx, _apt(0.5, a, b), 4, "rgba(255,240,200,0.85)", 12);
+    },
+    "ki-blast": (ctx, a, b, col, now) => {       // charge at source, then RELEASE
+        const ph = (now / 1600) % 1;
+        if (ph < 0.45) _aRing(ctx, _apt(0.05, a, b), 3 + ph * 16, "rgba(120,220,255," + (0.9 - ph) + ")", 2, 10);
+        else _aDot(ctx, _apt((ph - 0.45) / 0.55, a, b), 4.5, "#9bf6ff", 14);
+    },
+    "rainbow-road": (ctx, a, b, col, now) => {   // star sparkle convoy
+        for (let i = 0; i < 2; i++) {
+            const t = ((now / 1400) + i * 0.5) % 1, p = _apt(t, a, b);
+            _aGlyph(ctx, p, "*", 12, ["#fff34d", "#ffffff"][i], now / 300 + i);
+        }
+    },
+    "pokemon": (ctx, a, b, col, now) => {        // pokeball rolls the wire
+        const t = (now / 1500) % 1, p = _apt(t, a, b), rot = now / 150;
+        ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(rot);
+        ctx.fillStyle = "#ff3b30"; ctx.beginPath(); ctx.arc(0, 0, 5, Math.PI, 0); ctx.fill();
+        ctx.fillStyle = "#f5f5f5"; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI); ctx.fill();
+        ctx.strokeStyle = "#1a1a22"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.stroke();
+        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, 1.6, 0, _TAU); ctx.fill(); ctx.stroke();
+        ctx.restore();
+    },
+    "zelda": (ctx, a, b, col, now) => {          // triforce glints
+        const t = (now / 1800) % 1, p = _apt(t, a, b);
+        const tri = (x, y, r) => { ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.closePath(); ctx.fill(); };
+        ctx.save(); ctx.fillStyle = "#ffd54a"; ctx.shadowColor = "#ffd54a"; ctx.shadowBlur = 8;
+        tri(p[0], p[1] - 3, 3); tri(p[0] - 3, p[1] + 3, 3); tri(p[0] + 3, p[1] + 3, 3); ctx.restore();
+    },
+    "halo": (ctx, a, b, col, now) => {           // plasma bolt with heat trail
+        const t = (now / 800) % 1, p = _apt(t, a, b);
+        _aDot(ctx, p, 3.4, "#7cf5ff", 12);
+        _aDot(ctx, _apt(t - 0.05, a, b), 2.2, "rgba(124,245,255,0.4)", 0);
+    },
+    "among-us": (ctx, a, b, col, now) => {       // impostor chases crew bean
+        const ph = (now / 1700) % 1;
+        const bean = (p, c) => { ctx.save(); ctx.fillStyle = c;
+            ctx.beginPath(); ctx.ellipse(p[0], p[1], 4, 5, 0, 0, _TAU); ctx.fill();
+            ctx.fillStyle = "#aee3f2"; ctx.beginPath(); ctx.ellipse(p[0] + 1.5, p[1] - 1.5, 2.2, 1.4, 0, 0, _TAU); ctx.fill(); ctx.restore(); };
+        bean(_apt(ph, a, b), "#4dc3ff"); bean(_apt(ph - 0.12, a, b), "#ff4d4d");
+    },
+    "avatar-bending": (ctx, a, b, col, now) => { // four elements orbit the flow
+        const t = (now / 1600) % 1, p = _apt(t, a, b);
+        const cols = ["#7cc4ff", "#ff9f1c", "#a0f0a0", "#e8e4d8"];
+        for (let i = 0; i < 4; i++) {
+            const ang = now / 400 + i * Math.PI / 2;
+            _aDot(ctx, [p[0] + Math.cos(ang) * 8, p[1] + Math.sin(ang) * 8], 2, cols[i], 5);
+        }
+    },
+    "john-wick": (ctx, a, b, col, now) => {      // tracer round + muzzle flash
+        const ph = (now / 700) % 1;
+        if (ph < 0.12) _aDot(ctx, _apt(0.02, a, b), 4, "rgba(255,240,180,0.9)", 12);
+        const p = _apt(ph, a, b), q = _apt(ph - 0.04, a, b);
+        ctx.save(); ctx.strokeStyle = "#ffe9b0"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); ctx.restore();
+    },
+    "ghostbusters": (ctx, a, b, col, now) => {   // proton stream wiggle
+        ctx.save(); ctx.strokeStyle = "rgba(255,159,28,0.85)"; ctx.lineWidth = 1.6;
+        ctx.shadowColor = "#ff9f1c"; ctx.shadowBlur = 6;
+        ctx.beginPath();
+        for (let i = 0; i <= 16; i++) {
+            const t = i / 16, p = _apt(t, a, b);
+            const off = Math.sin(t * 22 + now / 90) * 4 * Math.sin(t * Math.PI);
+            if (i === 0) ctx.moveTo(p[0], p[1] + off); else ctx.lineTo(p[0], p[1] + off);
+        }
+        ctx.stroke(); ctx.restore();
+    },
+    "jurassic": (ctx, a, b, col, now) => {       // footsteps stamp along, tremor
+        const stepIdx = Math.floor(now / 500) % 4;
+        for (let i = 0; i <= stepIdx; i++) {
+            const p = _apt(0.15 + i * 0.22, a, b);
+            _aGlyph(ctx, [p[0], p[1] + (i % 2 ? 5 : -5)], "●", 6, "rgba(160,150,120,0.7)");
+        }
+    },
+    "gta": (ctx, a, b, col, now) => {            // pursuit lights strobe the wire
+        const t = (now / 1200) % 1, p = _apt(t, a, b);
+        const red = Math.floor(now / 180) % 2 === 0;
+        _aDot(ctx, [p[0] - 4, p[1]], 3, red ? "#ff3b30" : "rgba(255,59,48,0.25)", red ? 10 : 0);
+        _aDot(ctx, [p[0] + 4, p[1]], 3, red ? "rgba(77,166,255,0.25)" : "#4da6ff", red ? 0 : 10);
+    },
+    "space-invaders": (ctx, a, b, col, now) => { // invader steps down, zap shoots up
+        const step = Math.floor(now / 400) % 8;
+        const p = _apt(0.12 + step * 0.1, a, b);
+        _aGlyph(ctx, [p[0], p[1] - 6], "▓", 8, "#a6e3a1");
+        const zt = (now / 600) % 1, zp = _apt(1 - zt * 0.9, a, b);
+        ctx.save(); ctx.strokeStyle = "#e8f4ff"; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(zp[0], zp[1] + 6); ctx.lineTo(zp[0], zp[1] - 2); ctx.stroke(); ctx.restore();
+    },
+    "tetris": (ctx, a, b, col, now) => {         // tetromino cells tumble along
+        const cols = ["#4dd2ff", "#ffd24d", "#c77dff", "#8cff66"];
+        for (let i = 0; i < 3; i++) {
+            const t = ((now / 1800) + i * 0.33) % 1, p = _apt(t, a, b);
+            ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate((now / 500 + i) % _TAU);
+            ctx.fillStyle = cols[(i + Math.floor(now / 900)) % 4];
+            ctx.fillRect(-3, -3, 6, 6);
+            ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1; ctx.strokeRect(-3, -3, 6, 6);
+            ctx.restore();
+        }
+    },
+    "street-fighter": (ctx, a, b, col, now) => { // hadouken orb, burst on arrival
+        const ph = (now / 1100) % 1;
+        const p = _apt(ph, a, b);
+        _aDot(ctx, p, 4.5, "#7cc4ff", 12);
+        _aDot(ctx, _apt(ph - 0.05, a, b), 3, "rgba(124,196,255,0.45)", 0);
+        if (ph > 0.93) _aRing(ctx, _apt(1, a, b), (ph - 0.93) * 120, "rgba(180,220,255,0.8)", 2, 10);
+    },
+    "mega-man": (ctx, a, b, col, now) => {       // triple buster pellets
+        const base = (now / 900) % 1;
+        for (let i = 0; i < 3; i++) {
+            const p = _apt(base - i * 0.07, a, b);
+            _aDot(ctx, p, 2.6 - i * 0.5, "#9bf6ff", 8);
+        }
+    },
+    "mortal-kombat": (ctx, a, b, col, now) => {  // dragon-fire pulse sweeps + flash
+        const ph = (now / 1400) % 1, p = _apt(ph, a, b);
+        _aDot(ctx, p, 3.5, "#ffd24d", 10);
+        if (ph > 0.9) _aGlyph(ctx, _apt(0.5, a, b), "✦", 14, "rgba(255,210,77," + ((ph - 0.9) * 10) + ")");
+    },
+    "metroid": (ctx, a, b, col, now) => {        // morph ball rolls with band highlight
+        const t = (now / 1600) % 1, p = _apt(t, a, b), rot = now / 130;
+        ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(rot);
+        ctx.fillStyle = "#ff9f1c"; ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, _TAU); ctx.fill();
+        ctx.strokeStyle = "#7a3c00"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-4.5, 0); ctx.lineTo(4.5, 0); ctx.stroke();
+        ctx.restore();
+    },
+    "doom": (ctx, a, b, col, now) => {           // fireball + smoke puffs
+        const t = (now / 900) % 1, p = _apt(t, a, b);
+        _aDot(ctx, p, 3.6, "#ff6b1c", 12);
+        for (let i = 1; i <= 2; i++) {
+            const q = _apt(t - i * 0.05, a, b);
+            _aDot(ctx, [q[0], q[1] - i * 2], 2, "rgba(120,110,100," + (0.5 - i * 0.18) + ")", 0);
+        }
+    },
+    "elden-ring": (ctx, a, b, col, now) => {     // grace wisp drifts, slow flicker
+        const t = (now / 2600) % 1, p = _apt(t, a, b);
+        const fl = 0.6 + 0.4 * Math.sin(now / 220);
+        _aDot(ctx, [p[0], p[1] + Math.sin(now / 380) * 3], 3, "rgba(255,225,150," + fl + ")", 14);
+    },
+    "galaga": (ctx, a, b, col, now) => {         // alien zigzags, ship missile intercepts
+        const t = (now / 1500) % 1;
+        const p = _apt(t, a, b);
+        _aGlyph(ctx, [p[0] + Math.sin(now / 160) * 5, p[1]], "¤", 9, "#ff77c8");
+        const mt = (now / 700) % 1, m = _apt(1 - mt, a, b);
+        _aDot(ctx, m, 1.8, "#e8f4ff", 5);
+    },
+};
+
 const _ANIMATED = new Set([
     "dna-helix", "rainbow-flow", "dashed-march", "lightning", "pulse-packet",
     "rgb-spectrum", "fire", "comet", "candy", "aurora", "heartbeat",
@@ -97,7 +403,85 @@ function _typeColor(linkType) {
     return _safeColor("var(--c2c-lavender)");
 }
 
+// ── Pipe SHAPE (separate setting from the visual skin — any skin rides any
+// shape). "auto" = dead-straight when the nodes are roughly aligned, gentle
+// spline when offset (the Nuke read). angular/diag45 are piecewise polylines:
+// skins that SAMPLE via _bezierAt follow them exactly; skins that stroke raw
+// bezierCurveTo(cp1,cp2) render the rounded approximation of the same elbow.
+const SHAPE_SETTING_ID = "mec.noodle.shape";
+const SHAPES = ["auto", "spline", "straight", "angular", "rounded", "diag45", "arc", "s-curve"];
+let _shapeCache = "auto";
+function _refreshShapeCache() {
+    try {
+        const v = app.ui.settings.getSettingValue(SHAPE_SETTING_ID);
+        _shapeCache = (v === undefined || v === null) ? "auto" : v;
+    } catch (_) { _shapeCache = "auto"; }
+}
+function _currentShape() { return _shapeCache; }
+const _lerp2 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+function _alignedStraight(a, b) {
+    const dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]);
+    return (dx >= dy ? dy : dx) <= 40;     // near-horizontal OR near-vertical
+}
+// Elbow/diag waypoints for the piecewise shapes.
+function _shapeWaypoints(a, b, shape) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const horiz = Math.abs(dx) >= Math.abs(dy);
+    if (shape === "angular") {
+        return horiz
+            ? [a, [a[0] + dx / 2, a[1]], [a[0] + dx / 2, b[1]], b]
+            : [a, [a[0], a[1] + dy / 2], [b[0], a[1] + dy / 2], b];
+    }
+    // diag45 (Houdini): 45° run first, then straight to the target.
+    const sx = Math.sign(dx) || 1, sy = Math.sign(dy) || 1;
+    if (horiz) { const e = [a[0] + sx * Math.abs(dy), b[1]]; return [a, e, b]; }
+    const e = [b[0], a[1] + sy * Math.abs(dx)]; return [a, e, b];
+}
+function _polyAt(t, pts) {
+    let total = 0; const seg = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+        const l = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+        seg.push(l); total += l;
+    }
+    if (total <= 0) return pts[0].slice();
+    let d = t * total;
+    for (let i = 0; i < seg.length; i++) {
+        if (d <= seg[i] || i === seg.length - 1) {
+            return _lerp2(pts[i], pts[i + 1], seg[i] ? d / seg[i] : 0);
+        }
+        d -= seg[i];
+    }
+    return pts[pts.length - 1].slice();
+}
+
 function _bezierPoints(a, b) {
+    const shape = _currentShape();
+    if (shape === "straight" || (shape === "auto" && _alignedStraight(a, b))) {
+        return [_lerp2(a, b, 1 / 3), _lerp2(a, b, 2 / 3)];
+    }
+    if (shape === "rounded" || shape === "angular" || shape === "diag45") {
+        // Elbow tangents (angular/diag45 sampled exactly in _bezierAt; raw
+        // bezier consumers get the rounded approximation of the same elbow).
+        const w = _shapeWaypoints(a, b, shape === "diag45" ? "diag45" : "angular");
+        return [w[1].slice(), w[w.length - 2].slice()];
+    }
+    if (shape === "arc") {
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        const n = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
+        const off = Math.min(len * 0.28, 120);
+        const c1 = _lerp2(a, b, 0.25), c2 = _lerp2(a, b, 0.75);
+        return [[c1[0] + n[0] * off, c1[1] + n[1] * off], [c2[0] + n[0] * off, c2[1] + n[1] * off]];
+    }
+    if (shape === "s-curve") {
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            const d = Math.max(30, Math.abs(dx) * 0.9) * (dx >= 0 ? 1 : -1);
+            return [[a[0] + d, a[1]], [b[0] - d, b[1]]];
+        }
+        const d = Math.max(30, Math.abs(dy) * 0.9) * (dy >= 0 ? 1 : -1);
+        return [[a[0], a[1] + d], [b[0], b[1] - d]];
+    }
+    // spline (and auto when offset) — the classic geometry-aware tangents.
     // Geometry-aware control points. The classic form (cp1 = a+right, cp2 =
     // b-left) only reads well for normal left→right flow; when the endpoints are
     // vertically stacked or the target sits to the LEFT (e.g. with floating
@@ -115,6 +499,10 @@ function _bezierPoints(a, b) {
     return [[a[0], a[1] + d], [b[0], b[1] - d]];
 }
 function _bezierAt(t, a, cp1, cp2, b) {
+    const _sh = _currentShape();
+    if (_sh === "angular" || _sh === "diag45") {
+        return _polyAt(t, _shapeWaypoints(a, b, _sh));
+    }
     const u = 1 - t;
     const x = u*u*u*a[0] + 3*u*u*t*cp1[0] + 3*u*t*t*cp2[0] + t*t*t*b[0];
     const y = u*u*u*a[1] + 3*u*u*t*cp1[1] + 3*u*t*t*cp2[1] + t*t*t*b[1];
@@ -1260,9 +1648,51 @@ function _installRenderPatch() {
     LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines) {
         const style = _currentStyle();
         if (style === "default" || !_RENDER[style]) {
-            const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
-            if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
-            return _r;
+            // Default skin: core renders its spline — UNLESS a custom pipe
+            // SHAPE is active, in which case we stroke the shape ourselves
+            // (same colour/width as core would use).
+            const _sh = _currentShape();
+            const _core = _sh === "spline" || (_sh === "auto" && !_alignedStraight(a, b));
+            if (_core) {
+                const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+                if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
+                return _r;
+            }
+            try {
+                const linkType = link?.type || "";
+                const effColor = _safeColor(color) || _typeColor(linkType);
+                ctx.save();
+                ctx.strokeStyle = effColor;
+                ctx.lineWidth = this.connections_width || 3;
+                ctx.lineJoin = "round"; ctx.lineCap = "round";
+                ctx.beginPath();
+                if (_sh === "angular" || _sh === "diag45") {
+                    const pts = _shapeWaypoints(a, b, _sh);
+                    ctx.moveTo(pts[0][0], pts[0][1]);
+                    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+                } else {
+                    const [c1, c2] = _bezierPoints(a, b);
+                    ctx.moveTo(a[0], a[1]);
+                    ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], b[0], b[1]);
+                }
+                ctx.stroke();
+                ctx.restore();
+                if (link) {
+                    const mid = _bezierAt(0.5, a, ..._bezierPoints(a, b), b);
+                    if (!link._pos) link._pos = new Float32Array(2);
+                    link._pos[0] = mid[0]; link._pos[1] = mid[1];
+                    ctx.save();
+                    ctx.beginPath(); ctx.arc(mid[0], mid[1], 5, 0, Math.PI * 2);
+                    ctx.fillStyle = effColor; ctx.globalAlpha = 0.95; ctx.fill();
+                    ctx.globalAlpha = 1; ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = "rgba(20,20,28,0.65)"; ctx.stroke();
+                    ctx.restore();
+                }
+                if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
+                return;
+            } catch (_e2) {
+                return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+            }
         }
         try {
             const linkType = link?.type || "";
@@ -1270,6 +1700,9 @@ function _installRenderPatch() {
             // CSS var() which would render the noodle black on canvas.
             const effColor = _safeColor(color) || _typeColor(linkType);
             _RENDER[style](ctx, a, b, effColor, linkType);
+            // Unique per-skin animation overlay (shape-aware via _bezierAt).
+            const _ov = _ANIM_OVERLAYS[style];
+            if (_ov && !document.hidden) { try { _ov(ctx, a, b, effColor, performance.now()); } catch (_) {} }
             // ── Keep "the dot" working on EVERY custom noodle ──────────────
             // The native renderLink stores link._pos (the bezier centre) and
             // ComfyUI's separate link-marker pass draws + hit-tests the dot
@@ -1362,6 +1795,18 @@ if (!LITE) app.registerExtension({
             onChange: (v) => { _styleCache = (v === undefined || v === null) ? "default" : v; },
         },
         {
+            id: SHAPE_SETTING_ID,
+            name: "Pipe shape",
+            tooltip: "The PATH the wires take — independent of the visual style, any skin rides "
+                   + "any shape. auto = dead straight when nodes are aligned, gentle curve when "
+                   + "offset (Nuke-like). angular = 90° elbows, diag45 = Houdini diagonals, "
+                   + "arc = circular bow, s-curve = deep ease.",
+            type: "combo",
+            options: SHAPES,
+            defaultValue: "auto",
+            onChange: (v) => { _shapeCache = (v === undefined || v === null) ? "auto" : v; try { app.graph?.setDirtyCanvas(true, true); } catch (_) {} },
+        },
+        {
             id: FX_SETTING_ID,
             name: "Noodle completion FX",
             tooltip:
@@ -1374,6 +1819,7 @@ if (!LITE) app.registerExtension({
     ],
     async setup() {
         _refreshStyleCache();   // seed the per-frame style cache once at startup
+        _refreshShapeCache();   // seed the pipe-shape cache too
         // Game-sprite completion animation: ride every wire when a run finishes.
         try { api.addEventListener("execution_success", () => { try { _triggerFxAnim(); } catch (_) {} }); } catch (_) {}
         // LiteGraph is loaded before extensions, but be defensive.

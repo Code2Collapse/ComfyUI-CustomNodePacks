@@ -60,125 +60,55 @@ function slideAlongDotEdge(b, dotPt, tx, ty) {
     const OUT = 4;          // push exit just outside the border so it isn't
                             // hidden under the node's own edge stroke
     const CORNER = 10;      // keep exits off the exact corners
-    const dx = tx - b.cx, dy = ty - b.cy;
+    // Ray FROM THE SLOT (not the node centre — centre-rays detached the wire
+    // from the slot on tall nodes even in plain side-by-side layouts).
+    const sx = Math.max(b.x, Math.min(b.x + b.w, dotPt[0]));
+    const sy = Math.max(b.y, Math.min(b.y + b.h, dotPt[1]));
+    const dx = tx - sx, dy = ty - sy;
     if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) return null;
-    const hw = b.w / 2, hh = b.h / 2;
-    // Ray–box: which edge does (cx,cy)→(tx,ty) cross first?
-    const txr = dx !== 0 ? hw / Math.abs(dx) : Infinity;
-    const tyr = dy !== 0 ? hh / Math.abs(dy) : Infinity;
+    // Which edge does the slot live on? If the target lies on the slot's OWN
+    // side, the wire attaches at the slot exactly like classic ComfyUI — the
+    // 360° float only kicks in when the target is genuinely on another side.
+    const dl = Math.abs(sx - b.x), dr = Math.abs(b.x + b.w - sx);
+    const dt = Math.abs(sy - b.y), db = Math.abs(b.y + b.h - sy);
+    const m = Math.min(dl, dr, dt, db);
+    const n = m === dr ? [1, 0] : m === dl ? [-1, 0] : m === dt ? [0, -1] : [0, 1];
+    if (n[0] * dx + n[1] * dy >= -1e-6) return null;   // heading outward → classic
+    // Ray marches INTO the box: find where it exits (slab method).
+    const txr = dx > 0 ? (b.x + b.w - sx) / dx : dx < 0 ? (b.x - sx) / dx : Infinity;
+    const tyr = dy > 0 ? (b.y + b.h - sy) / dy : dy < 0 ? (b.y - sy) / dy : Infinity;
+    const t = Math.min(txr, tyr);
+    if (!isFinite(t) || t <= 1e-6) return null;
     const clampY = (y) => Math.max(b.y + CORNER, Math.min(b.y + b.h - CORNER, y));
     const clampX = (x) => Math.max(b.x + CORNER, Math.min(b.x + b.w - CORNER, x));
     if (txr <= tyr) {
-        // crosses a LEFT/RIGHT edge
         const right = dx > 0;
-        const x = right ? b.x + b.w + OUT : b.x - OUT;
-        const y = clampY(b.cy + dy * txr);
-        return { pt: [x, y], dir: right ? LiteGraph.RIGHT : LiteGraph.LEFT };
+        return { pt: [right ? b.x + b.w + OUT : b.x - OUT, clampY(sy + dy * t)],
+                 dir: right ? LiteGraph.RIGHT : LiteGraph.LEFT };
     }
-    // crosses a TOP/BOTTOM edge
     const down = dy > 0;
-    const y = down ? b.y + b.h + OUT : b.y - OUT;
-    const x = clampX(b.cx + dx * tyr);
-    return { pt: [x, y], dir: down ? LiteGraph.DOWN : LiteGraph.UP };
+    return { pt: [clampX(sx + dx * t), down ? b.y + b.h + OUT : b.y - OUT],
+             dir: down ? LiteGraph.DOWN : LiteGraph.UP };
 }
 
-// A DISTINCT colour per connection (stable hash of the link id). Both slots of a
-// wire get this SAME colour, so you can pair them at a glance — "this slot
-// connects to that slot" (match the colour) — even under a rainbow noodle. Two
-// wires from the same output get DIFFERENT colours (different ids).
-const PALETTE = [
-    "#ff5d73", "#4dd2ff", "#ffd24d", "#8cff66", "#c77dff",
-    "#ff9f1c", "#2ec4b6", "#ff77c8", "#7cc4ff", "#f15bb5",
-    "#a0f0a0", "#ffe14d",
-];
-function distinctLinkColor(link) {
-    const id = (link && (link.id | 0)) || 0;
-    return PALETTE[((id % PALETTE.length) + PALETTE.length) % PALETTE.length];
+// Slot DATA-TYPE colour — ComfyUI's standard palette (IMAGE blue, MASK green,
+// LATENT pink, ...), so the pipe endpoint always wears its slot's colour.
+function slotTypeColor(canvas, link) {
+    const t = link && link.type;
+    return (canvas.default_connection_color_byType && canvas.default_connection_color_byType[t])
+        || (window.LGraphCanvas && LGraphCanvas.link_type_colors && LGraphCanvas.link_type_colors[t])
+        || (canvas.default_link_color) || "#9aa4b8";
 }
 
-// Draw a colour ring ON a real slot (hit-testing untouched). Output = filled,
-// input = hollow, so direction reads too.
-function drawSlotRing(ctx, pt, color, filled) {
+// The pipe's attachment dot: a small filled disc at the perimeter exit —
+// visually the connector riding the edge (real slots/hit-testing untouched).
+function drawEndpointDot(ctx, pt, color) {
     ctx.save();
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 4;
-    ctx.globalAlpha = 1;
-    // bright ring so the slot clearly "wears" its connection colour
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(pt[0], pt[1], filled ? 5 : 5.5, 0, Math.PI * 2); ctx.stroke();
-    if (filled) {   // output = solid centre, input = hollow → direction reads too
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(pt[0], pt[1], 2.2, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
-}
-
-// Draw the "which-dot" leader: a short stub from the REAL port dot (where the
-// slot actually is, hit-testing untouched) to the floating perimeter exit, with
-// a filled dot at the slot end. This is the visual that answers the user's
-// "show which dot it's connected to".
-// Draw ONE "which-dot" leader: a short stub from the real port dot to the
-// floating perimeter exit, a filled anchor dot on the real port, and a hollow
-// ring at the floating exit. Drawn in a post-pass ON TOP of nodes (see the
-// drawFrontCanvas hook) — LiteGraph renders links UNDER node bodies, so an
-// inline leader from a right-edge dot to a bottom-edge exit got occluded by the
-// node and you couldn't see which dot the floating wire belonged to.
-// A SOLID, colour-matched connector from the real slot to the floating exit —
-// so the pipe stays visibly ATTACHED to its slot while it floats (Nuke-style).
-// The tether must never cross the node BODY — links render UNDER nodes, so a
-// straight slot→exit line gets occluded (e.g. right-edge slot, bottom exit).
-// Instead it hugs the perimeter: slot → its projection on the OUT-offset box →
-// around the corner(s), shorter way → exit. Always outside the border, always
-// visible, so the wire reads as firmly attached to its real slot.
-function drawTether(ctx, b, fromSlot, toExit, color) {
-    const OUT = 4;
-    const L = b.x - OUT, R = b.x + b.w + OUT, T = b.y - OUT, Bo = b.y + b.h + OUT;
-    const W = R - L, H = Bo - T, P = 2 * (W + H);
-    // param s (clockwise from top-left) for a point ON the offset box
-    const sOf = (x, y) => {
-        const dT = Math.abs(y - T), dR = Math.abs(x - R), dB = Math.abs(y - Bo), dL = Math.abs(x - L);
-        const m = Math.min(dT, dR, dB, dL);
-        if (m === dT) return (Math.max(L, Math.min(R, x)) - L);
-        if (m === dR) return W + (Math.max(T, Math.min(Bo, y)) - T);
-        if (m === dB) return W + H + (R - Math.max(L, Math.min(R, x)));
-        return W + H + W + (Bo - Math.max(T, Math.min(Bo, y)));
-    };
-    const xyOf = (s) => {
-        s = ((s % P) + P) % P;
-        if (s <= W) return [L + s, T];
-        if (s <= W + H) return [R, T + (s - W)];
-        if (s <= W + H + W) return [R - (s - W - H), Bo];
-        return [L, Bo - (s - W - H - W)];
-    };
-    const s1 = sOf(fromSlot[0], fromSlot[1]), s2 = sOf(toExit[0], toExit[1]);
-    let d = s2 - s1;
-    if (d > P / 2) d -= P; else if (d < -P / 2) d += P;   // shorter way around
-    const pts = [fromSlot, xyOf(s1)];
-    // corner s-values passed while walking from s1 to s1+d, in walk order
-    const hits = [];
-    for (const c of [0, W, W + H, W + H + W]) {
-        for (const k of [-1, 0, 1]) {                      // handle wrap
-            const cs = c + k * P;
-            if ((d >= 0 && cs > s1 + 0.5 && cs < s1 + d - 0.5) ||
-                (d < 0 && cs < s1 - 0.5 && cs > s1 + d + 0.5)) hits.push(cs);
-        }
-    }
-    hits.sort((a2, b2) => d >= 0 ? a2 - b2 : b2 - a2);
-    for (const cs of hits) pts.push(xyOf(cs));
-    pts.push(toExit);
-    ctx.save();
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 2;
-    ctx.globalAlpha = 0.95;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "rgba(12,12,16,0.8)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(pt[0], pt[1], 3.5, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
     ctx.restore();
 }
 
@@ -215,11 +145,12 @@ function install() {
                     //      colour (output = filled ring, input = hollow ring), even
                     //      under a rainbow noodle. The slots "change" per wire.
                     if (ctx && !disabled) {
-                        const col = distinctLinkColor(link);
-                        drawSlotRing(ctx, startPt, col, true);    // output slot
-                        drawSlotRing(ctx, endPt, col, false);     // input slot
-                        if (moved(startPt, a.pt)) drawTether(ctx, ba, startPt, a.pt, col);
-                        if (moved(endPt, b.pt))   drawTether(ctx, bb, endPt, b.pt, col);
+                        // Slot-TYPE colour (ComfyUI standard palette) — the dot at
+                        // the pipe's perimeter attachment "is" the slot, riding the
+                        // edge Nuke-style. Original slot dots stay untouched.
+                        const col = slotTypeColor(this, link);
+                        if (moved(startPt, a.pt)) drawEndpointDot(ctx, a.pt, col);
+                        if (moved(endPt, b.pt))   drawEndpointDot(ctx, b.pt, col);
                     }
                     startPt = a.pt; endPt = b.pt;
                     // Direction matches the dot's own edge now, so the bezier
@@ -228,6 +159,18 @@ function install() {
                 } catch (_) { /* fall back to fixed ports on any geometry hiccup */ }
             }
         }
+        // Shared pipe registry: the FINAL endpoints + dirs every renderer used
+        // this frame, keyed by link id. Consumed by the connected-highlight
+        // overlay (exact-path re-stroke) and the shape system. Registered even
+        // when floating is off, so consumers always have fresh geometry.
+        try {
+            if (link && link.id != null) {
+                (window.__C2C_PIPES || (window.__C2C_PIPES = new Map())).set(link.id, {
+                    a: [startPt[0], startPt[1]], b: [endPt[0], endPt[1]],
+                    da: startDir, db: endDir, type: link.type,
+                });
+            }
+        } catch (_) { /* registry is best-effort */ }
         return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
     };
 
