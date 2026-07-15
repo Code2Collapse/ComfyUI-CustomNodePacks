@@ -66,7 +66,7 @@ function install() {
                 // 1) subtle coloured glow UNDER the wire (slimmed down — was too
                 //    thick/big). Just enough to read, not a fat halo.
                 ctx.strokeStyle = col;
-                ctx.lineWidth = (this.connections_width || 3) + 3;
+                ctx.lineWidth = (this.connections_width || 3) + 1;
                 ctx.lineCap = "round";
                 ctx.shadowColor = col;
                 ctx.shadowBlur = 7;
@@ -80,7 +80,7 @@ function install() {
                 //    colour. Output = filled, input = hollow.
                 ctx.shadowBlur = 5;
                 ctx.globalAlpha = 1;
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 1.5;
                 ctx.fillStyle = col;
                 ctx.beginPath(); ctx.arc(a[0], a[1], 3.5, 0, Math.PI * 2); ctx.fill();
                 ctx.beginPath(); ctx.arc(b[0], b[1], 4, 0, Math.PI * 2); ctx.stroke();
