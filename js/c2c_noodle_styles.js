@@ -454,6 +454,20 @@ function _polyAt(t, pts) {
     return pts[pts.length - 1].slice();
 }
 
+// Complete a path (pen already at `a`) along the CURRENT pipe shape.
+// Piecewise shapes (angular/diag45) trace their exact waypoints — hard
+// corners — while curved shapes use the bezier. Lets every skin that used
+// to stroke a raw bezierCurveTo render the shape EXACTLY.
+function _curveTo(ctx, cp1, cp2, a, b) {
+    const sh = _currentShape();
+    if (sh === "angular" || sh === "diag45") {
+        const w = _shapeWaypoints(a, b, sh);
+        for (let i = 1; i < w.length; i++) ctx.lineTo(w[i][0], w[i][1]);
+        return;
+    }
+    _curveTo(ctx, cp1, cp2, a, b);
+}
+
 function _bezierPoints(a, b) {
     const shape = _currentShape();
     if (shape === "straight" || (shape === "auto" && _alignedStraight(a, b))) {
@@ -573,7 +587,7 @@ function _renderSpiderWeb(ctx, a, b /*, color */) {
     // core filament
     ctx.globalAlpha = 0.95; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     // two wavy rails
     ctx.lineWidth = 1.3; ctx.globalAlpha = 0.85;
     for (const side of [-1, 1]) {
@@ -638,12 +652,12 @@ function _renderLightsaber(ctx, a, b, color, linkType) {
     ctx.strokeStyle = glow; ctx.lineWidth = 8; ctx.globalAlpha = 0.45;
     ctx.shadowBlur = 16; ctx.shadowColor = glow;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     // White core
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     ctx.strokeStyle = C.white; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.restore();
 }
 function _renderDnaHelix(ctx, a, b, color) {
@@ -681,7 +695,7 @@ function _renderRainbowFlow(ctx, a, b) {
     ctx.save();
     ctx.strokeStyle = grad; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.restore();
 }
 function _renderDashedMarch(ctx, a, b, color) {
@@ -691,7 +705,7 @@ function _renderDashedMarch(ctx, a, b, color) {
     ctx.setLineDash([8,6]);
     ctx.lineDashOffset = -((performance.now()/40) % 14);
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
 }
 function _renderLightning(ctx, a, b, color) {
@@ -720,7 +734,7 @@ function _renderPulsePacket(ctx, a, b, color) {
     ctx.save();
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.globalAlpha = 0.7;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.globalAlpha = 1;
     const t = ((performance.now()/1500) % 1);
     const [px, py] = _bezierAt(t, a, cp1, cp2, b);
@@ -735,12 +749,12 @@ function _renderNeonTube(ctx, a, b, color) {
     ctx.strokeStyle = color; ctx.lineWidth = 6; ctx.globalAlpha = 0.25;
     ctx.shadowBlur = 18; ctx.shadowColor = color;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     // bright thin core
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     ctx.strokeStyle = C.white; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.bezierCurveTo(cp1[0],cp1[1], cp2[0],cp2[1], b[0],b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.restore();
 }
 
@@ -770,7 +784,7 @@ function _renderGradient(ctx, a, b, color, linkType) {
     ctx.save(); ctx.lineCap = "round"; ctx.lineWidth = 3.5; ctx.strokeStyle = grad;
     ctx.shadowBlur = 6; ctx.shadowColor = color;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.restore();
 }
 // Flame: red→orange→yellow gradient that flickers + tapers, with ember glow.
@@ -795,7 +809,7 @@ function _renderComet(ctx, a, b, color) {
     ctx.save(); ctx.lineCap = "round";
     ctx.strokeStyle = color; ctx.globalAlpha = 0.22; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     const head = (performance.now() / 900) % 1, TRAIL = 14;
     for (let i = 0; i < TRAIL; i++) {
         const t = head - i * 0.025; if (t < 0) continue;
@@ -812,10 +826,10 @@ function _renderCandy(ctx, a, b, color) {
     ctx.save(); ctx.lineCap = "butt"; ctx.lineWidth = 4.5;
     ctx.strokeStyle = "#ffffff";
     ctx.beginPath(); ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.strokeStyle = color; ctx.lineWidth = 4.5; ctx.setLineDash([8, 8]); ctx.lineDashOffset = -off;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]); ctx.stroke();
+    _curveTo(ctx, cp1, cp2, a, b); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
 }
 // Aurora: soft green↔blue↔purple ribbon that breathes along the wire.
@@ -860,7 +874,7 @@ function _renderHeartbeat(ctx, a, b, color) {
 function _trunk(ctx, a, cp1, cp2, b, color, w, glow) {
     ctx.beginPath();
     ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]);
+    _curveTo(ctx, cp1, cp2, a, b);
     if (glow) { ctx.shadowBlur = glow; ctx.shadowColor = color; }
     ctx.lineWidth = w; ctx.strokeStyle = color; ctx.stroke();
     ctx.shadowBlur = 0;
@@ -1770,6 +1784,21 @@ function _installMenuPatch() {
             content: "🍝 Noodle Style",
             has_submenu: true,
             submenu: { options: submenu },
+        });
+        const curShape = _currentShape();
+        out.push({
+            content: "〰 Pipe Shape",
+            has_submenu: true,
+            submenu: {
+                options: SHAPES.map(sh => ({
+                    content: `${sh === curShape ? "✓ " : "  "}${sh}`,
+                    callback: () => {
+                        _shapeCache = sh;
+                        try { app.ui.settings.setSettingValue(SHAPE_SETTING_ID, sh); } catch (__c2cErr) { __c2cReport("c2c_noodle_styles.shape", __c2cErr); }
+                        this.setDirty(true, true);
+                    },
+                })),
+            },
         });
         out.push({
             content: "— also configurable in Settings → mec.noodle.style",
