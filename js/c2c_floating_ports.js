@@ -165,7 +165,11 @@ function install() {
         // when floating is off, so consumers always have fresh geometry.
         try {
             if (link && link.id != null) {
-                (window.__C2C_PIPES || (window.__C2C_PIPES = new Map())).set(link.id, {
+                const _reg = window.__C2C_PIPES || (window.__C2C_PIPES = new Map());
+                // Bound the registry: link ids are monotonic and never reused,
+                // so long sessions would otherwise grow this without limit.
+                if (_reg.size > 2000) _reg.clear();
+                _reg.set(link.id, {
                     a: [startPt[0], startPt[1]], b: [endPt[0], endPt[1]],
                     da: startDir, db: endDir, type: link.type,
                 });

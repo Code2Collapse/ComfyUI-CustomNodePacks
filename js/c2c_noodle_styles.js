@@ -345,6 +345,62 @@ const _ANIM_OVERLAYS = {
         const fl = 0.6 + 0.4 * Math.sin(now / 220);
         _aDot(ctx, [p[0], p[1] + Math.sin(now / 380) * 3], 3, "rgba(255,225,150," + fl + ")", 14);
     },
+    "lightsaber": (ctx, a, b, col, now) => {     // blades duel: sweep in + CLASH sparks
+        const ph = (now / 1500) % 1;
+        const m = _apt(0.5, a, b);
+        if (ph < 0.45) {                          // blades sweep toward the middle
+            _aDot(ctx, _apt(ph, a, b), 3, "#7cc4ff", 12);
+            _aDot(ctx, _apt(1 - ph, a, b), 3, "#ff5d5d", 12);
+        } else if (ph < 0.7) {                    // CLASH: white flash + sparks
+            _aDot(ctx, m, 5, "#ffffff", 18);
+            const seed = Math.floor(now / 90);
+            for (let i = 0; i < 4; i++) {
+                const ang = ((seed * 53 + i * 91) % 360) / 180 * Math.PI;
+                const d = 6 + ((seed + i) % 4) * 3;
+                _aDot(ctx, [m[0] + Math.cos(ang) * d, m[1] + Math.sin(ang) * d], 1.3, "#fff3b0", 6);
+            }
+        }
+    },
+    "spider-web": (ctx, a, b, col, now) => {     // spider skitters the strand
+        const t = (now / 2400) % 1, p = _apt(t, a, b);
+        ctx.save(); ctx.fillStyle = "#e8e8f0";
+        ctx.beginPath(); ctx.arc(p[0], p[1], 2.4, 0, _TAU); ctx.fill();
+        ctx.strokeStyle = "rgba(232,232,240,0.8)"; ctx.lineWidth = 0.8;
+        for (let i = 0; i < 4; i++) {
+            const ang = i * Math.PI / 4 + Math.sin(now / 120) * 0.3;
+            ctx.beginPath(); ctx.moveTo(p[0] - Math.cos(ang) * 5, p[1] - Math.sin(ang) * 5);
+            ctx.lineTo(p[0] + Math.cos(ang) * 5, p[1] + Math.sin(ang) * 5); ctx.stroke();
+        }
+        ctx.restore();
+    },
+    "neon-tube": (ctx, a, b, col, now) => {      // specular gleam slides; rare flicker
+        const t = (now / 1800) % 1, p = _apt(t, a, b);
+        _aDot(ctx, p, 2, "rgba(255,255,255,0.9)", 10);
+        if (Math.floor(now / 70) % 23 === 0) {
+            const q = _apt(((now / 313) % 1), a, b);
+            _aDot(ctx, q, 3.5, "rgba(255,255,255,0.5)", 14);
+        }
+    },
+    "gradient": (ctx, a, b, col, now) => {       // shimmer band sweeps the ramp
+        const t = (now / 2000) % 1;
+        for (let i = -1; i <= 1; i++) {
+            const p = _apt(t + i * 0.02, a, b);
+            _aDot(ctx, p, 2.2 - Math.abs(i), "rgba(255,255,255," + (0.5 - Math.abs(i) * 0.2) + ")", 6);
+        }
+    },
+    "minecraft": (ctx, a, b, col, now) => {      // blocks get PLACED along the wire
+        const n = 5, step = Math.floor(now / 350) % (n + 2);
+        for (let i = 0; i < Math.min(step, n); i++) {
+            const p = _apt(0.12 + i * 0.19, a, b);
+            const fresh = i === step - 1;
+            ctx.save(); ctx.fillStyle = ["#7bb661", "#8d6b4b"][i % 2];
+            ctx.globalAlpha = fresh ? 1 : 0.75;
+            ctx.fillRect(p[0] - 3, p[1] - 3, 6, 6);
+            ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1; ctx.strokeRect(p[0] - 3, p[1] - 3, 6, 6);
+            if (fresh) { ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.strokeRect(p[0] - 4.5, p[1] - 4.5, 9, 9); }
+            ctx.restore();
+        }
+    },
     "galaga": (ctx, a, b, col, now) => {         // alien zigzags, ship missile intercepts
         const t = (now / 1500) % 1;
         const p = _apt(t, a, b);
@@ -355,6 +411,7 @@ const _ANIM_OVERLAYS = {
 };
 
 const _ANIMATED = new Set([
+    "spider-web", "lightsaber", "neon-tube", "gradient", "minecraft",
     "dna-helix", "rainbow-flow", "dashed-march", "lightning", "pulse-packet",
     "rgb-spectrum", "fire", "comet", "candy", "aurora", "heartbeat",
     "matrix", "tron", "portal", "pacman", "hyperspace", "upside-down", "ki-blast", "rainbow-road",
@@ -465,7 +522,7 @@ function _curveTo(ctx, cp1, cp2, a, b) {
         for (let i = 1; i < w.length; i++) ctx.lineTo(w[i][0], w[i][1]);
         return;
     }
-    _curveTo(ctx, cp1, cp2, a, b);
+    ctx.bezierCurveTo(cp1[0], cp1[1], cp2[0], cp2[1], b[0], b[1]);
 }
 
 function _bezierPoints(a, b) {
@@ -1659,7 +1716,13 @@ function _maybeFx(canvas, ctx, a, b, link) {
 function _installRenderPatch() {
     if (_orig || !window.LGraphCanvas) return;
     _orig = LGraphCanvas.prototype.renderLink;
-    LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines) {
+    LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options) {
+        // `options` is an OBJECT in current ComfyUI ({startControl,endControl,
+        // reroute,num_sublines,disabled}); it was historically num_sublines.
+        // DISABLED links must render natively (dashed) — never fully skinned.
+        if (options && typeof options === "object" && options.disabled) {
+            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
+        }
         const style = _currentStyle();
         if (style === "default" || !_RENDER[style]) {
             // Default skin: core renders its spline — UNLESS a custom pipe
@@ -1668,7 +1731,7 @@ function _installRenderPatch() {
             const _sh = _currentShape();
             const _core = _sh === "spline" || (_sh === "auto" && !_alignedStraight(a, b));
             if (_core) {
-                const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+                const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
                 if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
                 return _r;
             }
@@ -1705,7 +1768,7 @@ function _installRenderPatch() {
                 if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
                 return;
             } catch (_e2) {
-                return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+                return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
             }
         }
         try {
@@ -1760,7 +1823,7 @@ function _installRenderPatch() {
             if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
         } catch (e) {
             console.warn("[MEC.NoodleStyles] render error, falling back:", e);
-            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, num_sublines);
+            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
         }
     };
 }
