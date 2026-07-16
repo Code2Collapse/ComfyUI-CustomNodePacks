@@ -268,6 +268,7 @@ function _wireAndPromoteInnerWidgets(sgNode, opts) {
         if (typeof sgNode.computeSize === "function" &&
             typeof sgNode.setSize === "function") {
             sgNode.setSize(sgNode.computeSize());
+            try { (window.app?.canvas || app?.canvas)?.setDirtyCanvas(true, true); } catch (_) {}
         }
     } catch (_) {}
     return wired.length;
@@ -354,6 +355,7 @@ function _exposeRemainingIO(sgNode) {
         if (typeof sgNode.computeSize === "function" &&
             typeof sgNode.setSize === "function") {
             sgNode.setSize(sgNode.computeSize());
+            try { (window.app?.canvas || app?.canvas)?.setDirtyCanvas(true, true); } catch (_) {}
         }
     } catch (_) {}
     return out;
