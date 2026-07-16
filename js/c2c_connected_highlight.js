@@ -71,11 +71,14 @@ function install() {
         if (!active) {
             // DIM every wire not connected to the selected/hovered node, so the
             // lit ones pop. Alpha-wrap the normal draw — exact path, any skin.
+            // finally-restore: an inner throw must never leak the 0.3 alpha.
             ctx.save();
             ctx.globalAlpha *= 0.3;
-            const r = orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
-            ctx.restore();
-            return r;
+            try {
+                return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+            } finally {
+                ctx.restore();
+            }
         }
         // ACTIVE wire: normal draw first…
         const r = orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
@@ -91,12 +94,17 @@ function install() {
             ctx.globalAlpha = 0.95;
             const _w = this.connections_width;
             this.connections_width = (_w || 3) + 1;   // slightly fatter re-stroke → halo shows
-            // two stacked shadow passes = a clearly visible slot-coloured light
-            orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
-            orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
-            this.connections_width = _w;
-            ctx.restore();
-            _rerender = false;
+            try {
+                // two stacked shadow passes = a clearly visible slot-coloured light
+                orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+                orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+            } finally {
+                // a throw must never leak shadow/alpha state, a fattened
+                // connections_width, or a stuck _rerender flag
+                this.connections_width = _w;
+                ctx.restore();
+                _rerender = false;
+            }
             // slot pairing cue: slot-coloured dot on the output end, ring on the
             // input end — same colour as the slot itself.
             ctx.save();
