@@ -1,0 +1,65 @@
+{
+  "_readme": [
+    "Registered compute backends. Every backend is a FULL ComfyUI instance",
+    "(Docker container / gateway) speaking the standard ComfyUI HTTP API.",
+    "type: comfyui_native (AKS Docker, RunPod, vast.ai, LAN box).",
+    "api_key_env: name of the env var holding the gateway bearer token ('' = none).",
+    "compute_profiles: which gateway routing profiles this backend accepts.",
+    "url_loader_map: optional rewrite of local loader nodes to a URL-capable",
+    "loader class installed on the backend image, e.g.",
+    "  {\"LoadImage\": {\"class_type\": \"LoadImageFromUrl\", \"input\": \"url\"}}.",
+    "If empty, the courier substitutes the media path string with the cloud URL",
+    "in place (the backend image must patch its loaders to accept URLs)."
+  ],
+  "backends": [
+    {
+      "name": "local-selftest",
+      "type": "comfyui_native",
+      "enabled": false,
+      "base_url": "http://127.0.0.1:8188",
+      "api_key_env": "",
+      "max_concurrent_jobs": 1,
+      "compute_profiles": ["light_30gb"],
+      "url_loader_map": {},
+      "_note": "Loops back to THIS ComfyUI — smoke-testing the farm plumbing only. Always use wait_for_completion=false with it (a blocking self-submit waits behind itself in the single local queue)."
+    },
+    {
+      "name": "lan-workstation",
+      "type": "comfyui_native",
+      "enabled": false,
+      "base_url": "http://192.168.1.50:8188",
+      "api_key_env": "",
+      "max_concurrent_jobs": 1,
+      "compute_profiles": ["light_30gb"],
+      "url_loader_map": {}
+    },
+    {
+      "name": "aks-h100-pool",
+      "type": "comfyui_native",
+      "enabled": false,
+      "base_url": "https://comfy-gateway.example-embee.cloud",
+      "api_key_env": "RIB_AKS_API_KEY",
+      "max_concurrent_jobs": 4,
+      "compute_profiles": ["heavy_94gb", "light_30gb"],
+      "url_loader_map": {}
+    },
+    {
+      "name": "runpod-pod",
+      "type": "comfyui_native",
+      "enabled": false,
+      "base_url": "https://YOUR_POD_ID-8188.proxy.runpod.net",
+      "api_key_env": "RIB_RUNPOD_API_KEY",
+      "max_concurrent_jobs": 1,
+      "compute_profiles": ["heavy_94gb"],
+      "url_loader_map": {}
+    }
+  ],
+  "compute_profiles": {
+    "heavy_94gb": {
+      "description": "Node Pool A — 1 replica per 94GB GPU. 300-frame LTX, Wan 2.2 multi-pass."
+    },
+    "light_30gb": {
+      "description": "Node Pool B — 3 replicas per GPU (~30GB each). SDXL stills, light video."
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# RIB backend image — custom node manifest.
+# Format: <git-url> <commit-hash-or-ref>
+# One line per pack; the Dockerfile clones each at the EXACT ref so every
+# backend replica runs identical node code (pre-flight validation depends on
+# this). Pin real commit hashes for production images; refs/branches are for
+# dev images only.
+#
+# Keep this list in sync with what your workflows actually use — pre-flight
+# will refuse to dispatch any workflow whose class_types are missing here.
+
+# Our packs (pin to the commit you deployed):
+https://github.com/Code2Collapse/ComfyUI-CustomNodePacks.git main
+https://github.com/Code2Collapse/ComfyUI-WanNodeExperiments.git master
+
+# Ecosystem packs commonly needed by farm workflows:
+https://github.com/kijai/ComfyUI-WanVideoWrapper.git main
+https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git main
+https://github.com/kijai/ComfyUI-KJNodes.git main
+
+# URL-tolerant loaders for the invisible-courier handoff (LoadImageFromUrl):
+https://github.com/sipherxyz/comfyui-art-venture.git main
