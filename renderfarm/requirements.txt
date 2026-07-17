@@ -1,0 +1,12 @@
+# C2C Farm render-farm — local "Brain" dependencies.
+# Core (required):
+requests>=2.28
+
+# Live progress + preview thumbnails from backend websockets (recommended):
+websocket-client>=1.6
+
+# Storage couriers — install ONLY the provider(s) you use; the adapters are
+# lazy imports and fail with the exact pip command when missing:
+# boto3>=1.28                 # AWS S3 / Cloudflare R2 / MinIO
+# azure-storage-blob>=12.19   # Azure Blob
+# google-cloud-storage>=2.14  # Google Cloud Storage

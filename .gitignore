@@ -231,3 +231,10 @@ _deprecated/
 
 # MEC error assistant runtime data
 user/
+
+# C2C Farm render-farm runtime data (SQLite audit log — WAL siblings too)
+renderfarm/config/audit.db
+renderfarm/config/audit.db-wal
+renderfarm/config/audit.db-shm
+# but the C2C Farm render-farm test suite IS part of the source tree
+!renderfarm/tests/

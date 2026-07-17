@@ -1,0 +1,82 @@
+# C2C Farm backend image — CI template.
+# Builds the full-ComfyUI farm image (renderfarm/docker/Dockerfile + the
+# pinned custom_nodes_manifest.txt) and pushes to ACR and/or ECR.
+#
+# TEMPLATE: wire the secrets below in repo settings before enabling.
+#   ACR:  ACR_LOGIN_SERVER, ACR_USERNAME, ACR_PASSWORD
+#   ECR:  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ECR_REPOSITORY
+# Runs on manual dispatch (images are ~20GB — don't build per-push).
+
+name: build-c2c-farm-backend-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      comfyui_ref:
+        description: "ComfyUI git ref to bake"
+        default: "master"
+        required: true
+      image_tag:
+        description: "Image tag"
+        default: "latest"
+        required: true
+      push_acr:
+        description: "Push to Azure Container Registry"
+        type: boolean
+        default: true
+      push_ecr:
+        description: "Push to AWS ECR"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to ACR
+        if: ${{ inputs.push_acr }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Configure AWS credentials
+        if: ${{ inputs.push_ecr }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        if: ${{ inputs.push_ecr }}
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute tags
+        id: tags
+        run: |
+          TAGS=""
+          if [ "${{ inputs.push_acr }}" = "true" ]; then
+            TAGS="${{ secrets.ACR_LOGIN_SERVER }}/comfy-c2c-farm-backend:${{ inputs.image_tag }}"
+          fi
+          if [ "${{ inputs.push_ecr }}" = "true" ]; then
+            [ -n "$TAGS" ] && TAGS="$TAGS,"
+            TAGS="$TAGS${{ steps.ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ inputs.image_tag }}"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: renderfarm/docker/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            COMFYUI_REF=${{ inputs.comfyui_ref }}

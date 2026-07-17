@@ -520,8 +520,23 @@ except Exception as _fexc:  # pragma: no cover
         group="nodes",
     )
 
+# ── C2C Farm render-farm spooler (Tractor-style multi-cloud dispatch) ──
+_FARM_MAPPINGS, _FARM_DISPLAY = {}, {}
+try:
+    from .nodes import render_farm as _farm
+    _FARM_MAPPINGS.update(_farm.NODE_CLASS_MAPPINGS)
+    _FARM_DISPLAY.update(_farm.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _farm_exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "render_farm", _farm_exc,
+        hint="C2C Farm spooler (C2C_Submit / ClusterStatus / JobHistory); "
+             "check renderfarm/config/*.json is intact.",
+        group="nodes",
+    )
+
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
+    **_FARM_MAPPINGS,
     **_FLUID_MAPPINGS,
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
@@ -551,6 +566,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
+    **_FARM_DISPLAY,
     **_FLUID_DISPLAY,
     **_MEC_DISPLAY,
     **_MA_DISPLAY,

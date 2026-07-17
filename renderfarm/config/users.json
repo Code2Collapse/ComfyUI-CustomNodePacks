@@ -1,0 +1,21 @@
+{
+  "_readme": [
+    "Maps the C2C_USER_NAME env var to a farm role. role: admin|user.",
+    "Admins can pause/cancel anyone's jobs and see all jobs in the dashboard.",
+    "projects: tags this user may submit under ('*' = any).",
+    "max_concurrent_jobs: how many of this user's jobs may run at once;",
+    "extra jobs wait in the local spool queue."
+  ],
+  "users": {
+    "varig": {
+      "role": "admin",
+      "projects": ["*"],
+      "max_concurrent_jobs": 4
+    },
+    "example_artist": {
+      "role": "user",
+      "projects": ["wan22", "ltx_shots"],
+      "max_concurrent_jobs": 2
+    }
+  }
+}
