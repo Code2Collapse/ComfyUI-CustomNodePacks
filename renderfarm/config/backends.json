@@ -38,7 +38,7 @@
       "type": "comfyui_native",
       "enabled": false,
       "base_url": "https://comfy-gateway.example-embee.cloud",
-      "api_key_env": "RIB_AKS_API_KEY",
+      "api_key_env": "C2C_AKS_API_KEY",
       "max_concurrent_jobs": 4,
       "compute_profiles": ["heavy_94gb", "light_30gb"],
       "url_loader_map": {}
@@ -48,7 +48,7 @@
       "type": "comfyui_native",
       "enabled": false,
       "base_url": "https://YOUR_POD_ID-8188.proxy.runpod.net",
-      "api_key_env": "RIB_RUNPOD_API_KEY",
+      "api_key_env": "C2C_RUNPOD_API_KEY",
       "max_concurrent_jobs": 1,
       "compute_profiles": ["heavy_94gb"],
       "url_loader_map": {}

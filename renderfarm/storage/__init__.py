@@ -1,6 +1,6 @@
-"""RIB storage courier factory.
+"""C2C Farm storage courier factory.
 
-Provider chosen by the RIB_STORAGE_PROVIDER env var:
+Provider chosen by the C2C_STORAGE_PROVIDER env var:
     s3 | r2 | minio  -> S3CompatibleStorage (boto3)
     azure            -> AzureBlobStorage    (azure-storage-blob)
     gcs              -> GCSStorage          (google-cloud-storage)
@@ -19,11 +19,11 @@ _PROVIDERS = {"s3", "r2", "minio", "azure", "gcs"}
 
 
 def get_storage() -> BaseStorage:
-    provider = os.environ.get("RIB_STORAGE_PROVIDER", "").strip().lower()
+    provider = os.environ.get("C2C_STORAGE_PROVIDER", "").strip().lower()
     if not provider:
         raise RuntimeError(
-            "RIB storage: this workflow references local media files, which must be "
-            "handed to the backend via cloud storage — but RIB_STORAGE_PROVIDER is not "
+            "C2C Farm storage: this workflow references local media files, which must be "
+            "handed to the backend via cloud storage — but C2C_STORAGE_PROVIDER is not "
             f"set. Set it to one of {sorted(_PROVIDERS)} plus that provider's env vars "
             "(see renderfarm/storage/*.py headers)."
         )
@@ -37,6 +37,6 @@ def get_storage() -> BaseStorage:
         from .gcs_storage import GCSStorage
         return GCSStorage()
     raise RuntimeError(
-        f"RIB storage: unknown RIB_STORAGE_PROVIDER '{provider}'. "
+        f"C2C Farm storage: unknown C2C_STORAGE_PROVIDER '{provider}'. "
         f"Valid values: {sorted(_PROVIDERS)}."
     )

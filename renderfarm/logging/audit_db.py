@@ -1,4 +1,4 @@
-"""RIB audit log — SQLite at renderfarm/config/audit.db (gitignored).
+"""C2C Farm audit log — SQLite at renderfarm/config/audit.db (gitignored).
 
 Writes are ASYNC: every mutation is queued to a single daemon writer thread
 (SQLite wants one writing connection anyway), so node execution and the
@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 
-log = logging.getLogger("RIB.audit")
+log = logging.getLogger("C2C.Farm.audit")
 
 _CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
 DB_PATH = os.path.join(_CONFIG_DIR, "audit.db")
@@ -52,7 +52,7 @@ class AuditDB:
         with self._connect() as con:
             con.executescript(_SCHEMA)
         self._q: "queue.Queue" = queue.Queue()
-        self._writer = threading.Thread(target=self._writer_loop, name="rib-audit-writer", daemon=True)
+        self._writer = threading.Thread(target=self._writer_loop, name="c2c-farm-audit-writer", daemon=True)
         self._writer.start()
 
     def _connect(self) -> sqlite3.Connection:

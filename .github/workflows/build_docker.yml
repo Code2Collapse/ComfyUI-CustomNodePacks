@@ -1,4 +1,4 @@
-# RIB backend image — CI template.
+# C2C Farm backend image — CI template.
 # Builds the full-ComfyUI farm image (renderfarm/docker/Dockerfile + the
 # pinned custom_nodes_manifest.txt) and pushes to ACR and/or ECR.
 #
@@ -7,7 +7,7 @@
 #   ECR:  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ECR_REPOSITORY
 # Runs on manual dispatch (images are ~20GB — don't build per-push).
 
-name: build-rib-backend-image
+name: build-c2c-farm-backend-image
 
 on:
   workflow_dispatch:
@@ -63,7 +63,7 @@ jobs:
         run: |
           TAGS=""
           if [ "${{ inputs.push_acr }}" = "true" ]; then
-            TAGS="${{ secrets.ACR_LOGIN_SERVER }}/comfy-rib-backend:${{ inputs.image_tag }}"
+            TAGS="${{ secrets.ACR_LOGIN_SERVER }}/comfy-c2c-farm-backend:${{ inputs.image_tag }}"
           fi
           if [ "${{ inputs.push_ecr }}" = "true" ]; then
             [ -n "$TAGS" ] && TAGS="$TAGS,"

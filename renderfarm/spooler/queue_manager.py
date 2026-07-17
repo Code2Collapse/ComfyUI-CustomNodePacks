@@ -1,4 +1,4 @@
-"""RIB queue manager — the Tractor-style spooler.
+"""C2C Farm queue manager — the Tractor-style spooler.
 
 Jobs are held LOCALLY when backends are at capacity and dispatched by a
 single scheduler thread. Ordering: priority (desc), then submitted_at (asc),
@@ -20,7 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-log = logging.getLogger("RIB.spooler")
+log = logging.getLogger("C2C.Farm.spooler")
 
 # Terminal states never leave the history; everything else is "live".
 TERMINAL = {"complete", "failed", "cancelled"}
@@ -77,7 +77,7 @@ class QueueManager:
         self._history: list[Job] = []          # most-recent-first, capped
         self._seq = itertools.count()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._loop, name="rib-spooler", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="c2c-farm-spooler", daemon=True)
         if autostart:
             self._thread.start()
 
@@ -170,10 +170,10 @@ class QueueManager:
     def wait(self, job_id: str, timeout: float | None = None) -> Job:
         job = self.get(job_id)
         if job is None:
-            raise RuntimeError(f"RIB: unknown job {job_id}")
+            raise RuntimeError(f"C2C Farm: unknown job {job_id}")
         if not job.done.wait(timeout):
-            raise TimeoutError(f"RIB: job {job_id} still {job.status} after {timeout}s "
-                               f"(it keeps running — track it in the RIB dashboard)")
+            raise TimeoutError(f"C2C Farm: job {job_id} still {job.status} after {timeout}s "
+                               f"(it keeps running — track it in the C2C Farm dashboard)")
         return job
 
     def stop(self):
@@ -208,7 +208,7 @@ class QueueManager:
                 dispatched.append(j)
         for j in dispatched:
             threading.Thread(target=self._run_job, args=(j,),
-                             name=f"rib-job-{j.job_id}", daemon=True).start()
+                             name=f"c2c-farm-job-{j.job_id}", daemon=True).start()
         return dispatched
 
     def _loop(self):

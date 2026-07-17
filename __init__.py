@@ -507,23 +507,23 @@ except Exception as _fexc:  # pragma: no cover
         group="nodes",
     )
 
-# ── RIB render-farm spooler (Tractor-style multi-cloud dispatch) ──
-_RIB_MAPPINGS, _RIB_DISPLAY = {}, {}
+# ── C2C Farm render-farm spooler (Tractor-style multi-cloud dispatch) ──
+_FARM_MAPPINGS, _FARM_DISPLAY = {}, {}
 try:
-    from .nodes import render_farm as _rib
-    _RIB_MAPPINGS.update(_rib.NODE_CLASS_MAPPINGS)
-    _RIB_DISPLAY.update(_rib.NODE_DISPLAY_NAME_MAPPINGS)
-except Exception as _rib_exc:  # pragma: no cover
+    from .nodes import render_farm as _farm
+    _FARM_MAPPINGS.update(_farm.NODE_CLASS_MAPPINGS)
+    _FARM_DISPLAY.update(_farm.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _farm_exc:  # pragma: no cover
     _c2c_rec_fail(
-        "render_farm", _rib_exc,
-        hint="RIB render-farm spooler (RIB_Submit / ClusterStatus / JobHistory); "
+        "render_farm", _farm_exc,
+        hint="C2C Farm spooler (C2C_Submit / ClusterStatus / JobHistory); "
              "check renderfarm/config/*.json is intact.",
         group="nodes",
     )
 
 NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
-    **_RIB_MAPPINGS,
+    **_FARM_MAPPINGS,
     **_FLUID_MAPPINGS,
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
@@ -553,7 +553,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
-    **_RIB_DISPLAY,
+    **_FARM_DISPLAY,
     **_FLUID_DISPLAY,
     **_MEC_DISPLAY,
     **_MA_DISPLAY,

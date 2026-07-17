@@ -1,4 +1,4 @@
-# RIB render-farm — local "Brain" dependencies.
+# C2C Farm render-farm — local "Brain" dependencies.
 # Core (required):
 requests>=2.28
 

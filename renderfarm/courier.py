@@ -1,4 +1,4 @@
-"""RIB invisible courier — media handoff between local graph and cloud backend.
+"""C2C Farm invisible courier — media handoff between local graph and cloud backend.
 
 Outbound:  scan the prompt JSON for local media references, upload each file
 once through the configured storage adapter, and rewrite the prompt so the
@@ -11,7 +11,7 @@ Two rewrite modes (per-backend, `url_loader_map` in backends.json):
                image must ship URL-tolerant loaders).
 
 Inbound: `download_results` pulls any http(s) media URL from a job's outputs
-back into the local ComfyUI input folder (input/rib_results/<job_id>/) so the
+back into the local ComfyUI input folder (input/c2c_farm_results/<job_id>/) so the
 next node in the local graph can consume it.
 """
 
@@ -21,7 +21,7 @@ import copy
 import logging
 import os
 
-log = logging.getLogger("RIB.courier")
+log = logging.getLogger("C2C.Farm.courier")
 
 MEDIA_EXTS = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".exr", ".dpx",
@@ -110,13 +110,13 @@ def results_dir(job_id: str) -> str:
         base = folder_paths.get_input_directory()
     except Exception:  # noqa: BLE001 — tests
         base = os.path.join(os.getcwd(), "input")
-    d = os.path.join(base, "rib_results", job_id)
+    d = os.path.join(base, "c2c_farm_results", job_id)
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def download_results(urls: list[str], job_id: str, storage=None) -> list[str]:
-    """Pull output media URLs back into input/rib_results/<job_id>/."""
+    """Pull output media URLs back into input/c2c_farm_results/<job_id>/."""
     from .storage.base_storage import _http_download
     out = []
     dest = results_dir(job_id)

@@ -1,8 +1,8 @@
-"""RIB dashboard REST routes (/rib/*) served by the local ComfyUI PromptServer.
+"""C2C Farm dashboard REST routes (/c2c/farm/*) served by the local ComfyUI PromptServer.
 
 Registered once at pack import (the Model-Browser lesson: routes that are
 never registered are just 404s). All responses are JSON; role enforcement
-(admin vs user) happens server-side from RIB_USER_NAME + users.json.
+(admin vs user) happens server-side from C2C_USER_NAME + users.json.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-log = logging.getLogger("RIB.api")
+log = logging.getLogger("C2C.Farm.api")
 _registered = False
 
 
@@ -26,12 +26,12 @@ def register_routes():
 
     def _actor() -> dict:
         """Current local user (never raises — dashboard must render even
-        when RIB_USER_NAME is unset; submits still fail loudly)."""
+        when C2C_USER_NAME is unset; submits still fail loudly)."""
         from .user_config import get_user
         try:
             return get_user()
         except RuntimeError as exc:
-            return {"name": os.environ.get("RIB_USER_NAME", ""), "role": "unset",
+            return {"name": os.environ.get("C2C_USER_NAME", ""), "role": "unset",
                     "error": str(exc), "projects": [], "max_concurrent_jobs": 0}
 
     def _qm():
@@ -43,18 +43,18 @@ def register_routes():
         a = _actor()
         return bool(a.get("name")) and can_control(a["name"], job_user)
 
-    @routes.get("/rib/user")
-    async def rib_user(request):
+    @routes.get("/c2c/farm/user")
+    async def farm_user(request):
         return web.json_response(_actor())
 
-    @routes.get("/rib/jobs")
-    async def rib_jobs(request):
+    @routes.get("/c2c/farm/jobs")
+    async def farm_jobs(request):
         snap = _qm().snapshot()
         snap["actor"] = _actor()
         return web.json_response(snap)
 
-    @routes.get("/rib/history")
-    async def rib_history(request):
+    @routes.get("/c2c/farm/history")
+    async def farm_history(request):
         from .logging.audit_db import get_audit_db
         q = request.rel_url.query
         rows = get_audit_db().query(
@@ -62,8 +62,8 @@ def register_routes():
             status=q.get("status") or None, limit=int(q.get("limit", "200")))
         return web.json_response({"rows": rows})
 
-    @routes.get("/rib/cluster")
-    async def rib_cluster(request):
+    @routes.get("/c2c/farm/cluster")
+    async def farm_cluster(request):
         import asyncio
         from .backends import get_adapter
         from .user_config import list_backends
@@ -83,8 +83,8 @@ def register_routes():
                     for c in cfgs if not c.get("enabled")]
         return web.json_response({"backends": list(results) + disabled})
 
-    @routes.get("/rib/preview/{job_id}")
-    async def rib_preview(request):
+    @routes.get("/c2c/farm/preview/{job_id}")
+    async def farm_preview(request):
         job = _qm().get(request.match_info["job_id"])
         if job is None or not job.remote_id:
             return web.json_response({"preview": None}, status=404)
@@ -113,21 +113,21 @@ def register_routes():
             ok = getattr(qm, fn_name)(job_id)
         return web.json_response({"ok": bool(ok)})
 
-    @routes.post("/rib/cancel")
-    async def rib_cancel(request):
+    @routes.post("/c2c/farm/cancel")
+    async def farm_cancel(request):
         return await _job_action(request, "cancel")
 
-    @routes.post("/rib/pause")
-    async def rib_pause(request):
+    @routes.post("/c2c/farm/pause")
+    async def farm_pause(request):
         return await _job_action(request, "pause")
 
-    @routes.post("/rib/resume")
-    async def rib_resume(request):
+    @routes.post("/c2c/farm/resume")
+    async def farm_resume(request):
         return await _job_action(request, "resume")
 
-    @routes.post("/rib/bump")
-    async def rib_bump(request):
+    @routes.post("/c2c/farm/bump")
+    async def farm_bump(request):
         return await _job_action(request, "bump")
 
     _registered = True
-    log.info("RIB dashboard routes registered under /rib/*")
+    log.info("C2C Farm dashboard routes registered under /c2c/farm/*")

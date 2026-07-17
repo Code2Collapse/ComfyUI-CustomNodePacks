@@ -1,11 +1,11 @@
 """S3-compatible courier: AWS S3, Cloudflare R2, MinIO (boto3, lazy).
 
 Env:
-    RIB_S3_BUCKET        (required)  bucket name
-    RIB_S3_ENDPOINT_URL  (optional)  set for R2 / MinIO / other S3-compatibles
-    RIB_S3_REGION        (optional)  default us-east-1
-    RIB_S3_PREFIX        (optional)  key prefix, default "rib/"
-    RIB_S3_URL_TTL       (optional)  presigned GET lifetime seconds, default 86400
+    C2C_S3_BUCKET        (required)  bucket name
+    C2C_S3_ENDPOINT_URL  (optional)  set for R2 / MinIO / other S3-compatibles
+    C2C_S3_REGION        (optional)  default us-east-1
+    C2C_S3_PREFIX        (optional)  key prefix, default "c2c-farm/"
+    C2C_S3_URL_TTL       (optional)  presigned GET lifetime seconds, default 86400
 Credentials ride the standard boto3 chain (env AWS_ACCESS_KEY_ID/…, profile,
 instance role).
 """
@@ -22,9 +22,9 @@ class S3CompatibleStorage(BaseStorage):
     name = "s3"
 
     def __init__(self, client=None):
-        (self.bucket,) = require_env("RIB_S3_BUCKET")
-        self.prefix = os.environ.get("RIB_S3_PREFIX", "rib/")
-        self.ttl = int(os.environ.get("RIB_S3_URL_TTL", "86400"))
+        (self.bucket,) = require_env("C2C_S3_BUCKET")
+        self.prefix = os.environ.get("C2C_S3_PREFIX", "c2c-farm/")
+        self.ttl = int(os.environ.get("C2C_S3_URL_TTL", "86400"))
         if client is not None:  # test injection
             self.client = client
             return
@@ -32,13 +32,13 @@ class S3CompatibleStorage(BaseStorage):
             import boto3
         except ImportError as exc:
             raise RuntimeError(
-                "RIB storage: boto3 is not installed. Run: pip install boto3 "
+                "C2C Farm storage: boto3 is not installed. Run: pip install boto3 "
                 "(covers AWS S3, Cloudflare R2, MinIO)."
             ) from exc
         self.client = boto3.client(
             "s3",
-            endpoint_url=os.environ.get("RIB_S3_ENDPOINT_URL") or None,
-            region_name=os.environ.get("RIB_S3_REGION", "us-east-1"),
+            endpoint_url=os.environ.get("C2C_S3_ENDPOINT_URL") or None,
+            region_name=os.environ.get("C2C_S3_REGION", "us-east-1"),
         )
 
     def _key(self, local_path: str) -> str:

@@ -1,4 +1,4 @@
-"""RIB storage adapter interface — the "invisible courier" data plane.
+"""C2C Farm storage adapter interface — the "invisible courier" data plane.
 
 4K video / latents cannot ride a REST body without HTTP timeouts, so media
 is handed off through cloud object storage: upload → presigned URL → the
@@ -48,7 +48,7 @@ def require_env(*names: str) -> list[str]:
     missing = [n for n in names if not os.environ.get(n)]
     if missing:
         raise RuntimeError(
-            f"RIB storage: required environment variable(s) missing: {missing}. "
+            f"C2C Farm storage: required environment variable(s) missing: {missing}. "
             f"Set them before submitting jobs that carry local media."
         )
     return [os.environ[n] for n in names]

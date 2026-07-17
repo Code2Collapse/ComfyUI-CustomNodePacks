@@ -1,4 +1,4 @@
-"""RIB backend adapter interface — the compute plane contract.
+"""C2C Farm backend adapter interface — the compute plane contract.
 
 Every backend is a FULL ComfyUI instance (Docker on AKS, RunPod, vast.ai,
 LAN). Adapters translate the spooler's verbs into that backend's transport.

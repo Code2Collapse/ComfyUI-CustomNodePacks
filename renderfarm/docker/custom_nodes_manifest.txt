@@ -1,4 +1,4 @@
-# RIB backend image — custom node manifest.
+# C2C Farm backend image — custom node manifest.
 # Format: <git-url> <commit-hash-or-ref>
 # One line per pack; the Dockerfile clones each at the EXACT ref so every
 # backend replica runs identical node code (pre-flight validation depends on

@@ -11,26 +11,26 @@ from renderfarm.storage.s3_compatible_storage import S3CompatibleStorage
 
 # ── factory + fail-loud env ──────────────────────────────────────────
 def test_factory_unset_provider_fails_loudly(monkeypatch):
-    monkeypatch.delenv("RIB_STORAGE_PROVIDER", raising=False)
-    with pytest.raises(RuntimeError, match="RIB_STORAGE_PROVIDER is not set"):
+    monkeypatch.delenv("C2C_STORAGE_PROVIDER", raising=False)
+    with pytest.raises(RuntimeError, match="C2C_STORAGE_PROVIDER is not set"):
         get_storage()
 
 
 def test_factory_unknown_provider(monkeypatch):
-    monkeypatch.setenv("RIB_STORAGE_PROVIDER", "carrier-pigeon")
-    with pytest.raises(RuntimeError, match="unknown RIB_STORAGE_PROVIDER"):
+    monkeypatch.setenv("C2C_STORAGE_PROVIDER", "carrier-pigeon")
+    with pytest.raises(RuntimeError, match="unknown C2C_STORAGE_PROVIDER"):
         get_storage()
 
 
 def test_require_env_names_missing_vars(monkeypatch):
-    monkeypatch.delenv("RIB_TEST_MISSING_VAR", raising=False)
-    with pytest.raises(RuntimeError, match="RIB_TEST_MISSING_VAR"):
-        require_env("RIB_TEST_MISSING_VAR")
+    monkeypatch.delenv("C2C_TEST_MISSING_VAR", raising=False)
+    with pytest.raises(RuntimeError, match="C2C_TEST_MISSING_VAR"):
+        require_env("C2C_TEST_MISSING_VAR")
 
 
 def test_s3_missing_bucket_fails_loudly(monkeypatch):
-    monkeypatch.delenv("RIB_S3_BUCKET", raising=False)
-    with pytest.raises(RuntimeError, match="RIB_S3_BUCKET"):
+    monkeypatch.delenv("C2C_S3_BUCKET", raising=False)
+    with pytest.raises(RuntimeError, match="C2C_S3_BUCKET"):
         S3CompatibleStorage(client=object())
 
 
@@ -47,13 +47,13 @@ class FakeS3Client:
 
 
 def test_s3_upload_returns_presigned_url(tmp_path, monkeypatch):
-    monkeypatch.setenv("RIB_S3_BUCKET", "farm-bucket")
-    monkeypatch.setenv("RIB_S3_URL_TTL", "3600")
+    monkeypatch.setenv("C2C_S3_BUCKET", "farm-bucket")
+    monkeypatch.setenv("C2C_S3_URL_TTL", "3600")
     f = tmp_path / "plate.exr"
     f.write_bytes(b"exr")
     fake = FakeS3Client()
     url = S3CompatibleStorage(client=fake).upload(str(f))
-    assert url.startswith("https://fake.s3/farm-bucket/rib/")
+    assert url.startswith("https://fake.s3/farm-bucket/c2c-farm/")
     assert url.endswith("ttl=3600") and "plate.exr" in url
     assert fake.uploaded[0][1] == "farm-bucket"
 

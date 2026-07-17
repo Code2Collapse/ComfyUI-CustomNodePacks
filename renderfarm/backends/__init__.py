@@ -1,4 +1,4 @@
-"""RIB backend adapter registry/factory.
+"""C2C Farm backend adapter registry/factory.
 
 Adapters are cached per backend name (they hold websocket taps + object_info
 caches). backends.json `type` selects the class; comfyui_native covers every
@@ -31,7 +31,7 @@ def get_adapter(backend_name: str) -> BackendAdapter:
         adapter = ComfyUINativeAdapter(cfg)
     else:
         raise RuntimeError(
-            f"RIB: backend '{backend_name}' has unknown type '{btype}'. "
+            f"C2C Farm: backend '{backend_name}' has unknown type '{btype}'. "
             f"Supported types: {sorted(_TYPES)}."
         )
     with _lock:

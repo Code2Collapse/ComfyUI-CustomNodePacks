@@ -1,4 +1,4 @@
-"""RIB pre-flight validation — the fatality preventer.
+"""C2C Farm pre-flight validation — the fatality preventer.
 
 Before a workflow leaves the building, ask the target backend for its
 /object_info and verify every class_type in the submitted prompt exists

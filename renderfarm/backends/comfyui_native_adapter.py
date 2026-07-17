@@ -28,7 +28,7 @@ import uuid
 
 from .base_adapter import BackendAdapter
 
-log = logging.getLogger("RIB.backend")
+log = logging.getLogger("C2C.Farm.backend")
 
 
 class ComfyUINativeAdapter(BackendAdapter):
@@ -36,18 +36,18 @@ class ComfyUINativeAdapter(BackendAdapter):
         super().__init__(cfg)
         self.base_url = (cfg.get("base_url") or "").rstrip("/")
         if not self.base_url:
-            raise RuntimeError(f"RIB: backend '{self.name}' has no base_url in backends.json.")
+            raise RuntimeError(f"C2C Farm: backend '{self.name}' has no base_url in backends.json.")
         self.headers = {}
         key_env = cfg.get("api_key_env") or ""
         if key_env:
             token = os.environ.get(key_env, "")
             if not token:
                 raise RuntimeError(
-                    f"RIB: backend '{self.name}' requires the API token env var "
+                    f"C2C Farm: backend '{self.name}' requires the API token env var "
                     f"'{key_env}', which is not set. Export it and restart ComfyUI."
                 )
             self.headers["Authorization"] = f"Bearer {token}"
-        self.client_id = f"rib-{uuid.uuid4().hex[:8]}"
+        self.client_id = f"c2c-farm-{uuid.uuid4().hex[:8]}"
         self._object_info_cache: tuple[float, set[str]] | None = None
         self._ws_tap: _WsTap | None = None
         self._ws_lock = threading.Lock()
@@ -63,12 +63,12 @@ class ComfyUINativeAdapter(BackendAdapter):
                                  timeout=timeout, **kw)
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(
-                f"RIB: backend '{self.name}' unreachable at {self.base_url} ({exc.__class__.__name__}). "
+                f"C2C Farm: backend '{self.name}' unreachable at {self.base_url} ({exc.__class__.__name__}). "
                 f"Is the container/gateway running and the URL in backends.json correct?"
             ) from exc
         if r.status_code == 401 or r.status_code == 403:
             raise RuntimeError(
-                f"RIB: backend '{self.name}' rejected the API token (HTTP {r.status_code}). "
+                f"C2C Farm: backend '{self.name}' rejected the API token (HTTP {r.status_code}). "
                 f"Check the '{self.cfg.get('api_key_env')}' env var."
             )
         r.raise_for_status()
@@ -83,7 +83,7 @@ class ComfyUINativeAdapter(BackendAdapter):
             # node pools). Sent in the body AND a header so either layer can
             # route without parsing the prompt.
             "compute_profile": compute_profile,
-            "extra_data": {"rib": {"compute_profile": compute_profile,
+            "extra_data": {"c2c_farm": {"compute_profile": compute_profile,
                                    "priority": int(priority)}},
         }
         headers = {"X-Compute-Profile": compute_profile}
@@ -93,17 +93,17 @@ class ComfyUINativeAdapter(BackendAdapter):
                               headers={**self.headers, **headers}, timeout=(5, 120))
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(
-                f"RIB: submit to backend '{self.name}' failed ({exc.__class__.__name__}) — "
+                f"C2C Farm: submit to backend '{self.name}' failed ({exc.__class__.__name__}) — "
                 f"gateway {self.base_url} unreachable."
             ) from exc
         if r.status_code >= 400:
             raise RuntimeError(
-                f"RIB: backend '{self.name}' rejected the workflow (HTTP {r.status_code}): "
+                f"C2C Farm: backend '{self.name}' rejected the workflow (HTTP {r.status_code}): "
                 f"{r.text[:500]}"
             )
         remote_id = r.json().get("prompt_id")
         if not remote_id:
-            raise RuntimeError(f"RIB: backend '{self.name}' returned no prompt_id: {r.text[:300]}")
+            raise RuntimeError(f"C2C Farm: backend '{self.name}' returned no prompt_id: {r.text[:300]}")
         self._ensure_ws_tap()
         return remote_id
 
@@ -130,7 +130,7 @@ class ComfyUINativeAdapter(BackendAdapter):
     def get_result(self, job_id: str) -> list[str]:
         hist = self._history(job_id)
         if hist is None:
-            raise RuntimeError(f"RIB: backend '{self.name}' has no history for job {job_id}.")
+            raise RuntimeError(f"C2C Farm: backend '{self.name}' has no history for job {job_id}.")
         from ..courier import download_results, results_dir
         paths: list[str] = []
         url_outputs: list[str] = []
@@ -260,7 +260,7 @@ class _WsTap:
         ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
         self._url = f"{ws_url}/ws?clientId={client_id}"
         self._headers = [f"{k}: {v}" for k, v in headers.items()]
-        threading.Thread(target=self._loop, name="rib-ws-tap", daemon=True).start()
+        threading.Thread(target=self._loop, name="c2c-farm-ws-tap", daemon=True).start()
 
     def _loop(self):
         import websocket

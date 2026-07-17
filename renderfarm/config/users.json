@@ -1,6 +1,6 @@
 {
   "_readme": [
-    "Maps the RIB_USER_NAME env var to a farm role. role: admin|user.",
+    "Maps the C2C_USER_NAME env var to a farm role. role: admin|user.",
     "Admins can pause/cancel anyone's jobs and see all jobs in the dashboard.",
     "projects: tags this user may submit under ('*' = any).",
     "max_concurrent_jobs: how many of this user's jobs may run at once;",

@@ -1,11 +1,11 @@
-# RIB backend image — a FULL ComfyUI instance for the render-farm "Brawn".
+# C2C Farm backend image — a FULL ComfyUI instance for the render-farm "Brawn".
 # Built by .github/workflows/build_docker.yml and deployed by the infra team
 # (Embee) onto AKS node pools / RunPod templates. Kubernetes manifests are
 # explicitly out of scope here.
 #
 # Build args let CI pin exact versions:
 #   docker build -f renderfarm/docker/Dockerfile \
-#     --build-arg COMFYUI_REF=v0.3.40 -t comfy-rib-backend .
+#     --build-arg COMFYUI_REF=v0.3.40 -t comfy-c2c-farm-backend .
 
 ARG CUDA_TAG=12.4.1-cudnn-runtime-ubuntu22.04
 FROM nvidia/cuda:${CUDA_TAG}
@@ -46,7 +46,7 @@ RUN set -e; cd /opt/ComfyUI/custom_nodes; \
         fi; \
     done
 
-# RIB courier needs URL-tolerant loaders on the backend; websocket previews
+# C2C Farm courier needs URL-tolerant loaders on the backend; websocket previews
 # and storage SDKs so cloud-save nodes can push outputs back.
 RUN python -m pip install websocket-client boto3 azure-storage-blob google-cloud-storage
 

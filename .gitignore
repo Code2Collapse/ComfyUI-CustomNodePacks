@@ -232,10 +232,10 @@ _deprecated/
 # MEC error assistant runtime data
 user/
 
-# RIB render-farm runtime data (SQLite audit log — WAL siblings too)
+# C2C Farm render-farm runtime data (SQLite audit log — WAL siblings too)
 renderfarm/config/audit.db
 renderfarm/config/audit.db-wal
 renderfarm/config/audit.db-shm
 
-# but the RIB render-farm test suite IS part of the source tree
+# but the C2C Farm render-farm test suite IS part of the source tree
 !renderfarm/tests/

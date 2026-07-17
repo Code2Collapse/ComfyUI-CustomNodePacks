@@ -1,4 +1,4 @@
-"""RIB render-farm nodes — Submit / ClusterStatus / JobHistory.
+"""C2C Farm render-farm nodes — Submit / ClusterStatus / JobHistory.
 
 The graph-facing face of the renderfarm/ subsystem (Tractor-style spooler
 dispatching full workflows to remote ComfyUI Docker backends). All inputs
@@ -11,15 +11,15 @@ import json
 import logging
 import time
 
-log = logging.getLogger("RIB.nodes")
+log = logging.getLogger("C2C.Farm.nodes")
 
 # Dashboard REST routes ride this module's import (guarded — a route failure
 # must never take the node registrations down with it).
 try:
-    from ..renderfarm.api_routes import register_routes as _rib_register_routes
-    _rib_register_routes()
+    from ..renderfarm.api_routes import register_routes as _farm_register_routes
+    _farm_register_routes()
 except Exception as _exc:  # noqa: BLE001
-    log.warning("RIB dashboard routes not registered: %s", _exc)
+    log.warning("C2C Farm dashboard routes not registered: %s", _exc)
 
 
 def _backend_choices() -> list[str]:
@@ -28,7 +28,7 @@ def _backend_choices() -> list[str]:
         names = [b["name"] for b in list_backends(enabled_only=False)]
         return names or ["<no backends configured>"]
     except Exception as exc:  # noqa: BLE001
-        log.warning("RIB: could not read backends.json: %s", exc)
+        log.warning("C2C Farm: could not read backends.json: %s", exc)
         return ["<no backends configured>"]
 
 
@@ -45,14 +45,14 @@ def _progress_event(node_id, pct, label):
     try:
         from server import PromptServer
         PromptServer.instance.send_sync(
-            "rib.job.progress",
+            "c2c.farm.progress",
             {"node": str(node_id) if node_id is not None else "",
              "pct": float(pct), "label": label})
     except Exception:  # noqa: BLE001 — progress must never break dispatch
         pass
 
 
-class RIB_Submit:
+class C2C_Submit:
     """Spool a full workflow JSON to a remote ComfyUI backend."""
 
     @classmethod
@@ -75,8 +75,8 @@ class RIB_Submit:
                 "wait_for_completion": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "On: block until the remote render finishes and pull outputs "
-                               "back into input/rib_results/<job>/. Off: return the job id "
-                               "immediately and track it in the RIB dashboard."}),
+                               "back into input/c2c_farm_results/<job>/. Off: return the job id "
+                               "immediately and track it in the C2C Farm dashboard."}),
                 "timeout_minutes": ("INT", {"default": 120, "min": 1, "max": 1440}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -95,17 +95,17 @@ class RIB_Submit:
         from ..renderfarm.spooler.queue_manager import Job, get_queue_manager
         from ..renderfarm.user_config import get_backend, get_user, validate_profile
 
-        user = get_user()  # fail-loud: RIB_USER_NAME must be set + declared
+        user = get_user()  # fail-loud: C2C_USER_NAME must be set + declared
         if backend.startswith("<"):
             raise RuntimeError(
-                "RIB: no backends configured — register one in "
+                "C2C Farm: no backends configured — register one in "
                 "renderfarm/config/backends.json and set \"enabled\": true.")
         backend_cfg = get_backend(backend)   # fail-loud: unknown/disabled
         validate_profile(backend_cfg, compute_profile)
         projects = user.get("projects", [])
         if project_name and projects and "*" not in projects and project_name not in projects:
             raise RuntimeError(
-                f"RIB: user '{user['name']}' may not submit under project "
+                f"C2C Farm: user '{user['name']}' may not submit under project "
                 f"'{project_name}'. Allowed: {projects} (config/users.json).")
 
         prompt = json.loads(prompt_json) if isinstance(prompt_json, str) else prompt_json
@@ -113,7 +113,7 @@ class RIB_Submit:
             prompt = prompt["prompt"]
         if not isinstance(prompt, dict) or not prompt:
             raise RuntimeError(
-                "RIB: prompt_json is not a workflow. Export with 'Save (API Format)' "
+                "C2C Farm: prompt_json is not a workflow. Export with 'Save (API Format)' "
                 "and paste/pipe the JSON object here.")
 
         adapter = get_adapter(backend)
@@ -140,20 +140,20 @@ class RIB_Submit:
         while not job.done.wait(timeout=2.0):
             if time.time() > deadline:
                 raise RuntimeError(
-                    f"RIB: job {job.job_id} exceeded timeout_minutes={timeout_minutes} "
-                    f"(status={job.status}). It keeps running — watch it in the RIB "
-                    f"dashboard or re-fetch with RIB_JobHistory.")
+                    f"C2C Farm: job {job.job_id} exceeded timeout_minutes={timeout_minutes} "
+                    f"(status={job.status}). It keeps running — watch it in the C2C Farm "
+                    f"dashboard or re-fetch with C2C_JobHistory.")
             pct = 0.15 + 0.8 * float(job.progress or 0.0)
             _progress_event(unique_id, pct, f"{job.status} on {backend}")
         if job.status != "complete":
-            raise RuntimeError(f"RIB: job {job.job_id} {job.status}: {job.error}")
+            raise RuntimeError(f"C2C Farm: job {job.job_id} {job.status}: {job.error}")
         _progress_event(unique_id, 1.0, "complete")
         return (job.job_id, "\n".join(job.result_paths),
                 json.dumps({**info, "status": job.status,
                             "results": job.result_paths}, indent=2))
 
 
-class RIB_ClusterStatus:
+class C2C_ClusterStatus:
     """Live capacity of every registered backend, as JSON."""
 
     @classmethod
@@ -192,7 +192,7 @@ class RIB_ClusterStatus:
         return (json.dumps({"backends": report}, indent=2),)
 
 
-class RIB_JobHistory:
+class C2C_JobHistory:
     """Query the SQLite audit log (who ran what, where, how long)."""
 
     @classmethod
@@ -235,12 +235,12 @@ class RIB_JobHistory:
 
 
 NODE_CLASS_MAPPINGS = {
-    "RIB_Submit": RIB_Submit,
-    "RIB_ClusterStatus": RIB_ClusterStatus,
-    "RIB_JobHistory": RIB_JobHistory,
+    "C2C_Submit": C2C_Submit,
+    "C2C_ClusterStatus": C2C_ClusterStatus,
+    "C2C_JobHistory": C2C_JobHistory,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "RIB_Submit": "RIB Farm Submit — Remote Render",
-    "RIB_ClusterStatus": "RIB Cluster Status",
-    "RIB_JobHistory": "RIB Job History (Audit Log)",
+    "C2C_Submit": "C2C Farm Submit — Remote Render",
+    "C2C_ClusterStatus": "C2C Farm Cluster Status",
+    "C2C_JobHistory": "C2C Farm Job History (Audit Log)",
 }

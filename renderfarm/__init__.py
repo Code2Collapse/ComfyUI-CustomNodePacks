@@ -1,5 +1,5 @@
 """
-RIB — "Render In Background" Tractor-style farm manager for ComfyUI.
+C2C Farm — "Render In Background" Tractor-style farm manager for ComfyUI.
 ====================================================================
 Turns this local ComfyUI into a Pixar-Tractor-style spooler/dashboard that
 dispatches full workflow JSON to remote **ComfyUI instances in Docker**
@@ -12,7 +12,7 @@ dispatches full workflow JSON to remote **ComfyUI instances in Docker**
   * compute plane — backend adapters wrapping the remote ComfyUI HTTP API
     (`backends/`), compute-profile routing, pre-flight node validation
     (`preflight.py`)
-  * UI           — sidebar dashboard (js/rib_dashboard.js) fed by /rib/*
+  * UI           — sidebar dashboard (js/c2c_farm_dashboard.js) fed by /c2c/farm/*
     routes (`api_routes.py`)
 
 Everything here is import-light: heavy/optional SDKs (boto3, azure, gcs,
