@@ -236,3 +236,6 @@ user/
 renderfarm/config/audit.db
 renderfarm/config/audit.db-wal
 renderfarm/config/audit.db-shm
+
+# but the RIB render-farm test suite IS part of the source tree
+!renderfarm/tests/
