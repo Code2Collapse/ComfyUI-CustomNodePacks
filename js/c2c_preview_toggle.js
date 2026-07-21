@@ -66,7 +66,23 @@ app.registerExtension({
         // Push the saved choice to the server on load so it persists across restarts.
         // Default Auto: the backend wrapper selects TAESD for video/Wan latents and
         // core Auto for images, per model, on every sampler callback.
-        const v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "auto") || "auto";
+        let v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "auto") || "auto";
+        // One-time upgrade: installs from before "Auto" existed defaulted to
+        // "taesd" with no Auto option, so that value is pinned even after Auto
+        // ships. Auto is a strict superset — it picks the TAESD path for Wan/video
+        // anyway, and a better previewer for images — so bump a stale "taesd" to
+        // "auto" exactly ONCE. A deliberate latent2rgb/off is never touched, and
+        // if the user later re-picks taesd on purpose it is never re-flipped.
+        try {
+            const MIGRATION_KEY = "c2c.preview.method._autoMigrated";
+            if (!app.ui?.settings?.getSettingValue?.(MIGRATION_KEY, false)) {
+                if (v === "taesd") {
+                    v = "auto";
+                    app.ui?.settings?.setSettingValue?.(SETTING_ID, "auto");
+                }
+                app.ui?.settings?.setSettingValue?.(MIGRATION_KEY, true);
+            }
+        } catch (_) { /* settings API shape changed — just apply the saved value */ }
         applyMethod(v);
     },
 });
