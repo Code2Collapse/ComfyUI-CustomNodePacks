@@ -18,8 +18,11 @@ async function applyMethod(method) {
     //    extra_data.preview_method on every prompt and overrides args.preview_method.
     //    "default" (the stock value) means "use the CLI flag" = --preview-method
     //    none = no preview, which is why nothing showed. Force a real method here.
+    //    For "auto" we set core to auto too, but our backend wrapper is what
+    //    makes it smart (video->TAESD, image->Auto per model — core's own Auto
+    //    is blank for Wan).
     try {
-        const native = (method === "off") ? "none" : method;  // taesd | latent2rgb | none
+        const native = (method === "off") ? "none" : method;  // auto | taesd | latent2rgb | none
         app.ui?.settings?.setSettingValue?.("Comfy.Execution.PreviewMethod", native);
     } catch (_) { /* older ComfyUI without the per-queue setting */ }
     // 2) Also hit our backend route (sets args + default_preview_method) — covers
@@ -41,27 +44,45 @@ app.registerExtension({
             name: "C2C ▸ Sampler latent preview",
             tooltip:
                 "Live denoising preview inside the sampler node — works for core " +
-                "KSampler AND Kijai WanVideoSampler. 'Wan/video-aware' uses the " +
-                "TAESD path, which routes Wan samplers to their own video previewer " +
-                "(taehv if you drop taew2_1/taew2_2.safetensors in models/vae_approx, " +
-                "otherwise a Wan-factor Latent2RGB fallback) — this is the one that " +
-                "makes Wan/Kijai previews actually appear. 'Fast' is core Latent2RGB " +
-                "(good for SD/Flux, blank for Wan). 'Off' = no preview.",
+                "KSampler AND Kijai WanVideoSampler. 'Auto' picks the right previewer " +
+                "per model on every run: video/Wan latents get the TAESD path (their " +
+                "own video previewer — taehv if you drop taew2_1/taew2_2.safetensors " +
+                "in models/vae_approx, otherwise a Wan-factor Latent2RGB fallback), " +
+                "and image latents (SD/SDXL/Flux) get core Auto (TAESD when the " +
+                "decoder is present, else fast Latent2RGB). Force a single method with " +
+                "the other options. 'Off' = no preview.",
             type: "combo",
             options: [
-                { text: "On — Wan/video-aware (recommended)", value: "taesd" },
-                { text: "On — fast, SD/Flux only (Latent2RGB)", value: "latent2rgb" },
+                { text: "Auto — smart, per model (recommended)", value: "auto" },
+                { text: "Force On — Wan/video-aware (TAESD)", value: "taesd" },
+                { text: "Force On — fast, SD/Flux only (Latent2RGB)", value: "latent2rgb" },
                 { text: "Off", value: "off" },
             ],
-            defaultValue: "taesd",
-            onChange: (v) => { applyMethod(v || "taesd"); },
+            defaultValue: "auto",
+            onChange: (v) => { applyMethod(v || "auto"); },
         },
     ],
     async setup() {
         // Push the saved choice to the server on load so it persists across restarts.
-        // Default TAESD so Wan/Kijai samplers route to their own video previewer
-        // (core Auto/Latent2RGB shows nothing for Wan latents).
-        const v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "taesd") || "taesd";
+        // Default Auto: the backend wrapper selects TAESD for video/Wan latents and
+        // core Auto for images, per model, on every sampler callback.
+        let v = app.ui?.settings?.getSettingValue?.(SETTING_ID, "auto") || "auto";
+        // One-time upgrade: installs from before "Auto" existed defaulted to
+        // "taesd" with no Auto option, so that value is pinned even after Auto
+        // ships. Auto is a strict superset — it picks the TAESD path for Wan/video
+        // anyway, and a better previewer for images — so bump a stale "taesd" to
+        // "auto" exactly ONCE. A deliberate latent2rgb/off is never touched, and
+        // if the user later re-picks taesd on purpose it is never re-flipped.
+        try {
+            const MIGRATION_KEY = "c2c.preview.method._autoMigrated";
+            if (!app.ui?.settings?.getSettingValue?.(MIGRATION_KEY, false)) {
+                if (v === "taesd") {
+                    v = "auto";
+                    app.ui?.settings?.setSettingValue?.(SETTING_ID, "auto");
+                }
+                app.ui?.settings?.setSettingValue?.(MIGRATION_KEY, true);
+            }
+        } catch (_) { /* settings API shape changed — just apply the saved value */ }
         applyMethod(v);
     },
 });
