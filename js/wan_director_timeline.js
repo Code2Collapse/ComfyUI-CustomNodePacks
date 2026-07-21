@@ -683,10 +683,36 @@ class TimelineEditor {
             }
         }, { passive: false });
 
+        // Track pointer presence so a focus-independent Delete handler knows the
+        // user is working inside the timeline (not the graph).
+        this._pointerInside = false;
+        this.container.addEventListener("mouseenter", () => { this._pointerInside = true; });
+        this.container.addEventListener("mouseleave", () => { this._pointerInside = false; });
+
+        // THE FIX for "Delete wipes the whole node": ComfyUI has a global
+        // keydown that deletes the selected node. When a clip/lane is selected in
+        // the timeline, Delete must remove THAT item and never reach ComfyUI. A
+        // window capture-phase listener runs BEFORE ComfyUI's, and when the
+        // pointer is inside the widget (or focus is within it) with a selection,
+        // it deletes the segment and stops the event dead.
+        this._onWinKeyDown = (e) => {
+            if (e.key !== "Delete" && e.key !== "Backspace") return;
+            const focusInside = this.container.contains(document.activeElement);
+            const editing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")
+                            && this.container.contains(document.activeElement);
+            if (editing) return;                       // let text fields handle it
+            if (!(this._pointerInside || focusInside)) return;
+            if (!this.selection || this.selection.idx < 0 || !this.selection.type) return;
+            this.deleteSelected();
+            e.preventDefault();
+            e.stopImmediatePropagation();              // ComfyUI never sees it → node survives
+        };
+        window.addEventListener("keydown", this._onWinKeyDown, true);
+
         // Keyboard (canvas focused)
         this.cvs.addEventListener("keydown", (e) => {
             const sel = this.selection;
-            if (e.key === "Delete" || e.key === "Backspace") { this.deleteSelected(); e.preventDefault(); }
+            if (e.key === "Delete" || e.key === "Backspace") { this.deleteSelected(); e.preventDefault(); e.stopPropagation(); }
             else if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
                 if (sel.type && sel.idx >= 0) this._copySegment({ segType: sel.type, idx: sel.idx });
                 e.preventDefault();
@@ -1068,13 +1094,13 @@ class TimelineEditor {
         (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
         // LTX-style: a SCENE video that carries an audio track also drops a
         // waveform on the AUDIO track (control videos don't). Silent if no audio.
-        if (!toControl) { try { await this._autoExtractVideoAudio(file, filename); } catch (_) {} }
+        if (!toControl) { try { await this._autoExtractVideoAudio(file, filename, seg.id); } catch (_) {} }
     }
 
     /** Decode a video's embedded audio and add it as a waveform on the AUDIO
      *  track, referencing the same already-uploaded file (no re-upload). Skips
      *  silently when the video has no audio track. Mirrors LTX Director. */
-    async _autoExtractVideoAudio(file, videoFilename) {
+    async _autoExtractVideoAudio(file, videoFilename, sourceVideoId) {
         // If an audio clip for this exact file already exists, don't duplicate.
         if (this.audioSegments.some(a => a.audioFile === videoFilename)) return;
         let peaksInfo = null;
@@ -1088,6 +1114,9 @@ class TimelineEditor {
             audioDurationFrames: peaksInfo.durFrames,
             audioFile: videoFilename, fileName: file.name,
             waveformPeaks: peaksInfo.peaks, fromVideo: true,
+            // Linked to its parent SCENE video: deleting the video deletes this
+            // audio too (they're the same source), like LTX Director.
+            sourceVideoId: sourceVideoId || null,
         };
         this.audioBuffers.set(videoFilename, peaksInfo.audio);
         this.audioSegments.push(seg);
@@ -1126,7 +1155,13 @@ class TimelineEditor {
         if (idx < 0) return;
         const arr = this._segArr(type);
         if (idx < arr.length) {
+            const removed = arr[idx];
             arr.splice(idx, 1);
+            // Deleting a SCENE video also removes its linked auto-extracted audio
+            // (same source file), like LTX Director — video + its audio are one.
+            if (removed && removed.type === "video" && removed.id) {
+                this.audioSegments = this.audioSegments.filter(a => a.sourceVideoId !== removed.id);
+            }
             this.selection = { type: null, idx: -1 };
             this.commitChanges();
             if (this._isV2(type)) this._updateV2Props(); else this._updatePropsPanel();
@@ -2320,6 +2355,7 @@ class TimelineEditor {
     destroy() {
         this._stopAudio();
         this._dismissAddMenu();
+        try { if (this._onWinKeyDown) window.removeEventListener("keydown", this._onWinKeyDown, true); } catch {}
         try { this._resizeObs?.disconnect(); } catch {}
         if (this.audioCtx) try { this.audioCtx.close(); } catch {}
         this.audioCtx = null;
