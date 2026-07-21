@@ -641,9 +641,18 @@ class TimelineEditor {
             this.dropHint.style.display = "none";
             const files = Array.from(e.dataTransfer?.files || []);
             let accepted = 0;
+            // Track-aware: a video dropped on the CONTROL row is a control video
+            // (ControlNet/Uni3C); anywhere else it is SCENE content (LTX MAIN-style).
+            let dropControl = false;
+            try {
+                const rect = this.cvs.getBoundingClientRect();
+                const dropY = e.clientY - rect.top;
+                const vt = this._vidTop(), vb = vt + VID_TRACK_H;
+                dropControl = dropY >= vt && dropY < vb;
+            } catch (_) {}
             for (const f of files) {
                 if (f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi|m4v|mxf|mts|m2ts|exr|dpx|hdr|dnxhd|prores|j2k|jp2|jpc)$/i.test(f.name)) {
-                    await this.addVideoSegmentFromFile(f); accepted += 1;
+                    await this.addVideoSegmentFromFile(f, dropControl); accepted += 1;
                 } else if (f.type.startsWith("image/")) { await this.addImageSegmentFromFile(f); accepted += 1; }
                 else if (f.type.startsWith("audio/")) { await this.addAudioSegmentFromFile(f); accepted += 1; }
             }
@@ -771,10 +780,12 @@ class TimelineEditor {
             this.trackMuted = (tl.trackMuted && typeof tl.trackMuted === "object") ? tl.trackMuted : {};
         }
         this.suppressCommit = false;
-        // Async image preload
-        for (const s of this.segments) this._preloadImage(s);
-        // Thumbnails for video clips aren't stored in the JSON (would bloat the
-        // workflow); regenerate them from the uploaded file on load.
+        // Async preload: images load their thumbnail; SCENE videos regen their
+        // filmstrip (thumbs aren't serialized — they'd bloat the workflow JSON).
+        for (const s of this.segments) {
+            if (s.type === "video") this._regenVideoThumbs(s); else this._preloadImage(s);
+        }
+        // Same for CONTROL-track videos.
         for (const s of this.motionSegments) this._regenVideoThumbs(s);
     }
 
@@ -791,6 +802,15 @@ class TimelineEditor {
             imageFile: s.imageFile || "",
             imageB64:  s.imageB64  || "",
             guideStrength: typeof s.guideStrength === "number" ? s.guideStrength : 1.0,
+            // Video fields (present when a SCENE clip is a video, like LTX MAIN).
+            // Without these a SCENE video would lose its file on save/reload.
+            ...(s.type === "video" ? {
+                videoFile: s.videoFile || "", fileName: s.fileName || "",
+                trimStart: s.trimStart || 0, role: s.role || "scene",
+                srcDurationFrames: s.srcDurationFrames || 0,
+                srcDurationSec: s.srcDurationSec || 0,
+                srcW: s.srcW || 0, srcH: s.srcH || 0, kind: s.kind || "video",
+            } : {}),
         }));
         const audOut = this.audioSegments.map(s => ({
             id: s.id, type: "audio", start: s.start, length: s.length,
@@ -999,11 +1019,14 @@ class TimelineEditor {
         });
     }
 
-    async addVideoSegmentFromFile(file) {
+    async addVideoSegmentFromFile(file, toControl = false) {
         // Upload first (the server probe reads from input/), then decode on the
         // SERVER — that path handles EVERY format (EXR/DCP/ProRes/DNxHD/4K). A
         // client <video> decode is only a fallback for web-friendly formats when
         // the endpoint is missing, so we never hang on an undecodable pro file.
+        // toControl=false (default): the video is SCENE content (like LTX
+        // Director's MAIN track). toControl=true: a CONTROL video (ControlNet /
+        // Uni3C guide) on the CONTROL track. Same filmstrip visual either way.
         const res = await uploadFile(file, "image");   // /upload/image stores ANY file in input/
         if (!res) return;
         const filename = res.subfolder ? `${res.subfolder}/${res.name}` : res.name;
@@ -1024,16 +1047,22 @@ class TimelineEditor {
         const length = still
             ? Math.min(this.durFrames, Math.max(MIN_SEG_FRAMES, Math.round(fps * 2)))
             : Math.max(MIN_SEG_FRAMES, Math.min(srcFrames, this.durFrames));
-        const start = this._findFreeSlot(length, "video");
+        // SCENE row = this.segments (main content); CONTROL row = motionSegments.
+        // The row is the array; seg.type "video" drives the filmstrip render, so a
+        // video on SCENE renders correctly while its selection segType is "image".
+        const rowType = toControl ? "video" : "image";
+        const arr = toControl ? this.motionSegments : this.segments;
+        const start = this._findFreeSlot(length, rowType);
         const seg = {
             id: nid(), type: "video", start, length, trimStart: 0,
             videoFile: filename, fileName: file.name,
             srcDurationFrames: srcFrames, srcDurationSec: meta.durationSec || 0,
             srcW: meta.width || 0, srcH: meta.height || 0, kind: meta.kind || "video",
+            role: toControl ? "control" : "scene",
             prompt: "", _thumbs: meta.thumbs || [],
         };
-        this.motionSegments.push(seg);
-        this.selection = { type: "video", idx: this.motionSegments.length - 1 };
+        arr.push(seg);
+        this.selection = { type: rowType, idx: arr.length - 1 };
         this.commitChanges();
         this._updatePropsPanel();
         (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
@@ -1055,10 +1084,12 @@ class TimelineEditor {
         clone.id = nid();
         clone.start = ph;
         clone.length = secondLen;
-        if (type === "video" || type === "audio") clone.trimStart = (seg.trimStart || 0) + firstLen;
+        // Key off seg.type (visual kind), not the row: a SCENE video lives in the
+        // "image" row/array but still needs its source in-point advanced on split.
+        if (seg.type === "video" || seg.type === "audio") clone.trimStart = (seg.trimStart || 0) + firstLen;
         seg.length = firstLen;
         arr.push(clone);
-        if (type === "image") this._preloadImage(clone);
+        if (seg.type === "image") this._preloadImage(clone);
         this.commitChanges();
         this._updatePropsPanel();
     }
@@ -1758,19 +1789,25 @@ class TimelineEditor {
                 `Output length: ${(seg.length / fps).toFixed(2)}s<br>` +
                 `Trim-in: ${trimIn.toFixed(2)}s · Trim-out: ${Math.max(0, trimOut).toFixed(2)}s`;
         } else if (seg.type === "video") {
+            // A video is SCENE content (main track, like LTX MAIN) unless it was
+            // added to the CONTROL row (ControlNet/Uni3C guide). The role decides
+            // the label and which backend output it feeds.
+            const isControl = seg.role === "control";
             this.propTitle.textContent = `Video: ${seg.fileName || seg.videoFile || "(clip)"}`;
-            this.promptWrap.style.display = "none";
+            // SCENE videos take a per-segment prompt (like an image/scene clip);
+            // control videos don't (they're a guide signal).
+            this.promptWrap.style.display = isControl ? "none" : "block";
             this.gsSlider.parentElement.style.display = "none";
             this.audioInfo.style.display = "block";
             const srcSec = (seg.srcDurationFrames || 0) / fps;
             const trimInF = seg.trimStart || 0;
             this.audioInfo.innerHTML =
-                `<span class="wd-itag">Control video</span>` +
+                `<span class="wd-itag">${isControl ? "Control video" : "Scene video"}</span>` +
                 `File: <b>${seg.fileName || seg.videoFile}</b><br>` +
                 `Source: ${srcSec.toFixed(2)}s · ${seg.srcDurationFrames || "?"}f` +
                     (seg.srcW ? ` · ${seg.srcW}×${seg.srcH}` : "") + `<br>` +
                 `On timeline: ${fmtTime(seg.start, fps, this.displayMode)} → ${fmtTime(seg.start + seg.length, fps, this.displayMode)} · ${seg.length}f<br>` +
-                `Trim-in: ${trimInF}f → feeds <b>control_video</b>`;
+                `Trim-in: ${trimInF}f → feeds <b>${isControl ? "control_video" : "the main scene"}</b>`;
         } else {
             this.propTitle.textContent = (seg.type === "text" ? "TEXT SEGMENT" : "IMAGE SEGMENT");
             this.promptWrap.style.display = "";
