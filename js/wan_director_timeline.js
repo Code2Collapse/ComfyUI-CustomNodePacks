@@ -1014,13 +1014,16 @@ class TimelineEditor {
         try {
             const q = new URLSearchParams({ file: inputName, count: String(VID_THUMBS), height: "80" });
             if (opts.exrView) q.set("exr_view", opts.exrView);
+            if (opts.audio !== false) q.set("audio", "1");   // server-side audio peaks
             const r = await api.fetchApi("/wne/media_probe?" + q.toString());
             if (!r.ok) return null;
             const j = await r.json();
             if (!j || !j.ok) return null;
             const thumbs = (j.thumbs || []).map((d) => { const im = new Image(); im.src = d; return im; });
             return { durationSec: j.durationSec || 0, fps: j.fps || 0, frameCount: j.frameCount || 0,
-                     width: j.width || 0, height: j.height || 0, thumbs, kind: j.kind };
+                     width: j.width || 0, height: j.height || 0, thumbs, kind: j.kind,
+                     audioPeaks: Array.isArray(j.audioPeaks) ? j.audioPeaks : null,
+                     hasAudio: !!j.hasAudio, audioDurationSec: j.audioDurationSec || 0 };
         } catch (e) { return null; }
     }
 
@@ -1094,31 +1097,38 @@ class TimelineEditor {
         (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
         // LTX-style: a SCENE video that carries an audio track also drops a
         // waveform on the AUDIO track (control videos don't). Silent if no audio.
-        if (!toControl) { try { await this._autoExtractVideoAudio(file, filename, seg.id); } catch (_) {} }
+        if (!toControl) { try { await this._autoExtractVideoAudio(file, filename, seg.id, meta); } catch (_) {} }
     }
 
-    /** Decode a video's embedded audio and add it as a waveform on the AUDIO
-     *  track, referencing the same already-uploaded file (no re-upload). Skips
-     *  silently when the video has no audio track. Mirrors LTX Director. */
-    async _autoExtractVideoAudio(file, videoFilename, sourceVideoId) {
-        // If an audio clip for this exact file already exists, don't duplicate.
+    /** Add a video's audio as a waveform on the AUDIO track. Prefers the
+     *  SERVER-decoded peaks from /wne/media_probe (reliable across every codec,
+     *  the fix for "audio didn't appear"); falls back to a client Web-Audio
+     *  decode only for web-friendly files. Silent when there's no audio.
+     *  Linked to its parent SCENE video (deleting the video deletes it too). */
+    async _autoExtractVideoAudio(file, videoFilename, sourceVideoId, meta) {
         if (this.audioSegments.some(a => a.audioFile === videoFilename)) return;
-        let peaksInfo = null;
-        try { peaksInfo = await decodeAudioPeaks(file, this.fps); }
-        catch (_) { return; }                       // no decodable audio → skip
-        if (!peaksInfo || !peaksInfo.durFrames) return;
-        const length = Math.min(peaksInfo.durFrames, this.durFrames);
+        let durFrames = 0, peaks = null, audioBuffer = null;
+        if (meta && meta.hasAudio && Array.isArray(meta.audioPeaks) && meta.audioPeaks.length) {
+            peaks = meta.audioPeaks;
+            durFrames = Math.round((meta.audioDurationSec || meta.durationSec || 0) * this.fps);
+        } else {
+            let peaksInfo = null;
+            try { peaksInfo = await decodeAudioPeaks(file, this.fps); }
+            catch (_) { return; }                   // no decodable audio → skip
+            if (!peaksInfo || !peaksInfo.durFrames) return;
+            peaks = peaksInfo.peaks; durFrames = peaksInfo.durFrames; audioBuffer = peaksInfo.audio;
+        }
+        if (!durFrames || durFrames <= 0) return;
+        const length = Math.min(durFrames, this.durFrames);
         const start = this._findFreeSlot(length, "audio");
         const seg = {
             id: nid(), type: "audio", start, length, trimStart: 0,
-            audioDurationFrames: peaksInfo.durFrames,
+            audioDurationFrames: durFrames,
             audioFile: videoFilename, fileName: file.name,
-            waveformPeaks: peaksInfo.peaks, fromVideo: true,
-            // Linked to its parent SCENE video: deleting the video deletes this
-            // audio too (they're the same source), like LTX Director.
+            waveformPeaks: peaks, fromVideo: true,
             sourceVideoId: sourceVideoId || null,
         };
-        this.audioBuffers.set(videoFilename, peaksInfo.audio);
+        if (audioBuffer) this.audioBuffers.set(videoFilename, audioBuffer);
         this.audioSegments.push(seg);
         this.commitChanges();
         this.render();
