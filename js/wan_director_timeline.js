@@ -1066,6 +1066,33 @@ class TimelineEditor {
         this.commitChanges();
         this._updatePropsPanel();
         (seg._thumbs || []).forEach((im) => { im.onload = () => this.render(); });
+        // LTX-style: a SCENE video that carries an audio track also drops a
+        // waveform on the AUDIO track (control videos don't). Silent if no audio.
+        if (!toControl) { try { await this._autoExtractVideoAudio(file, filename); } catch (_) {} }
+    }
+
+    /** Decode a video's embedded audio and add it as a waveform on the AUDIO
+     *  track, referencing the same already-uploaded file (no re-upload). Skips
+     *  silently when the video has no audio track. Mirrors LTX Director. */
+    async _autoExtractVideoAudio(file, videoFilename) {
+        // If an audio clip for this exact file already exists, don't duplicate.
+        if (this.audioSegments.some(a => a.audioFile === videoFilename)) return;
+        let peaksInfo = null;
+        try { peaksInfo = await decodeAudioPeaks(file, this.fps); }
+        catch (_) { return; }                       // no decodable audio → skip
+        if (!peaksInfo || !peaksInfo.durFrames) return;
+        const length = Math.min(peaksInfo.durFrames, this.durFrames);
+        const start = this._findFreeSlot(length, "audio");
+        const seg = {
+            id: nid(), type: "audio", start, length, trimStart: 0,
+            audioDurationFrames: peaksInfo.durFrames,
+            audioFile: videoFilename, fileName: file.name,
+            waveformPeaks: peaksInfo.peaks, fromVideo: true,
+        };
+        this.audioBuffers.set(videoFilename, peaksInfo.audio);
+        this.audioSegments.push(seg);
+        this.commitChanges();
+        this.render();
     }
 
     /** Split the selected clip at the playhead into two clips. For media clips
