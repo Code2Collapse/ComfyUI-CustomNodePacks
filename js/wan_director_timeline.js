@@ -298,14 +298,16 @@ function _ensureWdStyles() {
   box-sizing:border-box;position:relative;}
 .wd-props{display:flex;flex-direction:column;gap:7px;flex:1 1 auto;min-height:0;overflow-y:auto;padding:2px;}
 .wd-prompt-wrap{position:relative;width:100%;background:var(--wd-panel);border:1px solid var(--wd-line);
-  border-radius:6px;box-sizing:border-box;overflow:hidden;transition:border-color .2s ease;min-height:74px;}
+  border-radius:6px;box-sizing:border-box;overflow:visible;transition:border-color .2s ease;
+  min-height:74px;flex:0 0 auto;}   /* flex:0 0 auto so the textarea's resized height is held */
 .wd-prompt-wrap:focus-within{border-color:#4d6a86;}
 .wd-plabel{position:absolute;top:6px;left:9px;font-size:9px;font-weight:700;color:var(--wd-dim2);
   text-transform:uppercase;letter-spacing:.6px;pointer-events:none;user-select:none;z-index:2;}
 .wd-pmeta{position:absolute;top:6px;right:9px;font:9px ui-monospace,monospace;color:var(--wd-dim2);
   pointer-events:none;z-index:2;}
-.wd-parea{width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);border:none;
-  padding:22px 9px 9px;resize:none;font-size:12px;line-height:1.45;outline:none;min-height:74px;}
+.wd-parea{display:block;width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);
+  border:none;padding:22px 9px 9px;resize:vertical;font-size:12px;line-height:1.45;outline:none;
+  min-height:74px;}   /* drag the textarea's bottom-right grip to grow the prompt box */
 .wd-parea::placeholder{color:#555;}
 .wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:6px;
   padding:10px 11px;font-size:11.5px;line-height:1.6;}
