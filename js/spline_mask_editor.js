@@ -364,11 +364,188 @@ function bezierCubic(points, samplesPerSeg, closed, handles) {
     return out;
 }
 
+// ── new accurate curve families (mirror nodes/_spline_curves.py exactly so
+//    the on-canvas preview matches the rasterized mask) ──────────────────
+const BSPLINE_M = [[-1, 3, -3, 1], [3, -6, 3, 0], [-3, 0, 3, 0], [1, 4, 1, 0]]
+    .map((r) => r.map((v) => v / 6));
+
+function bsplineLike(points, spb, closed, weights) {
+    const n = points.length;
+    if (n < 3) return points.slice();
+    const W = (Array.isArray(weights) && weights.length === n)
+        ? weights.map((w) => Math.max(1e-6, +w || 1)) : points.map(() => 1);
+    let idx, segs;
+    if (closed) { idx = [n - 1]; for (let i = 0; i < n; i++) idx.push(i); idx.push(0, 1); segs = n; }
+    else { idx = [0, 0]; for (let i = 0; i < n; i++) idx.push(i); idx.push(n - 1, n - 1); segs = idx.length - 3; }
+    const out = [], lastSeg = segs - 1;
+    for (let s = 0; s < segs; s++) {
+        const c = [idx[s], idx[s + 1], idx[s + 2], idx[s + 3]];
+        const steps = spb + ((!closed && s === lastSeg) ? 1 : 0);
+        for (let k = 0; k < steps; k++) {
+            const t = k / spb, tv = [t * t * t, t * t, t, 1];
+            const basis = [0, 0, 0, 0];
+            for (let a = 0; a < 4; a++) { let su = 0; for (let b = 0; b < 4; b++) su += tv[b] * BSPLINE_M[b][a]; basis[a] = su; }
+            let nx = 0, ny = 0, den = 0;
+            for (let a = 0; a < 4; a++) { const P = points[c[a]], wb = basis[a] * W[c[a]]; nx += wb * P.x; ny += wb * P.y; den += wb; }
+            out.push({ x: nx / den, y: ny / den });
+        }
+    }
+    return out;
+}
+
+function solveLinear(A, b) {  // small dense Gaussian elimination (n<=~64)
+    const n = b.length, M = A.map((r, i) => r.concat(b[i]));
+    for (let col = 0; col < n; col++) {
+        let piv = col; for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+        [M[col], M[piv]] = [M[piv], M[col]];
+        const d = M[col][col] || 1e-12;
+        for (let r = 0; r < n; r++) { if (r === col) continue; const f = M[r][col] / d; for (let cc = col; cc <= n; cc++) M[r][cc] -= f * M[col][cc]; }
+    }
+    return M.map((r, i) => r[n] / (r[i] || 1e-12));
+}
+
+function naturalCubic1d(y, closed) {
+    const n = y.length, k = new Array(n).fill(0);
+    if (closed) {
+        const A = Array.from({ length: n }, () => new Array(n).fill(0)), rhs = new Array(n).fill(0);
+        for (let i = 0; i < n; i++) {
+            A[i][(i - 1 + n) % n] = 1; A[i][i] = 4; A[i][(i + 1) % n] = 1;
+            rhs[i] = 6 * (y[(i + 1) % n] - 2 * y[i] + y[(i - 1 + n) % n]);
+        }
+        return solveLinear(A, rhs);
+    }
+    if (n >= 3) {
+        const m = n - 2, A = Array.from({ length: m }, () => new Array(m).fill(0)), rhs = new Array(m).fill(0);
+        for (let i = 0; i < m; i++) { A[i][i] = 4; if (i > 0) A[i][i - 1] = 1; if (i < m - 1) A[i][i + 1] = 1; rhs[i] = 6 * (y[i + 2] - 2 * y[i + 1] + y[i]); }
+        const sol = solveLinear(A, rhs); for (let i = 0; i < m; i++) k[i + 1] = sol[i];
+    }
+    return k;
+}
+
+function naturalCubic(points, spb, closed) {
+    const n = points.length;
+    if (n < 3) return points.slice();
+    const kx = naturalCubic1d(points.map((p) => p.x), closed);
+    const ky = naturalCubic1d(points.map((p) => p.y), closed);
+    const segs = closed ? n : n - 1, out = [], lastSeg = segs - 1;
+    for (let i = 0; i < segs; i++) {
+        const j = (i + 1) % n, steps = spb + ((!closed && i === lastSeg) ? 1 : 0);
+        for (let s = 0; s < steps; s++) {
+            const t = s / spb, u = 1 - t;
+            const cx = u * points[i].x + t * points[j].x + ((u ** 3 - u) * kx[i] + (t ** 3 - t) * kx[j]) / 6;
+            const cy = u * points[i].y + t * points[j].y + ((u ** 3 - u) * ky[i] + (t ** 3 - t) * ky[j]) / 6;
+            out.push({ x: cx, y: cy });
+        }
+    }
+    return out;
+}
+
+function cardinalSpline(points, spb, closed, tension) {
+    const n = points.length;
+    if (n < 3) return points.slice();
+    const c = 1 - Math.max(0, Math.min(1, +tension || 0));
+    let ext;
+    if (closed) ext = [points[n - 1], ...points, points[0], points[1]];
+    else ext = [{ x: 2 * points[0].x - points[1].x, y: 2 * points[0].y - points[1].y }, ...points,
+                { x: 2 * points[n - 1].x - points[n - 2].x, y: 2 * points[n - 1].y - points[n - 2].y }];
+    const segs = closed ? n : n - 1, out = [], lastSeg = segs - 1;
+    for (let i = 0; i < segs; i++) {
+        const p0 = ext[i], p1 = ext[i + 1], p2 = ext[i + 2], p3 = ext[i + 3];
+        const m1x = c * (p2.x - p0.x) * 0.5, m1y = c * (p2.y - p0.y) * 0.5;
+        const m2x = c * (p3.x - p1.x) * 0.5, m2y = c * (p3.y - p1.y) * 0.5;
+        const steps = spb + ((!closed && i === lastSeg) ? 1 : 0);
+        for (let s = 0; s < steps; s++) {
+            const t = s / spb, t2 = t * t, t3 = t2 * t;
+            const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+            out.push({ x: h00 * p1.x + h10 * m1x + h01 * p2.x + h11 * m2x,
+                       y: h00 * p1.y + h10 * m1y + h01 * p2.y + h11 * m2y });
+        }
+    }
+    return out;
+}
+
+function sampleFamily(pts, type, spb, closed, weights, tension) {
+    if (type === "b_spline") return bsplineLike(pts, spb, closed);
+    if (type === "nurbs") return bsplineLike(pts, spb, closed, weights);
+    if (type === "natural_cubic") return naturalCubic(pts, spb, closed);
+    if (type === "cardinal") return cardinalSpline(pts, spb, closed, tension);
+    return catmullRom(pts, spb, closed, 0.5);
+}
+
+function sampleWithCusps(sh, type, spb) {
+    const pts = sh.points, n = pts.length;
+    if (n < 3) return pts.slice();
+    const cusps = sh.cusps;
+    if (!Array.isArray(cusps) || !cusps.some(Boolean))
+        return sampleFamily(pts, type, spb, sh.closed, sh.weights, sh.tension);
+    const corner = pts.map((_, i) => !!cusps[i]);
+    const order = pts.map((_, i) => i).concat(sh.closed ? [0] : []);
+    const runs = []; let cur = [];
+    for (const i of order) { cur.push(i); if (corner[i] && cur.length > 1) { runs.push(cur); cur = [i]; } }
+    if (cur.length > 1) runs.push(cur);
+    const out = [];
+    for (const run of runs) {
+        const rp = run.map((i) => pts[i]);
+        const rw = sh.weights ? run.map((i) => sh.weights[i] ?? 1) : null;
+        let seg = sampleFamily(rp, type, spb, false, rw, sh.tension);
+        if (out.length && seg.length && Math.abs(out[out.length - 1].x - seg[0].x) < 1e-6
+            && Math.abs(out[out.length - 1].y - seg[0].y) < 1e-6) seg = seg.slice(1);
+        out.push(...seg);
+    }
+    return out;
+}
+
+// Parametric primitives (mirror _spline_curves.make_primitive) for preview.
+const PRIMITIVE_TYPES = ["circle", "ellipse", "rectangle", "rounded_rect", "polygon", "star", "arc"];
+function makePrimitive(type, pts, samples, params) {
+    params = params || {};
+    if (pts.length < 2) return pts.slice();
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const x0 = Math.min(...xs), y0 = Math.min(...ys), x1 = Math.max(...xs), y1 = Math.max(...ys);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const rx = Math.max(1e-6, (x1 - x0) / 2), ry = Math.max(1e-6, (y1 - y0) / 2);
+    const rot = +params.rotation || 0, cr = Math.cos(rot), sr = Math.sin(rot);
+    const place = (dx, dy) => ({ x: cx + dx * cr - dy * sr, y: cy + dx * sr + dy * cr });
+    const n = Math.max(3, samples | 0), TAU = Math.PI * 2;
+    if (type === "circle" || type === "ellipse") {
+        const r = type === "circle" ? Math.min(rx, ry) : null;
+        return Array.from({ length: n }, (_, i) => place((r || rx) * Math.cos(TAU * i / n), (r || ry) * Math.sin(TAU * i / n)));
+    }
+    if (type === "rectangle") return [place(-rx, -ry), place(rx, -ry), place(rx, ry), place(-rx, ry)];
+    if (type === "rounded_rect") {
+        let rad = params.corner_radius != null ? +params.corner_radius : Math.min(rx, ry) * 0.25;
+        rad = Math.max(0, Math.min(rad, Math.min(rx, ry)));
+        const per = Math.max(2, n >> 2), out = [];
+        [[rx - rad, ry - rad, 0], [-rx + rad, ry - rad, Math.PI / 2], [-rx + rad, -ry + rad, Math.PI], [rx - rad, -ry + rad, 1.5 * Math.PI]]
+            .forEach(([ccx, ccy, a0]) => { for (let k = 0; k <= per; k++) { const a = a0 + (Math.PI / 2) * (k / per); out.push(place(ccx + rad * Math.cos(a), ccy + rad * Math.sin(a))); } });
+        return out;
+    }
+    if (type === "polygon") {
+        const sides = Math.max(3, params.sides | 0 || 6), a0 = params.start_angle != null ? +params.start_angle : -Math.PI / 2;
+        return Array.from({ length: sides }, (_, i) => place(rx * Math.cos(a0 + TAU * i / sides), ry * Math.sin(a0 + TAU * i / sides)));
+    }
+    if (type === "star") {
+        const sides = Math.max(2, params.sides | 0 || 5), inner = Math.max(0.05, Math.min(1, params.inner_ratio != null ? +params.inner_ratio : 0.5));
+        const a0 = params.start_angle != null ? +params.start_angle : -Math.PI / 2, out = [];
+        for (let i = 0; i < sides * 2; i++) { const rr = i % 2 === 0 ? 1 : inner, a = a0 + Math.PI * i / sides; out.push(place(rx * rr * Math.cos(a), ry * rr * Math.sin(a))); }
+        return out;
+    }
+    if (type === "arc") {
+        const a0 = +params.start_angle || 0, a1 = params.end_angle != null ? +params.end_angle : Math.PI, r = Math.min(rx, ry);
+        return Array.from({ length: n }, (_, i) => place(r * Math.cos(a0 + (a1 - a0) * i / (n - 1)), r * Math.sin(a0 + (a1 - a0) * i / (n - 1))));
+    }
+    return pts.slice();
+}
+
 function sampleShape(sh, samplesPerSeg, alpha) {
     const pts = sh.points;
     if (pts.length < 2) return pts.slice();
+    if (PRIMITIVE_TYPES.includes(sh.type))
+        return makePrimitive(sh.type, pts, Math.max(3, samplesPerSeg * 3), sh.params);
     if (sh.type === "polyline") return pts.slice();
     if (sh.type === "bezier")   return bezierCubic(pts, samplesPerSeg, sh.closed, sh.handles);
+    if (sh.type === "b_spline" || sh.type === "nurbs" || sh.type === "natural_cubic" || sh.type === "cardinal")
+        return sampleWithCusps(sh, sh.type, samplesPerSeg);
     return catmullRom(pts, samplesPerSeg, sh.closed, alpha);
 }
 
