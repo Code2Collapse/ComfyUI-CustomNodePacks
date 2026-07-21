@@ -7,7 +7,7 @@
  *   - per-node advanced-panel state (WeakMap, not global)
  *   - wdHideWidget / wdShowWidget markers
  */
-export const WD_DEFAULT_W = 640;
+export const WD_DEFAULT_W = 1375;
 
 export function wdMaxH() {
     // 0.62 → 0.88: the 62%-viewport clamp cut the node ~240px shorter than its

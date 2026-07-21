@@ -38,23 +38,23 @@ import {
 } from "./_wan_director_ui.js";
 
 // ── Constants ───────────────────────────────────────────────────────
-const RULER_H = 22;
-const IMG_TRACK_H = 96;
-const AUD_TRACK_H = 48;
-const VID_TRACK_H = 76;          // Control-Video track (filmstrip of imported clips)
+const RULER_H = 24;
+const IMG_TRACK_H = 160;
+const AUD_TRACK_H = 80;
+const VID_TRACK_H = 84;          // Control-Video track (filmstrip of imported clips)
 const PROPS_MIN_H = 88;
 const TOOLBAR_H = 28;
 const PLAYER_BAR_H = 24;
 const PAD = 4;
 const MIN_SEG_FRAMES = 6;
-const HANDLE_PX = 12;
+const HANDLE_PX = 14;
 const WAVE_PEAKS = 200;
 
 // ── v2 automation tracks (LoRA / camera / seed / pose) ──────────────
 // The backend (director_node.py schema v2) already parses + validates
 // these four arrays and emits them in `tracks_program`; this surfaces
 // them in the timeline so the "6-track" program can be authored here.
-const V2_LANE_H = 26;
+const V2_LANE_H = 30;
 const V2_DEFS = [
     {
         key: "loraSegments", label: "LoRA", color: "#b4befe",
