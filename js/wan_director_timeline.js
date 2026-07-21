@@ -246,11 +246,11 @@ function _ensureWdStyles() {
 .wd-root{--wd-bg:#161616;--wd-panel:#1e1e1e;--wd-panel2:#222;--wd-line:#111;
   --wd-line2:#2c2c2c;--wd-fg:#e6e6e6;--wd-dim:#8a8a8a;--wd-dim2:#666;--wd-acc:#5b9dd9;
   font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--wd-fg);
-  background:var(--wd-bg);border-radius:8px;padding:8px;display:flex;flex-direction:column;
+  background:var(--wd-bg);border-radius:6px;padding:8px;display:flex;flex-direction:column;
   gap:7px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;min-height:0;}
 .wd-toolbar{display:flex;gap:5px;align-items:center;flex-wrap:wrap;flex:0 0 auto;}
 .wd-btn{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
-  border-radius:5px;padding:5px 11px;font-size:11px;font-weight:500;cursor:pointer;
+  border-radius:4px;padding:6px 12px;font-size:11px;font-weight:500;cursor:pointer;
   display:inline-flex;align-items:center;gap:5px;transition:background .15s ease,border-color .15s ease,transform .05s ease;}
 .wd-btn:hover{background:#2e2e2e;border-color:#4a4a4a;}
 .wd-btn:active{transform:translateY(1px);}
@@ -259,10 +259,10 @@ function _ensureWdStyles() {
 .wd-btn-icon{padding:5px 8px;font-size:12px;}
 .wd-sep{width:1px;align-self:stretch;background:var(--wd-line2);margin:2px 3px;}
 .wd-select{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
-  border-radius:5px;padding:4px 6px;font-size:11px;cursor:pointer;}
+  border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer;}
 .wd-status{margin-left:auto;font:11px ui-monospace,monospace;color:var(--wd-dim);letter-spacing:.2px;}
 .wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:#141414;
-  border:1px solid var(--wd-line);border-radius:7px;overflow:hidden;}
+  border:1px solid var(--wd-line);border-radius:6px;overflow:hidden;}
 .wd-canvas{display:block;width:100%;outline:none;cursor:default;}
 /* DOM track sidebar overlaid on the canvas's reserved left column */
 .wd-sb{position:absolute;left:0;top:0;height:100%;background:#171717;border-right:1px solid #0b0b0b;
@@ -286,7 +286,7 @@ function _ensureWdStyles() {
   padding:1px 7px;border-radius:999px;background:#242424;border:1px solid #303030;color:#9a9a9a;letter-spacing:.2px;
   max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;}
 .wd-playerbar{display:flex;align-items:center;gap:9px;background:var(--wd-panel);
-  border:1px solid var(--wd-line);border-radius:7px;padding:6px 10px;flex:0 0 auto;}
+  border:1px solid var(--wd-line);border-radius:6px;padding:6px 10px;flex:0 0 auto;}
 .wd-transport{display:flex;align-items:center;gap:3px;}
 .wd-tbtn{background:none;border:none;color:#cfcfcf;cursor:pointer;font-size:13px;
   width:26px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
@@ -294,11 +294,11 @@ function _ensureWdStyles() {
 .wd-tbtn:hover{background:#2c2c2c;color:#fff;}
 .wd-seek{flex:1 1 auto;accent-color:var(--wd-acc);height:4px;}
 .wd-readout{font:11px ui-monospace,monospace;color:var(--wd-dim);white-space:nowrap;letter-spacing:.3px;}
-.wd-panel{background:var(--wd-panel);border:1px solid var(--wd-line);border-radius:7px;
+.wd-panel{background:var(--wd-panel);border:1px solid var(--wd-line);border-radius:6px;
   box-sizing:border-box;position:relative;}
 .wd-props{display:flex;flex-direction:column;gap:7px;flex:1 1 auto;min-height:0;overflow-y:auto;padding:2px;}
 .wd-prompt-wrap{position:relative;width:100%;background:var(--wd-panel);border:1px solid var(--wd-line);
-  border-radius:7px;box-sizing:border-box;overflow:hidden;transition:border-color .2s ease;min-height:74px;}
+  border-radius:6px;box-sizing:border-box;overflow:hidden;transition:border-color .2s ease;min-height:74px;}
 .wd-prompt-wrap:focus-within{border-color:#4d6a86;}
 .wd-plabel{position:absolute;top:6px;left:9px;font-size:9px;font-weight:700;color:var(--wd-dim2);
   text-transform:uppercase;letter-spacing:.6px;pointer-events:none;user-select:none;z-index:2;}
@@ -307,7 +307,7 @@ function _ensureWdStyles() {
 .wd-parea{width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);border:none;
   padding:22px 9px 9px;resize:none;font-size:12px;line-height:1.45;outline:none;min-height:74px;}
 .wd-parea::placeholder{color:#555;}
-.wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:7px;
+.wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:6px;
   padding:10px 11px;font-size:11.5px;line-height:1.6;}
 .wd-info b,.wd-info span{color:#fff;font-weight:600;}
 .wd-itag{display:block;font-size:9px;font-weight:700;color:var(--wd-dim2);text-transform:uppercase;
@@ -458,7 +458,7 @@ class TimelineEditor {
         this.cvs.style.height = TRACKS_CANVAS_H + "px";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
-        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:#fff;font-size:13px;font-weight:600;border:2px dashed #5b9dd9;border-radius:7px;";
+        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:#fff;font-size:13px;font-weight:600;border:2px dashed #5b9dd9;border-radius:6px;";
         dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
