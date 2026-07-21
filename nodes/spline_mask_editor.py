@@ -37,6 +37,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ._is_changed_util import hash_args_and_kwargs
+from . import _spline_curves as _CURVE
 
 try:
     import cv2
@@ -344,7 +345,22 @@ def _rasterize_splines(spline_data_json: str, H: int, W: int,
         handles = shape.get("handles", None)
 
         # Sample curve points
-        if shape_type == "bezier" and handles:
+        if shape_type in _CURVE.PRIMITIVE_TYPES:
+            # Parametric primitive (circle/ellipse/rect/polygon/star/arc):
+            # exact outline from the shape's bounding-box points + params.
+            curve_pts = _CURVE.make_primitive(
+                shape_type, pts, samples=max(3, samples_per_segment * 3),
+                params=shape.get("params", {}))
+            shape_closed = shape.get("closed", shape_type != "arc")
+        elif shape_type in _CURVE.CURVE_TYPES:
+            # New accurate families: b_spline / nurbs / natural_cubic / cardinal.
+            # Per-point cusp flags break the smooth curve into sharp corners.
+            curve_pts = _CURVE.sample_with_cusps(
+                pts, shape_type, samples_per_segment, shape_closed,
+                cusps=shape.get("cusps", None),
+                weights=shape.get("weights", None),
+                tension=float(shape.get("tension", 0.0)))
+        elif shape_type == "bezier" and handles:
             curve_pts = _bezier_sample(pts, handles, samples_per_segment)
         elif shape_type == "polyline":
             curve_pts = _polyline_sample(pts, shape_closed)
@@ -628,7 +644,8 @@ class SplineMaskEditorMEC:
                     "multiline": True,
                     "tooltip": "Internal serialized spline state from the JS editor. Do not edit manually.",
                 }),
-                "spline_type": (["catmull_rom", "bezier", "polyline"], {
+                "spline_type": (["catmull_rom", "bezier", "polyline",
+                                 "b_spline", "nurbs", "natural_cubic", "cardinal"], {
                     "default": "catmull_rom",
                     "tooltip": (
                         "catmull_rom: smooth curve through all control points. "

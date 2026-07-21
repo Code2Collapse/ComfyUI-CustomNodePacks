@@ -79,9 +79,13 @@ class SplineMaskMEC:
                         "track: keyframes list [{frame:int, points:[[x,y],…]}, …]."
                     ),
                 }),
-                "spline_type": (["catmull_rom", "bezier", "polyline"], {
+                "spline_type": (["catmull_rom", "bezier", "polyline",
+                                 "b_spline", "nurbs", "natural_cubic", "cardinal"], {
                     "default": "catmull_rom",
-                    "tooltip": "[edit/flow_path] interpolation method",
+                    "tooltip": "[edit/flow_path] interpolation method. catmull_rom/"
+                               "natural_cubic/cardinal pass through the points; "
+                               "b_spline/nurbs are smooth approximating curves; "
+                               "bezier uses tangent handles; polyline = straight.",
                 }),
                 "closed": ("BOOLEAN", {
                     "default": True,
