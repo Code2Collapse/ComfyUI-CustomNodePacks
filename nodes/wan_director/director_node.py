@@ -350,6 +350,29 @@ def _apply_prompt_relay_native(model, clip, latent, global_prompt, local_list,
     )
 
 
+def _t5gemma_encode(t5gemma, text, max_tokens=512):
+    """Encode `text` with a loaded T5Gemma encoder → ComfyUI CONDITIONING
+    (``[[hidden, {pooled_output, attention_mask}]]``), matching the shape
+    WanT5GemmaTextEncode emits so downstream metadata attaches cleanly.
+
+    R&D only: T5Gemma states are a different space/width from Wan's UMT5-XXL;
+    usable on a Wan model adapted/finetuned for T5Gemma, not stock Wan.
+    """
+    model, tok = t5gemma["model"], t5gemma["tokenizer"]
+    dev = next(model.parameters()).device
+    enc = tok(text or "", return_tensors="pt", padding=True, truncation=True,
+              max_length=int(max_tokens))
+    enc = {k: v.to(dev) for k, v in enc.items()}
+    with torch.inference_mode():
+        hidden = model(**enc).last_hidden_state
+    mask = enc.get("attention_mask")
+    if mask is not None:
+        pooled = (hidden * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True).clamp(min=1)
+    else:
+        pooled = hidden.mean(1)
+    return [[hidden.float(), {"pooled_output": pooled.float(), "attention_mask": mask}]]
+
+
 def _apply_kijai_branch(wan_model, wan_t5, pos_text, neg_text, local_list,
                         segment_lengths_str, duration_frames, epsilon,
                         enable_prompt_relay):
@@ -1043,6 +1066,10 @@ class WanDirectorC2C:
                 "control_mask":     ("MASK",   {"tooltip": "For Wan Fun Inpaint: per-frame mask track. Passed through to control_mask output."}),
                 "wan_model":        ("WANVIDEOMODEL",    {"tooltip": "Kijai WanVideoWrapper model patcher (required when backend='kijai')."}),
                 "wan_t5":           ("WANTEXTENCODER",   {"tooltip": "Kijai T5 text encoder (required when backend='kijai')."}),
+                "t5gemma":          ("T5GEMMA_ENCODER",  {"tooltip": "R&D: connect a 'T5Gemma Encoder Loader (WNE)' to encode the Director's composed "
+                                                                     "prompt through T5Gemma instead of CLIP (backend='native'). NOTE: T5Gemma hidden states "
+                                                                     "are a different space/width from Wan's UMT5-XXL — this only works on a Wan model "
+                                                                     "finetuned/adapted for T5Gemma; a stock Wan checkpoint will error or produce garbage."}),
             },
         }
 
@@ -1072,18 +1099,21 @@ class WanDirectorC2C:
                 model=None, clip=None,
                 vae=None, clip_vision=None,
                 optional_latent=None, control_video=None, control_mask=None,
-                wan_model=None, wan_t5=None):
+                wan_model=None, wan_t5=None, t5gemma=None):
 
         # Per-backend input validation — clearer than ComfyUI's generic
         # "Required input is missing" because the user genuinely doesn't
         # need both pairs at once.
         if backend == "native":
-            missing = [n for n, v in (("model", model), ("clip", clip)) if v is None]
+            # T5Gemma (when connected) provides the text encoder, so CLIP is
+            # optional in that R&D path; the Wan MODEL is always required.
+            _need = [("model", model)] if t5gemma is not None else [("model", model), ("clip", clip)]
+            missing = [n for n, v in _need if v is None]
             if missing:
                 raise ValueError(
                     f"WanDirector: backend='native' requires {', '.join(missing)}. "
-                    "Either wire a native Wan MODEL + CLIP (UMT5) pair, or switch "
-                    "backend='kijai' and wire wan_model + wan_t5 instead."
+                    "Either wire a native Wan MODEL + CLIP (UMT5) pair (or a T5Gemma encoder in "
+                    "place of CLIP), or switch backend='kijai' and wire wan_model + wan_t5 instead."
                 )
         elif backend == "kijai":
             missing = [n for n, v in (("wan_model", wan_model), ("wan_t5", wan_t5)) if v is None]
@@ -1234,8 +1264,18 @@ class WanDirectorC2C:
             return mdl.clone() if mdl is original else mdl
 
         if backend == "native":
+            if t5gemma is not None:
+                # R&D path: encode the composed prompt through T5Gemma instead of
+                # CLIP. Different embedding space/width from UMT5 — only valid on a
+                # Wan model adapted for T5Gemma. Warned loudly; CLIP is ignored.
+                pos_cond = _t5gemma_encode(t5gemma, pos_text, 512)
+                neg_cond = _t5gemma_encode(t5gemma, neg_text, 512)
+                warnings.append(
+                    f"T5Gemma text encoder active ('{t5gemma.get('name', '?')}'): prompts encoded "
+                    "via T5Gemma, CLIP ignored. R&D — requires a Wan model adapted for T5Gemma; "
+                    "a stock UMT5-trained checkpoint will error or produce garbage.")
             # Multi-CLIP slot conditioning
-            if enable_multi_clip and clip and (structure_prompt.strip() or detail_prompt.strip()):
+            elif enable_multi_clip and clip and (structure_prompt.strip() or detail_prompt.strip()):
                 try:
                     from .features._local_multi_clip import build_multi_slot_conditioning
                     pos_cond = build_multi_slot_conditioning(
@@ -1252,9 +1292,10 @@ class WanDirectorC2C:
                 except Exception as exc:
                     pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
                     warnings.append(f"Multi-CLIP failed ({exc}); fell back to single prompt.")
+                neg_cond = clip.encode_from_tokens_scheduled(clip.tokenize(neg_text))
             else:
                 pos_cond = clip.encode_from_tokens_scheduled(clip.tokenize(pos_text))
-            neg_cond = clip.encode_from_tokens_scheduled(clip.tokenize(neg_text))
+                neg_cond = clip.encode_from_tokens_scheduled(clip.tokenize(neg_text))
 
             if vcfg["dual_cfg"]:
                 for c in pos_cond:
