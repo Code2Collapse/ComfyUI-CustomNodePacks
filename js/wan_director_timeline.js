@@ -50,6 +50,18 @@ const MIN_SEG_FRAMES = 6;
 const HANDLE_PX = 14;
 const WAVE_PEAKS = 200;
 
+// CONTROL-track video roles: what a control clip drives on the Wan side.
+// (Wan has no IC-LoRA; the third track is a real control-video track.)
+const CONTROL_TYPES = [
+    ["uni3c_camera", "Uni3C camera video"],
+    ["pose", "Pose (DWPose/OpenPose)"],
+    ["depth", "Depth"],
+    ["canny", "Canny / Lineart / edges"],
+    ["normal", "Normal map"],
+    ["tile", "Tile / reference"],
+    ["raw", "Raw video (as-is)"],
+];
+
 // ── v2 automation tracks (LoRA / camera / seed / pose) ──────────────
 // The backend (director_node.py schema v2) already parses + validates
 // these four arrays and emits them in `tracks_program`; this surfaces
@@ -425,7 +437,8 @@ class TimelineEditor {
         };
         this.btnAddText  = mkBtn("＋ Text",  "Add a text-only segment");
         this.btnAddImage = mkBtn("＋ Image", "Upload an image segment");
-        this.btnAddVideo = mkBtn("＋ Video", "Import a video clip onto the Control-Video track (mp4/mov/webm…)");
+        this.btnAddVideo = mkBtn("＋ Video", "Add a video clip to the Scene track (any format — mp4/mov/webm/mkv/exr/gif…); its audio auto-extracts to a waveform");
+        this.btnAddControl = mkBtn("＋ Control", "Add a control video (Uni3C camera / Pose / Depth / Canny / Normal…) to the Control-Video track. Any video format incl. gif and EXR.");
         this.btnAddAudio = mkBtn("＋ Audio", "Upload an audio segment");
         const sep1 = document.createElement("div"); sep1.className = "wd-sep";
         this.btnSplit    = mkBtn("Split ✂", "Split the selected clip at the playhead (S)");
@@ -444,7 +457,7 @@ class TimelineEditor {
         const status = document.createElement("span");
         status.className = "wd-status";
         this.statusEl = status;
-        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddAudio, sep1,
+        for (const el of [this.btnAddText, this.btnAddImage, this.btnAddVideo, this.btnAddControl, this.btnAddAudio, sep1,
                           this.btnSplit, this.btnDelete, sep2,
                           this.btnPlay, this.btnZoomOut, this.btnZoomIn, this.btnFit, modeSel, status]) {
             tb.appendChild(el);
@@ -541,6 +554,34 @@ class TimelineEditor {
         gsRow.appendChild(this.gsSlider);
         gsRow.appendChild(this.gsVal);
         props.appendChild(gsRow);
+        this.gsRow = gsRow;
+
+        // Control-type picker — visible only for a CONTROL-track video. Chooses
+        // what the clip drives (Uni3C camera / pose / depth / canny / …).
+        const ctRow = document.createElement("div");
+        ctRow.className = "wd-gsrow";
+        ctRow.style.display = "none";
+        const ctLabel = document.createElement("span");
+        ctLabel.textContent = "Control type";
+        this.ctrlTypeSelect = document.createElement("select");
+        this.ctrlTypeSelect.className = "wd-select";
+        this.ctrlTypeSelect.style.cssText = "flex:1 1 auto;";
+        for (const [val, txt] of CONTROL_TYPES) {
+            const o = document.createElement("option"); o.value = val; o.textContent = txt;
+            this.ctrlTypeSelect.appendChild(o);
+        }
+        this.ctrlTypeSelect.onchange = () => {
+            const seg = this._selSeg();
+            if (seg && seg.type === "video" && seg.role === "control") {
+                seg.controlType = this.ctrlTypeSelect.value;
+                this.commitChanges();
+                this._updatePropsPanel();
+            }
+        };
+        ctRow.appendChild(ctLabel);
+        ctRow.appendChild(this.ctrlTypeSelect);
+        props.appendChild(ctRow);
+        this.ctrlTypeRow = ctRow;
 
         // Audio info box (visible only when audio segment selected)
         this.audioInfo = document.createElement("div");
@@ -572,13 +613,20 @@ class TimelineEditor {
         root.appendChild(props);
 
         // Hidden file inputs
+        // EVERY format (project rule): the picker's accept is only a hint — the
+        // server (ffmpeg + OpenCV, OPENCV_IO_ENABLE_OPENEXR) decodes the actual
+        // bytes, so we list broad MIME globs + high-bit-depth/cinema extensions
+        // and never block a format the pipeline can read.
+        const IMG_ACCEPT = "image/*,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.tga,.exr,"
+            + ".dpx,.hdr,.pfm,.ppm,.pgm,.pbm,.pnm,.jp2,.j2k,.jpc,.jxl,.avif,.heic,.heif,.psd,.dds,.sgi,.ras";
+        const VID_ACCEPT = "video/*,image/*," + IMG_ACCEPT + ",.mp4,.mov,.webm,.mkv,.avi,.m4v,.wmv,"
+            + ".flv,.f4v,.ogv,.ogg,.3gp,.3g2,.ts,.mts,.m2ts,.m2v,.mpg,.mpeg,.vob,.asf,.rm,.rmvb,.divx,"
+            + ".mxf,.dnxhd,.prores,.gxf,.y4m,.nut,.roq,.dv,.qt,.amv,.svi,.mng,.apng";
         this.fileImg = document.createElement("input");
-        this.fileImg.type = "file"; this.fileImg.accept = "image/*"; this.fileImg.style.display = "none";
+        this.fileImg.type = "file"; this.fileImg.accept = IMG_ACCEPT; this.fileImg.style.display = "none";
         this.fileVid = document.createElement("input");
         this.fileVid.type = "file";
-        // Any format: web video + pro/cinema (EXR, DPX, ProRes, DNxHD, MXF/DCP,
-        // JPEG2000). image/* is included because EXR/DPX carry no video MIME type.
-        this.fileVid.accept = "video/*,image/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,.gif,.mxf,.mts,.m2ts,.exr,.dpx,.hdr,.dnxhd,.prores,.j2k,.jp2,.jpc";
+        this.fileVid.accept = VID_ACCEPT;
         this.fileVid.style.display = "none";
         this.fileAud = document.createElement("input");
         this.fileAud.type = "file"; this.fileAud.accept = "audio/*"; this.fileAud.style.display = "none";
@@ -590,7 +638,8 @@ class TimelineEditor {
     _wireEvents() {
         this.btnAddText.onclick  = () => this.addTextSegment();
         this.btnAddImage.onclick = () => this.fileImg.click();
-        this.btnAddVideo.onclick = () => this.fileVid.click();
+        this.btnAddVideo.onclick = () => { this._pendingVidControl = false; this.fileVid.click(); };
+        this.btnAddControl.onclick = () => { this._pendingVidControl = true; this.fileVid.click(); };
         this.btnAddAudio.onclick = () => this.fileAud.click();
         this.btnSplit.onclick    = () => this.splitSelectedAtPlayhead();
         this.btnDelete.onclick   = () => this.deleteSelected();
@@ -604,7 +653,9 @@ class TimelineEditor {
             this.fileImg.value = "";
         };
         this.fileVid.onchange = async () => {
-            for (const f of this.fileVid.files) await this.addVideoSegmentFromFile(f);
+            const toControl = !!this._pendingVidControl;
+            this._pendingVidControl = false;
+            for (const f of this.fileVid.files) await this.addVideoSegmentFromFile(f, toControl);
             this.fileVid.value = "";
         };
         this.fileAud.onchange = async () => {
@@ -797,7 +848,7 @@ class TimelineEditor {
             this.motionSegments = Array.isArray(tl.motionSegments) ? tl.motionSegments : [];
             for (const s of this.segments)      if (!s.id) s.id = nid();
             for (const s of this.audioSegments) if (!s.id) s.id = nid();
-            for (const s of this.motionSegments) { if (!s.id) s.id = nid(); s.type = "video"; }
+            for (const s of this.motionSegments) { if (!s.id) s.id = nid(); s.type = "video"; s.role = "control"; if (!s.controlType) s.controlType = "uni3c_camera"; }
             // v2 automation tracks (load, tolerate missing/legacy v1 docs).
             for (const k of V2_KEYS) {
                 this[k] = Array.isArray(tl[k]) ? tl[k] : [];
@@ -859,6 +910,8 @@ class TimelineEditor {
             videoFile: s.videoFile || "",
             fileName:  s.fileName  || "",
             srcDurationFrames: s.srcDurationFrames || 0,
+            role: "control",
+            controlType: s.controlType || "uni3c_camera",   // pose/depth/canny/uni3c/…
             prompt: s.prompt || "",
         }));
         // schema v2: preserve the four automation tracks so they survive an
@@ -1090,6 +1143,7 @@ class TimelineEditor {
             srcDurationFrames: srcFrames, srcDurationSec: meta.durationSec || 0,
             srcW: meta.width || 0, srcH: meta.height || 0, kind: meta.kind || "video",
             role: toControl ? "control" : "scene",
+            controlType: toControl ? "uni3c_camera" : undefined,
             prompt: "", _thumbs: meta.thumbs || [],
         };
         arr.push(seg);
@@ -1363,11 +1417,11 @@ class TimelineEditor {
             mkItem("Image — upload", "🖼", () => this.fileImg?.click());
             mkItem("Paste image", "📋", () => this._pasteImage());
             const sep = document.createElement("div"); sep.className = "wd-menu-sep"; menu.appendChild(sep);
-            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+            mkItem("Video — upload", "🎞", () => { this._pendingVidControl = false; this.fileVid?.click(); });
         } else if (track === "audio") {
             mkItem("Audio — upload", "♪", () => this.fileAud?.click());
         } else if (track === "video") {
-            mkItem("Video — upload", "🎞", () => this.fileVid?.click());
+            mkItem("Control video — upload", "🎞", () => { this._pendingVidControl = true; this.fileVid?.click(); });
         }
         document.body.appendChild(menu);
         // Clamp to viewport.
@@ -1529,11 +1583,12 @@ class TimelineEditor {
             items.push({ label: `+ ${def?.label || "segment"} here`, action: () => this.addV2Segment(hit.track, this._xToFrame(mx)) });
         } else if (hit.kind === "track") {
             if (hit.track === "video") {
-                items.push({ label: "+ Video…", action: () => this.fileVid.click() });
+                items.push({ label: "+ Control video…", action: () => { this._pendingVidControl = true; this.fileVid.click(); } });
             } else {
                 items.push({ label: "+ Text segment", action: () => this.addTextSegment() });
                 items.push({ label: "+ Image…",       action: () => this.fileImg.click() });
-                items.push({ label: "+ Video…",       action: () => this.fileVid.click() });
+                items.push({ label: "+ Video…",       action: () => { this._pendingVidControl = false; this.fileVid.click(); } });
+                items.push({ label: "+ Control video…", action: () => { this._pendingVidControl = true; this.fileVid.click(); } });
                 items.push({ label: "+ Audio…",       action: () => this.fileAud.click() });
             }
             if (this.clipboard) items.push({ label: "Paste", action: () => this._pasteAt(this._xToFrame(mx), hit.track) });
@@ -1836,6 +1891,7 @@ class TimelineEditor {
     // ── Properties panel sync ───────────────────────────────────────
     _updatePropsPanel() {
         const seg = this._selSeg();
+        if (this.ctrlTypeRow) this.ctrlTypeRow.style.display = "none";   // control-type: only for control videos
         if (!seg) {
             this.propTitle.textContent = "SEGMENT PROMPT";
             this.propBounds.textContent = "";
@@ -1873,6 +1929,11 @@ class TimelineEditor {
             this.promptWrap.style.display = isControl ? "none" : "block";
             this.gsSlider.parentElement.style.display = "none";
             this.audioInfo.style.display = "block";
+            // Control videos expose the control-type picker.
+            if (isControl && this.ctrlTypeRow) {
+                this.ctrlTypeRow.style.display = "flex";
+                this.ctrlTypeSelect.value = seg.controlType || "uni3c_camera";
+            }
             const srcSec = (seg.srcDurationFrames || 0) / fps;
             const trimInF = seg.trimStart || 0;
             this.audioInfo.innerHTML =

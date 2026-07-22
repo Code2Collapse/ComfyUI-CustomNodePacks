@@ -654,6 +654,60 @@ def _compile_pose_program(segs: list, total: int) -> tuple[list[dict], list[str]
     return out, warns
 
 
+# Control-video kinds the timeline's Control track can carry. Mirrors the
+# CONTROL_TYPES list in js/wan_director_timeline.js. Any of these routes the
+# clip to a matching ControlNet / Uni3C camera-embed path downstream.
+_CONTROL_TYPES = {
+    "uni3c_camera",  # Uni3C camera-embed video
+    "pose",          # DWPose / OpenPose
+    "depth",         # depth map sequence
+    "canny",         # canny / lineart / edges
+    "normal",        # normal map
+    "tile",          # tile / reference
+    "raw",           # feed the frames through unmodified
+}
+
+
+def _compile_control_program(segs: list, total: int) -> tuple[list[dict], list[str]]:
+    """Validate the Control-Video track (``motionSegments`` in the timeline).
+
+    Each entry only carries file references + metadata (no decode here), so
+    the program stays cheap on RAM/VRAM — the downstream runner opens the
+    clip lazily and applies the ControlNet indicated by ``controlType``.
+    """
+    out: list[dict] = []
+    warns: list[str] = []
+    for idx, seg in enumerate(segs or []):
+        if not isinstance(seg, dict):
+            warns.append(f"motionSegments[{idx}] is not an object; skipped.")
+            continue
+        vfile = str(seg.get("videoFile", "")).strip()
+        if not vfile:
+            warns.append(f"motionSegments[{idx}] missing videoFile; skipped.")
+            continue
+        clipped = _clip_frames(seg.get("start", 0), seg.get("length", 0), total)
+        if clipped is None:
+            warns.append(f"motionSegments[{idx}] ({vfile}) outside timeline; skipped.")
+            continue
+        s, n = clipped
+        ctype = str(seg.get("controlType", "uni3c_camera")).strip().lower()
+        if ctype not in _CONTROL_TYPES:
+            warns.append(f"motionSegments[{idx}] controlType='{ctype}' unknown; using 'uni3c_camera'.")
+            ctype = "uni3c_camera"
+        try:
+            trim = max(0, int(seg.get("trimStart", 0)))
+        except (TypeError, ValueError):
+            trim = 0
+        out.append({
+            "videoFile": vfile,
+            "fileName": str(seg.get("fileName", vfile)),
+            "controlType": ctype,
+            "start": s, "length": n, "trimStart": trim,
+            "srcDurationFrames": int(seg.get("srcDurationFrames", 0) or 0),
+        })
+    return out, warns
+
+
 # ── The node ─────────────────────────────────────────────────────────
 
 class WanDirectorC2C:
@@ -1066,7 +1120,8 @@ class WanDirectorC2C:
         camera_program, _w_cam    = _compile_camera_program(tdata.get("cameraSegments", []), _total_frames, float(frame_rate))
         seed_program,   _w_seed   = _compile_seed_program(tdata.get("seedSegments", []),   _total_frames)
         pose_program,   _w_pose   = _compile_pose_program(tdata.get("poseSegments", []),   _total_frames)
-        track_warnings = _w_lora + _w_cam + _w_seed + _w_pose
+        control_program, _w_ctrl  = _compile_control_program(tdata.get("motionSegments", []), _total_frames)
+        track_warnings = _w_lora + _w_cam + _w_seed + _w_pose + _w_ctrl
         warnings.extend(track_warnings)
 
         img_segs = sorted(
@@ -1456,6 +1511,11 @@ class WanDirectorC2C:
             "quality_features": active_features,
             "quality_recipe": quality_recipe,
             "control_video_connected": control_video is not None,
+            "control_clips": [
+                {"controlType": c["controlType"], "file": c["fileName"],
+                 "start": c["start"], "length": c["length"]}
+                for c in control_program
+            ],
             "control_mask_connected": control_mask is not None,
             "track_warnings": track_warnings,
             "warnings":     warnings,
@@ -1469,6 +1529,7 @@ class WanDirectorC2C:
             "camera": camera_program,
             "seed":   seed_program,
             "pose":   pose_program,
+            "control": control_program,
             "everanimate": everanimate_program,
         }, separators=(",", ":"))
 
