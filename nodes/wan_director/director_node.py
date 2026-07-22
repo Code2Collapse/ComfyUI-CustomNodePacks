@@ -924,13 +924,15 @@ class WanDirectorC2C:
                 # Embedded PromptRelay (universal — works for native + Kijai +
                 # any third-party diffusion backbone via the generic-fallback patcher).
                 "enable_prompt_relay": ("BOOLEAN", {
-                    "default": False,
+                    "default": True,
                     "tooltip": (
-                        "Apply the PromptRelay temporal cross-attention bias to the active backbone. "
-                        "Works on native ComfyUI MODEL, Kijai WANVIDEOMODEL, and arbitrary third-party "
-                        "video diffusion models (auto-falls back to generic introspection). When the "
-                        "timeline has 2+ text/image clips, the per-clip prompts become the local "
-                        "prompts and `global_prompt` is the anchor. With 0 or 1 clip this is a no-op."
+                        "Internal PromptRelay: bias each backbone cross-attention block so the "
+                        "timeline's per-clip prompts only steer their own frame span. On by default — "
+                        "the whole point of the timeline. Works on native ComfyUI MODEL, Kijai "
+                        "WANVIDEOMODEL, and arbitrary video-diffusion models (auto-falls back to "
+                        "generic introspection). With 2+ text/image clips the per-clip prompts become "
+                        "the local prompts and `global_prompt` is the anchor; with 0 or 1 clip it is a "
+                        "no-op. Turn off to encode one flat prompt for the whole clip."
                     ),
                 }),
                 "prompt_relay_epsilon": ("FLOAT", {
@@ -1425,9 +1427,13 @@ class WanDirectorC2C:
                     warnings.append(f"FETA failed ({exc}); config emitted in quality_recipe.")
                     log.warning("FETA apply failed: %s", exc)
 
-            # 7. PromptRelay
+            # 7. PromptRelay (internal — on by default, driven by the timeline)
             relay_cond = None
-            if enable_prompt_relay and len(local_list) >= 2:
+            if enable_prompt_relay and t5gemma is not None:
+                relay_note = "skipped (PromptRelay needs the CLIP tokenizer; T5Gemma encode is active)"
+            elif enable_prompt_relay and clip is None:
+                relay_note = "skipped (no CLIP connected)"
+            elif enable_prompt_relay and len(local_list) >= 2:
                 try:
                     out_model_native, relay_cond = _apply_prompt_relay_native(
                         out_model_native, clip, latent, global_prompt, local_list,
