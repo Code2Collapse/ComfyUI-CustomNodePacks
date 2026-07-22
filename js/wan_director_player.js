@@ -278,10 +278,34 @@ function makePlayerDOM(node) {
         }
         updateScrub();
     });
+    // Smooth playhead: requestVideoFrameCallback fires once per *composited*
+    // video frame, so the scrubber tracks playback frame-for-frame (the buttery
+    // motion LTX has) instead of stuttering on the coarse ~4/s `timeupdate`
+    // event. Falls back to rAF where rVFC is unavailable. Self-terminates on
+    // pause so it costs nothing while idle.
+    const _hasRVFC = typeof stageVideo.requestVideoFrameCallback === "function";
+    let _smoothHandle = null;
+    function _smoothTick() {
+        _smoothHandle = null;
+        if (state.mode === "video" && !scrubbing) updateScrub();
+        if (state.mode === "video" && !stageVideo.paused) {
+            _smoothHandle = _hasRVFC
+                ? stageVideo.requestVideoFrameCallback(_smoothTick)
+                : requestAnimationFrame(_smoothTick);
+        }
+    }
+    function _startSmooth() { if (_smoothHandle == null) _smoothTick(); }
+    function _stopSmooth() {
+        if (_smoothHandle == null) return;
+        if (_hasRVFC && stageVideo.cancelVideoFrameCallback) stageVideo.cancelVideoFrameCallback(_smoothHandle);
+        else cancelAnimationFrame(_smoothHandle);
+        _smoothHandle = null;
+    }
+
     // Gated on executed-render mode: in clips mode the <video> is paused and
     // reused when hopping video→image clips, which must not stop playback.
-    stageVideo.addEventListener("play",  () => { if (state.mode === "video") { state.playing = true;  btnPlay.textContent = "⏸"; } });
-    stageVideo.addEventListener("pause", () => { if (state.mode === "video") { state.playing = false; btnPlay.textContent = "▶"; } });
+    stageVideo.addEventListener("play",  () => { if (state.mode === "video") { state.playing = true;  btnPlay.textContent = "⏸"; _startSmooth(); } });
+    stageVideo.addEventListener("pause", () => { if (state.mode === "video") { state.playing = false; btnPlay.textContent = "▶"; _stopSmooth(); updateScrub(); } });
     stageVideo.addEventListener("loadedmetadata", () => { syncSpeed(); updateScrub(); });
 
     // Scrubber pointer interaction (click + drag to seek).
