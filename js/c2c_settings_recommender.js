@@ -14,6 +14,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { mountOmniTool } from "./_c2c_omni_tool.js";
 
 // ── Rule table ───────────────────────────────────────────────────────────────
 // Each rule: { test(name) -> bool, label, sampler, scheduler, cfg, steps, note }.
@@ -211,15 +212,20 @@ function applyTo(node, rec) {
 app.registerExtension({
     name: "C2C.SettingsRecommender",
     async setup() {
+        // Moved OUT of the sidebar into OmniPill's "Tools" section.
         try {
-            app.extensionManager.registerSidebarTab({
-                id: "c2c-recommended",
-                title: "Recommended",
-                icon: "pi pi-sliders-h",
-                type: "custom",
-                render: (el) => renderPanel(el),
+            mountOmniTool({
+                id: "recommended",
+                title: "Recommended Settings",
+                label: "Recommend",
+                icon: "🎚️",
+                section: "tools",
+                order: 20,
+                width: 440,
+                height: 560,
+                build: (body) => renderPanel(body),
             });
-        } catch (_) { /* older frontend without sidebar API */ }
+        } catch (_) { /* OmniPill unavailable */ }
     },
     // Deep breakdown in the node's right-click menu (the in-node inspector).
     getNodeMenuItems(node) {

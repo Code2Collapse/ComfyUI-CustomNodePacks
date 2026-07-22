@@ -15,6 +15,7 @@
 import { app } from "../../scripts/app.js";
 import { buildPanel } from "./_c2c_window.js";
 import { c2cAlert } from "./_c2c_dialog.js";
+import { mountOmniTool } from "./_c2c_omni_tool.js";
 
 const TAB_ID = "c2c.ai";
 const RIGHT_DOCK_ID = "c2c.ai.right-dock";
@@ -791,17 +792,21 @@ app.registerExtension({
           type: "hidden", default: false },
     ],
     async setup() {
+        // Moved OUT of the sidebar into OmniPill's "AI Assist" section.
         try {
-            app.extensionManager?.registerSidebarTab?.({
-                id: TAB_ID,
-                icon: "pi pi-cog",
-                title: "C2C AI",
-                tooltip: "C2C AI Backends — configure cloud + local providers",
-                type: "custom",
-                render: (el) => buildSettingsView(el),
+            mountOmniTool({
+                id: "ai-settings",
+                title: "C2C AI Backends",
+                label: "AI Setup",
+                icon: "⚙️",
+                section: "ai",
+                order: 10,
+                width: 560,
+                height: 640,
+                build: (body) => buildSettingsView(body),
             });
         } catch (exc) {
-            console.warn("[c2c.ai.settings] sidebar tab registration deferred:", exc);
+            console.warn("[c2c.ai.settings] OmniPill registration failed:", exc);
         }
 
         // First-run wizard — only if backends are empty AND user hasn't dismissed

@@ -36,6 +36,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { mountOmniTool } from "./_c2c_omni_tool.js";
 
 const SETTING_ID = "c2c.ui.layout";
 const ROW_HOST_ID = "c2c-mini-row-host";
@@ -431,19 +432,22 @@ app.registerExtension({
             mode = app.ui.settings.getSettingValue(SETTING_ID, "mini-row");
         } catch { /* setting not yet registered */ }
 
-        // Register the C2C sidebar tab unconditionally so it is always
-        // discoverable from the left rail, regardless of layout mode.
+        // The quick-actions launcher lives in OmniPill's "Tools" section now
+        // (was a left-rail sidebar tab that ate space). Opens as a floating panel.
         try {
-            app.extensionManager?.registerSidebarTab?.({
-                id: SIDEBAR_ID,
-                icon: "pi pi-th-large",
-                title: "C2C",
-                tooltip: "Code2Collapse quick actions launcher",
-                type: "custom",
-                render(el) { _mountSidebar(el); },
+            mountOmniTool({
+                id: "launcher",
+                title: "C2C Quick Actions",
+                label: "Quick Actions",
+                icon: "🧰",
+                section: "tools",
+                order: 10,
+                width: 380,
+                height: 460,
+                build: (body) => _mountSidebar(body),
             });
         } catch (e) {
-            console.warn("[C2C.UILayout] sidebar register failed:", e);
+            console.warn("[C2C.UILayout] OmniPill register failed:", e);
         }
 
         // The mini-row needs the top menu DOM to exist; wait one frame

@@ -18,6 +18,7 @@ import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { forAllNodes } from "./_subgraph_walk.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { mountOmniTool } from "./_c2c_omni_tool.js";
 
 const TAB_ID = "c2c.prompt";
 
@@ -187,8 +188,9 @@ function buildView(root) {
          ${field("avoid",    "Avoid",            "e.g. text, watermark, deformed hands")}
          ${field("notes",    "Other notes",      "")}
 
-         <div style="display:flex;gap:6px;margin-top:10px">
+         <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
            <button id="pw-go" style="${btnPrimary()}">✨ Generate</button>
+           <button id="pw-surprise" style="${btnGhost()}" title="Fill the form with a random creative brief">🎲 Surprise</button>
            <button id="pw-clear" style="${btnGhost()}">Clear</button>
            <button id="pw-browse" style="${btnGhost()}" title="Browse live prompts on Lexica">🔍 Browse Live</button>
          </div>
@@ -219,15 +221,17 @@ function buildView(root) {
     loadAIStatus().then(s => {
         const ok = (s.backends || []).some(b => b.health?.ok);
         const el = wrap.querySelector("#pw-status");
-        if (ok) {
-            el.textContent = `${(s.backends || []).filter(b => b.health?.ok).length} backend(s) online · cost today $${(s.cost_today_usd ?? 0).toFixed(3)}`;
+        const llm = (s.backends || []).filter(b => b.health?.ok && b.tier !== "deterministic");
+        if (llm.length) {
+            el.textContent = `${llm.length} AI backend(s) online · cost today $${(s.cost_today_usd ?? 0).toFixed(3)} · Generate = AI-enhanced`;
         } else {
-            el.innerHTML = `<span style="color:var(--c2c-red)">No AI backend online.</span> Open the C2C AI sidebar tab to configure.`;
+            el.innerHTML = `<span style="color:var(--c2c-green)">Offline composer ready.</span> Generate works now; open <b>AI Setup</b> in OmniPill to add an AI backend for enhanced prompts.`;
         }
     });
 
     // Wire actions
     wrap.querySelector("#pw-go").onclick = () => runGeneration(wrap);
+    wrap.querySelector("#pw-surprise").onclick = () => { randomizeForm(wrap); runGeneration(wrap); };
     wrap.querySelector("#pw-browse").onclick = () => {
         const q = wrap.querySelector("#pw-pos")?.value || (wrap.querySelector("input[data-field='subject']")?.value || "");
         window.__C2C_PRESET_HUB__?.open({ tab: "lexica", q });
@@ -260,6 +264,106 @@ function areaStyle()  { return `width:100%;background:var(--c2c-bg2);color:var(-
 function btnPrimary() { return `background:var(--c2c-mauve);color:var(--c2c-bg);border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
 function btnGhost()   { return `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px`; }
 
+// ── Surprise: fill the form with a random creative brief ─────────────────────
+const _RND = {
+    subject: ["a lone astronaut", "an ancient dragon coiled around a tower", "a cyberpunk street vendor",
+              "a young witch brewing a potion", "a weathered lighthouse keeper", "a bioluminescent jellyfish",
+              "a samurai in the rain", "a robot tending a garden", "a fox spirit in a bamboo forest",
+              "a diver exploring a sunken cathedral"],
+    setting: ["a red desert planet at dusk", "neon-drenched rain-slick alley", "misty moss-covered ruins",
+              "a floating sky city", "an abandoned space station", "a snow-covered pine forest at night",
+              "a coral reef bathed in shafts of light", "a candle-lit gothic library"],
+    style:   ["cinematic sci-fi, Denis Villeneuve", "studio Ghibli watercolor", "Moebius line art",
+              "oil painting, Rembrandt lighting", "1980s anime cel", "dark fantasy concept art",
+              "Art Nouveau, Alphonse Mucha", "brutalist retro-futurism"],
+    mood:    ["awe and isolation", "melancholic and hopeful", "ominous and tense", "serene and dreamlike",
+              "playful and warm", "epic and grand"],
+    camera:  ["35mm anamorphic, shallow depth of field", "wide-angle 24mm, deep focus",
+              "85mm portrait, creamy bokeh", "macro lens, extreme close-up", "drone shot, top-down"],
+    lighting:["golden hour rim light, volumetric dust", "cool moonlight and fog", "hard noir key light",
+              "soft overcast diffusion", "bioluminescent glow", "neon signage reflections"],
+    aspect:  ["wide cinematic", "portrait", "square", "ultra-wide establishing shot"],
+};
+function _pick(a) { return a[Math.floor(Math.random() * a.length)]; }
+function randomizeForm(wrap) {
+    const set = (name, val) => { const el = wrap.querySelector(`input[data-field='${name}']`); if (el) el.value = val; };
+    set("subject", _pick(_RND.subject));
+    set("setting", _pick(_RND.setting));
+    set("style",   _pick(_RND.style));
+    set("mood",    _pick(_RND.mood));
+    set("camera",  _pick(_RND.camera));
+    set("lighting",_pick(_RND.lighting));
+    set("aspect",  _pick(_RND.aspect));
+    set("avoid",   "text, watermark, extra limbs, deformed hands");
+}
+
+// ── Offline deterministic composer ──────────────────────────────────────────
+// The wizard must produce a usable prompt with ZERO AI backends configured.
+// This assembles the structured form into a model-aware positive/negative pair.
+// When a backend is online, runGeneration() streams an AI-enhanced version on
+// top of this baseline.
+const _QUALITY = {
+    sdxl:   ["masterpiece", "best quality", "highly detailed", "intricate details", "sharp focus", "8k uhd"],
+    "sd1.5":["(masterpiece:1.2)", "(best quality:1.2)", "highly detailed", "sharp focus", "(intricate:1.1)"],
+    flux:   [],
+    any:    ["high quality", "highly detailed", "sharp focus"],
+};
+const _NEG = {
+    sdxl:   ["lowres", "bad anatomy", "bad hands", "extra fingers", "fewer fingers", "text", "signature",
+             "watermark", "jpeg artifacts", "blurry", "worst quality", "low quality", "cropped", "deformed"],
+    "sd1.5":["(worst quality:1.4)", "(low quality:1.4)", "(lowres:1.2)", "bad anatomy", "(bad hands:1.2)",
+             "text", "watermark", "signature", "blurry", "deformed"],
+    flux:   [],
+    any:    ["low quality", "blurry", "distorted", "deformed", "watermark", "text", "jpeg artifacts"],
+};
+
+function _tagList(...items) {
+    return items.flat().map(s => String(s || "").trim()).filter(Boolean);
+}
+function _dedupe(list) {
+    const seen = new Set(); const out = [];
+    for (const t of list) { const k = t.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(t); } }
+    return out;
+}
+
+function composeOfflinePrompt(form, model, presetSummary) {
+    const f = form;
+    const presetPos = presetSummary ? presetSummary.split("—").slice(1).join("—").trim() : "";
+
+    if (model === "flux" || model === "any" && !f.style) {
+        // Natural-language paragraph (FLUX ignores tag spam / negatives).
+        const s = [];
+        if (f.subject)  s.push(f.subject);
+        if (f.setting)  s.push(`in ${f.setting}`);
+        if (f.style)    s.push(`in the style of ${f.style}`);
+        const tail = [];
+        if (f.lighting) tail.push(f.lighting);
+        if (f.camera)   tail.push(`shot on ${f.camera}`);
+        if (f.mood)     tail.push(`${f.mood} mood`);
+        if (f.aspect)   tail.push(f.aspect);
+        let positive = s.join(", ");
+        if (tail.length) positive += (positive ? ". " : "") + tail.join(", ") + ".";
+        if (f.notes)    positive += " " + f.notes;
+        if (presetPos)  positive = presetPos + ". " + positive;
+        const negative = model === "flux"
+            ? (f.avoid ? `Avoid: ${f.avoid}.` : "")
+            : _dedupe(_tagList(f.avoid ? f.avoid.split(",") : [], _NEG.any)).join(", ");
+        return { positive: positive.trim(), negative: negative.trim() };
+    }
+
+    // Tag style (SDXL / SD 1.5 / generic-with-style).
+    const q = _QUALITY[model] || _QUALITY.any;
+    const pos = _dedupe(_tagList(
+        presetPos ? presetPos.split(",") : [],
+        f.subject ? f.subject.split(",") : [],
+        f.setting, f.style, f.mood, f.lighting, f.camera, f.aspect,
+        f.notes ? f.notes.split(",") : [],
+        q,
+    ));
+    const neg = _dedupe(_tagList(f.avoid ? f.avoid.split(",") : [], _NEG[model] || _NEG.any));
+    return { positive: pos.join(", "), negative: neg.join(", ") };
+}
+
 async function runGeneration(wrap) {
     const form = {};
     wrap.querySelectorAll("input[data-field]").forEach(i => form[i.dataset.field] = i.value.trim());
@@ -276,14 +380,35 @@ async function runGeneration(wrap) {
         } catch (__c2cErr) { __c2cReport("c2c_prompt_wizard", __c2cErr); }
     }
 
-    const sys = SYS_BY_MODEL[model] || SYS_BY_MODEL.any;
-    const user = buildUserPrompt(form, presetSummary);
-
     const msg = wrap.querySelector("#pw-msg");
     const stream = wrap.querySelector("#pw-stream");
-    msg.textContent = "Asking AI…"; stream.style.display = "block"; stream.textContent = "";
-    wrap.querySelector("#pw-pos").value = "";
-    wrap.querySelector("#pw-neg").value = "";
+    const posEl = wrap.querySelector("#pw-pos");
+    const negEl = wrap.querySelector("#pw-neg");
+
+    // 1) Deterministic baseline — always works, instantly, with zero backends.
+    const base = composeOfflinePrompt(form, model, presetSummary);
+    posEl.value = base.positive;
+    negEl.value = base.negative;
+
+    // 2) If a backend is online, stream an AI-enhanced version on top.
+    let online = false;
+    try {
+        const s = await loadAIStatus();
+        online = (s.backends || []).some(b => b.health?.ok && b.tier !== "deterministic");
+    } catch (_) { online = false; }
+
+    if (!online) {
+        stream.style.display = "none";
+        msg.innerHTML = `Composed offline (no AI backend). ` +
+            `<a href="#" id="pw-open-ai" style="color:var(--c2c-blue)">Add a backend in AI Setup</a> for AI-enhanced prompts.`;
+        const link = wrap.querySelector("#pw-open-ai");
+        if (link) link.onclick = (e) => { e.preventDefault(); window.C2COmniBar?.open?.(); document.getElementById("c2c-omni-tool-ai-settings") || document.querySelector('[data-c2c-slot-id="ai-settings"]')?.click(); };
+        return;
+    }
+
+    const sys = SYS_BY_MODEL[model] || SYS_BY_MODEL.any;
+    const user = buildUserPrompt(form, presetSummary);
+    msg.textContent = "Enhancing with AI…"; stream.style.display = "block"; stream.textContent = "";
 
     let buffer = "";
     const result = await streamAI({
@@ -301,14 +426,15 @@ async function runGeneration(wrap) {
             stream.scrollTop = stream.scrollHeight;
         },
         onError: (err) => {
-            msg.textContent = "AI " + (err.kind || "error") + ": " + (err.message || "");
+            // Keep the offline baseline; just note the AI enhancement failed.
+            msg.textContent = "AI enhance failed (" + (err.kind || "error") + "); kept the offline draft.";
         },
     });
-    if (!result.ok) return;
+    if (!result.ok) return;                       // offline draft already in place
     const split = splitPositiveNegative(buffer);
-    wrap.querySelector("#pw-pos").value = split.positive;
-    wrap.querySelector("#pw-neg").value = split.negative;
-    msg.textContent = "Done. Review and apply.";
+    if (split.positive) posEl.value = split.positive;
+    if (split.negative) negEl.value = split.negative;
+    msg.textContent = "Done (AI-enhanced). Review and apply.";
 }
 
 function applyToSelection(wrap) {
@@ -327,20 +453,25 @@ function applyToSelection(wrap) {
 }
 
 // --------------------------------------------------------- register
+// Moved OUT of the sidebar and into OmniPill (frees rail space) — opens as a
+// floating panel from the "AI Assist" section of the pill.
 app.registerExtension({
     name: "c2c.prompt.wizard",
     async setup() {
         try {
-            app.extensionManager?.registerSidebarTab?.({
-                id: TAB_ID,
-                icon: "pi pi-pencil",
-                title: "C2C Prompt",
-                tooltip: "C2C Prompt Wizard — AI-assisted prompt builder",
-                type: "custom",
-                render: (el) => buildView(el),
+            mountOmniTool({
+                id: "prompt-wizard",
+                title: "C2C Prompt Wizard",
+                label: "Prompt",
+                icon: "✍️",
+                section: "ai",
+                order: 20,
+                width: 480,
+                height: 600,
+                build: (body) => buildView(body),
             });
         } catch (exc) {
-            console.warn("[c2c.prompt.wizard] sidebar tab registration failed:", exc);
+            console.warn("[c2c.prompt.wizard] OmniPill registration failed:", exc);
         }
     },
 });
