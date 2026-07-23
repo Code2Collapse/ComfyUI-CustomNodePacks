@@ -825,10 +825,21 @@ function openModal(node) {
     const ed = new VMEEditor(node);
 
     const overlay = document.createElement("div");
+    // Windowed panel (not fullscreen): centred, ~portion of the screen like
+    // ComfyUI's own mask editor. The big spread box-shadow paints the dim
+    // backdrop around the panel with no extra element, so close() (which just
+    // removes `overlay`) still works. Drag by the title bar, resize from the
+    // bottom-right corner (CSS `resize`).
     overlay.style.cssText = `
-        position:fixed;inset:0;z-index:var(--c2c-z-modal, 10000);
-        background:color-mix(in srgb, ${C.bg} 94%, transparent);
-        display:flex;flex-direction:column;color:${C.text};
+        position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+        width:min(1360px,90vw);height:min(880px,88vh);
+        min-width:520px;min-height:380px;
+        z-index:var(--c2c-z-modal, 10000);
+        background:${C.bg};color:${C.text};
+        display:flex;flex-direction:column;
+        border:1px solid ${C.border};border-radius:12px;overflow:hidden;resize:both;
+        box-shadow:0 0 0 100vmax color-mix(in srgb, ${C.bg} 55%, transparent),
+                   0 24px 70px rgba(0,0,0,0.55);
         font-family:Inter,system-ui,sans-serif;
     `;
     document.body.appendChild(overlay);
