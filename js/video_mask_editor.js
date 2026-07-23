@@ -128,10 +128,18 @@ class VMEEditor {
         this.curMask = null;       // ImageData for current frame's working buffer
         this.curDirty = false;
         // Tool state
-        this.tool = "brush";       // brush|erase|fill|lasso
+        this.tool = "brush";       // brush|erase|fill|lasso|rect|ellipse|polygon|star|line
         this.brushRadius = 30;
         this.brushOpacity = 1.0;
         this.brushFeather = 0.6;
+
+        // Shape-tool state (rect/ellipse/polygon/star/line)
+        this.shapeStart = null;    // {x,y} in image coords — drag anchor
+        this.shapeCur = null;      // {x,y} live drag point
+        this.shapeSides = 5;       // polygon/star vertex count
+        this.starInner = 0.5;      // star inner-radius ratio
+        this.shapeRotation = 0;    // radians
+        this.shapeSquare = false;  // constrain to square/circle (Shift)
         this.onion = true;
         this.painting = false;
         this.lastPaint = null;
@@ -350,6 +358,89 @@ class VMEEditor {
         }
     }
 
+    // ── Shape primitives (Nuke-style) ───────────────────────────────
+    // Outline points of the current shape from its drag bounding box
+    // (image coords). Mirrors nodes/_spline_curves.make_primitive.
+    _shapePoints(kind, x0, y0, x1, y1) {
+        let ax0 = Math.min(x0, x1), ay0 = Math.min(y0, y1);
+        let ax1 = Math.max(x0, x1), ay1 = Math.max(y0, y1);
+        if (this.shapeSquare) {
+            const s = Math.min(ax1 - ax0, ay1 - ay0);
+            ax1 = ax0 + s; ay1 = ay0 + s;
+        }
+        const cx = (ax0 + ax1) / 2, cy = (ay0 + ay1) / 2;
+        const rx = Math.max(0.5, (ax1 - ax0) / 2), ry = Math.max(0.5, (ay1 - ay0) / 2);
+        const rot = this.shapeRotation || 0;
+        const rotate = (px, py) => {
+            if (!rot) return [px, py];
+            const dx = px - cx, dy = py - cy, c = Math.cos(rot), s = Math.sin(rot);
+            return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+        };
+        const pts = [];
+        if (kind === "rect") {
+            for (const [px, py] of [[ax0,ay0],[ax1,ay0],[ax1,ay1],[ax0,ay1]]) pts.push(rotate(px,py));
+            return pts;
+        }
+        if (kind === "ellipse") {
+            const N = 72;
+            for (let i = 0; i < N; i++) { const a = (i/N)*Math.PI*2; pts.push(rotate(cx+Math.cos(a)*rx, cy+Math.sin(a)*ry)); }
+            return pts;
+        }
+        if (kind === "polygon" || kind === "star") {
+            const n = Math.max(3, this.shapeSides|0);
+            const inner = kind === "star" ? Math.max(0.05, Math.min(0.95, this.starInner)) : 1;
+            const count = kind === "star" ? n*2 : n;
+            const a0 = -Math.PI/2;
+            for (let i = 0; i < count; i++) {
+                const a = a0 + (i/count)*Math.PI*2;
+                const rr = (kind === "star" && (i % 2)) ? inner : 1;
+                pts.push(rotate(cx + Math.cos(a)*rx*rr, cy + Math.sin(a)*ry*rr));
+            }
+            return pts;
+        }
+        return pts;
+    }
+
+    // Rasterise the live shape into curMask's alpha (feathered). Uses an
+    // offscreen canvas then composites — the exact same alpha the brush
+    // writes, so keyframe/tween/player are untouched.
+    _rasterizeShape(kind) {
+        if (!this.shapeStart || !this.shapeCur || !this.curMask) return;
+        const W = this.curMask.width, H = this.curMask.height;
+        const x0 = this.shapeStart.x, y0 = this.shapeStart.y;
+        const x1 = this.shapeCur.x, y1 = this.shapeCur.y;
+        if (Math.hypot(x1 - x0, y1 - y0) < 1.5) return;   // ignore accidental taps
+        const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+        const tc = tmp.getContext("2d");
+        const featherPx = Math.round((this.brushFeather || 0) * 24);
+        tc.fillStyle = "#fff"; tc.strokeStyle = "#fff";
+        if (featherPx > 0) { tc.shadowColor = "#fff"; tc.shadowBlur = featherPx; }
+        if (kind === "line") {
+            tc.lineWidth = Math.max(1, this.brushRadius);
+            tc.lineCap = "round";
+            tc.beginPath(); tc.moveTo(x0, y0); tc.lineTo(x1, y1); tc.stroke();
+        } else {
+            const pts = this._shapePoints(kind, x0, y0, x1, y1);
+            if (pts.length < 3) return;
+            tc.beginPath(); tc.moveTo(pts[0][0], pts[0][1]);
+            for (let i = 1; i < pts.length; i++) tc.lineTo(pts[i][0], pts[i][1]);
+            tc.closePath(); tc.fill();
+        }
+        const shp = tc.getImageData(0, 0, W, H).data;
+        const data = this.curMask.data;
+        const accent = this._hexToRgb(C.accent);
+        const op = this.brushOpacity;
+        for (let p = 0; p < W * H; p++) {
+            const sa = shp[p*4+3];
+            if (!sa) continue;
+            const i = p*4;
+            const add = Math.round(sa * op);
+            data[i+3] = Math.min(255, data[i+3] + add);
+            data[i] = accent.r; data[i+1] = accent.g; data[i+2] = accent.b;
+        }
+        this.curDirty = true;
+    }
+
     _floodFill(x, y) {
         // Scanline flood-fill on alpha channel; fills connected region
         // of similar alpha with full opacity.
@@ -511,6 +602,32 @@ class VMEEditor {
             ctx.moveTo(this.lasso[0].x, this.lasso[0].y);
             for (let i = 1; i < this.lasso.length; i++) ctx.lineTo(this.lasso[i].x, this.lasso[i].y);
             ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Shape preview (live drag outline for rect/ellipse/polygon/star/line).
+        if (this.shaping && this.shapeStart && this.shapeCur) {
+            ctx.strokeStyle = C.accent;
+            ctx.fillStyle = (C.accent || "#89b4fa") + "22";
+            ctx.lineWidth = 2 / this.zoom;
+            ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
+            if (this.tool === "line") {
+                ctx.beginPath();
+                ctx.moveTo(this.shapeStart.x, this.shapeStart.y);
+                ctx.lineTo(this.shapeCur.x, this.shapeCur.y);
+                ctx.stroke();
+            } else {
+                const pts = this._shapePoints(this.tool, this.shapeStart.x, this.shapeStart.y,
+                                              this.shapeCur.x, this.shapeCur.y);
+                if (pts.length >= 3) {
+                    ctx.beginPath();
+                    ctx.moveTo(pts[0][0], pts[0][1]);
+                    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            }
             ctx.setLineDash([]);
         }
 
@@ -754,12 +871,22 @@ function openModal(node) {
     };
 
     // ── Tool buttons ───────────────────────────────────────────────
+    // Paint tools + a Nuke-style shape suite. Shape tools drag out a
+    // bounding box and rasterise the primitive into the current keyframe's
+    // alpha mask, so the frame-by-frame keyframe/tween/player path is
+    // completely unchanged — shapes are just another way to fill alpha.
     const tools = [
-        { id: "brush",  label: "🖌 Brush",  hot: "B" },
-        { id: "erase",  label: "🧽 Erase",  hot: "E" },
-        { id: "fill",   label: "🪣 Fill",   hot: "G" },
-        { id: "lasso",  label: "✂ Lasso",  hot: "L" },
+        { id: "brush",   label: "🖌 Brush",   hot: "B" },
+        { id: "erase",   label: "🧽 Erase",   hot: "E" },
+        { id: "fill",    label: "🪣 Fill",    hot: "G" },
+        { id: "lasso",   label: "✂ Lasso",   hot: "L" },
+        { id: "rect",    label: "▭ Rect",    hot: "R", shape: true },
+        { id: "ellipse", label: "◯ Ellipse", hot: "O", shape: true },
+        { id: "polygon", label: "⬠ Polygon", hot: "P", shape: true },
+        { id: "star",    label: "★ Star",    hot: "T", shape: true },
+        { id: "line",    label: "／ Line",    hot: "N", shape: true },
     ];
+    const SHAPE_IDS = new Set(tools.filter(t => t.shape).map(t => t.id));
     const toolBtns = {};
     const setTool = (id) => {
         ed.tool = id;
@@ -770,6 +897,8 @@ function openModal(node) {
             toolBtns[k].style.borderColor = sel ? C.accent : C.border;
         }
         ed.lasso = [];
+        // Show polygon/star/rotation controls only for shape tools.
+        if (ed._shapeCtrls) ed._shapeCtrls.style.display = SHAPE_IDS.has(id) ? "flex" : "none";
         ed.draw();
     };
     for (const t of tools) {
@@ -809,6 +938,19 @@ function openModal(node) {
         v => { ed.brushOpacity = v / 100; }, "%"));
     top.appendChild(sliderWrap("Feather", 0, 100, Math.round(ed.brushFeather * 100), 1,
         v => { ed.brushFeather = v / 100; }, "%"));
+
+    // Shape params (polygon/star sides, star point sharpness, rotation).
+    // Shown only while a shape tool is active (toggled in setTool).
+    const shapeCtrls = document.createElement("div");
+    shapeCtrls.style.cssText = "display:none;align-items:center;gap:6px;";
+    shapeCtrls.appendChild(sliderWrap("Sides", 3, 24, ed.shapeSides, 1,
+        v => { ed.shapeSides = v | 0; ed.draw(); }));
+    shapeCtrls.appendChild(sliderWrap("Point", 10, 90, Math.round(ed.starInner * 100), 1,
+        v => { ed.starInner = v / 100; ed.draw(); }, "%"));
+    shapeCtrls.appendChild(sliderWrap("Rotate", 0, 360, 0, 1,
+        v => { ed.shapeRotation = v * Math.PI / 180; ed.draw(); }, "°"));
+    top.appendChild(shapeCtrls);
+    ed._shapeCtrls = shapeCtrls;
 
     const sep = () => { const d = document.createElement("div"); d.style.cssText = `width:1px;height:22px;background:${C.border};margin:0 4px;`; return d; };
     top.appendChild(sep());
@@ -946,6 +1088,15 @@ function openModal(node) {
             ed.draw();
             return;
         }
+        if (SHAPE_IDS.has(ed.tool)) {
+            ed._pushUndo();
+            ed.shapeStart = fp;
+            ed.shapeCur = fp;
+            ed.shapeSquare = e.shiftKey;
+            ed.shaping = true;
+            ed.draw();
+            return;
+        }
         ed._pushUndo();
         ed.painting = true;
         ed._stamp(fp.x, fp.y, null);
@@ -971,6 +1122,12 @@ function openModal(node) {
             ed.draw();
             return;
         }
+        if (ed.shaping) {
+            ed.shapeCur = ed._viewToFrame(vx, vy);
+            ed.shapeSquare = e.shiftKey;
+            ed.draw();                         // live preview outline
+            return;
+        }
         if (ed.tool === "brush" || ed.tool === "erase") {
             ed.draw();
         }
@@ -979,6 +1136,12 @@ function openModal(node) {
     canvas.addEventListener("mouseup", (e) => {
         if (panning) { panning = false; panStart = null; }
         if (ed.painting) { ed.painting = false; ed.lastPaint = null; }
+        if (ed.shaping) {
+            ed.shaping = false;
+            ed._rasterizeShape(ed.tool);       // bake the shape into the keyframe alpha
+            ed.shapeStart = ed.shapeCur = null;
+            ed.draw();
+        }
     });
 
     canvas.addEventListener("dblclick", (e) => {
@@ -1025,6 +1188,11 @@ function openModal(node) {
         if (e.key === "e" || e.key === "E") { setTool("erase"); e.preventDefault(); return; }
         if (e.key === "g" || e.key === "G") { setTool("fill"); e.preventDefault(); return; }
         if (e.key === "l" || e.key === "L") { setTool("lasso"); e.preventDefault(); return; }
+        if (e.key === "r" || e.key === "R") { setTool("rect"); e.preventDefault(); return; }
+        if (e.key === "o" || e.key === "O") { setTool("ellipse"); e.preventDefault(); return; }
+        if (e.key === "p" || e.key === "P") { setTool("polygon"); e.preventDefault(); return; }
+        if (e.key === "t" || e.key === "T") { setTool("star"); e.preventDefault(); return; }
+        if (e.key === "n" || e.key === "N") { setTool("line"); e.preventDefault(); return; }
         if (e.key === "k" || e.key === "K") { ed.pin(); e.preventDefault(); return; }
         if (e.key === "o" || e.key === "O") { btnOnion.click(); e.preventDefault(); return; }
         // NOTE: bare F is reserved by KJNodes.fillConnectSelected. Use Shift+F here.
