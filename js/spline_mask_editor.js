@@ -816,6 +816,33 @@ function installEditor(node) {
     tb.appendChild(mkIcon("+ Path", "Add new path (N)", () => {
         ed.pushUndo(); ed.newPath(); ed.save();
     }));
+
+    // "+ Shape" primitive picker — drops an editable ellipse/rect/polygon/star/
+    // circle as a new closed path (smooth shapes get many points; rect/polygon/
+    // star get cusp corners so they stay sharp). Mirrors _spline_curves.
+    const addPrimitive = (type) => {
+        ed.pushUndo();
+        const W = ed.canvasW || 512, H = ed.canvasH || 512;
+        const box = [{ x: W * 0.28, y: H * 0.28 }, { x: W * 0.72, y: H * 0.72 }];
+        const params = { sides: type === "star" ? 5 : 6, inner_ratio: 0.5 };
+        const smooth = (type === "circle" || type === "ellipse" || type === "arc" || type === "rounded_rect");
+        const pts = makePrimitive(type, box, smooth ? 48 : 3, params);
+        const sh = { points: pts, type: ed.splineType || "catmull_rom", closed: true };
+        if (!smooth) sh.cusps = pts.map(() => true);   // sharp corners
+        ed.shapes.push(sh);
+        ed.active = ed.shapes.length - 1;
+        ed.save();
+    };
+    const shapeSel = document.createElement("select");
+    shapeSel.className = "c2ck-btn";
+    shapeSel.title = "Add an editable primitive shape";
+    shapeSel.style.cssText = "font-size:11px;padding:2px 4px;";
+    shapeSel.innerHTML = '<option value="">+ Shape…</option>' +
+        ["ellipse", "circle", "rectangle", "rounded_rect", "polygon", "star"]
+            .map(t => `<option value="${t}">${t.replace("_", " ")}</option>`).join("");
+    shapeSel.onmousedown = (e) => e.stopPropagation();
+    shapeSel.onchange = () => { if (shapeSel.value) { addPrimitive(shapeSel.value); shapeSel.value = ""; render(); } };
+    tb.appendChild(shapeSel);
     const closedBtn = mkIcon("◯", "Toggle closed (C)", () => {
         if (ed.active < 0) return;
         ed.pushUndo();
@@ -851,6 +878,12 @@ function installEditor(node) {
         { label: "Fit to view", run: () => {
             const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
         } },
+        { sep: true },
+        { label: (() => { const w = node.widgets?.find(x => x.name === "invert"); return w?.value ? "✓ Invert mask output" : "Invert mask output"; })(),
+          run: () => {
+              const w = node.widgets?.find(x => x.name === "invert");
+              if (w) { w.value = !w.value; if (typeof w.callback === "function") w.callback(w.value); node.setDirtyCanvas(true, true); }
+          } },
         { sep: true },
         { label: "Clear active path", danger: true, run: () => {
             if (ed.active < 0) return;
