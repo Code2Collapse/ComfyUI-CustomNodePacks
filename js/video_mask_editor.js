@@ -140,6 +140,12 @@ class VMEEditor {
         this.starInner = 0.5;      // star inner-radius ratio
         this.shapeRotation = 0;    // radians
         this.shapeSquare = false;  // constrain to square/circle (Shift)
+
+        // Roto pen state — editable spline through anchor points.
+        this.penPoints = [];       // [{x,y}] anchors in image coords
+        this.penDragIdx = -1;      // index of anchor being dragged (-1 none)
+        this.penHover = null;      // {x,y} rubber-band cursor point
+        this.penSmooth = true;     // smooth (Catmull-Rom) vs straight polygon
         this.onion = true;
         this.painting = false;
         this.lastPaint = null;
@@ -441,6 +447,74 @@ class VMEEditor {
         this.curDirty = true;
     }
 
+    // ── Roto pen (editable spline) ───────────────────────────────────
+    // Find the anchor index near a frame-space point (for grab/close).
+    _penHit(fp, tolImg) {
+        for (let i = 0; i < this.penPoints.length; i++) {
+            const p = this.penPoints[i];
+            if (Math.hypot(p.x - fp.x, p.y - fp.y) <= tolImg) return i;
+        }
+        return -1;
+    }
+
+    // Sample a smooth closed/open curve through the anchors (Catmull-Rom),
+    // or the straight polygon when penSmooth is off. Returns [[x,y],…].
+    _penCurve(closed) {
+        const P = this.penPoints;
+        const n = P.length;
+        if (n < 2) return P.map(p => [p.x, p.y]);
+        if (!this.penSmooth || n < 3) {
+            const pts = P.map(p => [p.x, p.y]);
+            return pts;
+        }
+        const out = [];
+        const seg = 16;                          // samples per span
+        const at = (i) => {                      // clamped/wrapped index
+            if (closed) return P[((i % n) + n) % n];
+            return P[Math.max(0, Math.min(n - 1, i))];
+        };
+        const last = closed ? n : n - 1;
+        for (let i = 0; i < last; i++) {
+            const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+            for (let s = 0; s < seg; s++) {
+                const t = s / seg, t2 = t * t, t3 = t2 * t;
+                const x = 0.5 * ((2*p1.x) + (-p0.x + p2.x)*t + (2*p0.x - 5*p1.x + 4*p2.x - p3.x)*t2 + (-p0.x + 3*p1.x - 3*p2.x + p3.x)*t3);
+                const y = 0.5 * ((2*p1.y) + (-p0.y + p2.y)*t + (2*p0.y - 5*p1.y + 4*p2.y - p3.y)*t2 + (-p0.y + 3*p1.y - 3*p2.y + p3.y)*t3);
+                out.push([x, y]);
+            }
+        }
+        if (!closed) out.push([P[n-1].x, P[n-1].y]);
+        return out;
+    }
+
+    // Rasterise the closed roto spline into curMask alpha (feathered).
+    _commitPen() {
+        if (this.penPoints.length < 3 || !this.curMask) { this.penPoints = []; return; }
+        this._pushUndo();
+        const W = this.curMask.width, H = this.curMask.height;
+        const pts = this._penCurve(true);
+        const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+        const tc = tmp.getContext("2d");
+        const featherPx = Math.round((this.brushFeather || 0) * 24);
+        if (featherPx > 0) { tc.shadowColor = "#fff"; tc.shadowBlur = featherPx; }
+        tc.fillStyle = "#fff";
+        tc.beginPath(); tc.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) tc.lineTo(pts[i][0], pts[i][1]);
+        tc.closePath(); tc.fill();
+        const shp = tc.getImageData(0, 0, W, H).data;
+        const data = this.curMask.data;
+        const accent = this._hexToRgb(C.accent);
+        const op = this.brushOpacity;
+        for (let p = 0; p < W * H; p++) {
+            const sa = shp[p*4+3]; if (!sa) continue;
+            const i = p*4;
+            data[i+3] = Math.min(255, data[i+3] + Math.round(sa * op));
+            data[i] = accent.r; data[i+1] = accent.g; data[i+2] = accent.b;
+        }
+        this.curDirty = true;
+        this.penPoints = []; this.penHover = null; this.penDragIdx = -1;
+    }
+
     _floodFill(x, y) {
         // Scanline flood-fill on alpha channel; fills connected region
         // of similar alpha with full opacity.
@@ -629,6 +703,41 @@ class VMEEditor {
                 }
             }
             ctx.setLineDash([]);
+        }
+
+        // Roto pen preview: smooth curve + rubber band + draggable anchors.
+        if (this.tool === "pen" && this.penPoints.length) {
+            const P = this.penPoints;
+            const closedPreview = P.length >= 3;
+            const curve = this._penCurve(closedPreview);
+            ctx.lineWidth = 2 / this.zoom;
+            // filled preview of the closed area
+            if (closedPreview && curve.length >= 3) {
+                ctx.fillStyle = (C.accent || "#89b4fa") + "22";
+                ctx.beginPath(); ctx.moveTo(curve[0][0], curve[0][1]);
+                for (let i = 1; i < curve.length; i++) ctx.lineTo(curve[i][0], curve[i][1]);
+                ctx.closePath(); ctx.fill();
+            }
+            // the curve itself
+            ctx.strokeStyle = C.accent;
+            ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
+            ctx.beginPath(); ctx.moveTo(curve[0][0], curve[0][1]);
+            for (let i = 1; i < curve.length; i++) ctx.lineTo(curve[i][0], curve[i][1]);
+            ctx.stroke();
+            // rubber band from last anchor to cursor
+            if (this.penHover && this.penDragIdx < 0) {
+                const lp = P[P.length - 1];
+                ctx.beginPath(); ctx.moveTo(lp.x, lp.y); ctx.lineTo(this.penHover.x, this.penHover.y); ctx.stroke();
+            }
+            ctx.setLineDash([]);
+            // anchor handles
+            const rr = 5 / this.zoom;
+            for (let i = 0; i < P.length; i++) {
+                ctx.beginPath(); ctx.arc(P[i].x, P[i].y, rr, 0, Math.PI * 2);
+                ctx.fillStyle = (i === 0) ? C.accent2 : "#fff";
+                ctx.fill();
+                ctx.lineWidth = 1.5 / this.zoom; ctx.strokeStyle = C.accent; ctx.stroke();
+            }
         }
 
         ctx.restore();
@@ -896,6 +1005,7 @@ function openModal(node) {
         { id: "polygon", label: "⬠ Polygon", hot: "P", shape: true },
         { id: "star",    label: "★ Star",    hot: "T", shape: true },
         { id: "line",    label: "／ Line",    hot: "N", shape: true },
+        { id: "pen",     label: "✎ Roto",    hot: "Y" },   // editable spline roto
     ];
     const SHAPE_IDS = new Set(tools.filter(t => t.shape).map(t => t.id));
     const toolBtns = {};
@@ -908,6 +1018,7 @@ function openModal(node) {
             toolBtns[k].style.borderColor = sel ? C.accent : C.border;
         }
         ed.lasso = [];
+        ed.penPoints = []; ed.penHover = null; ed.penDragIdx = -1;   // reset roto path
         // Show polygon/star/rotation controls only for shape tools.
         if (ed._shapeCtrls) ed._shapeCtrls.style.display = SHAPE_IDS.has(id) ? "flex" : "none";
         ed.draw();
@@ -1108,6 +1219,16 @@ function openModal(node) {
             ed.draw();
             return;
         }
+        if (ed.tool === "pen") {
+            const tol = 9 / ed.zoom;
+            const hit = ed._penHit(fp, tol);
+            if (hit === 0 && ed.penPoints.length >= 3) { ed._commitPen(); ed.draw(); return; }
+            if (hit >= 0) { ed.penDragIdx = hit; ed.draw(); return; }  // grab to adjust
+            ed.penPoints.push({ x: fp.x, y: fp.y });                    // place anchor
+            ed.penHover = { x: fp.x, y: fp.y };
+            ed.draw();
+            return;
+        }
         ed._pushUndo();
         ed.painting = true;
         ed._stamp(fp.x, fp.y, null);
@@ -1139,6 +1260,13 @@ function openModal(node) {
             ed.draw();                         // live preview outline
             return;
         }
+        if (ed.tool === "pen") {
+            const fp = ed._viewToFrame(vx, vy);
+            if (ed.penDragIdx >= 0) { ed.penPoints[ed.penDragIdx] = { x: fp.x, y: fp.y }; }
+            ed.penHover = { x: fp.x, y: fp.y };  // rubber-band to cursor
+            ed.draw();
+            return;
+        }
         if (ed.tool === "brush" || ed.tool === "erase") {
             ed.draw();
         }
@@ -1147,6 +1275,7 @@ function openModal(node) {
     canvas.addEventListener("mouseup", (e) => {
         if (panning) { panning = false; panStart = null; }
         if (ed.painting) { ed.painting = false; ed.lastPaint = null; }
+        if (ed.penDragIdx >= 0) { ed.penDragIdx = -1; }
         if (ed.shaping) {
             ed.shaping = false;
             ed._rasterizeShape(ed.tool);       // bake the shape into the keyframe alpha
@@ -1163,6 +1292,7 @@ function openModal(node) {
             ed.curDirty = true;
             ed.draw();
         }
+        if (ed.tool === "pen" && ed.penPoints.length >= 3) { ed._commitPen(); ed.draw(); }
     });
 
     canvas.addEventListener("contextmenu", (e) => {
@@ -1194,7 +1324,13 @@ function openModal(node) {
         if (e.key === " ") { spaceDown = (e.type === "keydown"); e.preventDefault(); return; }
         if (e.type !== "keydown") return;
         if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
-        if (e.key === "Escape") { close(false); e.preventDefault(); return; }
+        if (e.key === "Escape") {
+            if (ed.tool === "pen" && ed.penPoints.length) { ed.penPoints = []; ed.penHover = null; ed.penDragIdx = -1; ed.draw(); e.preventDefault(); return; }
+            close(false); e.preventDefault(); return;
+        }
+        if (e.key === "Enter" && ed.tool === "pen" && ed.penPoints.length >= 3) { ed._commitPen(); ed.draw(); e.preventDefault(); return; }
+        if (e.key === "Backspace" && ed.tool === "pen" && ed.penPoints.length) { ed.penPoints.pop(); ed.draw(); e.preventDefault(); return; }
+        if (e.key === "y" || e.key === "Y") { setTool("pen"); e.preventDefault(); return; }
         if (e.key === "b" || e.key === "B") { setTool("brush"); e.preventDefault(); return; }
         if (e.key === "e" || e.key === "E") { setTool("erase"); e.preventDefault(); return; }
         if (e.key === "g" || e.key === "G") { setTool("fill"); e.preventDefault(); return; }
