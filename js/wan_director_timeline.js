@@ -341,6 +341,46 @@ function _ensureWdStyles() {
 .wd-menu-btn:disabled{opacity:.4;cursor:not-allowed;}
 .wd-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:#9aa;}
 .wd-menu-sep{height:1px;background:#2c2c2c;margin:3px 4px;}
+/* Real DOM Scene-track segments (replaces canvas-painted blocks for the
+   image/text track — genuine elements, not an immediate-mode simulation). */
+.wd-seg-layer{position:absolute;pointer-events:none;overflow:hidden;z-index:1;}
+.wd-domseg{position:absolute;top:4px;bottom:4px;border-radius:5px;overflow:hidden;
+  box-sizing:border-box;border:1px solid #3a3a3a;cursor:grab;pointer-events:auto;
+  background:#242424;touch-action:none;transition:border-color .12s ease,box-shadow .12s ease;}
+.wd-domseg:hover{border-color:#4a4a4a;}
+.wd-domseg.selected{border-color:#5b9dd9;border-width:2px;box-shadow:0 0 0 1px rgba(91,157,217,.35);}
+.wd-domseg.dragging{cursor:grabbing;transition:none;}
+.wd-domseg-thumb{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  min-width:100%;min-height:100%;object-fit:cover;pointer-events:none;user-select:none;-webkit-user-drag:none;}
+.wd-domseg-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#666;font-size:10px;background:#2a2a2a;pointer-events:none;}
+.wd-domseg-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:6px;color:#f5c2e7;font-size:11px;line-height:1.3;background:#2a2436;
+  overflow:hidden;pointer-events:none;}
+.wd-domseg-prompt{position:absolute;left:0;right:0;bottom:0;padding:3px 7px;font-size:10px;
+  color:#e6e6e6;background:rgba(0,0,0,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  pointer-events:none;}
+.wd-domseg-handle{position:absolute;top:0;bottom:0;width:10px;cursor:ew-resize;z-index:2;}
+.wd-domseg-handle.l{left:-3px;} .wd-domseg-handle.r{right:-3px;}
+.wd-domseg-handle:hover{background:rgba(91,157,217,.35);}
+/* DOM segments for the AUDIO / CONTROL-video / automation lanes (2026-07-24 —
+   completes the all-tracks DOM conversion the Scene track started). */
+.wd-domseg.aud{background:#1c2b1e;}
+.wd-domseg.vid{background:#242424;}
+.wd-domseg-wave,.wd-domseg-film{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.wd-domseg-name{position:absolute;left:0;top:0;right:0;padding:2px 5px;font-size:10px;color:#e6e6e6;
+  background:rgba(0,0,0,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;}
+.wd-domseg-trim{position:absolute;left:0;right:0;bottom:0;height:3px;background:#fbbf24;
+  pointer-events:none;display:none;}
+.wd-domseg.pill{border-radius:3px;border:1px solid transparent;opacity:.75;}
+.wd-domseg.pill:hover{opacity:.9;}
+.wd-domseg.pill.selected{opacity:1;border-color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.35);}
+.wd-domseg-sum{position:absolute;inset:0;display:flex;align-items:center;padding:0 4px;
+  font:8px ui-monospace,monospace;color:rgba(0,0,0,.78);white-space:nowrap;overflow:hidden;pointer-events:none;}
+/* DOM playhead: rides ABOVE the seg divs (the canvas-drawn line disappears
+   behind opaque DOM segments). */
+.wd-dom-playhead{position:absolute;top:0;bottom:0;width:1.5px;background:#f38ba8;
+  pointer-events:none;z-index:3;}
 `;
     document.head.appendChild(el);
 }
@@ -480,6 +520,41 @@ class TimelineEditor {
         // Crisp DOM track sidebar (labels + eye toggles + status pills) overlaid
         // on the canvas's reserved left column — the LTX-Director look, real text.
         wrap.appendChild(this._buildSidebarOverlay());
+        // Real DOM Scene-track segments — genuine positioned <div>s (with a real
+        // <img> thumbnail, real CSS resize handles) instead of canvas-painted
+        // blocks. Coordinates come from the SAME _frameToX/_xToFrame the canvas
+        // already uses, so it stays pixel-aligned with the ruler/playhead. The
+        // layer itself is pointer-events:none (so empty space still falls
+        // through to the canvas's own "+"-add-hint / empty-track-click
+        // handling, unchanged); only individual segment divs opt back in.
+        // NOTE the coordinate convention: each layer is positioned at
+        // left:LANE_X0, so the divs inside use LAYER-LOCAL x — i.e.
+        // _frameToLayerX() (= _frameToX() - LANE_X0), NOT raw _frameToX().
+        // (Using raw canvas x here was the "segments shifted one
+        // sidebar-width right" misalignment bug, fixed 2026-07-24.)
+        const mkSegLayer = (top, h) => {
+            const l = document.createElement("div");
+            l.className = "wd-seg-layer";
+            l.style.left = LANE_X0 + "px";
+            l.style.top = top + "px";
+            l.style.right = "0";
+            l.style.height = h + "px";
+            wrap.appendChild(l);
+            return l;
+        };
+        this.segLayerImg = mkSegLayer(RULER_H, IMG_TRACK_H);
+        this.segLayerAud = mkSegLayer(RULER_H + IMG_TRACK_H, AUD_TRACK_H);
+        this.segLayerVid = mkSegLayer(RULER_H + IMG_TRACK_H + AUD_TRACK_H, VID_TRACK_H);
+        this.segLayerAuto = mkSegLayer(RULER_H + IMG_TRACK_H + AUD_TRACK_H + VID_TRACK_H, V2_TOTAL_H);
+        this._segDivs = new Map();  // seg.id -> { el, imgEl, promptEl, textEl }
+        this._audDivs = new Map();  // seg.id -> { el, waveCvs, nameEl }
+        this._vidDivs = new Map();  // seg.id -> { el, filmCvs, nameEl, trimEl }
+        this._autoDivs = new Map(); // "laneKey:segId" -> { el, sumEl }
+        // DOM playhead line — the canvas one vanishes behind opaque seg divs.
+        const ph = document.createElement("div");
+        ph.className = "wd-dom-playhead";
+        wrap.appendChild(ph);
+        this.domPlayhead = ph;
         root.appendChild(wrap);
         this.cvsWrap = wrap;
 
@@ -1270,6 +1345,9 @@ class TimelineEditor {
     }
     _frameToX(f) { return f * this._pxPerFrame() + LANE_X0; }
     _xToFrame(x) { return Math.round((x - LANE_X0) / Math.max(1e-3, this._pxPerFrame())); }
+    // Layer-local x for the DOM seg layers (they sit at left:LANE_X0, so the
+    // sidebar offset must NOT be double-counted inside them).
+    _frameToLayerX(f) { return f * this._pxPerFrame(); }
 
     /** Mouse event → canvas CSS-pixel coords, undoing the LiteGraph zoom.
      *  getBoundingClientRect() is post-transform (visual size); offsetWidth is
@@ -1717,10 +1795,12 @@ class TimelineEditor {
     }
 
     _drawV2Lanes(ctx, cssW) {
+        // Lane backgrounds / separators / dead-zone shading ONLY — the pills
+        // themselves are real DOM elements now (see _syncSegLayerAuto).
         const base = this._v2Base();
         const durX = this._frameToX(this.durFrames);
         for (let li = 0; li < V2_DEFS.length; li++) {
-            const def = V2_DEFS[li], top = base + li * V2_LANE_H, arr = this._segArr(def.key);
+            const top = base + li * V2_LANE_H;
             // lane background (alternating) + out-of-duration shadow
             ctx.fillStyle = li % 2 ? C.scrimDark : C.bg3;
             ctx.fillRect(0, top, cssW, V2_LANE_H);
@@ -1728,24 +1808,6 @@ class TimelineEditor {
             // (label + mute toggle are drawn by _drawSidebar)
             ctx.strokeStyle = C.surface1Alt; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(0, top + V2_LANE_H - 0.5); ctx.lineTo(cssW, top + V2_LANE_H - 0.5); ctx.stroke();
-            // segments
-            for (let i = 0; i < arr.length; i++) {
-                const s = arr[i];
-                const x1 = this._frameToX(s.start), x2 = this._frameToX(s.start + s.length);
-                const w = Math.max(3, x2 - x1), y = top + 3, h = V2_LANE_H - 6;
-                const selected = this.selection.type === def.key && this.selection.idx === i;
-                ctx.fillStyle = def.color;
-                ctx.globalAlpha = selected ? 0.95 : 0.7;
-                this._roundRect(ctx, x1, y, w, h, 3); ctx.fill();
-                ctx.globalAlpha = 1;
-                if (selected) { ctx.strokeStyle = C.fg || "#fff"; ctx.lineWidth = 1.5; this._roundRect(ctx, x1, y, w, h, 3); ctx.stroke(); }
-                if (w > 26) {
-                    ctx.save(); ctx.beginPath(); ctx.rect(x1 + 2, y, w - 4, h); ctx.clip();
-                    ctx.fillStyle = C.scrimDark; ctx.font = "8px ui-monospace,monospace"; ctx.textBaseline = "middle"; ctx.textAlign = "left";
-                    ctx.fillText(def.summary(s), x1 + 4, y + h / 2);
-                    ctx.restore();
-                }
-            }
         }
     }
     _roundRect(ctx, x, y, w, h, r) {
@@ -1996,24 +2058,34 @@ class TimelineEditor {
 
         // Ruler
         this._drawRuler(ctx, cssW);
-        // Segments
-        for (let i = 0; i < this.segments.length; i++) this._drawSegment(ctx, this.segments[i], i, "image");
-        for (let i = 0; i < this.audioSegments.length; i++) this._drawSegment(ctx, this.audioSegments[i], i, "audio");
-        for (let i = 0; i < this.motionSegments.length; i++) this._drawSegment(ctx, this.motionSegments[i], i, "video");
+        // Segments — ALL tracks now render as real DOM elements (scene came
+        // first; audio / control-video / automation lanes joined 2026-07-24).
+        // The canvas keeps only backgrounds, ruler, hints, and dead-zones.
         // Empty-track "+" add-affordances (LTX-style): inviting, clickable hot-spots.
         this._addHints = {};
         if (this.segments.length === 0) this._drawAddHint(ctx, cssW, RULER_H, IMG_TRACK_H, "image");
         if (this.audioSegments.length === 0) this._drawAddHint(ctx, cssW, RULER_H + IMG_TRACK_H, AUD_TRACK_H, "audio");
         if (this.motionSegments.length === 0) this._drawAddHint(ctx, cssW, vidTop, VID_TRACK_H, "video");
-        // v2 automation lanes
+        // v2 automation lanes (backgrounds/separators only; pills are DOM)
         this._drawV2Lanes(ctx, cssW);
         // Muted-lane dimming (over the timeline area)
         this._drawMuteDots(ctx, cssW);
         // Sync the DOM sidebar (labels/pills/mute state) — the crisp overlay
         // replaces the old canvas-drawn column.
         this._syncSidebar();
-        // Playhead
+        this._syncSegLayerImage();
+        this._syncSegLayerAudio();
+        this._syncSegLayerVideo();
+        this._syncSegLayerAuto();
+        // Playhead — canvas line (under the DOM segs) + DOM line (above them).
         this._drawPlayhead(ctx, cssH);
+        if (this.domPlayhead) {
+            const phx = this._frameToX(this.playhead);
+            this.domPlayhead.style.left = phx + "px";
+            this.domPlayhead.style.top = "0px";
+            this.domPlayhead.style.height = TRACKS_CANVAS_H + "px";
+            this.domPlayhead.style.display = phx >= LANE_X0 ? "block" : "none";
+        }
 
         // Update seekbar + readout
         const vd = this.visualDurFrames;
@@ -2154,6 +2226,385 @@ class TimelineEditor {
         setPill("image", n(this.segments));
         setPill("audio", readWidget(this.node, "audio_target", "") || "");
         setPill("video", n(this.motionSegments));
+    }
+
+    // ── Real DOM Scene-track segments ────────────────────────────────
+    // Reconciles this.segLayerImg's children against this.segments, keyed by
+    // seg.id so an in-progress drag / a loaded thumbnail / focus state never
+    // gets clobbered by an unrelated edit elsewhere re-running render().
+    _syncSegLayerImage() {
+        const layer = this.segLayerImg;
+        if (!layer) return;
+        const seen = new Set();
+        for (let idx = 0; idx < this.segments.length; idx++) {
+            const seg = this.segments[idx];
+            seen.add(seg.id);
+            let rec = this._segDivs.get(seg.id);
+            if (!rec) {
+                rec = this._makeSegDiv(seg);
+                this._segDivs.set(seg.id, rec);
+                layer.appendChild(rec.el);
+            }
+            rec.idx = idx; // pointer handlers read the CURRENT index via rec, not a closure
+            this._updateSegDiv(rec, seg, idx);
+        }
+        // Remove divs for segments no longer present (deleted / undone).
+        for (const [id, rec] of this._segDivs) {
+            if (!seen.has(id)) { try { rec.el.remove(); } catch (_) {} this._segDivs.delete(id); }
+        }
+    }
+
+    _makeSegDiv(seg) {
+        const el = document.createElement("div");
+        el.className = "wd-domseg";
+        const imgEl = document.createElement("img");
+        imgEl.className = "wd-domseg-thumb";
+        imgEl.style.display = "none";
+        imgEl.draggable = false;
+        const phEl = document.createElement("div");
+        phEl.className = "wd-domseg-ph";
+        phEl.textContent = "(loading)";
+        phEl.style.display = "none";
+        const textEl = document.createElement("div");
+        textEl.className = "wd-domseg-text";
+        textEl.style.display = "none";
+        const promptEl = document.createElement("div");
+        promptEl.className = "wd-domseg-prompt";
+        promptEl.style.display = "none";
+        const handleL = document.createElement("div");
+        handleL.className = "wd-domseg-handle l";
+        const handleR = document.createElement("div");
+        handleR.className = "wd-domseg-handle r";
+        el.append(imgEl, phEl, textEl, promptEl, handleL, handleR);
+
+        const rec = { el, imgEl, phEl, textEl, promptEl, handleL, handleR, idx: -1, id: seg.id };
+        this._wireSegDiv(rec);
+        return rec;
+    }
+
+    // Drag/resize physics are NOT reimplemented here — they call straight into
+    // the existing canvas drag pipeline (_onMouseMove's "seg" branch: snapping,
+    // collision resolution, trim clamping) via the same this.dragState the
+    // canvas itself uses, and _evtXY() works from clientX/clientY + the
+    // canvas's own bounding rect regardless of which element the pointer
+    // event actually targets — so this is the SAME physics, not a fork of it.
+    _wireSegDiv(rec) { this._wireTrackSegDiv(rec, "image"); }
+
+    // Generic version for ANY track ("image" | "audio" | "video" | v2 lane
+    // key). The canvas drag pipeline is already track-generic (dragState
+    // .segType + _segArr), so one wiring serves every DOM seg div.
+    _wireTrackSegDiv(rec, segType) {
+        const { el, handleL, handleR } = rec;
+        const startDrag = (e, edge) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const seg = this._segArr(segType)[rec.idx];
+            if (!seg) return;
+            try { el.setPointerCapture(e.pointerId); } catch (_) {}
+            this.selection = { type: segType, idx: rec.idx };
+            this._updatePropsPanel?.();
+            if (V2_KEYS.includes(segType)) this._updateV2Props?.();
+            const [mx] = this._evtXY(e);
+            this.dragState = {
+                type: "seg", edge, segType, idx: rec.idx,
+                startFrame: this._xToFrame(mx),
+                origStart: seg.start, origLength: seg.length, origTrim: seg.trimStart || 0,
+            };
+            el.classList.add("dragging");
+            this.render();
+        };
+        // Edge detection is proximity-based (mirrors the canvas _hitTest's own
+        // HANDLE_PX/2 tolerance), NOT dependent on which exact child element
+        // received the event — ComfyUI repositions DOM widgets continuously
+        // to track canvas pan/zoom, and a coordinate captured a frame earlier
+        // can land a few px off the dedicated handle strip by the time the
+        // event actually arrives. Falling back to el's own bounding rect
+        // keeps resize reliable regardless of that timing.
+        const edgeFor = (e) => {
+            const r = el.getBoundingClientRect();
+            if (e.clientX - r.left <= HANDLE_PX / 2) return "left";
+            if (r.right - e.clientX <= HANDLE_PX / 2) return "right";
+            return "mid";
+        };
+        el.addEventListener("pointerdown", (e) => startDrag(e, edgeFor(e)));
+        handleL.addEventListener("pointerdown", (e) => startDrag(e, "left"));
+        handleR.addEventListener("pointerdown", (e) => startDrag(e, "right"));
+        el.addEventListener("pointermove", (e) => {
+            if (this.dragState?.type === "seg" && this.dragState.segType === segType) this._onMouseMove(e);
+        });
+        const endDrag = (e) => {
+            el.classList.remove("dragging");
+            try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+            // window's existing "mouseup" listener (_onMouseUp) fires too via
+            // bubbling and calls commitChanges() — not duplicated here.
+        };
+        el.addEventListener("pointerup", endDrag);
+        el.addEventListener("pointercancel", endDrag);
+        el.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            if (segType === "image") this.promptArea?.focus();
+        });
+        el.addEventListener("contextmenu", (e) => {
+            e.preventDefault(); e.stopPropagation();
+            this.selection = { type: segType, idx: rec.idx };
+            this._onContextMenu(e);
+        });
+    }
+
+    _updateSegDiv(rec, seg, idx) {
+        const { el, imgEl, phEl, textEl, promptEl } = rec;
+        // Layer-local coords (the layer already sits at left:LANE_X0; using
+        // _frameToX here double-counted the sidebar and shifted every scene
+        // segment one sidebar-width right of the ruler — fixed 2026-07-24).
+        const x1 = this._frameToLayerX(seg.start);
+        const x2 = this._frameToLayerX(seg.start + seg.length);
+        el.style.left = x1 + "px";
+        el.style.width = Math.max(2, x2 - x1) + "px";
+        const selected = this.selection.type === "image" && this.selection.idx === idx;
+        el.classList.toggle("selected", selected);
+
+        if (seg.type === "image") {
+            textEl.style.display = "none";
+            const img = seg._imgUrl ? this.images.get(seg._imgUrl) : null;
+            if (img && img.complete && img.naturalWidth > 0) {
+                if (imgEl.src !== img.src) imgEl.src = img.src;
+                imgEl.style.display = "block";
+                phEl.style.display = "none";
+            } else {
+                imgEl.style.display = "none";
+                phEl.style.display = "flex";
+            }
+            if (seg.prompt) {
+                promptEl.textContent = seg.prompt;
+                promptEl.style.display = "block";
+            } else {
+                promptEl.style.display = "none";
+            }
+        } else if (seg.type === "text") {
+            imgEl.style.display = "none";
+            phEl.style.display = "none";
+            promptEl.style.display = "none";
+            textEl.textContent = seg.prompt || "Text";
+            textEl.style.display = "flex";
+        }
+    }
+
+    // ── DOM segments: AUDIO track ────────────────────────────────────
+    _syncSegLayerAudio() {
+        const layer = this.segLayerAud;
+        if (!layer) return;
+        const seen = new Set();
+        for (let idx = 0; idx < this.audioSegments.length; idx++) {
+            const seg = this.audioSegments[idx];
+            seen.add(seg.id);
+            let rec = this._audDivs.get(seg.id);
+            if (!rec) {
+                rec = this._makeAudioSegDiv(seg);
+                this._audDivs.set(seg.id, rec);
+                layer.appendChild(rec.el);
+            }
+            rec.idx = idx;
+            this._updateAudioSegDiv(rec, seg, idx);
+        }
+        for (const [id, rec] of this._audDivs) {
+            if (!seen.has(id)) { try { rec.el.remove(); } catch (_) {} this._audDivs.delete(id); }
+        }
+    }
+
+    _makeAudioSegDiv(seg) {
+        const el = document.createElement("div");
+        el.className = "wd-domseg aud";
+        const waveCvs = document.createElement("canvas");
+        waveCvs.className = "wd-domseg-wave";
+        const nameEl = document.createElement("div");
+        nameEl.className = "wd-domseg-name";
+        const handleL = document.createElement("div");
+        handleL.className = "wd-domseg-handle l";
+        const handleR = document.createElement("div");
+        handleR.className = "wd-domseg-handle r";
+        el.append(waveCvs, nameEl, handleL, handleR);
+        const rec = { el, waveCvs, nameEl, handleL, handleR, idx: -1, id: seg.id, _waveKey: "" };
+        this._wireTrackSegDiv(rec, "audio");
+        return rec;
+    }
+
+    _updateAudioSegDiv(rec, seg, idx) {
+        const { el, waveCvs, nameEl } = rec;
+        const x1 = this._frameToLayerX(seg.start);
+        const x2 = this._frameToLayerX(seg.start + seg.length);
+        const w = Math.max(2, x2 - x1);
+        el.style.left = x1 + "px";
+        el.style.width = w + "px";
+        el.classList.toggle("selected", this.selection.type === "audio" && this.selection.idx === idx);
+        nameEl.textContent = seg.fileName || seg.audioFile || "audio";
+        // Redraw the waveform only when something it depends on changed.
+        const h = AUD_TRACK_H - 8;
+        const peaks = seg.waveformPeaks || [];
+        const key = `${Math.round(w)}|${h}|${seg.trimStart || 0}|${seg.length}|${seg.audioDurationFrames || 0}|${peaks.length}`;
+        if (key !== rec._waveKey) {
+            rec._waveKey = key;
+            waveCvs.width = Math.max(2, Math.round(w));
+            waveCvs.height = h;
+            const ctx = waveCvs.getContext("2d");
+            ctx.clearRect(0, 0, waveCvs.width, waveCvs.height);
+            if (peaks.length) {
+                const totalFrames = seg.audioDurationFrames || seg.length;
+                const trim = seg.trimStart || 0;
+                const mid = waveCvs.height / 2;
+                ctx.strokeStyle = C.okSoft;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                const steps = Math.min(peaks.length, Math.max(20, Math.floor(waveCvs.width / 2)));
+                for (let i = 0; i < steps; i++) {
+                    const fAbs = trim + (i / steps) * seg.length;
+                    const pi = Math.min(peaks.length - 1, Math.max(0, Math.floor((fAbs / totalFrames) * peaks.length)));
+                    const amp = peaks[pi] * (waveCvs.height * 0.45);
+                    const px = (i / steps) * waveCvs.width;
+                    ctx.moveTo(px, mid - amp);
+                    ctx.lineTo(px, mid + amp);
+                }
+                ctx.stroke();
+            }
+        }
+    }
+
+    // ── DOM segments: CONTROL-video track ────────────────────────────
+    _syncSegLayerVideo() {
+        const layer = this.segLayerVid;
+        if (!layer) return;
+        const seen = new Set();
+        for (let idx = 0; idx < this.motionSegments.length; idx++) {
+            const seg = this.motionSegments[idx];
+            seen.add(seg.id);
+            let rec = this._vidDivs.get(seg.id);
+            if (!rec) {
+                rec = this._makeVideoSegDiv(seg);
+                this._vidDivs.set(seg.id, rec);
+                layer.appendChild(rec.el);
+            }
+            rec.idx = idx;
+            this._updateVideoSegDiv(rec, seg, idx);
+        }
+        for (const [id, rec] of this._vidDivs) {
+            if (!seen.has(id)) { try { rec.el.remove(); } catch (_) {} this._vidDivs.delete(id); }
+        }
+    }
+
+    _makeVideoSegDiv(seg) {
+        const el = document.createElement("div");
+        el.className = "wd-domseg vid";
+        const filmCvs = document.createElement("canvas");
+        filmCvs.className = "wd-domseg-film";
+        const nameEl = document.createElement("div");
+        nameEl.className = "wd-domseg-name";
+        const trimEl = document.createElement("div");
+        trimEl.className = "wd-domseg-trim";
+        const handleL = document.createElement("div");
+        handleL.className = "wd-domseg-handle l";
+        const handleR = document.createElement("div");
+        handleR.className = "wd-domseg-handle r";
+        el.append(filmCvs, nameEl, trimEl, handleL, handleR);
+        const rec = { el, filmCvs, nameEl, trimEl, handleL, handleR, idx: -1, id: seg.id, _filmKey: "" };
+        this._wireTrackSegDiv(rec, "video");
+        return rec;
+    }
+
+    _updateVideoSegDiv(rec, seg, idx) {
+        const { el, filmCvs, nameEl, trimEl } = rec;
+        const x1 = this._frameToLayerX(seg.start);
+        const x2 = this._frameToLayerX(seg.start + seg.length);
+        const w = Math.max(2, x2 - x1);
+        el.style.left = x1 + "px";
+        el.style.width = w + "px";
+        el.classList.toggle("selected", this.selection.type === "video" && this.selection.idx === idx);
+        nameEl.textContent = "🎞 " + (seg.fileName || seg.videoFile || "video");
+        trimEl.style.display = seg.trimStart ? "block" : "none";
+        const h = VID_TRACK_H - 8;
+        const thumbs = (seg._thumbs || []).filter(t => t.complete && t.naturalWidth > 0);
+        const key = `${Math.round(w)}|${h}|${thumbs.length}`;
+        if (key !== rec._filmKey) {
+            rec._filmKey = key;
+            filmCvs.width = Math.max(2, Math.round(w));
+            filmCvs.height = h;
+            const ctx = filmCvs.getContext("2d");
+            ctx.clearRect(0, 0, filmCvs.width, filmCvs.height);
+            if (thumbs.length) {
+                // Filmstrip: tile the poster thumbs left→right; pick which thumb
+                // by horizontal position within the clip (same as the old canvas).
+                const ar = thumbs[0].naturalWidth / thumbs[0].naturalHeight || (16 / 9);
+                const tileW = Math.max(10, h * ar);
+                for (let dx = 0; dx < filmCvs.width; dx += tileW) {
+                    const frac = dx / Math.max(1, filmCvs.width);
+                    const t = thumbs[Math.min(thumbs.length - 1, Math.floor(frac * thumbs.length))];
+                    try { ctx.drawImage(t, dx, 0, tileW, h); } catch (_) {}
+                }
+            } else {
+                ctx.fillStyle = C.slateMute;
+                ctx.font = "10px ui-sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("decoding video…", filmCvs.width / 2, filmCvs.height / 2);
+            }
+        }
+    }
+
+    // ── DOM segments: v2 automation lanes (LoRA / Cam / Seed / Pose) ─
+    _syncSegLayerAuto() {
+        const layer = this.segLayerAuto;
+        if (!layer) return;
+        const seen = new Set();
+        for (let li = 0; li < V2_DEFS.length; li++) {
+            const def = V2_DEFS[li];
+            const arr = this._segArr(def.key);
+            for (let idx = 0; idx < arr.length; idx++) {
+                const seg = arr[idx];
+                const mapKey = def.key + ":" + seg.id;
+                seen.add(mapKey);
+                let rec = this._autoDivs.get(mapKey);
+                if (!rec) {
+                    rec = this._makeAutoSegDiv(seg, def, li);
+                    this._autoDivs.set(mapKey, rec);
+                    layer.appendChild(rec.el);
+                }
+                rec.idx = idx;
+                this._updateAutoSegDiv(rec, seg, idx, def);
+            }
+        }
+        for (const [key, rec] of this._autoDivs) {
+            if (!seen.has(key)) { try { rec.el.remove(); } catch (_) {} this._autoDivs.delete(key); }
+        }
+    }
+
+    _makeAutoSegDiv(seg, def, laneIdx) {
+        const el = document.createElement("div");
+        el.className = "wd-domseg pill";
+        // Pills live inside one layer that spans all four lanes — pin each
+        // pill into its own lane row (the base .wd-domseg top/bottom rules
+        // are for the full-height tracks, so override them inline).
+        el.style.top = (laneIdx * V2_LANE_H + 3) + "px";
+        el.style.bottom = "auto";
+        el.style.height = (V2_LANE_H - 6) + "px";
+        el.style.background = def.color;
+        const sumEl = document.createElement("div");
+        sumEl.className = "wd-domseg-sum";
+        const handleL = document.createElement("div");
+        handleL.className = "wd-domseg-handle l";
+        const handleR = document.createElement("div");
+        handleR.className = "wd-domseg-handle r";
+        el.append(sumEl, handleL, handleR);
+        const rec = { el, sumEl, handleL, handleR, idx: -1, id: seg.id };
+        this._wireTrackSegDiv(rec, def.key);
+        return rec;
+    }
+
+    _updateAutoSegDiv(rec, seg, idx, def) {
+        const { el, sumEl } = rec;
+        const x1 = this._frameToLayerX(seg.start);
+        const x2 = this._frameToLayerX(seg.start + seg.length);
+        el.style.left = x1 + "px";
+        el.style.width = Math.max(3, x2 - x1) + "px";
+        el.classList.toggle("selected", this.selection.type === def.key && this.selection.idx === idx);
+        sumEl.textContent = def.summary(seg);
     }
 
     // (legacy) canvas sidebar — replaced by the DOM overlay; kept as a no-op-safe

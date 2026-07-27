@@ -171,6 +171,23 @@ except Exception as _exc:  # pragma: no cover
     )
     _SAM_MAPPINGS, _SAM_DISPLAY = {}, {}
 
+# Mask Placement — prompt/ref -> alpha -> quad placement -> propagate
+# (Slice 1: static; Cutie tracking + landmark-lock staged. Design doc:
+# MASK_PLACEMENT_NODE_DESIGN.md at the workspace root.)
+try:
+    from .nodes.mask_placement import MaskPlacementMEC
+    _MASKPLACE_MAPPINGS = {"MaskPlacementMEC": MaskPlacementMEC}
+    _MASKPLACE_DISPLAY = {
+        "MaskPlacementMEC": "Mask Placement — Prompt/Ref → Place → Track",
+    }
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "MaskPlacement", _exc,
+        hint="Requires opencv-python; prompt segmentation additionally needs the SAM stack.",
+        group="nodes",
+    )
+    _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY = {}, {}
+
 # SAM + ViTMatte combined pipeline (highest-quality mask in one node)
 try:
     from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
@@ -547,6 +564,7 @@ NODE_CLASS_MAPPINGS = {
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
+    **_MASKPLACE_MAPPINGS,
     **_SAMVIT_MAPPINGS,
     **_LUMAKEY_MAPPINGS,
     **_BGREMOVE_MAPPINGS,
@@ -577,6 +595,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,
+    **_MASKPLACE_DISPLAY,
     **_SAMVIT_DISPLAY,
     **_LUMAKEY_DISPLAY,
     **_BGREMOVE_DISPLAY,
