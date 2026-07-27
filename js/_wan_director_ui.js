@@ -27,21 +27,25 @@ export function writeWdNodeSize(node, w, h) {
     }
 }
 
+// Height is intentionally NOT capped any more. Capping node height in DOC
+// pixels by VIEWPORT pixels is meaningless across zoom levels, and whenever
+// the cap bit, LiteGraph still stacked the widget slots at full height — the
+// timeline/player DOM hung out of the node over the graph (the "damaged
+// node" screenshots). Tall nodes are normal ComfyUI UX (zoom/pan); the
+// timeline widget additionally self-shrinks if anything ever caps again.
 export function capWdComputeSize(sz) {
-    const cap = wdMaxH();
     return [
         Math.max(sz?.[0] || WD_DEFAULT_W, WD_DEFAULT_W),
-        Math.min(sz?.[1] || cap, cap),
+        sz?.[1] || 520,
     ];
 }
 
 export function capWdNode(node) {
     if (!node?.size) return;
-    const cap = wdMaxH();
     writeWdNodeSize(
         node,
         Math.max(node.size[0] || 0, WD_DEFAULT_W),
-        Math.min(node.size[1] || cap, cap),
+        node.size[1] || 520,
     );
     node.setDirtyCanvas?.(true, true);
 }
@@ -65,6 +69,107 @@ export function isWdWidgetHidden(w) {
     return !!(w._wd_ui_hidden || w._wd_compact_hidden || w._wd_hidden);
 }
 
+// Nodes 2.0 (Comfy.VueNodes.Enabled) support: the Vue renderer decides row
+// visibility from widget.options.hidden and only rebuilds its widget-row
+// snapshot when a widget is ADDED. So (1) hide/show mirror the state into
+// options.hidden, (2) wdVueNudge adds+removes a throwaway widget to trigger
+// the rebuild (debounced per node per frame; never rendered — the splice
+// lands before the next-frame snapshot).
+function _wdVueActive() {
+    try {
+        return window.app?.ui?.settings?.getSettingValue?.("Comfy.VueNodes.Enabled") === true;
+    } catch (_) { return false; }
+}
+
+export function wdVueNudge(node) {
+    if (!node?.widgets || !_wdVueActive() || node.__wdVueNudgePending) return;
+    // Only nudge once the Vue component for this node exists. Before the
+    // initial mount the fresh snapshot reads options.hidden anyway, and a
+    // rebuild racing the first mount detaches the node's DOM widgets
+    // (timeline/player elements end up orphaned from their rows).
+    if (!document.querySelector(`[data-node-id="${node.id}"]`)) return;
+    node.__wdVueNudgePending = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        node.__wdVueNudgePending = false;
+        try {
+            const d = node.addWidget("number", "__wd_vue_sync__", 0, () => {}, { serialize: false });
+            const i = node.widgets.indexOf(d);
+            if (i >= 0) node.widgets.splice(i, 1);
+        } catch (_) { /* node may be mid-removal */ }
+    }));
+}
+
+// First-instance mount race: when the very first WanDirector of a page load
+// is created, Vue can lose the DOM-widget registration for widgets added
+// while the node component is mid-mount — the row renders empty and the
+// element stays detached forever (a nudge won't fix it; only re-registering
+// does). Called from the timeline's liveness interval as a cheap self-heal.
+export function wdEnsureDomWidgetsAttached(node) {
+    if (!node?.widgets || !_wdVueActive() || node.graph == null) return;
+    if (node.__wdReattachBusy) return;
+    if (!document.querySelector(`[data-node-id="${node.id}"]`)) return;
+    const broken = node.widgets.filter((w) => w?.element && !w.element.isConnected
+        && !(w.options?.hidden || w.type === "hidden" || w.hidden));
+    if (!broken.length) return;
+    node.__wdReattachBusy = true;
+    // Two-phase on purpose: remove first, let Vue flush the removal, THEN
+    // re-add. Splice+add in one tick keeps the same widget identity in the
+    // snapshot diff, so Vue skips re-registration and the element stays
+    // detached (verified live). The pause between phases is what re-keys it.
+    const specs = broken.map((w) => ({
+        name: w.name, type: String(w.type || "div"),
+        el: w.element, opts: w.options || {}, cs: w.computeSize,
+    }));
+    for (const w of broken) {
+        const i = node.widgets.indexOf(w);
+        if (i >= 0) node.widgets.splice(i, 1);
+    }
+    setTimeout(() => {
+        try {
+            for (const s of specs) {
+                const w2 = node.addDOMWidget(s.name, s.type, s.el, s.opts);
+                if (s.cs) w2.computeSize = s.cs;
+            }
+        } catch (_) { /* retried on the next liveness tick */ }
+        node.__wdReattachBusy = false;
+    }, 150);
+}
+
+// ── Edit-proxy client (pairs with GET /wne/media_proxy) ─────────────
+// The browser can only PLAY web codecs; ProRes/EXR/MXF/… need the server
+// to transcode a frame-accurate H.264 proxy once (Resolve/Premiere
+// pattern). wdEnsureProxy() returns a playable URL: the original when the
+// container is web-safe, else the proxy (polling while it builds).
+
+export function wdViewUrl(file, type = "input") {
+    const parts = String(file || "").split("/");
+    const name = parts.pop();
+    const sub = parts.join("/");
+    return `/view?filename=${encodeURIComponent(name)}&subfolder=${encodeURIComponent(sub)}&type=${type}`;
+}
+
+export function wdIsWebSafe(file) {
+    return /\.(mp4|webm|m4v|ogv)$/i.test(String(file || ""));
+}
+
+export async function wdEnsureProxy(file, { height = 720, onProgress, signal } = {}) {
+    if (!file) return null;
+    if (wdIsWebSafe(file)) return wdViewUrl(file);
+    for (let i = 0; i < 400; i++) {            // ~10 min ceiling
+        if (signal?.aborted) return null;
+        let r = null;
+        try {
+            r = await (await fetch(
+                `/wne/media_proxy?file=${encodeURIComponent(file)}&height=${height}`)).json();
+        } catch (_) { return null; }
+        if (!r || r.ok === false || r.status === "error") return null;
+        if (r.status === "ready" && r.url) return r.url;
+        try { onProgress?.(r.progress ?? 0); } catch (_) {}
+        await new Promise((res) => setTimeout(res, 1500));
+    }
+    return null;
+}
+
 export function wdHideWidget(w) {
     if (!w || w._wd_ui_hidden) return;
     if (w._wd_ui_orig_cs === undefined) w._wd_ui_orig_cs = w.computeSize;
@@ -74,6 +179,8 @@ export function wdHideWidget(w) {
     w.type = "hidden";
     w.computeSize = () => [0, -4];
     w.draw = () => {};
+    w.options = w.options || {};
+    w.options.hidden = true;
     const el = w.element;
     if (el) {
         el.hidden = true;
@@ -93,6 +200,7 @@ export function wdShowWidget(w) {
     if (w._wd_ui_orig_cs) w.computeSize = w._wd_ui_orig_cs;
     else delete w.computeSize;
     delete w.draw;
+    if (w.options) w.options.hidden = false;
     const el = w.element;
     if (el) {
         el.hidden = false;
