@@ -1,499 +1,296 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
-import { installCanvasWidget } from "./_vue_canvas.js";
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 /**
- * MEC – SAM Multi-Mask Picker Widget
+ * MEC – SAM Multi-Mask Picker Widget  (REAL DOM — rewritten 2026-07-24)
  *
- * Renders 3 thumbnail canvases side-by-side showing each SAM candidate mask
- * overlaid on the source image (red tint at 50% opacity). Confidence score
- * displayed below each thumbnail.
+ * Shows the 3 SAM candidate masks as genuine clickable <div> tiles: a real
+ * <img> source backdrop with the mask PNG composited over it in CSS, a real
+ * score pill + confidence bar, real CSS hover/selected/focus states.
  *
- * Interaction:
- *   Click thumbnail  → update selected_index INT widget
- *   Keyboard 1/2/3   → quick-pick mask 0/1/2
- *   R                 → queue re-run prompt
+ * REPLACES: a version that painted the entire grid onto the node canvas
+ * (22 ctx.* calls vs 1 DOM element) and hand-rolled hit-rectangles to work
+ * out which tile you clicked. A grid of clickable thumbnails is the textbook
+ * DOM case — canvas-painting it meant blurry text at non-100% zoom, hit-rects
+ * that drift from what was drawn, no hover transitions, no keyboard focus,
+ * and a full repaint per frame. The mask/image PIXELS still live in <img>
+ * tags (browser-decoded, GPU-composited); nothing is redrawn per frame now.
  *
- * Theme support: detects light vs dark ComfyUI theme.
- * Graceful degradation: if JS fails, Python defaults to mask index 0.
+ * The mask PNGs are grayscale L-mode (pixel value == mask probability), so
+ * the red overlay is done with `mix-blend-mode:screen` + a hue filter rather
+ * than the old per-tile offscreen-canvas composite pass.
+ *
+ * Contracts preserved exactly (verify against the Python node before changing):
+ *   - `selected_index` INT widget is the source of truth for the choice
+ *   - keyboard 1/2/3 quick-picks mask 0/1/2
+ *   - execution payload: `message.scores` (JSON array; legacy output.scores /
+ *     output.ui.scores paths still accepted) and `message.mask_thumbs`
+ *     ([{filename, subfolder, type}, ...])
+ *   - source image read from the connected IMAGE input node's imgs[0].src
  */
 
-// ── Theme detection ──────────────────────────────────────────────────
-function isDarkTheme() {
-    const body = document.body;
-    if (!body) return true;
-    const bg = getComputedStyle(body).backgroundColor;
-    if (!bg || bg === "transparent") return true;
-    const match = bg.match(/\d+/g);
-    if (!match || match.length < 3) return true;
-    const luminance = (parseInt(match[0]) * 299 + parseInt(match[1]) * 587 + parseInt(match[2]) * 114) / 1000;
-    return luminance < 128;
+const TARGET = "SamMultiMaskPickerMEC";
+const N_MASKS = 3;
+
+function ensurePickerStyles() {
+    if (document.getElementById("mec-mask-picker-styles")) return;
+    const el = document.createElement("style");
+    el.id = "mec-mask-picker-styles";
+    el.textContent = `
+.mec-mp-root{display:flex;flex-direction:column;gap:6px;width:100%;height:100%;
+  box-sizing:border-box;padding:6px;min-height:0;font:11px ui-sans-serif,system-ui;}
+.mec-mp-head{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:#8b93a7;}
+.mec-mp-head b{color:#e6e9f0;font-weight:600;}
+.mec-mp-grid{display:flex;gap:6px;flex:1 1 auto;min-height:0;}
+.mec-mp-tile{position:relative;flex:1 1 0;min-width:0;border-radius:6px;overflow:hidden;
+  border:1px solid #3a3a3a;background:#1e1e24;cursor:pointer;box-sizing:border-box;
+  transition:border-color .12s ease,box-shadow .12s ease,transform .08s ease;
+  display:flex;align-items:center;justify-content:center;}
+.mec-mp-tile:hover{border-color:#5a5a5a;transform:translateY(-1px);}
+.mec-mp-tile.sel{border-color:#5b9dd9;border-width:2px;box-shadow:0 0 0 1px rgba(91,157,217,.4);}
+.mec-mp-tile:focus-visible{outline:2px solid #89b4fa;outline-offset:1px;}
+.mec-mp-src,.mec-mp-mask{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;pointer-events:none;user-select:none;-webkit-user-drag:none;}
+.mec-mp-mask{mix-blend-mode:screen;opacity:.55;filter:sepia(1) saturate(6) hue-rotate(-40deg);}
+.mec-mp-empty{color:#6b7280;font-size:10px;text-align:center;padding:6px;
+  pointer-events:none;white-space:pre-line;line-height:1.4;}
+.mec-mp-badge{position:absolute;top:4px;left:4px;min-width:15px;height:15px;border-radius:3px;
+  background:rgba(0,0,0,.66);color:#e6e9f0;font-size:9px;line-height:15px;text-align:center;
+  padding:0 3px;pointer-events:none;}
+.mec-mp-tile.sel .mec-mp-badge{background:#5b9dd9;color:#08111c;font-weight:700;}
+.mec-mp-score{position:absolute;left:0;right:0;bottom:0;padding:2px 5px;font-size:10px;
+  color:#e6e9f0;background:rgba(0,0,0,.62);pointer-events:none;
+  display:flex;justify-content:space-between;gap:4px;}
+.mec-mp-score .v{font-variant-numeric:tabular-nums;color:#a6e3a1;}
+.mec-mp-bar{position:absolute;left:0;bottom:0;height:2px;background:#a6e3a1;pointer-events:none;}
+`;
+    document.head.appendChild(el);
 }
 
-function _cssVar(name, fallback) {
-    // Custom-property computed values are returned as-written, before var() substitution.
-    // If the declaration itself is `var(...)`, addColorStop / canvas APIs will reject it.
-    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    if (!v || v.startsWith("var(")) return fallback;
-    return v;
-}
+function installPicker(node) {
+    if (node._mecPickerDom) return;
+    ensureC2CKit();
+    ensurePickerStyles();
 
-function getThemeColors() {
-    const dark = isDarkTheme();
-    return {
-        bg: dark ? "var(--c2c-bg)" : "var(--c2c-gray050)",
-        cardBg: dark ? "var(--c2c-border)" : "var(--c2c-gray100)",
-        cardSelectedBg: dark ? "var(--c2c-surface1)" : "var(--c2c-gray220)",
-        panelMid:  _cssVar("--c2c-panelMid",  dark ? "#3a5068" : "#d8dce8"),
-        panelMid2: _cssVar("--c2c-panelMid2", dark ? "#2a3040" : "#e8ebf2"),
-        panelMid3: _cssVar("--c2c-panelMid3", dark ? "#2a4058" : "#c8ced8"),
-        panelMid4: _cssVar("--c2c-panelMid4", dark ? "#1a2030" : "#b8bec8"),
-        border: dark ? "var(--c2c-surface2)" : "var(--c2c-gray360)",
-        selectedBorder: dark ? "var(--c2c-blue)" : "var(--c2c-blueAction)",
-        text: dark ? "var(--c2c-fg)" : "var(--c2c-gray800)",
-        textDim: dark ? "var(--c2c-dim)" : "var(--c2c-gray450)",
-        scoreBg: dark ? "var(--c2c-bg3)ee" : "var(--c2c-white)",
-        scoreText: dark ? "var(--c2c-green)" : "var(--c2c-okDeep)",
-        overlayColor: dark ? [255, 80, 80] : [200, 40, 40],
-        labelBg: dark ? "var(--c2c-bg2)cc" : "var(--c2c-white)",
+    const state = {
+        scores: [0, 0, 0],
+        maskUrls: [null, null, null],
+        srcUrl: null,
+        lastSrcUrl: null,
     };
-}
 
-// ── Drawing helpers ──────────────────────────────────────────────────
-function roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-}
+    const root = document.createElement("div");
+    root.className = "mec-mp-root";
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class SamMultiMaskPickerWidget {
-    constructor(node) {
-        this.node = node;
-        this.selectedIndex = 0;
-        this.scores = [0, 0, 0];
-        this.maskImages = [null, null, null];   // ImageData canvases (offscreen)
-        this.sourceImage = null;                // base image as Image element
-        this._sourceLoaded = false;
-        this._lastImageUrl = null;
-        this._hoveredThumb = -1;
-        this._thumbRects = [];                  // [{x,y,w,h}, ...]
-        this._needsRedraw = true;
+    const head = document.createElement("div");
+    head.className = "mec-mp-head";
+    const headLabel = document.createElement("b");
+    headLabel.textContent = "SAM candidates";
+    const headHint = document.createElement("span");
+    headHint.textContent = "click a mask · or press 1 / 2 / 3";
+    head.append(headLabel, headHint);
+    root.appendChild(head);
+
+    const grid = document.createElement("div");
+    grid.className = "mec-mp-grid";
+    grid.setAttribute("role", "radiogroup");
+    grid.setAttribute("aria-label", "SAM mask candidates");
+    root.appendChild(grid);
+
+    const tiles = [];
+    for (let i = 0; i < N_MASKS; i++) {
+        const tile = document.createElement("div");
+        tile.className = "mec-mp-tile";
+        tile.tabIndex = 0;
+        tile.setAttribute("role", "radio");
+        tile.setAttribute("aria-label", `Mask candidate ${i + 1}`);
+
+        const srcImg = document.createElement("img");
+        srcImg.className = "mec-mp-src";
+        srcImg.draggable = false;
+        srcImg.style.display = "none";
+
+        const maskImg = document.createElement("img");
+        maskImg.className = "mec-mp-mask";
+        maskImg.draggable = false;
+        maskImg.style.display = "none";
+
+        const empty = document.createElement("div");
+        empty.className = "mec-mp-empty";
+        empty.textContent = "queue to\ngenerate";
+
+        const badge = document.createElement("div");
+        badge.className = "mec-mp-badge";
+        badge.textContent = String(i + 1);
+
+        const score = document.createElement("div");
+        score.className = "mec-mp-score";
+        const sLabel = document.createElement("span");
+        sLabel.textContent = "score";
+        const sVal = document.createElement("span");
+        sVal.className = "v";
+        sVal.textContent = "—";
+        score.append(sLabel, sVal);
+
+        const bar = document.createElement("div");
+        bar.className = "mec-mp-bar";
+        bar.style.width = "0%";
+
+        tile.append(srcImg, maskImg, empty, badge, score, bar);
+        grid.appendChild(tile);
+
+        const pick = (e) => {
+            e?.preventDefault?.();
+            e?.stopPropagation?.();
+            setSelected(i);
+        };
+        tile.addEventListener("pointerdown", pick);
+        tile.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") pick(e);
+        });
+
+        tiles.push({ tile, srcImg, maskImg, empty, sVal, bar });
     }
 
-    // ── Data sync from node outputs ──────────────────────────────────
-    updateFromNode() {
-        // Read selected_index from widget
-        const indexWidget = this.node.widgets?.find(w => w.name === "selected_index");
-        if (indexWidget) {
-            this.selectedIndex = indexWidget.value || 0;
-        }
-
-        // Try to read scores from last execution output
-        // The node outputs scores as STRING at index 3
-        const outputData = this.node.outputs;
-        if (outputData && outputData.length > 3) {
-            try {
-                const scoresOut = this.node.getOutputData?.(3);
-                if (typeof scoresOut === "string") {
-                    const parsed = JSON.parse(scoresOut);
-                    if (Array.isArray(parsed) && parsed.length >= 3) {
-                        this.scores = parsed.slice(0, 3);
-                    }
-                }
-            } catch (__c2cErr) { __c2cReport("sam_multi_mask_picker", __c2cErr); }
-        }
+    function currentIndex() {
+        const w = node.widgets?.find((x) => x.name === "selected_index");
+        return Math.max(0, Math.min(N_MASKS - 1, Number(w?.value) || 0));
     }
 
-    setSelectedIndex(idx) {
-        idx = Math.max(0, Math.min(2, idx));
-        this.selectedIndex = idx;
-        const indexWidget = this.node.widgets?.find(w => w.name === "selected_index");
-        if (indexWidget) {
-            indexWidget.value = idx;
-            if (indexWidget.callback) {
-                indexWidget.callback(idx);
+    function setSelected(idx) {
+        idx = Math.max(0, Math.min(N_MASKS - 1, idx));
+        const w = node.widgets?.find((x) => x.name === "selected_index");
+        if (w) {
+            w.value = idx;
+            try { w.callback?.(idx); }
+            catch (err) { __c2cReport?.("sam_multi_mask_picker.callback", err); }
+        }
+        syncSelection();
+        node.graph?.setDirtyCanvas(true, true);
+    }
+
+    function syncSelection() {
+        const sel = currentIndex();
+        tiles.forEach((t, i) => {
+            t.tile.classList.toggle("sel", i === sel);
+            t.tile.setAttribute("aria-checked", String(i === sel));
+        });
+    }
+
+    function renderTiles() {
+        for (let i = 0; i < N_MASKS; i++) {
+            const t = tiles[i];
+            const mUrl = state.maskUrls[i];
+            const sUrl = state.srcUrl;
+            if (sUrl && t.srcImg.getAttribute("src") !== sUrl) t.srcImg.src = sUrl;
+            t.srcImg.style.display = sUrl ? "block" : "none";
+            if (mUrl && t.maskImg.getAttribute("src") !== mUrl) t.maskImg.src = mUrl;
+            t.maskImg.style.display = mUrl ? "block" : "none";
+            t.empty.style.display = (sUrl || mUrl) ? "none" : "block";
+
+            const sc = Number(state.scores[i]);
+            const has = Number.isFinite(sc) && sc > 0;
+            t.sVal.textContent = has ? sc.toFixed(3) : "—";
+            t.bar.style.width = has ? `${Math.max(0, Math.min(1, sc)) * 100}%` : "0%";
+        }
+        syncSelection();
+    }
+
+    // Source-image discovery — unchanged contract: the upstream node's own
+    // preview image (subgraph-safe link resolution via the owning graph).
+    function tryLoadSourceImage() {
+        try {
+            const imgInput = node.inputs?.[0];
+            if (!imgInput?.link) return;
+            const ownerGraph = node.graph || app.graph;
+            const linkInfo = ownerGraph?.links?.[imgInput.link];
+            if (!linkInfo) return;
+            const sourceNode = ownerGraph.getNodeById?.(linkInfo.origin_id);
+            const url = sourceNode?.imgs?.[0]?.src;
+            if (url && url !== state.lastSrcUrl) {
+                state.lastSrcUrl = url;
+                state.srcUrl = url;
+                renderTiles();
             }
-        }
-        this._needsRedraw = true;
-        this.node.setDirtyCanvas(true, true);
-    }
-
-    // ── Load source image from connected IMAGE input ─────────────────
-    tryLoadSourceImage() {
-        if (!this.node.inputs || !this.node.inputs.length) return;
-
-        const imgInput = this.node.inputs[0]; // image is first required input
-        if (!imgInput || !imgInput.link) return;
-
-        // Resolve links within the node's owning graph (subgraph-safe).
-        const ownerGraph = this.node.graph || app.graph;
-        const linkInfo = ownerGraph?.links?.[imgInput.link];
-        if (!linkInfo) return;
-
-        const sourceNode = ownerGraph.getNodeById?.(linkInfo.origin_id);
-        if (!sourceNode) return;
-
-        // Try to get the image URL from the source node's imgs array (preview images)
-        if (sourceNode.imgs && sourceNode.imgs.length > 0) {
-            const imgUrl = sourceNode.imgs[0].src;
-            if (imgUrl && imgUrl !== this._lastImageUrl) {
-                this._lastImageUrl = imgUrl;
-                this._sourceLoaded = false;
-                const img = new Image();
-                img.crossOrigin = "anonymous";
-                img.onload = () => {
-                    this.sourceImage = img;
-                    this._sourceLoaded = true;
-                    this._needsRedraw = true;
-                    this.node.setDirtyCanvas(true, true);
-                };
-                img.onerror = () => {
-                    this._sourceLoaded = false;
-                };
-                img.src = imgUrl;
-            }
+        } catch (err) {
+            __c2cReport?.("sam_multi_mask_picker.source", err);
         }
     }
 
-    // ── Build mask overlay thumbnails from server-rendered PNGs ──────
-    // The Python node renders each of the 3 SAM candidate masks to a PNG in
-    // ComfyUI's temp dir and passes the file infos via the ``ui`` payload.
-    // We download them as <img> elements once (browser caches by filename)
-    // and store them in maskImages[] so draw() can composite each thumbnail.
-    receiveMaskThumbnails(thumbInfos) {
+    function receiveMaskThumbnails(thumbInfos) {
         if (!Array.isArray(thumbInfos)) return;
-        for (let i = 0; i < Math.min(3, thumbInfos.length); i++) {
+        for (let i = 0; i < N_MASKS; i++) {
             const info = thumbInfos[i];
-            if (!info || !info.filename) {
-                this.maskImages[i] = null;
-                continue;
-            }
-            const url = `/view?filename=${encodeURIComponent(info.filename)}`
-                      + `&subfolder=${encodeURIComponent(info.subfolder || "")}`
-                      + `&type=${encodeURIComponent(info.type || "temp")}`
-                      + `&t=${Date.now()}`;
-            const img = new Image();
-            img.onload = () => {
-                this.maskImages[i] = img;
-                this._needsRedraw = true;
-                this.node.setDirtyCanvas(true, true);
-            };
-            img.onerror = () => {
-                this.maskImages[i] = null;
-            };
-            img.src = url;
+            if (!info?.filename) { state.maskUrls[i] = null; continue; }
+            state.maskUrls[i] =
+                `/view?filename=${encodeURIComponent(info.filename)}` +
+                `&subfolder=${encodeURIComponent(info.subfolder || "")}` +
+                `&type=${encodeURIComponent(info.type || "temp")}` +
+                `&t=${Date.now()}`;
         }
+        renderTiles();
     }
 
-    // ── Draw the picker widget ───────────────────────────────────────
-    draw(ctx, nodeX, nodeY, widgetWidth, widgetY, widgetHeight) {
-        const theme = getThemeColors();
-        const padding = 8;
-        const thumbGap = 6;
-        const labelH = 24;
-        const headerH = 22;
-
-        const totalW = widgetWidth - padding * 2;
-        const thumbW = Math.floor((totalW - thumbGap * 2) / 3);
-        const thumbH = Math.floor(thumbW * 0.75);
-        const fullH = headerH + thumbH + labelH + padding * 2;
-
-        // Background
-        ctx.save();
-        roundRect(ctx, nodeX + padding, widgetY, totalW, fullH, 6);
-        ctx.fillStyle = theme.bg;
-        ctx.fill();
-        ctx.strokeStyle = theme.border;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        // Header label
-        ctx.fillStyle = theme.textDim;
-        ctx.font = "11px sans-serif";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
-        ctx.fillText("SAM Mask Candidates (click or press 1/2/3)", nodeX + padding + 6, widgetY + 5);
-
-        this._thumbRects = [];
-
-        for (let i = 0; i < 3; i++) {
-            const tx = nodeX + padding + i * (thumbW + thumbGap);
-            const ty = widgetY + headerH;
-
-            // Store rect for hit testing
-            this._thumbRects.push({ x: tx, y: ty, w: thumbW, h: thumbH });
-
-            const isSelected = (i === this.selectedIndex);
-            const isHovered = (i === this._hoveredThumb);
-
-            // Card background
-            roundRect(ctx, tx, ty, thumbW, thumbH, 4);
-            ctx.fillStyle = isSelected ? theme.cardSelectedBg : theme.cardBg;
-            ctx.fill();
-
-            // Draw source image + mask overlay if source available
-            if (this._sourceLoaded && this.sourceImage) {
-                ctx.save();
-                ctx.beginPath();
-                roundRect(ctx, tx, ty, thumbW, thumbH, 4);
-                ctx.clip();
-
-                // Draw base image scaled to fit
-                const imgAR = this.sourceImage.width / this.sourceImage.height;
-                const thumbAR = thumbW / thumbH;
-                let sx = 0, sy = 0, sw = this.sourceImage.width, sh = this.sourceImage.height;
-                if (imgAR > thumbAR) {
-                    sw = sh * thumbAR;
-                    sx = (this.sourceImage.width - sw) / 2;
-                } else {
-                    sh = sw / thumbAR;
-                    sy = (this.sourceImage.height - sh) / 2;
-                }
-                ctx.drawImage(this.sourceImage, sx, sy, sw, sh, tx, ty, thumbW, thumbH);
-
-                // Real mask overlay if Python sent the per-mask PNG. The PNG is
-                // a grayscale L-mode image where pixel value == mask probability.
-                // We composite by drawing the mask in a colored tint using
-                // ``destination-in``-style masking via an offscreen canvas.
-                const maskImg = this.maskImages[i];
-                if (maskImg && maskImg.complete && maskImg.naturalWidth > 0) {
-                    // Match the same letterboxed crop the source image used,
-                    // so alignment matches frame-for-frame.
-                    const off = document.createElement("canvas");
-                    off.width = thumbW;
-                    off.height = thumbH;
-                    const octx = off.getContext("2d");
-                    // Draw the grayscale mask scaled to thumb size with the
-                    // same source crop as the base image (mask is full-res).
-                    octx.drawImage(maskImg, sx, sy, sw, sh, 0, 0, thumbW, thumbH);
-                    // Tint: replace the RGB with the overlay color, keep mask
-                    // luminance as alpha multiplier.
-                    octx.globalCompositeOperation = "source-in";
-                    octx.fillStyle = `rgba(${theme.overlayColor[0]}, ${theme.overlayColor[1]}, ${theme.overlayColor[2]}, 0.55)`;
-                    octx.fillRect(0, 0, thumbW, thumbH);
-                    ctx.drawImage(off, tx, ty);
-                } else {
-                    // No real mask available yet -> faint hint that this card
-                    // is selectable, but no fake-red full overlay anymore.
-                    ctx.fillStyle = `rgba(${theme.overlayColor[0]}, ${theme.overlayColor[1]}, ${theme.overlayColor[2]}, 0.10)`;
-                    ctx.fillRect(tx, ty, thumbW, thumbH);
-                }
-
-                ctx.restore();
-            } else {
-                // Placeholder: gradient fill
-                ctx.save();
-                ctx.beginPath();
-                roundRect(ctx, tx, ty, thumbW, thumbH, 4);
-                ctx.clip();
-                const grad = ctx.createLinearGradient(tx, ty, tx, ty + thumbH);
-                grad.addColorStop(0, isSelected ? theme.panelMid : theme.panelMid2);
-                grad.addColorStop(1, isSelected ? theme.panelMid3 : theme.panelMid4);
-                ctx.fillStyle = grad;
-                ctx.fillRect(tx, ty, thumbW, thumbH);
-                // Draw mask index letter
-                ctx.fillStyle = theme.textDim;
-                ctx.font = "bold 28px sans-serif";
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.fillText(`${i + 1}`, tx + thumbW / 2, ty + thumbH / 2);
-                ctx.restore();
-            }
-
-            // Selection border
-            if (isSelected) {
-                roundRect(ctx, tx, ty, thumbW, thumbH, 4);
-                ctx.strokeStyle = theme.selectedBorder;
-                ctx.lineWidth = 2.5;
-                ctx.stroke();
-            } else if (isHovered) {
-                roundRect(ctx, tx, ty, thumbW, thumbH, 4);
-                ctx.strokeStyle = theme.border;
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
-            }
-
-            // Score label below thumbnail
-            const score = this.scores[i] || 0;
-            const labelY = ty + thumbH + 2;
-
-            roundRect(ctx, tx, labelY, thumbW, labelH - 2, 3);
-            ctx.fillStyle = theme.labelBg;
-            ctx.fill();
-
-            ctx.fillStyle = isSelected ? theme.scoreText : theme.text;
-            ctx.font = isSelected ? "bold 11px sans-serif" : "11px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            const pct = score.toFixed(1);
-            ctx.fillText(`${pct}% confidence`, tx + thumbW / 2, labelY + (labelH - 2) / 2);
-
-            // Keyboard shortcut indicator
-            ctx.fillStyle = theme.textDim;
-            ctx.font = "9px sans-serif";
-            ctx.textAlign = "right";
-            ctx.textBaseline = "top";
-            ctx.fillText(`[${i + 1}]`, tx + thumbW - 4, ty + 3);
-        }
-
-        ctx.restore();
-
-        this._widgetFullHeight = fullH;
-        return fullH;
+    node.addDOMWidget("mask_picker_display", "mask_picker", root, {
+        getValue: () => "",
+        setValue: () => {},
+        serialize: false,
+    });
+    if (!node.size || node.size[1] < 260) {
+        node.size = [Math.max(node.size?.[0] || 0, 320), Math.max(node.size?.[1] || 0, 260)];
     }
 
-    // ── Hit testing ──────────────────────────────────────────────────
-    hitTest(localX, localY) {
-        for (let i = 0; i < this._thumbRects.length; i++) {
-            const r = this._thumbRects[i];
-            if (localX >= r.x && localX <= r.x + r.w &&
-                localY >= r.y && localY <= r.y + r.h) {
-                return i;
-            }
-        }
-        return -1;
-    }
+    const poll = setInterval(tryLoadSourceImage, 1500);
+    const origRemoved = node.onRemoved;
+    node.onRemoved = function () {
+        origRemoved?.apply(this, arguments);
+        clearInterval(poll);
+    };
 
-    onMouseMove(localX, localY) {
-        const prev = this._hoveredThumb;
-        this._hoveredThumb = this.hitTest(localX, localY);
-        if (prev !== this._hoveredThumb) {
-            this.node.setDirtyCanvas(true, false);
-        }
-    }
+    node._mecPickerDom = {
+        renderTiles, syncSelection, receiveMaskThumbnails, tryLoadSourceImage,
+        setScores: (s) => { state.scores = s; renderTiles(); },
+        setSelected,
+    };
 
-    onMouseDown(localX, localY, event) {
-        const idx = this.hitTest(localX, localY);
-        if (idx >= 0) {
-            this.setSelectedIndex(idx);
-            return true; // consumed
-        }
-        return false;
-    }
-
-    onKeyDown(event) {
-        const key = event.key;
-        // Number keys 1, 2, 3 for quick-pick
-        if (key === "1") {
-            this.setSelectedIndex(0);
-            return true;
-        }
-        if (key === "2") {
-            this.setSelectedIndex(1);
-            return true;
-        }
-        if (key === "3") {
-            this.setSelectedIndex(2);
-            return true;
-        }
-        // R to re-run
-        if (key === "r" || key === "R") {
-            app.queuePrompt(0, 1);
-            return true;
-        }
-        return false;
-    }
+    tryLoadSourceImage();
+    renderTiles();
 }
 
+if (!(app.extensions || []).some((e) => e?.name === "MEC.SamMultiMaskPicker")) {
+    app.registerExtension({
+        name: "MEC.SamMultiMaskPicker",
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Extension Registration
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        async beforeRegisterNodeDef(nodeType, nodeData) {
+            if (nodeData.name !== TARGET) return;
 
-app.registerExtension({
-    name: "MEC.SamMultiMaskPicker",
-
-    async beforeRegisterNodeDef(nodeType, nodeData, appInstance) {
-        if (nodeData.name !== "SamMultiMaskPickerMEC") return;
-
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            if (onNodeCreated) onNodeCreated.apply(this, arguments);
-
-            this._mecPicker = new SamMultiMaskPickerWidget(this);
-
-            // Add custom drawing widget
-            const pickerWidget = {
-                name: "mask_picker_display",
-                type: "custom",
-                value: "",
-                draw: (ctx, node, widgetWidth, widgetY, widgetHeight) => {
-                    if (!this._mecPicker) return;
-                    this._mecPicker.updateFromNode();
-                    this._mecPicker.tryLoadSourceImage();
-                    // ctx is already translated to the node origin by LiteGraph,
-                    // so widget-local coordinates start at (0, widgetY). Passing
-                    // absolute node.pos[*] here doubled the offset and pushed
-                    // the widget far below the node body.
-                    return this._mecPicker.draw(
-                        ctx,
-                        0,
-                        widgetY,
-                        widgetWidth,
-                        widgetY,
-                        widgetHeight
-                    );
-                },
-                computeSize: () => {
-                    return [0, 160]; // default height for the picker area
-                },
-                mouse: (event, pos, node) => {
-                    if (!this._mecPicker) return false;
-                    // ``pos`` is already in widget-local coordinates that match
-                    // the (0, widgetY) origin we draw from above.
-                    const localX = pos[0];
-                    const localY = pos[1];
-
-                    if (event.type === "mousemove") {
-                        this._mecPicker.onMouseMove(localX, localY);
-                        return false;
-                    }
-                    if (event.type === "pointerdown" || event.type === "mousedown") {
-                        return this._mecPicker.onMouseDown(localX, localY, event);
-                    }
-                    return false;
-                },
+            // Keyboard 1/2/3 quick-pick (contract preserved).
+            const onKeyDown = nodeType.prototype.onKeyDown;
+            nodeType.prototype.onKeyDown = function (event) {
+                if (onKeyDown) {
+                    const handled = onKeyDown.apply(this, arguments);
+                    if (handled) return true;
+                }
+                const k = event?.key;
+                if (k >= "1" && k <= String(N_MASKS) && this._mecPickerDom) {
+                    this._mecPickerDom.setSelected(parseInt(k, 10) - 1);
+                    return true;
+                }
+                return false;
             };
 
-            installCanvasWidget(this, pickerWidget, 300);   // classic unchanged; Vue DOM canvas
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                onConfigure?.apply(this, arguments);
+                this._mecPickerDom?.syncSelection();
+            };
 
-            // Increase node size to fit picker
-            const minH = 320;
-            if (this.size[1] < minH) {
-                this.size[1] = minH;
-            }
-        };
-
-        // Keyboard handler at node level
-        const onKeyDown = nodeType.prototype.onKeyDown;
-        nodeType.prototype.onKeyDown = function (event) {
-            if (onKeyDown) {
-                const handled = onKeyDown.apply(this, arguments);
-                if (handled) return true;
-            }
-            if (this._mecPicker) {
-                return this._mecPicker.onKeyDown(event);
-            }
-            return false;
-        };
-
-        // Parse output scores + receive per-mask thumbnail PNGs on execution
-        const onExecuted = nodeType.prototype.onExecuted;
-        nodeType.prototype.onExecuted = function (message) {
-            if (onExecuted) onExecuted.apply(this, arguments);
-
-            if (this._mecPicker && message) {
-                // Scores can arrive either as ui.scores (preferred) or via the
-                // legacy output.scores path. Try both.
+            // Scores + real mask thumbnails arrive on execution.
+            const onExecuted = nodeType.prototype.onExecuted;
+            nodeType.prototype.onExecuted = function (message) {
+                onExecuted?.apply(this, arguments);
+                if (!this._mecPickerDom || !message) return;
                 try {
                     let parsed = null;
                     if (Array.isArray(message.scores) && message.scores.length > 0) {
@@ -504,20 +301,22 @@ app.registerExtension({
                     } else if (message.output?.ui?.scores) {
                         parsed = JSON.parse(message.output.ui.scores);
                     }
-                    if (Array.isArray(parsed) && parsed.length >= 3) {
-                        this._mecPicker.scores = parsed.slice(0, 3);
+                    if (Array.isArray(parsed) && parsed.length >= N_MASKS) {
+                        this._mecPickerDom.setScores(parsed.slice(0, N_MASKS));
                     }
-                } catch (__c2cErr) { __c2cReport("sam_multi_mask_picker", __c2cErr); }
+                } catch (err) { __c2cReport?.("sam_multi_mask_picker.scores", err); }
 
-                // Real mask thumbnails sent by the Python side.
-                const thumbs = message.mask_thumbs;
-                if (Array.isArray(thumbs) && thumbs.length > 0) {
-                    this._mecPicker.receiveMaskThumbnails(thumbs);
+                if (Array.isArray(message.mask_thumbs) && message.mask_thumbs.length > 0) {
+                    this._mecPickerDom.receiveMaskThumbnails(message.mask_thumbs);
                 }
+                this._mecPickerDom.tryLoadSourceImage();
+            };
+        },
 
-                this._mecPicker._needsRedraw = true;
-                this.setDirtyCanvas(true, true);
-            }
-        };
-    },
-});
+        async nodeCreated(node) {
+            if (node.comfyClass !== TARGET) return;
+            try { installPicker(node); }
+            catch (err) { __c2cReport?.("sam_multi_mask_picker.install", err, "sam_multi_mask_picker"); }
+        },
+    });
+}
