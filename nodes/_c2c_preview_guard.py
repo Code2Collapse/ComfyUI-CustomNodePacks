@@ -87,7 +87,11 @@ def _is_video_latent(latent_format) -> bool:
     Mochi / Cosmos. Robust across ComfyUI versions:
       1. `latent_dimensions >= 3` (video formats set 3; images 2) — the primary,
          version-stable signal,
-      2. the TAESD decoder name (`taew*` / `taehv*` = video approx decoders),
+      2. the TAESD decoder name, checked against core's OWN canonical
+         `latent_preview.VIDEO_TAES` list (not a hardcoded prefix guess —
+         core renamed taew2_1/taew2_2 -> lighttaew2_1/lighttaew2_2 at some
+         point, and a hardcoded ("taew","taehv") prefix check silently stops
+         matching the moment core renames things again),
       3. a class-name keyword fallback.
     Any lookup failure just falls through to "not video" (image path)."""
     try:
@@ -96,11 +100,31 @@ def _is_video_latent(latent_format) -> bool:
     except Exception:
         pass
     try:
-        deco = str(getattr(latent_format, "taesd_decoder_name", "")).lower()
-        if deco.startswith(("taew", "taehv")):
+        deco = str(getattr(latent_format, "taesd_decoder_name", "") or "")
+        try:
+            import latent_preview
+            video_taes = set(getattr(latent_preview, "VIDEO_TAES", []))
+        except Exception:
+            video_taes = set()
+        if deco in video_taes or deco.lower().startswith(("taew", "taehv", "lighttaew", "lighttaehy", "taeltx")):
             return True
         name = type(latent_format).__name__.lower()
         return any(k in name for k in ("wan", "hunyuan", "ltx", "mochi", "cosmos", "video"))
+    except Exception:
+        return False
+
+
+def _taesd_decoder_present(latent_format) -> bool:
+    """True if a vae_approx file matching this format's taesd_decoder_name
+    actually exists on disk. Used to make "Auto" pick TAESD for images too
+    when it's genuinely available — see _auto_method_for for why this check
+    exists at all (core's real Auto does NOT do this itself)."""
+    try:
+        import folder_paths
+        name = getattr(latent_format, "taesd_decoder_name", None)
+        if not name:
+            return False
+        return any(fn.startswith(name) for fn in folder_paths.get_filename_list("vae_approx"))
     except Exception:
         return False
 
@@ -110,9 +134,44 @@ def _auto_method_for(latent_format) -> str:
       video  -> TAESD  (Kijai/Wan samplers route TAESD to their own video
                          previewer; core falls back to Wan-factor Latent2RGB
                          if the taew decoder file is absent — never blank),
-      image  -> "auto" (core Auto = TAESD when the decoder is present, else
-                         Latent2RGB — the best-looking image preview)."""
-    return "taesd" if _is_video_latent(latent_format) else "auto"
+      image  -> TAESD when a decoder file is actually present, else "auto"
+                (-> Latent2RGB). NOTE: core's real Auto does NOT do this
+                itself — `latent_preview.get_previewer` unconditionally maps
+                LatentPreviewMethod.Auto -> Latent2RGB regardless of whether
+                a sharp TAESD decoder is sitting right there in vae_approx.
+                That is a real quality regression for SD/SDXL/Flux/SD3 (whose
+                taesd_decoder/taesdxl_decoder/taesd3_decoder files are the
+                ComfyUI-standard, near-always-present ones) — Auto would give
+                a blocky Latent2RGB preview when a much sharper TAESD preview
+                was one filename-check away. This is what makes CNP's Auto
+                the best-looking option per model instead of just mirroring
+                core's own (weaker) Auto."""
+    if _is_video_latent(latent_format):
+        return "taesd"
+    return "taesd" if _taesd_decoder_present(latent_format) else "auto"
+
+
+class _MeanChannelPreviewer:
+    """Absolute last-resort previewer for latent formats with NEITHER a
+    usable TAESD decoder NOR latent_rgb_factors (e.g. LTXAV, which sets
+    latent_rgb_factors=None explicitly) — mean-projects all channels to a
+    normalized grayscale frame instead of returning None (a permanently
+    blank node during sampling). Crude, but strictly better than nothing,
+    matching this guard's own never-None design goal."""
+    def decode_latent_to_preview_image(self, preview_format, x0):
+        try:
+            import latent_preview as _lp
+            x = x0[0]                      # drop batch -> (C,H,W) or (C,T,H,W)
+            if x.ndim == 4:                # (C,T,H,W) video -> first frame
+                x = x[:, 0]
+            x = x.mean(dim=0)              # (H,W)
+            x = x.unsqueeze(-1).repeat(1, 1, 3)  # (H,W,3)
+            lo, hi = x.min(), x.max()
+            x = (x - lo) / (hi - lo + 1e-6)
+            img = _lp.preview_to_image(x, do_scale=False)
+            return ("JPEG", img, _lp.MAX_PREVIEW_RESOLUTION)
+        except Exception:
+            return None
 
 
 def _install_previewer_fallback() -> None:
@@ -173,13 +232,21 @@ def _install_previewer_fallback() -> None:
             return prev
         # Core gave nothing -> force Auto for one resolve (Latent2RGB, no model,
         # cannot fail) so the live preview always gets frames.
-        return _resolve_with("auto", device, latent_format) or prev
+        prev = _resolve_with("auto", device, latent_format)
+        if prev is not None:
+            return prev
+        # Still nothing: this format has no TAESD decoder AND no
+        # latent_rgb_factors at all (e.g. LTXAV). Absolute last resort so the
+        # node never sits permanently blank during sampling.
+        return _MeanChannelPreviewer()
 
     try:
         latent_preview.get_previewer = _patched_get_previewer
         latent_preview._c2c_previewer_patched = True
         log.info("[c2c.preview] installed smart-Auto + never-None get_previewer wrapper "
-                 "(video->TAESD, image->Auto, per model).")
+                 "(video->TAESD; image->TAESD when a decoder file is present, else Auto; "
+                 "per model, with a channel-mean grayscale previewer as the absolute "
+                 "last resort for formats with neither a decoder nor rgb factors).")
     except Exception as exc:  # noqa: BLE001
         log.debug("[c2c.preview] previewer patch skipped: %s", exc)
 

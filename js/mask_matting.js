@@ -9,6 +9,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports,vals) -> bool.
 // ``vals`` is a flat {widgetName: value} snapshot, allowing toggle-gated widgets.
@@ -223,6 +224,38 @@ function refreshVisibility(node) {
         const visible = !!pred(seg, mat, mode, sup, vals);
         setHidden(w, !visible);
     }
+
+    // Live status header: at-a-glance pipeline summary + a warning when the
+    // selected backend has NO local weights (the combo silently falls back
+    // to showing only "(auto)" in that case — easy to miss in a 30+ param
+    // node). Reuses the filtered lists applyFilteredChoices already built
+    // above, so this costs nothing extra to compute.
+    if (node._mecStatusPill) {
+        const visibleCount = (node.widgets || [])
+            .filter(w => w.type !== "hidden" && w.name !== "mec_status_header").length;
+        node._mecStatusPill.textContent =
+            `${seg || "?"} → ${(mat && mat !== "none") ? mat : "no matte"} · ${mode} · ${visibleCount} params`;
+    }
+    if (node._mecWarnPill) {
+        // "auto"/"auto_best" are meta cascade-selectors, not concrete
+        // backends — they route across whatever IS available at runtime, so
+        // their model dropdown is legitimately "(auto)"-only. Only warn for
+        // an actual named backend (present in *_TO_KEY) with no weights.
+        const segIsConcrete = Object.prototype.hasOwnProperty.call(SEGMENTER_TO_KEY, seg);
+        const matIsConcrete = !!mat && mat !== "none" && Object.prototype.hasOwnProperty.call(MATTER_TO_KEY, mat);
+        const segChoices = modelW?.options?.values || [];
+        const matChoices = matterModelW?.options?.values || [];
+        const segMissing = segIsConcrete && segChoices.length > 0 && segChoices.every(c => c === "(auto)");
+        const matMissing = matIsConcrete && matChoices.length > 0 && matChoices.every(c => c === "(auto)");
+        if (segMissing || matMissing) {
+            const missing = [segMissing && seg, matMissing && mat].filter(Boolean);
+            node._mecWarnPill.textContent = `⚠ no local weights: ${missing.join(", ")}`;
+            node._mecWarnPill.style.display = "inline-flex";
+        } else {
+            node._mecWarnPill.style.display = "none";
+        }
+    }
+
     vueSyncNodeWidgets(node);
     const sz = node.computeSize();
     // 30+ visible params: LiteGraph's title-derived default width (~253px)
@@ -245,8 +278,41 @@ app.registerExtension({
         const onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onCreated?.apply(this, arguments);
-            // Hook each control widget so any change refreshes visibility.
             const node = this;
+
+            // Compact DOM status header — this node is a flat wall of 30+
+            // native widgets (14 segmenter backends x 4 matting backends,
+            // each with its own conditional sub-params); a one-line live
+            // summary + a missing-weights warning gives at-a-glance context
+            // that the native combo/slider rows can't.
+            ensureC2CKit();
+            const statusEl = document.createElement("div");
+            statusEl.className = "c2ck";
+            statusEl.style.cssText =
+                "display:flex; align-items:center; gap:6px; flex-wrap:wrap; " +
+                "padding:3px 2px 7px 2px; min-height:20px;";
+            const statusPill = document.createElement("span");
+            statusPill.className = "c2ck-pill on";
+            statusPill.style.cssText = "font-size:10px; white-space:nowrap;";
+            statusPill.textContent = "…";
+            const warnPill = document.createElement("span");
+            warnPill.className = "c2ck-pill off";
+            warnPill.style.cssText = "font-size:10px; display:none;";
+            statusEl.append(statusPill, warnPill);
+            const statusWidget = node.addDOMWidget("mec_status_header", "STATUS", statusEl, {
+                serialize: false,
+                getHeight: () => 22,
+                getMinHeight: () => 22,
+            });
+            statusWidget.computeSize = () => [node.size?.[0] || 340, 22];
+            // Move it to the front of the widget list so it reads as a
+            // header above the parameter rows, not a footer beneath them.
+            const _si = node.widgets.indexOf(statusWidget);
+            if (_si > 0) { node.widgets.splice(_si, 1); node.widgets.unshift(statusWidget); }
+            node._mecStatusPill = statusPill;
+            node._mecWarnPill = warnPill;
+
+            // Hook each control widget so any change refreshes visibility.
             const triggers = [
                 "segmenter", "matter", "input_mode", "subject_preset",
                 "enable_luma_key", "luma_mode",
