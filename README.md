@@ -2,6 +2,15 @@
   <img src="https://i.pinimg.com/736x/5d/52/19/5d5219ef27c1530bea027ff95d352e05.jpg" alt="MEC Logo" width="120" />
 </p>
 
+> ### 📖 Full node & parameter reference
+> **[NODE_REFERENCE.md](NODE_REFERENCE.md)** documents **every node in this pack**:
+> each input's type, default, valid range and what it actually does, plus every
+> output. It is generated directly from the live `NODE_CLASS_MAPPINGS`, so the
+> descriptions there are the *same strings* you see as tooltips in ComfyUI and
+> cannot drift out of date. Start there when you want to know what a knob does;
+> read on here for how the pieces fit together.
+
+
 <h1 align="center">ComfyUI-CustomNodePacks</h1>
 
 <p align="center">
