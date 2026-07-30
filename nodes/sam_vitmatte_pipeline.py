@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import gc
+import logging
 import time
 
 from .utils import (
@@ -45,6 +46,7 @@ from .utils import (
     parse_bbox_input,
 )
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 try:
     import cv2
@@ -230,7 +232,51 @@ class SAMViTMattePipelineMEC:
         "Iterative SAM refinement → edge-aware matting → multi-scale fusion → cleanup."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, sam_model, image, subject_type, points_json, bbox_json,
+                   sam_iterations, refine_method, edge_radius,
+                   detail_preservation, edge_contrast, fill_holes_enabled,
+                   min_region_size, multimask_output, mask_index,
+                   score_threshold, bbox=None, existing_mask=None, trimap=None,
+                   trimap_dilate=0, trimap_erode=0, batch_mode=False, **kwargs):
+        return hash_args_and_kwargs(
+            sam_model, image, subject_type, points_json, bbox_json,
+            sam_iterations, refine_method, edge_radius,
+            detail_preservation, edge_contrast, fill_holes_enabled,
+            min_region_size, multimask_output, mask_index,
+            score_threshold, bbox, existing_mask, trimap,
+            trimap_dilate, trimap_erode, batch_mode, **kwargs,
+        )
+
     def execute(self, sam_model, image, subject_type, points_json, bbox_json,
+                sam_iterations, refine_method, edge_radius,
+                detail_preservation, edge_contrast, fill_holes_enabled,
+                min_region_size, multimask_output, mask_index,
+                score_threshold, bbox=None, existing_mask=None, trimap=None,
+                trimap_dilate=0, trimap_erode=0, batch_mode=False):
+
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SAMViTMattePipelineMEC expects IMAGE tensor [B,H,W,C]")
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor) or existing_mask.ndim not in (2, 3)
+        ):
+            raise ValueError("SAMViTMattePipelineMEC existing_mask expects MASK [H,W] or [B,H,W]")
+        if trimap is not None and (
+            not isinstance(trimap, torch.Tensor) or trimap.ndim not in (2, 3)
+        ):
+            raise ValueError("SAMViTMattePipelineMEC trimap expects MASK [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                sam_model, image, subject_type, points_json, bbox_json,
+                sam_iterations, refine_method, edge_radius,
+                detail_preservation, edge_contrast, fill_holes_enabled,
+                min_region_size, multimask_output, mask_index,
+                score_threshold, bbox, existing_mask, trimap,
+                trimap_dilate, trimap_erode, batch_mode,
+            )
+
+    def _execute_impl(self, sam_model, image, subject_type, points_json, bbox_json,
                 sam_iterations, refine_method, edge_radius,
                 detail_preservation, edge_contrast, fill_holes_enabled,
                 min_region_size, multimask_output, mask_index,
@@ -557,7 +603,15 @@ class SAMViTMattePipelineMEC:
             edge_band = compute_edge_band_np(mask_np, edge_radius)
             result = mask_np * (1 - edge_band) + np.clip(filtered, 0, 1) * edge_band
             return torch.from_numpy(result.astype(np.float32))
-        except Exception:
+        except Exception as _exc:      # noqa: BLE001
+            # Never silent: this IS the edge quality. Falling back to the
+            # unrefined mask without saying so looks exactly like 'the node
+            # produces soft edges' with no way to find the cause.
+            logging.getLogger(__name__).warning(
+                "SAMViTMattePipelineMEC: %s edge refinement failed (%s); "
+                "falling back to the unrefined mask for this frame - its "
+                "edges will be softer than the other refinement modes.",
+                'guided-filter', _exc,)
             return None
 
     @staticmethod
@@ -584,5 +638,13 @@ class SAMViTMattePipelineMEC:
 
             result = reconstruct_laplacian_pyramid(result_pyr)
             return torch.from_numpy(np.clip(result, 0, 1).astype(np.float32))
-        except Exception:
+        except Exception as _exc:      # noqa: BLE001
+            # Never silent: this IS the edge quality. Falling back to the
+            # unrefined mask without saying so looks exactly like 'the node
+            # produces soft edges' with no way to find the cause.
+            logging.getLogger(__name__).warning(
+                "SAMViTMattePipelineMEC: %s edge refinement failed (%s); "
+                "falling back to the unrefined mask for this frame - its "
+                "edges will be softer than the other refinement modes.",
+                'laplacian-detail', _exc,)
             return None
