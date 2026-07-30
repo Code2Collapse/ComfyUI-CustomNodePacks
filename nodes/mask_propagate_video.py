@@ -7,6 +7,8 @@ propagation (optical flow), and SAM2 video-propagation mode.
 from . import _interrupt_check as _IC
 from ._is_changed_util import hash_args_and_kwargs
 
+import json
+import logging
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -249,100 +251,143 @@ class MaskPropagateVideo:
         return masks
 
     def _sam2_video(self, images, src_mask, source_frame, sam_model, points_json):
-        """Use SAM2's video propagation if available, otherwise fall back to static."""
+        """Propagate a seed mask across the clip with SAM2's video memory.
+
+        This is the path that survives motion blur, occlusion and a subject
+        flipping upside-down: SAM2 carries a memory of the object across
+        frames instead of re-detecting it per frame, so a few unreadable
+        frames do not break the track.
+
+        It had never actually run. Four defects, all fixed here:
+
+        1. init_state was called as init_state(video_path=tmp). This fork's
+           signature is init_state(images, video_height, video_width, ...) and
+           takes the frame TENSOR directly, so every call raised TypeError,
+           was swallowed by a bare `except (ImportError, Exception)` and fell
+           back to optical flow. SAM2 was never involved in any result.
+        2. The frames were being written out as JPEG quality=95 into a temp
+           directory first. Lossy compression, on every frame, with the
+           artefacts concentrated exactly on the edges we are trying to cut.
+           Gone - the tensor goes straight in, which is also much faster.
+        3. The seed was reduced to the mask's BOUNDING BOX. That throws away
+           the shape and hands SAM2 a rectangle full of background to guess
+           from; on a subject mid-flip the box is nearly the whole frame.
+           add_new_mask() takes the real mask, so use it.
+        4. Propagation ran forward only, so with a seed anywhere but frame 0
+           every earlier frame came back empty. Now it runs both directions.
+
+        Edges come back as a soft alpha from the logits rather than a hard
+        `> 0` threshold, which is what makes the boundary sub-pixel instead of
+        stair-stepped.
+        """
         B, H, W, C = images.shape
+        _log = logging.getLogger(__name__)
 
         if sam_model is None:
-            return self._static(src_mask, B)
+            raise ValueError(
+                "mode='sam2_video' needs a SAM2 model on the sam_model input. "
+                "Connect SAMModelLoaderMEC with a sam2.1 checkpoint, or pick a "
+                "different mode."
+            )
+        model = sam_model["model"]
+        if sam_model.get("model_type") != "sam2.1":
+            raise ValueError(
+                f"mode='sam2_video' needs a sam2.1 model; got "
+                f"{sam_model.get('model_type')!r}. Video propagation is a SAM2 "
+                f"feature - SAM1 checkpoints cannot track across frames."
+            )
 
-        model_info = sam_model
-        model = model_info["model"]
-        model_type = model_info["model_type"]
+        from sam2.sam2_video_predictor import SAM2VideoPredictor
+        from comfy.utils import common_upscale
 
-        if model_type != "sam2.1":
-            return self._static(src_mask, B)
+        if not isinstance(model, SAM2VideoPredictor):
+            model.__class__ = SAM2VideoPredictor
+            model.fill_hole_area = 8
+            model.non_overlap_masks = False
+            model.clear_non_cond_mem_around_input = False
+            model.add_all_frames_to_correct_as_cond = False
+        predictor = model
 
-        try:
-            from sam2.sam2_video_predictor import SAM2VideoPredictor
-            import json as json_mod
-            import tempfile
-            import os
-            from PIL import Image as PILImage
+        device = next(predictor.parameters()).device
+        sz = predictor.image_size
+        # Same preparation the SAM2 pack's own video node uses: square-resize
+        # to the model's input size, keep the ORIGINAL H/W for output scaling.
+        frames = common_upscale(
+            images.movedim(-1, 1), sz, sz, "bilinear", "disabled",
+        ).contiguous().to(device)
 
-            # Upgrade model in-place if needed
-            if not isinstance(model, SAM2VideoPredictor):
-                model.__class__ = SAM2VideoPredictor
-                model.fill_hole_area = 8
-                model.non_overlap_masks = False
-                model.clear_non_cond_mem_around_input = False
-                model.add_all_frames_to_correct_as_cond = False
-            predictor = model
-
-            # SAM2 video predictor requires JPEG frames in a temp directory
-            tmp = tempfile.mkdtemp(prefix="mec_prop_")
+        if getattr(self, "_sam2_state", None) is not None:
             try:
-                for i in _PB.track(range(B), B, "MaskPropagate"):
-                    _IC.check()
-                    frame = (images[i].cpu().numpy() * 255).astype(np.uint8)
-                    PILImage.fromarray(frame).save(
-                        os.path.join(tmp, f"{i:06d}.jpg"), quality=95,
+                predictor.reset_state(self._sam2_state)
+            except Exception:      # noqa: BLE001 - a stale state must not block a new run
+                pass
+        state = predictor.init_state(frames, H, W, device=device)
+        self._sam2_state = state
+
+        seed = int(max(0, min(B - 1, source_frame)))
+        m = src_mask
+        if m.dim() == 3:
+            m = m[0] if m.shape[0] == 1 else m[seed] if m.shape[0] > seed else m[0]
+        m = m.to(torch.float32)
+        if m.shape != (H, W):
+            m = F.interpolate(m[None, None], size=(H, W), mode="bilinear",
+                              align_corners=False)[0, 0]
+        if float(m.max()) <= 0.0:
+            raise ValueError(
+                f"the seed mask on frame {seed} is empty, so there is nothing "
+                f"for SAM2 to track. Check source_frame points at a frame where "
+                f"the subject is actually masked."
+            )
+        predictor.add_new_mask(inference_state=state, frame_idx=seed,
+                               obj_id=1, mask=(m > 0.5))
+
+        # Extra clicks stay supported and are additive to the mask seed.
+        if points_json and points_json.strip():
+            try:
+                pts = json.loads(points_json)
+                if pts:
+                    predictor.add_new_points_or_box(
+                        inference_state=state, frame_idx=seed, obj_id=1,
+                        points=np.array([[p["x"], p["y"]] for p in pts], np.float32),
+                        labels=np.array([p.get("label", 1) for p in pts], np.int32),
                     )
+            except Exception as exc:      # noqa: BLE001 - bad JSON must not kill the track
+                _log.warning("MaskPropagateVideo: ignoring points_json (%s)", exc)
 
-                state = predictor.init_state(video_path=tmp)
+        masks = torch.zeros(B, H, W, dtype=torch.float32)
+        covered = torch.zeros(B, dtype=torch.bool)
+        # Both directions: forward from the seed, then backward, so a seed in
+        # the middle of the clip fills the whole clip instead of half of it.
+        for reverse in (False, True):
+            for f_idx, _obj_ids, logits in predictor.propagate_in_video(
+                state, start_frame_idx=seed, reverse=reverse,
+            ):
+                _IC.check()
+                if logits.shape[0] == 0:
+                    continue
+                # Soft alpha, not a hard threshold: the logit carries
+                # sub-pixel boundary information and binarising here is what
+                # makes SAM output look stair-stepped.
+                a = torch.sigmoid(logits[0, 0].float()).cpu()
+                if a.shape != (H, W):
+                    a = F.interpolate(a[None, None], size=(H, W), mode="bilinear",
+                                      align_corners=False)[0, 0]
+                masks[f_idx] = a.clamp(0, 1)
+                covered[f_idx] = True
 
-                # Add prompts: convert mask to point prompt (center of mass)
-                # and/or use the mask as a bbox prompt
-                mask_np = src_mask.cpu().numpy()
-                ys, xs = np.where(mask_np > 0.5)
+        n_cov = int(covered.sum())
+        if n_cov < B:
+            _log.warning(
+                "MaskPropagateVideo: SAM2 returned no mask on %d/%d frames "
+                "(seed frame %d). Those frames are left empty rather than "
+                "filled with a stale copy - add a click on one of them if the "
+                "subject is present.", B - n_cov, B, seed,
+            )
+        else:
+            _log.info("MaskPropagateVideo: SAM2 tracked all %d frames from seed "
+                      "frame %d (bidirectional, soft alpha).", B, seed)
+        return masks
 
-                pkw = {
-                    "inference_state": state,
-                    "frame_idx": source_frame,
-                    "obj_id": 1,
-                }
-
-                if len(ys) > 0:
-                    # Derive bbox from mask
-                    box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype=np.float32)
-                    pkw["box"] = box
-
-                # Parse optional points
-                if points_json and points_json.strip():
-                    try:
-                        pts = json_mod.loads(points_json)
-                        if pts:
-                            coords = np.array([[p["x"], p["y"]] for p in pts], dtype=np.float32)
-                            labels = np.array([p.get("label", 1) for p in pts], dtype=np.int32)
-                            pkw["points"] = coords
-                            pkw["labels"] = labels
-                    except Exception:
-                        pass
-
-                predictor.add_new_points_or_box(**pkw)
-
-                # Propagate
-                masks = torch.zeros(B, H, W, dtype=torch.float32, device=src_mask.device)
-                for frame_idx, obj_ids, mask_logits in predictor.propagate_in_video(state):
-                    if mask_logits.shape[0] > 0:
-                        m = (mask_logits[0, 0] > 0).float().cpu()
-                        if m.shape[0] != H or m.shape[1] != W:
-                            m = F.interpolate(m.unsqueeze(0).unsqueeze(0),
-                                              size=(H, W), mode="bilinear",
-                                              align_corners=False).squeeze(0).squeeze(0)
-                        masks[frame_idx] = m
-
-                return masks
-
-            finally:
-                import shutil
-                shutil.rmtree(tmp, ignore_errors=True)
-
-        except (ImportError, Exception):
-            # Fallback to optical flow or static
-            try:
-                return self._optical_flow(images, src_mask, source_frame, 2.0, True)
-            except Exception:
-                return self._static(src_mask, B)
 
     @staticmethod
     def _overlay_preview(images, masks):

@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import numpy as np
 import json
 import gc
+import logging
 import time
 
 from .utils import (
@@ -602,7 +603,15 @@ class SAMViTMattePipelineMEC:
             edge_band = compute_edge_band_np(mask_np, edge_radius)
             result = mask_np * (1 - edge_band) + np.clip(filtered, 0, 1) * edge_band
             return torch.from_numpy(result.astype(np.float32))
-        except Exception:
+        except Exception as _exc:      # noqa: BLE001
+            # Never silent: this IS the edge quality. Falling back to the
+            # unrefined mask without saying so looks exactly like 'the node
+            # produces soft edges' with no way to find the cause.
+            logging.getLogger(__name__).warning(
+                "SAMViTMattePipelineMEC: %s edge refinement failed (%s); "
+                "falling back to the unrefined mask for this frame - its "
+                "edges will be softer than the other refinement modes.",
+                'guided-filter', _exc,)
             return None
 
     @staticmethod
@@ -629,5 +638,13 @@ class SAMViTMattePipelineMEC:
 
             result = reconstruct_laplacian_pyramid(result_pyr)
             return torch.from_numpy(np.clip(result, 0, 1).astype(np.float32))
-        except Exception:
+        except Exception as _exc:      # noqa: BLE001
+            # Never silent: this IS the edge quality. Falling back to the
+            # unrefined mask without saying so looks exactly like 'the node
+            # produces soft edges' with no way to find the cause.
+            logging.getLogger(__name__).warning(
+                "SAMViTMattePipelineMEC: %s edge refinement failed (%s); "
+                "falling back to the unrefined mask for this frame - its "
+                "edges will be softer than the other refinement modes.",
+                'laplacian-detail', _exc,)
             return None
