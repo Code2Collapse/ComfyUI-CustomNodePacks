@@ -50,6 +50,22 @@ const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
 // -----------------------------------------------------------------------
 export const MEC_AUTOCOPY_KEY = "mec.clipboard.autoCopy";
 
+
+// Iterate app.graph.links regardless of container type.
+// BUG (fixed 2026-07-31): this used `for (const k in links)`. Newer ComfyUI
+// frontends changed graph.links from a plain object to a Map, and `for...in`
+// over a Map enumerates NOTHING — Maps keep their entries off the property
+// bag. So every copy silently produced "links": [] while the copied nodes
+// still referenced link ids, and pasting restored the nodes with every wire
+// missing. Handle Map, array and plain object.
+function _graphLinks() {
+    const links = app.graph?.links;
+    if (!links) return [];
+    if (typeof links.values === "function") return [...links.values()];
+    if (Array.isArray(links)) return links.filter(Boolean);
+    return Object.keys(links).map(k => links[k]);
+}
+
 function _readSettings() {
     try {
         const v = app.ui?.settings?.getSettingValue?.(MEC_AUTOCOPY_KEY);
@@ -313,9 +329,7 @@ async function _gatherSubgraph(nodes) {
         out_nodes.push(_serializeNode(n, prov));
     }
     const out_links = [];
-    const links = app.graph?.links || {};
-    for (const k in links) {
-        const l = links[k];
+    for (const l of _graphLinks()) {
         if (!l) continue;
         if (ids.has(l.origin_id) && ids.has(l.target_id)) {
             out_links.push({
@@ -366,9 +380,7 @@ function _gatherSubgraphSync(nodes) {
         out_nodes.push(_serializeNode(n, _provenanceForSync(n)));
     }
     const out_links = [];
-    const links = app.graph?.links || {};
-    for (const k in links) {
-        const l = links[k];
+    for (const l of _graphLinks()) {
         if (!l) continue;
         if (ids.has(l.origin_id) && ids.has(l.target_id)) {
             out_links.push({
