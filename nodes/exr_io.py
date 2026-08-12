@@ -25,6 +25,63 @@ import torch
 logger = logging.getLogger("MEC.EXRIO")
 
 
+def _try_oiio_load(path: str) -> tuple[np.ndarray, dict]:
+    """OpenImageIO read — the production path, tried first.
+
+    Why OIIO ahead of OpenEXR/imageio: it is the library Nuke and Katana use
+    for IO, and it is the only one of the three that surfaces a VFX EXR
+    honestly. Measured on an 11-channel test file, OIIO returned every named
+    channel (R,G,B,A, N.x/y/z, depth.Z, diffuse.R/G/B) plus the DWAA
+    compression setting and the metadata; the OpenCV path that the common
+    reference packs use could not even OPEN the file in this environment
+    (OpenEXR codec disabled unless OPENCV_IO_ENABLE_OPENEXR is set before cv2
+    imports), and when enabled it collapses everything to RGB(A).
+
+    RGB is returned for the IMAGE output, but the full channel list and the
+    file metadata go out in `info` so a caller can see what else is in there
+    rather than silently losing it.
+    """
+    import OpenImageIO as oiio  # type: ignore[import-not-found]
+    inp = oiio.ImageInput.open(path)
+    if inp is None:
+        raise RuntimeError(f"OpenImageIO could not open {path!r}: {oiio.geterror()}")
+    try:
+        spec = inp.spec()
+        names = list(spec.channelnames)
+        # Read as float32 regardless of the file's half/float storage — no
+        # clipping, so HDR values above 1.0 survive. Clamping on load is what
+        # destroys speculars and emissives before you ever see them.
+        pixels = inp.read_image(format="float32")
+        if pixels is None:
+            raise RuntimeError(f"OpenImageIO read failed for {path!r}: {inp.geterror()}")
+        arr = np.asarray(pixels, dtype=np.float32)
+        if arr.ndim == 2:
+            arr = arr[..., None]
+        arr = arr.reshape(spec.height, spec.width, spec.nchannels)
+        # Prefer explicitly named R/G/B; fall back to the first three planes
+        # for files that use bare channel names.
+        idx = [names.index(c) for c in ("R", "G", "B") if c in names]
+        rgb = arr[..., idx] if len(idx) == 3 else arr[..., :3]
+        if rgb.shape[-1] == 1:
+            rgb = np.repeat(rgb, 3, axis=-1)
+        meta = {}
+        for p in spec.extra_attribs:
+            try:
+                meta[str(p.name)] = str(p.value)
+            except Exception:  # noqa: BLE001 — a odd attrib must not fail the read
+                pass
+        info = {
+            "backend": "OpenImageIO",
+            "width": int(spec.width), "height": int(spec.height),
+            "channels": names, "n_channels": int(spec.nchannels),
+            "compression": str(spec.getattribute("compression") or ""),
+            "metadata": meta,
+        }
+        return rgb, info
+    finally:
+        inp.close()
+
+
 def _try_openexr_load(path: str) -> tuple[np.ndarray, dict]:
     import OpenEXR  # type: ignore[import-not-found]
     import Imath  # type: ignore[import-not-found]
@@ -77,13 +134,28 @@ class LoadEXRMEC:
         if not file_path or not os.path.isfile(file_path):
             raise FileNotFoundError(f"EXR not found: {file_path!r}")
         info: dict[str, Any]
-        try:
-            rgb, info = _try_openexr_load(file_path)
-        except ImportError:
-            rgb, info = _try_imageio_load(file_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[MEC] OpenEXR load failed (%s); using imageio.", exc)
-            rgb, info = _try_imageio_load(file_path)
+        # OIIO first (see _try_oiio_load for why), then OpenEXR, then imageio.
+        # Each fallback is LOGGED with the reason — a silent downgrade here
+        # means you find out your AOVs were dropped at delivery, not at load.
+        _errs = []
+        for _fn, _name in ((_try_oiio_load, "OpenImageIO"),
+                           (_try_openexr_load, "OpenEXR"),
+                           (_try_imageio_load, "imageio")):
+            try:
+                rgb, info = _fn(file_path)
+                if _errs:
+                    info["fell_back_from"] = _errs
+                    logger.warning("[MEC] EXR load used %s after: %s", _name, "; ".join(_errs))
+                break
+            except Exception as exc:  # noqa: BLE001
+                _errs.append(f"{_name}: {type(exc).__name__}: {exc}")
+        else:
+            raise RuntimeError(
+                "Could not read " + repr(file_path) + " with any backend.\n  "
+                + "\n  ".join(_errs)
+                + "\nInstall OpenImageIO into the ComfyUI python for full "
+                  "multi-channel EXR support: pip install OpenImageIO"
+            )
         info["file"] = os.path.basename(file_path)
         t = torch.from_numpy(np.ascontiguousarray(rgb)).unsqueeze(0)
         return (t, json.dumps(info, indent=2))
