@@ -122,10 +122,19 @@ _INPUT_FILE_PATTERNS = re.compile(
 
 _KNOWN_EXT_RE = re.compile(
     r"\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|"
-    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|hdr|heic|avif|"
+    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|dpx|cin|hdr|heic|avif|"
     r"wav|mp3|aac|flac|pdf|zip)$",
     re.IGNORECASE,
 )
+
+
+#: Still-image extensions that a FRAME SEQUENCE uses. Kept separate from
+#: _KNOWN_EXT_RE because only these carry a frame token worth stripping — a
+#: movie container never does, and stripping digits off 'take_002.mov' would
+#: destroy a real name.
+_SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$", __import__("re").IGNORECASE)
+#: The trailing frame token: .1001  _0042  .####  .%04d  (end of stem only).
+_SEQ_FRAME_RE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
 
 
 def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
@@ -151,7 +160,20 @@ def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
 
     # Real trailing extension on the basename (e.g. clip_2160_25fps.mp4).
     if _KNOWN_EXT_RE.search(basename):
-        return Path(basename).stem, Path(basename).suffix
+        stem, suffix = Path(basename).stem, Path(basename).suffix
+        # FRAME-SEQUENCE FIX (2026-08-01). A VFX moving-image source is a
+        # NUMBERED sequence — shot_0010.1001.exr, shot.####.exr,
+        # shot.%04d.exr. Left alone, the frame number rides along in the stem,
+        # so every frame derives a DIFFERENT folder name and the version
+        # counter never groups the sequence. Strip the trailing frame token so
+        # the whole sequence resolves to one name.
+        #
+        # Only stripped when the extension is a still-image one, because that
+        # is what a sequence uses; a movie container never carries a frame
+        # token, and stripping digits off e.g. "take_002.mov" would be wrong.
+        if _SEQ_EXT_RE.match(suffix):
+            stem = _SEQ_FRAME_RE.sub("", stem)
+        return stem, suffix
 
     # Interior dots only — keep full basename; extension from companion.
     return basename, fb

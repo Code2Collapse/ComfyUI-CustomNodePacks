@@ -297,7 +297,7 @@ app.registerExtension({
             return NAME_FORMATS.includes(v) ? v : "basename";
         }
 
-        const KNOWN_EXT_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|png|jpe?g|gif|webp|bmp|tiff?|tga|exr|hdr|heic|avif|wav|mp3|aac|flac|pdf|zip)$/i;
+        const KNOWN_EXT_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|png|jpe?g|gif|webp|bmp|tiff?|tga|exr|dpx|cin|hdr|heic|avif|wav|mp3|aac|flac|pdf|zip)$/i;
 
         function stripExt(filename) {
             if (!filename) return { stem: "", ext: "" };
@@ -401,11 +401,30 @@ app.registerExtension({
         //    extension (and by loader node type when available) and
         //    skip mismatches, falling through to the global type-aware
         //    scan instead.
-        const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif|tga|exr|hdr|heic|avif)$/i;
+        const IMAGE_EXT_RE = /\.(png|jpe?g|webp|bmp|tiff?|gif|tga|exr|dpx|cin|hdr|heic|avif)$/i;
         const VIDEO_EXT_RE = /\.(mp4|mov|webm|mkv|avi|flv|m4v|wmv|mpeg|mpg|ts|gif)$/i;
+
+        // A FRAME-SEQUENCE name: shot.1001.exr, shot_0042.exr, shot.####.exr,
+        // shot.%04d.exr. In VFX the moving-image source IS a numbered EXR/DPX
+        // sequence, so these must satisfy source_choice="video" even though
+        // their extension is a still-image one.
+        const SEQ_EXT_RE = /\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$/i;
+        const SEQ_FRAME_RE = /[._-](\d{2,8}|#{2,8}|%0?\d*d)(?=\.[A-Za-z0-9]+$)/;
+
+        function isFrameSequence(fn) {
+            return SEQ_EXT_RE.test(fn) && SEQ_FRAME_RE.test(fn);
+        }
 
         function classifyFilename(fn) {
             if (!fn) return "unknown";
+            // BUG FIX (2026-08-01): an EXR sequence used as the moving-image
+            // source classified as "image" (exr is in IMAGE_EXT_RE), so with
+            // source_choice="video" the pick found no video, no unknown, and
+            // fell through to found[0] — the CLOSEST node in the graph, which
+            // when wired through a VAE decode is the ref_image. That is the
+            // reported "takes ref_image name even with source_choice=video".
+            // A numbered sequence is a moving-image source; classify it as one.
+            if (isFrameSequence(fn)) return "video";
             // .gif counts as video here only when explicitly chosen video;
             // default to image to match common usage.
             if (/\.gif$/i.test(fn)) return "image";
