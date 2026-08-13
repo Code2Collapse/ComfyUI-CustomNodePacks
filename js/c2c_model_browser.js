@@ -1,20 +1,24 @@
 /**
  * c2c_model_browser.js — Model Browser (P2.1)
- * Search Civitai and HuggingFace for models/LoRAs/VAEs.
+ * Search Civitai and HuggingFace for models/LoRAs/VAEs, plus a LOCAL
+ * source that lists models already on disk (always works, no network).
  * Download directly into ComfyUI model directories via backend.
- * Open: Ctrl+Shift+M or OmniBar.
+ * Open: Ctrl+Alt+M or OmniBar.
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 
 const SEARCH_DEBOUNCE_MS = 400;
-const SOURCES = ["civitai", "huggingface"];
+// "local" is FIRST so it's the default — it lists on-disk models and never
+// needs the network, so opening the browser shows results immediately
+// instead of a Civitai/HF "loading error" when those are unreachable.
+const SOURCES = ["local", "civitai", "huggingface"];
 
 let _panel  = null;
 let _isOpen = false;
 let _debounceTimer = null;
-let _currentSource = "civitai";
+let _currentSource = "local";
 let _page = 1;
 let _slot = null;
 
@@ -116,9 +120,10 @@ function _buildPanel() {
 
   // source tabs
   const tabsEl = panel.querySelector("#c2c-mb-source-tabs");
+  const _labels = { local: "Local", civitai: "Civitai", huggingface: "HuggingFace" };
   for (const src of SOURCES) {
     const tab = document.createElement("button");
-    tab.textContent = src === "civitai" ? "Civitai" : "HuggingFace";
+    tab.textContent = _labels[src] || src;
     tab.dataset.src = src;
     tab.style.cssText = `
       padding:3px 10px;border-radius:5px;cursor:pointer;font-size:12px;
@@ -157,7 +162,7 @@ function _buildPanel() {
     overlay,
     header,
     titleEl,
-    shortcut: "Ctrl+Shift+M",
+    shortcut: "Ctrl+Alt+M",
     minW: 480, minH: 320,
   });
 
@@ -257,37 +262,43 @@ function _buildCard(item, destDirs) {
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex-shrink:0;">
-      <select data-dest style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);
+      ${item._source === "local"
+        ? `<span style="font-size:11px;background:rgba(0,200,100,.15);border:1px solid rgba(0,200,100,.3);
+                padding:4px 10px;border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;">✓ On disk</span>`
+        : `<select data-dest style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);
               border-radius:4px;padding:2px 5px;color:inherit;font-size:10px;max-width:140px;">
-        ${destDirs.map(d => `<option>${_esc(d)}</option>`).join("")}
-      </select>
-      <button data-dl
-        style="padding:4px 12px;background:rgba(0,200,100,.18);border:1px solid rgba(0,200,100,.3);
-               border-radius:5px;cursor:pointer;color:var(--c2c-okSoft2);font-size:12px;font-weight:600;">
-        ⬇ Download
-      </button>
+          ${destDirs.map(d => `<option>${_esc(d)}</option>`).join("")}
+        </select>
+        <button data-dl
+          style="padding:4px 12px;background:rgba(0,200,100,.18);border:1px solid rgba(0,200,100,.3);
+                 border-radius:5px;cursor:pointer;color:var(--c2c-okSoft2);font-size:12px;font-weight:600;">
+          ⬇ Download
+        </button>`
+      }
     </div>
   `;
 
-  card.querySelector("[data-dl]").addEventListener("click", async (e) => {
-    const btn     = e.currentTarget;
-    const destSel = card.querySelector("[data-dest]");
-    const destDir = destSel?.value || "models/checkpoints";
-    const firstFile = files[0];
-    const fileId = firstFile?.id || firstFile?.rfilename || "";
-    btn.textContent = "⏳";
-    btn.disabled = true;
-    try {
-      const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir);
-      btn.textContent = "✓ Queued";
-      btn.style.background = "rgba(0,255,0,.1)";
-    } catch (err) {
-      btn.textContent = "✗ Error";
-      btn.style.background = "rgba(255,0,0,.1)";
-      btn.title = err.message;
-      setTimeout(() => { btn.textContent = "⬇ Download"; btn.disabled = false; btn.style.background = ""; }, 2000);
-    }
-  });
+  if (item._source !== "local") {
+    card.querySelector("[data-dl]").addEventListener("click", async (e) => {
+      const btn     = e.currentTarget;
+      const destSel = card.querySelector("[data-dest]");
+      const destDir = destSel?.value || "models/checkpoints";
+      const firstFile = files[0];
+      const fileId = firstFile?.id || firstFile?.rfilename || "";
+      btn.textContent = "⏳";
+      btn.disabled = true;
+      try {
+        const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir);
+        btn.textContent = "✓ Queued";
+        btn.style.background = "rgba(0,255,0,.1)";
+      } catch (err) {
+        btn.textContent = "✗ Error";
+        btn.style.background = "rgba(255,0,0,.1)";
+        btn.title = err.message;
+        setTimeout(() => { btn.textContent = "⬇ Download"; btn.disabled = false; btn.style.background = ""; }, 2000);
+      }
+    });
+  }
 
   return card;
 }
@@ -320,7 +331,10 @@ function _close() {
 /* ─── keyboard ─── */
 
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key === "M") {
+  // Ctrl+Alt+M (was Ctrl+Shift+M — moved so it no longer collides with any
+  // core/custom Ctrl+M binding). Alt+mouseselect-style collisions are also
+  // avoided because Alt alone never opens this.
+  if (e.ctrlKey && e.altKey && e.key === "M") {
     e.preventDefault();
     _isOpen ? _close() : _open();
   }
@@ -333,7 +347,7 @@ function _buildSlot() {
   btn.id        = "c2c-model-browser-btn";
   btn.className = "c2c-omnibar-slot-pill";
   btn.textContent = "📦 Models";
-  btn.title     = "Model Browser (Ctrl+Shift+M)";
+  btn.title     = "Model Browser (Ctrl+Alt+M)";
   btn.style.cssText = `
     font-size: 11px;
     padding: 2px 7px;
