@@ -269,6 +269,13 @@ app.registerExtension({
             const firstOf = (c) => { const m = found.find(f => f.cls === c); return m ? m.filename : null; };
             if (choice === "video") return firstOf("video") || firstOf("unknown") || found[0].filename;
             if (choice === "image") return firstOf("image") || firstOf("unknown") || found[0].filename;
+            if (choice === "exr") {
+                // Prefer an exr/dpx/cin plate, then any sequence (video),
+                // then unknown, else closest.
+                const exr = found.find(f => isExrFile(f.filename));
+                return (exr && exr.filename) || firstOf("video")
+                    || firstOf("unknown") || found[0].filename;
+            }
             // auto
             return firstOf("video") || firstOf("image") || found[0].filename;
         }
@@ -297,7 +304,9 @@ app.registerExtension({
             // MANUAL bug-fix (Apr 2026): added 'custom' so users can
             // hand-type a name in the new custom_name widget instead
             // of being forced to wire up a loader trigger.
-            return ["auto", "image", "video", "custom"].includes(v) ? v : "auto";
+            // VFX (2026-08-13): added 'exr' — explicit EXR/DPX/CIN plate
+            // choice. Works without a trigger (source_path STRING).
+            return ["auto", "image", "video", "exr", "custom"].includes(v) ? v : "auto";
         }
 
         function getCustomName() {
@@ -329,6 +338,27 @@ app.registerExtension({
 
         function splitFilename(filename) {
             return stripExt(filename);
+        }
+
+        // VFX (2026-08-13): derive a display stem from a FULL path or
+        // filename (e.g. ".../shot_v001/shot_v001.1001.exr" → "shot_v001").
+        // Strips directory, extension, and the trailing frame token so a
+        // sequence resolves to one stem. Used to show the detected plate
+        // name in 'path mode' (source_path wired, no trigger) so the user
+        // can see the node found the EXR without connecting a trigger.
+        const SEQ_STRIP_EXT_RE = /\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$/i;
+        const SEQ_STRIP_FRAME_RE = /[._-](\d{2,8}|#{2,8}|%0?\d*d)$/;
+        function stemFromPath(raw) {
+            if (!raw) return "";
+            let v = String(raw).trim();
+            const slash = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
+            if (slash >= 0 && slash < v.length - 1) v = v.slice(slash + 1);
+            const { stem, ext } = splitFilename(v);
+            let s = stem || v;
+            if (ext && SEQ_STRIP_EXT_RE.test(ext)) {
+                s = s.replace(SEQ_STRIP_FRAME_RE, "");
+            }
+            return s;
         }
 
         function formatSourceName(rawFilename, fmt) {
@@ -434,6 +464,16 @@ app.registerExtension({
             return SEQ_EXT_RE.test(fn) && SEQ_FRAME_RE.test(fn);
         }
 
+        // VFX (2026-08-13): an EXR/DPX/CIN plate — single file OR numbered
+        // sequence. Used by source_choice='exr' to pick the plate
+        // preferentially. Distinct from classifyFilename (which returns
+        // 'video' for sequences) so the 'video' choice still picks exr
+        // sequences while 'exr' picks exr/dpx/cin specifically.
+        const EXR_FILE_RE = /\.(exr|dpx|cin)$/i;
+        function isExrFile(fn) {
+            return !!fn && EXR_FILE_RE.test(fn);
+        }
+
         function classifyFilename(fn) {
             if (!fn) return "unknown";
             // BUG FIX (2026-08-01): an EXR sequence used as the moving-image
@@ -454,6 +494,12 @@ app.registerExtension({
 
         function matchesChoice(fn, choice) {
             if (choice === "auto") return true;
+            if (choice === "exr") {
+                // Exr choice: accept exr/dpx/cin, or any sequence (classified
+                // video), or unknown (can't tell — be lenient).
+                return isExrFile(fn) || classifyFilename(fn) === "video"
+                    || classifyFilename(fn) === "unknown";
+            }
             const cls = classifyFilename(fn);
             if (cls === "unknown") return true; // can't tell -- be lenient
             return cls === choice;
@@ -539,6 +585,10 @@ app.registerExtension({
             let pool = candidates;
             if (choice === "video") pool = candidates.filter(c => c.isVideo);
             else if (choice === "image") pool = candidates.filter(c => c.isImage);
+            else if (choice === "exr") {
+                // Exr plate: exr/dpx/cin files, or any sequence (isVideo).
+                pool = candidates.filter(c => isExrFile(c.filename) || c.isVideo);
+            }
             if (pool.length === 0) return null;
 
             const score = (c) => {
@@ -609,13 +659,21 @@ app.registerExtension({
 
         // ── Auto-fill source_filename + status display ───────────────
         function syncSourceFilename() {
-            // source_path (a wired STRING path, e.g. from OCIORead) takes
-            // precedence over graph auto-detection. Show path mode and do
-            // NOT clobber source_filename — Python resolves the stem from
-            // source_path at execution time.
+            // source_path (a wired STRING path, e.g. from OCIORead / LoadEXRMEC
+            // / a VFX plate loader) takes precedence over graph auto-detection.
+            // Show the detected stem so the user can SEE the node found the EXR
+            // without connecting a trigger — Python resolves the stem from
+            // source_path at execution time regardless.
             const spInput = node.inputs?.find(i => i.name === "source_path");
             if (spInput && spInput.link != null) {
-                setStatus("\uD83D\uDD17 path mode (stem resolved at run)");
+                const origin = getSourceNodeFromInput("source_path");
+                const raw = origin ? getFilenameFromNode(origin) : null;
+                const stem = stemFromPath(raw);
+                if (stem) {
+                    setStatus(`🔗 ${stem} (path mode)`);
+                } else {
+                    setStatus("🔗 path mode (stem resolved at run)");
+                }
                 G().setDirtyCanvas(true);
                 return;
             }
