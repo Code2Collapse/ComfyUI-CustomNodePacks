@@ -21,6 +21,17 @@ log = logging.getLogger("C2C.ModelBrowser")
 _CIVITAI_BASE = "https://civitai.com/api/v1"
 _HF_API_BASE  = "https://huggingface.co/api"
 
+# Local-source type → folder_paths key fragments. Lets the type filter
+# narrow LOCAL browsing (e.g. "Checkpoint" -> only the checkpoints dir).
+_TYPE_TO_FOLDER = {
+    "checkpoint":         ["checkpoints"],
+    "lora":               ["loras"],
+    "vae":                ["vae"],
+    "controlnet":         ["controlnet"],
+    "textualinversion":   ["embeddings"],
+    "upscaler":           ["upscale_models"],
+}
+
 # 5-minute in-memory cache keyed by (source, q, type, page)
 _search_cache: dict[tuple, tuple[float, Any]] = {}
 _CACHE_TTL = 300.0
@@ -114,6 +125,48 @@ async def _hf_search(q: str, model_type: str, page: int) -> dict:
     return {"items": items, "total": len(items)}
 
 
+# ── Local (on-disk) search ───────────────────────────────────────────────────
+# The OFFLINE source: lists models already in ComfyUI's model folders via
+# folder_paths.get_filename_list. No network, no API key, no Cloudflare —
+# so it ALWAYS works. This is the default source, which is why opening the
+# browser no longer shows a "loading error" when Civitai/HF are unreachable.
+async def _local_search(q: str, model_type: str, page: int) -> dict:
+    try:
+        import folder_paths
+    except Exception:
+        return {"items": [], "total": 0}
+    q_lower = q.lower() if q else ""
+    items: list[dict] = []
+    for key, _paths in folder_paths.folder_names_and_paths.items():
+        # Type filter: narrow folders by the type→folder map (loose match).
+        if model_type:
+            frags = _TYPE_TO_FOLDER.get(model_type.lower(), [model_type.lower()])
+            if not any(f in key.lower() for f in frags):
+                continue
+        try:
+            files = folder_paths.get_filename_list(key)
+        except Exception:
+            files = []
+        for fn in files:
+            if q_lower and q_lower not in fn.lower():
+                continue
+            items.append({
+                "id"          : fn,
+                "name"        : fn,
+                "type"        : key,
+                "image"       : None,
+                "description" : f"{key}/{fn}",
+                "stats"       : {"downloadCount": 0},
+                "siblings"    : [],
+                "modelVersions": [],
+                "_source"     : "local",
+            })
+    per_page = 20
+    total = len(items)
+    start = (page - 1) * per_page
+    return {"items": items[start:start + per_page], "total": total}
+
+
 # ── ComfyUI dest dirs ─────────────────────────────────────────────────────────
 
 def _get_comfyui_model_dirs() -> list[str]:
@@ -202,7 +255,7 @@ def register_routes(server) -> None:
 
     @server.routes.get("/c2c/models/search")
     async def model_search(request: web.Request) -> web.Response:
-        source = request.rel_url.query.get("source", "civitai").lower()
+        source = request.rel_url.query.get("source", "local").lower()
         q      = request.rel_url.query.get("q", "").strip()
         mtype  = request.rel_url.query.get("type", "").strip()
         try:
@@ -216,7 +269,9 @@ def register_routes(server) -> None:
             return web.json_response(cached, headers={"X-C2C-Cache": "hit"})
 
         try:
-            if source == "civitai":
+            if source == "local":
+                result = await _local_search(q, mtype, page)
+            elif source == "civitai":
                 result = await _civitai_search(q, mtype, page)
             elif source == "huggingface":
                 result = await _hf_search(q, mtype, page)
