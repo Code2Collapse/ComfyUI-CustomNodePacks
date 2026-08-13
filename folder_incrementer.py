@@ -31,7 +31,13 @@ PATH_STYLE_CHOICES = ["auto", "windows", "linux", "macos"]
 # MANUAL bug-fix (Apr 2026): added 'custom' so users can hand-type a
 # name in the new ``custom_name`` widget instead of being forced to
 # wire up a loader trigger.
-SOURCE_CHOICE_CHOICES = ["auto", "image", "video", "custom"]
+# VFX (2026-08-13): added 'exr' so a VFX plate (EXR/DPX/CIN sequence or
+# single EXR) can be selected explicitly. Works WITHOUT a trigger: wire
+# the plate path STRING into `source_path` (or any loader's path), pick
+# 'exr', and the node derives the stem — no trigger_image/trigger_video
+# required. 'exr' is not special-cased in increment() (only 'custom' is),
+# so it flows through the normal source_path > source_filename path.
+SOURCE_CHOICE_CHOICES = ["auto", "image", "video", "exr", "custom"]
 
 # Name-format choices applied to the derived source filename.
 #   basename       — strip extension only           ("clip_2160_25fps")
@@ -360,6 +366,9 @@ class FolderIncrementer:
                                "'image' → trigger_image, 'video' → trigger_video, "
                                "'auto' → prefer video if connected, else image, "
                                "else legacy `trigger`. "
+                               "'exr' → prefer an EXR/DPX/CIN plate (sequence or single); "
+                               "works WITHOUT a trigger — wire the plate path STRING into "
+                               "`source_path` and the stem is derived from it. "
                                "'custom' → use the ``custom_name`` widget verbatim "
                                "and ignore all triggers.",
                 }),
