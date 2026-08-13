@@ -29,8 +29,25 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 log = logging.getLogger("c2c.preview")
+
+# Channel-count RGB factors for the raw-latent safety net. Imported here
+# (not inside the decode function) so it resolves once at import time with
+# the correct package context, and is robust to the guard being imported
+# from different entry points.
+try:
+    from . import _latent_rgb_factors as _factors_mod
+except Exception:  # noqa: BLE001 — fallback: locate it by path
+    try:
+        import importlib.util as _ilu
+        _fp = os.path.join(os.path.dirname(__file__), "_latent_rgb_factors.py")
+        _spec = _ilu.spec_from_file_location("_latent_rgb_factors", _fp)
+        _factors_mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_factors_mod)
+    except Exception:
+        _factors_mod = None
 
 # Recorded so the frontend can query what happened (via /object_info-independent log).
 PREVIEW_GUARD_STATUS = "unknown"
@@ -309,7 +326,161 @@ def _register_routes() -> None:
     log.info("[c2c.preview] registered POST /c2c/preview_method (enable/disable sampler preview).")
 
 
+# ── 24fps throttle on prepare_callback ──────────────────────────────────
+# ComfyUI's native latent_preview.prepare_callback decodes a preview on
+# EVERY sampler step and calls pbar.update_absolute(step, total, preview).
+# For video (Wan/Hunyuan/LTX) that's per-frame per-step — a TAESD neural
+# decode each call, which is the slowdown. Decoding at most 24x/sec looks
+# identical (every 5th step on a 30-step run is indistinguishable) and costs
+# a fraction as much. This is the "faster (24fps)" the user asked for, and
+# it reaches EVERY sampler that calls latent_preview.prepare_callback —
+# ComfyUI native (KSampler/SamplerCustom), Kijai's WanVideoSampler when
+# it uses the native path, res4lyf if it routes through native, etc.
+_PREVIEW_FPS = 24
+
+
+def _install_prepare_callback_throttle() -> None:
+    """Wrap latent_preview.prepare_callback so the inner callback skips
+    decode when less than 1/24s has elapsed since the last sent preview.
+
+    Fully guarded and idempotent. The wrapped callback still calls the
+    original pbar.update_absolute every step (so the progress bar stays
+    smooth) but passes preview=None on throttled steps — so no decode runs
+    and no preview bytes are sent, which is the whole speedup."""
+    try:
+        import latent_preview
+    except Exception:
+        return
+    if getattr(latent_preview, "_c2c_throttle_patched", False):
+        return
+    orig_prepare = getattr(latent_preview, "prepare_callback", None)
+    if not callable(orig_prepare):
+        return
+
+    def _throttled_prepare_callback(model, steps, x0_output_dict=None):
+        native_cb = orig_prepare(model, steps, x0_output_dict)
+        if native_cb is None:
+            return None
+        state = {"last": 0.0, "have_decoded": False}
+
+        def _cb(step, x0, x, total_steps):
+            now = time.monotonic()
+            # Always let the final step through (so the user sees the end
+            # result), and the first decode (so preview appears fast).
+            is_final = (step is not None) and (total_steps is not None) and (step + 1 >= total_steps)
+            throttle = state["have_decoded"] and not is_final and (now - state["last"]) < (1.0 / _PREVIEW_FPS)
+            if throttle:
+                # Skip the decode: pass None so the previewer never runs.
+                native_cb(step, None, x, total_steps)
+                return
+            state["last"] = now
+            state["have_decoded"] = True
+            native_cb(step, x0, x, total_steps)
+
+        return _cb
+
+    try:
+        latent_preview.prepare_callback = _throttled_prepare_callback
+        latent_preview._c2c_throttle_patched = True
+        log.info("[c2c.preview] installed 24fps prepare_callback throttle "
+                 "(decode at most 24x/sec during sampling — native + Kijai).")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] prepare_callback throttle skipped: %s", exc)
+
+
+# ── raw-latent safety net on ProgressBar.update_absolute ────────────────
+# res4lyf (Radiance) and a few other samplers pass the RAW latent tensor as
+# the preview (pbar.update_absolute(step, total, (x0,))). Standard ComfyUI
+# can't render a raw latent — it expects ("JPEG", pil_image, max_res) — so
+# those samplers show NO preview at all unless their own frontend decodes
+# it. ProgressBar.update_absolute is the ONE call every sampler makes, so
+# wrapping it reaches them all. When preview is a raw latent (a tuple whose
+# first element is a torch.Tensor, not a "JPEG"/"PNG" string), decode it to
+# a real JPEG preview via channel-count factors (Wan21/Wan22 for 16/48 ch,
+# mean-projection otherwise) and forward that. Additive + guarded: valid
+# previews pass through untouched.
+def _decode_raw_latent_preview(x0):
+    """Best-effort decode of a raw latent tensor to a ('JPEG', pil, max) preview.
+
+    Uses channel-count RGB factors (Wan21 16ch / Wan22 48ch) when known, else
+    a normalized mean-projection grayscale. Never raises — returns None on
+    any failure so the caller just forwards nothing."""
+    try:
+        import latent_preview as _lp
+        import torch
+        import io as _io
+        from PIL import Image
+        x = x0
+        if x.ndim == 5:          # (B,C,T,H,W) video -> first frame
+            x = x[0, :, 0]
+        elif x.ndim == 4:        # (B,C,H,W) -> first batch
+            x = x[0]
+        if x.ndim != 3:          # (C,H,W) expected now
+            return None
+        # Channel-count RGB factors (Wan21 16ch / Wan22 48ch); None -> the
+        # caller falls back to a mean-projection grayscale.
+        rgb = _factors_mod.decode_channels_to_rgb(x) if _factors_mod is not None else None
+        if rgb is None:
+            # Unknown channel count -> mean-projection grayscale (strictly
+            # better than a blank node).
+            g = x.mean(dim=0, keepdim=True).repeat(3, 1, 1)
+            lo, hi = g.min(), g.max()
+            rgb = ((g - lo) / (hi - lo + 1e-6)).clamp(0, 1)
+        rgb = (rgb * 0xFF).clamp(0, 255).to(device="cpu", dtype=torch.uint8)
+        img = Image.fromarray(rgb.permute(1, 2, 0).numpy())
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        return ("JPEG", buf.getvalue(), getattr(_lp, "MAX_PREVIEW_RESOLUTION", 256))
+    except Exception:
+        return None
+
+
+def _install_pbar_safety_net() -> None:
+    """Wrap comfy.utils.ProgressBar.update_absolute so a raw-latent preview
+    (a tuple whose [0] is a torch.Tensor, not a 'JPEG'/'PNG' str) is decoded
+    to a real image preview before reaching the frontend. Valid previews
+    pass through untouched. Idempotent + guarded."""
+    try:
+        import comfy.utils
+    except Exception:
+        return
+    PB = getattr(comfy.utils, "ProgressBar", None)
+    if PB is None or getattr(PB, "_c2c_pbar_patched", False):
+        return
+    orig_update = PB.update_absolute
+    if not callable(orig_update):
+        return
+
+    def _patched_update_absolute(self, value, total=None, preview=None):
+        if preview is not None:
+            try:
+                is_raw = (
+                    isinstance(preview, (tuple, list))
+                    and len(preview) >= 1
+                    and not isinstance(preview[0], str)
+                    and hasattr(preview[0], "ndim")
+                    and getattr(preview[0], "ndim", 0) >= 3
+                )
+            except Exception:
+                is_raw = False
+            if is_raw:
+                decoded = _decode_raw_latent_preview(preview[0])
+                if decoded is not None:
+                    preview = decoded
+        return orig_update(self, value, total, preview)
+
+    try:
+        PB.update_absolute = _patched_update_absolute
+        PB._c2c_pbar_patched = True
+        log.info("[c2c.preview] installed ProgressBar raw-latent safety net "
+                 "(res4lyf / samplers passing raw latents now preview).")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] pbar safety net skipped: %s", exc)
+
+
 # Run at import (custom_nodes load after core, so latent_preview already exists).
 ensure_previews_enabled()
 _install_previewer_fallback()
+_install_prepare_callback_throttle()
+_install_pbar_safety_net()
 _register_routes()
