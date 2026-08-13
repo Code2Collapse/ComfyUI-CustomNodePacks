@@ -1,8 +1,14 @@
+import hashlib
 import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+try:
+    from .nodes._is_changed_util import dir_version_fingerprint, hash_kwargs
+except ImportError:  # standalone / test import
+    from nodes._is_changed_util import dir_version_fingerprint, hash_kwargs
 
 
 # Date format selector → strftime mapping
@@ -35,6 +41,14 @@ SOURCE_CHOICE_CHOICES = ["auto", "image", "video", "custom"]
 # The JS companion mirrors this so the on-node status preview matches
 # what Python writes to disk.
 NAME_FORMAT_CHOICES = ["basename", "strip_tags", "first_segment"]
+
+# Where the `suffix` lands. Lets a user route mask/wan/etc outputs into
+# SEPARATE folders instead of only tagging the filename — the
+# "ATG_..._v002/mask" vs "ATG_..._mask/date/version" request.
+#   filename  — append to the output basename  (.../v001/clip_mask.mov)  [legacy default]
+#   subfolder — nest a folder AFTER the version (.../v001/mask/clip.mov)
+#   folder    — append to the TOP folder name  (ATG_..._mask/date/v001/clip.mov)
+SUFFIX_MODE_CHOICES = ["filename", "subfolder", "folder"]
 
 _TRAILING_TAG_RE = re.compile(
     r"[._\-](\d{3,4}p?|\d{2,3}fps|[248]k|uhd|hd|sd|sdr|hdr|raw|proxy|final|wip)$",
@@ -108,10 +122,19 @@ _INPUT_FILE_PATTERNS = re.compile(
 
 _KNOWN_EXT_RE = re.compile(
     r"\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|"
-    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|hdr|heic|avif|"
+    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|dpx|cin|hdr|heic|avif|"
     r"wav|mp3|aac|flac|pdf|zip)$",
     re.IGNORECASE,
 )
+
+
+#: Still-image extensions that a FRAME SEQUENCE uses. Kept separate from
+#: _KNOWN_EXT_RE because only these carry a frame token worth stripping — a
+#: movie container never does, and stripping digits off 'take_002.mov' would
+#: destroy a real name.
+_SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$", __import__("re").IGNORECASE)
+#: The trailing frame token: .1001  _0042  .####  .%04d  (end of stem only).
+_SEQ_FRAME_RE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
 
 
 def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
@@ -137,7 +160,20 @@ def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
 
     # Real trailing extension on the basename (e.g. clip_2160_25fps.mp4).
     if _KNOWN_EXT_RE.search(basename):
-        return Path(basename).stem, Path(basename).suffix
+        stem, suffix = Path(basename).stem, Path(basename).suffix
+        # FRAME-SEQUENCE FIX (2026-08-01). A VFX moving-image source is a
+        # NUMBERED sequence — shot_0010.1001.exr, shot.####.exr,
+        # shot.%04d.exr. Left alone, the frame number rides along in the stem,
+        # so every frame derives a DIFFERENT folder name and the version
+        # counter never groups the sequence. Strip the trailing frame token so
+        # the whole sequence resolves to one name.
+        #
+        # Only stripped when the extension is a still-image one, because that
+        # is what a sequence uses; a movie container never carries a frame
+        # token, and stripping digits off e.g. "take_002.mov" would be wrong.
+        if _SEQ_EXT_RE.match(suffix):
+            stem = _SEQ_FRAME_RE.sub("", stem)
+        return stem, suffix
 
     # Interior dots only — keep full basename; extension from companion.
     return basename, fb
@@ -236,11 +272,22 @@ class FolderIncrementer:
                 "padding": ("INT", {"default": 3, "min": 1, "max": 10,
                     "tooltip": "Zero-pad width (3 → 001)"}),
                 "suffix": ("STRING", {"default": "",
-                    "tooltip": "Optional suffix appended to the BASENAME of the "
-                               "filename_prefix and output_filename outputs. Example: "
-                               "suffix='_Inpaint' → '.../v001/clip_Inpaint.mov'. "
-                               "Leave empty to disable. Sanitized for cross-platform "
-                               "safety. Does NOT affect the version_string or folder_name."}),
+                    "tooltip": "Optional tag like '_mask' or '_wan'. WHERE it lands is "
+                               "controlled by suffix_mode:\n"
+                               "  filename  → '.../v001/clip_mask.mov'\n"
+                               "  subfolder → '.../v001/mask/clip.mov'  (separate folder per run)\n"
+                               "  folder    → 'ATG_..._mask/<date>/v001/clip.mov'  (separate top folder)\n"
+                               "Leave empty to disable. Sanitized for cross-platform safety."}),
+                "suffix_mode": (SUFFIX_MODE_CHOICES, {
+                    "default": "filename",
+                    "tooltip": "Where the `suffix` is applied:\n"
+                               "  filename  — append to the output basename (legacy behaviour)\n"
+                               "  subfolder — nest a folder AFTER the version, e.g. v001/mask/ — "
+                               "keeps mask vs wan outputs of the SAME run side by side, same version\n"
+                               "  folder    — append to the TOP folder name, e.g. ATG_..._mask/ — "
+                               "fully separate folder tree with its own versioning.\n"
+                               "For subfolder/folder a leading '_' or '-' is stripped from the folder "
+                               "name (so '_mask' → 'mask') and the basename is left clean."}),
                 "label": ("STRING", {"default": "default",
                     "tooltip": "Fallback folder name (used only when no source file is connected)"}),
                 "date_format": (DATE_FORMAT_CHOICES, {
@@ -328,8 +375,37 @@ class FolderIncrementer:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        # Re-execute every queue so the filesystem scan is up-to-date.
-        return float("NaN")
+        # Assumption: inputs + on-disk version dirs determine the next counter.
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        prefix = kwargs.get("prefix", "v")
+        padding = int(kwargs.get("padding", 3))
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        folder_name_override = (kwargs.get("folder_name_override") or "").strip()
+        source_filename = (kwargs.get("source_filename") or "").strip()
+        name_format = kwargs.get("name_format", "basename")
+        if folder_name_override:
+            folder_name = _sanitize_folder_name(folder_name_override, fallback=label or "output")
+        elif source_filename and not _looks_like_input_file(source_filename):
+            raw_stem, _ext = _resolve_stem_and_ext(source_filename, kwargs.get("source_extension", ""))
+            folder_name = _sanitize_folder_name(_format_source_name(raw_stem, name_format), fallback=label or "output")
+        else:
+            folder_name = _sanitize_folder_name(label, fallback="default")
+        # `folder` suffix_mode versions in a SEPARATE top folder — fingerprint
+        # that one so the cache key tracks the right v### counter.
+        suffix = str(kwargs.get("suffix", "") or "").strip()
+        smode = str(kwargs.get("suffix_mode", "filename") or "filename").strip().lower()
+        if smode == "folder" and suffix:
+            safe_suffix = _sanitize_folder_name(suffix, fallback="")
+            if safe_suffix:
+                folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
+        scan_dir = base_dir / folder_name / today_date
+        h.update(dir_version_fingerprint(scan_dir, prefix, padding).encode())
+        return h.hexdigest()
 
     def increment(self, prefix="v", padding=3, label="default",
                   date_format="MM-DD-YYYY", path_style="auto",
@@ -337,7 +413,7 @@ class FolderIncrementer:
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", reserve_version=False,
-                  suffix="", source_extension=""):
+                  suffix="", suffix_mode="filename", source_extension=""):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -381,6 +457,25 @@ class FolderIncrementer:
         else:
             folder_name = _sanitize_folder_name(derived_folder, fallback=label or "output")
 
+        # ── 1b. Resolve the suffix + where it lands ───────────────────
+        #    `suffix` (e.g. "_mask"/"_wan") is routed by `suffix_mode`:
+        #      filename  → appended to the output basename (legacy)
+        #      subfolder → a folder nested AFTER the version (v001/mask/)
+        #      folder    → appended to the TOP folder name (..._mask/)
+        #    `folder` must be applied BEFORE the version scan so the
+        #    separate tree gets its own independent v### counter.
+        safe_suffix = ""
+        if suffix and str(suffix).strip():
+            safe_suffix = _sanitize_folder_name(str(suffix).strip(), fallback="")
+        smode = str(suffix_mode or "filename").strip().lower()
+        if smode not in SUFFIX_MODE_CHOICES:
+            smode = "filename"
+        # For folder/subfolder a leading separator reads as a join hint,
+        # not part of the name → "_mask" becomes the folder "mask".
+        suffix_as_folder = safe_suffix.lstrip("_-. ") if safe_suffix else ""
+        if smode == "folder" and safe_suffix:
+            folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
+
         # ── 2. Resolve base directory ─────────────────────────────────
         if base_path and base_path.strip():
             base_dir = Path(base_path.strip())
@@ -421,15 +516,19 @@ class FolderIncrementer:
                 print(f"[MEC] FolderIncrementer: reserve_version failed: {exc}")
 
         # ── 6. Build output paths using chosen separator ──────────────
-        subfolder_path = sep.join([folder_name, today_date, version_string])
+        #    subfolder mode nests `suffix_as_folder` right after the version
+        #    dir, so masks/wan outputs of the SAME run sit side by side under
+        #    one shared version (…/v001/mask/, …/v001/wan/).
+        path_parts = [folder_name, today_date, version_string]
+        if smode == "subfolder" and suffix_as_folder:
+            path_parts.append(suffix_as_folder)
+        subfolder_path = sep.join(path_parts)
 
-        # Suffix is appended to the BASENAME (not the folder). Sanitized so it
-        # cannot escape the directory or break the file system. Empty string
-        # (the default) is a no-op.
-        safe_suffix = ""
-        if suffix and str(suffix).strip():
-            safe_suffix = _sanitize_folder_name(str(suffix).strip(), fallback="")
-        basename_no_ext = (name_no_ext or version_string) + safe_suffix
+        # In `filename` mode the suffix tags the basename; in subfolder/folder
+        # mode it has already shaped the path, so the basename stays clean.
+        basename_no_ext = (name_no_ext or version_string)
+        if smode == "filename" and safe_suffix:
+            basename_no_ext = basename_no_ext + safe_suffix
 
         filename_prefix = sep.join([subfolder_path, basename_no_ext])
 
@@ -482,7 +581,16 @@ class FolderIncrementerReset:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("NaN")
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        h.update(dir_version_fingerprint(base_dir / safe_label / today_date, "v", 3).encode())
+        return h.hexdigest()
 
     def check(self, label="default", date_format="MM-DD-YYYY",
                trigger=None, base_path=""):
@@ -541,7 +649,18 @@ class FolderIncrementerSet:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("NaN")
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        prefix = kwargs.get("prefix", "v")
+        padding = int(kwargs.get("padding", 3))
+        date_format = kwargs.get("date_format", "MM-DD-YYYY")
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        h.update(dir_version_fingerprint(base_dir / safe_label / today_date, prefix, padding).encode())
+        return h.hexdigest()
 
     def set_version(self, label="default", value=1, trigger=None,
                     prefix="v", padding=3, base_path="",
