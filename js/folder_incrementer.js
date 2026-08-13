@@ -69,7 +69,17 @@ app.registerExtension({
         // filename of the file they read.  Order matters: most-specific
         // first.  LoadImage uses "image", LoadVideo uses "video",
         // VHS_LoadVideo uses "video" too, audio loaders use "audio".
-        const FILENAME_WIDGETS = ["image", "video", "filename", "file", "audio", "url"];
+        // VFX/OCIO nodes (ComfyUI-NukeMaxNodes LoadEXRMEC, ComfyUI-OCIO
+        // OCIORead, generic file-path STRING inputs) name the path widget
+        // "source", "file_path", "path", "exr_path" or "image_path" —
+        // added so a FolderIncrementer wired downstream of an EXR/OCIO
+        // read auto-detects the plate name instead of falling through to
+        // the nearest ref-image loader.
+        const FILENAME_WIDGETS = [
+            "image", "video", "filename", "file", "audio", "url",
+            "source", "file_path", "filepath", "path",
+            "exr_path", "exr", "image_path", "sequence_path",
+        ];
 
         // ── Check a single node for a filename widget ────────────────
         function getFilenameFromNode(n) {
@@ -77,7 +87,16 @@ app.registerExtension({
             for (const wName of FILENAME_WIDGETS) {
                 const w = n.widgets.find(w => w.name === wName);
                 if (w?.value && typeof w.value === "string" && w.value.trim()) {
-                    const v = w.value.trim();
+                    let v = w.value.trim();
+                    // Some widgets (OCIORead file_path, LoadEXRMEC source,
+                    // generic STRING path inputs) hold a FULL path, not a
+                    // basename. source_filename is documented basename-only
+                    // and the version-token regex would mis-fire on a
+                    // directory segment like ".../shot_v001/...". Take the
+                    // basename; basename of an already-basename value is a
+                    // no-op, so this is safe for every loader.
+                    const slash = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
+                    if (slash >= 0 && slash < v.length - 1) v = v.slice(slash + 1);
                     if (v.includes(".")) return v;
                 }
             }
@@ -590,6 +609,16 @@ app.registerExtension({
 
         // ── Auto-fill source_filename + status display ───────────────
         function syncSourceFilename() {
+            // source_path (a wired STRING path, e.g. from OCIORead) takes
+            // precedence over graph auto-detection. Show path mode and do
+            // NOT clobber source_filename — Python resolves the stem from
+            // source_path at execution time.
+            const spInput = node.inputs?.find(i => i.name === "source_path");
+            if (spInput && spInput.link != null) {
+                setStatus("\uD83D\uDD17 path mode (stem resolved at run)");
+                G().setDirtyCanvas(true);
+                return;
+            }
             const result = extractFilename();
             const sfWidget = node.widgets?.find(w => w.name === "source_filename");
             if (result && result.filename) {
