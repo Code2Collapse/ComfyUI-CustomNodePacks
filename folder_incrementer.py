@@ -137,6 +137,59 @@ _SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr
 _SEQ_FRAME_RE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
 
 
+# Trailing version token inside a source filename stem, e.g. the "_v001"
+# in "shot_0010_v001". Recognised prefixes: v / ver / version / rev, case
+# insensitive, separated by . _ or - and followed by 1-8 digits at the end.
+# Anchored at $ so a shot number like "shot_0010" is NOT mistaken for a
+# version — only a *trailing* prefixed token counts.
+_SOURCE_VERSION_RE = re.compile(
+    r"(?P<sep>[._\-])(?P<prefix>v(?:er(?:sion)?)?|rev)(?P<digits>\d{1,8})$",
+    re.IGNORECASE,
+)
+
+
+def _extract_source_version(stem: str):
+    """Find a trailing version token in *stem*.
+
+    Returns a dict (sep, prefix, digits, width, full_token, current_token)
+    or ``None`` when no version token is present.
+
+    Example: ``"B_0151C002_260527_134258_a1IE7_v001"``
+        → sep="_", prefix="v", digits="001", width=3,
+          full_token="_v001", current_token="v001"
+    """
+    if not stem:
+        return None
+    m = _SOURCE_VERSION_RE.search(stem)
+    if not m:
+        return None
+    sep = m.group("sep")
+    prefix = m.group("prefix")
+    digits = m.group("digits")
+    return {
+        "sep": sep,
+        "prefix": prefix,
+        "digits": digits,
+        "width": len(digits),
+        "full_token": m.group(0),
+        "current_token": prefix + digits,
+    }
+
+
+def _resolve_source_path(source_path: str) -> str:
+    """Return the basename of *source_path* (a full file path), or "".
+
+    Used when the user wires a full media path (e.g. an OCIORead source
+    STRING holding ``.../shot_v001/shot_v001.1001.exr``) into the node.
+    The downstream ``_resolve_stem_and_ext`` already calls ``Path(...).name``
+    so it accepts full paths directly — this helper just normalises and trims.
+    """
+    sp = (source_path or "").strip()
+    if not sp:
+        return ""
+    return sp
+
+
 def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
     """Split a filename or path into (stem, extension).
 
@@ -331,10 +384,20 @@ class FolderIncrementer:
                 "source_filename": ("STRING", {"default": "",
                     "tooltip": "Auto-filled from the connected loader (basename only, no extension). "
                                "Drives folder name + output basename. Extension is stored separately "
-                               "in source_extension for output_filename."}),
+                               "in source_extension for output_filename. "
+                               "May also be a FULL PATH — the basename is extracted automatically."}),
                 "source_extension": ("STRING", {"default": "",
                     "tooltip": "Auto-filled file extension from the connected loader (e.g. .mp4, .mov). "
                                "Used only for output_filename — not part of the folder name."}),
+                "source_path": ("STRING", {"default": "",
+                    "tooltip": "Full path to a source media file (image / video / EXR / DPX sequence). "
+                               "When provided, the node extracts the filename stem from this path and "
+                               "uses it as the source name — this takes PRECEDENCE over source_filename "
+                               "and custom_name. Connect a STRING output here (e.g. an OCIORead "
+                               "'source' widget, or any loader that exposes its file path as STRING). "
+                               "The extracted stem is returned on the `source_stem` output, and a "
+                               "trailing version token (e.g. _v001) is incremented to _v002 on the "
+                               "`next_version_token` / `next_version_stem` outputs."}),
                 "custom_name": ("STRING", {"default": "",
                     "tooltip": "Manual source name. Only used when source_choice='custom'. "
                                "May include an extension (e.g. 'my_shot.mp4'); if no "
@@ -353,9 +416,12 @@ class FolderIncrementer:
             },
         }
 
-    RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING")
+    RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING",
+                     "STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES  = ("version_string", "version_number", "folder_name",
-                     "subfolder_path", "filename_prefix", "output_filename")
+                     "subfolder_path", "filename_prefix", "output_filename",
+                     "source_stem", "current_version_token",
+                     "next_version_token", "next_version_stem")
     OUTPUT_TOOLTIPS = (
         "Zero-padded version string, e.g. `v001`.",
         "Raw integer version number.",
@@ -363,6 +429,15 @@ class FolderIncrementer:
         "Full subfolder path: `<base>/<folder>/<date>/<version>`.",
         "Filename prefix combining folder + version (for SaveImage).",
         "Final output filename including extension.",
+        "Filename stem extracted from the connected source (extension and "
+        "frame token stripped). e.g. `B_0151C002_260527_134258_a1IE7_v001`.",
+        "Version token found at the end of the source stem, e.g. `v001`. "
+        "Empty when the source name has no trailing version token.",
+        "Source version token incremented by one, e.g. `v002`. "
+        "Empty when the source name has no trailing version token.",
+        "Source stem with its version token incremented, e.g. "
+        "`B_0151C002_260527_134258_a1IE7_v002`. Empty when the source name "
+        "has no trailing version token.",
     )
     FUNCTION = "increment"
     CATEGORY = "utils"
@@ -387,6 +462,10 @@ class FolderIncrementer:
         today_date = datetime.now().strftime(fmt)
         folder_name_override = (kwargs.get("folder_name_override") or "").strip()
         source_filename = (kwargs.get("source_filename") or "").strip()
+        source_path = (kwargs.get("source_path") or "").strip()
+        # source_path (full media path) takes precedence over source_filename.
+        if source_path:
+            source_filename = source_path
         name_format = kwargs.get("name_format", "basename")
         if folder_name_override:
             folder_name = _sanitize_folder_name(folder_name_override, fallback=label or "output")
@@ -413,7 +492,8 @@ class FolderIncrementer:
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", reserve_version=False,
-                  suffix="", suffix_mode="filename", source_extension=""):
+                  suffix="", suffix_mode="filename", source_extension="",
+                  source_path=""):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -438,6 +518,14 @@ class FolderIncrementer:
             # else: keep source_filename as-is (manual entry honoured).
 
         # ── 1. Derive names from source file ──────────────────────────
+        # source_path (a full media file path, e.g. from OCIORead) takes
+        # the HIGHEST precedence — it is the explicit "I wired a path in"
+        # signal. _resolve_stem_and_ext extracts the basename, so passing
+        # a full path here is safe.
+        sp = _resolve_source_path(source_path)
+        if sp:
+            source_filename = sp
+
         raw_source = (source_filename or "").strip()
         if raw_source and _looks_like_input_file(raw_source):
             raw_source = ""
@@ -537,8 +625,28 @@ class FolderIncrementer:
         else:
             output_filename = filename_prefix
 
+        # ── 7. Source-stem + version-token outputs ─────────────────────
+        #    `name_no_ext` is the filename stem with extension AND frame
+        #    token already stripped (e.g. "shot_v001" from
+        #    "shot_v001.1001.exr"). A trailing version token (v/ver/version/
+        #    rev + digits) is detected and incremented by one so the user
+        #    can build the NEXT version's name from the current source.
+        source_stem = name_no_ext or ""
+        sv = _extract_source_version(source_stem)
+        if sv:
+            current_version_token = sv["current_token"]
+            next_num = int(sv["digits"]) + 1
+            next_version_token = sv["prefix"] + str(next_num).zfill(sv["width"])
+            next_version_stem = source_stem[:-len(sv["full_token"])] + sv["sep"] + next_version_token
+        else:
+            current_version_token = ""
+            next_version_token = ""
+            next_version_stem = ""
+
         return (version_string, version_num, folder_name,
-                subfolder_path, filename_prefix, output_filename)
+                subfolder_path, filename_prefix, output_filename,
+                source_stem, current_version_token,
+                next_version_token, next_version_stem)
 
 
 class FolderIncrementerReset:
