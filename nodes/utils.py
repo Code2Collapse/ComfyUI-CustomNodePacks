@@ -116,8 +116,34 @@ def generate_trimap(mask_np, edge_radius, inner_scale=1.0, outer_scale=1.5):
         trimap: float32 (H, W) with 1.0=fg, 0.0=bg, 0.5=unknown
     """
     if not HAS_CV2:
-        # Fallback: threshold the mask directly
-        return (mask_np > 0.5).astype(np.float32)
+        # Torch fallback. The old fallback returned a THRESHOLDED BINARY mask,
+        # which is not a trimap: it has no 0.5 unknown band. ViTMatte is trained
+        # to solve for alpha *inside* that band, so handing it a two-value mask
+        # makes it output near-garbage edges — and because the failure is
+        # silent, it reads as "the matting model is bad" rather than "the
+        # trimap was never built".
+        #
+        # torch is always present in ComfyUI (cv2 is not), so dilate/erode with
+        # max_pool2d instead of degrading. no_grad is belt-and-braces: ComfyUI
+        # image tensors arrive with requires_grad=False so no graph is built
+        # anyway, but this function also accepts arrays from callers we do not
+        # control.
+        import torch
+        import torch.nn.functional as _F
+        with torch.no_grad():
+            m = torch.from_numpy(np.ascontiguousarray(mask_np)).float()[None, None]
+            binary = (m > 0.5).float()
+            inner_r = max(1, int(edge_radius * inner_scale))
+            outer_r = max(1, int(edge_radius * outer_scale))
+            # erosion == dilation of the complement
+            eroded = 1.0 - _F.max_pool2d(1.0 - binary, inner_r * 2 + 1,
+                                         stride=1, padding=inner_r)
+            dilated = _F.max_pool2d(binary, outer_r * 2 + 1,
+                                    stride=1, padding=outer_r)
+            trimap = torch.full_like(binary, 0.5)
+            trimap[dilated < 0.5] = 0.0          # definite background
+            trimap[eroded > 0.5] = 1.0           # definite foreground
+            return trimap[0, 0].cpu().numpy().astype(np.float32)
 
     binary = (mask_np > 0.5).astype(np.uint8) * 255
 
