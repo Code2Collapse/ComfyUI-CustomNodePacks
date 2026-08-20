@@ -86,6 +86,19 @@ def prepare_prompt(prompt: dict, backend_cfg: dict, storage=None,
     new_prompt = copy.deepcopy(prompt)
     loader_map = backend_cfg.get("url_loader_map") or {}
     uploads: dict[str, str] = {}  # local path -> url (each file uploaded once)
+    # "mounted" is for backends where the SAME storage the courier uploads to is
+    # already mounted into the container's input/ (BlobFUSE on AKS, an NFS
+    # share, a LAN mount). There the backend can open the file directly, so
+    # handing it a signed URL is wrong twice over: it forces a pointless second
+    # network fetch of bytes that are already on local disk, and it makes the
+    # workflow depend on a SAS that expires. Only the bare filename is needed,
+    # because ComfyUI resolves a plain LoadImage name against its input dir.
+    rewrite_mode = str(backend_cfg.get("media_rewrite", "")).strip().lower()
+    if rewrite_mode not in ("", "mapped", "in-place", "mounted"):
+        raise RuntimeError(
+            f"C2C Farm courier: backend {backend_cfg.get('name')!r} has "
+            f"media_rewrite={rewrite_mode!r}; expected 'mapped', 'in-place' or "
+            f"'mounted'. Fix renderfarm/config/backends.json.")
 
     for ref in refs:
         path = ref["path"]
@@ -95,7 +108,11 @@ def prepare_prompt(prompt: dict, backend_cfg: dict, storage=None,
         url = uploads[path]
         node = new_prompt[ref["node_id"]]
         mapping = loader_map.get(node.get("class_type", ""))
-        if mapping:
+        if rewrite_mode == "mounted":
+            # The upload still happens — that is what puts the file where the
+            # mount can see it. Only the reference changes.
+            node["inputs"][ref["input_key"]] = os.path.basename(path)
+        elif mapping:
             node["class_type"] = mapping["class_type"]
             node["inputs"] = {mapping["input"]: url}
         else:

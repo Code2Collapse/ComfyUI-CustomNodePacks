@@ -59,7 +59,9 @@ class Job:
 
 class QueueManager:
     def __init__(self, adapter_factory, user_limit_fn, backend_limit_fn,
-                 audit=None, poll_interval: float = 1.0, autostart: bool = True):
+                 audit=None, poll_interval: float = 1.0, autostart: bool = True,
+                 job_timeout: float = 7200.0, submit_attempts: int = 2,
+                 retry_wait: float = 5.0):
         """
         adapter_factory(backend_name) -> BackendAdapter
         user_limit_fn(user) -> int          (max concurrent jobs for the user)
@@ -71,6 +73,13 @@ class QueueManager:
         self._backend_limit = backend_limit_fn
         self._audit = audit
         self._poll = poll_interval
+        # Wall-clock ceiling on a single job. A backend that hangs without
+        # ever reporting a terminal status would otherwise pin this worker
+        # thread and its concurrency slot forever. 2h suits video work;
+        # raise it for very long renders rather than removing it.
+        self._job_timeout = float(job_timeout)
+        self._submit_attempts = max(1, int(submit_attempts))
+        self._retry_wait = float(retry_wait)
         self._lock = threading.RLock()
         self._pending: list[Job] = []
         self._active: dict[str, Job] = {}
@@ -78,8 +87,44 @@ class QueueManager:
         self._seq = itertools.count()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="c2c-farm-spooler", daemon=True)
+        self._reconcile_interrupted()
         if autostart:
             self._thread.start()
+
+    def _reconcile_interrupted(self):
+        """Close out jobs the audit log still thinks are live from a past run.
+
+        The pending queue lives in memory, so a ComfyUI restart loses it while
+        SQLite keeps saying "queued"/"running" forever. Those rows are what the
+        dashboard and history read, so they show ghost jobs that will never
+        move — and an operator cannot tell them apart from real ones.
+
+        They are marked FAILED, not re-dispatched. Re-dispatch would be unsafe:
+        a "running" row may still have a live render on the backend, and
+        resubmitting would duplicate the work and the bill. The error message
+        says exactly what happened so the operator can resubmit deliberately.
+        """
+        if not self._audit:
+            return
+        try:
+            stale = []
+            for st in ("queued", "dispatching", "running"):
+                stale.extend(self._audit.query(status=st, limit=500) or [])
+            for row in stale:
+                jid = row.get("job_id")
+                if not jid:
+                    continue
+                self._audit.update_status(
+                    jid, "failed",
+                    error=f"interrupted by a ComfyUI restart while {row.get('status')!r}; "
+                          f"the local queue does not survive a restart. If this job was "
+                          f"already running on {row.get('backend_name')!r} it may have "
+                          f"finished there — check the backend before resubmitting.")
+            if stale:
+                log.warning("C2C Farm: closed out %d job(s) left mid-flight by a previous "
+                            "session; they were NOT resubmitted.", len(stale))
+        except Exception as exc:  # noqa: BLE001 — never block startup on this
+            log.warning("C2C Farm: could not reconcile interrupted jobs: %s", exc)
 
     # ── public API ───────────────────────────────────────────────────
     def submit(self, job: Job) -> Job:
@@ -221,12 +266,45 @@ class QueueManager:
 
     # ── job lifecycle (one worker thread per dispatched job) ────────
     def _run_job(self, job: Job):
+        # SUBMISSION is retried; POLLING is not. A submit that dies on a network
+        # blip has produced nothing, so retrying is free. Once the backend has
+        # accepted the prompt it owns a running job, and re-submitting would
+        # queue the same render twice and bill for both.
+        adapter = None
+        for attempt in range(1, self._submit_attempts + 1):
+            try:
+                adapter = self._adapter_factory(job.backend_name)
+                job.remote_id = adapter.submit(
+                    job.prompt_json, job.compute_profile, job.priority)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt < self._submit_attempts:
+                    log.warning("job %s submit attempt %d/%d failed (%s); retrying "
+                                "in %.0fs", job.job_id, attempt,
+                                self._submit_attempts, exc, self._retry_wait)
+                    if self._stop.wait(self._retry_wait):
+                        self._done(job, "failed", "shutting down during retry")
+                        return
+                    continue
+                log.exception("job %s failed to submit: %s", job.job_id, exc)
+                self._done(job, "failed", str(exc))
+                return
+        if adapter is None:            # every attempt failed and reported
+            return
         try:
-            adapter = self._adapter_factory(job.backend_name)
-            job.remote_id = adapter.submit(job.prompt_json, job.compute_profile, job.priority)
             job.status = "running"
             self._set_status(job, "running")
+            # A backend that hangs, or silently forgets the job without saying
+            # "unknown", used to block this worker thread forever — one leaked
+            # thread and one permanently-occupied concurrency slot per event.
+            deadline = time.time() + self._job_timeout
             while True:
+                if time.time() > deadline:
+                    self._done(job, "failed",
+                               f"timed out after {self._job_timeout / 3600:.1f}h with no "
+                               f"terminal status from {job.backend_name}. The remote job "
+                               f"may still be running; check the backend before resubmitting.")
+                    return
                 st = adapter.get_status(job.remote_id)
                 job.progress = st.get("progress_pct")
                 s = st.get("status")

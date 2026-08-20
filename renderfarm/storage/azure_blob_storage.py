@@ -9,6 +9,7 @@ Env:
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import uuid
 
@@ -37,11 +38,26 @@ class AzureBlobStorage(BaseStorage):
         blob = self.service.get_blob_client(container=self.container, blob=blob_name)
         with open(local_path, "rb") as fh:
             blob.upload_blob(fh, overwrite=True)
+        # generate_blob_sas needs the ACCOUNT KEY to sign with. A connection
+        # string built from a SAS token has no account key on its credential,
+        # so reaching for it raises AttributeError and the upload dies AFTER
+        # the bytes are already in the container — the worst place to fail.
+        account_key = getattr(getattr(self.service, "credential", None),
+                              "account_key", None)
+        if not account_key:
+            logging.getLogger("C2C.Farm.storage").warning(
+                "C2C Farm storage: this Azure connection has no account key "
+                "(SAS-token or AAD credential), so no read SAS can be minted "
+                "for %s. Returning the bare blob URL — the backend can only "
+                "fetch it if the container allows anonymous read or the "
+                "backend carries its own credential. For signed URLs, use a "
+                "connection string that contains AccountKey=.", blob_name)
+            return blob.url
         sas = generate_blob_sas(
             account_name=self.service.account_name,
             container_name=self.container,
             blob_name=blob_name,
-            account_key=self.service.credential.account_key,
+            account_key=account_key,
             permission=BlobSasPermissions(read=True),
             expiry=datetime.datetime.utcnow() + datetime.timedelta(seconds=self.ttl),
         )
