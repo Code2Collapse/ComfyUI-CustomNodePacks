@@ -289,6 +289,11 @@ class _WsTap:
             pid = d.get("prompt_id") or self._current_prompt
             if pid and d.get("max"):
                 self.progress[pid] = round(float(d["value"]) / float(d["max"]), 4)
+                # Bounded like `previews` below. This tap lives as long as the
+                # backend connection, so on a long-running farm an unbounded
+                # dict is a slow leak: one float per prompt id, forever.
+                if len(self.progress) > 256:
+                    self.progress.pop(next(iter(self.progress)))
         elif t == "execution_start":
             self._current_prompt = d.get("prompt_id")
 
