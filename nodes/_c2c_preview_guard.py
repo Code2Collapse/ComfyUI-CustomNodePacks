@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 
 log = logging.getLogger("c2c.preview")
@@ -258,7 +259,13 @@ def _install_previewer_fallback() -> None:
         return _MeanChannelPreviewer()
 
     try:
-        latent_preview.get_previewer = _patched_get_previewer
+        # Wrap at the assignment, not at each return, so EVERY path out of
+        # _patched_get_previewer is throttleable — a previewer that escapes
+        # unwrapped would decode on steps we meant to skip.
+        latent_preview.get_previewer = (
+            lambda device, latent_format:
+                _throttling_previewer(_patched_get_previewer(device, latent_format))
+        )
         latent_preview._c2c_previewer_patched = True
         log.info("[c2c.preview] installed smart-Auto + never-None get_previewer wrapper "
                  "(video->TAESD; image->TAESD when a decoder file is present, else Auto; "
@@ -361,6 +368,43 @@ _PREVIEW_MIN_GAP = 1.0 / 24.0   # floor: never faster than 24fps
 _PREVIEW_MAX_GAP = 10.0         # ceiling: always show something within 10s
 
 
+class _SuppressFlag(threading.local):
+    """Per-thread preview suppression. Thread-local because ComfyUI can run
+    more than one sampler, and a global would let one sampler blank another's
+    preview."""
+    value = False
+
+
+_SUPPRESS = _SuppressFlag()
+
+
+def _throttling_previewer(prev):
+    """Wrap a previewer so a throttled step yields NO preview bytes.
+
+    This is where throttling belongs. The alternative — handing core a None
+    x0 — is not a way to skip a decode: core assigns x0 into x0_output_dict
+    (SamplerCustom's denoised latent) and passes it to the previewer
+    regardless. Returning None here is exactly what core already treats as
+    "no preview this step": `preview_bytes = None` then
+    `pbar.update_absolute(step, total, preview_bytes)`.
+    """
+    if prev is None or getattr(prev, "_c2c_throttled", False):
+        return prev
+    orig_decode = prev.decode_latent_to_preview_image
+
+    def _decode(preview_format, x0):
+        if _SUPPRESS.value:
+            return None
+        return orig_decode(preview_format, x0)
+
+    try:
+        prev.decode_latent_to_preview_image = _decode
+        prev._c2c_throttled = True
+    except Exception:  # noqa: BLE001 — slotted/immutable previewer: leave as-is
+        pass
+    return prev
+
+
 def _install_prepare_callback_throttle() -> None:
     """Wrap latent_preview.prepare_callback so the inner callback skips
     decode when less than 1/24s has elapsed since the last sent preview.
@@ -396,8 +440,19 @@ def _install_prepare_callback_throttle() -> None:
             gap = state["cost"] / _PREVIEW_BUDGET if state["cost"] > 0.0 else _PREVIEW_MIN_GAP
             gap = max(_PREVIEW_MIN_GAP, min(_PREVIEW_MAX_GAP, gap))
             if state["have_decoded"] and not is_final and (now - state["last"]) < gap:
-                # Skip the decode: pass None so the previewer never runs.
-                native_cb(step, None, x, total_steps)
+                # Suppress only the PREVIEW, never x0 itself. Core does
+                #     x0_output_dict["x0"] = x0
+                #     previewer.decode_latent_to_preview_image(fmt, x0)
+                # with no None check, so passing x0=None both corrupts
+                # SamplerCustom's denoised output and crashes the previewer
+                # (TAESDPreviewerImpl does x0[:1] -> TypeError). The flag below
+                # makes our previewer wrapper return no bytes for this call
+                # while the real x0 flows through untouched.
+                _SUPPRESS.value = True
+                try:
+                    native_cb(step, x0, x, total_steps)
+                finally:
+                    _SUPPRESS.value = False
                 return
             t0 = time.monotonic()
             native_cb(step, x0, x, total_steps)
