@@ -336,7 +336,29 @@ def _register_routes() -> None:
 # it reaches EVERY sampler that calls latent_preview.prepare_callback —
 # ComfyUI native (KSampler/SamplerCustom), Kijai's WanVideoSampler when
 # it uses the native path, res4lyf if it routes through native, etc.
-_PREVIEW_FPS = 24
+# The old value here was a flat 24 fps, which NEVER ENGAGED on the workload it
+# was written for. The predicate only throttles when consecutive sampler steps
+# are closer together than 1/24s = 41.7ms. Measured against realistic step
+# times, decodes allowed out of a 30-step run:
+#
+#     Wan video 768, 100-200 frames   2000ms/step   30/30   never throttled
+#     Wan video, distilled             500ms/step   30/30   never throttled
+#     SDXL image 1024                  120ms/step   30/30   never throttled
+#     tiny latent                       20ms/step   11/30   throttled
+#
+# So every step still ran a full multi-frame TAESD decode and pushed those bytes
+# down the websocket — which is what backs the socket up and makes previews
+# stall. A fixed frame rate cannot work here because decode cost varies by three
+# orders of magnitude between a 1024 image and a 200-frame video latent.
+#
+# Instead, budget preview against its OWN measured cost: after each decode we
+# know how long it took, so we require the next one to wait until the preview
+# has consumed no more than _PREVIEW_BUDGET of wall-clock time. That is
+# self-tuning — cheap image decodes stay smooth, expensive video decodes space
+# themselves out — and it degrades gracefully on hardware we have never seen.
+_PREVIEW_BUDGET = 0.10          # preview may cost at most 10% of sampling time
+_PREVIEW_MIN_GAP = 1.0 / 24.0   # floor: never faster than 24fps
+_PREVIEW_MAX_GAP = 10.0         # ceiling: always show something within 10s
 
 
 def _install_prepare_callback_throttle() -> None:
@@ -361,29 +383,40 @@ def _install_prepare_callback_throttle() -> None:
         native_cb = orig_prepare(model, steps, x0_output_dict)
         if native_cb is None:
             return None
-        state = {"last": 0.0, "have_decoded": False}
+        state = {"last": 0.0, "have_decoded": False, "cost": 0.0}
 
         def _cb(step, x0, x, total_steps):
             now = time.monotonic()
             # Always let the final step through (so the user sees the end
             # result), and the first decode (so preview appears fast).
             is_final = (step is not None) and (total_steps is not None) and (step + 1 >= total_steps)
-            throttle = state["have_decoded"] and not is_final and (now - state["last"]) < (1.0 / _PREVIEW_FPS)
-            if throttle:
+            # Required gap = what it costs, divided by the share of runtime we
+            # are willing to spend on it. A 0.5s video decode at a 10% budget
+            # must wait 5s; a 5ms image decode waits the 24fps floor.
+            gap = state["cost"] / _PREVIEW_BUDGET if state["cost"] > 0.0 else _PREVIEW_MIN_GAP
+            gap = max(_PREVIEW_MIN_GAP, min(_PREVIEW_MAX_GAP, gap))
+            if state["have_decoded"] and not is_final and (now - state["last"]) < gap:
                 # Skip the decode: pass None so the previewer never runs.
                 native_cb(step, None, x, total_steps)
                 return
-            state["last"] = now
-            state["have_decoded"] = True
+            t0 = time.monotonic()
             native_cb(step, x0, x, total_steps)
+            # Measure what the decode+send actually cost so the next gap adapts.
+            # Smoothed so one slow frame (a swap, a GC pause) does not lock the
+            # preview out for the rest of the run.
+            dt = time.monotonic() - t0
+            state["cost"] = dt if state["cost"] <= 0.0 else (0.5 * state["cost"] + 0.5 * dt)
+            state["last"] = time.monotonic()
+            state["have_decoded"] = True
 
         return _cb
 
     try:
         latent_preview.prepare_callback = _throttled_prepare_callback
         latent_preview._c2c_throttle_patched = True
-        log.info("[c2c.preview] installed 24fps prepare_callback throttle "
-                 "(decode at most 24x/sec during sampling — native + Kijai).")
+        log.info("[c2c.preview] installed adaptive preview throttle "
+                 "(preview budgeted to %.0f%% of sampling time, %.2fs-%.0fs gap).",
+                 _PREVIEW_BUDGET * 100, _PREVIEW_MIN_GAP, _PREVIEW_MAX_GAP)
     except Exception as exc:  # noqa: BLE001
         log.debug("[c2c.preview] prepare_callback throttle skipped: %s", exc)
 
