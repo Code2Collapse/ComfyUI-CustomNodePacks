@@ -16,6 +16,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 let _enabled = true;
 
@@ -123,7 +124,7 @@ function _setupRedrawWhileConnecting() {
     window.addEventListener("pointerdown", () => { if (_enabled) start(); }, true);
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.CompatibilityHints",
     settings: [
         {

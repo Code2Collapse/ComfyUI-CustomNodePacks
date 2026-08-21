@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 const SETTING_ENABLED = "c2c.wsLogger.enabled";
 const SETTING_BUFFER = "c2c.wsLogger.buffer_size";
@@ -231,7 +232,7 @@ function toggleSidebar() {
     } catch (e) { console.warn("[c2c_ws_logger] toggle failed", e); }
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.WSLogger",
     async setup() {
         app.ui.settings.addSetting({

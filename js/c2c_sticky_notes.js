@@ -13,6 +13,7 @@
 import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { c2cPrompt } from "./_c2c_dialog.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 // border values are assigned to ctx.strokeStyle (canvas 2D), which cannot
 // resolve CSS var() strings — use resolved-hex palette values instead.
@@ -204,7 +205,7 @@ function _patch() {
     };
 }
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.StickyNotes",
     settings: [
         {

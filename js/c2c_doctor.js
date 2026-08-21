@@ -33,6 +33,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 // ---------------------------------------------------------------------------
 // constants & helpers
@@ -1448,7 +1449,7 @@ window.__C2C_DOCTOR_V3__ = {
     status: () => _doctorStatus(),
 };
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.DoctorV3",
     async setup() {
         injectStyles();
