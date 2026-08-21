@@ -44,6 +44,7 @@
 
 import { app } from "../../scripts/app.js";
 import { startNativeOffsets, refreshNativeOffsets } from "./_c2c_native_offsets.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 const COMPONENT = "c2c_omnibar";
 
@@ -1212,7 +1213,7 @@ try {
 }
 
 // ── Extension registration ──────────────────────────────────────────────────
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.OmniBar",
     settings: [
         {

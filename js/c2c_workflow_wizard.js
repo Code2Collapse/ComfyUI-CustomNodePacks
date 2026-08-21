@@ -29,6 +29,7 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
 import { c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 const BTN_ID   = "mec-wizard-btn";
 const PANEL_ID = "mec-wizard-panel";
@@ -737,7 +738,7 @@ function _esc(s) {
 // Extension entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.WorkflowWizard",
     settings: [
         {

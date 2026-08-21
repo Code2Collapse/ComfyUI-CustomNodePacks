@@ -14,6 +14,7 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 const STYLE_TAG_ID = "mec-diagnostics-style";
 
@@ -1770,7 +1771,7 @@ function _mountSidebar(el) {
 // -----------------------------------------------------------------------
 // Registration
 // -----------------------------------------------------------------------
-app.registerExtension({
+if (!LITE) app.registerExtension({
     name: "C2C.DiagnosticsSidebar",
     async setup() {
         try {
