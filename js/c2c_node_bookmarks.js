@@ -19,6 +19,7 @@
 
 import { app } from "../../scripts/app.js";
 import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
 
 const ROOT_ID = "c2c-bookmarks-root";
 const SETTING_ID = "c2c.bookmarks.enabled";

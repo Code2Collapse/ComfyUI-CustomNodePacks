@@ -26,6 +26,46 @@ export const LITE = (() => {
     try { return localStorage.getItem(LS_KEY) === "1"; } catch (_) { return false; }
 })();
 
+// ── central LITE filter ────────────────────────────────────────────────────
+// Gating one file at a time means editing every heavy extension. This instead
+// filters at the single choke point every extension goes through, by NAME, so a
+// new visual extra is opted out with one line here.
+//
+// LOAD ORDER IS THE WHOLE GAME. ComfyUI discovers extensions with a plain
+// recursive glob (server.py get_extensions) whose order is filesystem-dependent
+// and NOT guaranteed sorted. If a listed extension evaluates before this module,
+// its registerExtension call has already happened and the filter is useless.
+// Every file named below therefore carries `import "./_c2c_lite.js"` — an ES
+// import forces this module to evaluate first, turning a coin flip into a
+// guarantee. If you add a name here, add that import to its file too.
+//
+// Only extensions NO NODE DEPENDS ON belong here. Gating a node's own widget
+// script leaves that node with no UI, which is a bug, not a saving.
+const SKIP_WHEN_LITE = new Set([
+    "C2C.StatsPill", "C2C.IntBadge", "C2C.StatusStrip", "C2C.TopDock",
+    "C2C.UILayout", "C2C.MoodBoard", "C2C.FrameOverlay", "C2C.GraphHealth",
+    "C2C.NodeBookmarks", "C2C.TokenCounter", "C2C.SurpriseMe",
+    "C2C.CostEstimator", "C2C.MetadataInspector", "C2C.OverlayVisibility",
+    "c2c.ai.statusBar", "MEC.IntegrityStatus",
+]);
+
+if (LITE && typeof app.registerExtension === "function"
+        && !app.registerExtension._c2cLitePatched) {
+    const _origReg = app.registerExtension.bind(app);
+    // Rest args, not (ext): ComfyUI has added parameters to registerExtension
+    // before, and swallowing them here would silently drop options on every
+    // extension in the app, not just ours.
+    const _filtered = function (ext, ...rest) {
+        if (ext && SKIP_WHEN_LITE.has(ext.name)) {
+            try { console.debug("[C2C.Lite] skipped", ext.name); } catch (_) {}
+            return undefined;
+        }
+        return _origReg(ext, ...rest);
+    };
+    _filtered._c2cLitePatched = true;
+    app.registerExtension = _filtered;
+}
+
 // Optional helper for gated files that prefer a function call.
 export function liteSkip(label) {
     if (LITE && label) { try { console.debug(`[C2C.Lite] skipped ${label}`); } catch (_) {} }

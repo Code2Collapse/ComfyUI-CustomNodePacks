@@ -18,6 +18,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { reportFailure as __c2cReport } from "../_c2c_report.js";
 import { c2cConfirm } from "../_c2c_dialog.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "../_c2c_lite.js";
 
 // ── State ───────────────────────────────────────────────────────────
 const STATE = {
