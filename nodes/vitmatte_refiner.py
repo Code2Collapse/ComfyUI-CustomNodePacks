@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from ._is_changed_util import hash_args_and_kwargs
 from .utils import (
     HAS_CV2,
     refine_with_vitmatte,
@@ -115,9 +116,39 @@ class ViTMatteRefinerMEC:
         "Laplacian blending, and Gaussian blur."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, mask, method, edge_radius, edge_softness,
+                   erode_amount, detail_level, iterations=1,
+                   edge_contrast_boost=1.0, trimap_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            image, mask, method, edge_radius, edge_softness,
+            erode_amount, detail_level, iterations,
+            edge_contrast_boost, trimap_mask, **kwargs,
+        )
+
     def refine(self, image, mask, method, edge_radius, edge_softness,
                erode_amount, detail_level, iterations=1,
                edge_contrast_boost=1.0, trimap_mask=None):
+
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("ViTMatteRefinerMEC expects IMAGE tensor [B,H,W,C]")
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("ViTMatteRefinerMEC expects MASK tensor [H,W] or [B,H,W]")
+        if trimap_mask is not None and (
+            not isinstance(trimap_mask, torch.Tensor) or trimap_mask.ndim not in (2, 3)
+        ):
+            raise ValueError("ViTMatteRefinerMEC trimap expects MASK tensor [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            return self._refine_impl(
+                image, mask, method, edge_radius, edge_softness,
+                erode_amount, detail_level, iterations,
+                edge_contrast_boost, trimap_mask,
+            )
+
+    def _refine_impl(self, image, mask, method, edge_radius, edge_softness,
+                     erode_amount, detail_level, iterations=1,
+                     edge_contrast_boost=1.0, trimap_mask=None):
 
         img = image[0]  # (H, W, C)
         H, W = img.shape[:2]

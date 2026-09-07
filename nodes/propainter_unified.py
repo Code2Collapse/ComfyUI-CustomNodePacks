@@ -33,6 +33,8 @@ from typing import Any, Dict, Optional
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MEC.ProPainter")
 
 
@@ -160,6 +162,25 @@ class ProPainterMEC:
                     {"tooltip": "[flow] Optional mask restricting the consistency visualisation."}),
             },
         }
+
+    @classmethod
+    def IS_CHANGED(cls, mode, use_half, color_match_mode, raft_iter, neighbor_stride,
+                   ref_stride, subvideo_length, raft_chunk, blend_boundary,
+                   remove_quality, remove_dilate_pixels, boundary_band_pixels,
+                   preserve_inpaint_center, upscale_method, ring_pixels,
+                   flow_consistency_thr,
+                   images=None, masks=None, stitch_data=None, inpainted_image=None,
+                   stitched_image=None, mask_override=None, frame_a=None, frame_b=None,
+                   flow_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            mode, use_half, color_match_mode, raft_iter, neighbor_stride,
+            ref_stride, subvideo_length, raft_chunk, blend_boundary,
+            remove_quality, remove_dilate_pixels, boundary_band_pixels,
+            preserve_inpaint_center, upscale_method, ring_pixels,
+            flow_consistency_thr,
+            images, masks, stitch_data, inpainted_image,
+            stitched_image, mask_override, frame_a, frame_b, flow_mask, **kwargs,
+        )
 
     # ────────────────────────────────────────────────────────────────
     @staticmethod

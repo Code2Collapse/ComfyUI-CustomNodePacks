@@ -47,6 +47,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 try:
     import cv2  # type: ignore
     _HAS_CV2 = True
@@ -475,6 +477,14 @@ class VideoMaskEditorMEC:
     RETURN_NAMES = ("mask", "info")
     FUNCTION = "execute"
 
+    @classmethod
+    def IS_CHANGED(cls, image, session_id, tween_mode, feather, threshold,
+                   input_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            image, session_id, tween_mode, feather, threshold, input_mask,
+            **kwargs,
+        )
+
     def execute(
         self,
         image: torch.Tensor,
@@ -484,8 +494,29 @@ class VideoMaskEditorMEC:
         threshold: float,
         input_mask: Optional[torch.Tensor] = None,
     ):
-        if image is None or image.ndim != 4:
-            raise ValueError("image must be IMAGE tensor (B,H,W,C)")
+        if image is None or not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("VideoMaskEditorMEC: image must be IMAGE tensor [B,H,W,C]")
+        if input_mask is not None and (
+            not isinstance(input_mask, torch.Tensor)
+            or input_mask.ndim not in (2, 3)
+        ):
+            raise ValueError(
+                "VideoMaskEditorMEC: input_mask must be MASK tensor [H,W] or [B,H,W]"
+            )
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, session_id, tween_mode, feather, threshold, input_mask,
+            )
+
+    def _execute_impl(
+        self,
+        image: torch.Tensor,
+        session_id: str,
+        tween_mode: str,
+        feather: float,
+        threshold: float,
+        input_mask: Optional[torch.Tensor] = None,
+    ):
         B, H, W, _C = image.shape
         sid = (session_id or "").strip()
         if not sid:

@@ -264,19 +264,30 @@ except Exception as _exc:  # pragma: no cover
     )
     _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY = {}, {}
 
-# Wan Director (P9) — multi-shot orchestration utilities
+# Wan Director is owned by ComfyUI-WanNodeExperiments, which holds the whole
+# director family (WanDirectorInspector, WanDirectorExtraArgs). The copy that
+# lived here duplicated the WanDirectorC2C id and was resolved by unsorted
+# os.listdir order; it is deleted (2026-08-29 dedup). Removed rather than left
+# guarded, so the loader does not record a spurious import failure.
+_WANDIR_MAPPINGS, _WANDIR_DISPLAY = {}, {}
+
+# ── C2C Vault: password-locked subgraph ──────────────────────────────
+# Guarded independently: the node stays registered even without
+# `cryptography`, so a workflow containing a vault still LOADS and reports a
+# clear install message instead of the node vanishing from the graph.
 try:
-    from .nodes.wan_director import (
-        NODE_CLASS_MAPPINGS as _WANDIR_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _WANDIR_DISPLAY,
+    from .nodes.vault_node import (
+        NODE_CLASS_MAPPINGS as _VAULT_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _VAULT_DISPLAY,
+        register_routes as _register_vault_routes,
     )
-except Exception as _exc:  # pragma: no cover
+except Exception as _exc:
     _c2c_rec_fail(
-        "WanDirector", _exc,
-        hint="Install `av` (PyAV) for audio mixing and ensure Wan 2.x model nodes are available.",
+        "C2CVault", _exc,
+        hint="Install `cryptography` for the password-locked subgraph node.",
         group="nodes",
     )
-    _WANDIR_MAPPINGS, _WANDIR_DISPLAY = {}, {}
+    _VAULT_MAPPINGS, _VAULT_DISPLAY, _register_vault_routes = {}, {}, None
 
 # C2C helpers (12 tiny utilities)
 try:
@@ -509,9 +520,17 @@ except Exception as _exc:  # pragma: no cover
 #    verified they have NO replacement in the current pack, so brought back).
 #    Each module is guarded independently so one failure never drops the rest.
 _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
-for _rmod in ("color_science", "exr_io", "exr_metadata_reader", "geometry_nodes",
-              "metadata_nodes", "plate_tools", "render_pass", "video_frame_extractor",
-              "optical_flow", "roto", "shuffle"):
+# NOTE (2026-08-29 dedup): color_science, exr_metadata_reader, geometry_nodes,
+# metadata_nodes, plate_tools and render_pass were REMOVED from this list and
+# deleted. They had been migrated to ComfyUI-NukeMaxNodes in Apr 2026, then
+# re-registered here by a 2026-05 "restore" whose check ("no replacement in the
+# current pack") only looked inside THIS pack - the replacement was in another
+# one. That restore is what created 18 duplicate node ids, resolved by unsorted
+# os.listdir order (ComfyUI/nodes.py:2295 last-write-wins, :2356 unsorted).
+# exr_io STAYS here: its OpenImageIO backend is the only EXR path that works in
+# this environment, and its SaveEXRMEC is the 6-input superset.
+for _rmod in ("exr_io", "video_frame_extractor",
+              "optical_flow", "roto", "shuffle", "pixel_aspect"):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
         _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})
@@ -552,6 +571,7 @@ except Exception as _farm_exc:  # pragma: no cover
     )
 
 NODE_CLASS_MAPPINGS = {
+    **_VAULT_MAPPINGS,
     **_FOLDER_MAPPINGS,
     **_FARM_MAPPINGS,
     **_FLUID_MAPPINGS,
@@ -583,6 +603,7 @@ NODE_CLASS_MAPPINGS = {
     **_RESTORED_MAPPINGS,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    **_VAULT_DISPLAY,
     **_FOLDER_DISPLAY,
     **_FARM_DISPLAY,
     **_FLUID_DISPLAY,
@@ -626,6 +647,17 @@ try:
     print("[MEC] Parameter Memory server route registered.")
 except Exception:
     pass  # Server not available (e.g. during import-only testing)
+
+# ── Register C2C Vault routes ────────────────────────────────────────
+# The password only ever travels over these routes. It is never a widget and
+# never enters the queued prompt, so it cannot be serialised into the workflow
+# JSON that the vault exists to protect.
+try:
+    if _register_vault_routes is not None:
+        import server as _comfy_server_vault
+        _register_vault_routes(_comfy_server_vault.PromptServer.instance)
+except Exception:
+    pass  # Server not available
 
 # ── Register server routes for Video Mask Editor ─────────────────────
 try:
@@ -678,11 +710,32 @@ try:
     except Exception as _et:
         print(f"[MEC] error_translator deferred: {_et}")
     try:
+        from .nodes.ai_workflow_builder import register_routes as _register_wf_builder_routes
+        _register_wf_builder_routes(_ps)
+        print("[MEC] ai_workflow_builder routes registered.")
+    except Exception as _wb:
+        print(f"[MEC] ai_workflow_builder deferred: {_wb}")
+    try:
+        from .nodes.ai_diagnose import register_routes as _register_ai_diagnose_routes
+        _register_ai_diagnose_routes(_ps)
+        print("[MEC] ai_diagnose routes registered.")
+    except Exception as _ad:
+        print(f"[MEC] ai_diagnose deferred: {_ad}")
+    try:
         from .nodes.error_introspector import register_routes as _register_error_introspector_routes
         _register_error_introspector_routes(_ps)
         print("[MEC] error_introspector routes registered.")
     except Exception as _ei:
         print(f"[MEC] error_introspector deferred: {_ei}")
+    try:
+        # Model Browser backend (/c2c/models/search|download|dest_dirs). The JS
+        # panel (c2c_model_browser.js) has shipped for a while but this
+        # registration was missing — every search 404'd ("Error: check console").
+        from .nodes.model_browser_routes import register_routes as _register_model_browser_routes
+        _register_model_browser_routes(_ps)
+        print("[MEC] model_browser routes registered.")
+    except Exception as _mb:
+        print(f"[MEC] model_browser deferred: {_mb}")
     try:
         from .nodes.flamegraph import register_routes as _register_flamegraph_routes
         _register_flamegraph_routes(_ps)

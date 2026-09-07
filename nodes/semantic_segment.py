@@ -16,6 +16,7 @@ Each run processes the full batch, giving per-frame masks for video workflows.
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import json
@@ -127,7 +128,32 @@ class SemanticSegmentMEC:
         "Clothes model: upper_clothes, pants, dress, shoes, bag, scarf, etc."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, model_name, classes_csv, threshold, invert,
+                   keep_model_loaded=True, **kwargs):
+        return hash_args_and_kwargs(
+            image, model_name, classes_csv, threshold, invert,
+            keep_model_loaded, **kwargs,
+        )
+
     def parse(
+        self,
+        image: torch.Tensor,
+        model_name: str,
+        classes_csv: str,
+        threshold: float,
+        invert: bool,
+        keep_model_loaded: bool = True,
+    ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SemanticSegmentMEC expects IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            return self._parse_impl(
+                image, model_name, classes_csv, threshold, invert,
+                keep_model_loaded,
+            )
+
+    def _parse_impl(
         self,
         image: torch.Tensor,
         model_name: str,
@@ -197,7 +223,7 @@ class SemanticSegmentMEC:
             inputs = processor(images=pil_img, return_tensors="pt")
             inputs = {k: v.to(dev) for k, v in inputs.items()}
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 outputs = model(**inputs)
 
             logits = outputs.logits  # (1, num_classes, h, w)

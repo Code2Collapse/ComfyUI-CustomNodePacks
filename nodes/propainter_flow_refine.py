@@ -15,6 +15,8 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 
+from ._is_changed_util import hash_args_and_kwargs
+
 from .propainter_bridge import (
     HAS_PROPAINTER,
     get_device,
@@ -188,7 +190,27 @@ class FlowRefineMEC:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, frame_a, frame_b, iters, consistency_thr, mask=None, **kwargs):
+        return hash_args_and_kwargs(frame_a, frame_b, iters, consistency_thr, mask, **kwargs)
+
     def refine_flow(self, frame_a, frame_b, iters, consistency_thr, mask=None):
+        if not isinstance(frame_a, torch.Tensor) or frame_a.ndim != 4 or frame_a.shape[-1] != 3:
+            raise ValueError(
+                f"FlowRefineMEC: frame_a must be IMAGE [B,H,W,3], got {tuple(getattr(frame_a, 'shape', ()))}"
+            )
+        if not isinstance(frame_b, torch.Tensor) or frame_b.ndim != 4 or frame_b.shape[-1] != 3:
+            raise ValueError(
+                f"FlowRefineMEC: frame_b must be IMAGE [B,H,W,3], got {tuple(getattr(frame_b, 'shape', ()))}"
+            )
+        if mask is not None and (not isinstance(mask, torch.Tensor) or mask.ndim not in (3, 4)):
+            raise ValueError(
+                f"FlowRefineMEC: mask must be MASK [B,H,W], got {tuple(getattr(mask, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._refine_flow_impl(frame_a, frame_b, iters, consistency_thr, mask)
+
+    def _refine_flow_impl(self, frame_a, frame_b, iters, consistency_thr, mask=None):
         flow, warped, consistency = compute_flow(
             frame_a, frame_b, iters=iters, consistency_thr=consistency_thr,
         )

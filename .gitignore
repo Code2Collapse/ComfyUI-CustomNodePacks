@@ -36,7 +36,7 @@ _tests/
 autoresearch-nodepacks/
 autoresearch-nexus/
 _test_models/
-
+_AUDIT/
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -236,5 +236,11 @@ user/
 renderfarm/config/audit.db
 renderfarm/config/audit.db-wal
 renderfarm/config/audit.db-shm
+
 # but the C2C Farm render-farm test suite IS part of the source tree
 !renderfarm/tests/
+
+# test scratch dirs (tests point folder_paths at the OS temp area now)
+_test_temp/
+_test_output/
+_test_input/

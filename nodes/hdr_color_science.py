@@ -15,6 +15,8 @@ from typing import Tuple
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MEC.HDRColor")
 
 
@@ -63,46 +65,56 @@ class C2CACESTonemap:
         "display-ready output with film-like highlight rolloff."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, source_space, exposure, contrast, saturation,
+                   output_colorspace, **kwargs):
+        return hash_args_and_kwargs(
+            image, source_space, exposure, contrast, saturation, output_colorspace, **kwargs,
+        )
+
     def apply_tonemap(self, image, source_space, exposure, contrast, saturation,
                       output_colorspace):
-        x = image.clone().float()
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("C2CACESTonemap expects IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            x = image.clone().float()
 
-        # Linearise from source color space
-        if source_space == "sRGB":
-            x = _srgb_to_linear(x)
-        elif source_space == "Log C3":
-            x = _logc3_to_linear(x)
-        # "Linear" → already linear, no conversion needed
+            # Linearise from source color space
+            if source_space == "sRGB":
+                x = _srgb_to_linear(x)
+            elif source_space == "Log C3":
+                x = _logc3_to_linear(x)
+            # "Linear" → already linear, no conversion needed
 
-        # Exposure
-        x = x * exposure
+            # Exposure
+            x = x * exposure
 
-        # Contrast in log space (around mid-gray 0.18)
-        if abs(contrast - 1.0) > 0.01:
-            x = x.clamp(min=1e-6)
-            log_x = torch.log2(x / 0.18)
-            log_x = log_x * contrast
-            x = 0.18 * (2.0 ** log_x)
+            # Contrast in log space (around mid-gray 0.18)
+            if abs(contrast - 1.0) > 0.01:
+                x = x.clamp(min=1e-6)
+                log_x = torch.log2(x / 0.18)
+                log_x = log_x * contrast
+                x = 0.18 * (2.0 ** log_x)
 
-        # Saturation
-        if abs(saturation - 1.0) > 0.01:
-            luma = 0.2126 * x[..., 0:1] + 0.7152 * x[..., 1:2] + 0.0722 * x[..., 2:3]
-            x = luma + saturation * (x - luma)
-            x = x.clamp(min=0.0)
+            # Saturation
+            if abs(saturation - 1.0) > 0.01:
+                luma = 0.2126 * x[..., 0:1] + 0.7152 * x[..., 1:2] + 0.0722 * x[..., 2:3]
+                x = luma + saturation * (x - luma)
+                x = x.clamp(min=0.0)
 
-        # ACES filmic curve
-        a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
-        result = (x * (a * x + b)) / (x * (c * x + d) + e)
-        result = result.clamp(0.0, 1.0)
+            # ACES filmic curve
+            a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
+            result = (x * (a * x + b)) / (x * (c * x + d) + e)
+            result = result.clamp(0.0, 1.0)
 
-        # Output colorspace
-        if output_colorspace == "sRGB (gamma)":
-            result = _linear_to_srgb(result)
-        elif output_colorspace == "Linear":
-            pass  # already linear after ACES
-        # ACES AP1 stays as-is (ACES output)
+            # Output colorspace
+            if output_colorspace == "sRGB (gamma)":
+                result = _linear_to_srgb(result)
+            elif output_colorspace == "Linear":
+                pass  # already linear after ACES
+            # ACES AP1 stays as-is (ACES output)
 
-        return (result,)
+            return (result,)
 
 
 class C2CVAEQualityDecode:
@@ -149,47 +161,54 @@ class C2CVAEQualityDecode:
         "optionally applies ACES tone mapping for HDR-quality output."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, samples, vae, force_fp32, tile_size, apply_aces, exposure, **kwargs):
+        return hash_args_and_kwargs(
+            samples, vae, force_fp32, tile_size, apply_aces, exposure, **kwargs,
+        )
+
     def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure):
-        dtype = torch.float32 if force_fp32 else torch.float16
+        with torch.inference_mode():
+            dtype = torch.float32 if force_fp32 else torch.float16
 
-        latent = samples["samples"]
+            latent = samples["samples"]
 
-        if latent.ndim == 5 and tile_size > 0:
-            try:
-                from .wan_director.features._local_vae_hdr import decode_wan_spatial_tiled
-                result = decode_wan_spatial_tiled(vae, latent, tile_size=tile_size, dtype=dtype)
-            except Exception as exc:
-                log.warning("Spatial-tiled decode failed (%s); falling back to standard.", exc)
+            if latent.ndim == 5 and tile_size > 0:
+                try:
+                    from .wan_director.features._local_vae_hdr import decode_wan_spatial_tiled
+                    result = decode_wan_spatial_tiled(vae, latent, tile_size=tile_size, dtype=dtype)
+                except Exception as exc:
+                    log.warning("Spatial-tiled decode failed (%s); falling back to standard.", exc)
+                    result = vae.decode(latent.to(dtype=dtype))
+            else:
+                original_dtype = None
+                if force_fp32 and hasattr(vae, "first_stage_model"):
+                    try:
+                        original_dtype = next(vae.first_stage_model.parameters()).dtype
+                        if original_dtype != torch.float32:
+                            vae.first_stage_model.to(dtype=torch.float32)
+                    except (StopIteration, AttributeError):
+                        pass
+
                 result = vae.decode(latent.to(dtype=dtype))
-        else:
-            original_dtype = None
-            if force_fp32 and hasattr(vae, "first_stage_model"):
-                try:
-                    original_dtype = next(vae.first_stage_model.parameters()).dtype
-                    if original_dtype != torch.float32:
-                        vae.first_stage_model.to(dtype=torch.float32)
-                except (StopIteration, AttributeError):
-                    pass
 
-            result = vae.decode(latent.to(dtype=dtype))
+                if original_dtype is not None and original_dtype != torch.float32:
+                    try:
+                        vae.first_stage_model.to(dtype=original_dtype)
+                    except (AttributeError, RuntimeError):
+                        pass
 
-            if original_dtype is not None and original_dtype != torch.float32:
-                try:
-                    vae.first_stage_model.to(dtype=original_dtype)
-                except (AttributeError, RuntimeError):
-                    pass
+            if isinstance(result, torch.Tensor):
+                result = result.float().clamp(0.0, 1.0)
 
-        if isinstance(result, torch.Tensor):
-            result = result.float().clamp(0.0, 1.0)
+            if apply_aces:
+                a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
+                x = result * exposure
+                result = (x * (a * x + b)) / (x * (c * x + d) + e)
+                result = result.clamp(0.0, 1.0)
+                result = _linear_to_srgb(result)
 
-        if apply_aces:
-            a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
-            x = result * exposure
-            result = (x * (a * x + b)) / (x * (c * x + d) + e)
-            result = result.clamp(0.0, 1.0)
-            result = _linear_to_srgb(result)
-
-        return (result,)
+            return (result,)
 
 
 class C2CColorSpaceConvert:
@@ -220,25 +239,32 @@ class C2CColorSpaceConvert:
     FUNCTION = "convert"
     CATEGORY = "MEC/Color Science"
 
+    @classmethod
+    def IS_CHANGED(cls, image, source_space, target_space, **kwargs):
+        return hash_args_and_kwargs(image, source_space, target_space, **kwargs)
+
     def convert(self, image, source_space, target_space):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("C2CColorSpaceConvert expects IMAGE tensor [B,H,W,C]")
         if source_space == target_space:
             return (image,)
 
-        x = image.clone().float()
+        with torch.inference_mode():
+            x = image.clone().float()
 
-        # To linear first
-        if source_space == "sRGB":
-            x = _srgb_to_linear(x)
-        elif source_space == "Log C3":
-            x = _logc3_to_linear(x)
+            # To linear first
+            if source_space == "sRGB":
+                x = _srgb_to_linear(x)
+            elif source_space == "Log C3":
+                x = _logc3_to_linear(x)
 
-        # From linear to target
-        if target_space == "sRGB":
-            x = _linear_to_srgb(x)
-        elif target_space == "Log C3":
-            x = _linear_to_logc3(x)
+            # From linear to target
+            if target_space == "sRGB":
+                x = _linear_to_srgb(x)
+            elif target_space == "Log C3":
+                x = _linear_to_logc3(x)
 
-        return (x.clamp(0.0, 1.0),)
+            return (x.clamp(0.0, 1.0),)
 
 
 # ── Color space conversion helpers ────────────────────────────────────

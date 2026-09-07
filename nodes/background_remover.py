@@ -14,6 +14,7 @@ alpha MASK. Ideal as a preprocessing step before compositing or inpainting.
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import json
@@ -97,6 +98,10 @@ class BackgroundRemoverMEC:
         "Ideal for portraits, product photos, and compositing workflows."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, model_name, threshold, invert, mask_blur, **kwargs):
+        return hash_args_and_kwargs(image, model_name, threshold, invert, mask_blur, **kwargs)
+
     def remove_bg(
         self,
         image: torch.Tensor,
@@ -119,7 +124,11 @@ class BackgroundRemoverMEC:
         mask_blur: int,
         keep_model_loaded: bool = True,
     ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("BackgroundRemoverMEC expects IMAGE tensor [B,H,W,C]")
         B, H, W, C = image.shape
+        if C not in (3, 4):
+            raise ValueError(f"BackgroundRemoverMEC expects 3 or 4 channels, got {C}")
         # MANUAL bug-fix (Apr 2026): full device autodetect (cuda > mps > cpu)
         # so Apple-Silicon and AMD-ROCm users get GPU acceleration too.
         if torch.cuda.is_available():
@@ -159,7 +168,7 @@ class BackgroundRemoverMEC:
             # accept the keyword `pixel_values`; call positionally when the
             # processor was unavailable (BiRefNet path).  Also cast input dtype
             # to match the loaded model parameters (fp16 BiRefNet variant).
-            with torch.no_grad():
+            with torch.inference_mode():
                 if inputs is not None:
                     out = model(**inputs)
                 else:

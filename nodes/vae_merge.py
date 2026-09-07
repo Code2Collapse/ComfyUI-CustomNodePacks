@@ -54,6 +54,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.VAEMerge")
 
 
@@ -495,8 +497,64 @@ class VAEMergeMEC:
     CATEGORY = "C2C/VAE"
     OUTPUT_NODE = False
 
+    @classmethod
+    def IS_CHANGED(cls, vae_a, vae_b, merge_mode, alpha, beta, brightness, contrast,
+                   use_blocks, auto_alpha, block_conv_in, block_conv_out, block_norm_out,
+                   block_0, block_1, block_2, block_3, block_mid, device, dry_run,
+                   vae_c=None, reference_image=None, recipe_in="", **kwargs):
+        return hash_args_and_kwargs(
+            vae_a, vae_b, merge_mode, alpha, beta, brightness, contrast,
+            use_blocks, auto_alpha, block_conv_in, block_conv_out, block_norm_out,
+            block_0, block_1, block_2, block_3, block_mid, device, dry_run,
+            vae_c, reference_image, recipe_in, **kwargs,
+        )
+
     # ------------------------------------------------------------------
     def merge(
+        self,
+        vae_a: Any,
+        vae_b: Any,
+        merge_mode: str = "weighted_sum",
+        alpha: float = 0.30,
+        beta: float = 0.70,
+        brightness: float = 0.0,
+        contrast: float = 0.0,
+        use_blocks: bool = False,
+        auto_alpha: bool = False,
+        block_conv_in: float = 0.5,
+        block_conv_out: float = 0.5,
+        block_norm_out: float = 0.5,
+        block_0: float = 0.5,
+        block_1: float = 0.5,
+        block_2: float = 0.5,
+        block_3: float = 0.5,
+        block_mid: float = 0.5,
+        device: str = "cpu",
+        dry_run: bool = False,
+        vae_c: Optional[Any] = None,
+        reference_image: Optional[torch.Tensor] = None,
+        recipe_in: str = "",
+    ) -> Tuple[Any, str, str, str]:
+
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor)
+            or reference_image.ndim != 4
+            or reference_image.shape[-1] not in (3, 4)
+        ):
+            raise ValueError(
+                "VAEMergeMEC: reference_image must be IMAGE [B,H,W,C], "
+                f"got {tuple(getattr(reference_image, 'shape', ()))}"
+            )
+
+        with torch.inference_mode():
+            return self._merge_impl(
+                vae_a, vae_b, merge_mode, alpha, beta, brightness, contrast,
+                use_blocks, auto_alpha, block_conv_in, block_conv_out, block_norm_out,
+                block_0, block_1, block_2, block_3, block_mid, device, dry_run,
+                vae_c, reference_image, recipe_in,
+            )
+
+    def _merge_impl(
         self,
         vae_a: Any,
         vae_b: Any,

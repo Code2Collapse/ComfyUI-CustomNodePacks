@@ -46,6 +46,8 @@ from .stabilization_utils import (
     motion_adaptive_temporal_smooth,
 )
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC")
 
 
@@ -492,6 +494,24 @@ class MotionMaskTrackerMEC:
         "Outputs motion mask + per-frame intensity score."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, images, camera_compensation, stabilization_method,
+                   detection_mode, pixel_diff_enabled, pixel_diff_threshold,
+                   flow_enabled, flow_threshold, flow_algorithm,
+                   bg_sub_enabled, bg_model_frames, bg_sub_threshold,
+                   hist_enabled, hist_grid_size, hist_threshold,
+                   combine_method, grow_pixels, min_region_size,
+                   temporal_smooth, **kwargs):
+        return hash_args_and_kwargs(
+            images, camera_compensation, stabilization_method,
+            detection_mode, pixel_diff_enabled, pixel_diff_threshold,
+            flow_enabled, flow_threshold, flow_algorithm,
+            bg_sub_enabled, bg_model_frames, bg_sub_threshold,
+            hist_enabled, hist_grid_size, hist_threshold,
+            combine_method, grow_pixels, min_region_size,
+            temporal_smooth, **kwargs,
+        )
+
     def execute(self, images: torch.Tensor,
                 camera_compensation: bool, stabilization_method: str,
                 detection_mode: str,
@@ -503,6 +523,9 @@ class MotionMaskTrackerMEC:
                 grow_pixels: float, min_region_size: int,
                 temporal_smooth: bool) -> tuple:
 
+        if not isinstance(images, torch.Tensor) or images.ndim != 4:
+            raise ValueError("MotionMaskTrackerMEC expects IMAGE tensor [B,H,W,C]")
+
         B, H, W, C = images.shape
         device = images.device
 
@@ -510,7 +533,7 @@ class MotionMaskTrackerMEC:
             empty_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
             return (empty_mask, 0.0, "[MEC] MotionMaskTracker: need >= 2 frames for motion detection.")
 
-        with torch.no_grad():
+        with torch.inference_mode():
             # ── Camera motion compensation ────────────────────────────
             camera_info = ""
             motion_magnitudes = None

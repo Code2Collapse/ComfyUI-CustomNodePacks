@@ -27,6 +27,8 @@ from typing import Dict, List, Tuple, Optional, Any
 import torch
 import torch.nn.functional as F
 
+from ._is_changed_util import hash_args_and_kwargs
+
 try:
     import cv2
     import numpy as np
@@ -965,6 +967,56 @@ class InpaintCropProMEC:
     DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). "
                    "Pair with Inpaint Stitch Pro (C2C).")
 
+    @classmethod
+    def IS_CHANGED(cls, image, downscale_algorithm, upscale_algorithm,
+                   preresize, preresize_mode,
+                   preresize_min_width, preresize_min_height,
+                   preresize_max_width, preresize_max_height,
+                   mask_fill_holes, mask_expand_pixels, mask_invert,
+                   mask_blend_pixels, mask_hipass_filter,
+                   extend_for_outpainting,
+                   extend_up_factor, extend_down_factor,
+                   extend_left_factor, extend_right_factor,
+                   context_from_mask_extend_factor,
+                   auto_context_factor,
+                   aspect_preset,
+                   output_resize_to_target_size,
+                   output_target_width, output_target_height, output_padding,
+                   device_mode,
+                   wan_align_multiple, wan_temporal_smooth_frames,
+                   wan_stable_crop, wan_mask_polarity,
+                   inpaint_mask_mode, stitch_blend_mode, blend_radius,
+                   video_stable_temporal_sigma, video_stable_dilate_px,
+                   video_stable_blur_sigma,
+                   fill_masked_area,
+                   mask=None, optional_context_mask=None,
+                   roto_quality=False, **kwargs):
+        return hash_args_and_kwargs(
+            image, downscale_algorithm, upscale_algorithm,
+            preresize, preresize_mode,
+            preresize_min_width, preresize_min_height,
+            preresize_max_width, preresize_max_height,
+            mask_fill_holes, mask_expand_pixels, mask_invert,
+            mask_blend_pixels, mask_hipass_filter,
+            extend_for_outpainting,
+            extend_up_factor, extend_down_factor,
+            extend_left_factor, extend_right_factor,
+            context_from_mask_extend_factor,
+            auto_context_factor,
+            aspect_preset,
+            output_resize_to_target_size,
+            output_target_width, output_target_height, output_padding,
+            device_mode,
+            wan_align_multiple, wan_temporal_smooth_frames,
+            wan_stable_crop, wan_mask_polarity,
+            inpaint_mask_mode, stitch_blend_mode, blend_radius,
+            video_stable_temporal_sigma, video_stable_dilate_px,
+            video_stable_blur_sigma,
+            fill_masked_area,
+            mask, optional_context_mask,
+            roto_quality, **kwargs,
+        )
+
     def inpaint_crop(self, image, downscale_algorithm, upscale_algorithm,
                      preresize, preresize_mode,
                      preresize_min_width, preresize_min_height,
@@ -988,6 +1040,64 @@ class InpaintCropProMEC:
                      mask=None, optional_context_mask=None,
                      roto_quality: bool = False):
 
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("InpaintCropProMEC expects IMAGE tensor [B,H,W,C]")
+        for _label, _m in (("mask", mask), ("optional_context_mask", optional_context_mask)):
+            if _m is not None and (
+                not isinstance(_m, torch.Tensor) or _m.ndim not in (2, 3)
+            ):
+                raise ValueError(
+                    f"InpaintCropProMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
+                )
+
+        with torch.inference_mode():
+            return self._inpaint_crop_core(
+                image, downscale_algorithm, upscale_algorithm,
+                preresize, preresize_mode,
+                preresize_min_width, preresize_min_height,
+                preresize_max_width, preresize_max_height,
+                mask_fill_holes, mask_expand_pixels, mask_invert,
+                mask_blend_pixels, mask_hipass_filter,
+                extend_for_outpainting,
+                extend_up_factor, extend_down_factor,
+                extend_left_factor, extend_right_factor,
+                context_from_mask_extend_factor,
+                auto_context_factor,
+                aspect_preset,
+                output_resize_to_target_size,
+                output_target_width, output_target_height, output_padding,
+                device_mode,
+                wan_align_multiple, wan_temporal_smooth_frames,
+                wan_stable_crop, wan_mask_polarity,
+                inpaint_mask_mode, stitch_blend_mode, blend_radius,
+                video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
+                fill_masked_area,
+                mask, optional_context_mask,
+                roto_quality,
+            )
+
+    def _inpaint_crop_core(self, image, downscale_algorithm, upscale_algorithm,
+                     preresize, preresize_mode,
+                     preresize_min_width, preresize_min_height,
+                     preresize_max_width, preresize_max_height,
+                     mask_fill_holes, mask_expand_pixels, mask_invert,
+                     mask_blend_pixels, mask_hipass_filter,
+                     extend_for_outpainting,
+                     extend_up_factor, extend_down_factor,
+                     extend_left_factor, extend_right_factor,
+                     context_from_mask_extend_factor,
+                     auto_context_factor,
+                     aspect_preset,
+                     output_resize_to_target_size,
+                     output_target_width, output_target_height, output_padding,
+                     device_mode,
+                     wan_align_multiple, wan_temporal_smooth_frames,
+                     wan_stable_crop, wan_mask_polarity,
+                     inpaint_mask_mode, stitch_blend_mode, blend_radius,
+                     video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
+                     fill_masked_area,
+                     mask=None, optional_context_mask=None,
+                     roto_quality: bool = False):
         image = image.clone()
         # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
         # Applied here (single point) so every downstream branch — single
@@ -1607,7 +1717,35 @@ class InpaintStitchProMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match."
 
+    @classmethod
+    def IS_CHANGED(cls, stitcher, inpainted_image,
+                   blend_mode_override="from_crop", color_match=False,
+                   stitch_temporal_sigma=0.0, stitch_dilate_px=0,
+                   roto_quality_override="from_crop", **kwargs):
+        return hash_args_and_kwargs(
+            stitcher, inpainted_image,
+            blend_mode_override, color_match,
+            stitch_temporal_sigma, stitch_dilate_px,
+            roto_quality_override, **kwargs,
+        )
+
     def inpaint_stitch(self, stitcher, inpainted_image,
+                       blend_mode_override="from_crop", color_match=False,
+                       stitch_temporal_sigma: float = 0.0,
+                       stitch_dilate_px: int = 0,
+                       roto_quality_override: str = "from_crop"):
+        if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.ndim != 4:
+            raise ValueError("InpaintStitchProMEC expects IMAGE tensor [B,H,W,C]")
+
+        with torch.inference_mode():
+            return self._inpaint_stitch_core(
+                stitcher, inpainted_image,
+                blend_mode_override, color_match,
+                stitch_temporal_sigma, stitch_dilate_px,
+                roto_quality_override,
+            )
+
+    def _inpaint_stitch_core(self, stitcher, inpainted_image,
                        blend_mode_override="from_crop", color_match=False,
                        stitch_temporal_sigma: float = 0.0,
                        stitch_dilate_px: int = 0,
@@ -1863,7 +2001,40 @@ class InpaintMaskPrepareMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite."
 
+    @classmethod
+    def IS_CHANGED(cls, mask, fill_holes, remove_small_regions, min_region_area,
+                   grow_pixels, inpaint_edge_mode, stitch_edge_mode,
+                   stitch_feather_radius, temporal_smooth, temporal_sigma,
+                   reference_image=None, **kwargs):
+        return hash_args_and_kwargs(
+            mask, fill_holes, remove_small_regions, min_region_area,
+            grow_pixels, inpaint_edge_mode, stitch_edge_mode,
+            stitch_feather_radius, temporal_smooth, temporal_sigma,
+            reference_image, **kwargs,
+        )
+
     def prepare_mask(self, mask: torch.Tensor, fill_holes: bool,
+                     remove_small_regions: bool, min_region_area: int,
+                     grow_pixels: int, inpaint_edge_mode: str,
+                     stitch_edge_mode: str, stitch_feather_radius: int,
+                     temporal_smooth: bool, temporal_sigma: float,
+                     reference_image: Optional[torch.Tensor] = None):
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("InpaintMaskPrepareMEC expects MASK tensor [H,W] or [B,H,W]")
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor) or reference_image.ndim != 4
+        ):
+            raise ValueError("InpaintMaskPrepareMEC reference_image expects IMAGE [B,H,W,C]")
+
+        with torch.inference_mode():
+            return self._prepare_mask_core(
+                mask, fill_holes, remove_small_regions, min_region_area,
+                grow_pixels, inpaint_edge_mode, stitch_edge_mode,
+                stitch_feather_radius, temporal_smooth, temporal_sigma,
+                reference_image,
+            )
+
+    def _prepare_mask_core(self, mask: torch.Tensor, fill_holes: bool,
                      remove_small_regions: bool, min_region_area: int,
                      grow_pixels: int, inpaint_edge_mode: str,
                      stitch_edge_mode: str, stitch_feather_radius: int,
@@ -1991,7 +2162,24 @@ class InpaintPasteBackMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Paste inpainted crop back using STITCHER, with optional feathered rectangle edges."
 
+    @classmethod
+    def IS_CHANGED(cls, stitcher, inpainted_image, upscale_method,
+                   feather_edges, feather_radius, **kwargs):
+        return hash_args_and_kwargs(
+            stitcher, inpainted_image, upscale_method,
+            feather_edges, feather_radius, **kwargs,
+        )
+
     def paste_back(self, stitcher, inpainted_image, upscale_method, feather_edges, feather_radius):
+        if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.ndim != 4:
+            raise ValueError("InpaintPasteBackMEC expects IMAGE tensor [B,H,W,C]")
+
+        with torch.inference_mode():
+            return self._paste_back_core(
+                stitcher, inpainted_image, upscale_method, feather_edges, feather_radius,
+            )
+
+    def _paste_back_core(self, stitcher, inpainted_image, upscale_method, feather_edges, feather_radius):
         if not isinstance(stitcher, dict):
             raise ValueError("InpaintPasteBackMEC: stitcher must be a dict from InpaintCropProMEC")
 

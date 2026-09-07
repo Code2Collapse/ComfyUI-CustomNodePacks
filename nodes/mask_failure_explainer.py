@@ -22,6 +22,7 @@ No models. Pure tensor math. VRAM Tier 1.
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
 import torch
@@ -876,6 +877,13 @@ class MaskFailureExplainerMEC:
         "and suggested masking method."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, mask, ring_width=5, blur_threshold=50.0,
+                   brightness_threshold=0.15, **kwargs):
+        return hash_args_and_kwargs(
+            image, mask, ring_width, blur_threshold, brightness_threshold, **kwargs,
+        )
+
     def analyze(
         self,
         image: torch.Tensor,
@@ -884,9 +892,15 @@ class MaskFailureExplainerMEC:
         blur_threshold: float = 50.0,
         brightness_threshold: float = 0.15,
     ) -> tuple[str, torch.Tensor, float, str]:
-        with _PB.session("MaskFailure"):
-            return self._analyze_impl(image, mask, ring_width, blur_threshold,
-                                      brightness_threshold)
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("MaskFailureExplainerMEC expects IMAGE tensor [B,H,W,C]")
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("MaskFailureExplainerMEC expects MASK tensor [H,W] or [B,H,W]")
+
+        with torch.inference_mode():
+            with _PB.session("MaskFailure"):
+                return self._analyze_impl(image, mask, ring_width, blur_threshold,
+                                          brightness_threshold)
 
     def _analyze_impl(
         self,

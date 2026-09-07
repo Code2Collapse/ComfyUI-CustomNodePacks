@@ -6,6 +6,7 @@ offset, and feather with sub-pixel precision.
 import torch
 import torch.nn.functional as F
 
+from ._is_changed_util import hash_args_and_kwargs
 
 
 class MaskTransformXY:
@@ -43,6 +44,13 @@ class MaskTransformXY:
     CATEGORY = "C2C/Transform"
     DESCRIPTION = "Erode/expand mask independently on X & Y with blur, offset, feather, and threshold."
 
+    @classmethod
+    def IS_CHANGED(cls, mask, expand_x, expand_y, blur_x, blur_y, offset_x,
+                   offset_y, feather, threshold, invert, **kwargs):
+        return hash_args_and_kwargs(
+            mask, expand_x, expand_y, blur_x, blur_y, offset_x,
+            offset_y, feather, threshold, invert, **kwargs,
+        )
 
     # ── helpers ──────────────────────────────────────────────────────────
 
@@ -150,6 +158,17 @@ class MaskTransformXY:
     def transform(self, mask: torch.Tensor, expand_x: int, expand_y: int,
                   blur_x: float, blur_y: float, offset_x: int, offset_y: int,
                   feather: float, threshold: float, invert: bool):
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("MaskTransformXY expects MASK tensor [H,W] or [B,H,W]")
+        with torch.inference_mode():
+            return self._transform_impl(
+                mask, expand_x, expand_y, blur_x, blur_y, offset_x, offset_y,
+                feather, threshold, invert,
+            )
+
+    def _transform_impl(self, mask: torch.Tensor, expand_x: int, expand_y: int,
+                        blur_x: float, blur_y: float, offset_x: int, offset_y: int,
+                        feather: float, threshold: float, invert: bool):
         m = mask.clone()
         # morphological ops per axis
         m = self._morph_1d(m, expand_x, "x")

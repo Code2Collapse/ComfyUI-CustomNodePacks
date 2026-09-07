@@ -19,9 +19,9 @@ Pure tensor math. No cv2 or model dependencies. VRAM Tier 1.
 from __future__ import annotations
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import gc
-import hashlib
 import torch
 
 # ITU-R BT.709 luminance coefficients
@@ -154,10 +154,7 @@ class LuminanceKeyerMEC:
 
     @classmethod
     def IS_CHANGED(cls, image, mode, low, high, falloff, gamma, invert, **kwargs):
-        h = hashlib.md5()
-        h.update(image.cpu().numpy().tobytes())
-        h.update(f"{mode}:{low}:{high}:{falloff}:{gamma}:{invert}".encode())
-        return h.hexdigest()
+        return hash_args_and_kwargs(image, mode, low, high, falloff, gamma, invert, **kwargs)
 
     def key_luminance(
         self,
@@ -169,9 +166,12 @@ class LuminanceKeyerMEC:
         falloff: float,
         invert: bool,
     ) -> tuple[torch.Tensor, str]:
-        with _PB.session("LumaKeyer"):
-            return self._key_luminance_impl(image, mode, low, high, gamma,
-                                            falloff, invert)
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("LuminanceKeyerMEC expects IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            with _PB.session("LumaKeyer"):
+                return self._key_luminance_impl(image, mode, low, high, gamma,
+                                                falloff, invert)
 
     def _key_luminance_impl(
         self,

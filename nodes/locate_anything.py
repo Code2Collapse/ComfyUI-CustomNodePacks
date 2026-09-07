@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.LocateAnything")
 
 
@@ -48,6 +50,15 @@ class LocateAnythingGroundingMEC:
     CATEGORY = "MaskEnhancedControl/Grounding"
 
     @classmethod
+    def IS_CHANGED(cls, image, prompt, model_path="nvidia/LocateAnything-3B",
+                   generation_mode="hybrid", max_new_tokens=2048, device="cuda",
+                   confidence_threshold=0.0, **kwargs):
+        return hash_args_and_kwargs(
+            image, prompt, model_path, generation_mode, max_new_tokens,
+            device, confidence_threshold, **kwargs,
+        )
+
+    @classmethod
     def _load_model(cls, model_path: str, device: str):
         if model_path in cls._model_cache:
             return cls._model_cache[model_path]
@@ -75,7 +86,36 @@ class LocateAnythingGroundingMEC:
         device: str = "cuda",
         confidence_threshold: float = 0.0,
     ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError(
+                "LocateAnythingGroundingMEC expects IMAGE tensor [B,H,W,C]"
+            )
+        with torch.inference_mode():
+            return self._run_impl(
+                image, prompt, model_path, generation_mode, max_new_tokens,
+                device, confidence_threshold,
+            )
+
+    def _run_impl(
+        self,
+        image: torch.Tensor,
+        prompt: str,
+        model_path: str = "nvidia/LocateAnything-3B",
+        generation_mode: str = "hybrid",
+        max_new_tokens: int = 2048,
+        device: str = "cuda",
+        confidence_threshold: float = 0.0,
+    ):
         from PIL import Image
+
+        # Cross-platform safety: the device widget defaults to "cuda", but on a
+        # CPU-only box (no NVIDIA driver / hardware accel off) `.to("cuda")` raises.
+        # Resolve to CPU when CUDA is unavailable so the node degrades gracefully
+        # instead of crashing — and both the model and the input tensors use the
+        # same resolved device. Verified statically; no GPU needed to confirm.
+        # Source: https://pytorch.org/docs/stable/generated/torch.cuda.is_available.html
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
 
         B = image.shape[0]
         all_bboxes: List[List[Dict[str, Any]]] = []
@@ -203,36 +243,45 @@ class LocateAnythingToSAMMEC:
     FUNCTION = "run"
     CATEGORY = "MaskEnhancedControl/Grounding"
 
+    @classmethod
+    def IS_CHANGED(cls, bboxes, image, expand_ratio=0.05, **kwargs):
+        return hash_args_and_kwargs(bboxes, image, expand_ratio, **kwargs)
+
     def run(
         self,
         bboxes: List[Dict[str, Any]],
         image: torch.Tensor,
         expand_ratio: float = 0.05,
     ):
-        B, H, W = image.shape[0], image.shape[1], image.shape[2]
-        mask = torch.zeros((B, H, W), dtype=torch.float32)
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError(
+                "LocateAnythingToSAMMEC expects IMAGE tensor [B,H,W,C]"
+            )
+        with torch.inference_mode():
+            B, H, W = image.shape[0], image.shape[1], image.shape[2]
+            mask = torch.zeros((B, H, W), dtype=torch.float32)
 
-        for box in bboxes:
-            x1, y1 = float(box["x1"]), float(box["y1"])
-            x2, y2 = float(box["x2"]), float(box["y2"])
+            for box in bboxes:
+                x1, y1 = float(box["x1"]), float(box["y1"])
+                x2, y2 = float(box["x2"]), float(box["y2"])
 
-            if expand_ratio > 0:
-                bw = x2 - x1
-                bh = y2 - y1
-                x1 = x1 - bw * expand_ratio
-                y1 = y1 - bh * expand_ratio
-                x2 = x2 + bw * expand_ratio
-                y2 = y2 + bh * expand_ratio
+                if expand_ratio > 0:
+                    bw = x2 - x1
+                    bh = y2 - y1
+                    x1 = x1 - bw * expand_ratio
+                    y1 = y1 - bh * expand_ratio
+                    x2 = x2 + bw * expand_ratio
+                    y2 = y2 + bh * expand_ratio
 
-            ix1 = max(0, int(round(x1)))
-            iy1 = max(0, int(round(y1)))
-            ix2 = min(W, int(round(x2)))
-            iy2 = min(H, int(round(y2)))
+                ix1 = max(0, int(round(x1)))
+                iy1 = max(0, int(round(y1)))
+                ix2 = min(W, int(round(x2)))
+                iy2 = min(H, int(round(y2)))
 
-            if ix2 > ix1 and iy2 > iy1:
-                mask[:, iy1:iy2, ix1:ix2] = 1.0
+                if ix2 > ix1 and iy2 > iy1:
+                    mask[:, iy1:iy2, ix1:ix2] = 1.0
 
-        return (mask,)
+            return (mask,)
 
 
 NODE_CLASS_MAPPINGS = {

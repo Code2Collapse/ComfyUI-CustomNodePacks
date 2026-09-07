@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
+from .._is_changed_util import hash_args_and_kwargs
 from .matters import all_matters, get_matter_cls
 from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
@@ -512,6 +513,22 @@ class MaskOpsMEC:
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, image, segmenter, matter, model, matter_model,
+                   precision, attention, offload, subject_preset,
+                   trimap_dilate, trimap_erode, edge_radius,
+                   individual_objects, tracking_direction, frame_annotation,
+                   object_id, max_frames_to_track, memory_size, start_frame,
+                   end_frame, auto_download, seed, **kwargs):
+        return hash_args_and_kwargs(
+            image, segmenter, matter, model, matter_model,
+            precision, attention, offload, subject_preset,
+            trimap_dilate, trimap_erode, edge_radius,
+            individual_objects, tracking_direction, frame_annotation,
+            object_id, max_frames_to_track, memory_size, start_frame,
+            end_frame, auto_download, seed, **kwargs,
+        )
+
     # ------------------------------------------------------------------
     def _resolve_mode(self, mode: str, B: int, has_pts: bool, has_bbox: bool,
                       has_text: bool, supports: set) -> str:
@@ -561,6 +578,83 @@ class MaskOpsMEC:
                 enable_diagnose=True, diag_ring_width=5,
                 diag_blur_threshold=50.0, diag_brightness_threshold=0.15,
                 # NEW: robust propagation (folded-in pipeline)
+                robust_propagation=False,
+                robust_confidence_threshold=0.65,
+                robust_reanchor_method="blend",
+                robust_blend_alpha=0.7,
+                positive_coords="", negative_coords="",
+                pos_points="", neg_points="", pos_bbox=None, neg_bbox=None,
+                normal_bbox=None, text_prompt="", external_mask=None,
+                external_trimap=None, holdout_mask=None, core_mask=None):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("MaskOpsMEC expects IMAGE tensor [B,H,W,C]")
+        for _label, _m in (
+            ("external_mask", external_mask),
+            ("external_trimap", external_trimap),
+            ("holdout_mask", holdout_mask),
+            ("core_mask", core_mask),
+        ):
+            if _m is not None and (
+                not isinstance(_m, torch.Tensor) or _m.ndim not in (2, 3)
+            ):
+                raise ValueError(
+                    f"MaskOpsMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
+                )
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, segmenter, matter, model, matter_model,
+                precision, attention, offload, subject_preset,
+                trimap_dilate, trimap_erode, edge_radius,
+                individual_objects, tracking_direction, frame_annotation,
+                object_id, max_frames_to_track, memory_size, start_frame, end_frame,
+                auto_download, seed,
+                tta_flip, multiscale, post_refine,
+                refine_radius, refine_iterations,
+                despill, despill_strength, preserve_skin,
+                lightwrap_strength, lightwrap_radius,
+                edge_band_radius, premultiply,
+                enable_luma_key, luma_mode,
+                luma_low, luma_high, luma_gamma,
+                luma_falloff, luma_invert, luma_mix,
+                enable_advanced_trimap,
+                trimap_inner_scale, trimap_outer_scale,
+                trimap_smooth, trimap_threshold,
+                auto_quality, auto_disambiguate,
+                quality_mode,
+                enable_diagnose, diag_ring_width,
+                diag_blur_threshold, diag_brightness_threshold,
+                robust_propagation,
+                robust_confidence_threshold,
+                robust_reanchor_method,
+                robust_blend_alpha,
+                positive_coords, negative_coords,
+                pos_points, neg_points, pos_bbox, neg_bbox,
+                normal_bbox, text_prompt, external_mask,
+                external_trimap, holdout_mask, core_mask,
+            )
+
+    def _execute_impl(self, image, segmenter, matter, model, matter_model,
+                precision, attention, offload, subject_preset,
+                trimap_dilate, trimap_erode, edge_radius,
+                individual_objects, tracking_direction, frame_annotation,
+                object_id, max_frames_to_track, memory_size, start_frame, end_frame,
+                auto_download, seed,
+                tta_flip=False, multiscale=False, post_refine="none",
+                refine_radius=8, refine_iterations=5,
+                despill="off", despill_strength=1.0, preserve_skin=True,
+                lightwrap_strength=0.0, lightwrap_radius=8,
+                edge_band_radius=4, premultiply=True,
+                enable_luma_key=False, luma_mode="auto",
+                luma_low=0.0, luma_high=1.0, luma_gamma=1.0,
+                luma_falloff=1.0, luma_invert=False, luma_mix="hint_only",
+                enable_advanced_trimap=False,
+                trimap_inner_scale=1.0, trimap_outer_scale=1.5,
+                trimap_smooth=0.0, trimap_threshold=0.5,
+                auto_quality=True, auto_disambiguate=True,
+                quality_mode="balanced",
+                enable_diagnose=True, diag_ring_width=5,
+                diag_blur_threshold=50.0, diag_brightness_threshold=0.15,
                 robust_propagation=False,
                 robust_confidence_threshold=0.65,
                 robust_reanchor_method="blend",

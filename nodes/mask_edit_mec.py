@@ -29,6 +29,7 @@ import json
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
 from .mask_transform_xy import MaskTransformXY
 from .mask_draw_frame import MaskDrawFrame, DrawShapeMEC
 from .points_mask_editor import PointsMaskEditor
@@ -212,8 +213,77 @@ class MaskEditMEC:
         "All outputs are normalized to the same 8-port schema."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, mode, expand_x, expand_y, blur_x, blur_y, offset_x,
+                   offset_y, feather, threshold, invert, width, height, shape,
+                   cx, cy, radius, size_w, size_h, rx, ry, top_left_x,
+                   top_left_y, x2, y2, thickness, outer_r, inner_r, num_points,
+                   corner_radius, cross_size, arrow_length, head_length,
+                   head_width, points_json_shape, value, rotation, operation,
+                   batch_size, shape_params_json, editor_data, default_radius,
+                   softness, normalize, bboxes_json, smoothing_radius,
+                   smoothing_method, alpha, mask=None, reference_image=None,
+                   existing_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            mode, expand_x, expand_y, blur_x, blur_y, offset_x, offset_y,
+            feather, threshold, invert, width, height, shape, cx, cy, radius,
+            size_w, size_h, rx, ry, top_left_x, top_left_y, x2, y2, thickness,
+            outer_r, inner_r, num_points, corner_radius, cross_size,
+            arrow_length, head_length, head_width, points_json_shape, value,
+            rotation, operation, batch_size, shape_params_json, editor_data,
+            default_radius, softness, normalize, bboxes_json, smoothing_radius,
+            smoothing_method, alpha, mask, reference_image, existing_mask,
+            **kwargs,
+        )
+
     # ──────────────────────────────────────────────────────────────────
     def execute(self, mode, expand_x, expand_y, blur_x, blur_y, offset_x,
+                offset_y, feather, threshold, invert,
+                width, height,
+                shape, cx, cy, radius, size_w, size_h, rx, ry,
+                top_left_x, top_left_y, x2, y2, thickness,
+                outer_r, inner_r, num_points, corner_radius, cross_size,
+                arrow_length, head_length, head_width, points_json_shape,
+                value, rotation, operation, batch_size,
+                shape_params_json,
+                editor_data, default_radius, softness, normalize,
+                bboxes_json, smoothing_radius, smoothing_method, alpha,
+                mask=None, reference_image=None, existing_mask=None):
+
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor)
+            or reference_image.ndim != 4
+        ):
+            raise ValueError(
+                "MaskEditMEC reference_image must be IMAGE tensor [B,H,W,C]"
+            )
+        if mask is not None and (
+            not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3)
+        ):
+            raise ValueError("MaskEditMEC expects MASK tensor [H,W] or [B,H,W]")
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor)
+            or existing_mask.ndim not in (2, 3)
+        ):
+            raise ValueError(
+                "MaskEditMEC existing_mask must be MASK tensor [H,W] or [B,H,W]"
+            )
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                mode, expand_x, expand_y, blur_x, blur_y, offset_x,
+                offset_y, feather, threshold, invert, width, height,
+                shape, cx, cy, radius, size_w, size_h, rx, ry,
+                top_left_x, top_left_y, x2, y2, thickness,
+                outer_r, inner_r, num_points, corner_radius, cross_size,
+                arrow_length, head_length, head_width, points_json_shape,
+                value, rotation, operation, batch_size, shape_params_json,
+                editor_data, default_radius, softness, normalize,
+                bboxes_json, smoothing_radius, smoothing_method, alpha,
+                mask, reference_image, existing_mask,
+            )
+
+    def _execute_impl(self, mode, expand_x, expand_y, blur_x, blur_y, offset_x,
                 offset_y, feather, threshold, invert,
                 width, height,
                 shape, cx, cy, radius, size_w, size_h, rx, ry,

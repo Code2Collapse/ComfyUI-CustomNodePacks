@@ -49,6 +49,8 @@ from typing import List, Tuple
 import numpy as np
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MEC.spline_mask_tracker")
 
 try:
@@ -282,8 +284,36 @@ class SplineMaskTrackerMEC:
         "pixel motion. No model weights, CPU-only."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, image, keyframes_json, closed, samples_per_segment,
+                   tracking_weight, klt_window, feather_radius, stroke_width,
+                   **kwargs):
+        return hash_args_and_kwargs(
+            image, keyframes_json, closed, samples_per_segment,
+            tracking_weight, klt_window, feather_radius, stroke_width, **kwargs,
+        )
+
     # -----------------------------------------------------------------
     def execute(
+        self,
+        image: torch.Tensor,
+        keyframes_json: str,
+        closed: bool,
+        samples_per_segment: int,
+        tracking_weight: float,
+        klt_window: int,
+        feather_radius: float,
+        stroke_width: int,
+    ) -> Tuple[torch.Tensor, str]:
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SplineMaskTrackerMEC expects IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, keyframes_json, closed, samples_per_segment,
+                tracking_weight, klt_window, feather_radius, stroke_width,
+            )
+
+    def _execute_impl(
         self,
         image: torch.Tensor,
         keyframes_json: str,

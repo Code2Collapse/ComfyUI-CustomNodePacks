@@ -21,6 +21,8 @@ import base64
 from io import BytesIO
 from PIL import Image as PILImage
 
+from ._is_changed_util import hash_args_and_kwargs
+
 
 class PointsMaskEditor:
     """Unified points + bounding-box editor with sub-pixel accuracy.
@@ -93,6 +95,14 @@ class PointsMaskEditor:
         "points_json / bbox_json → SAMMaskGeneratorMEC\n"
         "primary_bbox → BBox pipeline nodes [x, y, w, h]"
     )
+
+    @classmethod
+    def IS_CHANGED(cls, width, height, editor_data, default_radius, softness,
+                   normalize, reference_image=None, existing_mask=None, **kwargs):
+        return hash_args_and_kwargs(
+            width, height, editor_data, default_radius, softness, normalize,
+            reference_image, existing_mask, **kwargs,
+        )
 
     # ══════════════════════════════════════════════════════════════════
     #  Private Helpers
@@ -314,6 +324,31 @@ class PointsMaskEditor:
     def generate(self, width: int, height: int, editor_data: str,
                  default_radius: float, softness: float, normalize: bool,
                  reference_image=None, existing_mask=None):
+
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor)
+            or reference_image.ndim != 4
+        ):
+            raise ValueError(
+                "PointsMaskEditor reference_image must be IMAGE tensor [B,H,W,C]"
+            )
+        if existing_mask is not None and (
+            not isinstance(existing_mask, torch.Tensor)
+            or existing_mask.ndim not in (2, 3)
+        ):
+            raise ValueError(
+                "PointsMaskEditor existing_mask must be MASK tensor [H,W] or [B,H,W]"
+            )
+
+        with torch.inference_mode():
+            return self._generate_impl(
+                width, height, editor_data, default_radius, softness, normalize,
+                reference_image, existing_mask,
+            )
+
+    def _generate_impl(self, width: int, height: int, editor_data: str,
+                       default_radius: float, softness: float, normalize: bool,
+                       reference_image=None, existing_mask=None):
 
         # Resolve dimensions from image
         if reference_image is not None:

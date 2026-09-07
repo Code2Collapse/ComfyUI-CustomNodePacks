@@ -155,7 +155,16 @@ def _gguf_path(quant: str = _DEFAULT_QUANT) -> Optional[str]:
                 continue
     except Exception:
         pass
-    return None
+    # W5b fix: exact-filename matching left this AI tier dead even when a
+    # perfectly good model was installed (the SAME trap local_llm.py had —
+    # e.g. the Tier-2 Qwen3.5-4B-OpusDistill downloaded via C2C AI settings
+    # doesn't match the registry's quant filenames). Fall back to the shared
+    # any-Qwen/any-GGUF resolver so one downloaded model powers everything.
+    try:
+        from .local_llm import _resolve_any_model
+        return _resolve_any_model(None)
+    except Exception:
+        return None
 
 
 def _get_all_node_classes() -> dict:
@@ -256,37 +265,68 @@ except Exception:  # pragma: no cover - safety net
 _REQUIRED_KEYS = {"headline", "purpose", "inputs", "outputs"}
 
 
+def _looks_like_schema_echo(obj: dict) -> bool:
+    """Reasoning models often RESTATE the required schema (with its
+    '<10 words max>' placeholders) in their thinking before answering.
+    That echo validates key-wise, so reject any object whose string
+    values still carry angle-bracket placeholders or '...' stubs."""
+    for v in (obj.get("headline"), obj.get("purpose"), obj.get("when_to_use")):
+        if isinstance(v, str) and (("<" in v and ">" in v) or v.strip() in ("...", "")):
+            return True
+    for arr in (obj.get("inputs"), obj.get("outputs")):
+        if isinstance(arr, list):
+            for it in arr:
+                if isinstance(it, dict) and it.get("name") in ("...", "<name>"):
+                    return True
+    return False
+
+
+def _iter_json_objects(text: str):
+    """Yield every top-level balanced {...} slice in order."""
+    i = 0
+    n = len(text)
+    while i < n:
+        start = text.find("{", i)
+        if start == -1:
+            return
+        depth = 0
+        end = -1
+        for j in range(start, n):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j + 1
+                    break
+        if end == -1:
+            return
+        yield text[start:end]
+        i = end
+
+
 def _parse_llm_json(raw: str) -> Optional[dict]:
-    """Strip thinking tokens, find first JSON object, validate keys."""
+    """Strip thinking tokens, then pick the LAST valid non-placeholder JSON.
+    (First-object extraction returned the model's echoed schema template —
+    the same first-vs-last trap as the CAUSE:/FIXES: answer stripper.)"""
     text = _THINK_RE.sub("", raw).strip()
     # Strip markdown fences if present
     text = re.sub(r"^```[a-z]*\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
-    # Find JSON object boundaries
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    end = -1
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end == -1:
-        return None
-    try:
-        obj = json.loads(text[start:end])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    if not _REQUIRED_KEYS.issubset(obj.keys()):
-        return None
-    return obj
+    best: Optional[dict] = None
+    fallback: Optional[dict] = None
+    for chunk in _iter_json_objects(text):
+        try:
+            obj = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict) or not _REQUIRED_KEYS.issubset(obj.keys()):
+            continue
+        if _looks_like_schema_echo(obj):
+            fallback = obj      # keep as a last resort
+            continue
+        best = obj              # later valid objects win (the real answer)
+    return best or fallback
 
 
 # ═══════════════════════════════════════════════════════════════════════════

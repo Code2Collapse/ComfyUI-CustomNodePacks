@@ -140,7 +140,40 @@ _KNOWN_EXT_RE = re.compile(
 #: destroy a real name.
 _SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$", __import__("re").IGNORECASE)
 #: The trailing frame token: .1001  _0042  .####  .%04d  (end of stem only).
-_SEQ_FRAME_RE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
+#:
+#: THREE variants, because one rule cannot serve both conventions (2026-08-29).
+#: The 2026-08-01 fix stripped any 2-8 digit trailing token so a numbered
+#: sequence groups under one folder. That also ate SHOT NUMBERS: shot_010.png,
+#: shot_020.png and shot_030.png all collapsed to "shot", silently mixing
+#: unrelated plates into one sequence. It also contradicted _SOURCE_VERSION_RE
+#: below, which was deliberately anchored so a shot number is NOT eaten.
+#:
+#: The two failure modes cost very different amounts:
+#:   * false GROUPING mixes unrelated plates — destructive and invisible;
+#:   * false SPLITTING puts a sequence in per-frame folders — visible, harmless.
+#: So the default errs toward preserving identity.
+#:
+#: Explicit frame syntax (#### runs, %0Nd printf tokens) is ALWAYS stripped —
+#: it never appears in a shot-named still. A bare digit run is judged by width:
+#: >=4 digits reads as a frame index (plate.0001.png), <=3 as a shot number
+#: (shot_010.png). A convention, not a law — shot_0100 and plate.001 still
+#: misfire, which is what `numbered_still_mode` is for.
+_SEQ_FRAME_RE_AUTO = __import__("re").compile(r"[._-](\d{4,8}|#{2,8}|%0?\d*d)$")
+#: `sequence` — the exact pre-2026-08-29 behaviour, for bare-numbered stills.
+_SEQ_FRAME_RE_SEQUENCE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
+#: `identity` — explicit frame syntax only; never touch bare digits.
+_SEQ_FRAME_RE_IDENTITY = __import__("re").compile(r"[._-](#{2,8}|%0?\d*d)$")
+
+NUMBERED_STILL_MODES = ("auto", "sequence", "identity")
+
+_SEQ_FRAME_RE_BY_MODE = {
+    "auto": _SEQ_FRAME_RE_AUTO,
+    "sequence": _SEQ_FRAME_RE_SEQUENCE,
+    "identity": _SEQ_FRAME_RE_IDENTITY,
+}
+
+#: Back-compat alias for any external caller that imported the old name.
+_SEQ_FRAME_RE = _SEQ_FRAME_RE_AUTO
 
 
 # Trailing version token inside a source filename stem, e.g. the "_v001"
@@ -196,7 +229,9 @@ def _resolve_source_path(source_path: str) -> str:
     return sp
 
 
-def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
+def _resolve_stem_and_ext(
+    raw: str, fallback_ext: str = "", numbered_still_mode: str = "auto"
+) -> tuple[str, str]:
     """Split a filename or path into (stem, extension).
 
     *raw* may be a bare stem (``C1799.MP4 Comp 1``), a filename with a
@@ -231,7 +266,10 @@ def _resolve_stem_and_ext(raw: str, fallback_ext: str = "") -> tuple[str, str]:
         # is what a sequence uses; a movie container never carries a frame
         # token, and stripping digits off e.g. "take_002.mov" would be wrong.
         if _SEQ_EXT_RE.match(suffix):
-            stem = _SEQ_FRAME_RE.sub("", stem)
+            frame_re = _SEQ_FRAME_RE_BY_MODE.get(
+                str(numbered_still_mode or "auto").strip().lower(), _SEQ_FRAME_RE_AUTO
+            )
+            stem = frame_re.sub("", stem)
         return stem, suffix
 
     # Interior dots only — keep full basename; extension from companion.
@@ -380,6 +418,20 @@ class FolderIncrementer:
                                "  first_segment — keep only the first chunk before . or _ (clip)\n"
                                "The original file extension is preserved on output_filename.",
                 }),
+                "numbered_still_mode": (NUMBERED_STILL_MODES, {
+                    "default": "auto",
+                    "tooltip": "What a trailing number on a STILL means (png/exr/dpx/tif...):\n"
+                               "  auto     — >=4 digits is a frame index and is stripped\n"
+                               "             (plate.0001.png -> plate); <=3 digits is a shot\n"
+                               "             number and is KEPT (shot_010.png -> shot_010).\n"
+                               "  sequence — always strip a trailing 2-8 digit number. Use when\n"
+                               "             your frames are bare-numbered (plate_01.png ...).\n"
+                               "  identity — never strip bare digits; only #### and %04d go.\n"
+                               "#### and %04d are stripped in every mode — they are never part\n"
+                               "of a real name. auto errs toward KEEPING the number, because\n"
+                               "over-grouping silently mixes unrelated plates into one sequence,\n"
+                               "while over-splitting is merely inconvenient and visible.",
+                }),
             },
             "optional": {
                 "trigger": ("*", {
@@ -479,7 +531,10 @@ class FolderIncrementer:
         if folder_name_override:
             folder_name = _sanitize_folder_name(folder_name_override, fallback=label or "output")
         elif source_filename and not _looks_like_input_file(source_filename):
-            raw_stem, _ext = _resolve_stem_and_ext(source_filename, kwargs.get("source_extension", ""))
+            raw_stem, _ext = _resolve_stem_and_ext(
+                source_filename, kwargs.get("source_extension", ""),
+                kwargs.get("numbered_still_mode", "auto"),
+            )
             folder_name = _sanitize_folder_name(_format_source_name(raw_stem, name_format), fallback=label or "output")
         else:
             folder_name = _sanitize_folder_name(label, fallback="default")
@@ -498,6 +553,7 @@ class FolderIncrementer:
     def increment(self, prefix="v", padding=3, label="default",
                   date_format="MM-DD-YYYY", path_style="auto",
                   source_choice="auto", name_format="basename",
+                  numbered_still_mode="auto",
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", reserve_version=False,
@@ -540,7 +596,7 @@ class FolderIncrementer:
             raw_source = ""
 
         if raw_source:
-            raw_stem, ext = _resolve_stem_and_ext(raw_source, source_extension)
+            raw_stem, ext = _resolve_stem_and_ext(raw_source, source_extension, numbered_still_mode)
             name_no_ext = _format_source_name(raw_stem, name_format)
             derived_folder = name_no_ext
         else:

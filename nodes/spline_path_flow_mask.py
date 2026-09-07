@@ -34,6 +34,8 @@ from typing import List, Tuple
 import numpy as np
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 try:
     import cv2
     HAS_CV2 = True
@@ -627,6 +629,21 @@ class SplinePathFlowMaskMEC:
         "animation. Embedded spline editor optional."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, spline_data, pattern, width, height, thickness,
+                   amplitude, frequency, turbulence, turbulence_scale,
+                   edge_softness, taper_start, taper_end, frames,
+                   animation_speed, spline_type, samples_per_segment, closed,
+                   invert, seed, flow_direction="forward", mod_decay=0.0,
+                   use_embedded_editor=True, image=None, **kwargs):
+        return hash_args_and_kwargs(
+            spline_data, pattern, width, height, thickness, amplitude,
+            frequency, turbulence, turbulence_scale, edge_softness,
+            taper_start, taper_end, frames, animation_speed, spline_type,
+            samples_per_segment, closed, invert, seed, flow_direction,
+            mod_decay, use_embedded_editor, image, **kwargs,
+        )
+
     def execute(self, spline_data: str, pattern: str,
                 width: int, height: int,
                 thickness: float, amplitude: float, frequency: float,
@@ -639,6 +656,33 @@ class SplinePathFlowMaskMEC:
                 mod_decay: float = 0.0,
                 use_embedded_editor: bool = True,
                 image: torch.Tensor = None):
+        if image is not None and (
+            not isinstance(image, torch.Tensor) or image.ndim != 4
+        ):
+            raise ValueError(
+                "SplinePathFlowMaskMEC optional image must be IMAGE [B,H,W,C]"
+            )
+        with torch.inference_mode():
+            return self._execute_impl(
+                spline_data, pattern, width, height, thickness, amplitude,
+                frequency, turbulence, turbulence_scale, edge_softness,
+                taper_start, taper_end, frames, animation_speed, spline_type,
+                samples_per_segment, closed, invert, seed, flow_direction,
+                mod_decay, use_embedded_editor, image,
+            )
+
+    def _execute_impl(self, spline_data: str, pattern: str,
+                      width: int, height: int,
+                      thickness: float, amplitude: float, frequency: float,
+                      turbulence: float, turbulence_scale: float,
+                      edge_softness: float, taper_start: float, taper_end: float,
+                      frames: int, animation_speed: float,
+                      spline_type: str, samples_per_segment: int,
+                      closed: bool, invert: bool, seed: int,
+                      flow_direction: str = "forward",
+                      mod_decay: float = 0.0,
+                      use_embedded_editor: bool = True,
+                      image: torch.Tensor = None):
 
         # Resolve dimensions: prefer the connected image when present.
         if image is not None and image.dim() == 4:

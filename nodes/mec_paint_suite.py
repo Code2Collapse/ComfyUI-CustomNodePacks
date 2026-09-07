@@ -29,6 +29,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from ._is_changed_util import hash_args_and_kwargs
+
 logger = logging.getLogger("MEC.Paint")
 
 try:
@@ -179,6 +181,18 @@ class MECAdvancedPaintCanvas:
     FUNCTION = "execute"
 
     @classmethod
+    def IS_CHANGED(cls, canvas_width, canvas_height, brush_type, brush_color,
+                   brush_opacity, brush_hardness, brush_size, mask_hardness,
+                   mask_expansion, mask_blur_radius, mask_blur_strength,
+                   canvas_data, reference_image=None, **kwargs):
+        return hash_args_and_kwargs(
+            canvas_width, canvas_height, brush_type, brush_color,
+            brush_opacity, brush_hardness, brush_size, mask_hardness,
+            mask_expansion, mask_blur_radius, mask_blur_strength,
+            canvas_data, reference_image, **kwargs,
+        )
+
+    @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
@@ -268,6 +282,29 @@ class MECAdvancedPaintCanvas:
                 brush_opacity, brush_hardness, brush_size,
                 mask_hardness, mask_expansion, mask_blur_radius,
                 mask_blur_strength, canvas_data, reference_image=None):
+
+        if reference_image is not None and (
+            not isinstance(reference_image, torch.Tensor)
+            or reference_image.ndim != 4
+            or reference_image.shape[-1] not in (3, 4)
+        ):
+            raise ValueError(
+                f"MECAdvancedPaintCanvas: reference_image must be IMAGE [B,H,W,C], "
+                f"got {tuple(getattr(reference_image, 'shape', ()))}"
+            )
+
+        with torch.inference_mode():
+            return self._execute_impl(
+                canvas_width, canvas_height, brush_type, brush_color,
+                brush_opacity, brush_hardness, brush_size,
+                mask_hardness, mask_expansion, mask_blur_radius,
+                mask_blur_strength, canvas_data, reference_image,
+            )
+
+    def _execute_impl(self, canvas_width, canvas_height, brush_type, brush_color,
+                      brush_opacity, brush_hardness, brush_size,
+                      mask_hardness, mask_expansion, mask_blur_radius,
+                      mask_blur_strength, canvas_data, reference_image=None):
 
         w = int(canvas_width)
         h = int(canvas_height)
@@ -413,6 +450,20 @@ class MECContextInpainter:
     FUNCTION = "execute"
 
     @classmethod
+    def IS_CHANGED(cls, original_image, mask, inpainted_image, crop_padding,
+                   blend_softness, mask_expansion_blend, enable_color_correction,
+                   enable_lightness_rescue, enable_differential_diffusion,
+                   sampling_mask_blur_size, sampling_mask_blur_strength,
+                   face_positive_prompt="", face_negative_prompt="", **kwargs):
+        return hash_args_and_kwargs(
+            original_image, mask, inpainted_image, crop_padding,
+            blend_softness, mask_expansion_blend, enable_color_correction,
+            enable_lightness_rescue, enable_differential_diffusion,
+            sampling_mask_blur_size, sampling_mask_blur_strength,
+            face_positive_prompt, face_negative_prompt, **kwargs,
+        )
+
+    @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
@@ -512,6 +563,37 @@ class MECContextInpainter:
                 enable_differential_diffusion,
                 sampling_mask_blur_size, sampling_mask_blur_strength,
                 face_positive_prompt="", face_negative_prompt=""):
+        for name, t, kind in (
+            ("original_image", original_image, "IMAGE"),
+            ("inpainted_image", inpainted_image, "IMAGE"),
+            ("mask", mask, "MASK"),
+        ):
+            if not isinstance(t, torch.Tensor):
+                raise ValueError(f"MECContextInpainter: {name} must be a {kind} tensor")
+            if kind == "IMAGE" and (t.ndim != 4 or t.shape[-1] not in (3, 4)):
+                raise ValueError(
+                    f"MECContextInpainter: {name} must be [B,H,W,C], got {tuple(t.shape)}"
+                )
+            if kind == "MASK" and t.ndim not in (3, 4):
+                raise ValueError(
+                    f"MECContextInpainter: {name} must be [B,H,W], got {tuple(t.shape)}"
+                )
+        with torch.inference_mode():
+            return self._execute_impl(
+                original_image, mask, inpainted_image,
+                crop_padding, blend_softness, mask_expansion_blend,
+                enable_color_correction, enable_lightness_rescue,
+                enable_differential_diffusion,
+                sampling_mask_blur_size, sampling_mask_blur_strength,
+                face_positive_prompt, face_negative_prompt,
+            )
+
+    def _execute_impl(self, original_image, mask, inpainted_image,
+                      crop_padding, blend_softness, mask_expansion_blend,
+                      enable_color_correction, enable_lightness_rescue,
+                      enable_differential_diffusion,
+                      sampling_mask_blur_size, sampling_mask_blur_strength,
+                      face_positive_prompt="", face_negative_prompt=""):
         # MANUAL bug-fix (Apr 2026): hard-clamp crop_padding into the
         # documented [1.0, 2.0] range so a stray IPU/widget can't blow
         # up the bbox math. min/max widget bounds are advisory; a JSON
@@ -647,6 +729,19 @@ class MECToneRefiner:
         "VAE-encoded latent of the refined image (zero placeholder when auto_upscale is False).",
     )
     FUNCTION = "execute"
+
+    @classmethod
+    def IS_CHANGED(cls, image, neural_corrector, corrector_tone, corrector_color,
+                   highlight_protection, shadow_lift, enable_upscale, upscale_factor,
+                   ai_enable_dof, ai_dof_strength, ai_dof_focus_depth,
+                   latent=None, vae=None, upscale_model=None, depth_map=None,
+                   auto_upscale=True, **kwargs):
+        return hash_args_and_kwargs(
+            image, neural_corrector, corrector_tone, corrector_color,
+            highlight_protection, shadow_lift, enable_upscale, upscale_factor,
+            ai_enable_dof, ai_dof_strength, ai_dof_focus_depth,
+            latent, vae, upscale_model, depth_map, auto_upscale, **kwargs,
+        )
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -804,6 +899,28 @@ class MECToneRefiner:
                 ai_dof_strength, ai_dof_focus_depth,
                 latent=None, vae=None, upscale_model=None,
                 depth_map=None, auto_upscale=True):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"MECToneRefiner: image must be IMAGE [B,H,W,C], got {tuple(getattr(image, 'shape', ()))}"
+            )
+        if depth_map is not None and (not isinstance(depth_map, torch.Tensor) or depth_map.ndim not in (3, 4)):
+            raise ValueError(
+                f"MECToneRefiner: depth_map must be MASK [B,H,W], got {tuple(getattr(depth_map, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._execute_impl(
+                image, neural_corrector, corrector_tone, corrector_color,
+                highlight_protection, shadow_lift, enable_upscale, upscale_factor,
+                ai_enable_dof, ai_dof_strength, ai_dof_focus_depth,
+                latent, vae, upscale_model, depth_map, auto_upscale,
+            )
+
+    def _execute_impl(self, image, neural_corrector, corrector_tone, corrector_color,
+                      highlight_protection, shadow_lift,
+                      enable_upscale, upscale_factor, ai_enable_dof,
+                      ai_dof_strength, ai_dof_focus_depth,
+                      latent=None, vae=None, upscale_model=None,
+                      depth_map=None, auto_upscale=True):
         img = _to_bhwc(image)[0].cpu().numpy()
         out = img
 
@@ -972,6 +1089,18 @@ class MECBuilderSampler:
         "VAE-decoded preview image when a VAE is provided (zero image otherwise).",
     )
     FUNCTION = "execute"
+
+    @classmethod
+    def IS_CHANGED(cls, model, positive, negative, steps, cfg, sampler_name,
+                   scheduler, denoise, cfg_mode, cfg_finish, cfg_pivot,
+                   self_correction, resolution_preset, custom_width, custom_height,
+                   seed, vae=None, latent_image=None, **kwargs):
+        return hash_args_and_kwargs(
+            model, positive, negative, steps, cfg, sampler_name,
+            scheduler, denoise, cfg_mode, cfg_finish, cfg_pivot,
+            self_correction, resolution_preset, custom_width, custom_height,
+            seed, vae, latent_image, **kwargs,
+        )
 
     RESOLUTION_PRESETS = {
         "SDXL (1024x1024)": (1024, 1024),

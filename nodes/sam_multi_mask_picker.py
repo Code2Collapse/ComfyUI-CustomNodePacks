@@ -43,6 +43,7 @@ from .utils import (
     parse_points_json,
     parse_bbox_input,
 )
+from ._is_changed_util import hash_args_and_kwargs
 
 logger = logging.getLogger("MEC")
 
@@ -142,14 +143,34 @@ class SamMultiMaskPickerMEC:
             },
         }
 
-    # NOTE: IS_CHANGED removed intentionally. Returning float("nan") forced SAM
-    # to re-run on every prompt queue, even when only ``selected_index`` changed,
-    # which is wasteful (SAM inference is heavy). With normal caching, ComfyUI
-    # re-executes only when an input value changes -- which still includes
-    # ``selected_index`` -- so the JS picker continues to work, but identical
-    # re-queues are now properly cached. See docs/inpaint-suite-guide.md.
+    @classmethod
+    def IS_CHANGED(cls, image, model_name, points_json, bbox_json, precision,
+                   selected_index, sam_model=None, bbox=None, **kwargs):
+        return hash_args_and_kwargs(
+            image, model_name, points_json, bbox_json, precision,
+            selected_index, sam_model, bbox, **kwargs,
+        )
 
     def pick_mask(
+        self,
+        image: torch.Tensor,
+        model_name: str,
+        points_json: str,
+        bbox_json: str,
+        precision: str,
+        selected_index: int,
+        sam_model: Optional[dict] = None,
+        bbox: Optional[list] = None,
+    ):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+            raise ValueError("SamMultiMaskPickerMEC expects IMAGE tensor [B,H,W,C]")
+        with torch.inference_mode():
+            return self._pick_mask_impl(
+                image, model_name, points_json, bbox_json, precision,
+                selected_index, sam_model, bbox,
+            )
+
+    def _pick_mask_impl(
         self,
         image: torch.Tensor,
         model_name: str,
@@ -215,7 +236,7 @@ class SamMultiMaskPickerMEC:
                     }
 
             # Build predictor
-            with torch.no_grad():
+            with torch.inference_mode():
                 predictor = get_sam_predictor(model, model_type, img_np)
                 if predictor is None:
                     return self._empty_result(H, W, "No compatible SAM predictor found")
@@ -261,7 +282,7 @@ class SamMultiMaskPickerMEC:
                     model_info["device"] = "cpu"
                     model_info["model"] = model
 
-                with torch.no_grad():
+                with torch.inference_mode():
                     predictor = get_sam_predictor(model, model_type, img_np)
                     if predictor is None:
                         return self._empty_result(H, W, "No predictor after OOM fallback")
@@ -391,4 +412,15 @@ class SamMultiMaskPickerMEC:
         empty_batch = torch.zeros(3, H, W, dtype=torch.float32)
         scores_str = json.dumps([0.0, 0.0, 0.0])
         info = json.dumps({"error": reason, "num_masks": 0, "scores_pct": [0.0, 0.0, 0.0]})
-        return (empty_single, empty_batch, 0, scores_str, info)
+        # Same {"ui", "result"} shape as the success path.
+        #
+        # This used to return a BARE TUPLE while the success path returned the dict
+        # form. Both are valid to ComfyUI, but only the dict form emits an
+        # `executed` message carrying a ui payload — so on any SAM failure the JS
+        # picker was never told, and kept displaying the thumbnails from the
+        # previous successful run next to a now-empty mask. Clearing the thumbs
+        # explicitly is what makes a failure visible in the widget.
+        return {
+            "ui": {"mask_thumbs": [], "scores": [scores_str], "selected_index": [0]},
+            "result": (empty_single, empty_batch, 0, scores_str, info),
+        }

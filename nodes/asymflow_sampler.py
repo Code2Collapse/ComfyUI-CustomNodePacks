@@ -32,6 +32,8 @@ from typing import Any
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 try:
     from comfy import model_sampling as _ms  # type: ignore
     from comfy.model_patcher import ModelPatcher  # type: ignore  # noqa: F401
@@ -134,6 +136,10 @@ class AsymFlowSamplerPatch:
                 ),
             }
         }
+
+    @classmethod
+    def IS_CHANGED(cls, model, shift, multiplier, **kwargs):
+        return hash_args_and_kwargs(model, shift, multiplier, **kwargs)
 
     def patch(self, model: Any, shift: float, multiplier: int):
         if _ms is None:

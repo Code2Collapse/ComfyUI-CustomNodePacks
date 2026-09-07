@@ -8,8 +8,6 @@ opencv-python>=4.7.0
 scipy>=1.10.0
 
 # ── NukeNodeMax suite ────────────────────────────────────────────────
-# F7 integrity guard — used by nodes/integrity_guard.py
-pipdeptree>=2.13.0
 # P0/P1/P2 ProPainter bridge — install manually (not on PyPI):
 #   pip install git+https://github.com/sczhou/ProPainter.git
 # RAFT + RFC + Inpaint weights are auto-downloaded by propainter_bridge.py
@@ -50,3 +48,6 @@ regex>=2023.0.0
 # matrices and OETFs. Install only if you want extra space coverage in a
 # future release.
 # colour-science>=0.4.4
+# C2C Vault: AES-GCM for the password-locked subgraph node.
+# PBKDF2 comes from stdlib hashlib; only the AEAD needs this.
+cryptography>=41.0

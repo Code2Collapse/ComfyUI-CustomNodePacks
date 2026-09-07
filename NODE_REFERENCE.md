@@ -1,5 +1,14 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
+> **REBASELINE 2026-09-06.** This pack registers **89** nodes, not 104. The
+> cross-pack dedup moved six VFX modules to ComfyUI-NukeMaxNodes and
+> WanDirectorC2C to ComfyUI-WanNodeExperiments (one owner per id); two vault
+> nodes were then added. Measured this session with the production loader.
+>
+> This file is marked auto-generated, but **no generator exists in the repo**,
+> so the per-node bodies below cannot be regenerated and may drift from the
+> tooltips they claim to mirror. Treat the live schema as authoritative.
+
 *Auto-generated from the live `NODE_CLASS_MAPPINGS` on 2026-07-29 — 104 nodes. Every parameter description below is the node's own tooltip, so this file cannot drift from the code.*
 
 Regenerate after changing any node's `INPUT_TYPES`.

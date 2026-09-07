@@ -54,6 +54,7 @@ from .propainter_temporal_inpaint import (
     _compute_bidirectional_flow,
     _inpaint_window,
 )
+from ._is_changed_util import hash_args_and_kwargs
 
 log = logging.getLogger("MEC.propainter_stitch")
 
@@ -248,10 +249,38 @@ class ProPainterStitchRefineMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Run ProPainter on the seam ring of an already-stitched image to fix boundary flicker / hard edges."
 
+    @classmethod
+    def IS_CHANGED(cls, stitched_image, stitch_data, ring_pixels, raft_iter,
+                   neighbor_stride, ref_stride, subvideo_length, use_half,
+                   color_match_mode, mask_override=None, **kwargs):
+        return hash_args_and_kwargs(
+            stitched_image, stitch_data, ring_pixels, raft_iter,
+            neighbor_stride, ref_stride, subvideo_length, use_half,
+            color_match_mode, mask_override, **kwargs,
+        )
+
     def refine(self, stitched_image: torch.Tensor, stitch_data: Dict[str, Any],
                ring_pixels: int, raft_iter: int, neighbor_stride: int,
                ref_stride: int, subvideo_length: int, use_half: bool,
                color_match_mode: str, mask_override: Optional[torch.Tensor] = None):
+        if not isinstance(stitched_image, torch.Tensor) or stitched_image.dim() != 4 or stitched_image.shape[-1] != 3:
+            raise ValueError(
+                f"ProPainterStitchRefineMEC: expected IMAGE [B,H,W,3], got {tuple(stitched_image.shape)}"
+            )
+        if mask_override is not None and (not isinstance(mask_override, torch.Tensor) or mask_override.ndim not in (3, 4)):
+            raise ValueError(
+                f"ProPainterStitchRefineMEC: mask_override must be MASK [B,H,W], got {tuple(mask_override.shape)}"
+            )
+        with torch.inference_mode():
+            return self._refine_impl(
+                stitched_image, stitch_data, ring_pixels, raft_iter, neighbor_stride,
+                ref_stride, subvideo_length, use_half, color_match_mode, mask_override,
+            )
+
+    def _refine_impl(self, stitched_image: torch.Tensor, stitch_data: Dict[str, Any],
+                     ring_pixels: int, raft_iter: int, neighbor_stride: int,
+                     ref_stride: int, subvideo_length: int, use_half: bool,
+                     color_match_mode: str, mask_override: Optional[torch.Tensor] = None):
         if not HAS_PROPAINTER:
             require_propainter()
         t0 = time.time()
@@ -372,6 +401,16 @@ class ProPainterStitchMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "Stitch inpainted crop back using ProPainter for flow-consistent seams. Drop-in replacement for InpaintStitchProMEC."
 
+    @classmethod
+    def IS_CHANGED(cls, stitch_data, inpainted_image, boundary_band_pixels,
+                   preserve_inpaint_center, raft_iter, neighbor_stride, ref_stride,
+                   subvideo_length, use_half, color_match_mode, upscale_method, **kwargs):
+        return hash_args_and_kwargs(
+            stitch_data, inpainted_image, boundary_band_pixels,
+            preserve_inpaint_center, raft_iter, neighbor_stride, ref_stride,
+            subvideo_length, use_half, color_match_mode, upscale_method, **kwargs,
+        )
+
     def _resize_to(self, t: torch.Tensor, h: int, w: int, method: str) -> torch.Tensor:
         # IMAGE (B,H,W,C) -> resized.
         x = t.permute(0, 3, 1, 2)  # (B,C,H,W)
@@ -393,6 +432,23 @@ class ProPainterStitchMEC:
                raft_iter: int, neighbor_stride: int, ref_stride: int,
                subvideo_length: int, use_half: bool, color_match_mode: str,
                upscale_method: str):
+        if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.dim() != 4 or inpainted_image.shape[-1] != 3:
+            raise ValueError(
+                f"ProPainterStitchMEC: inpainted_image must be IMAGE [B,H,W,3], "
+                f"got {tuple(getattr(inpainted_image, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._stitch_impl(
+                stitch_data, inpainted_image, boundary_band_pixels, preserve_inpaint_center,
+                raft_iter, neighbor_stride, ref_stride, subvideo_length, use_half,
+                color_match_mode, upscale_method,
+            )
+
+    def _stitch_impl(self, stitch_data: Dict[str, Any], inpainted_image: torch.Tensor,
+                     boundary_band_pixels: int, preserve_inpaint_center: bool,
+                     raft_iter: int, neighbor_stride: int, ref_stride: int,
+                     subvideo_length: int, use_half: bool, color_match_mode: str,
+                     upscale_method: str):
         if not HAS_PROPAINTER:
             require_propainter()
         t0 = time.time()
@@ -563,9 +619,30 @@ class ProPainterRemoveMEC:
     CATEGORY = "C2C/Inpaint"
     DESCRIPTION = "ProPainter-only object / wire / plate removal. No SD model required."
 
+    @classmethod
+    def IS_CHANGED(cls, images, masks, quality, use_half, dilate_mask_pixels,
+                   color_match_mode, **kwargs):
+        return hash_args_and_kwargs(
+            images, masks, quality, use_half, dilate_mask_pixels, color_match_mode, **kwargs,
+        )
+
     def remove(self, images: torch.Tensor, masks: torch.Tensor,
                quality: str, use_half: bool, dilate_mask_pixels: int,
                color_match_mode: str):
+        if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[-1] != 3:
+            raise ValueError(
+                f"ProPainterRemoveMEC: IMAGE [B,H,W,3] expected, got {tuple(getattr(images, 'shape', ()))}"
+            )
+        if not isinstance(masks, torch.Tensor) or masks.ndim not in (3, 4):
+            raise ValueError(
+                f"ProPainterRemoveMEC: MASK [B,H,W] expected, got {tuple(getattr(masks, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._remove_impl(images, masks, quality, use_half, dilate_mask_pixels, color_match_mode)
+
+    def _remove_impl(self, images: torch.Tensor, masks: torch.Tensor,
+                     quality: str, use_half: bool, dilate_mask_pixels: int,
+                     color_match_mode: str):
         if not HAS_PROPAINTER:
             require_propainter()
         t0 = time.time()

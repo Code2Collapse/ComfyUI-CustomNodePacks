@@ -9,6 +9,8 @@ nodes. Original source preserved at ``_deprecated/bbox_nodes.snapshot.py``.
 import json
 import numpy as np
 
+from ._is_changed_util import hash_args_and_kwargs
+
 
 class BBoxSmooth:
     """Smooth a sequence of bounding boxes across video frames to reduce jitter.
@@ -49,6 +51,10 @@ class BBoxSmooth:
     FUNCTION = "smooth"
     CATEGORY = "C2C/BBox"
     DESCRIPTION = "Smooth bounding boxes across video frames to eliminate jitter. Median-based outlier rejection + exponential smoothing for best results."
+
+    @classmethod
+    def IS_CHANGED(cls, bboxes_json, smoothing_radius, method, alpha, **kwargs):
+        return hash_args_and_kwargs(bboxes_json, smoothing_radius, method, alpha, **kwargs)
 
     def smooth(self, bboxes_json, smoothing_radius, method, alpha):
         try:

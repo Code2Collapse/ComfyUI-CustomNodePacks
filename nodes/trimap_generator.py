@@ -10,6 +10,7 @@ Designed to feed directly into ViTMatte for alpha matting.
 """
 
 from . import _interrupt_check as _IC
+from ._is_changed_util import hash_args_and_kwargs
 
 import torch
 import torch.nn.functional as F
@@ -89,8 +90,30 @@ class TrimapGeneratorMEC:
         "Feed into ViTMatte for alpha matting."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, mask, edge_radius, inner_erosion, outer_dilation,
+                   smooth, threshold, image=None, **kwargs):
+        return hash_args_and_kwargs(
+            mask, edge_radius, inner_erosion, outer_dilation,
+            smooth, threshold, image, **kwargs,
+        )
+
     def generate(self, mask, edge_radius, inner_erosion, outer_dilation,
                  smooth, threshold, image=None):
+        if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
+            raise ValueError("TrimapGeneratorMEC expects MASK tensor [H,W] or [B,H,W]")
+        if image is not None and (
+            not isinstance(image, torch.Tensor) or image.ndim != 4
+        ):
+            raise ValueError("TrimapGeneratorMEC optional image must be IMAGE [B,H,W,C]")
+        with torch.inference_mode():
+            return self._generate_impl(
+                mask, edge_radius, inner_erosion, outer_dilation,
+                smooth, threshold, image,
+            )
+
+    def _generate_impl(self, mask, edge_radius, inner_erosion, outer_dilation,
+                       smooth, threshold, image=None):
 
         # Handle batch dimension
         if mask.dim() == 2:

@@ -36,6 +36,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+from ._is_changed_util import hash_args_and_kwargs
+
 log = logging.getLogger("MEC.video_stabilizer")
 
 # ---------------------------------------------------------------------
@@ -242,6 +244,16 @@ class VideoStabilizerMEC:
         "so it can chain straight into InpaintCropProMEC to fill borders."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, frames, method, preset, frame_rate, padding_color,
+                   framing_mode, transform_mode, camera_lock, strength, smooth,
+                   keep_fov, raft_iters, use_half, **kwargs):
+        return hash_args_and_kwargs(
+            frames, method, preset, frame_rate, padding_color,
+            framing_mode, transform_mode, camera_lock, strength, smooth,
+            keep_fov, raft_iters, use_half, **kwargs,
+        )
+
     # --------------------------------------------------------------
     def _pick_backend(self, method: str, batch_size: int) -> str:
         if method != "auto":
@@ -272,8 +284,20 @@ class VideoStabilizerMEC:
                   framing_mode, transform_mode, camera_lock, strength, smooth,
                   keep_fov, raft_iters, use_half):
         _require_stabilizer()
-        if frames.dim() != 4 or frames.shape[-1] != 3:
-            raise ValueError(f"IMAGE shape (B,H,W,3) expected, got {tuple(frames.shape)}")
+        if not isinstance(frames, torch.Tensor) or frames.dim() != 4 or frames.shape[-1] != 3:
+            raise ValueError(
+                f"VideoStabilizerMEC expects IMAGE tensor [B,H,W,3], got {tuple(getattr(frames, 'shape', ()))}"
+            )
+        with torch.inference_mode():
+            return self._stabilize_impl(
+                frames, method, preset, frame_rate, padding_color,
+                framing_mode, transform_mode, camera_lock, strength, smooth,
+                keep_fov, raft_iters, use_half,
+            )
+
+    def _stabilize_impl(self, frames, method, preset, frame_rate, padding_color,
+                        framing_mode, transform_mode, camera_lock, strength, smooth,
+                        keep_fov, raft_iters, use_half):
         B, H, W, _ = frames.shape
 
         backend = self._pick_backend(method, B)
