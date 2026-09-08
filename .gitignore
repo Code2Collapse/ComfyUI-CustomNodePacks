@@ -31,7 +31,10 @@ share/python-wheels/
 MANIFEST
 third_party/
 tasks/
-tests/
+# NOTE: 'tests/' was ignored here, which meant this pack's ENTIRE test
+# suite lived only on one developer's machine - never in the repo, never
+# on CI, never on the Linux deploy. Every other pack in this workspace
+# tracks its tests. '_tests/' below is the scratch dir and stays ignored.
 _tests/
 autoresearch-nodepacks/
 autoresearch-nexus/

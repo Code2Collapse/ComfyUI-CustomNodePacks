@@ -15,13 +15,13 @@
 
 import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
+import { reportFailure as __c2cReport } from "./_c2c_report.js";
 // Optional: noodle-style helpers (separate extension). Import is lazy /
 // non-fatal — if the file is missing or the extension hasn't registered
 // yet, we degrade gracefully and just don't show the noodle submenu.
 let NOODLE_STYLES = null;
 let NOODLE_SETTING_ID = null;
 import("./c2c_noodle_styles.js")
-import { reportFailure as __c2cReport } from "./_c2c_report.js";
     .then((m) => { NOODLE_STYLES = m.NOODLE_STYLES; NOODLE_SETTING_ID = m.NOODLE_SETTING_ID; })
     .catch(() => { /* file absent; reroute menu still works without it */ });
 
