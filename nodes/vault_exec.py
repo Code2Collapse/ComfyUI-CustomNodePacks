@@ -109,11 +109,17 @@ def execute_subgraph(subgraph: dict[str, Any], boundary_inputs: dict[str, Any]) 
 
     # boundary inputs feed specific (node, slot) pairs
     injected: dict[str, dict[int, Any]] = {i: {} for i in by_id}
+    widget_overrides: dict[str, dict[str, Any]] = {i: {} for i in by_id}
     for spec in b_in:
         name = spec["name"]
         if name not in boundary_inputs:
             raise VaultExecError(f"Vault input {name!r} was not supplied.")
-        injected[str(spec["to"])][int(spec["to_slot"])] = boundary_inputs[name]
+        val = boundary_inputs[name]
+        widget_name = spec.get("widget")
+        if widget_name:
+            widget_overrides[str(spec["to"])][str(widget_name)] = val
+        else:
+            injected[str(spec["to"])][int(spec["to_slot"])] = val
 
     results: dict[str, tuple] = {}
     for node_id in _topo_order(nodes, links):
@@ -126,6 +132,7 @@ def execute_subgraph(subgraph: dict[str, Any], boundary_inputs: dict[str, Any]) 
             )
 
         kwargs = dict(spec.get("widgets") or {})
+        kwargs.update(widget_overrides.get(node_id, {}))
         # Positional sockets are addressed by index; map them onto the class's
         # declared required-input order.
         try:
