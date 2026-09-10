@@ -36,6 +36,7 @@ from nodes.vault_crypto import (  # noqa: E402
     unseal_for_run,
     unseal_with_password,
 )
+from nodes.vault_boundary import build_interface_manifest, derive_boundary  # noqa: E402
 from nodes.vault_exec import VaultExecError, execute_subgraph  # noqa: E402
 
 PASSWORD = "correct horse battery staple"
@@ -257,7 +258,8 @@ def test_sealed_node_execute_needs_no_session_key(registry):
     from nodes.vault_node import SESSIONS, C2C_VaultSealed
     payload = seal_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
     SESSIONS.drop(VAULT_ID)
-    assert C2C_VaultSealed().execute(vault_id=VAULT_ID, vault_payload=payload)[0] == 7.0
+    out = C2C_VaultSealed().execute(vault_id=VAULT_ID, vault_payload=payload)
+    assert out[0] == 7.0
 
 
 def test_sealed_opens_with_the_password():
@@ -374,13 +376,33 @@ def test_js_input_cap_matches_the_declared_sockets():
     import re
     js = (PACK_ROOT / "js" / "c2c_vault.js").read_text(encoding="utf-8")
     node = (PACK_ROOT / "nodes" / "vault_node.py").read_text(encoding="utf-8")
-    m = re.search(r"MAX_VAULT_INPUTS\s*=\s*(\d+)", js)
-    assert m, "MAX_VAULT_INPUTS not found in c2c_vault.js"
-    declared = len(set(re.findall(r'"(input_\d+)"', node)))
-    assert int(m.group(1)) == declared, (
-        "js MAX_VAULT_INPUTS=" + m.group(1) + " but vault_node.py declares "
-        + str(declared) + " input sockets"
+    m_in = re.search(r"MAX_VAULT_INPUTS\s*=\s*(\d+)", js)
+    m_out = re.search(r"MAX_VAULT_OUTPUTS\s*=\s*(\d+)", js)
+    assert m_in, "MAX_VAULT_INPUTS not found in c2c_vault.js"
+    assert m_out, "MAX_VAULT_OUTPUTS not found in c2c_vault.js"
+    # Count the LIVE schema, not source text. The sockets are generated in a
+    # loop (vault_node.py `optional[f"input_{i}"]`), so grepping for a literal
+    # "input_0" measured 0 and the test failed for a reason that had nothing to
+    # do with the contract it exists to protect.
+    from nodes.vault_node import C2C_VaultLocked, MAX_VAULT_INPUTS, MAX_VAULT_OUTPUTS
+    spec = C2C_VaultLocked.INPUT_TYPES()
+    declared_in = len([k for k in (spec.get("optional") or {})
+                       if re.fullmatch(r"input_\d+", k)])
+    declared_out = len(C2C_VaultLocked.RETURN_NAMES)
+
+    assert int(m_in.group(1)) == declared_in, (
+        "js MAX_VAULT_INPUTS=" + m_in.group(1) + " but INPUT_TYPES declares "
+        + str(declared_in) + " input sockets"
     )
+    assert int(m_out.group(1)) == declared_out, (
+        "js MAX_VAULT_OUTPUTS=" + m_out.group(1) + " but RETURN_NAMES declares "
+        + str(declared_out) + " outputs"
+    )
+    assert MAX_VAULT_INPUTS == declared_in
+    assert MAX_VAULT_OUTPUTS == declared_out
+    # RETURN_TYPES must stay the same length as RETURN_NAMES or ComfyUI mislabels
+    # every socket after the first mismatch.
+    assert len(C2C_VaultLocked.RETURN_TYPES) == declared_out
 
 
 def test_js_no_longer_posts_empty_boundaries():
@@ -388,4 +410,89 @@ def test_js_no_longer_posts_empty_boundaries():
     # lock request are what made every UI-locked vault unrunnable.
     js = (PACK_ROOT / "js" / "c2c_vault.js").read_text(encoding="utf-8")
     assert "boundary_in: [], boundary_out: []" not in js
-    assert "subgraph: { nodes, links, boundary_in, boundary_out }" in js
+    assert "boundary_in, boundary_out" in js
+
+
+def test_lock_without_password_raises():
+    # INVARIANT: locking requires a password — empty string must fail at crypto.
+    with pytest.raises(VaultError):
+        lock_subgraph(_subgraph(), "", vault_id=VAULT_ID, iterations=FAST)
+
+
+def test_derive_boundary_three_node_two_in_one_out():
+    # INVARIANT: boundary derivation classifies 2 entering wires and 1 leaving.
+    sel = {"1", "2", "3"}
+    inputs_by_node = {
+        "1": [{"slot": 0, "origin_id": "ext_a", "origin_slot": 0}],
+        "2": [{"slot": 0, "origin_id": "ext_b", "origin_slot": 0}],
+        "3": [{"slot": 0, "origin_id": "1", "origin_slot": 0}],
+    }
+    outputs_by_node = {
+        "1": [{"slot": 0, "targets": []}],
+        "2": [{"slot": 0, "targets": []}],
+        "3": [{"slot": 0, "targets": [{"target_id": "ext_c", "target_slot": 0}]}],
+    }
+    links, b_in, b_out = derive_boundary(sel, inputs_by_node, outputs_by_node)
+    assert len(b_in) == 2
+    assert len(b_out) == 1
+    assert any(l["from"] == "1" and l["to"] == "3" for l in links)
+
+
+def test_workflow_save_load_restores_interface_manifest():
+    # INVARIANT: vault_interface round-trips through json and restores socket names.
+    iface = build_interface_manifest(
+        "locked", 3,
+        [{"name": "driver", "to": "1", "to_slot": 0}],
+        [{"name": "result", "from": "2", "from_slot": 0}],
+        in_types=["IMAGE"], out_types=["IMAGE"],
+    )
+    payload = lock_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    workflow = {
+        "nodes": [{
+            "type": "C2C_VaultLocked",
+            "inputs": [{"name": "driver", "type": "IMAGE", "link": None}],
+            "outputs": [{"name": "result", "type": "IMAGE", "links": []}],
+            "properties": {"vault_slots": {"in": 1, "out": 1}},
+            "widgets_values": [VAULT_ID, payload, json.dumps(iface)],
+        }],
+    }
+    restored = json.loads(json.dumps(workflow))["nodes"][0]
+    assert json.loads(restored["widgets_values"][2])["in"][0]["name"] == "driver"
+    assert restored["inputs"][0]["name"] == "driver"
+    assert restored["properties"]["vault_slots"]["out"] == 1
+
+
+def test_multi_output_boundary_mapping(registry):
+    # INVARIANT: _run returns every boundary_out value, not just the first.
+    from nodes.vault_node import C2C_VaultSealed
+
+    class _Twin:
+        FUNCTION = "run"
+        RETURN_TYPES = ("FLOAT", "FLOAT")
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"value": ("FLOAT", {"default": 1.0})}}
+
+        def run(self, value):
+            return (float(value), float(value) * 2.0)
+
+    mod = sys.modules["nodes"]
+    mapping = dict(mod.NODE_CLASS_MAPPINGS)
+    mapping["_VaultTestTwin"] = _Twin
+    mod.NODE_CLASS_MAPPINGS = mapping
+
+    sg = {
+        "nodes": [{"id": "1", "class_type": "_VaultTestTwin", "widgets": {"value": 3.0}}],
+        "links": [],
+        "boundary_in": [],
+        "boundary_out": [
+            {"name": "a", "from": "1", "from_slot": 0},
+            {"name": "b", "from": "1", "from_slot": 1},
+        ],
+    }
+    payload = seal_subgraph(sg, PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    result = C2C_VaultSealed().execute(vault_id=VAULT_ID, vault_payload=payload, vault_interface="{}")
+    assert result[0] == 3.0
+    assert result[1] == 6.0
+    assert all(v is None for v in result[2:])

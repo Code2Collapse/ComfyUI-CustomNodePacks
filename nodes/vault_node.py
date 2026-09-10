@@ -13,6 +13,9 @@ it asks the store for a key and refuses if there is none.
 
 The blob in `vault_payload` IS serialised with the workflow. That is the point:
 it is ciphertext.
+
+Positional sockets (input_0..input_9, output_0..output_7) are the wire protocol.
+Derived names live in vault_interface and are applied to the node instance by JS.
 """
 
 from __future__ import annotations
@@ -37,6 +40,9 @@ from .vault_crypto import (
 from .vault_exec import VaultExecError, execute_subgraph
 
 log = logging.getLogger("c2c.vault")
+
+MAX_VAULT_INPUTS = 10
+MAX_VAULT_OUTPUTS = 8
 
 # How long an unlock lasts. 15 minutes was too short in practice - it expires
 # mid-render and re-prompts during a batch, which is exactly when you cannot
@@ -113,17 +119,32 @@ class _SessionStore:
 SESSIONS = _SessionStore()
 
 
+def _vault_input_types() -> dict[str, Any]:
+    """Build optional input_0..input_9 sockets (positional wire protocol)."""
+    optional: dict[str, Any] = {}
+    for i in range(MAX_VAULT_INPUTS):
+        tip = (
+            "Positional boundary input {} — the label you see is applied by the "
+            "vault interface manifest, not by this socket name. Index must match "
+            "boundary_in[{}] inside the ciphertext."
+        ).format(i, i)
+        optional[f"input_{i}"] = ("*", {"tooltip": tip})
+    return optional
+
+
 class C2C_VaultLocked:
     """A password-locked subgraph. Will not RUN without the password."""
 
     CATEGORY = "C2C/Vault"
     FUNCTION = "execute"
-    RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("output",)
+    RETURN_TYPES = tuple(["*"] * MAX_VAULT_OUTPUTS)
+    RETURN_NAMES = tuple(f"output_{i}" for i in range(MAX_VAULT_OUTPUTS))
     DESCRIPTION = (
         "Run a password-locked subgraph. The wiring inside travels with the "
         "workflow as AES-GCM ciphertext, so a recipient sees an opaque blob "
         "instead of your node graph.\n\n"
+        "Lock a canvas selection via right-click → C2C Vault. Unlock once per "
+        "session to queue — the password never enters the workflow JSON.\n\n"
         "SCOPE, honestly: this stops casual inspection and copying. It cannot "
         "stop someone who can run Python in this process - the subgraph must be "
         "decrypted to execute, so the plaintext exists in memory while it runs. "
@@ -136,18 +157,23 @@ class C2C_VaultLocked:
             "required": {
                 "vault_id": ("STRING", {
                     "default": "", "multiline": False,
-                    "tooltip": "Identifies which unlocked session this node may use. "
-                               "Stored in clear and authenticated, never secret."}),
+                    "tooltip": "Public vault handle — authenticated in the "
+                               "ciphertext header, never secret. Lets the UI "
+                               "match an unlock session to the right blob "
+                               "without revealing what is inside."}),
                 "vault_payload": ("STRING", {
                     "default": "", "multiline": True,
-                    "tooltip": "The encrypted subgraph. Base64 AES-GCM ciphertext; "
-                               "saved with the workflow. Not editable by hand."}),
+                    "tooltip": "AES-GCM ciphertext of the internal graph. This "
+                               "is what travels in the .json — opaque to anyone "
+                               "without the password. Do not hand-edit."}),
+                "vault_interface": ("STRING", {
+                    "default": "{}", "multiline": True,
+                    "tooltip": "Clear-text boundary manifest: socket names, "
+                               "types, and node count. Public API of the vault "
+                               "(not secret). The JS renames input_N/output_N "
+                               "slots from this on load."}),
             },
-            "optional": {
-                "input_0": ("*", {"tooltip": "Wired to the vault's first boundary input."}),
-                "input_1": ("*", {}),
-                "input_2": ("*", {}),
-            },
+            "optional": _vault_input_types(),
         }
 
     @classmethod
@@ -155,7 +181,7 @@ class C2C_VaultLocked:
         from ._is_changed_util import hash_args_and_kwargs
         return hash_args_and_kwargs(**kwargs)
 
-    def execute(self, vault_id: str, vault_payload: str, **inputs):
+    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", **inputs):
         if not (vault_payload or "").strip():
             raise RuntimeError("C2C Vault: no payload. Lock a selection first.")
 
@@ -194,7 +220,17 @@ class C2C_VaultLocked:
         outs = list(subgraph.get("boundary_out", []))
         if not outs:
             raise RuntimeError(f"{label}: the subgraph declares no outputs.")
-        return (out[outs[0]["name"]],)
+        if len(outs) > MAX_VAULT_OUTPUTS:
+            raise RuntimeError(
+                f"{label}: the subgraph declares {len(outs)} outputs but the "
+                f"vault node supports at most {MAX_VAULT_OUTPUTS}."
+            )
+        # Pad to MAX_VAULT_OUTPUTS — RETURN_TYPES is fixed-length; trailing
+        # slots are hidden by JS and are never wired downstream.
+        result: list[Any] = [None] * MAX_VAULT_OUTPUTS
+        for i, spec in enumerate(outs):
+            result[i] = out[spec["name"]]
+        return tuple(result)
 
 
 def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
@@ -350,7 +386,7 @@ class C2C_VaultSealed(C2C_VaultLocked):
         "your password to run it at all."
     )
 
-    def execute(self, vault_id: str, vault_payload: str, **inputs):
+    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", **inputs):
         if not (vault_payload or "").strip():
             raise RuntimeError("C2C Vault (sealed): no payload. Seal a selection first.")
         try:
