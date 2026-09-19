@@ -123,6 +123,26 @@ except Exception as _mm_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] mask_matting import failed: %s", _mm_exc,
         )
+# Layer Effects (Photoshop-style — torch-native, batch-correct)
+try:
+    from .nodes.layer_effects import (
+        NODE_CLASS_MAPPINGS as _LAYERFX_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LAYERFX_DISPLAY,
+    )
+except Exception as _lfx_exc:  # pragma: no cover
+    _LAYERFX_MAPPINGS, _LAYERFX_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_lfx
+        _c2c_rec_fail_lfx(
+            "layer_effects", _lfx_exc,
+            hint="Layer Effects failed to import. Check nodes/layer_effects/_blend.py and _ops.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] layer_effects import failed: %s", _lfx_exc,
+        )
 # ── Central failure registry (surface silent drops to the user) ───────
 # Per ideas_summary.md §2.1: the #1 reason this pack "feels like stubs"
 # is that optional sub-imports were swallowed by `except: pass` / quiet
@@ -568,6 +588,7 @@ NODE_CLASS_MAPPINGS = {
     **_FACE_FIXER_MAPPINGS,
     **_FPDELTA_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
+    **_LAYERFX_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -600,6 +621,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FACE_FIXER_DISPLAY,
     **_FPDELTA_DISPLAY,
     **_MASKMATTE_DISPLAY,
+    **_LAYERFX_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,
