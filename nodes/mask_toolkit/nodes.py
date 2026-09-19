@@ -1,3 +1,13 @@
+# Ported from ComfyUI_LayerStyle by chflame163 (MIT,
+# https://github.com/chflame163/ComfyUI_LayerStyle), the LayerMask family:
+# mask_by_color, create_gradient_mask, mask_gradient, mask_grain,
+# mask_motion_blur and pixel_spread.
+#
+# Only the five capabilities this pack did NOT already have were taken. The
+# rest of LayerMask is covered by MaskRefineMEC, LayerEffectStrokeMEC and
+# nodes/bbox_nodes.py; see NOTICE for the full list of what was skipped and
+# why. Reimplemented in torch, not copied: upstream round-trips every frame
+# through PIL.
 """MEC Mask toolkit nodes — torch-native, batch-correct."""
 from __future__ import annotations
 

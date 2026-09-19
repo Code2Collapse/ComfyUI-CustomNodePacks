@@ -1,4 +1,5 @@
-# Torch mask ops — ported concepts from ComfyUI_LayerStyle LayerMask family.
+# Torch mask ops, ported from ComfyUI_LayerStyle by chflame163 (MIT,
+# https://github.com/chflame163/ComfyUI_LayerStyle), py/imagefunc.py.
 # No PIL in the hot path; batch-correct [B,H,W] / [B,H,W,C].
 # WHY no_grad AND NOT inference_mode: inference_mode marks the tensors it
 # produces as "inference tensors", and an inference tensor cannot be mutated
