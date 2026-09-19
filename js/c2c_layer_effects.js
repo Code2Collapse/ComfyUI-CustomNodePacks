@@ -31,6 +31,9 @@
 // coalesced, chained onRemoved, and nothing touches `window` at import time.
 
 import { app } from "../../scripts/app.js";
+import {
+  angleDial, colourRow, css, mountParts, normHex, widgetsOf,
+} from "./_c2c_fx_controls.js";
 
 const ST = "_c2cLayerFx";
 
@@ -64,24 +67,6 @@ const RAMP_NODES = {
   },
 };
 
-const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
-
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-function css(el, s) { Object.assign(el.style, s); }
-
-function widgetsOf(node) {
-  const map = {};
-  for (const w of node.widgets || []) map[w.name] = w;
-  return map;
-}
-
-function normHex(v, fallback = "#000000") {
-  const s = String(v ?? "").trim();
-  if (!HEX_RE.test(s)) return fallback;
-  return s.startsWith("#") ? s.toLowerCase() : "#" + s.toLowerCase();
-}
-
 /** Which widgets on this node hold a colour. */
 function colourWidgetNames(node) {
   return (node.widgets || [])
@@ -89,222 +74,11 @@ function colourWidgetNames(node) {
     .map((w) => w.name);
 }
 
-// ── colour row ──────────────────────────────────────────────────────────────
-
-function buildColourRow(node, name, invalidate) {
-  const row = document.createElement("div");
-  css(row, {
-    display: "flex", alignItems: "center", gap: "5px",
-    padding: "1px 0", minWidth: "0",
-  });
-
-  const label = document.createElement("span");
-  label.textContent = name.replace(/_/g, " ");
-  css(label, { flex: "0 0 auto", opacity: ".75", minWidth: "62px" });
-
-  const swatch = document.createElement("button");
-  swatch.type = "button";
-  swatch.title = `Pick ${name.replace(/_/g, " ")}`;
-  css(swatch, {
-    flex: "0 0 auto", width: "22px", height: "14px", padding: "0",
-    borderRadius: "3px", border: "1px solid rgba(255,255,255,0.28)",
-    cursor: "pointer", background: "#000",
-  });
-
-  // A checkerboard behind the swatch, so a dark colour on a dark node is still
-  // clearly a colour and not an empty hole.
-  const swatchWrap = document.createElement("span");
-  css(swatchWrap, {
-    flex: "0 0 auto", borderRadius: "3px", padding: "0", lineHeight: "0",
-    backgroundImage:
-      "linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%)," +
-      "linear-gradient(45deg,#555 25%,#333 25%,#333 75%,#555 75%)",
-    backgroundSize: "8px 8px",
-    backgroundPosition: "0 0, 4px 4px",
-  });
-  swatchWrap.append(swatch);
-
-  const hex = document.createElement("input");
-  hex.type = "text";
-  hex.spellcheck = false;
-  hex.title = "Hex value — paste one from anywhere";
-  css(hex, {
-    flex: "1 1 auto", minWidth: "0", width: "100%",
-    background: "var(--comfy-input-bg,#222)", color: "inherit",
-    border: "1px solid var(--border-color,#444)", borderRadius: "3px",
-    padding: "0 4px", font: "inherit", fontVariantNumeric: "tabular-nums",
-  });
-
-  // The native picker. Kept off-screen rather than styled, because browsers
-  // give <input type=color> a look that cannot be themed to match the node.
-  const picker = document.createElement("input");
-  picker.type = "color";
-  css(picker, { position: "absolute", width: "0", height: "0",
-                opacity: "0", pointerEvents: "none" });
-
-  row.append(label, swatchWrap, hex, picker);
-
-  const widget = () => widgetsOf(node)[name];
-
-  const paint = () => {
-    const w = widget();
-    if (!w) return;
-    const v = normHex(w.value, "#000000");
-    swatch.style.background = v;
-    if (document.activeElement !== hex) hex.value = v;
-    hex.style.borderColor = HEX_RE.test(String(w.value ?? "").trim())
-      ? "var(--border-color,#444)" : "#c0564f";
-  };
-
-  const commit = (v) => {
-    const w = widget();
-    if (!w) return;
-    w.value = v;
-    w.callback?.(v);
-    paint();
-    invalidate();
-    node.setDirtyCanvas(true, true);
-  };
-
-  swatch.onclick = () => { picker.value = normHex(widget()?.value); picker.click(); };
-  picker.oninput = () => commit(picker.value);
-  hex.oninput = () => {
-    const raw = hex.value.trim();
-    if (HEX_RE.test(raw)) commit(raw.startsWith("#") ? raw : "#" + raw);
-    else hex.style.borderColor = "#c0564f";   // say it is wrong, do not fight it
-  };
-  hex.onblur = paint;
-
-  return { row, paint };
-}
-
-// ── direction dial ──────────────────────────────────────────────────────────
-
-const DIAL_PX = 62;
-
-function buildDial(node, invalidate) {
-  const wrap = document.createElement("div");
-  css(wrap, { display: "flex", alignItems: "center", gap: "8px", padding: "2px 0" });
-
-  const cv = document.createElement("canvas");
-  cv.width = DIAL_PX * 2;
-  cv.height = DIAL_PX * 2;
-  css(cv, { width: `${DIAL_PX}px`, height: `${DIAL_PX}px`, flex: "0 0 auto",
-            cursor: "grab", borderRadius: "50%" });
-  cv.title = "Drag to aim the shadow. Shift-drag holds the distance, " +
-             "Alt-drag holds the angle.";
-
-  const readout = document.createElement("div");
-  css(readout, { flex: "1 1 auto", minWidth: "0", lineHeight: "1.45",
-                 fontVariantNumeric: "tabular-nums", opacity: ".85" });
-
-  wrap.append(cv, readout);
-
-  const xy = () => {
-    const w = widgetsOf(node);
-    return [Number(w.distance_x?.value ?? 0), Number(w.distance_y?.value ?? 0)];
-  };
-
-  const setXY = (x, y) => {
-    const w = widgetsOf(node);
-    if (w.distance_x) { w.distance_x.value = Math.round(x); w.distance_x.callback?.(w.distance_x.value); }
-    if (w.distance_y) { w.distance_y.value = Math.round(y); w.distance_y.callback?.(w.distance_y.value); }
-    node.setDirtyCanvas(true, true);
-  };
-
-  const paint = () => {
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    const s = cv.width;
-    const c = s / 2;
-    ctx.clearRect(0, 0, s, s);
-
-    // dial face
-    ctx.fillStyle = "#1b1b1b";
-    ctx.beginPath();
-    ctx.arc(c, c, c - 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // cross hairs
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(6, c); ctx.lineTo(s - 6, c);
-    ctx.moveTo(c, 6); ctx.lineTo(c, s - 6);
-    ctx.stroke();
-
-    const [x, y] = xy();
-    const dist = Math.hypot(x, y);
-    // The dial shows direction at full radius and distance as the handle's
-    // reach, compressed with a sqrt so a 25px and a 400px shadow are both
-    // readable on the same 62px control.
-    const reach = dist === 0 ? 0 : Math.min(1, Math.sqrt(dist / 200));
-    const hx = c + (dist === 0 ? 0 : (x / dist) * reach * (c - 10));
-    const hy = c + (dist === 0 ? 0 : (y / dist) * reach * (c - 10));
-
-    ctx.strokeStyle = "#e0a24a";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(c, c);
-    ctx.lineTo(hx, hy);
-    ctx.stroke();
-
-    ctx.fillStyle = "#e0a24a";
-    ctx.beginPath();
-    ctx.arc(hx, hy, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Screen y grows downward; report the angle the way a compositor says it,
-    // anticlockwise from east.
-    const deg = dist === 0 ? 0 : ((-Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-    readout.textContent =
-      `${deg.toFixed(0)}° · ${dist.toFixed(0)} px\n` +
-      `x ${x}  y ${y}` +
-      (dist === 0 ? "\ncentred — no offset" : "");
-    readout.style.whiteSpace = "pre-line";
-  };
-
-  let drag = null;
-  cv.onpointerdown = (e) => {
-    cv.setPointerCapture(e.pointerId);
-    cv.style.cursor = "grabbing";
-    const [x0, y0] = xy();
-    drag = { d0: Math.hypot(x0, y0), a0: Math.atan2(y0, x0) };
-    move(e);
-  };
-  const move = (e) => {
-    if (!drag) return;
-    const r = cv.getBoundingClientRect();
-    const dx = e.clientX - (r.left + r.width / 2);
-    const dy = e.clientY - (r.top + r.height / 2);
-    const reach = Math.min(1, Math.hypot(dx, dy) / (r.width / 2 - 5));
-    const angle = e.altKey ? drag.a0 : Math.atan2(dy, dx);
-    const dist = e.shiftKey ? drag.d0 : Math.round(reach * reach * 200);
-    setXY(Math.cos(angle) * dist, Math.sin(angle) * dist);
-    paint();
-    invalidate();
-  };
-  cv.onpointermove = (e) => { if (drag) move(e); };
-  const end = (e) => {
-    if (!drag) return;
-    drag = null;
-    cv.style.cursor = "grab";
-    try { cv.releasePointerCapture(e.pointerId); } catch (_e) { /* already gone */ }
-  };
-  cv.onpointerup = end;
-  cv.onpointercancel = end;
-
-  return { wrap, paint };
-}
-
 // ── gradient ramp ───────────────────────────────────────────────────────────
 
 const RAMP_H = 26;
 
-function buildRamp(node, cfg, invalidate) {
+function buildRamp(node, cfg) {
   const wrap = document.createElement("div");
   css(wrap, { padding: "2px 0" });
 
@@ -384,7 +158,7 @@ function buildRamp(node, cfg, invalidate) {
     }
   };
 
-  return { wrap, paint };
+  return { wrap, paint, height: RAMP_H + 16 };
 }
 
 // ── assembly ────────────────────────────────────────────────────────────────
@@ -392,84 +166,26 @@ function buildRamp(node, cfg, invalidate) {
 function attach(node, nodeName) {
   if (node[ST]) return node[ST];
 
-  const root = document.createElement("div");
-  css(root, {
-    width: "100%", boxSizing: "border-box", padding: "3px 2px",
-    display: "flex", flexDirection: "column", gap: "2px",
-    font: "10px system-ui,sans-serif", color: "var(--input-text,#ddd)",
-  });
-
-  const st = { parts: [], raf: 0, dead: false };
-  node[ST] = st;
-
-  st.invalidate = () => {
-    if (st.dead || st.raf) return;
-    st.raf = requestAnimationFrame(() => {
-      st.raf = 0;
-      if (st.dead || !root.isConnected) return;
-      for (const p of st.parts) { try { p.paint(); } catch (_e) { /* one bad part
-        must not blank the rest */ } }
-    });
-  };
+  const parts = [];
+  const bump = () => node[ST]?.invalidate?.();
 
   if (DIAL_NODES.has(nodeName)) {
-    const dial = buildDial(node, st.invalidate);
-    root.append(dial.wrap);
-    st.parts.push(dial);
+    parts.push(angleDial(node, {
+      mode: "xy", x: "distance_x", y: "distance_y",
+      maxDistance: 200, zeroLabel: "centred \u2014 no offset",
+    }, bump));
   }
 
   const rampCfg = RAMP_NODES[nodeName];
-  if (rampCfg) {
-    const ramp = buildRamp(node, rampCfg, st.invalidate);
-    root.append(ramp.wrap);
-    st.parts.push(ramp);
-  }
+  if (rampCfg) parts.push(buildRamp(node, rampCfg));
 
   for (const name of colourWidgetNames(node)) {
-    const row = buildColourRow(node, name, st.invalidate);
-    root.append(row.row);
-    st.parts.push(row);
+    parts.push(colourRow(node, name, bump));
   }
 
-  if (!st.parts.length) { delete node[ST]; return null; }
-
-  const rows = st.parts.length;
-  const widget = node.addDOMWidget("c2c_layer_fx", "div", root, { serialize: false });
-  widget.computeSize = (width) => {
-    let h = 8;
-    if (DIAL_NODES.has(nodeName)) h += DIAL_PX + 4;
-    if (rampCfg) h += RAMP_H + 16;
-    h += colourWidgetNames(node).length * 18;
-    return [width, h];
-  };
-  void rows;
-
-  // Repaint whenever any widget moves - the ramp and the dial both read several
-  // widgets, so watching only "their own" would leave them stale.
-  for (const w of node.widgets || []) {
-    const prev = w.callback;
-    w.callback = function (...args) {
-      const r = prev?.apply(this, args);
-      st.invalidate();
-      return r;
-    };
-  }
-
-  if (typeof ResizeObserver !== "undefined") {
-    st.ro = new ResizeObserver(() => st.invalidate());
-    st.ro.observe(root);
-  }
-
-  const onRemoved = node.onRemoved;
-  node.onRemoved = function (...args) {
-    st.dead = true;
-    if (st.raf) cancelAnimationFrame(st.raf);
-    st.ro?.disconnect();
-    return onRemoved?.apply(this, args);
-  };
-
-  st.invalidate();
-  return st;
+  // mountParts owns the root element, the rAF-coalesced repaint, the widget
+  // height and the teardown, so all three families behave identically.
+  return mountParts(node, ST, parts);
 }
 
 app.registerExtension({

@@ -671,10 +671,13 @@ class TestFrontEndMatchesTheBackend:
     def test_the_hex_pattern_in_the_js_accepts_the_python_defaults(self):
         # Belt and braces: the JS validates with its own regex before writing.
         # If the two disagree, a legitimate default shows as an error outline.
+        # The pattern lives in the SHARED control module, because the mask
+        # toolkit's colour row is the same control.
         from nodes.layer_effects import NODE_CLASS_MAPPINGS
 
-        src = _FX_JS.read_text(encoding="utf-8")
-        assert "const HEX_RE = /^#?[0-9a-fA-F]{6}$/;" in src
+        shared = _PACK / "js" / "_c2c_fx_controls.js"
+        assert "const HEX_RE = /^#?[0-9a-fA-F]{6}$/;" in shared.read_text(
+            encoding="utf-8")
         for cls in NODE_CLASS_MAPPINGS.values():
             spec = cls.INPUT_TYPES()
             for name, entry in spec.get("required", {}).items():
@@ -683,3 +686,23 @@ class TestFrontEndMatchesTheBackend:
                         r"#?[0-9a-fA-F]{6}", str(entry[1].get("default", ""))
                     )
         _json.dumps({})          # keep the import honest
+
+    def test_the_shared_control_module_resolves_for_both_families(self):
+        # INVARIANT: a relative import of a file that is not there 404s, and the
+        # browser discards the whole module graph below it - so one bad path
+        # takes out BOTH front-ends, not just the one that named it. Everything
+        # in js/ is auto-loaded by WEB_DIRECTORY, so there is no import list to
+        # catch this; only the path itself.
+        shared = _PACK / "js" / "_c2c_fx_controls.js"
+        assert shared.is_file()
+        for consumer in ("c2c_layer_effects.js", "c2c_mask_toolkit.js"):
+            src = (_PACK / "js" / consumer).read_text(encoding="utf-8")
+            assert './_c2c_fx_controls.js"' in src, f"{consumer} lost the import"
+
+    def test_the_shared_module_registers_nothing_of_its_own(self):
+        # INVARIANT: WEB_DIRECTORY loads every .js in js/, this one included. A
+        # helper that also called registerExtension would run twice-over and
+        # attach controls to nodes it knows nothing about.
+        shared = (_PACK / "js" / "_c2c_fx_controls.js").read_text(encoding="utf-8")
+        assert "registerExtension" not in shared
+        assert "scripts/app.js" not in shared

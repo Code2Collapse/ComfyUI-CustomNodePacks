@@ -77,7 +77,77 @@ def batch_image():
 
 # ─── Schema / Input Types ────────────────────────────────────────────
 
+# Frozen widget order — inserting into the middle breaks saved workflows.
+_LUMAKEY_REQUIRED_ORDER = [
+    "image", "mode", "low", "high", "gamma", "falloff", "invert",
+]
+_LUMAKEY_OPTIONAL_ORDER = ["channel", "low_soft", "high_soft", "invert_key"]
+
+# Goldens captured from LuminanceKeyerMEC BEFORE the mask-toolkit extension.
+# Means/sums for representative fixtures; full tensors compared via reference impl.
+_GOLDEN_STATS = {
+    "gradient_custom": {"mean": 0.5, "sum": 8192.0, "tl": 0.0, "br": 1.0, "mid": 0.7530365586280823},
+    "gradient_highlights": {"mean": 0.15, "sum": 2457.6, "tl": 0.0, "br": 1.0, "mid": 0.0},
+    "gradient_shadows": {"mean": 0.15, "sum": 2457.6, "tl": 1.0, "br": 0.0, "mid": 0.0},
+    "bright_auto": {"mean": 0.0, "sum": 0.0},
+    "dark_auto": {"mean": 0.0, "sum": 0.0},
+    "gradient_narrow": {"mean": 0.2, "sum": 3276.8},
+    "batch_custom": {"frame_means": [0.028, 0.5, 0.972]},
+}
+
+
+def _reference_key_pre_extension(
+    image, mode, low, high, gamma, falloff, invert,
+):
+    """Verbatim pre-extension luminance key path (BT.709 + existing modes only)."""
+    r = image[:, :, :, 0]
+    g = image[:, :, :, 1]
+    b = image[:, :, :, 2]
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    luminance = luminance.clamp(0.0, 1.0)
+    presets = {"highlights": (0.7, 1.0), "midtones": (0.3, 0.7), "shadows": (0.0, 0.3)}
+    effective_mode = mode
+    if mode == "auto":
+        mean_luma = luminance.mean().item()
+        if mean_luma > 0.6:
+            effective_mode = "shadows"
+        elif mean_luma < 0.4:
+            effective_mode = "highlights"
+        else:
+            effective_mode = "midtones"
+    if effective_mode in presets:
+        t_low, t_high = presets[effective_mode]
+    else:
+        t_low, t_high = low, high
+    if t_low > t_high:
+        t_low, t_high = t_high, t_low
+    span = t_high - t_low
+    if span < 1e-7:
+        mask = (luminance >= t_low).float()
+    elif effective_mode == "shadows":
+        t = ((luminance - t_low) / span).clamp(0.0, 1.0)
+        mask = _smooth_step(1.0 - t, falloff)
+    elif effective_mode == "midtones":
+        midpoint = (t_low + t_high) * 0.5
+        half_span = span * 0.5
+        t = 1.0 - ((luminance - midpoint).abs() / half_span).clamp(0.0, 1.0)
+        mask = _smooth_step(t, falloff)
+    else:
+        t = ((luminance - t_low) / span).clamp(0.0, 1.0)
+        mask = _smooth_step(t, falloff)
+    if abs(gamma - 1.0) > 1e-6:
+        mask = mask.clamp(0.0, 1.0).pow(max(gamma, 0.01))
+    if invert:
+        mask = 1.0 - mask
+    return mask.clamp(0.0, 1.0)
+
+
 class TestSchema:
+    def test_widget_order_pinned(self):
+        spec = LuminanceKeyerMEC.INPUT_TYPES()
+        assert list(spec["required"].keys()) == _LUMAKEY_REQUIRED_ORDER
+        assert list(spec.get("optional", {}).keys()) == _LUMAKEY_OPTIONAL_ORDER
+
     def test_input_types_structure(self):
         inputs = LuminanceKeyerMEC.INPUT_TYPES()
         req = inputs["required"]
@@ -104,6 +174,72 @@ class TestSchema:
 
     def test_vram_tier(self):
         assert LuminanceKeyerMEC.VRAM_TIER == 1
+
+
+# ─── Golden / default compatibility ───────────────────────────────────
+
+class TestGoldenDefaults:
+    def test_defaults_bit_identical_golden(self, keyer, gradient_image, batch_image):
+        cases = [
+            (gradient_image, "custom", 0.0, 1.0, 1.0, 1.0, False),
+            (gradient_image, "highlights", 0.0, 1.0, 1.0, 1.0, False),
+            (gradient_image, "shadows", 0.0, 1.0, 1.0, 1.0, False),
+            (torch.ones(1, 64, 64, 3) * 0.85, "auto", 0.0, 1.0, 1.0, 1.0, False),
+            (torch.ones(1, 64, 64, 3) * 0.15, "auto", 0.0, 1.0, 1.0, 1.0, False),
+            (gradient_image, "custom", 0.4, 0.6, 1.0, 1.0, False),
+        ]
+        for img, mode, low, high, gamma, falloff, inv in cases:
+            ref = _reference_key_pre_extension(img, mode, low, high, gamma, falloff, inv)
+            got, _ = keyer.key_luminance(
+                img, mode, low, high, gamma, falloff, inv,
+                channel="luma", low_soft=0.0, high_soft=0.0, invert_key=False,
+            )
+            assert torch.allclose(ref, got, atol=1e-6)
+        ref_b = _reference_key_pre_extension(
+            batch_image, "custom", 0.0, 1.0, 1.0, 1.0, False,
+        )
+        got_b, _ = keyer.key_luminance(
+            batch_image, "custom", 0.0, 1.0, 1.0, 1.0, False,
+            channel="luma", low_soft=0.0, high_soft=0.0, invert_key=False,
+        )
+        assert torch.allclose(ref_b, got_b, atol=1e-6)
+
+    def test_hardcoded_golden_stats(self, keyer, gradient_image):
+        m, _ = keyer.key_luminance(
+            gradient_image, "custom", 0.0, 1.0, 1.0, 1.0, False,
+            channel="luma", low_soft=0.0, high_soft=0.0, invert_key=False,
+        )
+        g = _GOLDEN_STATS["gradient_custom"]
+        assert abs(m.mean().item() - g["mean"]) < 1e-4
+        assert abs(m.sum().item() - g["sum"]) < 1.0
+        assert abs(m[0, 0, 0].item() - g["tl"]) < 1e-6
+        assert abs(m[0, -1, -1].item() - g["br"]) < 1e-6
+
+    def test_channel_red_differs_from_luma(self, keyer):
+        img = torch.zeros(1, 32, 32, 3)
+        img[:, :, :, 0] = 0.9
+        img[:, :, :, 1] = 0.1
+        img[:, :, :, 2] = 0.1
+        m_luma, _ = keyer.key_luminance(
+            img, "custom", 0.0, 1.0, 1.0, 1.0, False, channel="luma",
+        )
+        m_red, _ = keyer.key_luminance(
+            img, "custom", 0.0, 1.0, 1.0, 1.0, False, channel="red",
+        )
+        assert not torch.allclose(m_luma, m_red, atol=0.05)
+
+    def test_soft_ends_widen_transition(self, keyer, gradient_image):
+        hard, _ = keyer.key_luminance(
+            gradient_image, "custom", 0.3, 0.7, 1.0, 1.0, False,
+            low_soft=0.0, high_soft=0.0,
+        )
+        soft, _ = keyer.key_luminance(
+            gradient_image, "custom", 0.3, 0.7, 1.0, 1.0, False,
+            low_soft=0.15, high_soft=0.15,
+        )
+        mid_hard = ((hard > 0.1) & (hard < 0.9)).float().mean().item()
+        mid_soft = ((soft > 0.1) & (soft < 0.9)).float().mean().item()
+        assert mid_soft > mid_hard
 
 
 # ─── BT.709 Luminance ────────────────────────────────────────────────

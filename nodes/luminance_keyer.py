@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from . import _interrupt_check as _IC
 from ._is_changed_util import hash_args_and_kwargs
-
 import gc
 import torch
 
@@ -135,6 +134,33 @@ class LuminanceKeyerMEC:
                     "tooltip": "Invert the output mask (swap keyed and unkeyed regions).",
                 }),
             },
+            "optional": {
+                "channel": (["luma", "red", "green", "blue", "hue", "saturation", "value", "L", "a", "b"], {
+                    "default": "luma",
+                    "tooltip": (
+                        "Channel to key on. Luma is BT.709; hue/sat/value and LAB a/b "
+                        "isolate coloured spill without three separate nodes."
+                    ),
+                }),
+                "low_soft": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": (
+                        "Blend-If split below low — ramp into the key instead of a hard cut "
+                        "that looks like a sticker."
+                    ),
+                }),
+                "high_soft": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Blend-If split above high — feather the highlight side of the range.",
+                }),
+                "invert_key": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Invert the sampled channel before thresholding (ImageToMask behaviour). "
+                        "Distinct from invert, which flips the finished matte."
+                    ),
+                }),
+            },
         }
 
     RETURN_TYPES = ("MASK", "STRING")
@@ -154,7 +180,9 @@ class LuminanceKeyerMEC:
 
     @classmethod
     def IS_CHANGED(cls, image, mode, low, high, falloff, gamma, invert, **kwargs):
-        return hash_args_and_kwargs(image, mode, low, high, falloff, gamma, invert, **kwargs)
+        return hash_args_and_kwargs(
+            image, mode, low, high, falloff, gamma, invert, **kwargs,
+        )
 
     def key_luminance(
         self,
@@ -165,13 +193,19 @@ class LuminanceKeyerMEC:
         gamma: float,
         falloff: float,
         invert: bool,
+        channel: str = "luma",
+        low_soft: float = 0.0,
+        high_soft: float = 0.0,
+        invert_key: bool = False,
     ) -> tuple[torch.Tensor, str]:
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("LuminanceKeyerMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             with _PB.session("LumaKeyer"):
-                return self._key_luminance_impl(image, mode, low, high, gamma,
-                                                falloff, invert)
+                return self._key_luminance_impl(
+                    image, mode, low, high, gamma, falloff, invert,
+                    channel, low_soft, high_soft, invert_key,
+                )
 
     def _key_luminance_impl(
         self,
@@ -182,17 +216,27 @@ class LuminanceKeyerMEC:
         gamma: float,
         falloff: float,
         invert: bool,
+        channel: str = "luma",
+        low_soft: float = 0.0,
+        high_soft: float = 0.0,
+        invert_key: bool = False,
     ) -> tuple[torch.Tensor, str]:
         B, H, W, C = image.shape
 
         try:
-            # ── 1. Compute BT.709 luminance ──────────────────────────
-            # image is (B, H, W, C) with C >= 3
-            r = image[:, :, :, 0]
-            g = image[:, :, :, 1]
-            b = image[:, :, :, 2]
-            luminance = _BT709_R * r + _BT709_G * g + _BT709_B * b  # (B, H, W)
-            luminance = luminance.clamp(0.0, 1.0)
+            # ── 1. Sample channel ────────────────────────────────────
+            if channel == "luma":
+                # image is (B, H, W, C) with C >= 3
+                r = image[:, :, :, 0]
+                g = image[:, :, :, 1]
+                b = image[:, :, :, 2]
+                luminance = _BT709_R * r + _BT709_G * g + _BT709_B * b  # (B, H, W)
+                luminance = luminance.clamp(0.0, 1.0)
+            else:
+                from .mask_toolkit._ops import extract_channel
+                luminance = extract_channel(image, channel)
+            if invert_key:
+                luminance = 1.0 - luminance
 
             # ── 2. Determine thresholds ──────────────────────────────
             effective_mode = mode
@@ -209,6 +253,10 @@ class LuminanceKeyerMEC:
             # Ensure low <= high
             if t_low > t_high:
                 t_low, t_high = t_high, t_low
+
+            # Blend-If soft ends: widen the window (identity when both are 0).
+            t_low = t_low - float(low_soft)
+            t_high = t_high + float(high_soft)
 
             # ── 3. Build mask based on mode ───────────────────────────
             span = t_high - t_low
@@ -244,7 +292,7 @@ class LuminanceKeyerMEC:
             if invert:
                 mask = 1.0 - mask
 
-            mask = mask.clamp(0.0, 1.0)
+            mask = mask.clamp(0.0, 1.0).clone()
 
             # ── 6. Compute statistics for info string ────────────────
             mean_luma = luminance.mean().item()

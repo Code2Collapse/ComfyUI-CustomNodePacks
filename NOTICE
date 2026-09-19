@@ -92,6 +92,20 @@ Vendored third-party packages (under third_party/):
                 The front-end (js/c2c_layer_effects.js) is original work: the
                 upstream ships none for these nodes.
 
+                Second batch, nodes/mask_toolkit/: the LayerMask family. Only
+                the five capabilities this pack did not already have were
+                ported - Mask From Color, Mask Gradient, Mask Grain, Mask
+                Motion Blur and Edge Spread - plus a channel selector and
+                Blend-If soft ends folded into the EXISTING LuminanceKeyerMEC
+                rather than added as a sixth node. The rest of LayerMask was
+                deliberately not ported: MaskEdgeUltraDetail V1/V2/V3,
+                MaskGrow, MaskEdgeShrink, MaskInvert and MaskPreview are
+                covered by MaskRefineMEC, MaskStroke by LayerEffectStrokeMEC,
+                MaskBoxDetect/Extend by nodes/bbox_nodes.py, and the eight
+                Segformer nodes and RemBgUltra need model weights.
+                Front-ends in js/c2c_mask_toolkit.js and the shared
+                js/_c2c_fx_controls.js are original work.
+
   * Virtuoso Pack (blend-mode table, via ComfyUI_LayerStyle)
       Author:   Chris Freilich
       Source:   https://github.com/chrisfreilich/virtuoso-nodes

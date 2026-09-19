@@ -182,7 +182,7 @@ class LayerEffectDropShadowMEC:
         background_image=None,
         layer_mask=None,
     ):
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._run(
                 layer_image, invert_mask, blend_mode, opacity,
                 distance_x, distance_y, grow, blur, shadow_color,
@@ -314,7 +314,7 @@ class LayerEffectOuterGlowMEC:
     def execute(self, layer_image, invert_mask, blend_mode, opacity, brightness,
                 glow_range, blur, light_color, glow_color, dissolve_seed=0,
                 background_image=None, layer_mask=None):
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._glow(
                 layer_image, invert_mask, blend_mode, opacity, brightness,
                 glow_range, blur, light_color, glow_color, dissolve_seed,
@@ -392,7 +392,7 @@ class LayerEffectInnerGlowMEC(LayerEffectOuterGlowMEC):
     def execute(self, layer_image, invert_mask, blend_mode, opacity, brightness,
                 glow_range, blur, light_color, glow_color, dissolve_seed=0,
                 background_image=None, layer_mask=None):
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._glow(
                 layer_image, invert_mask, blend_mode, opacity, brightness,
                 glow_range, blur, light_color, glow_color, dissolve_seed,
@@ -431,7 +431,7 @@ class LayerEffectStrokeMEC:
     def execute(self, layer_image, invert_mask, blend_mode, opacity, stroke_grow,
                 stroke_width, blur, stroke_color, dissolve_seed=0,
                 background_image=None, layer_mask=None):
-        with torch.inference_mode():
+        with torch.no_grad():
             name = "Layer Effect: Stroke (MEC)"
             bg, layer, masks, notes, b = _prepare_compositing(
                 name, layer_image, background_image, layer_mask, invert_mask,
@@ -500,7 +500,7 @@ class LayerEffectColorOverlayMEC:
 
     def execute(self, layer_image, invert_mask, blend_mode, opacity, color,
                 dissolve_seed=0, background_image=None, layer_mask=None):
-        with torch.inference_mode():
+        with torch.no_grad():
             name = "Layer Effect: Color Overlay (MEC)"
             bg, layer, masks, notes, b = _prepare_compositing(
                 name, layer_image, background_image, layer_mask, invert_mask,
@@ -564,7 +564,7 @@ class LayerEffectGradientOverlayMEC:
         start_color, start_alpha, end_color, end_alpha, angle,
         dissolve_seed=0, background_image=None, layer_mask=None,
     ):
-        with torch.inference_mode():
+        with torch.no_grad():
             name = "Layer Effect: Gradient Overlay (MEC)"
             bg, layer, masks, notes, b = _prepare_compositing(
                 name, layer_image, background_image, layer_mask, invert_mask,
@@ -641,7 +641,7 @@ class LayerEffectGradientMapMEC:
         return hash_args_and_kwargs(**kwargs)
 
     def execute(self, image, start_color, mid_color, end_color, mid_point, opacity, layer_mask=None):
-        with torch.inference_mode():
+        with torch.no_grad():
             name = "Layer Effect: Gradient Map (MEC)"
             image = ensure_bhw4_image(image, name)
             layer_mask = ensure_bhw_mask(layer_mask, name)

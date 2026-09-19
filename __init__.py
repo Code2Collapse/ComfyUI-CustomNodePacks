@@ -223,6 +223,26 @@ except Exception as _exc:  # pragma: no cover
     )
     _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY = {}, {}
 
+# Mask toolkit (LayerMask port — torch-native, batch-correct)
+try:
+    from .nodes.mask_toolkit import (
+        NODE_CLASS_MAPPINGS as _MASKTOOLKIT_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MASKTOOLKIT_DISPLAY,
+    )
+except Exception as _mtk_exc:  # pragma: no cover
+    _MASKTOOLKIT_MAPPINGS, _MASKTOOLKIT_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_mtk
+        _c2c_rec_fail_mtk(
+            "mask_toolkit", _mtk_exc,
+            hint="Mask toolkit failed to import. Check nodes/mask_toolkit/_ops.py and nodes.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] mask_toolkit import failed: %s", _mtk_exc,
+        )
 # Luminance Keyer (Nuke-style luma key, pure tensor math)
 try:
     from .nodes.luminance_keyer import LuminanceKeyerMEC
@@ -589,6 +609,7 @@ NODE_CLASS_MAPPINGS = {
     **_FPDELTA_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
     **_LAYERFX_MAPPINGS,
+    **_MASKTOOLKIT_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -622,6 +643,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FPDELTA_DISPLAY,
     **_MASKMATTE_DISPLAY,
     **_LAYERFX_DISPLAY,
+    **_MASKTOOLKIT_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,

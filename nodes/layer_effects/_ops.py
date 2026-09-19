@@ -6,6 +6,16 @@
 # tensor for EVERY frame, so a 100-frame comp pays that round trip a
 # hundred times and never touches the GPU the tensor is already on.
 """Torch image ops for layer effects — no PIL in hot path."""
+# WHY no_grad AND NOT inference_mode: inference_mode marks the tensors it
+# produces as "inference tensors", and an inference tensor cannot be mutated
+# in place outside inference mode. ComfyUI hands a node's output straight to
+# the next node, and plenty of nodes - core ones included - do in-place work on
+# an IMAGE or MASK they were given. Those blow up with
+# "Inplace update to inference tensor outside InferenceMode is not allowed",
+# which names nothing the user can act on and points at the wrong node.
+# no_grad skips the autograd graph just the same, without the version-counter
+# restriction. Pinned by test_no_node_returns_an_inference_tensor.
+
 from __future__ import annotations
 
 import math
