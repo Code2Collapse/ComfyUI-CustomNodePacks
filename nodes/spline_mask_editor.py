@@ -748,7 +748,7 @@ class SplineMaskEditorMEC:
                 f"SplineMaskEditorMEC: image must be IMAGE [B,H,W,C], got {tuple(image.shape)}"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, spline_data, spline_type, closed, smoothing,
                 samples_per_segment, feather_radius, invert, centripetal_alpha,

@@ -81,7 +81,7 @@ class RVMMatter(BaseMatter):
             x = img.permute(0, 3, 1, 2).to(self.device, dtype=self._dtype)
             rec = [None] * 4   # recurrent state
             outs = []
-            with torch.inference_mode():
+            with torch.no_grad():
                 for i in interruptible_range(B, label="rvm"):
                     frame = x[i:i + 1]
                     fgr, pha, *rec = self._model(frame, *rec, downsample_ratio=0.4)

@@ -207,7 +207,7 @@ class SAM2Segmenter(BaseSegmenter):
         # mis-read header bytes as a legacy pickle protocol (e.g. "27"). We
         # build the model with no checkpoint and load the state dict ourselves,
         # supporting both formats.
-        with torch.inference_mode():
+        with torch.no_grad():
             self._image_model = build_sam2(cfg, ckpt_path=None, device=self.device)
             self._load_state_dict_lenient(self._image_model, sd_probe)
             self._predictor = SAM2ImagePredictor(self._image_model)
@@ -258,7 +258,7 @@ class SAM2Segmenter(BaseSegmenter):
 
     def _segment_image(self, image_hwc: np.ndarray, pos, neg, bbox) -> Tuple[np.ndarray, float]:
         img_u8 = (image_hwc * 255).clip(0, 255).astype(np.uint8)
-        with torch.inference_mode(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
+        with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
             self._predictor.set_image(img_u8)
             point_coords = None
             point_labels = None
@@ -316,7 +316,7 @@ class SAM2Segmenter(BaseSegmenter):
                 Image.fromarray((sub[i].cpu().numpy() * 255).astype(np.uint8)).save(
                     os.path.join(tmp, f"{i:06d}.jpg"), quality=95,
                 )
-            with torch.inference_mode(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
+            with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
                 state = self._video_predictor.init_state(video_path=tmp)
                 ann_frame = max(0, min(frame_annotation - start, N - 1))
                 if pos or neg:

@@ -662,7 +662,7 @@ class SplinePathFlowMaskMEC:
             raise ValueError(
                 "SplinePathFlowMaskMEC optional image must be IMAGE [B,H,W,C]"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 spline_data, pattern, width, height, thickness, amplitude,
                 frequency, turbulence, turbulence_scale, edge_softness,

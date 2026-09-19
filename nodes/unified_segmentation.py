@@ -462,7 +462,7 @@ class UnifiedSegmentation:
         ):
             raise ValueError("UnifiedSegmentation existing_mask expects MASK [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._segment_impl(
                 image, model_name, points_json, bbox_json,
                 multimask, mask_index, precision, bbox,

@@ -92,7 +92,7 @@ class MatAnyoneMatter(BaseMatter):
         self._processor = processor
         self._model = processor
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def matte(self, image_bhwc, coarse_mask,
               *, trimap=None, edge_radius: int = 4, memory_size: int = 8):
         try:

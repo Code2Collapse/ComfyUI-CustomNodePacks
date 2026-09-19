@@ -160,7 +160,7 @@ class MaskTransformXY:
                   feather: float, threshold: float, invert: bool):
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
             raise ValueError("MaskTransformXY expects MASK tensor [H,W] or [B,H,W]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._transform_impl(
                 mask, expand_x, expand_y, blur_x, blur_y, offset_x, offset_y,
                 feather, threshold, invert,

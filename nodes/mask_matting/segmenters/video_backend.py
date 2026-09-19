@@ -159,7 +159,7 @@ class CutieSegmenter(BaseSegmenter):
         self._InferenceCore = InferenceCore
         self._model = net  # sentinel for is-loaded
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def segment(self, image_bhwc, **kw):
         try:
             self.load()
@@ -274,7 +274,7 @@ class XMemSegmenter(BaseSegmenter):
         self._InferenceCore = InferenceCore
         self._model = net
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def segment(self, image_bhwc, **kw):
         try:
             self.load()
@@ -363,7 +363,7 @@ class SeCSegmenter(BaseSegmenter):
         self._predictor = build_sec_predictor(ckpt_path=ckpt, device=self.device)
         self._model = self._predictor
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def segment(self, image_bhwc, **kw):
         try:
             self.load()
@@ -469,7 +469,7 @@ class VideoMaMaSegmenter(BaseSegmenter):
         self._predictor = build_predictor(ckpt_path=ckpt, device=self.device)
         self._model = self._predictor
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def segment(self, image_bhwc, **kw):
         try:
             self.load()

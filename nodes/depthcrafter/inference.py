@@ -116,7 +116,7 @@ class DepthCrafterInference:
             dataset,
         )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             res = self.pipe(
                 frames,
                 height=frames.shape[1],

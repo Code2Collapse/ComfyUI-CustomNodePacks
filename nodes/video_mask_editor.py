@@ -503,7 +503,7 @@ class VideoMaskEditorMEC:
             raise ValueError(
                 "VideoMaskEditorMEC: input_mask must be MASK tensor [H,W] or [B,H,W]"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, session_id, tween_mode, feather, threshold, input_mask,
             )

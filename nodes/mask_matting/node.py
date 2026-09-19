@@ -601,7 +601,7 @@ class MaskOpsMEC:
                     f"MaskOpsMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
                 )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, segmenter, matter, model, matter_model,
                 precision, attention, offload, subject_preset,

@@ -90,7 +90,7 @@ class LocateAnythingGroundingMEC:
             raise ValueError(
                 "LocateAnythingGroundingMEC expects IMAGE tensor [B,H,W,C]"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._run_impl(
                 image, prompt, model_path, generation_mode, max_new_tokens,
                 device, confidence_threshold,
@@ -257,7 +257,7 @@ class LocateAnythingToSAMMEC:
             raise ValueError(
                 "LocateAnythingToSAMMEC expects IMAGE tensor [B,H,W,C]"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             B, H, W = image.shape[0], image.shape[1], image.shape[2]
             mask = torch.zeros((B, H, W), dtype=torch.float32)
 

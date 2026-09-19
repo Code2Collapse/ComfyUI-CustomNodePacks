@@ -86,7 +86,7 @@ class MaskPropagateVideo:
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
             raise ValueError("MaskPropagateVideo expects MASK tensor [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._propagate_core(
                 images, mask, source_frame, mode, flow_threshold,
                 fade_start, fade_end, bidirectional, sam_model, points_json,

@@ -196,7 +196,7 @@ class SAMMaskGeneratorMEC:
         ):
             raise ValueError("SAMMaskGeneratorMEC existing_mask expects MASK [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._generate_impl(
                 sam_model, image, points_json, bbox_json,
                 text_prompt, negative_text_prompt, grounding_model,

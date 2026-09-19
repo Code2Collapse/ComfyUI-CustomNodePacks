@@ -148,7 +148,7 @@ class BGMattingV2Matter(BaseMatter):
                 )
 
             outs = []
-            with torch.inference_mode():
+            with torch.no_grad():
                 for i in interruptible_range(B, label="bgmv2"):
                     src = x[i:i + 1]
                     bg = bgr[i:i + 1]

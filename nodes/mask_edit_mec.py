@@ -269,7 +269,7 @@ class MaskEditMEC:
                 "MaskEditMEC existing_mask must be MASK tensor [H,W] or [B,H,W]"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 mode, expand_x, expand_y, blur_x, blur_y, offset_x,
                 offset_y, feather, threshold, invert, width, height,

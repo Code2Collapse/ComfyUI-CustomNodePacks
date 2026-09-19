@@ -393,7 +393,7 @@ class VideoFramePlayerMEC:
             raise ValueError("VideoFramePlayerMEC: 'frames' input is missing or invalid (expected IMAGE B,H,W,C).")
         if not isinstance(frames, torch.Tensor) or frames.ndim != 4:
             raise ValueError(f"VideoFramePlayerMEC: expected 4D IMAGE (B,H,W,C), got shape {tuple(frames.shape)}.")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._play_impl(
                 frames, frame_index, output_mode, frame_start, frame_end,
                 frame_stride, playback_fps, loop_mode, crop_enabled,

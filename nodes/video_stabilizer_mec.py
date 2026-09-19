@@ -288,7 +288,7 @@ class VideoStabilizerMEC:
             raise ValueError(
                 f"VideoStabilizerMEC expects IMAGE tensor [B,H,W,3], got {tuple(getattr(frames, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._stabilize_impl(
                 frames, method, preset, frame_rate, padding_color,
                 framing_mode, transform_mode, camera_lock, strength, smooth,

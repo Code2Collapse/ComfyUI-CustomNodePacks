@@ -1050,7 +1050,7 @@ class InpaintCropProMEC:
                     f"InpaintCropProMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
                 )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._inpaint_crop_core(
                 image, downscale_algorithm, upscale_algorithm,
                 preresize, preresize_mode,
@@ -1737,7 +1737,7 @@ class InpaintStitchProMEC:
         if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.ndim != 4:
             raise ValueError("InpaintStitchProMEC expects IMAGE tensor [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._inpaint_stitch_core(
                 stitcher, inpainted_image,
                 blend_mode_override, color_match,
@@ -2026,7 +2026,7 @@ class InpaintMaskPrepareMEC:
         ):
             raise ValueError("InpaintMaskPrepareMEC reference_image expects IMAGE [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._prepare_mask_core(
                 mask, fill_holes, remove_small_regions, min_region_area,
                 grow_pixels, inpaint_edge_mode, stitch_edge_mode,
@@ -2174,7 +2174,7 @@ class InpaintPasteBackMEC:
         if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.ndim != 4:
             raise ValueError("InpaintPasteBackMEC expects IMAGE tensor [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._paste_back_core(
                 stitcher, inpainted_image, upscale_method, feather_edges, feather_radius,
             )

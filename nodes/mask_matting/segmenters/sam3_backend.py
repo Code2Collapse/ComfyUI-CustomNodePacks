@@ -54,14 +54,14 @@ class SAM3Segmenter(BaseSegmenter):
             )
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(self.precision, torch.float16)
         self._dtype = dtype
-        with torch.inference_mode():
+        with torch.no_grad():
             self._image_model = build_sam3(ckpt, device=self.device)
             self._predictor = SAM3ImagePredictor(self._image_model)
         self._model = self._predictor
 
     def _seg_one(self, frame_hwc: np.ndarray, pos, neg, bbox, neg_bbox, text):
         img_u8 = (frame_hwc * 255).clip(0, 255).astype(np.uint8)
-        with torch.inference_mode(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
+        with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
             self._predictor.set_image(img_u8)
 
             def _predict(_pos, _neg, _bbox, _text):

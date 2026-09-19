@@ -216,7 +216,7 @@ class MaskPlacementMEC:
                 source_mask=None, source_image=None, ref_image=None, sam_model=None):
         if not _CV2_OK:
             raise RuntimeError("MaskPlacementMEC needs opencv-python (cv2) installed.")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px, source_mask, source_image,

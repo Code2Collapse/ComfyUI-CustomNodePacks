@@ -168,7 +168,7 @@ class BackgroundRemoverMEC:
             # accept the keyword `pixel_values`; call positionally when the
             # processor was unavailable (BiRefNet path).  Also cast input dtype
             # to match the loaded model parameters (fp16 BiRefNet variant).
-            with torch.inference_mode():
+            with torch.no_grad():
                 if inputs is not None:
                     out = model(**inputs)
                 else:

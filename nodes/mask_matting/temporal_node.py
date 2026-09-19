@@ -119,7 +119,7 @@ def _raft_flow_pair(img_a_chw: torch.Tensor, img_b_chw: torch.Tensor, device: st
     a = img_a_chw.unsqueeze(0).to(device)
     b = img_b_chw.unsqueeze(0).to(device)
     a, b = preprocess(a, b)
-    with torch.inference_mode():
+    with torch.no_grad():
         flows = model(a, b)
     return flows[-1][0]  # final iteration, drop batch
 
@@ -292,7 +292,7 @@ class MaskTemporalMEC:
             raise ValueError("MaskTemporalMEC expects IMAGE tensor [B,H,W,C]")
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3, 4):
             raise ValueError("MaskTemporalMEC expects MASK tensor [H,W] or [B,H,W]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._run_impl(
                 image, mask, temporal_mode, blend, sigma, device,
                 drop_threshold, jump_threshold,

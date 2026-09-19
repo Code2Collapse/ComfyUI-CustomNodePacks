@@ -263,7 +263,7 @@ class SplineMaskMEC:
         ):
             raise ValueError("SplineMaskMEC image expects IMAGE tensor [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             if mode == "edit":
                 return self._mode_edit(
                     image, spline_data, spline_type, closed, smoothing,

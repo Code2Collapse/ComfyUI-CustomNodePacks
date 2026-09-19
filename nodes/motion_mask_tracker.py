@@ -533,7 +533,7 @@ class MotionMaskTrackerMEC:
             empty_mask = torch.zeros(B, H, W, device=device, dtype=torch.float32)
             return (empty_mask, 0.0, "[MEC] MotionMaskTracker: need >= 2 frames for motion detection.")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             # ── Camera motion compensation ────────────────────────────
             camera_info = ""
             motion_magnitudes = None

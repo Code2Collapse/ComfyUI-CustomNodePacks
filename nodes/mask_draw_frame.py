@@ -258,7 +258,7 @@ class MaskDrawFrame:
                 f"got {tuple(getattr(existing_mask, 'shape', ()))}"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._draw_impl(
                 width, height, shape, shape_params_json, value, feather,
                 rotation, operation, existing_mask, reference_image,

@@ -106,7 +106,7 @@ class TrimapGeneratorMEC:
             not isinstance(image, torch.Tensor) or image.ndim != 4
         ):
             raise ValueError("TrimapGeneratorMEC optional image must be IMAGE [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._generate_impl(
                 mask, edge_radius, inner_erosion, outer_dilation,
                 smooth, threshold, image,
