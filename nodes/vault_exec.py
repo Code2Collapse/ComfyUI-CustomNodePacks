@@ -72,12 +72,20 @@ def _topo_order(nodes: list[dict], links: list[dict]) -> list[str]:
     return order
 
 
-def execute_subgraph(subgraph: dict[str, Any], boundary_inputs: dict[str, Any]) -> dict[str, Any]:
+def execute_subgraph(
+    subgraph: dict[str, Any],
+    boundary_inputs: dict[str, Any],
+    extra_widget_overrides: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Run the subgraph. Returns {boundary_out name: value}.
 
     Args:
         subgraph: the decrypted dict.
         boundary_inputs: {name: value} for each declared boundary_in.
+        extra_widget_overrides: {node_id: {widget: value}} from promoted
+            parameters. Applied BEFORE boundary inputs, so a socket wired
+            straight at a widget still wins - a wire is the more specific
+            statement of intent than a value typed on the vault.
     """
     nodes = list(subgraph.get("nodes") or [])
     links = list(subgraph.get("links") or [])
@@ -88,6 +96,15 @@ def execute_subgraph(subgraph: dict[str, Any], boundary_inputs: dict[str, Any]) 
 
     registry = _node_registry()
     by_id = {str(n["id"]): n for n in nodes}
+
+    # Validate promoted targets before anything else. A manifest that points at
+    # a node this vault does not contain means the clear-text manifest and the
+    # ciphertext have drifted apart, and no other error message would say so.
+    for node_id in (extra_widget_overrides or {}):
+        if str(node_id) not in by_id:
+            raise VaultExecError(
+                f"A promoted parameter points at node {node_id!r}, which is not "
+                "in this vault. Re-lock the vault to rebuild the manifest.")
 
     # Resolve every class BEFORE running anything, so a missing dependency is one
     # clear message instead of a half-executed graph.
@@ -110,6 +127,8 @@ def execute_subgraph(subgraph: dict[str, Any], boundary_inputs: dict[str, Any]) 
     # boundary inputs feed specific (node, slot) pairs
     injected: dict[str, dict[int, Any]] = {i: {} for i in by_id}
     widget_overrides: dict[str, dict[str, Any]] = {i: {} for i in by_id}
+    for node_id, widgets in (extra_widget_overrides or {}).items():
+        widget_overrides[str(node_id)].update(widgets)
     for spec in b_in:
         name = spec["name"]
         if name not in boundary_inputs:

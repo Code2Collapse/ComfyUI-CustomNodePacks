@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { drawEditorEmptyState } from "./_editor_empty_state.js";
 
 const NODE_NAME = "MECAdvancedPaintCanvas";
 
@@ -45,13 +46,28 @@ class PaintCanvasController {
             width: "calc(100% - 12px)",
             minHeight: "320px",
             margin: "2px 6px 16px 6px",
-            background: "var(--c2c-neutral955)",
-            border: "1px solid var(--c2c-gray700)",
+            // Literal fallback: --c2c-neutral955 is published by no theme
+            // variant, so without one the declaration is dropped and the
+            // surface goes transparent - which is the "no canvas" report.
+            background: "var(--c2c-neutral955, #14141b)",
+            border: "1px solid var(--c2c-gray700, #3a3f4b)",
             borderRadius: "4px",
             overflow: "hidden",
             userSelect: "none",
             touchAction: "none",
         });
+
+        // Backdrop: checkerboard + empty-state hint. A SEPARATE layer, because
+        // `this.draw` is serialised into canvas_data and anything painted
+        // there would be baked into the saved image.
+        this.backdrop = document.createElement("canvas");
+        Object.assign(this.backdrop.style, {
+            position: "absolute", inset: 0,
+            width: "100%", height: "100%",
+            pointerEvents: "none",
+        });
+        this.bctx = this.backdrop.getContext("2d");
+        this._hasInk = false;
 
         // Drawing canvas (RGBA, persistent)
         this.draw = document.createElement("canvas");
@@ -72,9 +88,11 @@ class PaintCanvasController {
             pointerEvents: "none",
         });
         this.cctx = this.cursor.getContext("2d");
+        this._sizeBackdrop(this.size[0], this.size[1]);
 
+        this.root.appendChild(this.backdrop);   // bottom
         this.root.appendChild(this.draw);
-        this.root.appendChild(this.cursor);
+        this.root.appendChild(this.cursor);     // top
 
         // pointer state
         this._down = false;
@@ -109,6 +127,10 @@ class PaintCanvasController {
         // NotFoundError when the pointer is already inactive. try/catch it.
         try { this.draw.setPointerCapture?.(e.pointerId); } catch (_) {}
         this._down = true;
+        if (!this._hasInk) {           // the invitation has been taken up
+            this._hasInk = true;
+            this._paintBackdrop();
+        }
         this._eraser = e.button === 2;          // right-button erases
         this._last = this._localPos(e);
         this._stamp(this._last[0], this._last[1]);
@@ -250,12 +272,39 @@ class PaintCanvasController {
         this.draw.height = h;
         this.cursor.width = w;
         this.cursor.height = h;
+        this._sizeBackdrop(w, h);
         this.size = [w, h];
         this.ctx.drawImage(tmp, 0, 0, w, h);
         this._drawCursor();
     }
+    /** Checkerboard always; the invitation only while the artboard is bare. */
+    _paintBackdrop() {
+        if (!this.bctx) return;
+        const w = this.backdrop.width, h = this.backdrop.height;
+        if (!w || !h) return;
+        this.bctx.clearRect(0, 0, w, h);
+        // The helper sizes its text as 13/z canvas px so it lands at 13 SCREEN
+        // px. Our backdrop is the canvas's pixel size (512) displayed at the
+        // node's width (~265), so z is that ratio - passing 1 renders the hint
+        // at half size, which is why it read as absent.
+        const shown = this.backdrop.clientWidth || w;
+        const z = Math.max(0.15, Math.min(1, shown / w));
+        drawEditorEmptyState(
+            this.bctx, w, h, z, this._hasInk ? "" : "\u270e",
+            this._hasInk ? [] : ["Drag to paint \u00b7 right-drag to erase",
+                                 "Brush size and colour are above"]);
+    }
+
+    _sizeBackdrop(w, h) {
+        this.backdrop.width = w;
+        this.backdrop.height = h;
+        this._paintBackdrop();
+    }
+
     clear() {
         this.ctx.clearRect(0, 0, this.draw.width, this.draw.height);
+        this._hasInk = false;
+        this._paintBackdrop();
         this._serialiseSoon();
     }
     loadFromDataURL(url) {
@@ -264,6 +313,8 @@ class PaintCanvasController {
         img.onload = () => {
             this.ctx.clearRect(0, 0, this.draw.width, this.draw.height);
             this.ctx.drawImage(img, 0, 0, this.draw.width, this.draw.height);
+            this._hasInk = true;
+            this._paintBackdrop();
         };
         img.src = url;
     }
