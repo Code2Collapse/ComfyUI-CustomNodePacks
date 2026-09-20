@@ -34,6 +34,15 @@ installed in this ComfyUI, so a straight copy would have failed at import. The
 blend table is checked against a numpy transcription of upstream's own formulas
 in `tests/test_layer_effects.py`.
 
+### ComfyUI-NKD-Basic-Tools — Nekodificador
+<https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools> · **MIT** (declared in
+`pyproject.toml`)
+
+- **`nodes/frequency_grain/`** — Frequency Separate, Frequency Combine, Film Grain.
+  Ported from `nkd_frequency.py`, `nkd_film_grain.py`, and selected helpers in
+  `helpers.py` (colour transforms, mask resize, film-grain synthesis). Reimplemented
+  as CNP V1 nodes with report outputs; upstream live-preview widget code omitted.
+
 ### Virtuoso Pack — Chris Freilich
 <https://github.com/chrisfreilich/virtuoso-nodes>
 
@@ -54,8 +63,9 @@ a candidate set first.
 
 Read while building, no code taken:
 
-- **ComfyUI-NKD-Basic-Tools** and **ComfyUI-NKD-VFX-Tools** — read as the
-  standard for node UI quality.
+- **ComfyUI-NKD-VFX-Tools** — read as the standard for node UI quality.
+  (Frequency Separate/Combine and Film Grain from NKD Basic Tools are ported in
+  `nodes/frequency_grain/`.)
 - **ComfyUI-Pixaroma** by pixaroma (<https://github.com/pixaroma/ComfyUI-Pixaroma>,
   MIT) — read for its front-end approach.
 

@@ -243,6 +243,26 @@ except Exception as _mtk_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] mask_toolkit import failed: %s", _mtk_exc,
         )
+# Frequency / Grain (NKD Basic Tools port — frequency separation + film grain)
+try:
+    from .nodes.frequency_grain import (
+        NODE_CLASS_MAPPINGS as _FREQGRAIN_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _FREQGRAIN_DISPLAY,
+    )
+except Exception as _fg_exc:  # pragma: no cover
+    _FREQGRAIN_MAPPINGS, _FREQGRAIN_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_fg
+        _c2c_rec_fail_fg(
+            "frequency_grain", _fg_exc,
+            hint="Frequency / Grain failed to import. Check nodes/frequency_grain/_ops.py and nodes.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] frequency_grain import failed: %s", _fg_exc,
+        )
 # Luminance Keyer (Nuke-style luma key, pure tensor math)
 try:
     from .nodes.luminance_keyer import LuminanceKeyerMEC
@@ -610,6 +630,7 @@ NODE_CLASS_MAPPINGS = {
     **_MASKMATTE_MAPPINGS,
     **_LAYERFX_MAPPINGS,
     **_MASKTOOLKIT_MAPPINGS,
+    **_FREQGRAIN_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -644,6 +665,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MASKMATTE_DISPLAY,
     **_LAYERFX_DISPLAY,
     **_MASKTOOLKIT_DISPLAY,
+    **_FREQGRAIN_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,
