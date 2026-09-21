@@ -263,6 +263,26 @@ except Exception as _fg_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] frequency_grain import failed: %s", _fg_exc,
         )
+# Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
+try:
+    from .nodes.smart_crop import (
+        NODE_CLASS_MAPPINGS as _SMARTCROP_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _SMARTCROP_DISPLAY,
+    )
+except Exception as _sc_exc:  # pragma: no cover
+    _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_sc
+        _c2c_rec_fail_sc(
+            "smart_crop", _sc_exc,
+            hint="Smart Image Crop / Stitch failed to import. Check nodes/smart_crop.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] smart_crop import failed: %s", _sc_exc,
+        )
 # Luminance Keyer (Nuke-style luma key, pure tensor math)
 try:
     from .nodes.luminance_keyer import LuminanceKeyerMEC
@@ -631,6 +651,7 @@ NODE_CLASS_MAPPINGS = {
     **_LAYERFX_MAPPINGS,
     **_MASKTOOLKIT_MAPPINGS,
     **_FREQGRAIN_MAPPINGS,
+    **_SMARTCROP_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -666,6 +687,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_LAYERFX_DISPLAY,
     **_MASKTOOLKIT_DISPLAY,
     **_FREQGRAIN_DISPLAY,
+    **_SMARTCROP_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,
