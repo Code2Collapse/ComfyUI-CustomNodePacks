@@ -47,15 +47,27 @@ from dataclasses import dataclass
 
 import torch
 
-# Frame-count grids. A model that wants 4n+1 frames and is handed 4n will
-# silently reinterpret the clip rather than complain.
+try:
+    from ._frame_grid import (
+        CUSTOM, GRID_NAMES, FrameGridError, describe_fit, plan_fit, resolve,
+        trim_to,
+    )
+except ImportError:  # loaded as a top-level module rather than a package
+    from _frame_grid import (  # type: ignore
+        CUSTOM, GRID_NAMES, FrameGridError, describe_fit, plan_fit, resolve,
+        trim_to,
+    )
+
+# Kept for the legacy padding_mode widget. The real table now lives in
+# _frame_grid.py, shared with anything else that has to know what a model
+# will accept — two tables describing the same models is how they drift.
 GRIDS = {
     "disabled": None,
     "WAN (4n+1)": (4, 1),
     "LTX2 (8n+1)": (8, 1),
     "H3 (17n+5)": (17, 5),
 }
-MODES = ("add", "trim")
+MODES = ("add", "trim", "fit")
 SIDES = ("head", "tail")
 TRIM_SOURCES = ("auto", "manual")
 
@@ -73,6 +85,11 @@ class Handle:
     fps: float
     source_frames: int      # what the clip was BEFORE the handles went on
     run: str | None
+    #: The length to come back to, when `fit` set one. Obeyed in preference to
+    #: `frames`: a sampler that returns one frame more or fewer than asked is
+    #: common, and subtracting a remembered count from an unexpected length is
+    #: how a clip ends up short with nothing to explain it.
+    target: int = 0
 
 _MEM: dict[str, Handle] = {}
 _LOCK = threading.Lock()
@@ -283,10 +300,15 @@ class AVHandlesMEC:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mode": (list(MODES), {"default": "add", "tooltip":
-                    "add  — put handle frames on, and remember how many.\n"
-                    "trim — take them back off. Leave handle_frames at 0 and "
-                    "it uses the remembered count."}),
+                "mode": (list(MODES), {"default": "fit", "tooltip":
+                    "fit  — say how many frames you want OUT. The node works "
+                    "out what the model will accept, pads up to it, and "
+                    "remembers the target so the trim lands exactly there. "
+                    "This is the one to use.\n\n"
+                    "add  — put a specific number of frames on, and remember "
+                    "how many.\n\n"
+                    "trim — take them back off, using the remembered target "
+                    "or count."}),
                 "handle_frames": ("INT", {
                     "default": 8, "min": 0, "max": 400, "step": 1, "tooltip":
                     "ADD: how many frames to put on. With a grid selected, 0 "
@@ -308,6 +330,28 @@ class AVHandlesMEC:
             "optional": {
                 "images": ("IMAGE",),
                 "audio": ("AUDIO",),
+                "target_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000, "step": 1,
+                    "tooltip":
+                    "FIT mode: how many frames you want OUT. The model's own "
+                    "grid is an implementation detail — ask for 64 and you "
+                    "get 64, whatever the model needs to render to make "
+                    "them.\n\n"
+                    "0 in fit mode means 'use the clip's current length as "
+                    "the target', which pads it to something the model "
+                    "accepts and trims straight back."}),
+                "model": (list(GRID_NAMES), {
+                    "default": "MiniMax H3 (17n+5)", "tooltip":
+                    "Which model's frame grid to fit. Every video model wants "
+                    "step*n + plus frames and they disagree only on the "
+                    "numbers: H3 is 17n+5, Wan is 4n+1, LTX is 8n+1.\n\n"
+                    "Hand a model a count it does not accept and it does not "
+                    "complain — it reinterprets the clip, and the result "
+                    "comes out at the wrong speed."}),
+                "custom_step": ("INT", {"default": 4, "min": 1, "max": 1000,
+                    "tooltip": "Only used when model is 'custom'."}),
+                "custom_plus": ("INT", {"default": 1, "min": 0, "max": 1000,
+                    "tooltip": "Only used when model is 'custom'."}),
                 "side": (list(SIDES), {"default": "head", "tooltip":
                     "Which end. Handles go on the head because that is the run "
                     "a video model uses to settle; trim takes them off the "
@@ -354,9 +398,11 @@ class AVHandlesMEC:
             h.update(b"|records-state")
         return h.hexdigest()
 
-    def run(self, mode="add", handle_frames=8, trim_amount="auto",
-            images=None, audio=None, side="head", padding_mode="disabled",
-            manual_fps=0.0, handles=None, memo_key=""):
+    def run(self, mode="fit", handle_frames=8, trim_amount="auto",
+            target_frames=0, model="MiniMax H3 (17n+5)", custom_step=4,
+            custom_plus=1, images=None, audio=None, side="head",
+            padding_mode="disabled", manual_fps=0.0, handles=None,
+            memo_key=""):
         if mode not in MODES:
             raise AVHandlesError(
                 f"Unknown mode {mode!r}. Use 'add' or 'trim'.")
@@ -372,6 +418,38 @@ class AVHandlesMEC:
         src_frames = int(images.shape[0]) if images is not None else 0
         key = (memo_key or "").strip() or "default"
 
+        if mode == "fit":
+            if images is None:
+                raise AVHandlesError(
+                    "fit mode needs images: it works from the clip's length. "
+                    "For audio alone, use add with an explicit count.")
+            grid = resolve(model, custom_step, custom_plus)
+            want = int(target_frames) or src_frames
+            plan = plan_fit(want, grid)
+            # Pad the CLIP up to what the model accepts. The target is what
+            # the trim will obey later, so it is recorded alongside the count.
+            used = plan.generate - src_frames
+            if used < 0:
+                raise AVHandlesError(
+                    f"This clip is already {src_frames} frames but the target "
+                    f"is {want}. fit only pads — trim it down first, or set "
+                    "the target to the length you actually want.")
+            fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
+            out_img = pad_images(images, used, side)
+            out_aud = shift_audio(audio, used, fps, side, add=True)
+            total = int(out_img.shape[0])
+            remember(key, Handle(frames=used, side=side, fps=fps,
+                                 source_frames=src_frames, run=_run_id(),
+                                 target=plan.target))
+            info = (describe_fit(plan, model) + "\n" +
+                    describe("add", used, src_frames, total, side, "disabled",
+                             fps, fps_from, "recorded for the trim side",
+                             audio is not None))
+            return (out_img, out_aud, total,
+                    {"frames": used, "side": side, "fps": fps,
+                     "source_frames": src_frames, "target": plan.target},
+                    info)
+
         if mode == "add":
             used = plan_add(src_frames, int(handle_frames), padding_mode) \
                 if images is not None else max(0, int(handle_frames))
@@ -381,12 +459,27 @@ class AVHandlesMEC:
             total = int(out_img.shape[0]) if out_img is not None else used + src_frames
 
             rec = Handle(frames=used, side=side, fps=fps,
-                         source_frames=src_frames, run=_run_id())
+                         source_frames=src_frames, run=_run_id(), target=0)
             remember(key, rec)
             origin = "recorded for the trim side"
         else:
             used, origin = self._trim_count(
                 handle_frames, trim_amount, handles, key)
+            # A recorded TARGET wins over a recorded count. `fit` set one, and
+            # trimming to a length survives a sampler that returned one frame
+            # more or fewer than it was asked for — subtracting a remembered
+            # count from an unexpected length is how a clip ends up short.
+            if trim_amount != "manual" and images is not None:
+                tgt = 0
+                if isinstance(handles, dict):
+                    tgt = int(handles.get("target") or 0)
+                if not tgt:
+                    rem = recall(key)
+                    tgt = int(getattr(rem, "target", 0) or 0) if rem else 0
+                if tgt:
+                    used = trim_to(src_frames, tgt)
+                    origin = (f"the target of {tgt} frames recorded by fit "
+                              f"({src_frames} arrived, so {used} come off)")
             if images is not None and used >= src_frames:
                 raise AVHandlesError(
                     f"Trimming {used} frames off a {src_frames}-frame clip "
@@ -406,9 +499,12 @@ class AVHandlesMEC:
 
         info = describe(mode, used, src_frames, total, side, padding_mode,
                         fps, fps_from, origin, audio is not None)
+        _rem = recall(key)
         return (out_img, out_aud, total,
                 {"frames": used, "side": side, "fps": fps,
-                 "source_frames": src_frames}, info)
+                 "source_frames": src_frames,
+                 "target": int(getattr(_rem, "target", 0) or 0) if _rem else 0},
+                info)
 
     @staticmethod
     def _trim_count(typed, source, wired, key) -> tuple[int, str]:
