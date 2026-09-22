@@ -22,7 +22,7 @@
  * Widget to Input" by hand.
  */
 
-import { app } from "../../../scripts/app.js";
+import { app } from "../../scripts/app.js";
 
 const BUTTON_ID = "c2c-pack-subgraph-btn";
 const STYLE_ID  = "c2c-pack-subgraph-style";

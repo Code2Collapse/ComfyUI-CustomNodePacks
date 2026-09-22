@@ -10,7 +10,7 @@
 //
 // Frontend file only — backend lives in nodes/_c2c_autoconnect.py.
 
-import { app } from "../../../scripts/app.js";
+import { app } from "../../scripts/app.js";
 
 const TAG = "[C2C/autoconnect]";
 const SLOT_RADIUS = 10;      // graph-px tolerance for slot dot hit-tests
