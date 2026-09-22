@@ -64,6 +64,56 @@ Vendored third-party packages (under third_party/):
                 substantially similar to GPL-3 source, please open an
                 issue and we will reauthor the affected section.
 
+  * ComfyUI_LayerStyle (layer effects port)
+      Author:   chflame163
+      Source:   https://github.com/chflame163/ComfyUI_LayerStyle
+      License:  MIT (declared in the upstream pyproject.toml and README;
+                the clone under third_party/ ships no LICENSE file).
+      Usage:    nodes/layer_effects/ is a PORT, not a clean-room rewrite.
+                The eight MEC/LayerEffects nodes carry the feature union of
+                upstream's V1/V2/V3 variants of drop_shadow, inner_shadow,
+                outer_glow, inner_glow, stroke, color_overlay,
+                gradient_overlay and gradient_map.
+
+                Reimplemented in torch rather than copied verbatim, for a
+                concrete reason: upstream's py/blendmodes.py imports the
+                `blend_modes` pip package, which is not installed in this
+                ComfyUI, so a straight copy would fail at import. The blend
+                table is checked against a numpy transcription of the
+                upstream formulas in tests/test_layer_effects.py.
+
+                Four defects in the upstream are fixed here and each has a
+                test: an UnboundLocalError at zero offset, a size-mismatched
+                mask being replaced with solid white, a python list returned
+                through an IMAGE socket, and RGBA returned on an IMAGE socket.
+                The sign of distance_x/distance_y is deliberately inverted
+                relative to upstream so that positive moves the shadow right.
+
+                The front-end (js/c2c_layer_effects.js) is original work: the
+                upstream ships none for these nodes.
+
+                Second batch, nodes/mask_toolkit/: the LayerMask family. Only
+                the five capabilities this pack did not already have were
+                ported - Mask From Color, Mask Gradient, Mask Grain, Mask
+                Motion Blur and Edge Spread - plus a channel selector and
+                Blend-If soft ends folded into the EXISTING LuminanceKeyerMEC
+                rather than added as a sixth node. The rest of LayerMask was
+                deliberately not ported: MaskEdgeUltraDetail V1/V2/V3,
+                MaskGrow, MaskEdgeShrink, MaskInvert and MaskPreview are
+                covered by MaskRefineMEC, MaskStroke by LayerEffectStrokeMEC,
+                MaskBoxDetect/Extend by nodes/bbox_nodes.py, and the eight
+                Segformer nodes and RemBgUltra need model weights.
+                Front-ends in js/c2c_mask_toolkit.js and the shared
+                js/_c2c_fx_controls.js are original work.
+
+  * Virtuoso Pack (blend-mode table, via ComfyUI_LayerStyle)
+      Author:   Chris Freilich
+      Source:   https://github.com/chrisfreilich/virtuoso-nodes
+      Usage:    ComfyUI_LayerStyle's py/imagefunc.py:2506 credits this pack
+                for its 30-mode blend table, which nodes/layer_effects/
+                _blend.py reimplements in torch. Credited here because the
+                credit is owed upstream of our own upstream.
+
   * ComfyUI-KJNodes
       Author:   Kijai
       Source:   https://github.com/kijai/ComfyUI-KJNodes

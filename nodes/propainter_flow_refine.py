@@ -207,7 +207,7 @@ class FlowRefineMEC:
             raise ValueError(
                 f"FlowRefineMEC: mask must be MASK [B,H,W], got {tuple(getattr(mask, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._refine_flow_impl(frame_a, frame_b, iters, consistency_thr, mask)
 
     def _refine_flow_impl(self, frame_a, frame_b, iters, consistency_thr, mask=None):

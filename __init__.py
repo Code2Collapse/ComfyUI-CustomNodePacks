@@ -123,6 +123,26 @@ except Exception as _mm_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] mask_matting import failed: %s", _mm_exc,
         )
+# Layer Effects (Photoshop-style — torch-native, batch-correct)
+try:
+    from .nodes.layer_effects import (
+        NODE_CLASS_MAPPINGS as _LAYERFX_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LAYERFX_DISPLAY,
+    )
+except Exception as _lfx_exc:  # pragma: no cover
+    _LAYERFX_MAPPINGS, _LAYERFX_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_lfx
+        _c2c_rec_fail_lfx(
+            "layer_effects", _lfx_exc,
+            hint="Layer Effects failed to import. Check nodes/layer_effects/_blend.py and _ops.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] layer_effects import failed: %s", _lfx_exc,
+        )
 # ── Central failure registry (surface silent drops to the user) ───────
 # Per ideas_summary.md §2.1: the #1 reason this pack "feels like stubs"
 # is that optional sub-imports were swallowed by `except: pass` / quiet
@@ -203,6 +223,66 @@ except Exception as _exc:  # pragma: no cover
     )
     _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY = {}, {}
 
+# Mask toolkit (LayerMask port — torch-native, batch-correct)
+try:
+    from .nodes.mask_toolkit import (
+        NODE_CLASS_MAPPINGS as _MASKTOOLKIT_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MASKTOOLKIT_DISPLAY,
+    )
+except Exception as _mtk_exc:  # pragma: no cover
+    _MASKTOOLKIT_MAPPINGS, _MASKTOOLKIT_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_mtk
+        _c2c_rec_fail_mtk(
+            "mask_toolkit", _mtk_exc,
+            hint="Mask toolkit failed to import. Check nodes/mask_toolkit/_ops.py and nodes.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] mask_toolkit import failed: %s", _mtk_exc,
+        )
+# Frequency / Grain (NKD Basic Tools port — frequency separation + film grain)
+try:
+    from .nodes.frequency_grain import (
+        NODE_CLASS_MAPPINGS as _FREQGRAIN_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _FREQGRAIN_DISPLAY,
+    )
+except Exception as _fg_exc:  # pragma: no cover
+    _FREQGRAIN_MAPPINGS, _FREQGRAIN_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_fg
+        _c2c_rec_fail_fg(
+            "frequency_grain", _fg_exc,
+            hint="Frequency / Grain failed to import. Check nodes/frequency_grain/_ops.py and nodes.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] frequency_grain import failed: %s", _fg_exc,
+        )
+# Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
+try:
+    from .nodes.smart_crop import (
+        NODE_CLASS_MAPPINGS as _SMARTCROP_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _SMARTCROP_DISPLAY,
+    )
+except Exception as _sc_exc:  # pragma: no cover
+    _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_sc
+        _c2c_rec_fail_sc(
+            "smart_crop", _sc_exc,
+            hint="Smart Image Crop / Stitch failed to import. Check nodes/smart_crop.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] smart_crop import failed: %s", _sc_exc,
+        )
 # Luminance Keyer (Nuke-style luma key, pure tensor math)
 try:
     from .nodes.luminance_keyer import LuminanceKeyerMEC
@@ -581,6 +661,10 @@ NODE_CLASS_MAPPINGS = {
     **_FACE_FIXER_MAPPINGS,
     **_FPDELTA_MAPPINGS,
     **_MASKMATTE_MAPPINGS,
+    **_LAYERFX_MAPPINGS,
+    **_MASKTOOLKIT_MAPPINGS,
+    **_FREQGRAIN_MAPPINGS,
+    **_SMARTCROP_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -613,6 +697,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FACE_FIXER_DISPLAY,
     **_FPDELTA_DISPLAY,
     **_MASKMATTE_DISPLAY,
+    **_LAYERFX_DISPLAY,
+    **_MASKTOOLKIT_DISPLAY,
+    **_FREQGRAIN_DISPLAY,
+    **_SMARTCROP_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,

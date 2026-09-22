@@ -503,7 +503,7 @@ class FacePoseDeltaCoreMEC:
         right_eye_idx: int,
         external_anchors_json: str = "",
     ):
-        with torch.inference_mode():
+        with torch.no_grad():
             kfs, ease, extrap = _parse_keyframes(keyframe_edits_json)
 
             ext_centers = ext_scales = None

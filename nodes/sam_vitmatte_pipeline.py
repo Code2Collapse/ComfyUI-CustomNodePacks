@@ -266,7 +266,7 @@ class SAMViTMattePipelineMEC:
         ):
             raise ValueError("SAMViTMattePipelineMEC trimap expects MASK [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 sam_model, image, subject_type, points_json, bbox_json,
                 sam_iterations, refine_method, edge_radius,

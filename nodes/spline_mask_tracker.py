@@ -307,7 +307,7 @@ class SplineMaskTrackerMEC:
     ) -> Tuple[torch.Tensor, str]:
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SplineMaskTrackerMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, keyframes_json, closed, samples_per_segment,
                 tracking_weight, klt_window, feather_radius, stroke_width,

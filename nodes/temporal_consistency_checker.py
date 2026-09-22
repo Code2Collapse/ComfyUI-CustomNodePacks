@@ -144,7 +144,7 @@ class TemporalConsistencyCheckerMEC:
             raise ValueError(
                 "TemporalConsistencyCheckerMEC expects MASK tensor [H,W] or [B,H,W]"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._check_impl(metric, image, mask, binarize_threshold)
 
     def _check_impl(

@@ -293,7 +293,7 @@ class MECAdvancedPaintCanvas:
                 f"got {tuple(getattr(reference_image, 'shape', ()))}"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 canvas_width, canvas_height, brush_type, brush_color,
                 brush_opacity, brush_hardness, brush_size,
@@ -578,7 +578,7 @@ class MECContextInpainter:
                 raise ValueError(
                     f"MECContextInpainter: {name} must be [B,H,W], got {tuple(t.shape)}"
                 )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 original_image, mask, inpainted_image,
                 crop_padding, blend_softness, mask_expansion_blend,
@@ -907,7 +907,7 @@ class MECToneRefiner:
             raise ValueError(
                 f"MECToneRefiner: depth_map must be MASK [B,H,W], got {tuple(getattr(depth_map, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, neural_corrector, corrector_tone, corrector_color,
                 highlight_protection, shadow_lift, enable_upscale, upscale_factor,

@@ -19,7 +19,7 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
     Pipeline for DepthCrafter.
     """
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def encode_video(
         self,
         video: torch.Tensor,
@@ -53,7 +53,7 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         embeddings = torch.cat(embeddings, dim=0)  # [t, 1024]
         return embeddings
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def encode_vae_video(
         self,
         video: torch.Tensor,

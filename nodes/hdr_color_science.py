@@ -76,7 +76,7 @@ class C2CACESTonemap:
                       output_colorspace):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("C2CACESTonemap expects IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             x = image.clone().float()
 
             # Linearise from source color space
@@ -168,7 +168,7 @@ class C2CVAEQualityDecode:
         )
 
     def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure):
-        with torch.inference_mode():
+        with torch.no_grad():
             dtype = torch.float32 if force_fp32 else torch.float16
 
             latent = samples["samples"]
@@ -249,7 +249,7 @@ class C2CColorSpaceConvert:
         if source_space == target_space:
             return (image,)
 
-        with torch.inference_mode():
+        with torch.no_grad():
             x = image.clone().float()
 
             # To linear first

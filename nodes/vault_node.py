@@ -38,6 +38,12 @@ from .vault_crypto import (
     unseal_with_password,
 )
 from .vault_exec import VaultExecError, execute_subgraph
+from .vault_promote import (
+    MAX_VAULT_PARAMS,
+    VaultPromotionError,
+    describe,
+    resolve_overrides,
+)
 
 log = logging.getLogger("c2c.vault")
 
@@ -129,6 +135,17 @@ def _vault_input_types() -> dict[str, Any]:
             "boundary_in[{}] inside the ciphertext."
         ).format(i, i)
         optional[f"input_{i}"] = ("*", {"tooltip": tip})
+    # Promoted parameters that were converted to inputs read from these. They
+    # are deliberately separate from input_N: input_N is the vault's boundary
+    # wiring, param_N drives a widget inside it.
+    for i in range(MAX_VAULT_PARAMS):
+        optional[f"param_{i}"] = ("*", {
+            "tooltip": (
+                "Promoted parameter {} — connect this only when a promoted "
+                "parameter has been converted to an input. The vault decides "
+                "which internal widget it drives; that mapping lives inside "
+                "the ciphertext and is never in the workflow JSON."
+            ).format(i)})
     return optional
 
 
@@ -168,10 +185,13 @@ class C2C_VaultLocked:
                                "without the password. Do not hand-edit."}),
                 "vault_interface": ("STRING", {
                     "default": "{}", "multiline": True,
-                    "tooltip": "Clear-text boundary manifest: socket names, "
-                               "types, and node count. Public API of the vault "
-                               "(not secret). The JS renames input_N/output_N "
-                               "slots from this on load."}),
+                    "tooltip": "Clear-text manifest: socket names, types, node "
+                               "count, and any promoted parameters. This is the "
+                               "public API of the vault and it travels in the "
+                               ".json, so it carries a promoted parameter's "
+                               "LABEL and value only - which internal widget it "
+                               "drives is inside the ciphertext, because naming "
+                               "it here would describe the contents."}),
             },
             "optional": _vault_input_types(),
         }
@@ -199,10 +219,21 @@ class C2C_VaultLocked:
         except VaultError as exc:
             raise RuntimeError(f"C2C Vault: {exc}") from exc
 
-        return self._run(subgraph, inputs, "C2C Vault")
+        return self._run(subgraph, inputs, "C2C Vault", _parse_interface(vault_interface))
 
-    def _run(self, subgraph, inputs, label):
+    def _run(self, subgraph, inputs, label, interface=None):
         """Shared boundary wiring + execution, used by both vault modes."""
+        # Promoted parameters first: a mistake here should be reported before
+        # anything runs, not halfway through the graph.
+        socket_values = {
+            i: inputs.get(f"param_{i}") for i in range(MAX_VAULT_PARAMS)
+            if inputs.get(f"param_{i}") is not None
+        }
+        try:
+            overrides = resolve_overrides(subgraph, interface or {}, socket_values)
+        except VaultPromotionError as exc:
+            raise RuntimeError(f"{label}: {exc}") from exc
+
         names = [b["name"] for b in subgraph.get("boundary_in", [])]
         supplied = {}
         for i, name in enumerate(names):
@@ -212,7 +243,7 @@ class C2C_VaultLocked:
             supplied[name] = val
 
         try:
-            out = execute_subgraph(subgraph, supplied)
+            out = execute_subgraph(subgraph, supplied, overrides)
         except VaultExecError as exc:
             # Safe to be specific: we are past the access check.
             raise RuntimeError(f"{label}: {exc}") from exc
@@ -231,6 +262,22 @@ class C2C_VaultLocked:
         for i, spec in enumerate(outs):
             result[i] = out[spec["name"]]
         return tuple(result)
+
+
+def _parse_interface(raw: str) -> dict[str, Any]:
+    """The manifest is clear text and user-editable, so treat it as untrusted."""
+    if not raw:
+        return {}
+    try:
+        val = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"C2C Vault: the interface manifest is not valid JSON ({exc}). "
+            "Re-lock the vault to rebuild it."
+        ) from exc
+    if not isinstance(val, dict):
+        raise RuntimeError("C2C Vault: the interface manifest must be an object.")
+    return val
 
 
 def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
@@ -393,7 +440,7 @@ class C2C_VaultSealed(C2C_VaultLocked):
             subgraph = unseal_for_run(vault_payload, vault_id=vault_id)
         except VaultError as exc:
             raise RuntimeError(f"C2C Vault (sealed): {exc}") from exc
-        return self._run(subgraph, inputs, "C2C Vault (sealed)")
+        return self._run(subgraph, inputs, "C2C Vault (sealed)", _parse_interface(vault_interface))
 
 
 NODE_CLASS_MAPPINGS = {

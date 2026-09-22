@@ -748,7 +748,7 @@ class MaskRefineMEC:
             raise ValueError("MaskRefineMEC expects IMAGE tensor [B,H,W,C]")
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
             raise ValueError("MaskRefineMEC expects MASK tensor [H,W] or [B,H,W]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, mask, preset, auto_edge_lock, subject_class,
                 enable_hole_fill, morph_op, enable_thin_recover,

@@ -291,7 +291,7 @@ class MECFaceFixer:
         ):
             raise ValueError("MECFaceFixer mask expects MASK [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 image, model, positive, negative, vae,
                 face_model, confidence, max_faces, crop_padding, crop_resolution,

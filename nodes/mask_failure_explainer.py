@@ -897,7 +897,7 @@ class MaskFailureExplainerMEC:
         if not isinstance(mask, torch.Tensor) or mask.ndim not in (2, 3):
             raise ValueError("MaskFailureExplainerMEC expects MASK tensor [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             with _PB.session("MaskFailure"):
                 return self._analyze_impl(image, mask, ring_width, blur_threshold,
                                           brightness_threshold)

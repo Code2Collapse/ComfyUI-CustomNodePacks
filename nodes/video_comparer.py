@@ -538,7 +538,7 @@ class VideoComparerC2C:
                     + (f" shape {tuple(img.shape)}" if hasattr(img, "shape") else "")
                 )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,

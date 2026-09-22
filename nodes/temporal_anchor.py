@@ -524,7 +524,7 @@ class TemporalAnchorMEC:
         ):
             raise ValueError("TemporalAnchorMEC images expects IMAGE [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             try:
                 return self._execute_inner(
                     anchor_masks, anchor_frames, total_frames,

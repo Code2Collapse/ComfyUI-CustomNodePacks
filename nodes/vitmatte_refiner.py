@@ -139,7 +139,7 @@ class ViTMatteRefinerMEC:
         ):
             raise ValueError("ViTMatteRefinerMEC trimap expects MASK tensor [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._refine_impl(
                 image, mask, method, edge_radius, edge_softness,
                 erode_amount, detail_level, iterations,

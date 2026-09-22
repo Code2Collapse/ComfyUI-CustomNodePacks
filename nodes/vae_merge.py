@@ -546,7 +546,7 @@ class VAEMergeMEC:
                 f"got {tuple(getattr(reference_image, 'shape', ()))}"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._merge_impl(
                 vae_a, vae_b, merge_mode, alpha, beta, brightness, contrast,
                 use_blocks, auto_alpha, block_conv_in, block_conv_out, block_norm_out,

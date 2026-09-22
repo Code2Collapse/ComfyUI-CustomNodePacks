@@ -164,7 +164,7 @@ class SamMultiMaskPickerMEC:
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SamMultiMaskPickerMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._pick_mask_impl(
                 image, model_name, points_json, bbox_json, precision,
                 selected_index, sam_model, bbox,
@@ -236,7 +236,7 @@ class SamMultiMaskPickerMEC:
                     }
 
             # Build predictor
-            with torch.inference_mode():
+            with torch.no_grad():
                 predictor = get_sam_predictor(model, model_type, img_np)
                 if predictor is None:
                     return self._empty_result(H, W, "No compatible SAM predictor found")
@@ -282,7 +282,7 @@ class SamMultiMaskPickerMEC:
                     model_info["device"] = "cpu"
                     model_info["model"] = model
 
-                with torch.inference_mode():
+                with torch.no_grad():
                     predictor = get_sam_predictor(model, model_type, img_np)
                     if predictor is None:
                         return self._empty_result(H, W, "No predictor after OOM fallback")

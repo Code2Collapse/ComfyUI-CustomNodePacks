@@ -271,7 +271,7 @@ class ProPainterStitchRefineMEC:
             raise ValueError(
                 f"ProPainterStitchRefineMEC: mask_override must be MASK [B,H,W], got {tuple(mask_override.shape)}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._refine_impl(
                 stitched_image, stitch_data, ring_pixels, raft_iter, neighbor_stride,
                 ref_stride, subvideo_length, use_half, color_match_mode, mask_override,
@@ -437,7 +437,7 @@ class ProPainterStitchMEC:
                 f"ProPainterStitchMEC: inpainted_image must be IMAGE [B,H,W,3], "
                 f"got {tuple(getattr(inpainted_image, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._stitch_impl(
                 stitch_data, inpainted_image, boundary_band_pixels, preserve_inpaint_center,
                 raft_iter, neighbor_stride, ref_stride, subvideo_length, use_half,
@@ -637,7 +637,7 @@ class ProPainterRemoveMEC:
             raise ValueError(
                 f"ProPainterRemoveMEC: MASK [B,H,W] expected, got {tuple(getattr(masks, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._remove_impl(images, masks, quality, use_half, dilate_mask_pixels, color_match_mode)
 
     def _remove_impl(self, images: torch.Tensor, masks: torch.Tensor,

@@ -278,7 +278,7 @@ class BorrowedEncoderBackend(Backend):
                 in_len = 0
 
             try:
-                with torch.inference_mode():
+                with torch.no_grad():
                     out_ids = inner.generate(
                         **input_ids,
                         max_new_tokens=max_new,

@@ -340,7 +340,7 @@ class PointsMaskEditor:
                 "PointsMaskEditor existing_mask must be MASK tensor [H,W] or [B,H,W]"
             )
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._generate_impl(
                 width, height, editor_data, default_radius, softness, normalize,
                 reference_image, existing_mask,

@@ -123,7 +123,7 @@ class DINORelocator:
         img_np = (image_hwc.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
         inputs = processor(images=img_np, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(self.device)
-        with torch.inference_mode():
+        with torch.no_grad():
             out = model(pixel_values)
         # last_hidden_state: (1, 1+P, D), token 0 = CLS
         hidden = out.last_hidden_state[0]

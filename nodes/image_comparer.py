@@ -97,7 +97,7 @@ class ImageComparerMEC:
             raise ValueError("ImageComparerMEC image_a must be IMAGE tensor [B,H,W,C]")
         if not isinstance(image_b, torch.Tensor) or image_b.ndim != 4:
             raise ValueError("ImageComparerMEC image_b must be IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._compare_impl(
                 image_a, image_b, label_a, label_b, diff_mode,
                 diff_gain, diff_gamma, diff_threshold,

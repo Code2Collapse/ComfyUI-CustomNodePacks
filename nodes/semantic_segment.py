@@ -147,7 +147,7 @@ class SemanticSegmentMEC:
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SemanticSegmentMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._parse_impl(
                 image, model_name, classes_csv, threshold, invert,
                 keep_model_loaded,
@@ -223,7 +223,7 @@ class SemanticSegmentMEC:
             inputs = processor(images=pil_img, return_tensors="pt")
             inputs = {k: v.to(dev) for k, v in inputs.items()}
 
-            with torch.inference_mode():
+            with torch.no_grad():
                 outputs = model(**inputs)
 
             logits = outputs.logits  # (1, num_classes, h, w)

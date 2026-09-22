@@ -211,7 +211,7 @@ class SeCMatAnyonePipelineMEC:
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SeCMatAnyonePipelineMEC expects IMAGE tensor [B,H,W,C]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._process_impl(
                 image, segmentation_model, text_prompt, points_json, bbox_json,
                 matting_backend, edge_radius, n_warmup, precision,
@@ -417,7 +417,7 @@ class SeCMatAnyonePipelineMEC:
             inputs = processor(images=pil_img, trimaps=pil_tri, return_tensors="pt")
             inputs = {k: v.to(dev) for k, v in inputs.items()}
 
-            with torch.inference_mode():
+            with torch.no_grad():
                 out = model(**inputs)
 
             a = out.alphas[0, 0].cpu()

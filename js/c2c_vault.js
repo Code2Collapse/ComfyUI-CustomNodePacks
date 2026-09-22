@@ -15,7 +15,9 @@ import { api } from "../../scripts/api.js";
 const NODES = ["C2C_VaultLocked", "C2C_VaultSealed"];
 const MAX_VAULT_INPUTS = 10;
 const MAX_VAULT_OUTPUTS = 8;
+const MAX_VAULT_PARAMS = 8;
 const SLOT_H = 20;
+const PROMOTED_VALUE_TYPES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
 
 /** @type {Map<string, { subgraph: object, panel: HTMLElement, dispose: () => void }>} */
 const vaultEditSessions = new Map();
@@ -41,14 +43,34 @@ function generateStrongPassword(len = 20) {
 function parseInterface(raw) {
   try {
     const v = typeof raw === "string" ? JSON.parse(raw || "{}") : (raw || {});
+    const params = [];
+    if (Array.isArray(v.params)) {
+      for (const p of v.params) {
+        if (!p || typeof p !== "object") continue;
+        const id = String(p.id || "").trim();
+        if (!id) continue;
+        const entry = {
+          id,
+          name: String(p.name || id),
+          type: String(p.type || "STRING").toUpperCase(),
+          value: p.value,
+        };
+        if (p.socket !== undefined && p.socket !== null) {
+          const sock = Number(p.socket);
+          if (Number.isFinite(sock)) entry.socket = sock;
+        }
+        params.push(entry);
+      }
+    }
     return {
       mode: v.mode || "locked",
       node_count: Number(v.node_count) || 0,
       in: Array.isArray(v.in) ? v.in : [],
       out: Array.isArray(v.out) ? v.out : [],
+      params,
     };
   } catch (_) {
-    return { mode: "locked", node_count: 0, in: [], out: [] };
+    return { mode: "locked", node_count: 0, in: [], out: [], params: [] };
   }
 }
 
@@ -299,6 +321,228 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
   });
 }
 
+function inferPromotedWidgetType(w) {
+  const t = String(w?.type || "").toUpperCase();
+  if (PROMOTED_VALUE_TYPES.has(t)) return t;
+  const lt = String(w?.type || "").toLowerCase();
+  const opt = w?.options || {};
+  if (lt === "combo") return "COMBO";
+  if (lt === "toggle" || lt === "bool" || lt === "boolean") return "BOOLEAN";
+  if (lt === "number") {
+    if (opt.round === true || opt.precision === 0 || opt.step === 1) return "INT";
+    return "FLOAT";
+  }
+  if (lt === "text" || lt === "string") return "STRING";
+  return t || "STRING";
+}
+
+function isPromotableWidget(w) {
+  if (!w || !w.name) return false;
+  if (w.type === "button") return false;
+  if (w.name.startsWith("vault_") || w.name.startsWith("__vault_p_")) return false;
+  const sz = w.computeSize?.();
+  if (sz && sz[1] <= 0) return false;
+  return true;
+}
+
+function modalPromoteStep({ selection }) {
+  if (headless()) return { promoted: [], params: [] };
+
+  const groups = [];
+  for (const n of selection) {
+    const widgets = (n.widgets || []).filter(isPromotableWidget);
+    if (!widgets.length) continue;
+    groups.push({
+      nodeId: String(n.id),
+      title: `${n.comfyClass || n.type} (id ${n.id})`,
+      rows: widgets.map((w) => {
+        const type = inferPromotedWidgetType(w);
+        const widgetOk = PROMOTED_VALUE_TYPES.has(type);
+        return {
+          widgetName: w.name,
+          type,
+          value: w.value,
+          comboOptions: w.type === "combo" ? (w.options?.values || [w.value]) : null,
+          checked: false,
+          label: w.name,
+          mode: widgetOk ? "widget" : "socket",
+          widgetOk,
+        };
+      }),
+    });
+  }
+
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    css(back, {
+      position: "fixed", inset: "0", zIndex: "10000",
+      background: "rgba(0,0,0,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center",
+    });
+    const box = document.createElement("div");
+    css(box, {
+      background: "var(--comfy-menu-bg, #353535)",
+      color: "var(--fg-color, #ddd)",
+      border: "1px solid var(--border-color, #4a4a4a)",
+      borderRadius: "6px", padding: "18px 20px",
+      minWidth: "460px", maxWidth: "620px", maxHeight: "80vh", overflow: "auto",
+      font: "13px sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    });
+
+    const h = document.createElement("div");
+    h.textContent = "Promote parameters";
+    css(h, { fontWeight: "600", marginBottom: "10px" });
+
+    const note = document.createElement("div");
+    note.textContent =
+      "Promoted parameters stay editable from outside the vault while the contents stay sealed — the label you choose is public; which internal widget it drives is not.";
+    css(note, { opacity: "0.75", marginBottom: "12px", lineHeight: "1.45", fontSize: "12px" });
+
+    box.append(h, note);
+
+    if (!groups.length) {
+      const none = document.createElement("div");
+      none.textContent = "No promotable widgets in this selection.";
+      css(none, { opacity: "0.6", marginBottom: "8px", fontSize: "12px" });
+      box.append(none);
+    }
+
+    for (const group of groups) {
+      const sec = document.createElement("div");
+      css(sec, { marginBottom: "12px" });
+      const gh = document.createElement("div");
+      gh.textContent = group.title;
+      css(gh, { fontWeight: "600", marginBottom: "6px", fontSize: "12px" });
+      sec.append(gh);
+
+      for (const row of group.rows) {
+        const line = document.createElement("div");
+        css(line, {
+          display: "grid", gridTemplateColumns: "auto 1fr 1fr auto",
+          gap: "8px", marginBottom: "6px", alignItems: "center",
+          opacity: row.checked ? "1" : "0.55",
+        });
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.title = `Promote ${row.widgetName} from inside the vault`;
+        cb.onchange = () => {
+          row.checked = cb.checked;
+          line.style.opacity = row.checked ? "1" : "0.55";
+        };
+
+        const wname = document.createElement("span");
+        wname.textContent = row.widgetName;
+        css(wname, { fontFamily: "ui-monospace, monospace", fontSize: "11px", opacity: "0.8" });
+
+        const labelIn = document.createElement("input");
+        labelIn.value = row.label;
+        labelIn.placeholder = "Public label";
+        labelIn.title = "Name shown on the vault node — not the internal widget name";
+        css(labelIn, {
+          padding: "4px 8px", borderRadius: "4px",
+          background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
+          border: "1px solid var(--border-color, #4a4a4a)",
+        });
+        labelIn.oninput = () => { row.label = labelIn.value; };
+
+        const modeSel = document.createElement("select");
+        css(modeSel, {
+          padding: "4px 6px", borderRadius: "4px",
+          background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
+          border: "1px solid var(--border-color, #4a4a4a)",
+        });
+        const optWidget = document.createElement("option");
+        optWidget.value = "widget";
+        optWidget.textContent = "Widget on vault";
+        const optSocket = document.createElement("option");
+        optSocket.value = "socket";
+        optSocket.textContent = "Input socket";
+        modeSel.append(optWidget, optSocket);
+        modeSel.value = row.mode;
+        if (!row.widgetOk) {
+          optWidget.disabled = true;
+          optWidget.title = `${row.type} has no vault widget — wire it via param_N instead`;
+          modeSel.value = "socket";
+          row.mode = "socket";
+        }
+        modeSel.title = row.widgetOk
+          ? "Expose as an editable widget, or as a param_N socket"
+          : `${row.type} cannot be typed on the vault — only a param_N wire`;
+        modeSel.onchange = () => { row.mode = modeSel.value; };
+
+        line.append(cb, wname, labelIn, modeSel);
+        sec.append(line);
+      }
+      box.append(sec);
+    }
+
+    const row = document.createElement("div");
+    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "12px" });
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    const skip = document.createElement("button");
+    skip.textContent = "Skip";
+    const ok = document.createElement("button");
+    ok.textContent = "Continue";
+    for (const b of [cancel, skip, ok]) {
+      css(b, {
+        padding: "6px 14px", borderRadius: "4px", cursor: "pointer",
+        background: "var(--comfy-input-bg, #222)",
+        color: "var(--input-text, #ccc)",
+        border: "1px solid var(--border-color, #4a4a4a)",
+      });
+    }
+
+    const finish = (v) => { back.remove(); resolve(v); };
+    cancel.onclick = () => finish(null);
+    skip.onclick = () => finish({ promoted: [], params: [] });
+    ok.onclick = () => {
+      const promoted = [];
+      const params = [];
+      const socketRows = [];
+      let nextId = 0;
+
+      for (const group of groups) {
+        for (const row of group.rows) {
+          if (!row.checked) continue;
+          const id = `p${nextId++}`;
+          promoted.push({ id, node: group.nodeId, widget: row.widgetName });
+          const entry = {
+            id,
+            name: (row.label || row.widgetName).trim() || row.widgetName,
+            type: row.type,
+            value: row.value,
+            _comboOptions: row.comboOptions,
+          };
+          if (row.mode === "socket") socketRows.push(entry);
+          else params.push(entry);
+        }
+      }
+
+      const used = new Set(params.filter((p) => p.socket !== undefined).map((p) => p.socket));
+      for (const entry of socketRows) {
+        let k = 0;
+        while (used.has(k) && k < MAX_VAULT_PARAMS) k++;
+        if (k >= MAX_VAULT_PARAMS) {
+          shakeEl(box);
+          return;
+        }
+        entry.socket = k;
+        used.add(k);
+        params.push(entry);
+      }
+
+      finish({ promoted, params });
+    };
+
+    row.append(cancel, skip, ok);
+    box.append(row);
+    back.append(box);
+    document.body.append(back);
+  });
+}
+
 function modalAlert(title, note) {
   if (headless()) return Promise.resolve();
   return new Promise((resolve) => {
@@ -465,13 +709,165 @@ function hideSlot(slot, hidden) {
   }
 }
 
+function inputSlotByName(node, name) {
+  return (node.inputs || []).find((inp) => inp.name === name);
+}
+
+function readNodeInterface(node) {
+  return parseInterface(widget(node, "vault_interface")?.value);
+}
+
+function writeNodeInterface(node, iface) {
+  const w = widget(node, "vault_interface");
+  if (w) w.value = JSON.stringify(iface);
+}
+
+function lowestFreeParamSocket(params) {
+  const used = new Set(
+    (params || []).filter((p) => p.socket !== undefined && p.socket !== null).map((p) => Number(p.socket)),
+  );
+  for (let k = 0; k < MAX_VAULT_PARAMS; k++) {
+    if (!used.has(k)) return k;
+  }
+  return null;
+}
+
+function manifestTypeToSlotType(t) {
+  switch (String(t || "").toUpperCase()) {
+    case "INT": return "INT";
+    case "FLOAT": return "FLOAT";
+    case "STRING": return "STRING";
+    case "BOOLEAN": return "BOOLEAN";
+    default: return "*";
+  }
+}
+
+function updatePromotedParamValue(node, paramId, value) {
+  const iface = readNodeInterface(node);
+  const p = (iface.params || []).find((x) => x.id === paramId);
+  if (!p || p.socket !== undefined) return;
+  p.value = value;
+  writeNodeInterface(node, iface);
+}
+
+function removePromotedWidget(node, w) {
+  if (!w) return;
+  if (typeof node.removeWidget === "function") node.removeWidget(w);
+  else {
+    const idx = node.widgets?.indexOf(w);
+    if (idx >= 0) node.widgets.splice(idx, 1);
+  }
+}
+
+function installPromotedWidgetMenu(w, node, isSealed) {
+  const origMouse = w.mouse;
+  w.mouse = function (event, pos, nodeRef) {
+    if (event?.button === 2 || event?.which === 3) {
+      const menu = new LiteGraph.ContextMenu([
+        {
+          content: "Convert widget to input",
+          callback: () => convertPromotedParamToInput(nodeRef || node, w._vaultParamId, isSealed),
+        },
+      ], { event, parentMenu: null, node: nodeRef || node });
+      return true;
+    }
+    return origMouse?.call(this, event, pos, nodeRef);
+  };
+}
+
+function createPromotedWidget(node, param, comboOptions, isSealed) {
+  const label = param.name || param.id;
+  const onChange = (v) => updatePromotedParamValue(node, param.id, v);
+  let w;
+  switch (param.type) {
+    case "INT":
+      w = node.addWidget("number", label, param.value ?? 0, onChange, { round: true, step: 10, precision: 0 });
+      break;
+    case "FLOAT":
+      w = node.addWidget("number", label, param.value ?? 0, onChange, { step: 0.01 });
+      break;
+    case "BOOLEAN":
+      w = node.addWidget("toggle", label, !!param.value, onChange);
+      break;
+    case "COMBO": {
+      const values = comboOptions?.length ? comboOptions : [String(param.value ?? "")];
+      w = node.addWidget("combo", label, param.value ?? values[0], onChange, { values });
+      break;
+    }
+    default:
+      w = node.addWidget("text", label, String(param.value ?? ""), onChange);
+      break;
+  }
+  w._vaultParamId = param.id;
+  w._vaultComboOptions = comboOptions || null;
+  w.serializeValue = () => undefined;
+  installPromotedWidgetMenu(w, node, isSealed);
+  return w;
+}
+
+function reconcilePromotedWidgets(node, params, isSealed) {
+  const active = new Map();
+  for (const p of params || []) {
+    if (p.socket === undefined && PROMOTED_VALUE_TYPES.has(p.type)) active.set(p.id, p);
+  }
+  for (const w of [...(node.widgets || [])]) {
+    if (!w._vaultParamId) continue;
+    if (!active.has(w._vaultParamId)) removePromotedWidget(node, w);
+  }
+  for (const p of active.values()) {
+    let w = (node.widgets || []).find((x) => x._vaultParamId === p.id);
+    const comboOptions = node._vaultPromotedCombo?.[p.id] || w?._vaultComboOptions || null;
+    if (!w) {
+      w = createPromotedWidget(node, p, comboOptions, isSealed);
+    } else {
+      const label = p.name || p.id;
+      if (w.name !== label) w.name = label;
+      if (w.value !== p.value) w.value = p.value;
+      if (!w._vaultMenuInstalled) {
+        installPromotedWidgetMenu(w, node, isSealed);
+        w._vaultMenuInstalled = true;
+      }
+    }
+  }
+}
+
+function convertPromotedParamToInput(node, paramId, isSealed) {
+  const iface = readNodeInterface(node);
+  const p = (iface.params || []).find((x) => x.id === paramId);
+  if (!p || p.socket !== undefined) return;
+  const k = lowestFreeParamSocket(iface.params);
+  if (k === null) {
+    modalAlert("No sockets free", `All param_0..param_${MAX_VAULT_PARAMS - 1} sockets are in use.`);
+    return;
+  }
+  p.socket = k;
+  writeNodeInterface(node, iface);
+  applyVaultInterface(node, iface, isSealed);
+  node.setDirtyCanvas?.(true, true);
+}
+
+function convertPromotedParamToWidget(node, paramId, isSealed) {
+  const iface = readNodeInterface(node);
+  const p = (iface.params || []).find((x) => x.id === paramId);
+  if (!p || p.socket === undefined) return;
+  if (!PROMOTED_VALUE_TYPES.has(p.type)) {
+    modalAlert("Cannot convert", `${p.type} parameters can only be driven by a wire.`);
+    return;
+  }
+  delete p.socket;
+  writeNodeInterface(node, iface);
+  applyVaultInterface(node, iface, isSealed);
+  node.setDirtyCanvas?.(true, true);
+}
+
 function applyVaultInterface(node, iface, isSealed) {
   if (!node || !iface) return;
   const mIn = iface.in?.length || 0;
   const mOut = iface.out?.length || 0;
+  const params = iface.params || [];
 
   for (let i = 0; i < MAX_VAULT_INPUTS; i++) {
-    const slot = node.inputs?.[i];
+    const slot = inputSlotByName(node, `input_${i}`);
     if (!slot) continue;
     if (i < mIn) {
       hideSlot(slot, false);
@@ -494,8 +890,29 @@ function applyVaultInterface(node, iface, isSealed) {
     }
   }
 
+  const claimedSockets = new Set();
+  for (const p of params) {
+    if (p.socket === undefined || p.socket === null) continue;
+    const k = Number(p.socket);
+    if (!Number.isFinite(k) || k < 0 || k >= MAX_VAULT_PARAMS) continue;
+    claimedSockets.add(k);
+    const slot = inputSlotByName(node, `param_${k}`);
+    if (!slot) continue;
+    hideSlot(slot, false);
+    slot.name = p.name || p.id;
+    slot.type = manifestTypeToSlotType(p.type);
+  }
+
+  for (let k = 0; k < MAX_VAULT_PARAMS; k++) {
+    const slot = inputSlotByName(node, `param_${k}`);
+    if (!slot) continue;
+    if (!claimedSockets.has(k)) hideSlot(slot, true);
+  }
+
+  reconcilePromotedWidgets(node, params, isSealed);
+
   node.properties = node.properties || {};
-  node.properties.vault_slots = { in: mIn, out: mOut };
+  node.properties.vault_slots = { in: mIn, out: mOut, params: params.length };
 
   const badge = isSealed ? "📦 SEALED" : (unlockedSessions.has(widget(node, "vault_id")?.value) ? "🔓 UNLOCKED" : "🔒 LOCKED");
   const base = isSealed ? "C2C Vault — Sealed" : "C2C Vault — Locked";
@@ -503,16 +920,18 @@ function applyVaultInterface(node, iface, isSealed) {
 
   const summary = node._vaultSummaryEl;
   if (summary) {
-    summary.textContent = `${iface.node_count || 0} nodes · ${mIn} inputs · ${mOut} outputs`;
+    const mParams = params.length;
+    summary.textContent = `${iface.node_count || 0} nodes · ${mIn} inputs · ${mOut} outputs · ${mParams} params`;
   }
 
   const origCompute = node._vaultOrigComputeSize || node.computeSize?.bind(node);
   if (!node._vaultOrigComputeSize) node._vaultOrigComputeSize = origCompute;
+  const hiddenParams = MAX_VAULT_PARAMS - claimedSockets.size;
   node.computeSize = function (outW) {
     const sz = origCompute ? origCompute(outW) : [node.size?.[0] || 200, 120];
     const hiddenIn = MAX_VAULT_INPUTS - mIn;
     const hiddenOut = MAX_VAULT_OUTPUTS - mOut;
-    const hiddenSlots = Math.max(hiddenIn, hiddenOut);
+    const hiddenSlots = Math.max(hiddenIn, hiddenOut, hiddenParams);
     sz[1] = Math.max(60, sz[1] - hiddenSlots * SLOT_H);
     return sz;
   };
@@ -520,7 +939,7 @@ function applyVaultInterface(node, iface, isSealed) {
   node.setDirtyCanvas?.(true, true);
 }
 
-function buildInterfaceManifest(mode, nodeCount, boundary, inTypes, outTypes) {
+function buildInterfaceManifest(mode, nodeCount, boundary, inTypes, outTypes, params = []) {
   return {
     mode,
     node_count: nodeCount,
@@ -530,6 +949,16 @@ function buildInterfaceManifest(mode, nodeCount, boundary, inTypes, outTypes) {
     out: boundary.boundary_out.map((b, i) => ({
       name: b.name, type: outTypes[i] || b.type || "*",
     })),
+    params: (params || []).map((p) => {
+      const entry = {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        value: p.value,
+      };
+      if (p.socket !== undefined && p.socket !== null) entry.socket = p.socket;
+      return entry;
+    }),
   };
 }
 
@@ -683,7 +1112,7 @@ app.registerExtension({
         color: "var(--fg-color, #ddd)",
       });
       node._vaultSummaryEl = host;
-      host.textContent = "0 nodes · 0 inputs · 0 outputs";
+      host.textContent = "0 nodes · 0 inputs · 0 outputs · 0 params";
       node.addDOMWidget("vault_summary", "summary", host, { serialize: false });
 
       node.addWidget("button", isSealed ? "Open for editing…" : "Unlock…", null, () => {
@@ -701,12 +1130,29 @@ app.registerExtension({
 
       setTimeout(() => {
         const iface = parseInterface(widget(node, "vault_interface")?.value);
-        if (iface.in.length || iface.out.length || iface.node_count) {
+        if (iface.in.length || iface.out.length || iface.node_count || iface.params.length) {
           applyVaultInterface(node, iface, isSealed);
         }
       }, 0);
 
       return r;
+    };
+
+    const origSlotMenu = nodeType.prototype.getSlotMenuOptions;
+    nodeType.prototype.getSlotMenuOptions = function (slot) {
+      const items = origSlotMenu?.call(this, slot) || [];
+      const inp = slot?.input;
+      if (!inp?.name?.startsWith("param_")) return items;
+      const k = Number(inp.name.slice(6));
+      const iface = readNodeInterface(this);
+      const param = (iface.params || []).find((p) => Number(p.socket) === k);
+      if (!param || !PROMOTED_VALUE_TYPES.has(param.type)) return items;
+      items.push(null);
+      items.push({
+        content: "Convert to widget",
+        callback: () => convertPromotedParamToWidget(this, param.id, isSealed),
+      });
+      return items;
     };
 
     const configured = nodeType.prototype.onConfigure;
@@ -787,6 +1233,9 @@ app.registerExtension({
       });
       if (!confirmed) return;
 
+      const promotion = await modalPromoteStep({ selection: sel });
+      if (promotion === null) return;
+
       const idOf = (n) => String(n.id);
       const nodes = sel.map((n) => ({
         id: idOf(n),
@@ -804,7 +1253,10 @@ app.registerExtension({
       const vault_id = `vault-${Math.random().toString(36).slice(2, 10)}`;
       const { ok, data } = await post("/c2c_vault/lock", {
         vault_id, password: pw, mode: sealed ? "sealed" : "locked",
-        subgraph: { nodes, links: derived.links, boundary_in, boundary_out },
+        subgraph: {
+          nodes, links: derived.links, boundary_in, boundary_out,
+          promoted: promotion.promoted || [],
+        },
       });
       if (!ok) {
         await modalAlert("Lock failed", data.error || "Could not lock the selection.");
@@ -815,6 +1267,7 @@ app.registerExtension({
         sealed ? "sealed" : "locked", sel.length,
         { boundary_in, boundary_out },
         derived.inTypes, derived.outTypes,
+        promotion.params || [],
       );
 
       const [cx, cy] = selectionCentroid(sel);
@@ -825,6 +1278,10 @@ app.registerExtension({
       widget(vault, "vault_payload").value = data.payload;
       const ifaceW = widget(vault, "vault_interface");
       if (ifaceW) ifaceW.value = JSON.stringify(iface);
+      vault._vaultPromotedCombo = {};
+      for (const p of promotion.params || []) {
+        if (p._comboOptions) vault._vaultPromotedCombo[p.id] = p._comboOptions;
+      }
       applyVaultInterface(vault, iface, sealed);
 
       derived.externalSources.forEach((src, i) => {

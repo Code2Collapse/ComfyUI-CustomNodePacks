@@ -410,7 +410,7 @@ class ProPainterTemporalMEC:
             raise ValueError(
                 f"ProPainterTemporalMEC expects MASK [B,H,W] or [B,H,W,1], got {tuple(getattr(masks, 'shape', ()))}"
             )
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._inpaint_temporal_impl(
                 images, masks, stitch_data, neighbor_stride, ref_stride,
                 raft_iter, subvideo_length, use_half, blend_boundary,

@@ -255,7 +255,7 @@ class MaskTrackerMEC:
         ):
             raise ValueError("MaskTrackerMEC expects MASK tensor [H,W] or [B,H,W]")
 
-        with torch.inference_mode():
+        with torch.no_grad():
             return self._execute_impl(
                 mode, camera_compensation, stabilization_method, detection_mode,
                 pixel_diff_enabled, pixel_diff_threshold, flow_enabled,

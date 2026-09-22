@@ -247,3 +247,12 @@ renderfarm/config/audit.db-shm
 _test_temp/
 _test_output/
 _test_input/
+
+# Model weights are never source. Tests download them into models/, and a
+# plain `git add -A` then sweeps up hundreds of MB that GitHub rejects at
+# 100MB per file - which is how this was found.
+models/
+*.safetensors
+*.pth
+*.ckpt
+*.onnx

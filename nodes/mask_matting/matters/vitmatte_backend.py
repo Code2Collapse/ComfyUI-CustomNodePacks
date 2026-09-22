@@ -126,7 +126,7 @@ class ViTMatteMatter(BaseMatter):
                 tri_np = (trimap[i].cpu().numpy() * 255).astype(np.uint8)
                 inputs = self._processor(images=frame, trimaps=tri_np, return_tensors="pt")
                 inputs = {k: v.to(self.device, dtype=self._dtype if v.dtype.is_floating_point else v.dtype) for k, v in inputs.items()}
-                with torch.inference_mode(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
+                with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
                     out = self._model(**inputs)
                 alpha = out.alphas
                 # Resize to original
