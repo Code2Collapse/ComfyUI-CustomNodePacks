@@ -314,6 +314,12 @@ def _sanitize_folder_name(name: str, max_length: int = 100, fallback: str = "out
     return cleaned
 
 
+try:
+    from . import _version_lease as _lease
+except ImportError:  # loaded as a top-level module rather than a package
+    import _version_lease as _lease
+
+
 def _scan_next_version(scan_dir, prefix, padding):
     """
     Scan *scan_dir* for existing sub-directories that match the version
@@ -469,6 +475,17 @@ class FolderIncrementer:
                 "folder_name_override": ("STRING", {"default": "",
                     "tooltip": "Force a specific folder name instead of deriving from the input filename. "
                                "Sanitized for cross-platform safety."}),
+                "version_group": ("STRING", {"default": "", "tooltip":
+                    "Which outputs share one version number.\n\n"
+                    "LEAVE IT EMPTY (the normal case). Every incrementer in "
+                    "the same run whose folder is the same shot - including "
+                    "its _mask, _exr and _png variants - is handed the SAME "
+                    "version, so one render files as one version. An "
+                    "unrelated job in the same workflow keeps its own "
+                    "counter and is never dragged along.\n\n"
+                    "Set a name here only when two outputs belong together "
+                    "but their folder names do not say so. Incrementers "
+                    "sharing a name share a version, whatever their folders."}),
                 "reserve_version": ("BOOLEAN", {"default": False,
                     "tooltip": "If True, create the version directory and write a `.reserved` marker file "
                                "to claim the version number atomically. Prevents collisions in batch/render-farm "
@@ -548,6 +565,10 @@ class FolderIncrementer:
                 folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
         scan_dir = base_dir / folder_name / today_date
         h.update(dir_version_fingerprint(scan_dir, prefix, padding).encode())
+        # NOT keyed on the lease. IS_CHANGED runs before execution, outside
+        # any run context, so asking the lease here would both miss and
+        # pollute it. The lease is resolved in increment(), where the run id
+        # actually exists.
         return h.hexdigest()
 
     def increment(self, prefix="v", padding=3, label="default",
@@ -556,7 +577,7 @@ class FolderIncrementer:
                   numbered_still_mode="auto",
                   trigger=None, trigger_image=None, trigger_video=None,
                   source_filename="", custom_name="", base_path="",
-                  folder_name_override="", reserve_version=False,
+                  folder_name_override="", version_group="", reserve_version=False,
                   suffix="", suffix_mode="filename", source_extension="",
                   source_path=""):
 
@@ -642,7 +663,37 @@ class FolderIncrementer:
         # ── 4. Scan for next version INSIDE the date folder ───────────
         #    Structure: base_dir / folder_name / today_date / v###
         date_dir = base_dir / folder_name / today_date
-        version_num = _scan_next_version(date_dir, prefix, padding)
+
+        # One version per run, shared by the outputs that belong together.
+        #
+        # Two incrementers in one workflow used to produce two versions - the
+        # mov in v004 and the exr in v005 - which makes a render impossible to
+        # hand over as one deliverable. Two separate causes, both reasonable
+        # on their own: reserve_version made the first node CREATE its
+        # directory so the second correctly saw it and took the next number;
+        # and suffix_mode="folder" gives each suffix its own top folder with
+        # its own independent counter.
+        #
+        # The lease key deliberately IGNORES the suffix, so `shot_a` and
+        # `shot_a_mask` share while an unrelated job does not - that is what
+        # makes this "one version per run" without forcing unrelated outputs
+        # together. See _version_lease.py.
+        family_stem = _lease.strip_suffix(folder_name, safe_suffix)
+        lease_key = _lease.family_key(
+            str(base_dir), folder_name, today_date,
+            suffix=safe_suffix, group=version_group)
+
+        def _compute_version():
+            # The MAX across every tree in the family, not just this one.
+            # Without it, a family whose trees sit at different depths hands
+            # out a number that already exists in one of them, and the next
+            # render silently overwrites finished work.
+            return _lease.scan_family_next(
+                base_dir, family_stem, today_date, prefix, padding,
+                _scan_next_version)
+
+        version_num, version_shared = _lease.lease(
+            _lease.current_run_id(), lease_key, _compute_version)
         version_string = f"{prefix}{str(version_num).zfill(padding)}"
 
         # ── 5. Optional atomic reservation ────────────────────────────
@@ -715,6 +766,12 @@ class FolderIncrementer:
 
 
 class FolderIncrementerReset:
+    # DEPRECATED: merged into FolderVersionControl, which does both jobs
+    # behind one `action` combo. Kept registered so saved workflows still
+    # load - deleting it would break a graph silently, which is worse than
+    # one hidden class - but hidden from the menu.
+    DEPRECATED = True
+
     """
     Report the current version state for a folder (today's date).
 
@@ -780,6 +837,12 @@ class FolderIncrementerReset:
 
 
 class FolderIncrementerSet:
+    # DEPRECATED: merged into FolderVersionControl, which does both jobs
+    # behind one `action` combo. Kept registered so saved workflows still
+    # load - deleting it would break a graph silently, which is worse than
+    # one hidden class - but hidden from the menu.
+    DEPRECATED = True
+
     """
     Reserve version slots by creating empty directories (inside today's
     date folder).
@@ -852,15 +915,224 @@ class FolderIncrementerSet:
                 next_ver)
 
 
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Per-output variant: one shared version, many names
+# ──────────────────────────────────────────────────────────────────────────
+
+try:
+    from . import _version_variant as _variant
+except ImportError:  # loaded as a top-level module rather than a package
+    import _version_variant as _variant
+
+
+class FolderVersionVariant:
+    """Re-tag one output's path without changing its version.
+
+    Four Video Combines - mov, exr, png, masked mov - one incrementer, one
+    version. Each Combine gets one of these to give it its own name.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "filename_prefix": ("STRING", {"default": "", "forceInput": True,
+                    "tooltip": "Connect the Folder Version Incrementer's "
+                               "`filename_prefix` output. Every variant fed "
+                               "from the same incrementer lands under the same "
+                               "version."}),
+                "suffix": ("STRING", {"default": "", "tooltip":
+                    "Tag for THIS output, e.g. '_masked', '_exr', '_png'. "
+                    "Leave empty for the one output that needs no tag."}),
+                "mode": (_variant.SUFFIX_MODES, {"default": "subfolder",
+                    "tooltip":
+                    "Where the tag goes.\n\n"
+                    "filename  -> shot_a/v004/shot_a_masked.mov\n"
+                    "             everything in one folder, told apart by name\n\n"
+                    "subfolder -> shot_a/v004/masked/shot_a.mov\n"
+                    "             one folder per output INSIDE the version. "
+                    "Use this for exr sequences - thousands of files should "
+                    "not share a directory with anything else.\n\n"
+                    "folder    -> shot_a_masked/v004/shot_a.mov\n"
+                    "             a separate top-level tree, still on the "
+                    "same version."}),
+            },
+            "optional": {
+                "prefix": ("STRING", {"default": "", "tooltip":
+                    "Tag placed BEFORE the name instead of after. Offered "
+                    "because a prefix faked with a suffix sorts in the wrong "
+                    "order, which is the whole reason to use one."}),
+                "version_string": ("STRING", {"default": "", "forceInput": True,
+                    "tooltip": "Optional. Connect the incrementer's "
+                               "`version_string` so a subfolder tag is placed "
+                               "immediately after the version directory rather "
+                               "than at the end of the path."}),
+                "extension": ("STRING", {"default": "", "tooltip":
+                    "Optional extension for the `output_filename` output, "
+                    "e.g. '.mov'. Most save nodes take `filename_prefix` and "
+                    "add their own."}),
+            },
+        }
+
+    DESCRIPTION = (
+        "Give one output its own prefix or suffix while keeping the version "
+        "the Folder Version Incrementer decided. Put one of these between the "
+        "incrementer and each save node when a single render writes several "
+        "outputs - a mov, an exr sequence, a png sequence, a masked mov - so "
+        "they all file under one version with different names."
+    )
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("filename_prefix", "subfolder_path", "output_filename",
+                    "report")
+    OUTPUT_TOOLTIPS = (
+        "Re-tagged prefix. Wire to the save node's filename_prefix.",
+        "Directory part only.",
+        "Full name including the extension, when one was given.",
+        "What was tagged and where, and what stayed shared.",
+    )
+    FUNCTION = "variant"
+    CATEGORY = "utils"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # Pure string work with no disk access, so ordinary caching is right:
+        # same inputs, same path. Unlike the incrementer, this node has no
+        # side effect that a cache hit could skip.
+        return hash_kwargs(**kwargs)
+
+    def variant(self, filename_prefix, suffix="", mode="subfolder",
+                prefix="", version_string="", extension=""):
+        result = _variant.apply_variant(
+            filename_prefix, prefix=prefix, suffix=suffix, mode=mode,
+            version_string=version_string, extension=extension)
+        report = _variant.describe(result, mode=mode, prefix=prefix,
+                                   suffix=suffix, version_string=version_string)
+        return (result["filename_prefix"], result["subfolder_path"],
+                result["output_filename"], report)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Version control: check the counter, or set it
+# ──────────────────────────────────────────────────────────────────────────
+
+class FolderVersionControl:
+    """Read or write the version counter for a label/date folder.
+
+    Replaces the separate Check and Set nodes, which were two halves of one
+    job sharing six of the same settings - two places to keep in step for no
+    benefit.
+    """
+
+    ACTIONS = ("check", "set")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "action": (cls.ACTIONS, {"default": "check", "tooltip":
+                    "check -> report how many versions exist and what comes "
+                    "next. Reads only; touches nothing.\n\n"
+                    "set   -> create empty placeholder directories up to "
+                    "`value`, so the next run produces value+1. Use it to "
+                    "skip ahead or to reserve a range."}),
+                "label": ("STRING", {"default": "default", "tooltip":
+                    "Folder name to inspect, under the output directory."}),
+            },
+            "optional": {
+                "value": ("INT", {"default": 1, "min": 1, "max": 999999,
+                    "tooltip": "'set' only: create placeholders up to this "
+                               "version number. Ignored when checking."}),
+                "trigger": ("*", {"tooltip":
+                    "Optional any-type trigger. Wire any upstream output here "
+                    "to control when this runs."}),
+                "prefix": ("STRING", {"default": "v", "tooltip":
+                    "Version prefix. Must match the incrementer's."}),
+                "padding": ("INT", {"default": 3, "min": 1, "max": 10,
+                    "tooltip": "Zero-pad width. Must match the incrementer's."}),
+                "base_path": ("STRING", {"default": "", "tooltip":
+                    "Override base directory. Empty -> ComfyUI output dir."}),
+                "date_format": (DATE_FORMAT_CHOICES, {"default": "MM-DD-YYYY",
+                    "tooltip": "Must match the incrementer's."}),
+            },
+        }
+
+    DESCRIPTION = (
+        "Check or set the version counter for a label/date folder. 'check' "
+        "reports how many vNNN folders exist and what the next one will be; "
+        "'set' creates placeholders up to a number so the next run continues "
+        "after it. To truly reset a label, delete its date folder from disk."
+    )
+    RETURN_TYPES = ("STRING", "INT", "INT")
+    RETURN_NAMES = ("status", "current_version", "next_version")
+    OUTPUT_TOOLTIPS = (
+        "Human-readable description of what was found or done.",
+        "Highest version that exists (0 when there are none yet).",
+        "What the next incrementer run will produce.",
+    )
+    FUNCTION = "run"
+    CATEGORY = "utils"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        h = hashlib.md5(hash_kwargs(**kwargs).encode())
+        label = kwargs.get("label", "default")
+        prefix = kwargs.get("prefix", "v")
+        padding = int(kwargs.get("padding", 3))
+        base_path = (kwargs.get("base_path") or "").strip()
+        base_dir = Path(base_path) if base_path else Path(_get_output_dir())
+        fmt = DATE_FORMAT_MAP.get(kwargs.get("date_format", "MM-DD-YYYY"), "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        h.update(dir_version_fingerprint(
+            base_dir / safe_label / today_date, prefix, padding).encode())
+        return h.hexdigest()
+
+    def run(self, action="check", label="default", value=1, trigger=None,
+            prefix="v", padding=3, base_path="", date_format="MM-DD-YYYY"):
+        base_dir = (Path(base_path.strip()) if base_path and base_path.strip()
+                    else Path(_get_output_dir()))
+        fmt = DATE_FORMAT_MAP.get(date_format, "%m-%d-%Y")
+        today_date = datetime.now().strftime(fmt)
+        safe_label = _sanitize_folder_name(label, fallback="default")
+        scan_dir = base_dir / safe_label / today_date
+        where = f"'{safe_label}/{today_date}'"
+
+        if action == "set":
+            for i in range(1, int(value) + 1):
+                (scan_dir / f"{prefix}{str(i).zfill(padding)}").mkdir(
+                    parents=True, exist_ok=True)
+            nxt = int(value) + 1
+            status = (f"Reserved {prefix}001-{prefix}{str(value).zfill(padding)} "
+                      f"for {where}. Next = {prefix}{str(nxt).zfill(padding)}.")
+            return (status, int(value), nxt)
+
+        nxt = _scan_next_version(scan_dir, prefix, padding)
+        current = nxt - 1
+        if current < 1:
+            return (f"{where}: no versions yet - next will be "
+                    f"{prefix}{str(nxt).zfill(padding)}.", 0, nxt)
+        return (f"{where}: {current} version(s) exist - next will be "
+                f"{prefix}{str(nxt).zfill(padding)}.", current, nxt)
+
+
 # ----- Registration maps consumed by __init__.py -----
 NODE_CLASS_MAPPINGS = {
     "FolderIncrementer": FolderIncrementer,
+    "FolderVersionVariant": FolderVersionVariant,
+    "FolderVersionControl": FolderVersionControl,
+    # Deprecated: superseded by FolderVersionControl. Still registered so
+    # existing workflows load; DEPRECATED hides them from the menu.
     "FolderIncrementerReset": FolderIncrementerReset,
     "FolderIncrementerSet": FolderIncrementerSet,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FolderIncrementer": "Folder Version Incrementer",
-    "FolderIncrementerReset": "Folder Version Check",
-    "FolderIncrementerSet": "Folder Version Set",
+    "FolderVersionVariant": "Folder Version Variant (per output)",
+    "FolderVersionControl": "Folder Version Control (check / set)",
+    "FolderIncrementerReset": "Folder Version Check (deprecated)",
+    "FolderIncrementerSet": "Folder Version Set (deprecated)",
 }
