@@ -49,6 +49,12 @@ def _have_matanyone() -> bool:
 @register
 class MatAnyoneMatter(BaseMatter):
     KEY = "matanyone"
+    #: Widgets this matter reads; the node shows only these.
+    PARAMS = (
+        "warmup_frames", "matte_resolution",
+    )
+    #: Carries state between frames, so it does not flicker on video.
+    TEMPORAL = True
     DISPLAY = "MatAnyone (video matting)"
     MODELS_KEY = "matanyone"
     NEEDS_TRIMAP = False

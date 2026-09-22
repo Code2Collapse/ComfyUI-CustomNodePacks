@@ -81,6 +81,9 @@ class _SalientBase(BaseSegmenter):
     """Shared inference plumbing for the three HF-style salient models."""
 
     SUPPORTS_MODES = {"auto"}
+
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = ()
     STATUS = "ready" if _have_transformers() else "missing-deps"
     _DEFAULT_REPO: str = ""
     _INPUT_SIZE: int = 1024

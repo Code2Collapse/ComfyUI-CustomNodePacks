@@ -107,6 +107,10 @@ class _SalientMatterBase(BaseMatter):
 @register
 class BiRefNetMatter(_SalientMatterBase):
     KEY = "birefnet"
+    #: Widgets this matter reads; the node shows only these.
+    PARAMS = ()
+    #: Carries state between frames, so it does not flicker on video.
+    TEMPORAL = False
     DISPLAY = "BiRefNet (matter / soft alpha)"
     MODELS_KEY = "birefnet"
     _SEG_CLS_PATH = "BiRefNetSegmenter"

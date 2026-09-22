@@ -42,6 +42,12 @@ def _have_rvm_repo() -> bool:
 @register
 class RVMMatter(BaseMatter):
     KEY = "rvm"
+    #: Widgets this matter reads; the node shows only these.
+    PARAMS = (
+        "downsample_ratio", "recurrent_state",
+    )
+    #: Carries state between frames, so it does not flicker on video.
+    TEMPORAL = True
     DISPLAY = "RVM (Robust Video Matting)"
     MODELS_KEY = "rvm"
     NEEDS_TRIMAP = False

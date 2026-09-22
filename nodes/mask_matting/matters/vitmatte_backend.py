@@ -40,6 +40,12 @@ def _have_transformers() -> bool:
 @register
 class ViTMatteMatter(BaseMatter):
     KEY = "vitmatte"
+    #: Widgets this matter reads; the node shows only these.
+    PARAMS = (
+        "trimap_dilate", "trimap_erode", "matte_resolution",
+    )
+    #: Carries state between frames, so it does not flicker on video.
+    TEMPORAL = False
     DISPLAY = "ViTMatte"
     MODELS_KEY = "vitmatte"
     NEEDS_TRIMAP = True

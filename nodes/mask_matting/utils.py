@@ -20,7 +20,6 @@ logger = logging.getLogger("MEC.MaskMatting")
 # ComfyUI/models/ so users can drop weights in once and forget.
 # ──────────────────────────────────────────────────────────────────────
 _BACKEND_FOLDERS: Dict[str, str] = {
-    "sam2":           "sam2",
     "sam3":           "sam3",
     "sam3.1":         "sam3.1",
     "sec":            "sec",
@@ -112,16 +111,6 @@ _quiet_progress_bars()
 # on demand into the backend's models folder.
 # ──────────────────────────────────────────────────────────────────────
 _PRESETS: Dict[str, List[Dict[str, str]]] = {
-    "sam2": [
-        {"name": "sam2.1_hiera_tiny.safetensors",
-         "url":  "https://huggingface.co/Kijai/sam2-safetensors/resolve/main/sam2.1_hiera_tiny.safetensors"},
-        {"name": "sam2.1_hiera_small.safetensors",
-         "url":  "https://huggingface.co/Kijai/sam2-safetensors/resolve/main/sam2.1_hiera_small.safetensors"},
-        {"name": "sam2.1_hiera_base_plus.safetensors",
-         "url":  "https://huggingface.co/Kijai/sam2-safetensors/resolve/main/sam2.1_hiera_base_plus.safetensors"},
-        {"name": "sam2.1_hiera_large.safetensors",
-         "url":  "https://huggingface.co/Kijai/sam2-safetensors/resolve/main/sam2.1_hiera_large.safetensors"},
-    ],
     "sam3": [
         {"name": "sam3.safetensors",
          "url":  "https://huggingface.co/facebook/sam3/resolve/main/sam3.safetensors"},

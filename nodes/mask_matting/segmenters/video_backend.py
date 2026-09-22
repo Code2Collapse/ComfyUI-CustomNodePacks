@@ -126,6 +126,11 @@ class CutieSegmenter(BaseSegmenter):
     DISPLAY = "Cutie (video object segmentation)"
     MODELS_KEY = "cutie"
     SUPPORTS_MODES = {"video", "bbox", "points", "auto"}
+
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "positive_points", "negative_points", "bbox", "frame_annotation", "object_id", "memory_size", "max_frames", "start_frame", "end_frame", "tracking_direction", "individual_objects",
+    )
     STATUS = "ready" if _have_cutie() else "missing-deps"
 
     def load(self) -> None:
@@ -232,6 +237,14 @@ def _have_xmem() -> bool:
 @register
 class XMemSegmenter(BaseSegmenter):
     KEY = "xmem"
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "positive_points", "negative_points", "bbox", "frame_annotation",
+        "object_id", "memory_size", "max_frames", "start_frame",
+        "end_frame", "tracking_direction", "individual_objects",
+    )
+    #: Needs the whole clip, not a frame - it tracks over time.
+    NEEDS_VIDEO = True
     DISPLAY = "XMem (video segmentation, long-term memory)"
     MODELS_KEY = "xmem"
     SUPPORTS_MODES = {"video", "bbox", "points", "auto"}
@@ -336,6 +349,14 @@ def _have_sec() -> bool:
 @register
 class SeCSegmenter(BaseSegmenter):
     KEY = "sec"
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "text_prompt", "positive_points", "negative_points", "bbox", "frame_annotation",
+        "object_id", "memory_size", "max_frames", "start_frame",
+        "end_frame", "tracking_direction", "individual_objects",
+    )
+    #: Needs the whole clip, not a frame - it tracks over time.
+    NEEDS_VIDEO = True
     DISPLAY = "SeC (Segment Concept, video)"
     MODELS_KEY = "sec"
     SUPPORTS_MODES = {"video", "bbox", "points", "auto"}
@@ -438,6 +459,14 @@ def _have_videomama() -> bool:
 @register
 class VideoMaMaSegmenter(BaseSegmenter):
     KEY = "videomama"
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "positive_points", "negative_points", "bbox", "frame_annotation",
+        "object_id", "memory_size", "max_frames", "start_frame",
+        "end_frame", "tracking_direction", "individual_objects",
+    )
+    #: Needs the whole clip, not a frame - it tracks over time.
+    NEEDS_VIDEO = True
     DISPLAY = "VideoMaMa (Mamba-based VOS)"
     MODELS_KEY = "videomama"
     SUPPORTS_MODES = {"video", "bbox", "points", "auto"}

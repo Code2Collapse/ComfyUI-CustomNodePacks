@@ -19,6 +19,25 @@ class BaseSegmenter:
     MODELS_KEY: str = ""
     SUPPORTS_MODES: set = set()           # {"points", "bbox", "text", "video", "auto"}
 
+    #: The widgets this backend actually READS.
+    #:
+    #: This is the single source of truth behind "pick a model and only its
+    #: parameters appear". The node derives its visibility spec from the
+    #: registry and hands that to the front-end, so the Python that validates
+    #: and the JS that hides cannot drift - and the two failures that drift
+    #: produces are both bad: a control that is visible and silently ignored,
+    #: or one that is hidden and still required.
+    #:
+    #: Empty means "everything", which is the honest default for a backend
+    #: that has not declared yet - better to show a control that does nothing
+    #: than to hide one that matters.
+    PARAMS: tuple = ()
+
+    #: True when the backend needs the whole clip rather than a frame, so the
+    #: node can refuse to hand it a single image instead of failing deep
+    #: inside a tracker.
+    NEEDS_VIDEO: bool = False
+
     def __init__(self, model_name: str = "", device: str = "cuda",
                  precision: str = "fp16", attention: str = "auto",
                  offload: str = "none"):
@@ -100,12 +119,11 @@ def list_keys(installed_only: bool = False) -> List[str]:
 # missing (instead of nodes silently disappearing — the #1 cause of the
 # "everything is a stub" perception per ideas_summary.md §2.1).
 _HINT_BY_MODULE = {
-    "sam2_backend":         "Install `sam2` (Meta SAM 2) and place sam2 weights under models/sam2/.",
     "sam3_backend":         "Install `sam-3` and place SAM 3 weights under models/sam3/.",
     "sam31_backend":        "Install `sam-3.1` and place SAM 3.1 weights under models/sam3/ (or sam31/).",
     "salient_backend":      "Install `transformers` (for BiRefNet/U2-Net) and download salient-object weights to models/saliency/.",
     "experimental_backend": "Experimental backend — enable explicitly via the node widget; safe to ignore otherwise.",
-    "video_backend":        "Install SAM2 video-predictor support (sam2 ≥ 1.0) for video segmentation.",
+    "video_backend":        "Cutie video propagation is unavailable; install its dependencies, or use SeC, which tracks a concept rather than an appearance and survives occlusion.",
     "locate_anything_backend": "Install `transformers` (for LocateAnything-3B) — open-vocabulary grounding segmenter.",
 }
 
@@ -116,7 +134,11 @@ def _import_all() -> None:
         from ..._c2c_registry import record_failure
     except Exception:
         record_failure = None  # type: ignore
-    for mod in ("sam2_backend", "sam3_backend", "sam31_backend",
+    # SAM1 and SAM2 are deliberately absent: SAM3 supersedes both on every
+    # axis this pack uses, including the text prompts SAM2 never had, and a
+    # superseded backend is not free — it is another row in the dropdown and
+    # another thing that gets picked by accident and blamed for a bad matte.
+    for mod in ("sam3_backend", "sam31_backend",
                 "salient_backend", "experimental_backend",
                 "video_backend", "locate_anything_backend"):
         try:

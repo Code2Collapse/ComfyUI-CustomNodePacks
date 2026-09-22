@@ -50,6 +50,11 @@ class LocateAnythingSegmenter(BaseSegmenter):
     MODELS_KEY = "locate_anything"
     SUPPORTS_MODES = {"text", "auto"}
 
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "text_prompt", "box_threshold", "text_threshold",
+    )
+
     DEFAULT_REPO = "nvidia/LocateAnything-3B"
 
     def __init__(self, model_name: str = "", device: str = "cuda",

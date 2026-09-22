@@ -38,6 +38,11 @@ class SAM3Segmenter(BaseSegmenter):
     DISPLAY = "SAM 3 (text + points + bbox)"
     MODELS_KEY = "sam3"
     SUPPORTS_MODES = {"points", "bbox", "text", "auto"}
+
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "text_prompt", "positive_points", "negative_points", "bbox", "neg_bbox", "frame_annotation", "object_id", "multimask",
+    )
     STATUS = "ready" if _have_sam3() else "missing-deps"
 
     def load(self) -> None:

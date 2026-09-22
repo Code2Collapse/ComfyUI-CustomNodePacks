@@ -82,6 +82,9 @@ class DISSegmenter(BaseSegmenter):
     DISPLAY = "DIS / IS-Net (high-res salient)"
     MODELS_KEY = "dis"
     SUPPORTS_MODES = {"auto"}
+
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = ()
     STATUS = "ready" if _have_transformers() else "missing-deps"
     _DEFAULT_REPO = "briaai/RMBG-1.4"
     _INPUT_SIZE = 1024

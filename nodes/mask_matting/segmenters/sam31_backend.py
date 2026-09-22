@@ -90,6 +90,11 @@ class SAM31Segmenter(BaseSegmenter):
     DISPLAY = "SAM 3.1 (independent: text + points + bbox)"
     MODELS_KEY = "sam3.1"
     SUPPORTS_MODES = {"points", "bbox", "text", "auto"}
+
+    #: Widgets this backend reads; the node shows only these.
+    PARAMS = (
+        "text_prompt", "positive_points", "negative_points", "bbox", "neg_bbox", "frame_annotation", "object_id", "multimask",
+    )
     STATUS = "ready" if _have_vendor() else "missing-deps"
 
     DEFAULT_CONF = 0.20

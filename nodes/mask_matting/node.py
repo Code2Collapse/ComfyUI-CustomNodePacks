@@ -105,7 +105,7 @@ def _segmenter_choices() -> List[str]:
     for k, cls in all_segmenters().items():
         badge = "" if cls.STATUS == "ready" else f"  [{cls.STATUS}]"
         out.append(f"{k}{badge}")
-    return out or ["sam2.1"]
+    return out or ["sam3"]
 
 
 def _matter_choices() -> List[str]:
@@ -232,7 +232,7 @@ def _la_sam_text_grounding(
     if not prompt or "locate_anything" not in avail_c:
         return None, 0.0, {}
     sam_key = None
-    for k in ("sam2.1", "sam3", "sam2"):
+    for k in ("sam3.1", "sam3", "sec"):
         if k in avail_c:
             sam_key = k
             break
@@ -674,13 +674,20 @@ class MaskOpsMEC:
 
         # ── auto_route: pick best segmenter/matter from image stats ────
         # Triggered when user picks "auto" (added to the choices list)
-        # OR auto_quality=True AND segmenter="sam2.1" (default) AND no
+        # OR auto_quality=True AND segmenter="sam3" (default) AND no
         # explicit user choice override.  Heuristic:
-        #   text prompt present                  → sam3 (open-vocab)
-        #   B>1 (video)                          → sam2.1 (video propagation)
+        #   text prompt present                  → sam3 (open-vocabulary)
+        #   B>1 (video)                          → sec, else sam3
         #   boundary_ambig>0.6 or hair preset    → vitmatte + birefnet
         #   speckle_score>0.5 + B==1             → sam3 (more robust)
-        #   else                                 → sam2.1 (general best)
+        #   else                                 → sam3 (general best)
+        #
+        # Video goes to SeC first because SAM propagates by APPEARANCE and
+        # loses the subject when they turn, are occluded, change costume, or
+        # leave frame - and sometimes latches onto the wrong person, which is
+        # worse than losing them. SeC carries a concept, so it survives all
+        # four. SAM3 stays the fallback: on a short clip with no occlusion it
+        # reaches the same answer far faster.
         # Auto-route metadata gets baked into the `info` JSON.
         _auto_routed = False
         _auto_route_reasons: list[str] = []
@@ -693,15 +700,20 @@ class MaskOpsMEC:
             _cascade_mode = True
             _auto_routed = True
             _avail0 = set(all_segmenters().keys())
-            # primary = SAM2.1 (best general / only sam with video memory).
-            if "sam2.1" in _avail0:
-                seg_key = "sam2.1"
+            # Primary: SAM3, or SeC when this is a clip. SAM2.1 is gone -
+            # SAM3 supersedes it on every axis this pack uses, including the
+            # text prompts SAM2 never had.
+            _is_clip = int(getattr(image, "shape", [1])[0]) > 1
+            if _is_clip and "sec" in _avail0:
+                seg_key = "sec"
+            elif "sam3.1" in _avail0:
+                seg_key = "sam3.1"
             elif "sam3" in _avail0:
                 seg_key = "sam3"
             elif "birefnet" in _avail0:
                 seg_key = "birefnet"
             else:
-                seg_key = next(iter(_avail0), "sam2.1")
+                seg_key = next(iter(_avail0), "sam3")
             _auto_route_reasons.append(f"auto_best_primary→{seg_key}")
             # auto_best implies the production-quality bundle.
             auto_quality = True
@@ -726,9 +738,16 @@ class MaskOpsMEC:
             if _has_text and "sam3" in _avail:
                 seg_key = "sam3"
                 _auto_route_reasons.append("text_prompt→sam3")
-            elif _B > 1 and "sam2.1" in _avail:
-                seg_key = "sam2.1"
-                _auto_route_reasons.append(f"video(B={_B})→sam2.1")
+            elif _B > 1 and "sec" in _avail:
+                # Concept tracking, not appearance matching: this is the case
+                # where a subject turns away or passes behind something.
+                seg_key = "sec"
+                _auto_route_reasons.append(f"video(B={_B})→sec (occlusion-robust)")
+            elif _B > 1 and ("sam3.1" in _avail or "sam3" in _avail):
+                seg_key = "sam3.1" if "sam3.1" in _avail else "sam3"
+                _auto_route_reasons.append(
+                    f"video(B={_B})→{seg_key} (SeC unavailable; appearance "
+                    "matching, so expect drift through an occlusion)")
             elif _stats.get("boundary_ambig", 0) > 0.6 and "birefnet" in _avail:
                 seg_key = "birefnet"
                 _auto_route_reasons.append(
@@ -740,14 +759,14 @@ class MaskOpsMEC:
                     f"speckle={_stats['speckle_score']:.2f}→sam3"
                 )
             else:
-                # General best: prefer sam2.1, then sam3, then first ready.
-                for _pref in ("sam2.1", "sam3", "rmbg2", "birefnet"):
+                # General best: prefer sam3.1, then sam3, then first ready.
+                for _pref in ("sam3.1", "sam3", "rmbg2", "birefnet"):
                     if _pref in _avail:
                         seg_key = _pref
                         _auto_route_reasons.append(f"default→{_pref}")
                         break
                 else:
-                    seg_key = next(iter(_avail), "sam2.1")
+                    seg_key = next(iter(_avail), "sam3")
                     _auto_route_reasons.append(f"fallback→{seg_key}")
             logger.info(
                 "[MaskMatting] auto_route picked segmenter=%s (reasons: %s)",
@@ -945,11 +964,13 @@ class MaskOpsMEC:
                 score = float(seg_out.get("score", 1.0))
 
             # ── auto_best cascade: ensemble + fallback ────────────────
-            # Primary already ran above (typically sam2.1). For B==1 we
-            # also run sam3 (if available) and pick the higher-scoring
+            # Primary already ran above (SAM3, or SeC on a clip). For
+            # B==1 we also run the other SAM and pick the higher-scoring
             # mask; if BOTH score below 0.30 we drop to BiRefNet salient.
-            # For B>1 we keep sam2.1's video-memory mask; if its score
-            # is below 0.40 we fall back to SeC (memory-based propagation).
+            # For B>1 we keep the primary's mask; if its score is below
+            # 0.40 we fall back to SeC, which tracks a CONCEPT rather than
+            # an appearance and so survives the occlusion that usually
+            # caused the low score in the first place.
             if _cascade_mode:
                 _avail_c = set(all_segmenters().keys())
                 def _run_alt(alt_key: str) -> tuple:
@@ -1028,7 +1049,7 @@ class MaskOpsMEC:
                             # both confident → union (max) for hair / thin edges.
                             mask_t = torch.maximum(mask_t, m2.to(mask_t.device))
                             _auto_route_reasons.append(
-                                f"cascade:union(sam2.1,sam3)")
+                                f"cascade:union(primary,sam3)")
 
                 if score < 0.30:
                     if B > 1 and "sec" in _avail_c:

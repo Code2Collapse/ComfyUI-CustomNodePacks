@@ -73,6 +73,12 @@ def _synth_bgr_plate(img_bchw: torch.Tensor, alpha_b1hw: torch.Tensor) -> torch.
 @register
 class BGMattingV2Matter(BaseMatter):
     KEY = "bgmattingv2"
+    #: Widgets this matter reads; the node shows only these.
+    PARAMS = (
+        "matte_resolution",
+    )
+    #: Carries state between frames, so it does not flicker on video.
+    TEMPORAL = False
     DISPLAY = "BackgroundMattingV2"
     MODELS_KEY = "bgmattingv2"
     NEEDS_TRIMAP = False         # plate is preferred but optional via synthesis
