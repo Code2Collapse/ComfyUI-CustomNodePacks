@@ -263,6 +263,24 @@ except Exception as _fg_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] frequency_grain import failed: %s", _fg_exc,
         )
+# AV Handles (ComfyUI-AV-Handles port, MIT — Add + Trim combined into one)
+try:
+    from .nodes.av_handles import (
+        NODE_CLASS_MAPPINGS as _AVH_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _AVH_DISPLAY,
+    )
+except Exception as _avh_exc:  # pragma: no cover
+    _AVH_MAPPINGS, _AVH_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_avh
+        _c2c_rec_fail_avh(
+            "av_handles", _avh_exc,
+            hint="AV Handles failed to import. Check nodes/av_handles.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning("[MEC] av_handles import failed: %s", _avh_exc)
 # Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
 try:
     from .nodes.smart_crop import (
@@ -652,6 +670,7 @@ NODE_CLASS_MAPPINGS = {
     **_MASKTOOLKIT_MAPPINGS,
     **_FREQGRAIN_MAPPINGS,
     **_SMARTCROP_MAPPINGS,
+    **_AVH_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
     **_SAM_MAPPINGS,
@@ -688,6 +707,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MASKTOOLKIT_DISPLAY,
     **_FREQGRAIN_DISPLAY,
     **_SMARTCROP_DISPLAY,
+    **_AVH_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
     **_SAM_DISPLAY,
