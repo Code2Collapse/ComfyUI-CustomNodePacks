@@ -79,6 +79,12 @@ app.registerExtension({
             "image", "video", "filename", "file", "audio", "url",
             "source", "file_path", "filepath", "path",
             "exr_path", "exr", "image_path", "sequence_path",
+            // Found on live nodes during the 2026-09-22 sweep:
+            // NukeMax_MochaImportShapesAsMaskPaste uses `uploaded_file`,
+            // MiniMaxH3_DCCBridge uses `exr_sequence`, and several readers
+            // name a directory rather than a file.
+            "uploaded_file", "exr_sequence", "directory", "folder",
+            "pattern", "sequence", "frames_path",
         ];
 
         // ── Check a single node for a filename widget ────────────────
@@ -170,11 +176,43 @@ app.registerExtension({
         // ── Input loader detection ──────────────────────────────────
         //    Loaders are exactly the nodes whose filename we DO want.
         //    We don't block them — we extract from them.
+        //    BUG FIX (2026-09-22): the VFX readers were missing entirely.
+        //    FILENAME_WIDGETS already knew about `file_path`/`exr_path`, and
+        //    the classifier already knew a numbered EXR sequence is a
+        //    moving-image source — but an EXR/OCIO/Nuke read was not in THIS
+        //    list, which does two jobs and failed both:
+        //      * it stops the upstream walk, so an unrecognised reader was
+        //        walked straight past and the search escaped into another
+        //        island and found a ref-image loader there;
+        //      * it drives the many-loaders disambiguator, so an EXR read
+        //        could never win against a recognised LoadImage.
+        //    Net effect: the right filename, taken from the wrong node —
+        //    which is the reported "shows ref image, not the video/exr".
         const INPUT_LOADER_TYPES = [
+            // ComfyUI core / VHS
             "LoadImage", "Load Image", "LoadImageMask",
             "LoadVideo", "Load Video", "VHS_LoadVideo", "VHS_LoadVideoPath",
             "LoadAudio", "Load Audio", "VHS_LoadAudio",
             "LoadImageBatch", "LoadImagesFromDir", "LoadImagesFromDirectory",
+            // EXR / DPX / image-sequence readers (NukeMax, CNP, MiniMax)
+            "LoadEXRMEC", "SaveEXRMEC",
+            "NukeMax_EXRSequenceLoad", "NukeMax_VideoSequenceLoad",
+            "NukeMax_EXRChannelRouter", "NukeMax_ReadMultiPass",
+            "EXRMetadataReaderMEC", "MiniMaxH3_DCCBridge",
+            // Mocha shape imports read a .mocha/.shape file and output a MASK,
+            // so they are a source too. Found by the live-reader check rather
+            // than by hand, which is the point of having it.
+            "NukeMax_MochaImportShapesAsMask",
+            "NukeMax_MochaImportShapesAsMaskPaste",
+            // OCIO / colour-managed reads
+            "OCIORead", "OCIO Read", "NukeMax_OCIOFileTransform",
+            // Nuke-style reads, and the generic spellings third-party packs use
+            "NukeRead", "Nuke Read", "ReadEXR", "Read EXR", "ReadImage",
+            "ImageSequenceLoader", "LoadImageSequence", "LoadEXR",
+            "LoadEXRSequence", "Load EXR", "ImageFromPath", "LoadImageFromPath",
+            // Pixaroma loaders
+            "PixaromaLoadVideo", "PixaromaLoadImage", "PixaromaLoadImagesFolder",
+            "PixaromaLoadVideoFrame", "PixaromaLoadAudio",
         ];
 
         function isInputLoader(n) {
