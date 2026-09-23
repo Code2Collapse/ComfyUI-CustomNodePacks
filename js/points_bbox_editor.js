@@ -30,7 +30,17 @@ import { drawEditorEmptyState } from "./_editor_empty_state.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
-const TARGET_NODES = ["MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC"];
+//
+// The two matting pipelines were added after an audit found them shipping a
+// `points_json` TEXT BOX and nothing else: their point prompts are places you
+// click on a picture, and asking someone to type {"x":100,"y":200,"label":1}
+// for each one is not a usable node. They already read exactly the format
+// this editor writes - [{x,y,label}] in points_json, [x1,y1,x2,y2] in
+// bbox_json - so they needed binding, not new code.
+const TARGET_NODES = [
+    "MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC",
+    "SAMViTMattePipelineMEC", "SeCMatAnyonePipelineMEC",
+];
 
 const COLOR = {
     bg: "var(--c2c-bg2)",
