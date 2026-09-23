@@ -207,11 +207,33 @@ class VectorRotoMEC:
                 "samples_per_seg": ("INT", {"default": 24, "min": 2, "max": 256}),
                 "feather_px":      ("FLOAT", {"default": 0.0, "min": 0.0, "max": 64.0,
                                               "step": 0.5}),
+                # LAST on purpose. Widget values serialise as a flat
+                # POSITIONAL array, so a widget inserted anywhere but the end
+                # shifts every value after it and silently re-reads an old
+                # workflow's numbers into the wrong parameters.
+                #
+                # Editor-only: which keyframe the roto editor is showing and
+                # writing. rasterize() ignores it - the shapes themselves
+                # carry their frame numbers inside roto_json, and the
+                # renderer holds a single key across the clip and
+                # interpolates between several.
+                "roto_frame":      ("INT", {
+                    "default": 0, "min": 0, "max": 4096,
+                    "tooltip": "Which keyframe the editor is on. Scrub here, "
+                               "move the shape, and a key is written at this "
+                               "frame. With one key the shape holds for the "
+                               "whole clip; with several the renderer "
+                               "interpolates between them. Does not affect "
+                               "the render on its own."}),
             },
         }
 
     def rasterize(self, roto_json: str, frame_count: int, width: int, height: int,
-                  samples_per_seg: int, feather_px: float):
+                  samples_per_seg: int, feather_px: float, roto_frame: int = 0):
+        # roto_frame is the EDITOR's cursor, not a render parameter. The
+        # shapes carry their own frame numbers inside roto_json, so accepting
+        # and ignoring it here is deliberate - reading it would make the
+        # render depend on where the editor happened to be parked.
         roto = json.loads(roto_json)
         canvas = roto.get("canvas", {"w": width, "h": height})
         sx = width / max(canvas.get("w", width), 1)

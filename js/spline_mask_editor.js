@@ -30,7 +30,19 @@ import { ensureC2CKit } from "./_c2c_ui_kit.js";
 // Targets both the unified SplineMaskMEC (mode=edit) node and any
 // legacy SplineMaskEditorMEC references that may still live on saved
 // graphs. The unified node is gated on mode === "edit".
-const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC"];
+import {
+    ROTO_NODES, rotoToShapes, shapesToRoto, keyframesAgree,
+} from "./_roto_format.js";
+
+// VectorRotoMEC joins this editor rather than getting its own.
+//
+// It shipped its shapes as a roto_json TEXT BOX, and roto is closed cubic
+// beziers with tangent handles - nobody types one, so the node was unusable.
+// The geometry here is identical; only the serialisation differs (this editor
+// keeps handles as an OFFSET from the point, roto_json as a POSITION on the
+// canvas, and roto_json has a frame dimension). That is an adapter, not a
+// second editor - see js/_roto_format.js.
+const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC", ...ROTO_NODES];
 const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
@@ -213,7 +225,45 @@ class Editor {
         sh.handles.length = n;
     }
 
+    /** Is this node the roto one, which speaks roto_json? */
+    get isRoto() { return ROTO_NODES.includes(this.node?.comfyClass); }
+
+    /** The frame being edited. Roto is keyframed; everything else is not. */
+    get rotoFrame() {
+        const w = this.node?.widgets?.find(w => w.name === "roto_frame");
+        const n = Number(w?.value);
+        return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+    }
+
+    saveRoto() {
+        const w = this.node.widgets?.find(w => w.name === "roto_json");
+        if (!w) return;
+        const doc = shapesToRoto(this.shapes, {
+            previous: w.value,
+            frame: this.rotoFrame,
+            canvas: this._rotoCanvas,
+        });
+        w.value = JSON.stringify(doc);
+        // Point counts that disagree between keyframes do not raise - the
+        // renderer matches point 1 to point 1, so the shape TEARS between
+        // keys and the only clue is the render. Say so at edit time.
+        const agree = keyframesAgree(doc);
+        this._rotoWarning = agree.ok ? "" : agree.why;
+        if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
+    }
+
+    loadRoto() {
+        const w = this.node.widgets?.find(w => w.name === "roto_json");
+        if (!w?.value) return;
+        const { shapes, canvas } = rotoToShapes(w.value, this.rotoFrame);
+        this._rotoCanvas = canvas;
+        this.shapes = shapes;
+        this.active = this.shapes.length ? 0 : -1;
+        this._rotoWarning = keyframesAgree(w.value).why || "";
+    }
+
     save() {
+        if (this.isRoto) return this.saveRoto();
         const w = this.node.widgets?.find(w => w.name === "spline_data");
         if (!w) return;
         const data = this.shapes.map(sh => ({
@@ -226,6 +276,7 @@ class Editor {
         if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
     }
     load() {
+        if (this.isRoto) return this.loadRoto();
         const w = this.node.widgets?.find(w => w.name === "spline_data");
         if (!w?.value) return;
         try {
@@ -726,6 +777,10 @@ function installEditor(node) {
         }
     };
     hideWidget(node.widgets?.find(w => w.name === "spline_data"));
+    // The roto node's raw JSON is authored entirely by this editor. Left
+    // visible it is a 40-line textarea nobody should touch, and editing it by
+    // hand desynchronises it from the shapes on screen.
+    hideWidget(node.widgets?.find(w => w.name === "roto_json"));
 
     const syncFromWidgets = () => {
         const t = node.widgets?.find(x => x.name === "spline_type");
