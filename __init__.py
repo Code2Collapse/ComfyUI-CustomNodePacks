@@ -281,6 +281,26 @@ except Exception as _avh_exc:  # pragma: no cover
     except Exception:
         import logging as _lg
         _lg.getLogger("MEC").warning("[MEC] av_handles import failed: %s", _avh_exc)
+# Tiled video refinement (tile plan / split / merge / identity lock)
+try:
+    from .nodes.tiling import (
+        NODE_CLASS_MAPPINGS as _TILING_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _TILING_DISPLAY,
+    )
+except Exception as _tile_exc:  # pragma: no cover
+    _TILING_MAPPINGS, _TILING_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_tile
+        _c2c_rec_fail_tile(
+            "tiling", _tile_exc,
+            hint="Tiled refinement failed to import. Check nodes/tiling/.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] tiling import failed: %s", _tile_exc,
+        )
 # Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
 try:
     from .nodes.smart_crop import (
@@ -670,6 +690,7 @@ NODE_CLASS_MAPPINGS = {
     **_MASKTOOLKIT_MAPPINGS,
     **_FREQGRAIN_MAPPINGS,
     **_SMARTCROP_MAPPINGS,
+    **_TILING_MAPPINGS,
     **_AVH_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
@@ -707,6 +728,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_MASKTOOLKIT_DISPLAY,
     **_FREQGRAIN_DISPLAY,
     **_SMARTCROP_DISPLAY,
+    **_TILING_DISPLAY,
     **_AVH_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,
