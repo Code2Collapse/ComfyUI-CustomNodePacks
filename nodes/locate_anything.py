@@ -24,6 +24,14 @@ logger = logging.getLogger("MEC.LocateAnything")
 class LocateAnythingGroundingMEC:
     """Open-vocabulary object grounding via NVIDIA LocateAnything-3B."""
 
+    DESCRIPTION = (
+        "Find things in an image by describing them in words - 'the person on "
+        "the left', 'red car', 'coffee cup' - and get back bounding boxes. "
+        "Open-vocabulary, so it is not limited to a fixed class list the way a "
+        "detector is. Feed the boxes to Locate Anything To SAM to turn them "
+        "into masks."
+    )
+
     _model_cache: Dict[str, Tuple[Any, Any, Any]] = {}
 
     @classmethod
@@ -223,6 +231,13 @@ class LocateAnythingGroundingMEC:
 class LocateAnythingToSAMMEC:
     """Convert LocateAnything bounding boxes into filled-rectangle masks
     that downstream SAM nodes can use as box prompts."""
+
+    DESCRIPTION = (
+        "Turn bounding boxes into filled rectangles a SAM node can take as box "
+        "prompts. The rectangle is not the final matte - it tells SAM WHERE to "
+        "segment, and SAM finds the actual edge inside it. Wire it between "
+        "Locate Anything Grounding and your masking node."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):

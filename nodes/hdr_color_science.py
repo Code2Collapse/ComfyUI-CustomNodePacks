@@ -221,6 +221,14 @@ class C2CColorSpaceConvert:
     - Log C3 → Linear for returning to pipeline
     """
 
+    DESCRIPTION = (
+        "Move an image between sRGB, scene-linear and ARRI Log C3. Compositing "
+        "and blending are only correct in LINEAR - adding two sRGB images "
+        "together adds their display curves as well as their light, which is "
+        "why a screen blend in sRGB looks wrong. Convert in, work, convert "
+        "back out. Log C3 is for handing off to a grade."
+    )
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
