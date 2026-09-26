@@ -169,6 +169,223 @@ def _auto_method_for(latent_format) -> str:
     return "taesd" if _taesd_decoder_present(latent_format) else "auto"
 
 
+# ── fetching a missing TAE decoder ──────────────────────────────────────
+# A TAESD preview is far sharper than the Latent2RGB fallback, and the only
+# thing standing between them is a ~5 MB file sitting in models/vae_approx.
+# Core logs a warning and gives up; this fetches it.
+#
+# EVERY URL BELOW WAS CHECKED before being written here, and four candidates
+# were dropped because they did not resolve:
+#   madebyollin/taehv        401, the repo is gated
+#   the three Comfy-Org "lighttae*" paths   404, not at those paths
+# So the video decoders are NOT auto-fetchable and this does not pretend
+# otherwise - it names the exact file and folder and says to fetch it by hand.
+# Guessing a URL here would produce a silent 404 on every sample, which is
+# strictly worse than saying "I cannot get this one".
+#
+# Nothing is lost when a decoder is missing: the guard already falls through
+# to Latent2RGB and then to the channel-mean previewer, so the node never goes
+# blank. The fetch only ever UPGRADES the picture.
+#
+# Set C2C_NO_TAE_DOWNLOAD=1 to disable, or drop a JSON map of
+# {"decoder_name": "https://..."} at models/vae_approx/_c2c_tae_sources.json
+# to add your own without editing this file.
+_TAE_SOURCES = {
+    "taesd_decoder":   "https://github.com/madebyollin/taesd/raw/main/taesd_decoder.pth",
+    "taesdxl_decoder": "https://github.com/madebyollin/taesd/raw/main/taesdxl_decoder.pth",
+    "taesd3_decoder":  "https://github.com/madebyollin/taesd/raw/main/taesd3_decoder.pth",
+    "taef1_decoder":   "https://github.com/madebyollin/taesd/raw/main/taef1_decoder.pth",
+}
+
+_TAE_MIN_BYTES = 1 << 20          # a 5 MB decoder; anything under 1 MB is an
+                                  # error page that happened to return 200
+_TAE_MAX_BYTES = 512 << 20        # refuse to stream something unbounded
+_fetch_lock = threading.Lock()
+_fetch_tried: set = set()         # one attempt per decoder per process
+
+
+def _vae_approx_dir():
+    try:
+        import folder_paths
+        dirs = folder_paths.get_folder_paths("vae_approx")
+        return dirs[0] if dirs else None
+    except Exception:
+        return None
+
+
+def _tae_sources() -> dict:
+    """The built-in table, plus anything the user added alongside the models."""
+    out = dict(_TAE_SOURCES)
+    d = _vae_approx_dir()
+    if not d:
+        return out
+    try:
+        import json
+        p = os.path.join(d, "_c2c_tae_sources.json")
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8") as fh:
+                extra = json.load(fh)
+            if isinstance(extra, dict):
+                out.update({str(k): str(v) for k, v in extra.items()})
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] could not read _c2c_tae_sources.json: %s", exc)
+    return out
+
+
+def _download_tae(name: str, url: str, dest_dir: str) -> None:
+    """Fetch one decoder. Runs on a worker thread; never raises into a sampler.
+
+    Writes to a temp name and renames, so a half-finished download can never
+    be picked up as a model - an interrupted fetch would otherwise leave a
+    truncated file that loads, fails deep inside the decoder, and looks like a
+    corrupt install.
+    """
+    import urllib.request
+    ext = ".safetensors" if url.endswith(".safetensors") else ".pth"
+    final = os.path.join(dest_dir, name + ext)
+    tmp = final + ".part"
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        log.info("[c2c.preview] fetching the %s preview decoder (~5 MB) from %s "
+                 "- previews stay on the fallback until it lands", name, url)
+        req = urllib.request.Request(url, headers={"User-Agent": "ComfyUI-CustomNodePacks"})
+        total = 0
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as fh:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _TAE_MAX_BYTES:
+                    raise OSError(f"{name} exceeded {_TAE_MAX_BYTES} bytes - refusing")
+                fh.write(chunk)
+        if total < _TAE_MIN_BYTES:
+            raise OSError(f"{name} came back as {total} bytes, too small to be a decoder")
+        os.replace(tmp, final)
+        log.info("[c2c.preview] %s ready (%.1f MB) - TAESD previews from the next "
+                 "sample on", name, total / 1048576)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[c2c.preview] could not fetch %s: %s. Previews keep working on "
+                    "the Latent2RGB fallback; drop the file in %s yourself to upgrade "
+                    "them.", name, exc, dest_dir)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+
+
+def _ensure_decoder(latent_format) -> None:
+    """Kick off a fetch if this model's decoder is missing. Returns at once.
+
+    Deliberately non-blocking: a sampler callback must not wait on a network
+    request. This sample previews on the fallback and the next one is sharp.
+    """
+    if os.environ.get("C2C_NO_TAE_DOWNLOAD"):
+        return
+    try:
+        name = getattr(latent_format, "taesd_decoder_name", None)
+        if not name or _taesd_decoder_present(latent_format):
+            return
+        with _fetch_lock:
+            if name in _fetch_tried:
+                return
+            _fetch_tried.add(name)
+        dest = _vae_approx_dir()
+        if not dest:
+            return
+        url = _tae_sources().get(name)
+        if not url:
+            # Not guessing. A wrong URL is a silent 404 on every sample.
+            log.info("[c2c.preview] no download source known for the '%s' preview "
+                     "decoder (the video ones are gated or unpublished). Previews "
+                     "use the Latent2RGB fallback, which works. To sharpen them, "
+                     "put a file starting with '%s' in %s, or add "
+                     '{"%s": "<url>"} to %s.',
+                     name, name, dest, name,
+                     os.path.join(dest, "_c2c_tae_sources.json"))
+            return
+        threading.Thread(target=_download_tae, args=(name, url, dest),
+                         name=f"c2c-tae-{name}", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[c2c.preview] decoder fetch skipped: %s", exc)
+
+
+# ── which frame of a video latent to show ───────────────────────────────
+# Core shows frame 0, every time, for the whole sample. For a video model
+# that is the WORST frame to pick: it is usually the one pinned to the
+# conditioning image, so it looks correct from the first step whether or not
+# the rest of the clip is working, and it never changes. You watch a still
+# picture for two minutes and learn nothing.
+#
+#   sweep  (default) advance one frame per rendered preview, wrapping. Over a
+#          20-step sample you see 20 different frames instead of the same one
+#          20 times, so motion and temporal collapse are both visible.
+#   middle a fixed frame from the centre of the clip - stable, and still far
+#          more informative than frame 0.
+#   first  core's behaviour, for anyone who wants it back.
+#
+# The frame is chosen by SLICING the latent before handing it to whichever
+# previewer is active, so this works for TAESD, Latent2RGB and the
+# channel-mean net alike - each of them takes "the first frame" of what it is
+# given, and this changes what that is.
+_VIDEO_FRAME_POLICY = os.environ.get("C2C_PREVIEW_VIDEO_FRAME", "sweep").lower()
+
+
+class _FramePickingPreviewer:
+    """Wraps a previewer so a video latent does not show frame 0 forever."""
+
+    def __init__(self, inner, policy: str):
+        self._inner = inner
+        self._policy = policy
+        self._n = 0
+
+    def _pick(self, x0):
+        # (B, C, T, H, W) only - an image latent is 4-D and passes straight
+        # through untouched.
+        if getattr(x0, "ndim", 0) != 5:
+            return x0
+        frames = int(x0.shape[2])
+        if frames <= 1:
+            return x0
+        if self._policy == "middle":
+            i = frames // 2
+        else:
+            i = self._n % frames
+            self._n += 1
+        return x0[:, :, i:i + 1]
+
+    def decode_latent_to_preview_image(self, preview_format, x0):
+        try:
+            x0 = self._pick(x0)
+        except Exception:
+            pass  # a shape we did not expect: show whatever core would have
+        return self._inner.decode_latent_to_preview_image(preview_format, x0)
+
+    def decode_latent_to_preview(self, x0):
+        try:
+            x0 = self._pick(x0)
+        except Exception:
+            pass
+        return self._inner.decode_latent_to_preview(x0)
+
+    def __getattr__(self, item):
+        return getattr(self._inner, item)
+
+
+def _with_frame_policy(prev, latent_format):
+    """Apply the frame policy to a video previewer, if one is wanted."""
+    if prev is None or _VIDEO_FRAME_POLICY == "first":
+        return prev
+    try:
+        if not _is_video_latent(latent_format):
+            return prev
+        return _FramePickingPreviewer(prev, _VIDEO_FRAME_POLICY)
+    except Exception:
+        return prev
+
+
 class _MeanChannelPreviewer:
     """Absolute last-resort previewer for latent formats with NEITHER a
     usable TAESD decoder NOR latent_rgb_factors (e.g. LTXAV, which sets
@@ -229,6 +446,12 @@ def _install_previewer_fallback() -> None:
                 pass
 
     def _patched_get_previewer(device, latent_format):
+        # If this model's TAE decoder is missing, start fetching it. Returns
+        # immediately - this sample previews on the fallback, the next is
+        # sharp. Placed here because it is the one function every sampler
+        # reaches, core or third-party.
+        _ensure_decoder(latent_format)
+
         # Smart Auto: default (None) and explicit "auto" both get per-model
         # selection. This is authoritative on EVERY sampler callback, so the
         # per-prompt reset in PR #11261 can't undo it.
@@ -264,13 +487,18 @@ def _install_previewer_fallback() -> None:
         # unwrapped would decode on steps we meant to skip.
         latent_preview.get_previewer = (
             lambda device, latent_format:
-                _throttling_previewer(_patched_get_previewer(device, latent_format))
+                _throttling_previewer(
+                    _with_frame_policy(
+                        _patched_get_previewer(device, latent_format),
+                        latent_format))
         )
         latent_preview._c2c_previewer_patched = True
         log.info("[c2c.preview] installed smart-Auto + never-None get_previewer wrapper "
                  "(video->TAESD; image->TAESD when a decoder file is present, else Auto; "
                  "per model, with a channel-mean grayscale previewer as the absolute "
-                 "last resort for formats with neither a decoder nor rgb factors).")
+                 "last resort for formats with neither a decoder nor rgb factors). "
+                 "Missing image decoders are fetched in the background; video frame "
+                 "policy is %r.", _VIDEO_FRAME_POLICY)
     except Exception as exc:  # noqa: BLE001
         log.debug("[c2c.preview] previewer patch skipped: %s", exc)
 
@@ -530,9 +758,17 @@ def _install_pbar_safety_net() -> None:
     pass through untouched. Idempotent + guarded."""
     try:
         import comfy.utils
+        # getattr INSIDE the try. `import comfy.utils` can succeed while
+        # `comfy.utils` is not set as an attribute on the `comfy` package
+        # object - that is exactly what a partially-stubbed or partially-
+        # initialised comfy looks like - and the AttributeError then escapes
+        # this installer, propagates out of the module import, and takes the
+        # whole pack out of /object_info over a preview nicety. The module
+        # header promises "any change in ComfyUI's preview API simply no-ops
+        # here"; this line is what makes that true.
+        PB = getattr(comfy.utils, "ProgressBar", None)
     except Exception:
         return
-    PB = getattr(comfy.utils, "ProgressBar", None)
     if PB is None or getattr(PB, "_c2c_pbar_patched", False):
         return
     orig_update = PB.update_absolute
@@ -567,8 +803,17 @@ def _install_pbar_safety_net() -> None:
 
 
 # Run at import (custom_nodes load after core, so latent_preview already exists).
-ensure_previews_enabled()
-_install_previewer_fallback()
-_install_prepare_callback_throttle()
-_install_pbar_safety_net()
-_register_routes()
+#
+# Each installer guards itself, and this belt-and-braces layer is here because
+# the cost of being wrong is wildly asymmetric: every one of these is a
+# NICETY - sharper previews, a smoother frame rate - while an exception
+# escaping this module at import time removes EVERY node in the pack from
+# /object_info. Nothing below is worth that trade, so a failure is logged and
+# the rest still runs.
+for _step in (ensure_previews_enabled, _install_previewer_fallback,
+              _install_prepare_callback_throttle, _install_pbar_safety_net,
+              _register_routes):
+    try:
+        _step()
+    except Exception as _exc:  # noqa: BLE001
+        log.warning("[c2c.preview] %s skipped: %s", _step.__name__, _exc)
