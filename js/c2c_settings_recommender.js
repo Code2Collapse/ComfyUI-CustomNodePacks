@@ -126,23 +126,22 @@ function modelForSampler(_node, models) {
 
 // ── Sidebar panel ─────────────────────────────────────────────────────────────
 function renderPanel(container) {
-    const C = { bg: "#1e1e2e", card: "#181825", text: "#cdd6f4", dim: "#9399b2",
-        accent: "#89b4fa", green: "#a6e3a1", border: "#313244", mono: "ui-monospace,monospace" };
+    const MONO = "ui-monospace,monospace";
     container.innerHTML = "";
-    container.style.cssText = `padding:10px;color:${C.text};font:12px ui-sans-serif;overflow:auto;height:100%;background:${C.bg};`;
+    container.style.cssText = "padding:10px;color:var(--c2c-fg);font:12px ui-sans-serif;overflow:auto;height:100%;background:var(--c2c-bg);";
     const models = detectedModels();
     const h = document.createElement("div");
     h.style.cssText = `font-weight:600;font-size:13px;margin-bottom:8px;`;
     h.textContent = "⚙ Recommended settings";
     container.appendChild(h);
     const sub = document.createElement("div");
-    sub.style.cssText = `color:${C.dim};margin-bottom:10px;`;
+    sub.style.cssText = "color:var(--c2c-dim);margin-bottom:10px;";
     sub.textContent = "Rule-based (no AI) — derived from the model filename(s) in this workflow.";
     container.appendChild(sub);
 
     if (!models.length) {
         const e = document.createElement("div");
-        e.style.cssText = `color:${C.dim};`;
+        e.style.cssText = "color:var(--c2c-dim);";
         e.textContent = "No checkpoint / UNET loader with a model selected yet. Add one and reopen this tab.";
         container.appendChild(e);
         return;
@@ -152,12 +151,12 @@ function renderPanel(container) {
         if (seen.has(m.file)) continue; seen.add(m.file);
         const r = recFor(m.file);
         const card = document.createElement("div");
-        card.style.cssText = `background:${C.card};border:1px solid ${C.border};border-radius:6px;padding:8px 10px;margin-bottom:8px;`;
+        card.style.cssText = "background:var(--c2c-bg2);border:1px solid var(--c2c-border);border-radius:6px;padding:8px 10px;margin-bottom:8px;";
         const fam = document.createElement("div");
-        fam.style.cssText = `font-weight:600;color:${C.accent};margin-bottom:2px;`;
+        fam.style.cssText = "font-weight:600;color:var(--c2c-blue);margin-bottom:2px;";
         fam.textContent = r.label;
         const file = document.createElement("div");
-        file.style.cssText = `color:${C.dim};font:11px ${C.mono};word-break:break-all;margin-bottom:6px;`;
+        file.style.cssText = `color:var(--c2c-dim);font:11px ${MONO};word-break:break-all;margin-bottom:6px;`;
         file.textContent = m.file;
         const rows = [
             ["sampler", r.sampler], ["scheduler", r.scheduler],
@@ -166,12 +165,12 @@ function renderPanel(container) {
         const grid = document.createElement("div");
         grid.style.cssText = `display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin-bottom:6px;`;
         for (const [k, v] of rows) {
-            const kk = document.createElement("div"); kk.style.cssText = `color:${C.dim};`; kk.textContent = k;
-            const vv = document.createElement("div"); vv.style.cssText = `color:${C.green};font:12px ${C.mono};`; vv.textContent = v;
+            const kk = document.createElement("div"); kk.style.cssText = "color:var(--c2c-dim);"; kk.textContent = k;
+            const vv = document.createElement("div"); vv.style.cssText = `color:var(--c2c-green);font:12px ${MONO};`; vv.textContent = v;
             grid.append(kk, vv);
         }
         const note = document.createElement("div");
-        note.style.cssText = `color:${C.dim};font-size:11px;line-height:1.35;margin-bottom:6px;`;
+        note.style.cssText = "color:var(--c2c-dim);font-size:11px;line-height:1.35;margin-bottom:6px;";
         note.textContent = r.note;
         card.append(fam, file, grid, note);
         // Deep detail block
@@ -182,10 +181,10 @@ function renderPanel(container) {
                 ["negative", dd.neg], ["alternatives", dd.alts], ["⚠ pitfalls", dd.pitfalls],
             ].filter(([, v]) => v && v !== "—");
             const dgrid = document.createElement("div");
-            dgrid.style.cssText = `display:grid;grid-template-columns:auto 1fr;gap:3px 10px;border-top:1px solid ${C.border};padding-top:6px;`;
+            dgrid.style.cssText = "display:grid;grid-template-columns:auto 1fr;gap:3px 10px;border-top:1px solid var(--c2c-border);padding-top:6px;";
             for (const [k, v] of deepRows) {
-                const kk = document.createElement("div"); kk.style.cssText = `color:${C.dim};font-size:11px;white-space:nowrap;`; kk.textContent = k;
-                const vv = document.createElement("div"); vv.style.cssText = `color:${C.text};font-size:11px;line-height:1.35;`; vv.textContent = v;
+                const kk = document.createElement("div"); kk.style.cssText = "color:var(--c2c-dim);font-size:11px;white-space:nowrap;"; kk.textContent = k;
+                const vv = document.createElement("div"); vv.style.cssText = "color:var(--c2c-fg);font-size:11px;line-height:1.35;"; vv.textContent = v;
                 dgrid.append(kk, vv);
             }
             card.appendChild(dgrid);

@@ -19,23 +19,34 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
+import { C } from "./_c2c_theme.js";
 
 const TARGET = "MaskPlacementMEC";
 const HANDLE_R = 7;           // corner hit radius (screen px)
 const ROT_OFFSET = 34;        // rotate handle distance above the top edge
 
-// Canvas2D can't parse var() — resolve to literals once (see var-in-canvas-bug).
+// DOM uses var() for live theme; canvas reads C.* at draw time.
 const COLOR = {
-    line: "#5b9dd9",
-    lineSoft: "rgba(91,157,217,0.55)",
-    fill: "rgba(91,157,217,0.10)",
-    corner: "#7fd1ff",
-    mid: "#a6e3a1",
-    rot: "#f9e2af",
-    text: "#e6e6e6",
-    sub: "#8b93a7",
-    bg: "#141414",
+    line: "var(--c2c-blueAction)",
+    corner: "var(--c2c-cyanBright)",
+    mid: "var(--c2c-green)",
+    rot: "var(--c2c-yellow)",
+    text: "var(--c2c-fg)",
+    sub: "var(--c2c-overlay1)",
+    bg: "var(--c2c-bg2)",
 };
+
+// Canvas2D can't parse var() — resolve DOM-facing keys to literals once.
+(() => {
+    let cs; try { cs = getComputedStyle(document.documentElement); } catch (_) { return; }
+    const FB = { "--c2c-blueAction": "#5b8def", "--c2c-cyanBright": "#7fd4f2", "--c2c-green": "#a6e3a1",
+        "--c2c-yellow": "#f9e2af", "--c2c-fg": "#cdd6f4", "--c2c-overlay1": "#7f849c", "--c2c-bg2": "#181825" };
+    for (const k in COLOR) {
+        const m = String(COLOR[k]).match(/var\(\s*(--[a-z0-9-]+)\s*\)/i);
+        if (!m) continue;
+        COLOR[k] = ((cs.getPropertyValue(m[1]) || "").trim()) || FB[m[1]] || "#cdd6f4";
+    }
+})();
 
 function _clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -292,7 +303,7 @@ function installEditor(node) {
             const t = 16;
             for (let y = 0; y < h; y += t) {
                 for (let x = 0; x < w; x += t) {
-                    ctx.fillStyle = ((x / t + y / t) & 1) ? "#1b1b1b" : "#202020";
+                    ctx.fillStyle = ((x / t + y / t) & 1) ? C.bg3 : C.bg2;
                     ctx.fillRect(x, y, t, t);
                 }
             }
@@ -311,14 +322,18 @@ function installEditor(node) {
         ctx.moveTo(sp[0][0], sp[0][1]);
         for (let i = 1; i < 4; i++) ctx.lineTo(sp[i][0], sp[i][1]);
         ctx.closePath();
-        ctx.fillStyle = COLOR.fill; ctx.fill();
+        ctx.globalAlpha = 0.10;
+        ctx.fillStyle = COLOR.line; ctx.fill();
+        ctx.globalAlpha = 1;
         ctx.strokeStyle = COLOR.line; ctx.lineWidth = 2; ctx.stroke();
 
         // rotate handle
         const rh = toScreen(rotHandle());
         const tm = toScreen(midpoints()[0]);
-        ctx.strokeStyle = COLOR.lineSoft; ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.55;
+        ctx.strokeStyle = COLOR.line; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(tm[0], tm[1]); ctx.lineTo(rh[0], rh[1]); ctx.stroke();
+        ctx.globalAlpha = 1;
         ctx.beginPath(); ctx.arc(rh[0], rh[1], HANDLE_R - 1, 0, Math.PI * 2);
         ctx.fillStyle = COLOR.rot; ctx.fill();
         ctx.strokeStyle = "rgba(0,0,0,0.6)"; ctx.stroke();

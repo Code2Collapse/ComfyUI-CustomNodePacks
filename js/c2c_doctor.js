@@ -333,7 +333,7 @@ function injectStyles() {
     padding: 24px; text-align: center; cursor: pointer;
     color: var(--c2c-fg-dim, var(--c2c-gray300));
 }
-#${PANEL_ID} .c2c-doc-drop.over { border-color: var(--c2c-accent, var(--c2c-accentSoft)); background: rgba(80,180,255,.06); }
+#${PANEL_ID} .c2c-doc-drop.over { border-color: var(--c2c-accent, var(--c2c-accentSoft)); background: var(--c2c-blueBg); }
 #${PANEL_ID} .c2c-doc-empty { color: var(--c2c-fg-dim, var(--c2c-gray400)); font-style: italic; padding: 12px; text-align: center; }
 #${PANEL_ID} .c2c-doc-spark { height: 60px; background: var(--c2c-bg-elev, var(--c2c-bg));
                               border: 1px solid var(--c2c-border-soft, var(--c2c-panelBg)); border-radius: 4px;

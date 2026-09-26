@@ -255,7 +255,7 @@ app.registerExtension({
 
             // ── Build DOM widget ─────────────────────────────
             const wrap = document.createElement("div");
-            wrap.style.cssText = "position:relative;width:calc(100% - 12px);margin:6px;background:var(--c2c-scrimDark2);border:1px solid #1f1f2a;border-radius:6px;overflow:hidden;min-height:240px;";
+            wrap.style.cssText = "position:relative;width:calc(100% - 12px);margin:6px;background:var(--c2c-scrimDark2);border:1px solid var(--c2c-border);border-radius:6px;overflow:hidden;min-height:240px;";
             wrap.setAttribute("role", "group");
             wrap.setAttribute("aria-label", "A/B media comparer canvas");
 
@@ -280,7 +280,7 @@ app.registerExtension({
             wrap.appendChild(overlay);
 
             const hint = document.createElement("div");
-            hint.style.cssText = "position:absolute;bottom:6px;left:8px;right:8px;font:10px system-ui;color:#9aa0b8;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,0.7);";
+            hint.style.cssText = "position:absolute;bottom:6px;left:8px;right:8px;font:10px system-ui;color:var(--c2c-sub);pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,0.7);";
             hint.textContent = "Upload A/B (or pick from combo). Drag canvas to wipe. ←/→ to scrub video frames. Space to play/pause.";
             wrap.appendChild(hint);
 
@@ -290,9 +290,9 @@ app.registerExtension({
             // Two side-by-side <video> elements sharing a single transport.
             // Hidden by default; activated by the render() switch.
             const playerHost = document.createElement("div");
-            playerHost.style.cssText = "display:none;flex-direction:column;width:100%;background:#0a0a10;";
+            playerHost.style.cssText = "display:none;flex-direction:column;width:100%;background:var(--c2c-scrimDark2);";
             const playerRow = document.createElement("div");
-            playerRow.style.cssText = "display:flex;width:100%;gap:2px;background:#0a0a10;";
+            playerRow.style.cssText = "display:flex;width:100%;gap:2px;background:var(--c2c-scrimDark2);";
             const vidA = document.createElement("video");
             const vidB = document.createElement("video");
             for (const v of [vidA, vidB]) {
@@ -329,7 +329,7 @@ app.registerExtension({
 
             // Shared transport: play/pause button + seekbar + time readout.
             const transport = document.createElement("div");
-            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--c2c-bg3);border-top:1px solid #1f1f2a;color:var(--c2c-fg);font:11px system-ui;";
+            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--c2c-bg3);border-top:1px solid var(--c2c-border);color:var(--c2c-fg);font:11px system-ui;";
             const playBtn = document.createElement("button");
             playBtn.type = "button";
             playBtn.textContent = "▶";
@@ -621,7 +621,7 @@ app.registerExtension({
                     const ch = 240;
                     if (cvs.width !== cw || cvs.height !== ch) { cvs.width = cw; cvs.height = ch; }
                     ctx.fillStyle = C.scrimDark2; ctx.fillRect(0, 0, cw, ch);
-                    ctx.fillStyle = "#5a5a78";
+                    ctx.fillStyle = C.sub;
                     ctx.font = "12px system-ui,sans-serif";
                     ctx.textAlign = "center";
                     ctx.fillText("Upload A and B to begin (live for wipe/onion/diff/per-channel/false-color/crush)", cw / 2, ch / 2);

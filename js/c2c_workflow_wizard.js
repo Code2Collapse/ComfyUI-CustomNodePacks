@@ -841,8 +841,8 @@ app.registerExtension({
         p.id = PILL_ID;
         p.style.cssText =
             "position:fixed;left:74px;bottom:14px;z-index:9000;display:none;" +
-            "padding:4px 12px;border-radius:999px;border:1px solid var(--c2c-dangerBg,#3b2222);" +
-            "background:var(--c2c-bg2,#1a1a23);color:var(--c2c-red,#f38ba8);" +
+            "padding:4px 12px;border-radius:999px;border:1px solid var(--c2c-dangerBg);" +
+            "background:var(--c2c-bg2);color:var(--c2c-red);" +
             "font:600 11px ui-sans-serif,system-ui;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);";
         p.addEventListener("click", _toggleList);
         document.body.appendChild(p);
@@ -856,12 +856,12 @@ app.registerExtension({
         l.id = LIST_ID;
         l.style.cssText =
             "position:fixed;left:74px;bottom:44px;z-index:9001;width:380px;max-height:46vh;" +
-            "overflow:auto;background:var(--c2c-bg,#1a1a22);border:1px solid var(--c2c-surface2,#45475a);" +
+            "overflow:auto;background:var(--c2c-bg);border:1px solid var(--c2c-surface2);" +
             "border-radius:10px;padding:8px;box-shadow:0 8px 28px rgba(0,0,0,.5);" +
-            "font:11px ui-sans-serif,system-ui;color:var(--c2c-fg,#cdd6f4);";
+            "font:11px ui-sans-serif,system-ui;color:var(--c2c-fg);";
         for (const iss of _issues) {
             const row = document.createElement("div");
-            row.style.cssText = "display:flex;gap:8px;align-items:center;padding:6px;border-bottom:1px solid var(--c2c-surface0,#2a2a35);";
+            row.style.cssText = "display:flex;gap:8px;align-items:center;padding:6px;border-bottom:1px solid var(--c2c-surface0);";
             const txt = document.createElement("div");
             txt.style.cssText = "flex:1;line-height:1.4;";
             txt.textContent = iss.msg;
@@ -869,7 +869,7 @@ app.registerExtension({
             btn.textContent = iss.fix;
             btn.style.cssText =
                 "flex:0 0 auto;padding:3px 10px;border-radius:6px;cursor:pointer;border:none;" +
-                "background:var(--c2c-blue,#89b4fa);color:var(--c2c-bg3,#11111b);font:600 10px ui-sans-serif;";
+                "background:var(--c2c-blue);color:var(--c2c-onAccent);font:600 10px ui-sans-serif;";
             btn.addEventListener("click", () => { try { iss.apply(); } catch (_) {} setTimeout(_scan, 250); });
             row.append(txt, btn);
             l.appendChild(row);

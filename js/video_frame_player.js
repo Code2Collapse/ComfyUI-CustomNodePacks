@@ -102,8 +102,8 @@ app.registerExtension({
             const el = document.createElement("div");
             el.className = "c2ck";
             el.style.cssText =
-                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:#161616;pointer-events:auto;" +
-                "border-radius:8px;overflow:hidden;border:1px solid #111;display:flex;flex-direction:column;color:#e6e6e6;";
+                "position:relative;width:calc(100% - 12px);min-height:260px;margin:2px 6px 16px 6px;background:var(--c2c-bg2);pointer-events:auto;" +
+                "border-radius:8px;overflow:hidden;border:1px solid var(--c2c-border);display:flex;flex-direction:column;color:var(--c2c-fg);";
             el.setAttribute("role", "group");
             el.setAttribute("aria-label",
                 "Video frame player. Drag timeline to scrub. Drag rectangle to crop. " +
@@ -113,8 +113,8 @@ app.registerExtension({
             const tb = document.createElement("div");
             tb.style.cssText =
                 "display:flex;align-items:center;justify-content:space-between;" +
-                "padding:6px 10px;background:#1e1e1e;border-bottom:1px solid #111;" +
-                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:#e6e6e6;";
+                "padding:6px 10px;background:var(--c2c-bg3);border-bottom:1px solid var(--c2c-border);" +
+                "user-select:none;flex:0 0 auto;font:11px sans-serif;color:var(--c2c-fg);";
 
             // left side: Display Mode label + segmented toggle (Time | Frames)
             const left = document.createElement("div");
@@ -842,12 +842,12 @@ app.registerExtension({
                 // spline tracker) instead of a permanent "loading..." on a black
                 // void, which read as broken. Literal hex — canvas-safe.
                 ctx.textAlign = "center"; ctx.textBaseline = "middle";
-                ctx.fillStyle = "#aab2c0"; ctx.font = "600 13px sans-serif";
+                ctx.fillStyle = C.sub; ctx.font = "600 13px sans-serif";
                 ctx.fillText("Connect a video or image batch, then Queue once", px + pw / 2, py + ph / 2 - 9);
-                ctx.fillStyle = "#7a828e"; ctx.font = "11px sans-serif";
+                ctx.fillStyle = C.dim; ctx.font = "11px sans-serif";
                 ctx.fillText("frames appear here to scrub, trim & crop", px + pw / 2, py + ph / 2 + 11);
             } else {
-                ctx.fillStyle = "#8b93a0";
+                ctx.fillStyle = C.overlay1;
                 ctx.font = "12px sans-serif";
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";

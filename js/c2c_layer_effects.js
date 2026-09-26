@@ -31,6 +31,7 @@
 // coalesced, chained onRemoved, and nothing touches `window` at import time.
 
 import { app } from "../../scripts/app.js";
+import { C } from "./_c2c_theme.js";
 import {
   angleDial, colourRow, css, mountParts, normHex, widgetsOf,
 } from "./_c2c_fx_controls.js";
@@ -105,7 +106,7 @@ function buildRamp(node, cfg) {
     const sq = 8;
     for (let y = 0; y < h; y += sq) {
       for (let x = 0; x < width; x += sq) {
-        ctx.fillStyle = ((x / sq + y / sq) & 1) ? "#3a3a3a" : "#2b2b2b";
+        ctx.fillStyle = ((x / sq + y / sq) & 1) ? C.surface0 : C.bg3;
         ctx.fillRect(x, y, sq, sq);
       }
     }

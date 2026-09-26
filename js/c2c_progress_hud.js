@@ -32,6 +32,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
+import { C, onThemeChange } from "./_c2c_theme.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 const SETTINGS = {
@@ -45,9 +46,9 @@ const SETTINGS = {
 // color (invisible / "damaged bar"). Resolve theme vars to concrete colors,
 // cached so getComputedStyle isn't hit on every draw.
 const _cssColorCache = new Map();
-function _cssColor(varName, fallback) {
+function _cssColor(varName, fallbackKey) {
     if (_cssColorCache.has(varName)) return _cssColorCache.get(varName);
-    let out = fallback;
+    let out = C[fallbackKey] || "";
     try {
         const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
         if (v) out = v;
@@ -55,6 +56,7 @@ function _cssColor(varName, fallback) {
     _cssColorCache.set(varName, out);
     return out;
 }
+onThemeChange(() => _cssColorCache.clear());
 
 // Per-node WeakMap so lookups inside onDrawForeground are O(1) and don't
 // depend on whether the user is currently viewing the root graph or a
@@ -297,9 +299,9 @@ app.registerExtension({
             ctx.fillRect(0, barY, W, barH);
             // Fill colour: green → yellow → orange by percentage. Theme vars
             // resolved to concrete colors (canvas can't read var()).
-            const fillCol = pct < 50 ? _cssColor("--c2c-okSoft", "#a6e3a1")
-                          : pct < 85 ? _cssColor("--c2c-yellow", "#f9e2af")
-                          :            _cssColor("--c2c-peach",  "#fab387");
+            const fillCol = pct < 50 ? _cssColor("--c2c-okSoft", "okSoft")
+                          : pct < 85 ? _cssColor("--c2c-yellow", "yellow")
+                          :            _cssColor("--c2c-peach",  "peach");
             ctx.fillStyle = fillCol;
             ctx.fillRect(0, barY, W * (pct / 100), barH);
             // Subtle moving shimmer ─ purely cosmetic.
@@ -330,13 +332,15 @@ app.registerExtension({
             const cy = -16;
             const w = ctx.measureText(text).width + 14;
             const h = 16;
-            ctx.fillStyle = "rgba(30,30,46,0.85)";  // Catppuccin base
+            ctx.fillStyle = C.bg;
+            ctx.globalAlpha = 0.85;
             ctx.beginPath();
             if (ctx.roundRect) ctx.roundRect(cx - w / 2, cy - h / 2, w, h, 6);
             else ctx.rect(cx - w / 2, cy - h / 2, w, h);
             ctx.fill();
+            ctx.globalAlpha = 1;
             // Border
-            ctx.strokeStyle = "rgba(69,71,90,0.9)";  // surface1
+            ctx.strokeStyle = C.surface1;
             ctx.lineWidth = 1;
             ctx.stroke();
             ctx.fillStyle = fillCol;

@@ -31,6 +31,7 @@
 // Plain ES module, no Vue. The shared controls live in _c2c_fx_controls.js.
 
 import { app } from "../../scripts/app.js";
+import { C } from "./_c2c_theme.js";
 import {
   angleDial, checkerCss, colourRow, css, hexToRgb, mountParts, widgetsOf,
 } from "./_c2c_fx_controls.js";
@@ -173,19 +174,22 @@ function blendIfStrip(node, onChange) {
     for (let i = 0; i < hs.length; i++) {
       const x = Math.round(hs[i].v * width);
       const outer = i === 0 || i === 3;
-      ctx.fillStyle = outer ? "rgba(224,162,74,0.85)" : "#e0a24a";
+      ctx.globalAlpha = outer ? 0.85 : 1;
+      ctx.fillStyle = C.amberMid;
       ctx.beginPath();
       ctx.moveTo(x, outer ? 10 : 0);
       ctx.lineTo(x - 7, outer ? 0 : -1);
       ctx.lineTo(x + 7, outer ? 0 : -1);
       ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = outer ? "rgba(224,162,74,0.55)" : "#e0a24a";
+      ctx.globalAlpha = outer ? 0.55 : 1;
+      ctx.strokeStyle = C.amberMid;
       ctx.lineWidth = outer ? 2 : 3;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
       ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
     const mode = String(w.mode?.value ?? "custom");
@@ -300,7 +304,7 @@ function gradientShape(node) {
 
     // the centre, for the two types that have one
     if (type !== "linear") {
-      ctx.strokeStyle = "#e0a24a";
+      ctx.strokeStyle = C.amberMid;
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.arc(cx * s, cy * s, 7, 0, Math.PI * 2);
@@ -452,7 +456,7 @@ function tolerancePreview(node) {
     // the plate looks like - the node cannot know that from here.
     const grad = ctx.createLinearGradient(0, 0, width, 0);
     grad.addColorStop(0, `rgb(${r},${g},${b})`);
-    grad.addColorStop(1, "#808080");
+    grad.addColorStop(1, C.gray500);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, width, cv.height);
 
@@ -461,7 +465,7 @@ function tolerancePreview(node) {
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(Math.round(feather * width), 0,
                  width - Math.round(feather * width), cv.height);
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = C.white;
     ctx.lineWidth = 2;
     for (const [x, dash] of [[keep, []], [feather, [4, 4]]]) {
       ctx.setLineDash(dash);

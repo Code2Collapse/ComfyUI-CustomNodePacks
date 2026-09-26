@@ -347,7 +347,7 @@ function draw(state, ctx, vw, vh) {
     if (!state.frames.length) {
         ctx.restore();           // undo the zoom/pan transform from above
         ctx.save();
-        ctx.fillStyle = "#9aa6b2";   // literal: canvas can't parse var(--…)
+        ctx.fillStyle = C.dim;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         const cx = vw / 2, cy = vh / 2;

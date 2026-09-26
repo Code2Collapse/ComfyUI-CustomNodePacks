@@ -9,11 +9,9 @@
 //      artboard", not "broken node"),
 //   2. a centered glyph + hint lines in muted slate.
 //
-// Colors are literal hex on purpose: canvas fillStyle cannot resolve
-// var(--x) (the all-black-confetti bug class).
+// Canvas fillStyle cannot resolve var() — read C at draw time.
 
-const CHECK_A = "#15151d";
-const CHECK_B = "#1a1a24";
+import { C } from "./_c2c_theme.js";
 
 export function drawEditorEmptyState(ctx, w, h, z, glyph, lines) {
     const zz = Math.max(0.05, z || 1);
@@ -25,7 +23,7 @@ export function drawEditorEmptyState(ctx, w, h, z, glyph, lines) {
     const tile = 24;
     for (let y = 0; y < h; y += tile) {
         for (let x = 0; x < w; x += tile) {
-            ctx.fillStyle = (((x + y) / tile) % 2 === 0) ? CHECK_A : CHECK_B;
+            ctx.fillStyle = (((x + y) / tile) % 2 === 0) ? C.bg3 : C.bg2;
             ctx.fillRect(x, y, Math.min(tile, w - x), Math.min(tile, h - y));
         }
     }

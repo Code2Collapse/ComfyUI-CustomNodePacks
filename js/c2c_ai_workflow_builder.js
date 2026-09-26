@@ -18,25 +18,25 @@ function openBuilderDialog() {
     `;
     const panel = document.createElement("div");
     panel.style.cssText = `
-        width:min(640px,92vw);background:var(--c2c-bg, #1e1e2e);color:var(--c2c-fg, #cdd6f4);
-        border:1px solid var(--c2c-surface1, #45475a);border-radius:10px;padding:16px;
+        width:min(640px,92vw);background:var(--c2c-bg);color:var(--c2c-fg);
+        border:1px solid var(--c2c-surface1);border-radius:10px;padding:16px;
         font:13px system-ui,sans-serif;box-shadow:0 12px 48px rgba(0,0,0,0.6);
     `;
     panel.innerHTML = `
         <div style="font-size:15px;font-weight:600;margin-bottom:4px;">🪄 Build a workflow from a description</div>
-        <div style="color:var(--c2c-overlay1,#7f849c);margin-bottom:10px;">
+        <div style="color:var(--c2c-overlay1);margin-bottom:10px;">
             Describe what you want. The agent designs a graph using this workspace's
             nodes, validates it against the live registry, and loads it here.
         </div>
         <textarea rows="3" placeholder="e.g. basic text to image with SDXL at 1024, 30 steps"
-            style="width:100%;box-sizing:border-box;resize:vertical;background:var(--c2c-scrimDark3,#11111b);
-                   color:inherit;border:1px solid var(--c2c-surface1,#45475a);border-radius:6px;padding:8px;"></textarea>
-        <div data-status style="min-height:20px;margin:8px 0;color:var(--c2c-overlay1,#7f849c);"></div>
+            style="width:100%;box-sizing:border-box;resize:vertical;background:var(--c2c-scrimDark3);
+                   color:inherit;border:1px solid var(--c2c-surface1);border-radius:6px;padding:8px;"></textarea>
+        <div data-status style="min-height:20px;margin:8px 0;color:var(--c2c-overlay1);"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button data-cancel style="padding:6px 14px;border-radius:6px;border:1px solid var(--c2c-surface1,#45475a);
+            <button data-cancel style="padding:6px 14px;border-radius:6px;border:1px solid var(--c2c-surface1);
                 background:transparent;color:inherit;cursor:pointer;">Cancel</button>
-            <button data-go style="padding:6px 14px;border-radius:6px;border:1px solid var(--c2c-blue,#89b4fa);
-                background:var(--c2c-blue,#89b4fa);color:#11111b;font-weight:600;cursor:pointer;">Build</button>
+            <button data-go style="padding:6px 14px;border-radius:6px;border:1px solid var(--c2c-blue);
+                background:var(--c2c-blue);color:var(--c2c-onAccent);font-weight:600;cursor:pointer;">Build</button>
         </div>
     `;
     wrap.appendChild(panel);

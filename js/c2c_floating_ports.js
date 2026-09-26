@@ -17,6 +17,7 @@
 // call through to whatever renderLink was already installed.
 
 import { app } from "/scripts/app.js";
+import { C } from "./_c2c_theme.js";
 
 const SETTING_ID = "c2c.floatingPorts.enabled";
 let _enabled = false;
@@ -97,7 +98,7 @@ function slotTypeColor(canvas, link) {
     const t = link && link.type;
     return (canvas.default_connection_color_byType && canvas.default_connection_color_byType[t])
         || (window.LGraphCanvas && LGraphCanvas.link_type_colors && LGraphCanvas.link_type_colors[t])
-        || (canvas.default_link_color) || "#9aa4b8";
+        || (canvas.default_link_color) || C.overlay1;
 }
 
 // The pipe's attachment dot: a small filled disc at the perimeter exit —

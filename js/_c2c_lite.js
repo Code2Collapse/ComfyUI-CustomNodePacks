@@ -152,6 +152,11 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.LiteMode")) app.registe
         // (onChange is still gated by _initDone), then allow user toggles.
         try { app.ui.settings.setSettingValue("c2c.lite.enabled", LITE); } catch (_) {}
         setTimeout(() => { _initDone = true; }, 800);
-        if (LITE) { try { console.log("%c[C2C.Lite] active — visual extras disabled for performance", "color:#8cf"); } catch (_) {} }
+        if (LITE) {
+            try {
+                const { C } = await import("./_c2c_theme.js");
+                console.log("%c[C2C.Lite] active — visual extras disabled for performance", `color:${C.sky}`);
+            } catch (_) {}
+        }
     },
 });

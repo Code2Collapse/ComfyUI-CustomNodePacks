@@ -79,8 +79,8 @@ function _resizeCanvas() {
 
 /* ─── particle factory ─── */
 const PALETTE_DEFAULT = ["var(--c2c-warn)","var(--c2c-blue)","var(--c2c-violetSoft)","var(--c2c-dangerStrong)","var(--c2c-green)","var(--c2c-sky)","var(--c2c-danger)"];
-const PALETTE_RAINBOW = ["var(--c2c-danger)","var(--c2c-warnBright)","#8AC926","#1982C4","var(--c2c-overlay0)","var(--c2c-red)","#7DDF64"];
-const PALETTE_GHOST   = ["var(--c2c-accentBright)","var(--c2c-fg)","#A3BE8C","var(--c2c-sapphire)","var(--c2c-overlay1)"]; // rare easter egg
+const PALETTE_RAINBOW = ["var(--c2c-danger)","var(--c2c-warnBright)","var(--c2c-green)","var(--c2c-blue)","var(--c2c-overlay0)","var(--c2c-red)","var(--c2c-okBright)"];
+const PALETTE_GHOST   = ["var(--c2c-accentBright)","var(--c2c-fg)","var(--c2c-teal)","var(--c2c-sapphire)","var(--c2c-overlay1)"]; // rare easter egg
 const SHAPES = ["sq","rect","circle","tri"];
 
 function _rand(a, b) { return a + Math.random() * (b - a); }
@@ -96,7 +96,7 @@ function _resolveColor(c) {
       const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
       if (v) return v;
     } catch (_) { /* fall through to fallback */ }
-    return "#89b4fa";  // legible fallback so a particle is never invisible/black
+    return "var(--c2c-blue)";  // legible fallback so a particle is never invisible/black
   }
   return c;
 }

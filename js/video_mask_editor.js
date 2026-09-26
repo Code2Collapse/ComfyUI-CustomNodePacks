@@ -53,8 +53,10 @@ const _C_FALLBACK = {
 };
 const _C_TOKEN = {
     bg:       "--c2c-bg",
+    bg3:      "--c2c-bg3",
     panel:    "--c2c-surface0",
     surface0: "--c2c-surface0",
+    surface1: "--c2c-surface1",
     border:   "--c2c-surface2",
     text:     "--c2c-fg",
     sub:      "--c2c-sub",
@@ -63,9 +65,7 @@ const _C_TOKEN = {
     warn:     "--c2c-yellow",
     danger:   "--c2c-red",
     onion:    "--c2c-yellow",
-    // NOTE: `bg3`, `surface1`, `white` deliberately have no CSS token —
-    // they fall through to the literal hex in _C_FALLBACK above so the
-    // canvas always gets a parseable color.
+    white:    "--c2c-white",
 };
 const C = new Proxy(_C_FALLBACK, {
     get(target, key) {
@@ -448,8 +448,8 @@ class VMEEditor {
         const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
         const tc = tmp.getContext("2d");
         const featherPx = Math.round((this.brushFeather || 0) * 24);
-        tc.fillStyle = "#fff"; tc.strokeStyle = "#fff";
-        if (featherPx > 0) { tc.shadowColor = "#fff"; tc.shadowBlur = featherPx; }
+        tc.fillStyle = C.white; tc.strokeStyle = C.white;
+        if (featherPx > 0) { tc.shadowColor = C.white; tc.shadowBlur = featherPx; }
         if (kind === "line") {
             tc.lineWidth = Math.max(1, this.brushRadius);
             tc.lineCap = "round";
@@ -526,8 +526,8 @@ class VMEEditor {
         const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
         const tc = tmp.getContext("2d");
         const featherPx = Math.round((this.brushFeather || 0) * 24);
-        if (featherPx > 0) { tc.shadowColor = "#fff"; tc.shadowBlur = featherPx; }
-        tc.fillStyle = "#fff";
+        if (featherPx > 0) { tc.shadowColor = C.white; tc.shadowBlur = featherPx; }
+        tc.fillStyle = C.white;
         tc.beginPath(); tc.moveTo(pts[0][0], pts[0][1]);
         for (let i = 1; i < pts.length; i++) tc.lineTo(pts[i][0], pts[i][1]);
         tc.closePath(); tc.fill();
@@ -665,11 +665,7 @@ class VMEEditor {
                 if (f < this.curFrame) prev = f;
                 else if (f > this.curFrame && next === null) next = f;
             }
-            const onionColors = [
-                [prev, "rgba(249,226,175,0.35)"],
-                [next, "rgba(137,180,250,0.35)"],
-            ];
-            for (const [f, tint] of onionColors) {
+            for (const f of [prev, next]) {
                 if (f == null) continue;
                 const id = this.keyframes.get(f);
                 if (!id) continue;
@@ -714,7 +710,7 @@ class VMEEditor {
         // Shape preview (live drag outline for rect/ellipse/polygon/star/line).
         if (this.shaping && this.shapeStart && this.shapeCur) {
             ctx.strokeStyle = C.accent;
-            ctx.fillStyle = (C.accent || "#89b4fa") + "22";
+            ctx.fillStyle = C.accent + "22";
             ctx.lineWidth = 2 / this.zoom;
             ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
             if (this.tool === "line") {
@@ -745,7 +741,7 @@ class VMEEditor {
             ctx.lineWidth = 2 / this.zoom;
             // filled preview of the closed area
             if (closedPreview && curve.length >= 3) {
-                ctx.fillStyle = (C.accent || "#89b4fa") + "22";
+                ctx.fillStyle = C.accent + "22";
                 ctx.beginPath(); ctx.moveTo(curve[0][0], curve[0][1]);
                 for (let i = 1; i < curve.length; i++) ctx.lineTo(curve[i][0], curve[i][1]);
                 ctx.closePath(); ctx.fill();
@@ -766,7 +762,7 @@ class VMEEditor {
             const rr = 5 / this.zoom;
             for (let i = 0; i < P.length; i++) {
                 ctx.beginPath(); ctx.arc(P[i].x, P[i].y, rr, 0, Math.PI * 2);
-                ctx.fillStyle = (i === 0) ? C.accent2 : "#fff";
+                ctx.fillStyle = (i === 0) ? C.accent2 : C.white;
                 ctx.fill();
                 ctx.lineWidth = 1.5 / this.zoom; ctx.strokeStyle = C.accent; ctx.stroke();
             }

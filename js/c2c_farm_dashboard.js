@@ -11,6 +11,7 @@
 
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
+import { C } from "./_c2c_theme.js";
 
 const TAB_ID = "c2c-farm-dashboard";
 let _root = null;
@@ -20,28 +21,28 @@ let _actor = { name: "", role: "unset" };
 let _histSort = { key: "submitted_at", dir: -1 };
 
 const CSS = `
-.c2c-farm-wrap { display:flex; flex-direction:column; height:100%; font: 12px ui-monospace,monospace; color: var(--fg-color,#ddd); }
-.c2c-farm-tabs { display:flex; gap:2px; padding:4px; border-bottom:1px solid rgba(255,255,255,0.12); }
-.c2c-farm-tabs button { flex:1; padding:5px 2px; background:rgba(255,255,255,0.06); border:0; border-radius:4px; color:inherit; cursor:pointer; font:inherit; }
-.c2c-farm-tabs button.on { background:#3a5f8a; color:#fff; }
+.c2c-farm-wrap { display:flex; flex-direction:column; height:100%; font: 12px ui-monospace,monospace; color: var(--c2c-fg); }
+.c2c-farm-tabs { display:flex; gap:2px; padding:4px; border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 70%, transparent); }
+.c2c-farm-tabs button { flex:1; padding:5px 2px; background:color-mix(in srgb, var(--c2c-surface0) 60%, transparent); border:0; border-radius:4px; color:inherit; cursor:pointer; font:inherit; }
+.c2c-farm-tabs button.on { background:color-mix(in srgb, var(--c2c-blue) 35%, var(--c2c-surface0)); color:var(--c2c-fg); }
 .c2c-farm-body { flex:1; overflow:auto; padding:6px; }
-.c2c-farm-user { padding:4px 8px; font-size:11px; opacity:0.8; border-bottom:1px solid rgba(255,255,255,0.08); }
-.c2c-farm-user .role { color:#8cff66; } .c2c-farm-user .role.unset { color:#ff8c66; }
-.c2c-farm-card { border:1px solid rgba(255,255,255,0.12); border-radius:6px; padding:6px; margin-bottom:6px; background:rgba(0,0,0,0.25); }
+.c2c-farm-user { padding:4px 8px; font-size:11px; opacity:0.8; border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 50%, transparent); }
+.c2c-farm-user .role { color:var(--c2c-okBright); } .c2c-farm-user .role.unset { color:var(--c2c-peach); }
+.c2c-farm-card { border:1px solid color-mix(in srgb, var(--c2c-border) 70%, transparent); border-radius:6px; padding:6px; margin-bottom:6px; background:color-mix(in srgb, var(--c2c-scrimDark) 25%, transparent); }
 .c2c-farm-card .top { display:flex; justify-content:space-between; align-items:center; gap:4px; }
 .c2c-farm-card .meta { opacity:0.75; font-size:11px; margin:3px 0; }
-.c2c-farm-bar { height:8px; background:rgba(255,255,255,0.1); border-radius:4px; overflow:hidden; margin:4px 0; }
-.c2c-farm-bar > div { height:100%; background:#4da6ff; transition:width .4s; }
+.c2c-farm-bar { height:8px; background:color-mix(in srgb, var(--c2c-surface0) 60%, transparent); border-radius:4px; overflow:hidden; margin:4px 0; }
+.c2c-farm-bar > div { height:100%; background:var(--c2c-blue); transition:width .4s; }
 .c2c-farm-prev { max-width:100%; border-radius:4px; margin-top:4px; display:block; }
-.c2c-farm-btn { background:rgba(255,255,255,0.1); border:0; border-radius:4px; color:inherit; padding:3px 8px; cursor:pointer; font:inherit; }
-.c2c-farm-btn:hover { background:rgba(255,255,255,0.22); }
-.c2c-farm-btn.danger:hover { background:#8a3a3a; }
+.c2c-farm-btn { background:color-mix(in srgb, var(--c2c-surface0) 60%, transparent); border:0; border-radius:4px; color:inherit; padding:3px 8px; cursor:pointer; font:inherit; }
+.c2c-farm-btn:hover { background:color-mix(in srgb, var(--c2c-surface1) 70%, transparent); }
+.c2c-farm-btn.danger:hover { background:var(--c2c-dangerBg); }
 .c2c-farm-table { width:100%; border-collapse:collapse; font-size:11px; }
-.c2c-farm-table th { text-align:left; padding:3px 5px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.2); position:sticky; top:0; background:var(--comfy-menu-bg,#202020); user-select:none; }
-.c2c-farm-table td { padding:3px 5px; border-bottom:1px solid rgba(255,255,255,0.06); white-space:nowrap; }
-.c2c-farm-status-complete { color:#8cff66; } .c2c-farm-status-failed { color:#ff6666; }
-.c2c-farm-status-running { color:#4da6ff; } .c2c-farm-status-queued, .c2c-farm-status-paused { color:#ffc966; }
-.c2c-farm-status-cancelled { color:#999; }
+.c2c-farm-table th { text-align:left; padding:3px 5px; cursor:pointer; border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 80%, transparent); position:sticky; top:0; background:var(--c2c-bg2); user-select:none; }
+.c2c-farm-table td { padding:3px 5px; border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 40%, transparent); white-space:nowrap; }
+.c2c-farm-status-complete { color:var(--c2c-okBright); } .c2c-farm-status-failed { color:var(--c2c-danger); }
+.c2c-farm-status-running { color:var(--c2c-blue); } .c2c-farm-status-queued, .c2c-farm-status-paused { color:var(--c2c-warn); }
+.c2c-farm-status-cancelled { color:var(--c2c-dim); }
 .c2c-farm-empty { opacity:0.6; padding:14px; text-align:center; }
 `;
 
@@ -101,7 +102,7 @@ function jobCard(j, { withPreview } = {}) {
         ? `<div class="c2c-farm-bar"><div style="width:${pct ?? 4}%"></div></div>
            <div class="meta">${pct != null ? pct + "%" : "progress unknown (install websocket-client for live %)"}</div>`
         : ""}
-      ${j.error ? `<div class="meta" style="color:#ff8888">${esc(j.error)}</div>` : ""}`;
+      ${j.error ? `<div class="meta" style="color:var(--c2c-dangerSoft)">${esc(j.error)}</div>` : ""}`;
     const row = document.createElement("div");
     const canControl = _actor.role === "admin" || _actor.name === j.user;
     if (canControl && !["complete", "failed", "cancelled"].includes(j.status)) {
@@ -252,7 +253,7 @@ function updateUserline() {
     const el = _root?.querySelector(".c2c-farm-user");
     if (el) el.innerHTML = `user: <b>${esc(_actor.name || "?")}</b> ·
         role: <span class="role ${esc(_actor.role)}">${esc(_actor.role)}</span>` +
-        (_actor.error ? ` — <span style="color:#ff8c66">${esc(_actor.error)}</span>` : "");
+        (_actor.error ? ` — <span style="color:var(--c2c-peach)">${esc(_actor.error)}</span>` : "");
 }
 
 async function refresh() {
@@ -352,9 +353,9 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.FarmDashboard")) app.re
             ctx.save();
             ctx.fillStyle = "rgba(0,0,0,0.45)";
             ctx.fillRect(10, 4, w, 12);
-            ctx.fillStyle = p.pct >= 1 ? "#8cff66" : "#4da6ff";
+            ctx.fillStyle = p.pct >= 1 ? C.okBright : C.blue;
             ctx.fillRect(11, 5, Math.max(2, (w - 2) * Math.min(1, p.pct)), 10);
-            ctx.fillStyle = "rgba(240,244,255,0.95)";
+            ctx.fillStyle = C.fg;
             ctx.font = "9px ui-monospace,monospace";
             ctx.textAlign = "left"; ctx.textBaseline = "middle";
             let txt = p.label;

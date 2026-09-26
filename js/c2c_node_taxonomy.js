@@ -18,6 +18,8 @@
 // MIT-licensed, then extended for C2C + common custom packs.)
 // ─────────────────────────────────────────────────────────────────────
 
+import { C } from "./_c2c_theme.js";
+
 // ── Node-type → capability keyword string ────────────────────────────
 // Keyword text is intentionally redundant/natural-language so a tokenised
 // query like "make a video from an image" intersects with the right nodes.
@@ -170,90 +172,101 @@ export const NODE_CAPS = {
     "ImpactWildcardProcessor":     "wildcard prompt dynamic random",
 };
 
-// ── Category → colour (dark theme hex; mirrors gregowahoo grouping) ───
+// ── Category → palette hue key (mirrors gregowahoo grouping) ───────────
 // Keyed by node type. Prefix-match fallback then "default".
-export const NODE_COLORS = {
+// Values are C2C palette hue keys — resolved at runtime via nodeColor().
+export const NODE_HUES = {
     // Video I/O — teal
-    "VHS_LoadVideo": "#0b3d36", "VHS_LoadVideoPath": "#0b3d36",
-    "VHS_VideoCombine": "#0b3d36", "VHS_LoadImages": "#0b3d36",
-    "LoadVideo": "#0b3d36", "SaveVideo": "#0b3d36", "VideoToImages": "#0b3d36",
-    "ImagesToVideo": "#0b3d36",
-    // Audio — slate blue
-    "LoadAudio": "#1a2b3c", "SaveAudio": "#1a2b3c", "VHS_LoadAudio": "#1a2b3c",
-    "LTXVAddAudio": "#1a2b3c", "EmptyAudioLatent": "#1a2b3c",
-    // Image I/O — navy
-    "LoadImage": "#0d2855", "SaveImage": "#0d2855", "PreviewImage": "#0d2855",
-    "LoadImageMask": "#0d2855",
-    // Model loaders — deep purple
-    "CheckpointLoaderSimple": "#2d0d55", "UNETLoader": "#2d0d55",
-    "CLIPLoader": "#2d0d55", "VAELoader": "#2d0d55", "LoraLoader": "#2d0d55",
-    "LoraLoaderModelOnly": "#2d0d55", "DualCLIPLoader": "#2d0d55",
-    "TripleCLIPLoader": "#2d0d55",
-    // Samplers — burnt orange
-    "KSampler": "#5c2800", "KSamplerAdvanced": "#5c2800",
-    "SamplerCustomAdvanced": "#5c2800", "LTXVSampler": "#5c2800",
-    "WanVideoSampler": "#5c2800", "HunyuanVideoSampler": "#5c2800",
-    // CLIP / text encode — forest green
-    "CLIPTextEncode": "#0d3d0d", "CLIPTextEncodeFlux": "#0d3d0d",
-    "CLIPTextEncodeWan": "#0d3d0d", "CLIPTextEncodeLTXV": "#0d3d0d",
-    "CLIPTextEncodeSD3": "#0d3d0d", "CLIPTextEncodeHunyuan": "#0d3d0d",
-    // VAE — dark cyan
-    "VAEDecode": "#003344", "VAEEncode": "#003344", "VAEEncodeForInpaint": "#003344",
-    // Captioning / LLM — dark gold
-    "Florence2": "#3d2e00", "WD14Tagger": "#3d2e00", "BLIPCaption": "#3d2e00",
-    "JoyCaptionAlpha": "#3d2e00", "JoyCaption": "#3d2e00", "Moondream": "#3d2e00",
-    "LLMChat": "#3d2e00", "OllamaGenerate": "#3d2e00", "QwenVL": "#3d2e00",
-    "ImageToPrompt": "#3d2e00", "CaptionToPrompt": "#3d2e00", "CLIPInterrogator": "#3d2e00",
-    // ControlNet — dark magenta
-    "ControlNetLoader": "#3d003d", "ControlNetApply": "#3d003d",
-    "ControlNetApplyAdvanced": "#3d003d", "DWPose_Preprocessor": "#3d003d",
-    "OpenposePreprocessor": "#3d003d", "CannyEdgePreprocessor": "#3d003d",
-    "DepthAnythingV2Preprocessor": "#3d003d", "LineArtPreprocessor": "#3d003d",
-    // SAM / segmentation — dark rust
-    "SAMModelLoader": "#3d1500", "SAMPredictor": "#3d1500",
-    "GroundingDinoSAMSegment": "#3d1500", "SegmentAnything2": "#3d1500",
-    // Mask / inpaint — dark maroon
-    "GrowMask": "#2a1500", "GrowMaskWithBlur": "#2a1500", "MaskToImage": "#2a1500",
-    "ImageToMask": "#2a1500", "InpaintModelConditioning": "#2a1500", "LanPaintNode": "#2a1500",
-    // LTX video — dark teal-green
-    "LTXVLoader": "#003333", "LTXVScheduler": "#003333",
-    "LTXVConditioning": "#003333", "LTXVImgToVideo": "#003333",
-    // Wan / Hunyuan video
-    "WanVideoLoader": "#003028", "WanVideoEncode": "#003028", "HunyuanVideoLoader": "#002830",
-    // Flux
-    "FluxGuidance": "#1a1500", "ModelSamplingFlux": "#1a1500",
-    // Upscale
-    "ImageUpscaleWithModel": "#001a2a", "UpscaleModelLoader": "#001a2a",
-    "UltimateSDUpscale": "#001a2a",
-    // Qwen / Joy image edit — indigo
-    "QwenImageEditLoader": "#1a0a3d", "QwenImageEdit": "#1a0a3d",
-    "JoyAIImageEdit": "#1a0a3d", "JoyAILoader": "#1a0a3d",
-    // IP-Adapter / Face — dark pink
-    "IPAdapter": "#3d0025", "IPAdapterModelLoader": "#3d0025", "IPAdapterAdvanced": "#3d0025",
-    "IPAdapterFaceID": "#3d0025", "PulidModelLoader": "#3d0025", "InstantIDModelLoader": "#3d0025",
-    "ReActorFaceSwap": "#3d0025", "FaceRestoreWithModel": "#3d0025", "ImpactFaceDetailer": "#3d0025",
-    // Reference / conditioning
-    "ReferenceLatent": "#001840", "ConditioningConcat": "#001840", "ConditioningSetMask": "#001840",
+    "VHS_LoadVideo": "teal", "VHS_LoadVideoPath": "teal",
+    "VHS_VideoCombine": "teal", "VHS_LoadImages": "teal",
+    "LoadVideo": "teal", "SaveVideo": "teal", "VideoToImages": "teal",
+    "ImagesToVideo": "teal",
+    // Audio — sapphire
+    "LoadAudio": "sapphire", "SaveAudio": "sapphire", "VHS_LoadAudio": "sapphire",
+    "LTXVAddAudio": "sapphire", "EmptyAudioLatent": "sapphire",
+    // Image I/O — blue
+    "LoadImage": "blue", "SaveImage": "blue", "PreviewImage": "blue",
+    "LoadImageMask": "blue",
+    // Model loaders — mauve
+    "CheckpointLoaderSimple": "mauve", "UNETLoader": "mauve",
+    "CLIPLoader": "mauve", "VAELoader": "mauve", "LoraLoader": "mauve",
+    "LoraLoaderModelOnly": "mauve", "DualCLIPLoader": "mauve",
+    "TripleCLIPLoader": "mauve",
+    // Samplers — peach
+    "KSampler": "peach", "KSamplerAdvanced": "peach",
+    "SamplerCustomAdvanced": "peach", "LTXVSampler": "peach",
+    "WanVideoSampler": "peach", "HunyuanVideoSampler": "peach",
+    // CLIP / text encode — green
+    "CLIPTextEncode": "green", "CLIPTextEncodeFlux": "green",
+    "CLIPTextEncodeWan": "green", "CLIPTextEncodeLTXV": "green",
+    "CLIPTextEncodeSD3": "green", "CLIPTextEncodeHunyuan": "green",
+    // VAE — sapphire
+    "VAEDecode": "sapphire", "VAEEncode": "sapphire", "VAEEncodeForInpaint": "sapphire",
+    // Captioning / LLM — yellow
+    "Florence2": "yellow", "WD14Tagger": "yellow", "BLIPCaption": "yellow",
+    "JoyCaptionAlpha": "yellow", "JoyCaption": "yellow", "Moondream": "yellow",
+    "LLMChat": "yellow", "OllamaGenerate": "yellow", "QwenVL": "yellow",
+    "ImageToPrompt": "yellow", "CaptionToPrompt": "yellow", "CLIPInterrogator": "yellow",
+    // ControlNet — pink
+    "ControlNetLoader": "pink", "ControlNetApply": "pink",
+    "ControlNetApplyAdvanced": "pink", "DWPose_Preprocessor": "pink",
+    "OpenposePreprocessor": "pink", "CannyEdgePreprocessor": "pink",
+    "DepthAnythingV2Preprocessor": "pink", "LineArtPreprocessor": "pink",
+    // SAM / segmentation — peach
+    "SAMModelLoader": "peach", "SAMPredictor": "peach",
+    "GroundingDinoSAMSegment": "peach", "SegmentAnything2": "peach",
+    // Mask / inpaint — red
+    "GrowMask": "red", "GrowMaskWithBlur": "red", "MaskToImage": "red",
+    "ImageToMask": "red", "InpaintModelConditioning": "red", "LanPaintNode": "red",
+    // LTX video — teal
+    "LTXVLoader": "teal", "LTXVScheduler": "teal",
+    "LTXVConditioning": "teal", "LTXVImgToVideo": "teal",
+    // Wan / Hunyuan video — teal
+    "WanVideoLoader": "teal", "WanVideoEncode": "teal", "HunyuanVideoLoader": "teal",
+    // Flux — yellow
+    "FluxGuidance": "yellow", "ModelSamplingFlux": "yellow",
+    // Upscale — sky
+    "ImageUpscaleWithModel": "sky", "UpscaleModelLoader": "sky",
+    "UltimateSDUpscale": "sky",
+    // Qwen / Joy image edit — lavender
+    "QwenImageEditLoader": "lavender", "QwenImageEdit": "lavender",
+    "JoyAIImageEdit": "lavender", "JoyAILoader": "lavender",
+    // IP-Adapter / Face — pink
+    "IPAdapter": "pink", "IPAdapterModelLoader": "pink", "IPAdapterAdvanced": "pink",
+    "IPAdapterFaceID": "pink", "PulidModelLoader": "pink", "InstantIDModelLoader": "pink",
+    "ReActorFaceSwap": "pink", "FaceRestoreWithModel": "pink", "ImpactFaceDetailer": "pink",
+    // Reference / conditioning — blue
+    "ReferenceLatent": "blue", "ConditioningConcat": "blue", "ConditioningSetMask": "blue",
     // Default
-    "default": "#1a1a35",
+    "default": "lavender",
 };
 
-// ── Data-type → wire colour (substring match) ─────────────────────────
-export const LINK_COLORS = {
-    "IMAGE": "#2a7a55", "LATENT": "#8a6a2a", "MODEL": "#6a3a9a",
-    "CLIP": "#4a6a3a", "VAE": "#2a6a8a", "CONDITIONING": "#2a5a7a",
-    "VIDEO": "#2a7a6a", "AUDIO": "#4a4a9a", "MASK": "#8a3a2a",
-    "CONTROL_NET": "#7a3a7a", "STRING": "#3a6a6a", "INT": "#5a5a3a",
-    "FLOAT": "#5a5a3a",
+/** @deprecated Use NODE_HUES — kept for callers that import the old name. */
+export const NODE_COLORS = NODE_HUES;
+
+// ── Data-type → wire hue (substring match) ────────────────────────────
+export const LINK_HUES = {
+    "IMAGE": "green", "LATENT": "yellow", "MODEL": "mauve",
+    "CLIP": "green", "VAE": "sapphire", "CONDITIONING": "blue",
+    "VIDEO": "teal", "AUDIO": "lavender", "MASK": "peach",
+    "CONTROL_NET": "pink", "STRING": "teal", "INT": "yellow",
+    "FLOAT": "yellow",
 };
 
-// Human-readable category labels for legends, keyed by representative hex.
+/** @deprecated Use LINK_HUES */
+export const LINK_COLORS = LINK_HUES;
+
+/** Hue percent mixed into bg for category chips (canvas + CSS). */
+const CHIP_MIX = 22;
+const WIRE_MIX = 38;
+
+// Human-readable category labels for legends, keyed by palette hue.
 export const CATEGORY_LEGEND = [
-    ["#0b3d36", "Video I/O"], ["#1a2b3c", "Audio"], ["#0d2855", "Image I/O"],
-    ["#2d0d55", "Model loaders"], ["#5c2800", "Samplers"], ["#0d3d0d", "CLIP/Text"],
-    ["#003344", "VAE"], ["#3d2e00", "Caption/LLM"], ["#3d003d", "ControlNet"],
-    ["#3d1500", "SAM/Segment"], ["#2a1500", "Mask/Inpaint"], ["#001a2a", "Upscale"],
-    ["#1a0a3d", "Image edit"], ["#3d0025", "IP-Adapter/Face"], ["#1a1a35", "Utility"],
+    ["teal", "Video I/O"], ["sapphire", "Audio"], ["blue", "Image I/O"],
+    ["mauve", "Model loaders"], ["peach", "Samplers"], ["green", "CLIP/Text"],
+    ["sapphire", "VAE"], ["yellow", "Caption/LLM"], ["pink", "ControlNet"],
+    ["peach", "SAM/Segment"], ["red", "Mask/Inpaint"], ["sky", "Upscale"],
+    ["lavender", "Image edit"], ["pink", "IP-Adapter/Face"], ["lavender", "Utility"],
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -279,26 +292,64 @@ export function capabilityFor(type) {
     return splitTypeWords(type);
 }
 
-/** Node fill colour: exact, then prefix match, then default. */
-export function nodeColor(type) {
-    if (!type) return NODE_COLORS.default;
-    if (NODE_COLORS[type]) return NODE_COLORS[type];
-    for (const k of Object.keys(NODE_COLORS)) {
+/** Resolve palette hue key for a node type. */
+export function nodeHue(type) {
+    if (!type) return NODE_HUES.default;
+    if (NODE_HUES[type]) return NODE_HUES[type];
+    for (const k of Object.keys(NODE_HUES)) {
         if (k === "default") continue;
         if (k.length >= 5 && type.startsWith(k.slice(0, Math.min(8, k.length)))) {
-            return NODE_COLORS[k];
+            return NODE_HUES[k];
         }
     }
-    return NODE_COLORS.default;
+    return NODE_HUES.default;
+}
+
+function _hex2rgb(h) {
+    let s = String(h || "").replace("#", "");
+    if (s.length === 3) s = s.split("").map((c) => c + c).join("");
+    return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+}
+
+function _rgb2hex(c) {
+    return "#" + c.map((v) => {
+        const n = Math.max(0, Math.min(255, Math.round(v * 255)));
+        return n.toString(16).padStart(2, "0");
+    }).join("");
+}
+
+/** Mix a palette hue into the active ground (canvas — read C at call time). */
+function chipFill(hueKey, mix = CHIP_MIX) {
+    const hue = C[hueKey];
+    if (!hue) return C.panelBg;
+    try {
+        const t = mix / 100;
+        const bg = _hex2rgb(C.bg);
+        const fg = _hex2rgb(hue);
+        return _rgb2hex(bg.map((b, i) => b * (1 - t) + fg[i] * t));
+    } catch {
+        return C.panelBg;
+    }
+}
+
+/** CSS color-mix for category chips (live across variant switches). */
+export function nodeColorCss(type, mix = CHIP_MIX) {
+    const h = nodeHue(type);
+    return `color-mix(in srgb, var(--c2c-${h}) ${mix}%, var(--c2c-bg) ${100 - mix}%)`;
+}
+
+/** Node fill colour for canvas: exact, prefix match, then default. */
+export function nodeColor(type) {
+    return chipFill(nodeHue(type));
 }
 
 /** Wire colour by data-type (substring, case-insensitive). */
 export function linkColor(ltype) {
     const lt = String(ltype || "").toUpperCase();
-    for (const k of Object.keys(LINK_COLORS)) {
-        if (lt.includes(k)) return LINK_COLORS[k];
+    for (const k of Object.keys(LINK_HUES)) {
+        if (lt.includes(k)) return chipFill(LINK_HUES[k], WIRE_MIX);
     }
-    return "#3a3a6a";
+    return chipFill("lavender", 18);
 }
 
 /** Lighten a #rrggbb hex by `amt` per channel (header/border tints). */
@@ -315,6 +366,6 @@ export function lighten(hx, amt = 30) {
 }
 
 export default {
-    NODE_CAPS, NODE_COLORS, LINK_COLORS, CATEGORY_LEGEND,
-    capabilityFor, nodeColor, linkColor, lighten,
+    NODE_CAPS, NODE_HUES, NODE_COLORS, LINK_HUES, LINK_COLORS, CATEGORY_LEGEND,
+    capabilityFor, nodeHue, nodeColor, nodeColorCss, linkColor, lighten,
 };

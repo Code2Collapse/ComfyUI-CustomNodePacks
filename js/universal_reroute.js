@@ -64,7 +64,7 @@ function typeColor(t) {
   if (_typeColorCache[m[1]]) return _typeColorCache[m[1]];
   let v = "";
   try { v = getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim(); } catch (_) {}
-  if (!v) v = "#89b4fa";
+  if (!v) v = C.blue;
   _typeColorCache[m[1]] = v;
   return v;
 }

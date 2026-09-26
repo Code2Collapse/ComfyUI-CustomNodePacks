@@ -63,7 +63,7 @@ function makePlayerDOM(node) {
         flex: 1 1 auto; min-height: 0; position: relative; border-radius: 6px; overflow: hidden;
         background:
             radial-gradient(120% 90% at 50% 12%, rgba(137,180,250,0.06), transparent 60%),
-            linear-gradient(180deg, #14151d 0%, #0e0f16 100%);
+            linear-gradient(180deg, var(--c2c-panelHi) 0%, var(--c2c-bg3) 100%);
         display: flex; align-items: center; justify-content: center;
     `;
     const stageImg = document.createElement("img");
@@ -75,11 +75,11 @@ function makePlayerDOM(node) {
     const stageMsg = document.createElement("div");
     stageMsg.style.cssText = `
         display:flex; flex-direction:column; align-items:center; gap:6px;
-        color:var(--c2c-gray400,#9399b2); font: 12px ui-sans-serif,system-ui; text-align:center; padding:8px;
+        color:var(--c2c-gray400); font: 12px ui-sans-serif,system-ui; text-align:center; padding:8px;
     `;
     stageMsg.innerHTML =
         `<div style="font-size:30px;line-height:1;opacity:0.6">🎬</div>` +
-        `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">Preview stage</div>` +
+        `<div style="font-weight:600;color:var(--c2c-gray300)">Preview stage</div>` +
         `<div style="opacity:0.8">Add image / video clips below, or run the workflow.</div>`;
     stage.append(stageImg, stageVideo, stageMsg);
 
@@ -96,8 +96,8 @@ function makePlayerDOM(node) {
     const scrubHead = document.createElement("div");      // playhead
     scrubHead.style.cssText = "position:absolute;top:-2px;bottom:-2px;left:0;width:2px;background:var(--c2c-gray50);box-shadow:0 0 3px var(--c2c-black);pointer-events:none;";
     const mkMark = (color) => { const m = document.createElement("div"); m.style.cssText = `position:absolute;top:0;bottom:0;width:2px;background:${color};display:none;pointer-events:none;`; return m; };
-    const markIn  = mkMark("var(--c2c-green, #4ade80)");
-    const markOut = mkMark("var(--c2c-amber, #fbbf24)");
+    const markIn  = mkMark("var(--c2c-okBright)");
+    const markOut = mkMark("var(--c2c-warnBright)");
     scrub.append(scrubRegion, scrubFill, scrubHead, markIn, markOut);
 
     // ── Controls row ──────────────────────────────────────────────
@@ -183,7 +183,7 @@ function makePlayerDOM(node) {
         const empty = /no clips|no preview/i.test(msg);
         stageMsg.innerHTML =
             `<div style="font-size:30px;line-height:1;opacity:0.6">${empty ? "🎬" : "⏳"}</div>` +
-            `<div style="font-weight:600;color:var(--c2c-gray300,#bac2de)">${empty ? "Preview stage" : "Working…"}</div>` +
+            `<div style="font-weight:600;color:var(--c2c-gray300)">${empty ? "Preview stage" : "Working…"}</div>` +
             `<div style="opacity:0.8">${msg}</div>`;
     }
 

@@ -38,27 +38,27 @@ function showCard(node, diag) {
     card.id = "__c2c_diag_card";
     card.style.cssText = `
         position:fixed;right:16px;bottom:16px;z-index:2147483000;width:min(420px,90vw);
-        background:var(--c2c-bg,#1e1e2e);color:var(--c2c-fg,#cdd6f4);
-        border:1px solid var(--c2c-red,#f38ba8);border-radius:10px;padding:14px;
+        background:var(--c2c-bg);color:var(--c2c-fg);
+        border:1px solid var(--c2c-red);border-radius:10px;padding:14px;
         font:12.5px system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,0.6);
     `;
     const title = node ? `${node.title || node.type} failed` : "Workflow error";
     const applyBtn = diag.apply
-        ? `<button data-apply style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-green,#a6e3a1);
-             background:var(--c2c-green,#a6e3a1);color:#11111b;font-weight:600;cursor:pointer;">
+        ? `<button data-apply style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-green);
+             background:var(--c2c-green);color:var(--c2c-onAccent);font-weight:600;cursor:pointer;">
              Apply fix: ${diag.apply.widget} → ${JSON.stringify(diag.apply.value)}</button>`
         : "";
     card.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="font-size:15px;">🩺</span>
             <span style="font-weight:600;">${title}</span>
-            <span style="margin-left:auto;color:var(--c2c-overlay1,#7f849c);font-size:10.5px;">via ${diag.provider}</span>
+            <span style="margin-left:auto;color:var(--c2c-overlay1);font-size:10.5px;">via ${diag.provider}</span>
             <button data-x style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;">✕</button>
         </div>
         <div style="margin-bottom:4px;">${diag.cause || ""}</div>
-        <div style="color:var(--c2c-overlay1,#a6adc8);margin-bottom:${diag.apply ? "10px" : "0"};">${diag.fix || ""}</div>
+        <div style="color:var(--c2c-sub);margin-bottom:${diag.apply ? "10px" : "0"};">${diag.fix || ""}</div>
         <div style="display:flex;gap:8px;">${applyBtn}
-            ${node ? `<button data-goto style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1,#45475a);
+            ${node ? `<button data-goto style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
                 background:transparent;color:inherit;cursor:pointer;">Show node</button>` : ""}
         </div>
     `;

@@ -675,9 +675,9 @@ function _failedImportsSectionHtml(escape) {
         } else if (status) {
             if (status.ok) {
                 const inst = (status.installed || []).join(", ");
-                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-okSoft, #6f6);">✓ healed: ${escape(inst)} (${status.duration_s || "?"}s)</div>`;
+                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-okSoft);">✓ healed: ${escape(inst)} (${status.duration_s || "?"}s)</div>`;
             } else {
-                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-dangerTint, #f88);">✗ ${escape(status.error || "failed")}${status.rolled_back ? " — rolled back" : ""}</div>`;
+                statusHtml = `<div style="opacity:0.95; font-size:10px; margin-top:3px; color:var(--c2c-dangerTint);">✗ ${escape(status.error || "failed")}${status.rolled_back ? " — rolled back" : ""}</div>`;
             }
         }
 

@@ -115,7 +115,7 @@ function _buildPanel() {
       style="flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
              border-radius:5px;padding:4px 8px;color:inherit;font-size:12px;">
     <button id="c2c-key-reset-all"
-      style="font-size:11px;padding:3px 8px;background:rgba(255,0,0,.12);border:1px solid rgba(255,80,80,.25);
+      style="font-size:11px;padding:3px 8px;background:var(--c2c-dangerBg);border:1px solid var(--c2c-dangerTint);
              border-radius:5px;cursor:pointer;color:var(--c2c-dangerSoft);">Reset All</button>
     <button id="c2c-key-close"
       style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);padding:0 4px;">×</button>
@@ -185,8 +185,8 @@ function _renderList() {
         Edit
       </button>
       <button data-reset="${id}"
-        style="font-size:10px;padding:2px 7px;background:rgba(255,80,80,.08);
-               border:1px solid rgba(255,80,80,.18);border-radius:4px;cursor:pointer;color:var(--c2c-dangerSoft);">
+        style="font-size:10px;padding:2px 7px;background:var(--c2c-dangerBg);
+               border:1px solid var(--c2c-dangerTint);border-radius:4px;cursor:pointer;color:var(--c2c-dangerSoft);">
         ↺
       </button>
     `;

@@ -17,7 +17,7 @@ import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { forAllNodes } from "./_subgraph_walk.js";
 import { c2cConfirm, c2cPrompt } from "./_c2c_dialog.js";
-import { capabilityFor, nodeColor } from "./c2c_node_taxonomy.js";
+import { capabilityFor, nodeColorCss } from "./c2c_node_taxonomy.js";
 import { renderGraphPreview, legendHTML } from "./c2c_graph_preview.js";
 import { scoreLocal } from "./c2c_workflow_library.js";
 
@@ -166,7 +166,7 @@ function thumbCellHtml(card, { h = 120, fallback = "prompt" } = {}) {
     const overlay = blurred
         ? `<div class="ph-nsfw-reveal" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:rgba(0,0,0,0.45);cursor:pointer">
              <span style="font-size:18px">\ud83d\udd1e</span>
-             <span style="font-size:9px;color:#fff;letter-spacing:0.5px">${label}</span>
+             <span style="font-size:9px;color:var(--c2c-white);letter-spacing:0.5px">${label}</span>
            </div>`
         : "";
     return `<div style="position:relative;width:100%">${imgTag}${overlay}</div>`;
@@ -492,7 +492,7 @@ function renderPreview(modal) {
           <img src="${_esc(card.image)}" style="width:100%;border-radius:6px;background:var(--c2c-bg);${previewBlurred ? "filter:blur(24px)" : ""}"/>
           ${previewBlurred ? `<div class="ph-nsfw-reveal" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:rgba(0,0,0,0.45);cursor:pointer;border-radius:6px">
               <span style="font-size:22px">\u{1F51E}</span>
-              <span style="font-size:10px;color:#fff;letter-spacing:0.5px">NSFW \u00b7 click to reveal</span>
+              <span style="font-size:10px;color:var(--c2c-white);letter-spacing:0.5px">NSFW \u00b7 click to reveal</span>
             </div>` : ""}
         </div>` : ""}
       <div style="margin-top:8px;font-size:11px;color:var(--c2c-sub)">Prompt</div>
@@ -837,7 +837,7 @@ function renderWorkflows(modal, grid, opts = {}) {
             wrap.style.cssText = gridCss;
             for (const fp of _wf.local) {
                 const chips = (fp.nodes || []).slice(0, 6).map((nt) =>
-                    `<span style="display:inline-block;margin:2px;padding:1px 6px;border-radius:3px;font-size:9px;color:#fff;background:${nodeColor(nt)}" title="${_esc(capabilityFor(nt))}">${_esc(nt)}</span>`).join("");
+                    `<span style="display:inline-block;margin:2px;padding:1px 6px;border-radius:3px;font-size:9px;color:var(--c2c-fg);background:${nodeColorCss(nt)}" title="${_esc(capabilityFor(nt))}">${_esc(nt)}</span>`).join("");
                 const card = document.createElement("div");
                 card.style.cssText = `${box()};padding:8px;display:flex;flex-direction:column;gap:4px`;
                 card.innerHTML = `
@@ -993,7 +993,7 @@ function _cardBadgesHtml(card, { maxTags = 3 } = {}) {
     }
     if (card.nsfw === true) {
         parts.push(_chipHtml("NSFW", {
-            bg: "var(--c2c-red,#ef4444)", fg: "#fff", border: "var(--c2c-red,#ef4444)",
+            bg: "var(--c2c-red)", fg: "var(--c2c-white)", border: "var(--c2c-red)",
             title: "Source flagged this card as NSFW.",
         }));
     } else if (card.nsfw_unknown === true) {
@@ -1020,7 +1020,7 @@ function _dimsBadgeHtml(card) {
     if (!card || !card.width || !card.height) return "";
     return (
         `<span style="position:absolute;right:4px;bottom:4px;background:rgba(0,0,0,0.55);` +
-            `color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;line-height:1.4">` +
+            `color:var(--c2c-white);font-size:9px;padding:1px 5px;border-radius:3px;line-height:1.4">` +
             `${card.width}\u00d7${card.height}` +
         `</span>`
     );
@@ -1033,7 +1033,7 @@ function _permalinkButtonHtml(card) {
     return (
         `<a class="c2c-ph-permalink" href="${_esc(card.permalink)}" target="_blank" rel="noopener noreferrer" ` +
             `title="Open original on ${_esc(_sourceLabel(card.source))}" ` +
-            `style="position:absolute;right:4px;top:4px;background:rgba(0,0,0,0.55);color:#fff;` +
+            `style="position:absolute;right:4px;top:4px;background:rgba(0,0,0,0.55);color:var(--c2c-white);` +
             `font-size:11px;line-height:1;padding:2px 5px;border-radius:3px;text-decoration:none">\u2197</a>`
     );
 }

@@ -19,8 +19,8 @@
  *   3. "Ask AI" escalates to the streaming LLM endpoint (Tier 2/3) when the
  *      user wants a deeper, model-written explanation.
  *
- * Colours are LITERAL hex (bold red) so the panel is unmissable regardless of
- * the active theme; theme CSS vars are used only as soft fallbacks.
+ * Colours use the C2C house palette (var(--c2c-*)) so the panel tracks the
+ * active theme variant. Translucent scrims stay as rgba literals per theme rules.
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
@@ -30,19 +30,16 @@ const PANEL_ID = "c2c-ai-errtrans-panel";
 const SETTING_ENABLED = "c2c.ai.errorTranslator.enabled";
 const SETTING_AUTO_AI = "c2c.ai.errorTranslator.autoAskAI";
 
-// Soft, translucent "frosted garnet" palette — a calm advisory card, not an
-// alarm. backdrop-filter does the depth; a single desaturated-rose accent is
-// used sparingly (left stripe, glyph, labels, fix edges). All literal values
-// (never a theme var() — Canvas/CSS safe).
-const ACCENT      = "#e8788a";                    // soft desaturated rose — the ONE accent
-const ACCENT_SOFT = "rgba(232,120,138,0.13)";     // translucent rose fill (Ask-AI / glow)
-const ACCENT_HOV  = "rgba(232,120,138,0.22)";     // accent hover
-const GLASS_BG    = "rgba(24, 18, 22, 0.58)";     // frosted warm-charcoal base
+// Frosted advisory card — danger-family accent on the house palette.
+const ACCENT      = "var(--c2c-dangerSoft)";
+const ACCENT_SOFT = "var(--c2c-dangerBg)";
+const ACCENT_HOV  = "var(--c2c-dangerBg2)";
+const GLASS_BG    = "rgba(24, 18, 22, 0.58)";     // frosted scrim (literal OK)
 const GLASS_WASH  = "rgba(255, 255, 255, 0.04)";  // faint header/footer wash
 const ROW_BG      = "rgba(255, 255, 255, 0.045)"; // fix-row / detail fill
 const HAIR        = "rgba(255, 255, 255, 0.09)";  // hairline borders/dividers
-const TEXT        = "#f3edf0";                     // warm near-white body
-const TEXT_DIM    = "#b3a8af";                     // muted secondary
+const TEXT        = "var(--c2c-fg)";
+const TEXT_DIM    = "var(--c2c-sub)";
 
 function _c2cHumanise(raw) {
     if (!raw || typeof raw !== "string") return "Something went wrong while running this workflow.";

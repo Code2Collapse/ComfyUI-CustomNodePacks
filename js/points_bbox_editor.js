@@ -522,8 +522,8 @@ function installEditor(node) {
         display:flex;flex-direction:column;
         width:calc(100% - 12px);height:calc(100% - 18px);
         margin:2px 6px 16px 6px;
-        background:#161616;border:1px solid #111;border-radius:7px;
-        overflow:hidden;color:#e6e6e6;
+        background:var(--c2c-bg2);border:1px solid var(--c2c-border);border-radius:7px;
+        overflow:hidden;color:var(--c2c-fg);
         box-sizing:border-box;user-select:none;
         pointer-events:none;
     `;
@@ -533,7 +533,7 @@ function installEditor(node) {
     tb.className = "c2ck-toolbar";
     tb.style.cssText = `
         display:flex;align-items:center;gap:4px;padding:5px 7px;
-        background:#1e1e1e;border-bottom:1px solid #111;
+        background:var(--c2c-bg3);border-bottom:1px solid var(--c2c-border);
         flex:0 0 auto;font-size:11px;line-height:1;
         pointer-events:auto;
     `;

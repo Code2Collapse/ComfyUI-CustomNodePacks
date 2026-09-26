@@ -112,9 +112,9 @@ function modalPasswordStep({ title, note, sealed }) {
     });
     const box = document.createElement("div");
     css(box, {
-      background: "var(--comfy-menu-bg, #353535)",
-      color: "var(--fg-color, #ddd)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-bg2)",
+      color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
       borderRadius: "6px", padding: "18px 20px",
       minWidth: "360px", maxWidth: "480px", font: "13px sans-serif",
       boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
@@ -135,9 +135,9 @@ function modalPasswordStep({ title, note, sealed }) {
     css(pw, {
       width: "100%", boxSizing: "border-box", marginBottom: "8px",
       padding: "7px 9px", borderRadius: "4px",
-      background: "var(--comfy-input-bg, #222)",
-      color: "var(--input-text, #ccc)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-surface0)",
+      color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
     });
 
     const pw2 = document.createElement("input");
@@ -147,9 +147,9 @@ function modalPasswordStep({ title, note, sealed }) {
     css(pw2, {
       width: "100%", boxSizing: "border-box", marginBottom: "8px",
       padding: "7px 9px", borderRadius: "4px",
-      background: "var(--comfy-input-bg, #222)",
-      color: "var(--input-text, #ccc)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-surface0)",
+      color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
     });
 
     const genRow = document.createElement("div");
@@ -158,16 +158,16 @@ function modalPasswordStep({ title, note, sealed }) {
     genBtn.textContent = "Generate strong password";
     const genShow = document.createElement("span");
     genShow.textContent = "";
-    css(genShow, { fontFamily: "ui-monospace, monospace", fontSize: "11px", color: "var(--c2c-green, #a6e3a1)", flex: "1", wordBreak: "break-all" });
+    css(genShow, { fontFamily: "ui-monospace, monospace", fontSize: "11px", color: "var(--c2c-green)", flex: "1", wordBreak: "break-all" });
     const copyBtn = document.createElement("button");
     copyBtn.textContent = "Copy";
     copyBtn.style.display = "none";
     for (const b of [genBtn, copyBtn]) {
       css(b, {
         padding: "4px 10px", borderRadius: "4px", cursor: "pointer", fontSize: "11px",
-        background: "var(--comfy-input-bg, #222)",
-        color: "var(--input-text, #ccc)",
-        border: "1px solid var(--border-color, #4a4a4a)",
+        background: "var(--c2c-surface0)",
+        color: "var(--c2c-fg)",
+        border: "1px solid var(--c2c-border)",
       });
     }
     let shownOnce = "";
@@ -184,7 +184,7 @@ function modalPasswordStep({ title, note, sealed }) {
     genRow.append(genBtn, copyBtn, genShow);
 
     const err = document.createElement("div");
-    css(err, { color: "#f87171", minHeight: "16px", marginBottom: "8px" });
+    css(err, { color: "var(--c2c-dangerStrong)", minHeight: "16px", marginBottom: "8px" });
 
     const row = document.createElement("div");
     css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
@@ -195,9 +195,9 @@ function modalPasswordStep({ title, note, sealed }) {
     for (const b of [cancel, next]) {
       css(b, {
         padding: "6px 14px", borderRadius: "4px", cursor: "pointer",
-        background: "var(--comfy-input-bg, #222)",
-        color: "var(--input-text, #ccc)",
-        border: "1px solid var(--border-color, #4a4a4a)",
+        background: "var(--c2c-surface0)",
+        color: "var(--c2c-fg)",
+        border: "1px solid var(--c2c-border)",
       });
     }
 
@@ -234,9 +234,9 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
     });
     const box = document.createElement("div");
     css(box, {
-      background: "var(--comfy-menu-bg, #353535)",
-      color: "var(--fg-color, #ddd)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-bg2)",
+      color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
       borderRadius: "6px", padding: "18px 20px",
       minWidth: "420px", maxWidth: "560px", maxHeight: "80vh", overflow: "auto",
       font: "13px sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
@@ -269,8 +269,8 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
         nameIn.value = row.name;
         css(nameIn, {
           flex: "1", padding: "4px 8px", borderRadius: "4px",
-          background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
-          border: "1px solid var(--border-color, #4a4a4a)",
+          background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
+          border: "1px solid var(--c2c-border)",
         });
         nameIn.oninput = () => { row.name = nameIn.value; };
         line.append(typeEl, nameIn);
@@ -291,7 +291,7 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
     else {
       const none = document.createElement("div");
       none.textContent = "No outputs — vault cannot run.";
-      css(none, { color: "#f87171", marginBottom: "8px", fontSize: "12px" });
+      css(none, { color: "var(--c2c-dangerStrong)", marginBottom: "8px", fontSize: "12px" });
       box.append(none);
     }
 
@@ -304,9 +304,9 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
     for (const b of [cancel, ok]) {
       css(b, {
         padding: "6px 14px", borderRadius: "4px", cursor: "pointer",
-        background: "var(--comfy-input-bg, #222)",
-        color: "var(--input-text, #ccc)",
-        border: "1px solid var(--border-color, #4a4a4a)",
+        background: "var(--c2c-surface0)",
+        color: "var(--c2c-fg)",
+        border: "1px solid var(--c2c-border)",
       });
     }
     const done = (v) => { back.remove(); resolve(v); };
@@ -381,9 +381,9 @@ function modalPromoteStep({ selection }) {
     });
     const box = document.createElement("div");
     css(box, {
-      background: "var(--comfy-menu-bg, #353535)",
-      color: "var(--fg-color, #ddd)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-bg2)",
+      color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
       borderRadius: "6px", padding: "18px 20px",
       minWidth: "460px", maxWidth: "620px", maxHeight: "80vh", overflow: "auto",
       font: "13px sans-serif", boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
@@ -441,16 +441,16 @@ function modalPromoteStep({ selection }) {
         labelIn.title = "Name shown on the vault node — not the internal widget name";
         css(labelIn, {
           padding: "4px 8px", borderRadius: "4px",
-          background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
-          border: "1px solid var(--border-color, #4a4a4a)",
+          background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
+          border: "1px solid var(--c2c-border)",
         });
         labelIn.oninput = () => { row.label = labelIn.value; };
 
         const modeSel = document.createElement("select");
         css(modeSel, {
           padding: "4px 6px", borderRadius: "4px",
-          background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
-          border: "1px solid var(--border-color, #4a4a4a)",
+          background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
+          border: "1px solid var(--c2c-border)",
         });
         const optWidget = document.createElement("option");
         optWidget.value = "widget";
@@ -488,9 +488,9 @@ function modalPromoteStep({ selection }) {
     for (const b of [cancel, skip, ok]) {
       css(b, {
         padding: "6px 14px", borderRadius: "4px", cursor: "pointer",
-        background: "var(--comfy-input-bg, #222)",
-        color: "var(--input-text, #ccc)",
-        border: "1px solid var(--border-color, #4a4a4a)",
+        background: "var(--c2c-surface0)",
+        color: "var(--c2c-fg)",
+        border: "1px solid var(--c2c-border)",
       });
     }
 
@@ -554,8 +554,8 @@ function modalAlert(title, note) {
     });
     const box = document.createElement("div");
     css(box, {
-      background: "var(--comfy-menu-bg, #353535)", color: "var(--fg-color, #ddd)",
-      border: "1px solid var(--border-color, #4a4a4a)", borderRadius: "6px",
+      background: "var(--c2c-bg2)", color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)", borderRadius: "6px",
       padding: "18px 20px", minWidth: "300px", font: "13px sans-serif",
     });
     const ok = document.createElement("button");
@@ -583,8 +583,8 @@ function modalPassword({ title, note, confirmLabel }) {
     });
     const box = document.createElement("div");
     css(box, {
-      background: "var(--comfy-menu-bg, #353535)", color: "var(--fg-color, #ddd)",
-      border: "1px solid var(--border-color, #4a4a4a)", borderRadius: "6px",
+      background: "var(--c2c-bg2)", color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)", borderRadius: "6px",
       padding: "18px 20px", minWidth: "340px", font: "13px sans-serif",
     });
     const pw = document.createElement("input");
@@ -593,11 +593,11 @@ function modalPassword({ title, note, confirmLabel }) {
     css(pw, {
       width: "100%", boxSizing: "border-box", margin: "10px 0",
       padding: "7px 9px", borderRadius: "4px",
-      background: "var(--comfy-input-bg, #222)", color: "var(--input-text, #ccc)",
-      border: "1px solid var(--border-color, #4a4a4a)",
+      background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
     });
     const err = document.createElement("div");
-    css(err, { color: "#f87171", minHeight: "16px" });
+    css(err, { color: "var(--c2c-dangerStrong)", minHeight: "16px" });
     const row = document.createElement("div");
     css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
     const cancel = document.createElement("button");
@@ -981,9 +981,9 @@ function openVaultOverlay(node, subgraph, isSealed) {
   css(panel, {
     position: "fixed", top: "80px", left: "80px", zIndex: "8500",
     width: "520px", maxHeight: "70vh", overflow: "auto",
-    background: "var(--comfy-menu-bg, #353535)",
-    color: "var(--fg-color, #ddd)",
-    border: "1px solid var(--border-color, #4a4a4a)",
+    background: "var(--c2c-bg2)",
+    color: "var(--c2c-fg)",
+    border: "1px solid var(--c2c-border)",
     borderRadius: "8px", padding: "12px",
     boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
   });
@@ -1109,7 +1109,7 @@ app.registerExtension({
       css(host, {
         width: "100%", padding: "4px 0", fontSize: "11px",
         opacity: "0.8", textAlign: "center",
-        color: "var(--fg-color, #ddd)",
+        color: "var(--c2c-fg)",
       });
       node._vaultSummaryEl = host;
       host.textContent = "0 nodes · 0 inputs · 0 outputs · 0 params";

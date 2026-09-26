@@ -26,6 +26,7 @@ import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { C } from "./_c2c_theme.js";
 
 const BTN_ID    = "mec-mood-btn";
 const PANEL_ID  = "mec-mood-panel";
@@ -157,7 +158,7 @@ function _injectStyle() {
 #${LIGHT_ID} img { max-width: 90vw; max-height: 86vh; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
 #${LIGHT_ID} .mb-light-info {
     position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-    background: rgba(17,17,27,0.85); padding: 6px 12px; border-radius: 4px;
+    background: color-mix(in srgb, var(--c2c-bg3) 85%, transparent); padding: 6px 12px; border-radius: 4px;
     color: var(--c2c-fg); font-size: 11px; font-family: monospace;
 }
     `.trim();
@@ -506,8 +507,7 @@ function _exportPalettePng(palette) {
         const w = Math.max(8, W * p.pct);
         ctx.fillStyle = p.hex;
         ctx.fillRect(x, 0, w, H);
-        // Canvas 2D can't resolve CSS var(); black/white are theme-invariant.
-        ctx.fillStyle = _luma(p.rgb) > 128 ? "#000000" : "#ffffff";
+        ctx.fillStyle = _luma(p.rgb) > 128 ? C.black : C.white;
         ctx.font = "14px monospace";
         ctx.fillText(p.hex, x + 6, H - 12);
         x += w;

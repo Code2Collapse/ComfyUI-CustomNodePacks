@@ -4,6 +4,7 @@
 // discoverable (startup toast + a Sign in button on the Save To node).
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { C } from "../_c2c_theme.js";
 import { remapMagnificWidgetValues } from "./widget_remap.js";
 
 const POLL_INTERVAL_MS = 2000;
@@ -269,7 +270,7 @@ const attachGallery = (node, { buttonLabel, fetchItems, itemKey, itemThumb, item
   }
   const grid = document.createElement("div");
   grid.style.cssText =
-    "display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow-y:auto;height:220px;padding:4px;font-size:11px;color:#aaa;";
+    "display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow-y:auto;height:220px;padding:4px;font-size:11px;color:var(--c2c-sub);";
   const render = (items) => {
     grid.replaceChildren();
     if (!items.length) {
@@ -295,11 +296,11 @@ const attachGallery = (node, { buttonLabel, fetchItems, itemKey, itemThumb, item
         cell.appendChild(mark);
       }
       const key = itemKey(item);
-      if (selectedWidget?.value === key) img.style.borderColor = "#e5484d";
+      if (selectedWidget?.value === key) img.style.borderColor = "var(--c2c-dangerHot)";
       cell.onclick = () => {
         if (selectedWidget) selectedWidget.value = key;
         for (const thumb of grid.querySelectorAll("img")) thumb.style.borderColor = "transparent";
-        img.style.borderColor = "#e5484d";
+        img.style.borderColor = "var(--c2c-dangerHot)";
         node.setDirtyCanvas?.(true, true);
       };
       grid.appendChild(cell);
@@ -359,11 +360,13 @@ const attachStockGallery = (node) =>
   });
 
 // Placeholder tile for creations without a thumbnail (typically audio).
-const NO_THUMB_SVG =
-  "data:image/svg+xml," +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70"><rect width="70" height="70" rx="4" fill="#2a2a2a"/><path d="M44 20v20.5a6.5 6.5 0 1 1-3-5.5V26l-12 3v16.5a6.5 6.5 0 1 1-3-5.5V24l18-4Z" fill="#888"/></svg>',
-  );
+// Built at call time so C.* tracks the active theme (data-URI cannot use var()).
+function noThumbSvg() {
+  return "data:image/svg+xml," +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70"><rect width="70" height="70" rx="4" fill="${C.surface0}"/><path d="M44 20v20.5a6.5 6.5 0 1 1-3-5.5V26l-12 3v16.5a6.5 6.5 0 1 1-3-5.5V24l18-4Z" fill="${C.overlay0}"/></svg>`,
+    );
+}
 
 const attachCreationGallery = (node) =>
   attachGallery(node, {
@@ -377,7 +380,7 @@ const attachCreationGallery = (node) =>
       return payload.items;
     },
     itemKey: (item) => item.identifier,
-    itemThumb: (item) => item.thumbnailUrl || NO_THUMB_SVG,
+    itemThumb: (item) => item.thumbnailUrl || noThumbSvg(),
     itemTitle: (item) => item.prompt || item.tool || item.identifier,
     resetOn: ["project", "folder", "content_type"],
   });

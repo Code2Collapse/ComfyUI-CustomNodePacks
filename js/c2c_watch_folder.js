@@ -34,28 +34,28 @@ function _buildPanel() {
   const panel = document.createElement("div");
   panel.id = "c2c-watch-folder";
   panel.style.cssText = `
-    background:var(--c2c-surface,var(--c2c-neutral950));border:1px solid var(--c2c-border,rgba(255,255,255,.15));
+    background:var(--c2c-bg2);border:1px solid var(--c2c-border);
     border-radius:10px;width:640px;max-height:80vh;display:flex;flex-direction:column;
     overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.6);
-    color:var(--c2c-fg,var(--c2c-gray100));font-family:var(--c2c-font,system-ui,sans-serif);font-size:13px;
+    color:var(--c2c-fg);font-family:var(--c2c-font,system-ui,sans-serif);font-size:13px;
   `;
   panel.innerHTML = `
-    <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:8px;">
+    <div style="padding:14px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 70%, transparent);display:flex;align-items:center;gap:8px;">
       <span style="font-weight:600;font-size:14px;">👁 Watch Folder</span>
       <button id="c2c-wf-close" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);margin-left:auto;">×</button>
     </div>
-    <div style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06);">
+    <div style="padding:12px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 50%, transparent);">
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
         <div style="flex:2;min-width:140px;">
           <div style="font-size:10px;color:var(--c2c-gray400);margin-bottom:3px;">Folder path</div>
           <input id="c2c-wf-path" type="text" placeholder="C:\\path\\to\\folder"
-            style="width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+            style="width:100%;background:var(--c2c-bg3);border:1px solid var(--c2c-border);
                    border-radius:5px;padding:5px 8px;color:inherit;font-size:12px;">
         </div>
         <div style="flex:1;min-width:110px;">
           <div style="font-size:10px;color:var(--c2c-gray400);margin-bottom:3px;">Action</div>
           <select id="c2c-wf-action"
-            style="width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+            style="width:100%;background:var(--c2c-surface0);border:1px solid var(--c2c-border);
                    border-radius:5px;padding:5px 6px;color:inherit;font-size:12px;">
             <option value="notify">Notify only</option>
             <option value="load_image">Load image</option>
@@ -65,18 +65,18 @@ function _buildPanel() {
         <div id="c2c-wf-workflow-wrap" style="flex:2;min-width:140px;display:none;">
           <div style="font-size:10px;color:var(--c2c-gray400);margin-bottom:3px;">Workflow JSON path</div>
           <input id="c2c-wf-workflow" type="text" placeholder="path/to/workflow.json"
-            style="width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+            style="width:100%;background:var(--c2c-bg3);border:1px solid var(--c2c-border);
                    border-radius:5px;padding:5px 8px;color:inherit;font-size:12px;">
         </div>
         <button id="c2c-wf-add"
-          style="padding:6px 14px;background:rgba(0,200,100,.15);border:1px solid rgba(0,200,100,.3);
+          style="padding:6px 14px;background:color-mix(in srgb, var(--c2c-ok) 15%, transparent);border:1px solid color-mix(in srgb, var(--c2c-ok) 30%, transparent);
                  border-radius:5px;cursor:pointer;color:var(--c2c-okSoft2);font-size:12px;font-weight:600;white-space:nowrap;">
           + Add Watcher
         </button>
       </div>
     </div>
-    <div id="c2c-wf-watchers" style="padding:8px 16px;border-bottom:1px solid rgba(255,255,255,.06);min-height:40px;"></div>
-    <div style="padding:6px 16px;font-size:10px;color:var(--c2c-gray400);font-weight:600;border-bottom:1px solid rgba(255,255,255,.04);">
+    <div id="c2c-wf-watchers" style="padding:8px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 50%, transparent);min-height:40px;"></div>
+    <div style="padding:6px 16px;font-size:10px;color:var(--c2c-gray400);font-weight:600;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 40%, transparent);">
       RECENT EVENTS
     </div>
     <div id="c2c-wf-events" style="overflow-y:auto;flex:1;padding:6px 16px;font-size:11px;"></div>
@@ -128,12 +128,12 @@ async function _refreshUI() {
       watchersEl.innerHTML = `<div style="color:var(--c2c-gray600);font-size:11px;padding:6px 0;">No active watchers.</div>`;
     } else {
       watchersEl.innerHTML = statusData.watchers.map(w => `
-        <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04);">
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 40%, transparent);">
           <span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${w.path}">${w.path}</span>
           <span style="font-size:10px;color:var(--c2c-gray400);">${w.action}</span>
           <span style="width:8px;height:8px;border-radius:50%;background:${w.running ? "var(--c2c-okBright)" : "var(--c2c-gray400)"};display:inline-block;"></span>
           <button data-remove="${w.path}"
-            style="font-size:10px;padding:2px 7px;background:rgba(255,80,80,.1);border:1px solid rgba(255,80,80,.2);
+            style="font-size:10px;padding:2px 7px;background:color-mix(in srgb, var(--c2c-danger) 10%, transparent);border:1px solid color-mix(in srgb, var(--c2c-danger) 20%, transparent);
                    border-radius:4px;cursor:pointer;color:var(--c2c-dangerSoft);">Remove</button>
         </div>
       `).join("");
@@ -156,7 +156,7 @@ async function _refreshUI() {
         const d = new Date(ev.timestamp * 1000);
         const t = d.toLocaleTimeString();
         const name = ev.path.split(/[\\/]/).pop();
-        return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,.03);display:flex;gap:8px;">
+        return `<div style="padding:3px 0;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 30%, transparent);display:flex;gap:8px;">
           <span style="color:var(--c2c-gray600);min-width:60px;">${t}</span>
           <span style="color:var(--c2c-blue);">${ev.type}</span>
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c2c-gray250);" title="${ev.path}">${name}</span>
@@ -188,8 +188,8 @@ function _buildSlot() {
   btn.title     = "Watch Folder";
   btn.style.cssText = `
     font-size:11px;padding:2px 7px;cursor:pointer;
-    background:var(--c2c-pill-bg,rgba(255,255,255,.07));
-    color:var(--c2c-fg,var(--c2c-gray200));border:1px solid var(--c2c-border,rgba(255,255,255,.12));border-radius:10px;
+    background:color-mix(in srgb, var(--c2c-surface1) 90%, transparent);
+    color:var(--c2c-fg);border:1px solid color-mix(in srgb, var(--c2c-border) 24%, transparent);border-radius:10px;
   `;
   btn.addEventListener("click", () => _isOpen ? _close() : _open());
   return btn;

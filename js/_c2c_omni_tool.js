@@ -54,7 +54,7 @@ export function mountOmniTool({
         } catch (err) {
             __c2cReport(`omniTool.build:${id}`, err);
             refs.body.innerHTML =
-                `<div style="padding:16px;color:var(--c2c-red,#f38ba8);font:13px system-ui">` +
+                `<div style="padding:16px;color:var(--c2c-red);font:13px system-ui">` +
                 `This tool failed to open.<br><span style="opacity:.7">${(err && err.message) || err}</span></div>`;
         }
         bringToFront(refs.el);
@@ -69,7 +69,7 @@ export function mountOmniTool({
     const full = `${icon} ${label}`;
     chip.textContent = full;
     chip.title = title;
-    chip.addEventListener("pointerenter", () => { chip.style.borderColor = "var(--c2c-blue,#89b4fa)"; });
+    chip.addEventListener("pointerenter", () => { chip.style.borderColor = "var(--c2c-blue)"; });
     chip.addEventListener("pointerleave", () => { chip.style.borderColor = "var(--c2c-border)"; });
     chip.onclick = open;
 

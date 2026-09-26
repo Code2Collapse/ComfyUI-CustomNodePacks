@@ -127,8 +127,8 @@ function _buildPanel() {
     tab.dataset.src = src;
     tab.style.cssText = `
       padding:3px 10px;border-radius:5px;cursor:pointer;font-size:12px;
-      background:${src === _currentSource ? "rgba(100,160,255,.2)" : "rgba(255,255,255,.07)"};
-      border:1px solid ${src === _currentSource ? "rgba(100,160,255,.4)" : "rgba(255,255,255,.12)"};
+      background:${src === _currentSource ? "var(--c2c-blueBg)" : "var(--c2c-overlay-hover)"};
+      border:1px solid ${src === _currentSource ? "var(--c2c-blue)" : "var(--c2c-border)"};
       color:${src === _currentSource ? "var(--c2c-blue)" : "var(--c2c-gray300)"};
     `;
     tab.addEventListener("click", () => {
@@ -173,8 +173,8 @@ function _updateTabStyles() {
   const tabs = document.querySelectorAll("#c2c-mb-source-tabs [data-src]");
   for (const tab of tabs) {
     const active = tab.dataset.src === _currentSource;
-    tab.style.background = active ? "rgba(100,160,255,.2)" : "rgba(255,255,255,.07)";
-    tab.style.border      = `1px solid ${active ? "rgba(100,160,255,.4)" : "rgba(255,255,255,.12)"}`;
+    tab.style.background = active ? "var(--c2c-blueBg)" : "var(--c2c-overlay-hover)";
+    tab.style.border      = `1px solid ${active ? "var(--c2c-blue)" : "var(--c2c-border)"}`;
     tab.style.color       = active ? "var(--c2c-blue)" : "var(--c2c-gray300)";
   }
 }
@@ -263,14 +263,14 @@ function _buildCard(item, destDirs) {
     </div>
     <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex-shrink:0;">
       ${item._source === "local"
-        ? `<span style="font-size:11px;background:rgba(0,200,100,.15);border:1px solid rgba(0,200,100,.3);
+        ? `<span style="font-size:11px;background:var(--c2c-okBg);border:1px solid var(--c2c-okMute);
                 padding:4px 10px;border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;">✓ On disk</span>`
-        : `<select data-dest style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);
+        : `<select data-dest style="background:var(--c2c-overlay-hover);border:1px solid var(--c2c-border);
               border-radius:4px;padding:2px 5px;color:inherit;font-size:10px;max-width:140px;">
           ${destDirs.map(d => `<option>${_esc(d)}</option>`).join("")}
         </select>
         <button data-dl
-          style="padding:4px 12px;background:rgba(0,200,100,.18);border:1px solid rgba(0,200,100,.3);
+          style="padding:4px 12px;background:var(--c2c-okBg2);border:1px solid var(--c2c-okMute);
                  border-radius:5px;cursor:pointer;color:var(--c2c-okSoft2);font-size:12px;font-weight:600;">
           ⬇ Download
         </button>`
@@ -290,10 +290,10 @@ function _buildCard(item, destDirs) {
       try {
         const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir);
         btn.textContent = "✓ Queued";
-        btn.style.background = "rgba(0,255,0,.1)";
+        btn.style.background = "var(--c2c-okBg)";
       } catch (err) {
         btn.textContent = "✗ Error";
-        btn.style.background = "rgba(255,0,0,.1)";
+        btn.style.background = "var(--c2c-dangerBg)";
         btn.title = err.message;
         setTimeout(() => { btn.textContent = "⬇ Download"; btn.disabled = false; btn.style.background = ""; }, 2000);
       }

@@ -16,7 +16,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";  // kept for future use
-import { capabilityFor, nodeColor, lighten } from "./c2c_node_taxonomy.js";
+import { capabilityFor, nodeColorCss, nodeHue } from "./c2c_node_taxonomy.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
 
 // ── constants ──────────────────────────────────────────────────────────────
@@ -397,7 +397,7 @@ function _injectStyle() {
 #${POPOVER_ID}.c2c-ne-panel-mode .c2c-ne-edge.ne { top:0;    right:0;    width:10px; height:10px; cursor: nesw-resize; }
 #${POPOVER_ID}.c2c-ne-panel-mode .c2c-ne-edge.sw { bottom:0; left:0;     width:10px; height:10px; cursor: nesw-resize; }
 #${POPOVER_ID}.c2c-ne-panel-mode .c2c-ne-edge.se { bottom:0; right:0;    width:10px; height:10px; cursor: nwse-resize; }
-#${POPOVER_ID}.c2c-ne-panel-mode .c2c-ne-edge:hover { background: rgba(137,180,250,0.18); }
+#${POPOVER_ID}.c2c-ne-panel-mode .c2c-ne-edge:hover { background: var(--c2c-blueBg); }
 #${POPOVER_ID}.c2c-ne-panel-mode[data-collapsed="1"] {
     height: auto !important;
 }
@@ -410,7 +410,7 @@ function _injectStyle() {
 /* Per-widget hover table inside the panel body */
 #${POPOVER_ID} table.mec-ne-opts td { padding: 2px 8px 2px 0; vertical-align: top; }
 #${POPOVER_ID} table.mec-ne-opts td:first-child { color:var(--c2c-yellow); font-weight:600; width: 28%; }
-#${POPOVER_ID} table.mec-ne-opts tr.cur td { background: rgba(137,180,250,0.18); }
+#${POPOVER_ID} table.mec-ne-opts tr.cur td { background: var(--c2c-blueBg); }
     `.trim();
     document.head.appendChild(style);
 }
@@ -1296,10 +1296,12 @@ function _recommendBlock(cls, node) {
 function _capabilityBlock(cls) {
     const caps = capabilityFor(cls);
     if (!caps) return "";
-    const col = nodeColor(cls);
+    const h = nodeHue(cls);
+    const chip = nodeColorCss(cls);
+    const chipBorder = `color-mix(in srgb, var(--c2c-${h}) 45%, var(--c2c-surface1) 55%)`;
     return `<div class="mec-ne-purpose" style="display:flex;gap:6px;align-items:center;margin-top:3px">`
-         + `<span style="width:10px;height:10px;border-radius:2px;flex:0 0 auto;background:${col};border:1px solid ${lighten(col, 40)}"></span>`
-         + `<span style="color:#9aa0d0;font-size:11px">${_esc(caps)}</span></div>`;
+         + `<span style="width:10px;height:10px;border-radius:2px;flex:0 0 auto;background:${chip};border:1px solid ${chipBorder}"></span>`
+         + `<span style="color:var(--c2c-sub);font-size:11px">${_esc(caps)}</span></div>`;
 }
 
 function _showError(el, msg) {

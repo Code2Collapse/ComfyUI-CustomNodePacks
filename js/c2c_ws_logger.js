@@ -150,7 +150,7 @@ function renderRows() {
         const row = document.createElement("div");
         const color = colorForType(e.type);
         const selected = _selected.has(e.seq);
-        row.style.cssText = `padding:3px 8px; cursor:pointer; border-left:3px solid ${color}; ${selected ? "background:rgba(91,141,239,0.18);" : ""}`;
+        row.style.cssText = `padding:3px 8px; cursor:pointer; border-left:3px solid ${color}; ${selected ? "background:var(--c2c-blueBg);" : ""}`;
         const time = new Date(e.t).toISOString().slice(11, 23);
         const detail = summarize(e.detail);
         row.innerHTML = `<span style="color:var(--c2c-accentMuted2);">${time}</span> <span style="color:${color}; font-weight:600;">${e.type}</span> <span style="color:var(--c2c-accentLight2);">${escapeHtml(detail)}</span>`;

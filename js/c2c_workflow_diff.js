@@ -104,8 +104,8 @@ function _buildPanel() {
   const panel = document.createElement("div");
   panel.id = "c2c-wf-diff";
   panel.style.cssText = `
-    background: var(--c2c-surface, var(--c2c-neutral950));
-    border: 1px solid var(--c2c-border, rgba(255,255,255,.15));
+    background: var(--c2c-bg2);
+    border: 1px solid var(--c2c-border);
     border-radius: 10px;
     width: 820px;
     max-height: 80vh;
@@ -113,47 +113,47 @@ function _buildPanel() {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 12px 40px rgba(0,0,0,.6);
-    color: var(--c2c-fg, var(--c2c-gray100));
+    color: var(--c2c-fg);
     font-family: var(--c2c-font, system-ui, sans-serif);
     font-size: 13px;
   `;
 
   panel.innerHTML = `
-    <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.1);
+    <div style="padding:14px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 70%, transparent);
                 display:flex;align-items:center;gap:8px;">
       <span style="font-weight:600;font-size:14px;">⇄ Workflow Diff</span>
       <button id="c2c-wf-diff-load-current"
-        style="font-size:11px;padding:3px 9px;background:rgba(100,160,255,.15);
-               border:1px solid rgba(100,160,255,.3);border-radius:5px;cursor:pointer;color:var(--c2c-blue);margin-left:auto;">
+        style="font-size:11px;padding:3px 9px;background:color-mix(in srgb, var(--c2c-blue) 15%, transparent);
+               border:1px solid color-mix(in srgb, var(--c2c-blue) 30%, transparent);border-radius:5px;cursor:pointer;color:var(--c2c-blue);margin-left:auto;">
         Use Current as Left
       </button>
       <button id="c2c-wf-diff-close"
         style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);">×</button>
     </div>
-    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06);">
+    <div style="display:flex;gap:10px;padding:12px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 50%, transparent);">
       <div style="flex:1;">
         <div style="font-size:11px;color:var(--c2c-gray400);margin-bottom:4px;">Left (base)</div>
         <textarea id="c2c-wf-diff-left" placeholder="Paste workflow JSON or use 'Use Current as Left'…"
-          style="width:100%;height:80px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+          style="width:100%;height:80px;background:var(--c2c-bg3);border:1px solid var(--c2c-border);
                  border-radius:5px;padding:6px;color:inherit;font-size:11px;font-family:monospace;resize:vertical;">
         </textarea>
       </div>
       <div style="flex:1;">
         <div style="font-size:11px;color:var(--c2c-gray400);margin-bottom:4px;">Right (new)</div>
         <textarea id="c2c-wf-diff-right" placeholder="Paste workflow JSON to compare…"
-          style="width:100%;height:80px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);
+          style="width:100%;height:80px;background:var(--c2c-bg3);border:1px solid var(--c2c-border);
                  border-radius:5px;padding:6px;color:inherit;font-size:11px;font-family:monospace;resize:vertical;">
         </textarea>
       </div>
     </div>
-    <div style="padding:8px 16px;border-bottom:1px solid rgba(255,255,255,.06);display:flex;gap:8px;">
+    <div style="padding:8px 16px;border-bottom:1px solid color-mix(in srgb, var(--c2c-border) 50%, transparent);display:flex;gap:8px;">
       <button id="c2c-wf-diff-run"
-        style="padding:5px 16px;background:rgba(100,200,100,.18);border:1px solid rgba(100,200,100,.3);
+        style="padding:5px 16px;background:color-mix(in srgb, var(--c2c-ok) 18%, transparent);border:1px solid color-mix(in srgb, var(--c2c-ok) 30%, transparent);
                border-radius:5px;cursor:pointer;color:var(--c2c-ok);font-size:12px;font-weight:600;">
         ▶ Compare
       </button>
       <button id="c2c-wf-diff-save-left"
-        style="padding:5px 12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);
+        style="padding:5px 12px;background:color-mix(in srgb, var(--c2c-surface0) 60%, transparent);border:1px solid var(--c2c-border);
                border-radius:5px;cursor:pointer;color:var(--c2c-gray300);font-size:12px;">
         📁 Load File…
       </button>
@@ -247,7 +247,7 @@ function _runDiff() {
     html += `<div style="margin-bottom:12px;"><div style="font-size:11px;color:var(--c2c-ok);font-weight:600;margin-bottom:6px;">
       ➕ Added (${diff.added.length})</div>`;
     for (const n of diff.added) {
-      html += `<div style="padding:5px 8px;background:rgba(0,255,0,.06);border-left:2px solid var(--c2c-okMute);
+      html += `<div style="padding:5px 8px;background:color-mix(in srgb, var(--c2c-ok) 6%, transparent);border-left:2px solid var(--c2c-okMute);
                border-radius:3px;margin-bottom:3px;font-size:12px;">
         <strong>#${n.id}</strong> — ${n.type || "(unknown)"} ${n.title ? `"${n.title}"` : ""}
       </div>`;
@@ -259,7 +259,7 @@ function _runDiff() {
     html += `<div style="margin-bottom:12px;"><div style="font-size:11px;color:var(--c2c-dangerSoft);font-weight:600;margin-bottom:6px;">
       ➖ Removed (${diff.removed.length})</div>`;
     for (const n of diff.removed) {
-      html += `<div style="padding:5px 8px;background:rgba(255,0,0,.06);border-left:2px solid var(--c2c-dangerStrong);
+      html += `<div style="padding:5px 8px;background:color-mix(in srgb, var(--c2c-danger) 6%, transparent);border-left:2px solid var(--c2c-dangerStrong);
                border-radius:3px;margin-bottom:3px;font-size:12px;">
         <strong>#${n.id}</strong> — ${n.type || "(unknown)"} ${n.title ? `"${n.title}"` : ""}
       </div>`;
@@ -271,7 +271,7 @@ function _runDiff() {
     html += `<div style="margin-bottom:12px;"><div style="font-size:11px;color:var(--c2c-peach);font-weight:600;margin-bottom:6px;">
       ✎ Changed (${diff.changed.length})</div>`;
     for (const { node, changes } of diff.changed) {
-      html += `<div style="padding:5px 8px;background:rgba(255,165,0,.06);border-left:2px solid var(--c2c-peach);
+      html += `<div style="padding:5px 8px;background:color-mix(in srgb, var(--c2c-peach) 6%, transparent);border-left:2px solid var(--c2c-peach);
                border-radius:3px;margin-bottom:4px;font-size:12px;">
         <strong>#${node.id}</strong> — ${node.type || "(unknown)"} ${node.title ? `"${node.title}"` : ""}
         <ul style="margin:4px 0 0 12px;padding:0;list-style:disc;">
@@ -290,7 +290,7 @@ function _runDiff() {
   if (diff.linksDiff.length) {
     html += `<div style="margin-bottom:12px;"><div style="font-size:11px;color:var(--c2c-blue);font-weight:600;margin-bottom:6px;">
       ⟵⟶ Links</div>
-      <div style="padding:5px 8px;background:rgba(100,160,255,.06);border-left:2px solid var(--c2c-overlay0);
+      <div style="padding:5px 8px;background:color-mix(in srgb, var(--c2c-blue) 6%, transparent);border-left:2px solid var(--c2c-overlay0);
                   border-radius:3px;font-size:12px;">
         Count: ${diff.linksDiff[0].from} → ${diff.linksDiff[0].to}
       </div></div>`;
@@ -333,9 +333,9 @@ function _buildSlot() {
     font-size: 11px;
     padding: 2px 7px;
     cursor: pointer;
-    background: var(--c2c-pill-bg, rgba(255,255,255,.07));
-    color: var(--c2c-fg, var(--c2c-gray200));
-    border: 1px solid var(--c2c-border, rgba(255,255,255,.12));
+    background: color-mix(in srgb, var(--c2c-surface1) 90%, transparent);
+    color: var(--c2c-fg);
+    border: 1px solid color-mix(in srgb, var(--c2c-border) 24%, transparent);
     border-radius: 10px;
   `;
   btn.addEventListener("click", () => _isOpen ? _close() : _open());

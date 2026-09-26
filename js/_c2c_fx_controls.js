@@ -11,6 +11,8 @@
 // Plain ES module. Nothing here touches `window` or ComfyUI at import time, so
 // it is safe in a headless run and safe to import from either family.
 
+import { C } from "./_c2c_theme.js";
+
 export const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
 
 export function css(el, s) { Object.assign(el.style, s); }
@@ -39,8 +41,8 @@ export function checkerCss(size = 8) {
   const h = size / 2;
   return {
     backgroundImage:
-      `linear-gradient(45deg,#555 25%,transparent 25%,transparent 75%,#555 75%),` +
-      `linear-gradient(45deg,#555 25%,#333 25%,#333 75%,#555 75%)`,
+      `linear-gradient(45deg,var(--c2c-gray500) 25%,transparent 25%,transparent 75%,var(--c2c-gray500) 75%),` +
+      `linear-gradient(45deg,var(--c2c-gray500) 25%,var(--c2c-gray800) 25%,var(--c2c-gray800) 75%,var(--c2c-gray500) 75%)`,
     backgroundSize: `${size}px ${size}px`,
     backgroundPosition: `0 0, ${h}px ${h}px`,
   };
@@ -71,7 +73,7 @@ export function colourRow(node, name, onChange) {
   swatch.title = `Pick ${name.replace(/_/g, " ")}`;
   css(swatch, { width: "22px", height: "14px", padding: "0", borderRadius: "3px",
                 border: "1px solid rgba(255,255,255,0.28)", cursor: "pointer",
-                background: "#000" });
+                background: "var(--c2c-black)" });
   swatchWrap.append(swatch);
 
   const hex = document.createElement("input");
@@ -102,7 +104,7 @@ export function colourRow(node, name, onChange) {
     swatch.style.background = v;
     if (document.activeElement !== hex) hex.value = v;
     hex.style.borderColor = HEX_RE.test(String(w.value ?? "").trim())
-      ? "var(--border-color,#444)" : "#c0564f";
+      ? "var(--border-color,#444)" : "var(--c2c-danger)";
   };
 
   const commit = (v) => {
@@ -120,7 +122,7 @@ export function colourRow(node, name, onChange) {
   hex.oninput = () => {
     const raw = hex.value.trim();
     if (HEX_RE.test(raw)) commit(raw.startsWith("#") ? raw : "#" + raw);
-    else hex.style.borderColor = "#c0564f";   // say it is wrong, do not fight it
+    else hex.style.borderColor = "var(--c2c-danger)";   // say it is wrong, do not fight it
   };
   hex.onblur = paint;
 
@@ -205,7 +207,7 @@ export function angleDial(node, opts, onChange) {
     const c = s / 2;
     ctx.clearRect(0, 0, s, s);
 
-    ctx.fillStyle = "#1b1b1b";
+    ctx.fillStyle = C.bg3;
     ctx.beginPath();
     ctx.arc(c, c, c - 2, 0, Math.PI * 2);
     ctx.fill();
@@ -227,13 +229,13 @@ export function angleDial(node, opts, onChange) {
     const hx = c + Math.cos(rad) * reach * (c - 10);
     const hy = c + Math.sin(rad) * reach * (c - 10);
 
-    ctx.strokeStyle = "#e0a24a";
+    ctx.strokeStyle = C.amberMid;
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(c, c);
     ctx.lineTo(hx, hy);
     ctx.stroke();
-    ctx.fillStyle = "#e0a24a";
+    ctx.fillStyle = C.amberMid;
     ctx.beginPath();
     ctx.arc(hx, hy, 6, 0, Math.PI * 2);
     ctx.fill();

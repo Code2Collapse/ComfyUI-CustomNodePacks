@@ -13,6 +13,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { findNodeAnywhere } from "../_subgraph_walk.js";
 import { reportFailure as __c2cReport } from "../_c2c_report.js";
+import { C, onThemeChange } from "../_c2c_theme.js";
 
 const STATE = {
     nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, cpu_ms, ram_delta_mb, error?}
@@ -47,19 +48,30 @@ function ensureBadge(nodeOrId) {
     if (!node) return null;
     let badge = node._mecInsightBadge;
     if (!badge) {
-        badge = { line1: "", line2: "", color: "#444", tooltip: "" };
+        badge = { line1: "", line2: "", color: C.gray700, tooltip: "" };
         node._mecInsightBadge = badge;
     }
     return badge;
 }
 
 function colorFor(deltaMb, maxMb, isError) {
-    if (isError) return "#ff3a3a";
+    if (isError) return C.red;
     const t = Math.max(0, Math.min(1, deltaMb / Math.max(maxMb, 1)));
-    const r = Math.round(60 + 195 * t);
-    const g = Math.round(200 - 140 * t);
-    const b = 60;
-    return `rgb(${r},${g},${b})`;
+    // Interpolate ok → warn → peach as VRAM load rises (theme-anchored heat ramp).
+    const low = _hex2rgb(C.teal), mid = _hex2rgb(C.yellow), high = _hex2rgb(C.peach);
+    const a = t < 0.5 ? low : mid;
+    const b = t < 0.5 ? mid : high;
+    const u = t < 0.5 ? t * 2 : (t - 0.5) * 2;
+    const r = Math.round(a[0] + (b[0] - a[0]) * u);
+    const g = Math.round(a[1] + (b[1] - a[1]) * u);
+    const bl = Math.round(a[2] + (b[2] - a[2]) * u);
+    return `rgb(${r},${g},${bl})`;
+}
+
+function _hex2rgb(h) {
+    const s = String(h || "").replace("#", "");
+    if (s.length === 3) return [0, 2, 4].map((i) => parseInt(s[i] + s[i], 16));
+    return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16));
 }
 
 function fmtMs(v) {
@@ -182,6 +194,7 @@ app.registerExtension({
     ],
     setup() {
         api.addEventListener("nukenodemax.insight", onInsight);
+        onThemeChange(() => refresh());
 
         // Paint badges BELOW the node body so the title bar stays clean.
         const origDraw = LGraphCanvas.prototype.drawNodeShape;
@@ -223,7 +236,7 @@ app.registerExtension({
 
             ctx.fillStyle = badge.color;
             ctx.fillRect(x, y, w, h);
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = C.white;
             ctx.textBaseline = "middle";
             ctx.textAlign = "center";
             const cx = x + w / 2;

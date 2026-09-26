@@ -20,6 +20,7 @@
  * License: Apache-2.0
  */
 import { nodeColor, linkColor, lighten, capabilityFor, CATEGORY_LEGEND } from "./c2c_node_taxonomy.js";
+import { C } from "./_c2c_theme.js";
 
 const DEF_W = 180, DEF_H = 70, COL_GAP = 90, ROW_GAP = 26;
 
@@ -127,19 +128,19 @@ export function renderGraphPreview(container, workflow, opts = {}) {
     container.innerHTML = "";
     container.style.position = "relative";
     const canvas = document.createElement("canvas");
-    canvas.style.cssText = `width:100%;height:${height}px;display:block;background:#07071a;border-radius:6px;cursor:grab;`;
+    canvas.style.cssText = `width:100%;height:${height}px;display:block;background:var(--c2c-bg3);border-radius:6px;cursor:grab;`;
     container.appendChild(canvas);
 
     const bar = document.createElement("div");
     bar.style.cssText = "position:absolute;top:6px;right:8px;display:flex;gap:4px;z-index:2;";
     bar.innerHTML = `
-<button data-a="fit" title="Fit (F)" style="background:#26264e;color:#d4d4f0;border:0;border-radius:4px;padding:2px 7px;cursor:pointer;font:11px monospace;">Fit</button>
-<button data-a="in" style="background:#26264e;color:#d4d4f0;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px monospace;">+</button>
-<button data-a="out" style="background:#26264e;color:#d4d4f0;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px monospace;">\u2212</button>`;
+<button data-a="fit" title="Fit (F)" style="background:var(--c2c-surface0);color:var(--c2c-fg);border:0;border-radius:4px;padding:2px 7px;cursor:pointer;font:11px monospace;">Fit</button>
+<button data-a="in" style="background:var(--c2c-surface0);color:var(--c2c-fg);border:0;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px monospace;">+</button>
+<button data-a="out" style="background:var(--c2c-surface0);color:var(--c2c-fg);border:0;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px monospace;">\u2212</button>`;
     container.appendChild(bar);
 
     const tip = document.createElement("div");
-    tip.style.cssText = "position:absolute;pointer-events:none;display:none;background:#111128;color:#e0e0ff;border:1px solid #3a3a7e;border-radius:4px;padding:4px 7px;font:11px monospace;z-index:3;max-width:240px;";
+    tip.style.cssText = "position:absolute;pointer-events:none;display:none;background:var(--c2c-panelDeep);color:var(--c2c-fg);border:1px solid var(--c2c-surface1);border-radius:4px;padding:4px 7px;font:11px monospace;z-index:3;max-width:240px;";
     container.appendChild(tip);
 
     const ctx = canvas.getContext("2d");
@@ -183,7 +184,7 @@ export function renderGraphPreview(container, workflow, opts = {}) {
         ctx.save();
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, canvas.clientWidth, height);
-        ctx.fillStyle = "#07071a";
+        ctx.fillStyle = C.bg3;
         ctx.fillRect(0, 0, canvas.clientWidth, height);
 
         const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -195,7 +196,7 @@ export function renderGraphPreview(container, workflow, opts = {}) {
             const [sx, sy] = toScreen(a.x + a.w, a.y + a.h / 2);
             const [ex, ey] = toScreen(b.x, b.y + b.h / 2);
             const cdx = Math.max(30, Math.abs(ex - sx) * 0.5);
-            ctx.strokeStyle = linkColor(l.type) || "#4a4a7a";
+            ctx.strokeStyle = linkColor(l.type) || C.overlay0;
             ctx.globalAlpha = 0.85;
             ctx.beginPath();
             ctx.moveTo(sx, sy);
@@ -214,10 +215,10 @@ export function renderGraphPreview(container, workflow, opts = {}) {
             // header
             ctx.fillStyle = lighten(base, 34);
             roundRect(ctx, x, y, w, Math.min(20 * view.scale, h), 5); ctx.fill();
-            ctx.strokeStyle = "#00000055"; ctx.lineWidth = 1;
-            roundRect(ctx, x, y, w, h, 5); ctx.stroke();
+            ctx.strokeStyle = C.black; ctx.globalAlpha = 0.33; ctx.lineWidth = 1;
+            roundRect(ctx, x, y, w, h, 5); ctx.stroke(); ctx.globalAlpha = 1;
             if (fontPx >= 8) {
-                ctx.fillStyle = "#f0f0ff";
+                ctx.fillStyle = C.fg;
                 ctx.font = `${fontPx}px Consolas,monospace`;
                 ctx.save();
                 ctx.beginPath(); ctx.rect(x + 4, y, w - 8, h); ctx.clip();
@@ -229,7 +230,7 @@ export function renderGraphPreview(container, workflow, opts = {}) {
         ctx.restore();
         if (synthetic) {
             ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            ctx.fillStyle = "#6a6a9a"; ctx.font = "10px monospace";
+            ctx.fillStyle = C.dim; ctx.font = "10px monospace";
             ctx.fillText("auto-layout (no saved positions)", 8, height - 8);
             ctx.restore();
         }
@@ -268,7 +269,7 @@ export function renderGraphPreview(container, workflow, opts = {}) {
             tip.style.display = "block";
             tip.style.left = Math.min(mx + 12, r.width - 240) + "px";
             tip.style.top = (my + 12) + "px";
-            tip.innerHTML = `<b>${escTip(hit.title)}</b><br><span style="color:#8a90ff">${escTip(hit.type)}</span><br><span style="color:#8888bb">${escTip(capabilityFor(hit.type))}</span>`;
+            tip.innerHTML = `<b>${escTip(hit.title)}</b><br><span style="color:var(--c2c-lavender)">${escTip(hit.type)}</span><br><span style="color:var(--c2c-dim)">${escTip(capabilityFor(hit.type))}</span>`;
         } else {
             tip.style.display = "none";
         }
@@ -318,9 +319,9 @@ export function renderGraphPreview(container, workflow, opts = {}) {
 
 // Small helper so callers can render a colour legend next to a preview.
 export function legendHTML() {
-    return CATEGORY_LEGEND.map(([hex, label]) =>
-        `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:11px;color:#b0b0d0;">
-<span style="width:10px;height:10px;border-radius:2px;background:${hex};display:inline-block;"></span>${label}</span>`).join("");
+    return CATEGORY_LEGEND.map(([hue, label]) =>
+        `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:11px;color:var(--c2c-sub);">
+<span style="width:10px;height:10px;border-radius:2px;background:color-mix(in srgb,var(--c2c-${hue}) 22%,var(--c2c-bg) 78%);display:inline-block;"></span>${label}</span>`).join("");
 }
 
 export default { renderGraphPreview, legendHTML };

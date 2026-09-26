@@ -23,7 +23,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { attachWindowChrome } from "./_c2c_window.js";
-import { capabilityFor, nodeColor } from "./c2c_node_taxonomy.js";
+import { capabilityFor, nodeColorCss } from "./c2c_node_taxonomy.js";
 import { renderGraphPreview, legendHTML } from "./c2c_graph_preview.js";
 import { c2cPrompt } from "./_c2c_dialog.js";
 
@@ -171,48 +171,48 @@ function injectStyles() {
     el.id = STYLE_ID;
     el.textContent = `
 #${PANEL_ID}{position:fixed;top:60px;right:16px;width:760px;height:560px;
-  display:none;flex-direction:column;background:#0c0c1e;color:#d4d4f0;
-  border:1px solid #2d2d5e;border-radius:8px;z-index:1200;
+  display:none;flex-direction:column;background:var(--c2c-bg2);color:var(--c2c-fg);
+  border:1px solid var(--c2c-border);border-radius:8px;z-index:1200;
   box-shadow:0 8px 32px rgba(0,0,0,.55);font:13px Consolas,monospace;overflow:hidden;}
 #${PANEL_ID}.open{display:flex;}
 #${PANEL_ID} .c2c-lib-hdr{display:flex;align-items:center;gap:8px;padding:8px 10px;
-  background:#111128;border-bottom:1px solid #2d2d5e;cursor:move;}
-#${PANEL_ID} .c2c-lib-title{font-weight:bold;color:#8a90ff;flex:0 0 auto;}
+  background:var(--c2c-bg3);border-bottom:1px solid var(--c2c-border);cursor:move;}
+#${PANEL_ID} .c2c-lib-title{font-weight:bold;color:var(--c2c-lavender);flex:0 0 auto;}
 #${PANEL_ID} .c2c-lib-hdr .sp{flex:1;}
-#${PANEL_ID} button{background:#26264e;color:#d4d4f0;border:0;border-radius:4px;
+#${PANEL_ID} button{background:var(--c2c-surface0);color:var(--c2c-fg);border:0;border-radius:4px;
   padding:4px 9px;cursor:pointer;font:12px Consolas,monospace;}
-#${PANEL_ID} button:hover{background:#3a3a7e;}
-#${PANEL_ID} button.acc{background:#6c72ff;color:#0a0a1a;font-weight:bold;}
-#${PANEL_ID} button.acc:hover{background:#8a90ff;}
+#${PANEL_ID} button:hover{background:var(--c2c-surface1);}
+#${PANEL_ID} button.acc{background:var(--c2c-mauve);color:var(--c2c-bg);font-weight:bold;}
+#${PANEL_ID} button.acc:hover{background:var(--c2c-accentSoft);}
 #${PANEL_ID} .c2c-lib-body{flex:1;overflow:auto;padding:8px 10px;}
-#${PANEL_ID} .c2c-lib-foot{padding:5px 10px;background:#080818;border-top:1px solid #2d2d5e;
-  color:#5a5a9a;font-size:11px;}
+#${PANEL_ID} .c2c-lib-foot{padding:5px 10px;background:var(--c2c-bg3);border-top:1px solid var(--c2c-border);
+  color:var(--c2c-dim);font-size:11px;}
 #${PANEL_ID} .sec{margin-bottom:10px;}
-#${PANEL_ID} .sec h4{margin:0 0 5px;color:#6c72ff;font-size:11px;letter-spacing:.5px;}
+#${PANEL_ID} .sec h4{margin:0 0 5px;color:var(--c2c-mauve);font-size:11px;letter-spacing:.5px;}
 #${PANEL_ID} .locrow{display:flex;align-items:center;gap:6px;padding:2px 0;}
 #${PANEL_ID} .locrow .chk{cursor:pointer;width:20px;text-align:center;}
 #${PANEL_ID} .locrow .path{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-#${PANEL_ID} .locrow .miss{color:#cc6666;}
-#${PANEL_ID} input[type=text]{background:#080818;color:#e0e0ff;border:1px solid #2d2d5e;
+#${PANEL_ID} .locrow .miss{color:var(--c2c-dangerSoft);}
+#${PANEL_ID} input[type=text]{background:var(--c2c-bg3);color:var(--c2c-subtext1);border:1px solid var(--c2c-border);
   border-radius:4px;padding:5px 8px;font:13px Consolas,monospace;flex:1;}
-#${PANEL_ID} select{background:#080818;color:#d4d4f0;border:1px solid #2d2d5e;
+#${PANEL_ID} select{background:var(--c2c-bg3);color:var(--c2c-fg);border:1px solid var(--c2c-border);
   border-radius:4px;padding:4px;font:12px Consolas,monospace;}
 #${PANEL_ID} .qrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;}
 #${PANEL_ID} table{width:100%;border-collapse:collapse;font-size:12px;}
-#${PANEL_ID} th{position:sticky;top:0;background:#1a1a3e;color:#8a90ff;text-align:left;
-  padding:4px 6px;cursor:pointer;user-select:none;border-bottom:1px solid #2d2d5e;}
-#${PANEL_ID} td{padding:3px 6px;border-bottom:1px solid #18183a;}
-#${PANEL_ID} tr:hover td{background:#16163200;background:#161632;}
-#${PANEL_ID} tr.sel td{background:#282860;}
-#${PANEL_ID} .score{color:#66cc88;text-align:right;}
-#${PANEL_ID} .matched{color:#8888bb;}
-#${PANEL_ID} .pkgs{color:#cc88cc;font-size:11px;}
+#${PANEL_ID} th{position:sticky;top:0;background:var(--c2c-surface0);color:var(--c2c-lavender);text-align:left;
+  padding:4px 6px;cursor:pointer;user-select:none;border-bottom:1px solid var(--c2c-border);}
+#${PANEL_ID} td{padding:3px 6px;border-bottom:1px solid var(--c2c-border);}
+#${PANEL_ID} tr:hover td{background:var(--c2c-surface0);}
+#${PANEL_ID} tr.sel td{background:var(--c2c-surface1);}
+#${PANEL_ID} .score{color:var(--c2c-ok);text-align:right;}
+#${PANEL_ID} .matched{color:var(--c2c-sub);}
+#${PANEL_ID} .pkgs{color:var(--c2c-pink);font-size:11px;}
 #${PANEL_ID} .nodechip{display:inline-block;margin:2px;padding:1px 6px;border-radius:3px;
-  font-size:11px;color:#e8e8ff;}
-#${BTN_ID}{position:fixed;bottom:8px;right:96px;z-index:1100;background:#26264e;
-  color:#d4d4f0;border:1px solid #3a3a7e;border-radius:5px;padding:5px 10px;
+  font-size:11px;color:var(--c2c-fg);}
+#${BTN_ID}{position:fixed;bottom:8px;right:96px;z-index:1100;background:var(--c2c-surface0);
+  color:var(--c2c-fg);border:1px solid var(--c2c-surface1);border-radius:5px;padding:5px 10px;
   cursor:pointer;font:12px Consolas,monospace;}
-#${BTN_ID}:hover{background:#3a3a7e;}
+#${BTN_ID}:hover{background:var(--c2c-surface1);}
 `;
     document.head.appendChild(el);
 }
@@ -331,11 +331,11 @@ function renderLocations(dirs) {
     _refs.locrows.innerHTML = dirs.length
         ? dirs.map((d, i) => `
 <div class="locrow">
-  <span class="chk" data-i="${i}" style="color:${d.enabled ? "#66cc88" : "#505070"}">${d.enabled ? "\u2611" : "\u2610"}</span>
+  <span class="chk" data-i="${i}" style="color:${d.enabled ? "var(--c2c-ok)" : "var(--c2c-dim)"}">${d.enabled ? "\u2611" : "\u2610"}</span>
   <span class="path ${d.exists ? "" : "miss"}">${esc(d.path)}${d.exists ? "" : "  [not found]"}</span>
   <button data-rm="${i}" title="Remove">\u00d7</button>
 </div>`).join("")
-        : '<div style="color:#5a5a9a">No locations. Click "+ Folder" to add one.</div>';
+        : '<div style="color:var(--c2c-dim)">No locations. Click "+ Folder" to add one.</div>';
     _refs.locrows.querySelectorAll(".chk").forEach((el) => {
         el.addEventListener("click", () => {
             const i = +el.dataset.i;
@@ -385,7 +385,7 @@ async function doScan() {
 // ── Results ───────────────────────────────────────────────────────────
 function renderResults() {
     if (!_state.workflows.length) {
-        _refs.results.innerHTML = '<div style="color:#5a5a9a">Scan a location to begin.</div>';
+        _refs.results.innerHTML = '<div style="color:var(--c2c-dim)">Scan a location to begin.</div>';
         return;
     }
     const namePat = _refs.name.value.trim().toLowerCase();
@@ -413,7 +413,7 @@ function renderResults() {
   <td class="pkgs">${esc((fp.required_packages || []).join(", "))}</td>
 </tr>`).join("");
     _refs.results.innerHTML = head + rows + "</tbody></table>" +
-        `<div style="color:#5a5a9a;margin-top:4px">${res.length} result(s)${res.length > 300 ? " (showing 300)" : ""}</div>`;
+        `<div style="color:var(--c2c-dim);margin-top:4px">${res.length} result(s)${res.length > 300 ? " (showing 300)" : ""}</div>`;
 
     _refs.results.querySelectorAll("th[data-sort]").forEach((th) => {
         th.addEventListener("click", () => {
@@ -439,17 +439,17 @@ function showDetail(fp) {
     if (!fp) { _refs.detail.innerHTML = ""; return; }
     const chips = (fp.nodes || []).map((nt) => {
         const cap = capabilityFor(nt);
-        return `<span class="nodechip" style="background:${nodeColor(nt)}" title="${esc(cap)}">${esc(nt)}</span>`;
+        return `<span class="nodechip" style="background:${nodeColorCss(nt)}" title="${esc(cap)}">${esc(nt)}</span>`;
     }).join("");
     _refs.detail.innerHTML = `
 <h4>${esc(fp.filename)}</h4>
-<div style="color:#8888bb;font-size:11px;margin-bottom:4px">${esc(fp.path)}</div>
+<div style="color:var(--c2c-sub);font-size:11px;margin-bottom:4px">${esc(fp.path)}</div>
 <div class="qrow">
   <button class="acc" data-act="open">Open in canvas</button>
   <button data-act="preview">Preview graph</button>
   <button data-act="copy">Copy path</button>
   <span class="sp"></span>
-  <span style="color:#5a5a9a">${fp.node_count} nodes</span>
+  <span style="color:var(--c2c-dim)">${fp.node_count} nodes</span>
 </div>
 <div data-role="preview" style="margin-top:6px"></div>
 <div data-role="legend" style="margin-top:4px;display:none"></div>
@@ -466,15 +466,15 @@ async function previewWorkflow(fp) {
     const host = _refs.detail.querySelector('[data-role="preview"]');
     const legend = _refs.detail.querySelector('[data-role="legend"]');
     if (!host) return;
-    host.innerHTML = '<div style="color:#5a5a9a">Loading preview\u2026</div>';
+    host.innerHTML = '<div style="color:var(--c2c-dim)">Loading preview\u2026</div>';
     try {
         const data = await jget("/c2c/library/load?path=" + encodeURIComponent(fp.path));
-        if (!data.success) { host.innerHTML = '<div style="color:#cc6666">Preview error: ' + esc(data.error || "?") + "</div>"; return; }
+        if (!data.success) { host.innerHTML = '<div style="color:var(--c2c-dangerSoft)">Preview error: ' + esc(data.error || "?") + "</div>"; return; }
         if (_preview) { _preview.destroy(); _preview = null; }
         _preview = renderGraphPreview(host, data.workflow, { height: 300 });
         if (legend) { legend.innerHTML = legendHTML(); legend.style.display = "block"; }
     } catch (e) {
-        host.innerHTML = '<div style="color:#cc6666">Preview failed: ' + esc(String(e)) + "</div>";
+        host.innerHTML = '<div style="color:var(--c2c-dangerSoft)">Preview failed: ' + esc(String(e)) + "</div>";
     }
 }
 
@@ -505,26 +505,26 @@ function openPkgFilter() {
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:fixed;inset:0;z-index:1300;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);";
     wrap.innerHTML = `
-<div style="background:#0c0c1e;border:1px solid #2d2d5e;border-radius:8px;width:420px;max-height:70vh;
-  display:flex;flex-direction:column;color:#d4d4f0;font:13px Consolas,monospace;">
-  <div style="padding:8px 10px;border-bottom:1px solid #2d2d5e;color:#8a90ff;font-weight:bold;">Node Pack Filter</div>
+<div style="background:var(--c2c-bg2);border:1px solid var(--c2c-border);border-radius:8px;width:420px;max-height:70vh;
+  display:flex;flex-direction:column;color:var(--c2c-fg);font:13px Consolas,monospace;">
+  <div style="padding:8px 10px;border-bottom:1px solid var(--c2c-border);color:var(--c2c-lavender);font-weight:bold;">Node Pack Filter</div>
   <label style="padding:8px 10px;display:flex;gap:6px;align-items:center;">
     <input type="checkbox" data-role="core" ${_state.coreOnly ? "checked" : ""}/> Core nodes only (no custom packages)
   </label>
-  <div data-role="list" style="flex:1;overflow:auto;padding:4px 10px;border-top:1px solid #18183a;"></div>
-  <div style="padding:8px 10px;border-top:1px solid #2d2d5e;display:flex;gap:6px;">
+  <div data-role="list" style="flex:1;overflow:auto;padding:4px 10px;border-top:1px solid var(--c2c-border);"></div>
+  <div style="padding:8px 10px;border-top:1px solid var(--c2c-border);display:flex;gap:6px;">
     <button data-act="all">All</button><button data-act="none">None</button>
     <span style="flex:1"></span>
     <button data-act="clear">Clear filter</button>
-    <button class="acc" data-act="apply" style="background:#6c72ff;color:#0a0a1a;font-weight:bold;border:0;border-radius:4px;padding:4px 9px;cursor:pointer;">Apply</button>
+    <button class="acc" data-act="apply" style="background:var(--c2c-mauve);color:var(--c2c-bg);font-weight:bold;border:0;border-radius:4px;padding:4px 9px;cursor:pointer;">Apply</button>
   </div>
 </div>`;
     const list = wrap.querySelector('[data-role="list"]');
     list.innerHTML = _state.packages.map((p) => `
 <label style="display:flex;gap:6px;align-items:center;padding:2px 0;">
   <input type="checkbox" data-pkg="${esc(p)}" ${enabled.has(p) ? "checked" : ""}/>
-  ${esc(p)} <span style="color:#5a5a9a">(${counts[p] || 0})</span>
-</label>`).join("") || '<div style="color:#5a5a9a">No custom packages.</div>';
+  ${esc(p)} <span style="color:var(--c2c-dim)">(${counts[p] || 0})</span>
+</label>`).join("") || '<div style="color:var(--c2c-dim)">No custom packages.</div>';
     document.body.appendChild(wrap);
     const close = () => wrap.remove();
     wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });

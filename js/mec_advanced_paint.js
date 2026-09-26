@@ -49,8 +49,8 @@ class PaintCanvasController {
             // Literal fallback: --c2c-neutral955 is published by no theme
             // variant, so without one the declaration is dropped and the
             // surface goes transparent - which is the "no canvas" report.
-            background: "var(--c2c-neutral955, #14141b)",
-            border: "1px solid var(--c2c-gray700, #3a3f4b)",
+            background: "var(--c2c-bg2)",
+            border: "1px solid var(--c2c-border)",
             borderRadius: "4px",
             overflow: "hidden",
             userSelect: "none",

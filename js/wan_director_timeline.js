@@ -255,8 +255,8 @@ function _ensureWdStyles() {
     const el = document.createElement("style");
     el.id = "wd-timeline-styles";
     el.textContent = `
-.wd-root{--wd-bg:#161616;--wd-panel:#1e1e1e;--wd-panel2:#222;--wd-line:#111;
-  --wd-line2:#2c2c2c;--wd-fg:#e6e6e6;--wd-dim:#8a8a8a;--wd-dim2:#666;--wd-acc:#5b9dd9;
+.wd-root{--wd-bg:var(--c2c-bg);--wd-panel:var(--c2c-panelBg);--wd-panel2:var(--c2c-surface0);--wd-line:var(--c2c-border);
+  --wd-line2:var(--c2c-surface1);--wd-fg:var(--c2c-fg);--wd-dim:var(--c2c-dim);--wd-dim2:var(--c2c-sub);--wd-acc:var(--c2c-blue);
   font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;color:var(--wd-fg);
   background:var(--wd-bg);border-radius:6px;padding:8px;display:flex;flex-direction:column;
   gap:7px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;min-height:0;}
@@ -264,25 +264,25 @@ function _ensureWdStyles() {
 .wd-btn{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
   border-radius:4px;padding:6px 12px;font-size:11px;font-weight:500;cursor:pointer;
   display:inline-flex;align-items:center;gap:5px;transition:background .15s ease,border-color .15s ease,transform .05s ease;}
-.wd-btn:hover{background:#2e2e2e;border-color:#4a4a4a;}
+.wd-btn:hover{background:var(--c2c-surface1);border-color:var(--c2c-overlay0);}
 .wd-btn:active{transform:translateY(1px);}
-.wd-btn.on{background:#1c2733;border-color:#2f4a63;color:#cfe6ff;}
-.wd-btn-danger:hover{background:#3a1717;border-color:#a44;color:#ffb4b4;}
+.wd-btn.on{background:color-mix(in srgb,var(--c2c-blue) 18%,var(--c2c-bg2) 82%);border-color:color-mix(in srgb,var(--c2c-blue) 45%,var(--c2c-border) 55%);color:var(--c2c-accentLight);}
+.wd-btn-danger:hover{background:color-mix(in srgb,var(--c2c-danger) 22%,var(--c2c-bg2) 78%);border-color:var(--c2c-danger);color:var(--c2c-dangerSoft);}
 .wd-btn-icon{padding:5px 8px;font-size:12px;}
 .wd-sep{width:1px;align-self:stretch;background:var(--wd-line2);margin:2px 3px;}
 .wd-select{background:var(--wd-panel2);color:var(--wd-fg);border:1px solid var(--wd-line);
   border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer;}
 .wd-status{margin-left:auto;font:11px ui-monospace,monospace;color:var(--wd-dim);letter-spacing:.2px;}
-.wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:#141414;
+.wd-canvas-wrap{position:relative;width:100%;flex:0 0 auto;background:var(--c2c-bg2);
   border:1px solid var(--wd-line);border-radius:6px;overflow:hidden;}
 .wd-canvas{display:block;width:100%;outline:none;cursor:default;}
 /* DOM track sidebar overlaid on the canvas's reserved left column */
-.wd-sb{position:absolute;left:0;top:0;height:100%;background:#171717;border-right:1px solid #0b0b0b;
+.wd-sb{position:absolute;left:0;top:0;height:100%;background:var(--c2c-bg2);border-right:1px solid var(--c2c-border);
   display:flex;flex-direction:column;z-index:3;overflow:hidden;box-sizing:border-box;}
-.wd-sb-ruler{display:flex;align-items:center;padding:0 8px;font-size:9px;color:#666;letter-spacing:.6px;
-  border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;}
+.wd-sb-ruler{display:flex;align-items:center;padding:0 8px;font-size:9px;color:var(--c2c-dim);letter-spacing:.6px;
+  border-bottom:1px solid var(--c2c-border);box-sizing:border-box;flex:0 0 auto;}
 .wd-sb-row{position:relative;display:flex;flex-direction:column;justify-content:center;gap:3px;
-  padding:0 7px 0 12px;border-bottom:1px solid #0b0b0b;box-sizing:border-box;flex:0 0 auto;overflow:hidden;}
+  padding:0 7px 0 12px;border-bottom:1px solid var(--c2c-border);box-sizing:border-box;flex:0 0 auto;overflow:hidden;}
 .wd-sb-row.sm{flex-direction:row;align-items:center;gap:6px;padding:0 6px 0 12px;}
 .wd-sb-row::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;background:var(--acc);opacity:.85;}
 .wd-sb-row.muted{opacity:.4;}
@@ -290,20 +290,20 @@ function _ensureWdStyles() {
 .wd-sb-eye{background:none;border:none;color:var(--acc);cursor:pointer;font-size:12px;padding:0;line-height:1;
   width:16px;text-align:left;flex:0 0 auto;transition:opacity .12s ease;}
 .wd-sb-eye:hover{opacity:.7;}
-.wd-sb-name{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:#d4d4d4;letter-spacing:.3px;}
+.wd-sb-name{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;color:var(--c2c-fg);letter-spacing:.3px;}
 .wd-sb-row.sm .wd-sb-name{font-size:9.5px;font-weight:500;}
 .wd-sb-g{color:var(--acc);font-size:13px;}
 .wd-sb-row.sm .wd-sb-g{font-size:11px;}
 .wd-sb-pill{align-self:flex-start;display:inline-flex;align-items:center;font-size:8.5px;font-weight:600;
-  padding:1px 7px;border-radius:999px;background:#242424;border:1px solid #303030;color:#9a9a9a;letter-spacing:.2px;
+  padding:1px 7px;border-radius:999px;background:var(--c2c-surface0);border:1px solid var(--c2c-surface1);color:var(--c2c-dim);letter-spacing:.2px;
   max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;}
 .wd-playerbar{display:flex;align-items:center;gap:9px;background:var(--wd-panel);
   border:1px solid var(--wd-line);border-radius:6px;padding:6px 10px;flex:0 0 auto;}
 .wd-transport{display:flex;align-items:center;gap:3px;}
-.wd-tbtn{background:none;border:none;color:#cfcfcf;cursor:pointer;font-size:13px;
+.wd-tbtn{background:none;border:none;color:var(--c2c-subtext1);cursor:pointer;font-size:13px;
   width:26px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
   transition:background .12s ease,color .12s ease;}
-.wd-tbtn:hover{background:#2c2c2c;color:#fff;}
+.wd-tbtn:hover{background:var(--c2c-surface1);color:var(--c2c-fg);}
 .wd-seek{flex:1 1 auto;accent-color:var(--wd-acc);height:4px;}
 .wd-readout{font:11px ui-monospace,monospace;color:var(--wd-dim);white-space:nowrap;letter-spacing:.3px;}
 .wd-panel{background:var(--wd-panel);border:1px solid var(--wd-line);border-radius:6px;
@@ -312,7 +312,7 @@ function _ensureWdStyles() {
 .wd-prompt-wrap{position:relative;width:100%;background:var(--wd-panel);border:1px solid var(--wd-line);
   border-radius:6px;box-sizing:border-box;overflow:visible;transition:border-color .2s ease;
   min-height:74px;flex:0 0 auto;}   /* flex:0 0 auto so the textarea's resized height is held */
-.wd-prompt-wrap:focus-within{border-color:#4d6a86;}
+.wd-prompt-wrap:focus-within{border-color:color-mix(in srgb,var(--c2c-blue) 55%,var(--c2c-border) 45%);}
 .wd-plabel{position:absolute;top:6px;left:9px;font-size:9px;font-weight:700;color:var(--wd-dim2);
   text-transform:uppercase;letter-spacing:.6px;pointer-events:none;user-select:none;z-index:2;}
 .wd-pmeta{position:absolute;top:6px;right:9px;font:9px ui-monospace,monospace;color:var(--wd-dim2);
@@ -320,45 +320,45 @@ function _ensureWdStyles() {
 .wd-parea{display:block;width:100%;box-sizing:border-box;background:transparent;color:var(--wd-fg);
   border:none;padding:22px 9px 9px;resize:vertical;font-size:12px;line-height:1.45;outline:none;
   min-height:74px;}   /* drag the textarea's bottom-right grip to grow the prompt box */
-.wd-parea::placeholder{color:#555;}
-.wd-info{background:#191919;color:#bcbcbc;border:1px solid var(--wd-line);border-radius:6px;
+.wd-parea::placeholder{color:var(--c2c-dim);}
+.wd-info{background:var(--c2c-bg2);color:var(--c2c-sub);border:1px solid var(--wd-line);border-radius:6px;
   padding:10px 11px;font-size:11.5px;line-height:1.6;}
-.wd-info b,.wd-info span{color:#fff;font-weight:600;}
+.wd-info b,.wd-info span{color:var(--c2c-fg);font-weight:600;}
 .wd-itag{display:block;font-size:9px;font-weight:700;color:var(--wd-dim2);text-transform:uppercase;
   letter-spacing:.6px;margin-bottom:6px;}
 .wd-gsrow{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--wd-dim);}
 .wd-gsrow input[type=range]{flex:1 1 auto;accent-color:var(--wd-acc);}
-.wd-field{flex:1;min-width:0;background:#171717;color:var(--wd-fg);border:1px solid var(--wd-line);
+.wd-field{flex:1;min-width:0;background:var(--c2c-bg2);color:var(--wd-fg);border:1px solid var(--wd-line);
   border-radius:5px;padding:4px 7px;font-size:11px;}
-.wd-field:focus{outline:none;border-color:#4d6a86;}
-.wd-menu{position:fixed;z-index:2147483000;background:#1c1c1c;border:1px solid #333;border-radius:9px;
+.wd-field:focus{outline:none;border-color:color-mix(in srgb,var(--c2c-blue) 55%,var(--c2c-border) 45%);}
+.wd-menu{position:fixed;z-index:2147483000;background:var(--c2c-bg2);border:1px solid var(--c2c-surface1);border-radius:9px;
   padding:5px;box-shadow:0 10px 30px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:1px;min-width:176px;}
-.wd-menu-head{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#666;padding:5px 10px 3px;}
-.wd-menu-btn{display:flex;align-items:center;gap:9px;background:none;border:none;color:#e6e6e6;
+.wd-menu-head{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--c2c-dim);padding:5px 10px 3px;}
+.wd-menu-btn{display:flex;align-items:center;gap:9px;background:none;border:none;color:var(--c2c-fg);
   font:12px ui-sans-serif,system-ui;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer;
   transition:background .12s ease;width:100%;box-sizing:border-box;}
-.wd-menu-btn:hover:not(:disabled){background:#2c2c2c;}
+.wd-menu-btn:hover:not(:disabled){background:var(--c2c-surface1);}
 .wd-menu-btn:disabled{opacity:.4;cursor:not-allowed;}
-.wd-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:#9aa;}
-.wd-menu-sep{height:1px;background:#2c2c2c;margin:3px 4px;}
+.wd-menu-btn .g{width:16px;text-align:center;flex:0 0 auto;color:var(--c2c-dim);}
+.wd-menu-sep{height:1px;background:var(--c2c-surface1);margin:3px 4px;}
 /* Real DOM Scene-track segments (replaces canvas-painted blocks for the
    image/text track — genuine elements, not an immediate-mode simulation). */
 .wd-seg-layer{position:absolute;pointer-events:none;overflow:hidden;z-index:1;}
 .wd-domseg{position:absolute;top:4px;bottom:4px;border-radius:5px;overflow:hidden;
-  box-sizing:border-box;border:1px solid #3a3a3a;cursor:grab;pointer-events:auto;
-  background:#242424;touch-action:none;transition:border-color .12s ease,box-shadow .12s ease;}
-.wd-domseg:hover{border-color:#4a4a4a;}
-.wd-domseg.selected{border-color:#5b9dd9;border-width:2px;box-shadow:0 0 0 1px rgba(91,157,217,.35);}
+  box-sizing:border-box;border:1px solid var(--c2c-border);cursor:grab;pointer-events:auto;
+  background:var(--c2c-surface0);touch-action:none;transition:border-color .12s ease,box-shadow .12s ease;}
+.wd-domseg:hover{border-color:var(--c2c-overlay0);}
+.wd-domseg.selected{border-color:var(--c2c-blue);border-width:2px;box-shadow:0 0 0 1px rgba(91,157,217,.35);}
 .wd-domseg.dragging{cursor:grabbing;transition:none;}
 .wd-domseg-thumb{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   min-width:100%;min-height:100%;object-fit:cover;pointer-events:none;user-select:none;-webkit-user-drag:none;}
 .wd-domseg-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  color:#666;font-size:10px;background:#2a2a2a;pointer-events:none;}
+  color:var(--c2c-dim);font-size:10px;background:var(--c2c-surface1);pointer-events:none;}
 .wd-domseg-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   text-align:center;padding:6px;color:#f5c2e7;font-size:11px;line-height:1.3;background:#2a2436;
   overflow:hidden;pointer-events:none;}
 .wd-domseg-prompt{position:absolute;left:0;right:0;bottom:0;padding:3px 7px;font-size:10px;
-  color:#e6e6e6;background:rgba(0,0,0,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  color:var(--c2c-fg);background:rgba(0,0,0,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   pointer-events:none;}
 .wd-domseg-handle{position:absolute;top:0;bottom:0;width:10px;cursor:ew-resize;z-index:2;}
 .wd-domseg-handle.l{left:-3px;} .wd-domseg-handle.r{right:-3px;}
@@ -368,18 +368,18 @@ function _ensureWdStyles() {
 .wd-domseg.aud{background:#1c2b1e;}
 .wd-domseg.vid{background:#242424;}
 .wd-domseg-wave,.wd-domseg-film{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
-.wd-domseg-name{position:absolute;left:0;top:0;right:0;padding:2px 5px;font-size:10px;color:#e6e6e6;
+.wd-domseg-name{position:absolute;left:0;top:0;right:0;padding:2px 5px;font-size:10px;color:var(--c2c-fg);
   background:rgba(0,0,0,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;}
-.wd-domseg-trim{position:absolute;left:0;right:0;bottom:0;height:3px;background:#fbbf24;
+.wd-domseg-trim{position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--c2c-yellow);
   pointer-events:none;display:none;}
 .wd-domseg.pill{border-radius:3px;border:1px solid transparent;opacity:.75;}
 .wd-domseg.pill:hover{opacity:.9;}
-.wd-domseg.pill.selected{opacity:1;border-color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.35);}
+.wd-domseg.pill.selected{opacity:1;border-color:var(--c2c-fg);box-shadow:0 0 0 1px rgba(255,255,255,.35);}
 .wd-domseg-sum{position:absolute;inset:0;display:flex;align-items:center;padding:0 4px;
   font:8px ui-monospace,monospace;color:rgba(0,0,0,.78);white-space:nowrap;overflow:hidden;pointer-events:none;}
 /* DOM playhead: rides ABOVE the seg divs (the canvas-drawn line disappears
    behind opaque DOM segments). */
-.wd-dom-playhead{position:absolute;top:0;bottom:0;width:1.5px;background:#f38ba8;
+.wd-dom-playhead{position:absolute;top:0;bottom:0;width:1.5px;background:var(--c2c-pink);
   pointer-events:none;z-index:3;}
 `;
     document.head.appendChild(el);
@@ -513,7 +513,7 @@ class TimelineEditor {
         this.cvs.style.height = TRACKS_CANVAS_H + "px";
         wrap.appendChild(this.cvs);
         const dropHint = document.createElement("div");
-        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:#fff;font-size:13px;font-weight:600;border:2px dashed #5b9dd9;border-radius:6px;";
+        dropHint.style.cssText = "position:absolute;inset:0;pointer-events:none;display:none;align-items:center;justify-content:center;background:rgba(80,140,220,0.22);color:var(--c2c-fg);font-size:13px;font-weight:600;border:2px dashed var(--c2c-blue);border-radius:6px;";
         dropHint.textContent = "Drop video, image, or audio file here";
         this.dropHint = dropHint;
         wrap.appendChild(dropHint);
@@ -614,7 +614,7 @@ class TimelineEditor {
         this.gsSlider.type = "range";
         this.gsSlider.min = "0"; this.gsSlider.max = "200"; this.gsSlider.value = "100";
         this.gsVal = document.createElement("span");
-        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:#e6e6e6;min-width:40px;text-align:right;";
+        this.gsVal.style.cssText = "font-family:ui-monospace,monospace;color:var(--c2c-fg);min-width:40px;text-align:right;";
         this.gsVal.textContent = "1.00";
         this.gsSlider.oninput = () => {
             const v = parseInt(this.gsSlider.value) / 100;
@@ -1840,10 +1840,10 @@ class TimelineEditor {
             const r = document.createElement("div");
             r.style.cssText = "display:flex;align-items:center;gap:6px;";
             const l = document.createElement("span");
-            l.textContent = label; l.style.cssText = "width:72px;color:var(--c2c-dim,#9399b2);flex:0 0 auto;";
+            l.textContent = label; l.style.cssText = "width:72px;color:var(--c2c-dim);flex:0 0 auto;";
             r.appendChild(l); return r;
         };
-        const styleInput = (el) => { el.style.cssText = "flex:1;min-width:0;background:var(--c2c-surface0,#313244);color:var(--c2c-fg,#cdd6f4);border:1px solid var(--c2c-surface1,#45475a);border-radius:3px;padding:3px 5px;font:11px system-ui;"; return el; };
+        const styleInput = (el) => { el.style.cssText = "flex:1;min-width:0;background:var(--c2c-surface0);color:var(--c2c-fg);border:1px solid var(--c2c-surface1);border-radius:3px;padding:3px 5px;font:11px system-ui;"; return el; };
         const commit = () => { this.commitChanges(); this.propTitle.textContent = `${def.label}: ${def.summary(seg)}`; };
         const textIn = (val, on) => { const i = styleInput(document.createElement("input")); i.type = "text"; i.value = val ?? ""; i.oninput = () => { on(i.value); commit(); }; return i; };
         const numIn = (val, min, max, step, on) => { const i = styleInput(document.createElement("input")); i.type = "number"; i.value = String(val); i.min = min; i.max = max; i.step = step; i.oninput = () => { on(parseFloat(i.value)); commit(); }; return i; };
@@ -1858,7 +1858,7 @@ class TimelineEditor {
             const pj = textIn(JSON.stringify(seg.params || {}), v => { try { seg.params = JSON.parse(v || "{}"); } catch (_) {} });
             add("Params", pj);
             const hint = document.createElement("div");
-            hint.style.cssText = "font:9px ui-sans-serif;color:var(--c2c-dim,#9399b2);padding-left:78px;";
+            hint.style.cssText = "font:9px ui-sans-serif;color:var(--c2c-dim);padding-left:78px;";
             hint.textContent = "pan→{dx,dy} · zoom→{from,to} · orbit→{radius,deg} · dolly→{dz}";
             wrap.appendChild(hint);
         } else if (def.key === "seedSegments") {
@@ -2099,12 +2099,12 @@ class TimelineEditor {
     _drawRuler(ctx, cssW) {
         // Ruler bar + a slightly darker sidebar corner so the label column
         // reads as one continuous gutter from the ruler down.
-        ctx.fillStyle = "#1c1e28";
+        ctx.fillStyle = C.panelBg;
         ctx.fillRect(0, 0, cssW, RULER_H);
-        ctx.fillStyle = "#16171f";
+        ctx.fillStyle = C.bg2;
         ctx.fillRect(0, 0, LANE_X0, RULER_H);
         // Corner label.
-        ctx.fillStyle = C.slateMute || "#7f849c";
+        ctx.fillStyle = C.slateMute;
         ctx.font = "9px ui-sans-serif,system-ui";
         ctx.textAlign = "left"; ctx.textBaseline = "middle";
         ctx.fillText(this.displayMode === "frames" ? "FRAME" : "TIME", 8, RULER_H / 2);
@@ -2123,7 +2123,7 @@ class TimelineEditor {
         }
         ctx.stroke();
         // Major ticks + labels.
-        ctx.fillStyle = C.dim || "#a6adc8";
+        ctx.fillStyle = C.dim;
         ctx.font = "10px ui-monospace,monospace";
         ctx.strokeStyle = "rgba(255,255,255,0.16)"; ctx.lineWidth = 1;
         for (let f = 0; f <= this.visualDurFrames + step; f += step) {
@@ -2144,7 +2144,7 @@ class TimelineEditor {
             const x2 = this._frameToX(lo != null ? lo : this.visualDurFrames);
             ctx.fillStyle = "rgba(249,226,175,0.22)";
             ctx.fillRect(x1, 0, Math.max(2, x2 - x1), RULER_H);
-            ctx.fillStyle = "#f9e2af"; ctx.textAlign = "left";
+            ctx.fillStyle = C.yellow; ctx.textAlign = "left";
             if (li != null) { ctx.fillRect(x1, 0, 2, RULER_H); ctx.fillText("I", x1 + 4, RULER_H / 2); }
             if (lo != null) { ctx.fillRect(x2 - 2, 0, 2, RULER_H); ctx.textAlign = "right"; ctx.fillText("O", x2 - 4, RULER_H / 2); ctx.textAlign = "left"; }
         }
@@ -2169,7 +2169,7 @@ class TimelineEditor {
         ];
         for (const d of defs) {
             const meta = TRACK_LABELS[d.key] || { name: d.key, glyph: "•" };
-            const acc = meta.color || d.color || "#cdd6f4";
+            const acc = meta.color || d.color || C.fg;
             const row = document.createElement("div");
             row.className = "wd-sb-row" + (d.big ? "" : " sm");
             row.style.height = d.h + "px";
@@ -2611,7 +2611,7 @@ class TimelineEditor {
     // helper in case an old render path calls it.
     _drawSidebar(ctx, cssW, cssH) {
         // Column background + right divider.
-        ctx.fillStyle = "#16171f";
+        ctx.fillStyle = C.bg2;
         ctx.fillRect(0, RULER_H, LANE_X0, cssH - RULER_H);
         ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(LANE_X0 - 0.5, RULER_H); ctx.lineTo(LANE_X0 - 0.5, cssH); ctx.stroke();
@@ -2624,7 +2624,7 @@ class TimelineEditor {
         ];
         for (const r of rows) {
             const meta = TRACK_LABELS[r.key] || { name: r.key, glyph: "•" };
-            const color = meta.color || r.color || "#cdd6f4";
+            const color = meta.color || r.color || C.fg;
             const muted = !!this.trackMuted?.[r.key];
             const cy = r.top + r.h / 2;
             // Accent tab on the left edge of the track (its identity colour).
@@ -2647,13 +2647,13 @@ class TimelineEditor {
                 ctx.fillStyle = color; ctx.font = "13px ui-sans-serif,system-ui";
                 ctx.textAlign = "left"; ctx.textBaseline = "middle";
                 ctx.fillText(meta.glyph, 24, r.top + 13);
-                ctx.fillStyle = "#cdd6f4"; ctx.font = "600 10px ui-sans-serif,system-ui";
+                ctx.fillStyle = C.fg; ctx.font = "600 10px ui-sans-serif,system-ui";
                 ctx.fillText(meta.name, 8, r.top + 30);
             } else {
                 ctx.fillStyle = color; ctx.font = "10px ui-sans-serif,system-ui";
                 ctx.textAlign = "left"; ctx.textBaseline = "middle";
                 ctx.fillText(meta.glyph, 24, cy);
-                ctx.fillStyle = "#bac2de"; ctx.font = "9px ui-sans-serif,system-ui";
+                ctx.fillStyle = C.subtext1; ctx.font = "9px ui-sans-serif,system-ui";
                 ctx.fillText(meta.name, 34, cy);
             }
             ctx.globalAlpha = 1;
@@ -2844,7 +2844,7 @@ class TimelineEditor {
             }
             // Trim-in indicator (amber underline)
             if (seg.trimStart) {
-                ctx.fillStyle = C.amber || "#fbbf24";
+                ctx.fillStyle = C.amber;
                 ctx.fillRect(x1, y + h - 3, w, 3);
             }
             ctx.restore();
