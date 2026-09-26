@@ -527,8 +527,13 @@ async function _aiCompare(body) {
 app.registerExtension({
     name: "C2C.UndoPanel",
     settings: [
-        { id: "c2c.undo_panel.enabled", name: "Undo Panel: capture graph snapshots", type: "boolean", default: true },
-        { id: "c2c.undo_panel.max",     name: "Undo Panel: max snapshots",            type: "number",  default: 30 },
+        // `defaultValue`, not `default`. ComfyUI reads the former; with the
+        // latter the control opens EMPTY and getSettingValue returns undefined,
+        // so the panel ran on the `true` / `30` fallbacks at each call site
+        // while the settings page showed a blank box. It worked by accident
+        // and looked broken.
+        { id: "c2c.undo_panel.enabled", name: "Undo Panel: capture graph snapshots", type: "boolean", defaultValue: true, tooltip: "Snapshot the graph after each change so the Undo Panel can step back through it." },
+        { id: "c2c.undo_panel.max",     name: "Undo Panel: max snapshots",            type: "number",  defaultValue: 30, tooltip: "How many snapshots to keep. Each one holds a copy of the graph, so a large number costs memory." },
     ],
     async setup() {
         _injectStyle();

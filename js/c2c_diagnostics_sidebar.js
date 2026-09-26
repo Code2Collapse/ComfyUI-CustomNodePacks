@@ -1356,7 +1356,12 @@ async function _renderClipboard(body) {
     const setOn = (on) => {
         try { localStorage.setItem(AUTOCOPY_KEY, on ? "1" : "0"); } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
         window.dispatchEvent(new CustomEvent("mec-clipboard-autocopy-changed", { detail: { enabled: !!on } }));
-        try { app.ui?.settings?.setSettingValue?.("MEC.Clipboard.AutoCopy", !!on); } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
+        // AUTOCOPY_KEY, not a re-spelling of it. This wrote
+        // "MEC.Clipboard.AutoCopy" while reading "mec.clipboard.autoCopy" four
+        // lines above, and ComfyUI's ids are case-sensitive - so the toggle
+        // read the real setting, wrote a phantom one, and snapped back to its
+        // old state on the next render. A control that looks like it works.
+        try { app.ui?.settings?.setSettingValue?.(AUTOCOPY_KEY, !!on); } catch (__c2cErr) { __c2cReport("c2c_diagnostics_sidebar", __c2cErr); }
     };
     const toggleRow = document.createElement("div");
     toggleRow.className = "mec-diag-card info";

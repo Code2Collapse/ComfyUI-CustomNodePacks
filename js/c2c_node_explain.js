@@ -1669,6 +1669,21 @@ app.registerExtension({
             defaultValue: "Q4_K_M",
         },
         {
+            // Read at the AI-blurb call site with a default of `true`, and
+            // registered nowhere until now - so the feature was permanently ON
+            // and there was no control to turn it off. It is the one setting
+            // here that makes a NETWORK CALL, which makes "no way to say no"
+            // the wrong default state to be unable to leave.
+            id:      "c2c.inspector.ai_widget_blurb",
+            name:    "Node Explain: AI widget descriptions",
+            tooltip: "When a widget has no written description, ask the LLM "
+                   + "backend for one and cache it. Turn this off to keep the "
+                   + "inspector entirely offline - written descriptions still "
+                   + "show.",
+            type:    "boolean",
+            defaultValue: true,
+        },
+        {
             id:      "mec.node_explain.dwell_ms",
             name:    "Node Explain: hover dwell (ms)",
             tooltip: "How long to hover a node title before the explanation card appears. Lower = snappier.",
