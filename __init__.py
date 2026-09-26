@@ -301,6 +301,26 @@ except Exception as _tile_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] tiling import failed: %s", _tile_exc,
         )
+# Magnific (vendor pack ported in — hosted generation / upscale / stock)
+try:
+    from .nodes.magnific import (
+        NODE_CLASS_MAPPINGS as _MAGNIFIC_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _MAGNIFIC_DISPLAY,
+    )
+except Exception as _mag_exc:  # pragma: no cover
+    _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_mag
+        _c2c_rec_fail_mag(
+            "magnific", _mag_exc,
+            hint="Magnific failed to import. Check nodes/magnific/.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] magnific import failed: %s", _mag_exc,
+        )
 # VAE Clean (colour cast / oversaturation / decode artefacts after a decode)
 try:
     from .nodes.vae_clean import (
@@ -712,6 +732,7 @@ NODE_CLASS_MAPPINGS = {
     **_SMARTCROP_MAPPINGS,
     **_TILING_MAPPINGS,
     **_VAECLEAN_MAPPINGS,
+    **_MAGNIFIC_MAPPINGS,
     **_AVH_MAPPINGS,
     **_USEG_MAPPINGS,
     **_SAMPICKER_MAPPINGS,
@@ -751,6 +772,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_SMARTCROP_DISPLAY,
     **_TILING_DISPLAY,
     **_VAECLEAN_DISPLAY,
+    **_MAGNIFIC_DISPLAY,
     **_AVH_DISPLAY,
     **_USEG_DISPLAY,
     **_SAMPICKER_DISPLAY,

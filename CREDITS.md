@@ -71,6 +71,32 @@ Read while building, no code taken:
 
 ---
 
+## Ported code that is NOT open source
+
+- **magnific-comfyui 0.7.0** by Magnific / Freepik
+  (<https://www.magnific.com/plugins>) — ported whole into `nodes/magnific/`
+  and `js/magnific/`.
+
+  Its `pyproject.toml` declares `license = { text = "UNLICENSED" }`. That is an
+  explicit reservation of rights, not a missing licence, so it is recorded
+  separately from the permissive ports above: **this pack has no right to
+  redistribute it.** It is here because `third_party/` is gitignored and so is
+  absent on the Linux box; if this repository is ever published, this
+  directory comes out first.
+
+  Four changes were made on the way in, each commented at the site that
+  changed and pinned by `tests/test_magnific_port.py`: the version literal
+  (upstream read a sibling `pyproject.toml` that does not exist here, and its
+  failure path returned `0.0.0`), the update check no longer raises, the JS
+  import depth gained a `../`, and the route mount is guarded against a
+  missing `PromptServer.instance`. To re-sync, copy the upstream files over
+  and re-apply those four — the tests name them.
+
+  The fifteen node IDs are unchanged, so the vendor's own pack installed
+  alongside this one registers all fifteen twice.
+
+---
+
 ## Upstream projects whose licence could not be verified
 
 Both of these declare `license = {file = "LICENSE"}` in `pyproject.toml` while
