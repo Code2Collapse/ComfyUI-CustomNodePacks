@@ -197,6 +197,25 @@ _TAE_SOURCES = {
     "taef1_decoder":   "https://github.com/madebyollin/taesd/raw/main/taef1_decoder.pth",
 }
 
+# Wan is the exception, and it needed care rather than another table row.
+#
+# Core asks for a decoder called "lighttaew2_1"/"lighttaew2_2". The file that
+# actually produces a sharp Wan preview is at Kijai/WanVideo_comfy and is named
+# "taew2_1.safetensors"/"taew2_2.safetensors" - a DIFFERENT name, and I could
+# not establish that the two are the same weights. So this fetches Kijai's file
+# under KIJAI'S name and does not rename it into core's slot: Kijai's
+# WanVideoSampler routes TAESD to its own video previewer and looks for exactly
+# that filename (see the pack notes on the Wan preview path), so this is the
+# route that pays off, and mislabelling a possibly-different architecture as
+# core's decoder would fail inside the loader rather than fall back cleanly.
+#
+# Core's own lighttaew* remains a manual drop; nothing breaks without it,
+# because the Wan-factor Latent2RGB fallback still decodes Wan latents.
+_TAE_COMPANIONS = {
+    "lighttaew2_1": ("taew2_1", "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/taew2_1.safetensors"),
+    "lighttaew2_2": ("taew2_2", "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/taew2_2.safetensors"),
+}
+
 _TAE_MIN_BYTES = 1 << 20          # a 5 MB decoder; anything under 1 MB is an
                                   # error page that happened to return 200
 _TAE_MAX_BYTES = 512 << 20        # refuse to stream something unbounded
@@ -211,6 +230,16 @@ def _vae_approx_dir():
         return dirs[0] if dirs else None
     except Exception:
         return None
+
+
+def _file_present(stem: str) -> bool:
+    """True if some vae_approx file starts with this stem - the same test core
+    uses, so "already installed" means the same thing to both of us."""
+    try:
+        import folder_paths
+        return any(fn.startswith(stem) for fn in folder_paths.get_filename_list("vae_approx"))
+    except Exception:
+        return False
 
 
 def _tae_sources() -> dict:
@@ -297,6 +326,17 @@ def _ensure_decoder(latent_format) -> None:
             return
         url = _tae_sources().get(name)
         if not url:
+            # Wan: fetch the file Kijai's sampler looks for, under its own name.
+            comp = _TAE_COMPANIONS.get(name)
+            if comp:
+                stem, comp_url = comp
+                if not _file_present(stem):
+                    log.info("[c2c.preview] '%s' has no published source, but the "
+                             "Wan previewer's own '%s' does - fetching that instead.",
+                             name, stem)
+                    threading.Thread(target=_download_tae, args=(stem, comp_url, dest),
+                                     name=f"c2c-tae-{stem}", daemon=True).start()
+                    return
             # Not guessing. A wrong URL is a silent 404 on every sample.
             log.info("[c2c.preview] no download source known for the '%s' preview "
                      "decoder (the video ones are gated or unpublished). Previews "

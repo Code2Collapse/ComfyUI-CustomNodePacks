@@ -208,6 +208,55 @@ def test_only_urls_that_were_actually_checked_are_listed(guard):
             "does not resolve. Re-check it before adding it again.")
 
 
+def test_wan_fetches_the_file_its_own_sampler_looks_for(guard, monkeypatch):
+    """Core asks for "lighttaew2_2"; the file that actually sharpens a Wan
+    preview is Kijai's "taew2_2.safetensors", a different name whose weights I
+    could not prove identical. So it is fetched under KIJAI'S name, not renamed
+    into core's slot - a mislabelled architecture would fail inside the loader
+    instead of falling back cleanly."""
+    monkeypatch.setattr(guard, "_taesd_decoder_present", lambda fmt: False)
+    monkeypatch.setattr(guard, "_file_present", lambda stem: False)
+    monkeypatch.setattr(guard, "_vae_approx_dir", lambda: os.sep + "models")
+    monkeypatch.setattr(guard, "_fetch_tried", set())
+    started = []
+
+    class FakeThread:
+        def __init__(self, *a, **k):
+            started.append(k["args"])
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(guard.threading, "Thread", FakeThread)
+    guard._ensure_decoder(video_format())          # taesd_decoder_name = lighttaew2_2
+    assert len(started) == 1
+    stem, url, _dest = started[0]
+    assert stem == "taew2_2", f"saved under {stem!r}, not the name the sampler looks for"
+    assert "lighttaew" not in stem, "renamed into core's slot without proof they match"
+    assert url.startswith("https://huggingface.co/Kijai/WanVideo_comfy/")
+
+
+def test_wan_does_not_refetch_what_is_already_installed(guard, monkeypatch):
+    """Presence is checked by the COMPANION's name. Checking the format's name
+    would see lighttaew2_2 missing forever and re-fetch on every model load."""
+    monkeypatch.setattr(guard, "_taesd_decoder_present", lambda fmt: False)
+    monkeypatch.setattr(guard, "_file_present", lambda stem: stem == "taew2_2")
+    monkeypatch.setattr(guard, "_vae_approx_dir", lambda: os.sep + "models")
+    monkeypatch.setattr(guard, "_fetch_tried", set())
+    monkeypatch.setattr(guard.threading, "Thread",
+                        lambda *a, **k: pytest.fail("re-fetched an installed decoder"))
+    guard._ensure_decoder(video_format())
+
+
+def test_the_companion_table_only_holds_checked_urls(guard):
+    for name, (stem, url) in guard._TAE_COMPANIONS.items():
+        assert url.startswith("https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/")
+        assert url.endswith(stem + ".safetensors")
+        assert not stem.startswith("lighttae"), (
+            f"{name} maps to {stem}, which is core's own name - that claims the "
+            "two are the same weights, which was never established")
+
+
 def test_a_missing_source_says_what_to_do_instead_of_guessing(guard, monkeypatch, caplog):
     """The video path. It must be actionable, not silent."""
     monkeypatch.setattr(guard, "_taesd_decoder_present", lambda fmt: False)
@@ -216,10 +265,13 @@ def test_a_missing_source_says_what_to_do_instead_of_guessing(guard, monkeypatch
     started = []
     monkeypatch.setattr(guard.threading, "Thread",
                         lambda *a, **k: started.append(k) or pytest.fail("downloaded"))
+    monkeypatch.setattr(guard, "_file_present", lambda stem: False)
+    fmt = video_format()
+    fmt.taesd_decoder_name = "taeh3"      # MiniMax H3: no source, no companion
     with caplog.at_level("INFO"):
-        guard._ensure_decoder(video_format())
+        guard._ensure_decoder(fmt)
     text = caplog.text
-    assert "lighttaew2_2" in text
+    assert "taeh3" in text
     assert "models" in text
     assert not started
 
