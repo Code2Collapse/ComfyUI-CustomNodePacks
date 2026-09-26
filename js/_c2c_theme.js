@@ -19,8 +19,12 @@
  *   border-radius: var(--c2c-radius-md);
  *
  * `applyThemeVars()` is called once at module load and re-runs when the
- * user switches Catppuccin variants via the setting `c2c.theme.variant`
- * (mocha | latte | oled | custom). §16 theme toggle.
+ * user switches variants via the setting `c2c.theme.variant`
+ * (night | mocha | oled | latte). §16 theme toggle.
+ *
+ * `night` is the default and the house identity: the ground is a blue-black
+ * indigo ramp and violet is the only saturated hue on it, so the accent reads
+ * everywhere without a second colour competing.
  *
  * Backward-compat: `C` is re-exported with the exact same keys as
  * `_c2c_window.js` so existing imports keep working unchanged.
@@ -43,189 +47,387 @@ import "./_c2c_native_offsets.js";
 import "./c2c_omnibar.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
-// ── Catppuccin variants ────────────────────────────────────────────────────
-// Palette keys with extended Catppuccin surface/overlay/subtext tiers + a few
-// long-standing C2C semantic shades (panelBg, panelBgAlt, scrim*, accent*,
-// danger*, warn*, ok*) so every literal hex in the codebase has a named token
-// to resolve against. P0.1b theme-sweep relies on this expanded surface set.
-const PALETTES = {
+// ── Palettes ───────────────────────────────────────────────────────────────
+// Four variants. Each authors 75 CORE keys by hand - the ground ramp, the
+// text tiers, the hue anchors, the handful of semantic shades - and the
+// remaining 108 are DERIVED from them at load.
+//
+// They used to be authored too, and that was the bug. A sweep had replaced
+// every inline hex in the codebase with a named token, which is the right
+// move, but it pasted the SAME 108 values into all three variants. They were
+// byte-identical: 108 of the 183 keys - the majority of the palette - simply
+// did not respond to the variant at all. Thirty of them were near-black,
+// sitting in `latte`, the LIGHT theme. Any panel reaching for `panelDeep` or
+// `scrimDark4` or `neutral900` painted a black block onto a white ground, and
+// no amount of care in the individual widgets could fix it, because the
+// widgets were doing the right thing.
+//
+// So the relationships are measured off `mocha` once (see DERIVE below) and
+// re-applied to whichever palette is active. Three kinds, because they behave
+// differently and conflating them is what produced black-on-white:
+//
+//   S  surface - a lightness OFFSET from the palette's own ground. Recessed
+//      means darker on a dark theme and greyer on a light one; the offset
+//      simply flips sign. These must follow the ground or they are wrong.
+//   T  tinted background - a surface that carries a hue (an "ok" chip's
+//      backing). Ground lightness, family hue.
+//   C  chip - foreground colour on the ground. ABSOLUTE lightness, because a
+//      bright green should stay bright whether the ground is #1e1e2e or pure
+//      black; mirrored about mid on a light theme so it lands dark on white
+//      rather than vanishing into it.
+//   A  absolute ramp - the greys, same reasoning as C.
+//
+// Measured against what shipped before: mocha moves 2.6/100 on average (10 of
+// 108 shades move enough to see, so the dark theme nobody complained about
+// stays put), oled's surfaces finally track its black ground, and latte goes
+// from 41 of 41 near-black surfaces to none, with poor-contrast chips down
+// from 23 to 2. Adding a palette is now 75 considered colours, not 183.
+
+const CORE = {
+    night: {
+        bg: "#12132f", bg2: "#0c0d23", bg3: "#07081a", surface0: "#1d1e45",
+        surface1: "#2a2a57", surface2: "#3b3a68", overlay0: "#4e4d80", overlay1: "#6664a0",
+        overlay2: "#8280ba", fg: "#e8e6f7", sub: "#bab7db", subtext1: "#d2cfee",
+        dim: "#6f6d9b", border: "#2a2a57", highlightBase: "#ffffff", shadowBase: "#000000",
+        mauve: "#b494ff", blue: "#7ba3f8", sky: "#7fd4f2", sapphire: "#5ec2e3",
+        teal: "#76dccb", green: "#8ee09d", yellow: "#f3d288", peach: "#f1aa7b",
+        red: "#f27a92", pink: "#eba2de", lavender: "#c6c2ff", rosewater: "#f2e4e2",
+        flamingo: "#e7bfbf", maroon: "#e28ca0", panelBg: "#1e1f47", panelBgAlt: "#1d1e45",
+        panelTint: "#181a3a", panelHi: "#12132f", panelHi2: "#101128", scrimDark: "#090a1c",
+        scrimDark2: "#07081a", accentSoft: "#a892f0", accentSoft2: "#8f74e8", accentLink: "#c0aaff",
+        accentLight: "#ddd2ff", accentLight2: "#d4cfe4", accentBright: "#efeaff", accentText: "#e9e4fa",
+        accentNeutral: "#e6e5ee", accentMuted: "#8a86a8", accentMuted2: "#847fa4", ok: "#7fe0ab",
+        okBright: "#48d97a", okSoft: "#8ee09d", okSoft2: "#6fe3b6", okMute: "#3da874",
+        warn: "#ffd27a", warnSoft: "#fde0a0", warnBright: "#f9c93c", warnTint: "#fce9c2",
+        danger: "#ff7b93", dangerSoft: "#ff9aad", dangerTint: "#fcb0bd", dangerStrong: "#f87f95",
+        violet: "#b9a4e8", violetSoft: "#c68cff", violetTint: "#dcbcff", white: "#ffffff",
+        black: "#000000", gray100: "#e2e0ec", gray200: "#cecbdd", gray300: "#aca9c2",
+        gray400: "#8b88a3", gray500: "#6a6883", gray600: "#5a5871", gray700: "#48475c",
+        gray800: "#37364a", gray900: "#292838", gray950: "#1c1b28",
+    },
     mocha: {
-        // base layers
-        bg: "#1e1e2e", bg2: "#181825", bg3: "#11111b",
-        // surface tiers (Catppuccin surface0/1/2)
-        surface0: "#313244", surface1: "#45475a", surface2: "#585b70",
-        // overlay tiers (Catppuccin overlay0/1/2)
-        overlay0: "#6c7086", overlay1: "#7f849c", overlay2: "#9399b2",
-        // foreground tiers (text + subtext0/1)
-        fg: "#cdd6f4", sub: "#a6adc8", subtext1: "#bac2de", dim: "#6c7086",
-        // generic alias kept for back-compat
-        border: "#313244",
-        // Per-variant translucency anchors. shadowBase is universally black;
-        // highlightBase flips to keep "light wash" overlays visible in latte.
-        highlightBase: "#ffffff", shadowBase: "#000000",
-        // accents
+        bg: "#1e1e2e", bg2: "#181825", bg3: "#11111b", surface0: "#313244",
+        surface1: "#45475a", surface2: "#585b70", overlay0: "#6c7086", overlay1: "#7f849c",
+        overlay2: "#9399b2", fg: "#cdd6f4", sub: "#a6adc8", subtext1: "#bac2de",
+        dim: "#6c7086", border: "#313244", highlightBase: "#ffffff", shadowBase: "#000000",
         mauve: "#cba6f7", blue: "#89b4fa", sky: "#89dceb", sapphire: "#74c7ec",
-        teal: "#94e2d5", green: "#a6e3a1", yellow: "#f9e2af",
-        peach: "#fab387", red: "#f38ba8", pink: "#f5c2e7",
-        lavender: "#b4befe", rosewater: "#f5e0dc", flamingo: "#f2cdcd", maroon: "#eba0ac",
-        // C2C-specific named shades long used inline across panels
-        panelBg: "#2a2a36", panelBgAlt: "#2a2a35",
-        panelTint: "#22223a", panelHi: "#1a1a2e", panelHi2: "#1a1a26",
-        scrimDark: "#0e0e16", scrimDark2: "#0d0d12",
-        accentSoft: "#7bb6f4", accentSoft2: "#5b8def", accentLink: "#9ec1ff",
-        accentLight: "#cfe0ff", accentLight2: "#cfd6e0",
-        accentBright: "#e7ecf3", accentText: "#e5ecf5", accentNeutral: "#e6e8ec",
-        accentMuted: "#7d8896", accentMuted2: "#7a8492",
-        ok: "#7ee0a8", okBright: "#3ecf5a", okSoft: "#a6e3a1", okSoft2: "#6ee7b7", okMute: "#3aa66a",
+        teal: "#94e2d5", green: "#a6e3a1", yellow: "#f9e2af", peach: "#fab387",
+        red: "#f38ba8", pink: "#f5c2e7", lavender: "#b4befe", rosewater: "#f5e0dc",
+        flamingo: "#f2cdcd", maroon: "#eba0ac", panelBg: "#2a2a36", panelBgAlt: "#2a2a35",
+        panelTint: "#22223a", panelHi: "#1a1a2e", panelHi2: "#1a1a26", scrimDark: "#0e0e16",
+        scrimDark2: "#0d0d12", accentSoft: "#7bb6f4", accentSoft2: "#5b8def", accentLink: "#9ec1ff",
+        accentLight: "#cfe0ff", accentLight2: "#cfd6e0", accentBright: "#e7ecf3", accentText: "#e5ecf5",
+        accentNeutral: "#e6e8ec", accentMuted: "#7d8896", accentMuted2: "#7a8492", ok: "#7ee0a8",
+        okBright: "#3ecf5a", okSoft: "#a6e3a1", okSoft2: "#6ee7b7", okMute: "#3aa66a",
         warn: "#ffd166", warnSoft: "#fde68a", warnBright: "#facc15", warnTint: "#fce5b6",
         danger: "#ff6b6b", dangerSoft: "#ff8e8e", dangerTint: "#fca5a5", dangerStrong: "#f87171",
-        violet: "#b39ddb", violetSoft: "#c084fc", violetTint: "#d8b4fe",
-        // common neutrals (CSS shorthand collapsed to canonical 6-char hex)
-        white: "#ffffff", black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc",
-        gray300: "#aaaaaa", gray400: "#888888", gray500: "#666666", gray600: "#555555",
-        gray700: "#444444", gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
-        // __P0_1B_EXTRAS__
-        accentVivid: "#7c5cff", panelDeep: "#15151c", cyanBright: "#55bbff", dangerBg: "#3a1e29",
-        slate400: "#94a3b8", okBg: "#3a5f50", panelDeep2: "#161a22", blueDim: "#5b9bd5",
-        surface1Alt: "#3a3a4a", scrimDark3: "#0e0e14", panelDeep3: "#141821", panelDeep4: "#0f1218",
-        slate500: "#6b7280", okVivid: "#4ade80", gray350: "#999999", neutral900: "#2a2a2a",
-        okBg2: "#2d4a3e", dangerBg2: "#4a2d2d", dangerBg3: "#5f3a3a", blueSoft: "#a1c4fd",
-        gray150: "#dddddd", slateLight: "#9aa6b2", slate300: "#9ca3af", dangerSoft2: "#ff7a7a",
-        blueDeep: "#2c4a82", peachBg: "#5a3a30", peachSoft: "#ffd1a3", slate350: "#8b96a5",
-        gray120: "#e6e6e6", neutral850: "#3a3a3a", fgAltLight: "#e8ecf1", cyanMid: "#5bd3ef",
-        violetMid: "#a06fd0", dangerMid: "#e25c5c", amberDim: "#a89060", amberMid: "#d4a04a",
-        okPale: "#9fe39f", neutral950: "#1e1e1e", neutral990: "#111111", gray110: "#eeeeee",
-        gray250: "#bbbbbb", neutral955: "#1c1c1c", scrimDark4: "#0a0a1a", okBgDark: "#1e3a2a",
-        warnBg: "#3a361e", warnBg2: "#3a311e", okBgDark2: "#16331f", okBright2: "#7be089",
-        warnBg3: "#3a2e15", amberSoft: "#f0c764", amberStrong: "#e3a93b", dangerBgDark: "#3a1818",
-        dangerSoft3: "#ff8b8b", dangerMid2: "#e25151", panelDeep5: "#101820", panelDeep6: "#1f2c3a",
-        panelDeep7: "#0a1218", panelDeep8: "#1a2632", peachMid: "#d58a3e", panelDeep9: "#2a3a4a",
-        blueBg: "#1e3a5f", okBgDark3: "#1a3a1a", warnBg4: "#3a2a1a", blueLink: "#003399",
-        okStrong: "#22d65a", dangerHot: "#ff4466", violetBg: "#583444", gray050: "#f5f5f5",
-        gray220: "#c0c0c0", gray360: "#999999", blueAction: "#1a73e8", gray450: "#777777",
-        okDeep: "#2e7d32", panelMid: "#3a5068", panelMid2: "#2a3040", panelMid3: "#2a4058",
-        panelMid4: "#1a2030", blueSoft2: "#64b5f6", pinkMid: "#ff6e9c", okMid: "#81c784",
-        amberSoft2: "#ffd54f", cyanSoft: "#4dd0e1", amberMid2: "#ffa726", okPale2: "#c5e1a5",
-        violetSoft2: "#ce93d8", slate450: "#90a4ae", dangerTint2: "#ef9a9a", tealMid: "#4db6ac",
-        dangerSoft4: "#e57373", panelDeep10: "#16213e", panelDeep11: "#1e1e28", surface2Alt: "#3a3a48",
-        peachVivid: "#ff8800", neutral920: "#222222", okBrightAlt: "#55dd55", dangerHotAlt: "#ee5555",
-        amberHotAlt: "#ffcc66", panelTintAlt: "#222234", scrimDark5: "#101018", panelBgAlt2: "#2a2a3e",
-        scrimDark6: "#0f0f17", okMid2: "#7fd17a", violetBgAlt: "#332233", neutral910: "#232323",
-        neutral940: "#1f1f1f", cyanBright2: "#66ccff", scrimDark7: "#181820", slateMute: "#7d8590",
-    },
-    latte: {
-        bg: "#eff1f5", bg2: "#e6e9ef", bg3: "#dce0e8",
-        surface0: "#ccd0da", surface1: "#bcc0cc", surface2: "#acb0be",
-        overlay0: "#9ca0b0", overlay1: "#8c8fa1", overlay2: "#7c7f93",
-        fg: "#4c4f69", sub: "#5c5f77", subtext1: "#5c5f77", dim: "#8c8fa1",
-        border: "#bcc0cc",
-        // Light variant: highlightBase flips to dark so overlays remain visible.
-        highlightBase: "#000000", shadowBase: "#000000",
-        mauve: "#8839ef", blue: "#1e66f5", sky: "#04a5e5", sapphire: "#209fb5",
-        teal: "#179299", green: "#40a02b", yellow: "#df8e1d",
-        peach: "#fe640b", red: "#d20f39", pink: "#ea76cb",
-        lavender: "#7287fd", rosewater: "#dc8a78", flamingo: "#dd7878", maroon: "#e64553",
-        panelBg: "#e6e9ef", panelBgAlt: "#dce0e8",
-        panelTint: "#dce0e8", panelHi: "#eff1f5", panelHi2: "#e6e9ef",
-        scrimDark: "#ccd0da", scrimDark2: "#bcc0cc",
-        accentSoft: "#1e66f5", accentSoft2: "#04a5e5", accentLink: "#1e66f5",
-        accentLight: "#dce0e8", accentLight2: "#ccd0da",
-        accentBright: "#4c4f69", accentText: "#4c4f69", accentNeutral: "#4c4f69",
-        accentMuted: "#6c6f85", accentMuted2: "#7c7f93",
-        ok: "#40a02b", okBright: "#40a02b", okSoft: "#40a02b", okSoft2: "#40a02b", okMute: "#40a02b",
-        warn: "#df8e1d", warnSoft: "#df8e1d", warnBright: "#df8e1d", warnTint: "#fce5b6",
-        danger: "#d20f39", dangerSoft: "#d20f39", dangerTint: "#d20f39", dangerStrong: "#d20f39",
-        violet: "#7287fd", violetSoft: "#8839ef", violetTint: "#b4befe",
-        white: "#ffffff", black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc",
-        gray300: "#aaaaaa", gray400: "#888888", gray500: "#666666", gray600: "#555555",
-        gray700: "#444444", gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
-        // __P0_1B_EXTRAS__
-        accentVivid: "#7c5cff", panelDeep: "#15151c", cyanBright: "#55bbff", dangerBg: "#3a1e29",
-        slate400: "#94a3b8", okBg: "#3a5f50", panelDeep2: "#161a22", blueDim: "#5b9bd5",
-        surface1Alt: "#3a3a4a", scrimDark3: "#0e0e14", panelDeep3: "#141821", panelDeep4: "#0f1218",
-        slate500: "#6b7280", okVivid: "#4ade80", gray350: "#999999", neutral900: "#2a2a2a",
-        okBg2: "#2d4a3e", dangerBg2: "#4a2d2d", dangerBg3: "#5f3a3a", blueSoft: "#a1c4fd",
-        gray150: "#dddddd", slateLight: "#9aa6b2", slate300: "#9ca3af", dangerSoft2: "#ff7a7a",
-        blueDeep: "#2c4a82", peachBg: "#5a3a30", peachSoft: "#ffd1a3", slate350: "#8b96a5",
-        gray120: "#e6e6e6", neutral850: "#3a3a3a", fgAltLight: "#e8ecf1", cyanMid: "#5bd3ef",
-        violetMid: "#a06fd0", dangerMid: "#e25c5c", amberDim: "#a89060", amberMid: "#d4a04a",
-        okPale: "#9fe39f", neutral950: "#1e1e1e", neutral990: "#111111", gray110: "#eeeeee",
-        gray250: "#bbbbbb", neutral955: "#1c1c1c", scrimDark4: "#0a0a1a", okBgDark: "#1e3a2a",
-        warnBg: "#3a361e", warnBg2: "#3a311e", okBgDark2: "#16331f", okBright2: "#7be089",
-        warnBg3: "#3a2e15", amberSoft: "#f0c764", amberStrong: "#e3a93b", dangerBgDark: "#3a1818",
-        dangerSoft3: "#ff8b8b", dangerMid2: "#e25151", panelDeep5: "#101820", panelDeep6: "#1f2c3a",
-        panelDeep7: "#0a1218", panelDeep8: "#1a2632", peachMid: "#d58a3e", panelDeep9: "#2a3a4a",
-        blueBg: "#1e3a5f", okBgDark3: "#1a3a1a", warnBg4: "#3a2a1a", blueLink: "#003399",
-        okStrong: "#22d65a", dangerHot: "#ff4466", violetBg: "#583444", gray050: "#f5f5f5",
-        gray220: "#c0c0c0", gray360: "#999999", blueAction: "#1a73e8", gray450: "#777777",
-        okDeep: "#2e7d32", panelMid: "#3a5068", panelMid2: "#2a3040", panelMid3: "#2a4058",
-        panelMid4: "#1a2030", blueSoft2: "#64b5f6", pinkMid: "#ff6e9c", okMid: "#81c784",
-        amberSoft2: "#ffd54f", cyanSoft: "#4dd0e1", amberMid2: "#ffa726", okPale2: "#c5e1a5",
-        violetSoft2: "#ce93d8", slate450: "#90a4ae", dangerTint2: "#ef9a9a", tealMid: "#4db6ac",
-        dangerSoft4: "#e57373", panelDeep10: "#16213e", panelDeep11: "#1e1e28", surface2Alt: "#3a3a48",
-        peachVivid: "#ff8800", neutral920: "#222222", okBrightAlt: "#55dd55", dangerHotAlt: "#ee5555",
-        amberHotAlt: "#ffcc66", panelTintAlt: "#222234", scrimDark5: "#101018", panelBgAlt2: "#2a2a3e",
-        scrimDark6: "#0f0f17", okMid2: "#7fd17a", violetBgAlt: "#332233", neutral910: "#232323",
-        neutral940: "#1f1f1f", cyanBright2: "#66ccff", scrimDark7: "#181820", slateMute: "#7d8590",
+        violet: "#b39ddb", violetSoft: "#c084fc", violetTint: "#d8b4fe", white: "#ffffff",
+        black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc", gray300: "#aaaaaa",
+        gray400: "#888888", gray500: "#666666", gray600: "#555555", gray700: "#444444",
+        gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
     },
     oled: {
-        bg: "#000000", bg2: "#0a0a10", bg3: "#000000",
-        surface0: "#11111b", surface1: "#1f2229", surface2: "#2a2a36",
-        overlay0: "#3a3a4a", overlay1: "#5a5f6b", overlay2: "#7f849c",
-        fg: "#e8ecf1", sub: "#9aa1ab", subtext1: "#bac2de", dim: "#5a5f6b",
-        border: "#1f2229",
-        highlightBase: "#ffffff", shadowBase: "#000000",
+        bg: "#000000", bg2: "#0a0a10", bg3: "#000000", surface0: "#11111b",
+        surface1: "#1f2229", surface2: "#2a2a36", overlay0: "#3a3a4a", overlay1: "#5a5f6b",
+        overlay2: "#7f849c", fg: "#e8ecf1", sub: "#9aa1ab", subtext1: "#bac2de",
+        dim: "#5a5f6b", border: "#1f2229", highlightBase: "#ffffff", shadowBase: "#000000",
         mauve: "#cba6f7", blue: "#89b4fa", sky: "#89dceb", sapphire: "#74c7ec",
-        teal: "#94e2d5", green: "#a6e3a1", yellow: "#f9e2af",
-        peach: "#fab387", red: "#f38ba8", pink: "#f5c2e7",
-        lavender: "#b4befe", rosewater: "#f5e0dc", flamingo: "#f2cdcd", maroon: "#eba0ac",
-        panelBg: "#0a0a10", panelBgAlt: "#0d0d12",
-        panelTint: "#0e0e14", panelHi: "#0e0e16", panelHi2: "#0f1218",
-        scrimDark: "#000000", scrimDark2: "#000000",
-        accentSoft: "#7bb6f4", accentSoft2: "#5b8def", accentLink: "#9ec1ff",
-        accentLight: "#cfe0ff", accentLight2: "#cfd6e0",
-        accentBright: "#e7ecf3", accentText: "#e5ecf5", accentNeutral: "#e6e8ec",
-        accentMuted: "#7d8896", accentMuted2: "#7a8492",
-        ok: "#7ee0a8", okBright: "#3ecf5a", okSoft: "#a6e3a1", okSoft2: "#6ee7b7", okMute: "#3aa66a",
+        teal: "#94e2d5", green: "#a6e3a1", yellow: "#f9e2af", peach: "#fab387",
+        red: "#f38ba8", pink: "#f5c2e7", lavender: "#b4befe", rosewater: "#f5e0dc",
+        flamingo: "#f2cdcd", maroon: "#eba0ac", panelBg: "#0a0a10", panelBgAlt: "#0d0d12",
+        panelTint: "#0e0e14", panelHi: "#0e0e16", panelHi2: "#0f1218", scrimDark: "#000000",
+        scrimDark2: "#000000", accentSoft: "#7bb6f4", accentSoft2: "#5b8def", accentLink: "#9ec1ff",
+        accentLight: "#cfe0ff", accentLight2: "#cfd6e0", accentBright: "#e7ecf3", accentText: "#e5ecf5",
+        accentNeutral: "#e6e8ec", accentMuted: "#7d8896", accentMuted2: "#7a8492", ok: "#7ee0a8",
+        okBright: "#3ecf5a", okSoft: "#a6e3a1", okSoft2: "#6ee7b7", okMute: "#3aa66a",
         warn: "#ffd166", warnSoft: "#fde68a", warnBright: "#facc15", warnTint: "#fce5b6",
         danger: "#ff6b6b", dangerSoft: "#ff8e8e", dangerTint: "#fca5a5", dangerStrong: "#f87171",
-        violet: "#b39ddb", violetSoft: "#c084fc", violetTint: "#d8b4fe",
-        white: "#ffffff", black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc",
-        gray300: "#aaaaaa", gray400: "#888888", gray500: "#666666", gray600: "#555555",
-        gray700: "#444444", gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
-        // __P0_1B_EXTRAS__
-        accentVivid: "#7c5cff", panelDeep: "#15151c", cyanBright: "#55bbff", dangerBg: "#3a1e29",
-        slate400: "#94a3b8", okBg: "#3a5f50", panelDeep2: "#161a22", blueDim: "#5b9bd5",
-        surface1Alt: "#3a3a4a", scrimDark3: "#0e0e14", panelDeep3: "#141821", panelDeep4: "#0f1218",
-        slate500: "#6b7280", okVivid: "#4ade80", gray350: "#999999", neutral900: "#2a2a2a",
-        okBg2: "#2d4a3e", dangerBg2: "#4a2d2d", dangerBg3: "#5f3a3a", blueSoft: "#a1c4fd",
-        gray150: "#dddddd", slateLight: "#9aa6b2", slate300: "#9ca3af", dangerSoft2: "#ff7a7a",
-        blueDeep: "#2c4a82", peachBg: "#5a3a30", peachSoft: "#ffd1a3", slate350: "#8b96a5",
-        gray120: "#e6e6e6", neutral850: "#3a3a3a", fgAltLight: "#e8ecf1", cyanMid: "#5bd3ef",
-        violetMid: "#a06fd0", dangerMid: "#e25c5c", amberDim: "#a89060", amberMid: "#d4a04a",
-        okPale: "#9fe39f", neutral950: "#1e1e1e", neutral990: "#111111", gray110: "#eeeeee",
-        gray250: "#bbbbbb", neutral955: "#1c1c1c", scrimDark4: "#0a0a1a", okBgDark: "#1e3a2a",
-        warnBg: "#3a361e", warnBg2: "#3a311e", okBgDark2: "#16331f", okBright2: "#7be089",
-        warnBg3: "#3a2e15", amberSoft: "#f0c764", amberStrong: "#e3a93b", dangerBgDark: "#3a1818",
-        dangerSoft3: "#ff8b8b", dangerMid2: "#e25151", panelDeep5: "#101820", panelDeep6: "#1f2c3a",
-        panelDeep7: "#0a1218", panelDeep8: "#1a2632", peachMid: "#d58a3e", panelDeep9: "#2a3a4a",
-        blueBg: "#1e3a5f", okBgDark3: "#1a3a1a", warnBg4: "#3a2a1a", blueLink: "#003399",
-        okStrong: "#22d65a", dangerHot: "#ff4466", violetBg: "#583444", gray050: "#f5f5f5",
-        gray220: "#c0c0c0", gray360: "#999999", blueAction: "#1a73e8", gray450: "#777777",
-        okDeep: "#2e7d32", panelMid: "#3a5068", panelMid2: "#2a3040", panelMid3: "#2a4058",
-        panelMid4: "#1a2030", blueSoft2: "#64b5f6", pinkMid: "#ff6e9c", okMid: "#81c784",
-        amberSoft2: "#ffd54f", cyanSoft: "#4dd0e1", amberMid2: "#ffa726", okPale2: "#c5e1a5",
-        violetSoft2: "#ce93d8", slate450: "#90a4ae", dangerTint2: "#ef9a9a", tealMid: "#4db6ac",
-        dangerSoft4: "#e57373", panelDeep10: "#16213e", panelDeep11: "#1e1e28", surface2Alt: "#3a3a48",
-        peachVivid: "#ff8800", neutral920: "#222222", okBrightAlt: "#55dd55", dangerHotAlt: "#ee5555",
-        amberHotAlt: "#ffcc66", panelTintAlt: "#222234", scrimDark5: "#101018", panelBgAlt2: "#2a2a3e",
-        scrimDark6: "#0f0f17", okMid2: "#7fd17a", violetBgAlt: "#332233", neutral910: "#232323",
-        neutral940: "#1f1f1f", cyanBright2: "#66ccff", scrimDark7: "#181820", slateMute: "#7d8590",
+        violet: "#b39ddb", violetSoft: "#c084fc", violetTint: "#d8b4fe", white: "#ffffff",
+        black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc", gray300: "#aaaaaa",
+        gray400: "#888888", gray500: "#666666", gray600: "#555555", gray700: "#444444",
+        gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
+    },
+    latte: {
+        bg: "#eff1f5", bg2: "#e6e9ef", bg3: "#dce0e8", surface0: "#ccd0da",
+        surface1: "#bcc0cc", surface2: "#acb0be", overlay0: "#9ca0b0", overlay1: "#8c8fa1",
+        overlay2: "#7c7f93", fg: "#4c4f69", sub: "#5c5f77", subtext1: "#5c5f77",
+        dim: "#8c8fa1", border: "#bcc0cc", highlightBase: "#000000", shadowBase: "#000000",
+        mauve: "#8839ef", blue: "#1e66f5", sky: "#04a5e5", sapphire: "#209fb5",
+        teal: "#179299", green: "#40a02b", yellow: "#df8e1d", peach: "#fe640b",
+        red: "#d20f39", pink: "#ea76cb", lavender: "#7287fd", rosewater: "#dc8a78",
+        flamingo: "#dd7878", maroon: "#e64553", panelBg: "#e6e9ef", panelBgAlt: "#dce0e8",
+        panelTint: "#dce0e8", panelHi: "#eff1f5", panelHi2: "#e6e9ef", scrimDark: "#ccd0da",
+        scrimDark2: "#bcc0cc", accentSoft: "#1e66f5", accentSoft2: "#04a5e5", accentLink: "#1e66f5",
+        accentLight: "#dce0e8", accentLight2: "#ccd0da", accentBright: "#4c4f69", accentText: "#4c4f69",
+        accentNeutral: "#4c4f69", accentMuted: "#6c6f85", accentMuted2: "#7c7f93", ok: "#40a02b",
+        okBright: "#40a02b", okSoft: "#40a02b", okSoft2: "#40a02b", okMute: "#40a02b",
+        warn: "#df8e1d", warnSoft: "#df8e1d", warnBright: "#df8e1d", warnTint: "#fce5b6",
+        danger: "#d20f39", dangerSoft: "#d20f39", dangerTint: "#d20f39", dangerStrong: "#d20f39",
+        violet: "#7287fd", violetSoft: "#8839ef", violetTint: "#b4befe", white: "#ffffff",
+        black: "#000000", gray100: "#e0e0e0", gray200: "#cccccc", gray300: "#aaaaaa",
+        gray400: "#888888", gray500: "#666666", gray600: "#555555", gray700: "#444444",
+        gray800: "#333333", gray900: "#252525", gray950: "#1a1a1a",
     },
 };
 
-let _variant = "mocha";
-export let C = { ...PALETTES.mocha };
+const DERIVE = {accentVivid: ["C", "accent", 0.6804, 1.1975],
+    panelDeep: ["S", -0.0529, 0.1429, 0.6786],
+    cyanBright: ["C", "cyan", 0.6667, 1.4082],
+    dangerBg: ["T", "danger", 0.0235, 0.3182],
+    slate400: ["C", "slate", 0.651, 1.5831],
+    okBg: ["T", "ok", 0.151, 0.2418],
+    panelDeep2: ["S", -0.0392, 0.2143, 1.0179],
+    blueDim: ["C", "blue", 0.5961, 0.6446],
+    surface1Alt: ["S", 0.1098, 0.1212, 0.5758],
+    scrimDark3: ["S", -0.0824, 0.1765, 0.8382],
+    panelDeep3: ["S", -0.0451, 0.2453, 1.1651],
+    panelDeep4: ["S", -0.0725, 0.2308, 1.0962],
+    slate500: ["C", "slate", 0.4608, 0.6995],
+    okVivid: ["C", "ok", 0.5804, 1.2784],
+    gray350: ["A", 0.6, 0.0],
+    neutral900: ["A", 0.1647, 0.0],
+    okBg2: ["T", "ok", 0.0843, 0.2437],
+    dangerBg2: ["T", "danger", 0.0843, 0.2437],
+    dangerBg3: ["T", "danger", 0.151, 0.2418],
+    blueSoft: ["C", "blue", 0.8118, 1.0431],
+    gray150: ["A", 0.8667, 0.0],
+    slateLight: ["C", "slate", 0.651, 1.0554],
+    slate300: ["C", "slate", 0.649, 0.8309],
+    dangerSoft2: ["C", "danger", 0.7392, 1.2308],
+    blueDeep: ["C", "blue", 0.3412, 0.538],
+    peachBg: ["T", "peach", 0.1216, 0.3043],
+    peachSoft: ["C", "peach", 0.8196, 1.087],
+    slate350: ["C", "slate", 0.5961, 0.9879],
+    gray120: ["A", 0.902, 0.0],
+    neutral850: ["A", 0.2275, 0.0],
+    fgAltLight: ["C", "fg", 0.9275, 0.3805],
+    cyanMid: ["C", "cyan", 0.6471, 1.1578],
+    violetMid: ["C", "violet", 0.6255, 0.6082],
+    dangerMid: ["C", "danger", 0.6235, 0.859],
+    amberDim: ["C", "amber", 0.5176, 0.3401],
+    amberMid: ["C", "amber", 0.5608, 0.716],
+    okPale: ["C", "ok", 0.7569, 1.0137],
+    neutral950: ["A", 0.1176, 0.0],
+    neutral990: ["A", 0.0667, 0.0],
+    gray110: ["A", 0.9333, 0.0],
+    gray250: ["A", 0.7333, 0.0],
+    neutral955: ["A", 0.1098, 0.0],
+    scrimDark4: ["S", -0.0784, 0.4444, 2.1111],
+    okBgDark: ["T", "ok", 0.0235, 0.3182],
+    warnBg: ["T", "warn", 0.0235, 0.3182],
+    warnBg2: ["T", "warn", 0.0235, 0.3182],
+    okBgDark2: ["T", "ok", -0.0059, 0.3973],
+    okBright2: ["C", "ok", 0.6804, 1.1454],
+    warnBg3: ["T", "warn", 0.0059, 0.4684],
+    amberSoft: ["C", "amber", 0.6667, 0.9571],
+    amberStrong: ["C", "amber", 0.5608, 0.8716],
+    dangerBgDark: ["T", "danger", 0.0118, 0.4146],
+    dangerSoft3: ["C", "danger", 0.7725, 1.2308],
+    dangerMid2: ["C", "danger", 0.602, 0.8791],
+    panelDeep5: ["S", -0.0549, 0.3333, 1.5833],
+    panelDeep6: ["S", 0.0255, 0.3034, 1.441],
+    panelDeep7: ["S", -0.0824, 0.4118, 1.9559],
+    panelDeep8: ["S", 0.0, 0.3158, 1.5],
+    peachMid: ["C", "peach", 0.5392, 0.6984],
+    panelDeep9: ["S", 0.0784, 0.2759, 1.3103],
+    blueBg: ["T", "blue", 0.0961, 0.52],
+    okBgDark3: ["T", "ok", 0.0157, 0.381],
+    warnBg4: ["T", "warn", 0.0157, 0.381],
+    blueLink: ["C", "blue", 0.3, 1.0885],
+    okStrong: ["C", "ok", 0.4863, 1.3416],
+    dangerHot: ["C", "danger", 0.6333, 1.2308],
+    violetBg: ["T", "violet", 0.1255, 0.2571],
+    gray050: ["A", 0.9608, 0.0],
+    gray220: ["A", 0.7529, 0.0],
+    gray360: ["A", 0.6, 0.0],
+    blueAction: ["C", "blue", 0.5059, 0.8898],
+    gray450: ["A", 0.4667, 0.0],
+    okDeep: ["C", "ok", 0.3353, 0.854],
+    panelMid: ["S", 0.1686, 0.284, 1.3488],
+    panelMid2: ["S", 0.0588, 0.2075, 0.9858],
+    panelMid3: ["S", 0.1059, 0.3538, 1.6808],
+    panelMid4: ["S", -0.0039, 0.2973, 1.4122],
+    blueSoft2: ["C", "blue", 0.6784, 0.969],
+    pinkMid: ["C", "pink", 0.7157, 1.3922],
+    okMid: ["C", "ok", 0.6431, 0.711],
+    amberSoft2: ["C", "amber", 0.6549, 1.1622],
+    cyanSoft: ["C", "cyan", 0.5922, 1.002],
+    amberMid2: ["C", "amber", 0.5745, 1.1622],
+    okPale2: ["C", "ok", 0.7647, 0.9242],
+    violetSoft2: ["C", "violet", 0.7118, 0.5621],
+    slate450: ["C", "slate", 0.6235, 1.2231],
+    dangerTint2: ["C", "danger", 0.7706, 0.8941],
+    tealMid: ["C", "teal", 0.5078, 0.7294],
+    dangerSoft4: ["C", "danger", 0.6745, 0.8452],
+    panelDeep10: ["S", 0.0157, 0.4762, 2.2619],
+    panelDeep11: ["S", -0.0118, 0.1429, 0.6786],
+    surface2Alt: ["S", 0.1059, 0.1077, 0.5115],
+    peachVivid: ["C", "peach", 0.5, 1.087],
+    neutral920: ["A", 0.1333, 0.0],
+    okBrightAlt: ["C", "ok", 0.6, 1.2323],
+    dangerHotAlt: ["C", "danger", 0.6333, 1.007],
+    amberHotAlt: ["C", "amber", 0.7, 1.1622],
+    panelTintAlt: ["S", 0.0196, 0.2093, 0.9942],
+    scrimDark5: ["S", -0.0706, 0.2, 0.95],
+    panelBgAlt2: ["S", 0.0549, 0.1923, 0.9135],
+    scrimDark6: ["S", -0.0745, 0.2105, 1.0],
+    okMid2: ["C", "ok", 0.649, 0.8984],
+    violetBgAlt: ["T", "violet", 0.0176, 0.2],
+    neutral910: ["A", 0.1373, 0.0],
+    neutral940: ["A", 0.1216, 0.0],
+    cyanBright2: ["C", "cyan", 0.7, 1.4082],
+    scrimDark7: ["S", -0.0392, 0.1429, 0.6786],
+    slateMute: ["C", "slate", 0.5275, 0.6171],
+};
+
+// ── Derivation ─────────────────────────────────────────────────────────────
+// HSL rather than a perceptual space on purpose: these are UI chrome shades
+// read against a known ground, the relationships were measured in the same
+// space they are applied in, and it keeps the whole engine dependency-free
+// and cheap enough to run on every variant switch.
+
+function _hex2rgb(h) {
+    let s = h.replace("#", "");
+    if (s.length === 3) s = s.split("").map((c) => c + c).join("");
+    return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+}
+
+function _rgb2hex(c) {
+    return "#" + c.map((v) => {
+        const n = Math.max(0, Math.min(255, Math.round(v * 255)));
+        return n.toString(16).padStart(2, "0");
+    }).join("");
+}
+
+function _rgb2hsl([r, g, b]) {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+    if (mx === mn) return [0, 0, l];
+    const d = mx - mn;
+    const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    let h;
+    if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (mx === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+    return [h, s, l];
+}
+
+function _hsl2rgb(h, s, l) {
+    if (s === 0) return [l, l, l];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const f = (t) => {
+        t = ((t % 1) + 1) % 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+    };
+    return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+}
+
+const _clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * Place a surface at `bl + dl`, folding the offset back when the ground has
+ * no room left in that direction.
+ *
+ * A plain clamp looked fine in the average and destroyed the thing surfaces
+ * are FOR. `oled`'s ground is pure black, so every recessed offset hit the
+ * floor and seventeen distinct tokens - panelDeep, all five scrims, ten
+ * panelDeep variants - collapsed onto #000000. Elevation stopped existing:
+ * a panel, the scrim behind a modal and the page all painted the same colour,
+ * so nothing had an edge. `latte` had the mirror of it at the top, ten
+ * surfaces flattened onto #ffffff.
+ *
+ * Folding is what a designer does by hand in that situation: on a ground
+ * that is already black, "deeper" is drawn as a faintly LIGHTER charcoal,
+ * because there is nowhere below. Damped to 0.6 so a fold reads as a quieter
+ * step than a real one, and the shades stay distinct from each other.
+ */
+function _place(bl, dl) {
+    const FLOOR = 0.035, CEIL = 0.965;
+    let l = bl + dl;
+    if (l < FLOOR) l = FLOOR + (FLOOR - l) * 0.6;
+    else if (l > CEIL) l = CEIL - (l - CEIL) * 0.6;
+    return _clamp(l);
+}
+
+/** Which core key each chip/tint family takes its hue from. */
+const ANCHOR = {
+    ok: "green", danger: "red", warn: "yellow", amber: "yellow", blue: "blue",
+    cyan: "sky", violet: "mauve", peach: "peach", pink: "pink", teal: "teal",
+    accent: "mauve", slate: "overlay1", fg: "fg",
+};
+
+/**
+ * Expand a 75-key core into the full 183-key palette.
+ * @param {object} core - the hand-authored keys
+ * @param {boolean} dark - true if the ground is darker than its text
+ * @returns {object} core plus the 108 derived shades
+ */
+function buildPalette(core, dark) {
+    const [, , bl] = _rgb2hsl(_hex2rgb(core.bg));
+    // Hue and saturation come from a TONE ANCHOR rather than from bg itself,
+    // because `oled`'s ground is pure black: its hue is undefined and its
+    // saturation is zero, so anchoring on it would strip the blue out of
+    // every surface and leave a flat grey theme. surface1 is the nearest
+    // thing to "the ground, but with its colour still attached".
+    const raw = _rgb2hsl(_hex2rgb(core.bg));
+    const [bh, bs] = raw[1] < 0.05 ? _rgb2hsl(_hex2rgb(core.surface1)) : raw;
+    // Only chips flip. Surfaces keep their elevation offset in both themes.
+    // On a light theme a shade tuned against #1e1e2e has to land on the other
+    // side of mid, or it disappears into the page.
+    const mirror = (l) => (dark ? l : _clamp(1 - l));
+    const out = { ...core };
+    for (const [key, rule] of Object.entries(DERIVE)) {
+        const kind = rule[0];
+        if (kind === "A") {
+            const [, l, s] = rule;
+            out[key] = _rgb2hex(_hsl2rgb(bh, Math.min(s + bs * 0.30, 0.34), mirror(l)));
+        } else if (kind === "S") {
+            // Two numbers, and the shade is their geometric mean.
+            //
+            // Copying mocha's absolute saturation left night's panels GREY on
+            // an indigo ground - the "nothing matches" problem this block
+            // exists to fix. Scaling by the palette's own ground saturation
+            // instead overshot the other way: night's ground is twice as
+            // saturated as mocha's, so panels came out vivid blue-violet,
+            // which is not what a panel is for. Half of each keeps the
+            // palette's character without letting chrome shout, and reduces
+            // to mocha's own value exactly when the palette IS mocha.
+            //
+            // The offset is NOT mirrored here, unlike a chip. Recessed means
+            // darker on a light theme too - that is how elevation reads in
+            // both. Mirroring it sent latte's "deep" panels to pure white,
+            // because its ground already sits at the top of the range.
+            const [, dl, sAbs, sr] = rule;
+            const sMix = Math.sqrt(sAbs * _clamp(sr * bs));
+            out[key] = _rgb2hex(_hsl2rgb(bh, _clamp(sMix), _place(bl, dl)));
+        } else if (kind === "T") {
+            // Same reasoning as S for the offset: a tinted backing sits at
+            // the ground's elevation, which does not flip with the theme.
+            const [, fam, dl, s] = rule;
+            const fh = _rgb2hsl(_hex2rgb(core[ANCHOR[fam]]))[0];
+            out[key] = _rgb2hex(_hsl2rgb(fh, _clamp(s), _place(bl, dl)));
+        } else {
+            const [, fam, l, sr] = rule;
+            const [ah, as] = _rgb2hsl(_hex2rgb(core[ANCHOR[fam]]));
+            out[key] = _rgb2hex(_hsl2rgb(ah, _clamp(as * sr),
+                                         _clamp(mirror(l), 0.06, 0.96)));
+        }
+    }
+    return out;
+}
+
+/** Which variants read as dark. Drives every sign flip above. */
+const IS_DARK = { night: true, mocha: true, oled: true, latte: false };
+
+const PALETTES = Object.fromEntries(
+    Object.entries(CORE).map(([name, core]) => [name, buildPalette(core, IS_DARK[name])]),
+);
+
+let _variant = "night";
+export let C = { ...PALETTES.night };
 
 // Convenience flat-exports: a subset of palette keys imported by name in
 // spline_mask_editor.js, spline_mask_tracker.js, and c2c_maskops_health.js.
@@ -638,14 +840,15 @@ if (!window.__C2C_THEME_REG__) { window.__C2C_THEME_REG__ = true; try {
             {
                 id: "c2c.theme.variant",
                 name: "C2C → Theme variant",
-                tooltip: "Catppuccin variant used across every C2C panel/HUD.",
+                tooltip: "Palette used across every C2C panel, HUD and widget.",
                 type: "combo",
                 options: [
-                    { value: "mocha", text: "Mocha (default dark)" },
-                    { value: "latte", text: "Latte (light)" },
+                    { value: "night", text: "Night (default) — indigo ground, violet accent" },
+                    { value: "mocha", text: "Mocha (Catppuccin dark)" },
                     { value: "oled",  text: "OLED (true black)" },
+                    { value: "latte", text: "Latte (light)" },
                 ],
-                defaultValue: "mocha",
+                defaultValue: "night",
                 onChange: (v) => setVariant(v),
             },
             {
