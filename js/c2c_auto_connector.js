@@ -46,6 +46,10 @@ function firstFreeOutput(srcNode, requiredType) {
 
 function autoWire(newNode) {
     if (!newNode || !_lastNode || _lastNode === newNode) return;
+    // The remembered node may since have been deleted, or belong to another
+    // workflow tab / subgraph: wiring it would fail ("node doesn't belong to
+    // any graph") or cross graphs. Only wire within the same live graph.
+    if (!_lastNode.graph || _lastNode.graph !== newNode.graph) { _lastNode = null; return; }
     if (!_lastNode.outputs?.length || !newNode.inputs?.length) return;
 
     // Try every input of newNode (first compatible wins).

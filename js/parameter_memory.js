@@ -609,7 +609,7 @@ function _applyPreset(node, name) {
   if (applied > 0) {
     node.setDirtyCanvas?.(true, true);
     const orig = node.bgcolor;
-    node.bgcolor = "var(--c2c-surface0)";
+    node.bgcolor = C.surface0;   // canvas colour: a var() string flashed black
     setTimeout(() => { node.bgcolor = orig; node.setDirtyCanvas?.(true, true); }, 300);
   }
 }

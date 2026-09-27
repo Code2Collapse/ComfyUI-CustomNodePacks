@@ -111,6 +111,40 @@ process.stdout.write(JSON.stringify(out));
     assert not wrong, wrong
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_a_node_smaller_than_its_content_is_grown_and_never_shrunk(tmp_path):
+    """DOM widgets arrive in onNodeCreated, after sizing: 275 fresh nodes came
+    out 8-19px short with their bottom row clipped, small ones narrower than
+    their own title. Grow to computeSize, never shrink."""
+    src = CANONICAL.read_text(encoding="utf-8")
+    start = src.index("/** Grow `node`")
+    end = src.index("function enabled()")
+    probe = tmp_path / "fit.mjs"
+    probe.write_text(src[start:end] + r'''
+const strip = { element: { tagName: "DIV" } };
+const mk = (w, h, mw, mh, widgets = [strip]) => ({ size: [w, h], computeSize: () => [mw, mh],
+  widgets, setSize(s) { this.size = s; }, setDirtyCanvas() {} });
+// no DOM widget / only a textarea / a virtual reroute: small on purpose, untouched
+const plain = mk(154, 45, 210, 53, []);
+const texty = mk(154, 45, 210, 53, [{ element: { tagName: "TEXTAREA" } }]);
+const reroute = Object.assign(mk(40, 30, 270, 26), { isVirtualNode: true });
+const shortNode = mk(270, 233, 210, 241);
+const tallNode = mk(400, 600, 210, 241);       // the user made it bigger
+const narrow = mk(154, 45, 210, 53);           // "Invert (Nuke..." - both sides short
+const broken = { size: [1, 1], widgets: [strip], computeSize() { throw new Error("x"); } };
+const out = [fitToContent(shortNode), shortNode.size, fitToContent(tallNode), tallNode.size,
+             fitToContent(narrow), narrow.size, fitToContent(broken), fitToContent(null),
+             fitToContent(plain), plain.size, fitToContent(texty), fitToContent(reroute), reroute.size];
+process.stdout.write(JSON.stringify(out));
+''', encoding="utf-8")
+    p = subprocess.run([shutil.which("node"), str(probe)], capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr[:600]
+    assert json.loads(p.stdout) == [True, [270, 241], False, [400, 600],
+                                    True, [210, 53], False, False,
+                                    False, [154, 45], False, False, [40, 30]]
+    assert "requestAnimationFrame(() => fitToContent(node))" in src
+
+
 def test_the_setting_is_registered_once_and_read_by_every_copy():
     src = CANONICAL.read_text(encoding="utf-8")
     assert "if (!window.__C2C_BRAND_REG__)" in src

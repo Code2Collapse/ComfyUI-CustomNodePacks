@@ -76,6 +76,9 @@ app.registerExtension({
   // ── Backend node hooks ─────────────────────────────────────────────
   beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name !== NODE_TYPE) return;
+    // A dot, like core's own reroute: no title bar (at 40px it showed "Uni").
+    nodeType.title_mode = LiteGraph.NO_TITLE;
+    nodeType.collapsable = false;
     nodeType.prototype.onConnectInput  = () => true;
     nodeType.prototype.onConnectOutput = () => true;
   },
@@ -85,11 +88,17 @@ app.registerExtension({
     if (node.comfyClass !== NODE_TYPE) return;
 
     node.setSize([NODE_WIDTH, NODE_HEIGHT]);
-    node.color   = "var(--c2c-panelHi)";
-    node.bgcolor = "var(--c2c-panelHi)";
+    // Canvas colours: C resolves the palette key to a real colour. A "var()"
+    // string here painted the node box black (canvas cannot parse var()).
+    node.color   = C.panelHi;
+    node.bgcolor = C.panelHi;
     node.shape   = LiteGraph.BOX_SHAPE;
     node.serialize_widgets = false;
     node.isVirtualNode = true;
+    // Slot captions ("anything", "output") were drawn either side of a 40px
+    // dot and ran into each other. Display labels only: the input's NAME is
+    // what the backend keys the prompt by, so it stays.
+    for (const s of [...(node.inputs || []), ...(node.outputs || [])]) s.label = " ";
 
     if (!node.properties) node.properties = {};
     node.properties.showLabel = false;

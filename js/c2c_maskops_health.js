@@ -4,11 +4,12 @@
  * The MaskOpsMEC node lets users pick a `segmenter` and a `matter`, but the
  * readiness of each backend is only visible after opening the dropdown
  * (entries are tagged with `  [missing-deps]` / `  [experimental]`). This
- * extension surfaces that information on the node body itself: two small
- * status pills are drawn just under the title (one for the segmenter, one
+ * extension surfaces that information on the node itself: two small status
+ * pills sit at the right end of the title bar (one for the segmenter, one
  * for the matter), colored green for "ready", amber for "experimental",
  * and red for "missing-deps". Hovering shows a tooltip; clicking the pill
- * copies a hint string to the clipboard.
+ * copies a hint string to the clipboard. They never cover the title: on a
+ * narrow node they shorten to "S ✓" / "M ✓", and narrower still they hide.
  *
  * Implementation notes
  * --------------------
@@ -66,18 +67,33 @@ function _pillColors(status) {
     return STATUS_STYLE[status] || STATUS_STYLE["ready"];
 }
 
-/** Draw a single pill at (x,y). Returns its right edge. */
-function _drawPill(ctx, x, y, kind, name, status) {
-    const style = _pillColors(status);
+const PILL_FONT = "10px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif";
+const PILL_PAD_X = 6, PILL_H = 16, PILL_GAP = 6;
+
+function _pillText(kind, name, status, compact) {
     const isReady = status === "ready";
     const labelKind = kind === "seg" ? "S" : "M";
-    const text = isReady ? `${labelKind}:${name} ✓` : `${labelKind}:${name} • ${style.label}`;
+    if (compact) return isReady ? `${labelKind} ✓` : `${labelKind} •`;
+    return isReady ? `${labelKind}:${name} ✓` : `${labelKind}:${name} • ${_pillColors(status).label}`;
+}
+
+function _pillWidth(ctx, text) {
+    ctx.save();
+    ctx.font = PILL_FONT;
+    const w = Math.ceil(ctx.measureText(text).width) + PILL_PAD_X * 2;
+    ctx.restore();
+    return w;
+}
+
+/** Draw a single pill at (x,y). Returns its right edge. */
+function _drawPill(ctx, x, y, text, status) {
+    const style = _pillColors(status);
+    const isReady = status === "ready";
 
     ctx.save();
-    ctx.font = "10px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif";
-    const metrics = ctx.measureText(text);
-    const padX = 6, padY = 2, h = 16;
-    const w = Math.ceil(metrics.width) + padX * 2;
+    ctx.font = PILL_FONT;
+    const padX = PILL_PAD_X, h = PILL_H;
+    const w = Math.ceil(ctx.measureText(text).width) + padX * 2;
 
     // Background pill
     ctx.fillStyle = isReady ? "rgba(166,227,161,0.18)" : style.bg;
@@ -115,22 +131,37 @@ function _drawHealthPills(node, ctx) {
     const mat = _parseChoice(_widgetValue(node, "matter"));
     if (!seg.name && !mat.name) return;
 
-    // Position: just below the title bar, left-aligned, with small gap.
-    const startX = 8;
-    const y = -18;   // Litegraph draws title at y < 0; this sits just under.
-    let cursor = startX;
-    const geom = [];
+    // Right end of the title bar, vertically centred in it. (They used to sit
+    // at y=-18 from the left edge - inside the title bar, on top of the title
+    // text.) Title-bar space is y in [-titleH, 0].
+    const titleH = globalThis.LiteGraph?.NODE_TITLE_HEIGHT || 30;
+    const y = -Math.round((titleH + PILL_H) / 2);
+    const items = [];
+    if (seg.name) items.push({ kind: "seg", geomKind: "segmenter", name: seg.name, status: seg.status });
+    if (mat.name && mat.name !== "none") items.push({ kind: "mat", geomKind: "matter", name: mat.name, status: mat.status });
 
-    if (seg.name) {
-        const g = _drawPill(ctx, cursor, y, "seg", seg.name, seg.status);
-        geom.push({ kind: "segmenter", name: seg.name, status: seg.status,
-                    x: cursor, y, w: g.width, h: g.height });
-        cursor = g.right + 6;
+    ctx.save();
+    ctx.font = `${globalThis.LiteGraph?.NODE_TEXT_SIZE || 14}px ${globalThis.LiteGraph?.NODE_FONT || "sans-serif"}`;
+    const titleRight = titleH + ctx.measureText(node.getTitle?.() || node.title || "").width + 10;
+    ctx.restore();
+    const room = node.size[0] - 8 - titleRight;
+
+    let texts = null;
+    for (const compact of [false, true]) {
+        const t = items.map((it) => _pillText(it.kind, it.name, it.status, compact));
+        const total = t.reduce((a, s) => a + _pillWidth(ctx, s), 0) + PILL_GAP * (t.length - 1);
+        if (total <= room) { texts = t; break; }
     }
-    if (mat.name && mat.name !== "none") {
-        const g = _drawPill(ctx, cursor, y, "mat", mat.name, mat.status);
-        geom.push({ kind: "matter", name: mat.name, status: mat.status,
-                    x: cursor, y, w: g.width, h: g.height });
+    const geom = [];
+    if (texts) {
+        const total = texts.reduce((a, s) => a + _pillWidth(ctx, s), 0) + PILL_GAP * (texts.length - 1);
+        let cursor = node.size[0] - 8 - total;
+        items.forEach((it, i) => {
+            const g = _drawPill(ctx, cursor, y, texts[i], it.status);
+            geom.push({ kind: it.geomKind, name: it.name, status: it.status,
+                        x: cursor, y, w: g.width, h: g.height });
+            cursor = g.right + PILL_GAP;
+        });
     }
     node.__mec_health_geom = geom;
 }

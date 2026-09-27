@@ -335,6 +335,9 @@ function _injectStyle() {
 /* ── Panel mode (fixed inspector dock) ──────────────────────────────── */
 #${POPOVER_ID}.c2c-ne-panel-mode {
     position: fixed;
+    /* A dock, not a popover: the HUD tier, under ComfyUI's own dialogs. At the
+       popover tier it covered the node-search dialog's preview pane. */
+    z-index: var(--c2c-z-hud, 1000);
     display: flex !important;
     flex-direction: column;
     left: auto !important;

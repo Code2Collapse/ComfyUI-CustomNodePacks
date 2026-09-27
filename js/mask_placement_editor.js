@@ -357,8 +357,16 @@ function installEditor(node) {
         getValue: () => "",
         setValue: () => {},
         serialize: false,
+        // toolbar + a usable stage; without it the node came out 288 tall and
+        // the editor got 42px - only its toolbar showed
+        getMinHeight: () => 260,
     });
-    if (!node.size || node.size[0] < 380) node.size = [Math.max(node.size?.[0] || 0, 380), Math.max(node.size?.[1] || 0, 420)];
+    // Width and height each get their floor. (It used to enforce the height
+    // only when the node was ALSO narrower than 380px, so a 423px-wide node
+    // kept a height that left no room for the editor.)
+    if (!node.size || node.size[0] < 380 || node.size[1] < 420) {
+        node.size = [Math.max(node.size?.[0] || 0, 380), Math.max(node.size?.[1] || 0, 420)];
+    }
 
     const ro = new ResizeObserver(() => render());
     ro.observe(stage);

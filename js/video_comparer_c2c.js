@@ -846,7 +846,14 @@ app.registerExtension({
             });
 
             // ── Mount DOM widget + lock size ─────────────────
-            node.addDOMWidget("comparer_view", "COMPARER", wrap, { serialize: false });
+            // The view's own floor (CSS min-height 240 + 6px margins) must be
+            // declared: the mode filter resizes the node to computeSize(), and
+            // without it the 600px node collapsed to 244 with the view cut to a
+            // 40px strip.
+            node.addDOMWidget("comparer_view", "COMPARER", wrap, {
+                serialize: false,
+                getMinHeight: () => 252,
+            });
             // Default size: wide enough so each video gets ~360px in the
             // dual-player view (was 480 → each video ~224px, felt cramped).
             // User can still resize via the corner handle.

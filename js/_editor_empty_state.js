@@ -34,13 +34,37 @@ export function drawEditorEmptyState(ctx, w, h, z, glyph, lines) {
     ctx.fillStyle = "rgba(148,158,190,0.55)";
     ctx.font = `${28 / zz}px system-ui, sans-serif`;
     ctx.fillText(glyph || "✎", cx, cy - 26 / zz);
-    ctx.font = `600 ${13 / zz}px system-ui, sans-serif`;
-    ctx.fillStyle = "rgba(168,178,208,0.75)";
-    if (lines && lines.length) ctx.fillText(lines[0], cx, cy + 4 / zz);
-    ctx.font = `${11 / zz}px system-ui, sans-serif`;
-    ctx.fillStyle = "rgba(128,138,166,0.55)";
-    for (let i = 1; i < (lines?.length || 0); i++) {
-        ctx.fillText(lines[i], cx, cy + (4 + i * 18) / zz);
-    }
+    // Hint lines are word-wrapped to the canvas: on a small editor (Vector
+    // Roto's 1024px doc at 24% zoom is ~246px wide) they were clipped at both
+    // edges. Spacing is unchanged for lines that fit: 18px between hints,
+    // 14px for a wrapped continuation.
+    const maxW = Math.max(40 / zz, w - 20 / zz);
+    let y = cy + 4 / zz;
+    (lines || []).forEach((line, i) => {
+        if (i === 0) {
+            ctx.font = `600 ${13 / zz}px system-ui, sans-serif`;
+            ctx.fillStyle = "rgba(168,178,208,0.75)";
+        } else if (i === 1) {
+            ctx.font = `${11 / zz}px system-ui, sans-serif`;
+            ctx.fillStyle = "rgba(128,138,166,0.55)";
+        }
+        _wrap(ctx, line, maxW).forEach((part, j) => {
+            if (j > 0) y += 14 / zz;
+            ctx.fillText(part, cx, y);
+        });
+        y += 18 / zz;
+    });
     ctx.restore();
+}
+
+function _wrap(ctx, text, maxW) {
+    const out = [];
+    let line = "";
+    for (const word of String(text || "").split(/\s+/).filter(Boolean)) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && ctx.measureText(next).width > maxW) { out.push(line); line = word; }
+        else line = next;
+    }
+    out.push(line);
+    return out;
 }

@@ -182,6 +182,24 @@ def test_rebrand_v3_wraps_only_once():
     assert Node.define_schema().category == f"{ROOT}/MMX/Finish"
 
 
+def test_a_v3_node_inside_a_v1_mapping_is_moved_through_its_schema():
+    """NukeMax registers ReLight 2D (a V3 io.ComfyNode) in its V1 mapping.
+    ComfyUI builds that node's /object_info from define_schema(), so setting
+    CATEGORY on the class moved nothing in the real menu."""
+    Node, _ = _v3("NukeMax/Relight")
+    Node.GET_NODE_INFO_V1 = classmethod(lambda cls: {"category": cls.define_schema().category})
+
+    class Classic:
+        CATEGORY = "NukeMax/Color"
+
+    n = menu.rebrand_v1({"NukeMax_ReLight2D": Node, "NukeMax_Grade": Classic}, "NM",
+                        strip=("NukeMax",))
+    assert n == 2
+    assert Node.GET_NODE_INFO_V1()["category"] == f"{ROOT}/NM/Relight"
+    assert "CATEGORY" not in Node.__dict__, "must not mask the V3 classproperty"
+    assert Classic.CATEGORY == f"{ROOT}/NM/Color"
+
+
 def test_rebrand_v3_skips_classes_without_a_schema():
     class NotANode:
         pass

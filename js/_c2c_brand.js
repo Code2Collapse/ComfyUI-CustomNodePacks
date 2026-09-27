@@ -22,6 +22,16 @@
  *
  * Colours are literal hex on purpose: node colours are painted on the canvas,
  * and a canvas cannot parse var() - it silently paints black.
+ *
+ * FIT: a node is also grown to its own minimum size (computeSize), one frame
+ * after it is created. DOM widgets (status strips, scopes, editors) are added
+ * in onNodeCreated, after the node was sized, so fresh nodes came out 8-19px
+ * shorter than their content with the bottom row clipped (275 nodes measured
+ * across four packs), and small ones narrower than their own title
+ * ("Invert (Nuke..."). Only ever up, to the size LiteGraph would enforce on the
+ * first drag anyway: a size the user made larger, or a saved one that fits, is
+ * kept. Only nodes that carry such a DOM widget - the measured cause - are
+ * touched; a node that is small on purpose (a reroute dot) is left alone.
  */
 
 import { app } from "../../scripts/app.js";
@@ -68,6 +78,26 @@ export function belongsTo(nodeData, folder) {
     return _norm(own) === _norm(folder);
 }
 
+/** Grow `node` to its own minimum size; never shrink either side. Only for a
+ *  node carrying a DOM widget (a plain textarea does not count). */
+export function fitToContent(node) {
+    try {
+        if (!node || node.isVirtualNode) return false;
+        const dom = (node.widgets || []).some((w) => w?.element && w.element.tagName !== "TEXTAREA");
+        if (!dom) return false;
+        const min = node.computeSize?.();
+        if (!min || !node.size) return false;
+        const w = Math.max(node.size[0], min[0]);
+        const h = Math.max(node.size[1], min[1]);
+        if (w === node.size[0] && h === node.size[1]) return false;
+        node.setSize([w, h]);
+        node.setDirtyCanvas?.(true, true);
+        return true;
+    } catch {
+        return false;   // sizing is cosmetic; it must never break the node
+    }
+}
+
 function enabled() {
     try {
         const v = app.ui?.settings?.getSettingValue?.("c2c.brand.nodeColors", true);
@@ -109,6 +139,10 @@ app.registerExtension({
                 if (!this.color) this.color = BRAND.title;
                 if (!this.bgcolor) this.bgcolor = BRAND.body;
             }
+            // after every other onNodeCreated (kits add their DOM widgets
+            // there) and after a loaded workflow restores the saved size
+            const node = this;
+            requestAnimationFrame(() => fitToContent(node));
             return r;
         };
     },

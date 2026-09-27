@@ -270,7 +270,9 @@ const attachGallery = (node, { buttonLabel, fetchItems, itemKey, itemThumb, item
   }
   const grid = document.createElement("div");
   grid.style.cssText =
-    "display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow-y:auto;height:220px;padding:4px;font-size:11px;color:var(--c2c-sub);";
+    "display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;overflow-y:auto;height:100%;min-height:0;box-sizing:border-box;padding:4px;font-size:11px;color:var(--c2c-sub);";
+  // An empty box read as broken until something was browsed.
+  grid.textContent = "Nothing loaded yet. Press Browse.";
   const render = (items) => {
     grid.replaceChildren();
     if (!items.length) {
@@ -320,7 +322,10 @@ const attachGallery = (node, { buttonLabel, fetchItems, itemKey, itemThumb, item
     },
     { serialize: false },
   );
-  node.addDOMWidget("magnific_gallery", "div", grid, { serialize: false });
+  // The grid fills its slot; the slot reserves 220px of grid plus ComfyUI's
+  // 10px DOM margin on each side. (A fixed 220px grid in an unreserved slot
+  // hung past the node's bottom edge.)
+  node.addDOMWidget("magnific_gallery", "div", grid, { serialize: false, getMinHeight: () => 240 });
   node.setSize?.([Math.max(node.size?.[0] ?? 0, 340), Math.max(node.size?.[1] ?? 0, 460)]);
 };
 
@@ -744,11 +749,23 @@ const checkSignedIn = async () => {
   }
 };
 
+// Asked once, and only when a Magnific node is actually in the graph (added or
+// loaded). Magnific is a handful of nodes in a large pack: asking at every page
+// load nagged everyone who never uses it, on an empty canvas.
+let signInChecked = false;
+const checkSignedInOnce = () => {
+  if (signInChecked) return;
+  signInChecked = true;
+  checkSignedIn();
+};
+
 app.registerExtension({
   name: "magnific.auth",
   setup() {
     checkForUpdate();
-    checkSignedIn();
+  },
+  nodeCreated(node) {
+    if (String(node?.comfyClass || "").startsWith("Magnific")) checkSignedInOnce();
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
     const isSaveTo = nodeData.name === "MagnificSaveTo";

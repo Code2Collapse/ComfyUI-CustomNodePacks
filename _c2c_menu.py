@@ -72,7 +72,12 @@ def rebrand_v1(
 ) -> int:
     """Rewrite CATEGORY on every V1 node class in `mappings`. Returns how many
     changed. Never raises: a class that refuses the attribute keeps its old
-    category, which is a menu placement, not a failure."""
+    category, which is a menu placement, not a failure.
+
+    A V3 node registered through a V1 mapping (NukeMax's ReLight 2D is one) is
+    handed to rebrand_v3: ComfyUI builds its /object_info from the schema, so
+    assigning CATEGORY would only mask the classproperty while the menu kept
+    the old path."""
     strip = tuple(strip)
     changed = 0
     seen: set[int] = set()
@@ -80,6 +85,9 @@ def rebrand_v1(
         if id(cls) in seen:
             continue
         seen.add(id(cls))
+        if _is_v3(cls):
+            changed += rebrand_v3([cls], label, strip, rename)
+            continue
         old = getattr(cls, "CATEGORY", None)
         new = menu_category(old, label, strip, rename)
         if new != old:
@@ -89,6 +97,12 @@ def rebrand_v1(
             except Exception:
                 pass
     return changed
+
+
+def _is_v3(cls: Any) -> bool:
+    """A comfy_api io.ComfyNode: its node info comes from define_schema()."""
+    return callable(getattr(cls, "GET_NODE_INFO_V1", None)) and callable(
+        getattr(cls, "define_schema", None))
 
 
 def rebrand_v3(
