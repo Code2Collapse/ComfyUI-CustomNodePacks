@@ -59,6 +59,24 @@ a candidate set first.
 
 ---
 
+## Adapted front-end compatibility
+
+- **ComfyUI-Pixaroma** by pixaroma (<https://github.com/pixaroma/ComfyUI-Pixaroma>,
+  MIT) — Nodes 2.0 compatibility logic adapted into `js/c2c_ui/nodes2.js` from
+  `third_party/ComfyUI-Pixaroma/js/shared/nodes2.mjs`, `renderer_switch.mjs`, and
+  `resize_floor.mjs`. Visual components in `c2c_ui/` are original C2C design.
+
+  Copyright (c) 2026 pixaroma. Permission is hereby granted, free of charge, to any
+  person obtaining a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is furnished to do
+  so, subject to the following conditions: The above copyright notice and this
+  permission notice shall be included in all copies or substantial portions of the
+  Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+---
+
 ## Not ported — reference only
 
 Read while building, no code taken:
@@ -66,8 +84,6 @@ Read while building, no code taken:
 - **ComfyUI-NKD-VFX-Tools** — read as the standard for node UI quality.
   (Frequency Separate/Combine and Film Grain from NKD Basic Tools are ported in
   `nodes/frequency_grain/`.)
-- **ComfyUI-Pixaroma** by pixaroma (<https://github.com/pixaroma/ComfyUI-Pixaroma>,
-  MIT) — read for its front-end approach.
 
 ---
 
