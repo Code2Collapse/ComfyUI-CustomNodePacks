@@ -21,6 +21,12 @@ import { app } from "../../scripts/app.js";
 // Match any node whose python_module is this pack OR whose category starts
 // with one of these prefixes. Cheap & robust without a hard-coded list.
 const PACK_PREFIXES = [
+    // Every Code2Collapse node now lives under one menu root (see
+    // _c2c_menu.py). This fallback matters on installs whose folder names
+    // differ from python_module's checks above - the Linux box uses the GitHub
+    // names (ComfyUI-NukeNodePack, ...) - and without the root here the
+    // safety net would have silently switched off for them.
+    "\u{1F43A} C2C",
     "MEC", "MaskEditControl", "GLMImage", "NukeMax",
     "WanAnimal", "WanAnimate",
 ];

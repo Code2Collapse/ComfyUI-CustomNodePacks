@@ -26,6 +26,7 @@ COPIES = {
     "ComfyUI-MiniMaxSuite": "web",
     "ComfyUI-WanAnimatePreprocessV2": "js",
     "ComfyUI-GLM_Image": "web",
+    "ComfyUI-WanAnimalPreprocessor": "web",
 }
 
 
