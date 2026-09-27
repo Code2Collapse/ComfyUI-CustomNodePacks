@@ -54,7 +54,9 @@ def test_every_pack_ships_the_same_menu(pack):
     _present(pack)
     path = WORKSPACE / pack / "_c2c_menu.py"
     assert path.exists(), f"{pack} has no _c2c_menu.py - its nodes stay outside the root"
-    assert path.read_bytes() == CANONICAL.read_bytes(), f"{pack}'s _c2c_menu.py has drifted"
+    # text, not bytes: git may rewrite line endings per clone
+    assert path.read_text(encoding="utf-8") == CANONICAL.read_text(encoding="utf-8"), (
+        f"{pack}'s _c2c_menu.py has drifted")
 
 
 @pytest.mark.parametrize("pack", sorted(PACKS))
