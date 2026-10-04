@@ -28,6 +28,13 @@ try:
 except Exception:  # never block the pack on a preview tweak
     pass
 
+# ── Memory guard: release pack-owned GPU caches when ComfyUI frees VRAM ──
+try:
+    from .nodes._c2c_memguard import install as _c2c_memguard_install
+    _c2c_memguard_install()
+except Exception:  # never block the pack on a memory hook
+    pass
+
 # ── MaskEditControl nodes ─────────────────────────────────────────────
 # Unified composition wrappers — these replace 12 legacy node classes:
 #   MaskEditMEC      replaces MaskTransformXY, MaskDrawFrame, DrawShapeMEC,
@@ -701,6 +708,19 @@ except Exception as _fexc:  # pragma: no cover
         group="nodes",
     )
 
+# ── C2C Video loaders (S1a — lazy-handle decode nodes) ──
+_C2CVIDEO_MAPPINGS, _C2CVIDEO_DISPLAY = {}, {}
+try:
+    from .nodes.c2c_video import nodes_load as _c2c_video_nodes
+    _C2CVIDEO_MAPPINGS.update(_c2c_video_nodes.NODE_CLASS_MAPPINGS)
+    _C2CVIDEO_DISPLAY.update(_c2c_video_nodes.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _cv_exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "c2c_video_nodes", _cv_exc,
+        hint="C2C Video loaders need PyAV, OpenImageIO, torch, and psutil.",
+        group="nodes",
+    )
+
 # ── C2C Farm render-farm spooler (Tractor-style multi-cloud dispatch) ──
 _FARM_MAPPINGS, _FARM_DISPLAY = {}, {}
 try:
@@ -720,6 +740,7 @@ NODE_CLASS_MAPPINGS = {
     **_FOLDER_MAPPINGS,
     **_FARM_MAPPINGS,
     **_FLUID_MAPPINGS,
+    **_C2CVIDEO_MAPPINGS,
     **_MEC_MAPPINGS,
     **_MA_MAPPINGS,
     **_PAINT_MAPPINGS,
@@ -760,6 +781,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **_FOLDER_DISPLAY,
     **_FARM_DISPLAY,
     **_FLUID_DISPLAY,
+    **_C2CVIDEO_DISPLAY,
     **_MEC_DISPLAY,
     **_MA_DISPLAY,
     **_PAINT_DISPLAY,
@@ -994,6 +1016,18 @@ try:
         print("[C2C] sys metrics routes registered (/c2c/sys/metrics).")
     except Exception as _sm:
         print(f"[C2C] sys metrics deferred: {_sm}")
+    try:
+        from .nodes._c2c_vram_headroom import register_routes as _register_vram_headroom_routes
+        _register_vram_headroom_routes()
+        print("[C2C] browser VRAM headroom routes registered (/c2c/memory/browser_headroom).")
+    except Exception as _vh:
+        print(f"[C2C] browser VRAM headroom deferred: {_vh}")
+    try:
+        from .nodes.c2c_video.routes import register_routes as _register_c2c_video_routes
+        _register_c2c_video_routes()
+        print("[C2C] video loader routes registered (/c2c/video/probe, /c2c/video/preview).")
+    except Exception as _cvr:
+        print(f"[C2C] video loader routes deferred: {_cvr}")
     try:
         from .nodes._c2c_secrets import register_routes as _register_c2c_secrets_routes, backend_name as _c2c_secrets_backend
         _register_c2c_secrets_routes(_ps)

@@ -28,6 +28,11 @@ ai-local = []  # llama.cpp or Ollama is installed system-wide; no Python deps re
 Repository = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks"
 Issues = "https://github.com/Code2Collapse/ComfyUI-CustomNodePacks/issues"
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: long-running memory torture test",
+]
+
 [tool.comfy]
 PublisherId = "code2collapse"
 DisplayName = "ComfyUI-CustomNodePacks"
