@@ -126,10 +126,21 @@ _INPUT_FILE_PATTERNS = re.compile(
 )
 
 
+# Media extensions, mirrored by js/_fi_source_name.js (a test holds the two
+# in step). Includes the camera/VFX containers a plate arrives in (mxf, r3d,
+# braw, ari) and the stills a sequence can be made of (jp2, sgi, dng...).
+_VIDEO_EXTS = ("mp4", "mov", "webm", "mkv", "avi", "m4v", "flv", "wmv", "mpeg", "mpg",
+               "ts", "mts", "m2ts", "mxf", "r3d", "braw", "ari", "3gp", "ogv", "y4m", "dv",
+               "vob", "f4v")
+_IMAGE_EXTS = ("png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "tga", "exr",
+               "dpx", "cin", "hdr", "heic", "avif", "jp2", "j2k", "jxl", "psd", "sgi", "iff",
+               "pic", "pfm", "ppm", "dng", "cr2", "nef", "arw")
+_AUDIO_EXTS = ("wav", "mp3", "aac", "flac", "ogg", "m4a", "opus", "aiff")
+_SEQ_EXTS = ("exr", "dpx", "cin", "tif", "tiff", "tga", "png", "jpg", "jpeg", "hdr", "jp2",
+             "j2k", "sgi", "pic", "iff", "dng", "webp", "bmp")
+
 _KNOWN_EXT_RE = re.compile(
-    r"\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|"
-    r"png|jpe?g|gif|webp|bmp|tiff?|tga|exr|dpx|cin|hdr|heic|avif|"
-    r"wav|mp3|aac|flac|pdf|zip)$",
+    r"\.(" + "|".join(_VIDEO_EXTS + _IMAGE_EXTS + _AUDIO_EXTS + ("pdf", "zip")) + r")$",
     re.IGNORECASE,
 )
 
@@ -138,7 +149,7 @@ _KNOWN_EXT_RE = re.compile(
 #: _KNOWN_EXT_RE because only these carry a frame token worth stripping — a
 #: movie container never does, and stripping digits off 'take_002.mov' would
 #: destroy a real name.
-_SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr)$", __import__("re").IGNORECASE)
+_SEQ_EXT_RE = re.compile(r"^\.(" + "|".join(_SEQ_EXTS) + r")$", re.IGNORECASE)
 #: The trailing frame token: .1001  _0042  .####  .%04d  (end of stem only).
 #:
 #: THREE variants, because one rule cannot serve both conventions (2026-08-29).
@@ -158,11 +169,14 @@ _SEQ_EXT_RE = __import__("re").compile(r"^\.(exr|dpx|cin|tiff?|tga|png|jpe?g|hdr
 #: >=4 digits reads as a frame index (plate.0001.png), <=3 as a shot number
 #: (shot_010.png). A convention, not a law — shot_0100 and plate.001 still
 #: misfire, which is what `numbered_still_mode` is for.
-_SEQ_FRAME_RE_AUTO = __import__("re").compile(r"[._-](\d{4,8}|#{2,8}|%0?\d*d)$")
+#: Explicit frame syntax, every host's spelling: Nuke #### / %04d, Houdini
+#: $F4, Shake @@@@, and a [1001-1100] range. Never part of a real name.
+_FRAME_SYNTAX = r"#{1,8}|@{1,8}|%0?\d*d|\$F\d*|\[\d+[-:]\d+\]"
+_SEQ_FRAME_RE_AUTO = re.compile(r"(?:[._-]\d{4,8}|[._-]?(?:" + _FRAME_SYNTAX + r"))$", re.IGNORECASE)
 #: `sequence` — the exact pre-2026-08-29 behaviour, for bare-numbered stills.
-_SEQ_FRAME_RE_SEQUENCE = __import__("re").compile(r"[._-](\d{2,8}|#{2,8}|%0?\d*d)$")
+_SEQ_FRAME_RE_SEQUENCE = re.compile(r"(?:[._-]\d{2,8}|[._-]?(?:" + _FRAME_SYNTAX + r"))$", re.IGNORECASE)
 #: `identity` — explicit frame syntax only; never touch bare digits.
-_SEQ_FRAME_RE_IDENTITY = __import__("re").compile(r"[._-](#{2,8}|%0?\d*d)$")
+_SEQ_FRAME_RE_IDENTITY = re.compile(r"[._-]?(?:" + _FRAME_SYNTAX + r")$", re.IGNORECASE)
 
 NUMBERED_STILL_MODES = ("auto", "sequence", "identity")
 
@@ -229,6 +243,202 @@ def _resolve_source_path(source_path: str) -> str:
     return sp
 
 
+# ── Reading a source name out of ANY loader's value ──────────────────────
+# Mirrors js/_fi_source_name.js; tests/test_folder_incrementer_sources.py runs
+# one fixture table through both. A value is judged by what it IS:
+#   D:/shots/sh010_plate/          -> sh010_plate           (folder)
+#   D:/shots/sh010_plate/*.exr     -> sh010_plate.exr       (glob: the folder)
+#   D:/shots/sh010_plate/0001.exr  -> sh010_plate.exr       (bare frame: the folder)
+#   D:/shots/sh010/exr/            -> sh010                 (generic folder: parent)
+#   sh010.####.exr                 -> sh010.exr             (frame syntax dropped)
+#   clip.mov [input]               -> clip.mov
+_FILE_WIDGETS = (
+    "image", "video", "filename", "file", "audio", "url",
+    "source", "file_path", "filepath", "image_path", "video_path", "exr_path", "exr",
+    "uploaded_file", "media", "media_path", "clip", "plate", "movie",
+)
+_FOLDER_WIDGETS = (
+    "directory", "folder", "dir", "folder_path", "dir_path", "input_folder", "input_dir",
+    "image_folder", "images_folder", "images_path", "image_dir", "frames_path", "frames_dir",
+    "sequence_path", "sequence_folder", "sequence", "exr_sequence", "exr_folder", "exr_dir",
+    "load_path", "input_path", "path", "pattern",
+)
+_SKIP_WIDGETS = frozenset((
+    "filename_prefix", "output_path", "save_path", "output_dir", "out_path", "base_path",
+    "custom_name", "source_filename", "source_extension", "folder_name_override", "suffix",
+    "text", "prompt", "positive", "negative", "string", "label", "title",
+))
+_GENERIC_DIRS = frozenset((
+    "exr", "exrs", "dpx", "png", "pngs", "jpg", "jpgs", "jpeg", "tif", "tiff", "tga", "cin",
+    "frames", "frame", "images", "image", "imgs", "img", "seq", "seqs", "sequence", "sequences",
+    "render", "renders", "plate", "plates", "input", "inputs", "output", "outputs", "src",
+    "source", "sources", "media", "footage", "full", "fullres", "proxy", "proxies", "hires",
+    "lores", "uhd", "hd", "sd", "linear", "acescg", "aces", "srgb", "rec709", "log", "raw",
+    "beauty", "rgba", "rgb", "main", "data", "temp", "tmp", "cache", "comfyui", "video",
+    "videos", "movies", "clips",
+))
+_VERSION_DIR_RE = re.compile(r"^(v|ver|version|rev)\d+$", re.IGNORECASE)
+_RES_DIR_RE = re.compile(r"^(\d{3,5}x\d{3,5}|\d{3,4}[pk]|[1-8]k)$", re.IGNORECASE)
+_DRIVE_RE = re.compile(r"^[A-Za-z]:$")
+_ANNOTATION_RE = re.compile(r"\s*\[(input|output|temp)\]$", re.IGNORECASE)
+_FRAME_SYNTAX_END_RE = re.compile(r"[._-]?(?:" + _FRAME_SYNTAX + r")$", re.IGNORECASE)
+_ABS_PATH_RE = re.compile(r"^([A-Za-z]:[\\/]|\\\\|/|~[\\/])")
+
+
+def _meaningful_dir(segs) -> str:
+    """The last folder in *segs* that names something (not exr/, frames/, v003/)."""
+    real = [s for s in segs if s and not _DRIVE_RE.match(s) and s not in ("~", ".", "..")]
+    for s in reversed(real):
+        if s.lower() in _GENERIC_DIRS or _VERSION_DIR_RE.match(s) or _RES_DIR_RE.match(s):
+            continue
+        return s
+    return real[-1] if real else ""
+
+
+def _looks_like_path(v) -> bool:
+    if not isinstance(v, str) or len(v) > 4096:   # never copy a huge value to strip it
+        return False
+    s = v.strip()
+    if not s or len(s) > 2048 or "\n" in s or "\r" in s:
+        return False
+    if _ABS_PATH_RE.match(s):
+        return True
+    s = _ANNOTATION_RE.sub("", s)
+    return bool(_KNOWN_EXT_RE.search(s)) and "  " not in s
+
+
+def _source_from_value(value, folder_hint: bool = False):
+    """Judge one widget value. Returns ``(filename, kind)`` or ``None``.
+
+    kind: video | image | audio | file | sequence (numbered frames) | folder.
+    A folder yields its name with no extension."""
+    if not isinstance(value, str) or len(value) > 4096:
+        return None
+    s = value.strip()
+    if not s or len(s) > 2048 or "\n" in s or "\r" in s:
+        return None
+    s = _ANNOTATION_RE.sub("", s)
+    if re.match(r"^[a-z][a-z0-9+.-]*://", s, re.IGNORECASE):
+        s = re.sub(r"[?#].*$", "", s)
+    s = s.replace("\\", "/").rstrip("/")
+    segs = [x for x in s.split("/") if x]
+    if not segs:
+        return None
+    base, parents = segs[-1], segs[:-1]
+    m = _KNOWN_EXT_RE.search(base)
+    ext = m.group(0) if m else ""
+
+    if re.search(r"[*?]", base) or re.search(r"\{[^}]*\}", base):
+        d = _meaningful_dir(parents)
+        return (d + ext, "sequence") if d else None
+
+    if ext:
+        stem = base[: -len(ext)]
+        if _SEQ_EXT_RE.match(ext):
+            bare = _FRAME_SYNTAX_END_RE.sub("", stem)
+            if not bare or bare.isdigit():
+                d = _meaningful_dir(parents)
+                return (d + ext, "sequence") if d else None
+            numbered = bare != stem or bool(re.search(r"[._-]\d{2,8}$", stem))
+            return (bare + ext, "sequence" if numbered else "image")
+        low = ext[1:].lower()
+        kind = ("video" if low in _VIDEO_EXTS else "audio" if low in _AUDIO_EXTS
+                else "image" if low in _IMAGE_EXTS else "file")
+        return (base, kind)
+
+    if parents or folder_hint or re.match(r"^[A-Za-z]:", s):
+        d = _meaningful_dir(segs)
+        return (d, "folder") if d else None
+    return None
+
+
+def _source_from_inputs(inputs):
+    """The source a prompt node reads, from its ``inputs`` dict (widget values;
+    links are lists and are ignored). Same priority as the front-end: file
+    widgets, then folder widgets, then any value that is a path."""
+    if not isinstance(inputs, dict):
+        return None
+    for name in _FILE_WIDGETS:
+        r = _source_from_value(inputs.get(name), False)
+        if r:
+            return r
+    for name in _FOLDER_WIDGETS:
+        r = _source_from_value(inputs.get(name), True)
+        if r:
+            return r
+    for name, v in inputs.items():
+        if name in _SKIP_WIDGETS or name in _FILE_WIDGETS or name in _FOLDER_WIDGETS:
+            continue
+        if _looks_like_path(v):
+            r = _source_from_value(v, False)
+            if r:
+                return r
+    return None
+
+
+_KIND_RANK = {
+    "video": {"video": 4, "sequence": 3, "folder": 3, "image": 1, "file": 1, "audio": 0},
+    "image": {"image": 4, "sequence": 3, "folder": 3, "video": 1, "file": 1, "audio": 0},
+    "exr": {"sequence": 4, "folder": 3, "image": 2, "video": 1, "file": 1, "audio": 0},
+    "auto": {"video": 4, "sequence": 4, "folder": 4, "image": 2, "file": 1, "audio": 0},
+}
+_LOADER_WORD_RE = re.compile(
+    r"(load|read|import|open|sequence|footage|plate|batch|from.?(dir|folder|path))", re.IGNORECASE)
+
+
+def _detect_source_from_prompt(prompt, unique_id, choice: str = "auto") -> str:
+    """Server-side twin of the front-end detection, for runs where
+    source_filename arrived empty (API / headless submits, or a loader the UI
+    did not see). Walks UPSTREAM from this node through every link; if nothing
+    is wired, scans every loader in the prompt. Returns a filename or ""."""
+    if not isinstance(prompt, dict) or unique_id is None:
+        return ""
+    ranks = _KIND_RANK.get(choice, _KIND_RANK["auto"])
+
+    def score(r):
+        sc = ranks.get(r[1], 0)
+        if choice == "exr" and re.search(r"\.(exr|dpx|cin)$", r[0], re.IGNORECASE):
+            sc += 2
+        return sc
+
+    me = prompt.get(str(unique_id)) or {}
+    found, seen = [], set()
+    queue = [v[0] for v in (me.get("inputs") or {}).values() if isinstance(v, list) and len(v) == 2]
+    while queue and len(seen) < 400:
+        nid = str(queue.pop(0))
+        if nid in seen or nid == str(unique_id):
+            continue
+        seen.add(nid)
+        n = prompt.get(nid)
+        if not isinstance(n, dict):
+            continue
+        r = _source_from_inputs(n.get("inputs"))
+        if r:
+            found.append(r)
+            continue       # a source ends its branch; sibling branches still drain
+        for v in (n.get("inputs") or {}).values():
+            if isinstance(v, list) and len(v) == 2:
+                queue.append(v[0])
+    if not found:
+        for nid, n in prompt.items():
+            if str(nid) == str(unique_id) or not isinstance(n, dict):
+                continue
+            ct = str(n.get("class_type") or "")
+            title = str((n.get("_meta") or {}).get("title") or "")
+            if not (_LOADER_WORD_RE.search(ct) or _LOADER_WORD_RE.search(title)):
+                continue
+            r = _source_from_inputs(n.get("inputs"))
+            if r:
+                found.append(r)
+    if not found:
+        return ""
+    best = found[0]
+    for r in found[1:]:
+        if score(r) > score(best):
+            best = r
+    return best[0]
+
+
 def _resolve_stem_and_ext(
     raw: str, fallback_ext: str = "", numbered_still_mode: str = "auto"
 ) -> tuple[str, str]:
@@ -242,7 +452,15 @@ def _resolve_stem_and_ext(
     """
     if not raw or not str(raw).strip():
         return "", ""
-    basename = Path(str(raw).strip().replace("\\", "/")).name
+    raw = str(raw).strip()
+    # A path, glob or annotated name is judged first (folder name, parent of a
+    # bare frame, generic folders skipped) - the same rules the front-end
+    # applies to a loader's value. A plain filename skips this untouched.
+    if re.search(r"[\\/*?]|\[(input|output|temp)\]$", raw, re.IGNORECASE):
+        judged = _source_from_value(raw, folder_hint=True)
+        if judged:
+            raw = judged[0]
+    basename = Path(raw.replace("\\", "/")).name
 
     fb = str(fallback_ext or "").strip()
     if fb and not fb.startswith("."):
@@ -492,6 +710,10 @@ class FolderIncrementer:
                                "workflows. Leave False for normal use (the directory will be created by "
                                "ComfyUI's Save node when output is actually written)."}),
             },
+            # The whole prompt, so a run whose source_filename arrived empty
+            # (API submit, or a loader the UI did not recognise) can still
+            # find the source by reading every upstream loader's values.
+            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING",
@@ -579,7 +801,7 @@ class FolderIncrementer:
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", version_group="", reserve_version=False,
                   suffix="", suffix_mode="filename", source_extension="",
-                  source_path=""):
+                  source_path="", prompt=None, unique_id=None):
 
         sep = _get_path_sep(path_style)
         detected_os = _get_current_os()
@@ -613,6 +835,14 @@ class FolderIncrementer:
             source_filename = sp
 
         raw_source = (source_filename or "").strip()
+        # Nothing arrived from the UI: read the prompt ourselves, the same way
+        # the front-end reads the graph (any loader, file / folder / sequence).
+        if not raw_source and str(source_choice).lower() != "custom":
+            try:
+                raw_source = _detect_source_from_prompt(prompt, unique_id, str(source_choice).lower())
+            except Exception as exc:   # a name is cosmetic; never fail the run
+                print(f"[MEC] FolderIncrementer: prompt source scan failed: {exc}")
+                raw_source = ""
         if raw_source and _looks_like_input_file(raw_source):
             raw_source = ""
 

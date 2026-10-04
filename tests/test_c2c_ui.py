@@ -188,3 +188,279 @@ unsub();
 process.stdout.write(JSON.stringify({ live, fires }));
 """)
     assert data == {"live": 0, "fires": [True]}
+
+
+_CHART_PRELUDE = """
+globalThis.window = globalThis;
+globalThis.devicePixelRatio = 2;
+globalThis.LiteGraph = { vueNodesMode: false };
+globalThis.comfyAPI = { app: { app: { canvas: { ds: { scale: 1 } } } } };
+globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+globalThis.cancelAnimationFrame = () => {};
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async () => {} } }, configurable: true, writable: true });
+globalThis.getComputedStyle = () => ({
+  getPropertyValue: (p) => ({
+    "--cu-series-1": "#b494ff",
+    "--cu-sunken": "#0c0d23",
+    "--cu-edge": "#2a2a57",
+    "--cu-ink-dim": "#6f6d9b",
+    "--cu-ink-soft": "#bab7db",
+    "--cu-danger": "#f27a92",
+  }[p] || ""),
+});
+function makeEl(tag = "div") {
+  const kids = [];
+  const el = {
+    tagName: tag.toUpperCase(),
+    className: "",
+    hidden: false,
+    textContent: "",
+    style: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    dataset: {},
+    children: kids,
+    appendChild(c) { kids.push(c); c.parentElement = el; return c; },
+    listeners: {},
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    removeEventListener(type) { delete this.listeners[type]; },
+    click() { this.listeners.click?.(); },
+    querySelector(sel) {
+      const cls = sel.startsWith(".") ? sel.slice(1) : sel;
+      if (String(this.className).split(/\s+/).includes(cls)) return this;
+      for (const c of this.children) {
+        const hit = c.querySelector?.(sel);
+        if (hit) return hit;
+      }
+      return null;
+    },
+    querySelectorAll(sel) {
+      const out = [];
+      const cls = sel.startsWith(".") ? sel.slice(1) : sel;
+      if (String(this.className).split(/\s+/).includes(cls)) out.push(this);
+      for (const c of this.children) {
+        const nested = c.querySelectorAll?.(sel) || [];
+        for (const n of nested) out.push(n);
+      }
+      return out;
+    },
+    getBoundingClientRect() { return { left: 0, top: 0, width: 300, height: 160 }; },
+    clientWidth: 300,
+    clientHeight: 160,
+    parentElement: null,
+    setAttribute() {},
+    getAttribute() { return null; },
+  };
+  if (tag === "canvas") {
+    el.width = 300; el.height = 160;
+    el.getContext = () => ({
+      setTransform() {}, clearRect() {}, fillRect() {}, strokeRect() {},
+      beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {},
+      arc() {}, save() {}, restore() {}, translate() {}, rotate() {},
+      fillText() {}, setLineDash() {}, measureText(s) { return { width: String(s).length * 6 }; },
+      fillStyle: "", strokeStyle: "", lineWidth: 1, font: "", globalAlpha: 1,
+      textAlign: "", textBaseline: "",
+    });
+  }
+  return el;
+}
+globalThis.document = {
+  getElementById: () => null,
+  createElement: (tag) => makeEl(tag),
+  createElementNS: (_ns, tag) => makeEl(tag),
+  head: { appendChild() {} },
+  body: { appendChild() {} },
+};
+"""
+
+
+def _run_chart_probe(tmp_path, name, body):
+    chart_uri = (CANONICAL_DIR / "chart.js").resolve().as_uri()
+    probe = tmp_path / f"{name}.mjs"
+    probe.write_text(_CHART_PRELUDE + f'const M = await import("{chart_uri}");\n' + body, encoding="utf-8")
+    p = subprocess.run([shutil.which("node"), str(probe)], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr[:800]
+    return json.loads(p.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_nice_ticks_unit_interval(tmp_path):
+    data = _run_chart_probe(tmp_path, "ticks1", """
+process.stdout.write(JSON.stringify(M.niceTicks(0, 1, 5)));
+""")
+    assert data["step"] == 0.2
+    assert data["ticks"] == [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    assert data["decimals"] == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_nice_ticks_drift_range(tmp_path):
+    data = _run_chart_probe(tmp_path, "ticks2", """
+process.stdout.write(JSON.stringify(M.niceTicks(0, 3.4, 5)));
+""")
+    assert 0 < data["step"] <= 1.0
+    assert len(data["ticks"]) <= 6
+    assert data["ticks"][0] >= 0
+    assert data["ticks"][-1] <= 3.4 + data["step"]
+    assert data["decimals"] == 0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_nearest_index_edges(tmp_path):
+    data = _run_chart_probe(tmp_path, "near", """
+const xs = [0, 2, 4, 6];
+process.stdout.write(JSON.stringify({
+  empty: M.nearestIndex([], 1),
+  before: M.nearestIndex(xs, -1),
+  exact: M.nearestIndex(xs, 4),
+  between: M.nearestIndex(xs, 3.1),
+  after: M.nearestIndex(xs, 99),
+}));
+""")
+    assert data == {"empty": -1, "before": 0, "exact": 2, "between": 2, "after": 3}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_series_to_csv_shape(tmp_path):
+    data = _run_chart_probe(tmp_path, "csv", """
+const csv = M.seriesToCSV("step", [0, 1], [
+  { label: "a", values: [1.0, null] },
+  { label: "b", values: [2.0, 3.0] },
+]);
+const lines = csv.split("\\n");
+process.stdout.write(JSON.stringify({ header: lines[0], rows: lines.length - 1, row1: lines[1], row2: lines[2] }));
+""")
+    assert data["header"] == "step,a,b"
+    assert data["rows"] == 2
+    assert data["row1"] == "0,1,2"      # JavaScript number text: 1.0 prints as 1
+    assert data["row2"] == "1,,3"       # a missing value is an empty cell
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_line_chart_build_toggle_and_csv(tmp_path):
+    data = _run_chart_probe(tmp_path, "chart", """
+const chart = M.lineChart({
+  minHeight: 120,
+  xLabel: "step",
+  series: [{ id: "a", label: "A", color: "--cu-series-1", axis: "y" }],
+});
+chart.setState("ready");
+chart.setData([0, 1], { a: [1, 2] });
+const chip = chart.el.querySelector(".c2c-ui-chart__chip");
+const before = chart.toCSV().split("\\n").length;
+chip.click();
+const after = chart.toCSV().split("\\n").length;
+chart.destroy();
+process.stdout.write(JSON.stringify({ before, after, hasEl: !!chart.el }));
+""")
+    assert data["hasEl"]
+    assert data["before"] >= 2
+    assert data["after"] >= 2
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_line_chart_hides_readout_on_pointerleave(tmp_path):
+    data = _run_chart_probe(tmp_path, "hover", """
+const chart = M.lineChart({
+  minHeight: 120,
+  xLabel: "step",
+  series: [{ id: "a", label: "A", color: "--cu-series-1", axis: "y" }],
+});
+chart.setState("ready");
+chart.setData([0, 1, 2], { a: [1, 2, 3] });
+const plotWrap = chart.el.querySelector(".c2c-ui-chart__plot-wrap");
+const readout = chart.el.querySelector(".c2c-ui-chart__readout");
+plotWrap.listeners.pointermove({ clientX: 150 });
+const shown = !readout.hidden;
+plotWrap.listeners.pointerleave();
+const hidden = readout.hidden;
+chart.destroy();
+process.stdout.write(JSON.stringify({ shown, hidden }));
+""")
+    assert data["shown"] is True
+    assert data["hidden"] is True
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_line_chart_skips_plot_false_legend_chips(tmp_path):
+    data = _run_chart_probe(tmp_path, "legend", """
+const chart = M.lineChart({
+  series: [
+    { id: "a", label: "A", color: "--cu-series-1", axis: "y" },
+    { id: "carry", label: "carry", color: "--cu-series-2", axis: "y", plot: false, readout: true },
+  ],
+});
+const chips = chart.el.querySelectorAll(".c2c-ui-chart__chip");
+const hasCarry = chips.some((c) => (c.children[1]?.textContent || "").includes("carry"));
+chart.destroy();
+process.stdout.write(JSON.stringify({ count: chips.length, hasCarry }));
+""")
+    assert data["count"] == 1
+    assert data["hasCarry"] is False
+
+
+_ZOOM_PRELUDE = """
+globalThis.window = globalThis;
+globalThis.devicePixelRatio = 2;
+globalThis.LiteGraph = { vueNodesMode: false };
+let scale = 1;
+globalThis.comfyAPI = { app: { app: { canvas: { ds: { get scale() { return scale; }, set scale(v) { scale = v; } } } } } };
+const listeners = new Map();
+globalThis.addEventListener = (type, fn, opts) => {
+  if (!listeners.has(type)) listeners.set(type, []);
+  listeners.get(type).push({ fn, opts });
+};
+globalThis.removeEventListener = (type, fn, opts) => {
+  const arr = listeners.get(type) || [];
+  const i = arr.findIndex((e) => e.fn === fn);
+  if (i >= 0) arr.splice(i, 1);
+};
+globalThis.dispatchWheel = () => {
+  for (const { fn } of listeners.get("wheel") || []) fn({});
+};
+globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+globalThis.cancelAnimationFrame = () => {};
+globalThis.document = { getElementById: () => null, createElement: () => ({ style: {}, classList: { add() {} } }), head: { appendChild() {} } };
+"""
+
+
+def _run_zoom_probe(tmp_path, name, body):
+    uri = (CANONICAL_DIR / "nodes2.js").resolve().as_uri()
+    probe = tmp_path / f"{name}.mjs"
+    probe.write_text(_ZOOM_PRELUDE + f'const M = await import("{uri}");\n' + body, encoding="utf-8")
+    p = subprocess.run([shutil.which("node"), str(probe)], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr[:800]
+    return json.loads(p.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_on_zoom_change_shared_listeners(tmp_path):
+    data = _run_zoom_probe(tmp_path, "zoomshare", """
+const listenerCount = () => ["wheel","pointerup","keyup","resize"]
+  .reduce((n, t) => n + (listeners.get(t) || []).length, 0);
+const a = M.onZoomChange(() => {});
+const b = M.onZoomChange(() => {});
+const shared = listenerCount() === 4;
+a(); b();
+const torn = listenerCount() === 0;
+process.stdout.write(JSON.stringify({ shared, torn }));
+""")
+    assert data["shared"]
+    assert data["torn"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
+def test_on_zoom_change_fires_once_on_scale_change(tmp_path):
+    data = _run_zoom_probe(tmp_path, "zoomfire", """
+let calls = 0;
+const off = M.onZoomChange(() => { calls += 1; });
+dispatchWheel();
+const unchanged = calls;
+scale = 1.2;
+dispatchWheel();
+const changed = calls;
+off();
+process.stdout.write(JSON.stringify({ unchanged, changed }));
+""")
+    assert data["unchanged"] == 0
+    assert data["changed"] == 1

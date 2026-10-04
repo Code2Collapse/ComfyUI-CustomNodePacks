@@ -1,5 +1,7 @@
 ﻿import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { sourceFromWidgets, sourceFromValue, kindRank, KNOWN_EXT_RE as SOURCE_EXT_RE } from "./_fi_source_name.js";
 
 /**
  * FolderIncrementer JS companion
@@ -13,6 +15,38 @@ import { vueSyncNodeWidgets } from "./_widget_visibility.js";
  *   "video" → trace trigger_video, "auto" → prefer video if connected,
  *   else image, else legacy `trigger`.
  */
+// ── Resync on CHANGE, never on a timer ──────────────────────────────────────
+// Each node used to poll every 3 s: a walk of the whole graph (every node,
+// every widget) per incrementer, forever, including in background tabs. On a
+// big production graph with several incrementers that is steady main-thread
+// load for nothing. The front-end already announces every real edit - node
+// added or removed, link changed, a loader's file picked - as `graphChanged`
+// (ChangeTracker, the same signal its autosave uses). Listen to that, once for
+// the page, debounced; a hidden tab catches up when it becomes visible.
+const _fiLive = new Set();
+let _fiTimer = 0, _fiPendingHidden = false;
+function _fiResyncAll() {
+    _fiTimer = 0;
+    if (typeof document !== "undefined" && document.hidden) { _fiPendingHidden = true; return; }
+    for (const n of _fiLive) {
+        if (!n.graph) { _fiLive.delete(n); continue; }   // removed from its graph
+        try { n._fiSyncSource?.(); } catch (_) { /* a name preview must never break the page */ }
+    }
+}
+function _fiSchedule() {
+    if (_fiTimer) clearTimeout(_fiTimer);
+    _fiTimer = setTimeout(_fiResyncAll, 250);
+}
+if (!globalThis.__C2C_FI_EVENTS__) {
+    globalThis.__C2C_FI_EVENTS__ = true;
+    try { api.addEventListener("graphChanged", _fiSchedule); } catch (_) { /* old front-end */ }
+    if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && _fiPendingHidden) { _fiPendingHidden = false; _fiSchedule(); }
+        });
+    }
+}
+
 app.registerExtension({
     name: "Comfy.FolderIncrementer",
 
@@ -87,26 +121,18 @@ app.registerExtension({
             "pattern", "sequence", "frames_path",
         ];
 
-        // ── Check a single node for a filename widget ────────────────
+        // ── The source a single node reads ───────────────────────────
+        //    Judged by VALUE, not by node type or a fixed widget list
+        //    (_fi_source_name.js): a file, a folder, a glob or a sequence
+        //    pattern in ANY widget. The old rule kept a value only if it
+        //    contained a dot, so every folder loader - Load Images From Dir,
+        //    VHS Load Images, WAS Load Image Batch, EXR sequence folders - was
+        //    skipped and the name came from some other loader, or none.
+        function getSourceFromNode(n) {
+            try { return sourceFromWidgets(n?.widgets); } catch (_) { return null; }
+        }
         function getFilenameFromNode(n) {
-            if (!n?.widgets) return null;
-            for (const wName of FILENAME_WIDGETS) {
-                const w = n.widgets.find(w => w.name === wName);
-                if (w?.value && typeof w.value === "string" && w.value.trim()) {
-                    let v = w.value.trim();
-                    // Some widgets (OCIORead file_path, LoadEXRMEC source,
-                    // generic STRING path inputs) hold a FULL path, not a
-                    // basename. source_filename is documented basename-only
-                    // and the version-token regex would mis-fire on a
-                    // directory segment like ".../shot_v001/...". Take the
-                    // basename; basename of an already-basename value is a
-                    // no-op, so this is safe for every loader.
-                    const slash = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
-                    if (slash >= 0 && slash < v.length - 1) v = v.slice(slash + 1);
-                    if (v.includes(".")) return v;
-                }
-            }
-            return null;
+            return getSourceFromNode(n)?.filename || null;
         }
 
         // ── Resolve a Get node → find matching Set node ──────────────
@@ -215,10 +241,18 @@ app.registerExtension({
             "PixaromaLoadVideoFrame", "PixaromaLoadAudio",
         ];
 
+        // Any node that READS media counts, whatever pack it is from: its
+        // class or title says load/read/import, or it has no wired inputs at
+        // all (a pure source) - and in both cases a widget names a file or
+        // folder. The list above stays as the fast, certain path.
+        const LOADER_WORD_RE = /(load|read|import|open|sequence|footage|plate|batch|from.?(dir|folder|path))/i;
         function isInputLoader(n) {
             const cls = n.comfyClass || "";
             const title = n.title || "";
-            return INPUT_LOADER_TYPES.some(t => cls.includes(t) || title.includes(t));
+            if (INPUT_LOADER_TYPES.some(t => cls.includes(t) || title.includes(t))) return true;
+            if (!getSourceFromNode(n)) return false;
+            if (LOADER_WORD_RE.test(cls) || LOADER_WORD_RE.test(title)) return true;
+            return !(n.inputs || []).some(i => i && i.link != null);
         }
 
         // ── BFS chain traversal: COLLECT every filename in the source island ─
@@ -268,11 +302,11 @@ app.registerExtension({
                 // Filename present on this node? Record it (dedup), then stop
                 // this branch — but keep draining the queue so sibling branches
                 // (e.g. the video branch alongside a ref-image branch) are seen.
-                const fn = getFilenameFromNode(current);
-                if (fn) {
-                    if (!seenFn.has(fn)) {
-                        seenFn.add(fn);
-                        found.push({ filename: fn, cls: classifyFilename(fn) });
+                const src = getSourceFromNode(current);
+                if (src) {
+                    if (!seenFn.has(src.filename)) {
+                        seenFn.add(src.filename);
+                        found.push({ filename: src.filename, cls: src.kind });
                     }
                     continue;
                 }
@@ -304,18 +338,16 @@ app.registerExtension({
         // re-pick (was stuck), and a wired decode resolve to the VIDEO name.
         function pickFilenameByChoice(found, choice) {
             if (!found || !found.length) return null;
-            const firstOf = (c) => { const m = found.find(f => f.cls === c); return m ? m.filename : null; };
-            if (choice === "video") return firstOf("video") || firstOf("unknown") || found[0].filename;
-            if (choice === "image") return firstOf("image") || firstOf("unknown") || found[0].filename;
-            if (choice === "exr") {
-                // Prefer an exr/dpx/cin plate, then any sequence (video),
-                // then unknown, else closest.
-                const exr = found.find(f => isExrFile(f.filename));
-                return (exr && exr.filename) || firstOf("video")
-                    || firstOf("unknown") || found[0].filename;
+            // Best kind for the choice wins; among equals the CLOSEST (BFS
+            // order) wins. A folder / numbered sequence is a moving-image
+            // source, so it satisfies "video" and outranks a lone still.
+            let best = null, bestScore = -Infinity;
+            for (const f of found) {
+                let sc = kindRank(f.cls, choice);
+                if (choice === "exr" && isExrFile(f.filename)) sc += 2;
+                if (sc > bestScore) { best = f; bestScore = sc; }
             }
-            // auto
-            return firstOf("video") || firstOf("image") || found[0].filename;
+            return best ? best.filename : null;
         }
 
         // Thin wrapper kept for the call sites below.
@@ -363,7 +395,7 @@ app.registerExtension({
             return NAME_FORMATS.includes(v) ? v : "basename";
         }
 
-        const KNOWN_EXT_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|wmv|mpeg|mpg|ts|png|jpe?g|gif|webp|bmp|tiff?|tga|exr|dpx|cin|hdr|heic|avif|wav|mp3|aac|flac|pdf|zip)$/i;
+        const KNOWN_EXT_RE = SOURCE_EXT_RE;
 
         function stripExt(filename) {
             if (!filename) return { stem: "", ext: "" };
@@ -388,7 +420,8 @@ app.registerExtension({
         const SEQ_STRIP_FRAME_RE = /[._-](\d{2,8}|#{2,8}|%0?\d*d)$/;
         function stemFromPath(raw) {
             if (!raw) return "";
-            let v = String(raw).trim();
+            const judged = sourceFromValue(String(raw), true);
+            let v = judged ? judged.filename : String(raw).trim();
             const slash = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
             if (slash >= 0 && slash < v.length - 1) v = v.slice(slash + 1);
             const { stem, ext } = splitFilename(v);
@@ -420,21 +453,33 @@ app.registerExtension({
             return base; // basename
         }
 
+        // PERF: this used to write (and fire the callback) even when the value
+        // was already right. source_filename's callback schedules a re-sync,
+        // the re-sync writes the same stem again - an endless loop measured at
+        // ~150 laps/s and ~700 ms of main thread per second, per workflow with
+        // this node, at idle. Now: an unchanged value is left alone, and a
+        // callback fired by our own write does not schedule another sync.
         function forceWidgetRefresh(w, value) {
             if (!w) return;
             const v = value !== undefined ? value : w.value;
+            if (w.value === v && (!w.inputEl || w.inputEl.value === v)) return;
             w.value = v;
-            try { w.callback?.(v, app.canvas, node); } catch (_) {
-                try { w.callback?.(v); } catch (_2) {}
+            node._fiWriting = true;
+            try {
+                try { w.callback?.(v, app.canvas, node); } catch (_) {
+                    try { w.callback?.(v); } catch (_2) {}
+                }
+                if (w.inputEl) {
+                    w.inputEl.value = v;
+                    try {
+                        w.inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+                        w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+                    } catch (_) {}
+                }
+                try { node.onWidgetChanged?.(); } catch (_) {}
+            } finally {
+                node._fiWriting = false;
             }
-            if (w.inputEl) {
-                w.inputEl.value = v;
-                try {
-                    w.inputEl.dispatchEvent(new Event("input", { bubbles: true }));
-                    w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
-                } catch (_) {}
-            }
-            try { node.onWidgetChanged?.(); } catch (_) {}
         }
 
         function writeSourceWidgets(fullFilename) {
@@ -604,12 +649,15 @@ app.registerExtension({
             const allNodes = G()._nodes || G().nodes || [];
             const candidates = [];
             for (const n of allNodes) {
-                if (!isInputLoader(n)) continue;
-                const fn = getFilenameFromNode(n);
-                if (!fn) continue;
+                if (n === node || !isInputLoader(n)) continue;
+                const src = getSourceFromNode(n);
+                if (!src) continue;
+                const fn = src.filename;
                 const blob = ((n.comfyClass || "") + " " + (n.title || "")).toLowerCase();
-                const isVideo = /video|vhs/.test(blob) || classifyFilename(fn) === "video";
-                const isImage = (/image/.test(blob) || classifyFilename(fn) === "image") && !isVideo;
+                const moving = src.kind === "video" || src.kind === "sequence" || src.kind === "folder";
+                const isVideo = moving || /video|vhs/.test(blob);
+                const isImage = (src.kind === "image" || src.kind === "folder"
+                    || (/image/.test(blob) && src.kind !== "video"));
                 // "many LoadVideo nodes" disambiguator: a loader whose output is
                 // actually wired into the pipeline is far more likely to be the
                 // one the user cares about than an orphaned/spare loader.
@@ -764,6 +812,7 @@ app.registerExtension({
             sfWidgetHook.callback = function (v) {
                 origSfCb?.apply(this, arguments);
                 const raw = String(v ?? sfWidgetHook.value ?? "").trim();
+                if (node._fiWriting) return;      // our own write: already in sync
                 if (raw.includes(".")) {
                     writeSourceWidgets(raw);
                 }
@@ -795,7 +844,7 @@ app.registerExtension({
             const origCb = fmtWidget.callback;
             fmtWidget.callback = function (v) {
                 origCb?.apply(this, arguments);
-                setTimeout(syncSourceFilename, 0);
+                if (!node._fiWriting) setTimeout(syncSourceFilename, 0);
             };
         }
 
@@ -806,7 +855,7 @@ app.registerExtension({
             const origCb = customWidget.callback;
             customWidget.callback = function (v) {
                 origCb?.apply(this, arguments);
-                setTimeout(syncSourceFilename, 0);
+                if (!node._fiWriting) setTimeout(syncSourceFilename, 0);
             };
         }
 
@@ -818,7 +867,7 @@ app.registerExtension({
             const origCb = w.callback;
             w.callback = function (v) {
                 origCb?.apply(this, arguments);
-                setTimeout(syncSourceFilename, 0);
+                if (!node._fiWriting) setTimeout(syncSourceFilename, 0);
             };
         }
 
@@ -842,22 +891,15 @@ app.registerExtension({
         setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 500);
         setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 2000);
 
-        // Slow polling: re-scan every 3s so changes elsewhere in a big
-        // workflow (e.g. user picks a different file in a Load Video
-        // node, or loads a new Set/Get pair) propagate without needing
-        // to wiggle our own connections.
-        if (node._fiPollTimer) clearInterval(node._fiPollTimer);
-        node._fiPollTimer = setInterval(() => {
-            // Stop polling if the node is gone from the graph
-            const g = G();
-            const stillThere = (g._nodes || g.nodes || [])
-                .some(n => n.id === node.id);
-            if (!stillThere) {
-                clearInterval(node._fiPollTimer);
-                node._fiPollTimer = null;
-                return;
-            }
-            syncSourceFilename();
-        }, 3000);
+        // Changes elsewhere in the graph (another loader's file, a new
+        // Set/Get pair) arrive through the page-wide `graphChanged` listener
+        // above - no per-node timer.
+        if (node._fiPollTimer) { clearInterval(node._fiPollTimer); node._fiPollTimer = null; }
+        _fiLive.add(node);
+        const _origRemoved = node.onRemoved;
+        node.onRemoved = function () {
+            _fiLive.delete(node);
+            return _origRemoved?.apply(this, arguments);
+        };
     },
 });

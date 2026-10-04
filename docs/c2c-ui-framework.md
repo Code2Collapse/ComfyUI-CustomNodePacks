@@ -83,7 +83,38 @@ All return plain elements. Every control has a visible `:focus-visible` ring
   `_editor_empty_state.js` visuals over time.
 - `stage({aspect, empty})` - preview area: `setImage(src, w, h)`,
   `setCanvas(canvas)`, `setEmpty()`, footer readout `480 × 270`.
-- `statusLine()` - one-line state with semantic colour.
+- `statusLine()` - one-line state with semantic colour. Wraps; never ellipsised.
+- `.c2c-ui-ledger` - scoped table for tabular numeric readouts (phrase, bar, value
+  columns; `tabular-nums` on values). Used by MiniMax W8 NegPiP ledger.
+
+## Charts (`c2c_ui/chart.js`)
+
+`lineChart({minHeight, xLabel, yLabel, y2Label, xFormat, yFormat, y2Format,
+series, thresholds, empty})` returns `{el, setData, setThresholds, setMarkers,
+setState, toCSV, redraw, destroy}`. The first users are MiniMax W3 Sigma
+Inspector and W4 Drift QC.
+
+- Curves are canvas; legend chips (`<button aria-pressed>`), the hover readout,
+  badges and Copy CSV are DOM. Series with `plot: false` show in the readout
+  only and get no chip.
+- Axis ticks come from `niceTicks(min, max, count)` -> `{step, ticks, decimals}`
+  (count = intervals; ticks are `i x step` rounded, so no `0.6000000000000001`).
+  Tick labels use the step's precision; `*Format` is for the readout.
+- Margins are measured from the widest tick label, so axis titles never
+  overlap. Layout uses `clientWidth/Height` (node pixels), never
+  `getBoundingClientRect` (screen pixels, scaled by the canvas zoom).
+- Series colours are `--cu-series-1..6`; canvas colours are resolved with
+  `getComputedStyle` at draw time (a canvas cannot parse `var()`).
+- Redraws only on data, state, resize, hover (one coalesced rAF) or a legend
+  click. Loading is a CSS spinner.
+- `setThresholds` accepts `axis: "x"` for vertical guide lines (e.g. ramp edges).
+
+## Zoom (`c2c_ui/nodes2.js`)
+
+`onZoomChange(cb)` -> unsubscribe. ONE page-wide watcher shared by every pack
+copy (`window.__c2cZoomWatch`): wheel / pointerup / keyup / resize schedule a
+single rAF that compares `canvas.ds.scale`. `installZoomRepaint` is built on it.
+Never poll the zoom with a per-node rAF loop.
 
 ## Mounting a panel in a node (`c2c_ui/node_panel.js`)
 

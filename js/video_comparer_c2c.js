@@ -92,6 +92,18 @@ function mediaURL(filename) {
  *  Native-first: the original file is tried in a <video>; if the browser
  *  can't decode it (ProRes .mov, MXF, …) we fall back once to the
  *  frame-accurate H.264 edit proxy from /wne/media_proxy. */
+// A <video> keeps its decoder and buffered frames - and, while playing, the
+// whole element - alive after the last reference to it is dropped. Every
+// source swap and the node's removal release the old one explicitly.
+function releaseMedia(v) {
+    if (!v) return;
+    try { v.pause(); v.removeAttribute("src"); v.load(); } catch { /* already gone */ }
+}
+function swapSource(old, next) {
+    if (old && old !== next && old.kind === "video") releaseMedia(old.el);
+    return next;
+}
+
 function loadSource(filename) {
     return new Promise((resolve) => {
         if (!filename) { resolve(null); return; }
@@ -252,6 +264,11 @@ app.registerExtension({
                 rafToken: 0,
             };
             node._VC = S;
+            S.releaseAll = () => {
+                S.srcA = swapSource(S.srcA, null);
+                S.srcB = swapSource(S.srcB, null);
+                releaseMedia(vidA); releaseMedia(vidB);
+            };
 
             // ── Build DOM widget ─────────────────────────────
             const wrap = document.createElement("div");
@@ -284,7 +301,10 @@ app.registerExtension({
             hint.textContent = "Upload A/B (or pick from combo). Drag canvas to wipe. ←/→ to scrub video frames. Space to play/pause.";
             wrap.appendChild(hint);
 
-            const ctx = cvs.getContext("2d", { willReadFrequently: true });
+            // Never read back (diff modes read their own offscreen canvas), so no
+            // willReadFrequently: that flag moves the canvas to the CPU and made
+            // every wipe and video frame composite in software.
+            const ctx = cvs.getContext("2d");
 
             // ── Synced dual-video player (mode = "synced_player") ──
             // Two side-by-side <video> elements sharing a single transport.
@@ -709,9 +729,12 @@ app.registerExtension({
                 }
 
                 if (a && b && (mode === "diff" || mode === "per_channel" || mode === "false_color" || mode === "bit_depth_crush")) {
-                    const off = document.createElement("canvas");
-                    off.width = cw; off.height = ch;
-                    const octx = off.getContext("2d", { willReadFrequently: true });
+                    // One read-back canvas per node, reused every frame (was a new
+                    // canvas per render: garbage at video frame rate).
+                    const off = (S._diffCanvas ||= document.createElement("canvas"));
+                    if (off.width !== cw || off.height !== ch) { off.width = cw; off.height = ch; }
+                    const octx = (S._diffCtx ||= off.getContext("2d", { willReadFrequently: true }));
+                    octx.clearRect(0, 0, cw, ch);
                     octx.drawImage(a.el, 0, 0, cw, ch);
                     const idA = octx.getImageData(0, 0, cw, ch);
                     octx.clearRect(0, 0, cw, ch);
@@ -862,8 +885,8 @@ app.registerExtension({
 
             // ── Upload buttons (wired to live load) ─────────
             const onUploaded = async (slot, filename) => {
-                if (slot === "a") S.srcA = await loadSource(filename);
-                else              S.srcB = await loadSource(filename);
+                if (slot === "a") S.srcA = swapSource(S.srcA, await loadSource(filename));
+                else              S.srcB = swapSource(S.srcB, await loadSource(filename));
                 applyFrameToVideos();
                 render();
             };
@@ -882,8 +905,8 @@ app.registerExtension({
                 const orig = w.callback;
                 w.callback = async (v) => {
                     orig?.call(w, v);
-                    if (w.name === "file_a") S.srcA = await loadSource(v);
-                    if (w.name === "file_b") S.srcB = await loadSource(v);
+                    if (w.name === "file_a") S.srcA = swapSource(S.srcA, await loadSource(v));
+                    if (w.name === "file_b") S.srcB = swapSource(S.srcB, await loadSource(v));
                     if (w.name === "wipe_position") S.wipePos = +v;
                     if (w.name === "onion_alpha")   S.onionAlpha = +v;
                     if (w.name === "frame_index")   applyFrameToVideos();
@@ -898,8 +921,8 @@ app.registerExtension({
             queueMicrotask(async () => {
                 const fa = getVal(node, "file_a", "");
                 const fb = getVal(node, "file_b", "");
-                if (fa) S.srcA = await loadSource(fa);
-                if (fb) S.srcB = await loadSource(fb);
+                if (fa) S.srcA = swapSource(S.srcA, await loadSource(fa));
+                if (fb) S.srcB = swapSource(S.srcB, await loadSource(fb));
                 applyFrameToVideos();
                 render();
             });
@@ -952,6 +975,7 @@ app.registerExtension({
             _removed?.apply(this, arguments);
             try { this._VC_ro?.disconnect?.(); } catch {}
             if (this._VC?.rafToken) cancelAnimationFrame(this._VC.rafToken);
+            try { this._VC?.releaseAll?.(); } catch {}
         };
     },
 });

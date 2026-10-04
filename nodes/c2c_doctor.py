@@ -26,6 +26,7 @@ import re
 import shutil
 import struct
 import sys
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -36,7 +37,16 @@ from typing import Any, Dict, List, Optional, Tuple
 # Disk cache - walking ComfyUI/models can take many seconds; cache for 60s.
 # ---------------------------------------------------------------------------
 _DISK_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
-_DISK_TTL_S = 60.0
+# Folder sizes change slowly and one full walk can take minutes (an output
+# folder with a million sub-folders exists in the wild), so sizes are cached
+# for ten minutes, walked by one thread at a time, and every folder gets a
+# time budget: past it the size is reported as a lower bound ("partial").
+_DISK_TTL_S = 600.0
+_DISK_SECTION_BUDGET_S = 20.0
+_DISK_LOCK = threading.Lock()
+_DISK_REFRESHING = threading.Event()
+_PYENV_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_PYENV_TTL_S = 300.0
 
 
 def _comfy_root() -> Optional[Path]:
@@ -57,22 +67,40 @@ def _comfy_root() -> Optional[Path]:
     return None
 
 
-def _dir_size_fast(p: Path) -> Tuple[int, int]:
-    """Return (total_bytes, file_count). Skips symlinks (we have junctions)."""
+def _dir_size_scan(p: Path, deadline: Optional[float] = None) -> Tuple[int, int, bool]:
+    """Return (total_bytes, file_count, complete). Skips symlinks/junctions.
+
+    os.scandir, not os.walk + os.stat: on Windows a DirEntry already carries
+    the size from the directory listing, so there is no system call per file.
+    Stops at `deadline` (time.monotonic()) and reports complete=False."""
     total = 0
     count = 0
-    try:
-        for root, dirs, files in os.walk(p, followlinks=False):
-            for f in files:
-                fp = os.path.join(root, f)
-                try:
-                    st = os.stat(fp, follow_symlinks=False)
-                    total += st.st_size
-                    count += 1
-                except OSError:
-                    continue
-    except Exception:
-        pass
+    stack = [str(p)]
+    while stack:
+        if deadline is not None and time.monotonic() > deadline:
+            return total, count, False
+        top = stack.pop()
+        try:
+            with os.scandir(top) as it:
+                for e in it:
+                    try:
+                        if e.is_symlink():
+                            continue
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                            count += 1
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total, count, True
+
+
+def _dir_size_fast(p: Path) -> Tuple[int, int]:
+    """Return (total_bytes, file_count). Skips symlinks (we have junctions)."""
+    total, count, _ = _dir_size_scan(p)
     return total, count
 
 
@@ -87,20 +115,43 @@ def _model_subdir_breakdown(models_root: Path) -> List[Dict[str, Any]]:
     except Exception:
         return out
     for sub in children:
-        size, files = _dir_size_fast(sub)
-        out.append({"name": sub.name, "path": str(sub), "bytes": size, "files": files})
+        size, files, complete = _dir_size_scan(sub, time.monotonic() + _DISK_SECTION_BUDGET_S)
+        row = {"name": sub.name, "path": str(sub), "bytes": size, "files": files}
+        if not complete:
+            row["partial"] = True
+        out.append(row)
     return out
 
 
-def collect_disk(refresh: bool = False) -> Dict[str, Any]:
-    """Return disk usage snapshot. Cached for _DISK_TTL_S seconds."""
-    now = time.time()
-    if (not refresh) and _DISK_CACHE["data"] is not None and (now - _DISK_CACHE["ts"]) < _DISK_TTL_S:
-        d = dict(_DISK_CACHE["data"])
-        d["cached"] = True
-        d["age_s"] = round(now - _DISK_CACHE["ts"], 1)
-        return d
+def _cached_disk(now: float) -> Optional[Dict[str, Any]]:
+    data = _DISK_CACHE["data"]
+    if data is None:
+        return None
+    d = dict(data)
+    d["cached"] = True
+    d["age_s"] = round(now - _DISK_CACHE["ts"], 1)
+    return d
 
+
+def collect_disk(refresh: bool = False) -> Dict[str, Any]:
+    """Return disk usage snapshot. Cached for _DISK_TTL_S seconds.
+
+    Blocking: call it from a worker thread, never from the event loop. Only
+    one walk runs at a time; a caller that arrives during a walk waits for it
+    and gets its result instead of starting a second one."""
+    now = time.time()
+    if not refresh and _DISK_CACHE["data"] is not None and (now - _DISK_CACHE["ts"]) < _DISK_TTL_S:
+        return _cached_disk(now)
+    started = time.time()
+    with _DISK_LOCK:
+        # somebody finished a walk while we waited for the lock
+        if _DISK_CACHE["data"] is not None and _DISK_CACHE["ts"] >= started:
+            return _cached_disk(time.time())
+        return _walk_disk()
+
+
+def _walk_disk() -> Dict[str, Any]:
+    now = time.time()
     root = _comfy_root()
     out: Dict[str, Any] = {"success": True, "cached": False, "ts": now}
     if root is None:
@@ -125,8 +176,10 @@ def collect_disk(refresh: bool = False) -> Dict[str, Any]:
                      ("input", "input")):
         p = root / sub
         if p.is_dir():
-            size, count = _dir_size_fast(p)
+            size, count, complete = _dir_size_scan(p, time.monotonic() + _DISK_SECTION_BUDGET_S)
             sections[key] = {"path": str(p), "bytes": size, "files": count}
+            if not complete:
+                sections[key]["partial"] = True
         else:
             sections[key] = {"path": str(p), "missing": True}
     out["sections"] = sections
@@ -135,7 +188,42 @@ def collect_disk(refresh: bool = False) -> Dict[str, Any]:
     out["models_breakdown"] = _model_subdir_breakdown(root / "models")
 
     _DISK_CACHE["data"] = out
-    _DISK_CACHE["ts"] = now
+    _DISK_CACHE["ts"] = time.time()
+    return out
+
+
+def collect_disk_nowait() -> Dict[str, Any]:
+    """Never blocks. For status pollers: the last snapshot (however old), and
+    a background refresh when it is stale. Before the first walk finishes it
+    returns the drive's free space only, flagged pending."""
+    now = time.time()
+    fresh = _DISK_CACHE["data"] is not None and (now - _DISK_CACHE["ts"]) < _DISK_TTL_S
+    if not fresh and not _DISK_REFRESHING.is_set():
+        _DISK_REFRESHING.set()
+
+        def _bg():
+            try:
+                collect_disk(refresh=True)
+            except Exception:
+                pass
+            finally:
+                _DISK_REFRESHING.clear()
+
+        threading.Thread(target=_bg, name="c2c-disk-sizes", daemon=True).start()
+    cached = _cached_disk(now)
+    if cached is not None:
+        if not fresh:
+            cached["refreshing"] = True
+        return cached
+    out: Dict[str, Any] = {"success": True, "cached": False, "pending": True, "ts": now}
+    root = _comfy_root()
+    if root is not None:
+        out["root"] = str(root)
+        try:
+            du = shutil.disk_usage(root)
+            out["drive"] = {"total": du.total, "used": du.used, "free": du.free}
+        except Exception as exc:
+            out["drive"] = {"error": str(exc)}
     return out
 
 
@@ -167,7 +255,20 @@ def _pkg_version(name: str) -> Optional[str]:
         return None
 
 
-def collect_pyenv() -> Dict[str, Any]:
+def collect_pyenv(refresh: bool = False) -> Dict[str, Any]:
+    """Python / torch / package versions. Cached for _PYENV_TTL_S: the answer
+    only changes when something is installed, and a status badge asks every
+    few seconds."""
+    now = time.time()
+    if not refresh and _PYENV_CACHE["data"] is not None and (now - _PYENV_CACHE["ts"]) < _PYENV_TTL_S:
+        return _PYENV_CACHE["data"]
+    out = _collect_pyenv_uncached()
+    _PYENV_CACHE["data"] = out
+    _PYENV_CACHE["ts"] = now
+    return out
+
+
+def _collect_pyenv_uncached() -> Dict[str, Any]:
     out: Dict[str, Any] = {"success": True, "ts": time.time()}
     out["python"] = {
         "version": sys.version.split()[0],

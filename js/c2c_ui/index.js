@@ -25,10 +25,12 @@ export {
     isVueNodes,
     adaptiveCanvasOnly,
     onRendererChange,
+    onZoomChange,
     installResizeFloor,
     measureRootContent,
     canvasBackingScale,
     installZoomRepaint,
 } from "./nodes2.js";
+export { lineChart, niceTicks, nearestIndex, seriesToCSV } from "./chart.js";
 export { mountPanel } from "./node_panel.js";
 export { openEditor } from "./editor.js";

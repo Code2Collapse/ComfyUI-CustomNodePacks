@@ -8,7 +8,8 @@ Merges four signal sources into a single health status with a 4-color level:
                     high VRAM headroom, recent OOM-like hints)
   red     "err"   — at least one error (doctor errors, runtime node_error
                     events in the recent window, damaged-package signals)
-  purple  "crit"  — pip dependency check failed OR multiple recent OOMs
+  purple  "crit"  — a ComfyUI-core package fails pip check OR multiple recent OOMs
+                  (other pip conflicts are "warn": most real envs have some)
                     OR the last prompt definitively failed.
 
 Signal sources (all best-effort — every read is wrapped so a missing module
@@ -51,9 +52,14 @@ Response envelope:
 """
 from __future__ import annotations
 
+import asyncio
+import functools
+import hashlib
+import json
 import logging
+import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("C2C.IntAggregator")
 
@@ -182,7 +188,10 @@ def _read_environment(disk_refresh: bool = False) -> Dict[str, Any]:
         except Exception:
             return {"available": False}
     pyenv = _safe(_cd.collect_pyenv, {}) or {}
-    disk = _safe(lambda: _cd.collect_disk(refresh=disk_refresh), {}) or {}
+    # Never walk folders here: this runs for a status badge every few seconds.
+    # The last snapshot comes back at once; a stale one refreshes in the background.
+    disk = _safe(lambda: (_cd.collect_disk(refresh=True) if disk_refresh
+                          else _cd.collect_disk_nowait()), {}) or {}
     # Flatten a few headline counters for the badge / popover header.
     py_warnings = 0
     py_errors = 0
@@ -225,9 +234,30 @@ def _read_registry_summary() -> Dict[str, Any]:
     }
 
 
-def _run_doctor(workflow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+# Same bytes, same verdict - but the lint also looks at files on disk (missing
+# models), so a verdict is reused for one minute at most.
+_DOCTOR_CACHE: Dict[str, Any] = {"key": None, "data": None, "ts": 0.0}
+_DOCTOR_TTL_S = 60.0
+
+
+def _run_doctor(workflow: Optional[Dict[str, Any]], key: Optional[str] = None) -> Dict[str, Any]:
+    """Lint the workflow. `key` identifies its exact content (a hash of the
+    request body): the badge re-sends an unchanged workflow every few seconds,
+    and the verdict on the same bytes is the same."""
     if not workflow:
         return {"available": False, "ran": False}
+    if (key is not None and _DOCTOR_CACHE["key"] == key
+            and time.time() - _DOCTOR_CACHE["ts"] < _DOCTOR_TTL_S):
+        return _DOCTOR_CACHE["data"]
+    res = _run_doctor_uncached(workflow)
+    if key is not None:
+        _DOCTOR_CACHE["key"] = key
+        _DOCTOR_CACHE["data"] = res
+        _DOCTOR_CACHE["ts"] = time.time()
+    return res
+
+
+def _run_doctor_uncached(workflow: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from . import workflow_doctor as _wd
     except Exception:
@@ -270,6 +300,43 @@ def _run_doctor(workflow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────
 # Aggregation
 # ─────────────────────────────────────────────────────────────────────────
+# Packages ComfyUI itself imports on start or on every run. A pip conflict in
+# one of THESE (e.g. "torchvision X has requirement torch==Y") can break
+# ComfyUI; a conflict elsewhere breaks at most the node pack that uses it.
+_CORE_PKGS = frozenset({
+    "torch", "torchvision", "torchaudio", "numpy", "safetensors", "aiohttp",
+    "comfyui-frontend-package", "comfyui-workflow-templates", "comfyui-embedded-docs",
+    "transformers", "tokenizers", "sentencepiece", "pillow", "pyyaml", "scipy",
+    "einops", "kornia", "spandrel", "av", "torchsde", "psutil", "alembic", "sqlalchemy",
+})
+
+
+def _norm_pkg(name: str) -> str:
+    return name.strip().lower().replace("_", "-").replace(".", "-")
+
+
+def _pip_conflicts(ig: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    """Split `pip check` output into (core, other) lines. The package that
+    is broken is the one named first: "<pkg> <ver> requires ..." /
+    "<pkg> <ver> has requirement ...". Unparseable failure output counts as
+    `other` - it is worth a look, not an alarm."""
+    if not ig.get("available") or ig.get("pip_check_ok") is not False:
+        return [], []
+    lines = [ln.strip() for ln in str(ig.get("pip_check_detail") or "").splitlines() if ln.strip()]
+    # uv says "Found 6 incompatibilities" first, then
+    # "The package `mediapipe` requires `numpy<2`, but `2.4.6` is installed".
+    lines = [ln for ln in lines if not re.match(r"(Found|Checked|Resolved|Using|warning:)\b", ln)]
+    core: List[str] = []
+    other: List[str] = []
+    for ln in lines:
+        m = re.match(r"The package `([^`]+)`", ln)
+        head = m.group(1) if m else ln.split(" ", 1)[0]
+        (core if _norm_pkg(head) in _CORE_PKGS else other).append(ln)
+    if not lines:
+        other.append("pip check failed without output")
+    return core, other
+
+
 _LEVEL_RANK = {"ok": 0, "warn": 1, "err": 2, "crit": 3}
 _LEVEL_LABEL = {"ok": "Healthy", "warn": "Degraded", "err": "Errors", "crit": "Critical"}
 
@@ -281,20 +348,28 @@ def _bump(current: str, candidate: str) -> str:
 
 
 def aggregate(workflow: Optional[Dict[str, Any]] = None,
-              window_s: int = _DEFAULT_WINDOW_S) -> Dict[str, Any]:
+              window_s: int = _DEFAULT_WINDOW_S,
+              workflow_key: Optional[str] = None) -> Dict[str, Any]:
     rt = _safe(lambda: _read_runtime_buffer(window_s), {"available": False}) or {"available": False}
     ig = _safe(_read_integrity_report, {"available": False}) or {"available": False}
     rg = _safe(_read_registry_summary, {"available": False}) or {"available": False}
     en = _safe(_read_environment, {"available": False}) or {"available": False}
-    dr = _safe(lambda: _run_doctor(workflow), {"available": False, "ran": False}) \
+    dr = _safe(lambda: _run_doctor(workflow, workflow_key), {"available": False, "ran": False}) \
         or {"available": False, "ran": False}
 
     level = "ok"
+    pip_core, pip_other = _pip_conflicts(ig)
 
     # ── crit ──
-    # Pip check failed → environment is broken: critical.
-    if ig.get("available") and ig.get("pip_check_ok") is False:
+    # A package ComfyUI itself runs on is broken → critical. Any other pip
+    # conflict is only Degraded: nearly every real ComfyUI env fails
+    # `pip check` somewhere (an unused extra, a stale pin like mediapipe's
+    # numpy<2) and still runs - treating those as Critical kept the badge
+    # purple forever, so nobody looked at it.
+    if pip_core:
         level = _bump(level, "crit")
+    elif pip_other:
+        level = _bump(level, "warn")
     # >=2 OOMs in the window → out of memory situation
     if int(rt.get("ooms_recent", 0) or 0) >= 2:
         level = _bump(level, "crit")
@@ -345,6 +420,8 @@ def aggregate(workflow: Optional[Dict[str, Any]] = None,
         "ooms_recent": int(rt.get("ooms_recent", 0) or 0),
         "env_errors": int(en.get("py_errors", 0) or 0),
         "env_warnings": int(en.get("py_warnings", 0) or 0),
+        "pip_core_conflicts": len(pip_core),
+        "pip_conflicts": len(pip_core) + len(pip_other),
     }
 
     return {
@@ -388,27 +465,39 @@ def register_routes(server) -> None:
 
     routes = server.routes if hasattr(server, "routes") else server.app.router
 
+    # aggregate() does real work (package metadata, workflow lint, file
+    # reads). On the event loop it froze the WHOLE server - queueing, the
+    # progress websocket, every other route - for as long as it ran, and the
+    # badge asks every few seconds. It runs on a worker thread instead.
+    async def _aggregate_off_loop(**kw):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, functools.partial(aggregate, **kw))
+
     @routes.get("/c2c/int/health")
     async def _get_health(req):  # noqa: ANN001
         try:
             window_s = int(req.query.get("window_s") or _DEFAULT_WINDOW_S)
         except Exception:
             window_s = _DEFAULT_WINDOW_S
-        return web.json_response(aggregate(workflow=None, window_s=window_s))
+        return web.json_response(await _aggregate_off_loop(workflow=None, window_s=window_s))
 
     @routes.post("/c2c/int/health")
     async def _post_health(req):  # noqa: ANN001
         body: Dict[str, Any] = {}
+        raw = b""
         try:
-            body = await req.json()
+            raw = await req.read()
+            body = json.loads(raw) if raw else {}
         except Exception:
             body = {}
-        wf = body.get("workflow")
+        wf = body.get("workflow") if isinstance(body, dict) else None
         try:
             window_s = int(body.get("window_s") or req.query.get("window_s") or _DEFAULT_WINDOW_S)
         except Exception:
             window_s = _DEFAULT_WINDOW_S
-        return web.json_response(aggregate(workflow=wf, window_s=window_s))
+        key = hashlib.sha1(raw).hexdigest() if raw else None
+        return web.json_response(await _aggregate_off_loop(workflow=wf, window_s=window_s,
+                                                           workflow_key=key))
 
     @routes.get("/c2c/int/runs")
     async def _get_runs(req):  # noqa: ANN001

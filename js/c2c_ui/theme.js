@@ -27,6 +27,12 @@ const CSS = `
   --cu-ok: var(--c2c-ok, #7fe0ab);
   --cu-warn: var(--c2c-yellow, #f3d288);
   --cu-danger: var(--c2c-red, #f27a92);
+  --cu-series-1: var(--c2c-mauve, #b494ff);
+  --cu-series-2: #76dccb;
+  --cu-series-3: var(--c2c-yellow, #f3d288);
+  --cu-series-4: var(--c2c-red, #f27a92);
+  --cu-series-5: #7fd4f2;
+  --cu-series-6: var(--c2c-ok, #8ee09d);
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 12px;
   color: var(--cu-ink);
@@ -68,7 +74,9 @@ const CSS = `
   gap: 6px;
   padding: 5px 12px;
   border-radius: 6px;
-  border: 1px solid var(--cu-edge);
+  /* edge-strong, not edge: --cu-edge (#2a2a57) is the night node body's own
+     colour (#282a56), so a button on a node lost its outline entirely */
+  border: 1px solid var(--cu-edge-strong);
   background: var(--cu-raised);
   color: var(--cu-ink);
   font: inherit;
@@ -87,7 +95,7 @@ const CSS = `
 
 .c2c-ui .c2c-ui-btn:hover:not(:disabled),
 .c2c-ui-editor .c2c-ui-btn:hover:not(:disabled) {
-  border-color: var(--cu-edge-strong);
+  border-color: var(--cu-accent);
   background: var(--cu-panel);
 }
 
@@ -109,6 +117,21 @@ const CSS = `
 .c2c-ui-editor .c2c-ui-btn--primary:hover:not(:disabled) {
   background: var(--cu-accent-hover);
   border-color: var(--cu-accent-hover);
+}
+
+/* On a node (Obsidian): the primary action is a dark key with a lit rim, not
+   a solid violet block - filled violet across every node read as "all purple".
+   The full-screen editor keeps the filled Save: one strong action per screen. */
+.c2c-ui:not(.c2c-ui-editor) .c2c-ui-btn--primary {
+  background: linear-gradient(180deg, #1c1d47, #121332);
+  border-color: color-mix(in srgb, var(--cu-accent) 75%, transparent);
+  color: #e6ddff;
+  box-shadow: 0 0 14px -6px var(--cu-accent), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.c2c-ui:not(.c2c-ui-editor) .c2c-ui-btn--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #26275c, #17183f);
+  border-color: var(--cu-accent);
+  color: #ffffff;
 }
 
 .c2c-ui .c2c-ui-btn--danger,
@@ -509,9 +532,9 @@ const CSS = `
   padding: 4px 8px;
   font-size: 11px;
   color: var(--cu-ink-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
 }
 
 .c2c-ui .c2c-ui-status--ok,
@@ -522,6 +545,288 @@ const CSS = `
 
 .c2c-ui .c2c-ui-status--danger,
 .c2c-ui-editor .c2c-ui-status--danger { color: var(--cu-danger); }
+
+/* ── ledger table (tabular readouts, e.g. NegPiP term list) ─────────────── */
+
+.c2c-ui .c2c-ui-ledger,
+.c2c-ui-editor .c2c-ui-ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  table-layout: fixed;
+}
+
+.c2c-ui .c2c-ui-ledger th,
+.c2c-ui-editor .c2c-ui-ledger th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--cu-ink-dim);
+  padding: 2px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c2c-ui .c2c-ui-ledger td,
+.c2c-ui-editor .c2c-ui-ledger td {
+  padding: 3px 4px;
+  vertical-align: middle;
+  color: var(--cu-ink);
+}
+
+.c2c-ui .c2c-ui-ledger__phrase,
+.c2c-ui-editor .c2c-ui-ledger__phrase {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.c2c-ui .c2c-ui-ledger__bar,
+.c2c-ui-editor .c2c-ui-ledger__bar {
+  position: relative;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+}
+
+.c2c-ui .c2c-ui-ledger__bar--degrade::after,
+.c2c-ui-editor .c2c-ui-ledger__bar--degrade::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: rgba(242, 122, 146, 0.15);
+  border-left: 1px solid rgba(242, 122, 146, 0.45);
+  width: var(--ledger-degrade-pct, 30%);
+}
+
+.c2c-ui .c2c-ui-ledger__fill,
+.c2c-ui-editor .c2c-ui-ledger__fill {
+  height: 100%;
+  border-radius: 2px;
+  min-width: 1px;
+}
+
+.c2c-ui .c2c-ui-ledger__val,
+.c2c-ui-editor .c2c-ui-ledger__val {
+  text-align: right;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── line chart ─────────────────────────────────────────────────────────── */
+
+.c2c-ui .c2c-ui-chart,
+.c2c-ui-editor .c2c-ui-chart {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 4px;
+}
+
+.c2c-ui .c2c-ui-chart__plot-wrap,
+.c2c-ui-editor .c2c-ui-chart__plot-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 80px;
+  border-radius: 6px;
+  border: 1px solid var(--cu-edge);
+  background: var(--cu-sunken);
+  overflow: hidden;
+}
+
+.c2c-ui .c2c-ui-chart__plot-wrap--masked .c2c-ui-chart__canvas,
+.c2c-ui-editor .c2c-ui-chart__plot-wrap--masked .c2c-ui-chart__canvas {
+  visibility: hidden;
+}
+
+.c2c-ui .c2c-ui-chart__canvas,
+.c2c-ui-editor .c2c-ui-chart__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.c2c-ui .c2c-ui-chart__overlay,
+.c2c-ui-editor .c2c-ui-chart__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cu-sunken);
+  z-index: 1;
+}
+
+.c2c-ui .c2c-ui-chart__overlay[hidden],
+.c2c-ui-editor .c2c-ui-chart__overlay[hidden] {
+  display: none !important;   /* widgets set display:flex inline; that would beat [hidden] */
+}
+
+.c2c-ui .c2c-ui-chart__spinner,
+.c2c-ui-editor .c2c-ui-chart__spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--cu-edge);
+  border-top-color: var(--cu-accent);
+  animation: c2c-ui-chart-spin 0.75s linear infinite;
+}
+
+@keyframes c2c-ui-chart-spin {
+  to { transform: rotate(360deg); }
+}
+
+.c2c-ui .c2c-ui-chart__error,
+.c2c-ui-editor .c2c-ui-chart__error {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--cu-danger);
+  text-align: center;
+  max-width: 90%;
+  line-height: 1.4;
+}
+
+.c2c-ui .c2c-ui-chart__readout,
+.c2c-ui-editor .c2c-ui-chart__readout {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--cu-edge);
+  background: var(--cu-panel);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cu-ink-soft);
+}
+
+.c2c-ui .c2c-ui-chart__readout-row,
+.c2c-ui-editor .c2c-ui-chart__readout-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.c2c-ui .c2c-ui-chart__readout-dot,
+.c2c-ui-editor .c2c-ui-chart__readout-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.c2c-ui .c2c-ui-chart__legend,
+.c2c-ui-editor .c2c-ui-chart__legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.c2c-ui .c2c-ui-chart__chips,
+.c2c-ui-editor .c2c-ui-chart__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.c2c-ui .c2c-ui-chart__chip,
+.c2c-ui-editor .c2c-ui-chart__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--cu-edge);
+  background: var(--cu-raised);
+  color: var(--cu-ink-soft);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.c2c-ui .c2c-ui-chart__chip[aria-pressed="false"],
+.c2c-ui-editor .c2c-ui-chart__chip[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.c2c-ui .c2c-ui-chart__chip:hover,
+.c2c-ui-editor .c2c-ui-chart__chip:hover {
+  border-color: var(--cu-edge-strong);
+  color: var(--cu-ink);
+}
+
+.c2c-ui .c2c-ui-chart__chip-dot,
+.c2c-ui-editor .c2c-ui-chart__chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.c2c-ui .c2c-ui-chart__copy,
+.c2c-ui-editor .c2c-ui-chart__copy {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+.c2c-ui .c2c-ui-chart__header,
+.c2c-ui-editor .c2c-ui-chart__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 22px;
+  flex-shrink: 0;
+}
+
+.c2c-ui .c2c-ui-chart__pill,
+.c2c-ui-editor .c2c-ui-chart__pill {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--cu-edge);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--cu-ink-dim);
+  background: var(--cu-raised);
+}
+
+.c2c-ui .c2c-ui-chart__pill--ok,
+.c2c-ui-editor .c2c-ui-chart__pill--ok {
+  color: var(--cu-ok);
+  border-color: var(--cu-ok);
+  background: color-mix(in srgb, var(--cu-ok) 18%, transparent);
+}
+
+.c2c-ui .c2c-ui-chart__pill--danger,
+.c2c-ui-editor .c2c-ui-chart__pill--danger {
+  color: var(--cu-danger);
+  border-color: var(--cu-danger);
+  background: color-mix(in srgb, var(--cu-danger) 18%, transparent);
+}
+
+.c2c-ui .c2c-ui-chart__header-text,
+.c2c-ui-editor .c2c-ui-chart__header-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--cu-ink-soft);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 /* ── editor shell ───────────────────────────────────────────────────────── */
 
