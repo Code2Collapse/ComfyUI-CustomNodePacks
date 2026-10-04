@@ -11,9 +11,10 @@ logger = logging.getLogger("MEC.MaskMatting.Matters")
 
 class BaseMatter:
 
-    #: Widgets this matter reads. Same contract as the segmenter's
-    #: PARAMS - one source of truth for what the front-end shows.
-    PARAMS: tuple = ()
+    #: Widgets this matter reads. Same contract as the segmenter's PARAMS:
+    #: None means "has not said" (show everything), () is a real "reads
+    #: nothing extra".
+    PARAMS: tuple | None = None
 
     #: True when the matter is temporally aware (carries state between
     #: frames). A per-frame matter on video flickers, and that is the

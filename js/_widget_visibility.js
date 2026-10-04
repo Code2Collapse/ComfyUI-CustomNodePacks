@@ -104,7 +104,8 @@ export function vueSyncNodeWidgets(node) {
     for (const w of node.widgets) {
         if (!w) continue;
         w.options = w.options || {};
-        w.options.hidden = (w.type === "hidden") || w.hidden === true;
+        // any "…hidden" type: the MaskOps spec folding uses "c2c-hidden"
+        w.options.hidden = String(w.type).includes("hidden") || w.hidden === true;
     }
     // Only nudge once the Vue component for this node exists. Before the
     // initial mount the fresh snapshot reads options.hidden anyway, and a

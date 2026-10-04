@@ -28,10 +28,12 @@ class BaseSegmenter:
     #: produces are both bad: a control that is visible and silently ignored,
     #: or one that is hidden and still required.
     #:
-    #: Empty means "everything", which is the honest default for a backend
-    #: that has not declared yet - better to show a control that does nothing
-    #: than to hide one that matters.
-    PARAMS: tuple = ()
+    #: None means "has not said", and the honest answer there is to show
+    #: everything - hiding a control that might matter is worse than showing
+    #: one that does not. An empty tuple is a real declaration: "this backend
+    #: reads no extra widgets", which shows the core only. The two are
+    #: different claims and must not collapse into one.
+    PARAMS: tuple | None = None
 
     #: True when the backend needs the whole clip rather than a frame, so the
     #: node can refuse to hand it a single image instead of failing deep

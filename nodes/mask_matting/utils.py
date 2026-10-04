@@ -45,9 +45,26 @@ def _register_backend_folders() -> None:
     Safe to call multiple times; uses ``add_model_folder_path`` if available
     and falls back to mutating ``folder_names_and_paths`` directly.
     """
-    models_root = folder_paths.models_dir if hasattr(folder_paths, "models_dir") else os.path.join(
-        os.path.dirname(folder_paths.__file__), "models"
-    )
+    # `models_dir` first, then `base_path`, and only then the module's own
+    # location. `__file__` is not guaranteed to exist — a namespace package, a
+    # frozen build or a stubbed folder_paths has none, and reaching for it
+    # unguarded raises AttributeError at IMPORT time, which takes MaskOps,
+    # MaskTemporal and every segmenter and matter out of the menu at once.
+    # Found by a test whose harness supplies exactly such a stub.
+    models_root = getattr(folder_paths, "models_dir", None)
+    if not models_root:
+        base = getattr(folder_paths, "base_path", None)
+        if base:
+            models_root = os.path.join(base, "models")
+    if not models_root:
+        here = getattr(folder_paths, "__file__", None)
+        models_root = (os.path.join(os.path.dirname(here), "models")
+                       if here else None)
+    if not models_root:
+        # Nothing to anchor to. Registering nothing is correct here: the
+        # backends fall back to their own search paths and report a missing
+        # model when asked to load, rather than the whole package vanishing.
+        return
     for key, sub in _BACKEND_FOLDERS.items():
         abs_dir = os.path.join(models_root, sub)
         try:

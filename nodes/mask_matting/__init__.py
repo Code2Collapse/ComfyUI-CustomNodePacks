@@ -112,3 +112,15 @@ __all__ = [
 ]
 
 from .utils import morph_erode, morph_dilate, morph_open, morph_close, morph_gradient
+
+
+# The widget-visibility spec, served to the front-end. Guarded: a failure here
+# must never take the mask nodes out of the menu, and the front-end already
+# falls back to showing every control when the route is unreachable.
+try:
+    from ._visibility import register_routes as _reg_vis
+    _reg_vis()
+except Exception as _vis_exc:  # noqa: BLE001
+    import logging as _lg
+    _lg.getLogger("MEC.MaskMatting").warning(
+        "[MEC] mask visibility route not registered: %s", _vis_exc)

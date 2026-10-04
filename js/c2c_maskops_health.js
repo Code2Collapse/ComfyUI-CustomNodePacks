@@ -127,7 +127,14 @@ function _drawPill(ctx, x, y, text, status) {
  *  `node.__mec_health_geom` so onMouseDown can hit-test without recomputing. */
 function _drawHealthPills(node, ctx) {
     if (node.flags?.collapsed) return;
-    const seg = _parseChoice(_widgetValue(node, "segmenter"));
+    let seg = _parseChoice(_widgetValue(node, "segmenter"));
+    // pipeline="onyx" always tracks with SAM 3.1 - the (folded) segmenter
+    // picker is not what runs, so the pill reports the backend that does.
+    if (String(_widgetValue(node, "pipeline") || "") === "onyx") {
+        const segW = (node.widgets || []).find((w) => w.name === "segmenter");
+        const opt = (segW?.options?.values || []).find((v) => _parseChoice(v).name === "sam3.1");
+        seg = opt ? _parseChoice(opt) : { name: "sam3.1", status: "ready" };
+    }
     const mat = _parseChoice(_widgetValue(node, "matter"));
     if (!seg.name && !mat.name) return;
 

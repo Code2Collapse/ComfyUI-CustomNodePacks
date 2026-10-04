@@ -29,6 +29,20 @@ from . import BaseMatter, register
 logger = logging.getLogger("MEC.MaskMatting.ViTMatte")
 
 
+def unpad_alpha(alpha: torch.Tensor, H: int, W: int) -> torch.Tensor:
+    """Map ViTMatte's output alpha back onto the (H, W) frame.
+
+    The HF processor PADS the frame bottom/right to a multiple of 32 - it
+    never resizes it (1080x1920 -> 1088x1920). The padding is cropped off.
+    This used to resize the padded alpha to (H, W), which STRETCHED it and
+    slid the matte off the true edges, increasingly towards the bottom/right
+    (~8 px at the bottom of a 1080p frame). A processor that does resize is
+    still mapped back by interpolation."""
+    if alpha.shape[-2] >= H and alpha.shape[-1] >= W:
+        return alpha[..., :H, :W]
+    return F.interpolate(alpha, size=(H, W), mode="bilinear", align_corners=False)
+
+
 def _have_transformers() -> bool:
     try:
         import transformers  # noqa: F401
@@ -134,9 +148,7 @@ class ViTMatteMatter(BaseMatter):
                 inputs = {k: v.to(self.device, dtype=self._dtype if v.dtype.is_floating_point else v.dtype) for k, v in inputs.items()}
                 with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
                     out = self._model(**inputs)
-                alpha = out.alphas
-                # Resize to original
-                alpha = F.interpolate(alpha, size=(H, W), mode="bilinear", align_corners=False)
+                alpha = unpad_alpha(out.alphas, H, W)
                 alphas.append(alpha[0, 0].float().cpu())
             alpha_t = torch.stack(alphas, 0).clamp(0, 1)
             return {"alpha": alpha_t, "info": {"backend": self.KEY}}

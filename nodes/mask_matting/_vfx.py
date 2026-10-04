@@ -179,6 +179,72 @@ def edge_inside_outside(alpha_bhw: torch.Tensor, edge_radius: int = 4
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Final edge treatment (hard binary / feather)
+# ──────────────────────────────────────────────────────────────────────
+
+def gaussian_blur_mask(alpha_bhw: torch.Tensor, radius: float) -> torch.Tensor:
+    """Blur a mask by a true Gaussian, separably.
+
+    A box blur is cheaper and is what most mask nodes actually do, but it
+    leaves a visible straight-sided ramp on a soft edge — the thing you are
+    looking at most closely when you feather a key. Two 1-D passes cost
+    about the same and give a real falloff.
+    """
+    r = float(radius)
+    if r <= 0:
+        return alpha_bhw
+    sigma = r / 2.0                      # radius read as ~2 sigma, so the
+    k = max(3, int(2 * round(r) + 1))    # visible falloff matches the number
+    if k % 2 == 0:
+        k += 1
+    half = k // 2
+    x = torch.arange(k, dtype=torch.float32, device=alpha_bhw.device) - half
+    w = torch.exp(-(x ** 2) / (2.0 * sigma * sigma))
+    w = w / w.sum()
+
+    a = alpha_bhw.unsqueeze(1).float()
+    # Reflect padding, so a subject touching the frame edge does not get
+    # dragged toward zero by imaginary background outside the picture.
+    a = F.pad(a, (half, half, 0, 0), mode="reflect")
+    a = F.conv2d(a, w.view(1, 1, 1, k))
+    a = F.pad(a, (0, 0, half, half), mode="reflect")
+    a = F.conv2d(a, w.view(1, 1, k, 1))
+    return a.squeeze(1).clamp(0, 1)
+
+
+def edge_treatment(alpha_bhw: torch.Tensor, mode: str = "soft", *,
+                   threshold: float = 0.5, feather: float = 0.0
+                   ) -> torch.Tensor:
+    """The final say on what the matte's edge looks like.
+
+    A matter hands back whatever softness its model happened to produce. That
+    is right for hair and wrong for a rotoscoped hard surface, and there was
+    no way to ask for either:
+
+      soft          leave it alone — what the matter produced
+      feather       blur the existing edge; keeps the matter's own falloff
+                    and widens it
+      hard          binary cut at `threshold`; NO partial alpha at all, which
+                    is what a holdout or a garbage matte wants
+      hard+feather  cut hard, then feather that cut — the edge width is then
+                    yours, not the model's, which is the only way to get a
+                    consistent edge across shots keyed by different backends
+
+    Order matters: thresholding AFTER a blur would just re-harden it, so
+    hard+feather cuts first and blurs second.
+    """
+    m = str(mode or "soft").lower()
+    if m in ("soft", "none", "off", ""):
+        return alpha_bhw
+    a = alpha_bhw
+    if m.startswith("hard"):
+        a = (a >= float(threshold)).to(a.dtype)
+    if "feather" in m:
+        a = gaussian_blur_mask(a, float(feather))
+    return a.clamp(0, 1)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # TTA (horizontal-flip ensemble)
 # ──────────────────────────────────────────────────────────────────────
 

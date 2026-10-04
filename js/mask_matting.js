@@ -189,17 +189,38 @@ function setHidden(widget, hide) {
     }
 }
 
+/** The server-driven folding (mask_visibility.js, spec from _visibility.py)
+ *  is the authority when it is installed: two systems hiding the same widgets
+ *  undo each other, depending on which callback ran last. The PREDICATES
+ *  table below is kept only as the fallback for an install without it. */
+function serverFoldingActive() {
+    try { return (app.extensions || []).some((e) => e?.name === "C2C.MaskOps.Visibility"); }
+    catch (_e) { return false; }
+}
+
+/** Objects in the scene_prompts JSON, 0 when it is empty, -1 when not JSON. */
+function sceneObjectCount(raw) {
+    if (!raw || !String(raw).trim()) return 0;
+    try {
+        const d = JSON.parse(raw);
+        return Array.isArray(d?.objects) ? d.objects.filter((o) => o?.enabled !== false).length : 0;
+    } catch (_e) { return -1; }
+}
+
 function refreshVisibility(node) {
     const widgetMap = {};
     for (const w of node.widgets || []) widgetMap[w.name] = w;
     const segWidget   = widgetMap.segmenter;
     const matWidget   = widgetMap.matter;
     if (!segWidget || !matWidget) return;
-    const seg  = stripBadge(segWidget.value);
+    const onyx = String(widgetMap.pipeline?.value || "") === "onyx";
+    // ONYX always tracks with SAM 3.1, whatever the (folded) segmenter says.
+    const seg  = onyx ? "sam3.1" : stripBadge(segWidget.value);
     const mat  = stripBadge(matWidget.value);
     const modeW = widgetMap.input_mode;
     const mode = modeW ? String(modeW.value || "auto").toLowerCase() : "auto";
-    const sup  = SEGMENTER_MODES[seg] || new Set(["auto"]);
+    const sup  = onyx ? new Set(["points", "bbox", "text", "video", "auto"])
+                      : (SEGMENTER_MODES[seg] || new Set(["auto"]));
 
     // Per-backend filtered model dropdowns. The Python side ships ONE big
     // list (sam2/..., sam3/..., [preset:sam2] ..., etc.); here we keep
@@ -214,7 +235,9 @@ function refreshVisibility(node) {
     // Hide matter_model entirely when matter == none.
     if (!matKey) setHidden(matterModelW, true);
 
+    const ownFolding = !serverFoldingActive();
     for (const [name, pred] of Object.entries(PREDICATES)) {
+        if (!ownFolding) break;
         const w = widgetMap[name];
         if (!w) continue;
         // Build a flat snapshot of widget values so predicates can
@@ -232,9 +255,26 @@ function refreshVisibility(node) {
     // above, so this costs nothing extra to compute.
     if (node._mecStatusPill) {
         const visibleCount = (node.widgets || [])
-            .filter(w => w.type !== "hidden" && w.name !== "mec_status_header").length;
-        node._mecStatusPill.textContent =
-            `${seg || "?"} → ${(mat && mat !== "none") ? mat : "no matte"} · ${mode} · ${visibleCount} params`;
+            .filter(w => !String(w.type).includes("hidden") && w.name !== "mec_status_header").length;
+        const matLabel = (mat && mat !== "none") ? mat : "no matte";
+        if (onyx) {
+            const n = sceneObjectCount(widgetMap.scene_prompts?.value);
+            const objects = n < 0 ? "scene JSON invalid"
+                : n === 0 ? "1 object (prompt sockets)" : `${n} object${n === 1 ? "" : "s"}`;
+            node._mecStatusPill.textContent = `SAM 3.1 video → ${matLabel} · ${objects} · ${visibleCount} params`;
+        } else {
+            node._mecStatusPill.textContent =
+                `${seg || "?"} → ${matLabel} · ${mode} · ${visibleCount} params`;
+        }
+        node._mecStatusPill.title = node._mecStatusPill.textContent;
+    }
+    if (node._mecPipeBtns) {
+        for (const [val, btn] of node._mecPipeBtns) {
+            const on = (val === "onyx") === onyx;
+            btn.setAttribute("aria-pressed", on ? "true" : "false");
+            btn.style.background = on ? "color-mix(in srgb, #b494ff 30%, transparent)" : "transparent";
+            btn.style.color = on ? "#f3f1ff" : "#8280ba";
+        }
     }
     if (node._mecWarnPill) {
         // "auto"/"auto_best" are meta cascade-selectors, not concrete
@@ -242,14 +282,23 @@ function refreshVisibility(node) {
         // their model dropdown is legitimately "(auto)"-only. Only warn for
         // an actual named backend (present in *_TO_KEY) with no weights.
         const segIsConcrete = Object.prototype.hasOwnProperty.call(SEGMENTER_TO_KEY, seg);
+        const onyxNoLocal = onyx && !(modelW?.options?.values || []).some((c) => c.startsWith("sam3.1/"));
         const matIsConcrete = !!mat && mat !== "none" && Object.prototype.hasOwnProperty.call(MATTER_TO_KEY, mat);
         const segChoices = modelW?.options?.values || [];
         const matChoices = matterModelW?.options?.values || [];
         const segMissing = segIsConcrete && segChoices.length > 0 && segChoices.every(c => c === "(auto)");
         const matMissing = matIsConcrete && matChoices.length > 0 && matChoices.every(c => c === "(auto)");
-        if (segMissing || matMissing) {
+        if (onyxNoLocal) {
+            const auto = !!widgetMap.auto_download?.value;
+            node._mecWarnPill.textContent = auto ? "↓ SAM 3.1" : "⚠ SAM 3.1";
+            node._mecWarnPill.title = auto
+                ? "No SAM 3.1 checkpoint in models/sam3.1 yet - it downloads on the first run."
+                : "No SAM 3.1 checkpoint in models/sam3.1. Tick auto_download, or place the weights there.";
+            node._mecWarnPill.style.display = "inline-flex";
+        } else if (segMissing || matMissing) {
             const missing = [segMissing && seg, matMissing && mat].filter(Boolean);
-            node._mecWarnPill.textContent = `⚠ no local weights: ${missing.join(", ")}`;
+            node._mecWarnPill.textContent = `⚠ ${missing.join(", ")}`;
+            node._mecWarnPill.title = `No local weights for ${missing.join(" and ")} - the dropdown only offers (auto).`;
             node._mecWarnPill.style.display = "inline-flex";
         } else {
             node._mecWarnPill.style.display = "none";
@@ -279,6 +328,8 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = onCreated?.apply(this, arguments);
             const node = this;
+            if (!node.properties) node.properties = {};
+            node.properties.c2c_pipeline_v = 1;
 
             // Compact DOM status header — this node is a flat wall of 30+
             // native widgets (14 segmenter backends x 4 matting backends,
@@ -289,22 +340,60 @@ app.registerExtension({
             const statusEl = document.createElement("div");
             statusEl.className = "c2ck";
             statusEl.style.cssText =
-                "display:flex; align-items:center; gap:6px; flex-wrap:wrap; " +
-                "padding:3px 2px 7px 2px; min-height:20px;";
+                "display:flex; align-items:center; gap:6px; flex-wrap:nowrap; overflow:hidden; " +
+                "padding:0 2px; height:100%; box-sizing:border-box;";
+            // Pipeline switch. The `pipeline` widget has to stay at the END of
+            // the inputs (saved workflows are positional), which puts the
+            // most important choice at the bottom of a tall node - so the
+            // strip at the top carries it too.
+            const seg = document.createElement("div");
+            seg.setAttribute("role", "group");
+            seg.setAttribute("aria-label", "Pipeline");
+            seg.style.cssText = "display:inline-flex; flex:none; border:1px solid " +
+                "color-mix(in srgb, #b494ff 45%, transparent); border-radius:5px; overflow:hidden;";
+            const pipeBtns = [];
+            for (const [val, label, tip] of [
+                ["onyx", "ONYX", "One SAM 3.1 tracking session for the clip, up to 16 objects, tiled ViTMatte at full resolution."],
+                ["cascade (legacy)", "Cascade", "The previous multi-backend auto_best path."],
+            ]) {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.textContent = label;
+                btn.title = tip;
+                btn.style.cssText = "font:600 10px/1 system-ui,sans-serif; letter-spacing:.04em; " +
+                    "padding:4px 8px; border:0; cursor:pointer; background:transparent; color:#8280ba;";
+                btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const w = (node.widgets || []).find((x) => x.name === "pipeline");
+                    if (!w || w.value === val) return;
+                    w.value = val;
+                    w.callback?.(val);
+                    node.setDirtyCanvas?.(true, true);
+                });
+                seg.appendChild(btn);
+                pipeBtns.push([val, btn]);
+            }
+            node._mecPipeBtns = pipeBtns;
             const statusPill = document.createElement("span");
             statusPill.className = "c2ck-pill on";
-            statusPill.style.cssText = "font-size:10px; white-space:nowrap;";
+            statusPill.style.cssText = "font-size:10px; white-space:nowrap; overflow:hidden; " +
+                "text-overflow:ellipsis; min-width:0; flex:1 1 auto;";
             statusPill.textContent = "…";
             const warnPill = document.createElement("span");
             warnPill.className = "c2ck-pill off";
-            warnPill.style.cssText = "font-size:10px; display:none;";
-            statusEl.append(statusPill, warnPill);
+            warnPill.style.cssText = "font-size:10px; display:none; flex:none; white-space:nowrap;";
+            statusEl.append(seg, statusPill, warnPill);
+            // ComfyUI insets a DOM widget by `margin` (default 10) on every
+            // side: a 22 px slot left the pill 2 px, so it spilled over the
+            // first parameter row. 3 px margin in a 28 px slot fits it.
             const statusWidget = node.addDOMWidget("mec_status_header", "STATUS", statusEl, {
                 serialize: false,
-                getHeight: () => 22,
-                getMinHeight: () => 22,
+                margin: 3,
+                getHeight: () => 28,
+                getMinHeight: () => 28,
             });
-            statusWidget.computeSize = () => [node.size?.[0] || 340, 22];
+            statusWidget.computeSize = () => [node.size?.[0] || 340, 28];
             // Move it to the front of the widget list so it reads as a
             // header above the parameter rows, not a footer beneath them.
             const _si = node.widgets.indexOf(statusWidget);
@@ -314,6 +403,7 @@ app.registerExtension({
 
             // Hook each control widget so any change refreshes visibility.
             const triggers = [
+                "pipeline", "scene_prompts", "auto_download",
                 "segmenter", "matter", "input_mode", "subject_preset",
                 "enable_luma_key", "luma_mode",
                 "enable_advanced_trimap",
@@ -328,18 +418,29 @@ app.registerExtension({
                 const orig = w.callback;
                 w.callback = function (...args) {
                     const out = orig?.apply(this, args);
-                    refreshVisibility(node);
+                    // after the server-driven folding in the same chain, so
+                    // the size fit sees the final widget set
+                    setTimeout(() => refreshVisibility(node), 0);
                     return out;
                 };
             }
-            // Initial pass after the next tick (widgets fully populated).
+            // Initial pass after the next tick (widgets fully populated), and
+            // again once the folding spec has arrived from the server.
             setTimeout(() => refreshVisibility(node), 0);
+            setTimeout(() => refreshVisibility(node), 400);
             return r;
         };
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             const r = onConfigure?.apply(this, arguments);
+            if (!(info?.properties && "c2c_pipeline_v" in info.properties)) {
+                const pipeW = (this.widgets || []).find((w) => w.name === "pipeline");
+                if (pipeW) pipeW.value = "cascade (legacy)";
+            }
+            if (!this.properties) this.properties = {};
+            this.properties.c2c_pipeline_v = 1;
             setTimeout(() => refreshVisibility(this), 0);
+            setTimeout(() => refreshVisibility(this), 400);
             return r;
         };
     },
