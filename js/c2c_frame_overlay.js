@@ -176,7 +176,7 @@ function _renderControl(node, state) {
         const delay = Math.max(20, 1000 / Math.max(1, fps));
         state.playing = true;
         playBtn.textContent = "⏸";
-        state.interval = setInterval(() => {
+        state.interval = setInterval(() => { // c2c-allow-interval: frame playback timer (fps-driven)
             _showFrame(node, state, state.cursor + 1);
             update();
         }, delay);

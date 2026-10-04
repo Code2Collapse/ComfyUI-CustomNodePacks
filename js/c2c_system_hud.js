@@ -23,6 +23,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
@@ -491,16 +492,14 @@ function _start() {
     _ensureHud();
     _hookRunTimer();
     _tick();
-    _timer = setInterval(_tick, POLL_MS);
+    _timer = getRuntime().every("system.hud", POLL_MS, () => _tick(), { ambient: true });
     if (typeof window !== "undefined") {
-        // Cleanup on unload so reload doesn't leak the interval.
-        window.__MEC_SYSTEM_HUD_INTERVAL = _timer;
         window.addEventListener("beforeunload", _stop, { once: true });
     }
 }
 
 function _stop() {
-    if (_timer) { clearInterval(_timer); _timer = null; }
+    if (_timer) { _timer.cancel(); _timer = null; }
     _hide();
 }
 

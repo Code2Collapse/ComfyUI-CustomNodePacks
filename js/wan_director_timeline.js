@@ -27,6 +27,7 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 import { C, reducedMotion } from './_c2c_theme.js';
 import { reportFailure } from './_c2c_report.js';
+import { getRuntime } from './_c2c_runtime.js';
 import {
     WD_DEFAULT_W,
     capWdNode,
@@ -1091,14 +1092,16 @@ class TimelineEditor {
             v.muted = true; v.crossOrigin = "anonymous"; v.preload = "auto";
             v.playsInline = true; v.src = src;
             let done = false;
-            const fail = (e) => { if (!done) { done = true; reject(e || new Error("video decode failed")); } };
+            // Drop the decoder as soon as the answer is in (or the attempt failed).
+            const release = () => { try { v.onerror = v.onloadedmetadata = null; v.removeAttribute("src"); v.load(); } catch (_) {} };
+            const fail = (e) => { if (!done) { done = true; release(); reject(e || new Error("video decode failed")); } };
             v.onerror = () => fail(new Error("video load error"));
             v.onloadedmetadata = async () => {
                 const durationSec = isFinite(v.duration) ? v.duration : 0;
                 const width = v.videoWidth, height = v.videoHeight;
                 let thumbs = [];
                 try { thumbs = await this._captureThumbs(v, VID_THUMBS); } catch (_) {}
-                if (!done) { done = true; resolve({ durationSec, width, height, thumbs }); }
+                if (!done) { done = true; release(); resolve({ durationSec, width, height, thumbs }); }
             };
             setTimeout(() => fail(new Error("video decode timeout")), 15000);
         });
@@ -2982,17 +2985,17 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
                 // Liveness self-clean (idle-safe): a dead-idle timeline never
                 // calls render(), so poll cheaply and remove the UI when the
                 // node has left the graph without onRemoved firing.
-                const _aliveTimer = setInterval(() => {
+                self._wd_aliveEvery = getRuntime().every(`wan.timeline.alive.${self.id}`, 2000, () => {
                     if (self.graph == null) {
                         try { self._wdTimeline?.destroy(); } catch (_) {}
                         try { host.remove(); } catch (_) {}
-                        clearInterval(_aliveTimer);
+                        self._wd_aliveEvery?.cancel();
                         return;
                     }
                     // Nodes 2.0 self-heal: re-register DOM widgets Vue lost
                     // during the first-instance mount race (timeline + player).
                     try { wdEnsureDomWidgetsAttached(self); } catch (_) {}
-                }, 2000);
+                }, { ambient: false });
                 // Re-flow once after all DOM widgets (timeline + player) have
                 // registered so the player's computeSize sees a stable width
                 // and the node height fits both DOM widgets. Preserve the
@@ -3044,6 +3047,7 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirectorTimeline")) ap
 
         const origRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
+            try { this._wd_aliveEvery?.cancel(); } catch {}
             try { this._wdTimeline?.destroy(); } catch {}
             _wdInstances.delete(this);
             return origRemoved?.apply(this, arguments);

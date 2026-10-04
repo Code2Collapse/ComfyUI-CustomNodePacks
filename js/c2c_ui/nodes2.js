@@ -13,7 +13,7 @@
  */
 
 const CANVAS_BACKING_CAP = 6000;
-const RENDERER_POLL_MS = 300;
+const RENDERER_POLL_MS = 500;
 
 /** @returns {object|null} ComfyUI app instance, read at call time. */
 function getApp() {
@@ -80,7 +80,7 @@ export function onRendererChange(cb) {
     _rendererListeners.add(cb);
     if (_rendererTimer == null) {
         _rendererLast = _currentRendererMode();
-        _rendererTimer = setInterval(_rendererTick, RENDERER_POLL_MS);
+        _rendererTimer = setInterval(_rendererTick, RENDERER_POLL_MS); // c2c-allow-interval: renderer mode watcher, cleared when last subscriber unsubscribes
     }
     return () => {
         _rendererListeners.delete(cb);
@@ -182,6 +182,85 @@ export function canvasBackingScale(cssW, cssH) {
     return Math.max(dpr, s);
 }
 
+const ZOOM_EPS = 0.005;
+const ZOOM_EVENTS = ["wheel", "pointerup", "keyup", "resize"];
+
+function _currentZoom() {
+    return Math.max(1, getApp()?.canvas?.ds?.scale || 1);
+}
+
+function _getZoomWatch() {
+    if (typeof window === "undefined") return null;
+    if (!window.__c2cZoomWatch) {
+        window.__c2cZoomWatch = {
+            subs: new Set(),
+            lastZoom: _currentZoom(),
+            raf: 0,
+            armed: false,
+            onEvent: null,
+            tick: null,
+        };
+    }
+    return window.__c2cZoomWatch;
+}
+
+function _armZoomCheck(watch) {
+    if (watch.armed) return;
+    watch.armed = true;
+    watch.raf = requestAnimationFrame(watch.tick);
+}
+
+function _ensureZoomWatch(watch) {
+    if (watch.onEvent) return;
+    watch.onEvent = () => _armZoomCheck(watch);
+    watch.tick = () => {
+        watch.armed = false;
+        watch.raf = 0;
+        const zoom = _currentZoom();
+        if (Math.abs(zoom - watch.lastZoom) <= ZOOM_EPS) return;
+        watch.lastZoom = zoom;
+        for (const cb of [...watch.subs]) {
+            try { cb(zoom); } catch (_e) { /* ignore */ }
+        }
+    };
+    const opts = { passive: true, capture: true };
+    for (const type of ZOOM_EVENTS) {
+        window.addEventListener(type, watch.onEvent, opts);
+    }
+}
+
+function _teardownZoomWatch(watch) {
+    if (!watch.onEvent) return;
+    const opts = { capture: true };
+    for (const type of ZOOM_EVENTS) {
+        window.removeEventListener(type, watch.onEvent, opts);
+    }
+    watch.onEvent = null;
+    watch.tick = null;
+    if (watch.raf) {
+        try { cancelAnimationFrame(watch.raf); } catch (_e) { /* ignore */ }
+        watch.raf = 0;
+    }
+    watch.armed = false;
+}
+
+/**
+ * Subscribe to graph zoom changes. One page-wide watcher shared by all subscribers.
+ * @param {(zoom: number) => void} cb
+ * @returns {() => void}
+ */
+export function onZoomChange(cb) {
+    if (typeof cb !== "function") return () => {};
+    const watch = _getZoomWatch();
+    if (!watch) return () => {};
+    watch.subs.add(cb);
+    _ensureZoomWatch(watch);
+    return () => {
+        watch.subs.delete(cb);
+        if (!watch.subs.size) _teardownZoomWatch(watch);
+    };
+}
+
 /**
  * Repaint when graph zoom changes (not every frame).
  * @param {object} node
@@ -190,18 +269,8 @@ export function canvasBackingScale(cssW, cssH) {
  * @returns {() => void}
  */
 export function installZoomRepaint(node, render, rafKey) {
-    let lastZoom = -1;
-    const tick = () => {
-        const zoom = Math.max(1, getApp()?.canvas?.ds?.scale || 1);
-        if (Math.abs(zoom - lastZoom) > 0.005) {
-            lastZoom = zoom;
-            try { render(); } catch (_e) { /* ignore */ }
-        }
-        node[rafKey] = requestAnimationFrame(tick);
-    };
-    node[rafKey] = requestAnimationFrame(tick);
-    return () => {
-        try { cancelAnimationFrame(node[rafKey]); } catch (_e) { /* ignore */ }
-        node[rafKey] = null;
-    };
+    if (node && rafKey) node[rafKey] = null;
+    return onZoomChange(() => {
+        try { render(); } catch (_e) { /* ignore */ }
+    });
 }

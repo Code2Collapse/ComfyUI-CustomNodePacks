@@ -20,7 +20,7 @@
 //   green  ok    — clean
 //   yellow warn  — warnings present
 //   red    err   — errors present
-//   purple crit  — pip-check failed OR >=2 OOMs in window OR last run failed
+//   purple crit  — a ComfyUI-core package fails pip check OR >=2 OOMs in window OR last run failed
 //
 // Click → opens a breakdown popover with per-section counts and "Open Doctor",
 // "Open Integrity", "Open Graph Health" deep-links.
@@ -35,6 +35,8 @@
 import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
 
 const CHIP_ID = "int";
 const CHIP_EL_ID = "c2c-int-chip";
@@ -48,7 +50,11 @@ const DEFAULT_WINDOW_S = 300;
 const DEFAULT_POLL_MS = 4000;
 const MIN_POLL_MS = 1500;
 
-let _timer = null;
+let _pollEvery = null;
+let _graphWired = false;
+let _wfGen = 0;
+let _wfCached = null;
+let _wfCachedGen = -1;
 let _lastHealth = null;
 let _busy = false;
 let _popoverOpen = false;
@@ -209,12 +215,46 @@ function _injectStyle() {
     document.head.appendChild(s);
 }
 
+// PERF: this runs every few seconds. graph.serialize() walks every node and
+// widget - on a big graph that is a visible hitch each time. ComfyUI's change
+// tracker already keeps a serialised copy for undo and replaces that object
+// only when the graph really changed, so it is reused (and so is the request
+// body built from it) until then.
+let _lastWf = null;
+let _lastBody = "";
+let _lastWindow = 0;
 function _currentWorkflow() {
+    if (!graphReadable()) return null;
+    if (_wfCachedGen === _wfGen && _wfCached !== undefined) return _wfCached;
     try {
+        const st = app?.extensionManager?.workflow?.activeWorkflow?.changeTracker?.activeState;
+        if (st && typeof st === "object" && Array.isArray(st.nodes)) {
+            _wfCached = st;
+            _wfCachedGen = _wfGen;
+            return st;
+        }
         const g = app?.graph;
-        if (!g || typeof g.serialize !== "function") return null;
-        return g.serialize();
-    } catch { return null; }
+        if (!g || typeof g.serialize !== "function") {
+            _wfCached = null;
+            _wfCachedGen = _wfGen;
+            return null;
+        }
+        _wfCached = g.serialize();
+        _wfCachedGen = _wfGen;
+        return _wfCached;
+    } catch {
+        _wfCached = null;
+        _wfCachedGen = _wfGen;
+        return null;
+    }
+}
+function _healthBody(wf, window_s) {
+    if (wf !== _lastWf || window_s !== _lastWindow || !_lastBody) {
+        _lastBody = JSON.stringify({ workflow: wf, window_s });
+        _lastWf = wf;
+        _lastWindow = window_s;
+    }
+    return _lastBody;
 }
 
 function _graphHealthCounts() {
@@ -848,10 +888,18 @@ function _renderPopover(health) {
             <div class="int-sec">
                 <h4>Package integrity</h4>
                 ${ig.available ? `
-                    <div class="int-row ${ig.pip_check_ok === false ? "crit" : ""}">
+                    <div class="int-row ${ig.pip_check_ok === false ? ((c.pip_core_conflicts || 0) > 0 ? "crit" : "warn") : ""}">
                         <span>pip check</span>
-                        <span class="v">${ig.pip_check_ok === false ? "FAIL" : "ok"}</span>
+                        <span class="v">${ig.pip_check_ok === false
+                            ? ((c.pip_core_conflicts || 0) > 0
+                                ? `${c.pip_core_conflicts} in ComfyUI core`
+                                : `${c.pip_conflicts || "some"} outside core`)
+                            : "ok"}</span>
                     </div>
+                    ${ig.pip_check_ok === false && (c.pip_core_conflicts || 0) === 0 ? `
+                        <div style="opacity:0.7; font-size:11px; margin:2px 0 4px;">
+                            None of these touch a package ComfyUI itself runs on. At most, the node pack that uses the named package may misbehave.
+                        </div>` : ""}
                     ${ig.pip_check_ok === false && ig.pip_check_detail ? `
                         <div class="int-top"><b>Conflicts</b>
                             <div style="opacity:0.85; margin-top:2px; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:10px;">${escape(String(ig.pip_check_detail).slice(0, 800))}</div>
@@ -968,7 +1016,9 @@ function _togglePopover() {
 }
 
 async function _refreshNow(force = false) {
-    if (_busy && !force) return;
+    if (_busy && force !== true) return;
+    // Nobody can see the chip in a background tab; the next visible poll catches up.
+    if (document.hidden && force !== true) return;
     _busy = true;
     try {
         const window_s = +(_getSetting(SETTING_WINDOW, DEFAULT_WINDOW_S)) || DEFAULT_WINDOW_S;
@@ -978,7 +1028,7 @@ async function _refreshNow(force = false) {
             r = await api.fetchApi("/c2c/int/health", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ workflow: wf, window_s }),
+                body: _healthBody(wf, window_s),
             });
         } else {
             r = await api.fetchApi(`/c2c/int/health?window_s=${window_s}`);
@@ -1011,10 +1061,20 @@ async function _refreshNow(force = false) {
     }
 }
 
+function _wireGraphRefresh() {
+    if (_graphWired) return;
+    _graphWired = true;
+    getRuntime().onGraphChange(getRuntime().guard(() => {
+        _wfGen += 1;
+        _wfCachedGen = -1;
+        _refreshNow();
+    }, "int_badge:graph"));
+}
+
 function _startPolling() {
-    if (_timer) clearInterval(_timer);
+    if (_pollEvery) _pollEvery.cancel();
     const ms = Math.max(MIN_POLL_MS, +(_getSetting(SETTING_POLL, DEFAULT_POLL_MS)) || DEFAULT_POLL_MS);
-    _timer = setInterval(_refreshNow, ms);
+    _pollEvery = getRuntime().every("int.health", ms, () => _refreshNow(), { ambient: true });
 }
 
 function _wireBackgroundEvents() {
@@ -1099,6 +1159,7 @@ app.registerExtension({
             await new Promise((r) => setTimeout(r, 100));
         }
         _wireBackgroundEvents();
+        _wireGraphRefresh();
         _startPolling();
         // First refresh in a moment so other extensions have time to mount.
         setTimeout(_refreshNow, 600);

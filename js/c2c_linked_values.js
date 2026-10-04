@@ -124,6 +124,15 @@ function ensurePill() {
     if (el) return el;
     el = document.createElement("div");
     el.id = PILL_ID;
+    if (!document.getElementById("c2c-linked-values-lite-style")) {
+        const st = document.createElement("style");
+        st.id = "c2c-linked-values-lite-style";
+        st.textContent = `html.c2c-lite #${PILL_ID} {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }`;
+        document.head.appendChild(st);
+    }
     el.style.cssText = `
         position: fixed; right: 14px; bottom: 158px; z-index: var(--c2c-z-hud);
         background: color-mix(in srgb, var(--c2c-panelBg) 84%, transparent);

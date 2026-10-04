@@ -241,7 +241,9 @@ function installPicker(node) {
         node.size = [Math.max(node.size?.[0] || 0, 320), Math.max(node.size?.[1] || 0, 260)];
     }
 
-    const poll = setInterval(tryLoadSourceImage, 1500);
+    const poll = setInterval(() => { // c2c-allow-interval: load source image until ready, cancelled onRemoved
+        tryLoadSourceImage();
+    }, 1500);
     const origRemoved = node.onRemoved;
     node.onRemoved = function () {
         origRemoved?.apply(this, arguments);

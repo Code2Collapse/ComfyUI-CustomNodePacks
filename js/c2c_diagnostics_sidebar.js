@@ -14,7 +14,11 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const STYLE_TAG_ID = "mec-diagnostics-style";
 
@@ -977,8 +981,8 @@ async function _renderSettings(body) {
             return;
         }
         const jobId = r.data.job_id;
-        if (_dlPollTimer) { clearInterval(_dlPollTimer); _dlPollTimer = null; }
-        _dlPollTimer = setInterval(async () => {
+        if (_dlPollTimer) { _dlPollTimer.cancel(); _dlPollTimer = null; }
+        _dlPollTimer = getRuntime().every("diag.dl", 800, async () => {
             const p = await _api(`/mec/diagnostics/local_llm/download_progress?job_id=${jobId}`);
             if (!p.success) return;
             const d = p.data;
@@ -988,16 +992,16 @@ async function _renderSettings(body) {
                 `<span>${_fmtBytes(d.bytes_done)} / ${_fmtBytes(d.total)} (${pct.toFixed(1)}%)</span>` +
                 `<span style="opacity:0.6;">${d.status}</span>`;
             if (d.status === "done" || d.status === "exists") {
-                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                _dlPollTimer?.cancel(); _dlPollTimer = null;
                 dlLabel.textContent = (d.status === "exists" ? "Already present: " : "Downloaded: ") + d.dest_path;
                 dlBtn.disabled = false;
                 _scanLocalModels(); // refresh installed markers and dropdown
             } else if (d.status === "error") {
-                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                _dlPollTimer?.cancel(); _dlPollTimer = null;
                 dlLabel.textContent = "Download failed: " + (d.error || "(unknown)");
                 dlBtn.disabled = false;
             }
-        }, 800);
+        }, { ambient: false });
     }
     dlBtn.onclick = _startDownload;
 
@@ -1102,8 +1106,8 @@ async function _renderSettings(body) {
             return;
         }
         const jobId = r.data.job_id;
-        if (_dlPollTimer) { clearInterval(_dlPollTimer); _dlPollTimer = null; }
-        _dlPollTimer = setInterval(async () => {
+        if (_dlPollTimer) { _dlPollTimer.cancel(); _dlPollTimer = null; }
+        _dlPollTimer = getRuntime().every("diag.dl.hf", 800, async () => {
             const p = await _api(`/mec/diagnostics/local_llm/download_progress?job_id=${jobId}`);
             if (!p.success) return;
             const d = p.data;
@@ -1113,16 +1117,16 @@ async function _renderSettings(body) {
                 `<span>${_fmtBytes(d.bytes_done)} / ${_fmtBytes(d.total)} (${pct.toFixed(1)}%)</span>` +
                 `<span style="opacity:0.6;">${d.status}</span>`;
             if (d.status === "done" || d.status === "exists") {
-                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                _dlPollTimer?.cancel(); _dlPollTimer = null;
                 dlLabel.textContent = (d.status === "exists" ? "Already present: " : "Downloaded: ") + d.dest_path;
                 hfDlBtn.disabled = false;
                 _scanLocalModels();
             } else if (d.status === "error") {
-                clearInterval(_dlPollTimer); _dlPollTimer = null;
+                _dlPollTimer?.cancel(); _dlPollTimer = null;
                 dlLabel.textContent = "Download failed: " + (d.error || "(unknown)");
                 hfDlBtn.disabled = false;
             }
-        }, 800);
+        }, { ambient: false });
     }
     hfDlBtn.onclick = _hfStartDownload;
     llamaPane.querySelector('[data-action="hf-search"]').onclick = _runHfSearch;

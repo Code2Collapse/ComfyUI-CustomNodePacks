@@ -16,7 +16,11 @@
  */
 
 import { app } from "../../scripts/app.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
 
 let _enabled = true;
 
@@ -40,12 +44,9 @@ function _typesCompatible(srcType, dstType) {
 }
 
 function _patchCanvas() {
-    if (!LGraphCanvas || LGraphCanvas.prototype._mecHintsPatched) return;
+    if (!LGraphCanvas || typeof LGraphCanvas.prototype.drawNode !== "function") return;
 
-    const origDraw = LGraphCanvas.prototype.drawNode;
-    if (typeof origDraw !== "function") return;
-
-    LGraphCanvas.prototype.drawNode = function (node, ctx) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "drawNode", (origDraw) => function (node, ctx) {
         const result = origDraw.call(this, node, ctx);
 
         if (!_enabled) return result;
@@ -96,9 +97,7 @@ function _patchCanvas() {
         }
         void ci;  // reserved for future
         return result;
-    };
-
-    LGraphCanvas.prototype._mecHintsPatched = true;
+    }, { id: "hints.drawNode" });
 }
 
 function _setupRedrawWhileConnecting() {

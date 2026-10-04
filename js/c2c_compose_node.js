@@ -437,7 +437,7 @@ function _watchToolbox() {
         };
         // Run a few times during startup, then stop.
         let tries = 0;
-        const id = setInterval(() => {
+        const id = setInterval(() => { // c2c-allow-interval: migrate observer to canvas, cap 20×500ms
             upgrade();
             if (currentTarget !== document.body || tries++ > 20) clearInterval(id);
         }, 500);

@@ -78,6 +78,10 @@ class _State:
 
 _STATE = _State()
 
+# Client failure dedup: at most one log/print/emit per dedup key per 60 s.
+_CLIENT_FAILURE_DEDUP: Dict[str, Dict[str, Any]] = {}
+_CLIENT_FAILURE_DEDUP_INTERVAL_S = 60.0
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def _emit_event(payload: Dict[str, Any]) -> None:
@@ -210,6 +214,7 @@ def clear() -> None:
     with _lock:
         _STATE.failures.clear()
         _STATE.statuses.clear()
+        _CLIENT_FAILURE_DEDUP.clear()
 
 
 def record_client_failure(payload: Dict[str, Any]) -> FailureRecord:
@@ -217,13 +222,20 @@ def record_client_failure(payload: Dict[str, Any]) -> FailureRecord:
     other browser-side error surfaces post here). The payload shape is the
     same one ``_surfaceFailure`` builds:
 
-        { scope, where, message, stack, context, ts }
+        { component, where, message, stack, context, ts }
+
+    (Legacy payloads may use ``scope`` instead of ``component``.)
 
     We translate it into a :class:`FailureRecord` (group=``"client.js"``)
     so it appears in the same ``/c2c/registry/status`` summary the Doctor
     panel and INT badge consume. Mojibake-safe: values are coerced to str
     and truncated.
+
+    Rate-limited: per ``where|message`` key, log/print/emit at most once
+    per 60 s; suppressed repeats are counted and surfaced on the next emit.
     """
+    import time as _time
+
     def _s(v: Any, cap: int) -> str:
         if v is None:
             return ""
@@ -233,7 +245,7 @@ def record_client_failure(payload: Dict[str, Any]) -> FailureRecord:
             t = repr(v)
         return t[:cap]
 
-    scope = _s(payload.get("scope"), 80) or "c2c.client"
+    scope = _s(payload.get("component") or payload.get("scope"), 80) or "c2c.client"
     where = _s(payload.get("where"), 200) or "unknown"
     message = _s(payload.get("message"), 1000) or "(no message)"
     stack = _s(payload.get("stack"), 4000)
@@ -244,12 +256,43 @@ def record_client_failure(payload: Dict[str, Any]) -> FailureRecord:
     except Exception:
         ctx_str = _s(ctx, 2000)
 
+    dedup_key = f"{where}|{message}"
+    now = _time.monotonic()
+    suppressed = 0
+    with _lock:
+        entry = _CLIENT_FAILURE_DEDUP.get(dedup_key)
+        if entry is not None and (now - entry.get("last_emit", 0.0)) < _CLIENT_FAILURE_DEDUP_INTERVAL_S:
+            entry["suppressed"] = int(entry.get("suppressed", 0)) + 1
+            suppressed = entry["suppressed"]
+            # Return a lightweight record without logging or ring-buffer growth.
+            return FailureRecord(
+                key=f"{scope}:{where}",
+                group="client.js",
+                exception_type=scope,
+                message=message,
+                hint=ctx_str or None,
+                traceback=stack,
+                severity="warning",
+            )
+        if entry is None:
+            entry = {"last_emit": now, "suppressed": 0}
+            _CLIENT_FAILURE_DEDUP[dedup_key] = entry
+        else:
+            suppressed = int(entry.get("suppressed", 0))
+            entry["last_emit"] = now
+            entry["suppressed"] = 0
+
+    hint = ctx_str or None
+    if suppressed > 0:
+        suffix = f"(+{suppressed} suppressed repeats)"
+        hint = f"{hint} {suffix}".strip() if hint else suffix
+
     rec = FailureRecord(
         key=f"{scope}:{where}",
         group="client.js",
         exception_type=scope,
         message=message,
-        hint=ctx_str or None,
+        hint=hint,
         traceback=stack,
         severity="warning",
     )
@@ -259,6 +302,8 @@ def record_client_failure(payload: Dict[str, Any]) -> FailureRecord:
         if len(_STATE.failures) > 500:
             del _STATE.failures[: len(_STATE.failures) - 500]
     line = f"client.js/{scope}:{where} {message}"
+    if suppressed > 0:
+        line = f"{line} (+{suppressed} suppressed repeats)"
     _log_and_print("warning", line)
     _emit_event({"kind": "failure", "record": asdict(rec)})
     return rec

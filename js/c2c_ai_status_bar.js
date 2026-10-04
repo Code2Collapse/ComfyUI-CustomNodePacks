@@ -18,7 +18,14 @@
  */
 
 import { app } from "../../scripts/app.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const CHIP_ID    = "c2c-ai-chip";
 const POPOVER_ID = "c2c-ai-popover";
@@ -28,7 +35,7 @@ const SETTING_PAUSE = "c2c.ai.paused";
 const SETTING_HUD   = "c2c.ai.hudVisible";
 
 let _lastStatus = null;
-let _pollTimer = null;
+let _pollEvery = null;
 let _popoverOpen = false;
 let _chipEl = null;
 let _chipDot = null;
@@ -84,6 +91,10 @@ function _injectStyle() {
   padding: 10px 12px;
   display: none;
   backdrop-filter: blur(8px);
+}
+html.c2c-lite #${POPOVER_ID} {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 #${POPOVER_ID}.open { display: block; }
 #${POPOVER_ID} h4 {
@@ -392,7 +403,7 @@ function _registerChip() {
             id: "ai",
             order: 10,
             element: el,
-            update: () => { /* polled via setInterval; chip re-renders on each refresh */ },
+            update: () => { /* polled via runtime.every; chip re-renders on each refresh */ },
             onMode: _onSlotMode,
         });
     } catch (e) {
@@ -417,8 +428,8 @@ app.registerExtension({
         _registerChip();
         // Initial paint + poll loop.
         await refresh();
-        if (_pollTimer) clearInterval(_pollTimer);
-        _pollTimer = setInterval(refresh, POLL_MS);
+        if (_pollEvery) _pollEvery.cancel();
+        _pollEvery = getRuntime().every("ai.status", POLL_MS, () => refresh(), { ambient: true });
         // Sweep any stale legacy DOM left behind by older builds.
         document.getElementById("c2c-ai-hud")?.remove();
         document.getElementById("c2c-ai-hud-flyout")?.remove();

@@ -31,6 +31,7 @@
  * License: Apache-2.0
  */
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const NS = "C2C.MemoryGuard";
 const POLL_MS = 8000;
@@ -56,7 +57,7 @@ MEM.trackBlob = (url) => {
     return url;
 };
 
-let _timer = 0;
+let _timer = null;
 let _warnedAt = 0;
 
 function _setting(id, def) {
@@ -132,8 +133,10 @@ app.registerExtension({
         { id: "c2c.memGuard.freeNow", label: "C2C: Free memory now", function: _freeNow },
     ],
     async setup() {
-        if (_timer) clearInterval(_timer);
-        _timer = setInterval(() => { try { _tick(); } catch (_) { /* never throw from the guard */ } }, POLL_MS);
+        if (_timer) _timer.cancel();
+        _timer = getRuntime().every("mem.guard", POLL_MS, () => {
+            try { _tick(); } catch (_) { /* never throw from the guard */ }
+        }, { ambient: true });
         document.addEventListener("visibilitychange", () => { if (!document.hidden) { try { _tick(); } catch (_) {} } });
         const h = _heap();
         console.log(`[C2C.MemoryGuard] armed (poll ${POLL_MS}ms; heap API ${h ? "available" : "unavailable"}).`);

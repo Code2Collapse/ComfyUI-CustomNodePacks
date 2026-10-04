@@ -12,6 +12,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const LORA_NODE_RE = /lora.*loader|loraloader|loralightning|lcm.*lora/i;
 
@@ -162,39 +163,38 @@ function _isStrengthWidget(w) {
            w.name.toLowerCase() === "strength";
 }
 
-function _patchNodeMenu() {
-    const orig = LGraphCanvas.prototype.getNodeMenuOptions;
-    if (!orig || orig._mecLoraScrubPatched) return;
-    LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-        const opts = orig.call(this, node);
+function _nodeMenuItems(node, canvas) {
+    const enabled = (() => {
+        try { return app.ui.settings.getSettingValue("c2c.lora_scrubber.enabled", true); }
+        catch { return true; }
+    })();
+    if (!enabled || !_isLoraNode(node)) return [];
 
-        const enabled = (() => {
-            try { return app.ui.settings.getSettingValue("c2c.lora_scrubber.enabled", true); }
-            catch { return true; }
-        })();
-        if (!enabled) return opts;
-        if (!_isLoraNode(node)) return opts;
+    const strengths = (node.widgets || []).filter(_isStrengthWidget);
+    if (strengths.length === 0) return [];
 
-        const strengths = (node.widgets || []).filter(_isStrengthWidget);
-        if (strengths.length === 0) return opts;
+    const cvs = canvas || app.canvas;
+    const items = [null];
+    for (const w of strengths) {
+        items.push({
+            content: `🎚 Scrub ${w.name}`,
+            callback: () => {
+                const rect = cvs.canvas.getBoundingClientRect();
+                _openScrubber(
+                    node, w,
+                    rect.left + rect.width / 2,
+                    rect.top + rect.height / 2,
+                );
+            },
+        });
+    }
+    return items;
+}
 
-        opts.push(null);
-        for (const w of strengths) {
-            opts.push({
-                content: `🎚 Scrub ${w.name}`,
-                callback: () => {
-                    const rect = this.canvas.getBoundingClientRect();
-                    _openScrubber(
-                        node, w,
-                        rect.left + rect.width / 2,
-                        rect.top + rect.height / 2,
-                    );
-                },
-            });
-        }
-        return opts;
-    };
-    LGraphCanvas.prototype.getNodeMenuOptions._mecLoraScrubPatched = true;
+function _mergeNodeMenuItems(opts, node) {
+    const items = _nodeMenuItems(node, this);
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -208,9 +208,12 @@ app.registerExtension({
             defaultValue: true,
         },
     ],
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
         _injectStyle();
-        _patchNodeMenu();
+        legacyNodeMenu("lora_scrubber", _mergeNodeMenuItems);
         console.log("[MEC.LoRAScrubber] Loaded.");
     },
 });

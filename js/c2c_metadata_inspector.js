@@ -18,10 +18,28 @@
 
 import { app } from "../../scripts/app.js";
 import { readPngTextChunks, assessWorkflowMetadata } from "./c2c_png_metadata.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
 
 const SETTING_ENABLED = "c2c.metaInspect.enabled";
+const MODAL_BACKDROP_ID = "c2c-metadata-modal-backdrop";
 let _enabled = true;
+
+function _ensureLiteBlurStyle() {
+    if (document.getElementById("c2c-metadata-lite-style")) return;
+    const st = document.createElement("style");
+    st.id = "c2c-metadata-lite-style";
+    st.textContent = `html.c2c-lite #${MODAL_BACKDROP_ID} {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }`;
+    document.head.appendChild(st);
+}
 
 function tryParseWorkflow(meta) {
     const a = assessWorkflowMetadata(meta);
@@ -37,7 +55,9 @@ function readPngTextChunksLegacy(buffer) {
 
 function openModal(meta, parsed, file) {
     return new Promise((resolve) => {
+        _ensureLiteBlurStyle();
         const root = document.createElement("div");
+        root.id = MODAL_BACKDROP_ID;
         root.style.cssText = `
             position: fixed; inset: 0; z-index: var(--c2c-z-modal);
             display: flex; align-items: center; justify-content: center;

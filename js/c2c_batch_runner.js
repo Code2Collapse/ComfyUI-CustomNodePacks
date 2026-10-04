@@ -37,6 +37,7 @@
 
 import { app } from "../../scripts/app.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const STYLE_ID  = "mec-batch-style";
 const MODAL_ID  = "mec-batch-modal";
@@ -534,25 +535,20 @@ function _openModal(node) {
 // ───────────────────────────────────────────────────────────────────────
 // Context-menu integration
 // ───────────────────────────────────────────────────────────────────────
-function _patchNodeContextMenu() {
-    const orig = LGraphCanvas.prototype.getNodeMenuOptions;
-    if (!orig || orig._mecBatchPatched) return;
+function _nodeMenuItems(node) {
+    let enabled = true;
+    try { enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true); } catch { /* default */ }
+    if (!enabled || !_sweepableWidgets(node).length) return [];
+    return [null, {
+        content: "📦 Batch Run…",
+        callback: () => _openModal(node),
+    }];
+}
 
-    LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-        const opts = orig.call(this, node);
-        let enabled = true;
-        try { enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true); } catch { /* default */ }
-        if (!enabled) return opts;
-        if (!_sweepableWidgets(node).length) return opts;
-
-        opts.push(null);
-        opts.push({
-            content: "📦 Batch Run…",
-            callback: () => _openModal(node),
-        });
-        return opts;
-    };
-    LGraphCanvas.prototype.getNodeMenuOptions._mecBatchPatched = true;
+function _mergeNodeMenuItems(opts, node) {
+    const items = _nodeMenuItems(node);
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -577,10 +573,13 @@ app.registerExtension({
             attrs: { min: 1, max: 4096, step: 1 },
         },
     ],
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
         _injectStyle();
         _ensureToast();
-        _patchNodeContextMenu();
+        legacyNodeMenu("batch_runner", _mergeNodeMenuItems);
         console.log("[MEC.BatchRunner] Loaded — right-click a node → '📦 Batch Run…'.");
     },
 });

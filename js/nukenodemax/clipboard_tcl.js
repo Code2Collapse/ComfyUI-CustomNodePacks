@@ -3,6 +3,7 @@
 // INTEGRATES WITH: nodes/clipboard_tcl.py (/nukenodemax/copy_tcl, /nukenodemax/paste_tcl)
 
 import { app } from "../../../scripts/app.js";
+import { legacyCanvasMenu } from "../_c2c_compat.js";
 
 function gather(selectedNodes) {
     const idSet = new Set(selectedNodes.map(n => n.id));
@@ -111,8 +112,24 @@ async function pasteTcl() {
     console.info("[nukenodemax] pasted", parsed.nodes.length, "nodes from TCL");
 }
 
+function _canvasMenuItems() {
+    return [
+        null,
+        { content: "Copy as TCL (Ctrl+Shift+C)", callback: copyTcl },
+        { content: "Paste TCL (Ctrl+Shift+V)", callback: pasteTcl },
+    ];
+}
+
+function _mergeCanvasMenuItems(opts) {
+    opts.push(..._canvasMenuItems());
+    return opts;
+}
+
 app.registerExtension({
     name: "nukenodemax.clipboard_tcl",
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
+    },
     setup() {
         document.addEventListener("keydown", (e) => {
             if (!e.ctrlKey || !e.shiftKey) return;
@@ -125,14 +142,6 @@ app.registerExtension({
             }
         });
 
-        // Canvas right-click additions.
-        const orig = LGraphCanvas.prototype.getCanvasMenuOptions;
-        LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-            const opts = orig ? orig.apply(this, arguments) : [];
-            opts.push(null);
-            opts.push({ content: "Copy as TCL (Ctrl+Shift+C)", callback: copyTcl });
-            opts.push({ content: "Paste TCL (Ctrl+Shift+V)", callback: pasteTcl });
-            return opts;
-        };
+        legacyCanvasMenu("nukenodemax.clipboard_tcl", _mergeCanvasMenuItems);
     },
 });

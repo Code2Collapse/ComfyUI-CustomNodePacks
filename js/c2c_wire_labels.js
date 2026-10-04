@@ -12,6 +12,7 @@
 import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
+import { getRuntime } from "./_c2c_runtime.js";
 
 const STORE_KEY = "c2c_wire_labels"; // stored under graph.extra[STORE_KEY]
 const STYLE_ID  = "mec-wire-labels-style";
@@ -166,9 +167,7 @@ function _openDialog(linkId, screenX, screenY) {
 }
 
 function _patchDblClick() {
-    const orig = LGraphCanvas.prototype.processMouseDown;
-    if (!orig || orig._mecWireLabelsPatched) return;
-    LGraphCanvas.prototype.processMouseDown = function (e) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "processMouseDown", (orig) => function (e) {
         const r = orig.call(this, e);
         try {
             if (!_enabled) return r;
@@ -187,14 +186,11 @@ function _patchDblClick() {
             console.warn("[MEC.WireLabels] dblclick handler error:", err);
         }
         return r;
-    };
-    LGraphCanvas.prototype.processMouseDown._mecWireLabelsPatched = true;
+    }, { id: "wirelabels.processMouseDown" });
 }
 
 function _patchDrawConnections() {
-    const orig = LGraphCanvas.prototype.drawConnections;
-    if (!orig || orig._mecWireLabelsPatched) return;
-    LGraphCanvas.prototype.drawConnections = function (ctx) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "drawConnections", (orig) => function (ctx) {
         const r = orig.call(this, ctx);
         try {
             if (!_enabled) return r;
@@ -238,8 +234,7 @@ function _patchDrawConnections() {
             console.warn("[MEC.WireLabels] draw error:", err);
         }
         return r;
-    };
-    LGraphCanvas.prototype.drawConnections._mecWireLabelsPatched = true;
+    }, { id: "wirelabels.drawConnections" });
 }
 
 app.registerExtension({

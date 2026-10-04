@@ -23,7 +23,14 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
 
 const SETTING_ID = "c2c.graphHealth.enabled";
 const PULSE_MS = 1100;
@@ -219,12 +226,10 @@ function _colors() {
 }
 try { window.addEventListener("c2c:theme-changed", () => { _colCache = null; }); } catch (_) { /* no-op */ }
 // ── Canvas paint hook ────────────────────────────────────────────────
-function patchDraw() {
+function installDrawPatch() {
     const c = app.canvas;
-    if (!c || c._c2c_health_painted) return;
-    c._c2c_health_painted = true;
-    const orig = c.drawNode;
-    c.drawNode = function (node, ctx) {
+    if (!c || typeof c.drawNode !== "function") return;
+    getRuntime().safePatch(c, "drawNode", (orig) => function (node, ctx) {
         const r = orig.apply(this, arguments);
         // O(1) fast bail: healthy graph → zero per-node work (the common case).
         if (_deadSet.size === 0 && _cycleSet.size === 0 && _dangByNode.size === 0) return r;
@@ -267,7 +272,7 @@ function patchDraw() {
             ctx.restore();
         } catch { /* */ }
         return r;
-    };
+    }, { id: "graphhealth.drawNode" });
 }
 
 // ── UI (retired — INT badge in OmniBar hosts the breakdown) ──────────
@@ -382,23 +387,18 @@ app.registerExtension({
             };
         }
         const G = window.LGraph?.prototype;
-        if (G && !G._c2c_health_patched) {
+        const rt = getRuntime();
+        if (G) {
             for (const m of ["add", "remove", "connect", "disconnect"]) {
-                const o = G[m];
-                if (typeof o === "function") {
-                    G[m] = function (...args) {
-                        const r = o.apply(this, args);
-                        schedule();
-                        return r;
-                    };
-                }
+                rt.safePatch(G, m, (orig) => function (...args) {
+                    const r = orig.apply(this, args);
+                    schedule();
+                    return r;
+                }, { id: `graphhealth.lgraph.${m}` });
             }
-            G._c2c_health_patched = true;
         }
         // Initial.
-        setTimeout(() => { patchDraw(); schedule(); }, 600);
-        // Safety re-paint hook (canvas may be reconstructed).
-        setInterval(() => patchDraw(), 3000);
+        setTimeout(() => { installDrawPatch(); schedule(); }, 600);
         console.log("[C2C.GraphHealth] ready.");
     },
 });

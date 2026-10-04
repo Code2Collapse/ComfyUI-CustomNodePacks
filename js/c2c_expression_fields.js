@@ -20,6 +20,8 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
 
 const SETTING_ID = "c2c.expressionFields.enabled";
 
@@ -244,22 +246,25 @@ app.registerExtension({
         } catch { /* */ }
         // Initial pass + watch for node creation.
         setTimeout(rebindAll, 250);
-        const orig = window.LGraph?.prototype?.add;
-        if (orig && !window.LGraph.prototype._c2c_expr_patched) {
-            window.LGraph.prototype.add = function (node, ...rest) {
+        const G = window.LGraph?.prototype;
+        if (G) {
+            getRuntime().safePatch(G, "add", (orig) => function (node, ...rest) {
                 const r = orig.apply(this, [node, ...rest]);
                 queueMicrotask(() => {
                     for (const w of node.widgets || []) hookWidget(node, w);
                 });
                 return r;
-            };
-            window.LGraph.prototype._c2c_expr_patched = true;
+            }, { id: "expressionfields.lgraph.add" });
         }
-        // Periodic re-eval (only nodes with _expr do work). PERF: this used to
-        // run as a 60fps requestAnimationFrame loop FOREVER just to do work every
-        // 250ms — 60 wakeups/sec for a 4/sec task, even when idle/hidden. A plain
-        // 250ms interval that pauses while the tab is hidden is 15x fewer wakeups.
-        setInterval(() => { if (!document.hidden) reevalAll(); }, 250);
+        const rt = getRuntime();
+        const reeval = rt.guard(() => {
+            if (!graphReadable()) return;
+            reevalAll();
+        }, "expr:reeval");
+        rt.onGraphChange(reeval);
+        rt.every("expr.reeval", 250, () => {
+            if (!document.hidden) reeval();
+        }, { ambient: false });
         console.log("[C2C.ExpressionFields] ready (type =expr in any numeric widget).");
     },
 });

@@ -11,6 +11,7 @@
 // Frontend file only — backend lives in nodes/_c2c_autoconnect.py.
 
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const TAG = "[C2C/autoconnect]";
 const SLOT_RADIUS = 10;      // graph-px tolerance for slot dot hit-tests
@@ -365,9 +366,8 @@ async function autoconnectFromSlot(node, isInput, slotIndex, opts = {}) {
 // ---------------------------------------------------------------------------
 function _hookConnect() {
     const proto = window.LiteGraph?.LGraphNode?.prototype;
-    if (!proto || proto.__c2c_ac_hooked) return;
-    const orig = proto.connect;
-    proto.connect = function patched(srcSlotIdx, target, dstSlotIdx) {
+    if (!proto) return;
+    getRuntime().safePatch(proto, "connect", (orig) => function patched(srcSlotIdx, target, dstSlotIdx) {
         const ret = orig.apply(this, arguments);
         try {
             if (ret !== null && ret !== false && target && typeof target === "object") {
@@ -390,8 +390,7 @@ function _hookConnect() {
             }
         } catch (_e) { /* never break LiteGraph */ }
         return ret;
-    };
-    proto.__c2c_ac_hooked = true;
+    }, { id: "autoconnect.lgraphnode.connect" });
 }
 
 // ---------------------------------------------------------------------------

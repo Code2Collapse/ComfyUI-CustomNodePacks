@@ -24,6 +24,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const SETTING_ID = "c2c.slotGetSet.enabled";
 
@@ -181,12 +182,10 @@ app.registerExtension({
         }
 
         // Augment per-node slot context menu.
-        const augmentMenu = (proto) => {
-            if (!proto || proto._c2c_getset_menu_hooked) return;
-            proto._c2c_getset_menu_hooked = true;
-            const _orig = proto.getSlotMenuOptions;
-            proto.getSlotMenuOptions = function (slot) {
-                const items = _orig ? _orig.call(this, slot) || [] : [];
+        const proto = window.LGraphNode?.prototype;
+        if (proto) {
+            getRuntime().safePatch(proto, "getSlotMenuOptions", (orig) => function (slot) {
+                const items = orig ? orig.call(this, slot) || [] : [];
                 if (!enabled() || !hasKJSetGet()) return items;
                 const isInput  = slot?.input != null;
                 const isOutput = slot?.output != null;
@@ -207,10 +206,8 @@ app.registerExtension({
                     });
                 }
                 return items;
-            };
-        };
-        // Patch base LGraphNode prototype (covers every node type).
-        augmentMenu(window.LGraphNode?.prototype);
+            }, { id: "slotgetset.getSlotMenuOptions" });
+        }
         console.log("[C2C.SlotGetSet] ready. KJNodes present:", hasKJSetGet());
     },
 });

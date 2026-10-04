@@ -22,6 +22,7 @@ import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
 import { c2cPrompt, c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 const USERDATA_DIR  = "c2c/group_presets";
 const USERDATA_INDEX = `${USERDATA_DIR}/index.json`;
@@ -560,25 +561,24 @@ async function _loadPreset(id) {
     console.log("[C2C.GroupPresets] Loaded", created.length, "nodes from preset", id);
 }
 
-function _patchCanvasMenu() {
-    const orig = LGraphCanvas.prototype.getCanvasMenuOptions;
-    if (!orig || orig._mecPresetsPatched) return;
-    LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-        const opts = orig.call(this);
-        const enabled = (() => {
-            try { return app.ui.settings.getSettingValue("c2c.group_presets.enabled", true); }
-            catch { return true; }
-        })();
-        if (!enabled) return opts;
-        opts.push(null);
-        opts.push({ content: "📚 Preset library…", callback: () => _toggleGallery() });
-        const sel = _selectedNodes();
-        if (sel.length > 0) {
-            opts.push({ content: `💾 Save ${sel.length} selected as preset…`, callback: () => _savePreset() });
-        }
-        return opts;
-    };
-    LGraphCanvas.prototype.getCanvasMenuOptions._mecPresetsPatched = true;
+function _canvasMenuItems() {
+    const enabled = (() => {
+        try { return app.ui.settings.getSettingValue("c2c.group_presets.enabled", true); }
+        catch { return true; }
+    })();
+    if (!enabled) return [];
+    const items = [null, { content: "📚 Preset library…", callback: () => _toggleGallery() }];
+    const sel = _selectedNodes();
+    if (sel.length > 0) {
+        items.push({ content: `💾 Save ${sel.length} selected as preset…`, callback: () => _savePreset() });
+    }
+    return items;
+}
+
+function _mergeCanvasMenuItems(opts) {
+    const items = _canvasMenuItems();
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -596,10 +596,13 @@ app.registerExtension({
             },
         },
     ],
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
+    },
     async setup() {
         _injectStyle();
         _ensureUi();
-        _patchCanvasMenu();
+        legacyCanvasMenu("group_presets", _mergeCanvasMenuItems);
         const enabled = (() => {
             try { return app.ui.settings.getSettingValue("c2c.group_presets.enabled", true); }
             catch { return true; }

@@ -354,6 +354,18 @@ function ensureModal() {
 
     modal = document.createElement("div");
     modal.id = MODAL_ID;
+    if (!document.getElementById("c2c-preset-hub-lite-style")) {
+        const st = document.createElement("style");
+        st.id = "c2c-preset-hub-lite-style";
+        st.textContent = `html.c2c-lite #${MODAL_ID} {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        html.c2c-lite #${MODAL_ID} img {
+            filter: none !important;
+        }`;
+        document.head.appendChild(st);
+    }
     modal.style.cssText = `position:fixed;inset:0;z-index:1000000;display:none;
         background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);
         font-family:ui-sans-serif,system-ui,sans-serif;`;

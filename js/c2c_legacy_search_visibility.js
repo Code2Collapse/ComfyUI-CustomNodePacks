@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const TAG = "[C2C.LegacySearchVis]";
 
@@ -65,18 +66,15 @@ function findSearchBoxEl() {
 function patchShowSearchBox() {
     try {
         const proto = (window.LGraphCanvas || app?.canvas?.constructor)?.prototype;
-        if (!proto || proto._c2c_show_patched) return;
-        const orig = proto.showSearchBox;
-        if (typeof orig !== "function") return;
-        proto.showSearchBox = function (...args) {
+        if (!proto || typeof proto.showSearchBox !== "function") return;
+        getRuntime().safePatch(proto, "showSearchBox", (orig) => function (...args) {
             const ret = orig.apply(this, args);
             // Engine may create the element synchronously or schedule
             // it; cover both with a microtask + a short re-check.
             queueMicrotask(() => forceShow(findSearchBoxEl()));
             setTimeout(() => forceShow(findSearchBoxEl()), 50);
             return ret;
-        };
-        proto._c2c_show_patched = true;
+        }, { id: "legacysearch.showSearchBox" });
         console.log(`${TAG} patched LGraphCanvas.showSearchBox`);
     } catch (e) {
         console.warn(`${TAG} patch failed:`, e);

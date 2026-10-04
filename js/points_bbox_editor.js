@@ -1080,7 +1080,10 @@ function installEditor(node) {
             tryDiscoverRef();
         }
     };
-    const refPoll = setInterval(() => { if (!ed.refImg) tryDiscoverRef(); }, 1500);
+    const refPoll = setInterval(() => { // c2c-allow-interval: discover ref image until found, cancelled onRemoved
+        if (!ed.refImg) tryDiscoverRef();
+        else clearInterval(refPoll);
+    }, 1500);
 
     const origRemoved = node.onRemoved;
     node.onRemoved = function () {

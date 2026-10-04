@@ -16,6 +16,7 @@
 import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { C } from "./_c2c_theme.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 // Canvas 2D cannot resolve CSS var() strings (renders black/invisible), so we
 // map each colorspace tag to the resolved-hex value from the theme palette.
@@ -112,18 +113,15 @@ function _drawBadge(node, ctx) {
 }
 
 function _patch() {
-    if (LGraphCanvas.prototype._mecColorspacePatched) return;
-    LGraphCanvas.prototype._mecColorspacePatched = true;
     // Hook into per-node draw via LGraphCanvas.prototype.drawNode by wrapping
     // the original to draw the badge AFTER the node frame.
-    const orig = LGraphCanvas.prototype.drawNode;
-    LGraphCanvas.prototype.drawNode = function (node, ctx) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "drawNode", (orig) => function (node, ctx) {
         const r = orig.apply(this, arguments);
         try {
             if (node && !node.flags?.collapsed) _drawBadge(node, ctx);
         } catch { /* never break drawing */ }
         return r;
-    };
+    }, { id: "colorspace.drawNode" });
 }
 
 app.registerExtension({

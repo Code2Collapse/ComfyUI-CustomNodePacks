@@ -33,7 +33,11 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 // ---------------------------------------------------------------------------
 // constants & helpers
@@ -207,7 +211,9 @@ function _ensureGpuPolling() {
     _gpuPollOnce();
     // Skip the /system_stats fetch while the tab is hidden — no point polling
     // (and allocating sample objects) when nobody's looking. Resumes on focus.
-    _gpuPollTimer = setInterval(() => { if (!document.hidden) _gpuPollOnce(); }, 2000);
+    _gpuPollTimer = getRuntime().every("doctor.gpu", 2000, () => {
+        if (!document.hidden) _gpuPollOnce();
+    }, { ambient: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -995,12 +1001,13 @@ async function renderGpu(body, refs) {
         body.querySelector('[data-role="n"]').textContent = String(_gpuRing.length);
     };
     draw();
-    const iv = setInterval(() => {
+    const sparkEvery = getRuntime().every("doctor.gpu.spark", 1000, () => {
         if (!_panelRefs || _panelRefs.active !== "gpu" || !document.body.contains(body)) {
-            clearInterval(iv); return;
+            sparkEvery.cancel();
+            return;
         }
         draw();
-    }, 1000);
+    }, { ambient: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,7 +1443,7 @@ function _hookOmniBar() {
     if (tryReg()) return;
     // Poll briefly while the OmniBar extension finishes booting.
     let n = 0;
-    const iv = setInterval(() => {
+    const iv = setInterval(() => { // c2c-allow-interval: wait for OmniBar, cap 40×500ms
         if (tryReg() || ++n > 40) clearInterval(iv);
     }, 500);
 }

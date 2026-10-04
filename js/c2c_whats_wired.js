@@ -23,6 +23,8 @@
 
 import { app } from "../../scripts/app.js";
 import { forAllNodes } from "./_subgraph_walk.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
 
 const HUD_ID    = "mec-whats-wired";
 const STYLE_ID  = "mec-whats-wired-style";
@@ -576,23 +578,6 @@ function _schedule() {
     _scheduled = true;
     requestAnimationFrame(() => { _scheduled = false; _render(); });
 }
-function _hookGraph() {
-    const g = app.graph;
-    if (!g) return;
-    const wrap = (obj, prop) => {
-        if (typeof obj[prop] !== "function") return;
-        const orig = obj[prop];
-        if (orig._mecWWWrapped) return;
-        obj[prop] = function (...args) {
-            const r = orig.apply(this, args);
-            try { _schedule(); } catch (_) {}
-            return r;
-        };
-        obj[prop]._mecWWWrapped = true;
-    };
-    wrap(g, "add"); wrap(g, "remove"); wrap(g, "configure"); wrap(g, "clear");
-}
-
 function _open() {
     const hud = document.getElementById(HUD_ID) || _buildHud();
     const g = _loadGeom();
@@ -619,9 +604,17 @@ app.registerExtension({
     async setup() {
         _injectStyle();
         _buildHud();
-        _hookGraph();
+        const rt = getRuntime();
+        const onGraph = rt.guard(() => {
+            if (!graphReadable()) return;
+            _schedule();
+        }, "c2c_whats_wired:graph");
+        rt.onGraphChange(onGraph);
         _render();
-        setInterval(_render, 2000);
+        rt.every("whats_wired.safety", 10000, () => {
+            if (!graphReadable()) return;
+            onGraph();
+        }, { ambient: true });
         window.c2c_whats_wired = { open: _open, render: _render };
         console.log("[C2C.WhatsWired] window-mode loaded.");
     },

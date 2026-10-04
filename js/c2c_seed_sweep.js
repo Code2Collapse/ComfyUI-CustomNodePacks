@@ -12,6 +12,7 @@
 
 import { app } from "../../scripts/app.js";
 import { c2cPrompt } from "./_c2c_dialog.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const SEED_NAME_RE = /^(seed|noise_seed|rand_seed|sampling_seed)$/i;
 
@@ -102,45 +103,43 @@ async function _runSweep(node, widget, count) {
     setTimeout(() => _showProgress(total + 1, total), 1500);
 }
 
-function _patchNodeContextMenu() {
-    const orig = LGraphCanvas.prototype.getNodeMenuOptions;
-    if (!orig || orig._mecSeedSweepPatched) return;
+function _nodeMenuItems(node) {
+    const enabled = (() => {
+        try { return app.ui.settings.getSettingValue("mec.seed_sweep.enabled", true); }
+        catch { return true; }
+    })();
+    if (!enabled) return [];
 
-    LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-        const opts = orig.call(this, node);
+    const seedWidgets = (node.widgets || []).filter(_isSeedWidget);
+    if (seedWidgets.length === 0) return [];
 
-        const enabled = (() => {
-            try { return app.ui.settings.getSettingValue("mec.seed_sweep.enabled", true); }
-            catch { return true; }
-        })();
-        if (!enabled) return opts;
+    const items = [null];
+    for (const w of seedWidgets) {
+        items.push({
+            content: `🎲 Sweep ${w.name} (8 runs)`,
+            callback: () => _runSweep(node, w, 8),
+        });
+        items.push({
+            content: `🎲 Sweep ${w.name} — custom…`,
+            callback: async () => {
+                const ans = await c2cPrompt(
+                    `Sweep ${w.name}: how many runs? (current value = ${w.value})`,
+                    "8",
+                );
+                if (!ans) return;
+                const n = parseInt(ans, 10);
+                if (!isFinite(n) || n <= 0) return;
+                _runSweep(node, w, n);
+            },
+        });
+    }
+    return items;
+}
 
-        const seedWidgets = (node.widgets || []).filter(_isSeedWidget);
-        if (seedWidgets.length === 0) return opts;
-
-        opts.push(null);
-        for (const w of seedWidgets) {
-            opts.push({
-                content: `🎲 Sweep ${w.name} (8 runs)`,
-                callback: () => _runSweep(node, w, 8),
-            });
-            opts.push({
-                content: `🎲 Sweep ${w.name} — custom…`,
-                callback: async () => {
-                    const ans = await c2cPrompt(
-                        `Sweep ${w.name}: how many runs? (current value = ${w.value})`,
-                        "8",
-                    );
-                    if (!ans) return;
-                    const n = parseInt(ans, 10);
-                    if (!isFinite(n) || n <= 0) return;
-                    _runSweep(node, w, n);
-                },
-            });
-        }
-        return opts;
-    };
-    LGraphCanvas.prototype.getNodeMenuOptions._mecSeedSweepPatched = true;
+function _mergeNodeMenuItems(opts, node) {
+    const items = _nodeMenuItems(node);
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -154,10 +153,13 @@ app.registerExtension({
             defaultValue: true,
         },
     ],
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
         _injectStyle();
         _ensureToast();
-        _patchNodeContextMenu();
+        legacyNodeMenu("seed_sweep", _mergeNodeMenuItems);
         console.log("[MEC.SeedSweep] Loaded — right-click a node with a 'seed' widget.");
     },
 });

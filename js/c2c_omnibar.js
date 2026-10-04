@@ -44,7 +44,10 @@
 
 import { app } from "../../scripts/app.js";
 import { startNativeOffsets, refreshNativeOffsets } from "./_c2c_native_offsets.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
 
 const COMPONENT = "c2c_omnibar";
 
@@ -350,6 +353,10 @@ function _injectStyle() {
     font: 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     user-select: none;
     pointer-events: auto;
+}
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 #${ROOT_ID}[data-c2c-omnibar-open="1"] { display: flex; }
 

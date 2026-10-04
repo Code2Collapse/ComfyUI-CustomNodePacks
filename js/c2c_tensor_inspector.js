@@ -10,6 +10,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const STYLE_ID = "mec-tensor-inspector-style";
 const PANEL_ID = "mec-tensor-inspector-panel";
@@ -237,31 +238,32 @@ async function _showFor(node, slotIndex, mouseX, mouseY) {
     }
 }
 
-function _hookCanvasContextMenu() {
-    // Augment node context menu with an "Inspect tensor" item.
-    const origGetMenu = LGraphCanvas.prototype.getCanvasMenuOptions;
-    const origGetNodeMenu = LGraphCanvas.prototype.getNodeMenuOptions;
-    if (origGetNodeMenu && !origGetNodeMenu._mecPatched) {
-        LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-            const opts = origGetNodeMenu.call(this, node);
-            opts.push(null); // separator
-            opts.push({
-                content: "🔬 Inspect tensor outputs",
-                callback: () => {
-                    const rect = this.canvas.getBoundingClientRect();
-                    _showFor(
-                        node,
-                        null,
-                        rect.left + rect.width / 2,
-                        rect.top + rect.height / 2,
-                    );
-                },
-            });
-            return opts;
-        };
-        LGraphCanvas.prototype.getNodeMenuOptions._mecPatched = true;
-    }
-    void origGetMenu;  // keep reference, no-op
+function _tensorInspectorEnabled() {
+    try { return app.ui.settings.getSettingValue("c2c.tensor_inspector.enabled", true); }
+    catch { return true; }
+}
+
+function _nodeMenuItems(node, canvas) {
+    if (!_tensorInspectorEnabled()) return [];
+    const cvs = canvas || app.canvas;
+    return [null, {
+        content: "🔬 Inspect tensor outputs",
+        callback: () => {
+            const rect = cvs.canvas.getBoundingClientRect();
+            _showFor(
+                node,
+                null,
+                rect.left + rect.width / 2,
+                rect.top + rect.height / 2,
+            );
+        },
+    }];
+}
+
+function _mergeNodeMenuItems(opts, node) {
+    const items = _nodeMenuItems(node, this);
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -275,17 +277,16 @@ app.registerExtension({
             defaultValue: true,
         },
     ],
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
         _injectStyle();
         _ensurePanel();
 
-        const enabled = (() => {
-            try { return app.ui.settings.getSettingValue("c2c.tensor_inspector.enabled", true); }
-            catch { return true; }
-        })();
-        if (!enabled) return;
+        if (!_tensorInspectorEnabled()) return;
 
-        _hookCanvasContextMenu();
+        legacyNodeMenu("tensor_inspector", _mergeNodeMenuItems);
         console.log("[MEC.TensorInspector] Loaded — right-click a node to inspect outputs.");
     },
 });

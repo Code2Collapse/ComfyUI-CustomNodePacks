@@ -46,7 +46,10 @@ function injectStyle() {
     font: 13px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
     color: var(--c2c-fg); backdrop-filter: blur(14px);
     padding: 10px 10px 8px;
-    display: none;
+}
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 #${ROOT_ID}.is-open { display: block; }
 #${ROOT_ID} .c2c-cmdpal-head {

@@ -16,6 +16,7 @@
 import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 // Optional: noodle-style helpers (separate extension). Import is lazy /
 // non-fatal — if the file is missing or the extension hasn't registered
 // yet, we degrade gracefully and just don't show the noodle submenu.
@@ -67,6 +68,18 @@ function typeColor(t) {
   if (!v) v = C.blue;
   _typeColorCache[m[1]] = v;
   return v;
+}
+
+function _canvasMenuItems(canvas) {
+  return [null, {
+    content: "Insert Reroute (MEC)",
+    callback: () => insertRerouteAtMouse(canvas || app.canvas),
+  }];
+}
+
+function _mergeCanvasMenuItems(opts, canvas) {
+  opts.push(..._canvasMenuItems(canvas ?? this));
+  return opts;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -254,6 +267,9 @@ app.registerExtension({
   },
 
   // ── Canvas-level setup ─────────────────────────────────────────────
+  getCanvasMenuItems(canvas) {
+    return _canvasMenuItems(canvas);
+  },
   setup() {
     // Strip from prompt before execution
     const origGTP = app.graphToPrompt?.bind(app);
@@ -278,18 +294,7 @@ app.registerExtension({
       };
     }
 
-    // Right-click canvas → "Insert Reroute (MEC)"
-    const origCanvasMenu = LGraphCanvas.prototype.getCanvasMenuOptions;
-    if (origCanvasMenu) {
-      LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-        const opts = origCanvasMenu.apply(this, arguments);
-        opts.push(null, {
-          content: "Insert Reroute (MEC)",
-          callback: () => insertRerouteAtMouse(this),
-        });
-        return opts;
-      };
-    }
+    legacyCanvasMenu("universal_reroute", _mergeCanvasMenuItems);
   },
 });
 

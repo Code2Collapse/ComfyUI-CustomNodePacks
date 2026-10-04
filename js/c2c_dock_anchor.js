@@ -49,6 +49,7 @@
 import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const NATIVE_STATUS_BAR_PX = 52;   // ComfyUI Vue status bar default
 const RIGHT_HALF_THRESHOLD = 0.5;  // occluder must extend past this fraction
@@ -190,8 +191,32 @@ function _boot() {
     } catch (__c2cErr) { __c2cReport("c2c_dock_anchor", __c2cErr); }
 
     window.addEventListener("resize", _scheduleRecompute, { passive: true });
-    setInterval(_scheduleRecompute, POLL_MS);
+    // PERF: re-measuring on a timer forced a full page layout every tick
+    // (~2-3 ms each on a Nodes 2.0 graph). The tick now only asks which
+    // occluders exist - selector matching, no layout - and a ResizeObserver
+    // on the ones it found says when their size changes. Layout is read only
+    // when something actually changed.
+    try { _occRO = new ResizeObserver(() => _scheduleRecompute()); } catch { _occRO = null; }
+    getRuntime().every("dock.occluders", POLL_MS, () => _discoverOccluders(), { ambient: true });
+    _discoverOccluders();
     recompute();
+}
+
+let _occRO = null;
+const _occluders = new Set();
+function _discoverOccluders() {
+    if (document.hidden) return;
+    const now = new Set(document.querySelectorAll(OCCLUDER_SELECTOR));
+    let changed = !_occRO || now.size !== _occluders.size;
+    for (const el of now) {
+        if (!_occluders.has(el)) { changed = true; _occRO?.observe(el); }
+    }
+    for (const el of _occluders) {
+        if (!now.has(el)) { changed = true; _occRO?.unobserve(el); }
+    }
+    _occluders.clear();
+    for (const el of now) _occluders.add(el);
+    if (changed) _scheduleRecompute();
 }
 
 window.__mecDock = { register, unregister, recompute };

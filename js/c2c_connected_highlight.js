@@ -11,6 +11,7 @@
 // slot rings beneath any "active" link, then calls through to the normal noodle
 // render (composes with NoodleStyles). Idle cost is ~zero (nothing active).
 import { app } from "/scripts/app.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const SETTING = "c2c.connectedHighlight.enabled";
 let _enabled = true;
@@ -56,10 +57,9 @@ let _rerender = false;
 
 function install() {
     const proto = window.LGraphCanvas && LGraphCanvas.prototype;
-    if (!proto || proto.__c2cConnHighlight) return false;
+    if (!proto) return false;
     if (typeof proto._renderAllLinkSegments !== "function") return false;
-    const orig = proto._renderAllLinkSegments;
-    proto._renderAllLinkSegments = function (ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled) {
+    getRuntime().safePatch(proto, "_renderAllLinkSegments", (orig) => function (ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled) {
         if (_rerender || !enabledNow() || !link) {
             return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
         }
@@ -115,8 +115,7 @@ function install() {
             ctx.restore();
         } catch (_) { _rerender = false; /* never break link rendering */ }
         return r;
-    };
-    proto.__c2cConnHighlight = true;
+    }, { id: "connectedhighlight._renderAllLinkSegments" });
     return true;
 }
 

@@ -28,6 +28,7 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import Fuse from "./_fuse.mjs";
 import { capabilityFor } from "./c2c_node_taxonomy.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const STYLE_ID = "c2c-workflow-find-style";
 const ROOT_ID  = "c2c-workflow-find-root";
@@ -99,6 +100,10 @@ function injectStyle() {
     font: 12.5px/1.4 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
     color: var(--c2c-fgAltLight); backdrop-filter: blur(12px);
     padding: 8px 8px 6px;
+}
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 #${ROOT_ID} .c2c-find-header {
     display:flex; align-items:center; gap:8px; padding: 0 4px 6px;
@@ -537,6 +542,45 @@ function onGlobalPointerDown(ev) {
     close();
 }
 
+function _nodeMenuItems(node) {
+    try {
+        const enabled = (() => {
+            try { return app.ui.settings.getSettingValue(SETTING_ID, true) !== false; }
+            catch { return true; }
+        })();
+        if (!enabled || !node) return [];
+        const seed = node.type || node.title || "";
+        if (!seed) return [];
+        return [{
+            content: "🔍 Find similar nodes…",
+            callback: () => { try { open(seed); } catch (e) { __c2cReport("c2c_workflow_find", e); } },
+        }];
+    } catch (e) {
+        __c2cReport("c2c_workflow_find", e);
+        return [];
+    }
+}
+
+function _mergeNodeMenuItems(opts, node) {
+    try {
+        const enabled = (() => {
+            try { return app.ui.settings.getSettingValue(SETTING_ID, true) !== false; }
+            catch { return true; }
+        })();
+        if (!enabled || !node) return opts;
+        const seed = node.type || node.title || "";
+        if (!seed) return opts;
+        const entry = {
+            content: "🔍 Find similar nodes…",
+            callback: () => { try { open(seed); } catch (e) { __c2cReport("c2c_workflow_find", e); } },
+        };
+        const sepIdx = opts.findIndex((o) => o == null);
+        if (sepIdx > 0) opts.splice(sepIdx, 0, entry);
+        else opts.unshift(entry, null);
+    } catch (e) { __c2cReport("c2c_workflow_find", e); }
+    return opts;
+}
+
 app.registerExtension({
     name: "C2C.WorkflowFind",
     async setup() {
@@ -558,35 +602,11 @@ app.registerExtension({
         window.addEventListener("keydown", onGlobalKey, true);
         // Bound on capture so we see clicks before LiteGraph swallows them.
         window.addEventListener("mousedown", onGlobalPointerDown, true);
+        legacyNodeMenu("workflow_find", _mergeNodeMenuItems);
         console.log("[C2C.WorkflowFind] Ctrl+F now searches nodes in workflow (Fuse).");
     },
 
-    /**
-     * Right-click on a node → "🔍 Find similar nodes…" entry that
-     * pre-fills the in-workflow finder with the clicked node's type.
-     * Survives across LiteGraph versions; only adds the entry when the
-     * setting is enabled.
-     */
-    getNodeMenuOptions(_canvas, options, node) {
-        try {
-            const enabled = (() => {
-                try { return app.ui.settings.getSettingValue(SETTING_ID, true) !== false; }
-                catch { return true; }
-            })();
-            if (!enabled || !node) return options;
-            const seed = node.type || node.title || "";
-            if (!seed) return options;
-            // Insert near the top, before the default "Properties" group.
-            const entry = {
-                content: "🔍 Find similar nodes…",
-                callback: () => { try { open(seed); } catch (e) { __c2cReport("c2c_workflow_find", e); } },
-            };
-            // LiteGraph passes options as an array; the first nullish slot
-            // is a separator placeholder — insert just above it.
-            const sepIdx = options.findIndex((o) => o == null);
-            if (sepIdx > 0) options.splice(sepIdx, 0, entry);
-            else options.unshift(entry, null);
-        } catch (e) { __c2cReport("c2c_workflow_find", e); }
-        return options;
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
     },
 });

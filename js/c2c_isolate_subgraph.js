@@ -11,6 +11,8 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { legacyCanvasMenu, legacyNodeMenu } from "./_c2c_compat.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 let _isolatedIds = null;  // Set<number> or null
 
@@ -44,18 +46,13 @@ function _reset() {
 }
 
 function _patch() {
-    if (LGraphCanvas.prototype._mecIsolatePatched) return;
-    LGraphCanvas.prototype._mecIsolatePatched = true;
-
     // Dim non-isolated nodes by wrapping LGraphCanvas.drawNode.
     //
-    // NOTE: ComfyUI's extension API exposes `getCanvasMenuOptions` and
-    // `getNodeMenuOptions` (handled below via `app.registerExtension`) but
+    // NOTE: ComfyUI's extension API exposes `getCanvasMenuItems` and
+    // `getNodeMenuItems` (handled below via `app.registerExtension`) but
     // does NOT expose a per-node alpha-modulation hook. To dim a node
     // during normal canvas paints we have to wrap `drawNode` directly.
-    // The guard above ensures this runs exactly once.
-    const origDrawNode = LGraphCanvas.prototype.drawNode;
-    LGraphCanvas.prototype.drawNode = function (node, ctx) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "drawNode", (origDrawNode) => function (node, ctx) {
         if (!_isolatedIds || !_settingsEnabled() || _isolatedIds.has(node.id)) {
             return origDrawNode.apply(this, arguments);
         }
@@ -66,7 +63,7 @@ function _patch() {
         } finally {
             ctx.globalAlpha = prev;
         }
-    };
+    }, { id: "isolate.drawNode" });
 
     // Esc key to reset.
     window.addEventListener("keydown", (e) => {
@@ -75,6 +72,33 @@ function _patch() {
             e.stopPropagation();
         }
     });
+}
+
+function _canvasMenuItems() {
+    if (_isolatedIds && _settingsEnabled()) {
+        return [null, { content: "↺ Reset isolation", callback: _reset }];
+    }
+    return [];
+}
+
+function _nodeMenuItems() {
+    if (!_settingsEnabled()) return [];
+    return [null, {
+        content: _isolatedIds ? "↺ Reset isolation" : "🔍 Isolate selection",
+        callback: () => { _isolatedIds ? _reset() : _isolate(); },
+    }];
+}
+
+function _mergeCanvasMenuItems(opts) {
+    const items = _canvasMenuItems();
+    if (items.length) opts.push(...items);
+    return opts;
+}
+
+function _mergeNodeMenuItems(opts) {
+    const items = _nodeMenuItems();
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -94,24 +118,16 @@ app.registerExtension({
         },
     ],
     // Extension-API menu hooks (no LGraphCanvas.prototype patching).
-    getCanvasMenuOptions(opts /*, canvas */) {
-        if (_isolatedIds && _settingsEnabled()) {
-            opts.push(null);
-            opts.push({ content: "↺ Reset isolation", callback: _reset });
-        }
-        return opts;
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
     },
-    getNodeMenuOptions(opts /*, node */) {
-        if (!_settingsEnabled()) return opts;
-        opts.push(null);
-        opts.push({
-            content: _isolatedIds ? "↺ Reset isolation" : "🔍 Isolate selection",
-            callback: () => { _isolatedIds ? _reset() : _isolate(); },
-        });
-        return opts;
+    getNodeMenuItems(_node) {
+        return _nodeMenuItems();
     },
     async setup() {
         _patch();
+        legacyCanvasMenu("isolate_subgraph", _mergeCanvasMenuItems);
+        legacyNodeMenu("isolate_subgraph", _mergeNodeMenuItems);
         console.log("[MEC.IsolateSubgraph] Loaded.");
     },
 });

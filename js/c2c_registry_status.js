@@ -60,6 +60,10 @@ function injectStyle() {
     transition: opacity var(--c2c-dur-base, 180ms) var(--c2c-ease-out, ease),
                 transform var(--c2c-dur-base, 180ms) var(--c2c-ease-out, ease);
 }
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
 #${ROOT_ID}.is-open { opacity: 1; transform: translateY(0); }
 #${ROOT_ID} .c2c-reg-head {
     display: flex; align-items: center; gap: ${T.gap.md};

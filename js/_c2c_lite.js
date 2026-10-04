@@ -14,17 +14,21 @@
 // hooks, DOM, and timers are never installed (true load reduction, not a flag
 // checked every frame).
 //
-// Toggle: Settings → C2C → Performance → "Lite mode". Changing it writes
+// Toggle: Settings → C2C → Performance → "Performance mode". Changing it writes
 // localStorage and the value applies on the next page load (extensions are
 // imported once at startup), so we offer a one-click reload.
 
 import { app } from "/scripts/app.js";
+import { getRuntime, probeGpuSoftware } from "./_c2c_runtime.js";
 
-const LS_KEY = "c2c.lite";
+const LS_MODE = "c2c.perf.mode";
+const MODE_AUTO = "Auto (recommended)";
+const MODE_FULL = "Full";
+const MODE_LITE = "Lite";
 
-export const LITE = (() => {
-    try { return localStorage.getItem(LS_KEY) === "1"; } catch (_) { return false; }
-})();
+const _rt = getRuntime();
+export const TIER = _rt.tier();
+export const LITE = TIER === "lite";
 
 // ── central LITE filter ────────────────────────────────────────────────────
 // Gating one file at a time means editing every heavy extension. This instead
@@ -44,7 +48,8 @@ export const LITE = (() => {
 const SKIP_WHEN_LITE = new Set([
     "C2C.StatsPill", "C2C.IntBadge", "C2C.StatusStrip", "C2C.TopDock",
     "C2C.UILayout", "C2C.MoodBoard", "C2C.FrameOverlay", "C2C.GraphHealth",
-    "C2C.NodeBookmarks", "tokens",   // NOT "C2C.TokenCounter" — that name never existed "C2C.SurpriseMe",
+    "C2C.NodeBookmarks", "tokens",   // NOT "C2C.TokenCounter" — that name never existed
+    "C2C.SurpriseMe",
     "C2C.CostEstimator", "C2C.MetadataInspector", "C2C.OverlayVisibility",
     "c2c.ai.statusBar", "MEC.IntegrityStatus",
     "C2C.NodeExplain", "C2C.ProgressHUD", "C2C.OmniBar", "Yellow",
@@ -105,58 +110,115 @@ export function liteSkip(label) {
     return LITE;
 }
 
+function _readStoredMode() {
+    try {
+        const v = localStorage.getItem(LS_MODE);
+        if (v === MODE_AUTO || v === MODE_FULL || v === MODE_LITE) return v;
+        if (!v && localStorage.getItem("c2c.lite") === "1") return MODE_LITE;
+    } catch (_) {}
+    return MODE_AUTO;
+}
+
+function _writeMode(mode) {
+    try { localStorage.setItem(LS_MODE, mode); } catch (_) {}
+}
+
+// `ask` only when the USER just changed the setting. Automatic detection must
+// never open a blocking confirm() on page load (it freezes every script on the
+// page until answered, and nobody asked); it only informs, and the
+// "C2C: GPU & performance status" command carries the Reload button.
+function _offerReload(summary, detail, { ask = true } = {}) {
+    try {
+        const t = app.extensionManager?.toast;
+        if (t?.add) {
+            t.add({
+                severity: "info",
+                summary,
+                detail,
+                life: 8000,
+            });
+        }
+    } catch (_) {}
+    if (!ask) return;
+    setTimeout(() => {
+        try {
+            if (window.confirm(`${detail}\nReload now to apply?`)) {
+                location.reload();
+            }
+        } catch (_) {}
+    }, 50);
+}
+
 // localStorage is the SOLE source of truth (read at module-eval). ComfyUI fires
 // the setting's onChange with its server-stored value during init, which must
 // NOT be allowed to clobber localStorage — so onChange is ignored until the user
 // can actually interact (after setup).
 let _initDone = false;
+let _gpuProbeDone = false;
 
 if (!(app.extensions || []).some((e) => e?.name === "C2C.LiteMode")) app.registerExtension({
     name: "C2C.LiteMode",
     settings: [
         {
-            id: "c2c.lite.enabled",
-            name: "Lite mode — disable C2C visual extras (FX, animated noodles, HUD pills, badges) for performance",
-            tooltip: "Recommended on heavy graphs / low-RAM machines. Keeps all functional tools; turns off "
-                   + "eye-candy and always-on overlays. Applies after a page reload.",
-            type: "boolean",
-            defaultValue: LITE,
-            category: ["c2c", "Performance", "Lite mode"],
+            id: "c2c.perf.mode",
+            name: "Performance mode — Auto detects software rendering; Lite disables C2C visual extras",
+            tooltip: "Auto (recommended) enables Lite when the browser renders without a GPU "
+                   + "(SwiftShader, llvmpipe, etc.). Lite turns off eye-candy and always-on overlays "
+                   + "while keeping functional tools. Applies after a page reload.",
+            type: "combo",
+            options: [MODE_AUTO, MODE_FULL, MODE_LITE],
+            defaultValue: _readStoredMode(),
+            category: ["c2c", "Performance", "Performance mode"],
             onChange: (v) => {
-                if (!_initDone) return;          // ignore the init echo + our own sync (don't clobber localStorage)
-                const on = !!v;
+                if (!_initDone) return;
+                const mode = (v === MODE_FULL || v === MODE_LITE) ? v : MODE_AUTO;
                 let changed = false;
-                try { changed = (localStorage.getItem(LS_KEY) === "1") !== on; localStorage.setItem(LS_KEY, on ? "1" : "0"); } catch (_) {}
+                try { changed = _readStoredMode() !== mode; _writeMode(mode); } catch (_) {}
                 if (!changed) return;
-                // Offer an immediate reload so the change takes effect.
-                try {
-                    const t = app.extensionManager?.toast;
-                    if (t?.add) {
-                        t.add({ severity: "info", summary: "C2C Lite mode",
-                                detail: `Lite mode ${on ? "ON" : "OFF"} — reload to apply.`, life: 6000 });
-                    }
-                } catch (_) {}
-                // A gentle confirm to reload now (skips if the host blocks dialogs).
-                setTimeout(() => {
-                    try {
-                        if (window.confirm(`C2C Lite mode ${on ? "enabled" : "disabled"}.\nReload now to apply?`)) {
-                            location.reload();
-                        }
-                    } catch (_) {}
-                }, 50);
+                _offerReload(
+                    "C2C Performance mode",
+                    `Performance mode set to "${mode}" — reload to apply.`,
+                );
             },
         },
     ],
     async setup() {
-        // Sync the checkbox to the real (localStorage) state without writing back
-        // (onChange is still gated by _initDone), then allow user toggles.
-        try { app.ui.settings.setSettingValue("c2c.lite.enabled", LITE); } catch (_) {}
+        try { app.ui.settings.setSettingValue("c2c.perf.mode", _readStoredMode()); } catch (_) {}
         setTimeout(() => { _initDone = true; }, 800);
         if (LITE) {
             try {
                 const { C } = await import("./_c2c_theme.js");
                 console.log("%c[C2C.Lite] active — visual extras disabled for performance", `color:${C.sky}`);
             } catch (_) {}
+        }
+        // Live GPU probe: once per page load, never at module eval.
+        const _runGpuProbe = () => {
+            if (_gpuProbeDone) return;
+            _gpuProbeDone = true;
+            try {
+                const entry = probeGpuSoftware();
+                const rt = getRuntime();
+                const evalTier = TIER;
+                const probedTier = rt.tierAfterProbe(entry);
+                rt.refreshTierCache();
+                if (entry.software) {
+                    import("./c2c_gpu_status.js")
+                        .then((m) => m.onSoftwareProbeResult(entry))
+                        .catch(() => {});
+                }
+                if (_readStoredMode() === MODE_AUTO && probedTier !== evalTier && probedTier === "lite") {
+                    _offerReload(
+                        "C2C Performance mode",
+                        "C2C: switched to Lite on next reload because this browser is rendering without the GPU.",
+                        { ask: false },
+                    );
+                }
+            } catch (_) {}
+        };
+        if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(_runGpuProbe, { timeout: 3000 });
+        } else {
+            setTimeout(_runGpuProbe, 500);
         }
     },
 });

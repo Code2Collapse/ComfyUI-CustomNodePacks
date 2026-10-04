@@ -205,6 +205,7 @@ let _wheelAcc = 0;
 // needed, and pin the pill at that width so cycling chips never causes
 // a layout shift (user-reported annoyance).
 let _maxPillWidth = 0;
+let _chipSetKey = "";
 
 function _lockPillWidth() {
     if (!_pill) return;
@@ -301,10 +302,12 @@ function _renderPill() {
     cyc.className = "c2c-sp-cyc";
     cyc.textContent = "▾";
     _pill.appendChild(cyc);
-    // Update the locked width AFTER content is in the DOM so scrollWidth
-    // reflects the new chip; this guarantees the pill grows to the
-    // widest value ever observed and never shrinks below it.
-    _lockPillWidth();
+    // Re-measure only when the chip SET changes (ids), not on every value tick.
+    const setKey = chips.map((c) => c.id).sort().join("|");
+    if (setKey !== _chipSetKey) {
+        _chipSetKey = setKey;
+        _lockPillWidth();
+    }
 }
 
 function _renderPanel() {
@@ -638,7 +641,7 @@ function _waitForStripAndStart() {
         return;
     }
     let ticks = 0;
-    const iv = setInterval(() => {
+    const iv = setInterval(() => { // c2c-allow-interval: wait for status strip, cap 200×50ms
         if (window.C2CStatusStrip?.subscribe) {
             clearInterval(iv);
             _subscribeStrip();
@@ -714,7 +717,7 @@ app.registerExtension({
             // ComfyUI's Vue boot), then mount per placement setting.
             // MutationObserver handles any subsequent re-renders.
             let tries = 0;
-            const iv = setInterval(() => {
+            const iv = setInterval(() => { // c2c-allow-interval: wait for manager bar mount, cap 200×50ms
                 const enabled = app.ui?.settings?.getSettingValue?.(
                     "c2c.statsPill.enabled", true) ?? true;
                 if (!enabled) { clearInterval(iv); return; }

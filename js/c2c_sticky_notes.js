@@ -13,7 +13,12 @@
 import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { c2cPrompt } from "./_c2c_dialog.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 // border values are assigned to ctx.strokeStyle (canvas 2D), which cannot
 // resolve CSS var() strings — use resolved-hex palette values instead.
@@ -131,36 +136,34 @@ function _stickyContextMenu(note, e) {
     new LiteGraph.ContextMenu(opts, { event: e });
 }
 
-function _patch() {
-    if (LGraphCanvas.prototype._mecStickyPatched) return;
-    LGraphCanvas.prototype._mecStickyPatched = true;
+function _canvasMenuItems(canvas) {
+    if (!_settingsEnabled()) return [];
+    const cvs = canvas || app.canvas;
+    return [null, {
+        content: "📝 Add sticky note",
+        callback: () => {
+            const p = cvs.graph_mouse || [0, 0];
+            _addSticky(p[0], p[1]);
+        },
+    }];
+}
 
-    const origBg = LGraphCanvas.prototype.onDrawBackground;
-    LGraphCanvas.prototype.onDrawBackground = function (ctx) {
+function _mergeCanvasMenuItems(opts, canvas) {
+    const items = _canvasMenuItems(canvas ?? this);
+    if (items.length) opts.push(...items);
+    return opts;
+}
+
+function _patch() {
+    const rt = getRuntime();
+    rt.safePatch(LGraphCanvas.prototype, "onDrawBackground", (origBg) => function (ctx) {
         if (origBg) origBg.call(this, ctx);
         try { _draw(ctx); } catch { /* ignore */ }
-    };
-
-    const origMenu = LGraphCanvas.prototype.getCanvasMenuOptions;
-    LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-        const opts = origMenu ? origMenu.apply(this, arguments) : [];
-        if (!_settingsEnabled()) return opts;
-        const canvas = this;
-        opts.push(null);
-        opts.push({
-            content: "📝 Add sticky note",
-            callback: () => {
-                const p = canvas.graph_mouse || [0, 0];
-                _addSticky(p[0], p[1]);
-            },
-        });
-        return opts;
-    };
+    }, { id: "stickynotes.onDrawBackground" });
 
     // Hook mouse down to: 1) sticky context menu on right-click over sticky;
     //                     2) drag sticky;  3) double-click to edit.
-    const origDown = LGraphCanvas.prototype.processMouseDown;
-    LGraphCanvas.prototype.processMouseDown = function (e) {
+    rt.safePatch(LGraphCanvas.prototype, "processMouseDown", (origDown) => function (e) {
         if (_settingsEnabled() && this.graph) {
             const [mx, my] = this.graph_mouse || [0, 0];
             // Only act when no node under cursor.
@@ -202,7 +205,7 @@ function _patch() {
             }
         }
         return origDown ? origDown.apply(this, arguments) : undefined;
-    };
+    }, { id: "stickynotes.processMouseDown" });
 }
 
 app.registerExtension({
@@ -219,9 +222,13 @@ app.registerExtension({
             },
         },
     ],
+    getCanvasMenuItems(canvas) {
+        return _canvasMenuItems(canvas);
+    },
     async setup() {
         _enabled = _settingsEnabled();
         _patch();
+        legacyCanvasMenu("sticky_notes", _mergeCanvasMenuItems);
         console.log("[MEC.StickyNotes] Loaded.");
     },
 });

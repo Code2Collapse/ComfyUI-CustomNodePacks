@@ -30,6 +30,7 @@
 
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { legacyCanvasMenu, legacyNodeMenu } from "./_c2c_compat.js";
 
 const CLIP_VERSION = "1.5";
 const CLIP_HEADER  = `# MEC.clipboard ${CLIP_VERSION}`;
@@ -1043,6 +1044,34 @@ document.addEventListener("paste", (ev) => {
     }
 }, true);
 
+function _canvasMenuItems() {
+    return [
+        null,
+        { content: "C2C: Copy node(s) with metadata (Ctrl+C / Ctrl+Alt+C)", callback: () => _copy() },
+        { content: "C2C: Paste node(s) from clipboard (Ctrl+V / Ctrl+Alt+V)", callback: _paste },
+    ];
+}
+
+function _nodeMenuItems(node) {
+    return [null, {
+        content: "C2C: Copy with metadata",
+        callback: () => {
+            try { app.canvas.selectNode?.(node, true); } catch (__c2cErr) { __c2cReport("c2c_clipboard", __c2cErr); }
+            _copy(node);
+        },
+    }];
+}
+
+function _mergeCanvasMenuItems(opts) {
+    opts.push(..._canvasMenuItems());
+    return opts;
+}
+
+function _mergeNodeMenuItems(opts, node) {
+    opts.push(..._nodeMenuItems(node));
+    return opts;
+}
+
 app.registerExtension({
     name: "C2C.Clipboard",
     settings: [
@@ -1055,6 +1084,12 @@ app.registerExtension({
             onChange: (v) => setAutoCopyEnabled(!!v),
         },
     ],
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
+    },
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
         // First-paint sync: ComfyUI's settings store has the authoritative
         // value (persisted in user/<id>/comfy.settings.json) but its
@@ -1089,23 +1124,7 @@ app.registerExtension({
         // Pre-warm the pack map (non-blocking).
         _fetchPackMap().catch(() => {});
 
-        const origMenu = LGraphCanvas.prototype.getCanvasMenuOptions;
-        LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-            const opts = origMenu.apply(this, arguments) || [];
-            opts.push(null);
-            opts.push({ content: "C2C: Copy node(s) with metadata (Ctrl+C / Ctrl+Alt+C)", callback: () => _copy() });
-            opts.push({ content: "C2C: Paste node(s) from clipboard (Ctrl+V / Ctrl+Alt+V)", callback: _paste });
-            return opts;
-        };
-        const origNodeMenu = LGraphCanvas.prototype.getNodeMenuOptions;
-        LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-            const opts = origNodeMenu.apply(this, arguments) || [];
-            opts.push(null);
-            opts.push({ content: "C2C: Copy with metadata", callback: () => {
-                try { app.canvas.selectNode?.(node, true); } catch (__c2cErr) { __c2cReport("c2c_clipboard", __c2cErr); }
-                _copy(node);
-            }});
-            return opts;
-        };
+        legacyCanvasMenu("clipboard", _mergeCanvasMenuItems);
+        legacyNodeMenu("clipboard", _mergeNodeMenuItems);
     },
 });

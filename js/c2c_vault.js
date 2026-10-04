@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 /**
  * C2C Vault — password-locked subgraph.
@@ -1085,6 +1086,129 @@ async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
   applyVaultInterface(node, iface, isSealed);
 }
 
+async function lockSelection(sealed) {
+  if (headless()) return;
+  const sel = Object.values(app.canvas.selected_nodes || {});
+  if (sel.length < 1) {
+    await modalAlert("Nothing selected", "Select the nodes to lock first.");
+    return;
+  }
+
+  const pw = await modalPasswordStep({
+    title: `${sealed ? "Seal" : "Lock"} ${sel.length} node(s) into a vault`,
+    note: sealed
+      ? "Sealed: recipient runs with no password but cannot read the graph. Your password is still required to edit — store it safely; there is no recovery."
+      : "Locked: recipient needs this password to run at all. Store it safely — there is no recovery, by design.",
+    sealed,
+  });
+  if (pw === null) return;
+
+  const derived = deriveBoundary(sel, app.graph);
+  if (!derived.boundary_out.length) {
+    await modalAlert("No outputs", "These nodes produce no output. Include the node whose result you want.");
+    return;
+  }
+  if (derived.boundary_in.length > MAX_VAULT_INPUTS) {
+    await modalAlert("Too many inputs", `Selection needs ${derived.boundary_in.length} external inputs but vault supports ${MAX_VAULT_INPUTS}. Include more upstream nodes inside the selection.`);
+    return;
+  }
+  if (derived.boundary_out.length > MAX_VAULT_OUTPUTS) {
+    await modalAlert("Too many outputs", `Selection needs ${derived.boundary_out.length} outputs but vault supports ${MAX_VAULT_OUTPUTS}.`);
+    return;
+  }
+
+  const confirmed = await modalBoundaryStep({
+    boundary: derived, nodeCount: sel.length, sealed,
+  });
+  if (!confirmed) return;
+
+  const promotion = await modalPromoteStep({ selection: sel });
+  if (promotion === null) return;
+
+  const idOf = (n) => String(n.id);
+  const nodes = sel.map((n) => ({
+    id: idOf(n),
+    class_type: n.comfyClass || n.type,
+    widgets: Object.fromEntries((n.widgets || []).map((w) => [w.name, w.value])),
+  }));
+
+  const boundary_in = derived.boundary_in.map((b) => ({
+    name: b.name, to: b.to, to_slot: b.to_slot,
+  }));
+  const boundary_out = derived.boundary_out.map((b) => ({
+    name: b.name, from: b.from, from_slot: b.from_slot,
+  }));
+
+  const vault_id = `vault-${Math.random().toString(36).slice(2, 10)}`;
+  const { ok, data } = await post("/c2c_vault/lock", {
+    vault_id, password: pw, mode: sealed ? "sealed" : "locked",
+    subgraph: {
+      nodes, links: derived.links, boundary_in, boundary_out,
+      promoted: promotion.promoted || [],
+    },
+  });
+  if (!ok) {
+    await modalAlert("Lock failed", data.error || "Could not lock the selection.");
+    return;
+  }
+
+  const iface = buildInterfaceManifest(
+    sealed ? "sealed" : "locked", sel.length,
+    { boundary_in, boundary_out },
+    derived.inTypes, derived.outTypes,
+    promotion.params || [],
+  );
+
+  const [cx, cy] = selectionCentroid(sel);
+  const vault = LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
+  vault.pos = [cx, cy];
+  app.graph.add(vault);
+  widget(vault, "vault_id").value = vault_id;
+  widget(vault, "vault_payload").value = data.payload;
+  const ifaceW = widget(vault, "vault_interface");
+  if (ifaceW) ifaceW.value = JSON.stringify(iface);
+  vault._vaultPromotedCombo = {};
+  for (const p of promotion.params || []) {
+    if (p._comboOptions) vault._vaultPromotedCombo[p.id] = p._comboOptions;
+  }
+  applyVaultInterface(vault, iface, sealed);
+
+  derived.externalSources.forEach((src, i) => {
+    const srcNode = app.graph.getNodeById(src.id);
+    if (srcNode) srcNode.connect(src.slot, vault, i);
+  });
+  derived.externalTargets.forEach((tgt, i) => {
+    if (!tgt) return;
+    const tgtNode = app.graph.getNodeById(tgt.id);
+    if (tgtNode) vault.connect(i, tgtNode, tgt.slot);
+  });
+
+  for (const n of sel) app.graph.remove(n);
+  app.graph.setDirtyCanvas(true, true);
+  await modalAlert(
+    sealed ? "Sealed" : "Locked",
+    `${sealed ? "Sealed" : "Locked"} ${sel.length} node(s) into a vault. Original nodes removed.`,
+  );
+}
+
+function _vaultCanvasMenuItems() {
+  return [
+    {
+      content: "C2C Vault → Lock selection (password to run)",
+      callback: () => lockSelection(false),
+    },
+    {
+      content: "C2C Vault → Seal selection (runs without password)",
+      callback: () => lockSelection(true),
+    },
+  ];
+}
+
+function _mergeVaultCanvasMenuItems(opts) {
+  opts.push(..._vaultCanvasMenuItems());
+  return opts;
+}
+
 app.registerExtension({
   name: "Code2Collapse.CustomNodePacks.Vault",
 
@@ -1180,126 +1304,12 @@ app.registerExtension({
     };
   },
 
+  getCanvasMenuItems() {
+    return _vaultCanvasMenuItems();
+  },
+
   setup() {
     installSaveGuard();
-
-    const orig = app.canvas.getCanvasMenuOptions;
-    app.canvas.getCanvasMenuOptions = function () {
-      const opts = orig?.apply(this, arguments) || [];
-      opts.push({
-        content: "C2C Vault → Lock selection (password to run)",
-        callback: () => lockSelection(false),
-      });
-      opts.push({
-        content: "C2C Vault → Seal selection (runs without password)",
-        callback: () => lockSelection(true),
-      });
-      return opts;
-    };
-
-    async function lockSelection(sealed) {
-      if (headless()) return;
-      const sel = Object.values(app.canvas.selected_nodes || {});
-      if (sel.length < 1) {
-        await modalAlert("Nothing selected", "Select the nodes to lock first.");
-        return;
-      }
-
-      const pw = await modalPasswordStep({
-        title: `${sealed ? "Seal" : "Lock"} ${sel.length} node(s) into a vault`,
-        note: sealed
-          ? "Sealed: recipient runs with no password but cannot read the graph. Your password is still required to edit — store it safely; there is no recovery."
-          : "Locked: recipient needs this password to run at all. Store it safely — there is no recovery, by design.",
-        sealed,
-      });
-      if (pw === null) return;
-
-      const derived = deriveBoundary(sel, app.graph);
-      if (!derived.boundary_out.length) {
-        await modalAlert("No outputs", "These nodes produce no output. Include the node whose result you want.");
-        return;
-      }
-      if (derived.boundary_in.length > MAX_VAULT_INPUTS) {
-        await modalAlert("Too many inputs", `Selection needs ${derived.boundary_in.length} external inputs but vault supports ${MAX_VAULT_INPUTS}. Include more upstream nodes inside the selection.`);
-        return;
-      }
-      if (derived.boundary_out.length > MAX_VAULT_OUTPUTS) {
-        await modalAlert("Too many outputs", `Selection needs ${derived.boundary_out.length} outputs but vault supports ${MAX_VAULT_OUTPUTS}.`);
-        return;
-      }
-
-      const confirmed = await modalBoundaryStep({
-        boundary: derived, nodeCount: sel.length, sealed,
-      });
-      if (!confirmed) return;
-
-      const promotion = await modalPromoteStep({ selection: sel });
-      if (promotion === null) return;
-
-      const idOf = (n) => String(n.id);
-      const nodes = sel.map((n) => ({
-        id: idOf(n),
-        class_type: n.comfyClass || n.type,
-        widgets: Object.fromEntries((n.widgets || []).map((w) => [w.name, w.value])),
-      }));
-
-      const boundary_in = derived.boundary_in.map((b) => ({
-        name: b.name, to: b.to, to_slot: b.to_slot,
-      }));
-      const boundary_out = derived.boundary_out.map((b) => ({
-        name: b.name, from: b.from, from_slot: b.from_slot,
-      }));
-
-      const vault_id = `vault-${Math.random().toString(36).slice(2, 10)}`;
-      const { ok, data } = await post("/c2c_vault/lock", {
-        vault_id, password: pw, mode: sealed ? "sealed" : "locked",
-        subgraph: {
-          nodes, links: derived.links, boundary_in, boundary_out,
-          promoted: promotion.promoted || [],
-        },
-      });
-      if (!ok) {
-        await modalAlert("Lock failed", data.error || "Could not lock the selection.");
-        return;
-      }
-
-      const iface = buildInterfaceManifest(
-        sealed ? "sealed" : "locked", sel.length,
-        { boundary_in, boundary_out },
-        derived.inTypes, derived.outTypes,
-        promotion.params || [],
-      );
-
-      const [cx, cy] = selectionCentroid(sel);
-      const vault = LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
-      vault.pos = [cx, cy];
-      app.graph.add(vault);
-      widget(vault, "vault_id").value = vault_id;
-      widget(vault, "vault_payload").value = data.payload;
-      const ifaceW = widget(vault, "vault_interface");
-      if (ifaceW) ifaceW.value = JSON.stringify(iface);
-      vault._vaultPromotedCombo = {};
-      for (const p of promotion.params || []) {
-        if (p._comboOptions) vault._vaultPromotedCombo[p.id] = p._comboOptions;
-      }
-      applyVaultInterface(vault, iface, sealed);
-
-      derived.externalSources.forEach((src, i) => {
-        const srcNode = app.graph.getNodeById(src.id);
-        if (srcNode) srcNode.connect(src.slot, vault, i);
-      });
-      derived.externalTargets.forEach((tgt, i) => {
-        if (!tgt) return;
-        const tgtNode = app.graph.getNodeById(tgt.id);
-        if (tgtNode) vault.connect(i, tgtNode, tgt.slot);
-      });
-
-      for (const n of sel) app.graph.remove(n);
-      app.graph.setDirtyCanvas(true, true);
-      await modalAlert(
-        sealed ? "Sealed" : "Locked",
-        `${sealed ? "Sealed" : "Locked"} ${sel.length} node(s) into a vault. Original nodes removed.`,
-      );
-    }
+    legacyCanvasMenu("vault", _mergeVaultCanvasMenuItems);
   },
 });

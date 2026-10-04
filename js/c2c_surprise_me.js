@@ -86,14 +86,14 @@ function _injectStyle() {
     background: var(--c2c-bg); border: 1px solid var(--c2c-surface1); border-radius: 8px;
     padding: 8px 10px; color: var(--c2c-fg); font-family: -apple-system, "Segoe UI", sans-serif;
     font-size: 11px; box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-    display: none; animation: sm-fade-in 0.3s ease;
+    display: none; animation: c2c-sm-fade-in 0.3s ease;
 }
 #${LOG_ID}.visible { display: block; }
 #${LOG_ID} .sm-log-title { color: var(--c2c-pink); font-weight: 700; margin-bottom: 6px; font-size: 12px; }
 #${LOG_ID} .sm-log-row { padding: 2px 0; border-bottom: 1px solid var(--c2c-surface0); display: flex; gap: 6px; }
 #${LOG_ID} .sm-log-row .sm-log-node { color: var(--c2c-mauve); flex-shrink: 0; min-width: 60px; }
 #${LOG_ID} .sm-log-row .sm-log-val { color: var(--c2c-okSoft); font-family: monospace; }
-@keyframes sm-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes c2c-sm-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     `.trim();
     document.head.appendChild(style);
 }

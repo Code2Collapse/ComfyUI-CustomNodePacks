@@ -34,6 +34,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 const LOG = (...a) => console.debug("[c2c-reset]", ...a);
 
@@ -186,6 +187,18 @@ function captureKeydown(e) {
 }
 
 // ================================================================ extension
+function _canvasMenuItems() {
+    return [null, {
+        content: "\u21BA C2C: Reset selection to defaults",
+        callback: () => resetSelectedOrAll(),
+    }];
+}
+
+function _mergeCanvasMenuItems(opts) {
+    opts.push(..._canvasMenuItems());
+    return opts;
+}
+
 app.registerExtension({
     name: "c2c.reset_to_defaults",
     settings: [
@@ -230,6 +243,9 @@ app.registerExtension({
             },
         }];
     },
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
+    },
     // NOTE: No `keybindings:` entry — ComfyUI's registry conflict-checks
     // by `key` alone (ignoring modifiers), so { key:"r", ctrl:true }
     // collides with Comfy.RefreshNodeDefinitions' bare `r` and spams a
@@ -241,21 +257,7 @@ app.registerExtension({
             if (enabled === false) return;
             captureKeydown(e);
         }, { capture: true });
-        // Right-click → "Reset to defaults" on selection.
-        const orig = LGraphCanvas.prototype.getCanvasMenuOptions;
-        if (orig && !orig.__c2c_reset_patched) {
-            const patched = function (...args) {
-                const opts = orig.apply(this, args) || [];
-                opts.push(null);
-                opts.push({
-                    content: "\u21BA C2C: Reset selection to defaults",
-                    callback: () => resetSelectedOrAll(),
-                });
-                return opts;
-            };
-            patched.__c2c_reset_patched = true;
-            LGraphCanvas.prototype.getCanvasMenuOptions = patched;
-        }
+        legacyCanvasMenu("reset_to_defaults", _mergeCanvasMenuItems);
         LOG("Reset-to-defaults installed");
     },
 });

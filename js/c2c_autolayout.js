@@ -12,6 +12,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 function _settingsEnabled() {
     try { return app.ui.settings.getSettingValue("mec.autolayout.enabled", true); }
@@ -112,17 +113,15 @@ function _tidy() {
     console.log(`[MEC.Autolayout] Tidied ${nodes.length} nodes across ${sortedLayers.length} layers.`);
 }
 
-function _patchMenu() {
-    if (LGraphCanvas.prototype._mecAutolayoutPatched) return;
-    LGraphCanvas.prototype._mecAutolayoutPatched = true;
-    const orig = LGraphCanvas.prototype.getCanvasMenuOptions;
-    LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-        const opts = orig ? orig.apply(this, arguments) : [];
-        if (!_settingsEnabled()) return opts;
-        opts.push(null);
-        opts.push({ content: "🧹 Tidy layout", callback: _tidy });
-        return opts;
-    };
+function _canvasMenuItems() {
+    if (!_settingsEnabled()) return [];
+    return [null, { content: "🧹 Tidy layout", callback: _tidy }];
+}
+
+function _mergeCanvasMenuItems(opts) {
+    const items = _canvasMenuItems();
+    if (items.length) opts.push(...items);
+    return opts;
 }
 
 app.registerExtension({
@@ -150,8 +149,11 @@ app.registerExtension({
     commands: [
         { id: "mec.autolayout.tidy", label: "🧹 MEC: Tidy layout", function: _tidy },
     ],
+    getCanvasMenuItems() {
+        return _canvasMenuItems();
+    },
     async setup() {
-        _patchMenu();
+        legacyCanvasMenu("autolayout", _mergeCanvasMenuItems);
         console.log("[MEC.Autolayout] Loaded.");
     },
 });

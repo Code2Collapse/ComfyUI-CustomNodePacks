@@ -37,7 +37,13 @@
 
 import { app } from "../../scripts/app.js";
 import { mountOmniTool } from "./_c2c_omni_tool.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
 
 const SETTING_ID = "c2c.ui.layout";
 const ROW_HOST_ID = "c2c-mini-row-host";
@@ -283,7 +289,7 @@ function _mountMiniRow() {
         // span of a few hundred ms at most in practice).
         let ticks = 0;
         const maxTicks = 1200; // 50 ms * 1200 = 60 s safety cap
-        const iv = setInterval(() => {
+        const iv = setInterval(() => { // c2c-allow-interval: wait for OmniBar, cap 1200×50ms
             if (_tryRegister() || ++ticks >= maxTicks) {
                 clearInterval(iv);
             }

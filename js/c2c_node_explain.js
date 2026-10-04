@@ -17,7 +17,10 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";  // kept for future use
 import { capabilityFor, nodeColorCss, nodeHue } from "./c2c_node_taxonomy.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
 
 // ── constants ──────────────────────────────────────────────────────────────
 const DEFAULT_DWELL_MS = 250;   // how long to hover before showing tooltip

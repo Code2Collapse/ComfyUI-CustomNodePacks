@@ -603,7 +603,7 @@ function _hookOmniBar() {
     };
     if (tryReg()) return;
     let n = 0;
-    const iv = setInterval(() => {
+    const iv = setInterval(() => { // c2c-allow-interval: wait for OmniBar, cap 40×500ms
         if (tryReg() || ++n > 40) clearInterval(iv);
     }, 500);
 }

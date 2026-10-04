@@ -19,7 +19,15 @@
 
 import { app } from "../../scripts/app.js";
 import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
 
 const ROOT_ID = "c2c-bookmarks-root";
 const SETTING_ID = "c2c.bookmarks.enabled";
@@ -38,6 +46,10 @@ function injectStyle() {
     border-radius: 7px; padding: 4px;
     font: 11px ui-sans-serif, system-ui, sans-serif;
     color: var(--c2c-fg); backdrop-filter: blur(6px);
+}
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 #${ROOT_ID} .cell {
     min-width: 22px; height: 22px;
@@ -239,7 +251,10 @@ app.registerExtension({
                 return r;
             };
         }
-        setInterval(() => { if (!document.hidden) render(); }, 1500);  // re-render 9 cells; skip while tab hidden
+        const rt = getRuntime();
+        rt.onGraphChange(rt.guard(() => {
+            if (!document.hidden && graphReadable()) render();
+        }, "node_bookmarks:graph"));
         render();
         console.log("[C2C.NodeBookmarks] ready.");
     },

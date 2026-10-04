@@ -13,7 +13,9 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { findNodeAnywhere } from "../_subgraph_walk.js";
 import { reportFailure as __c2cReport } from "../_c2c_report.js";
+import { getRuntime } from "../_c2c_runtime.js";
 import { C, onThemeChange } from "../_c2c_theme.js";
+import { legacyNodeMenu } from "../_c2c_compat.js";
 
 const STATE = {
     nodes: new Map(),  // node_id -> {elapsed_ms, vram_delta_mb, cpu_ms, ram_delta_mb, error?}
@@ -181,6 +183,25 @@ function onInsight(ev) {
     refresh();
 }
 
+function _nodeMenuItems(node) {
+    const badge = node._mecInsightBadge;
+    if (!badge || !badge.tooltip) return [];
+    const isErr = !!STATE.nodes.get(node.id)?.error;
+    return [null, {
+        content: "Insight: " + (isErr ? "show error hint" : "show stats"),
+        callback: () => alert(badge.tooltip),
+    }];
+}
+
+function _mergeNodeMenuItems(opts, node) {
+    const items = _nodeMenuItems(node);
+    if (items.length >= 2) {
+        opts.unshift(items[1]);
+        opts.unshift(items[0]);
+    }
+    return opts;
+}
+
 app.registerExtension({
     name: "nukenodemax.insight_overlay",
     settings: [
@@ -197,8 +218,7 @@ app.registerExtension({
         onThemeChange(() => refresh());
 
         // Paint badges BELOW the node body so the title bar stays clean.
-        const origDraw = LGraphCanvas.prototype.drawNodeShape;
-        LGraphCanvas.prototype.drawNodeShape = function (node, ctx, size, fgColor, bgColor, selected, mouseOver) {
+        getRuntime().safePatch(LGraphCanvas.prototype, "drawNodeShape", (origDraw) => function (node, ctx, size, fgColor, bgColor, selected, mouseOver) {
             origDraw.apply(this, arguments);
             // Per user mandate 2026-05-19: do NOT always-paint. These
             // badges live in graph space and therefore scale with the
@@ -244,22 +264,11 @@ app.registerExtension({
                 ctx.fillText(lines[i], cx, y + 2 + lineH * (i + 0.5));
             }
             ctx.restore();
-        };
+        }, { id: "insight.drawNodeShape" });
 
-        // Right-click menu: show full hint / stats.
-        const origMenu = LGraphCanvas.prototype.getNodeMenuOptions;
-        LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-            const opts = origMenu ? origMenu.apply(this, arguments) : [];
-            const badge = node._mecInsightBadge;
-            if (badge && badge.tooltip) {
-                const isErr = !!STATE.nodes.get(node.id)?.error;
-                opts.unshift({
-                    content: "Insight: " + (isErr ? "show error hint" : "show stats"),
-                    callback: () => alert(badge.tooltip),
-                });
-                opts.unshift(null);  // separator
-            }
-            return opts;
-        };
+        legacyNodeMenu("nukenodemax.insight_overlay", _mergeNodeMenuItems);
+    },
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
     },
 });

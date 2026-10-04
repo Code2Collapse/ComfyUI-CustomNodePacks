@@ -13,6 +13,7 @@ import { streamAI } from "./_c2c_ai_client.js";
 import { buildPanel, esc, nodeAnchor, clearConnector } from "./_c2c_window.js";
 import { getPrompt } from "./_c2c_prompts.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { legacyNodeMenu } from "./_c2c_compat.js";
 
 const PANEL_ID = "c2c-ai-explainer-panel";
 const SETTING_ENABLE = "c2c.ai.explainer.enabled";
@@ -309,49 +310,38 @@ async function showMe(nodeClass, refs) {
     app.graph.setDirtyCanvas(true, true);
 }
 
+function _explainerEnabled() {
+    const v = app.ui?.settings?.getSettingValue(SETTING_ENABLE);
+    return (v === undefined || v === null) ? true : !!v;
+}
+
+function _nodeMenuItems(node) {
+    if (!_explainerEnabled() || !node) return [];
+    return [null, {
+        content: "🧠 Explain with AI",
+        callback: () => explain(node),
+    }];
+}
+
+function _mergeNodeMenuItems(opts, node) {
+    if (!_explainerEnabled() || !Array.isArray(opts)) return opts;
+    if (opts.some(o => o && /Explain with AI/.test(o.content || ""))) return opts;
+    const items = _nodeMenuItems(node);
+    if (items.length) opts.push(...items);
+    return opts;
+}
+
 app.registerExtension({
     name: "c2c.ai.explainer",
     settings: [
         { id: SETTING_ENABLE, name: "C2C ▸ AI ▸ Show 'Explain with AI' in node menu",
           type: "boolean", default: true },
     ],
+    getNodeMenuItems(node) {
+        return _nodeMenuItems(node);
+    },
     async setup() {
-        // Hook LGraphCanvas.getNodeMenuOptions instead of per-nodeType prototype.
-        // The per-nodeType approach gets clobbered by other extensions that wrap
-        // getExtraMenuOptions in a non-chaining way (observed: a wrapper that
-        // captures `i` (prior) and `t` (its own) closure refs and replaces our
-        // wrapped fn outright, dropping our pushed item). Hooking the canvas
-        // method runs exactly once per right-click and is immune to that war.
-        const LGC = window.LGraphCanvas;
-        if (!LGC || !LGC.prototype || !LGC.prototype.getNodeMenuOptions) {
-            console.warn("[c2c.ai.explainer] LGraphCanvas.getNodeMenuOptions not found; menu item will not be installed.");
-            return;
-        }
-        if (LGC.prototype.__c2c_explainer_installed__) return;
-        const orig = LGC.prototype.getNodeMenuOptions;
-        LGC.prototype.getNodeMenuOptions = function (node) {
-            const options = orig.apply(this, arguments);
-            try {
-                // NOTE: in newer ComfyUI front-ends the 2nd arg to
-                // getSettingValue (default) is ignored and the function
-                // returns `undefined` when the setting hasn't been touched
-                // by the user. Treat undefined === "use the setting's
-                // declared default", which for us is true.
-                const v = app.ui?.settings?.getSettingValue(SETTING_ENABLE);
-                const enabled = (v === undefined || v === null) ? true : !!v;
-                if (!enabled) return options;
-                if (!Array.isArray(options)) return options;
-                // Avoid duplicate insertion if some other code already added it.
-                if (options.some(o => o && /Explain with AI/.test(o.content || ""))) return options;
-                options.push(null);
-                options.push({
-                    content: "🧠 Explain with AI",
-                    callback: () => explain(node),
-                });
-            } catch (e) { console.error("[c2c.ai.explainer] menu hook error:", e); }
-            return options;
-        };
-        LGC.prototype.__c2c_explainer_installed__ = true;
+        legacyNodeMenu("ai.explainer", _mergeNodeMenuItems);
     },
 });
 

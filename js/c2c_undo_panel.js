@@ -538,8 +538,10 @@ app.registerExtension({
     async setup() {
         _injectStyle();
         _ensureUi();
-        const waitForGraph = setInterval(() => {
-            if (app.graph) { _hookGraphChanges(); clearInterval(waitForGraph); }
+        let _graphWait = 0;
+        const waitForGraph = setInterval(() => { // c2c-allow-interval: wait for graph, cap 50×200ms
+            if (app.graph) { _hookGraphChanges(); clearInterval(waitForGraph); return; }
+            if (++_graphWait >= 50) clearInterval(waitForGraph);
         }, 200);
         const enabled = _settingsEnabled();
         const b = document.getElementById(BTN_ID);

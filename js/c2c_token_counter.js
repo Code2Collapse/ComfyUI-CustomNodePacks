@@ -14,6 +14,8 @@ import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { forAllNodes } from "./_subgraph_walk.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
 
 const TEXT_NODE_RE = /cliptextencode|smz_cliptextencode|promptstyler|advanced.*clip.*text/i;
 const TEXT_WIDGET_NAMES = ["text", "prompt", "positive", "negative", "string"];
@@ -204,11 +206,13 @@ app.registerExtension({
         // the feature OFF actually stops the work (not just hides the badge).
         const _scanIfEnabled = () => {
             try { if (app.ui.settings.getSettingValue("mec.token_counter.enabled", true) === false) return; } catch (_) {}
+            if (!graphReadable()) return;
             _scanAll();
         };
-        const _t = setInterval(_scanIfEnabled, 4000);  // catch nodes added by graph load
-        window.addEventListener("beforeunload", () => clearInterval(_t), { once: true });
-        window.__MEC_TOKEN_COUNTER_INTERVAL = _t;
+        const rt = getRuntime();
+        const scan = rt.guard(_scanIfEnabled, "token_counter:scan");
+        rt.onGraphChange(scan);
+        scan();
         console.log("[MEC.TokenCounter] Loaded.");
     },
 });

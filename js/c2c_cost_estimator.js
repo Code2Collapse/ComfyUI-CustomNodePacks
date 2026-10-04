@@ -23,6 +23,7 @@ import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const BTN_ID    = "mec-cost-btn";
 const PANEL_ID  = "mec-cost-panel";
@@ -67,12 +68,12 @@ function _onExecStart(ev) {
     L.nodeTimings = [];
     L.currentNode = null;
     L.nodeStartTs = 0;
-    clearInterval(L.timerHandle);
-    L.timerHandle = setInterval(() => {
-        if (!L.active) { clearInterval(L.timerHandle); return; }
+    L.timerHandle?.cancel();
+    L.timerHandle = getRuntime().every("cost.live", 250, () => {
+        if (!L.active) { L.timerHandle?.cancel(); return; }
         L.elapsed = performance.now() - L.startTs;
         if (_state.open) _renderLiveBar();
-    }, 250);
+    }, { ambient: false });
     if (_state.open) _renderBody();
 }
 
@@ -103,7 +104,7 @@ function _onExecDone() {
     }
     L.elapsed = performance.now() - L.startTs;
     L.active = false;
-    clearInterval(L.timerHandle);
+    L.timerHandle?.cancel();
     _state.runHistory.push({
         ts: Date.now(),
         total_ms: L.elapsed,

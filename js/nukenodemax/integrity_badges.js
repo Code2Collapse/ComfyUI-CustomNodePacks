@@ -17,8 +17,15 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { reportFailure as __c2cReport } from "../_c2c_report.js";
+import { getRuntime } from "../_c2c_runtime.js";
 import { c2cConfirm } from "../_c2c_dialog.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "../_c2c_lite.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "../_c2c_lite.js";
 
 // ── State ───────────────────────────────────────────────────────────
 const STATE = {
@@ -556,10 +563,7 @@ function renderDialogBody() {
 // ── Per-node checksum-drift badge (kept; tiny, in-context) ──────────
 function installNodeBadge() {
     if (typeof LGraphCanvas === "undefined") return;
-    if (LGraphCanvas.prototype.__MEC_INTEG_PATCHED__) return;
-    LGraphCanvas.prototype.__MEC_INTEG_PATCHED__ = true;
-    const origDraw = LGraphCanvas.prototype.drawNodeShape;
-    LGraphCanvas.prototype.drawNodeShape = function (node /*, ctx, size, fg, bg, selected, mouseOver*/) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "drawNodeShape", (origDraw) => function (node /*, ctx, size, fg, bg, selected, mouseOver*/) {
         origDraw.apply(this, arguments);
         if (isMuted() || !STATE.events.length || !node?.type) return;
         const drifted = STATE.events.find(
@@ -589,7 +593,7 @@ function installNodeBadge() {
             ctx.fillText("!", 8, -8);
             ctx.restore();
         }
-    };
+    }, { id: "integrity.drawNodeShape" });
 }
 
 // ── Extension registration ──────────────────────────────────────────
@@ -605,6 +609,6 @@ app.registerExtension({
         fetchReport();
 
         // Light periodic poll in case the socket misses an event.
-        setInterval(fetchReport, 60_000);
+        getRuntime().every("integrity.report", 60_000, () => fetchReport(), { ambient: true });
     },
 });

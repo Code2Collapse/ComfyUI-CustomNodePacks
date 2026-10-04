@@ -21,6 +21,9 @@
  *           Used for optional-feature absences (missing optional route, etc.)
  *           where the user must NOT see a red toast.
  *
+ * Rate limits (Slice A): per dedup key (where|message) — console first 3 then
+ * every 100th; window event max 1/10s; POST max 1/5min; global POST cap 20/min.
+ *
  * The implementation MUST itself be bullet-proof: it cannot throw, because
  * throwing inside an error handler would create an infinite loop or hide the
  * original error. Any internal failure is swallowed silently as a last resort
@@ -29,6 +32,38 @@
 
 const _C2C_REPORT_ENDPOINT = "/c2c/registry/failure";
 const _VALID_LEVELS = new Set(["error", "warn", "info"]);
+const _EVENT_INTERVAL_MS = 10_000;
+const _POST_INTERVAL_MS = 5 * 60_000;
+const _GLOBAL_POST_CAP = 20;
+const _GLOBAL_POST_WINDOW_MS = 60_000;
+
+const _perKey = new Map();
+const _globalPosts = [];
+
+function _dedupKey(where, message) {
+    return `${where}|${message}`;
+}
+
+const _MAX_KEYS = 500;
+
+function _keyState(key) {
+    let s = _perKey.get(key);
+    if (!s) {
+        // messages that embed ids or times make endless distinct keys: keep
+        // the newest 500 (Map iterates oldest-first)
+        if (_perKey.size >= _MAX_KEYS) _perKey.delete(_perKey.keys().next().value);
+        s = { count: 0, lastEvent: 0, lastPost: 0 };
+        _perKey.set(key, s);
+    }
+    return s;
+}
+
+function _globalPostAllowed(now) {
+    while (_globalPosts.length && _globalPosts[0] < now - _GLOBAL_POST_WINDOW_MS) {
+        _globalPosts.shift();
+    }
+    return _globalPosts.length < _GLOBAL_POST_CAP;
+}
 
 /**
  * Report a non-fatal failure from a C2C/MEC module.
@@ -79,28 +114,43 @@ export function reportFailure(where, err, componentOrOpts) {
         return;
     }
 
-    // 1) Console — primary developer-facing channel. Level-aware so we don't
-    //    spam DevTools with red noise for optional-feature absences.
+    const now = detail.ts;
+    const dkey = _dedupKey(detail.where, detail.message);
+    let ks;
     try {
-        const prefix = `[${detail.component}] ${detail.where}:`;
-        // eslint-disable-next-line no-console
-        if (level === "info") console.info(prefix, err);
-        // eslint-disable-next-line no-console
-        else if (level === "warn") console.warn(prefix, err);
-        // eslint-disable-next-line no-console
-        else console.error(prefix, err);
+        ks = _keyState(dkey);
+        ks.count += 1;
+    } catch (_) {
+        ks = { count: 1, lastEvent: 0, lastPost: 0 };
+    }
+
+    // 1) Console — first 3 per key, then every 100th occurrence.
+    try {
+        const n = ks.count;
+        const logFull = n <= 3 || (n % 100 === 0);
+        if (logFull) {
+            const prefix = n > 3
+                ? `[${detail.component}] ${detail.where}: repeated ${n} times`
+                : `[${detail.component}] ${detail.where}:`;
+            // eslint-disable-next-line no-console
+            if (level === "info") console.info(prefix, err);
+            // eslint-disable-next-line no-console
+            else if (level === "warn") console.warn(prefix, err);
+            // eslint-disable-next-line no-console
+            else console.error(prefix, err);
+        }
     } catch (consoleErr) {
-        // If even console.error throws (e.g. console mocked away), do nothing.
         void consoleErr;
     }
 
-    // 2) Window CustomEvent — picked up by c2c_registry_status.js and the
-    //    diagnostics sidebar. Skipped for level="info" so optional-feature
-    //    absences don't accumulate in the registry-failure log.
+    // 2) Window CustomEvent — max once per key per 10 s.
     if (level !== "info") {
         try {
-            if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-                window.dispatchEvent(new CustomEvent("c2c:registry-failure", { detail }));
+            if (now - ks.lastEvent >= _EVENT_INTERVAL_MS) {
+                ks.lastEvent = now;
+                if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+                    window.dispatchEvent(new CustomEvent("c2c:registry-failure", { detail }));
+                }
             }
         } catch (dispatchErr) {
             try {
@@ -112,11 +162,13 @@ export function reportFailure(where, err, componentOrOpts) {
         }
     }
 
-    // 3) Best-effort server POST. Keepalive lets it survive page unload.
-    //    Only fires for level="error" so optional-failure noise does not
-    //    surface as a red toast via /c2c/registry/status.
+    // 3) Best-effort server POST — max once per key per 5 min; global 20/min.
     if (level !== "error") return;
     try {
+        if (now - ks.lastPost < _POST_INTERVAL_MS) return;
+        if (!_globalPostAllowed(now)) return;
+        ks.lastPost = now;
+        _globalPosts.push(now);
         if (typeof fetch === "function") {
             fetch(_C2C_REPORT_ENDPOINT, {
                 method: "POST",
@@ -124,8 +176,6 @@ export function reportFailure(where, err, componentOrOpts) {
                 body: JSON.stringify(detail),
                 keepalive: true,
             }).catch((netErr) => {
-                // Net errors here are expected when the server endpoint is
-                // not mounted (older builds). Log once, do not re-throw.
                 try {
                     // eslint-disable-next-line no-console
                     console.debug("[c2c-report] net-post-failed", netErr);

@@ -16,6 +16,7 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 import { wdEnsureProxy } from "./_wan_director_ui.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const PLAYER_H = 168;          // total player widget height (px) — was 280 (node-stack bloat); 168 keeps stage usable + transport
 const STRIP_H  = 56;            // thumbnail strip height
@@ -565,13 +566,13 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.Player")) app
             // firing (some graph.clear/workflow-load paths), the dead player UI
             // would linger and swallow clicks. Poll cheaply; remove ourselves.
             const _self = this;
-            const _aliveTimer = setInterval(() => {
+            _self._wd_aliveEvery = getRuntime().every(`wan.player.alive.${_self.id}`, 2000, () => {
                 if (_self.graph == null) {
                     try { player.root.remove(); } catch (_) {}
                     try { player.destroy?.(); } catch (_) {}
-                    clearInterval(_aliveTimer);
+                    _self._wd_aliveEvery?.cancel();
                 }
-            }, 2000);
+            }, { ambient: false });
             // Use the inset `width` LiteGraph passes — never `this.size[0]`,
             // which over-reserves the column and leaks the node bgcolor as
             // dark gutters on both edges of the widget.
@@ -595,6 +596,12 @@ if (!(app.extensions || []).some(e => e?.name === "C2C.WanDirector.Player")) app
         };
 
         // Hook executed events to display final video / image / info text.
+        const origRemoved = nodeType.prototype.onRemoved;
+        nodeType.prototype.onRemoved = function () {
+            try { this._wd_aliveEvery?.cancel(); } catch (_) {}
+            return origRemoved?.apply(this, arguments);
+        };
+
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             onExecuted?.apply(this, arguments);

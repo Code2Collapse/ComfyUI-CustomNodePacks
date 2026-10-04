@@ -11,6 +11,8 @@
 
 import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+import { graphReadable } from "./_c2c_compat.js";
 
 const HUD_ID   = "mec-complexity-hud";
 const STYLE_ID = "mec-complexity-hud-style";
@@ -283,6 +285,7 @@ function _scheduleUpdate() {
     });
 }
 
+let _lastKey = "";
 function _update() {
     const enabled = (() => {
         try { return app.ui.settings.getSettingValue("mec.complexity_hud.enabled", true); }
@@ -291,11 +294,18 @@ function _update() {
     const hud = _ensureHud();
     if (!enabled) {
         hud.style.display = "none";
+        _lastKey = "";
         return;
     }
+    const { nodes, links } = _countGraph();
+    // PERF: this runs every 2 s. Rewriting innerHTML and re-registering the
+    // strip each time dirtied the DOM (waking every observer on the page)
+    // although nothing had changed. Now only a real change writes.
+    const key = nodes + ":" + links;
+    if (key === _lastKey && hud.style.display === "block") return;
+    _lastKey = key;
     hud.style.display = "block";
 
-    const { nodes, links } = _countGraph();
     const tier = _classify(nodes, links);
     hud.style.background   = tier.bg;
     hud.style.color        = tier.color;
@@ -367,13 +377,15 @@ app.registerExtension({
         _hookGraphMutations();
         _update();
 
-        // Periodic safety refresh — in case some custom op mutates the graph
-        // without going through the hooked methods. Store the handle so the
-        // interval can be torn down (e.g. on hot-reload of the extension or
-        // when the page navigates away).
-        const _t = setInterval(() => { if (!document.hidden) _update(); }, 2000);
-        window.addEventListener("beforeunload", () => clearInterval(_t), { once: true });
-        window.__MEC_COMPLEXITY_HUD_INTERVAL = _t;
+        const rt = getRuntime();
+        const onGraph = rt.guard(() => {
+            if (!graphReadable()) return;
+            _scheduleUpdate();
+        }, "complexity_hud:graph");
+        rt.onGraphChange(onGraph);
+        rt.every("complexity_hud.safety", 10000, () => {
+            if (!document.hidden && graphReadable()) _update();
+        }, { ambient: true });
 
         console.log("[MEC.ComplexityHUD] Loaded.");
     },

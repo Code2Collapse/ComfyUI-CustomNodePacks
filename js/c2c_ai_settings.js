@@ -16,6 +16,7 @@ import { app } from "../../scripts/app.js";
 import { buildPanel } from "./_c2c_window.js";
 import { c2cAlert } from "./_c2c_dialog.js";
 import { mountOmniTool } from "./_c2c_omni_tool.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const TAB_ID = "c2c.ai";
 const RIGHT_DOCK_ID = "c2c.ai.right-dock";
@@ -177,23 +178,24 @@ a backend below just upgrades it from rule-based to plain-English AI replies.</p
                     return;
                 }
                 dlStat.textContent = "starting…";
-                pollTimer = setInterval(async () => {
+                pollTimer?.cancel();
+                pollTimer = getRuntime().every("ai.local.dl", 1500, async () => {
                     try {
                         const s = await apiGet("/c2c/ai/local_model/status");
                         const d = s.download || {};
                         if (d.error) {
                             dlStat.textContent = "✗ " + d.error;
-                            clearInterval(pollTimer); dlBtn.disabled = false;
+                            pollTimer?.cancel(); dlBtn.disabled = false;
                         } else if (s.model_present && !d.downloading) {
                             dlStat.textContent = "✓ installed — local AI is ready";
-                            clearInterval(pollTimer);
+                            pollTimer?.cancel();
                         } else if (d.downloading) {
                             const pct = Math.round((d.progress || 0) * 100);
                             const gb = ((d.bytes_done || 0) / 1e9).toFixed(2);
                             dlStat.textContent = `downloading… ${pct}% (${gb} GB)`;
                         }
                     } catch (_) {}
-                }, 1500);
+                }, { ambient: false });
             } catch (e) {
                 dlStat.textContent = "✗ " + (e && e.message || "request failed");
                 dlBtn.disabled = false;

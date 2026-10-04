@@ -32,7 +32,14 @@
 
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
-// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at// module-eval time. ComfyUI discovers extensions with a plain glob, whose order// is filesystem-dependent and NOT guaranteed, so relying on this file loading// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the// imported module always evaluates first, so the filter is in place before the// registerExtension call below runs.import "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+// Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
+// module-eval time. ComfyUI discovers extensions with a plain glob, whose order
+// is filesystem-dependent and NOT guaranteed, so relying on this file loading
+// after _c2c_lite.js is a coin flip. An ES import makes it a guarantee — the
+// imported module always evaluates first, so the filter is in place before the
+// registerExtension call below runs.
+import "./_c2c_lite.js";
 
 const WRAP_ID_LEFT  = "c2c-top-dock-left";
 const WRAP_ID_RIGHT = "c2c-top-dock-right";
@@ -193,6 +200,12 @@ let _lastTop = -1;
 let _lastLeft = -1;
 let _lastRight = -1;
 function _applyTop() {
+    // PERF: the measurers below force a full page layout (measured ~9 ms per
+    // call on a Nodes 2.0 graph, twice a second). Once the OmniBar has taken
+    // every member, both strips are empty and hidden - nothing to position.
+    const lw = document.getElementById(WRAP_ID_LEFT);
+    const rw = document.getElementById(WRAP_ID_RIGHT);
+    if (!lw?.firstElementChild && !rw?.firstElementChild) { _lastTop = -1; return; }
     const t   = _measureTopChromeBottom() + MIN_GAP;
     const lsb = _measureLeftSidebarRight();
     const rsb = _measureRightSidebarLeft();
@@ -355,7 +368,7 @@ function _boot() {
         mo.observe(document.body, { childList: true, subtree: false });
     } catch (__c2cErr) { __c2cReport("_c2c_top_dock", __c2cErr); }
     window.addEventListener("resize", _schedule, { passive: true });
-    setInterval(_schedule, 1000);
+    getRuntime().every("topdock.layout", 1000, () => _schedule(), { ambient: true });
 }
 
 window.__c2cTopDock = { register, unregister, recompute: _applyTop };

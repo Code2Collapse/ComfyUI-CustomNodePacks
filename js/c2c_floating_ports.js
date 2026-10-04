@@ -18,6 +18,7 @@
 
 import { app } from "/scripts/app.js";
 import { C } from "./_c2c_theme.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const SETTING_ID = "c2c.floatingPorts.enabled";
 let _enabled = false;
@@ -115,7 +116,7 @@ function drawEndpointDot(ctx, pt, color) {
 
 function install() {
     const proto = window.LGraphCanvas && LGraphCanvas.prototype;
-    if (!proto || proto.__c2cFloatingPorts) return false;
+    if (!proto) return false;
     // Hook the LOW-LEVEL segment renderer, not renderLink: in current litegraph
     // _renderAllLinkSegments(ctx, link, startPt, endPt, paths, time, startDir,
     // endDir, disabled) is what computes the endpoints + directions and feeds
@@ -123,9 +124,8 @@ function install() {
     // sits BELOW us), so adjusting the endpoints here reroutes EVERY noodle
     // style to the nearest edge while leaving the port dots + hit-testing alone.
     if (typeof proto._renderAllLinkSegments !== "function") return false;
-    const orig = proto._renderAllLinkSegments;
     const moved = (p, q) => (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1])) > 3;
-    proto._renderAllLinkSegments = function (ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled) {
+    getRuntime().safePatch(proto, "_renderAllLinkSegments", (orig) => function (ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled) {
         if (enabledNow() && link && this.graph && !link._dragging) {
             const A = this.graph.getNodeById(link.origin_id);
             const B = this.graph.getNodeById(link.target_id);
@@ -177,9 +177,7 @@ function install() {
             }
         } catch (_) { /* registry is best-effort */ }
         return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
-    };
-
-    proto.__c2cFloatingPorts = true;
+    }, { id: "floatingports._renderAllLinkSegments" });
     return true;
 }
 

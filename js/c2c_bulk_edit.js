@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 const ROOT_ID = "c2c-bulk-edit-root";
 const SETTING_ID = "c2c.bulkEdit.enabled";
@@ -38,6 +39,10 @@ function injectStyle() {
     backdrop-filter: blur(10px);
     color: var(--c2c-fg); font: 12px ui-sans-serif, system-ui, sans-serif;
     overflow: hidden; display: flex; flex-direction: column;
+}
+html.c2c-lite #${ROOT_ID} {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 #${ROOT_ID} .hdr {
     padding: 9px 12px;
@@ -236,8 +241,26 @@ function onKey(ev) {
     open();
 }
 
+function _canvasMenuItems(canvas) {
+    const sel = Object.values((canvas || app.canvas)?.selected_nodes || {});
+    if (sel.length < 2) return [];
+    return [{
+        content: `Bulk-edit ${sel.length} nodes…`,
+        callback: open,
+    }];
+}
+
+function _mergeCanvasMenuItems(opts, canvas) {
+    const items = _canvasMenuItems(canvas ?? this);
+    if (items.length) opts.unshift(...items);
+    return opts;
+}
+
 app.registerExtension({
     name: "C2C.BulkEdit",
+    getCanvasMenuItems(canvas) {
+        return _canvasMenuItems(canvas);
+    },
     async setup() {
         try {
             app.ui.settings.addSetting({
@@ -248,22 +271,7 @@ app.registerExtension({
             });
         } catch { /* */ }
         window.addEventListener("keydown", onKey, true);
-        // Add right-click "Bulk-edit widgets…" via canvas menu hook.
-        const origGetMenu = window.LGraphCanvas?.prototype?.getCanvasMenuOptions;
-        if (origGetMenu && !window.LGraphCanvas.prototype._c2c_bulk_patched) {
-            window.LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-                const opts = origGetMenu.apply(this, arguments) || [];
-                const sel = Object.values(this.selected_nodes || {});
-                if (sel.length >= 2) {
-                    opts.unshift({
-                        content: `Bulk-edit ${sel.length} nodes…`,
-                        callback: open,
-                    });
-                }
-                return opts;
-            };
-            window.LGraphCanvas.prototype._c2c_bulk_patched = true;
-        }
+        legacyCanvasMenu("bulk_edit", _mergeCanvasMenuItems);
         console.log("[C2C.BulkEdit] ready (Ctrl+Shift+E).");
     },
 });

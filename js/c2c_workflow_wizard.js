@@ -26,10 +26,14 @@
 
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { getRuntime } from "./_c2c_runtime.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
 import { c2cConfirm, c2cAlert } from "./_c2c_dialog.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
 
 const BTN_ID   = "mec-wizard-btn";
 const PANEL_ID = "mec-wizard-panel";
@@ -49,7 +53,6 @@ let _favs = new Set();
 let _active = null;                          // { template_id, title, steps, idx, skipped:Set, done:Set }
 let _aiBusy = false;
 let _aiOutput = "";
-let _drawPatched = false;
 let _rafTok = null;
 const _listeners = [];
 
@@ -639,16 +642,12 @@ function _stopHighlightLoop() {
 }
 
 function _ensureDrawPatch() {
-    if (_drawPatched) return;
     if (typeof LGraphCanvas === "undefined") return;
-    const orig = LGraphCanvas.prototype.onDrawForeground;
-    LGraphCanvas.prototype.onDrawForeground = function (ctx) {
+    getRuntime().safePatch(LGraphCanvas.prototype, "onDrawForeground", (orig) => function (ctx) {
         if (orig) orig.call(this, ctx);
         try { _drawHighlight(); }
         catch (e) { __c2cReport("c2c_workflow_wizard", e); }
-    };
-    LGraphCanvas.prototype.onDrawForeground._c2cWizardPatched = true;
-    _drawPatched = true;
+    }, { id: "wizard.onDrawForeground" });
 }
 
 function _autoCenterOnTarget() {
@@ -904,7 +903,7 @@ app.registerExtension({
             }
         } catch (_) {}
         // Safety-net poll: cheap (object_info cached; scan is O(nodes)).
-        setInterval(_schedule, 5000);
+        getRuntime().every("wizard.scan", 5000, () => _schedule(), { ambient: true });
         _schedule();
     };
     if (window.app?.graph) _arm(); else setTimeout(_arm, 1500);

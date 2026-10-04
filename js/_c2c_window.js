@@ -111,6 +111,10 @@ function _injectStyle() {
     min-height: 120px;
     backdrop-filter: blur(6px);
 }
+html.c2c-lite .c2c-win {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
 .c2c-win-header {
     padding: 8px 12px;
     background: linear-gradient(180deg, var(--c2c-bg2) 0%, var(--c2c-bg3) 100%);

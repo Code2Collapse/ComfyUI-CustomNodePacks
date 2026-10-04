@@ -22,6 +22,7 @@ import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { buildPanel } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const STYLE_ID = "mec-flamegraph-style";
 const PANEL_ID = "c2c-flame";
@@ -171,11 +172,11 @@ function _liveExecStart(ev) {
     L.currentNodeClass = null;
     L.nodeStartTs = 0;
     L.progress = { node: null, value: 0, max: 0 };
-    clearInterval(L.timerHandle);
-    L.timerHandle = setInterval(() => {
-        if (!L.active) { clearInterval(L.timerHandle); return; }
+    L.timerHandle?.cancel();
+    L.timerHandle = getRuntime().every("flamegraph.live", 500, () => {
+        if (!L.active) { L.timerHandle?.cancel(); return; }
         if (_state.open) _renderPanel();
-    }, 500);
+    }, { ambient: false });
     if (_state.open) _renderPanel();
 }
 
@@ -224,7 +225,7 @@ function _liveExecDone(ev) {
     }
     const totalMs = performance.now() - L.startTs;
     L.active = false;
-    clearInterval(L.timerHandle);
+    L.timerHandle?.cancel();
     _state.current = {
         rows: L.completedRows.slice(),
         total_ms: totalMs,

@@ -101,6 +101,15 @@ function ensurePanel() {
     if (p) return p;
     p = document.createElement("div");
     p.id = PANEL_ID;
+    if (!document.getElementById("c2c-ai-errtrans-lite-style")) {
+        const st = document.createElement("style");
+        st.id = "c2c-ai-errtrans-lite-style";
+        st.textContent = `html.c2c-lite #${PANEL_ID} {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }`;
+        document.head.appendChild(st);
+    }
     p.style.cssText =
         `position:fixed;top:64px;right:18px;width:416px;max-width:calc(100vw - 36px);
          max-height:74vh;z-index:2147483600;

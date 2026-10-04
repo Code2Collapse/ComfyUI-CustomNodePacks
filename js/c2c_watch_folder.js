@@ -6,6 +6,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 let _panel  = null;
 let _isOpen = false;
@@ -171,13 +172,13 @@ function _open() {
   _panel.style.display = "flex";
   _isOpen = true;
   _refreshUI();
-  _refreshTimer = setInterval(_refreshUI, 3000);
+  _refreshTimer = getRuntime().every("watchfolder.ui", 3000, () => _refreshUI(), { ambient: true });
 }
 
 function _close() {
   if (_panel) _panel.style.display = "none";
   _isOpen = false;
-  if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+  if (_refreshTimer) { _refreshTimer.cancel(); _refreshTimer = null; }
 }
 
 function _buildSlot() {

@@ -31,9 +31,17 @@
 //
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 import { C, onThemeChange } from "./_c2c_theme.js";
-// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite// mode it must never register at all — its rAF loops, timers and draw hooks are// then never installed. See _c2c_lite.js.import { LITE } from "./_c2c_lite.js";
+import { getRuntime } from "./_c2c_runtime.js";
+// Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
+// mode it must never register at all — its rAF loops, timers and draw hooks are
+// then never installed. See _c2c_lite.js.
+import { LITE } from "./_c2c_lite.js";
+
+function _requestFgRedraw() {
+    getRuntime().requestRedraw();
+}
 
 const SETTINGS = {
     enabled: true,
@@ -189,7 +197,7 @@ api.addEventListener("progress", (ev) => {
     const id = String(d.node ?? d.node_id ?? EXEC_NODE ?? "");
     if (!id) return;
     _record(id, +d.value, +d.max || 1);
-    dirtyAllGraphs();
+    _requestFgRedraw();
 });
 
 api.addEventListener("executing", (ev) => {
@@ -200,7 +208,7 @@ api.addEventListener("executing", (ev) => {
         // Workflow finished — clear overlays + title prefixes.
         PROGRESS.clear();
         _clear_all_title_prefixes();
-        dirtyAllGraphs();
+        _requestFgRedraw();
     }
 });
 
@@ -211,37 +219,58 @@ api.addEventListener("executed", (ev) => {
         PROGRESS.delete(id);
         _clear_title_prefix(id);
     }
-    dirtyAllGraphs();
+    _requestFgRedraw();
 });
 
 api.addEventListener("execution_error", () => {
     PROGRESS.clear();
     _clear_all_title_prefixes();
-    dirtyAllGraphs();
+    _requestFgRedraw();
 });
 
 // Drive a steady redraw while ≥1 node is in progress so smoothing + ETA
 // counter visibly tick down between socket events.
+// PERF: every frame of this loop redraws the whole canvas. It used to run at
+// 60 fps for the entire generation - while the GPU is busiest - even when the
+// bar had long caught up and only the shimmer moved. Now: full rate only while
+// a bar is gliding to a new value, ~12 fps otherwise (shimmer + ETA).
+const IDLE_FRAME_MS = 83;
 let _raf_handle = null;
+let _idle_timer = null;
 function _animate_loop() {
     _raf_handle = null;
+    if (document.hidden) return;
     if (PROGRESS.size === 0) return;
     // Smooth interpolate displayed value toward true value.
-    const t = _now();
+    let moving = false;
     for (const p of PROGRESS.values()) {
         const target = p.value;
         const diff   = target - p.smoothed;
-        if (Math.abs(diff) > 0.01) p.smoothed += diff * 0.18;
+        if (Math.abs(diff) > 0.01) { p.smoothed += diff * 0.18; moving = true; }
         else p.smoothed = target;
     }
-    dirtyAllGraphs();
-    _raf_handle = requestAnimationFrame(_animate_loop);
+    _requestFgRedraw();
+    if (moving) {
+        _raf_handle = requestAnimationFrame(_animate_loop);
+    } else {
+        _idle_timer = setTimeout(() => {
+            _idle_timer = null;
+            _raf_handle = requestAnimationFrame(_animate_loop);
+        }, IDLE_FRAME_MS);
+    }
 }
 function _ensure_anim() {
-    if (_raf_handle == null && PROGRESS.size > 0) {
+    if (document.hidden) return;
+    if (_raf_handle == null && _idle_timer == null && PROGRESS.size > 0) {
         _raf_handle = requestAnimationFrame(_animate_loop);
     }
 }
+
+try {
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && PROGRESS.size > 0) _ensure_anim();
+    });
+} catch (_) { /* headless */ }
 
 app.registerExtension({
     name: "C2C.ProgressHUD",

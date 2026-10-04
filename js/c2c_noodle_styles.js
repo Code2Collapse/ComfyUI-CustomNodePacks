@@ -27,7 +27,9 @@ import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { getRuntime } from "./_c2c_runtime.js";
 import { api } from "/scripts/api.js";
+import { legacyCanvasMenu } from "./_c2c_compat.js";
 
 const STYLES = [
     "default","spider-web","lightsaber","dna-helix","rainbow-flow",
@@ -419,7 +421,6 @@ const _ANIMATED = new Set([
     "gta", "space-invaders", "tetris", "street-fighter", "mega-man", "mortal-kombat", "metroid", "doom", "elden-ring", "galaga",
 ]);
 
-let _orig = null;
 
 // CRITICAL: Canvas2D CANNOT parse CSS var() — assigning "var(--x)" to
 // fillStyle/strokeStyle silently leaves it BLACK (the historic black-confetti /
@@ -1714,14 +1715,13 @@ function _maybeFx(canvas, ctx, a, b, link) {
 }
 
 function _installRenderPatch() {
-    if (_orig || !window.LGraphCanvas) return;
-    _orig = LGraphCanvas.prototype.renderLink;
-    LGraphCanvas.prototype.renderLink = function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options) {
+    if (!window.LGraphCanvas) return;
+    getRuntime().safePatch(LGraphCanvas.prototype, "renderLink", (orig) => function (ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options) {
         // `options` is an OBJECT in current ComfyUI ({startControl,endControl,
         // reroute,num_sublines,disabled}); it was historically num_sublines.
         // DISABLED links must render natively (dashed) — never fully skinned.
         if (options && typeof options === "object" && options.disabled) {
-            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
+            return orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
         }
         const style = _currentStyle();
         if (style === "default" || !_RENDER[style]) {
@@ -1731,7 +1731,7 @@ function _installRenderPatch() {
             const _sh = _currentShape();
             const _core = _sh === "spline" || (_sh === "auto" && !_alignedStraight(a, b));
             if (_core) {
-                const _r = _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
+                const _r = orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
                 if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
                 return _r;
             }
@@ -1768,7 +1768,7 @@ function _installRenderPatch() {
                 if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
                 return;
             } catch (_e2) {
-                return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
+                return orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
             }
         }
         try {
@@ -1823,33 +1823,31 @@ function _installRenderPatch() {
             if (_fx.active) { try { _maybeFx(this, ctx, a, b, link); } catch (_) {} }
         } catch (e) {
             console.warn("[MEC.NoodleStyles] render error, falling back:", e);
-            return _orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
+            return orig.call(this, ctx, a, b, link, skip_border, flow, color, start_dir, end_dir, options);
         }
-    };
+    }, { id: "noodlestyles.renderLink" });
 }
 
-function _installMenuPatch() {
-    if (!window.LGraphCanvas) return;
-    const origMenu = LGraphCanvas.prototype.getCanvasMenuOptions;
-    LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-        const out = origMenu ? origMenu.call(this) : [];
-        const cur = _currentStyle();
-        const submenu = STYLES.map(s => ({
-            content: `${s === cur ? "✓ " : "  "}${s}`,
-            callback: () => {
-                _styleCache = s;   // update cache immediately (don't rely on onChange firing)
-                try { app.ui.settings.setSettingValue(SETTING_ID, s); } catch (__c2cErr) { __c2cReport("c2c_noodle_styles", __c2cErr); }
-                this.setDirty(true, true);
-            },
-        }));
-        out.push(null); // separator
-        out.push({
+function _canvasMenuItems(canvas) {
+    const cvs = canvas || app.canvas;
+    const cur = _currentStyle();
+    const submenu = STYLES.map(s => ({
+        content: `${s === cur ? "✓ " : "  "}${s}`,
+        callback: () => {
+            _styleCache = s;
+            try { app.ui.settings.setSettingValue(SETTING_ID, s); } catch (__c2cErr) { __c2cReport("c2c_noodle_styles", __c2cErr); }
+            cvs?.setDirty?.(true, true);
+        },
+    }));
+    const curShape = _currentShape();
+    return [
+        null,
+        {
             content: "🍝 Noodle Style",
             has_submenu: true,
             submenu: { options: submenu },
-        });
-        const curShape = _currentShape();
-        out.push({
+        },
+        {
             content: "〰 Pipe Shape",
             has_submenu: true,
             submenu: {
@@ -1858,17 +1856,21 @@ function _installMenuPatch() {
                     callback: () => {
                         _shapeCache = sh;
                         try { app.ui.settings.setSettingValue(SHAPE_SETTING_ID, sh); } catch (__c2cErr) { __c2cReport("c2c_noodle_styles.shape", __c2cErr); }
-                        this.setDirty(true, true);
+                        cvs?.setDirty?.(true, true);
                     },
                 })),
             },
-        });
-        out.push({
+        },
+        {
             content: "— also configurable in Settings → mec.noodle.style",
             disabled: true,
-        });
-        return out;
-    };
+        },
+    ];
+}
+
+function _mergeCanvasMenuItems(opts, canvas) {
+    opts.push(..._canvasMenuItems(canvas ?? this));
+    return opts;
 }
 
 app.registerExtension({
@@ -1909,6 +1911,9 @@ app.registerExtension({
             defaultValue: "random",
         },
     ],
+    getCanvasMenuItems(canvas) {
+        return _canvasMenuItems(canvas);
+    },
     async setup() {
         _refreshStyleCache();   // seed the per-frame style cache once at startup
         _refreshShapeCache();   // seed the pipe-shape cache too
@@ -1918,7 +1923,7 @@ app.registerExtension({
         const tryInstall = () => {
             if (window.LGraphCanvas) {
                 _installRenderPatch();
-                _installMenuPatch();
+                legacyCanvasMenu("noodle_styles", _mergeCanvasMenuItems);
                 console.log("[MEC.NoodleStyles] Installed:", STYLES.filter(s=>s!=="default").join(", "));
             } else {
                 setTimeout(tryInstall, 100);

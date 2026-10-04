@@ -40,6 +40,7 @@
 
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 export function isSubgraphNode(node) {
     if (!node) return false;
@@ -156,24 +157,9 @@ export function forAllNodes(fn) {
 }
 
 export function dirtyAllGraphs() {
-    const seen = new Set();
-    const mark = (g) => {
-        if (!g || seen.has(g)) return;
-        seen.add(g);
-        try { g.setDirtyCanvas?.(true, true); } catch (__c2cErr) { __c2cReport("_subgraph_walk", __c2cErr); }
-    };
-    mark(app.graph);
-    forAllNodes((n) => {
-        const inner = _innerGraph(n);
-        if (inner) mark(inner);
-    });
-    // Also redraw the active canvas explicitly, in case the user is
-    // currently inside a subgraph view that isn't `app.graph`.
-    try { app.canvas?.setDirty?.(true, true); } catch (__c2cErr) { __c2cReport("_subgraph_walk", __c2cErr); }
     try {
-        const list = app.graph?.list_of_graphcanvas || app.canvas?.constructor?.active_canvas
-            ? (app.graph.list_of_graphcanvas || [app.canvas])
-            : [];
-        for (const c of list || []) c?.setDirty?.(true, true);
-    } catch (__c2cErr) { __c2cReport("_subgraph_walk", __c2cErr); }
+        getRuntime().requestRedraw({ bg: true });
+    } catch (__c2cErr) {
+        __c2cReport("_subgraph_walk", __c2cErr);
+    }
 }
