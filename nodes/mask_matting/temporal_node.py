@@ -84,6 +84,17 @@ def _release_raft():
     free_vram()
 
 
+try:
+    from .._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register(
+        "cnp.raft",
+        _release_raft,
+        lambda: _RAFT_MODEL is not None,
+    )
+except Exception:
+    pass
+
+
 # ── flow helpers ────────────────────────────────────────────────────────
 def _warp_mask_by_flow(mask_hw: torch.Tensor, flow_2hw: torch.Tensor) -> torch.Tensor:
     """Warp a (H,W) mask by a (2,H,W) flow field via grid_sample.

@@ -173,6 +173,17 @@ def _flush_cache() -> None:
         torch.cuda.empty_cache()
 
 
+try:
+    from ._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register(
+        "cnp.unified_segmentation",
+        _flush_cache,
+        lambda: _cache.get("model") is not None,
+    )
+except Exception:
+    pass
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Helpers
 # ══════════════════════════════════════════════════════════════════════

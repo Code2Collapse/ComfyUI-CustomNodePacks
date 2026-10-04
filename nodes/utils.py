@@ -99,6 +99,17 @@ def release_vitmatte_model():
         torch.cuda.empty_cache()
 
 
+try:
+    from ._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register(
+        "cnp.vitmatte",
+        release_vitmatte_model,
+        lambda: _vitmatte_model is not None,
+    )
+except Exception:
+    pass
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Trimap Generation
 # ══════════════════════════════════════════════════════════════════════

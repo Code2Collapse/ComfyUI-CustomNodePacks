@@ -392,3 +392,14 @@ def normals_from_depth(depth_bhwc):
     n = n / (n.norm(dim=1, keepdim=True) + 1e-6)
     n = (n * 0.5 + 0.5).permute(0, 2, 3, 1)  # [B,H,W,3] 0..1
     return n.clamp(0, 1).contiguous()
+
+
+def _release_control_cache() -> None:
+    _CACHE.clear()
+
+
+try:
+    from ._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register("cnp.control_backends", _release_control_cache, lambda: bool(_CACHE))
+except Exception:
+    pass

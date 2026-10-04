@@ -91,6 +91,17 @@ def release_dinov2() -> None:
     _DINO_MODEL = None
 
 
+try:
+    from .._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register(
+        "cnp.dinov2",
+        release_dinov2,
+        lambda: _DINO_MODEL is not None,
+    )
+except Exception:
+    pass
+
+
 class DINORelocator:
     """Find the best bounding box for an object in a query image.
 
