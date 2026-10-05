@@ -10,6 +10,11 @@
 // seam the floating-ports feature also uses) and draws a coloured underlay +
 // slot rings beneath any "active" link, then calls through to the normal noodle
 // render (composes with NoodleStyles). Idle cost is ~zero (nothing active).
+//
+// Perf: still canvas = identical shadow halos; during pan/drag/zoom a single cheap
+// re-stroke replaces two shadowBlur passes. Interaction end triggers one dirty to
+// restore the full-quality still look.
+
 import { app } from "/scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
 
@@ -17,6 +22,9 @@ const SETTING = "c2c.connectedHighlight.enabled";
 let _enabled = true;
 let _selIds = new Set();
 let _lastCheck = 0;
+let _checkCounter = 0;
+let _lastWheelMs = 0;
+let _wheelTimer = null;
 
 const HALO = "rgba(120, 205, 255, 0.9)";   // fallback cyan
 
@@ -37,10 +45,34 @@ function _linkActive(canvas, link) {
     return !!(over && over.id != null && (over.id === link.origin_id || over.id === link.target_id));
 }
 
+// Re-reads the persisted setting every 256 link draws at most, and no more
+// often than ~4×/sec when the counter fires — onChange still updates immediately.
 function enabledNow() {
-    const t = (window.performance && performance.now()) || Date.now();
-    if (t - _lastCheck > 250) { _lastCheck = t; try { _enabled = app.ui.settings.getSettingValue(SETTING, true) !== false; } catch (_) {} }
+    if ((_checkCounter++ & 255) === 0) {
+        const t = (window.performance && performance.now()) || Date.now();
+        if (t - _lastCheck >= 250) {
+            _lastCheck = t;
+            try { _enabled = app.ui.settings.getSettingValue(SETTING, true) !== false; } catch (_) {}
+        }
+    }
     return _enabled;
+}
+
+function isInteracting(canvas) {
+    if (!canvas) return false;
+    if (canvas.state?.draggingCanvas || canvas.state?.draggingItems || canvas.pointer?.isDown) return true;
+    if (canvas.dragging_canvas || canvas.node_dragged) return true;
+    const t = (window.performance && performance.now()) || Date.now();
+    return (t - _lastWheelMs) < 150;
+}
+
+function scheduleStillRefresh() {
+    clearTimeout(_wheelTimer);
+    _wheelTimer = setTimeout(() => {
+        if (!isInteracting(app.canvas)) {
+            try { app.canvas?.setDirty(false, true); } catch (_) {}
+        }
+    }, 150);
 }
 
 function refreshSelection(canvas) {
@@ -72,47 +104,64 @@ function install() {
             // DIM every wire not connected to the selected/hovered node, so the
             // lit ones pop. Alpha-wrap the normal draw — exact path, any skin.
             // finally-restore: an inner throw must never leak the 0.3 alpha.
-            ctx.save();
-            ctx.globalAlpha *= 0.3;
+            const prevAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = prevAlpha * 0.3;
             try {
                 return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
             } finally {
-                ctx.restore();
+                ctx.globalAlpha = prevAlpha;
             }
         }
         // ACTIVE wire: normal draw first…
         const r = orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
         try {
             const col = _linkColor(this, link);
+            const interacting = isInteracting(this);
             // …then the LIGHT: re-render the very same wire (endpoints already
-            // floated; core → NoodleStyles skin) with a slot-coloured shadow —
-            // the glow hugs the exact noodle path, any skin or shape.
+            // floated; core → NoodleStyles skin). Still canvas = two shadow passes;
+            // interacting = one cheap fat re-stroke (no shadowBlur).
             _rerender = true;
-            ctx.save();
-            ctx.shadowColor = col;
-            ctx.shadowBlur = 14;
-            ctx.globalAlpha = 0.95;
             const _w = this.connections_width;
-            this.connections_width = (_w || 3) + 1;   // slightly fatter re-stroke → halo shows
+            const _ga = ctx.globalAlpha;
+            const _sc = ctx.shadowColor;
+            const _sb = ctx.shadowBlur;
             try {
-                // two stacked shadow passes = a clearly visible slot-coloured light
-                orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
-                orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+                if (interacting) {
+                    this.connections_width = (_w || 3) + 4;
+                    ctx.globalAlpha = 0.35;
+                    ctx.shadowBlur = 0;
+                    orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+                } else {
+                    ctx.shadowColor = col;
+                    ctx.shadowBlur = 14;
+                    ctx.globalAlpha = 0.95;
+                    this.connections_width = (_w || 3) + 1;
+                    orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+                    orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
+                }
             } finally {
-                // a throw must never leak shadow/alpha state, a fattened
-                // connections_width, or a stuck _rerender flag
                 this.connections_width = _w;
-                ctx.restore();
+                ctx.globalAlpha = _ga;
+                ctx.shadowColor = _sc;
+                ctx.shadowBlur = _sb;
                 _rerender = false;
             }
             // slot pairing cue: slot-coloured dot on the output end, ring on the
             // input end — same colour as the slot itself.
-            ctx.save();
-            ctx.shadowColor = col; ctx.shadowBlur = 6;
-            ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
-            ctx.beginPath(); ctx.arc(startPt[0], startPt[1], 3.5, 0, Math.PI * 2); ctx.fill();
-            ctx.beginPath(); ctx.arc(endPt[0], endPt[1], 4, 0, Math.PI * 2); ctx.stroke();
-            ctx.restore();
+            if (interacting) {
+                const pf = ctx.fillStyle, ps = ctx.strokeStyle, pl = ctx.lineWidth;
+                ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(startPt[0], startPt[1], 3.5, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(endPt[0], endPt[1], 4, 0, Math.PI * 2); ctx.stroke();
+                ctx.fillStyle = pf; ctx.strokeStyle = ps; ctx.lineWidth = pl;
+            } else {
+                ctx.save();
+                ctx.shadowColor = col; ctx.shadowBlur = 6;
+                ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(startPt[0], startPt[1], 3.5, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(endPt[0], endPt[1], 4, 0, Math.PI * 2); ctx.stroke();
+                ctx.restore();
+            }
         } catch (_) { _rerender = false; /* never break link rendering */ }
         return r;
     }, { id: "connectedhighlight._renderAllLinkSegments" });
@@ -139,6 +188,13 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.ConnectedHighlight")) a
         install();
         const canvas = app.canvas;
         if (canvas) {
+            const canvasEl = canvas.canvas;
+            if (canvasEl) {
+                canvasEl.addEventListener("wheel", () => {
+                    _lastWheelMs = (window.performance && performance.now()) || Date.now();
+                    scheduleStillRefresh();
+                }, { passive: true });
+            }
             const orig = canvas.onSelectionChange;
             canvas.onSelectionChange = function (...a) {
                 const r = orig ? orig.apply(this, a) : undefined;
@@ -151,7 +207,10 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.ConnectedHighlight")) a
             if (typeof omu === "function") {
                 canvas.processMouseUp = function (e) {
                     const r = omu.apply(this, arguments);
-                    try { refreshSelection(this); } catch (_) {}
+                    try {
+                        refreshSelection(this);
+                        if (!isInteracting(this)) this.setDirty(false, true);
+                    } catch (_) {}
                     return r;
                 };
             }

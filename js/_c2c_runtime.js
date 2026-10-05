@@ -50,12 +50,24 @@ function _readPerfMode() {
     return MODE_AUTO;
 }
 
+const GPU_PROBE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
+/** The cached probe when it is under a week old and was taken by this browser build (UA): a GPU or
+ *  driver change shows up as a new UA or an expired entry, and only then is a WebGL context created. */
+export function freshGpuProbe() {
+    const c = _readGpuCache();
+    if (!c || typeof c.ts !== "number" || Date.now() - c.ts > GPU_PROBE_MAX_AGE_MS) return null;
+    if (c.ua !== String(navigator?.userAgent || "")) return null;
+    return c;
+}
+
 /** Live WebGL probe — call only from requestIdleCallback, never at module eval. */
 export function probeGpuSoftware() {
     let software = true;
     let renderer = "";
     try {
         const canvas = document.createElement("canvas");
+        canvas.__c2cProbe = true;              // the browser guard leaves this context alone
         const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
         if (!gl) {
             software = true;
@@ -67,6 +79,7 @@ export function probeGpuSoftware() {
             software = SOFTWARE_RE.test(renderer);
             try {
                 const lose = gl.getExtension("WEBGL_lose_context");
+                canvas.__c2cIntentionalLoss = true;
                 if (lose) lose.loseContext();
             } catch (_) { /* best effort */ }
         }

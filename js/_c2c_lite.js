@@ -19,7 +19,7 @@
 // imported once at startup), so we offer a one-click reload.
 
 import { app } from "/scripts/app.js";
-import { getRuntime, probeGpuSoftware } from "./_c2c_runtime.js";
+import { freshGpuProbe, getRuntime, probeGpuSoftware } from "./_c2c_runtime.js";
 
 const LS_MODE = "c2c.perf.mode";
 const MODE_AUTO = "Auto (recommended)";
@@ -191,10 +191,13 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.LiteMode")) app.registe
                 console.log("%c[C2C.Lite] active — visual extras disabled for performance", `color:${C.sky}`);
             } catch (_) {}
         }
-        // Live GPU probe: once per page load, never at module eval.
+        // Live GPU probe: at most once a week per browser build, never at module eval.
         const _runGpuProbe = () => {
             if (_gpuProbeDone) return;
             _gpuProbeDone = true;
+            // The tier at module eval already came from this cache; a fresh entry means no WebGL
+            // context this load (the probe used to create one on every page load).
+            if (freshGpuProbe()) return;
             try {
                 const entry = probeGpuSoftware();
                 const rt = getRuntime();

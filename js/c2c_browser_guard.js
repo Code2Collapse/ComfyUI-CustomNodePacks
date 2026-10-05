@@ -139,8 +139,23 @@ if (globalThis.__C2C_BROWSER_GUARD__) {
         if (!known) {
             const weak = (o) => (typeof WeakRef === "function" ? new WeakRef(o) : o);
             G.live.add({ ctxRef: weak(ctx), canvasRef: weak(canvas), disconnectedPasses: 0 });
+            // A deliberate loss (a view disposing itself: three.js forceContextLoss, our janitor) goes
+            // through WEBGL_lose_context.loseContext(); flag the canvas so only REAL losses warn (L4.09).
+            try {
+                const getExt = ctx.getExtension.bind(ctx);
+                ctx.getExtension = function (name) {
+                    const ext = getExt(name);
+                    if (ext && String(name).toLowerCase() === "webgl_lose_context" && !ext.__c2cMarked) {
+                        const lose = ext.loseContext.bind(ext);
+                        ext.loseContext = function () { canvas.__c2cIntentionalLoss = true; return lose(); };
+                        ext.__c2cMarked = true;
+                    }
+                    return ext;
+                };
+            } catch (_) { /* a frozen context object: losses just stay unclassified */ }
             try {
                 canvas.addEventListener("webglcontextlost", (e) => {
+                    if (canvas.__c2cIntentionalLoss) return;
                     try { e.preventDefault(); } catch (_) { /* */ }
                     _onContextLost();
                 });
@@ -155,7 +170,7 @@ if (globalThis.__C2C_BROWSER_GUARD__) {
         G.origGetContext = HTMLCanvasElement.prototype.getContext;
         getRuntime().safePatch(HTMLCanvasElement.prototype, "getContext", (orig) => function (type, attrs) {
             const ctx = orig.call(this, type, attrs);
-            if (ctx && typeof type === "string" && /webgl/i.test(type)) {
+            if (ctx && typeof type === "string" && /webgl/i.test(type) && !this.__c2cProbe) {
                 trackWebGLContext(this, ctx);
             }
             return ctx;

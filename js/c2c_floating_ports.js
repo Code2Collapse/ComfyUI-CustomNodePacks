@@ -15,6 +15,9 @@
 // routing)". Off = zero overhead (the override early-returns to the original).
 // Composes with C2C NoodleStyles: we only adjust the endpoints/directions, then
 // call through to whatever renderLink was already installed.
+//
+// Perf: enabled-check and node bounds are amortised (counter gate + per-node box
+// cache); geometry, tether colours, and routing behaviour are unchanged.
 
 import { app } from "/scripts/app.js";
 import { C } from "./_c2c_theme.js";
@@ -23,13 +26,16 @@ import { getRuntime } from "./_c2c_runtime.js";
 const SETTING_ID = "c2c.floatingPorts.enabled";
 let _enabled = false;
 let _lastCheck = 0;
-// Robust enabled-check: re-reads the persisted setting at most ~4x/sec, so the
-// toggle works even if a programmatic setSettingValue doesn't fire onChange.
+let _checkCounter = 0;
+// Re-reads the persisted setting every 256 link draws at most, and no more
+// often than ~4×/sec when the counter fires — onChange still updates immediately.
 function enabledNow() {
-    const t = (window.performance && performance.now()) || Date.now();
-    if (t - _lastCheck > 250) {
-        _lastCheck = t;
-        try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = (v === undefined || v === null) ? true : v === true; } catch (_) {}
+    if ((_checkCounter++ & 255) === 0) {
+        const t = (window.performance && performance.now()) || Date.now();
+        if (t - _lastCheck >= 250) {
+            _lastCheck = t;
+            try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = (v === undefined || v === null) ? true : v === true; } catch (_) {}
+        }
     }
     return _enabled;
 }
@@ -37,15 +43,19 @@ function enabledNow() {
 // ── geometry helpers (graph-space) ──────────────────────────────────────────
 const _box = [0, 0, 0, 0];
 function nodeBox(node) {
-    // Full render bounds incl. title bar, in graph coords.
+    // Full render bounds incl. title bar, in graph coords — reused object on node.
+    let b = node.__c2cBox;
+    if (!b) b = node.__c2cBox = { x: 0, y: 0, w: 0, h: 0, cx: 0, cy: 0 };
     if (typeof node.getBounding === "function") {
         node.getBounding(_box);
-        return { x: _box[0], y: _box[1], w: _box[2], h: _box[3],
-                 cx: _box[0] + _box[2] / 2, cy: _box[1] + _box[3] / 2 };
+        b.x = _box[0]; b.y = _box[1]; b.w = _box[2]; b.h = _box[3];
+        b.cx = b.x + b.w / 2; b.cy = b.y + b.h / 2;
+        return b;
     }
     const th = LiteGraph.NODE_TITLE_HEIGHT || 30;
-    const x = node.pos[0], y = node.pos[1] - th, w = node.size[0], h = node.size[1] + th;
-    return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+    b.x = node.pos[0]; b.y = node.pos[1] - th; b.w = node.size[0]; b.h = node.size[1] + th;
+    b.cx = b.x + b.w / 2; b.cy = b.y + b.h / 2;
+    return b;
 }
 
 // TRUE 360° Nuke-style pipe attachment: the wire's visual exit is where the
@@ -105,13 +115,13 @@ function slotTypeColor(canvas, link) {
 // The pipe's attachment dot: a small filled disc at the perimeter exit —
 // visually the connector riding the edge (real slots/hit-testing untouched).
 function drawEndpointDot(ctx, pt, color) {
-    ctx.save();
+    const pf = ctx.fillStyle, ps = ctx.strokeStyle, pl = ctx.lineWidth;
     ctx.fillStyle = color;
     ctx.strokeStyle = "rgba(12,12,16,0.8)";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(pt[0], pt[1], 3.5, 0, Math.PI * 2);
     ctx.fill(); ctx.stroke();
-    ctx.restore();
+    ctx.fillStyle = pf; ctx.strokeStyle = ps; ctx.lineWidth = pl;
 }
 
 function install() {
@@ -160,22 +170,6 @@ function install() {
                 } catch (_) { /* fall back to fixed ports on any geometry hiccup */ }
             }
         }
-        // Shared pipe registry: the FINAL endpoints + dirs every renderer used
-        // this frame, keyed by link id. Consumed by the connected-highlight
-        // overlay (exact-path re-stroke) and the shape system. Registered even
-        // when floating is off, so consumers always have fresh geometry.
-        try {
-            if (link && link.id != null) {
-                const _reg = window.__C2C_PIPES || (window.__C2C_PIPES = new Map());
-                // Bound the registry: link ids are monotonic and never reused,
-                // so long sessions would otherwise grow this without limit.
-                if (_reg.size > 2000) _reg.clear();
-                _reg.set(link.id, {
-                    a: [startPt[0], startPt[1]], b: [endPt[0], endPt[1]],
-                    da: startDir, db: endDir, type: link.type,
-                });
-            }
-        } catch (_) { /* registry is best-effort */ }
         return orig.call(this, ctx, link, startPt, endPt, paths, time, startDir, endDir, disabled);
     }, { id: "floatingports._renderAllLinkSegments" });
     return true;
