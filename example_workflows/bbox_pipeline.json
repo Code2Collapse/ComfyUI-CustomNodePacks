@@ -1,194 +1,1275 @@
 {
+  "id": "00000000-0000-0000-0000-000000000000",
+  "revision": 0,
   "last_node_id": 8,
-  "last_link_id": 8,
+  "last_link_id": 9,
   "nodes": [
     {
       "id": 1,
       "type": "LoadImage",
-      "pos": [50, 50],
-      "size": [320, 314],
+      "pos": [
+        50,
+        110
+      ],
+      "size": [
+        282.796875,
+        350
+      ],
       "flags": {},
       "order": 0,
       "mode": 0,
-      "outputs": [
-        { "name": "IMAGE", "type": "IMAGE", "links": [1], "slot_index": 0 },
-        { "name": "MASK", "type": "MASK", "links": [2] }
+      "showAdvanced": null,
+      "inputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "choose file to upload",
+          "locked": null,
+          "name": "upload",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
       ],
-      "properties": { "Node name for S&R": "LoadImage" },
-      "widgets_values": ["example.png", "image"]
+      "outputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "IMAGE",
+          "locked": null,
+          "name": "IMAGE",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            1,
+            9
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "MASK",
+          "locked": null,
+          "name": "MASK",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "widgets_values_named": {
+        "image": "example.png",
+        "upload": "image"
+      }
     },
     {
       "id": 2,
       "type": "BBoxFromMask",
-      "pos": [430, 50],
-      "size": [320, 200],
+      "pos": [
+        430,
+        110
+      ],
+      "size": [
+        317.203125,
+        271
+      ],
       "flags": {},
       "order": 1,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "mask", "type": "MASK", "link": 2 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "link": 2
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "padding",
+          "locked": null,
+          "name": "padding",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "padding"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "padding_x",
+          "locked": null,
+          "name": "padding_x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "padding_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "padding_y",
+          "locked": null,
+          "name": "padding_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "padding_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "threshold",
+          "locked": null,
+          "name": "threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "threshold"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "bbox", "type": "BBOX", "links": [3, 4], "slot_index": 0 },
-        { "name": "x", "type": "INT", "links": null, "slot_index": 1 },
-        { "name": "y", "type": "INT", "links": null, "slot_index": 2 },
-        { "name": "width", "type": "INT", "links": null, "slot_index": 3 },
-        { "name": "height", "type": "INT", "links": null, "slot_index": 4 },
-        { "name": "bbox_str", "type": "STRING", "links": null, "slot_index": 5 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            3,
+            4
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "x",
+          "locked": null,
+          "name": "x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "y",
+          "locked": null,
+          "name": "y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "width",
+          "locked": null,
+          "name": "width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "height",
+          "locked": null,
+          "name": "height",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_str",
+          "locked": null,
+          "name": "bbox_str",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "BBox From Mask",
-      "properties": { "Node name for S&R": "BBoxFromMask" },
-      "widgets_values": [10, 0, 0, 0.5],
-      "color": "#232",
-      "bgcolor": "#353"
+      "properties": {
+        "Node name for S&R": "BBoxFromMask"
+      },
+      "widgets_values": [
+        10,
+        0,
+        0,
+        0.5
+      ],
+      "widgets_values_named": {
+        "padding": 10,
+        "padding_x": 0,
+        "padding_y": 0,
+        "threshold": 0.5
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 3,
       "type": "BBoxPad",
-      "pos": [810, 50],
-      "size": [300, 240],
+      "pos": [
+        837.203125,
+        110
+      ],
+      "size": [
+        270,
+        247
+      ],
       "flags": {},
       "order": 2,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "bbox", "type": "BBOX", "link": 3 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "link": 3
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "pad_left",
+          "locked": null,
+          "name": "pad_left",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "pad_left"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "pad_right",
+          "locked": null,
+          "name": "pad_right",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "pad_right"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "pad_top",
+          "locked": null,
+          "name": "pad_top",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "pad_top"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "pad_bottom",
+          "locked": null,
+          "name": "pad_bottom",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "pad_bottom"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image_width",
+          "locked": null,
+          "name": "image_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "image_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image_height",
+          "locked": null,
+          "name": "image_height",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "image_height"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "bbox", "type": "BBOX", "links": [5], "slot_index": 0 },
-        { "name": "bbox_str", "type": "STRING", "links": null, "slot_index": 1 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            5
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_str",
+          "locked": null,
+          "name": "bbox_str",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "BBox Pad (+20px all sides)",
-      "properties": { "Node name for S&R": "BBoxPad" },
-      "widgets_values": [20, 20, 20, 20, 512, 512],
-      "color": "#223",
-      "bgcolor": "#335"
+      "properties": {
+        "Node name for S&R": "BBoxPad"
+      },
+      "widgets_values": [
+        20,
+        20,
+        20,
+        20,
+        512,
+        512
+      ],
+      "widgets_values_named": {
+        "pad_left": 20,
+        "pad_right": 20,
+        "pad_top": 20,
+        "pad_bottom": 20,
+        "image_width": 512,
+        "image_height": 512
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 4,
       "type": "BBoxCrop",
-      "pos": [1170, 50],
-      "size": [300, 180],
+      "pos": [
+        1226.78125,
+        110
+      ],
+      "size": [
+        225,
+        99
+      ],
       "flags": {},
       "order": 3,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "image", "type": "IMAGE", "link": 1 },
-        { "name": "bbox", "type": "BBOX", "link": 5 },
-        { "name": "mask", "type": "MASK", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 1
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "link": 5
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "MASK",
+          "pos": null,
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "cropped_image", "type": "IMAGE", "links": [6], "slot_index": 0 },
-        { "name": "cropped_mask", "type": "MASK", "links": null, "slot_index": 1 },
-        { "name": "bbox", "type": "BBOX", "links": null, "slot_index": 2 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "cropped_image",
+          "locked": null,
+          "name": "cropped_image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            6
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "cropped_mask",
+          "locked": null,
+          "name": "cropped_mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "BBox Crop (Padded Region)",
-      "properties": { "Node name for S&R": "BBoxCrop" },
-      "color": "#322",
-      "bgcolor": "#533"
+      "properties": {
+        "Node name for S&R": "BBoxCrop"
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 5,
       "type": "BBoxToMask",
-      "pos": [810, 350],
-      "size": [300, 160],
+      "pos": [
+        837.203125,
+        437
+      ],
+      "size": [
+        299.578125,
+        135
+      ],
       "flags": {},
       "order": 4,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "bbox", "type": "BBOX", "link": 4 },
-        { "name": "reference_image", "type": "IMAGE", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "link": 4
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "reference_image",
+          "locked": null,
+          "name": "reference_image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "IMAGE",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image_width",
+          "locked": null,
+          "name": "image_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "image_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image_height",
+          "locked": null,
+          "name": "image_height",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "image_height"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "MASK", "type": "MASK", "links": [7], "slot_index": 0 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "MASK",
+          "locked": null,
+          "name": "MASK",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            7
+          ]
+        }
       ],
       "title": "BBox To Mask (Rectangular)",
-      "properties": { "Node name for S&R": "BBoxToMask" },
-      "widgets_values": [512, 512],
-      "color": "#232",
-      "bgcolor": "#353"
+      "properties": {
+        "Node name for S&R": "BBoxToMask"
+      },
+      "widgets_values": [
+        512,
+        512
+      ],
+      "widgets_values_named": {
+        "image_width": 512,
+        "image_height": 512
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 6,
       "type": "PreviewImage",
-      "pos": [1530, 50],
-      "size": [350, 300],
+      "pos": [
+        1671.515625,
+        110
+      ],
+      "size": [
+        225,
+        34
+      ],
       "flags": {},
       "order": 5,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "images", "type": "IMAGE", "link": 6 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "Preview: Cropped Region",
-      "properties": { "Node name for S&R": "PreviewImage" }
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
     },
     {
       "id": 7,
       "type": "MaskPreviewOverlay",
-      "pos": [1170, 350],
-      "size": [350, 250],
+      "pos": [
+        1226.78125,
+        289
+      ],
+      "size": [
+        354.734375,
+        379
+      ],
       "flags": {},
       "order": 6,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "image", "type": "IMAGE", "link": null },
-        { "name": "mask", "type": "MASK", "link": 7 },
-        { "name": "bbox", "type": "BBOX", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 9
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "link": 7
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BBOX",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "display_mode",
+          "locked": null,
+          "name": "display_mode",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "display_mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_r",
+          "locked": null,
+          "name": "overlay_color_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_g",
+          "locked": null,
+          "name": "overlay_color_g",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_g"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_b",
+          "locked": null,
+          "name": "overlay_color_b",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_b"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "opacity",
+          "locked": null,
+          "name": "opacity",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "opacity"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "edge_width",
+          "locked": null,
+          "name": "edge_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "edge_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "show_bbox",
+          "locked": null,
+          "name": "show_bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "show_bbox"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_r",
+          "locked": null,
+          "name": "bbox_color_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_g",
+          "locked": null,
+          "name": "bbox_color_g",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_g"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_b",
+          "locked": null,
+          "name": "bbox_color_b",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_b"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "preview", "type": "IMAGE", "links": [8], "slot_index": 0 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "preview",
+          "locked": null,
+          "name": "preview",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            8
+          ]
+        }
       ],
       "title": "Preview: BBox as Mask",
-      "properties": { "Node name for S&R": "MaskPreviewOverlay" },
-      "widgets_values": ["mask_only", 1.0, 0.0, 0.0, 0.4, 2, false, 0.0, 1.0, 0.0]
+      "properties": {
+        "Node name for S&R": "MaskPreviewOverlay"
+      },
+      "widgets_values": [
+        "mask_only",
+        1,
+        0,
+        0,
+        0.4,
+        2,
+        false,
+        0,
+        1,
+        0
+      ],
+      "widgets_values_named": {
+        "display_mode": "mask_only",
+        "overlay_color_r": 1,
+        "overlay_color_g": 0,
+        "overlay_color_b": 0,
+        "opacity": 0.4,
+        "edge_width": 2,
+        "show_bbox": false,
+        "bbox_color_r": 0,
+        "bbox_color_g": 1,
+        "bbox_color_b": 0
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 8,
       "type": "PreviewImage",
-      "pos": [1530, 350],
-      "size": [350, 300],
+      "pos": [
+        1671.515625,
+        224
+      ],
+      "size": [
+        225,
+        34
+      ],
       "flags": {},
       "order": 7,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "images", "type": "IMAGE", "link": 8 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "Preview: BBox as Mask",
-      "properties": { "Node name for S&R": "PreviewImage" }
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
     }
   ],
   "links": [
-    [1, 1, 0, 4, 0, "IMAGE"],
-    [2, 1, 1, 2, 0, "MASK"],
-    [3, 2, 0, 3, 0, "BBOX"],
-    [4, 2, 0, 5, 0, "BBOX"],
-    [5, 3, 0, 4, 1, "BBOX"],
-    [6, 4, 0, 6, 0, "IMAGE"],
-    [7, 5, 0, 7, 1, "MASK"],
-    [8, 7, 0, 8, 0, "IMAGE"]
+    [
+      1,
+      1,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      1,
+      1,
+      2,
+      0,
+      "MASK"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      0,
+      "BBOX"
+    ],
+    [
+      4,
+      2,
+      0,
+      5,
+      0,
+      "BBOX"
+    ],
+    [
+      5,
+      3,
+      0,
+      4,
+      1,
+      "BBOX"
+    ],
+    [
+      6,
+      4,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ],
+    [
+      7,
+      5,
+      0,
+      7,
+      1,
+      "MASK"
+    ],
+    [
+      8,
+      7,
+      0,
+      8,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      1,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ]
   ],
+  "floatingLinks": null,
   "groups": [
     {
+      "id": 1,
       "title": "1. Extract BBox from Mask",
-      "bounding": [410, 20, 360, 230],
+      "bounding": [
+        405,
+        10,
+        367.203125,
+        396
+      ],
       "color": "#8A8",
-      "font_size": 24
+      "flags": {}
     },
     {
+      "id": 2,
       "title": "2a. Pad & Crop",
-      "bounding": [790, 20, 700, 280],
+      "bounding": [
+        812.203125,
+        10,
+        664.578125,
+        372
+      ],
       "color": "#A88",
-      "font_size": 24
+      "flags": {}
     },
     {
+      "id": 3,
       "title": "2b. BBox → Mask",
-      "bounding": [790, 320, 700, 310],
+      "bounding": [
+        812.203125,
+        189,
+        794.3125,
+        504
+      ],
       "color": "#88A",
-      "font_size": 24
+      "flags": {}
     }
   ],
+  "definitions": null,
   "config": {},
   "extra": {
-    "ds": { "scale": 0.7, "offset": [50, 50] }
+    "c2c": {
+      "bookmarks": {}
+    },
+    "reroutes": null
   },
   "version": 0.4
 }

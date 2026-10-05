@@ -41,9 +41,11 @@ def generate_migration_markdown() -> str:
     lines = [
         "# Node migration guide (legacy → unified)",
         "",
-        "Fourteen node ids were merged into unified nodes. ComfyUI core's "
+        f"{len(table)} node ids have a unified successor. ComfyUI core's "
         "NodeReplaceManager (and this pack's server registration) maps saved "
-        "workflows and API prompts from the old id to the new one.",
+        "workflows and API prompts from the old id to the new one. Core only "
+        "rewrites an id that is no longer registered, so rows for deprecated "
+        "nodes that still load change nothing until those nodes are removed.",
         "",
         "## Merged nodes (replacement table)",
         "",

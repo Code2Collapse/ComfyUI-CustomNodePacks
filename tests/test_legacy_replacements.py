@@ -31,6 +31,7 @@ NEW_NODE_MODULES = {
     "MaskTrackerMEC": "nodes.mask_tracker_mec",
     "ProPainterMEC": "nodes.propainter_unified",
     "MaskOpsMEC": "nodes.mask_matting.node",
+    "VideoStabilizerMEC": "nodes.video_stabilizer_mec",
 }
 
 EXTERNAL_ALLOWLIST = {
@@ -248,7 +249,7 @@ def _patch_node_replace(monkeypatch):
 
 
 class TestRegister:
-    def test_register_records_fourteen_rows(self, replacement_table, monkeypatch):
+    def test_register_records_every_row(self, replacement_table, monkeypatch):
         _patch_node_replace(monkeypatch)
         from nodes._legacy_replacements import register
 
@@ -262,8 +263,8 @@ class TestRegister:
             node_replace_manager = _Manager()
 
         count = register(_Server())
-        assert count == 14
-        assert len(calls) == 14
+        assert count == len(replacement_table) == 17
+        assert len(calls) == 17
         for row, call in zip(replacement_table, calls):
             assert call.old_node_id == row["old_node_id"]
             assert call.new_node_id == row["new_node_id"]
@@ -284,7 +285,7 @@ class TestRegister:
         """Real io.NodeReplace + real NodeReplaceManager, in a fresh interpreter with real core
         (this process has stubbed comfy modules, so it cannot import app.node_replace_manager)."""
         live = _live()["C2C_REPLACEMENTS_JSON="]
-        assert live["registered"] == len(replacement_table) == 14
+        assert live["registered"] == len(replacement_table) == 17
         for row in replacement_table:
             [entry] = live["table"][row["old_node_id"]]
             assert entry["new_node_id"] == row["new_node_id"]
@@ -409,6 +410,61 @@ class TestExampleWorkflows:
             if bad:
                 offenders[path.name] = bad
         assert not offenders, f"example workflow node types not allowed: {offenders}"
+
+
+class TestResavedExamples:
+    """The examples as re-saved from the live graph (L2.02): current node ids only, links consistent with both
+    endpoints, a Templates thumbnail each, and all of them listed in the README."""
+
+    @staticmethod
+    def _examples() -> list[Path]:
+        return sorted(EXAMPLE_DIR.glob("*.json"))
+
+    def test_examples_use_current_node_ids_only(self):
+        replaced = {row["old_node_id"] for row in _load_json(TABLE_PATH)}
+        frontend_virtual = {"Note", "MarkdownNote", "Reroute", "PrimitiveNode"}
+        current = _pack_node_ids() | _core_node_ids() | frontend_virtual
+        offenders: dict[str, list[str]] = {}
+        for path in self._examples():
+            used = set(_collect_workflow_node_types(_load_json(path)))
+            bad = sorted(t for t in used if t not in current or t in replaced or t in EXTERNAL_ALLOWLIST)
+            if bad:
+                offenders[path.name] = bad
+        assert not offenders, f"examples must use current, in-pack node ids: {offenders}"
+
+    def test_links_are_consistent_with_their_endpoints(self):
+        for path in self._examples():
+            wf = _load_json(path)
+            nodes = {n["id"]: n for n in wf["nodes"]}
+            seen: set[int] = set()
+            for lid, o_id, o_slot, t_id, t_slot, _typ in wf["links"]:
+                seen.add(lid)
+                assert o_id in nodes and t_id in nodes, f"{path.name}: link {lid} references a missing node"
+                assert lid in (nodes[o_id]["outputs"][o_slot].get("links") or []), \
+                    f"{path.name}: link {lid} is not listed on its origin output"
+                assert nodes[t_id]["inputs"][t_slot].get("link") == lid, \
+                    f"{path.name}: link {lid} is not referenced by its target input"
+            for n in wf["nodes"]:
+                for inp in n.get("inputs") or []:
+                    if inp.get("link") is not None:
+                        assert inp["link"] in seen, f"{path.name}: node {n['id']}.{inp['name']} -> unknown link"
+                for out in n.get("outputs") or []:
+                    for lid in out.get("links") or []:
+                        assert lid in seen, f"{path.name}: node {n['id']}.{out['name']} -> unknown link {lid}"
+
+    def test_every_example_has_a_template_thumbnail(self):
+        from PIL import Image
+
+        for path in self._examples():
+            jpg = path.with_suffix(".jpg")
+            assert jpg.is_file(), f"{jpg.name} missing (ComfyUI's Templates browser loads <name>.jpg)"
+            with Image.open(jpg) as im:
+                assert im.format == "JPEG" and im.width >= 320 and im.height >= 200, (jpg.name, im.size)
+
+    def test_readme_lists_every_example(self):
+        readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
+        missing = [p.name for p in self._examples() if f"`{p.name}`" not in readme]
+        assert not missing, f"example_workflows/README.md does not list {missing}"
 
 
 class TestMigrationDoc:

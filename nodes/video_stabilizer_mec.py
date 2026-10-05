@@ -254,6 +254,18 @@ class VideoStabilizerMEC:
             keep_fov, raft_iters, use_half, **kwargs,
         )
 
+    # VideoStabilizerAutoMEC spelled raft_flow as "flow" (its force_backend). Core's NodeReplace copies
+    # values verbatim, so a graph migrated from it can carry "flow": accept it rather than fail validation.
+    _METHOD_ALIASES = {"flow": "raft_flow"}
+    _METHODS = ("auto", "classic", "raft_flow")
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, method):
+        # Naming only `method` keeps core's list/range checks for every other input.
+        if method in cls._METHODS or method in cls._METHOD_ALIASES:
+            return True
+        return f"method must be one of {', '.join(cls._METHODS)}; got {method!r}"
+
     # --------------------------------------------------------------
     def _pick_backend(self, method: str, batch_size: int) -> str:
         if method != "auto":
@@ -283,6 +295,7 @@ class VideoStabilizerMEC:
     def stabilize(self, frames, method, preset, frame_rate, padding_color,
                   framing_mode, transform_mode, camera_lock, strength, smooth,
                   keep_fov, raft_iters, use_half):
+        method = self._METHOD_ALIASES.get(method, method)
         _require_stabilizer()
         if not isinstance(frames, torch.Tensor) or frames.dim() != 4 or frames.shape[-1] != 3:
             raise ValueError(

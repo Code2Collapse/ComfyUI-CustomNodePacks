@@ -1397,5 +1397,215 @@
   ],
   "dropped": [],
   "note": "pipeline is pinned to 'cascade (legacy)' so a migrated graph keeps the old matting path"
+ },
+ {
+  "old_node_id": "VideoStabilizerClassicMEC",
+  "new_node_id": "VideoStabilizerMEC",
+  "old_widget_ids": [
+   "frame_rate",
+   "framing_mode",
+   "transform_mode",
+   "camera_lock",
+   "strength",
+   "smooth",
+   "keep_fov",
+   "padding_color"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "frames",
+    "old_id": "frames"
+   },
+   {
+    "new_id": "frame_rate",
+    "old_id": "frame_rate"
+   },
+   {
+    "new_id": "framing_mode",
+    "old_id": "framing_mode"
+   },
+   {
+    "new_id": "transform_mode",
+    "old_id": "transform_mode"
+   },
+   {
+    "new_id": "camera_lock",
+    "old_id": "camera_lock"
+   },
+   {
+    "new_id": "strength",
+    "old_id": "strength"
+   },
+   {
+    "new_id": "smooth",
+    "old_id": "smooth"
+   },
+   {
+    "new_id": "keep_fov",
+    "old_id": "keep_fov"
+   },
+   {
+    "new_id": "padding_color",
+    "old_id": "padding_color"
+   },
+   {
+    "new_id": "method",
+    "set_value": "classic"
+   },
+   {
+    "new_id": "preset",
+    "set_value": "manual"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "Deprecated shim (removal announced in video_stabilizer_mec.py); mirrors its own delegation: method=classic, preset=manual."
+ },
+ {
+  "old_node_id": "VideoStabilizerFlowMEC",
+  "new_node_id": "VideoStabilizerMEC",
+  "old_widget_ids": [
+   "frame_rate",
+   "framing_mode",
+   "transform_mode",
+   "camera_lock",
+   "strength",
+   "smooth",
+   "keep_fov",
+   "padding_color",
+   "raft_iters",
+   "use_half"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "frames",
+    "old_id": "frames"
+   },
+   {
+    "new_id": "frame_rate",
+    "old_id": "frame_rate"
+   },
+   {
+    "new_id": "framing_mode",
+    "old_id": "framing_mode"
+   },
+   {
+    "new_id": "transform_mode",
+    "old_id": "transform_mode"
+   },
+   {
+    "new_id": "camera_lock",
+    "old_id": "camera_lock"
+   },
+   {
+    "new_id": "strength",
+    "old_id": "strength"
+   },
+   {
+    "new_id": "smooth",
+    "old_id": "smooth"
+   },
+   {
+    "new_id": "keep_fov",
+    "old_id": "keep_fov"
+   },
+   {
+    "new_id": "padding_color",
+    "old_id": "padding_color"
+   },
+   {
+    "new_id": "raft_iters",
+    "old_id": "raft_iters"
+   },
+   {
+    "new_id": "use_half",
+    "old_id": "use_half"
+   },
+   {
+    "new_id": "method",
+    "set_value": "raft_flow"
+   },
+   {
+    "new_id": "preset",
+    "set_value": "manual"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "Deprecated shim; mirrors its own delegation: method=raft_flow, preset=manual."
+ },
+ {
+  "old_node_id": "VideoStabilizerAutoMEC",
+  "new_node_id": "VideoStabilizerMEC",
+  "old_widget_ids": [
+   "frame_rate",
+   "force_backend",
+   "preset",
+   "padding_color"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "frames",
+    "old_id": "frames"
+   },
+   {
+    "new_id": "frame_rate",
+    "old_id": "frame_rate"
+   },
+   {
+    "new_id": "preset",
+    "old_id": "preset"
+   },
+   {
+    "new_id": "padding_color",
+    "old_id": "padding_color"
+   },
+   {
+    "new_id": "method",
+    "old_id": "force_backend"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "Deprecated shim; force_backend becomes method. Its 'flow' arrives verbatim and VideoStabilizerMEC accepts it as an alias of raft_flow."
  }
 ]

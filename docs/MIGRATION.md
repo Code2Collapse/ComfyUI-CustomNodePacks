@@ -1,6 +1,6 @@
 # Node migration guide (legacy → unified)
 
-Fourteen node ids were merged into unified nodes. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one.
+17 node ids have a unified successor. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one. Core only rewrites an id that is no longer registered, so rows for deprecated nodes that still load change nothing until those nodes are removed.
 
 ## Merged nodes (replacement table)
 
@@ -20,6 +20,9 @@ Fourteen node ids were merged into unified nodes. ComfyUI core's NodeReplaceMana
 | TemporalConsistencyCheckerMEC | MaskTrackerMEC | mode='consistency_check' | image→video | — | 0→1, 1→0, 2→2, 3→3 | — |
 | ProPainterTemporalMEC | ProPainterMEC | mode='temporal' | — | — | 0→0, 1→4 | — |
 | MaskMattingMEC | MaskOpsMEC | pipeline='cascade (legacy)' | — | — | 0→0, 1→1, 2→2, 3→3, 4→4, 5→5, 6→6, 7→7, 8→8, 9→9, 10→10, 11→11, 12→12 | pipeline is pinned to 'cascade (legacy)' so a migrated graph keeps the old matting path |
+| VideoStabilizerClassicMEC | VideoStabilizerMEC | method='classic', preset='manual' | — | — | 0→0, 1→1, 2→2 | Deprecated shim (removal announced in video_stabilizer_mec.py); mirrors its own delegation: method=classic, preset=manual. |
+| VideoStabilizerFlowMEC | VideoStabilizerMEC | method='raft_flow', preset='manual' | — | — | 0→0, 1→1, 2→2 | Deprecated shim; mirrors its own delegation: method=raft_flow, preset=manual. |
+| VideoStabilizerAutoMEC | VideoStabilizerMEC | — | force_backend→method | — | 0→0, 1→1, 2→2 | Deprecated shim; force_backend becomes method. Its 'flow' arrives verbatim and VideoStabilizerMEC accepts it as an alias of raft_flow. |
 
 ## Deprecated nodes kept as-is (7)
 

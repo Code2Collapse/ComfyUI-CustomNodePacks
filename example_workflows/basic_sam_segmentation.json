@@ -1,187 +1,2342 @@
 {
+  "id": "00000000-0000-0000-0000-000000000000",
+  "revision": 0,
   "last_node_id": 7,
   "last_link_id": 8,
   "nodes": [
     {
       "id": 1,
       "type": "LoadImage",
-      "pos": [50, 200],
-      "size": [320, 314],
+      "pos": [
+        50,
+        413
+      ],
+      "size": [
+        282.796875,
+        350
+      ],
       "flags": {},
       "order": 0,
       "mode": 0,
-      "outputs": [
-        { "name": "IMAGE", "type": "IMAGE", "links": [1, 4], "slot_index": 0 },
-        { "name": "MASK", "type": "MASK", "links": null }
+      "showAdvanced": null,
+      "inputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "image"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "choose file to upload",
+          "locked": null,
+          "name": "upload",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGEUPLOAD",
+          "widget": {
+            "name": "upload"
+          },
+          "link": null
+        }
       ],
-      "properties": { "Node name for S&R": "LoadImage" },
-      "widgets_values": ["example.png", "image"]
+      "outputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "IMAGE",
+          "locked": null,
+          "name": "IMAGE",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "MASK",
+          "locked": null,
+          "name": "MASK",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "widgets_values_named": {
+        "image": "example.png",
+        "upload": "image"
+      }
     },
     {
       "id": 2,
       "type": "SAMModelLoaderMEC",
-      "pos": [50, 50],
-      "size": [340, 130],
+      "pos": [
+        50,
+        110
+      ],
+      "size": [
+        352.609375,
+        223
+      ],
       "flags": {},
       "order": 1,
       "mode": 0,
+      "showAdvanced": null,
+      "inputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "model_name",
+          "locked": null,
+          "name": "model_name",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "model_name"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "model_type",
+          "locked": null,
+          "name": "model_type",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "model_type"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "device",
+          "locked": null,
+          "name": "device",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "device"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "offload_to_cpu",
+          "locked": null,
+          "name": "offload_to_cpu",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "offload_to_cpu"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "dtype",
+          "locked": null,
+          "name": "dtype",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "dtype"
+          },
+          "link": null
+        }
+      ],
       "outputs": [
-        { "name": "sam_model", "type": "SAM_MODEL", "links": [2], "slot_index": 0 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "sam_model",
+          "locked": null,
+          "name": "sam_model",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "SAM_MODEL",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            2
+          ]
+        }
       ],
       "title": "SAM Model Loader",
-      "properties": { "Node name for S&R": "SAMModelLoaderMEC" },
-      "widgets_values": ["sam2.1_hiera_large.pt", "auto", "auto", false, "float16"],
-      "color": "#223",
-      "bgcolor": "#335"
+      "properties": {
+        "Node name for S&R": "SAMModelLoaderMEC"
+      },
+      "widgets_values": [
+        "sam2.1_hiera_large.pt",
+        "auto",
+        "auto",
+        false,
+        "float16"
+      ],
+      "widgets_values_named": {
+        "model_name": "sam2.1_hiera_large.pt",
+        "model_type": "auto",
+        "device": "auto",
+        "offload_to_cpu": false,
+        "dtype": "float16"
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 3,
-      "type": "PointsMaskEditor",
-      "pos": [430, 50],
-      "size": [550, 650],
+      "type": "MaskEditMEC",
+      "pos": [
+        492.609375,
+        110
+      ],
+      "size": [
+        600,
+        806
+      ],
       "flags": {},
       "order": 2,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "reference_image", "type": "IMAGE", "link": 1 },
-        { "name": "existing_mask", "type": "MASK", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "MASK",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "reference_image",
+          "locked": null,
+          "name": "reference_image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 1
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "existing_mask",
+          "locked": null,
+          "name": "existing_mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "MASK",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mode",
+          "locked": null,
+          "name": "mode",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "expand_x",
+          "locked": null,
+          "name": "expand_x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "expand_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "expand_y",
+          "locked": null,
+          "name": "expand_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "expand_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "blur_x",
+          "locked": null,
+          "name": "blur_x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "blur_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "blur_y",
+          "locked": null,
+          "name": "blur_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "blur_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "offset_x",
+          "locked": null,
+          "name": "offset_x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "offset_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "offset_y",
+          "locked": null,
+          "name": "offset_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "offset_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "feather",
+          "locked": null,
+          "name": "feather",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "feather"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "threshold",
+          "locked": null,
+          "name": "threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "invert",
+          "locked": null,
+          "name": "invert",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "invert"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "width",
+          "locked": null,
+          "name": "width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "height",
+          "locked": null,
+          "name": "height",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "shape",
+          "locked": null,
+          "name": "shape",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "shape"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "cx",
+          "locked": null,
+          "name": "cx",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "cx"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "cy",
+          "locked": null,
+          "name": "cy",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "cy"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "radius",
+          "locked": null,
+          "name": "radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "size_w",
+          "locked": null,
+          "name": "size_w",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "size_w"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "size_h",
+          "locked": null,
+          "name": "size_h",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "size_h"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "rx",
+          "locked": null,
+          "name": "rx",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "rx"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "ry",
+          "locked": null,
+          "name": "ry",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "ry"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "top_left_x",
+          "locked": null,
+          "name": "top_left_x",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "top_left_x"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "top_left_y",
+          "locked": null,
+          "name": "top_left_y",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "top_left_y"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "x2",
+          "locked": null,
+          "name": "x2",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "x2"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "y2",
+          "locked": null,
+          "name": "y2",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "y2"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "thickness",
+          "locked": null,
+          "name": "thickness",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "thickness"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "outer_r",
+          "locked": null,
+          "name": "outer_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "outer_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "inner_r",
+          "locked": null,
+          "name": "inner_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "inner_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "num_points",
+          "locked": null,
+          "name": "num_points",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "num_points"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "corner_radius",
+          "locked": null,
+          "name": "corner_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "corner_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "cross_size",
+          "locked": null,
+          "name": "cross_size",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "cross_size"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "arrow_length",
+          "locked": null,
+          "name": "arrow_length",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "arrow_length"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "head_length",
+          "locked": null,
+          "name": "head_length",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "head_length"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "head_width",
+          "locked": null,
+          "name": "head_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "head_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "points_json_shape",
+          "locked": null,
+          "name": "points_json_shape",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "points_json_shape"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "value",
+          "locked": null,
+          "name": "value",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "value"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "rotation",
+          "locked": null,
+          "name": "rotation",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "rotation"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "operation",
+          "locked": null,
+          "name": "operation",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "operation"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "batch_size",
+          "locked": null,
+          "name": "batch_size",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "batch_size"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "shape_params_json",
+          "locked": null,
+          "name": "shape_params_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "shape_params_json"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "editor_data",
+          "locked": null,
+          "name": "editor_data",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "editor_data"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "default_radius",
+          "locked": null,
+          "name": "default_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "default_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "softness",
+          "locked": null,
+          "name": "softness",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "softness"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "normalize",
+          "locked": null,
+          "name": "normalize",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "normalize"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bboxes_json",
+          "locked": null,
+          "name": "bboxes_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "bboxes_json"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "smoothing_radius",
+          "locked": null,
+          "name": "smoothing_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "smoothing_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "smoothing_method",
+          "locked": null,
+          "name": "smoothing_method",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "smoothing_method"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "alpha",
+          "locked": null,
+          "name": "alpha",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "alpha"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "mask", "type": "MASK", "links": null, "slot_index": 0 },
-        { "name": "positive_coords", "type": "STRING", "links": null, "slot_index": 1 },
-        { "name": "negative_coords", "type": "STRING", "links": null, "slot_index": 2 },
-        { "name": "bboxes", "type": "BBOX", "links": null, "slot_index": 3 },
-        { "name": "neg_bboxes", "type": "BBOX", "links": null, "slot_index": 4 },
-        { "name": "points_json", "type": "STRING", "links": [3], "slot_index": 5 },
-        { "name": "bbox_json", "type": "STRING", "links": [5], "slot_index": 6 },
-        { "name": "primary_bbox", "type": "BBOX", "links": null, "slot_index": 7 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "positive_coords",
+          "locked": null,
+          "name": "positive_coords",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "negative_coords",
+          "locked": null,
+          "name": "negative_coords",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bboxes",
+          "locked": null,
+          "name": "bboxes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "neg_bboxes",
+          "locked": null,
+          "name": "neg_bboxes",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "points_json",
+          "locked": null,
+          "name": "points_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            3
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_json",
+          "locked": null,
+          "name": "bbox_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            5
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "primary_bbox",
+          "locked": null,
+          "name": "primary_bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "Points Mask Editor (Interactive)",
-      "properties": { "Node name for S&R": "PointsMaskEditor" },
-      "widgets_values": [512, 512, "{\"points\":[],\"bboxes\":[]}", 3.0, 1.0, true],
-      "color": "#232",
-      "bgcolor": "#353"
+      "properties": {
+        "Node name for S&R": "MaskEditMEC"
+      },
+      "widgets_values": [
+        "points_bbox",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.5,
+        false,
+        512,
+        512,
+        "circle",
+        256,
+        256,
+        50,
+        200,
+        100,
+        100,
+        50,
+        100,
+        100,
+        400,
+        400,
+        5,
+        100,
+        40,
+        5,
+        20,
+        100,
+        200,
+        60,
+        80,
+        "[[100,100],[400,100],[400,400],[100,400]]",
+        1,
+        0,
+        "set",
+        1,
+        "{\"cx\": 256, \"cy\": 256, \"radius\": 50}",
+        "{\"points\":[],\"bboxes\":[]}",
+        3,
+        1,
+        true,
+        "[]",
+        3,
+        "median_then_exponential",
+        0.3,
+        ""
+      ],
+      "widgets_values_named": {
+        "mode": "points_bbox",
+        "expand_x": 0,
+        "expand_y": 0,
+        "blur_x": 0,
+        "blur_y": 0,
+        "offset_x": 0,
+        "offset_y": 0,
+        "feather": 0,
+        "threshold": 0.5,
+        "invert": false,
+        "width": 512,
+        "height": 512,
+        "shape": "circle",
+        "cx": 256,
+        "cy": 256,
+        "radius": 50,
+        "size_w": 200,
+        "size_h": 100,
+        "rx": 100,
+        "ry": 50,
+        "top_left_x": 100,
+        "top_left_y": 100,
+        "x2": 400,
+        "y2": 400,
+        "thickness": 5,
+        "outer_r": 100,
+        "inner_r": 40,
+        "num_points": 5,
+        "corner_radius": 20,
+        "cross_size": 100,
+        "arrow_length": 200,
+        "head_length": 60,
+        "head_width": 80,
+        "points_json_shape": "[[100,100],[400,100],[400,400],[100,400]]",
+        "value": 1,
+        "rotation": 0,
+        "operation": "set",
+        "batch_size": 1,
+        "shape_params_json": "{\"cx\": 256, \"cy\": 256, \"radius\": 50}",
+        "editor_data": "{\"points\":[],\"bboxes\":[]}",
+        "default_radius": 3,
+        "softness": 1,
+        "normalize": true,
+        "bboxes_json": "[]",
+        "smoothing_radius": 3,
+        "smoothing_method": "median_then_exponential",
+        "alpha": 0.3,
+        "points_editor": ""
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 4,
       "type": "SAMMaskGeneratorMEC",
-      "pos": [1040, 50],
-      "size": [350, 380],
+      "pos": [
+        1182.609375,
+        110
+      ],
+      "size": [
+        600,
+        975
+      ],
       "flags": {},
       "order": 3,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "sam_model", "type": "SAM_MODEL", "link": 2 },
-        { "name": "image", "type": "IMAGE", "link": 4 },
-        { "name": "points_json", "type": "STRING", "link": 3 },
-        { "name": "bbox_json", "type": "STRING", "link": 5 },
-        { "name": "bbox", "type": "BBOX", "link": null },
-        { "name": "existing_mask", "type": "MASK", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "sam_model",
+          "locked": null,
+          "name": "sam_model",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "SAM_MODEL",
+          "pos": null,
+          "link": 2
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 4
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BBOX",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "existing_mask",
+          "locked": null,
+          "name": "existing_mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "MASK",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "points_json",
+          "locked": null,
+          "name": "points_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "points_json"
+          },
+          "link": 3
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_json",
+          "locked": null,
+          "name": "bbox_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "bbox_json"
+          },
+          "link": 5
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "text_prompt",
+          "locked": null,
+          "name": "text_prompt",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "text_prompt"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "negative_text_prompt",
+          "locked": null,
+          "name": "negative_text_prompt",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "widget": {
+            "name": "negative_text_prompt"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "grounding_model",
+          "locked": null,
+          "name": "grounding_model",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "grounding_model"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "text_threshold",
+          "locked": null,
+          "name": "text_threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "text_threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "text_box_threshold",
+          "locked": null,
+          "name": "text_box_threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "text_box_threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "multimask_output",
+          "locked": null,
+          "name": "multimask_output",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "multimask_output"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask_index",
+          "locked": null,
+          "name": "mask_index",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "mask_index"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "score_threshold",
+          "locked": null,
+          "name": "score_threshold",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "score_threshold"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "apply_bbox_crop",
+          "locked": null,
+          "name": "apply_bbox_crop",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "apply_bbox_crop"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "refine_iterations",
+          "locked": null,
+          "name": "refine_iterations",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "refine_iterations"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "auto_negative_points",
+          "locked": null,
+          "name": "auto_negative_points",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "auto_negative_points"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "edge_refine",
+          "locked": null,
+          "name": "edge_refine",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "edge_refine"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "edge_radius",
+          "locked": null,
+          "name": "edge_radius",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "edge_radius"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bboxes_json",
+          "locked": null,
+          "name": "bboxes_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "bboxes_json"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "spline_json",
+          "locked": null,
+          "name": "spline_json",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "spline_json"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "mask", "type": "MASK", "links": [6], "slot_index": 0 },
-        { "name": "all_masks", "type": "MASK", "links": null, "slot_index": 1 },
-        { "name": "detected_bbox", "type": "BBOX", "links": null, "slot_index": 2 },
-        { "name": "score", "type": "FLOAT", "links": null, "slot_index": 3 },
-        { "name": "info", "type": "STRING", "links": null, "slot_index": 4 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            6
+          ]
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "all_masks",
+          "locked": null,
+          "name": "all_masks",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "detected_bbox",
+          "locked": null,
+          "name": "detected_bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BBOX",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "score",
+          "locked": null,
+          "name": "score",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "info",
+          "locked": null,
+          "name": "info",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "STRING",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "SAM Mask Generator",
-      "properties": { "Node name for S&R": "SAMMaskGeneratorMEC" },
-      "widgets_values": ["[]", "", true, 0, 0.0, false, 1, false],
-      "color": "#322",
-      "bgcolor": "#533"
+      "properties": {
+        "Node name for S&R": "SAMMaskGeneratorMEC"
+      },
+      "widgets_values": [
+        "[]",
+        "",
+        "",
+        "",
+        "none",
+        0.25,
+        0.3,
+        true,
+        0,
+        0,
+        false,
+        1,
+        false,
+        "guided",
+        8,
+        "",
+        "",
+        ""
+      ],
+      "widgets_values_named": {
+        "points_json": "[]",
+        "bbox_json": "",
+        "text_prompt": "",
+        "negative_text_prompt": "",
+        "grounding_model": "none",
+        "text_threshold": 0.25,
+        "text_box_threshold": 0.3,
+        "multimask_output": true,
+        "mask_index": 0,
+        "score_threshold": 0,
+        "apply_bbox_crop": false,
+        "refine_iterations": 1,
+        "auto_negative_points": false,
+        "edge_refine": "guided",
+        "edge_radius": 8,
+        "bboxes_json": "",
+        "spline_json": "",
+        "points_editor": ""
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 5,
       "type": "MaskPreviewOverlay",
-      "pos": [1450, 50],
-      "size": [400, 500],
+      "pos": [
+        1872.609375,
+        110
+      ],
+      "size": [
+        354.734375,
+        379
+      ],
       "flags": {},
       "order": 4,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "image", "type": "IMAGE", "link": 7 },
-        { "name": "mask", "type": "MASK", "link": 6 },
-        { "name": "bbox", "type": "BBOX", "link": null }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "image",
+          "locked": null,
+          "name": "image",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 7
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "mask",
+          "locked": null,
+          "name": "mask",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "MASK",
+          "pos": null,
+          "link": 6
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox",
+          "locked": null,
+          "name": "bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "BBOX",
+          "pos": null,
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "display_mode",
+          "locked": null,
+          "name": "display_mode",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "COMBO",
+          "widget": {
+            "name": "display_mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_r",
+          "locked": null,
+          "name": "overlay_color_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_g",
+          "locked": null,
+          "name": "overlay_color_g",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_g"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "overlay_color_b",
+          "locked": null,
+          "name": "overlay_color_b",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "overlay_color_b"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "opacity",
+          "locked": null,
+          "name": "opacity",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "opacity"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "edge_width",
+          "locked": null,
+          "name": "edge_width",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "edge_width"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "show_bbox",
+          "locked": null,
+          "name": "show_bbox",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "show_bbox"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_r",
+          "locked": null,
+          "name": "bbox_color_r",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_r"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_g",
+          "locked": null,
+          "name": "bbox_color_g",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_g"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "bbox_color_b",
+          "locked": null,
+          "name": "bbox_color_b",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "FLOAT",
+          "widget": {
+            "name": "bbox_color_b"
+          },
+          "link": null
+        }
       ],
       "outputs": [
-        { "name": "preview", "type": "IMAGE", "links": [8], "slot_index": 0 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "preview",
+          "locked": null,
+          "name": "preview",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": [
+            8
+          ]
+        }
       ],
       "title": "Mask Preview Overlay",
-      "properties": { "Node name for S&R": "MaskPreviewOverlay" },
-      "widgets_values": ["overlay", 1.0, 0.0, 0.0, 0.4, 2, false, 0.0, 1.0, 0.0],
-      "color": "#223",
-      "bgcolor": "#335"
+      "properties": {
+        "Node name for S&R": "MaskPreviewOverlay"
+      },
+      "widgets_values": [
+        "overlay",
+        1,
+        0,
+        0,
+        0.4,
+        2,
+        false,
+        0,
+        1,
+        0
+      ],
+      "widgets_values_named": {
+        "display_mode": "overlay",
+        "overlay_color_r": 1,
+        "overlay_color_g": 0,
+        "overlay_color_b": 0,
+        "opacity": 0.4,
+        "edge_width": 2,
+        "show_bbox": false,
+        "bbox_color_r": 0,
+        "bbox_color_g": 1,
+        "bbox_color_b": 0
+      },
+      "color": "#12132f",
+      "bgcolor": "#0c0d23"
     },
     {
       "id": 6,
       "type": "PreviewImage",
-      "pos": [1900, 50],
-      "size": [400, 400],
+      "pos": [
+        2317.34375,
+        110
+      ],
+      "size": [
+        225,
+        34
+      ],
       "flags": {},
       "order": 5,
       "mode": 0,
+      "showAdvanced": null,
       "inputs": [
-        { "name": "images", "type": "IMAGE", "link": 8 }
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "images",
+          "locked": null,
+          "name": "images",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": null
+        }
       ],
       "title": "Preview Result",
-      "properties": { "Node name for S&R": "PreviewImage" }
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
     },
     {
       "id": 7,
       "type": "Note",
-      "pos": [50, 570],
-      "size": [320, 160],
+      "pos": [
+        50,
+        843
+      ],
+      "size": [
+        225,
+        82
+      ],
       "flags": {},
       "order": 6,
       "mode": 0,
-      "properties": { "text": "" },
+      "showAdvanced": null,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
       "widgets_values": [
         "=== Basic SAM Segmentation ===\n\n1. Connect a Load Image node (replace 'example.png')\n2. Open the Points Mask Editor canvas\n3. Left-click = positive point (include region)\n   Right-click = negative point (exclude region)\n   Ctrl+Drag = draw bounding box\n4. Queue Prompt to generate the mask\n5. Preview shows the mask overlaid on the image\n\nTip: Use Ctrl+Scroll to zoom, Middle-drag to pan\nTip: Shift+click on a point to delete it"
       ],
+      "widgets_values_named": {
+        "text": "=== Basic SAM Segmentation ===\n\n1. Connect a Load Image node (replace 'example.png')\n2. Open the Points Mask Editor canvas\n3. Left-click = positive point (include region)\n   Right-click = negative point (exclude region)\n   Ctrl+Drag = draw bounding box\n4. Queue Prompt to generate the mask\n5. Preview shows the mask overlaid on the image\n\nTip: Use Ctrl+Scroll to zoom, Middle-drag to pan\nTip: Shift+click on a point to delete it"
+      },
       "color": "#432",
       "bgcolor": "#653"
     }
   ],
   "links": [
-    [1, 1, 0, 3, 0, "IMAGE"],
-    [2, 2, 0, 4, 0, "SAM_MODEL"],
-    [3, 3, 5, 4, 2, "STRING"],
-    [4, 1, 0, 4, 1, "IMAGE"],
-    [5, 3, 6, 4, 3, "STRING"],
-    [6, 4, 0, 5, 1, "MASK"],
-    [7, 1, 0, 5, 0, "IMAGE"],
-    [8, 5, 0, 6, 0, "IMAGE"]
+    [
+      1,
+      1,
+      0,
+      3,
+      1,
+      "IMAGE"
+    ],
+    [
+      2,
+      2,
+      0,
+      4,
+      0,
+      "SAM_MODEL"
+    ],
+    [
+      3,
+      3,
+      5,
+      4,
+      4,
+      "STRING"
+    ],
+    [
+      4,
+      1,
+      0,
+      4,
+      1,
+      "IMAGE"
+    ],
+    [
+      5,
+      3,
+      6,
+      4,
+      5,
+      "STRING"
+    ],
+    [
+      6,
+      4,
+      0,
+      5,
+      1,
+      "MASK"
+    ],
+    [
+      7,
+      1,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      5,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ]
   ],
+  "floatingLinks": null,
   "groups": [
     {
+      "id": 1,
       "title": "1. Load Model & Image",
-      "bounding": [30, 20, 370, 530],
+      "bounding": [
+        25,
+        10,
+        402.609375,
+        778
+      ],
       "color": "#88A",
-      "font_size": 24
+      "flags": {}
     },
     {
+      "id": 2,
       "title": "2. Place Points & BBoxes",
-      "bounding": [410, 20, 580, 700],
+      "bounding": [
+        467.609375,
+        10,
+        650,
+        931
+      ],
       "color": "#8A8",
-      "font_size": 24
+      "flags": {}
     },
     {
+      "id": 3,
       "title": "3. Generate Mask",
-      "bounding": [1020, 20, 390, 430],
+      "bounding": [
+        1157.609375,
+        10,
+        650,
+        1100
+      ],
       "color": "#A88",
-      "font_size": 24
+      "flags": {}
     },
     {
+      "id": 4,
       "title": "4. Preview Result",
-      "bounding": [1430, 20, 920, 530],
+      "bounding": [
+        1847.609375,
+        10,
+        719.734375,
+        504
+      ],
       "color": "#88A",
-      "font_size": 24
+      "flags": {}
     }
   ],
+  "definitions": null,
   "config": {},
   "extra": {
-    "ds": { "scale": 0.7, "offset": [50, 50] }
+    "c2c": {
+      "bookmarks": {}
+    },
+    "reroutes": null
   },
   "version": 0.4
 }
