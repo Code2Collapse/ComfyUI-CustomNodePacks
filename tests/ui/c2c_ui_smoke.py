@@ -67,11 +67,16 @@ def start_server(core: Path, python: str, port: int, out: Path):
     _link(base / "custom_nodes" / PACK, PACK_DIR)
     settings = base / "user" / "default" / "comfy.settings.json"
     settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({"Comfy.TutorialCompleted": True}), encoding="utf-8")
+    # first-run tours and the C2C AI welcome wizard would cover the nodes being photographed
+    settings.write_text(json.dumps({"Comfy.TutorialCompleted": True, "c2c.ai.firstRunCompleted": True}),
+                        encoding="utf-8")
     log = out / "server.log"
     cmd = [python, "-s", str(core / "main.py"), "--cpu", "--listen", "127.0.0.1", "--port", str(port),
            "--base-directory", str(base), "--disable-auto-launch", "--preview-method", "none", "--disable-metadata"]
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    home = base / "home"            # packs keep some state in ~ (~/.c2c, ~/.magnific): keep it in the sandbox
+    home.mkdir()
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "HOME": str(home),
+           "USERPROFILE": str(home), "C2C_HOME": str(home / ".c2c"), "C2C_VIDEO_INDEX_DIR": str(home / "video_index")}
     proc = subprocess.Popen(cmd, cwd=str(core), stdout=open(log, "w", encoding="utf-8"), stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env)
     url = f"http://127.0.0.1:{port}"
