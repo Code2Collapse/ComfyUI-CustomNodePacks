@@ -735,6 +735,20 @@ except Exception as _farm_exc:  # pragma: no cover
         group="nodes",
     )
 
+# ── Legacy nodes (deprecated — kept so old workflows load) ────────────
+try:
+    from .nodes.legacy_compat import (
+        NODE_CLASS_MAPPINGS as _LEGACY_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _LEGACY_DISPLAY,
+    )
+except Exception as _leg_exc:  # pragma: no cover
+    _LEGACY_MAPPINGS, _LEGACY_DISPLAY = {}, {}
+    _c2c_rec_fail(
+        "legacy_compat", _leg_exc,
+        hint="Legacy workflow-compat nodes failed to import. Check nodes/legacy_compat.py.",
+        group="nodes",
+    )
+
 _C2C_FAMILIES = [
     ("Vault", _VAULT_MAPPINGS, _VAULT_DISPLAY),
     ("Folder Incrementer", _FOLDER_MAPPINGS, _FOLDER_DISPLAY),
@@ -775,6 +789,7 @@ _C2C_FAMILIES = [
     ("Control AOV", _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY),
     ("Clipboard TCL", _TCL_MAPPINGS, _TCL_DISPLAY),
     ("Restored VFX", _RESTORED_MAPPINGS, _RESTORED_DISPLAY),
+    ("Legacy (deprecated)", _LEGACY_MAPPINGS, _LEGACY_DISPLAY),
 ]
 
 NODE_CLASS_MAPPINGS = {}
@@ -1062,6 +1077,12 @@ try:
         print("[C2C] depcheck routes registered (/c2c/depcheck/*).")
     except Exception as _dc:
         print(f"[C2C] depcheck routes deferred: {_dc}")
+    try:
+        from .nodes._legacy_replacements import register as _register_legacy_replacements
+        _n_legacy = _register_legacy_replacements(_ps)
+        print(f"[C2C] {_n_legacy} legacy node replacements registered (old saved workflows -> unified nodes).")
+    except Exception as _lr:
+        print(f"[C2C] legacy replacements deferred: {_lr}")
     print("[MEC] NukeNodeMax routes + hooks registered.")
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")

@@ -147,6 +147,39 @@ def write_docs(summary: Dict[str, Any]) -> None:
     _replace_marker_block(REPO / "NODE_REFERENCE.md", block)
 
 
+def _pack_module():
+    return sys.modules[str(REPO).replace(".", "_x_")]
+
+
+def registered_ids() -> Dict[str, List[str]]:
+    """Ids this pack registers + core's node ids (nodes.py AND the comfy_extras modules core loads at
+    startup, e.g. MaskToImage), from THIS fresh, real-core interpreter."""
+    import asyncio
+
+    import nodes as core_nodes  # ComfyUI's nodes.py; on sys.path after load_pack_summary()
+
+    pack = sorted(getattr(_pack_module(), "NODE_CLASS_MAPPINGS", {}))
+    before = set(core_nodes.NODE_CLASS_MAPPINGS)
+    try:
+        asyncio.run(core_nodes.init_builtin_extra_nodes())
+    except Exception as exc:  # report, do not hide: the test then sees fewer core ids
+        print(f"[_load_summary] init_builtin_extra_nodes failed: {exc}", file=sys.stderr)
+    core = set(core_nodes.NODE_CLASS_MAPPINGS) - (set(pack) - before)
+    return {"pack": pack, "core": sorted(core)}
+
+
+def replacements_against_real_core() -> Dict[str, Any]:
+    """Register the legacy table into core's real NodeReplaceManager (not a stub)."""
+    from types import SimpleNamespace
+
+    from app.node_replace_manager import NodeReplaceManager
+
+    legacy = importlib.import_module(_pack_module().__name__ + ".nodes._legacy_replacements")
+    manager = NodeReplaceManager()
+    n = legacy.register(SimpleNamespace(node_replace_manager=manager))
+    return {"registered": n, "table": manager.as_dict()}
+
+
 def main(argv: List[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -156,10 +189,20 @@ def main(argv: List[str] | None = None) -> int:
         action="store_true",
         help="Rewrite README.md and NODE_REFERENCE.md marker blocks.",
     )
+    parser.add_argument("--ids", action="store_true", help="Also print C2C_IDS_JSON= (pack + core node ids).")
+    parser.add_argument("--replacements", action="store_true",
+                        help="Also print C2C_REPLACEMENTS_JSON= (legacy table registered into core's real manager).")
     args = parser.parse_args(argv)
     summary = load_pack_summary()
     if args.write_docs:
         write_docs(summary)
+    core = str(_resolve_comfy_core())
+    if core not in sys.path:
+        sys.path.insert(0, core)
+    if args.ids:
+        print(f"C2C_IDS_JSON={json.dumps(registered_ids(), ensure_ascii=True)}")
+    if args.replacements:
+        print(f"C2C_REPLACEMENTS_JSON={json.dumps(replacements_against_real_core(), ensure_ascii=True)}")
     print(f"C2C_LOAD_SUMMARY_JSON={json.dumps(summary, ensure_ascii=True)}")
     return 0
 

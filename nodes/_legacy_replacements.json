@@ -1,0 +1,1401 @@
+[
+ {
+  "old_node_id": "MaskTransformXY",
+  "new_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "expand_x",
+   "expand_y",
+   "blur_x",
+   "blur_y",
+   "offset_x",
+   "offset_y",
+   "feather",
+   "threshold",
+   "invert"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "expand_x",
+    "old_id": "expand_x"
+   },
+   {
+    "new_id": "expand_y",
+    "old_id": "expand_y"
+   },
+   {
+    "new_id": "blur_x",
+    "old_id": "blur_x"
+   },
+   {
+    "new_id": "blur_y",
+    "old_id": "blur_y"
+   },
+   {
+    "new_id": "offset_x",
+    "old_id": "offset_x"
+   },
+   {
+    "new_id": "offset_y",
+    "old_id": "offset_y"
+   },
+   {
+    "new_id": "feather",
+    "old_id": "feather"
+   },
+   {
+    "new_id": "threshold",
+    "old_id": "threshold"
+   },
+   {
+    "new_id": "invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "transform"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "MaskDrawFrame",
+  "new_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "width",
+   "height",
+   "shape",
+   "shape_params_json",
+   "value",
+   "feather",
+   "rotation",
+   "operation"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "shape",
+    "old_id": "shape"
+   },
+   {
+    "new_id": "shape_params_json",
+    "old_id": "shape_params_json"
+   },
+   {
+    "new_id": "value",
+    "old_id": "value"
+   },
+   {
+    "new_id": "feather",
+    "old_id": "feather"
+   },
+   {
+    "new_id": "rotation",
+    "old_id": "rotation"
+   },
+   {
+    "new_id": "operation",
+    "old_id": "operation"
+   },
+   {
+    "new_id": "existing_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "reference_image",
+    "old_id": "reference_image"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "draw_advanced"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "DrawShapeMEC",
+  "new_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "width",
+   "height",
+   "shape",
+   "cx",
+   "cy",
+   "radius",
+   "size_w",
+   "size_h",
+   "rx",
+   "ry",
+   "top_left_x",
+   "top_left_y",
+   "x2",
+   "y2",
+   "thickness",
+   "outer_r",
+   "inner_r",
+   "num_points",
+   "corner_radius",
+   "cross_size",
+   "arrow_length",
+   "head_length",
+   "head_width",
+   "points_json",
+   "value",
+   "feather",
+   "rotation",
+   "operation",
+   "batch_size",
+   "coords_json"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "shape",
+    "old_id": "shape"
+   },
+   {
+    "new_id": "cx",
+    "old_id": "cx"
+   },
+   {
+    "new_id": "cy",
+    "old_id": "cy"
+   },
+   {
+    "new_id": "radius",
+    "old_id": "radius"
+   },
+   {
+    "new_id": "size_w",
+    "old_id": "size_w"
+   },
+   {
+    "new_id": "size_h",
+    "old_id": "size_h"
+   },
+   {
+    "new_id": "rx",
+    "old_id": "rx"
+   },
+   {
+    "new_id": "ry",
+    "old_id": "ry"
+   },
+   {
+    "new_id": "top_left_x",
+    "old_id": "top_left_x"
+   },
+   {
+    "new_id": "top_left_y",
+    "old_id": "top_left_y"
+   },
+   {
+    "new_id": "x2",
+    "old_id": "x2"
+   },
+   {
+    "new_id": "y2",
+    "old_id": "y2"
+   },
+   {
+    "new_id": "thickness",
+    "old_id": "thickness"
+   },
+   {
+    "new_id": "outer_r",
+    "old_id": "outer_r"
+   },
+   {
+    "new_id": "inner_r",
+    "old_id": "inner_r"
+   },
+   {
+    "new_id": "num_points",
+    "old_id": "num_points"
+   },
+   {
+    "new_id": "corner_radius",
+    "old_id": "corner_radius"
+   },
+   {
+    "new_id": "cross_size",
+    "old_id": "cross_size"
+   },
+   {
+    "new_id": "arrow_length",
+    "old_id": "arrow_length"
+   },
+   {
+    "new_id": "head_length",
+    "old_id": "head_length"
+   },
+   {
+    "new_id": "head_width",
+    "old_id": "head_width"
+   },
+   {
+    "new_id": "points_json_shape",
+    "old_id": "points_json"
+   },
+   {
+    "new_id": "value",
+    "old_id": "value"
+   },
+   {
+    "new_id": "feather",
+    "old_id": "feather"
+   },
+   {
+    "new_id": "rotation",
+    "old_id": "rotation"
+   },
+   {
+    "new_id": "operation",
+    "old_id": "operation"
+   },
+   {
+    "new_id": "batch_size",
+    "old_id": "batch_size"
+   },
+   {
+    "new_id": "existing_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "reference_image",
+    "old_id": "reference_image"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "draw_shape"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [
+   "coords_json"
+  ],
+  "note": "coords_json (per-frame positions from a Points editor) has no MaskEditMEC input; it is dropped"
+ },
+ {
+  "old_node_id": "PointsMaskEditor",
+  "new_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "width",
+   "height",
+   "editor_data",
+   "default_radius",
+   "softness",
+   "normalize"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "editor_data",
+    "old_id": "editor_data"
+   },
+   {
+    "new_id": "default_radius",
+    "old_id": "default_radius"
+   },
+   {
+    "new_id": "softness",
+    "old_id": "softness"
+   },
+   {
+    "new_id": "normalize",
+    "old_id": "normalize"
+   },
+   {
+    "new_id": "reference_image",
+    "old_id": "reference_image"
+   },
+   {
+    "new_id": "existing_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "points_bbox"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   },
+   {
+    "old_idx": 5,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 6,
+    "new_idx": 6
+   },
+   {
+    "old_idx": 7,
+    "new_idx": 7
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "BBoxSmooth",
+  "new_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "bboxes_json",
+   "smoothing_radius",
+   "method",
+   "alpha"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "bboxes_json",
+    "old_id": "bboxes_json"
+   },
+   {
+    "new_id": "smoothing_radius",
+    "old_id": "smoothing_radius"
+   },
+   {
+    "new_id": "smoothing_method",
+    "old_id": "method"
+   },
+   {
+    "new_id": "alpha",
+    "old_id": "alpha"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "bbox_smooth"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 6
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 7
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "SplineMaskEditorMEC",
+  "new_node_id": "SplineMaskMEC",
+  "old_widget_ids": [
+   "spline_data",
+   "spline_type",
+   "closed",
+   "smoothing",
+   "samples_per_segment",
+   "centripetal_alpha",
+   "feather_radius",
+   "invert",
+   "width",
+   "height",
+   "mask_color",
+   "mask_opacity"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "spline_data",
+    "old_id": "spline_data"
+   },
+   {
+    "new_id": "spline_type",
+    "old_id": "spline_type"
+   },
+   {
+    "new_id": "closed",
+    "old_id": "closed"
+   },
+   {
+    "new_id": "smoothing",
+    "old_id": "smoothing"
+   },
+   {
+    "new_id": "samples_per_segment",
+    "old_id": "samples_per_segment"
+   },
+   {
+    "new_id": "centripetal_alpha",
+    "old_id": "centripetal_alpha"
+   },
+   {
+    "new_id": "feather_radius",
+    "old_id": "feather_radius"
+   },
+   {
+    "new_id": "invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "mask_color",
+    "old_id": "mask_color"
+   },
+   {
+    "new_id": "mask_opacity",
+    "old_id": "mask_opacity"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "edit"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "SplineMaskTrackerMEC",
+  "new_node_id": "SplineMaskMEC",
+  "old_widget_ids": [
+   "keyframes_json",
+   "closed",
+   "samples_per_segment",
+   "tracking_weight",
+   "klt_window",
+   "feather_radius",
+   "stroke_width"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "spline_data",
+    "old_id": "keyframes_json"
+   },
+   {
+    "new_id": "closed",
+    "old_id": "closed"
+   },
+   {
+    "new_id": "samples_per_segment",
+    "old_id": "samples_per_segment"
+   },
+   {
+    "new_id": "tracking_weight",
+    "old_id": "tracking_weight"
+   },
+   {
+    "new_id": "klt_window",
+    "old_id": "klt_window"
+   },
+   {
+    "new_id": "feather_radius",
+    "old_id": "feather_radius"
+   },
+   {
+    "new_id": "stroke_width",
+    "old_id": "stroke_width"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "track"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "SplinePathFlowMaskMEC",
+  "new_node_id": "SplineMaskMEC",
+  "old_widget_ids": [
+   "spline_data",
+   "pattern",
+   "flow_direction",
+   "width",
+   "height",
+   "thickness",
+   "amplitude",
+   "frequency",
+   "turbulence",
+   "turbulence_scale",
+   "edge_softness",
+   "taper_start",
+   "taper_end",
+   "frames",
+   "animation_speed",
+   "spline_type",
+   "samples_per_segment",
+   "closed",
+   "invert",
+   "seed",
+   "control_after_generate",
+   "mod_decay",
+   "use_embedded_editor"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "spline_data",
+    "old_id": "spline_data"
+   },
+   {
+    "new_id": "pattern",
+    "old_id": "pattern"
+   },
+   {
+    "new_id": "flow_direction",
+    "old_id": "flow_direction"
+   },
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "thickness",
+    "old_id": "thickness"
+   },
+   {
+    "new_id": "amplitude",
+    "old_id": "amplitude"
+   },
+   {
+    "new_id": "frequency",
+    "old_id": "frequency"
+   },
+   {
+    "new_id": "turbulence",
+    "old_id": "turbulence"
+   },
+   {
+    "new_id": "turbulence_scale",
+    "old_id": "turbulence_scale"
+   },
+   {
+    "new_id": "edge_softness",
+    "old_id": "edge_softness"
+   },
+   {
+    "new_id": "taper_start",
+    "old_id": "taper_start"
+   },
+   {
+    "new_id": "taper_end",
+    "old_id": "taper_end"
+   },
+   {
+    "new_id": "frames",
+    "old_id": "frames"
+   },
+   {
+    "new_id": "animation_speed",
+    "old_id": "animation_speed"
+   },
+   {
+    "new_id": "spline_type",
+    "old_id": "spline_type"
+   },
+   {
+    "new_id": "samples_per_segment",
+    "old_id": "samples_per_segment"
+   },
+   {
+    "new_id": "closed",
+    "old_id": "closed"
+   },
+   {
+    "new_id": "invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "seed",
+    "old_id": "seed"
+   },
+   {
+    "new_id": "mod_decay",
+    "old_id": "mod_decay"
+   },
+   {
+    "new_id": "use_embedded_editor",
+    "old_id": "use_embedded_editor"
+   },
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "flow_path"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "MotionMaskTrackerMEC",
+  "new_node_id": "MaskTrackerMEC",
+  "old_widget_ids": [
+   "camera_compensation",
+   "stabilization_method",
+   "detection_mode",
+   "pixel_diff_enabled",
+   "pixel_diff_threshold",
+   "flow_enabled",
+   "flow_threshold",
+   "flow_algorithm",
+   "bg_sub_enabled",
+   "bg_model_frames",
+   "bg_sub_threshold",
+   "hist_enabled",
+   "hist_grid_size",
+   "hist_threshold",
+   "combine_method",
+   "grow_pixels",
+   "min_region_size",
+   "temporal_smooth"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "video",
+    "old_id": "images"
+   },
+   {
+    "new_id": "camera_compensation",
+    "old_id": "camera_compensation"
+   },
+   {
+    "new_id": "stabilization_method",
+    "old_id": "stabilization_method"
+   },
+   {
+    "new_id": "detection_mode",
+    "old_id": "detection_mode"
+   },
+   {
+    "new_id": "pixel_diff_enabled",
+    "old_id": "pixel_diff_enabled"
+   },
+   {
+    "new_id": "pixel_diff_threshold",
+    "old_id": "pixel_diff_threshold"
+   },
+   {
+    "new_id": "flow_enabled",
+    "old_id": "flow_enabled"
+   },
+   {
+    "new_id": "flow_threshold",
+    "old_id": "flow_threshold"
+   },
+   {
+    "new_id": "flow_algorithm",
+    "old_id": "flow_algorithm"
+   },
+   {
+    "new_id": "bg_sub_enabled",
+    "old_id": "bg_sub_enabled"
+   },
+   {
+    "new_id": "bg_model_frames",
+    "old_id": "bg_model_frames"
+   },
+   {
+    "new_id": "bg_sub_threshold",
+    "old_id": "bg_sub_threshold"
+   },
+   {
+    "new_id": "hist_enabled",
+    "old_id": "hist_enabled"
+   },
+   {
+    "new_id": "hist_grid_size",
+    "old_id": "hist_grid_size"
+   },
+   {
+    "new_id": "hist_threshold",
+    "old_id": "hist_threshold"
+   },
+   {
+    "new_id": "combine_method",
+    "old_id": "combine_method"
+   },
+   {
+    "new_id": "grow_pixels",
+    "old_id": "grow_pixels"
+   },
+   {
+    "new_id": "min_region_size",
+    "old_id": "min_region_size"
+   },
+   {
+    "new_id": "temporal_smooth",
+    "old_id": "temporal_smooth"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "motion"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "MaskPropagateVideo",
+  "new_node_id": "MaskTrackerMEC",
+  "old_widget_ids": [
+   "source_frame",
+   "mode",
+   "flow_threshold",
+   "fade_start",
+   "fade_end",
+   "bidirectional",
+   "points_json"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "video",
+    "old_id": "images"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "source_frame",
+    "old_id": "source_frame"
+   },
+   {
+    "new_id": "propagate_mode",
+    "old_id": "mode"
+   },
+   {
+    "new_id": "prop_flow_threshold",
+    "old_id": "flow_threshold"
+   },
+   {
+    "new_id": "fade_start",
+    "old_id": "fade_start"
+   },
+   {
+    "new_id": "fade_end",
+    "old_id": "fade_end"
+   },
+   {
+    "new_id": "bidirectional",
+    "old_id": "bidirectional"
+   },
+   {
+    "new_id": "sam_model",
+    "old_id": "sam_model"
+   },
+   {
+    "new_id": "points_json",
+    "old_id": "points_json"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "propagate"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "TemporalAnchorMEC",
+  "new_node_id": "MaskTrackerMEC",
+  "old_widget_ids": [
+   "anchor_frames",
+   "total_frames",
+   "easing",
+   "sdf_iterations",
+   "flow_refinement"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "anchor_masks"
+   },
+   {
+    "new_id": "anchor_frames",
+    "old_id": "anchor_frames"
+   },
+   {
+    "new_id": "total_frames",
+    "old_id": "total_frames"
+   },
+   {
+    "new_id": "easing",
+    "old_id": "easing"
+   },
+   {
+    "new_id": "sdf_iterations",
+    "old_id": "sdf_iterations"
+   },
+   {
+    "new_id": "flow_refinement",
+    "old_id": "flow_refinement"
+   },
+   {
+    "new_id": "video",
+    "old_id": "images"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "anchor"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "TemporalConsistencyCheckerMEC",
+  "new_node_id": "MaskTrackerMEC",
+  "old_widget_ids": [
+   "metric",
+   "binarize_threshold"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "metric",
+    "old_id": "metric"
+   },
+   {
+    "new_id": "video",
+    "old_id": "image"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "binarize_threshold",
+    "old_id": "binarize_threshold"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "consistency_check"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "ProPainterTemporalMEC",
+  "new_node_id": "ProPainterMEC",
+  "old_widget_ids": [
+   "neighbor_stride",
+   "ref_stride",
+   "raft_iter",
+   "subvideo_length",
+   "raft_chunk",
+   "use_half",
+   "blend_boundary",
+   "color_match_mode"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "images",
+    "old_id": "images"
+   },
+   {
+    "new_id": "masks",
+    "old_id": "masks"
+   },
+   {
+    "new_id": "stitch_data",
+    "old_id": "stitch_data"
+   },
+   {
+    "new_id": "neighbor_stride",
+    "old_id": "neighbor_stride"
+   },
+   {
+    "new_id": "ref_stride",
+    "old_id": "ref_stride"
+   },
+   {
+    "new_id": "raft_iter",
+    "old_id": "raft_iter"
+   },
+   {
+    "new_id": "subvideo_length",
+    "old_id": "subvideo_length"
+   },
+   {
+    "new_id": "raft_chunk",
+    "old_id": "raft_chunk"
+   },
+   {
+    "new_id": "use_half",
+    "old_id": "use_half"
+   },
+   {
+    "new_id": "blend_boundary",
+    "old_id": "blend_boundary"
+   },
+   {
+    "new_id": "color_match_mode",
+    "old_id": "color_match_mode"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "temporal"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": ""
+ },
+ {
+  "old_node_id": "MaskMattingMEC",
+  "new_node_id": "MaskOpsMEC",
+  "old_widget_ids": [
+   "segmenter",
+   "matter",
+   "model",
+   "matter_model",
+   "precision",
+   "attention",
+   "offload",
+   "subject_preset",
+   "trimap_dilate",
+   "trimap_erode",
+   "edge_radius",
+   "individual_objects",
+   "tracking_direction",
+   "frame_annotation",
+   "object_id",
+   "max_frames_to_track",
+   "memory_size",
+   "start_frame",
+   "end_frame",
+   "auto_download",
+   "seed",
+   "control_after_generate",
+   "tta_flip",
+   "multiscale",
+   "post_refine",
+   "refine_radius",
+   "refine_iterations",
+   "despill",
+   "despill_strength",
+   "preserve_skin",
+   "lightwrap_strength",
+   "lightwrap_radius",
+   "edge_band_radius",
+   "premultiply"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "segmenter",
+    "old_id": "segmenter"
+   },
+   {
+    "new_id": "matter",
+    "old_id": "matter"
+   },
+   {
+    "new_id": "model",
+    "old_id": "model"
+   },
+   {
+    "new_id": "matter_model",
+    "old_id": "matter_model"
+   },
+   {
+    "new_id": "precision",
+    "old_id": "precision"
+   },
+   {
+    "new_id": "attention",
+    "old_id": "attention"
+   },
+   {
+    "new_id": "offload",
+    "old_id": "offload"
+   },
+   {
+    "new_id": "subject_preset",
+    "old_id": "subject_preset"
+   },
+   {
+    "new_id": "trimap_dilate",
+    "old_id": "trimap_dilate"
+   },
+   {
+    "new_id": "trimap_erode",
+    "old_id": "trimap_erode"
+   },
+   {
+    "new_id": "edge_radius",
+    "old_id": "edge_radius"
+   },
+   {
+    "new_id": "individual_objects",
+    "old_id": "individual_objects"
+   },
+   {
+    "new_id": "tracking_direction",
+    "old_id": "tracking_direction"
+   },
+   {
+    "new_id": "frame_annotation",
+    "old_id": "frame_annotation"
+   },
+   {
+    "new_id": "object_id",
+    "old_id": "object_id"
+   },
+   {
+    "new_id": "max_frames_to_track",
+    "old_id": "max_frames_to_track"
+   },
+   {
+    "new_id": "memory_size",
+    "old_id": "memory_size"
+   },
+   {
+    "new_id": "start_frame",
+    "old_id": "start_frame"
+   },
+   {
+    "new_id": "end_frame",
+    "old_id": "end_frame"
+   },
+   {
+    "new_id": "auto_download",
+    "old_id": "auto_download"
+   },
+   {
+    "new_id": "seed",
+    "old_id": "seed"
+   },
+   {
+    "new_id": "tta_flip",
+    "old_id": "tta_flip"
+   },
+   {
+    "new_id": "multiscale",
+    "old_id": "multiscale"
+   },
+   {
+    "new_id": "post_refine",
+    "old_id": "post_refine"
+   },
+   {
+    "new_id": "refine_radius",
+    "old_id": "refine_radius"
+   },
+   {
+    "new_id": "refine_iterations",
+    "old_id": "refine_iterations"
+   },
+   {
+    "new_id": "despill",
+    "old_id": "despill"
+   },
+   {
+    "new_id": "despill_strength",
+    "old_id": "despill_strength"
+   },
+   {
+    "new_id": "preserve_skin",
+    "old_id": "preserve_skin"
+   },
+   {
+    "new_id": "lightwrap_strength",
+    "old_id": "lightwrap_strength"
+   },
+   {
+    "new_id": "lightwrap_radius",
+    "old_id": "lightwrap_radius"
+   },
+   {
+    "new_id": "edge_band_radius",
+    "old_id": "edge_band_radius"
+   },
+   {
+    "new_id": "premultiply",
+    "old_id": "premultiply"
+   },
+   {
+    "new_id": "positive_coords",
+    "old_id": "positive_coords"
+   },
+   {
+    "new_id": "negative_coords",
+    "old_id": "negative_coords"
+   },
+   {
+    "new_id": "pos_bbox",
+    "old_id": "pos_bbox"
+   },
+   {
+    "new_id": "neg_bbox",
+    "old_id": "neg_bbox"
+   },
+   {
+    "new_id": "normal_bbox",
+    "old_id": "normal_bbox"
+   },
+   {
+    "new_id": "text_prompt",
+    "old_id": "text_prompt"
+   },
+   {
+    "new_id": "external_mask",
+    "old_id": "external_mask"
+   },
+   {
+    "new_id": "external_trimap",
+    "old_id": "external_trimap"
+   },
+   {
+    "new_id": "holdout_mask",
+    "old_id": "holdout_mask"
+   },
+   {
+    "new_id": "core_mask",
+    "old_id": "core_mask"
+   },
+   {
+    "new_id": "pipeline",
+    "set_value": "cascade (legacy)"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   },
+   {
+    "old_idx": 5,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 6,
+    "new_idx": 6
+   },
+   {
+    "old_idx": 7,
+    "new_idx": 7
+   },
+   {
+    "old_idx": 8,
+    "new_idx": 8
+   },
+   {
+    "old_idx": 9,
+    "new_idx": 9
+   },
+   {
+    "old_idx": 10,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 11,
+    "new_idx": 11
+   },
+   {
+    "old_idx": 12,
+    "new_idx": 12
+   }
+  ],
+  "dropped": [],
+  "note": "pipeline is pinned to 'cascade (legacy)' so a migrated graph keeps the old matting path"
+ }
+]
