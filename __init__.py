@@ -105,6 +105,28 @@ except Exception as _fpd_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] face_pose_delta import failed: %s", _fpd_exc,
         )
+# Image Mask Editor (C2C) — persistent native-resolution mask editor
+try:
+    from .nodes.image_mask_editor import (
+        NODE_CLASS_MAPPINGS as _IMEMASK_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _IMEMASK_DISPLAY,
+        register_routes as _register_imemask_routes,
+    )
+except Exception as _ime_exc:  # pragma: no cover
+    _IMEMASK_MAPPINGS, _IMEMASK_DISPLAY = {}, {}
+    _register_imemask_routes = None
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_ime
+        _c2c_rec_fail_ime(
+            "image_mask_editor", _ime_exc,
+            hint="Image Mask Editor failed to import. Check nodes/image_mask_editor/.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning(
+            "[MEC] image_mask_editor import failed: %s", _ime_exc,
+        )
 # Mask + Matting (multi-backend: SAM2.1, SAM3 + ViTMatte, RVM, ...)
 # Guarded: a failure inside mask_matting (e.g. a missing _reanchor.py helper
 # on an out-of-sync install) must NOT abort this __init__ — that would drop
@@ -756,6 +778,7 @@ _C2C_FAMILIES = [
     ("Fluid Shots/Audio", _FLUID_MAPPINGS, _FLUID_DISPLAY),
     ("C2C video", _C2CVIDEO_MAPPINGS, _C2CVIDEO_DISPLAY),
     ("MaskEditControl", _MEC_MAPPINGS, _MEC_DISPLAY),
+    ("Image Mask Editor", _IMEMASK_MAPPINGS, _IMEMASK_DISPLAY),
     ("Model analysis", _MA_MAPPINGS, _MA_DISPLAY),
     ("MEC Paint Suite", _PAINT_MAPPINGS, _PAINT_DISPLAY),
     ("Face Fixer", _FACE_FIXER_MAPPINGS, _FACE_FIXER_DISPLAY),
@@ -872,6 +895,14 @@ except Exception:
 try:
     import server as _comfy_server_vme
     _register_vme_routes(_comfy_server_vme.PromptServer.instance)
+except Exception:
+    pass  # Server not available
+
+# ── Register server routes for Image Mask Editor (C2C) ───────────────
+try:
+    if _register_imemask_routes is not None:
+        import server as _comfy_server_ime
+        _register_imemask_routes(_comfy_server_ime.PromptServer.instance)
 except Exception:
     pass  # Server not available
 

@@ -12,7 +12,7 @@
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
-const PLAN_LOADER_TYPES = new Set([
+export const PLAN_LOADER_TYPES = new Set([
     "LoadVideoC2C",
     "LoadVideoPathC2C",
     "LoadImagesPathC2C",
@@ -245,31 +245,31 @@ export async function findUpstreamFrameSource(node, opts = {}) {
         }
     }
 
-    // Pass 2: sibling-preview scan.
+    // Pass 2: sibling-preview scan (VHS_LoadVideo -> [PreviewImage, VME]). A preview qualifies only
+    // when it shows an image this node's input derives from: one of its inputs comes STRAIGHT from the
+    // source or an ancestor of it, and none passes through this node. Sharing any ancestor is not
+    // enough - a preview DOWNSTREAM of this node shows its output (the mask), and an editor that took
+    // it as the plate drew on its own last result (measured 2026-10-05, L7.38: the second session of
+    // LoadImage -> ImageMaskEditor -> MaskToImage -> PreviewImage edited the white-on-black mask).
     const myAncestors = _ancestorsOf(graph, sourceId);
     myAncestors.add(sourceId);
     let best = null;
     let bestUrls = [];
     const allNodes = graph._nodes || graph.nodes || [];
     for (const n of allNodes) {
+        if (n.id === node.id) continue;
         const urls = _executedUrls(n);
         if (!urls.length) continue;
-        if (n.id === node.id) continue;
-        let nAnc = null;
+        let fedFromMyChain = false;
+        let downstreamOfMe = false;
         for (const i2 of n.inputs || []) {
             if (i2.link == null) continue;
             const li = graph.links?.[i2.link];
-            if (li) {
-                nAnc = nAnc || new Set();
-                for (const a of _ancestorsOf(graph, li.origin_id)) nAnc.add(a);
-            }
+            if (!li) continue;
+            if (myAncestors.has(li.origin_id)) fedFromMyChain = true;
+            if (li.origin_id === node.id || _ancestorsOf(graph, li.origin_id).has(node.id)) downstreamOfMe = true;
         }
-        if (!nAnc) continue;
-        let shares = false;
-        for (const a of myAncestors) {
-            if (nAnc.has(a)) { shares = true; break; }
-        }
-        if (!shares) continue;
+        if (!fedFromMyChain || downstreamOfMe) continue;
         if (!best || urls.length > bestUrls.length) { best = n; bestUrls = urls; }
     }
     if (bestUrls.length) {

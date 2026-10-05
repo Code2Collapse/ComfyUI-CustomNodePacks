@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **141** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **142** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -55,6 +55,7 @@
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
 | MaskEditControl | 17 |
+| Image Mask Editor | 1 |
 | Model analysis | 2 |
 | MEC Paint Suite | 4 |
 | Face Fixer | 1 |
@@ -90,7 +91,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 141 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Model analysis 2, MEC Paint Suite 4, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 3, Video Stabilizer 4, C2C helpers 12, Prompt Relay 5, AsymFlow sampler 1, HDR Color Science 3, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 142 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Image Mask Editor 1, Model analysis 2, MEC Paint Suite 4, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 3, Video Stabilizer 4, C2C helpers 12, Prompt Relay 5, AsymFlow sampler 1, HDR Color Science 3, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -829,6 +830,31 @@ Each metric contributes up to 20 points to a severity score (0–100). The node 
 ---
 
 ### Interactive Editor
+
+#### Image Mask Editor (C2C)
+
+Paints a mask over the image that actually reaches the node, at native resolution (`C2C/Masking`).
+Click **✏️ Edit mask** to open the full-window editor.
+
+- **What you edit:**
+  - a directly wired LoadImage or C2C/VHS loader shows its frames without a run;
+  - any other source (a crop, an upscale, a generated image) shows the exact frames the node received in its last run;
+  - before that first run you get the nearest upstream preview, with a banner saying so.
+- **Tools:** brush and eraser (size, hardness, opacity), rectangle, ellipse, polygon, lasso and bucket fill (tolerance). Alt + stroke subtracts. Overlay / matte / image views.
+- **Batches:** a frame strip, one mask per frame (or one shared mask with `frame_mode = shared`), and "Copy previous frame".
+- **Non-destructive result stage:** `grow`, `feather`, `threshold`, `invert` and `combine` (with an optional `input_mask`) are node parameters, so changing a feather never means repainting.
+- **Storage:** masks are PNGs in `input/c2c_masks/<editor_id>/` and survive a server restart. The workflow keeps only the editor id. The masks' content hash is part of the cache key, so an edit re-runs the graph and an unchanged graph stays cached.
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| **B / E** | Brush / eraser | **[ / ]** | Brush size |
+| **R / O** | Rectangle / ellipse | **F / 1** | Fit / 100% |
+| **P / L** | Polygon / lasso | **V** | Cycle view |
+| **G** | Bucket fill | **, / .** | Previous / next frame |
+| **Ctrl+Z / Ctrl+Y** | Undo / redo | **Enter / Esc** | Save / cancel |
+| **Space or middle drag** | Pan | **?** | Shortcut list |
+
+**Outputs:** `mask` (MASK), `preview` (IMAGE, mask tinted over the input) and `info` (STRING: frames, stored masks, notes).
 
 #### Points Mask Editor (MEC)
 
