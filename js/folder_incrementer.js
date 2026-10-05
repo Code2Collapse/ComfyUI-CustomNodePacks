@@ -856,6 +856,16 @@ app.registerExtension({
             }
         }
 
+        // A sync that must not trust the per-version cache: an edit made in code
+        // (no graphChanged) leaves _fiVersion where it was. Dropping this graph's
+        // shared cache makes the next read rebuild it from the live widgets; the
+        // rebuilt cache stays valid for the other incrementers of this version.
+        function syncFresh() {
+            _fiCaches.delete(G());
+            normalizeSourceFilename();
+            syncSourceFilename();
+        }
+
         node._fiNormalizeSource = normalizeSourceFilename;
         node._fiSyncSource = syncSourceFilename;
 
@@ -939,11 +949,13 @@ app.registerExtension({
             // Runs on EVERY serialize (the change tracker's included), so it must be
             // cheap: re-sync only if the graph changed since this node last synced.
             // A queue right after an edit still sends a fresh value.
-            // The 2 s cap covers an edit made in code without a graphChanged event,
+            // The 10 s cap covers an edit made in code without a graphChanged event,
             // on front-ends that lack the beforeQueued hook below.
-            if (node._fiSyncedVersion !== _fiVersion || performance.now() - (node._fiSyncedAt || 0) > 2000) {
+            if (node._fiSyncedVersion !== _fiVersion) {
                 normalizeSourceFilename();
                 syncSourceFilename();
+            } else if (performance.now() - (node._fiSyncedAt || 0) > 10000) {
+                syncFresh();
             }
             origOnSerialize?.apply(this, arguments);
         };
@@ -955,7 +967,7 @@ app.registerExtension({
         if (sfQueueWidget) {
             const prevBeforeQueued = sfQueueWidget.beforeQueued;
             sfQueueWidget.beforeQueued = function (...args) {
-                try { normalizeSourceFilename(); syncSourceFilename(); } catch (_) { /* never block a queue */ }
+                try { syncFresh(); } catch (_) { /* never block a queue */ }
                 return prevBeforeQueued?.apply(this, args);
             };
         }
