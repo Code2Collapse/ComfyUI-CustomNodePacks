@@ -68,10 +68,13 @@ def test_every_node_has_a_display_name():
 def test_they_reach_the_packs_own_mappings():
     """Registered in nodes/magnific/ but not wired into __init__.py is the
     failure that looks exactly like success from inside the subpackage."""
+    import re
+
     root = source("__init__.py")
     assert "_MAGNIFIC_MAPPINGS" in root
-    assert "**_MAGNIFIC_MAPPINGS," in root
-    assert "**_MAGNIFIC_DISPLAY," in root
+    # since L2.01 the merge is the ordered _C2C_FAMILIES table: (label, mappings, display)
+    table = root.split("_C2C_FAMILIES = [", 1)[1].split("\n]", 1)[0]
+    assert re.search(r'\(\s*"[^"]+",\s*_MAGNIFIC_MAPPINGS,\s*_MAGNIFIC_DISPLAY\s*\)', table)
 
 
 def test_the_node_ids_are_not_renamed():

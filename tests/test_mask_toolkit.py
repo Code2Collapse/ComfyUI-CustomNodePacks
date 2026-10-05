@@ -79,9 +79,13 @@ class TestRegistration:
             assert nid in NODE_CLASS_MAPPINGS
 
     def test_ids_merged_in_pack_init(self):
+        import re
+
         init_src = (PACK_ROOT / "__init__.py").read_text(encoding="utf-8")
         assert "_MASKTOOLKIT_MAPPINGS" in init_src
-        assert "**_MASKTOOLKIT_MAPPINGS" in init_src
+        # since L2.01 the merge is the ordered _C2C_FAMILIES table: (label, mappings, display)
+        table = init_src.split("_C2C_FAMILIES = [", 1)[1].split("\n]", 1)[0]
+        assert re.search(r'\(\s*"[^"]+",\s*_MASKTOOLKIT_MAPPINGS,\s*_MASKTOOLKIT_DISPLAY\s*\)', table)
 
 
 class TestMaskFromColor:

@@ -735,88 +735,74 @@ except Exception as _farm_exc:  # pragma: no cover
         group="nodes",
     )
 
-NODE_CLASS_MAPPINGS = {
-    **_VAULT_MAPPINGS,
-    **_FOLDER_MAPPINGS,
-    **_FARM_MAPPINGS,
-    **_FLUID_MAPPINGS,
-    **_C2CVIDEO_MAPPINGS,
-    **_MEC_MAPPINGS,
-    **_MA_MAPPINGS,
-    **_PAINT_MAPPINGS,
-    **_FACE_FIXER_MAPPINGS,
-    **_FPDELTA_MAPPINGS,
-    **_MASKMATTE_MAPPINGS,
-    **_LAYERFX_MAPPINGS,
-    **_MASKTOOLKIT_MAPPINGS,
-    **_FREQGRAIN_MAPPINGS,
-    **_SMARTCROP_MAPPINGS,
-    **_TILING_MAPPINGS,
-    **_VAECLEAN_MAPPINGS,
-    **_MAGNIFIC_MAPPINGS,
-    **_AVH_MAPPINGS,
-    **_USEG_MAPPINGS,
-    **_SAMPICKER_MAPPINGS,
-    **_SAM_MAPPINGS,
-    **_MASKPLACE_MAPPINGS,
-    **_SAMVIT_MAPPINGS,
-    **_LUMAKEY_MAPPINGS,
-    **_BGREMOVE_MAPPINGS,
-    **_SEMSEG_MAPPINGS,
-    **_NUKEMAX_MAPPINGS,
-    **_STABILIZER_MAPPINGS,
-    **_WANDIR_MAPPINGS,
-    **_HELPERS_MAPPINGS,
-    **_PROMPTRELAY_MAPPINGS,
-    **_ASYMFLOW_MAPPINGS,
-    **_HDR_MAPPINGS,
-    **_LOCATE_MAPPINGS,
-    **_NANOBANANA_MAPPINGS,
-    **_CONTROLFORGE_MAPPINGS,
-    **_TCL_MAPPINGS,
-    **_RESTORED_MAPPINGS,
+_C2C_FAMILIES = [
+    ("Vault", _VAULT_MAPPINGS, _VAULT_DISPLAY),
+    ("Folder Incrementer", _FOLDER_MAPPINGS, _FOLDER_DISPLAY),
+    ("Render farm", _FARM_MAPPINGS, _FARM_DISPLAY),
+    ("Fluid Shots/Audio", _FLUID_MAPPINGS, _FLUID_DISPLAY),
+    ("C2C video", _C2CVIDEO_MAPPINGS, _C2CVIDEO_DISPLAY),
+    ("MaskEditControl", _MEC_MAPPINGS, _MEC_DISPLAY),
+    ("Model analysis", _MA_MAPPINGS, _MA_DISPLAY),
+    ("MEC Paint Suite", _PAINT_MAPPINGS, _PAINT_DISPLAY),
+    ("Face Fixer", _FACE_FIXER_MAPPINGS, _FACE_FIXER_DISPLAY),
+    ("Face/Pose Delta", _FPDELTA_MAPPINGS, _FPDELTA_DISPLAY),
+    ("Mask + Matting", _MASKMATTE_MAPPINGS, _MASKMATTE_DISPLAY),
+    ("Layer Effects", _LAYERFX_MAPPINGS, _LAYERFX_DISPLAY),
+    ("Mask toolkit", _MASKTOOLKIT_MAPPINGS, _MASKTOOLKIT_DISPLAY),
+    ("Frequency / Grain", _FREQGRAIN_MAPPINGS, _FREQGRAIN_DISPLAY),
+    ("Smart Crop/Stitch", _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY),
+    ("Tiled refinement", _TILING_MAPPINGS, _TILING_DISPLAY),
+    ("VAE Clean", _VAECLEAN_MAPPINGS, _VAECLEAN_DISPLAY),
+    ("Magnific", _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY),
+    ("AV Handles", _AVH_MAPPINGS, _AVH_DISPLAY),
+    ("Unified Segmentation", _USEG_MAPPINGS, _USEG_DISPLAY),
+    ("SAM Multi-Mask Picker", _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY),
+    ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
+    ("Mask Placement", _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY),
+    ("SAM + ViTMatte", _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY),
+    ("Luminance Keyer", _LUMAKEY_MAPPINGS, _LUMAKEY_DISPLAY),
+    ("Background Remover", _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY),
+    ("Semantic Segment", _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY),
+    ("NukeNodeMax", _NUKEMAX_MAPPINGS, _NUKEMAX_DISPLAY),
+    ("Video Stabilizer", _STABILIZER_MAPPINGS, _STABILIZER_DISPLAY),
+    ("WanDirector", _WANDIR_MAPPINGS, _WANDIR_DISPLAY),
+    ("C2C helpers", _HELPERS_MAPPINGS, _HELPERS_DISPLAY),
+    ("Prompt Relay", _PROMPTRELAY_MAPPINGS, _PROMPTRELAY_DISPLAY),
+    ("AsymFlow sampler", _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY),
+    ("HDR Color Science", _HDR_MAPPINGS, _HDR_DISPLAY),
+    ("LocateAnything", _LOCATE_MAPPINGS, _LOCATE_DISPLAY),
+    ("Nano Banana", _NANOBANANA_MAPPINGS, _NANOBANANA_DISPLAY),
+    ("Control AOV", _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY),
+    ("Clipboard TCL", _TCL_MAPPINGS, _TCL_DISPLAY),
+    ("Restored VFX", _RESTORED_MAPPINGS, _RESTORED_DISPLAY),
+]
+
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
+for _label, _maps, _disp in _C2C_FAMILIES:
+    NODE_CLASS_MAPPINGS.update(_maps)
+    NODE_DISPLAY_NAME_MAPPINGS.update(_disp)
+
+C2C_LOAD_SUMMARY = {
+    "pack": "ComfyUI-CustomNodePacks",
+    "total": len(NODE_CLASS_MAPPINGS),
+    "families": [[_lbl, len(_maps)] for _lbl, _maps, _ in _C2C_FAMILIES if len(_maps) > 0],
+    "failed": [],
 }
-NODE_DISPLAY_NAME_MAPPINGS = {
-    **_VAULT_DISPLAY,
-    **_FOLDER_DISPLAY,
-    **_FARM_DISPLAY,
-    **_FLUID_DISPLAY,
-    **_C2CVIDEO_DISPLAY,
-    **_MEC_DISPLAY,
-    **_MA_DISPLAY,
-    **_PAINT_DISPLAY,
-    **_FACE_FIXER_DISPLAY,
-    **_FPDELTA_DISPLAY,
-    **_MASKMATTE_DISPLAY,
-    **_LAYERFX_DISPLAY,
-    **_MASKTOOLKIT_DISPLAY,
-    **_FREQGRAIN_DISPLAY,
-    **_SMARTCROP_DISPLAY,
-    **_TILING_DISPLAY,
-    **_VAECLEAN_DISPLAY,
-    **_MAGNIFIC_DISPLAY,
-    **_AVH_DISPLAY,
-    **_USEG_DISPLAY,
-    **_SAMPICKER_DISPLAY,
-    **_SAM_DISPLAY,
-    **_MASKPLACE_DISPLAY,
-    **_SAMVIT_DISPLAY,
-    **_LUMAKEY_DISPLAY,
-    **_BGREMOVE_DISPLAY,
-    **_SEMSEG_DISPLAY,
-    **_NUKEMAX_DISPLAY,
-    **_STABILIZER_DISPLAY,
-    **_WANDIR_DISPLAY,
-    **_HELPERS_DISPLAY,
-    **_PROMPTRELAY_DISPLAY,
-    **_ASYMFLOW_DISPLAY,
-    **_HDR_DISPLAY,
-    **_LOCATE_DISPLAY,
-    **_NANOBANANA_DISPLAY,
-    **_CONTROLFORGE_DISPLAY,
-    **_TCL_DISPLAY,
-    **_RESTORED_DISPLAY,
-}
+try:
+    from .nodes._c2c_registry import summary as _c2c_reg_summary
+
+    C2C_LOAD_SUMMARY["failed"] = [
+        {
+            "key": _rec["key"],
+            "group": _rec["group"],
+            "error": f"{_rec['exception_type']}: {_rec['message']}",
+        }
+        for _rec in _c2c_reg_summary()["failures"]
+        if _rec.get("group") in ("nodes", "root")
+    ]
+except Exception:
+    pass
 
 WEB_DIRECTORY = "./js"
 
@@ -1080,4 +1066,20 @@ try:
 except Exception as _e:
     print(f"[MEC] NukeNodeMax server hooks deferred: {_e}")
 
-print(f"[MEC] Loaded {len(_MEC_MAPPINGS)} MaskEditControl nodes.")
+_c2c_fam_part = ", ".join(f"{_lbl} {_n}" for _lbl, _n in C2C_LOAD_SUMMARY["families"])
+_c2c_n_failed = len(C2C_LOAD_SUMMARY["failed"])
+_c2c_line = (
+    f"[C2C] CustomNodePacks: {C2C_LOAD_SUMMARY['total']} nodes loaded "
+    f"({_c2c_fam_part}) - {_c2c_n_failed} failed"
+)
+if C2C_LOAD_SUMMARY["failed"]:
+    _c2c_fail_part = "; ".join(
+        f"{_f['key']} ({_f['error'][:80]})" for _f in C2C_LOAD_SUMMARY["failed"]
+    )
+    _c2c_line += f" : {_c2c_fail_part}"
+print(_c2c_line)
+if C2C_LOAD_SUMMARY["failed"]:
+    print(
+        "[C2C] CustomNodePacks: the [C2C registry] lines above say how to fix "
+        "each failed family."
+    )

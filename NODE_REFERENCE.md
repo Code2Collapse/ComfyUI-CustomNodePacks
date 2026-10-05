@@ -1,17 +1,58 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
-> **REBASELINE 2026-09-06.** This pack registers **89** nodes, not 104. The
-> cross-pack dedup moved six VFX modules to ComfyUI-NukeMaxNodes and
-> WanDirectorC2C to ComfyUI-WanNodeExperiments (one owner per id); two vault
-> nodes were then added. Measured this session with the production loader.
->
-> This file is marked auto-generated, but **no generator exists in the repo**,
-> so the per-node bodies below cannot be regenerated and may drift from the
-> tooltips they claim to mirror. Treat the live schema as authoritative.
+<!-- C2C:NODE-COUNTS:BEGIN -->
+**ComfyUI-CustomNodePacks** registers **134** nodes across these families:
 
-*Auto-generated from the live `NODE_CLASS_MAPPINGS` on 2026-07-29 — 104 nodes. Every parameter description below is the node's own tooltip, so this file cannot drift from the code.*
+| Family | Nodes |
+|--------|------:|
+| Vault | 2 |
+| Folder Incrementer | 5 |
+| Render farm | 3 |
+| Fluid Shots/Audio | 3 |
+| C2C video | 4 |
+| MaskEditControl | 17 |
+| Model analysis | 2 |
+| MEC Paint Suite | 4 |
+| Face Fixer | 1 |
+| Face/Pose Delta | 1 |
+| Mask + Matting | 3 |
+| Layer Effects | 8 |
+| Mask toolkit | 5 |
+| Frequency / Grain | 3 |
+| Smart Crop/Stitch | 2 |
+| Tiled refinement | 4 |
+| VAE Clean | 1 |
+| Magnific | 15 |
+| AV Handles | 1 |
+| SAM Multi-Mask Picker | 1 |
+| SAM Loader/Generator | 2 |
+| Mask Placement | 1 |
+| SAM + ViTMatte | 1 |
+| Luminance Keyer | 1 |
+| Background Remover | 1 |
+| Semantic Segment | 1 |
+| NukeNodeMax | 3 |
+| Video Stabilizer | 4 |
+| C2C helpers | 12 |
+| Prompt Relay | 5 |
+| AsymFlow sampler | 1 |
+| HDR Color Science | 3 |
+| LocateAnything | 2 |
+| Nano Banana | 1 |
+| Control AOV | 1 |
+| Clipboard TCL | 2 |
+| Restored VFX | 8 |
 
-Regenerate after changing any node's `INPUT_TYPES`.
+Startup log line to verify the pack loaded:
+
+`[C2C] CustomNodePacks: 134 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Model analysis 2, MEC Paint Suite 4, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 3, Video Stabilizer 4, C2C helpers 12, Prompt Relay 5, AsymFlow sampler 1, HDR Color Science 3, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8) - 0 failed`
+<!-- C2C:NODE-COUNTS:END -->
+
+
+The counts above are generated from live registration (`python tests/_load_summary.py --write-docs`,
+checked by `tests/test_node_counts_match_docs.py`). The per-node sections below were generated from the
+code on 2026-07-29 and have **no generator in this repo yet**, so they can drift from the tooltips they
+mirror; treat the live node schema as authoritative until they are regenerated.
 
 
 ## Contents

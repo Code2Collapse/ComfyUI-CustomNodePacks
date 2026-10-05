@@ -44,19 +44,54 @@
 
 ## Overview
 
-**ComfyUI-CustomNodePacks** ships **72 nodes** organized into the following packs:
+<!-- C2C:NODE-COUNTS:BEGIN -->
+**ComfyUI-CustomNodePacks** registers **134** nodes across these families:
 
-| Pack | Nodes | Purpose |
-|------|------:|---------|
-| **MaskEditControl (MEC)** | 33 | Pinpoint mask editing, SAM1/2/3 segmentation, SAM multi-mask picker, SeC + MatAnyone2 pipeline, background removal, face/clothes parsing, ViTMatte alpha matting, luminance keying, inpaint crop/stitch/paste-back suite, image comparison, mask failure diagnostics, temporal anchor interpolation, video propagation, compositing tools |
-| **VAE Tools** | 4 | Merge two/three VAEs (8 algorithms, per-block alpha), latent inspector, similarity analyser, per-block weight inspector |
-| **VFX Suite** | 19 | Color-space convert (sRGB/linear/Rec.709/ACEScg), `.cube` LUT apply, exposure/grade, EXR load+save, merge render passes, depth-of-field mask, depth warp, normal→curvature, position-pass splitter, grain match, plate stabilizer, clean-plate extractor, difference matte, metadata writer, frame-range router, shot-metadata reader |
-| **Diagnostics** | 5 | EXR metadata reader, batch version manager, temporal consistency checker, model metadata extractor, parameter history |
-| **FolderIncrementer** | 3 | Filesystem-safe auto-versioned output (`v001`, `v002`, …) with name sanitization and atomic version reservation |
-| **Universal Reroute** | 1 | Nuke-style Dot node — reroute any wire type for cleaner workflow graphs |
-| **Parameter Memory** | 1 | Tracks every parameter change with SQLite history, defaults recall, and per-run diffing |
+| Family | Nodes |
+|--------|------:|
+| Vault | 2 |
+| Folder Incrementer | 5 |
+| Render farm | 3 |
+| Fluid Shots/Audio | 3 |
+| C2C video | 4 |
+| MaskEditControl | 17 |
+| Model analysis | 2 |
+| MEC Paint Suite | 4 |
+| Face Fixer | 1 |
+| Face/Pose Delta | 1 |
+| Mask + Matting | 3 |
+| Layer Effects | 8 |
+| Mask toolkit | 5 |
+| Frequency / Grain | 3 |
+| Smart Crop/Stitch | 2 |
+| Tiled refinement | 4 |
+| VAE Clean | 1 |
+| Magnific | 15 |
+| AV Handles | 1 |
+| SAM Multi-Mask Picker | 1 |
+| SAM Loader/Generator | 2 |
+| Mask Placement | 1 |
+| SAM + ViTMatte | 1 |
+| Luminance Keyer | 1 |
+| Background Remover | 1 |
+| Semantic Segment | 1 |
+| NukeNodeMax | 3 |
+| Video Stabilizer | 4 |
+| C2C helpers | 12 |
+| Prompt Relay | 5 |
+| AsymFlow sampler | 1 |
+| HDR Color Science | 3 |
+| LocateAnything | 2 |
+| Nano Banana | 1 |
+| Control AOV | 1 |
+| Clipboard TCL | 2 |
+| Restored VFX | 8 |
 
-All nodes are prefixed with **(MEC)** in the ComfyUI node menu for easy discovery.
+Startup log line to verify the pack loaded:
+
+`[C2C] CustomNodePacks: 134 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Model analysis 2, MEC Paint Suite 4, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 3, Video Stabilizer 4, C2C helpers 12, Prompt Relay 5, AsymFlow sampler 1, HDR Color Science 3, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8) - 0 failed`
+<!-- C2C:NODE-COUNTS:END -->
+
 
 ### Who is this for?
 
@@ -978,7 +1013,7 @@ Filesystem-aware auto-versioning for output files.
 
 ## Node Quick-Reference Table
 
-All 47 nodes at a glance:
+Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 
 | # | Node | Category | VRAM Tier | What it does |
 |---|------|----------|-----------|-------------|
@@ -1255,7 +1290,7 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 
 ```
 ComfyUI-CustomNodePacks/
-├── __init__.py                     # Node registration (47 nodes)
+├── __init__.py                     # Node registration
 ├── folder_incrementer.py           # FolderIncrementer nodes (3)
 ├── conftest.py                     # Pytest root configuration
 ├── pyproject.toml                  # Package metadata
@@ -1361,7 +1396,7 @@ MIT
 
 ## Use in image/video generation pipelines (Flux / Qwen-Image / Wan / Z-Image / ERNIE-VL)
 
-This umbrella pack aggregates ~72 nodes across four sub-namespaces — Folder Incrementer (`_FOLDER_MAPPINGS`, 3 nodes), MEC tools (`_MEC_MAPPINGS`, 30 nodes covering masking, SAM/ViT-Matte segmentation, inpaint crop/stitch/paste-back, spline editors, motion mask trackers, draw shapes, VAE merge/inspect, batch version manager, temporal consistency, model metadata, image comparer, parameter history, semantic segment, luminance keyer, mask failure explainer, temporal anchor, SAM multi-mask picker), Paint nodes (`_PAINT_MAPPINGS`), and MA nodes (`_MA_MAPPINGS`). The nodes are model-agnostic — they speak ComfyUI's native `IMAGE`, `MASK`, `LATENT`, `VAE`, and `MODEL` types — so they slot into any sampler graph regardless of which diffusion family produces the pixels.
+This umbrella pack aggregates nodes across four sub-namespaces — Folder Incrementer (`_FOLDER_MAPPINGS`), MEC tools (`_MEC_MAPPINGS` covering masking, SAM/ViT-Matte segmentation, inpaint crop/stitch/paste-back, spline editors, motion mask trackers, draw shapes, VAE merge/inspect, batch version manager, temporal consistency, model metadata, image comparer, parameter history, semantic segment, luminance keyer, mask failure explainer, temporal anchor, SAM multi-mask picker), Paint nodes (`_PAINT_MAPPINGS`), and MA nodes (`_MA_MAPPINGS`). The nodes are model-agnostic — they speak ComfyUI's native `IMAGE`, `MASK`, `LATENT`, `VAE`, and `MODEL` types — so they slot into any sampler graph regardless of which diffusion family produces the pixels.
 
 | Model family | Recommended bridges |
 |---|---|
