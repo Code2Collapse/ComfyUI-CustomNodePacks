@@ -550,11 +550,21 @@ class MaskOpsMEC:
                 }),
                 "matte_tile": ("INT", {
                     "default": 1024, "min": 256, "max": 4096, "step": 64,
-                    "tooltip": "ViTMatte tile size in pixels (ONYX path).",
+                    "tooltip": "ViTMatte tile size in pixels for both the ONYX and cascade pipelines.",
                 }),
                 "temporal_stabilise": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "3-tap temporal median on alpha inside the unknown trimap band (ONYX path).",
+                }),
+                "matte_overlap": ("INT", {
+                    "default": 64, "min": 16, "max": 256, "step": 1,
+                    "advanced": True,
+                    "tooltip": "Overlap between ViTMatte tiles in pixels. Larger overlaps reduce seams but run more tiles.",
+                }),
+                "matte_tile_batch": ("INT", {
+                    "default": 4, "min": 1, "max": 16, "step": 1,
+                    "advanced": True,
+                    "tooltip": "How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors.",
                 }),
             },
         }
@@ -567,7 +577,8 @@ class MaskOpsMEC:
                    object_id, max_frames_to_track, memory_size, start_frame,
                    end_frame, auto_download, seed,
                    pipeline, scene_prompts, band_scale, matte_tile,
-                   temporal_stabilise, **kwargs):
+                   temporal_stabilise, matte_overlap, matte_tile_batch,
+                   **kwargs):
         return hash_args_and_kwargs(
             image, segmenter, matter, model, matter_model,
             precision, attention, offload, subject_preset,
@@ -576,7 +587,8 @@ class MaskOpsMEC:
             object_id, max_frames_to_track, memory_size, start_frame,
             end_frame, auto_download, seed,
             pipeline, scene_prompts, band_scale, matte_tile,
-            temporal_stabilise, **kwargs,
+            temporal_stabilise, matte_overlap, matte_tile_batch,
+            **kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -638,7 +650,8 @@ class MaskOpsMEC:
                 normal_bbox=None, text_prompt="", external_mask=None,
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
-                band_scale=1.0, matte_tile=1024, temporal_stabilise=True):
+                band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
+                matte_overlap=64, matte_tile_batch=4):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskOpsMEC expects IMAGE tensor [B,H,W,C]")
         for _label, _m in (
@@ -687,7 +700,7 @@ class MaskOpsMEC:
                 normal_bbox, text_prompt, external_mask,
                 external_trimap, holdout_mask, core_mask,
                 pipeline, scene_prompts, band_scale, matte_tile,
-                temporal_stabilise,
+                temporal_stabilise, matte_overlap, matte_tile_batch,
             )
 
     def _execute_impl(self, image, segmenter, matter, model, matter_model,
@@ -721,7 +734,8 @@ class MaskOpsMEC:
                 normal_bbox=None, text_prompt="", external_mask=None,
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
-                band_scale=1.0, matte_tile=1024, temporal_stabilise=True):
+                band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
+                matte_overlap=64, matte_tile_batch=4):
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
         pos_points = positive_coords or pos_points or ""
@@ -1366,21 +1380,35 @@ class MaskOpsMEC:
                     obj_masks_raw = seg_out.get("object_masks")  # [N,H,W] or None
                     obj_boxes_raw = seg_out.get("object_boxes", [])
                     use_multi = (
-                        obj_masks_raw is not None
+                        isinstance(obj_masks_raw, torch.Tensor)
+                        and obj_masks_raw.ndim >= 2
                         and len(obj_boxes_raw) > 0
                         and B == 1
                         and hasattr(mat_inst, "matte_multi")
                     )
+                    _vit_kw: Dict[str, Any] = {}
+                    if mat_key == "vitmatte":
+                        _vit_kw = {
+                            "tile_size": max(64, int(matte_tile)),
+                            "tile_overlap": int(matte_overlap),
+                            "tile_batch": int(matte_tile_batch),
+                        }
                     if use_multi:
-                        om_list = [obj_masks_raw[i].unsqueeze(0) for i in range(len(obj_boxes_raw))]
+                        n_obj = min(int(obj_masks_raw.shape[0]), len(obj_boxes_raw))
+                        om_list = [
+                            obj_masks_raw[i].unsqueeze(0) for i in range(n_obj)
+                        ]
+                        boxes = obj_boxes_raw[:n_obj]
                         mat_out = mat_inst.matte_multi(
-                            img_bhwc, om_list, obj_boxes_raw,
+                            img_bhwc, om_list, boxes,
                             edge_radius=edge, memory_size=int(memory_size),
+                            **_vit_kw,
                         )
                     else:
                         mat_out = mat_inst.matte(
                             img_bhwc, mask_t, trimap=trimap_t,
                             edge_radius=edge, memory_size=int(memory_size),
+                            **_vit_kw,
                         )
                     alpha_t = mat_out["alpha"].float().clamp(0, 1)
                 else:

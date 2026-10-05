@@ -80,6 +80,8 @@ FEATURE = (
     "precision", "attention", "offload",
     # the ONYX pipeline's own controls (gated on `pipeline` in TOGGLES)
     "scene_prompts", "band_scale", "matte_tile", "temporal_stabilise",
+    # ViTMatte cascade tiling (gated on matter + pipeline in tiling_visible)
+    "matte_overlap", "matte_tile_batch",
 )
 
 #: pipeline="onyx" is ONE fixed pipeline - a SAM 3.1 video session, a trimap
@@ -106,7 +108,12 @@ ONYX_KEEPS = (
     "frame_annotation", "tracking_direction", "start_frame", "max_frames_to_track",
     "text_prompt", "positive_coords", "negative_coords",
 )
-_ONYX_ONLY = ("scene_prompts", "band_scale", "matte_tile", "temporal_stabilise")
+_ONYX_ONLY = ("scene_prompts", "band_scale", "temporal_stabilise")
+
+#: ViTMatte tile controls — matte_tile on ONYX and cascade+vitmatte; overlap/batch
+#: cascade+vitmatte only (ONYX tiling is internal to _onyx_pipeline).
+_VITMATTE_TILE_WIDGETS = frozenset({"matte_tile", "matte_overlap", "matte_tile_batch"})
+_CASCADE_VITMATTE_TILE = frozenset({"matte_overlap", "matte_tile_batch"})
 
 #: Inputs that take data down a wire. Never folded away: a hidden socket that
 #: is wired is a connection the user cannot see or undo.
@@ -162,7 +169,6 @@ TOGGLES: Dict[str, Any] = {
     # ONYX's own controls read nothing on the legacy cascade.
     "scene_prompts": ("pipeline", "cascade (legacy)"),
     "band_scale": ("pipeline", "cascade (legacy)"),
-    "matte_tile": ("pipeline", "cascade (legacy)"),
     "temporal_stabilise": ("pipeline", "cascade (legacy)"),
 }
 
@@ -280,6 +286,20 @@ def widgets_for(segmenter: str, matter: str) -> List[str]:
     return sorted(out)
 
 
+def tiling_visible(name: str, matter: str, values: Dict[str, Any]) -> bool:
+    """ViTMatte tile widgets: matte_tile on ONYX and cascade+vitmatte."""
+    if name not in _VITMATTE_TILE_WIDGETS:
+        return True
+    if matter != "vitmatte":
+        return False
+    pipeline = str(values.get("pipeline", "cascade (legacy)"))
+    if pipeline == "onyx":
+        return name == "matte_tile"
+    if pipeline == "cascade (legacy)":
+        return True
+    return False
+
+
 def toggle_allows(name: str, values: Dict[str, Any]) -> bool:
     """Is this widget's feature switch currently on?
 
@@ -312,13 +332,19 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
         if mat is not None:
             cand |= _widgets_of(getattr(mat, "PARAMS", ()) or ())
         cand -= set(ONYX_IGNORES)
-        return sorted(n for n in cand
-                      if n in SOCKETS or toggle_allows(n, values))
+        return sorted(
+            n for n in cand
+            if n in SOCKETS
+            or (toggle_allows(n, values) and tiling_visible(n, matter, values))
+        )
     cand = widgets_for(segmenter, matter)
     if cand == ["*"]:
         return cand
-    return sorted(n for n in cand
-                  if n in SOCKETS or toggle_allows(n, values))
+    return sorted(
+        n for n in cand
+        if n in SOCKETS
+        or (toggle_allows(n, values) and tiling_visible(n, matter, values))
+    )
 
 
 def build_spec() -> Dict[str, Any]:
@@ -359,6 +385,10 @@ def build_spec() -> Dict[str, Any]:
         "by_mode": {k: list(v) for k, v in BY_MODE.items()},
         "onyx": {"ignores": list(ONYX_IGNORES), "keeps": list(ONYX_KEEPS),
                  "only": list(_ONYX_ONLY)},
+        "vitmatte_tiling": {
+            "widgets": sorted(_VITMATTE_TILE_WIDGETS),
+            "cascade_only": sorted(_CASCADE_VITMATTE_TILE),
+        },
     }
 
 

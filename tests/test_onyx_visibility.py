@@ -20,12 +20,15 @@ if str(PACK) not in sys.path:
 vis = pytest.importorskip("nodes.mask_matting._visibility",
                           reason="mask_matting registry unavailable")
 
-ONYX_ONLY = {"scene_prompts", "band_scale", "matte_tile", "temporal_stabilise"}
+ONYX_ONLY = {"scene_prompts", "band_scale", "temporal_stabilise"}
 
 
 def test_onyx_shows_its_controls_and_drops_the_cascade_machinery():
     shown = set(vis.visible("auto_best", "vitmatte", {"pipeline": "onyx"}))
     assert ONYX_ONLY <= shown
+    assert "matte_tile" in shown
+    assert "matte_overlap" not in shown
+    assert "matte_tile_batch" not in shown
     assert "pipeline" in shown and "model" in shown and "matter" in shown
     for gone in ("segmenter", "tta_flip", "multiscale", "auto_quality",
                  "enable_luma_key", "trimap_dilate", "robust_propagation"):
@@ -38,6 +41,9 @@ def test_the_cascade_folds_onyx_controls_away():
     shown = set(vis.visible("sam3", "vitmatte", {"pipeline": "cascade (legacy)"}))
     assert not (ONYX_ONLY & shown)
     assert "pipeline" in shown
+    assert "matte_tile" in shown
+    assert "matte_overlap" in shown
+    assert "matte_tile_batch" in shown
 
 
 def test_the_spec_tells_the_front_end_about_onyx():
@@ -47,6 +53,7 @@ def test_the_spec_tells_the_front_end_about_onyx():
     assert "pipeline" in spec["always"]
     for name in ONYX_ONLY:
         assert spec["toggles"][name] == ["pipeline", "cascade (legacy)"]
+    assert "matte_tile" not in ONYX_ONLY
 
 
 def test_no_onyx_rule_names_a_widget_the_node_lacks():

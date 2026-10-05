@@ -350,3 +350,31 @@ def test_the_report_explains_an_undeclared_backend():
         assert "has not declared" in vis.describe("x", "vitmatte", 68)
     finally:
         vis._seg_classes = real
+
+
+# ── ViTMatte tiling widgets (cascade + ONYX matte_tile) ─────────────────────
+
+def _visible(seg: str, mat: str, pipeline: str):
+    cls = _maskops()
+    vals = dict(_defaults(cls), pipeline=pipeline)
+    return set(vis.visible(seg, mat, vals))
+
+
+def test_matte_tile_shows_on_onyx_and_cascade_vitmatte():
+    assert "matte_tile" in _visible("sam3.1", "vitmatte", "onyx")
+    assert "matte_tile" in _visible("sam3.1", "vitmatte", "cascade (legacy)")
+
+
+def test_matte_overlap_and_batch_show_on_cascade_vitmatte_only():
+    cascade = _visible("sam3.1", "vitmatte", "cascade (legacy)")
+    onyx = _visible("sam3.1", "vitmatte", "onyx")
+    assert "matte_overlap" in cascade
+    assert "matte_tile_batch" in cascade
+    assert "matte_overlap" not in onyx
+    assert "matte_tile_batch" not in onyx
+
+
+def test_vitmatte_tiling_widgets_hidden_for_other_matters():
+    shown = _visible("sam3.1", "rvm", "cascade (legacy)")
+    for name in ("matte_tile", "matte_overlap", "matte_tile_batch"):
+        assert name not in shown

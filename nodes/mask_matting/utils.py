@@ -403,12 +403,17 @@ def _morph_pool(x: torch.Tensor, k: int, mode: str) -> torch.Tensor:
 
     Uses ``reflect`` padding instead of zero-padding to prevent erosion
     from eating into mask regions that touch the image boundary.
+    Falls back to replicate padding when reflect would not fit (tiny dims).
     """
     if k <= 0:
         return x
     size = 2 * int(k) + 1
     pad = int(k)
-    x_padded = F.pad(x, (pad, pad, pad, pad), mode="reflect")
+    h, w = x.shape[-2], x.shape[-1]
+    pad_mode = "reflect"
+    if pad >= h or pad >= w:
+        pad_mode = "replicate"
+    x_padded = F.pad(x, (pad, pad, pad, pad), mode=pad_mode)
     if mode == "max":
         return F.max_pool2d(x_padded, kernel_size=size, stride=1, padding=0)
     return 1.0 - F.max_pool2d(
