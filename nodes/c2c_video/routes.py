@@ -34,16 +34,18 @@ _ROUTES_REGISTERED = False
 # one preview encode at a time keeps a low-end machine usable.
 _PROBE_POOL = None
 _PREVIEW_POOL = None
+_FRAMES_POOL = None
 
 
 def _pools():
-    global _PROBE_POOL, _PREVIEW_POOL
+    global _PROBE_POOL, _PREVIEW_POOL, _FRAMES_POOL
     if _PROBE_POOL is None:
         from concurrent.futures import ThreadPoolExecutor
 
         _PROBE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="c2c-video-probe")
         _PREVIEW_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="c2c-video-preview")
-    return _PROBE_POOL, _PREVIEW_POOL
+        _FRAMES_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="c2c-frames")
+    return _PROBE_POOL, _PREVIEW_POOL, _FRAMES_POOL
 _PREVIEW_LOCKS: dict[str, threading.Lock] = {}
 _PREVIEW_LOCK_GUARD = threading.Lock()
 _encode_calls = 0
@@ -449,8 +451,73 @@ def register_routes() -> bool:
                 status=500,
             )
 
+    async def _handle_frames_plan(request):
+        import asyncio
+
+        from .frames import PlanError, plan_frames
+
+        loop = asyncio.get_running_loop()
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Request body must be JSON."}, status=400)
+        try:
+            data = await loop.run_in_executor(
+                _pools()[2],
+                plan_frames,
+                str(body.get("node_type") or ""),
+                body.get("widgets") if isinstance(body.get("widgets"), dict) else {},
+            )
+            return web.json_response(data)
+        except PlanError as exc:
+            return web.json_response({"error": exc.message}, status=exc.status)
+        except Exception as exc:
+            log.exception("frames plan failed")
+            return web.json_response(
+                {"error": f"Could not plan frames: {exc}"},
+                status=500,
+            )
+
+    async def _handle_frames_thumb(request):
+        import asyncio
+
+        from .frames import PlanError, encode_thumb
+
+        loop = asyncio.get_running_loop()
+        q = dict(request.query)
+        try:
+            token = str(q.get("token") or "").strip()
+            if not token:
+                raise PlanError(400, "token is required.")
+            index = _int_param(q, "i", -1)
+            max_px = _int_param(q, "max", 384)
+            fmt = str(q.get("fmt") or "jpeg").lower()
+            data = await loop.run_in_executor(
+                _pools()[2],
+                encode_thumb,
+                token,
+                index,
+                max_px,
+                fmt,
+            )
+            ctype = "image/png" if fmt == "png" else "image/jpeg"
+            return web.Response(body=data, content_type=ctype)
+        except PlanError as exc:
+            return web.json_response({"error": exc.message}, status=exc.status)
+        except Exception as exc:
+            log.exception("frames thumb failed")
+            return web.json_response(
+                {"error": f"Could not build thumbnail: {exc}"},
+                status=500,
+            )
+
     routes.get("/c2c/video/probe")(_handle_probe)
     routes.get("/c2c/video/preview")(_handle_preview)
+    routes.post("/c2c/frames/plan")(_handle_frames_plan)
+    routes.get("/c2c/frames/thumb")(_handle_frames_thumb)
     _ROUTES_REGISTERED = True
-    log.info("[c2c_video] registered GET /c2c/video/probe and /c2c/video/preview")
+    log.info(
+        "[c2c_video] registered GET /c2c/video/probe, /c2c/video/preview, "
+        "POST /c2c/frames/plan, GET /c2c/frames/thumb",
+    )
     return True

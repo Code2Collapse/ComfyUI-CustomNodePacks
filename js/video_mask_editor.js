@@ -9,7 +9,7 @@
  */
 
 import { app } from "../../scripts/app.js";
-import { findUpstreamFramesAsync } from "./_frame_finder.js";
+import { findUpstreamFrameSource } from "./_frame_finder.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cAlert } from "./_c2c_dialog.js";
 // NOTE: do NOT import { C } from './_c2c_theme.js' here.
@@ -95,6 +95,16 @@ function uuid() {
 // Implementation lives in _frame_finder.js and handles video sources,
 // sibling preview scan, and single-frame fallback.
 
+function _vmeSettingInt(id, fallback, min, max) {
+    try {
+        const v = Number(app.ui?.settings?.getSettingValue?.(id, fallback));
+        if (!Number.isFinite(v)) return fallback;
+        return Math.max(min, Math.min(max, Math.round(v)));
+    } catch {
+        return fallback;
+    }
+}
+
 function loadImage(url) {
     return new Promise((resolve, reject) => {
         const cached = loadImage.cache?.get(url);
@@ -111,15 +121,75 @@ function loadImage(url) {
     });
 }
 
+/** Bounded LRU of decoded frame images; evicts farthest from current frame. */
+class FrameImageCache {
+    constructor(source, limit) {
+        this.source = source;
+        this.limit = Math.max(1, limit | 0);
+        this.cache = new Map();
+        this.pending = new Map();
+        this.curFrame = 0;
+    }
+
+    _evictIfNeeded() {
+        while (this.cache.size > this.limit) {
+            let worst = null;
+            let worstDist = -1;
+            for (const key of this.cache.keys()) {
+                const dist = Math.abs(key - this.curFrame);
+                if (dist > worstDist) {
+                    worstDist = dist;
+                    worst = key;
+                }
+            }
+            if (worst == null) break;
+            this.cache.delete(worst);
+        }
+    }
+
+    async ensure(idx) {
+        idx = idx | 0;
+        this.curFrame = idx;
+        if (this.cache.has(idx)) return this.cache.get(idx);
+        if (this.pending.has(idx)) return this.pending.get(idx);
+        const url = this.source.url(idx);
+        const p = loadImage(url).then((img) => {
+            this.cache.set(idx, img);
+            this.pending.delete(idx);
+            this._evictIfNeeded();
+            return img;
+        }).catch((err) => {
+            this.pending.delete(idx);
+            throw err;
+        });
+        this.pending.set(idx, p);
+        return p;
+    }
+
+    get(idx) {
+        return this.cache.get(idx | 0) || null;
+    }
+
+    prefetchAround(idx) {
+        for (const d of [-2, -1, 1, 2]) {
+            const j = (idx | 0) + d;
+            if (j < 0 || j >= this.source.count) continue;
+            if (this.cache.has(j) || this.pending.has(j)) continue;
+            this.ensure(j).catch(() => {});
+        }
+    }
+}
+
 
 // ─── Editor session class ───────────────────────────────────────────
 class VMEEditor {
     constructor(node) {
         this.node = node;
         this.sessionId = this._getOrCreateSession();
-        this.frameUrls = [];
-        this.frameImgs = [];       // loaded HTMLImageElements
+        this.frameSource = null;
+        this.frameCache = null;
         this.frameCount = 0;
+        this.frameExact = true;
         this.frameW = 0;
         this.frameH = 0;
         this.curFrame = 0;
@@ -175,26 +245,34 @@ class VMEEditor {
 
     // ── frame init / switch ──────────────────────────────────────────
     async loadFrames() {
-        const urls = await findUpstreamFramesAsync(this.node, { maxVideoFrames: 32 });
-        if (!urls.length) {
+        const source = await findUpstreamFrameSource(this.node);
+        if (!source.count) {
             c2cAlert("[VideoMaskEditor]\n\nNo frames found upstream. " +
                   "Queue Prompt once so the upstream image source has " +
                   "previewable frames, then re-open the editor.");
             return false;
         }
-        this.frameUrls = urls;
-        this.frameCount = urls.length;
-        this.frameImgs = new Array(urls.length).fill(null);
-        // Load first frame to learn dimensions.
-        const im0 = await loadImage(urls[0]);
-        this.frameW = im0.naturalWidth;
-        this.frameH = im0.naturalHeight;
-        this.frameImgs[0] = im0;
-        // Lazy-load others in background.
-        urls.slice(1).forEach((u, i) => {
-            loadImage(u).then(img => { this.frameImgs[i + 1] = img; this.draw(); })
-                        .catch(() => {});
-        });
+        this.frameSource = source;
+        this.frameCount = source.count;
+        this.frameExact = !source.sampled && source.kind !== "single";
+        const cacheLimit = _vmeSettingInt("c2c.vme.cacheFrames", 64, 8, 2000);
+        this.frameCache = new FrameImageCache(source, cacheLimit);
+        if (source.width > 0 && source.height > 0) {
+            this.frameW = source.width;
+            this.frameH = source.height;
+        }
+        const im0 = await this.frameCache.ensure(0);
+        if (!this.frameW || !this.frameH) {
+            this.frameW = im0.naturalWidth;
+            this.frameH = im0.naturalHeight;
+        }
+        this.frameCache.prefetchAround(0);
+        if (this.dom.banner) {
+            const show = source.sampled || source.kind === "single";
+            this.dom.banner.hidden = !show;
+            if (show) this.dom.banner.textContent = source.note ||
+                "Frame preview may not match the batch this node receives.";
+        }
         // Init session on server.
         try {
             await fetch(`/mec/video_mask_editor/init?session=${encodeURIComponent(this.sessionId)}`, {
@@ -257,10 +335,6 @@ class VMEEditor {
         idx = Math.max(0, Math.min(this.frameCount - 1, idx | 0));
         if (!fresh) this._commitCurrent();
         this.curFrame = idx;
-        // Working buffer: start from pinned keyframe at this frame
-        // if any, else from an empty mask. We do NOT auto-tween in the
-        // editor — user is editing keyframes explicitly. (Tweening
-        // happens server-side at execute time.)
         const kf = this.keyframes.get(idx);
         if (kf) {
             this.curMask = new ImageData(
@@ -269,7 +343,14 @@ class VMEEditor {
             this.curMask = this._emptyMask();
         }
         this.curDirty = false;
-        this.draw();
+        if (this.frameCache) {
+            this.frameCache.ensure(idx).then(() => {
+                this.frameCache.prefetchAround(idx);
+                this.draw();
+            }).catch(() => this.draw());
+        } else {
+            this.draw();
+        }
     }
 
     /** If user painted on this frame, store as a keyframe. */
@@ -644,7 +725,7 @@ class VMEEditor {
         ctx.scale(this.zoom, this.zoom);
 
         // Underlay: current video frame.
-        const frame = this.frameImgs[this.curFrame];
+        const frame = this.frameCache?.get(this.curFrame);
         if (frame?.complete) {
             ctx.imageSmoothingEnabled = true;
             try { ctx.drawImage(frame, 0, 0, this.frameW, this.frameH); }
@@ -790,8 +871,9 @@ class VMEEditor {
 
     _updateStatus() {
         const pinned = this.keyframes.has(this.curFrame) || this.curDirty;
+        const exactTag = this.frameExact ? "(exact)" : "(sampled)";
         this.dom.status.textContent =
-            `${this.frameW}×${this.frameH} · frame ${this.curFrame + 1}/${this.frameCount} · ` +
+            `${this.frameW}×${this.frameH} · frame ${this.curFrame + 1}/${this.frameCount} ${exactTag} · ` +
             `${pinned ? "📌 keyframe" : "blank"} · ${this.keyframes.size} pinned` +
             (this.curDirty ? " · ●" : "");
     }
@@ -861,13 +943,13 @@ class VMEEditor {
         ctx.fillStyle = C.border;
         ctx.fillRect(8, H / 2 - 2, W - 16, 4);
         const n = Math.max(1, this.frameCount);
-        // Frame ticks.
-        if (n <= 200) {
-            ctx.fillStyle = C.surface1;
-            for (let i = 0; i < n; i++) {
-                const x = 8 + (W - 16) * (i / Math.max(1, n - 1));
-                ctx.fillRect(x - 0.5, H / 2 - 4, 1, 8);
-            }
+        const trackW = W - 16;
+        // Frame ticks — decimate when closer than 3px apart.
+        const step = n <= 1 ? 1 : Math.max(1, Math.floor((n * 3) / trackW));
+        ctx.fillStyle = C.surface1;
+        for (let i = 0; i < n; i += step) {
+            const x = 8 + trackW * (i / Math.max(1, n - 1));
+            ctx.fillRect(x - 0.5, H / 2 - 4, 1, 8);
         }
         // Keyframe pins.
         for (const f of this.keyframes.keys()) {
@@ -1178,6 +1260,14 @@ function openModal(node) {
         bg: C.panel, hover: "var(--c2c-violetBgAlt)", fg: C.danger });
     top.appendChild(btnCancel);
 
+    const banner = document.createElement("div");
+    banner.hidden = true;
+    banner.style.cssText = `
+        flex:0 0 auto;padding:8px 14px;font-size:12px;line-height:1.4;
+        background:${C.warn}22;color:${C.warn};border-bottom:1px solid ${C.warn}55;
+    `;
+    overlay.appendChild(banner);
+
     // ── Body: canvas + sidebar ─────────────────────────────────────
     const body = document.createElement("div");
     body.style.cssText = `display:flex;flex:1;min-height:0;`;
@@ -1244,7 +1334,7 @@ function openModal(node) {
     sidebar.appendChild(sbHelp);
 
     // ── Hook up editor DOM refs ────────────────────────────────────
-    ed.dom = { viewport, canvas, status, scrub: scrubCanvas, kfList };
+    ed.dom = { viewport, canvas, status, scrub: scrubCanvas, kfList, banner };
 
     // ── Pointer handling ───────────────────────────────────────────
     let panning = false; let panStart = null;
@@ -1489,6 +1579,24 @@ function openModal(node) {
 // ─── Extension registration ─────────────────────────────────────────
 app.registerExtension({
     name: "MEC.VideoMaskEditor",
+    settings: [
+        {
+            id: "c2c.vme.sampledFrames",
+            name: "Video Mask Editor: sampled video frame count",
+            type: "number",
+            defaultValue: 32,
+            attrs: { min: 2, max: 2000, step: 1 },
+            tooltip: "When no exact frame plan is available, sample this many evenly spaced frames from the video preview element.",
+        },
+        {
+            id: "c2c.vme.cacheFrames",
+            name: "Video Mask Editor: decoded frame cache size",
+            type: "number",
+            defaultValue: 64,
+            attrs: { min: 8, max: 2000, step: 1 },
+            tooltip: "Maximum decoded frame images kept in memory while the editor is open.",
+        },
+    ],
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         const origCreated = nodeType.prototype.onNodeCreated;
