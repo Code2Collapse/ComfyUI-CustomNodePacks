@@ -32,7 +32,9 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 | **P** | Polygon: click points, Enter or double-click closes, Backspace removes the last point |
 | **L** | Lasso: freehand, closes on release |
 | **G** | Bucket fill on the image colours (tolerance in the toolbar) |
-| **Alt** + any tool | Subtract instead of add |
+| **C** | Colour range: click samples the plate colour; Shift+click adds a sample. Toolbar: space (RGB / HSV / LAB), tolerance (0–255), softness (0–128), contiguous. Live preview over the mask; Enter or Apply commits through the selection mode; Esc clears the preview |
+| **Add / Subtract / Intersect** | Toolbar modes for rectangle, ellipse, polygon, lasso, bucket and colour range. Alt held during a stroke swaps Add and Subtract for that stroke |
+| **Alt** + brush | Subtract instead of add (brush and eraser are unchanged by the mode buttons) |
 | **Ctrl+Z / Ctrl+Y** | Undo / redo (per frame, capped at 128 MB) |
 | **[ / ]** | Brush size |
 | **V** | Overlay / matte / image view |
@@ -40,7 +42,7 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 | Wheel | Zoom at the pointer |
 | **Space** + drag, or middle drag | Pan |
 | **, / .** or the frame strip | Previous / next frame (batches) |
-| **Enter / Esc** | Save and close / cancel (asks before discarding edits) |
+| **Enter / Esc** | Save and close / cancel (asks before discarding edits). Enter applies a colour preview or closes a polygon first; Esc clears an in-progress shape or colour preview before closing |
 | **?** | Shortcut list |
 
 The editor is a modal dialog: while it is open, ComfyUI's own shortcuts and graph undo do not react to
@@ -80,4 +82,4 @@ All result-stage parameters are applied in Python every run and never baked into
 
 - Images over 16 MP are edited at reduced resolution (a banner says so) and the mask is upscaled on save.
 - Undo history is per frame and resets when you switch frames.
-- Colour range, SAM clicks and the edge-refine brush arrive in the next slice (ledger L7.38).
+- SAM clicks and the edge-refine brush arrive in a later slice (ledger L7.38).

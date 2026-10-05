@@ -198,3 +198,42 @@ export function floodFill(mask, imageData, w, h, sx, sy, tolerance, value) {
 export function floodFillScratch(scratch, imageData, w, h, sx, sy, tolerance, value) {
     return floodFill(scratch, imageData, w, h, sx, sy, tolerance, value);
 }
+
+/**
+ * Compose a scratch selection (0–255, may be soft) into the live mask.
+ * mode "add":     mask = max(mask, sel) inside bounds
+ * mode "subtract": mask = min(mask, 255 - sel) inside bounds
+ * mode "intersect": mask = min(mask, sel) over the WHOLE frame (outside sel → 0)
+ * Returns undo bounds {x0,y0,x1,y1}; intersect always returns the full frame.
+ */
+export function composeSelection(mask, sel, w, h, mode, bounds) {
+    if (mode === "intersect") {
+        const n = w * h;
+        for (let i = 0; i < n; i++) {
+            mask[i] = Math.min(mask[i], sel[i]);
+        }
+        return { x0: 0, y0: 0, x1: w - 1, y1: h - 1 };
+    }
+    const x0 = bounds.x0 | 0, y0 = bounds.y0 | 0;
+    const x1 = bounds.x1 | 0, y1 = bounds.y1 | 0;
+    if (mode === "add") {
+        for (let yy = y0; yy <= y1; yy++) {
+            const row = yy * w;
+            for (let xx = x0; xx <= x1; xx++) {
+                const i = row + xx;
+                const s = sel[i];
+                if (s > mask[i]) mask[i] = s;
+            }
+        }
+    } else {
+        for (let yy = y0; yy <= y1; yy++) {
+            const row = yy * w;
+            for (let xx = x0; xx <= x1; xx++) {
+                const i = row + xx;
+                const v = 255 - sel[i];
+                if (v < mask[i]) mask[i] = v;
+            }
+        }
+    }
+    return { x0, y0, x1, y1 };
+}

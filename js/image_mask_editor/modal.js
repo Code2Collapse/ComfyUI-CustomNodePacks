@@ -6,15 +6,17 @@ import { IMEEditor } from "./editor.js";
 import { FrameStrip } from "./strip.js";
 
 const TOOL_LABELS = {
-    brush: "B", eraser: "E", rect: "R", ellipse: "O", polygon: "P", lasso: "L", bucket: "G",
+    brush: "B", eraser: "E", rect: "R", ellipse: "O", polygon: "P", lasso: "L", bucket: "G", colour: "C",
 };
 const VIEW_LABELS = ["Overlay", "Matte", "Image"];
 // Hotkey letter -> tool, derived from the labels so the toolbar and the keyboard cannot disagree.
 const KEY_TO_TOOL = Object.fromEntries(Object.entries(TOOL_LABELS).map(([tool, key]) => [key.toLowerCase(), tool]));
 
 const HOTKEY_TEXT =
-    "B brush · E eraser · R rect · O ellipse · P polygon · L lasso · G bucket\n" +
-    "Alt subtract · [ ] size · , . prev/next frame · F fit · 1 100%\n" +
+    "B brush · E eraser · R rect · O ellipse · P polygon · L lasso · G bucket · C colour\n" +
+    "Add / Subtract / Intersect modes (toolbar); Alt swaps Add↔Subtract for area tools\n" +
+    "Colour: click sample · Shift+click add sample · Enter/Apply commit · Esc clear preview\n" +
+    "Alt+brush subtract · [ ] size · , . prev/next frame · F fit · 1 100%\n" +
     "V view mode · Ctrl+Z undo · Ctrl+Y redo · Enter save · Esc cancel shape / close";
 
 function _formControlFocused(e) {
@@ -22,7 +24,8 @@ function _formControlFocused(e) {
     if (!t) return false;
     const tag = t.tagName;
     if (tag === "INPUT") {
-        if ((t.type || "").toLowerCase() === "range") return false;
+        const type = (t.type || "").toLowerCase();
+        if (type === "range" || type === "checkbox") return false;   // not text entry: hotkeys keep working
         return true;
     }
     return tag === "SELECT" || tag === "TEXTAREA" || t.isContentEditable;
@@ -119,22 +122,73 @@ export function openModal(node, editorId, onSaved) {
     overlay.append(banner, toolbar, canvas, stripHost, frameBar);
     document.body.appendChild(overlay);
 
-    const toolList = ["brush", "eraser", "rect", "ellipse", "polygon", "lasso", "bucket"];
+    const toolList = ["brush", "eraser", "rect", "ellipse", "polygon", "lasso", "bucket", "colour"];
     const toolBtns = {};
+    const btnStyle = `padding:4px 8px;border:1px solid ${C.border};background:${C.panel};color:${C.text};cursor:pointer;border-radius:4px;`;
     for (const t of toolList) {
         const b = document.createElement("button");
         b.textContent = `${TOOL_LABELS[t] || t} ${t}`;
-        b.style.cssText = `padding:4px 8px;border:1px solid ${C.border};background:${C.panel};color:${C.text};cursor:pointer;border-radius:4px;`;
-        b.onclick = () => { ed.setTool(t); highlightTool(); };
+        b.style.cssText = btnStyle;
+        b.onclick = () => { ed.setTool(t); highlightTool(); syncToolbarVisibility(); };
         toolBtns[t] = b;
         toolbar.appendChild(b);
     }
 
+    const modeGroup = document.createElement("div");
+    modeGroup.style.cssText = "display:inline-flex;gap:4px;align-items:center;";
+    const modeBtns = {};
+    for (const [mode, label] of [["add", "Add"], ["subtract", "Subtract"], ["intersect", "Intersect"]]) {
+        const b = document.createElement("button");
+        b.id = `ime-mode-${mode}`;
+        b.textContent = label;
+        b.style.cssText = btnStyle;
+        b.onclick = () => { ed.setSelectionMode(mode); highlightMode(); };
+        modeBtns[mode] = b;
+        modeGroup.appendChild(b);
+    }
+    toolbar.appendChild(modeGroup);
+
+    const brushOpts = document.createElement("div");
+    brushOpts.style.cssText = "display:inline-flex;gap:6px;align-items:center;";
     const sizeCtl = _mkRange("ime-brush-size", "Size", 1, 512, 1, ed.brushSize, (v) => `${v | 0}px`);
     const hardCtl = _mkRange("ime-brush-hardness", "Hard", 0, 1, 0.01, ed.brushHardness, (v) => Number(v).toFixed(2));
     const opCtl = _mkRange("ime-brush-opacity", "Opac", 0, 1, 0.01, ed.brushOpacity, (v) => Number(v).toFixed(2));
+    brushOpts.append(sizeCtl.wrap, hardCtl.wrap, opCtl.wrap);
+
+    const bucketOpts = document.createElement("div");
+    bucketOpts.style.cssText = "display:inline-flex;gap:6px;align-items:center;";
     const tolCtl = _mkRange("ime-bucket-tolerance", "Tol", 0, 255, 1, ed.bucketTolerance, (v) => String(v | 0));
-    for (const c of [sizeCtl, hardCtl, opCtl, tolCtl]) toolbar.appendChild(c.wrap);
+    bucketOpts.appendChild(tolCtl.wrap);
+
+    const colourOpts = document.createElement("div");
+    colourOpts.style.cssText = `display:inline-flex;gap:6px;align-items:center;color:${C.sub};font-size:12px;`;
+    const spaceLbl = document.createElement("label");
+    spaceLbl.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    const spaceCap = document.createElement("span");
+    spaceCap.textContent = "Space";
+    const spaceSel = document.createElement("select");
+    spaceSel.id = "ime-colour-space";
+    for (const s of ["rgb", "hsv", "lab"]) {
+        const o = document.createElement("option");
+        o.value = s; o.textContent = s.toUpperCase();
+        spaceSel.appendChild(o);
+    }
+    spaceLbl.append(spaceCap, spaceSel);
+    const tolColCtl = _mkRange("ime-colour-tol", "Tol", 0, 255, 1, ed.colourTolerance, (v) => String(v | 0));
+    const softCtl = _mkRange("ime-colour-soft", "Soft", 0, 128, 1, ed.colourSoftness, (v) => String(v | 0));
+    const contigLbl = document.createElement("label");
+    contigLbl.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    const contigInp = document.createElement("input");
+    contigInp.type = "checkbox";
+    contigInp.id = "ime-colour-contig";
+    contigLbl.append(contigInp, document.createTextNode("Contig"));
+    const btnColourApply = document.createElement("button");
+    btnColourApply.id = "ime-colour-apply";
+    btnColourApply.textContent = "Apply";
+    btnColourApply.style.cssText = btnStyle;
+    colourOpts.append(spaceLbl, tolColCtl.wrap, softCtl.wrap, contigLbl, btnColourApply);
+
+    toolbar.append(brushOpts, bucketOpts, colourOpts);
 
     const btnView = document.createElement("button");
     btnView.id = "ime-view-mode";
@@ -170,6 +224,40 @@ export function openModal(node, editorId, onSaved) {
         ed.bucketTolerance = Number(tolCtl.inp.value) | 0;
         tolCtl.valEl.textContent = tolCtl.fmt(ed.bucketTolerance);
     });
+    spaceSel.addEventListener("change", () => {
+        ed.colourSpace = spaceSel.value;
+        ed._rebuildColourPreview();
+    });
+    tolColCtl.inp.addEventListener("input", () => {
+        ed.colourTolerance = Number(tolColCtl.inp.value) | 0;
+        tolColCtl.valEl.textContent = tolColCtl.fmt(ed.colourTolerance);
+        ed._rebuildColourPreview();
+    });
+    softCtl.inp.addEventListener("input", () => {
+        ed.colourSoftness = Number(softCtl.inp.value) | 0;
+        softCtl.valEl.textContent = softCtl.fmt(ed.colourSoftness);
+        ed._rebuildColourPreview();
+    });
+    contigInp.addEventListener("change", () => {
+        ed.colourContiguous = contigInp.checked;
+        ed._rebuildColourPreview();
+    });
+    btnColourApply.onclick = () => { ed.applyColourPreview(); canvas.focus(); };
+
+    function highlightMode() {
+        for (const [k, b] of Object.entries(modeBtns)) {
+            b.style.outline = k === ed.selectionMode ? `2px solid ${C.accent}` : "";
+        }
+    }
+
+    function syncToolbarVisibility() {
+        const t = ed.tool;
+        // style.display, not [hidden]: these groups carry an inline display, which beats the [hidden] rule
+        const show = (el, on) => { el.style.display = on ? "inline-flex" : "none"; };
+        show(brushOpts, t === "brush" || t === "eraser");
+        show(bucketOpts, t === "bucket");
+        show(colourOpts, t === "colour");
+    }
 
     function relabelView() {
         btnView.textContent = VIEW_LABELS[ed.viewMode] || "Overlay";
@@ -187,6 +275,7 @@ export function openModal(node, editorId, onSaved) {
         for (const [k, b] of Object.entries(toolBtns)) {
             b.style.outline = k === ed.tool ? `2px solid ${C.accent}` : "";
         }
+        syncToolbarVisibility();
     }
 
     function updateStatus() {
@@ -276,6 +365,7 @@ export function openModal(node, editorId, onSaved) {
     canvas.addEventListener("dblclick", () => {
         if (ed.tool === "polygon") ed.closePolygon();
     });
+    ed.onToolChange = syncToolbarVisibility;
 
     btnPrev.onclick = () => ed._switchFrame(ed.curFrame - 1).then(() => updateStatus());
     btnNext.onclick = () => ed._switchFrame(ed.curFrame + 1).then(() => updateStatus());
@@ -290,12 +380,19 @@ export function openModal(node, editorId, onSaved) {
         if ((e.ctrlKey && e.shiftKey && e.key === "Z") || (e.ctrlKey && e.key === "y")) {
             e.preventDefault(); ed.redoOp(); return;
         }
-        if (e.key === "Enter" && ed.tool === "polygon") { e.preventDefault(); ed.closePolygon(); return; }
+        if (e.key === "Enter" && ed.colourPreviewActive()) {
+            e.preventDefault(); ed.applyColourPreview(); return;
+        }
+        if (e.key === "Enter" && ed.tool === "polygon") { e.preventDefault(); ed.closePolygon(e); return; }
         if (e.key === "Enter") { e.preventDefault(); tryClose(true); return; }
         if (e.key === "Escape") {
             e.preventDefault();
-            if (ed.shapeInProgress()) {
+            if (ed.shapeInProgress() && !ed.colourPreviewActive()) {
                 ed.cancelShapeInProgress();
+                return;
+            }
+            if (ed.colourPreviewActive()) {
+                ed.clearColourPreview();
                 return;
             }
             tryClose(false);
@@ -316,7 +413,7 @@ export function openModal(node, editorId, onSaved) {
         if (e.key === "Backspace" && ed.tool === "polygon") { ed.popPolyPoint(); return; }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const t = KEY_TO_TOOL[e.key.toLowerCase()];
-        if (t) { e.preventDefault(); ed.setTool(t); highlightTool(); }
+        if (t) { e.preventDefault(); ed.setTool(t); highlightTool(); syncToolbarVisibility(); }
     }
     function onKeyUp(e) {
         if (e.key === " ") ed.spacePan = false;
@@ -331,11 +428,21 @@ export function openModal(node, editorId, onSaved) {
     }
     node.onRemoved = onRemovedWrapper;
 
-    const canvasRo = new ResizeObserver(() => ed.requestDraw());
+    // The toolbar re-wraps when the tool options change and the frame strip/banner come and go, which moves
+    // the canvas's top edge; shift the pan by the same amount so the image stays still on screen.
+    // ed.viewTop is the canvas top the current pan was set for (fit and 100% re-anchor it).
+    const canvasRo = new ResizeObserver(() => {
+        const top = canvas.getBoundingClientRect().top;
+        if (ed.viewTop != null && top !== ed.viewTop) ed.panY += ed.viewTop - top;
+        ed.viewTop = top;
+        ed.requestDraw();
+    });
     canvasRo.observe(canvas);
 
     ed.onChange = updateStatus;
     highlightTool();
+    highlightMode();
+    syncToolbarVisibility();
     ed.loadFrames().then((res) => {
         if (!node.graph) { closeModal(); return; }
         if (!res.ok) {
