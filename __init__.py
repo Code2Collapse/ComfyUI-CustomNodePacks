@@ -880,6 +880,22 @@ try:
 except Exception:
     pass  # Server not available (e.g. during import-only testing)
 
+# ── Autobatch: opt-in frame chunking (config reloads each prompt) ────
+try:
+    from .nodes._autobatch import register_prompt_hook as _c2c_autobatch_register
+    _c2c_autobatch_register()
+except Exception as _ab_exc:  # pragma: no cover
+    try:
+        _c2c_rec_fail(
+            "autobatch", _ab_exc,
+            hint="Automatic frame batching hook failed to register. "
+                 "Set C2C_AUTOBATCH=0 to disable chunking.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _ab_log
+        _ab_log.getLogger("C2C").warning("[C2C] autobatch hook failed: %s", _ab_exc)
+
 # ── Register C2C Vault routes ────────────────────────────────────────
 # The password only ever travels over these routes. It is never a widget and
 # never enters the queued prompt, so it cannot be serialised into the workflow
