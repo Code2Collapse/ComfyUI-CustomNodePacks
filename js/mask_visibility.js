@@ -21,6 +21,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { setWidgetVisible, vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 const NODE_ID = "MaskOpsMEC";
 const ROUTE = "/c2c/mask/visibility";
@@ -58,6 +59,17 @@ function toggleAllows(node, name, spec) {
     }
     const v = valueOf(node, rule);
     return !(v === false || v === 0 || v === undefined);
+}
+
+/** ViTMatte's tile controls (spec.vitmatte_tiling, _visibility.py tiling_visible): only for the vitmatte
+ *  matter; on ONYX only matte_tile (its tiling is internal), on the cascade all three. */
+function tilingAllows(node, name, spec) {
+    const t = spec.vitmatte_tiling;
+    if (!t || !(t.widgets || []).includes(name)) return true;
+    if (stripBadge(String(valueOf(node, "matter") ?? "")) !== "vitmatte") return false;
+    const pipeline = String(valueOf(node, "pipeline") ?? "cascade (legacy)");
+    if (pipeline === "onyx") return !(t.cascade_only || []).includes(name);
+    return pipeline === "cascade (legacy)";
 }
 
 /** Which widgets this segmenter/matter pair actually reads. */
@@ -98,9 +110,11 @@ function relevant(node, spec) {
     return keep;
 }
 
-/** Backend names can carry a status badge like "sam3 (missing deps)". */
+/** Backend names can carry a status badge. The node builds it as "sam3  [missing-deps]" (two spaces + bracket,
+ *  node.py _segmenter_choices / _strip_badge); the older " (missing deps)" form is still accepted. Splitting
+ *  on " (" alone left the bracket form unmatched, so every missing-deps backend fell back to showing all. */
 function stripBadge(v) {
-    return String(v).split(" (")[0].trim();
+    return String(v).split("  [")[0].split(" (")[0].trim();
 }
 
 function apply(node) {
@@ -119,26 +133,21 @@ function apply(node) {
         const isSocket = sockets.has(w.name);
         const wanted = isSocket
             || keep === null                       // undeclared: show all
-            || (keep.has(w.name) && toggleAllows(node, w.name, spec));
+            || (keep.has(w.name) && toggleAllows(node, w.name, spec)
+                && tilingAllows(node, w.name, spec));
 
-        if (w.__c2cOrigType === undefined) {
-            w.__c2cOrigType = w.type;
-            w.__c2cOrigCompute = w.computeSize;
-        }
-        if (wanted) {
-            w.type = w.__c2cOrigType;
-            w.computeSize = w.__c2cOrigCompute;
-        } else {
-            // LiteGraph has no `hidden` flag for widgets; the convention is a
-            // type it does not draw, plus a zero height so the node shrinks
-            // instead of leaving a gap where the widget used to be.
-            w.type = "c2c-hidden";
-            w.computeSize = () => [0, -4];
-            hidden += 1;
-        }
+        // The shared helper folds BOTH layers: the LiteGraph row (type + zero height) and, for DOM-backed
+        // widgets such as the scene_prompts textarea, the element and its .dom-widget wrapper - a bare type
+        // swap left that textarea on screen on top of the next row. It also sets widget.hidden /
+        // options.hidden, which is what Nodes 2.0 reads.
+        setWidgetVisible(w, wanted);
+        if (!wanted) hidden += 1;
     }
 
     node.__c2cHiddenCount = hidden;
+    // Nodes 2.0 rebuilds its rows from options.hidden; mask_matting.js syncs after ITS refresh, which can
+    // run before this fold, leaving empty rows where folded widgets were (ledger L9.19). Sync here too.
+    vueSyncNodeWidgets(node);
     const size = node.computeSize();
     // Only ever GROW to the computed height: shrinking a node the user has
     // deliberately made taller is its own annoyance.

@@ -110,6 +110,13 @@ ONYX_KEEPS = (
 )
 _ONYX_ONLY = ("scene_prompts", "band_scale", "temporal_stabilise")
 
+#: The simple trimap pair belongs to the MATTER that builds a trimap: ViTMatte names both in its PARAMS, RVM
+#: and the salient matters name neither. Listing them in FEATURE (every pair) put them on screen for RVM,
+#: visible and ignored - the exact failure this module exists to stop (tests/test_mask_visibility.py,
+#: "trimap widget only appears for a matter that uses one"). They reach the candidate set through the
+#: matter's PARAMS instead; the served spec omits them from "feature" so the front-end agrees.
+TRIMAP_WIDGETS = frozenset({"trimap_dilate", "trimap_erode"})
+
 #: ViTMatte tile controls — matte_tile on ONYX and cascade+vitmatte; overlap/batch
 #: cascade+vitmatte only (ONYX tiling is internal to _onyx_pipeline).
 _VITMATTE_TILE_WIDGETS = frozenset({"matte_tile", "matte_overlap", "matte_tile_batch"})
@@ -262,7 +269,7 @@ def widgets_for(segmenter: str, matter: str) -> List[str]:
     An empty tuple is a real declaration - "reads nothing extra" - and shows
     the core only. Collapsing the two would make silence look like a claim.
     """
-    out = set(ALWAYS) | set(SOCKETS) | set(FEATURE)
+    out = set(ALWAYS) | set(SOCKETS) | (set(FEATURE) - TRIMAP_WIDGETS)
 
     seg = _seg_classes().get(segmenter)
     if seg is None:
@@ -358,7 +365,7 @@ def build_spec() -> Dict[str, Any]:
     mats = _mat_classes()
     return {
         "always": list(ALWAYS),
-        "feature": list(FEATURE),
+        "feature": [f for f in FEATURE if f not in TRIMAP_WIDGETS],
         "sockets": list(SOCKETS),
         "toggles": {k: (list(v) if isinstance(v, tuple) else v)
                     for k, v in TOGGLES.items()},

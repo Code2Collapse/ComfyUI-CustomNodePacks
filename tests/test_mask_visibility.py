@@ -84,7 +84,12 @@ def test_switching_a_feature_on_reveals_its_controls():
     candidate set, so its switch revealed nothing. A toggle rule RESTRICTS
     when a widget shows; it never grants."""
     cls = _maskops()
-    off = _defaults(cls)
+    # These are cascade features: the default pipeline is ONYX (b940a48), which folds them by design
+    # (see test_onyx_folds_cascade_features_even_when_switched_on). Pin the pipeline they belong to.
+    # Every switch explicitly OFF: defaults move (enable_diagnose now opens ON), the property does not.
+    off = dict(_defaults(cls), pipeline="cascade (legacy)", enable_luma_key=False,
+               enable_advanced_trimap=False, enable_diagnose=False, robust_propagation=False,
+               despill="off", edge_mode="soft", post_refine="none", lightwrap_strength=0.0)
     on = dict(off, enable_luma_key=True, enable_advanced_trimap=True,
               enable_diagnose=True, robust_propagation=True,
               despill="green", edge_mode="hard+feather",
@@ -98,6 +103,17 @@ def test_switching_a_feature_on_reveals_its_controls():
         assert name in after, (
             f"{name} stays hidden with its switch ON — its toggle rule can "
             "never fire because nothing puts it in the candidate set")
+
+
+def test_onyx_folds_cascade_features_even_when_switched_on():
+    """ONYX is one fixed pipeline: the cascade's luma pre-key, advanced trimap and re-anchoring read nothing
+    there, so switching them on must not bring their controls back (ONYX_IGNORES)."""
+    cls = _maskops()
+    on = dict(_defaults(cls), pipeline="onyx", enable_luma_key=True,
+              enable_advanced_trimap=True, robust_propagation=True)
+    shown_onyx = set(vis.visible("sam3.1", "vitmatte", on))
+    for name in ("luma_low", "trimap_smooth", "robust_blend_alpha", "trimap_dilate"):
+        assert name not in shown_onyx, f"{name} shown on ONYX, which never reads it"
 
 
 def test_every_toggled_widget_is_reachable():
