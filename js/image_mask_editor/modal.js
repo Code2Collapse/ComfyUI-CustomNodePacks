@@ -256,6 +256,7 @@ export function openModal(node, editorId, onSaved) {
         const p = localXY(e);
         ed.pointerMove(p.x, p.y, e);
     });
+    canvas.addEventListener("pointerleave", () => { ed.hover = null; ed.requestDraw(); });
     canvas.addEventListener("pointerup", (e) => {
         endPointer(e);
         try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }

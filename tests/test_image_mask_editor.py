@@ -69,6 +69,18 @@ def test_store_round_trip(mask_root):
     assert store.digest(eid) != ""
 
 
+def test_resave_rewrites_one_file_per_frame(mask_root):
+    """Saving a frame again replaces its PNG: the store never grows per save (ComfyUI's editor adds four
+    clipspace files per save)."""
+    eid = _eid()
+    for v in (10, 200, 77):
+        store.put_frame(eid, 0, _png_bytes(np.full((8, 8), v, dtype=np.uint8)))
+    names = sorted(p.name for p in (mask_root / "c2c_masks" / eid).iterdir())
+    assert [n for n in names if n.endswith(".png")] == ["00000.png"]
+    assert not [n for n in names if n.endswith(".tmp")]
+    assert int(store.get_frame(eid, 0).mean()) == 77
+
+
 def test_digest_changes_on_edit_not_otherwise(mask_root):
     eid = _eid()
     d0 = store.digest(eid)

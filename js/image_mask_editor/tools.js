@@ -1,19 +1,24 @@
-/** Raster tools operating on Uint8 mask buffers. */
+/**
+ * Raster tools operating on Uint8 mask buffers.
+ * Image coordinates are continuous (pixel k spans [k, k+1)); every kernel samples at pixel CENTRES
+ * (k + 0.5), so a shape covers the pixels whose centre it contains and stays centred where it was drawn.
+ */
 
 export function stampBrushCoverage(
     mask, strokeStart, coverage, w, h, cx, cy, radius, hardness, opacity, erase,
 ) {
     const r2 = radius * radius;
-    const featherStart = radius * (1 - hardness);
+    // hardness 1 = hard disc, 0 = linear falloff from the centre (was inverted: 1 painted the softest cone)
+    const featherStart = radius * Math.max(0, Math.min(1, hardness));
     const x0 = Math.max(0, Math.floor(cx - radius));
     const y0 = Math.max(0, Math.floor(cy - radius));
     const x1 = Math.min(w - 1, Math.ceil(cx + radius));
     const y1 = Math.min(h - 1, Math.ceil(cy + radius));
     const op = Math.max(0, Math.min(1, opacity));
     for (let yy = y0; yy <= y1; yy++) {
-        const dy = yy - cy;
+        const dy = yy + 0.5 - cy;
         for (let xx = x0; xx <= x1; xx++) {
-            const dx = xx - cx;
+            const dx = xx + 0.5 - cx;
             const d2 = dx * dx + dy * dy;
             if (d2 > r2) continue;
             const d = Math.sqrt(d2);
@@ -61,15 +66,15 @@ export function fillRect(mask, w, h, x0, y0, x1, y1, value, square) {
         const s = Math.min(ax1 - ax0, ay1 - ay0);
         ax1 = ax0 + s; ay1 = ay0 + s;
     }
-    const ix0 = Math.max(0, Math.floor(ax0));
-    const iy0 = Math.max(0, Math.floor(ay0));
-    const ix1 = Math.min(w, Math.ceil(ax1));
-    const iy1 = Math.min(h, Math.ceil(ay1));
+    const ix0 = Math.max(0, Math.ceil(ax0 - 0.5));
+    const iy0 = Math.max(0, Math.ceil(ay0 - 0.5));
+    const ix1 = Math.min(w, Math.ceil(ax1 - 0.5));
+    const iy1 = Math.min(h, Math.ceil(ay1 - 0.5));
     for (let yy = iy0; yy < iy1; yy++) {
         const row = yy * w;
         for (let xx = ix0; xx < ix1; xx++) mask[row + xx] = value;
     }
-    return { x0: ix0, y0: iy0, x1: ix1 - 1, y1: iy1 - 1 };
+    return { x0: ix0, y0: iy0, x1: Math.max(ix0, ix1 - 1), y1: Math.max(iy0, iy1 - 1) };
 }
 
 export function fillEllipse(mask, w, h, x0, y0, x1, y1, value, square) {
@@ -87,7 +92,7 @@ export function fillEllipse(mask, w, h, x0, y0, x1, y1, value, square) {
     const iy1 = Math.min(h, Math.ceil(cy + ry));
     for (let yy = iy0; yy < iy1; yy++) {
         for (let xx = ix0; xx < ix1; xx++) {
-            const dx = (xx - cx) / rx, dy = (yy - cy) / ry;
+            const dx = (xx + 0.5 - cx) / rx, dy = (yy + 0.5 - cy) / ry;
             if (dx * dx + dy * dy <= 1) mask[yy * w + xx] = value;
         }
     }
@@ -117,8 +122,8 @@ export function fillPolygon(mask, w, h, pts, value) {
         }
         xs.sort((a, b) => a - b);
         for (let k = 0; k + 1 < xs.length; k += 2) {
-            const xa = Math.max(ix0, Math.ceil(xs[k]));
-            const xb = Math.min(ix1, Math.floor(xs[k + 1]));
+            const xa = Math.max(ix0, Math.ceil(xs[k] - 0.5));
+            const xb = Math.min(ix1, Math.ceil(xs[k + 1] - 0.5));
             for (let xx = xa; xx < xb; xx++) mask[yy * w + xx] = value;
         }
     }

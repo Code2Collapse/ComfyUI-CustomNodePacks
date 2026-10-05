@@ -41,7 +41,8 @@ export class IMEEditor {
         this.brushSize = 24;
         this.brushHardness = 0.6;
         this.brushOpacity = 1;
-        this.brushSpacing = 0.35;
+        this.brushSpacing = 0.15;      // stamp distance as a fraction of the brush DIAMETER
+        this.hover = null;             // pointer position in image space, for the brush outline
         this.bucketTolerance = 32;
         this.subtract = false;
         this.viewMode = 0;
@@ -432,7 +433,7 @@ export class IMEEditor {
         const b = tools.stampBrushCoverage(
             this.mask, this.strokeStart, this.coverage,
             this.editW, this.editH, cx, cy,
-            this.brushSize, this.brushHardness, this.brushOpacity, erase,
+            this.brushSize / 2, this.brushHardness, this.brushOpacity, erase,   // brushSize is the diameter
         );
         if (b) {
             this._strokeBounds = this._strokeBounds
@@ -578,6 +579,8 @@ export class IMEEditor {
     }
 
     pointerMove(ix, iy, e) {
+        this.hover = { x: ix, y: iy };
+        if (!this.painting && (this.tool === "brush" || this.tool === "eraser")) this.requestDraw();
         if (this.panning && this.panAnchor) {
             this.panX = e.clientX - this.panAnchor.x;
             this.panY = e.clientY - this.panAnchor.y;
@@ -589,7 +592,7 @@ export class IMEEditor {
             const b = tools.lineBrush(
                 (cx, cy) => this._stampAt(cx, cy),
                 this.lastPt.x, this.lastPt.y, ix, iy,
-                this.brushSize, this.brushSize * this.brushSpacing,
+                this.brushSize / 2, Math.max(1, this.brushSize * this.brushSpacing),
             );
             if (b) {
                 this._strokeBounds = this._strokeBounds
@@ -734,6 +737,19 @@ export class IMEEditor {
                 ctx.lineTo(this.lassoPts[i].x, this.lassoPts[i].y);
             }
             ctx.stroke();
+        }
+        if (this.hover && (this.tool === "brush" || this.tool === "eraser")) {
+            // Brush outline, two-tone so it reads on any plate; line widths are screen pixels.
+            const r = Math.max(0.5, this.brushSize / 2);
+            ctx.beginPath();
+            ctx.arc(this.hover.x, this.hover.y, r, 0, Math.PI * 2);
+            ctx.lineWidth = 3 / this.zoom;
+            ctx.strokeStyle = C.black;
+            ctx.stroke();
+            ctx.lineWidth = 1.5 / this.zoom;
+            ctx.strokeStyle = this.tool === "eraser" || this.subtract ? C.danger : C.white;
+            ctx.stroke();
+            ctx.lineWidth = 1;
         }
         ctx.restore();
     }
