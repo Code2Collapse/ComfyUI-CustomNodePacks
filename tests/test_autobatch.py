@@ -27,6 +27,13 @@ def _reset_autobatch_state(monkeypatch):
     ab._CONFIG_MTIME = None
     ab._CONFIG_CACHE = None
     ab._PROMPT_HOOK_REGISTERED = False
+    ab._ROUTES_REGISTERED = False
+    ab._WRAP_STRICT.clear()
+    ab._SAFE.clear()
+    ab._UNSAFE.clear()
+    ab._REFUSAL_LOGGED.clear()
+    ab._MEASURED_BPF.clear()
+    ab._CALL_HISTORY.clear()
     yield
 
 
@@ -610,3 +617,309 @@ def test_v3_tuple_return_stays_tuple():
     assert not isinstance(out, _FakeNodeOutput)
     assert chunked_calls == [4, 4, 2]
     assert torch.equal(out[0], direct[0])
+
+
+def _fake_v1_info(image_type="IMAGE", output_type="IMAGE"):
+    return {
+        "input": {"required": {"image": [image_type, {}]}, "optional": {}},
+        "output": [output_type],
+        "output_node": False,
+        "output_is_list": False,
+        "is_input_list": False,
+    }
+
+
+class _FakeV1Image:
+    FUNCTION = "execute"
+    OUTPUT_NODE = False
+    INPUT_IS_LIST = False
+    RETURN_TYPES = ("IMAGE",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+    def execute(self, image):
+        return (image * 0.5,)
+
+
+class _FakeV3Image(_FakeV3Base):
+    @classmethod
+    def GET_NODE_INFO_V1(cls):
+        return _fake_v1_info()
+
+    @classmethod
+    def execute(cls, image):
+        return _FakeNodeOutput(image * 0.5)
+
+
+class _FakeOutputNode(_FakeV1Image):
+    OUTPUT_NODE = True
+
+
+class _FakeListNode(_FakeV1Image):
+    OUTPUT_IS_LIST = [True]
+
+
+class _FakeVideoBatchNode(_FakeV1Image):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+    @classmethod
+    def GET_NODE_INFO_V1(cls):
+        info = _fake_v1_info()
+        return info
+
+
+def test_discover_v1_and_v3_image_nodes():
+    mappings = {
+        "V1Image": _FakeV1Image,
+        "V3Image": _FakeV3Image,
+    }
+    cfg = {"mode": "universal", "enabled": True, "allow": [], "never": []}
+    found = ab.discover_universal_candidates(mappings, {}, cfg)
+    assert "V1Image" in found
+    assert "V3Image" in found
+    assert found["V1Image"]["frames"] == ["image"]
+    assert found["V3Image"]["frames"] == ["image"]
+
+
+def test_discover_skips_output_node_list_excluded_never():
+    class BatchNameNode(_FakeV1Image):
+        pass
+
+    class NeverNode(_FakeV1Image):
+        pass
+
+    mappings = {
+        "BadOutput": _FakeOutputNode,
+        "BadList": _FakeListNode,
+        "ImageBatch": _FakeVideoBatchNode,
+        "VideoBatchNode": BatchNameNode,
+        "NeverNode": NeverNode,
+    }
+    display = {"VideoBatchNode": "Video Batch Helper"}
+    cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "allow": [],
+        "never": ["NeverNode"],
+    }
+    found = ab.discover_universal_candidates(mappings, display, cfg)
+    assert "BadOutput" not in found
+    assert "BadList" not in found
+    assert "ImageBatch" not in found
+    assert "VideoBatchNode" not in found
+    assert "NeverNode" not in found
+
+
+def test_probe_passes_per_frame_op(config_dir):
+    calls = {"n": 0}
+
+    class ProbeOk:
+        FUNCTION = "execute"
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+        def execute(self, image):
+            calls["n"] += 1
+            return (image * 0.5,)
+
+    mappings = {"ProbeOk": ProbeOk}
+    cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "max_frames": 4,
+        "nodes": {},
+    }
+    ab.install_wrappers(mappings, cfg)
+    image = torch.ones(12, 2, 2, 3)
+    out = ProbeOk().execute(image)
+    assert out[0].shape == image.shape
+    assert "ProbeOk" in ab._SAFE
+    assert calls["n"] >= 2
+
+
+def test_probe_fails_temporal_op(caplog):
+    caplog.set_level(logging.INFO, logger="C2C.autobatch")
+    calls = {"n": 0}
+
+    class MeanShift:
+        FUNCTION = "execute"
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+        def execute(self, image):
+            calls["n"] += 1
+            mean = image.mean(dim=0, keepdim=True)
+            return ((image - mean).clone(),)
+
+    mappings = {"MeanShift": MeanShift}
+    cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "max_frames": 4,
+        "allow": ["MeanShift"],
+        "nodes": {},
+    }
+    ab.install_wrappers(mappings, cfg)
+    image = torch.randn(12, 2, 2, 3)
+    out = MeanShift().execute(image)
+    direct = (image - image.mean(dim=0, keepdim=True)).clone()
+    assert torch.allclose(out[0], direct)
+    # First time: calibration chunk + the probe frame alone + the full-batch fallback.
+    assert calls["n"] == 3
+    assert "MeanShift" in ab._UNSAFE
+    calls["n"] = 0
+    out2 = MeanShift().execute(image)          # known unsafe now: one plain call
+    assert calls["n"] == 1 and torch.allclose(out2[0], direct)
+    assert any("probe" in r.message.lower() or "diff" in r.message.lower() for r in caplog.records)
+
+
+def test_refuse_latent_alongside(caplog):
+    caplog.set_level(logging.INFO, logger="C2C.autobatch")
+    calls = {"n": 0}
+
+    class WithLatent:
+        FUNCTION = "execute"
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {
+                "required": {"image": ("IMAGE",), "latent": ("LATENT",)},
+                "optional": {},
+            }
+
+        def execute(self, image, latent):
+            calls["n"] += 1
+            return (image.clone(),)
+
+    mappings = {"WithLatent": WithLatent}
+    cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "max_frames": 4,
+        "allow": ["WithLatent"],
+        "nodes": {},
+    }
+    ab.install_wrappers(mappings, cfg)
+    image = torch.zeros(8, 2, 2, 3)
+    latent = {"samples": torch.zeros(8, 4, 2, 2)}
+    WithLatent().execute(image, latent)
+    assert calls["n"] == 1
+    assert any("LATENT" in r.message or "non-frame" in r.message for r in caplog.records)
+
+
+def test_anomaly_fallback_universal_vs_strict_explicit():
+    class DropFrames:
+        FUNCTION = "execute"
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+        calls = 0
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+        def execute(self, image):
+            DropFrames.calls += 1
+            return (image[: max(1, image.shape[0] - 1)].clone(),)
+
+    mappings = {"DropFrames": DropFrames}
+    universal_cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "max_frames": 4,
+        "allow": ["DropFrames"],          # its name matches the cross-frame word "frame": allow forces the wrap
+        "nodes": {},
+    }
+    ab.install_wrappers(mappings, universal_cfg)
+    image = torch.zeros(12, 2, 2, 3)
+    out = DropFrames().execute(image)
+    assert out[0].shape[0] == 11              # the node's own full-batch result (it drops one frame)
+    assert "DropFrames" in ab._UNSAFE
+    ab.uninstall_wrappers()
+    DropFrames.calls = 0
+
+    strict_cfg = {
+        "enabled": True,
+        "curated": False,
+        "max_frames": 4,
+        "nodes": {"DropFrames": {"frames": ["image"]}},
+    }
+    ab.install_wrappers(mappings, strict_cfg)
+    with pytest.raises(ab.AutobatchError):
+        DropFrames().execute(image)
+
+
+def test_validate_config_and_atomic_save(config_dir):
+    with pytest.raises(ValueError, match="mode"):
+        ab.validate_config({"mode": "bogus"})
+    with pytest.raises(ValueError, match="allow"):
+        ab.validate_config({"allow": "ImageBlur"})
+    saved = ab.save_config({
+        "mode": "universal",
+        "enabled": True,
+        "allow": ["ImageBlur"],
+        "never": [],
+        "nodes": {},
+    })
+    assert saved["mode"] == "universal"
+    assert saved["allow"] == ["ImageBlur"]
+    loaded = json.loads(config_dir.read_text(encoding="utf-8"))
+    assert loaded["mode"] == "universal"
+    assert loaded["allow"] == ["ImageBlur"]
+
+
+def test_fast_path_no_extra_calls():
+    calls = {"n": 0}
+
+    class FastPath:
+        FUNCTION = "execute"
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+        def execute(self, image):
+            calls["n"] += 1
+            return (image.clone(),)
+
+    mappings = {"FastPath": FastPath}
+    cfg = {
+        "mode": "universal",
+        "enabled": True,
+        "budget_mb": 99999,
+        "nodes": {},
+    }
+    ab.install_wrappers(mappings, cfg)
+    FastPath().execute(torch.zeros(4, 2, 2, 3))
+    assert calls["n"] == 1
+
+
+def test_saved_mode_resolves_to_itself(config_dir):
+    """Regression (live testbed, L4.15): saving {"mode": "universal"} stored enabled=false and resolved to off."""
+    for mode in ("universal", "curated", "off"):
+        saved = ab.save_config({"mode": mode, "budget_mb": 64})
+        assert ab._resolve_mode(saved) == mode
+        assert ab._resolve_mode(ab.load_config()) == mode
+    legacy = {"enabled": True, "curated": False, "nodes": {"X": {"frames": ["image"]}}}
+    assert ab._resolve_mode(legacy) == "explicit"
