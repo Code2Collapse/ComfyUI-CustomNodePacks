@@ -25,15 +25,28 @@ import { sourceFromWidgets, sourceFromValue, kindRank, KNOWN_EXT_RE as SOURCE_EX
 // the page, debounced; a hidden tab catches up when it becomes visible.
 const _fiLive = new Set();
 let _fiTimer = 0, _fiPendingHidden = false;
+// ── Work once per graph change, not once per serialize (ledger L4.11) ───────
+// The change tracker serializes the whole graph after nearly every action, and
+// other extensions serialize too; onSerialize used to re-walk the graph for every
+// incrementer each time - on the owner's graph collectFilenamesFromChain was ~85%
+// of the main thread. Now every graph change bumps _fiVersion; a node re-syncs only
+// when its last sync is older than that, and what all incrementers in a graph read
+// (each node's source, loader detection, the Set/Get bus map, the global loader
+// list) is computed once per version and shared.
+let _fiVersion = 1;
+const _fiCaches = new WeakMap();          // graph -> per-version shared lookups
+function _fiBump() { _fiVersion++; }
 function _fiResyncAll() {
     _fiTimer = 0;
     if (typeof document !== "undefined" && document.hidden) { _fiPendingHidden = true; return; }
     for (const n of _fiLive) {
         if (!n.graph) { _fiLive.delete(n); continue; }   // removed from its graph
+        if (n._fiSyncedVersion === _fiVersion) continue;   // nothing changed since its last sync
         try { n._fiSyncSource?.(); } catch (_) { /* a name preview must never break the page */ }
     }
 }
 function _fiSchedule() {
+    _fiBump();
     if (_fiTimer) clearTimeout(_fiTimer);
     _fiTimer = setTimeout(_fiResyncAll, 250);
 }
@@ -128,8 +141,28 @@ app.registerExtension({
         //    contained a dot, so every folder loader - Load Images From Dir,
         //    VHS Load Images, WAS Load Image Batch, EXR sequence folders - was
         //    skipped and the name came from some other loader, or none.
-        function getSourceFromNode(n) {
+        function readSourceFromNode(n) {
             try { return sourceFromWidgets(n?.widgets); } catch (_) { return null; }
+        }
+        // Shared by every incrementer in this graph until the next graph change:
+        // reading `widgets` is not free on this front-end (subgraph nodes project
+        // promoted widgets on every access), so each node is read once per version.
+        function graphCache() {
+            const g = G();
+            let c = _fiCaches.get(g);
+            if (!c || c.version !== _fiVersion) {
+                c = { version: _fiVersion, src: new Map(), loader: new Map(), bus: null, candidates: null };
+                _fiCaches.set(g, c);
+            }
+            return c;
+        }
+        function getSourceFromNode(n) {
+            if (!n) return null;
+            const c = graphCache();
+            if (c.src.has(n)) return c.src.get(n);
+            const s = readSourceFromNode(n);
+            c.src.set(n, s);
+            return s;
         }
         function getFilenameFromNode(n) {
             return getSourceFromNode(n)?.filename || null;
@@ -153,24 +186,29 @@ app.registerExtension({
             return m ? m[2].trim().toLowerCase() : "";
         }
 
+        // key -> Set nodes, built once per graph version: resolving a Get node used
+        // to scan every node in the graph, once per Get node met during a walk.
+        function busMap() {
+            const c = graphCache();
+            if (c.bus) return c.bus;
+            const m = new Map();
+            for (const n of (G()._nodes || G().nodes || [])) {
+                const title = (n.title || "").toLowerCase();
+                const cls = (n.comfyClass || "").toLowerCase();
+                if (!(title.startsWith("set") || cls.startsWith("set") || cls.includes("setnode"))) continue;
+                const key = getBusKey(n);
+                if (!key) continue;
+                if (!m.has(key)) m.set(key, []);
+                m.get(key).push(n);
+            }
+            c.bus = m;
+            return m;
+        }
+
         function resolveGetNode(getNode) {
             const busName = getBusKey(getNode);
             if (!busName) return [];
-
-            const results = [];
-            const allNodes = G()._nodes || G().nodes || [];
-            for (const n of allNodes) {
-                if (n.id === getNode.id) continue;
-                const title = (n.title || "").toLowerCase();
-                const cls = (n.comfyClass || "").toLowerCase();
-                const isSet = title.startsWith("set") || cls.startsWith("set")
-                           || cls.includes("setnode");
-                if (!isSet) continue;
-                if (getBusKey(n) === busName) {
-                    results.push(n);
-                }
-            }
-            return results;
+            return (busMap().get(busName) || []).filter(n => n.id !== getNode.id);
         }
 
         // ── Node types that are transparent routing (follow through) ──
@@ -246,13 +284,24 @@ app.registerExtension({
         // all (a pure source) - and in both cases a widget names a file or
         // folder. The list above stays as the fast, certain path.
         const LOADER_WORD_RE = /(load|read|import|open|sequence|footage|plate|batch|from.?(dir|folder|path))/i;
-        function isInputLoader(n) {
+        // Same "class or title contains one of these" test as before, as ONE regex:
+        // the 60-name .some(includes) was the hottest line of a global scan.
+        const LOADER_TYPES_RE = new RegExp(
+            INPUT_LOADER_TYPES.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"));
+        function computeIsInputLoader(n) {
             const cls = n.comfyClass || "";
             const title = n.title || "";
-            if (INPUT_LOADER_TYPES.some(t => cls.includes(t) || title.includes(t))) return true;
+            if (LOADER_TYPES_RE.test(cls) || LOADER_TYPES_RE.test(title)) return true;
             if (!getSourceFromNode(n)) return false;
             if (LOADER_WORD_RE.test(cls) || LOADER_WORD_RE.test(title)) return true;
             return !(n.inputs || []).some(i => i && i.link != null);
+        }
+        function isInputLoader(n) {
+            const c = graphCache();
+            if (c.loader.has(n)) return c.loader.get(n);
+            const v = computeIsInputLoader(n);
+            c.loader.set(n, v);
+            return v;
         }
 
         // ── BFS chain traversal: COLLECT every filename in the source island ─
@@ -646,24 +695,29 @@ app.registerExtension({
             }
 
             // ── Global fallback: scan every loader in the graph ──────
-            const allNodes = G()._nodes || G().nodes || [];
-            const candidates = [];
-            for (const n of allNodes) {
-                if (n === node || !isInputLoader(n)) continue;
-                const src = getSourceFromNode(n);
-                if (!src) continue;
-                const fn = src.filename;
-                const blob = ((n.comfyClass || "") + " " + (n.title || "")).toLowerCase();
-                const moving = src.kind === "video" || src.kind === "sequence" || src.kind === "folder";
-                const isVideo = moving || /video|vhs/.test(blob);
-                const isImage = (src.kind === "image" || src.kind === "folder"
-                    || (/image/.test(blob) && src.kind !== "video"));
-                // "many LoadVideo nodes" disambiguator: a loader whose output is
-                // actually wired into the pipeline is far more likely to be the
-                // one the user cares about than an orphaned/spare loader.
-                const isConnected = (n.outputs || []).some(o => o && o.links && o.links.length);
-                candidates.push({ node: n, filename: fn, isVideo, isImage, isConnected });
+            //    The loader list is the same for every incrementer in the graph,
+            //    so it is built once per graph version and shared.
+            const gc = graphCache();
+            if (!gc.candidates) {
+                const all = [];
+                for (const n of (G()._nodes || G().nodes || [])) {
+                    if (!isInputLoader(n)) continue;
+                    const src = getSourceFromNode(n);
+                    if (!src) continue;
+                    const blob = ((n.comfyClass || "") + " " + (n.title || "")).toLowerCase();
+                    const moving = src.kind === "video" || src.kind === "sequence" || src.kind === "folder";
+                    const isVideo = moving || /video|vhs/.test(blob);
+                    const isImage = (src.kind === "image" || src.kind === "folder"
+                        || (/image/.test(blob) && src.kind !== "video"));
+                    // "many LoadVideo nodes" disambiguator: a loader whose output is
+                    // actually wired into the pipeline is far more likely to be the
+                    // one the user cares about than an orphaned/spare loader.
+                    const isConnected = (n.outputs || []).some(o => o && o.links && o.links.length);
+                    all.push({ node: n, filename: src.filename, isVideo, isImage, isConnected });
+                }
+                gc.candidates = all;
             }
+            const candidates = gc.candidates.filter(c => c.node !== node);
             // BUG-FIX (Apr 2026): when explicit choice is set, drop
             // mismatched candidates entirely so we don't return the
             // wrong-type filename just because nothing of the right
@@ -745,6 +799,8 @@ app.registerExtension({
 
         // ── Auto-fill source_filename + status display ───────────────
         function syncSourceFilename() {
+            node._fiSyncedVersion = _fiVersion;   // see _fiVersion: later serializes skip until a change
+            node._fiSyncedAt = performance.now();
             // source_path (a wired STRING path, e.g. from OCIORead / LoadEXRMEC
             // / a VFX plate loader) takes precedence over graph auto-detection.
             // Show the detected stem so the user can SEE the node found the EXR
@@ -760,8 +816,7 @@ app.registerExtension({
                 } else {
                     setStatus("🔗 path mode (stem resolved at run)");
                 }
-                G().setDirtyCanvas(true);
-                return;
+                return;   // setStatus redraws only when the text changed
             }
             const result = extractFilename();
             const sfWidget = node.widgets?.find(w => w.name === "source_filename");
@@ -784,8 +839,7 @@ app.registerExtension({
                           : result.mode === "input"  ? "\uD83D\uDD0C"  // plug for non-trigger input
                           : result.mode === "custom" ? "\u270D\uFE0F"  // hand-writing for custom
                                                      : "\uD83D\uDCC4"; // page for trigger
-                setStatus(`${tag} ${preview}${extLabel}${sfxLabel}`);
-                G().setDirtyCanvas(true);
+                setStatus(`${tag} ${preview}${extLabel}${sfxLabel}`);   // redraws only on change
             } else {
                 const manual = sfWidget?.value && sfWidget.value.trim();
                 if (manual) {
@@ -825,6 +879,7 @@ app.registerExtension({
             origOnConnectionsChange?.apply(this, arguments);
             // Re-sync whether connecting OR disconnecting: a disconnect
             // may flip auto-mode from video back to image.
+            _fiBump();
             setTimeout(syncSourceFilename, 150);
         };
 
@@ -834,6 +889,7 @@ app.registerExtension({
             const origCb = choiceWidget.callback;
             choiceWidget.callback = function (v) {
                 origCb?.apply(this, arguments);
+                _fiBump();
                 setTimeout(syncSourceFilename, 50);
             };
         }
@@ -880,10 +936,29 @@ app.registerExtension({
         // Sync before serialization (prompt queue) so Python gets fresh value
         const origOnSerialize = node.onSerialize;
         node.onSerialize = function (o) {
-            normalizeSourceFilename();
-            syncSourceFilename();
+            // Runs on EVERY serialize (the change tracker's included), so it must be
+            // cheap: re-sync only if the graph changed since this node last synced.
+            // A queue right after an edit still sends a fresh value.
+            // The 2 s cap covers an edit made in code without a graphChanged event,
+            // on front-ends that lack the beforeQueued hook below.
+            if (node._fiSyncedVersion !== _fiVersion || performance.now() - (node._fiSyncedAt || 0) > 2000) {
+                normalizeSourceFilename();
+                syncSourceFilename();
+            }
             origOnSerialize?.apply(this, arguments);
         };
+
+        // Fresh name for the prompt itself: the front-end calls every widget's
+        // beforeQueued right before graphToPrompt (core uses it for seeds), so a
+        // queue never sends a stale source, without paying on every serialize.
+        const sfQueueWidget = node.widgets?.find(w => w.name === "source_filename");
+        if (sfQueueWidget) {
+            const prevBeforeQueued = sfQueueWidget.beforeQueued;
+            sfQueueWidget.beforeQueued = function (...args) {
+                try { normalizeSourceFilename(); syncSourceFilename(); } catch (_) { /* never block a queue */ }
+                return prevBeforeQueued?.apply(this, args);
+            };
+        }
 
         // Initial sync + periodic retry (graph may not be fully loaded yet)
         hideExtensionWidget();
