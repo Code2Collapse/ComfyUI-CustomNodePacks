@@ -125,7 +125,7 @@ class ImageMaskEditorC2C:
     DESCRIPTION = (
         "Paint a mask over the image that actually reaches this node. "
         "Open the editor to draw; grow, feather, threshold and invert are "
-        "non-destructive node parameters."
+        "non-destructive node parameters. Docs: docs/image-mask-editor.md in this pack."
     )
     OUTPUT_NODE = False
 
@@ -180,6 +180,12 @@ class ImageMaskEditorC2C:
 
     RETURN_TYPES = ("MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("mask", "preview", "info")
+    OUTPUT_TOOLTIPS = (
+        "The final mask [B,H,W] in 0-1: painted frames, combined with input_mask, then grow, feather, "
+        "threshold and invert.",
+        "The input image with the mask tinted over it.",
+        "Frame count, stored masks, mode and notes (resized frames, frame recording skipped).",
+    )
     FUNCTION = "execute"
 
     @classmethod

@@ -181,3 +181,21 @@ def test_undo_stack_holds_its_byte_cap(tmp_path):
     cap = 128 * 1024 * 1024
     assert out["bytes"] <= cap and out["entries"] == 3
     assert out["afterUndo"]["bytes"] <= cap and out["afterUndo"]["undo"] + out["afterUndo"]["redo"] <= 3
+
+
+def test_shift_square_constrains_rect_and_ellipse(tmp_path):
+    w, h = 64, 48
+    out = _run(tmp_path, """
+      const r = new Uint8Array(IN.w * IN.h), e = new Uint8Array(IN.w * IN.h);
+      T.fillRect(r, IN.w, IN.h, 10, 10, 40, 25, 255, true);      // Shift: the shorter side wins
+      T.fillEllipse(e, IN.w, IN.h, 10, 10, 40, 25, 255, true);
+      out.r = Array.from(r); out.e = Array.from(e);
+    """, {"w": w, "h": h})
+    ref = np.zeros((h, w), np.uint8)
+    ref[10:25, 10:25] = 255
+    assert np.array_equal(_mask(out["r"], w, h), ref)
+    e = _mask(out["e"], w, h)
+    ys, xs = np.nonzero(e)
+    assert xs.min() >= 10 and xs.max() <= 24 and ys.min() >= 10 and ys.max() <= 24
+    sub = e[:40, :40]
+    assert np.array_equal(sub, sub.T)                            # a circle: symmetric about the diagonal
