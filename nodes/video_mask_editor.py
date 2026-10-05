@@ -38,6 +38,7 @@ VRAM tier: 0 (CPU-only).
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import threading
@@ -103,6 +104,33 @@ def _get_session(session_id: str, create: bool = False) -> Optional[dict]:
         if s is not None:
             s["ts"] = time.time()
         return s
+
+
+def session_digest(session_id: str) -> str:
+    """Content digest of a session's pinned keyframes.
+
+    The editor's whole state lives in this server-side store, not in any widget, so ComfyUI's
+    cache key never saw a keyframe edit and a downstream preview kept the old masks until some
+    other widget changed (issue #11.4). IS_CHANGED includes this digest: editing, adding or
+    deleting a keyframe re-runs the node; re-pinning an identical mask does not. Per-keyframe
+    hashes are cached against the array object, so a queue with unchanged keyframes costs a dict
+    walk, not a re-hash."""
+    s = _SESSIONS.get(session_id) if session_id else None
+    if s is None:
+        return "no-session"
+    with s["lock"]:
+        cache = s.setdefault("kf_digest", {})
+        parts = []
+        for frame in sorted(s["keyframes"]):
+            arr = s["keyframes"][frame]
+            hit = cache.get(frame)
+            if hit is None or hit[0] is not arr:
+                hit = (arr, hashlib.sha1(np.ascontiguousarray(arr).tobytes()).hexdigest())
+                cache[frame] = hit
+            parts.append(f"{frame}:{tuple(arr.shape)}:{hit[1]}")
+        for frame in [f for f in cache if f not in s["keyframes"]]:
+            cache.pop(frame, None)
+    return hashlib.sha1("|".join(parts).encode("ascii")).hexdigest()
 
 
 # ─── PNG codec helpers ───────────────────────────────────────────────
@@ -482,6 +510,7 @@ class VideoMaskEditorMEC:
                    input_mask=None, **kwargs):
         return hash_args_and_kwargs(
             image, session_id, tween_mode, feather, threshold, input_mask,
+            session_digest((session_id or "").strip()),   # keyframe edits (#11.4)
             **kwargs,
         )
 
