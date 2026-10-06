@@ -9,9 +9,15 @@ import * as tools from "./tools.js";
 import * as colour from "./colour.js";
 import * as api from "./api.js";
 import { c2cAlert } from "../_c2c_dialog.js";
-import { outlineMask, rubylithRGBA, gridLines } from "./view.js";
+import {
+    rubylithRGBA, gridLines,
+    overlayRGBA, matteRGBA, previewRGBA, outlineTileRGBA, outlineBufRect,
+    overlayTileLOD, matteTileLOD, rubylithTileLOD, previewTileLOD, outlineTileLOD,
+} from "./view.js";
+import { TileCache, tilesForRect, pickLodLevel, DEFAULT_BYTE_BUDGET } from "./tiles.js";
 
-const MP_LIMIT = 16_000_000;
+const MP_LIMIT = 40_000_000;
+const SAM_MP_LIMIT = 4_000_000;
 const OVERLAY_ALPHA = 0.45;
 const PREVIEW_ALPHA = 0.45;
 const CLEAN_MASK_CAP = 8;
@@ -45,15 +51,10 @@ export class IMEEditor {
         this.imageBitmap = null;
         this.imageData = null;
         this.mask = null;
-        this.overlayCanvas = null;
-        this.overlayCtx = null;
-        this.matteCanvas = null;
-        this.matteCtx = null;
-        this.rubylithCanvas = null;
-        this.rubylithCtx = null;
-        this.outlineCanvas = null;
-        this.outlineCtx = null;
+        this._tileCache = new TileCache({ byteBudget: DEFAULT_BYTE_BUDGET });
         this._outlineBuf = null;
+        this._outlineBufStale = false;
+        this._outlineDirty = null;
         this._overlayTint = hexToRgb(C.accent);
         this._gridTint = hexToRgb(C.sub);
         this.history = new FrameHistory();
@@ -79,8 +80,6 @@ export class IMEEditor {
         this.colourDist = null;
         this.colourDistKey = "";
         this.candidatePreview = null;
-        this.previewCanvas = null;
-        this.previewCtx = null;
         this._previewTint = hexToRgb(C.accent2);
         this.samPoints = [];
         this.samBox = null;
@@ -145,113 +144,206 @@ export class IMEEditor {
         this._urls = [];
     }
 
-    _ensureBuffers() {
-        if (!this.overlayCanvas || this.overlayCanvas.width !== this.editW) {
-            this.overlayCanvas = document.createElement("canvas");
-            this.overlayCanvas.width = this.editW;
-            this.overlayCanvas.height = this.editH;
-            this.overlayCtx = this.overlayCanvas.getContext("2d");
-            this.previewCanvas = document.createElement("canvas");
-            this.previewCanvas.width = this.editW;
-            this.previewCanvas.height = this.editH;
-            this.previewCtx = this.previewCanvas.getContext("2d");
-            this.matteCanvas = document.createElement("canvas");
-            this.matteCanvas.width = this.editW;
-            this.matteCanvas.height = this.editH;
-            this.matteCtx = this.matteCanvas.getContext("2d");
-            this.rubylithCanvas = document.createElement("canvas");
-            this.rubylithCanvas.width = this.editW;
-            this.rubylithCanvas.height = this.editH;
-            this.rubylithCtx = this.rubylithCanvas.getContext("2d");
-            this.outlineCanvas = document.createElement("canvas");
-            this.outlineCanvas.width = this.editW;
-            this.outlineCanvas.height = this.editH;
-            this.outlineCtx = this.outlineCanvas.getContext("2d");
-            this._outlineBuf = new Uint8Array(this.editW * this.editH);
+    _viewName(vm) {
+        return ["overlay", "matte", "rubylith", "outline"][vm];
+    }
+
+    _ensureOutlineBuf() {
+        const n = this.editW * this.editH;
+        if (!this._outlineBuf || this._outlineBuf.length !== n) {
+            this._outlineBuf = new Uint8Array(n);
+            this._outlineBufStale = true;
+            this._outlineDirty = null;
+            this._tileCache.setImageSize(this.editW, this.editH);
         }
     }
 
-    _syncOverlayRect(x, y, w, h) {
-        if (!this.mask || !this.overlayCtx) return;
-        const x2 = Math.min(this.editW, x + w);
-        const y2 = Math.min(this.editH, y + h);
-        const rw = x2 - x;
-        const rh = y2 - y;
-        if (rw <= 0 || rh <= 0) return;
-        const id = this.overlayCtx.createImageData(rw, rh);
-        const ac = this._overlayTint;
-        for (let yy = 0; yy < rh; yy++) {
-            for (let xx = 0; xx < rw; xx++) {
-                const pi = (y + yy) * this.editW + (x + xx);
-                const a = this.mask[pi];
-                const oi = (yy * rw + xx) * 4;
-                id.data[oi] = ac.r;
-                id.data[oi + 1] = ac.g;
-                id.data[oi + 2] = ac.b;
-                id.data[oi + 3] = Math.round(a * OVERLAY_ALPHA);
+    _rebuildOutlineBufFull() {
+        if (!this.mask || !this._outlineBuf) return;
+        this._outlineBuf.fill(0);
+        outlineBufRect(
+            this.mask, this.editW, this.editH,
+            0, 0, this.editW - 1, this.editH - 1,
+            this._outlineBuf,
+        );
+    }
+
+    _updateOutlineBufRect(x0, y0, x1, y1) {
+        if (!this.mask || !this._outlineBuf) return;
+        outlineBufRect(this.mask, this.editW, this.editH, x0, y0, x1, y1, this._outlineBuf);
+    }
+
+    _flushOutlineBuf() {
+        const vm = this.viewMode;
+        if (vm === 3) {
+            if (this._outlineBufStale) {
+                this._rebuildOutlineBufFull();
+                this._outlineBufStale = false;
+                this._outlineDirty = null;
+            } else if (this._outlineDirty) {
+                const d = this._outlineDirty;
+                this._outlineDirty = null;
+                const x0 = Math.max(0, d.x0 - 1);
+                const y0 = Math.max(0, d.y0 - 1);
+                const x1 = Math.min(this.editW - 1, d.x1 + 1);
+                const y1 = Math.min(this.editH - 1, d.y1 + 1);
+                this._updateOutlineBufRect(x0, y0, x1, y1);
             }
+        } else if (this._outlineDirty) {
+            this._outlineBufStale = true;
+            this._outlineDirty = null;
         }
-        this.overlayCtx.putImageData(id, x, y);
     }
 
-    _syncMatteRect(x, y, w, h) {
-        if (!this.mask || !this.matteCtx) return;
-        const id = this.matteCtx.createImageData(w, h);
-        for (let yy = 0; yy < h; yy++) {
-            for (let xx = 0; xx < w; xx++) {
-                const pi = (y + yy) * this.editW + (x + xx);
-                const g = this.mask[pi];
-                const oi = (yy * w + xx) * 4;
-                id.data[oi] = id.data[oi + 1] = id.data[oi + 2] = g;
-                id.data[oi + 3] = 255;
+    _createTileCanvas(w, h) {
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        return { canvas, ctx: canvas.getContext("2d"), w, h, dirty: null, bytes: w * h * 4 };
+    }
+
+    _fillTileRegion(viewKey, t, u0, v0, u1, v1, id, srcBuf = null) {
+        const { x, y, w, h, level } = t;
+        const rw = u1 - u0 + 1;
+        const rh = v1 - v0 + 1;
+        if (viewKey === "overlay" && this.mask) {
+            if (level === 0) {
+                overlayRGBA(
+                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    id.data, rw, this._overlayTint, OVERLAY_ALPHA,
+                );
+            } else {
+                overlayTileLOD(
+                    this.mask, this.editW, this.editH, level, x, y,
+                    u0, v0, u1, v1, id.data, rw, this._overlayTint, OVERLAY_ALPHA,
+                );
             }
-        }
-        this.matteCtx.putImageData(id, x, y);
-    }
-
-    _syncRubylithRect(x, y, w, h) {
-        if (!this.mask || !this.rubylithCtx) return;
-        const id = this.rubylithCtx.createImageData(w, h);
-        rubylithRGBA(this.mask, this.editW, this.editH, x, y, x + w - 1, y + h - 1, id.data, w);
-        this.rubylithCtx.putImageData(id, x, y);
-    }
-
-    _syncOutlineRect(x, y, w, h) {
-        if (!this.mask || !this.outlineCtx || !this._outlineBuf) return;
-        const edges = outlineMask(this.mask, this.editW, this.editH, x, y, x + w - 1, y + h - 1);
-        const id = this.outlineCtx.createImageData(w, h);
-        for (let yy = 0; yy < h; yy++) {
-            for (let xx = 0; xx < w; xx++) {
-                const pi = (y + yy) * this.editW + (x + xx);
-                const oi = (yy * w + xx) * 4;
-                if (edges[pi]) {
-                    this._outlineBuf[pi] = 1;
-                    id.data[oi] = id.data[oi + 1] = id.data[oi + 2] = 255;
-                    id.data[oi + 3] = 255;
+        } else if (viewKey === "matte" && this.mask) {
+            if (level === 0) {
+                matteRGBA(
+                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    id.data, rw,
+                );
+            } else {
+                matteTileLOD(
+                    this.mask, this.editW, this.editH, level, x, y,
+                    u0, v0, u1, v1, id.data, rw,
+                );
+            }
+        } else if (viewKey === "rubylith" && this.mask) {
+            if (level === 0) {
+                rubylithRGBA(
+                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    id.data, rw,
+                );
+            } else {
+                rubylithTileLOD(
+                    this.mask, this.editW, this.editH, level, x, y,
+                    u0, v0, u1, v1, id.data, rw,
+                );
+            }
+        } else if (viewKey === "outline" && this.mask) {
+            if (level === 0) {
+                outlineTileRGBA(this.mask, this.editW, this.editH, x, y, w, h, id.data, rw);
+            } else {
+                outlineTileLOD(
+                    this.mask, this.editW, this.editH, level, x, y, w, h,
+                    u0, v0, u1, v1, id.data, rw,
+                );
+            }
+        } else if (viewKey === "preview") {
+            const buf = srcBuf || this.candidatePreview;
+            if (buf) {
+                if (level === 0) {
+                    previewRGBA(
+                        buf, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                        id.data, rw, this._previewTint, PREVIEW_ALPHA,
+                    );
                 } else {
-                    this._outlineBuf[pi] = 0;
-                    id.data[oi + 3] = 0;
+                    previewTileLOD(
+                        buf, this.editW, this.editH, level, x, y,
+                        u0, v0, u1, v1, id.data, rw, this._previewTint, PREVIEW_ALPHA,
+                    );
                 }
             }
         }
-        this.outlineCtx.putImageData(id, x, y);
     }
 
-    _rebuildRubylithFull() {
-        if (!this.mask) return;
-        this._staleViews?.delete(2);
-        this._ensureBuffers();
-        this.rubylithCtx.clearRect(0, 0, this.editW, this.editH);
-        this._syncRubylithRect(0, 0, this.editW, this.editH);
+    _fillTile(viewKey, t, srcBuf = null, dirtyRect = null) {
+        const { w, h, tx, ty, level } = t;
+        let u0 = 0;
+        let v0 = 0;
+        let u1 = w - 1;
+        let v1 = h - 1;
+        if (dirtyRect) {
+            u0 = dirtyRect.x0;
+            v0 = dirtyRect.y0;
+            u1 = dirtyRect.x1;
+            v1 = dirtyRect.y1;
+        }
+        if (viewKey === "outline") {
+            u0 = Math.max(0, u0 - 1);
+            v0 = Math.max(0, v0 - 1);
+            u1 = Math.min(w - 1, u1 + 1);
+            v1 = Math.min(h - 1, v1 + 1);
+        }
+        let tile = this._tileCache.get(viewKey, level, tx, ty);
+        if (!tile) tile = this._createTileCanvas(w, h);
+        const rw = u1 - u0 + 1;
+        const rh = v1 - v0 + 1;
+        const id = tile.ctx.createImageData(rw, rh);
+        if (viewKey === "outline" && level === 0 && dirtyRect) {
+            const tmp = tile.ctx.createImageData(w, h);
+            outlineTileRGBA(this.mask, this.editW, this.editH, t.x, t.y, w, h, tmp.data, w);
+            for (let v = v0; v <= v1; v++) {
+                for (let u = u0; u <= u1; u++) {
+                    const si = (v * w + u) * 4;
+                    const di = ((v - v0) * rw + (u - u0)) * 4;
+                    id.data[di] = tmp.data[si];
+                    id.data[di + 1] = tmp.data[si + 1];
+                    id.data[di + 2] = tmp.data[si + 2];
+                    id.data[di + 3] = tmp.data[si + 3];
+                }
+            }
+        } else {
+            this._fillTileRegion(viewKey, t, u0, v0, u1, v1, id, srcBuf);
+        }
+        tile.ctx.putImageData(id, u0, v0);
+        this._tileCache.set(viewKey, level, tx, ty, tile);
     }
 
-    _rebuildOutlineFull() {
-        if (!this.mask) return;
-        this._staleViews?.delete(3);
-        this._ensureBuffers();
-        this._outlineBuf.fill(0);
-        this.outlineCtx.clearRect(0, 0, this.editW, this.editH);
-        this._syncOutlineRect(0, 0, this.editW, this.editH);
+    _drawViewTiles(ctx, viewKey, srcBuf = null, vw, vh) {
+        const { ix0, iy0, ix1, iy1 } = this._visibleImageRect(vw, vh);
+        const level = pickLodLevel(
+            this.zoom, ix0, iy0, ix1, iy1,
+            this.editW, this.editH, DEFAULT_BYTE_BUDGET,
+        );
+        // Tiles are placed in screen space with edges snapped to whole pixels, so neighbours abut exactly.
+        const z = this.zoom;
+        const px = this.panX;
+        const py = this.panY;
+        const dpr = window.devicePixelRatio || 1;
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        for (const t of tilesForRect(ix0, iy0, ix1, iy1, this.editW, this.editH, level)) {
+            let tile = this._tileCache.get(viewKey, level, t.tx, t.ty);
+            if (!tile) {
+                this._fillTile(viewKey, t, srcBuf, null);
+                tile = this._tileCache.get(viewKey, level, t.tx, t.ty);
+            } else if (tile.dirty) {
+                this._fillTile(viewKey, t, srcBuf, tile.dirty);
+                tile = this._tileCache.get(viewKey, level, t.tx, t.ty);
+            }
+            if (!tile?.canvas) continue;
+            const dx0 = Math.round(px + t.x * z);
+            const dy0 = Math.round(py + t.y * z);
+            const dx1 = Math.round(px + (t.x + t.imageW) * z);
+            const dy1 = Math.round(py + (t.y + t.imageH) * z);
+            if (dx1 > dx0 && dy1 > dy0) {
+                ctx.drawImage(tile.canvas, 0, 0, t.w, t.h, dx0, dy0, dx1 - dx0, dy1 - dy0);
+            }
+        }
+        ctx.restore();
     }
 
     _visibleImageRect(vw, vh) {
@@ -262,56 +354,15 @@ export class IMEEditor {
         return { ix0, iy0, ix1, iy1 };
     }
 
-    _rebuildOverlayFull() {
-        if (!this.mask) return;
-        this._staleViews?.delete(0);
-        this._ensureBuffers();
-        this._syncOverlayRect(0, 0, this.editW, this.editH);
-    }
-
-    _syncPreviewRect(x, y, w, h, srcBuf = null) {
-        const buf = srcBuf || this.candidatePreview;
-        if (!buf || !this.previewCtx) return;
-        const x2 = Math.min(this.editW, x + w);
-        const y2 = Math.min(this.editH, y + h);
-        const rw = x2 - x;
-        const rh = y2 - y;
-        if (rw <= 0 || rh <= 0) return;
-        const id = this.previewCtx.createImageData(rw, rh);
-        const ac = this._previewTint;
-        for (let yy = 0; yy < rh; yy++) {
-            for (let xx = 0; xx < rw; xx++) {
-                const pi = (y + yy) * this.editW + (x + xx);
-                const a = buf[pi];
-                const oi = (yy * rw + xx) * 4;
-                id.data[oi] = ac.r;
-                id.data[oi + 1] = ac.g;
-                id.data[oi + 2] = ac.b;
-                id.data[oi + 3] = Math.round(a * PREVIEW_ALPHA);
-            }
-        }
-        this.previewCtx.putImageData(id, x, y);
-    }
-
-    _rebuildPreviewFull(srcBuf = null) {
-        const buf = srcBuf || this.candidatePreview;
-        if (!buf) return;
-        this._ensureBuffers();
-        this.previewCtx.clearRect(0, 0, this.editW, this.editH);
-        this._syncPreviewRect(0, 0, this.editW, this.editH, buf);
-    }
-
     _setCandidatePreview(buf) {
         this.candidatePreview = buf;
-        this._rebuildPreviewFull(buf);
+        this._tileCache.markViewStale("preview");
         this.requestDraw();
     }
 
     _clearCandidatePreview() {
         this.candidatePreview = null;
-        if (this.previewCtx) {
-            this.previewCtx.clearRect(0, 0, this.editW, this.editH);
-        }
+        this._tileCache.markViewStale("preview");
         this.requestDraw();
     }
 
@@ -338,58 +389,19 @@ export class IMEEditor {
         this.applyCandidatePreview();
     }
 
-    _rebuildMatteFull() {
-        if (!this.mask || this.viewMode !== 1) return;
-        this._staleViews?.delete(1);
-        this._ensureBuffers();
-        this.matteCtx.clearRect(0, 0, this.editW, this.editH);
-        this._syncMatteRect(0, 0, this.editW, this.editH);
-    }
-
-    // Mask edits only record a dirty rect; _flushDirty() syncs it once per drawn frame, into the cache of the view
-    // on screen. The other views' caches are marked stale and rebuilt when shown. Measured (slice 3b profile,
-    // 2K, 10 strokes): syncing all four caches on every brush stamp took 906 of ~1000 ms of pointer handling.
+    // Mask edits mark tiles stale; outlineBuf is updated once per frame in _drawNow when view 3 is shown.
     _maskDirtyRect(x0, y0, x1, y1) {
         const x = Math.max(0, x0 | 0);
         const y = Math.max(0, y0 | 0);
         const x2 = Math.min(this.editW, (x1 | 0) + 1) - 1;
         const y2 = Math.min(this.editH, (y1 | 0) + 1) - 1;
         if (x2 < x || y2 < y) return;
-        const d = this._dirty;
-        this._dirty = d
-            ? { x0: Math.min(d.x0, x), y0: Math.min(d.y0, y), x1: Math.max(d.x1, x2), y1: Math.max(d.y1, y2) }
+        this._tileCache.markStaleRect(x, y, x2, y2);
+        const od = this._outlineDirty;
+        this._outlineDirty = od
+            ? { x0: Math.min(od.x0, x), y0: Math.min(od.y0, y), x1: Math.max(od.x1, x2), y1: Math.max(od.y1, y2) }
             : { x0: x, y0: y, x1: x2, y1: y2 };
         this.requestDraw();
-    }
-
-    _flushDirty() {
-        const d = this._dirty;
-        if (!d || !this.mask) return;
-        this._dirty = null;
-        const vm = this.viewMode;
-        if (!this._staleViews) this._staleViews = new Set();
-        for (const v of [0, 1, 2, 3]) if (v !== vm) this._staleViews.add(v);
-        if (this._staleViews.has(vm)) return;                // a full rebuild is pending anyway
-        const w = d.x1 - d.x0 + 1, h = d.y1 - d.y0 + 1;
-        if (vm === 0) this._syncOverlayRect(d.x0, d.y0, w, h);
-        else if (vm === 1) this._syncMatteRect(d.x0, d.y0, w, h);
-        else if (vm === 2) this._syncRubylithRect(d.x0, d.y0, w, h);
-        else if (vm === 3) {
-            // an edit changes the edge status of the pixels just outside it too
-            const x0 = Math.max(0, d.x0 - 1), y0 = Math.max(0, d.y0 - 1);
-            const x1 = Math.min(this.editW - 1, d.x1 + 1), y1 = Math.min(this.editH - 1, d.y1 + 1);
-            this._syncOutlineRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-        }
-    }
-
-    _ensureViewCache() {
-        const vm = this.viewMode;
-        if (!this._staleViews || !this._staleViews.has(vm) || !this.mask) return;
-        this._staleViews.delete(vm);
-        if (vm === 0) this._rebuildOverlayFull();
-        else if (vm === 1) this._rebuildMatteFull();
-        else if (vm === 2) this._rebuildRubylithFull();
-        else if (vm === 3) this._rebuildOutlineFull();
     }
 
     requestDraw() {
@@ -486,7 +498,7 @@ export class IMEEditor {
         }
         this.editW = Math.max(1, Math.round(this.nativeW * this.editScale));
         this.editH = Math.max(1, Math.round(this.nativeH * this.editScale));
-        this._ensureBuffers();
+        this._ensureOutlineBuf();
         try {
             const st = await api.fetchState(this.editorId);
             this.digest = st.digest || "";
@@ -558,12 +570,9 @@ export class IMEEditor {
         }
         this.mask = this.masks.get(idx) || this._emptyMask();
         await this._loadImageFrame(idx);
-        this._dirty = null;                           // the caches below are rebuilt for the new frame
-        this._staleViews = new Set([0, 1, 2, 3]);     // the ones not rebuilt now are rebuilt when shown
-        this._rebuildOverlayFull();
-        if (this.viewMode === 1) this._rebuildMatteFull();
-        if (this.viewMode === 2) this._rebuildRubylithFull();
-        if (this.viewMode === 3) this._rebuildOutlineFull();
+        this._tileCache.markAllStale();
+        this._outlineBufStale = true;
+        this._outlineDirty = null;
         this._notify();
         this.requestDraw();
     }
@@ -946,20 +955,76 @@ export class IMEEditor {
         return this.frameKey;
     }
 
+    _samUploadScale() {
+        const px = this.editW * this.editH;
+        return px > SAM_MP_LIMIT ? Math.sqrt(SAM_MP_LIMIT / px) : 1;
+    }
+
     async _rgbPngBlob() {
+        const s = this._samUploadScale();
         const c = document.createElement("canvas");
-        c.width = this.editW;
-        c.height = this.editH;
+        if (s === 1) {
+            c.width = this.editW;
+            c.height = this.editH;
+            const cx = c.getContext("2d");
+            const id = cx.createImageData(this.editW, this.editH);
+            for (let p = 0, i = 0; p < this.editW * this.editH; p++, i += 4) {
+                id.data[i] = this.imageData[i];
+                id.data[i + 1] = this.imageData[i + 1];
+                id.data[i + 2] = this.imageData[i + 2];
+                id.data[i + 3] = 255;
+            }
+            cx.putImageData(id, 0, 0);
+            return new Promise((res) => c.toBlob(res, "image/png"));
+        }
+        const w = Math.max(1, Math.round(this.editW * s));
+        const h = Math.max(1, Math.round(this.editH * s));
+        c.width = w;
+        c.height = h;
         const cx = c.getContext("2d");
-        const id = cx.createImageData(this.editW, this.editH);
-        for (let p = 0, i = 0; p < this.editW * this.editH; p++, i += 4) {
-            id.data[i] = this.imageData[i];
-            id.data[i + 1] = this.imageData[i + 1];
-            id.data[i + 2] = this.imageData[i + 2];
+        cx.imageSmoothingEnabled = true;
+        if (this.imageBitmap) {
+            cx.drawImage(this.imageBitmap, 0, 0, this.editW, this.editH, 0, 0, w, h);
+        } else if (this.imageData) {
+            const full = document.createElement("canvas");
+            full.width = this.editW;
+            full.height = this.editH;
+            const fcx = full.getContext("2d");
+            const id = fcx.createImageData(this.editW, this.editH);
+            for (let p = 0, i = 0; p < this.editW * this.editH; p++, i += 4) {
+                id.data[i] = this.imageData[i];
+                id.data[i + 1] = this.imageData[i + 1];
+                id.data[i + 2] = this.imageData[i + 2];
+                id.data[i + 3] = 255;
+            }
+            fcx.putImageData(id, 0, 0);
+            cx.drawImage(full, 0, 0, this.editW, this.editH, 0, 0, w, h);
+        }
+        return new Promise((res) => c.toBlob(res, "image/png"));
+    }
+
+    _upscaleMaskUint8(src, sw, sh, dw, dh) {
+        const c = document.createElement("canvas");
+        c.width = sw;
+        c.height = sh;
+        const cx = c.getContext("2d");
+        const id = cx.createImageData(sw, sh);
+        for (let p = 0, i = 0; p < src.length; p++, i += 4) {
+            const v = src[p];
+            id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
             id.data[i + 3] = 255;
         }
         cx.putImageData(id, 0, 0);
-        return new Promise((res) => c.toBlob(res, "image/png"));
+        const out = document.createElement("canvas");
+        out.width = dw;
+        out.height = dh;
+        const ocx = out.getContext("2d");
+        ocx.imageSmoothingEnabled = true;
+        ocx.drawImage(c, 0, 0, sw, sh, 0, 0, dw, dh);
+        const oid = ocx.getImageData(0, 0, dw, dh);
+        const mask = new Uint8Array(dw * dh);
+        for (let p = 0, i = 0; p < mask.length; p++, i += 4) mask[p] = oid.data[i];
+        return mask;
     }
 
     clearSamState(report = true) {
@@ -983,23 +1048,26 @@ export class IMEEditor {
         this._refineStrokeStart = null;
         this._refineCoverage = null;
         this._refineStrokeBounds = null;
-        if (this.tool === "refine" && this.previewCtx) {
-            this.previewCtx.clearRect(0, 0, this.editW, this.editH);
+        if (this.tool === "refine") {
+            this._tileCache.markViewStale("preview");
         }
         if (report) this._reportStatus("");
         this.requestDraw();
     }
 
     _samMeta(seq) {
+        const s = this._samUploadScale();
+        const w = Math.max(1, Math.round(this.editW * s));
+        const h = Math.max(1, Math.round(this.editH * s));
         return {
             editor_id: this.editorId,
             frame_key: this.frameKey,
             seq,
-            width: this.editW,
-            height: this.editH,
+            width: w,
+            height: h,
             model: this.samModel || "",
-            points: this.samPoints.map((p) => [p.x, p.y, p.label]),
-            box: this.samBox ? [...this.samBox] : null,
+            points: this.samPoints.map((p) => [p.x * s, p.y * s, p.label]),
+            box: this.samBox ? this.samBox.map((v) => v * s) : null,
         };
     }
 
@@ -1038,12 +1106,18 @@ export class IMEEditor {
                 }
             }
             if (seq !== this.samSeq || ac.signal.aborted) return;
-            if (result.width !== this.editW || result.height !== this.editH) {
+            const s = this._samUploadScale();
+            const expectW = Math.max(1, Math.round(this.editW * s));
+            const expectH = Math.max(1, Math.round(this.editH * s));
+            if (result.width !== expectW || result.height !== expectH) {
                 this._reportStatus("SAM returned an unexpected mask size.", "error");
                 return;
             }
             this.samScore = result.score;
-            this._setCandidatePreview(result.mask);
+            const mask = s === 1
+                ? result.mask
+                : this._upscaleMaskUint8(result.mask, expectW, expectH, this.editW, this.editH);
+            this._setCandidatePreview(mask);
             this._reportStatus(`SAM score: ${result.score.toFixed(2)}`);
         } catch (e) {
             if (seq !== this.samSeq || ac.signal.aborted || e.superseded) return;
@@ -1087,8 +1161,8 @@ export class IMEEditor {
     }
 
     _syncRefineBandPreview() {
-        if (!this.refineBand || !this.previewCtx) return;
-        this._syncPreviewRect(0, 0, this.editW, this.editH, this.refineBand);
+        if (!this.refineBand) return;
+        this._tileCache.markViewStale("preview");
         this.requestDraw();
     }
 
@@ -1525,9 +1599,6 @@ export class IMEEditor {
 
     cycleView() {
         this.viewMode = (this.viewMode + 1) % 5;
-        if (this.viewMode === 1) this._rebuildMatteFull();
-        if (this.viewMode === 2) this._rebuildRubylithFull();
-        if (this.viewMode === 3) this._rebuildOutlineFull();
         try { localStorage.setItem(VIEW_MODE_KEY, String(this.viewMode)); } catch (_) { /* ignore */ }
         this.requestDraw();
     }
@@ -1535,8 +1606,7 @@ export class IMEEditor {
     _drawNow() {
         const c = this.dom.canvas;
         if (!c) return;
-        this._flushDirty();
-        this._ensureViewCache();
+        this._flushOutlineBuf();
         const ctx = c.getContext("2d");
         const dpr = window.devicePixelRatio || 1;
         const vw = c.clientWidth, vh = c.clientHeight;
@@ -1558,18 +1628,18 @@ export class IMEEditor {
             ctx.drawImage(this.imageBitmap, 0, 0, this.editW, this.editH);
         }
         ctx.imageSmoothingEnabled = this.zoom < 1;
-        if (vm === 1 && this.matteCanvas) {
-            ctx.drawImage(this.matteCanvas, 0, 0, this.editW, this.editH);
-        } else if (vm === 0 && this.overlayCanvas) {
-            ctx.drawImage(this.overlayCanvas, 0, 0, this.editW, this.editH);
-        } else if (vm === 2 && this.rubylithCanvas) {
-            ctx.drawImage(this.rubylithCanvas, 0, 0, this.editW, this.editH);
-        } else if (vm === 3 && this.zoom < 2 && this.outlineCanvas) {
+        if (vm === 1) {
+            this._drawViewTiles(ctx, "matte", null, vw, vh);
+        } else if (vm === 0) {
+            this._drawViewTiles(ctx, "overlay", null, vw, vh);
+        } else if (vm === 2) {
+            this._drawViewTiles(ctx, "rubylith", null, vw, vh);
+        } else if (vm === 3 && this.zoom < 2) {
             ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(this.outlineCanvas, 0, 0, this.editW, this.editH);
+            this._drawViewTiles(ctx, "outline", null, vw, vh);
         }
-        if (vm !== 4 && this.candidatePreview && this.previewCanvas) {
-            ctx.drawImage(this.previewCanvas, 0, 0, this.editW, this.editH);
+        if (vm !== 4 && this.candidatePreview) {
+            this._drawViewTiles(ctx, "preview", this.candidatePreview, vw, vh);
         }
         ctx.imageSmoothingEnabled = true;
         if (this.shapeStart && this.shapeCur) {
@@ -1789,12 +1859,11 @@ export class IMEEditor {
         this.dirtyFrames.clear();
         this.cleanLru = [];
         this.mask = null;
-        this.overlayCanvas = null;
-        this.previewCanvas = null;
-        this.matteCanvas = null;
-        this.rubylithCanvas = null;
-        this.outlineCanvas = null;
+        this._tileCache?.dispose();
+        this._tileCache = null;
         this._outlineBuf = null;
+        this._outlineDirty = null;
+        this._outlineBufStale = false;
         this.history = null;
         this._maskClipboard = null;
         this.node = null;

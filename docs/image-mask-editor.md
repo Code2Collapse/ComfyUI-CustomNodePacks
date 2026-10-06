@@ -84,9 +84,10 @@ All result-stage parameters are applied in Python every run and never baked into
 
 ## Limits
 
-- Images over 16 MP are edited at reduced resolution (a banner says so) and the mask is upscaled on save.
+- Images up to 40 MP (8K UHD is 33 MP) are edited at their native resolution. The views are drawn from 512 px tiles kept under a 64 MB budget, so the browser holds the mask (1 byte per pixel), the image (4 bytes per pixel), at most 64 MB of tiles and at most 128 MB of undo. Larger images are edited at reduced resolution (a banner says so) and the mask is upscaled on save.
+- For smart select on frames above 4 MP the editor sends SAM a 4 MP copy and scales the result back up; SAM works at about 1 MP internally either way.
 - Undo is kept per frame under one shared 128 MB budget; switching frames does not discard another frame's stack.
-- Export PNG saves the mask at the editing resolution (the image's own size, or the reduced size above 16 MP). Import PNG reads luminance, or the alpha channel when the PNG has transparency, resizes to the editing size, and commits through the toolbar selection mode as one undo step.
+- Export PNG saves the mask at the editing resolution (the image's own size, or the reduced size above 40 MP). Import PNG reads luminance, or the alpha channel when the PNG has transparency, resizes to the editing size, and commits through the toolbar selection mode as one undo step.
 - Apply to all frames keeps every frame's mask in the browser until you save, so it refuses above about 512 MB of masks and says so. For long clips set the node's `frame_mode` to `shared` instead: it uses frame 1's mask for every frame without copying it.
 
 ## Requirements for smart select and edge refine

@@ -46,6 +46,57 @@ def _run_colour(tmp_path: Path, body: str, inputs: dict) -> dict:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
+def _run_tiles(tmp_path: Path, body: str, inputs: dict) -> dict:
+    probe = tmp_path / "probe_tiles.mjs"
+    probe.write_text(
+        f"const TC = await import({json.dumps((JS / 'tiles.js').resolve().as_uri())});\n"
+        f"const IN = {json.dumps(inputs)};\n"
+        "const out = {};\n" + body + "\nconsole.log(JSON.stringify(out));\n",
+        encoding="utf-8")
+    r = subprocess.run([NODE, str(probe)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-2000:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _tiles_for_rect_ref(x0: int, y0: int, x1: int, y1: int, w: int, h: int, level: int = 0, tile: int = 512) -> list[dict]:
+    rx0, ry0 = max(0, x0), max(0, y0)
+    rx1, ry1 = min(w - 1, x1), min(h - 1, y1)
+    if rx1 < rx0 or ry1 < ry0 or w <= 0 or h <= 0:
+        return []
+    scale = 1 << level
+    span = tile * scale
+    tx0, tx1 = rx0 // span, rx1 // span
+    ty0, ty1 = ry0 // span, ry1 // span
+    out = []
+    for ty in range(ty0, ty1 + 1):
+        y = ty * span
+        image_h = min(span, h - y)
+        th = min(tile, int(np.ceil(image_h / scale)))
+        for tx in range(tx0, tx1 + 1):
+            x = tx * span
+            image_w = min(span, w - x)
+            tw = min(tile, int(np.ceil(image_w / scale)))
+            out.append({
+                "tx": tx, "ty": ty, "x": x, "y": y, "w": tw, "h": th,
+                "level": level, "scale": scale, "imageW": image_w, "imageH": image_h,
+            })
+    return out
+
+
+def _lod_block_means_ref(mask: np.ndarray, w: int, h: int, level: int) -> np.ndarray:
+    scale = 1 << level
+    gw = int(np.ceil(w / scale))
+    gh = int(np.ceil(h / scale))
+    out = np.zeros((gh, gw), np.float32)
+    for gy in range(gh):
+        for gx in range(gw):
+            x0, y0 = gx * scale, gy * scale
+            x1, y1 = min(w, x0 + scale), min(h, y0 + scale)
+            block = mask[y0:y1, x0:x1]
+            out[gy, gx] = float(block.mean()) if block.size else 0.0
+    return out
+
+
 def _run_view(tmp_path: Path, body: str, inputs: dict) -> dict:
     probe = tmp_path / "probe_view.mjs"
     probe.write_text(
@@ -470,6 +521,142 @@ def test_frame_history_evicts_other_frame_first(tmp_path):
     assert out["bytes"] <= 30 * 1024 * 1024
 
 
+def test_tiles_for_rect_edges_and_partial_last_tile(tmp_path):
+    cases = [
+        (0, 0, 999, 776, 1000, 777),
+        (500, 500, 1000, 776, 1000, 777),
+        (0, 0, 63, 47, 64, 48),
+        (60, 40, 63, 47, 64, 48),
+    ]
+    for x0, y0, x1, y1, w, h in cases:
+        out = _run_tiles(tmp_path, """
+          out.t = TC.tilesForRect(IN.x0, IN.y0, IN.x1, IN.y1, IN.w, IN.h);
+        """, {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "w": w, "h": h})
+        ref = _tiles_for_rect_ref(x0, y0, x1, y1, w, h)
+        assert out["t"] == ref
+
+
+def test_mark_stale_rect_touches_exact_tiles(tmp_path):
+    w, h = 1200, 900
+    out = _run_tiles(tmp_path, """
+      const cache = new TC.TileCache({ imgW: IN.w, imgH: IN.h, byteBudget: 1e9 });
+      const views = ["overlay", "matte", "rubylith", "outline", "preview"];
+      const mk = (view, tx, ty) => ({ w: 512, h: 512, dirty: null, bytes: 512 * 512 * 4, view, tx, ty });
+      for (const v of views) {
+        for (let ty = 0; ty <= 1; ty++) {
+          for (let tx = 0; tx <= 2; tx++) cache.set(v, 0, tx, ty, mk(v, tx, ty));
+        }
+      }
+      cache.markStaleRect(520, 10, 530, 20);
+      const stale = [];
+      for (const [key, tile] of cache._map.entries()) {
+        if (tile.dirty) stale.push(key);
+      }
+      out.stale = stale.sort();
+      out.keys = [...cache._map.keys()].sort();
+    """, {"w": w, "h": h})
+    touched = _tiles_for_rect_ref(520, 10, 530, 20, w, h)
+    suffixes = {f":0:{t['tx']}:{t['ty']}" for t in touched}
+    expected = sorted(k for k in out["keys"] if any(k.endswith(s) for s in suffixes))
+    assert out["stale"] == expected
+    assert len(out["stale"]) == len(suffixes) * 5
+
+
+def test_tile_cache_lru_eviction(tmp_path):
+    tile_bytes = 512 * 512 * 4
+    budget = 2 * tile_bytes
+    out = _run_tiles(tmp_path, """
+      const cache = new TC.TileCache({ imgW: 4096, imgH: 4096, byteBudget: IN.budget });
+      const mk = (id) => ({ w: 512, h: 512, dirty: null, bytes: IN.tileBytes, id });
+      cache.set("overlay", 0, 0, 0, mk("a"));
+      cache.set("overlay", 0, 1, 0, mk("b"));
+      out.afterTwo = { bytes: cache.bytesUsed(), keys: [...cache._map.keys()].sort() };
+      cache.set("overlay", 0, 2, 0, mk("c"));
+      out.afterThree = { bytes: cache.bytesUsed(), keys: [...cache._map.keys()].sort() };
+      cache.get("overlay", 0, 1, 0);
+      cache.set("overlay", 0, 3, 0, mk("d"));
+      out.afterFour = { bytes: cache.bytesUsed(), keys: [...cache._map.keys()].sort() };
+      out.hasA = cache.get("overlay", 0, 0, 0) != null;
+      out.hasB = cache.get("overlay", 0, 1, 0) != null;
+      out.hasC = cache.get("overlay", 0, 2, 0) != null;
+      out.hasD = cache.get("overlay", 0, 3, 0) != null;
+    """, {"budget": budget, "tileBytes": tile_bytes})
+    assert out["afterTwo"]["bytes"] <= budget
+    assert out["afterThree"]["bytes"] <= budget
+    assert out["afterFour"]["bytes"] <= budget
+    assert out["hasA"] is False
+    assert out["hasB"] is True
+    assert out["hasC"] is False
+    assert out["hasD"] is True
+
+
+def test_lod_block_mean_matches_numpy(tmp_path):
+    rng = np.random.default_rng(11)
+    w, h = 777, 513
+    mask = rng.integers(0, 256, (h, w), dtype=np.uint8)
+    for level in (1, 2):
+        out = _run_tiles(tmp_path, """
+          const V = await import(IN.viewUri);
+          const m = new Uint8Array(IN.mask);
+          const r = V.lodBlockMeans(m, IN.w, IN.h, IN.level);
+          out.means = Array.from(r.means);
+          out.gw = r.gw; out.gh = r.gh;
+        """, {
+            "w": w, "h": h, "level": level,
+            "mask": mask.reshape(-1).tolist(),
+            "viewUri": (JS / "view.js").resolve().as_uri(),
+        })
+        ref = _lod_block_means_ref(mask, w, h, level)
+        got = np.array(out["means"], np.float32).reshape(out["gh"], out["gw"])
+        assert got.shape == ref.shape
+        assert np.max(np.abs(got - ref)) < 1e-4
+
+
+def test_mark_stale_rect_subrect_union_per_level(tmp_path):
+    w, h = 2048, 1536
+    out = _run_tiles(tmp_path, """
+      const cache = new TC.TileCache({ imgW: IN.w, imgH: IN.h, byteBudget: 1e9 });
+      const mk = () => ({ w: 512, h: 512, dirty: null, bytes: 512 * 512 * 4 });
+      cache.set("overlay", 0, 1, 1, mk());
+      cache.set("overlay", 2, 0, 0, mk());
+      cache.markStaleRect(600, 600, 605, 605);
+      cache.markStaleRect(608, 608, 610, 610);
+      const d0 = cache.get("overlay", 0, 1, 1).dirty;
+      const d2 = cache.get("overlay", 2, 0, 0).dirty;
+      const t0 = TC.tilesForRect(600, 600, 610, 610, IN.w, IN.h, 0).find(t => t.tx === 1 && t.ty === 1);
+      const t2 = TC.tilesForRect(600, 600, 610, 610, IN.w, IN.h, 2).find(t => t.tx === 0 && t.ty === 0);
+      out.d0 = d0;
+      out.d2 = d2;
+      const u0 = TC.dirtyTileRect(600, 600, 605, 605, t0);
+      const u1 = TC.dirtyTileRect(608, 608, 610, 610, t0);
+      out.ref0 = {
+        x0: Math.min(u0.x0, u1.x0), y0: Math.min(u0.y0, u1.y0),
+        x1: Math.max(u0.x1, u1.x1), y1: Math.max(u0.y1, u1.y1),
+      };
+      out.ref2 = TC.dirtyTileRect(600, 600, 610, 610, t2);
+    """, {"w": w, "h": h})
+    assert out["d0"] == out["ref0"]
+    assert out["d2"] == out["ref2"]
+    assert out["d0"]["x1"] - out["d0"]["x0"] < 50
+    assert out["d2"]["x1"] - out["d2"]["x0"] < 10
+
+
+def test_pick_lod_level_8k_fit_within_budget(tmp_path):
+    w, h = 7680, 4320
+    zoom = 0.19
+    budget = 64 * 512 * 512 * 4
+    out = _run_tiles(tmp_path, """
+      const ix0 = 0, iy0 = 0, ix1 = IN.w - 1, iy1 = IN.h - 1;
+      out.L = TC.pickLodLevel(IN.zoom, ix0, iy0, ix1, iy1, IN.w, IN.h, IN.budget);
+      out.count = TC.tilesForRect(ix0, iy0, ix1, iy1, IN.w, IN.h, out.L).length;
+      out.cap = TC.maxTilesForBudget(IN.budget);
+      out.Lzoom = TC.lodLevelForZoom(IN.zoom);
+    """, {"w": w, "h": h, "zoom": zoom, "budget": budget})
+    assert out["count"] <= out["cap"]
+    assert out["L"] >= out["Lzoom"]
+    assert out["L"] >= 2
+
+
 def test_frame_history_undo_after_frame_switch(tmp_path):
     w, h = 4, 4
     out = _run_view(tmp_path, """
@@ -492,3 +679,18 @@ def test_frame_history_undo_after_frame_switch(tmp_path):
       out.m1 = Array.from(mask1);
     """, {"w": w, "h": h, "n": w * h})
     assert np.all(_mask(out["m1"], w, h) == 100)
+
+
+def test_tile_cache_set_same_tile_keeps_its_canvas(tmp_path):
+    # A tile refreshed in place and stored again must not be released (its canvas zeroed) - found live at 8K.
+    out = _run_tiles(tmp_path, """
+      const tc = new TC.TileCache({ byteBudget: 4 * 512 * 512 * 4, imgW: 2048, imgH: 2048 });
+      const tile = { canvas: { width: 512, height: 512 }, w: 512, h: 512 };
+      tc.set("overlay", 0, 0, 0, tile);
+      tc.markStaleRect(10, 10, 20, 20);
+      const again = tc.get("overlay", 0, 0, 0);
+      tc.set("overlay", 0, 0, 0, again);
+      out.w = again.canvas.width; out.h = again.canvas.height; out.dirty = again.dirty;
+    """, {})
+    assert out["w"] == 512 and out["h"] == 512 and out["dirty"] is None
+
