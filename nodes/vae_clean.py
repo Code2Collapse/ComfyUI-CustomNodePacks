@@ -38,6 +38,8 @@ looks like a real colour rather than a cast.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -247,6 +249,266 @@ def soften_contrast(lin: torch.Tensor, amount: float) -> torch.Tensor:
     return lin * (1.0 - pedestal) + pedestal
 
 
+# ── round-trip metering (R5) and original-pixel restore (R4) ───────────────
+
+def _align_reference(image: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    """Broadcast a 1-frame reference or require matching batch/H/W."""
+    if reference.shape[-3:] != image.shape[-3:]:
+        raise VAECleanError(
+            f"Reference size {tuple(reference.shape)} does not match image "
+            f"size {tuple(image.shape)}. Height and width must match.")
+    if reference.shape[0] == image.shape[0]:
+        return reference
+    if reference.shape[0] == 1:
+        return reference.expand(image.shape[0], -1, -1, -1)
+    raise VAECleanError(
+        f"Reference has {reference.shape[0]} frames but the image has "
+        f"{image.shape[0]}. Connect a single-frame plate or match the count.")
+
+
+def _box_mean(x: torch.Tensor, radius: int) -> torch.Tensor:
+    """Mean over a (2r+1)^2 window with replicate padding. x: [B,H,W]."""
+    if radius < 1:
+        return x
+    k = 2 * radius + 1
+    x4 = x.unsqueeze(1)
+    w = torch.ones(1, 1, k, k, dtype=x.dtype, device=x.device) / (k * k)
+    return F.conv2d(
+        F.pad(x4, (radius, radius, radius, radius), mode="replicate"), w,
+    ).squeeze(1)
+
+
+def _psnr_vs_ref(a: torch.Tensor, b: torch.Tensor, peak: float = 1.0) -> float:
+    mse = float(torch.mean((a.float() - b.float()) ** 2))
+    if mse == 0.0:
+        return 99.0
+    return 10.0 * math.log10((peak * peak) / mse)
+
+
+def _psnr_masked(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
+                 peak: float = 1.0) -> float:
+    """PSNR over pixels where mask is True. a,b: [B,H,W,C]; mask: [B,H,W]."""
+    m = mask.unsqueeze(-1).expand_as(a)
+    if not m.any():
+        return 99.0
+    diff = (a[m] - b[m]).float()
+    mse = float(torch.mean(diff ** 2))
+    if mse == 0.0:
+        return 99.0
+    return 10.0 * math.log10((peak * peak) / mse)
+
+
+def write_back_unchanged(
+    image: torch.Tensor,
+    reference: torch.Tensor,
+    threshold: float,
+    radius: int,
+) -> tuple[torch.Tensor, dict]:
+    """Write back unchanged pixels from reference (R4). Experimental."""
+    img = image.float()
+    ref = _align_reference(img, reference.float())
+    radius = max(1, int(radius))
+
+    d = (img - ref).abs().mean(dim=-1)
+    d_mean = _box_mean(d, radius)
+    changed = d_mean > threshold
+
+    k = 2 * radius + 1
+    dilated = F.max_pool2d(
+        changed.float().unsqueeze(1),
+        kernel_size=k, stride=1, padding=radius,
+    ).squeeze(1) > 0.5
+
+    feather = _box_mean(dilated.float(), radius)
+    # A box mean of ones sums to 0.99999994, not 1: snap float noise at both ends so pixels the write-back does
+    # not touch (well inside an edit, or far from one) come out bit-exact.
+    feather = torch.where(feather > 1.0 - 1e-6, torch.ones_like(feather),
+                          torch.where(feather < 1e-6, torch.zeros_like(feather), feather))
+    fully_restored = feather == 0
+    psnr_before = _psnr_masked(img, ref, fully_restored)
+    m = feather.unsqueeze(-1)
+    out = m * img + (1.0 - m) * ref
+    psnr_after = _psnr_masked(out, ref, fully_restored)
+
+    return out, {
+        "restored_share": float(fully_restored.float().mean()),
+        "psnr_unchanged_before": psnr_before,
+        "psnr_unchanged_after": psnr_after,
+    }
+
+
+def srgb_to_lab(t: torch.Tensor) -> torch.Tensor:
+    """sRGB (D65) to CIE Lab using the exact piecewise EOTF."""
+    lin = srgb_to_linear(t.clamp(min=0.0))
+    # sRGB D65 -> XYZ (IEC 61966-2-1)
+    r, g, b = lin[..., 0], lin[..., 1], lin[..., 2]
+    x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b
+    y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+    z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b
+    # D65 reference white
+    xn, yn, zn = 0.95047, 1.0, 1.08883
+    xr, yr, zr = x / xn, y / yn, z / zn
+    delta = 6.0 / 29.0
+    delta3 = delta ** 3
+    inv3d2 = 1.0 / (3.0 * delta ** 2)
+    fx = torch.where(xr > delta3, xr.pow(1.0 / 3.0), xr * inv3d2 + 4.0 / 29.0)
+    fy = torch.where(yr > delta3, yr.pow(1.0 / 3.0), yr * inv3d2 + 4.0 / 29.0)
+    fz = torch.where(zr > delta3, zr.pow(1.0 / 3.0), zr * inv3d2 + 4.0 / 29.0)
+    l = 116.0 * fy - 16.0
+    a = 500.0 * (fx - fy)
+    b = 200.0 * (fy - fz)
+    return torch.stack((l, a, b), dim=-1)
+
+
+def ciede2000(lab1: torch.Tensor, lab2: torch.Tensor) -> torch.Tensor:
+    """CIEDE2000 colour difference (Sharma et al. 2005)."""
+    l1, a1, b1 = lab1[..., 0], lab1[..., 1], lab1[..., 2]
+    l2, a2, b2 = lab2[..., 0], lab2[..., 1], lab2[..., 2]
+
+    c1 = torch.sqrt(a1 * a1 + b1 * b1)
+    c2 = torch.sqrt(a2 * a2 + b2 * b2)
+    c_bar = (c1 + c2) * 0.5
+    c_bar7 = c_bar ** 7
+    g = 0.5 * (1.0 - torch.sqrt(c_bar7 / (c_bar7 + 25.0 ** 7)))
+
+    a1p = (1.0 + g) * a1
+    a2p = (1.0 + g) * a2
+    c1p = torch.sqrt(a1p * a1p + b1 * b1)
+    c2p = torch.sqrt(a2p * a2p + b2 * b2)
+
+    h1p = torch.atan2(b1, a1p)
+    h2p = torch.atan2(b2, a2p)
+    h1p = torch.where(h1p < 0, h1p + 2.0 * torch.pi, h1p)
+    h2p = torch.where(h2p < 0, h2p + 2.0 * torch.pi, h2p)
+
+    dlp = l2 - l1
+    dcp = c2p - c1p
+
+    dhp = h2p - h1p
+    dhp = torch.where(dhp > torch.pi, dhp - 2.0 * torch.pi, dhp)
+    dhp = torch.where(dhp < -torch.pi, dhp + 2.0 * torch.pi, dhp)
+    dhp = torch.where((c1p * c2p) == 0, torch.zeros_like(dhp), dhp)
+    dhp = 2.0 * torch.sqrt(c1p * c2p) * torch.sin(dhp * 0.5)
+
+    l_bar_p = (l1 + l2) * 0.5
+    c_bar_p = (c1p + c2p) * 0.5
+
+    hp_sum = h1p + h2p
+    hp_diff = torch.abs(h1p - h2p)
+    h_bar_p = torch.where(
+        (c1p * c2p) == 0,
+        hp_sum,
+        torch.where(
+            hp_diff <= torch.pi,
+            hp_sum * 0.5,
+            torch.where(
+                hp_sum < 2.0 * torch.pi,
+                (hp_sum + 2.0 * torch.pi) * 0.5,
+                (hp_sum - 2.0 * torch.pi) * 0.5,
+            ),
+        ),
+    )
+
+    t = (1.0
+         - 0.17 * torch.cos(h_bar_p - torch.pi / 6.0)
+         + 0.24 * torch.cos(2.0 * h_bar_p)
+         + 0.32 * torch.cos(3.0 * h_bar_p + torch.pi / 30.0)
+         - 0.20 * torch.cos(4.0 * h_bar_p - 63.0 * torch.pi / 180.0))
+
+    d_theta = 30.0 * torch.pi / 180.0 * torch.exp(
+        -(((h_bar_p * 180.0 / torch.pi - 275.0) / 25.0) ** 2)
+    )
+    rc = 2.0 * torch.sqrt(c_bar_p ** 7 / (c_bar_p ** 7 + 25.0 ** 7))
+    sl = 1.0 + 0.015 * (l_bar_p - 50.0) ** 2 / torch.sqrt(20.0 + (l_bar_p - 50.0) ** 2)
+    sc = 1.0 + 0.045 * c_bar_p
+    sh = 1.0 + 0.015 * c_bar_p * t
+    rt = -torch.sin(2.0 * d_theta) * rc
+
+    return torch.sqrt(
+        (dlp / sl) ** 2
+        + (dcp / sc) ** 2
+        + (dhp / sh) ** 2
+        + rt * (dcp / sc) * (dhp / sh)
+    )
+
+
+def _spatial_subsample_stride(frames: int, height: int, width: int,
+                              limit: int = 2_000_000) -> int:
+    n_pixels = frames * height * width
+    return max(1, int(math.ceil(math.sqrt(n_pixels / limit))))
+
+
+def roundtrip_report(image: torch.Tensor, reference: torch.Tensor) -> dict:
+    """Round-trip loss vs reference (R5). PSNR/max_err on raw; dE2000 on clamped."""
+    img = image.float()
+    ref = reference.float()
+    n_frames_img = img.shape[0]
+    n_frames_ref = ref.shape[0]
+
+    if img.shape[1:3] != ref.shape[1:3]:
+        ih, iw = img.shape[1], img.shape[2]
+        rh, rw = ref.shape[1], ref.shape[2]
+        line = (
+            f"Round trip not measured: the reference is {rw}x{rh}, "
+            f"the image {iw}x{ih}."
+        )
+        return {
+            "psnr": None,
+            "max_err": None,
+            "mean_de2000": None,
+            "frames_image": n_frames_img,
+            "frames_reference": n_frames_ref,
+            "frame_note": None,
+            "outside_01_share": None,
+            "lines": [line],
+        }
+
+    if n_frames_ref == 1 and n_frames_img > 1:
+        ref = ref.expand(n_frames_img, -1, -1, -1)
+    elif n_frames_ref != n_frames_img:
+        common = min(n_frames_img, n_frames_ref)
+        img = img[:common]
+        ref = ref[:common]
+    else:
+        common = n_frames_img
+
+    outside = ((img < 0.0) | (img > 1.0)).any(dim=-1)
+    outside_share = float(outside.float().mean())
+
+    max_err = float((img - ref).abs().max())
+    psnr = _psnr_vs_ref(img, ref, peak=1.0)
+
+    stride = _spatial_subsample_stride(img.shape[0], img.shape[1], img.shape[2])
+    img_s = img[:, ::stride, ::stride, :].clamp(0.0, 1.0)
+    ref_s = ref[:, ::stride, ::stride, :].clamp(0.0, 1.0)
+    mean_de = float(ciede2000(srgb_to_lab(img_s), srgb_to_lab(ref_s)).mean())
+
+    lines = [
+        f"Round-trip vs reference: PSNR {psnr:.2f} dB (raw, peak 1.0), "
+        f"max error {max_err:.4f}, mean ΔE2000 {mean_de:.3f} (clamped 0..1).",
+        f"Pixels outside 0..1: {outside_share * 100:.2f}%.",
+    ]
+    frame_note = None
+    if n_frames_ref > 1 and n_frames_img > 1 and n_frames_img != n_frames_ref:
+        frame_note = (
+            f"Frame count: image {n_frames_img}, reference {n_frames_ref} "
+            f"(compared first {common}). A Wan VAE encode rounds down to 4n+1 "
+            f"frames and drops the rest without a message."
+        )
+        lines.append(frame_note)
+
+    return {
+        "psnr": psnr,
+        "max_err": max_err,
+        "mean_de2000": mean_de,
+        "frames_image": n_frames_img,
+        "frames_reference": n_frames_ref,
+        "frame_note": frame_note,
+        "outside_01_share": outside_share,
+        "lines": lines,
+    }
+
+
 def clean_chroma(lin: torch.Tensor, strength: float) -> torch.Tensor:
     """Blur CHROMA only, leaving luma untouched.
 
@@ -408,6 +670,26 @@ class VAECleanMEC:
                 "reference": ("IMAGE", {
                     "tooltip": "Required by 'match reference'. The plate, or "
                                "any frame whose colour you want copied."}),
+                "restore_unchanged": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 0.5, "step": 0.005,
+                    "tooltip": "Experimental. 0 = off. Every VAE round trip "
+                               "loses detail everywhere, even where nothing was "
+                               "meant to change. With the original plate wired "
+                               "to 'reference', this writes the original pixels "
+                               "back wherever the picture did not really change, "
+                               "and keeps the edit.\n"
+                               "The value is how far the local average may move "
+                               "and still count as unchanged. Measured on the "
+                               "Flux VAE: one round trip moves it by up to 0.037, "
+                               "three by up to 0.050 - so start near 0.05-0.07. "
+                               "Too low leaves VAE loss in place; too high also "
+                               "reverts subtle intended changes."}),
+                "restore_radius": ("INT", {
+                    "default": 8, "min": 1, "max": 64,
+                    "tooltip": "Window for the write-back, in pixels (8 = one "
+                               "latent cell of an 8x VAE). An edit's influence "
+                               "reaches about 3x this far past its edge, so the "
+                               "boundary blends rather than cuts. Experimental."}),
             },
         }
 
@@ -432,7 +714,8 @@ class VAECleanMEC:
         return h.hexdigest()
 
     def clean(self, image, balance_mode, balance_strength, saturation,
-              contrast_restore, chroma_cleanup, reference=None):
+              contrast_restore, chroma_cleanup, reference=None,
+              restore_unchanged=0.0, restore_radius=8):
         if image.ndim != 4 or image.shape[-1] < 3:
             raise VAECleanError(
                 f"Expected an IMAGE batch [B,H,W,C], got {tuple(image.shape)}.")
@@ -440,8 +723,28 @@ class VAECleanMEC:
         srgb = image.float().clamp(0.0, 1.0)
         before = measure(srgb)
 
-        lin = srgb_to_linear(srgb)
+        roundtrip_lines: list[str] = []
+        if reference is not None:
+            roundtrip_lines = roundtrip_report(image.float(), reference)["lines"]
+
+        working = image.float()
         actions: list[str] = []
+        if restore_unchanged > 0:
+            if reference is None:
+                raise VAECleanError(
+                    "restore_unchanged is set but no reference image is "
+                    "connected. Wire the original plate, or set "
+                    "restore_unchanged to 0.")
+            working, rinfo = write_back_unchanged(
+                working, reference, float(restore_unchanged), int(restore_radius))
+            actions.append(
+                f"Experimental restore: {rinfo['restored_share'] * 100:.1f}% of "
+                f"pixels written back from reference. PSNR on unchanged pixels "
+                f"{rinfo['psnr_unchanged_before']:.1f} -> "
+                f"{rinfo['psnr_unchanged_after']:.1f} dB.")
+
+        srgb = working.clamp(0.0, 1.0)
+        lin = srgb_to_linear(srgb)
 
         lin, why = balance(lin, balance_mode, reference=reference,
                            strength=float(balance_strength))
@@ -469,7 +772,12 @@ class VAECleanMEC:
         out = linear_to_srgb(lin).clamp(0.0, 1.0)
         after = measure(out)
         cast = max(abs(c) for c in before["cast"])
-        return (out.to(image.dtype), describe(before, after, actions),
+        report_body = describe(before, after, actions)
+        if roundtrip_lines:
+            report = "\n".join(roundtrip_lines + ["", report_body])
+        else:
+            report = report_body
+        return (out.to(image.dtype), report,
                 float(cast), float(before["saturation"]))
 
 

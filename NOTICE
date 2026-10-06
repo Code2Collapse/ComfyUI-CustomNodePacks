@@ -134,3 +134,9 @@ Vendored third-party packages (under third_party/):
                 nodes/prompt_relay/NOTICE.md and
                 THIRD_PARTY_LICENSES/PromptRelay-NOTICE.txt.
 
+
+  * Wan spatial-tiled VAE decode helper (nodes/_vae_tiled.py)
+      Author:   Code2Collapse (same author as this pack)
+      Source:   ComfyUI-WanNodeExperiments, nodes/wan_director/features/_local_vae_hdr.py
+      License:  Apache-2.0 (permissive -> this pack, attribution kept in the file header)
+      Usage:    used by C2CVAEQualityDecode's spatial tiling (ledger L7.39).

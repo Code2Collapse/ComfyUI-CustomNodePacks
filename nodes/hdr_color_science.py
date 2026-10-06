@@ -118,13 +118,10 @@ class C2CACESTonemap:
 
 
 class C2CVAEQualityDecode:
-    """High-quality VAE decode with fp32 precision and spatial-only tiling.
+    """VAE decode with optional fp32, spatial-only tiling, and unclamped output.
 
-    Wan VAE produces significantly better results when decoded in fp32.
-    This node wraps the standard VAE decode with quality improvements:
-    - Forces fp32 computation during decode
-    - Uses spatial-only tiling (temporal coherence preserved)
-    - Optional ACES tone mapping post-decode
+    Measured (L7.41 M1): fp32 adds at most 0.17 dB to round-trip on Flux/Wan 2.1
+    at roughly 2x VAE memory. Spatial tiling preserves temporal coherence.
     """
 
     @classmethod
@@ -135,11 +132,14 @@ class C2CVAEQualityDecode:
                 "vae": ("VAE",),
                 "force_fp32": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Force fp32 during VAE decode for maximum quality.",
+                    "tooltip": "Decode in fp32. Measured gain: at most 0.17 dB on "
+                               "Flux/Wan 2.1 round-trip (~2x VAE memory).",
                 }),
                 "tile_size": ("INT", {
                     "default": 0, "min": 0, "max": 1024, "step": 64,
-                    "tooltip": "Spatial tile size (0=auto/no tiling). Set 256+ for 1080p.",
+                    "tooltip": "Spatial tile size in PIXELS (0=no tiling). "
+                               "Converted with the VAE spatial factor (usually 8). "
+                               "256+ suits 1080p when memory is tight.",
                 }),
                 "apply_aces": ("BOOLEAN", {
                     "default": False,
@@ -150,15 +150,23 @@ class C2CVAEQualityDecode:
                     "tooltip": "Exposure for ACES (only used if apply_aces=True).",
                 }),
             },
+            "optional": {
+                "clamp_output": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Core clamps decoder output to 0..1. Off keeps "
+                               "out-of-range values (4.6x / 5.3x more accurate "
+                               "there on Flux/Wan, measured M2). For HDR/EXR chains.",
+                }),
+            },
         }
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "decode"
     CATEGORY = "MEC/Color Science"
     DESCRIPTION = (
-        "High-fidelity VAE decode for Wan video. Forces fp32 precision, "
-        "uses spatial-only tiling to prevent frame flickering, and "
-        "optionally applies ACES tone mapping for HDR-quality output."
+        "VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only "
+        "tiling for Wan video, optional unclamped output for HDR chains, and "
+        "optional ACES tone mapping."
     )
 
     @classmethod
@@ -167,39 +175,102 @@ class C2CVAEQualityDecode:
             samples, vae, force_fp32, tile_size, apply_aces, exposure, **kwargs,
         )
 
-    def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure):
-        with torch.no_grad():
-            dtype = torch.float32 if force_fp32 else torch.float16
+    @staticmethod
+    def _is_dtype_mismatch_error(exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        return (
+            "should be the same" in msg
+            or "expected scalar type" in msg
+            or "dtype" in msg
+        )
 
+    @staticmethod
+    def _is_vae_dynamic(vae) -> bool:
+        if hasattr(vae, "is_dynamic") and callable(vae.is_dynamic):
+            return bool(vae.is_dynamic())
+        patcher = getattr(vae, "patcher", None)
+        if patcher is not None and hasattr(patcher, "is_dynamic") and callable(patcher.is_dynamic):
+            return bool(patcher.is_dynamic())
+        return False
+
+    def _run_decode(self, vae, latent, tile_size):
+        from ._vae_tiled import decode_wan_spatial_tiled
+
+        if latent.ndim == 5 and tile_size > 0:
+            factor = (
+                vae.spacial_compression_decode()
+                if hasattr(vae, "spacial_compression_decode") else 8
+            )
+            tile_latent = max(1, tile_size // factor)
+            # 25% overlap. Measured on Wan 2.1 (16-latent tiles vs a full decode): overlap 2 -> 42.9 dB,
+            # 4 -> 48.4 dB (core decode_tiled at 4: 47.9), 7 -> 51.1 dB at ~3x the tiles
+            # (docs/evidence/L7.41/tile_overlap_sweep.json). Larger tiles cut seams more cheaply.
+            overlap_latent = max(1, tile_latent // 4)
+            try:
+                return decode_wan_spatial_tiled(vae, latent, tile_latent, overlap_latent)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Spatial-tiled VAE decode failed ({exc}). "
+                    "Try a larger tile_size, tile_size=0 for no tiling, "
+                    "or check that the VAE supports 5D video latents."
+                ) from exc
+        return vae.decode(latent)
+
+    def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure,
+               clamp_output=True):
+        from contextlib import nullcontext
+
+        from ._vae_tiled import unclamped_output, vae_compute_dtype
+
+        with torch.no_grad():
             latent = samples["samples"]
 
-            if latent.ndim == 5 and tile_size > 0:
-                try:
-                    from .wan_director.features._local_vae_hdr import decode_wan_spatial_tiled
-                    result = decode_wan_spatial_tiled(vae, latent, tile_size=tile_size, dtype=dtype)
-                except Exception as exc:
-                    log.warning("Spatial-tiled decode failed (%s); falling back to standard.", exc)
-                    result = vae.decode(latent.to(dtype=dtype))
-            else:
-                original_dtype = None
-                if force_fp32 and hasattr(vae, "first_stage_model"):
-                    try:
-                        original_dtype = next(vae.first_stage_model.parameters()).dtype
-                        if original_dtype != torch.float32:
-                            vae.first_stage_model.to(dtype=torch.float32)
-                    except (StopIteration, AttributeError):
-                        pass
+            def _decode_with_contexts(use_fp32: bool):
+                dtype_ctx = (
+                    vae_compute_dtype(vae, torch.float32)
+                    if use_fp32 else nullcontext()
+                )
+                unclamp_ctx = unclamped_output(vae) if not clamp_output else nullcontext()
+                with dtype_ctx, unclamp_ctx:
+                    return self._run_decode(vae, latent, tile_size)
 
-                result = vae.decode(latent.to(dtype=dtype))
+            try:
+                result = _decode_with_contexts(force_fp32)
+            except RuntimeError as exc:
+                if (
+                    force_fp32
+                    and self._is_vae_dynamic(vae)
+                    and self._is_dtype_mismatch_error(exc)
+                ):
+                    log.warning(
+                        "fp32 decode failed on a dynamic VAE (%s); "
+                        "retrying at the VAE's native dtype.",
+                        exc,
+                    )
+                    result = _decode_with_contexts(False)
+                else:
+                    raise
 
-                if original_dtype is not None and original_dtype != torch.float32:
-                    try:
-                        vae.first_stage_model.to(dtype=original_dtype)
-                    except (AttributeError, RuntimeError):
-                        pass
+            if isinstance(result, dict):
+                result = result.get(
+                    "samples", result.get("sample", next(iter(result.values())))
+                )
 
-            if isinstance(result, torch.Tensor):
-                result = result.float().clamp(0.0, 1.0)
+            if isinstance(result, torch.Tensor) and result.ndim == 5:
+                result = result.reshape(-1, *result.shape[-3:])
+
+            src_frames = samples.get("c2c_source_frames")
+            if (
+                isinstance(src_frames, int)
+                and latent.shape[0] == 1
+                and isinstance(result, torch.Tensor)
+                and result.shape[0] > src_frames
+            ):
+                result = result[:src_frames]
+
+            result = result.float()
+            if clamp_output:
+                result = result.clamp(0.0, 1.0)
 
             if apply_aces:
                 a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14

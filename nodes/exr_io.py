@@ -266,7 +266,7 @@ def _try_imageio_save(path: str, rgb: np.ndarray) -> dict:
     except Exception as exc:  # noqa: BLE001
         # Last-ditch: write a 16-bit TIFF at the same stem and warn.
         alt = os.path.splitext(path)[0] + "_fallback.tif"
-        scaled = (np.clip(rgb, 0.0, 65.535) * 1000.0).astype(np.uint16)
+        scaled = np.round(np.clip(rgb, 0.0, 65.535) * 1000.0).astype(np.uint16)
         iio.imwrite(alt, scaled)
         logger.warning(
             "[MEC] EXR write failed (%s); wrote 16-bit TIFF fallback to %s", exc, alt,
