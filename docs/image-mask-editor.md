@@ -42,6 +42,7 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 | **[ / ]** | Brush size |
 | **V** | Cycle view: Overlay → Matte → Rubylith → Outline → Image (remembered in the browser). Rubylith tints what is NOT selected red, the compositing convention; Outline draws the mask edge as a two-tone line that reads on any image. A pixel grid appears from 800% zoom |
 | **Frame ▾** (toolbar menu) | Copy mask · Paste mask · Apply to all frames · Clear frame · Export PNG · Import PNG |
+| **Layers ▾** (toolbar panel) | Up to 8 layers with add / subtract / intersect modes, visibility and lock. Add layer · reorder · rename (double-click) · delete. **Ctrl+Shift+N** adds a layer; **Alt+[** / **Alt+]** selects the layer below / above |
 | **F / 1** | Fit / 100% |
 | Wheel | Zoom at the pointer |
 | **Space** + drag, or middle drag | Pan |
@@ -88,7 +89,8 @@ All result-stage parameters are applied in Python every run and never baked into
 - For smart select on frames above 4 MP the editor sends SAM a 4 MP copy and scales the result back up; SAM works at about 1 MP internally either way.
 - Undo is kept per frame under one shared 128 MB budget; switching frames does not discard another frame's stack.
 - Export PNG saves the mask at the editing resolution (the image's own size, or the reduced size above 40 MP). Import PNG reads luminance, or the alpha channel when the PNG has transparency, resizes to the editing size, and commits through the toolbar selection mode as one undo step.
-- Apply to all frames keeps every frame's mask in the browser until you save, so it refuses above about 512 MB of masks and says so. For long clips set the node's `frame_mode` to `shared` instead: it uses frame 1's mask for every frame without copying it.
+- Apply to all frames keeps every frame's active layer in the browser until you save, so it refuses above about 512 MB of masks and says so. For long clips set the node's `frame_mode` to `shared` instead: it uses frame 1's mask for every frame without copying it.
+- **Layers.** Up to 8 layers share one stack for every frame; each frame holds its own pixels per layer. Tools edit the **active** layer; the viewer, export, save and edge refine read the **merged** stack (add / subtract / intersect, bottom to top). Copy, paste, clear and apply-to-all affect the active layer only. A locked active layer refuses edits. Painting is undoable per layer; adding, deleting, reordering, renaming and changing a layer's mode or visibility are not, so deleting a layer asks first. The 512 MB guard applies when **adding** a layer (not when switching frames). On disk, a simple single visible add layer keeps today's format (merged PNG only); a sidecar (`layers.json` plus `layers/<id>/` PNGs) is written only for multi-layer stacks or a non-default single layer.
 
 ## Requirements for smart select and edge refine
 

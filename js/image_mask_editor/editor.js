@@ -4,7 +4,7 @@
 import { resolveEditorSource } from "./source.js";
 import { C, hexToRgb } from "./palette.js";
 import { fitView, zoomAtCursor } from "./coords.js";
-import { FrameHistory, captureRect, applyRect, pushUndoEntry } from "./undo.js";
+import { FrameHistory, captureRect, applyRect } from "./undo.js";
 import * as tools from "./tools.js";
 import * as colour from "./colour.js";
 import * as api from "./api.js";
@@ -15,6 +15,10 @@ import {
     overlayTileLOD, matteTileLOD, rubylithTileLOD, previewTileLOD, outlineTileLOD,
 } from "./view.js";
 import { TileCache, tilesForRect, pickLodLevel, DEFAULT_BYTE_BUDGET } from "./tiles.js";
+import {
+    defaultManifest, mergeLayers, makeLayerId, needsSidecar, legacyFillLayer,
+    MAX_LAYERS, LAYER_MEM_CAP,
+} from "./layers.js";
 
 const MP_LIMIT = 40_000_000;
 const SAM_MP_LIMIT = 4_000_000;
@@ -51,6 +55,13 @@ export class IMEEditor {
         this.imageBitmap = null;
         this.imageData = null;
         this.mask = null;
+        this.merged = null;
+        this.layerManifest = defaultManifest();
+        this.frameLayers = new Map();
+        this.dirtyLayerKeys = new Set();
+        this.manifestDirty = false;
+        this.sidecarOnDisk = false;
+        this._legacyMergedPreserve = new Set();
         this._tileCache = new TileCache({ byteBudget: DEFAULT_BYTE_BUDGET });
         this._outlineBuf = null;
         this._outlineBufStale = false;
@@ -122,6 +133,7 @@ export class IMEEditor {
         this.onChange = null;
         this.onToolChange = null;
         this.onStatus = null;
+        this.onLayersChange = null;
     }
 
     _reportStatus(text, kind = "info") {
@@ -159,18 +171,18 @@ export class IMEEditor {
     }
 
     _rebuildOutlineBufFull() {
-        if (!this.mask || !this._outlineBuf) return;
+        if (!this.merged || !this._outlineBuf) return;
         this._outlineBuf.fill(0);
         outlineBufRect(
-            this.mask, this.editW, this.editH,
+            this.merged, this.editW, this.editH,
             0, 0, this.editW - 1, this.editH - 1,
             this._outlineBuf,
         );
     }
 
     _updateOutlineBufRect(x0, y0, x1, y1) {
-        if (!this.mask || !this._outlineBuf) return;
-        outlineBufRect(this.mask, this.editW, this.editH, x0, y0, x1, y1, this._outlineBuf);
+        if (!this.merged || !this._outlineBuf) return;
+        outlineBufRect(this.merged, this.editW, this.editH, x0, y0, x1, y1, this._outlineBuf);
     }
 
     _flushOutlineBuf() {
@@ -206,48 +218,48 @@ export class IMEEditor {
         const { x, y, w, h, level } = t;
         const rw = u1 - u0 + 1;
         const rh = v1 - v0 + 1;
-        if (viewKey === "overlay" && this.mask) {
+        if (viewKey === "overlay" && this.merged) {
             if (level === 0) {
                 overlayRGBA(
-                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    this.merged, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
                     id.data, rw, this._overlayTint, OVERLAY_ALPHA,
                 );
             } else {
                 overlayTileLOD(
-                    this.mask, this.editW, this.editH, level, x, y,
+                    this.merged, this.editW, this.editH, level, x, y,
                     u0, v0, u1, v1, id.data, rw, this._overlayTint, OVERLAY_ALPHA,
                 );
             }
-        } else if (viewKey === "matte" && this.mask) {
+        } else if (viewKey === "matte" && this.merged) {
             if (level === 0) {
                 matteRGBA(
-                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    this.merged, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
                     id.data, rw,
                 );
             } else {
                 matteTileLOD(
-                    this.mask, this.editW, this.editH, level, x, y,
+                    this.merged, this.editW, this.editH, level, x, y,
                     u0, v0, u1, v1, id.data, rw,
                 );
             }
-        } else if (viewKey === "rubylith" && this.mask) {
+        } else if (viewKey === "rubylith" && this.merged) {
             if (level === 0) {
                 rubylithRGBA(
-                    this.mask, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
+                    this.merged, this.editW, this.editH, x + u0, y + v0, x + u1, y + v1,
                     id.data, rw,
                 );
             } else {
                 rubylithTileLOD(
-                    this.mask, this.editW, this.editH, level, x, y,
+                    this.merged, this.editW, this.editH, level, x, y,
                     u0, v0, u1, v1, id.data, rw,
                 );
             }
-        } else if (viewKey === "outline" && this.mask) {
+        } else if (viewKey === "outline" && this.merged) {
             if (level === 0) {
-                outlineTileRGBA(this.mask, this.editW, this.editH, x, y, w, h, id.data, rw);
+                outlineTileRGBA(this.merged, this.editW, this.editH, x, y, w, h, id.data, rw);
             } else {
                 outlineTileLOD(
-                    this.mask, this.editW, this.editH, level, x, y, w, h,
+                    this.merged, this.editW, this.editH, level, x, y, w, h,
                     u0, v0, u1, v1, id.data, rw,
                 );
             }
@@ -294,7 +306,7 @@ export class IMEEditor {
         const id = tile.ctx.createImageData(rw, rh);
         if (viewKey === "outline" && level === 0 && dirtyRect) {
             const tmp = tile.ctx.createImageData(w, h);
-            outlineTileRGBA(this.mask, this.editW, this.editH, t.x, t.y, w, h, tmp.data, w);
+            outlineTileRGBA(this.merged, this.editW, this.editH, t.x, t.y, w, h, tmp.data, w);
             for (let v = v0; v <= v1; v++) {
                 for (let u = u0; u <= u1; u++) {
                     const si = (v * w + u) * 4;
@@ -389,7 +401,7 @@ export class IMEEditor {
         this.applyCandidatePreview();
     }
 
-    // Mask edits mark tiles stale; outlineBuf is updated once per frame in _drawNow when view 3 is shown.
+    // Merged-mask edits mark tiles stale; outlineBuf is updated once per frame in _drawNow when view 3 is shown.
     _maskDirtyRect(x0, y0, x1, y1) {
         const x = Math.max(0, x0 | 0);
         const y = Math.max(0, y0 | 0);
@@ -402,6 +414,213 @@ export class IMEEditor {
             ? { x0: Math.min(od.x0, x), y0: Math.min(od.y0, y), x1: Math.max(od.x1, x2), y1: Math.max(od.y1, y2) }
             : { x0: x, y0: y, x1: x2, y1: y2 };
         this.requestDraw();
+    }
+
+    _activeLayerDef() {
+        const id = this.layerManifest.active;
+        return this.layerManifest.layers.find((l) => l.id === id) || null;
+    }
+
+    _activeLayerLocked() {
+        return this._activeLayerDef()?.locked === true;
+    }
+
+    _editsBlocked() {
+        if (!this._activeLayerLocked()) return false;
+        this._reportStatus("Layer is locked", "error");
+        return true;
+    }
+
+    _frameLayerMap(f) {
+        const fi = f | 0;
+        if (!this.frameLayers.has(fi)) this.frameLayers.set(fi, new Map());
+        return this.frameLayers.get(fi);
+    }
+
+    _getLayerBuf(f, layerId, create = false) {
+        const m = this._frameLayerMap(f);
+        if (m.has(layerId)) return m.get(layerId);
+        if (!create) return null;
+        const buf = this._emptyMask();
+        m.set(layerId, buf);
+        return buf;
+    }
+
+    _syncActiveLayerToMap() {
+        if (!this.mask) return;
+        this._frameLayerMap(this.curFrame).set(this.layerManifest.active, this.mask);
+    }
+
+    _ensureMerged() {
+        if (!this.merged || this.merged.length !== this.editW * this.editH) {
+            this.merged = this._emptyMask();
+        }
+        return this.merged;
+    }
+
+    _recomputeMergedRect(x0, y0, x1, y1) {
+        const out = this._ensureMerged();
+        mergeLayers(
+            this._frameLayerMap(this.curFrame),
+            this.layerManifest.layers,
+            x0, y0, x1, y1,
+            this.editW, out,
+        );
+    }
+
+    _recomputeMergedFull() {
+        this._recomputeMergedRect(0, 0, this.editW - 1, this.editH - 1);
+    }
+
+    _layerEditDirtyRect(x0, y0, x1, y1) {
+        this._recomputeMergedRect(x0, y0, x1, y1);
+        this.masks.set(this.curFrame, this.merged);
+        this._maskDirtyRect(x0, y0, x1, y1);
+    }
+
+    _markLayerDirty(f, layerId) {
+        this.dirtyLayerKeys.add(`${f | 0}:${layerId}`);
+    }
+
+    _frameLayerBytes(f) {
+        const m = this.frameLayers.get(f | 0);
+        const n = m ? m.size : 1;
+        return n * this.editW * this.editH;
+    }
+
+    _canAddLayer() {
+        if (this.layerManifest.layers.length >= MAX_LAYERS) {
+            this._reportStatus(`Maximum ${MAX_LAYERS} layers`, "error");
+            return false;
+        }
+        const bytes = (this.layerManifest.layers.length + 1) * this.editW * this.editH;
+        if (bytes > LAYER_MEM_CAP) {
+            this._reportStatus(
+                `Adding a layer would exceed the ${Math.round(LAYER_MEM_CAP / (1024 * 1024))} MB layer limit for this frame.`,
+                "error",
+            );
+            return false;
+        }
+        return true;
+    }
+
+    _structuralLayerChange() {
+        this._recomputeMergedFull();
+        this.masks.set(this.curFrame, this.merged);
+        this._maskDirtyRect(0, 0, this.editW - 1, this.editH - 1);
+        this.dirtyFrames.add(this.curFrame);
+        this.manifestDirty = true;
+        this._notify();
+        this.onLayersChange?.();
+    }
+
+    getLayerManifest() {
+        return this.layerManifest;
+    }
+
+    setActiveLayer(id) {
+        if (id === this.layerManifest.active) return;
+        if (!this.layerManifest.layers.some((l) => l.id === id)) return;
+        this._syncActiveLayerToMap();
+        this.layerManifest.active = id;
+        this.mask = this._getLayerBuf(this.curFrame, id, true);
+        this.manifestDirty = true;
+        this._notify();
+        this.onLayersChange?.();
+        this.requestDraw();
+    }
+
+    addLayer() {
+        if (!this._canAddLayer()) return false;
+        this._syncActiveLayerToMap();
+        const id = makeLayerId();
+        const n = this.layerManifest.layers.length + 1;
+        this.layerManifest.layers.push({
+            id,
+            name: `Layer ${n}`,
+            mode: "add",
+            visible: true,
+            locked: false,
+        });
+        this.layerManifest.active = id;
+        this.mask = this._emptyMask();
+        this._frameLayerMap(this.curFrame).set(id, this.mask);
+        this._markLayerDirty(this.curFrame, id);
+        this._structuralLayerChange();
+        this._reportStatus(`Added layer ${n}`);
+        return true;
+    }
+
+    async deleteLayer(id) {
+        if (this.layerManifest.layers.length <= 1) {
+            this._reportStatus("Cannot delete the only layer", "error");
+            return false;
+        }
+        const idx = this.layerManifest.layers.findIndex((l) => l.id === id);
+        if (idx < 0) return false;
+        this.layerManifest.layers.splice(idx, 1);
+        for (const [, m] of this.frameLayers) {
+            m.delete(id);
+        }
+        if (this.layerManifest.active === id) {
+            const pick = this.layerManifest.layers[Math.max(0, idx - 1)];
+            this.layerManifest.active = pick.id;
+            this.mask = this._getLayerBuf(this.curFrame, pick.id, true);
+        }
+        this._structuralLayerChange();
+        return true;
+    }
+
+    moveLayer(id, dir) {
+        const layers = this.layerManifest.layers;
+        const idx = layers.findIndex((l) => l.id === id);
+        if (idx < 0) return;
+        const j = idx + (dir > 0 ? 1 : -1);
+        if (j < 0 || j >= layers.length) return;
+        [layers[idx], layers[j]] = [layers[j], layers[idx]];
+        this._structuralLayerChange();
+    }
+
+    setLayerVisible(id, visible) {
+        const layer = this.layerManifest.layers.find((l) => l.id === id);
+        if (!layer || layer.visible === visible) return;
+        layer.visible = visible;
+        this._structuralLayerChange();
+    }
+
+    setLayerMode(id, mode) {
+        const layer = this.layerManifest.layers.find((l) => l.id === id);
+        if (!layer || layer.mode === mode) return;
+        layer.mode = mode;
+        this._structuralLayerChange();
+    }
+
+    setLayerLocked(id, locked) {
+        const layer = this.layerManifest.layers.find((l) => l.id === id);
+        if (!layer || layer.locked === locked) return;
+        layer.locked = locked;
+        this.manifestDirty = true;
+        this.onLayersChange?.();
+    }
+
+    renameLayer(id, name) {
+        const layer = this.layerManifest.layers.find((l) => l.id === id);
+        if (!layer) return;
+        layer.name = String(name || layer.name).slice(0, 40);
+        this.manifestDirty = true;
+        this.onLayersChange?.();
+    }
+
+    selectLayerBelow() {
+        const layers = this.layerManifest.layers;
+        const idx = layers.findIndex((l) => l.id === this.layerManifest.active);
+        if (idx > 0) this.setActiveLayer(layers[idx - 1].id);
+    }
+
+    selectLayerAbove() {
+        const layers = this.layerManifest.layers;
+        const idx = layers.findIndex((l) => l.id === this.layerManifest.active);
+        if (idx >= 0 && idx < layers.length - 1) this.setActiveLayer(layers[idx + 1].id);
     }
 
     requestDraw() {
@@ -455,21 +674,25 @@ export class IMEEditor {
             }
             if (victim == null) break;
             this.masks.delete(victim);
+            this.frameLayers.delete(victim);
             this._removeCleanLru(victim);
         }
     }
 
     _evictLeavingFrame(idx) {
         if (this.dirtyFrames.has(idx)) {
-            this.masks.set(idx, this.mask);
+            this._syncActiveLayerToMap();
+            this._recomputeMergedFull();
+            this.masks.set(idx, this.merged);
             return;
         }
         if (!this.storedFrames.has(idx)) {
             this.masks.delete(idx);
+            this.frameLayers.delete(idx);
             this._removeCleanLru(idx);
             return;
         }
-        if (this.masks.has(idx)) {
+        if (this.masks.has(idx) || this.frameLayers.has(idx)) {
             this._touchCleanLru(idx);
             this._trimCleanCache();
         }
@@ -507,6 +730,20 @@ export class IMEEditor {
             console.warn("[IME] state load:", e);
             this.storedFrames = new Set();
         }
+        try {
+            const man = await api.fetchLayersManifest(this.editorId);
+            if (man) {
+                this.layerManifest = man;
+                this.sidecarOnDisk = true;
+            } else {
+                this.layerManifest = defaultManifest();
+                this.sidecarOnDisk = false;
+            }
+        } catch (e) {
+            console.warn("[IME] layers load:", e);
+            this.layerManifest = defaultManifest();
+            this.sidecarOnDisk = false;
+        }
         await this._switchFrame(0, true);
         return { ok: true, banner: pixels > MP_LIMIT };
     }
@@ -533,21 +770,82 @@ export class IMEEditor {
         return src.url(idx);
     }
 
-    async _loadMaskFrame(f) {
-        const blob = await api.fetchFramePng(this.editorId, f);
-        if (!blob) return;
+    async _blobToMask(blob) {
         const bm = await createImageBitmap(blob);
         const c = document.createElement("canvas");
-        c.width = this.editW; c.height = this.editH;
+        c.width = this.editW;
+        c.height = this.editH;
         const cx = c.getContext("2d");
         cx.drawImage(bm, 0, 0, this.editW, this.editH);
         bm.close();
         const id = cx.getImageData(0, 0, this.editW, this.editH);
         const buf = new Uint8Array(this.editW * this.editH);
         for (let i = 0, p = 0; p < buf.length; i += 4, p++) buf[p] = id.data[i];
+        return buf;
+    }
+
+    async _loadFrameFromStore(f) {
         const fi = f | 0;
-        this.masks.set(fi, buf);
+        const layerMap = new Map();
+        const useSidecar = this.sidecarOnDisk || needsSidecar(this.layerManifest);
+        if (useSidecar) {
+            let anyLayerPng = false;
+            const layerBlobs = new Map();
+            for (const layer of this.layerManifest.layers) {
+                const blob = await api.fetchLayerFramePng(this.editorId, layer.id, fi);
+                if (blob) anyLayerPng = true;
+                layerBlobs.set(layer.id, blob);
+            }
+            const mergedBlob = await api.fetchFramePng(this.editorId, fi);
+            if (!anyLayerPng && mergedBlob) {
+                const mergedBuf = await this._blobToMask(mergedBlob);
+                for (const layer of this.layerManifest.layers) {
+                    layerMap.set(layer.id, this._emptyMask());
+                }
+                const fillId = legacyFillLayer(this.layerManifest);
+                if (fillId) {
+                    layerMap.set(fillId, new Uint8Array(mergedBuf));
+                    this._markLayerDirty(fi, fillId);
+                    this.merged = new Uint8Array(mergedBuf);
+                } else {
+                    this._legacyMergedPreserve.add(fi);
+                    this.merged = new Uint8Array(mergedBuf);
+                    this._reportStatus(
+                        `Frame ${fi + 1}: no add layer for legacy mask; merged PNG kept until you edit or add an add layer.`,
+                        "error",
+                    );
+                }
+                this.frameLayers.set(fi, layerMap);
+                this.masks.set(fi, this.merged);
+                this._touchCleanLru(fi);
+                return;
+            }
+            for (const layer of this.layerManifest.layers) {
+                const blob = layerBlobs.get(layer.id);
+                layerMap.set(layer.id, blob ? await this._blobToMask(blob) : this._emptyMask());
+            }
+            this.frameLayers.set(fi, layerMap);
+            this.merged = this._emptyMask();
+            mergeLayers(
+                layerMap, this.layerManifest.layers,
+                0, 0, this.editW - 1, this.editH - 1,
+                this.editW, this.merged,
+            );
+            this.masks.set(fi, this.merged);
+        } else {
+            const blob = await api.fetchFramePng(this.editorId, fi);
+            const buf = blob ? await this._blobToMask(blob) : this._emptyMask();
+            const active = this.layerManifest.active;
+            layerMap.set(active, buf);
+            this.frameLayers.set(fi, layerMap);
+            this.merged = new Uint8Array(buf);
+            this.masks.set(fi, this.merged);
+        }
         this._touchCleanLru(fi);
+    }
+
+    async _loadMaskFrame(f) {
+        await this._loadFrameFromStore(f);
     }
 
     _emptyMask() {
@@ -565,10 +863,25 @@ export class IMEEditor {
             this._evictLeavingFrame(this.curFrame);
         }
         this.curFrame = idx;
-        if (this.storedFrames.has(idx) && !this.masks.has(idx)) {
-            await this._loadMaskFrame(idx);
+        const needStore = this.storedFrames.has(idx) && !this.frameLayers.has(idx);
+        if (needStore) {
+            await this._loadFrameFromStore(idx);
+        } else if (!this.frameLayers.has(idx)) {
+            const m = new Map();
+            for (const layer of this.layerManifest.layers) {
+                m.set(layer.id, this._emptyMask());
+            }
+            this.frameLayers.set(idx, m);
         }
-        this.mask = this.masks.get(idx) || this._emptyMask();
+        this.mask = this._getLayerBuf(idx, this.layerManifest.active, true);
+        // A frame without a cached merge gets its OWN buffer. _ensureMerged() returned the previous frame's
+        // buffer, which is also cached under that frame, so two frames shared one merged array and switching
+        // back showed (and exported) the other frame's mask - found by the slice 3a export round trip.
+        this.merged = this.masks.get(idx) || this._emptyMask();
+        if (!this.masks.has(idx)) {
+            this._recomputeMergedFull();
+            this.masks.set(idx, this.merged);
+        }
         await this._loadImageFrame(idx);
         this._tileCache.markAllStale();
         this._outlineBufStale = true;
@@ -579,7 +892,9 @@ export class IMEEditor {
 
     _commitFrame() {
         if (this.dirtyFrames.has(this.curFrame)) {
-            this.masks.set(this.curFrame, this.mask);
+            this._syncActiveLayerToMap();
+            this._recomputeMergedFull();
+            this.masks.set(this.curFrame, this.merged);
         }
     }
 
@@ -607,44 +922,58 @@ export class IMEEditor {
     }
 
     _commitUndoRect(x0, y0, x1, y1, beforeSrc) {
-        const entry = pushUndoEntry(
-            this.history, this.curFrame, this.mask, this.editW, this.editH,
-            x0, y0, x1, y1, beforeSrc,
-        );
+        if (this._editsBlocked()) return null;
+        const before = beforeSrc
+            ? captureRect(beforeSrc, this.editW, this.editH, x0, y0, x1, y1)
+            : captureRect(this.mask, this.editW, this.editH, x0, y0, x1, y1);
+        const after = captureRect(this.mask, this.editW, this.editH, x0, y0, x1, y1);
+        const layerId = this.layerManifest.active;
+        this.history.push(this.curFrame, {
+            layerId,
+            x: after.x, y: after.y, w: after.w, h: after.h,
+            before: before.data, after: after.data,
+        });
         this.dirtyFrames.add(this.curFrame);
-        this._maskDirtyRect(entry.x, entry.y, entry.x + entry.w - 1, entry.y + entry.h - 1);
+        this._markLayerDirty(this.curFrame, layerId);
+        this._layerEditDirtyRect(after.x, after.y, after.x + after.w - 1, after.y + after.h - 1);
         this._notify();
-        return entry;
+        return after;
+    }
+
+    _applyUndoEntry(e, dataKey) {
+        const layerId = e.layerId || this.layerManifest.active;
+        const buf = this._getLayerBuf(this.curFrame, layerId, true);
+        applyRect(buf, this.editW, { x: e.x, y: e.y, w: e.w, h: e.h, data: e[dataKey] });
+        if (layerId === this.layerManifest.active) this.mask = buf;
+        this.dirtyFrames.add(this.curFrame);
+        this._markLayerDirty(this.curFrame, layerId);
+        this._layerEditDirtyRect(e.x, e.y, e.x + e.w - 1, e.y + e.h - 1);
+        this.requestDraw();
+        this._notify();
     }
 
     undoOp() {
         const e = this.history.undo(this.curFrame);
         if (!e) return;
         this.history.pushRedo(this.curFrame, e);
-        applyRect(this.mask, this.editW, { x: e.x, y: e.y, w: e.w, h: e.h, data: e.before });
-        this.dirtyFrames.add(this.curFrame);
-        this._maskDirtyRect(e.x, e.y, e.x + e.w - 1, e.y + e.h - 1);
-        this.requestDraw();
-        this._notify();
+        this._applyUndoEntry(e, "before");
     }
 
     redoOp() {
         const e = this.history.redo(this.curFrame);
         if (!e) return;
-        applyRect(this.mask, this.editW, { x: e.x, y: e.y, w: e.w, h: e.h, data: e.after });
-        this.dirtyFrames.add(this.curFrame);
-        this._maskDirtyRect(e.x, e.y, e.x + e.w - 1, e.y + e.h - 1);
-        this.requestDraw();
-        this._notify();
+        this._applyUndoEntry(e, "after");
     }
 
     async copyPrevFrame() {
         const prev = this.curFrame - 1;
         if (prev < 0) return;
-        if (this.storedFrames.has(prev) && !this.masks.has(prev)) {
-            await this._loadMaskFrame(prev);
+        if (this._editsBlocked()) return;
+        if (this.storedFrames.has(prev) && !this.frameLayers.has(prev)) {
+            await this._loadFrameFromStore(prev);
         }
-        const src = this.masks.get(prev);
+        const active = this.layerManifest.active;
+        const src = this._getLayerBuf(prev, active);
         if (!src) return;
         const before = new Uint8Array(this.mask);
         this.mask.set(src);
@@ -669,6 +998,7 @@ export class IMEEditor {
     }
 
     clearFrame() {
+        if (this._editsBlocked()) return;
         const before = new Uint8Array(this.mask);
         this.mask.fill(0);
         this._commitUndoRect(0, 0, this.editW - 1, this.editH - 1, before);
@@ -682,8 +1012,9 @@ export class IMEEditor {
         c.height = this.editH;
         const cx = c.getContext("2d");
         const id = cx.createImageData(this.editW, this.editH);
-        for (let p = 0, i = 0; p < this.mask.length; p++, i += 4) {
-            id.data[i] = id.data[i + 1] = id.data[i + 2] = this.mask[p];
+        const src = this.merged || this.mask;
+        for (let p = 0, i = 0; p < src.length; p++, i += 4) {
+            id.data[i] = id.data[i + 1] = id.data[i + 2] = src[p];
             id.data[i + 3] = 255;
         }
         cx.putImageData(id, 0, 0);
@@ -750,11 +1081,15 @@ export class IMEEditor {
 
     async _ensureMaskFrame(f) {
         const fi = f | 0;
-        if (this.storedFrames.has(fi) && !this.masks.has(fi)) {
-            await this._loadMaskFrame(fi);
+        if (this.storedFrames.has(fi) && !this.frameLayers.has(fi)) {
+            await this._loadFrameFromStore(fi);
         }
-        if (!this.masks.has(fi)) {
-            this.masks.set(fi, this._emptyMask());
+        if (!this.frameLayers.has(fi)) {
+            const m = new Map();
+            for (const layer of this.layerManifest.layers) {
+                m.set(layer.id, this._emptyMask());
+            }
+            this.frameLayers.set(fi, m);
         }
     }
 
@@ -766,7 +1101,7 @@ export class IMEEditor {
         let newHeld = 0;
         for (let f = 0; f < this.frameCount; f++) {
             if (f === this.curFrame) continue;
-            if (!this.masks.has(f)) newHeld++;
+            if (!this.frameLayers.has(f)) newHeld++;
         }
         const bytes = newHeld * this.editW * this.editH;
         if (bytes > APPLY_ALL_MEM_CAP) {
@@ -905,6 +1240,7 @@ export class IMEEditor {
     }
 
     _commitSelection(sel, bounds, altKey) {
+        if (this._editsBlocked()) return;
         const mode = this._effectiveSelectionMode(altKey);
         const ub = mode === "intersect"
             ? { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 }
@@ -912,21 +1248,25 @@ export class IMEEditor {
         const before = captureRect(this.mask, this.editW, this.editH, ub.x0, ub.y0, ub.x1, ub.y1);
         const rb = tools.composeSelection(this.mask, sel, this.editW, this.editH, mode, bounds);
         const after = captureRect(this.mask, this.editW, this.editH, rb.x0, rb.y0, rb.x1, rb.y1);
+        const layerId = this.layerManifest.active;
         this.history.push(this.curFrame, {
+            layerId,
             x: after.x, y: after.y, w: after.w, h: after.h,
             before: before.data, after: after.data,
         });
         this.dirtyFrames.add(this.curFrame);
-        this._maskDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
+        this._markLayerDirty(this.curFrame, layerId);
+        this._layerEditDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
         this._notify();
     }
 
     _commitSelectionOnFrame(frame, sel, bounds, altKey) {
         const f = frame | 0;
-        let mask = this.masks.get(f);
+        const active = this.layerManifest.active;
+        let mask = this._getLayerBuf(f, active);
         if (!mask) {
             mask = this._emptyMask();
-            this.masks.set(f, mask);
+            this._frameLayerMap(f).set(active, mask);
         }
         const mode = this._effectiveSelectionMode(altKey);
         const ub = mode === "intersect"
@@ -936,12 +1276,18 @@ export class IMEEditor {
         const rb = tools.composeSelection(mask, sel, this.editW, this.editH, mode, bounds);
         const after = captureRect(mask, this.editW, this.editH, rb.x0, rb.y0, rb.x1, rb.y1);
         this.history.push(f, {
+            layerId: active,
             x: after.x, y: after.y, w: after.w, h: after.h,
             before: before.data, after: after.data,
         });
         this.dirtyFrames.add(f);
+        this._markLayerDirty(f, active);
         if (f === this.curFrame) {
-            this._maskDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
+            this._layerEditDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
+        } else {
+            const merged = this.masks.get(f) || this._emptyMask();
+            mergeLayers(this._frameLayerMap(f), this.layerManifest.layers, rb.x0, rb.y0, rb.x1, rb.y1, this.editW, merged);
+            this.masks.set(f, merged);
         }
     }
 
@@ -1246,7 +1592,7 @@ export class IMEEditor {
             const { x0, y0, x1, y1 } = bb;
             const [imgB, maskB, bandB] = await Promise.all([
                 this._cropPngRgb(x0, y0, x1, y1),
-                this._cropPngL(this.mask, x0, y0, x1, y1),
+                this._cropPngL(this.merged, x0, y0, x1, y1),
                 this._cropPngL(this.refineBand, x0, y0, x1, y1),
             ]);
             if (seq !== this.refineSeq || ac.signal.aborted) return;
@@ -1275,6 +1621,7 @@ export class IMEEditor {
     }
 
     _applyRefineCrop(x0, y0, alphaCrop, cw, ch) {
+        if (this._editsBlocked()) return;
         const before = captureRect(
             this.mask, this.editW, this.editH,
             x0, y0, x0 + cw - 1, y0 + ch - 1,
@@ -1294,13 +1641,16 @@ export class IMEEditor {
             }
         }
         // `before` is a crop; _commitUndoRect expects a full-frame source, so push the entry directly.
+        const layerId = this.layerManifest.active;
         const after = captureRect(this.mask, this.editW, this.editH, x0, y0, x0 + cw - 1, y0 + ch - 1);
         this.history.push(this.curFrame, {
+            layerId,
             x: before.x, y: before.y, w: before.w, h: before.h,
             before: before.data, after: after.data,
         });
         this.dirtyFrames.add(this.curFrame);
-        this._maskDirtyRect(x0, y0, x0 + cw - 1, y0 + ch - 1);
+        this._markLayerDirty(this.curFrame, layerId);
+        this._layerEditDirtyRect(x0, y0, x0 + cw - 1, y0 + ch - 1);
         this._notify();
         this.requestDraw();
     }
@@ -1356,7 +1706,7 @@ export class IMEEditor {
                     y1: Math.max(this._strokeBounds.y1, b.y1),
                 }
                 : b;
-            this._maskDirtyRect(b.x0, b.y0, b.x1, b.y1);
+            this._layerEditDirtyRect(b.x0, b.y0, b.x1, b.y1);
         }
     }
 
@@ -1447,6 +1797,7 @@ export class IMEEditor {
             this.panAnchor = { x: e.clientX - this.panX, y: e.clientY - this.panY };
             return;
         }
+        if (this.tool !== "colour" && this.tool !== "sam" && this._editsBlocked()) return;
         if (this.tool === "colour") {
             this.addColourSample(ix, iy, e.shiftKey);
             return;
@@ -1758,14 +2109,14 @@ export class IMEEditor {
             ctx.lineWidth = 1;
         }
         ctx.restore();
-        if (vm === 3 && this.zoom >= 2 && this._outlineBuf && this.mask) {
+        if (vm === 3 && this.zoom >= 2 && this._outlineBuf && this.merged) {
             const { ix0, iy0, ix1, iy1 } = this._visibleImageRect(vw, vh);
             const z = this.zoom;
             const px = this.panX;
             const py = this.panY;
             const iw = this.editW;
             const ih = this.editH;
-            const mask = this.mask;
+            const mask = this.merged;
             const buf = this._outlineBuf;
             // Pixel edges are snapped to whole screen pixels (neighbours share the exact same edge), so the line
             // is continuous and crisp at fractional zoom; fractional rects blended to pink/brown at 2.3x.
@@ -1808,21 +2159,86 @@ export class IMEEditor {
         }
     }
 
+    async _backfillLegacyLayerPngs(fillId, skipFrames) {
+        for (const f of this.storedFrames) {
+            const fi = f | 0;
+            if (skipFrames.has(fi)) continue;
+            const existing = await api.fetchLayerFramePng(this.editorId, fillId, fi);
+            if (existing) continue;
+            const mergedBlob = await api.fetchFramePng(this.editorId, fi);
+            if (!mergedBlob) continue;
+            await api.putLayerFramePng(this.editorId, fillId, fi, mergedBlob);
+            const layerMap = this.frameLayers.get(fi);
+            if (layerMap?.has(fillId)) {
+                layerMap.set(fillId, await this._blobToMask(mergedBlob));
+            }
+            this._markLayerDirty(fi, fillId);
+        }
+    }
+
     async save() {
         this._commitBrushStroke();
+        this._syncActiveLayerToMap();
         this._commitFrame();
         let digest = this.digest;
+        const creatingSidecar = needsSidecar(this.layerManifest) && !this.sidecarOnDisk;
+
+        if (creatingSidecar) {
+            const fillId = legacyFillLayer(this.layerManifest);
+            if (fillId) await this._backfillLegacyLayerPngs(fillId, this.dirtyFrames);
+        }
+
+        const layerFrames = new Set(this.dirtyFrames);
+        for (const key of this.dirtyLayerKeys) {
+            layerFrames.add(parseInt(key.slice(0, key.indexOf(":")), 10));
+        }
+        if (needsSidecar(this.layerManifest)) {
+            for (const f of layerFrames) {
+                const layerMap = this.frameLayers.get(f);
+                if (!layerMap) continue;
+                for (const [layerId, buf] of layerMap) {
+                    const blob = await this._maskToPngBlob(buf);
+                    await api.putLayerFramePng(this.editorId, layerId, f, blob);
+                }
+            }
+        }
+        this.dirtyLayerKeys.clear();
+
         const uploaded = [];
         for (const f of this.dirtyFrames) {
-            let buf = this.masks.get(f);
-            if (!buf && f === this.curFrame) buf = this.mask;
-            if (!buf) continue;
-            const blob = await this._maskToPngBlob(buf);
+            if (this._legacyMergedPreserve.has(f)) {
+                this._legacyMergedPreserve.delete(f);
+            }
+            let merged = this.masks.get(f);
+            if (f === this.curFrame) {
+                this._recomputeMergedFull();
+                merged = this.merged;
+            } else if (this.frameLayers.has(f)) {
+                if (!merged || merged.length !== this.editW * this.editH) {
+                    merged = this._emptyMask();
+                }
+                mergeLayers(
+                    this.frameLayers.get(f),
+                    this.layerManifest.layers,
+                    0, 0, this.editW - 1, this.editH - 1,
+                    this.editW, merged,
+                );
+                this.masks.set(f, merged);
+            }
+            if (!merged) continue;
+            const blob = await this._maskToPngBlob(merged);
             const j = await api.putFramePng(this.editorId, f, blob);
             digest = j.digest;
             uploaded.push(f);
         }
         this.dirtyFrames.clear();
+
+        if (this.manifestDirty) {
+            await api.putLayersManifest(this.editorId, this.layerManifest);
+            this.sidecarOnDisk = needsSidecar(this.layerManifest);
+            this.manifestDirty = false;
+        }
+
         for (const f of uploaded) this.storedFrames.add(f);
         this.digest = digest;
         this._notify();
@@ -1855,10 +2271,14 @@ export class IMEEditor {
         if (this.editorId) api.release(this.editorId);
         this._releaseBitmap();
         this.masks.clear();
+        this.frameLayers.clear();
         this.storedFrames.clear();
         this.dirtyFrames.clear();
+        this.dirtyLayerKeys.clear();
+        this._legacyMergedPreserve.clear();
         this.cleanLru = [];
         this.mask = null;
+        this.merged = null;
         this._tileCache?.dispose();
         this._tileCache = null;
         this._outlineBuf = null;

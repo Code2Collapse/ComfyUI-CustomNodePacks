@@ -657,6 +657,144 @@ def test_pick_lod_level_8k_fit_within_budget(tmp_path):
     assert out["L"] >= 2
 
 
+def _run_layers(tmp_path: Path, body: str, inputs: dict) -> dict:
+    probe = tmp_path / "probe_layers.mjs"
+    probe.write_text(
+        f"const L = await import({json.dumps((JS / 'layers.js').resolve().as_uri())});\n"
+        f"const IN = {json.dumps(inputs)};\n"
+        "const out = {};\n" + body + "\nconsole.log(JSON.stringify(out));\n",
+        encoding="utf-8")
+    r = subprocess.run([NODE, str(probe)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-2000:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _merge_ref(buffers: dict, layers: list[dict], w: int, h: int) -> np.ndarray:
+    out = np.zeros(w * h, np.uint8)
+    for y in range(h):
+        for x in range(w):
+            idx = y * w + x
+            m = 0
+            for layer in layers:
+                if not layer.get("visible", True):
+                    continue
+                arr = buffers.get(layer["id"])
+                L = int(arr[idx]) if arr is not None else 0
+                mode = layer.get("mode", "add")
+                if mode == "add":
+                    m = max(m, L)
+                elif mode == "subtract":
+                    m = min(m, 255 - L)
+                elif mode == "intersect":
+                    m = min(m, L)
+            out[idx] = m
+    return out.reshape(h, w)
+
+
+def test_merge_layers_add_subtract_intersect(tmp_path):
+    w, h = 8, 8
+    base = np.zeros((h, w), np.uint8)
+    base[2:6, 2:6] = 200
+    cut = np.zeros((h, w), np.uint8)
+    cut[3:5, 3:5] = 255
+    layers = [
+        {"id": "a", "mode": "add", "visible": True},
+        {"id": "b", "mode": "subtract", "visible": True},
+    ]
+    out = _run_layers(tmp_path, """
+      const w = IN.w, h = IN.h;
+      const bufs = new Map();
+      bufs.set("a", new Uint8Array(IN.a));
+      bufs.set("b", new Uint8Array(IN.b));
+      const merged = new Uint8Array(w * h);
+      L.mergeLayers(bufs, IN.layers, 0, 0, w - 1, h - 1, w, merged);
+      out.m = Array.from(merged);
+    """, {
+        "w": w, "h": h,
+        "a": base.reshape(-1).tolist(),
+        "b": cut.reshape(-1).tolist(),
+        "layers": layers,
+    })
+    ref = _merge_ref({"a": base.reshape(-1), "b": cut.reshape(-1)}, layers, w, h)
+    assert np.array_equal(_mask(out["m"], w, h), ref)
+
+
+def test_merge_skips_hidden_layers(tmp_path):
+    w, h = 4, 4
+    a = np.full((h, w), 200, np.uint8)
+    b = np.full((h, w), 255, np.uint8)
+    layers = [
+        {"id": "a", "mode": "add", "visible": True},
+        {"id": "b", "mode": "subtract", "visible": False},
+    ]
+    out = _run_layers(tmp_path, """
+      const bufs = new Map([["a", new Uint8Array(IN.a)], ["b", new Uint8Array(IN.b)]]);
+      const merged = new Uint8Array(IN.w * IN.h);
+      L.mergeLayers(bufs, IN.layers, 0, 0, IN.w - 1, IN.h - 1, IN.w, merged);
+      out.m = Array.from(merged);
+    """, {"w": w, "h": h, "a": a.reshape(-1).tolist(), "b": b.reshape(-1).tolist(), "layers": layers})
+    assert np.array_equal(_mask(out["m"], w, h), a)
+
+
+def test_merge_random_five_layer_stack(tmp_path):
+    rng = np.random.default_rng(11)
+    w, h = 32, 24
+    ids = ["a", "b", "c", "d", "e"]
+    modes = ["add", "subtract", "intersect"]
+    bufs = {i: rng.integers(0, 256, w * h, dtype=np.uint8).tolist() for i in ids}
+    layers = [
+        {"id": i, "mode": modes[j % 3], "visible": bool(rng.integers(0, 2))}
+        for j, i in enumerate(ids)
+    ]
+    out = _run_layers(tmp_path, """
+      const bufs = new Map(Object.entries(IN.bufs).map(([k,v]) => [k, new Uint8Array(v)]));
+      const merged = new Uint8Array(IN.w * IN.h);
+      L.mergeLayers(bufs, IN.layers, 0, 0, IN.w - 1, IN.h - 1, IN.w, merged);
+      out.m = Array.from(merged);
+    """, {"w": w, "h": h, "bufs": bufs, "layers": layers})
+    ref = _merge_ref({k: np.array(v, np.uint8) for k, v in bufs.items()}, layers, w, h)
+    assert np.array_equal(_mask(out["m"], w, h), ref)
+
+
+def test_legacy_fill_layer_visible_add_bottom_most(tmp_path):
+    man = {
+        "version": 1,
+        "layers": [
+            {"id": "base", "name": "B", "mode": "add", "visible": True, "locked": False},
+            {"id": "cut", "name": "C", "mode": "subtract", "visible": True, "locked": False},
+        ],
+        "active": "base",
+    }
+    out = _run_layers(tmp_path, 'out.id = L.legacyFillLayer(IN.man);', {"man": man})
+    assert out["id"] == "base"
+
+
+def test_legacy_fill_layer_hidden_add_fallback(tmp_path):
+    man = {
+        "version": 1,
+        "layers": [
+            {"id": "sub", "name": "S", "mode": "subtract", "visible": True, "locked": False},
+            {"id": "hid", "name": "H", "mode": "add", "visible": False, "locked": False},
+        ],
+        "active": "sub",
+    }
+    out = _run_layers(tmp_path, 'out.id = L.legacyFillLayer(IN.man);', {"man": man})
+    assert out["id"] == "hid"
+
+
+def test_legacy_fill_layer_no_add_returns_null(tmp_path):
+    man = {
+        "version": 1,
+        "layers": [
+            {"id": "s", "name": "S", "mode": "subtract", "visible": True, "locked": False},
+            {"id": "i", "name": "I", "mode": "intersect", "visible": True, "locked": False},
+        ],
+        "active": "s",
+    }
+    out = _run_layers(tmp_path, 'out.id = L.legacyFillLayer(IN.man);', {"man": man})
+    assert out["id"] is None
+
+
 def test_frame_history_undo_after_frame_switch(tmp_path):
     w, h = 4, 4
     out = _run_view(tmp_path, """

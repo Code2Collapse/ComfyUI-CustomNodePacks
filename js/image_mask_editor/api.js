@@ -153,3 +153,56 @@ export async function samModels() {
     const r = await fetch(`${BASE}/sam/models`);
     return _readJsonOrThrow(r);
 }
+
+export async function fetchLayersManifest(editorId) {
+    const r = await fetch(`${BASE}/layers?id=${encodeURIComponent(editorId)}`);
+    if (r.status === 404) return null;
+    if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `layers GET failed (${r.status})`);
+    }
+    return r.json();
+}
+
+export async function putLayersManifest(editorId, manifest) {
+    const r = await fetch(`${BASE}/layers?id=${encodeURIComponent(editorId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manifest),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `layers POST failed (${r.status})`);
+    return j;
+}
+
+export async function fetchLayerFramePng(editorId, layerId, frame) {
+    const r = await fetch(
+        `${BASE}/layer_frame?id=${encodeURIComponent(editorId)}`
+        + `&layer_id=${encodeURIComponent(layerId)}&frame=${frame | 0}`,
+    );
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`layer_frame GET failed (${r.status})`);
+    return r.blob();
+}
+
+export async function putLayerFramePng(editorId, layerId, frame, pngBlob) {
+    const r = await fetch(
+        `${BASE}/layer_frame?id=${encodeURIComponent(editorId)}`
+        + `&layer_id=${encodeURIComponent(layerId)}&frame=${frame | 0}`,
+        { method: "POST", body: pngBlob },
+    );
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `layer_frame POST failed (${r.status})`);
+    return j;
+}
+
+export async function deleteLayerFrame(editorId, layerId, frame) {
+    const r = await fetch(
+        `${BASE}/layer_frame?id=${encodeURIComponent(editorId)}`
+        + `&layer_id=${encodeURIComponent(layerId)}&frame=${frame | 0}`,
+        { method: "DELETE" },
+    );
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `layer_frame DELETE failed (${r.status})`);
+    return j;
+}

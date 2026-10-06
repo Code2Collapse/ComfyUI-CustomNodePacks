@@ -201,5 +201,75 @@ def register_routes(server) -> None:
         status, body, _hdr = await _smart_off_loop(smart.handle_sam_models)
         return web.json_response(body, status=status)
 
+    @routes.get("/c2c/image_mask_editor/layers")
+    async def get_layers_route(request):
+        (eid,) = _query(request, "id")
+        if not eid:
+            return _bad("id required")
+        try:
+            store.validate_editor_id(eid)
+        except ValueError as e:
+            return _bad(e)
+        manifest = await _off_loop(store.get_layers_manifest, eid)
+        if manifest is None:
+            return web.Response(status=404)
+        return web.json_response(manifest)
+
+    @routes.post("/c2c/image_mask_editor/layers")
+    async def post_layers_route(request):
+        (eid,) = _query(request, "id")
+        if not eid:
+            return _bad("id required")
+        try:
+            data = await request.json()
+            await _off_loop(store.put_layers_manifest, eid, data)
+            return web.json_response({"ok": True})
+        except json.JSONDecodeError:
+            return _bad("invalid JSON body")
+        except ValueError as e:
+            return _bad(e)
+        except Exception as e:  # noqa: BLE001
+            log.exception("saving layers manifest failed")
+            return _bad(f"could not save layers: {e}", 500)
+
+    @routes.get("/c2c/image_mask_editor/layer_frame")
+    async def get_layer_frame_route(request):
+        eid, layer_id, frame_s = _query(request, "id", "layer_id", "frame")
+        if not eid or not layer_id or not frame_s.isdigit():
+            return _bad("id, layer_id and frame required")
+        try:
+            body = await _off_loop(store.get_layer_frame_png, eid, layer_id, int(frame_s))
+        except ValueError as e:
+            return _bad(e)
+        if body is None:
+            return web.Response(status=404)
+        return web.Response(body=body, content_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @routes.post("/c2c/image_mask_editor/layer_frame")
+    async def post_layer_frame_route(request):
+        eid, layer_id, frame_s = _query(request, "id", "layer_id", "frame")
+        if not eid or not layer_id or not frame_s.isdigit():
+            return _bad("id, layer_id and frame required")
+        try:
+            data = await request.read()
+            sha = await _off_loop(store.put_layer_frame, eid, layer_id, int(frame_s), data)
+            return web.json_response({"ok": True, "sha": sha})
+        except ValueError as e:
+            return _bad(e)
+        except Exception as e:  # noqa: BLE001
+            log.exception("saving layer frame failed")
+            return _bad(f"could not save the layer: {e}", 500)
+
+    @routes.delete("/c2c/image_mask_editor/layer_frame")
+    async def delete_layer_frame_route(request):
+        eid, layer_id, frame_s = _query(request, "id", "layer_id", "frame")
+        if not eid or not layer_id or not frame_s.isdigit():
+            return _bad("id, layer_id and frame required")
+        try:
+            await _off_loop(store.delete_layer_frame, eid, layer_id, int(frame_s))
+            return web.json_response({"ok": True})
+        except ValueError as e:
+            return _bad(e)
+
     _ROUTES_REGISTERED = True
     print("[C2C.ImageMaskEditor] routes registered (/c2c/image_mask_editor/*)")

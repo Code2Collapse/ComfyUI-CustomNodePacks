@@ -1,6 +1,6 @@
 /** Full-screen modal mask editor. */
 import { C } from "./palette.js";
-import { c2cAlert, c2cConfirm } from "../_c2c_dialog.js";
+import { c2cAlert, c2cConfirm, c2cPrompt } from "../_c2c_dialog.js";
 import { screenToImage } from "./coords.js";
 import { IMEEditor } from "./editor.js";
 import { FrameStrip } from "./strip.js";
@@ -24,6 +24,8 @@ const HOTKEY_TEXT =
     "V cycles Overlay → Matte → Rubylith → Outline → Image · pixel grid from 800% zoom\n" +
     "Pen pressure toggles (brush toolbar); mouse strokes ignore them\n" +
     "Ctrl+Shift+C copy mask · Ctrl+Shift+V paste mask · Frame menu: apply all / clear / import / export\n" +
+    "Layers ▾ panel · Ctrl+Shift+N add layer · Alt+[ / Alt+] layer below / above\n" +
+    "Copy/paste/clear/apply-to-all edit the active layer; export shows the merged stack\n" +
     "Ctrl+Z / Ctrl+Y undo / redo (per frame, shared 128 MB budget) · Enter save · Esc cancel shape / close";
 
 function _formControlFocused(e) {
@@ -272,6 +274,7 @@ export function openModal(node, editorId, onSaved) {
     document.body.appendChild(frameMenu);
     frameMenu.addEventListener("click", (ev) => ev.stopPropagation());
     btnFrameMenu.onclick = (ev) => {
+        hideLayersPanel();
         const r = btnFrameMenu.getBoundingClientRect();
         frameMenu.style.left = `${r.left}px`;
         frameMenu.style.top = `${r.bottom + 2}px`;
@@ -289,6 +292,137 @@ export function openModal(node, editorId, onSaved) {
     window.addEventListener("click", hideFrameMenu);
     importInp.addEventListener("change", onImportChange);
 
+    const btnLayersMenu = document.createElement("button");
+    btnLayersMenu.id = "ime-layers-menu";
+    btnLayersMenu.textContent = "Layers ▾";
+    btnLayersMenu.style.cssText = btnStyle;
+    const layersPanel = document.createElement("div");
+    layersPanel.style.cssText = [
+        "position:fixed;z-index:calc(var(--c2c-z-modal,10000) + 1);",
+        `background:${C.panel};border:1px solid ${C.border};border-radius:4px;`,
+        "padding:8px;flex-direction:column;gap:6px;min-width:280px;max-height:360px;overflow:auto;display:none;",
+    ].join("");
+    const layersList = document.createElement("div");
+    layersList.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+    const btnAddLayer = document.createElement("button");
+    btnAddLayer.type = "button";
+    btnAddLayer.textContent = "Add layer";
+    btnAddLayer.style.cssText = menuBtnStyle;
+    layersPanel.append(layersList, btnAddLayer);
+    document.body.appendChild(layersPanel);
+    layersPanel.addEventListener("click", (ev) => ev.stopPropagation());
+
+    function hideLayersPanel() {
+        layersPanel.style.display = "none";
+    }
+
+    function refreshLayersPanel() {
+        layersList.replaceChildren();
+        const man = ed.getLayerManifest();
+        for (let i = 0; i < man.layers.length; i++) {
+            const layer = man.layers[i];
+            const row = document.createElement("div");
+            row.style.cssText = [
+                "display:grid;grid-template-columns:auto 1fr auto auto auto auto auto;gap:4px;align-items:center;",
+                "padding:4px;border-radius:4px;",
+                layer.id === man.active ? `outline:2px solid ${C.accent}` : "",
+            ].join("");
+            const visBtn = document.createElement("button");
+            visBtn.type = "button";
+            visBtn.textContent = layer.visible !== false ? "👁" : "○";
+            visBtn.title = "Visibility";
+            visBtn.style.cssText = "border:none;background:transparent;cursor:pointer;padding:2px 4px;";
+            visBtn.onclick = () => {
+                ed.setLayerVisible(layer.id, layer.visible === false);
+                refreshLayersPanel();
+                updateStatus();
+            };
+            const nameBtn = document.createElement("button");
+            nameBtn.type = "button";
+            nameBtn.textContent = layer.name || layer.id;
+            nameBtn.style.cssText = `border:none;background:transparent;color:${C.text};text-align:left;cursor:pointer;padding:2px 4px;`;
+            nameBtn.onclick = () => { ed.setActiveLayer(layer.id); refreshLayersPanel(); updateStatus(); };
+            nameBtn.ondblclick = async (ev) => {
+                ev.stopPropagation();
+                const neu = await c2cPrompt("Layer name", layer.name || "");
+                if (neu != null) {
+                    ed.renameLayer(layer.id, neu);
+                    refreshLayersPanel();
+                }
+                canvas.focus();
+            };
+            const modeSel = document.createElement("select");
+            modeSel.style.cssText = `font:12px system-ui;background:${C.panel};color:${C.text};border:1px solid ${C.border};`;
+            for (const m of ["add", "subtract", "intersect"]) {
+                const o = document.createElement("option");
+                o.value = m;
+                o.textContent = m;
+                modeSel.appendChild(o);
+            }
+            modeSel.value = layer.mode || "add";
+            modeSel.onchange = () => {
+                ed.setLayerMode(layer.id, modeSel.value);
+                refreshLayersPanel();
+                updateStatus();
+            };
+            const lockBtn = document.createElement("button");
+            lockBtn.type = "button";
+            lockBtn.textContent = layer.locked ? "🔒" : "🔓";
+            lockBtn.title = "Lock";
+            lockBtn.style.cssText = visBtn.style.cssText;
+            lockBtn.onclick = () => {
+                ed.setLayerLocked(layer.id, !layer.locked);
+                refreshLayersPanel();
+            };
+            const upBtn = document.createElement("button");
+            upBtn.type = "button";
+            upBtn.textContent = "▲";
+            upBtn.disabled = i === 0;
+            upBtn.style.cssText = visBtn.style.cssText;
+            upBtn.onclick = () => { ed.moveLayer(layer.id, -1); refreshLayersPanel(); updateStatus(); };
+            const downBtn = document.createElement("button");
+            downBtn.type = "button";
+            downBtn.textContent = "▼";
+            downBtn.disabled = i === man.layers.length - 1;
+            downBtn.style.cssText = visBtn.style.cssText;
+            downBtn.onclick = () => { ed.moveLayer(layer.id, 1); refreshLayersPanel(); updateStatus(); };
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.textContent = "✕";
+            delBtn.title = "Delete layer";
+            delBtn.style.cssText = visBtn.style.cssText;
+            delBtn.onclick = async () => {
+                const ok = await c2cConfirm(`Delete layer "${layer.name || layer.id}"?`);
+                if (ok) {
+                    await ed.deleteLayer(layer.id);
+                    refreshLayersPanel();
+                    updateStatus();
+                }
+                canvas.focus();
+            };
+            row.append(visBtn, nameBtn, modeSel, lockBtn, upBtn, downBtn, delBtn);
+            layersList.appendChild(row);
+        }
+    }
+
+    btnLayersMenu.onclick = (ev) => {
+        hideFrameMenu();
+        const r = btnLayersMenu.getBoundingClientRect();
+        layersPanel.style.left = `${r.left}px`;
+        layersPanel.style.top = `${r.bottom + 2}px`;
+        refreshLayersPanel();
+        layersPanel.style.display = layersPanel.style.display === "none" ? "flex" : "none";
+        ev.stopPropagation();
+    };
+    btnAddLayer.onclick = () => {
+        if (ed.addLayer()) {
+            refreshLayersPanel();
+            updateStatus();
+        }
+        canvas.focus();
+    };
+    window.addEventListener("click", hideLayersPanel);
+
     const btnView = document.createElement("button");
     btnView.id = "ime-view-mode";
     btnView.textContent = VIEW_LABELS[ed.viewMode];
@@ -299,7 +433,7 @@ export function openModal(node, editorId, onSaved) {
     btnHelp.title = "Keyboard shortcuts";
     btnHelp.style.cssText = btnView.style.cssText;
 
-    toolbar.append(btnFrameMenu, btnView, btnHelp, status);
+    toolbar.append(btnFrameMenu, btnLayersMenu, btnView, btnHelp, status);
 
     function syncBrushSize(v) {
         const n = Math.max(1, Math.min(512, v | 0));
@@ -418,9 +552,12 @@ export function openModal(node, editorId, onSaved) {
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKeyUp);
         window.removeEventListener("click", hideFrameMenu);
+        window.removeEventListener("click", hideLayersPanel);
         importInp.removeEventListener("change", onImportChange);
         btnFrameMenu.onclick = null;
+        btnLayersMenu.onclick = null;
         try { frameMenu.remove(); } catch (_) { /* ignore */ }
+        try { layersPanel.remove(); } catch (_) { /* ignore */ }
         try { canvasRo.disconnect(); } catch (_) { /* ignore */ }
         if (node.onRemoved === onRemovedWrapper) node.onRemoved = origRemoved;
         strip.dispose();
@@ -510,6 +647,10 @@ export function openModal(node, editorId, onSaved) {
         if (e.key === "Enter") { e.preventDefault(); tryClose(true); return; }
         if (e.key === "Escape") {
             e.preventDefault();
+            if (layersPanel.style.display !== "none") {
+                hideLayersPanel();
+                return;
+            }
             if (frameMenu.style.display !== "none") {
                 hideFrameMenu();
                 return;
@@ -552,6 +693,20 @@ export function openModal(node, editorId, onSaved) {
         if (e.ctrlKey && e.shiftKey && (e.key === "v" || e.key === "V")) {
             e.preventDefault(); ed.pasteMask(e.altKey); updateStatus(); return;
         }
+        if (e.ctrlKey && e.shiftKey && (e.key === "n" || e.key === "N")) {
+            e.preventDefault();
+            if (ed.addLayer()) {
+                if (layersPanel.style.display !== "none") refreshLayersPanel();
+                updateStatus();
+            }
+            return;
+        }
+        if (e.altKey && e.key === "[") {
+            e.preventDefault(); ed.selectLayerBelow(); updateStatus(); return;
+        }
+        if (e.altKey && e.key === "]") {
+            e.preventDefault(); ed.selectLayerAbove(); updateStatus(); return;
+        }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const t = KEY_TO_TOOL[e.key.toLowerCase()];
         if (t) { e.preventDefault(); ed.setTool(t); highlightTool(); syncToolbarVisibility(); }
@@ -581,6 +736,9 @@ export function openModal(node, editorId, onSaved) {
     canvasRo.observe(canvas);
 
     ed.onChange = updateStatus;
+    ed.onLayersChange = () => {
+        if (layersPanel.style.display !== "none") refreshLayersPanel();
+    };
     highlightTool();
     highlightMode();
     syncToolbarVisibility();
