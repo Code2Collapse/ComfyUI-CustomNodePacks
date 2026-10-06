@@ -56,10 +56,27 @@ export class IMEEditor {
         this.colourContiguous = false;
         this.colourDist = null;
         this.colourDistKey = "";
-        this.colourPreview = null;
+        this.candidatePreview = null;
         this.previewCanvas = null;
         this.previewCtx = null;
         this._previewTint = hexToRgb(C.accent2);
+        this.samPoints = [];
+        this.samBox = null;
+        this.samSeq = 0;
+        this.samAbort = null;
+        this.samModel = "";
+        this.samDragStart = null;
+        this.samScore = 0;
+        this.frameKey = "";
+        this.frameKeyFor = -1;
+        this.refineBand = null;
+        this.refineSeq = 0;
+        this.refineAbort = null;
+        this._refineStrokeStart = null;
+        this._refineCoverage = null;
+        this._refineStrokeBounds = null;
+        this.toolStatus = "";
+        this.toolStatusKind = "";
         this.viewMode = 0;
         this.zoom = 1;
         this.panX = 0;
@@ -83,6 +100,17 @@ export class IMEEditor {
         this.dom = {};
         this.onChange = null;
         this.onToolChange = null;
+        this.onStatus = null;
+    }
+
+    _reportStatus(text, kind = "info") {
+        this.toolStatus = text || "";
+        this.toolStatusKind = kind;
+        this.onStatus?.(this.toolStatus, kind);
+    }
+
+    getToolStatusLine() {
+        return this.toolStatus || "";
     }
 
     _releaseBitmap() {
@@ -157,8 +185,9 @@ export class IMEEditor {
         this._syncOverlayRect(0, 0, this.editW, this.editH);
     }
 
-    _syncPreviewRect(x, y, w, h) {
-        if (!this.colourPreview || !this.previewCtx) return;
+    _syncPreviewRect(x, y, w, h, srcBuf = null) {
+        const buf = srcBuf || this.candidatePreview;
+        if (!buf || !this.previewCtx) return;
         const x2 = Math.min(this.editW, x + w);
         const y2 = Math.min(this.editH, y + h);
         const rw = x2 - x;
@@ -169,7 +198,7 @@ export class IMEEditor {
         for (let yy = 0; yy < rh; yy++) {
             for (let xx = 0; xx < rw; xx++) {
                 const pi = (y + yy) * this.editW + (x + xx);
-                const a = this.colourPreview[pi];
+                const a = buf[pi];
                 const oi = (yy * rw + xx) * 4;
                 id.data[oi] = ac.r;
                 id.data[oi + 1] = ac.g;
@@ -180,11 +209,49 @@ export class IMEEditor {
         this.previewCtx.putImageData(id, x, y);
     }
 
-    _rebuildPreviewFull() {
-        if (!this.colourPreview) return;
+    _rebuildPreviewFull(srcBuf = null) {
+        const buf = srcBuf || this.candidatePreview;
+        if (!buf) return;
         this._ensureBuffers();
         this.previewCtx.clearRect(0, 0, this.editW, this.editH);
-        this._syncPreviewRect(0, 0, this.editW, this.editH);
+        this._syncPreviewRect(0, 0, this.editW, this.editH, buf);
+    }
+
+    _setCandidatePreview(buf) {
+        this.candidatePreview = buf;
+        this._rebuildPreviewFull(buf);
+        this.requestDraw();
+    }
+
+    _clearCandidatePreview() {
+        this.candidatePreview = null;
+        if (this.previewCtx) {
+            this.previewCtx.clearRect(0, 0, this.editW, this.editH);
+        }
+        this.requestDraw();
+    }
+
+    candidatePreviewActive() {
+        if (!this.candidatePreview) return false;
+        if (this.colourSamples.length > 0) return true;
+        if (this.tool === "sam" && (this.samPoints.length > 0 || this.samBox)) return true;
+        return false;
+    }
+
+    applyCandidatePreview() {
+        if (!this.candidatePreviewActive()) return;
+        const bounds = { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 };
+        this._commitSelection(this.candidatePreview, bounds, false);
+        if (this.colourSamples.length > 0) {
+            this.clearColourPreview();
+        } else {
+            this.clearSamState(false);
+        }
+        this._reportStatus("");
+    }
+
+    applySamPreview() {
+        this.applyCandidatePreview();
     }
 
     _rebuildMatteFull() {
@@ -358,6 +425,8 @@ export class IMEEditor {
             this._commitFrame();
             this._commitBrushStroke();
             this.clearColourPreview();
+            this.clearSamState(false);
+            this.clearRefineState(false);
             this._evictLeavingFrame(this.curFrame);
         }
         this.curFrame = idx;
@@ -391,6 +460,8 @@ export class IMEEditor {
             const cx = c.getContext("2d");
             cx.drawImage(this.imageBitmap, 0, 0, this.editW, this.editH);
             this.imageData = cx.getImageData(0, 0, this.editW, this.editH).data;
+            this.frameKey = "";
+            this.frameKeyFor = -1;
         } catch (e) {
             console.warn("[IME] image load:", e);
         }
@@ -450,7 +521,10 @@ export class IMEEditor {
     setTool(t) {
         this.cancelShapeInProgress();
         this.clearColourPreview();
+        this.clearSamState(false);
+        this.clearRefineState(false);
         this.tool = t;
+        this._reportStatus("");
         this.onToolChange?.();
     }
 
@@ -463,6 +537,7 @@ export class IMEEditor {
         return (this.tool === "polygon" && this.polyPts.length > 0) ||
             (this.tool === "lasso" && this.lassoPts.length > 0) ||
             ((this.tool === "rect" || this.tool === "ellipse") && this.shapeStart) ||
+            (this.tool === "sam" && (this.samPoints.length > 0 || this.samBox)) ||
             this.colourPreviewActive();
     }
 
@@ -476,7 +551,7 @@ export class IMEEditor {
     }
 
     colourPreviewActive() {
-        return this.colourPreview != null && this.colourSamples.length > 0;
+        return this.candidatePreview != null && this.colourSamples.length > 0;
     }
 
     clearColourPreview() {
@@ -484,9 +559,8 @@ export class IMEEditor {
         this.colourSamplePixels = [];
         this.colourDist = null;
         this.colourDistKey = "";
-        this.colourPreview = null;
-        if (this.previewCtx) {
-            this.previewCtx.clearRect(0, 0, this.editW, this.editH);
+        if (this.tool !== "sam") {
+            this._clearCandidatePreview();
         }
         this.requestDraw();
     }
@@ -512,8 +586,7 @@ export class IMEEditor {
 
     _rebuildColourPreview() {
         if (!this.colourSamples.length) {
-            this.colourPreview = null;
-            if (this.previewCtx) this.previewCtx.clearRect(0, 0, this.editW, this.editH);
+            if (this.tool !== "sam") this._clearCandidatePreview();
             this.requestDraw();
             return;
         }
@@ -525,9 +598,7 @@ export class IMEEditor {
         if (this.colourContiguous && this.colourSamplePixels.length) {
             sel = colour.keepConnected(sel, this.editW, this.editH, this.colourSamplePixels);
         }
-        this.colourPreview = sel;
-        this._rebuildPreviewFull();
-        this.requestDraw();
+        this._setCandidatePreview(sel);
     }
 
     addColourSample(ix, iy, shiftKey) {
@@ -547,10 +618,7 @@ export class IMEEditor {
     }
 
     applyColourPreview() {
-        if (!this.colourPreviewActive()) return;
-        const bounds = { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 };
-        this._commitSelection(this.colourPreview, bounds, false);
-        this.clearColourPreview();
+        this.applyCandidatePreview();
     }
 
     _effectiveSelectionMode(altKey) {
@@ -576,6 +644,298 @@ export class IMEEditor {
         this.dirtyFrames.add(this.curFrame);
         this._maskDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
         this._notify();
+    }
+
+    async _ensureFrameKey() {
+        if (this.frameKeyFor === this.curFrame && this.frameKey) return this.frameKey;
+        if (!this.imageData) return "";
+        const digest = await crypto.subtle.digest("SHA-1", this.imageData);
+        this.frameKey = Array.from(new Uint8Array(digest))
+            .map((b) => b.toString(16).padStart(2, "0")).join("");
+        this.frameKeyFor = this.curFrame;
+        return this.frameKey;
+    }
+
+    async _rgbPngBlob() {
+        const c = document.createElement("canvas");
+        c.width = this.editW;
+        c.height = this.editH;
+        const cx = c.getContext("2d");
+        const id = cx.createImageData(this.editW, this.editH);
+        for (let p = 0, i = 0; p < this.editW * this.editH; p++, i += 4) {
+            id.data[i] = this.imageData[i];
+            id.data[i + 1] = this.imageData[i + 1];
+            id.data[i + 2] = this.imageData[i + 2];
+            id.data[i + 3] = 255;
+        }
+        cx.putImageData(id, 0, 0);
+        return new Promise((res) => c.toBlob(res, "image/png"));
+    }
+
+    clearSamState(report = true) {
+        this.samAbort?.abort();
+        this.samAbort = null;
+        this.samPoints = [];
+        this.samBox = null;
+        this.samDragStart = null;
+        this.samScore = 0;
+        if (this.tool === "sam" || !this.colourSamples.length) {
+            this._clearCandidatePreview();
+        }
+        if (report) this._reportStatus("");
+        this.requestDraw();
+    }
+
+    clearRefineState(report = true) {
+        this.refineAbort?.abort();
+        this.refineAbort = null;
+        this.refineBand = null;
+        this._refineStrokeStart = null;
+        this._refineCoverage = null;
+        this._refineStrokeBounds = null;
+        if (this.tool === "refine" && this.previewCtx) {
+            this.previewCtx.clearRect(0, 0, this.editW, this.editH);
+        }
+        if (report) this._reportStatus("");
+        this.requestDraw();
+    }
+
+    _samMeta(seq) {
+        return {
+            editor_id: this.editorId,
+            frame_key: this.frameKey,
+            seq,
+            width: this.editW,
+            height: this.editH,
+            model: this.samModel || "",
+            points: this.samPoints.map((p) => [p.x, p.y, p.label]),
+            box: this.samBox ? [...this.samBox] : null,
+        };
+    }
+
+    async _requestSam() {
+        if (this.tool !== "sam" || !this.imageData) return;
+        if (!this.samModel) {
+            this._reportStatus(this.samUnavailable || "SAM: no model installed - pick one marked [download] to fetch it.", "error");
+            return;
+        }
+        if (!this.samPoints.length && !this.samBox) {
+            this._clearCandidatePreview();
+            this._reportStatus("");
+            return;
+        }
+        const seq = ++this.samSeq;
+        this.samAbort?.abort();
+        const ac = new AbortController();
+        this.samAbort = ac;
+        this._reportStatus("SAM: computing image embedding…");
+        try {
+            await this._ensureFrameKey();
+            const meta = this._samMeta(seq);
+            let result;
+            try {
+                result = await api.samPredict(meta);
+            } catch (e) {
+                if (e.needImage) {
+                    this._reportStatus("SAM: uploading frame…");
+                    const blob = await this._rgbPngBlob();
+                    if (seq !== this.samSeq) return;
+                    result = await api.samPredict(meta, blob);
+                } else if (e.superseded) {
+                    return;
+                } else {
+                    throw e;
+                }
+            }
+            if (seq !== this.samSeq || ac.signal.aborted) return;
+            if (result.width !== this.editW || result.height !== this.editH) {
+                this._reportStatus("SAM returned an unexpected mask size.", "error");
+                return;
+            }
+            this.samScore = result.score;
+            this._setCandidatePreview(result.mask);
+            this._reportStatus(`SAM score: ${result.score.toFixed(2)}`);
+        } catch (e) {
+            if (seq !== this.samSeq || ac.signal.aborted || e.superseded) return;
+            this._reportStatus(e?.message || "SAM request failed.", "error");
+        }
+    }
+
+    _ensureRefineBand() {
+        if (!this.refineBand || this.refineBand.length !== this.editW * this.editH) {
+            this.refineBand = new Uint8Array(this.editW * this.editH);
+        }
+        return this.refineBand;
+    }
+
+    _beginRefineStroke(ix, iy) {
+        const band = this._ensureRefineBand();
+        this._refineStrokeStart = new Uint8Array(band);
+        this._refineCoverage = new Uint8Array(band.length);
+        this._refineStrokeBounds = null;
+        this._stampRefineAt(ix, iy);
+    }
+
+    _stampRefineAt(cx, cy) {
+        const band = this._ensureRefineBand();
+        const b = tools.stampBrushCoverage(
+            band, this._refineStrokeStart, this._refineCoverage,
+            this.editW, this.editH, cx, cy,
+            this.brushSize / 2, this.brushHardness, 1, false,
+        );
+        if (b) {
+            this._refineStrokeBounds = this._refineStrokeBounds
+                ? {
+                    x0: Math.min(this._refineStrokeBounds.x0, b.x0),
+                    y0: Math.min(this._refineStrokeBounds.y0, b.y0),
+                    x1: Math.max(this._refineStrokeBounds.x1, b.x1),
+                    y1: Math.max(this._refineStrokeBounds.y1, b.y1),
+                }
+                : b;
+            this._syncRefineBandPreview();
+        }
+    }
+
+    _syncRefineBandPreview() {
+        if (!this.refineBand || !this.previewCtx) return;
+        this._syncPreviewRect(0, 0, this.editW, this.editH, this.refineBand);
+        this.requestDraw();
+    }
+
+    _bandBBox(margin = 16) {
+        const band = this.refineBand;
+        if (!band) return null;
+        let x0 = this.editW, y0 = this.editH, x1 = -1, y1 = -1;
+        for (let y = 0; y < this.editH; y++) {
+            for (let x = 0; x < this.editW; x++) {
+                if (band[y * this.editW + x] > 0) {
+                    x0 = Math.min(x0, x);
+                    y0 = Math.min(y0, y);
+                    x1 = Math.max(x1, x);
+                    y1 = Math.max(y1, y);
+                }
+            }
+        }
+        if (x1 < x0) return null;
+        x0 = Math.max(0, x0 - margin);
+        y0 = Math.max(0, y0 - margin);
+        x1 = Math.min(this.editW - 1, x1 + margin);
+        y1 = Math.min(this.editH - 1, y1 + margin);
+        return { x0, y0, x1, y1 };
+    }
+
+    async _cropPngRgb(x0, y0, x1, y1) {
+        const w = x1 - x0 + 1;
+        const h = y1 - y0 + 1;
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const cx = c.getContext("2d");
+        const id = cx.createImageData(w, h);
+        for (let yy = 0; yy < h; yy++) {
+            for (let xx = 0; xx < w; xx++) {
+                const si = ((y0 + yy) * this.editW + (x0 + xx)) * 4;
+                const di = (yy * w + xx) * 4;
+                id.data[di] = this.imageData[si];
+                id.data[di + 1] = this.imageData[si + 1];
+                id.data[di + 2] = this.imageData[si + 2];
+                id.data[di + 3] = 255;
+            }
+        }
+        cx.putImageData(id, 0, 0);
+        return new Promise((res) => c.toBlob(res, "image/png"));
+    }
+
+    async _cropPngL(buf, x0, y0, x1, y1) {
+        const w = x1 - x0 + 1;
+        const h = y1 - y0 + 1;
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const cx = c.getContext("2d");
+        const id = cx.createImageData(w, h);
+        for (let yy = 0; yy < h; yy++) {
+            for (let xx = 0; xx < w; xx++) {
+                const v = buf[(y0 + yy) * this.editW + (x0 + xx)];
+                const di = (yy * w + xx) * 4;
+                id.data[di] = id.data[di + 1] = id.data[di + 2] = v;
+                id.data[di + 3] = 255;
+            }
+        }
+        cx.putImageData(id, 0, 0);
+        return new Promise((res) => c.toBlob(res, "image/png"));
+    }
+
+    async _runRefine() {
+        if (this.tool !== "refine" || !this.refineBand || !this.imageData) return;
+        const bb = this._bandBBox(16);
+        if (!bb) {
+            this.clearRefineState(false);
+            return;
+        }
+        const seq = ++this.refineSeq;
+        this.refineAbort?.abort();
+        const ac = new AbortController();
+        this.refineAbort = ac;
+        this._reportStatus("Refine: computing edge matte…");
+        try {
+            const { x0, y0, x1, y1 } = bb;
+            const [imgB, maskB, bandB] = await Promise.all([
+                this._cropPngRgb(x0, y0, x1, y1),
+                this._cropPngL(this.mask, x0, y0, x1, y1),
+                this._cropPngL(this.refineBand, x0, y0, x1, y1),
+            ]);
+            if (seq !== this.refineSeq || ac.signal.aborted) return;
+            const meta = { editor_id: this.editorId, seq, bbox: [x0, y0, x1, y1] };
+            const alphaBlob = await api.refine(meta, imgB, maskB, bandB);
+            if (seq !== this.refineSeq || ac.signal.aborted) return;
+            const bm = await createImageBitmap(alphaBlob);
+            const cw = bm.width;
+            const ch = bm.height;
+            const c = document.createElement("canvas");
+            c.width = cw;
+            c.height = ch;
+            const cx = c.getContext("2d");
+            cx.drawImage(bm, 0, 0);
+            bm.close();
+            const id = cx.getImageData(0, 0, cw, ch);
+            const alpha = new Uint8Array(cw * ch);
+            for (let p = 0, i = 0; p < alpha.length; p++, i += 4) alpha[p] = id.data[i];
+            this._applyRefineCrop(x0, y0, alpha, cw, ch);
+            this.clearRefineState(false);
+            this._reportStatus("Refine applied.");
+        } catch (e) {
+            if (seq !== this.refineSeq || ac.signal.aborted || e.superseded) return;
+            this._reportStatus(e?.message || "Refine failed.", e.needWeights ? "need_weights" : "error");
+        }
+    }
+
+    _applyRefineCrop(x0, y0, alphaCrop, cw, ch) {
+        const before = captureRect(
+            this.mask, this.editW, this.editH,
+            x0, y0, x0 + cw - 1, y0 + ch - 1,
+        );
+        const band = this.refineBand;
+        for (let yy = 0; yy < ch; yy++) {
+            for (let xx = 0; xx < cw; xx++) {
+                const fx = x0 + xx;
+                const fy = y0 + yy;
+                if (fx < 0 || fy < 0 || fx >= this.editW || fy >= this.editH) continue;
+                const i = fy * this.editW + fx;
+                const b = band[i] / 255;
+                if (b <= 0) continue;
+                const a = alphaCrop[yy * cw + xx];
+                const m = this.mask[i];
+                this.mask[i] = Math.round(b * a + (1 - b) * m);
+            }
+        }
+        // `before` is a crop; _commitUndoRect expects a full-frame source, so push the entry directly.
+        const after = captureRect(this.mask, this.editW, this.editH, x0, y0, x0 + cw - 1, y0 + ch - 1);
+        this.undo.push({ x: before.x, y: before.y, w: before.w, h: before.h, before: before.data, after: after.data });
+        this.dirtyFrames.add(this.curFrame);
+        this._maskDirtyRect(x0, y0, x0 + cw - 1, y0 + ch - 1);
+        this._notify();
+        this.requestDraw();
     }
 
     _beginBrushStroke(ix, iy) {
@@ -664,6 +1024,25 @@ export class IMEEditor {
         } else if (this.tool === "lasso") {
             this.lassoPts = [];
             this.painting = false;
+        } else if (this.tool === "sam" && this.samDragStart) {
+            // Point or box is only known once the pointer is released: a press that travelled more than 4 image
+            // px is a box and adds NO point (a point at the box corner would select the background around it).
+            const start = this.samDragStart;
+            if (Math.hypot(ix - start.x, iy - start.y) > 4) {
+                this.samBox = [Math.min(start.x, ix), Math.min(start.y, iy), Math.max(start.x, ix), Math.max(start.y, iy)];
+            } else {
+                this.samPoints.push({ x: start.x, y: start.y, label: start.alt ? 0 : 1 });
+            }
+            this.samDragStart = null;
+            this.shapeCur = null;
+            this.painting = false;
+            this._requestSam();
+        } else if (this.tool === "refine") {
+            this._runRefine();
+            this._refineStrokeStart = null;
+            this._refineCoverage = null;
+            this._refineStrokeBounds = null;
+            this.painting = false;
         }
         this.requestDraw();
     }
@@ -678,10 +1057,19 @@ export class IMEEditor {
             this.addColourSample(ix, iy, e.shiftKey);
             return;
         }
+        if (this.tool === "sam") {
+            // Alt is read here, at press time (released-before-pointerup must not flip a negative click).
+            this.painting = true;
+            this.samDragStart = { x: ix, y: iy, alt: !!e.altKey };
+            this.shapeCur = null;
+            return;
+        }
         this.painting = true;
         this.lastPt = { x: ix, y: iy };
         if (this.tool === "brush" || this.tool === "eraser") {
             this._beginBrushStroke(ix, iy);
+        } else if (this.tool === "refine") {
+            this._beginRefineStroke(ix, iy);
         } else if (this.tool === "rect" || this.tool === "ellipse") {
             this.shapeStart = { x: ix, y: iy };
             this.shapeCur = { x: ix, y: iy };
@@ -703,11 +1091,16 @@ export class IMEEditor {
 
     pointerMove(ix, iy, e) {
         this.hover = { x: ix, y: iy };
-        if (this.tool === "colour") {
+        if (this.tool === "sam" && this.painting && this.samDragStart) {
+            this.shapeCur = { x: ix, y: iy };       // live box outline while dragging
+        }
+        if (this.tool === "colour" || this.tool === "sam") {
             this.requestDraw();
             return;
         }
-        if (!this.painting && (this.tool === "brush" || this.tool === "eraser")) this.requestDraw();
+        if (!this.painting && (this.tool === "brush" || this.tool === "eraser" || this.tool === "refine")) {
+            this.requestDraw();
+        }
         if (this.panning && this.panAnchor) {
             this.panX = e.clientX - this.panAnchor.x;
             this.panY = e.clientY - this.panAnchor.y;
@@ -731,6 +1124,14 @@ export class IMEEditor {
                     }
                     : b;
             }
+            this.lastPt = { x: ix, y: iy };
+            this.requestDraw();
+        } else if (this.tool === "refine") {
+            tools.lineBrush(
+                (cx, cy) => this._stampRefineAt(cx, cy),
+                this.lastPt.x, this.lastPt.y, ix, iy,
+                this.brushSize / 2, Math.max(1, this.brushSize * this.brushSpacing),
+            );
             this.lastPt = { x: ix, y: iy };
             this.requestDraw();
         } else if (this.tool === "rect" || this.tool === "ellipse") {
@@ -821,7 +1222,7 @@ export class IMEEditor {
         } else if (this.viewMode !== 2 && this.overlayCanvas) {
             ctx.drawImage(this.overlayCanvas, 0, 0, this.editW, this.editH);
         }
-        if (this.viewMode !== 2 && this.colourPreview && this.previewCanvas) {
+        if (this.viewMode !== 2 && this.candidatePreview && this.previewCanvas) {
             ctx.drawImage(this.previewCanvas, 0, 0, this.editW, this.editH);
         }
         ctx.imageSmoothingEnabled = true;
@@ -861,6 +1262,53 @@ export class IMEEditor {
             }
             ctx.stroke();
         }
+        if (this.tool === "sam" && this.samBox) {
+            const [x0, y0, x1, y1] = this.samBox;
+            ctx.strokeStyle = C.accent2;
+            ctx.setLineDash([4 / this.zoom, 4 / this.zoom]);
+            ctx.lineWidth = 1.5 / this.zoom;
+            ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1;
+        }
+        if (this.tool === "sam" && this.samDragStart && this.shapeCur) {
+            const x0 = this.samDragStart.x;
+            const y0 = this.samDragStart.y;
+            const x1 = this.shapeCur.x;
+            const y1 = this.shapeCur.y;
+            if (Math.hypot(x1 - x0, y1 - y0) > 4) {
+                ctx.strokeStyle = C.accent2;
+                ctx.setLineDash([4 / this.zoom, 4 / this.zoom]);
+                ctx.lineWidth = 1.5 / this.zoom;
+                ctx.strokeRect(
+                    Math.min(x0, x1), Math.min(y0, y1),
+                    Math.abs(x1 - x0), Math.abs(y1 - y0),
+                );
+                ctx.setLineDash([]);
+                ctx.lineWidth = 1;
+            }
+        }
+        if (this.tool === "sam" && this.samPoints.length) {
+            const arm = 5 / this.zoom;
+            for (const p of this.samPoints) {
+                const cx = p.x + 0.5;
+                const cy = p.y + 0.5;
+                const fg = p.label === 1;
+                ctx.beginPath();
+                ctx.moveTo(cx - arm, cy); ctx.lineTo(cx + arm, cy);
+                ctx.moveTo(cx, cy - arm); ctx.lineTo(cx, cy + arm);
+                ctx.lineWidth = 3 / this.zoom;
+                ctx.strokeStyle = C.black;
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx - arm, cy); ctx.lineTo(cx + arm, cy);
+                ctx.moveTo(cx, cy - arm); ctx.lineTo(cx, cy + arm);
+                ctx.lineWidth = 1.5 / this.zoom;
+                ctx.strokeStyle = fg ? "#6bdc6b" : C.danger;
+                ctx.stroke();
+            }
+            ctx.lineWidth = 1;
+        }
         if (this.tool === "colour" && this.colourSamplePixels.length) {
             const arm = 5 / this.zoom;
             for (const p of this.colourSamplePixels) {
@@ -880,7 +1328,7 @@ export class IMEEditor {
             }
             ctx.lineWidth = 1;
         }
-        if (this.hover && (this.tool === "brush" || this.tool === "eraser")) {
+        if (this.hover && (this.tool === "brush" || this.tool === "eraser" || this.tool === "refine")) {
             // Brush outline, two-tone so it reads on any plate; line widths are screen pixels.
             const r = Math.max(0.5, this.brushSize / 2);
             ctx.beginPath();
@@ -938,6 +1386,9 @@ export class IMEEditor {
     dispose() {
         if (this._raf) cancelAnimationFrame(this._raf);
         this._raf = 0;
+        this.samAbort?.abort();
+        this.refineAbort?.abort();
+        if (this.editorId) api.release(this.editorId);
         this._releaseBitmap();
         this.masks.clear();
         this.storedFrames.clear();

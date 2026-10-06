@@ -57,6 +57,14 @@ def _model_to(obj, device):
     return obj
 
 
+def _inference_device_str():
+    try:
+        import comfy.model_management as mm
+        return str(mm.get_torch_device().type)
+    except Exception:
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 def move_to_inference_device(sam_wrapper):
     """Move a SAM wrapper's underlying model onto its inference device.
 
@@ -64,11 +72,12 @@ def move_to_inference_device(sam_wrapper):
     """
     if not isinstance(sam_wrapper, dict):
         return None
-    device = sam_wrapper.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
+    inference_dev = _inference_device_str()
+    device = sam_wrapper.get("device") or inference_dev
     if sam_wrapper.get("offload_to_cpu"):
         # When offload is enabled, the resting place is CPU; we still
         # need to move it onto the inference device for the call.
-        target = "cuda" if torch.cuda.is_available() else "cpu"
+        target = inference_dev
     else:
         target = device
     _model_to(sam_wrapper.get("model"), target)
@@ -379,8 +388,16 @@ class SAMModelLoaderMEC:
                             download_dir = candidate
                             break
         if not download_dir:
-            download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                                         "models", "sam2")
+            if HAS_FOLDER_PATHS:
+                models_dir = getattr(folder_paths, "models_dir", None)
+                if not models_dir:
+                    models_dir = os.path.join(folder_paths.base_path, "models")
+                download_dir = os.path.join(models_dir, "sam2")
+            else:
+                download_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                    "models", "sam2",
+                )
 
         os.makedirs(download_dir, exist_ok=True)
         dest_path = os.path.join(download_dir, model_name)

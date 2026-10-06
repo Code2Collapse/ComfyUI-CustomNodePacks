@@ -4,9 +4,11 @@ import { c2cAlert, c2cConfirm } from "../_c2c_dialog.js";
 import { screenToImage } from "./coords.js";
 import { IMEEditor } from "./editor.js";
 import { FrameStrip } from "./strip.js";
+import * as api from "./api.js";
 
 const TOOL_LABELS = {
     brush: "B", eraser: "E", rect: "R", ellipse: "O", polygon: "P", lasso: "L", bucket: "G", colour: "C",
+    sam: "S", refine: "M",
 };
 const VIEW_LABELS = ["Overlay", "Matte", "Image"];
 // Hotkey letter -> tool, derived from the labels so the toolbar and the keyboard cannot disagree.
@@ -16,6 +18,8 @@ const HOTKEY_TEXT =
     "B brush · E eraser · R rect · O ellipse · P polygon · L lasso · G bucket · C colour\n" +
     "Add / Subtract / Intersect modes (toolbar); Alt swaps Add↔Subtract for area tools\n" +
     "Colour: click sample · Shift+click add sample · Enter/Apply commit · Esc clear preview\n" +
+    "S SAM: click +/Alt− · drag box · Enter/Apply commit · Esc clear\n" +
+    "M refine: paint edge band · release to matte · Esc clear band\n" +
     "Alt+brush subtract · [ ] size · , . prev/next frame · F fit · 1 100%\n" +
     "V view mode · Ctrl+Z undo · Ctrl+Y redo · Enter save · Esc cancel shape / close";
 
@@ -122,7 +126,7 @@ export function openModal(node, editorId, onSaved) {
     overlay.append(banner, toolbar, canvas, stripHost, frameBar);
     document.body.appendChild(overlay);
 
-    const toolList = ["brush", "eraser", "rect", "ellipse", "polygon", "lasso", "bucket", "colour"];
+    const toolList = ["brush", "eraser", "rect", "ellipse", "polygon", "lasso", "bucket", "colour", "sam", "refine"];
     const toolBtns = {};
     const btnStyle = `padding:4px 8px;border:1px solid ${C.border};background:${C.panel};color:${C.text};cursor:pointer;border-radius:4px;`;
     for (const t of toolList) {
@@ -188,7 +192,23 @@ export function openModal(node, editorId, onSaved) {
     btnColourApply.style.cssText = btnStyle;
     colourOpts.append(spaceLbl, tolColCtl.wrap, softCtl.wrap, contigLbl, btnColourApply);
 
-    toolbar.append(brushOpts, bucketOpts, colourOpts);
+    const samOpts = document.createElement("div");
+    samOpts.style.cssText = `display:inline-flex;gap:6px;align-items:center;color:${C.sub};font-size:12px;`;
+    const samModelLbl = document.createElement("label");
+    samModelLbl.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    const samModelCap = document.createElement("span");
+    samModelCap.textContent = "Model";
+    const samModelSel = document.createElement("select");
+    samModelSel.id = "ime-sam-model";
+    samModelSel.style.maxWidth = "260px";      // long "(needs the sam2 package)" names otherwise wrap the toolbar
+    samModelLbl.append(samModelCap, samModelSel);
+    const btnSamApply = document.createElement("button");
+    btnSamApply.id = "ime-sam-apply";
+    btnSamApply.textContent = "Apply";
+    btnSamApply.style.cssText = btnStyle;
+    samOpts.append(samModelLbl, btnSamApply);
+
+    toolbar.append(brushOpts, bucketOpts, colourOpts, samOpts);
 
     const btnView = document.createElement("button");
     btnView.id = "ime-view-mode";
@@ -243,6 +263,11 @@ export function openModal(node, editorId, onSaved) {
         ed._rebuildColourPreview();
     });
     btnColourApply.onclick = () => { ed.applyColourPreview(); canvas.focus(); };
+    btnSamApply.onclick = () => { ed.applySamPreview(); canvas.focus(); };
+    samModelSel.addEventListener("change", () => {
+        ed.samModel = samModelSel.value;
+        ed._requestSam();
+    });
 
     function highlightMode() {
         for (const [k, b] of Object.entries(modeBtns)) {
@@ -254,10 +279,23 @@ export function openModal(node, editorId, onSaved) {
         const t = ed.tool;
         // style.display, not [hidden]: these groups carry an inline display, which beats the [hidden] rule
         const show = (el, on) => { el.style.display = on ? "inline-flex" : "none"; };
-        show(brushOpts, t === "brush" || t === "eraser");
+        show(brushOpts, t === "brush" || t === "eraser" || t === "refine");
         show(bucketOpts, t === "bucket");
         show(colourOpts, t === "colour");
+        show(samOpts, t === "sam");
     }
+
+    let refineAlertShown = false;
+    ed.onStatus = (text, kind) => {
+        updateStatus();
+        if (kind === "need_weights" && !refineAlertShown) {
+            refineAlertShown = true;
+            c2cAlert(
+                text || "ViTMatte weights are not installed.\n"
+                + "Place a HuggingFace model folder under ComfyUI/models/vitmatte/.",
+            );
+        }
+    };
 
     function relabelView() {
         btnView.textContent = VIEW_LABELS[ed.viewMode] || "Overlay";
@@ -279,8 +317,10 @@ export function openModal(node, editorId, onSaved) {
     }
 
     function updateStatus() {
-        status.textContent =
+        const base =
             `frame ${ed.curFrame + 1}/${ed.frameCount} · ${ed.maskCount()} masks · ${ed.nativeW}×${ed.nativeH}`;
+        const extra = ed.getToolStatusLine();
+        status.textContent = extra ? `${base} · ${extra}` : base;
         navBar.style.display = ed.frameCount > 1 ? "flex" : "none";
         stripHost.hidden = ed.frameCount <= 1;
         strip.refresh();
@@ -355,7 +395,7 @@ export function openModal(node, editorId, onSaved) {
         try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
     });
     canvas.addEventListener("lostpointercapture", (e) => {
-        if (ed.painting || ed.strokeStart) endPointer(e);
+        if (ed.painting || ed.strokeStart || (ed.tool === "refine" && ed._refineStrokeStart)) endPointer(e);
     });
     canvas.addEventListener("wheel", (e) => {
         const r = canvas.getBoundingClientRect();
@@ -380,15 +420,26 @@ export function openModal(node, editorId, onSaved) {
         if ((e.ctrlKey && e.shiftKey && e.key === "Z") || (e.ctrlKey && e.key === "y")) {
             e.preventDefault(); ed.redoOp(); return;
         }
-        if (e.key === "Enter" && ed.colourPreviewActive()) {
-            e.preventDefault(); ed.applyColourPreview(); return;
+        if (e.key === "Enter" && ed.candidatePreviewActive()) {
+            e.preventDefault();
+            if (ed.colourPreviewActive()) ed.applyColourPreview();
+            else ed.applySamPreview();
+            return;
         }
         if (e.key === "Enter" && ed.tool === "polygon") { e.preventDefault(); ed.closePolygon(e); return; }
         if (e.key === "Enter") { e.preventDefault(); tryClose(true); return; }
         if (e.key === "Escape") {
             e.preventDefault();
-            if (ed.shapeInProgress() && !ed.colourPreviewActive()) {
+            if (ed.shapeInProgress() && !ed.candidatePreviewActive()) {
                 ed.cancelShapeInProgress();
+                return;
+            }
+            if (ed.tool === "sam" && (ed.samPoints.length > 0 || ed.samBox || ed.candidatePreview)) {
+                ed.clearSamState();
+                return;
+            }
+            if (ed.tool === "refine") {
+                ed.clearRefineState();
                 return;
             }
             if (ed.colourPreviewActive()) {
@@ -455,6 +506,44 @@ export function openModal(node, editorId, onSaved) {
             banner.hidden = false;
             banner.textContent = ed.frameSource.note;
         }
+        api.samModels().then((m) => {
+            const unavailable = m.unavailable || {};
+            const allUnavailable = (m.models || []).length > 0
+                && (m.models || []).every((name) => unavailable[name]);
+            samModelSel.replaceChildren();
+            if (!m.default) {           // nothing installed: no silent multi-GB download on the first click
+                const o = document.createElement("option");
+                o.value = "";
+                if (allUnavailable) {
+                    const reason = unavailable[m.models[0]] || "";
+                    o.textContent = "SAM unavailable - see tooltip";
+                    o.title = reason;
+                } else {
+                    o.textContent = "choose a model";
+                }
+                samModelSel.appendChild(o);
+            }
+            for (const name of m.models || []) {
+                const o = document.createElement("option");
+                o.value = name;
+                const reason = unavailable[name];
+                if (reason) {
+                    o.disabled = true;
+                    o.textContent = name + " (needs the sam2 package)";
+                    o.title = reason;
+                } else {
+                    o.textContent = name;
+                }
+                samModelSel.appendChild(o);
+            }
+            // An option's title only shows while the list is open: the select carries the reason too, and the
+            // editor quotes it when SAM is clicked without a model.
+            const why = allUnavailable ? (unavailable[m.models[0]] || "") : "";
+            samModelSel.title = why;
+            ed.samUnavailable = why;
+            ed.samModel = m.default || "";
+            samModelSel.value = ed.samModel;
+        }).catch((e) => console.warn("[IME] sam models:", e));
         strip.mount(stripHost, ed, updateStatus);
         updateStatus();
         ed.fit();

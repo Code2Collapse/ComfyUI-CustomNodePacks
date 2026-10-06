@@ -6,9 +6,10 @@ takes hundreds of milliseconds to decode, and the event loop serves every other 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
-from . import store
+from . import smart, store
 
 log = logging.getLogger("C2C.ImageMaskEditor")
 _ROUTES_REGISTERED = False
@@ -28,6 +29,16 @@ def register_routes(server) -> None:
 
     async def _off_loop(fn, *args):
         return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+
+    def _png_response(body, headers):
+        # aiohttp forbids content_type= together with a Content-Type header (ValueError -> every reply a 500)
+        extra = {k: v for k, v in (headers or {}).items() if k.lower() != "content-type"}
+        return web.Response(body=body, content_type="image/png", headers=extra)
+
+    async def _smart_off_loop(fn, *args):
+        loop = asyncio.get_running_loop()
+        smart.init_loop(loop)
+        return await loop.run_in_executor(smart.get_executor(), fn, *args)
 
     def _bad(msg, status=400):
         return web.json_response({"error": str(msg)}, status=status)
@@ -109,6 +120,86 @@ def register_routes(server) -> None:
             return web.json_response({"ok": True, "digest": await _off_loop(store.digest, dst)})
         except ValueError as e:
             return _bad(e)
+
+    @routes.post("/c2c/image_mask_editor/sam")
+    async def post_sam(request):
+        try:
+            ct = (request.content_type or "").lower()
+            if "multipart" in ct:
+                reader = await request.multipart()
+                meta_raw = None
+                image_png = None
+                while True:
+                    part = await reader.next()
+                    if part is None:
+                        break
+                    if part.name == "meta":
+                        meta_raw = await part.read()
+                    elif part.name == "image":
+                        image_png = await part.read()
+                if meta_raw is None:
+                    return _bad("meta field required")
+            else:
+                meta_raw = await request.json()
+                image_png = None
+            status, body, headers = await _smart_off_loop(smart.handle_sam, meta_raw, image_png)
+        except json.JSONDecodeError:
+            return _bad("invalid JSON in meta")
+        except Exception as e:  # noqa: BLE001
+            log.exception("SAM route failed")
+            return _bad(str(e), 500)
+        if status == 200:
+            return _png_response(body, headers)
+        return web.json_response(body, status=status)
+
+    @routes.post("/c2c/image_mask_editor/refine")
+    async def post_refine(request):
+        try:
+            reader = await request.multipart()
+            meta_raw = None
+            image_png = mask_png = band_png = None
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                if part.name == "meta":
+                    meta_raw = await part.read()
+                elif part.name == "image":
+                    image_png = await part.read()
+                elif part.name == "mask":
+                    mask_png = await part.read()
+                elif part.name == "band":
+                    band_png = await part.read()
+            if meta_raw is None or image_png is None or mask_png is None or band_png is None:
+                return _bad("meta, image, mask and band fields required")
+            status, body, headers = await _smart_off_loop(
+                smart.handle_refine, meta_raw, image_png, mask_png, band_png,
+            )
+        except json.JSONDecodeError:
+            return _bad("invalid JSON in meta")
+        except Exception as e:  # noqa: BLE001
+            log.exception("refine route failed")
+            return _bad(str(e), 500)
+        if status == 200:
+            return _png_response(body, headers)
+        return web.json_response(body, status=status)
+
+    @routes.post("/c2c/image_mask_editor/release")
+    async def post_release(request):
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return _bad("JSON body required")
+        eid = (data.get("editor_id") or "").strip()
+        if not eid:
+            return _bad("editor_id required")
+        status, body, _hdr = await _smart_off_loop(smart.handle_release, eid)
+        return web.json_response(body, status=status)
+
+    @routes.get("/c2c/image_mask_editor/sam/models")
+    async def get_sam_models(request):
+        status, body, _hdr = await _smart_off_loop(smart.handle_sam_models)
+        return web.json_response(body, status=status)
 
     _ROUTES_REGISTERED = True
     print("[C2C.ImageMaskEditor] routes registered (/c2c/image_mask_editor/*)")

@@ -347,7 +347,9 @@ def test_record_frames_version_changes_on_pixel_edit(mask_root):
     out1 = _run_full(im, eid)
     v1 = out1["ui"]["c2c_ime_frames"][0]["version"]
     im2 = im.clone()
-    im2[0, 0, 0, 0] = 1.0 - im2[0, 0, 0, 0]
+    # A full 8-bit level or more: the fingerprint hashes the frame as uint8 (what the editor shows), so the old
+    # "1 - x" edit was a no-op whenever x sat within 1/255 of 0.5 - a ~0.4% flake seen once in a full-suite run.
+    im2[0, 0, 0, 0] = 0.0 if float(im2[0, 0, 0, 0]) >= 0.5 else 1.0
     out2 = _run_full(im2, eid)
     v2 = out2["ui"]["c2c_ime_frames"][0]["version"]
     assert v2 != v1

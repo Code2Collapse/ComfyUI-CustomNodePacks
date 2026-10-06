@@ -33,6 +33,8 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 | **L** | Lasso: freehand, closes on release |
 | **G** | Bucket fill on the image colours (tolerance in the toolbar) |
 | **C** | Colour range: click samples the plate colour; Shift+click adds a sample. Toolbar: space (RGB / HSV / LAB), tolerance (0–255), softness (0–128), contiguous. Live preview over the mask; Enter or Apply commits through the selection mode; Esc clears the preview |
+| **S** | Smart select (SAM). Click adds a positive point, Alt+click a negative one; drag draws a box instead. The candidate shows over the image; Enter or Apply commits it through the selection mode; Esc clears it. The image is uploaded once per frame and the model's embedding is reused for every further click. Needs a SAM 2.1 model and the `sam2` Python package (see Requirements) |
+| **M** | Edge refine. Paint a band over a hair or fur edge; on release ViTMatte (tiled) mattes that band only and writes soft alpha into it, leaving the rest of the mask untouched. Ctrl+Z restores the exact previous pixels. Needs ViTMatte weights (see Requirements) |
 | **Add / Subtract / Intersect** | Toolbar modes for rectangle, ellipse, polygon, lasso, bucket and colour range. Alt held during a stroke swaps Add and Subtract for that stroke |
 | **Alt** + brush | Subtract instead of add (brush and eraser are unchanged by the mode buttons) |
 | **Ctrl+Z / Ctrl+Y** | Undo / redo (per frame, capped at 128 MB) |
@@ -82,4 +84,19 @@ All result-stage parameters are applied in Python every run and never baked into
 
 - Images over 16 MP are edited at reduced resolution (a banner says so) and the mask is upscaled on save.
 - Undo history is per frame and resets when you switch frames.
-- SAM clicks and the edge-refine brush arrive in a later slice (ledger L7.38).
+
+## Requirements for smart select and edge refine
+
+Both tools run on the server; the other tools need nothing extra.
+
+- **Smart select (S).**
+  - Needs the `sam2` Python package. If it is missing, the model list says so, the tooltip and the status line give
+    the install command (`pip install git+https://github.com/facebookresearch/sam2.git`, then restart ComfyUI), and
+    nothing is downloaded.
+  - Models: any SAM 2.1 checkpoint in `ComfyUI/models/sam2/` (or `sams/`). Entries marked `[download]` are fetched
+    from Hugging Face into `ComfyUI/models/sam2/` the first time you pick one; nothing is pre-selected, so a
+    download only starts on your choice.
+  - The model runs on ComfyUI's device (it follows `--cpu`) and is released when the editor closes.
+- **Edge refine (M).** Needs a ViTMatte model folder (Hugging Face layout, `config.json` +
+  `preprocessor_config.json`) under `ComfyUI/models/vitmatte/`. Without it the first stroke says so and the mask
+  is not changed.
