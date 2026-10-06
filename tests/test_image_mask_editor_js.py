@@ -46,6 +46,36 @@ def _run_colour(tmp_path: Path, body: str, inputs: dict) -> dict:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
+def _run_view(tmp_path: Path, body: str, inputs: dict) -> dict:
+    probe = tmp_path / "probe_view.mjs"
+    probe.write_text(
+        f"const V = await import({json.dumps((JS / 'view.js').resolve().as_uri())});\n"
+        f"const T = await import({json.dumps((JS / 'tools.js').resolve().as_uri())});\n"
+        f"const U = await import({json.dumps((JS / 'undo.js').resolve().as_uri())});\n"
+        f"const IN = {json.dumps(inputs)};\n"
+        "const out = {};\n" + body + "\nconsole.log(JSON.stringify(out));\n",
+        encoding="utf-8")
+    r = subprocess.run([NODE, str(probe)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-2000:]
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def _outline_ref(mask: np.ndarray, w: int, h: int, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+    out = np.zeros((h, w), np.uint8)
+    rx0, ry0 = max(0, x0), max(0, y0)
+    rx1, ry1 = min(w - 1, x1), min(h - 1, y1)
+    for y in range(ry0, ry1 + 1):
+        for x in range(rx0, rx1 + 1):
+            if mask[y, x] < 128:
+                continue
+            for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                nx, ny = x + dx, y + dy
+                if nx < 0 or nx >= w or ny < 0 or ny >= h or mask[ny, nx] < 128:
+                    out[y, x] = 1
+                    break
+    return out
+
+
 def _mask(out_list, w, h) -> np.ndarray:
     return np.array(out_list, dtype=np.uint8).reshape(h, w)
 
@@ -357,3 +387,108 @@ def test_distance_map_rgb_hsv_lab(tmp_path):
             assert float(np.max(np.abs(got - _lab_dist_ref(rgb, samples, exact=False)))) <= 1.5, "lab vs OpenCV"
         tol = 0.1 if space == "lab" else 0.75
         assert float(np.max(np.abs(got - ref))) <= tol, space
+
+
+def test_outline_mask_disc_and_square(tmp_path):
+    w, h = 64, 64
+    mask = np.zeros((h, w), np.uint8)
+    cx, cy, r = 32, 32, 20
+    yy, xx = np.ogrid[:h, :w]
+    mask[(xx - cx) ** 2 + (yy - cy) ** 2 <= r ** 2] = 255
+    mask[10:30, 10:30] = 255
+    out = _run_view(tmp_path, """
+      const m = new Uint8Array(IN.mask);
+      out.o = Array.from(V.outlineMask(m, IN.w, IN.h, 0, 0, IN.w - 1, IN.h - 1));
+    """, {"w": w, "h": h, "mask": mask.reshape(-1).tolist()})
+    got = _mask(out["o"], w, h)
+    ref = _outline_ref(mask, w, h, 0, 0, w - 1, h - 1)
+    assert np.array_equal(got, ref)
+
+
+def test_rubylith_alpha_unselected(tmp_path):
+    w, h = 8, 8
+    mask = np.array([0, 255] * 32, dtype=np.uint8)
+    out = _run_view(tmp_path, """
+      const rgba = new Uint8ClampedArray(IN.w * IN.h * 4);
+      V.rubylithRGBA(new Uint8Array(IN.mask), IN.w, IN.h, 0, 0, IN.w - 1, IN.h - 1, rgba);
+      out.a = Array.from(rgba);
+    """, {"w": w, "h": h, "mask": mask.tolist()})
+    a = np.array(out["a"], dtype=np.uint8).reshape(h, w, 4)
+    assert (a[0, 0, :3] == [255, 0, 0]).all() and a[0, 0, 3] == 128
+    assert a[0, 1, 3] == 0
+
+
+def test_grid_lines_empty_below_8x(tmp_path):
+    out = _run_view(tmp_path, """
+      out.g = V.gridLines(4, 10, 20, 800, 600);
+    """, {})
+    assert out["g"]["xs"] == [] and out["g"]["ys"] == []
+
+
+def test_grid_lines_at_16x(tmp_path):
+    zoom, pan_x, pan_y, vw, vh = 16, 8, 12, 400, 300
+    out = _run_view(tmp_path, """
+      out.g = V.gridLines(IN.zoom, IN.panX, IN.panY, IN.vw, IN.vh);
+    """, {"zoom": zoom, "panX": pan_x, "panY": pan_y, "vw": vw, "vh": vh})
+    kx0 = int(np.ceil((0 - pan_x) / zoom))
+    kx1 = int(np.floor((vw - pan_x) / zoom))
+    ky0 = int(np.ceil((0 - pan_y) / zoom))
+    ky1 = int(np.floor((vh - pan_y) / zoom))
+    ref_xs = [k * zoom + pan_x for k in range(kx0, kx1 + 1)]
+    ref_ys = [k * zoom + pan_y for k in range(ky0, ky1 + 1)]
+    assert out["g"]["xs"] == ref_xs
+    assert out["g"]["ys"] == ref_ys
+    assert len(ref_xs) == kx1 - kx0 + 1
+
+
+def test_pressure_at_monotone(tmp_path):
+    out = _run_view(tmp_path, """
+      out.p0 = T.pressureAt(0.2, 1.0, 0);
+      out.p1 = T.pressureAt(0.2, 1.0, 0.5);
+      out.p2 = T.pressureAt(0.2, 1.0, 1);
+    """, {})
+    assert out["p0"] == pytest.approx(0.2)
+    assert out["p2"] == pytest.approx(1.0)
+    assert out["p0"] <= out["p1"] <= out["p2"]
+
+
+def test_frame_history_evicts_other_frame_first(tmp_path):
+    out = _run_view(tmp_path, """
+      // 12 MB per entry (6 MB before + 6 MB after) under a 30 MB cap: frame 0 fills to 2 entries, then frame 1's
+      // two pushes must take their room from frame 0 (the OTHER frame) and keep both of their own.
+      const H = new U.FrameHistory(30 * 1024 * 1024);
+      const big = 6 * 1024 * 1024;
+      const mk = () => ({ x: 0, y: 0, w: 1, h: 1, before: new Uint8Array(big), after: new Uint8Array(big) });
+      H.push(0, mk()); H.push(0, mk()); H.push(0, mk());
+      H.push(1, mk()); H.push(1, mk());
+      out.f0 = H._stack(0).undo.length;
+      out.f1 = H._stack(1).undo.length;
+      out.bytes = H.bytes;
+    """, {})
+    assert out["f1"] == 2
+    assert out["f0"] == 0
+    assert out["bytes"] <= 30 * 1024 * 1024
+
+
+def test_frame_history_undo_after_frame_switch(tmp_path):
+    w, h = 4, 4
+    out = _run_view(tmp_path, """
+      const H = new U.FrameHistory();
+      const mask1 = new Uint8Array(IN.n);
+      const mask2 = new Uint8Array(IN.n);
+      mask1.fill(100);
+      mask2.fill(50);
+      const entry = (before, after) => ({ x: 0, y: 0, w: IN.w, h: IN.h, before, after });
+      const b1 = new Uint8Array(mask1);
+      mask1.fill(200);
+      const a1 = new Uint8Array(mask1);
+      H.push(1, entry(b1, a1));
+      const b2 = new Uint8Array(mask2);
+      mask2.fill(150);
+      const a2 = new Uint8Array(mask2);
+      H.push(2, entry(b2, a2));
+      const e = H.undo(1);
+      U.applyRect(mask1, IN.w, { x: e.x, y: e.y, w: e.w, h: e.h, data: e.before });
+      out.m1 = Array.from(mask1);
+    """, {"w": w, "h": h, "n": w * h})
+    assert np.all(_mask(out["m1"], w, h) == 100)

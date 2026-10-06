@@ -10,7 +10,7 @@ const TOOL_LABELS = {
     brush: "B", eraser: "E", rect: "R", ellipse: "O", polygon: "P", lasso: "L", bucket: "G", colour: "C",
     sam: "S", refine: "M",
 };
-const VIEW_LABELS = ["Overlay", "Matte", "Image"];
+const VIEW_LABELS = ["Overlay", "Matte", "Rubylith", "Outline", "Image"];
 // Hotkey letter -> tool, derived from the labels so the toolbar and the keyboard cannot disagree.
 const KEY_TO_TOOL = Object.fromEntries(Object.entries(TOOL_LABELS).map(([tool, key]) => [key.toLowerCase(), tool]));
 
@@ -21,7 +21,10 @@ const HOTKEY_TEXT =
     "S SAM: click +/Alt− · drag box · Enter/Apply commit · Esc clear\n" +
     "M refine: paint edge band · release to matte · Esc clear band\n" +
     "Alt+brush subtract · [ ] size · , . prev/next frame · F fit · 1 100%\n" +
-    "V view mode · Ctrl+Z undo · Ctrl+Y redo · Enter save · Esc cancel shape / close";
+    "V cycles Overlay → Matte → Rubylith → Outline → Image · pixel grid from 800% zoom\n" +
+    "Pen pressure toggles (brush toolbar); mouse strokes ignore them\n" +
+    "Ctrl+Shift+C copy mask · Ctrl+Shift+V paste mask · Frame menu: apply all / clear / import / export\n" +
+    "Ctrl+Z / Ctrl+Y undo / redo (per frame, shared 128 MB budget) · Enter save · Esc cancel shape / close";
 
 function _formControlFocused(e) {
     const t = e.target;
@@ -157,7 +160,19 @@ export function openModal(node, editorId, onSaved) {
     const sizeCtl = _mkRange("ime-brush-size", "Size", 1, 512, 1, ed.brushSize, (v) => `${v | 0}px`);
     const hardCtl = _mkRange("ime-brush-hardness", "Hard", 0, 1, 0.01, ed.brushHardness, (v) => Number(v).toFixed(2));
     const opCtl = _mkRange("ime-brush-opacity", "Opac", 0, 1, 0.01, ed.brushOpacity, (v) => Number(v).toFixed(2));
-    brushOpts.append(sizeCtl.wrap, hardCtl.wrap, opCtl.wrap);
+    const presSizeLbl = document.createElement("label");
+    presSizeLbl.style.cssText = `display:inline-flex;align-items:center;gap:4px;color:${C.sub};font-size:12px;`;
+    const presSizeInp = document.createElement("input");
+    presSizeInp.type = "checkbox";
+    presSizeInp.id = "ime-pressure-size";
+    presSizeLbl.append(presSizeInp, document.createTextNode("P→size"));
+    const presOpLbl = document.createElement("label");
+    presOpLbl.style.cssText = presSizeLbl.style.cssText;
+    const presOpInp = document.createElement("input");
+    presOpInp.type = "checkbox";
+    presOpInp.id = "ime-pressure-opacity";
+    presOpLbl.append(presOpInp, document.createTextNode("P→opac"));
+    brushOpts.append(sizeCtl.wrap, hardCtl.wrap, opCtl.wrap, presSizeLbl, presOpLbl);
 
     const bucketOpts = document.createElement("div");
     bucketOpts.style.cssText = "display:inline-flex;gap:6px;align-items:center;";
@@ -210,6 +225,70 @@ export function openModal(node, editorId, onSaved) {
 
     toolbar.append(brushOpts, bucketOpts, colourOpts, samOpts);
 
+    const importInp = document.createElement("input");
+    importInp.type = "file";
+    importInp.accept = "image/png";
+    importInp.id = "ime-import-mask";
+    importInp.hidden = true;
+    overlay.appendChild(importInp);
+
+    const btnFrameMenu = document.createElement("button");
+    btnFrameMenu.id = "ime-frame-menu";
+    btnFrameMenu.textContent = "Frame ▾";
+    btnFrameMenu.style.cssText = btnStyle;
+    const frameMenu = document.createElement("div");
+    frameMenu.style.cssText = [
+        "position:fixed;z-index:calc(var(--c2c-z-modal,10000) + 1);",
+        `background:${C.panel};border:1px solid ${C.border};border-radius:4px;`,
+        "padding:4px 0;flex-direction:column;min-width:168px;display:none;",
+    ].join("");
+    const menuBtnStyle = `padding:6px 12px;border:none;background:transparent;color:${C.text};text-align:left;cursor:pointer;width:100%;font:13px system-ui,sans-serif;`;
+    function _menuItem(label, fn) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.style.cssText = menuBtnStyle;
+        b.onclick = () => {
+            frameMenu.style.display = "none";
+            fn();
+            canvas.focus();
+        };
+        return b;
+    }
+    frameMenu.append(
+        _menuItem("Copy mask", () => { ed.copyMask(); updateStatus(); }),
+        _menuItem("Paste mask", () => { ed.pasteMask(false); updateStatus(); }),
+        _menuItem("Apply to all frames", async () => {
+            const ok = await c2cConfirm(
+                `Apply this frame's mask to all ${ed.frameCount} frame${ed.frameCount === 1 ? "" : "s"}?`,
+            );
+            if (ok) await ed.applyToAllFrames();
+            updateStatus();
+        }),
+        _menuItem("Clear frame", () => { ed.clearFrame(); updateStatus(); }),
+        _menuItem("Export PNG", () => ed.exportMaskPng()),
+        _menuItem("Import PNG", () => importInp.click()),
+    );
+    document.body.appendChild(frameMenu);
+    frameMenu.addEventListener("click", (ev) => ev.stopPropagation());
+    btnFrameMenu.onclick = (ev) => {
+        const r = btnFrameMenu.getBoundingClientRect();
+        frameMenu.style.left = `${r.left}px`;
+        frameMenu.style.top = `${r.bottom + 2}px`;
+        frameMenu.style.display = frameMenu.style.display === "none" ? "flex" : "none";
+        ev.stopPropagation();
+    };
+    function hideFrameMenu() {
+        frameMenu.style.display = "none";
+    }
+    function onImportChange() {
+        const f = importInp.files?.[0];
+        if (f) ed.importMaskPng(f).then(() => updateStatus());
+        importInp.value = "";
+    }
+    window.addEventListener("click", hideFrameMenu);
+    importInp.addEventListener("change", onImportChange);
+
     const btnView = document.createElement("button");
     btnView.id = "ime-view-mode";
     btnView.textContent = VIEW_LABELS[ed.viewMode];
@@ -220,7 +299,7 @@ export function openModal(node, editorId, onSaved) {
     btnHelp.title = "Keyboard shortcuts";
     btnHelp.style.cssText = btnView.style.cssText;
 
-    toolbar.append(btnView, btnHelp, status);
+    toolbar.append(btnFrameMenu, btnView, btnHelp, status);
 
     function syncBrushSize(v) {
         const n = Math.max(1, Math.min(512, v | 0));
@@ -240,6 +319,8 @@ export function openModal(node, editorId, onSaved) {
         ed.brushOpacity = Number(opCtl.inp.value);
         opCtl.valEl.textContent = opCtl.fmt(ed.brushOpacity);
     });
+    presSizeInp.addEventListener("change", () => { ed.pressureSize = presSizeInp.checked; });
+    presOpInp.addEventListener("change", () => { ed.pressureOpacity = presOpInp.checked; });
     tolCtl.inp.addEventListener("input", () => {
         ed.bucketTolerance = Number(tolCtl.inp.value) | 0;
         tolCtl.valEl.textContent = tolCtl.fmt(ed.bucketTolerance);
@@ -336,6 +417,10 @@ export function openModal(node, editorId, onSaved) {
         closed = true;
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKeyUp);
+        window.removeEventListener("click", hideFrameMenu);
+        importInp.removeEventListener("change", onImportChange);
+        btnFrameMenu.onclick = null;
+        try { frameMenu.remove(); } catch (_) { /* ignore */ }
         try { canvasRo.disconnect(); } catch (_) { /* ignore */ }
         if (node.onRemoved === onRemovedWrapper) node.onRemoved = origRemoved;
         strip.dispose();
@@ -364,7 +449,6 @@ export function openModal(node, editorId, onSaved) {
         if (!node.graph) { closeModal(); return; }
         const p = localXY(e);
         ed.finishPointerStroke(p.x, p.y, e);
-        if (ed._baseBrush != null) ed.brushSize = ed._baseBrush;
     }
 
     canvas.addEventListener("pointerdown", (e) => {
@@ -372,10 +456,6 @@ export function openModal(node, editorId, onSaved) {
         if (e.button !== 0 && e.button !== 1) return;
         canvas.setPointerCapture(e.pointerId);
         ed.subtract = e.altKey;
-        ed._baseBrush = ed.brushSize;
-        if (e.pointerType === "pen" && e.pressure > 0) {
-            ed.brushSize = Math.max(1, ed._baseBrush * e.pressure);
-        }
         const p = localXY(e);
         ed.pointerDown(p.x, p.y, e);
         e.preventDefault();
@@ -430,6 +510,10 @@ export function openModal(node, editorId, onSaved) {
         if (e.key === "Enter") { e.preventDefault(); tryClose(true); return; }
         if (e.key === "Escape") {
             e.preventDefault();
+            if (frameMenu.style.display !== "none") {
+                hideFrameMenu();
+                return;
+            }
             if (ed.shapeInProgress() && !ed.candidatePreviewActive()) {
                 ed.cancelShapeInProgress();
                 return;
@@ -462,6 +546,12 @@ export function openModal(node, editorId, onSaved) {
         if (e.key === "[") { syncBrushSize(ed.brushSize - 2); return; }
         if (e.key === "]") { syncBrushSize(ed.brushSize + 2); return; }
         if (e.key === "Backspace" && ed.tool === "polygon") { ed.popPolyPoint(); return; }
+        if (e.ctrlKey && e.shiftKey && (e.key === "c" || e.key === "C")) {
+            e.preventDefault(); ed.copyMask(); updateStatus(); return;
+        }
+        if (e.ctrlKey && e.shiftKey && (e.key === "v" || e.key === "V")) {
+            e.preventDefault(); ed.pasteMask(e.altKey); updateStatus(); return;
+        }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const t = KEY_TO_TOOL[e.key.toLowerCase()];
         if (t) { e.preventDefault(); ed.setTool(t); highlightTool(); syncToolbarVisibility(); }

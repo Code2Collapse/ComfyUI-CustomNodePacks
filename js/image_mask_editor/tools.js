@@ -237,3 +237,39 @@ export function composeSelection(mask, sel, w, h, mode, bounds) {
     }
     return { x0, y0, x1, y1 };
 }
+
+/** Linear interpolation; t in [0, 1]. */
+export function pressureAt(p0, p1, t) {
+    return p0 + (p1 - p0) * t;
+}
+
+/** Stamp radius and opacity from pen pressure and toolbar toggles. */
+export function stampPressure(pressure, baseSize, baseOpacity, useSize, useOpacity) {
+    let p = pressure;
+    if (useSize || useOpacity) {
+        p = Math.max(0.05, Math.min(1, pressure));
+    }
+    const size = useSize ? baseSize * p : baseSize;
+    const opacity = useOpacity ? baseOpacity * p : baseOpacity;
+    return { radius: size / 2, opacity };
+}
+
+/** Like lineBrush but interpolates pressure between endpoints for each stamp. */
+export function lineBrushPressure(stampFn, x0, y0, p0, x1, y1, p1, baseRadius, spacing) {
+    const dist = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.max(1, Math.ceil(dist / Math.max(1, spacing)));
+    let bx0 = Infinity, by0 = Infinity, bx1 = -1, by1 = -1;
+    for (let s = 0; s <= steps; s++) {
+        const t = steps === 0 ? 0 : s / steps;
+        const cx = x0 + (x1 - x0) * t;
+        const cy = y0 + (y1 - y0) * t;
+        const pr = pressureAt(p0, p1, t);
+        const b = stampFn(cx, cy, pr);
+        if (b) {
+            bx0 = Math.min(bx0, b.x0); by0 = Math.min(by0, b.y0);
+            bx1 = Math.max(bx1, b.x1); by1 = Math.max(by1, b.y1);
+        }
+    }
+    if (bx1 < bx0) return null;
+    return { x0: bx0, y0: by0, x1: bx1, y1: by1 };
+}

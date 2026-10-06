@@ -26,7 +26,7 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 
 | Key | Tool / action |
 |---|---|
-| **B** | Brush (size = diameter, hardness, opacity in the toolbar). An outline shows the brush under the pointer |
+| **B** | Brush (size = diameter, hardness, opacity in the toolbar). Pen pressure can scale size and/or opacity (toggles); mouse strokes ignore the toggles. An outline shows the brush under the pointer |
 | **E** | Eraser |
 | **R / O** | Rectangle / ellipse (drag; Shift = square / circle) |
 | **P** | Polygon: click points, Enter or double-click closes, Backspace removes the last point |
@@ -37,9 +37,11 @@ After the first run the node writes its input frames to `temp/c2c_ime/<editor_id
 | **M** | Edge refine. Paint a band over a hair or fur edge; on release ViTMatte (tiled) mattes that band only and writes soft alpha into it, leaving the rest of the mask untouched. Ctrl+Z restores the exact previous pixels. Needs ViTMatte weights (see Requirements) |
 | **Add / Subtract / Intersect** | Toolbar modes for rectangle, ellipse, polygon, lasso, bucket and colour range. Alt held during a stroke swaps Add and Subtract for that stroke |
 | **Alt** + brush | Subtract instead of add (brush and eraser are unchanged by the mode buttons) |
-| **Ctrl+Z / Ctrl+Y** | Undo / redo (per frame, capped at 128 MB) |
+| **Ctrl+Z / Ctrl+Y** | Undo / redo on the current frame (one shared 128 MB budget across all frames) |
+| **Ctrl+Shift+C / Ctrl+Shift+V** | Copy / paste the current frame's mask (paste uses the toolbar Add / Subtract / Intersect mode) |
 | **[ / ]** | Brush size |
-| **V** | Overlay / matte / image view |
+| **V** | Cycle view: Overlay → Matte → Rubylith → Outline → Image (remembered in the browser). Rubylith tints what is NOT selected red, the compositing convention; Outline draws the mask edge as a two-tone line that reads on any image. A pixel grid appears from 800% zoom |
+| **Frame ▾** (toolbar menu) | Copy mask · Paste mask · Apply to all frames · Clear frame · Export PNG · Import PNG |
 | **F / 1** | Fit / 100% |
 | Wheel | Zoom at the pointer |
 | **Space** + drag, or middle drag | Pan |
@@ -83,7 +85,9 @@ All result-stage parameters are applied in Python every run and never baked into
 ## Limits
 
 - Images over 16 MP are edited at reduced resolution (a banner says so) and the mask is upscaled on save.
-- Undo history is per frame and resets when you switch frames.
+- Undo is kept per frame under one shared 128 MB budget; switching frames does not discard another frame's stack.
+- Export PNG saves the mask at the editing resolution (the image's own size, or the reduced size above 16 MP). Import PNG reads luminance, or the alpha channel when the PNG has transparency, resizes to the editing size, and commits through the toolbar selection mode as one undo step.
+- Apply to all frames keeps every frame's mask in the browser until you save, so it refuses above about 512 MB of masks and says so. For long clips set the node's `frame_mode` to `shared` instead: it uses frame 1's mask for every frame without copying it.
 
 ## Requirements for smart select and edge refine
 

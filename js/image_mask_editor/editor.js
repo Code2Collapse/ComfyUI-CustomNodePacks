@@ -4,15 +4,27 @@
 import { resolveEditorSource } from "./source.js";
 import { C, hexToRgb } from "./palette.js";
 import { fitView, zoomAtCursor } from "./coords.js";
-import { UndoStack, captureRect, applyRect, pushUndoEntry } from "./undo.js";
+import { FrameHistory, captureRect, applyRect, pushUndoEntry } from "./undo.js";
 import * as tools from "./tools.js";
 import * as colour from "./colour.js";
 import * as api from "./api.js";
+import { c2cAlert } from "../_c2c_dialog.js";
+import { outlineMask, rubylithRGBA, gridLines } from "./view.js";
 
 const MP_LIMIT = 16_000_000;
 const OVERLAY_ALPHA = 0.45;
 const PREVIEW_ALPHA = 0.45;
 const CLEAN_MASK_CAP = 8;
+const APPLY_ALL_MEM_CAP = 512 * 1024 * 1024;
+const VIEW_MODE_KEY = "c2c.ime.viewMode";
+
+function _loadViewMode() {
+    try {
+        const v = parseInt(localStorage.getItem(VIEW_MODE_KEY), 10);
+        if (Number.isInteger(v) && v >= 0 && v <= 4) return v;
+    } catch (_) { /* ignore */ }
+    return 0;
+}
 
 export class IMEEditor {
     constructor(node, editorId) {
@@ -37,8 +49,18 @@ export class IMEEditor {
         this.overlayCtx = null;
         this.matteCanvas = null;
         this.matteCtx = null;
+        this.rubylithCanvas = null;
+        this.rubylithCtx = null;
+        this.outlineCanvas = null;
+        this.outlineCtx = null;
+        this._outlineBuf = null;
         this._overlayTint = hexToRgb(C.accent);
-        this.undo = new UndoStack();
+        this._gridTint = hexToRgb(C.sub);
+        this.history = new FrameHistory();
+        this.pressureSize = false;
+        this.pressureOpacity = false;
+        this._lastPressure = 1;
+        this._maskClipboard = null;
         this.tool = "brush";
         this.brushSize = 24;
         this.brushHardness = 0.6;
@@ -77,7 +99,7 @@ export class IMEEditor {
         this._refineStrokeBounds = null;
         this.toolStatus = "";
         this.toolStatusKind = "";
-        this.viewMode = 0;
+        this.viewMode = _loadViewMode();
         this.zoom = 1;
         this.panX = 0;
         this.panY = 0;
@@ -137,6 +159,15 @@ export class IMEEditor {
             this.matteCanvas.width = this.editW;
             this.matteCanvas.height = this.editH;
             this.matteCtx = this.matteCanvas.getContext("2d");
+            this.rubylithCanvas = document.createElement("canvas");
+            this.rubylithCanvas.width = this.editW;
+            this.rubylithCanvas.height = this.editH;
+            this.rubylithCtx = this.rubylithCanvas.getContext("2d");
+            this.outlineCanvas = document.createElement("canvas");
+            this.outlineCanvas.width = this.editW;
+            this.outlineCanvas.height = this.editH;
+            this.outlineCtx = this.outlineCanvas.getContext("2d");
+            this._outlineBuf = new Uint8Array(this.editW * this.editH);
         }
     }
 
@@ -161,7 +192,6 @@ export class IMEEditor {
             }
         }
         this.overlayCtx.putImageData(id, x, y);
-        if (this.viewMode === 1) this._syncMatteRect(x, y, rw, rh);
     }
 
     _syncMatteRect(x, y, w, h) {
@@ -177,6 +207,57 @@ export class IMEEditor {
             }
         }
         this.matteCtx.putImageData(id, x, y);
+    }
+
+    _syncRubylithRect(x, y, w, h) {
+        if (!this.mask || !this.rubylithCtx) return;
+        const id = this.rubylithCtx.createImageData(w, h);
+        rubylithRGBA(this.mask, this.editW, this.editH, x, y, x + w - 1, y + h - 1, id.data, w);
+        this.rubylithCtx.putImageData(id, x, y);
+    }
+
+    _syncOutlineRect(x, y, w, h) {
+        if (!this.mask || !this.outlineCtx || !this._outlineBuf) return;
+        const edges = outlineMask(this.mask, this.editW, this.editH, x, y, x + w - 1, y + h - 1);
+        const id = this.outlineCtx.createImageData(w, h);
+        for (let yy = 0; yy < h; yy++) {
+            for (let xx = 0; xx < w; xx++) {
+                const pi = (y + yy) * this.editW + (x + xx);
+                const oi = (yy * w + xx) * 4;
+                if (edges[pi]) {
+                    this._outlineBuf[pi] = 1;
+                    id.data[oi] = id.data[oi + 1] = id.data[oi + 2] = 255;
+                    id.data[oi + 3] = 255;
+                } else {
+                    this._outlineBuf[pi] = 0;
+                    id.data[oi + 3] = 0;
+                }
+            }
+        }
+        this.outlineCtx.putImageData(id, x, y);
+    }
+
+    _rebuildRubylithFull() {
+        if (!this.mask) return;
+        this._ensureBuffers();
+        this.rubylithCtx.clearRect(0, 0, this.editW, this.editH);
+        this._syncRubylithRect(0, 0, this.editW, this.editH);
+    }
+
+    _rebuildOutlineFull() {
+        if (!this.mask) return;
+        this._ensureBuffers();
+        this._outlineBuf.fill(0);
+        this.outlineCtx.clearRect(0, 0, this.editW, this.editH);
+        this._syncOutlineRect(0, 0, this.editW, this.editH);
+    }
+
+    _visibleImageRect(vw, vh) {
+        const ix0 = Math.max(0, Math.floor((0 - this.panX) / this.zoom));
+        const iy0 = Math.max(0, Math.floor((0 - this.panY) / this.zoom));
+        const ix1 = Math.min(this.editW - 1, Math.ceil((vw - this.panX) / this.zoom) - 1);
+        const iy1 = Math.min(this.editH - 1, Math.ceil((vh - this.panY) / this.zoom) - 1);
+        return { ix0, iy0, ix1, iy1 };
     }
 
     _rebuildOverlayFull() {
@@ -266,7 +347,13 @@ export class IMEEditor {
         const y = Math.max(0, y0 | 0);
         const x2 = Math.min(this.editW, (x1 | 0) + 1);
         const y2 = Math.min(this.editH, (y1 | 0) + 1);
-        this._syncOverlayRect(x, y, x2 - x, y2 - y);
+        const rw = x2 - x;
+        const rh = y2 - y;
+        if (rw <= 0 || rh <= 0) return;
+        this._syncOverlayRect(x, y, rw, rh);
+        if (this.viewMode === 1) this._syncMatteRect(x, y, rw, rh);
+        this._syncRubylithRect(x, y, rw, rh);
+        this._syncOutlineRect(x, y, rw, rh);
     }
 
     requestDraw() {
@@ -434,10 +521,11 @@ export class IMEEditor {
             await this._loadMaskFrame(idx);
         }
         this.mask = this.masks.get(idx) || this._emptyMask();
-        this.undo = new UndoStack();
         await this._loadImageFrame(idx);
         this._rebuildOverlayFull();
         if (this.viewMode === 1) this._rebuildMatteFull();
+        if (this.viewMode === 2) this._rebuildRubylithFull();
+        if (this.viewMode === 3) this._rebuildOutlineFull();
         this._notify();
         this.requestDraw();
     }
@@ -473,7 +561,7 @@ export class IMEEditor {
 
     _commitUndoRect(x0, y0, x1, y1, beforeSrc) {
         const entry = pushUndoEntry(
-            this.undo, this.mask, this.editW, this.editH,
+            this.history, this.curFrame, this.mask, this.editW, this.editH,
             x0, y0, x1, y1, beforeSrc,
         );
         this.dirtyFrames.add(this.curFrame);
@@ -483,9 +571,9 @@ export class IMEEditor {
     }
 
     undoOp() {
-        const e = this.undo.popUndo();
+        const e = this.history.undo(this.curFrame);
         if (!e) return;
-        this.undo.pushRedo(e);
+        this.history.pushRedo(this.curFrame, e);
         applyRect(this.mask, this.editW, { x: e.x, y: e.y, w: e.w, h: e.h, data: e.before });
         this.dirtyFrames.add(this.curFrame);
         this._maskDirtyRect(e.x, e.y, e.x + e.w - 1, e.y + e.h - 1);
@@ -494,9 +582,8 @@ export class IMEEditor {
     }
 
     redoOp() {
-        const e = this.undo.popRedo();
+        const e = this.history.redo(this.curFrame);
         if (!e) return;
-        this.undo.push(e);
         applyRect(this.mask, this.editW, { x: e.x, y: e.y, w: e.w, h: e.h, data: e.after });
         this.dirtyFrames.add(this.curFrame);
         this._maskDirtyRect(e.x, e.y, e.x + e.w - 1, e.y + e.h - 1);
@@ -515,6 +602,147 @@ export class IMEEditor {
         const before = new Uint8Array(this.mask);
         this.mask.set(src);
         this._commitUndoRect(0, 0, this.editW - 1, this.editH - 1, before);
+        this.requestDraw();
+    }
+
+    copyMask() {
+        this._maskClipboard = new Uint8Array(this.mask);
+        this._reportStatus("Mask copied");
+    }
+
+    pasteMask(altKey = false) {
+        if (!this._maskClipboard) {
+            this._reportStatus("Nothing to paste", "error");
+            return;
+        }
+        const bounds = { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 };
+        this._commitSelection(this._maskClipboard, bounds, altKey);
+        this._reportStatus(`Pasted mask (${this._effectiveSelectionMode(altKey)})`);
+        this.requestDraw();
+    }
+
+    clearFrame() {
+        const before = new Uint8Array(this.mask);
+        this.mask.fill(0);
+        this._commitUndoRect(0, 0, this.editW - 1, this.editH - 1, before);
+        this._reportStatus("Frame cleared");
+        this.requestDraw();
+    }
+
+    exportMaskPng() {
+        const c = document.createElement("canvas");
+        c.width = this.editW;
+        c.height = this.editH;
+        const cx = c.getContext("2d");
+        const id = cx.createImageData(this.editW, this.editH);
+        for (let p = 0, i = 0; p < this.mask.length; p++, i += 4) {
+            id.data[i] = id.data[i + 1] = id.data[i + 2] = this.mask[p];
+            id.data[i + 3] = 255;
+        }
+        cx.putImageData(id, 0, 0);
+        c.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${this.editorId}_frame${this.curFrame + 1}.png`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }, "image/png");
+        this._reportStatus("Mask exported");
+    }
+
+    async importMaskPng(file) {
+        if (!file) return;
+        const blob = await file.arrayBuffer();
+        const bm = await createImageBitmap(new Blob([blob]));
+        const sw = bm.width;
+        const sh = bm.height;
+        const c = document.createElement("canvas");
+        c.width = this.editW;
+        c.height = this.editH;
+        const cx = c.getContext("2d");
+        const src = document.createElement("canvas");
+        src.width = sw;
+        src.height = sh;
+        src.getContext("2d").drawImage(bm, 0, 0);
+        bm.close();
+        const sdata = src.getContext("2d").getImageData(0, 0, sw, sh).data;
+        let useAlpha = false;
+        for (let i = 3; i < sdata.length; i += 4) {
+            if (sdata[i] < 255) {
+                useAlpha = true;
+                break;
+            }
+        }
+        const sample = (i) => useAlpha
+            ? sdata[i + 3]
+            : Math.round(0.299 * sdata[i] + 0.587 * sdata[i + 1] + 0.114 * sdata[i + 2]);
+        let binary = true;
+        for (let i = 0; i < sdata.length; i += 4) {
+            const v = sample(i);
+            if (v !== 0 && v !== 255) {
+                binary = false;
+                break;
+            }
+        }
+        cx.imageSmoothingEnabled = !binary;
+        cx.drawImage(src, 0, 0, this.editW, this.editH);
+        const id = cx.getImageData(0, 0, this.editW, this.editH);
+        const sel = new Uint8Array(this.editW * this.editH);
+        for (let p = 0, i = 0; p < sel.length; p++, i += 4) {
+            sel[p] = useAlpha
+                ? id.data[i + 3]
+                : Math.round(0.299 * id.data[i] + 0.587 * id.data[i + 1] + 0.114 * id.data[i + 2]);
+        }
+        const bounds = { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 };
+        this._commitSelection(sel, bounds, false);
+        this._reportStatus(`Imported mask (${this.selectionMode})`);
+        this.requestDraw();
+    }
+
+    async _ensureMaskFrame(f) {
+        const fi = f | 0;
+        if (this.storedFrames.has(fi) && !this.masks.has(fi)) {
+            await this._loadMaskFrame(fi);
+        }
+        if (!this.masks.has(fi)) {
+            this.masks.set(fi, this._emptyMask());
+        }
+    }
+
+    async applyToAllFrames() {
+        if (this.frameCount <= 1) {
+            this._reportStatus("Only one frame", "error");
+            return;
+        }
+        let newHeld = 0;
+        for (let f = 0; f < this.frameCount; f++) {
+            if (f === this.curFrame) continue;
+            if (!this.masks.has(f)) newHeld++;
+        }
+        const bytes = newHeld * this.editW * this.editH;
+        if (bytes > APPLY_ALL_MEM_CAP) {
+            const gb = bytes / (1024 ** 3);
+            const gbText = gb >= 10 ? Math.round(gb) : gb.toFixed(1);
+            const msg =
+                `Applying to all ${this.frameCount} frames would hold about ${gbText} GB of masks in the browser. `
+                + "Set the node's frame_mode to 'shared' instead - it uses this frame's mask for every frame without copying it.";
+            this._reportStatus(msg, "error");
+            c2cAlert(msg);
+            return;
+        }
+        const sel = new Uint8Array(this.mask);
+        const bounds = { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 };
+        let n = 0;
+        for (let f = 0; f < this.frameCount; f++) {
+            if (f === this.curFrame) continue;
+            await this._ensureMaskFrame(f);
+            this._commitSelectionOnFrame(f, sel, bounds, false);
+            n++;
+        }
+        this._reportStatus(`Applied to ${n} frame${n === 1 ? "" : "s"}`);
+        this._notify();
         this.requestDraw();
     }
 
@@ -637,13 +865,37 @@ export class IMEEditor {
         const before = captureRect(this.mask, this.editW, this.editH, ub.x0, ub.y0, ub.x1, ub.y1);
         const rb = tools.composeSelection(this.mask, sel, this.editW, this.editH, mode, bounds);
         const after = captureRect(this.mask, this.editW, this.editH, rb.x0, rb.y0, rb.x1, rb.y1);
-        this.undo.push({
+        this.history.push(this.curFrame, {
             x: after.x, y: after.y, w: after.w, h: after.h,
             before: before.data, after: after.data,
         });
         this.dirtyFrames.add(this.curFrame);
         this._maskDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
         this._notify();
+    }
+
+    _commitSelectionOnFrame(frame, sel, bounds, altKey) {
+        const f = frame | 0;
+        let mask = this.masks.get(f);
+        if (!mask) {
+            mask = this._emptyMask();
+            this.masks.set(f, mask);
+        }
+        const mode = this._effectiveSelectionMode(altKey);
+        const ub = mode === "intersect"
+            ? { x0: 0, y0: 0, x1: this.editW - 1, y1: this.editH - 1 }
+            : bounds;
+        const before = captureRect(mask, this.editW, this.editH, ub.x0, ub.y0, ub.x1, ub.y1);
+        const rb = tools.composeSelection(mask, sel, this.editW, this.editH, mode, bounds);
+        const after = captureRect(mask, this.editW, this.editH, rb.x0, rb.y0, rb.x1, rb.y1);
+        this.history.push(f, {
+            x: after.x, y: after.y, w: after.w, h: after.h,
+            before: before.data, after: after.data,
+        });
+        this.dirtyFrames.add(f);
+        if (f === this.curFrame) {
+            this._maskDirtyRect(rb.x0, rb.y0, rb.x1, rb.y1);
+        }
     }
 
     async _ensureFrameKey() {
@@ -931,27 +1183,57 @@ export class IMEEditor {
         }
         // `before` is a crop; _commitUndoRect expects a full-frame source, so push the entry directly.
         const after = captureRect(this.mask, this.editW, this.editH, x0, y0, x0 + cw - 1, y0 + ch - 1);
-        this.undo.push({ x: before.x, y: before.y, w: before.w, h: before.h, before: before.data, after: after.data });
+        this.history.push(this.curFrame, {
+            x: before.x, y: before.y, w: before.w, h: before.h,
+            before: before.data, after: after.data,
+        });
         this.dirtyFrames.add(this.curFrame);
         this._maskDirtyRect(x0, y0, x0 + cw - 1, y0 + ch - 1);
         this._notify();
         this.requestDraw();
     }
 
-    _beginBrushStroke(ix, iy) {
+    _eventPressure(e) {
+        if (!e || e.pointerType === "mouse") return 1;
+        return e.pressure > 0 ? e.pressure : 0.5;
+    }
+
+    _pointerImageXY(ev) {
+        const c = this.dom.canvas;
+        if (!c) return { x: 0, y: 0 };
+        const r = c.getBoundingClientRect();
+        return {
+            x: (ev.clientX - r.left - this.panX) / this.zoom,
+            y: (ev.clientY - r.top - this.panY) / this.zoom,
+        };
+    }
+
+    _beginBrushStroke(ix, iy, e) {
         this.strokeStart = new Uint8Array(this.mask);
         this.coverage = new Uint8Array(this.mask.length);
         this._strokeBounds = null;
         this._strokeCommitted = false;
-        this._stampAt(ix, iy);
+        this._strokePointerType = e?.pointerType || "mouse";
+        this._lastPressure = this._eventPressure(e);
+        this._stampAt(ix, iy, this._lastPressure, this._strokePointerType);
     }
 
-    _stampAt(cx, cy) {
+    _stampAt(cx, cy, pressure, pointerType = "mouse") {
         const erase = this.tool === "eraser" || this.subtract;
+        let radius = this.brushSize / 2;
+        let opacity = this.brushOpacity;
+        if (pointerType !== "mouse" && (this.pressureSize || this.pressureOpacity)) {
+            const s = tools.stampPressure(
+                pressure, this.brushSize, this.brushOpacity,
+                this.pressureSize, this.pressureOpacity,
+            );
+            radius = s.radius;
+            opacity = s.opacity;
+        }
         const b = tools.stampBrushCoverage(
             this.mask, this.strokeStart, this.coverage,
             this.editW, this.editH, cx, cy,
-            this.brushSize / 2, this.brushHardness, this.brushOpacity, erase,   // brushSize is the diameter
+            radius, this.brushHardness, opacity, erase,
         );
         if (b) {
             this._strokeBounds = this._strokeBounds
@@ -1067,7 +1349,7 @@ export class IMEEditor {
         this.painting = true;
         this.lastPt = { x: ix, y: iy };
         if (this.tool === "brush" || this.tool === "eraser") {
-            this._beginBrushStroke(ix, iy);
+            this._beginBrushStroke(ix, iy, e);
         } else if (this.tool === "refine") {
             this._beginRefineStroke(ix, iy);
         } else if (this.tool === "rect" || this.tool === "ellipse") {
@@ -1109,22 +1391,37 @@ export class IMEEditor {
         }
         if (!this.painting) return;
         if (this.tool === "brush" || this.tool === "eraser") {
-            const b = tools.lineBrush(
-                (cx, cy) => this._stampAt(cx, cy),
-                this.lastPt.x, this.lastPt.y, ix, iy,
-                this.brushSize / 2, Math.max(1, this.brushSize * this.brushSpacing),
-            );
-            if (b) {
-                this._strokeBounds = this._strokeBounds
-                    ? {
-                        x0: Math.min(this._strokeBounds.x0, b.x0),
-                        y0: Math.min(this._strokeBounds.y0, b.y0),
-                        x1: Math.max(this._strokeBounds.x1, b.x1),
-                        y1: Math.max(this._strokeBounds.y1, b.y1),
+            const events = e.getCoalescedEvents?.() ?? [e];
+            let prev = this.lastPt;
+            let prevP = this._lastPressure;
+            const pt = this._strokePointerType || "mouse";
+            for (const ev of events) {
+                const p = this._pointerImageXY(ev);
+                const pr = this._eventPressure(ev);
+                if (prev) {
+                    const b = tools.lineBrushPressure(
+                        (cx, cy, pressure) => this._stampAt(cx, cy, pressure, pt),
+                        prev.x, prev.y, prevP, p.x, p.y, pr,
+                        this.brushSize / 2, Math.max(1, this.brushSize * this.brushSpacing),
+                    );
+                    if (b) {
+                        this._strokeBounds = this._strokeBounds
+                            ? {
+                                x0: Math.min(this._strokeBounds.x0, b.x0),
+                                y0: Math.min(this._strokeBounds.y0, b.y0),
+                                x1: Math.max(this._strokeBounds.x1, b.x1),
+                                y1: Math.max(this._strokeBounds.y1, b.y1),
+                            }
+                            : b;
                     }
-                    : b;
+                } else {
+                    this._stampAt(p.x, p.y, pr, pt);
+                }
+                prev = p;
+                prevP = pr;
             }
-            this.lastPt = { x: ix, y: iy };
+            this.lastPt = prev;
+            this._lastPressure = prevP;
             this.requestDraw();
         } else if (this.tool === "refine") {
             tools.lineBrush(
@@ -1189,8 +1486,11 @@ export class IMEEditor {
     }
 
     cycleView() {
-        this.viewMode = (this.viewMode + 1) % 3;
+        this.viewMode = (this.viewMode + 1) % 5;
         if (this.viewMode === 1) this._rebuildMatteFull();
+        if (this.viewMode === 2) this._rebuildRubylithFull();
+        if (this.viewMode === 3) this._rebuildOutlineFull();
+        try { localStorage.setItem(VIEW_MODE_KEY, String(this.viewMode)); } catch (_) { /* ignore */ }
         this.requestDraw();
     }
 
@@ -1213,16 +1513,22 @@ export class IMEEditor {
         // Zoomed in, show real pixels: the mask from 100% (its edge is what is being judged), the plate
         // from 400%. Zoomed out, smoothing avoids aliasing.
         ctx.imageSmoothingEnabled = this.zoom < 4;
-        if (this.viewMode !== 1 && this.imageBitmap) {
+        const vm = this.viewMode;
+        if (vm !== 1 && this.imageBitmap) {
             ctx.drawImage(this.imageBitmap, 0, 0, this.editW, this.editH);
         }
         ctx.imageSmoothingEnabled = this.zoom < 1;
-        if (this.viewMode === 1 && this.matteCanvas) {
+        if (vm === 1 && this.matteCanvas) {
             ctx.drawImage(this.matteCanvas, 0, 0, this.editW, this.editH);
-        } else if (this.viewMode !== 2 && this.overlayCanvas) {
+        } else if (vm === 0 && this.overlayCanvas) {
             ctx.drawImage(this.overlayCanvas, 0, 0, this.editW, this.editH);
+        } else if (vm === 2 && this.rubylithCanvas) {
+            ctx.drawImage(this.rubylithCanvas, 0, 0, this.editW, this.editH);
+        } else if (vm === 3 && this.zoom < 2 && this.outlineCanvas) {
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(this.outlineCanvas, 0, 0, this.editW, this.editH);
         }
-        if (this.viewMode !== 2 && this.candidatePreview && this.previewCanvas) {
+        if (vm !== 4 && this.candidatePreview && this.previewCanvas) {
             ctx.drawImage(this.previewCanvas, 0, 0, this.editW, this.editH);
         }
         ctx.imageSmoothingEnabled = true;
@@ -1342,6 +1648,54 @@ export class IMEEditor {
             ctx.lineWidth = 1;
         }
         ctx.restore();
+        if (vm === 3 && this.zoom >= 2 && this._outlineBuf && this.mask) {
+            const { ix0, iy0, ix1, iy1 } = this._visibleImageRect(vw, vh);
+            const z = this.zoom;
+            const px = this.panX;
+            const py = this.panY;
+            const iw = this.editW;
+            const ih = this.editH;
+            const mask = this.mask;
+            const buf = this._outlineBuf;
+            // Pixel edges are snapped to whole screen pixels (neighbours share the exact same edge), so the line
+            // is continuous and crisp at fractional zoom; fractional rects blended to pink/brown at 2.3x.
+            const white = [];
+            const black = [];
+            for (let y = iy0; y <= iy1; y++) {
+                const row = y * iw;
+                const T = Math.round(y * z + py);
+                const B = Math.round((y + 1) * z + py);
+                for (let x = ix0; x <= ix1; x++) {
+                    if (!buf[row + x]) continue;
+                    const L = Math.round(x * z + px);
+                    const R = Math.round((x + 1) * z + px);
+                    if (y <= 0 || mask[row - iw + x] < 128) { white.push(L, T, R - L, 1); black.push(L, T - 1, R - L, 1); }
+                    if (y >= ih - 1 || mask[row + iw + x] < 128) { white.push(L, B - 1, R - L, 1); black.push(L, B, R - L, 1); }
+                    if (x <= 0 || mask[row + x - 1] < 128) { white.push(L, T, 1, B - T); black.push(L - 1, T, 1, B - T); }
+                    if (x >= iw - 1 || mask[row + x + 1] < 128) { white.push(R - 1, T, 1, B - T); black.push(R, T, 1, B - T); }
+                }
+            }
+            ctx.fillStyle = "#000000";
+            for (let i = 0; i < black.length; i += 4) ctx.fillRect(black[i], black[i + 1], black[i + 2], black[i + 3]);
+            ctx.fillStyle = "#ffffff";
+            for (let i = 0; i < white.length; i += 4) ctx.fillRect(white[i], white[i + 1], white[i + 2], white[i + 3]);
+        }
+        const grid = gridLines(this.zoom, this.panX, this.panY, vw, vh);
+        if (grid.xs.length) {
+            const g = this._gridTint;
+            ctx.strokeStyle = `rgba(${g.r},${g.g},${g.b},0.35)`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (const x of grid.xs) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, vh);
+            }
+            for (const y of grid.ys) {
+                ctx.moveTo(0, y);
+                ctx.lineTo(vw, y);
+            }
+            ctx.stroke();
+        }
     }
 
     async save() {
@@ -1398,6 +1752,11 @@ export class IMEEditor {
         this.overlayCanvas = null;
         this.previewCanvas = null;
         this.matteCanvas = null;
+        this.rubylithCanvas = null;
+        this.outlineCanvas = null;
+        this._outlineBuf = null;
+        this.history = null;
+        this._maskClipboard = null;
         this.node = null;
     }
 }
