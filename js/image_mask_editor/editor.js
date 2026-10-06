@@ -239,6 +239,7 @@ export class IMEEditor {
 
     _rebuildRubylithFull() {
         if (!this.mask) return;
+        this._staleViews?.delete(2);
         this._ensureBuffers();
         this.rubylithCtx.clearRect(0, 0, this.editW, this.editH);
         this._syncRubylithRect(0, 0, this.editW, this.editH);
@@ -246,6 +247,7 @@ export class IMEEditor {
 
     _rebuildOutlineFull() {
         if (!this.mask) return;
+        this._staleViews?.delete(3);
         this._ensureBuffers();
         this._outlineBuf.fill(0);
         this.outlineCtx.clearRect(0, 0, this.editW, this.editH);
@@ -262,6 +264,7 @@ export class IMEEditor {
 
     _rebuildOverlayFull() {
         if (!this.mask) return;
+        this._staleViews?.delete(0);
         this._ensureBuffers();
         this._syncOverlayRect(0, 0, this.editW, this.editH);
     }
@@ -337,23 +340,56 @@ export class IMEEditor {
 
     _rebuildMatteFull() {
         if (!this.mask || this.viewMode !== 1) return;
+        this._staleViews?.delete(1);
         this._ensureBuffers();
         this.matteCtx.clearRect(0, 0, this.editW, this.editH);
         this._syncMatteRect(0, 0, this.editW, this.editH);
     }
 
+    // Mask edits only record a dirty rect; _flushDirty() syncs it once per drawn frame, into the cache of the view
+    // on screen. The other views' caches are marked stale and rebuilt when shown. Measured (slice 3b profile,
+    // 2K, 10 strokes): syncing all four caches on every brush stamp took 906 of ~1000 ms of pointer handling.
     _maskDirtyRect(x0, y0, x1, y1) {
         const x = Math.max(0, x0 | 0);
         const y = Math.max(0, y0 | 0);
-        const x2 = Math.min(this.editW, (x1 | 0) + 1);
-        const y2 = Math.min(this.editH, (y1 | 0) + 1);
-        const rw = x2 - x;
-        const rh = y2 - y;
-        if (rw <= 0 || rh <= 0) return;
-        this._syncOverlayRect(x, y, rw, rh);
-        if (this.viewMode === 1) this._syncMatteRect(x, y, rw, rh);
-        this._syncRubylithRect(x, y, rw, rh);
-        this._syncOutlineRect(x, y, rw, rh);
+        const x2 = Math.min(this.editW, (x1 | 0) + 1) - 1;
+        const y2 = Math.min(this.editH, (y1 | 0) + 1) - 1;
+        if (x2 < x || y2 < y) return;
+        const d = this._dirty;
+        this._dirty = d
+            ? { x0: Math.min(d.x0, x), y0: Math.min(d.y0, y), x1: Math.max(d.x1, x2), y1: Math.max(d.y1, y2) }
+            : { x0: x, y0: y, x1: x2, y1: y2 };
+        this.requestDraw();
+    }
+
+    _flushDirty() {
+        const d = this._dirty;
+        if (!d || !this.mask) return;
+        this._dirty = null;
+        const vm = this.viewMode;
+        if (!this._staleViews) this._staleViews = new Set();
+        for (const v of [0, 1, 2, 3]) if (v !== vm) this._staleViews.add(v);
+        if (this._staleViews.has(vm)) return;                // a full rebuild is pending anyway
+        const w = d.x1 - d.x0 + 1, h = d.y1 - d.y0 + 1;
+        if (vm === 0) this._syncOverlayRect(d.x0, d.y0, w, h);
+        else if (vm === 1) this._syncMatteRect(d.x0, d.y0, w, h);
+        else if (vm === 2) this._syncRubylithRect(d.x0, d.y0, w, h);
+        else if (vm === 3) {
+            // an edit changes the edge status of the pixels just outside it too
+            const x0 = Math.max(0, d.x0 - 1), y0 = Math.max(0, d.y0 - 1);
+            const x1 = Math.min(this.editW - 1, d.x1 + 1), y1 = Math.min(this.editH - 1, d.y1 + 1);
+            this._syncOutlineRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+        }
+    }
+
+    _ensureViewCache() {
+        const vm = this.viewMode;
+        if (!this._staleViews || !this._staleViews.has(vm) || !this.mask) return;
+        this._staleViews.delete(vm);
+        if (vm === 0) this._rebuildOverlayFull();
+        else if (vm === 1) this._rebuildMatteFull();
+        else if (vm === 2) this._rebuildRubylithFull();
+        else if (vm === 3) this._rebuildOutlineFull();
     }
 
     requestDraw() {
@@ -522,6 +558,8 @@ export class IMEEditor {
         }
         this.mask = this.masks.get(idx) || this._emptyMask();
         await this._loadImageFrame(idx);
+        this._dirty = null;                           // the caches below are rebuilt for the new frame
+        this._staleViews = new Set([0, 1, 2, 3]);     // the ones not rebuilt now are rebuilt when shown
         this._rebuildOverlayFull();
         if (this.viewMode === 1) this._rebuildMatteFull();
         if (this.viewMode === 2) this._rebuildRubylithFull();
@@ -1497,6 +1535,8 @@ export class IMEEditor {
     _drawNow() {
         const c = this.dom.canvas;
         if (!c) return;
+        this._flushDirty();
+        this._ensureViewCache();
         const ctx = c.getContext("2d");
         const dpr = window.devicePixelRatio || 1;
         const vw = c.clientWidth, vh = c.clientHeight;
