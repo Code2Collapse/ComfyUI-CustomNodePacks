@@ -21,6 +21,7 @@
 | Draw, transform, or composite masks | [`mask-editing.md`](mask-editing.md) |
 | Place points / boxes interactively on the canvas | [`utility-nodes.md`](utility-nodes.md) (Points Mask Editor) |
 | Inspect, merge, or compare VAEs | [`vae-merge.md`](vae-merge.md) |
+| Lose less through the VAE (fp32, unclamped, Wan frames, write-back) | [`vae-precision.md`](vae-precision.md) |
 | Read / write OpenEXR with metadata | [`exr-io.md`](exr-io.md) |
 | Convert colorspaces / apply LUTs | [`color-science.md`](color-science.md) |
 | Composite render passes | [`render-pass.md`](render-pass.md) |
@@ -79,6 +80,7 @@
 | [`render-pass.md`](render-pass.md) | Merge Passes, Depth→CoC | Beauty + AO/diffuse/spec/emission compositing, depth-of-field mask synthesis |
 | [`plate-tools.md`](plate-tools.md) | Grain Match, Plate Stabilizer (ORB/FFT), Clean Plate, Difference Matte | Grain transplant, sparse plate stabilisation, multi-frame median clean plate |
 | [`vae-merge.md`](vae-merge.md) | VAE Merge, Latent Inspector, Similarity Analyser, Block Inspector | 8 merge algorithms, per-block alpha, latent statistics |
+| [`vae-precision.md`](vae-precision.md) | C2C VAE Quality Decode, VAE Clean | Where VAE round trips lose precision (measured), fp32 / unclamped decode, tiled decode, round-trip meter, original-pixel write-back |
 
 ---
 
