@@ -1,6 +1,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { legacyCanvasMenu } from "./_c2c_compat.js";
+import { asOneUndoStep } from "./_c2c_undo_scope.js";
+import { setHidden } from "./_widget_visibility.js";
 
 /**
  * C2C Vault — password-locked subgraph.
@@ -17,7 +19,6 @@ const NODES = ["C2C_VaultLocked", "C2C_VaultSealed"];
 const MAX_VAULT_INPUTS = 10;
 const MAX_VAULT_OUTPUTS = 8;
 const MAX_VAULT_PARAMS = 8;
-const SLOT_H = 20;
 const PROMOTED_VALUE_TYPES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
 
 /** @type {Map<string, { subgraph: object, panel: HTMLElement, dispose: () => void }>} */
@@ -106,6 +107,8 @@ function modalPasswordStep({ title, note, sealed }) {
   if (headless()) return Promise.resolve(null);
   return new Promise((resolve) => {
     const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
     css(back, {
       position: "fixed", inset: "0", zIndex: "10000",
       background: "rgba(0,0,0,0.55)", display: "flex",
@@ -228,6 +231,8 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
   if (headless()) return Promise.resolve(null);
   return new Promise((resolve) => {
     const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
     css(back, {
       position: "fixed", inset: "0", zIndex: "10000",
       background: "rgba(0,0,0,0.55)", display: "flex",
@@ -316,9 +321,18 @@ function modalBoundaryStep({ boundary, nodeCount, sealed }) {
       if (!boundary.boundary_out.length) { shakeEl(box); return; }
       done(boundary);
     };
+    back.onkeydown = (e) => {
+      if (e.key === "Escape") done(null);
+      if (e.key === "Enter") ok.click();
+    };
     row.append(cancel, ok);
     box.append(row);
     back.append(box);
+    // This step was built but never added to the page, so Lock and Seal waited forever after the password
+    // and the vault could never be created (A9 "vault is not working", docs/evidence/L2.24).
+    document.body.append(back);
+    back.tabIndex = -1;
+    ok.focus();
   });
 }
 
@@ -375,6 +389,8 @@ function modalPromoteStep({ selection }) {
 
   return new Promise((resolve) => {
     const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
     css(back, {
       position: "fixed", inset: "0", zIndex: "10000",
       background: "rgba(0,0,0,0.55)", display: "flex",
@@ -548,6 +564,8 @@ function modalAlert(title, note) {
   if (headless()) return Promise.resolve();
   return new Promise((resolve) => {
     const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
     css(back, {
       position: "fixed", inset: "0", zIndex: "10000",
       background: "rgba(0,0,0,0.55)", display: "flex",
@@ -577,6 +595,8 @@ function modalPassword({ title, note, confirmLabel }) {
   if (headless()) return Promise.resolve(null);
   return new Promise((resolve) => {
     const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
     css(back, {
       position: "fixed", inset: "0", zIndex: "10000",
       background: "rgba(0,0,0,0.55)", display: "flex",
@@ -627,6 +647,13 @@ function modalPassword({ title, note, confirmLabel }) {
 /** Classify selection links — mirrors nodes/vault_boundary.py */
 function deriveBoundary(sel, graph) {
   const idOf = (n) => String(n.id);
+  // Frontend 1.52 keeps links in a Map: an index lookup on graph.links returned undefined for every wire, so the vault saw no
+  // internal links and no inputs.
+  const linkOf = (id) => {
+    if (id == null) return null;
+    const L = graph.links;
+    return (L instanceof Map ? L.get(id) : L?.[id]) ?? graph._links?.get?.(id) ?? null;
+  };
   const ids = new Set(sel.map(idOf));
   const links = [];
   const boundary_in = [];
@@ -635,19 +662,19 @@ function deriveBoundary(sel, graph) {
 
   for (const n of sel) {
     (n.inputs || []).forEach((inp, slot) => {
-      const lk = inp.link != null ? graph.links[inp.link] : null;
+      const lk = linkOf(inp.link);
       if (!lk) return;
       if (ids.has(String(lk.origin_id))) {
         links.push({
           from: String(lk.origin_id), from_slot: lk.origin_slot,
-          to: idOf(n), to_slot: slot,
+          to: idOf(n), to_slot: slot, to_name: inp.name,
         });
       } else {
         const origin = graph.getNodeById?.(lk.origin_id);
         const outType = origin?.outputs?.[lk.origin_slot]?.type || "*";
         boundary_in.push({
           name: inp.name || `in_${boundary_in.length}`,
-          to: idOf(n), to_slot: slot, type: outType,
+          to: idOf(n), to_slot: slot, to_name: inp.name, type: outType,
         });
         externalSources.push({ id: lk.origin_id, slot: lk.origin_slot });
         inTypes.push(outType);
@@ -662,7 +689,7 @@ function deriveBoundary(sel, graph) {
   for (const n of sel) {
     (n.outputs || []).forEach((out, slot) => {
       (out.links || []).forEach((lid) => {
-        const lk = graph.links[lid];
+        const lk = linkOf(lid);
         if (!lk || ids.has(String(lk.target_id))) return;
         boundary_out.push({
           name: out.name || `out_${boundary_out.length}`,
@@ -695,18 +722,59 @@ function deriveBoundary(sel, graph) {
   };
 }
 
-function hideSlot(slot, hidden) {
-  if (!slot) return;
-  if (hidden) {
-    if (!slot._vaultStash) slot._vaultStash = { name: slot.name, type: slot.type };
-    slot._vaultHidden = true;
-    slot.name = "";
-  } else {
-    slot._vaultHidden = false;
-    if (slot._vaultStash) {
-      slot.name = slot._vaultStash.name;
-      slot.type = slot._vaultStash.type;
-    }
+// A socket's NAME is the key ComfyUI sends in the prompt (input_0, param_3, ...), so it is never changed: the
+// boundary name the user sees is the slot's LABEL. Renaming `name` sent "destination" instead of "input_0", and
+// the server answered "input 0 ('destination') is not connected" (A9, docs/evidence/L2.24).
+const WIRE_SOCKET = /^(input|param)_\d+$/;
+
+/** Vaults saved while the names were overwritten still carry all 18 wire sockets (input_0..9, then param_0..7,
+ *  in declaration order): give them their canonical names back. Wire sockets are the non-widget inputs. */
+function canonicalizeVaultSockets(node) {
+  const sockets = (node.inputs || []).filter((inp) => !inp.widget);
+  if (sockets.length !== MAX_VAULT_INPUTS + MAX_VAULT_PARAMS) return;   // current saves: names already canonical
+  if (sockets.every((inp) => WIRE_SOCKET.test(inp.name || ""))) return;
+  sockets.forEach((inp, k) => {
+    const want = k < MAX_VAULT_INPUTS ? `input_${k}` : `param_${k - MAX_VAULT_INPUTS}`;
+    if (inp.name === want) return;
+    if (inp.label == null && inp.name) inp.label = inp.name;
+    inp.name = want;
+  });
+}
+
+/** Show exactly the vault's boundary: the sockets the interface uses exist (canonical name, boundary label);
+ *  unused, unconnected ones are removed instead of drawn as rows of unlabelled dots. */
+function syncVaultSockets(node, iface, params) {
+  const want = new Map();   // socket name -> { label, type }
+  (iface.in || []).slice(0, MAX_VAULT_INPUTS).forEach((b, i) => {
+    want.set(`input_${i}`, { label: b.name || `in_${i}`, type: b.type || "*" });
+  });
+  for (const p of params) {
+    const k = Number(p.socket);
+    if (p.socket === undefined || p.socket === null || !Number.isFinite(k) || k < 0 || k >= MAX_VAULT_PARAMS) continue;
+    want.set(`param_${k}`, { label: p.name || p.id, type: manifestTypeToSlotType(p.type) });
+  }
+  for (let i = (node.inputs || []).length - 1; i >= 0; i--) {
+    const inp = node.inputs[i];
+    if (inp.widget || !WIRE_SOCKET.test(inp.name || "")) continue;
+    const w = want.get(inp.name);
+    if (w) { inp.label = w.label; inp.type = w.type; }
+    else if (inp.link == null) node.removeInput(i);
+  }
+  for (const [name, w] of want) {
+    if (inputSlotByName(node, name)) continue;
+    node.addInput(name, w.type);
+    const slot = inputSlotByName(node, name);
+    if (slot) slot.label = w.label;
+  }
+  const mOut = Math.min(iface.out?.length || 0, MAX_VAULT_OUTPUTS);
+  for (let i = (node.outputs || []).length - 1; i >= mOut; i--) {
+    if ((node.outputs[i].links || []).length) break;   // a wired output keeps every output before it
+    node.removeOutput(i);
+  }
+  for (let i = 0; i < mOut; i++) {
+    if (!node.outputs?.[i]) node.addOutput(`output_${i}`, iface.out[i].type || "*");
+    node.outputs[i].label = iface.out[i].name || `out_${i}`;
+    node.outputs[i].type = iface.out[i].type || "*";
   }
 }
 
@@ -863,52 +931,11 @@ function convertPromotedParamToWidget(node, paramId, isSealed) {
 
 function applyVaultInterface(node, iface, isSealed) {
   if (!node || !iface) return;
+  canonicalizeVaultSockets(node);
   const mIn = iface.in?.length || 0;
   const mOut = iface.out?.length || 0;
   const params = iface.params || [];
-
-  for (let i = 0; i < MAX_VAULT_INPUTS; i++) {
-    const slot = inputSlotByName(node, `input_${i}`);
-    if (!slot) continue;
-    if (i < mIn) {
-      hideSlot(slot, false);
-      slot.name = iface.in[i].name || `in_${i}`;
-      slot.type = iface.in[i].type || "*";
-    } else {
-      hideSlot(slot, true);
-    }
-  }
-
-  for (let i = 0; i < MAX_VAULT_OUTPUTS; i++) {
-    const slot = node.outputs?.[i];
-    if (!slot) continue;
-    if (i < mOut) {
-      hideSlot(slot, false);
-      slot.name = iface.out[i].name || `out_${i}`;
-      slot.type = iface.out[i].type || "*";
-    } else {
-      hideSlot(slot, true);
-    }
-  }
-
-  const claimedSockets = new Set();
-  for (const p of params) {
-    if (p.socket === undefined || p.socket === null) continue;
-    const k = Number(p.socket);
-    if (!Number.isFinite(k) || k < 0 || k >= MAX_VAULT_PARAMS) continue;
-    claimedSockets.add(k);
-    const slot = inputSlotByName(node, `param_${k}`);
-    if (!slot) continue;
-    hideSlot(slot, false);
-    slot.name = p.name || p.id;
-    slot.type = manifestTypeToSlotType(p.type);
-  }
-
-  for (let k = 0; k < MAX_VAULT_PARAMS; k++) {
-    const slot = inputSlotByName(node, `param_${k}`);
-    if (!slot) continue;
-    if (!claimedSockets.has(k)) hideSlot(slot, true);
-  }
+  syncVaultSockets(node, iface, params);
 
   reconcilePromotedWidgets(node, params, isSealed);
 
@@ -925,18 +952,10 @@ function applyVaultInterface(node, iface, isSealed) {
     summary.textContent = `${iface.node_count || 0} nodes · ${mIn} inputs · ${mOut} outputs · ${mParams} params`;
   }
 
-  const origCompute = node._vaultOrigComputeSize || node.computeSize?.bind(node);
-  if (!node._vaultOrigComputeSize) node._vaultOrigComputeSize = origCompute;
-  const hiddenParams = MAX_VAULT_PARAMS - claimedSockets.size;
-  node.computeSize = function (outW) {
-    const sz = origCompute ? origCompute(outW) : [node.size?.[0] || 200, 120];
-    const hiddenIn = MAX_VAULT_INPUTS - mIn;
-    const hiddenOut = MAX_VAULT_OUTPUTS - mOut;
-    const hiddenSlots = Math.max(hiddenIn, hiddenOut, hiddenParams);
-    sz[1] = Math.max(60, sz[1] - hiddenSlots * SLOT_H);
-    return sz;
-  };
-  node.setSize(node.computeSize());
+  // the sockets match the boundary now, so the node's own size is right (no hidden-row arithmetic)
+  if (node._vaultOrigComputeSize) { node.computeSize = node._vaultOrigComputeSize; delete node._vaultOrigComputeSize; }
+  const sz = node.computeSize?.();
+  if (sz) node.setSize([Math.max(node.size?.[0] || 0, sz[0]), sz[1]]);
   node.setDirtyCanvas?.(true, true);
 }
 
@@ -1103,7 +1122,8 @@ async function lockSelection(sealed) {
   });
   if (pw === null) return;
 
-  const derived = deriveBoundary(sel, app.graph);
+  const graph = app.canvas?.graph || app.graph;
+  const derived = deriveBoundary(sel, graph);
   if (!derived.boundary_out.length) {
     await modalAlert("No outputs", "These nodes produce no output. Include the node whose result you want.");
     return;
@@ -1129,11 +1149,15 @@ async function lockSelection(sealed) {
   const nodes = sel.map((n) => ({
     id: idOf(n),
     class_type: n.comfyClass || n.type,
-    widgets: Object.fromEntries((n.widgets || []).map((w) => [w.name, w.value])),
+    // real inputs only: display widgets ("$$canvas-image-preview", buttons, serialize:false) are not node inputs
+    widgets: Object.fromEntries((n.widgets || [])
+      .filter((w) => w?.name && !String(w.name).startsWith("$$") && w.type !== "button"
+        && w.serialize !== false && w.options?.serialize !== false)
+      .map((w) => [w.name, w.value])),
   }));
 
   const boundary_in = derived.boundary_in.map((b) => ({
-    name: b.name, to: b.to, to_slot: b.to_slot,
+    name: b.name, to: b.to, to_slot: b.to_slot, to_name: b.to_name,
   }));
   const boundary_out = derived.boundary_out.map((b) => ({
     name: b.name, from: b.from, from_slot: b.from_slot,
@@ -1151,6 +1175,7 @@ async function lockSelection(sealed) {
     await modalAlert("Lock failed", data.error || "Could not lock the selection.");
     return;
   }
+  if (!sealed && data.session_open) unlockedSessions.add(vault_id);
 
   const iface = buildInterfaceManifest(
     sealed ? "sealed" : "locked", sel.length,
@@ -1162,29 +1187,33 @@ async function lockSelection(sealed) {
   const [cx, cy] = selectionCentroid(sel);
   const vault = LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
   vault.pos = [cx, cy];
-  app.graph.add(vault);
-  widget(vault, "vault_id").value = vault_id;
-  widget(vault, "vault_payload").value = data.payload;
-  const ifaceW = widget(vault, "vault_interface");
-  if (ifaceW) ifaceW.value = JSON.stringify(iface);
-  vault._vaultPromotedCombo = {};
-  for (const p of promotion.params || []) {
-    if (p._comboOptions) vault._vaultPromotedCombo[p.id] = p._comboOptions;
-  }
-  applyVaultInterface(vault, iface, sealed);
+  // one undo step: the vault node, its wiring and the removal of the originals
+  asOneUndoStep(app.canvas, () => {
+    graph.add(vault);
+    widget(vault, "vault_id").value = vault_id;
+    widget(vault, "vault_payload").value = data.payload;
+    const ifaceW = widget(vault, "vault_interface");
+    if (ifaceW) ifaceW.value = JSON.stringify(iface);
+    vault._vaultPromotedCombo = {};
+    for (const p of promotion.params || []) {
+      if (p._comboOptions) vault._vaultPromotedCombo[p.id] = p._comboOptions;
+    }
+    applyVaultInterface(vault, iface, sealed);
 
-  derived.externalSources.forEach((src, i) => {
-    const srcNode = app.graph.getNodeById(src.id);
-    if (srcNode) srcNode.connect(src.slot, vault, i);
-  });
-  derived.externalTargets.forEach((tgt, i) => {
-    if (!tgt) return;
-    const tgtNode = app.graph.getNodeById(tgt.id);
-    if (tgtNode) vault.connect(i, tgtNode, tgt.slot);
-  });
+    derived.externalSources.forEach((src, i) => {
+      const srcNode = graph.getNodeById(src.id);
+      const slot = (vault.inputs || []).findIndex((inp) => inp.name === `input_${i}`);
+      if (srcNode && slot >= 0) srcNode.connect(src.slot, vault, slot);
+    });
+    derived.externalTargets.forEach((tgt, i) => {
+      if (!tgt) return;
+      const tgtNode = graph.getNodeById(tgt.id);
+      if (tgtNode) vault.connect(i, tgtNode, tgt.slot);
+    });
 
-  for (const n of sel) app.graph.remove(n);
-  app.graph.setDirtyCanvas(true, true);
+    for (const n of sel) graph.remove(n);
+  });
+  graph.setDirtyCanvas(true, true);
   await modalAlert(
     sealed ? "Sealed" : "Locked",
     `${sealed ? "Sealed" : "Locked"} ${sel.length} node(s) into a vault. Original nodes removed.`,
@@ -1221,13 +1250,9 @@ app.registerExtension({
       const r = created?.apply(this, arguments);
       const node = this;
 
-      for (const wn of ["vault_payload", "vault_interface"]) {
-        const w = widget(node, wn);
-        if (w) {
-          w.computeSize = () => [0, -4];
-          if (w.inputEl) w.inputEl.hidden = true;
-        }
-      }
+      // Internal: the ciphertext and the public manifest travel in the workflow but are not for editing. Hidden in
+      // both renderers (the old `inputEl.hidden` only worked on the classic canvas and is deprecated, L7.35).
+      for (const wn of ["vault_payload", "vault_interface"]) setHidden(widget(node, wn), true);
 
       const host = document.createElement("div");
       css(host, {

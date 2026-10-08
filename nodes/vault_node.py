@@ -196,10 +196,19 @@ class C2C_VaultLocked:
             "optional": _vault_input_types(),
         }
 
+    # A Locked vault needs an open session to run; a Sealed one does not.
+    NEEDS_SESSION = True
+
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         from ._is_changed_util import hash_args_and_kwargs
-        return hash_args_and_kwargs(**kwargs)
+        digest = hash_args_and_kwargs(**kwargs)
+        if not cls.NEEDS_SESSION:
+            return digest
+        # The session state is part of the cache key: after "Lock session" the next queue checks the password
+        # again instead of serving the cached result (which made Lock session look like it did nothing).
+        state = "open" if SESSIONS.get(str(kwargs.get("vault_id") or "")) is not None else "locked"
+        return f"{digest}:{state}"
 
     def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", **inputs):
         if not (vault_payload or "").strip():
@@ -291,7 +300,10 @@ def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
     blob = base64.b64decode(payload.encode("ascii"), validate=True)
     if not blob.startswith(MAGIC):
         raise VaultError("Not a C2C vault payload.")
-    header, hdr_id, _salt, _iters, _bh, hlen = _unpack_header(blob)
+    # _unpack_header returns (header, vault_id, salt, iterations, boundary_hash, header_len, mode): unpacking six
+    # values raised ValueError since the mode byte was added, so no Locked vault could run (A9, L2.24).
+    hdr = _unpack_header(blob)
+    header, hdr_id, hlen = hdr[0], hdr[1], hdr[5]
     if hdr_id != vault_id:
         raise VaultError("Vault payload does not belong to this vault.")
     nonce = blob[hlen:hlen + NONCE_LEN]
@@ -305,6 +317,17 @@ def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
         ) from exc
     return json.loads(plain.decode("utf-8"))
 
+
+
+def _open_session(vault_id: str, payload: str, password: str) -> None:
+    """Hold the key derived from `password` for this vault (the store never holds the password itself)."""
+    import base64
+
+    from .vault_crypto import _unpack_header, derive_key
+
+    blob = base64.b64decode(payload.encode("ascii"), validate=True)
+    hdr = _unpack_header(blob)   # 7 fields; Unlock failed with ValueError while it unpacked 6 (L2.24)
+    SESSIONS.put(vault_id, derive_key(password, hdr[2], hdr[3]))
 
 # ─────────────────────────── HTTP routes ────────────────────────────
 _ROUTES_REGISTERED = False
@@ -343,11 +366,7 @@ def register_routes(server) -> None:
             SESSIONS.note_failure(vault_id)
             return web.json_response({"ok": False, "error": str(exc)}, status=403)
 
-        from .vault_crypto import _unpack_header, derive_key
-        import base64
-        blob = base64.b64decode(payload.encode("ascii"), validate=True)
-        _hdr, _vid, salt, iters, _bh, _n = _unpack_header(blob)
-        SESSIONS.put(vault_id, derive_key(password, salt, iters))
+        _open_session(vault_id, payload, password)
         return web.json_response({"ok": True, "ttl_seconds": SESSION_TTL_SECONDS})
 
     @routes.post("/c2c_vault/lock")
@@ -363,7 +382,16 @@ def register_routes(server) -> None:
             )
         except VaultError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
-        return web.json_response({"ok": True, "payload": payload})
+        # The creator has just typed the password: open their session as Unlock would, so the vault runs at once
+        # instead of answering "Vault locked" to the person who locked it (A9). TTL and "Lock session" still apply.
+        session_open = False
+        if mode != "sealed":
+            try:
+                _open_session(str(body.get("vault_id") or ""), payload, str(body.get("password") or ""))
+                session_open = True
+            except Exception as exc:  # the lock itself succeeded; the user can still Unlock
+                log.warning("[C2C Vault] could not open the creator's session: %s", exc)
+        return web.json_response({"ok": True, "payload": payload, "session_open": session_open})
 
     @routes.post("/c2c_vault/open")
     async def _open(request):
@@ -419,6 +447,8 @@ class C2C_VaultSealed(C2C_VaultLocked):
     recipient must have your password to run at all. Sealed = they run it
     freely and simply cannot read it.
     """
+
+    NEEDS_SESSION = False
 
     CATEGORY = "C2C/Vault"
     DESCRIPTION = (

@@ -12,8 +12,11 @@ Subgraph format (what lock_subgraph encrypts):
 
     {
       "nodes": [{"id": "1", "class_type": "NukeMax_Add", "widgets": {...}}, ...],
-      "links": [{"from": "1", "from_slot": 0, "to": "2", "to_slot": 1}, ...],
-      "boundary_in":  [{"name": "image", "to": "1", "to_slot": 0}],
+      "links": [{"from": "1", "from_slot": 0, "to": "2", "to_slot": 1, "to_name": "image"}, ...],
+      "boundary_in":  [{"name": "image", "to": "1", "to_slot": 0, "to_name": "image"}],
+
+`to_name` is the target input's name (the INPUT_TYPES key). Payloads locked before 2026-10-08 carry only
+`to_slot`, which is mapped onto the class's INPUT_TYPES order as before.
       "boundary_out": [{"name": "result", "from": "2", "from_slot": 0}]
     }
 
@@ -24,6 +27,9 @@ says "Vault locked" and nothing else.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import threading
 from typing import Any
 
 
@@ -43,6 +49,83 @@ def _node_registry() -> dict[str, Any]:
         return dict(getattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {}) or {})
     except Exception:
         return {}
+
+
+def _run_coroutine(coro):
+    """Finish an async node's coroutine. The vault runs inside ComfyUI's executor, which may already be running
+    an event loop on this thread, so the coroutine then gets a loop of its own on a short-lived thread."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    box: dict[str, Any] = {}
+
+    def runner():
+        try:
+            box["value"] = asyncio.run(coro)
+        except BaseException as exc:  # re-raised on the caller's thread
+            box["error"] = exc
+
+    t = threading.Thread(target=runner, name="c2c-vault-async-node", daemon=True)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _normalize_output(out) -> tuple:
+    """A node's return value as the plain output tuple."""
+    args = getattr(out, "args", None)          # V3 NodeOutput keeps its outputs in .args
+    if args is not None and not isinstance(out, (tuple, dict)):
+        return tuple(args)
+    if isinstance(out, dict):                  # {"ui": ..., "result": ...} form
+        out = out.get("result", ())
+    return tuple(out) if isinstance(out, tuple) else (out,)
+
+
+def _declared_only(cls, fn_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the inputs the class declares, unless its function takes **kwargs. The front-end also keeps
+    display-only widgets on a node (e.g. `$$canvas-image-preview` after an image preview): passed on, they made
+    ImageInvert raise "unexpected keyword argument" inside the vault (A9, L2.24)."""
+    try:
+        it = cls.INPUT_TYPES() or {}
+        declared = set((it.get("required") or {}).keys()) | set((it.get("optional") or {}).keys())
+    except Exception:
+        return kwargs
+    try:
+        fn = getattr(cls, fn_name)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in inspect.signature(fn).parameters.values()):
+            return {k: v for k, v in kwargs.items() if not str(k).startswith("$$")}
+    except (TypeError, ValueError):
+        pass
+    return {k: v for k, v in kwargs.items() if k in declared}
+
+
+def _call_node(cls, fn_name: str, kwargs: dict[str, Any]) -> tuple:
+    """Call one node the way ComfyUI's executor does (core 0.36 execution.py, _async_map_node_over_list), minus
+    caching, progress and hidden inputs. A V3 node (comfy_api io.ComfyNode) runs on a prepared class clone; called
+    directly it returned a NodeOutput object, which the next node then received as its input."""
+    is_v3 = False
+    try:
+        from comfy_api.internal import _ComfyNodeInternal, make_locked_method_func  # type: ignore
+        from comfy_api.latest import _io  # type: ignore
+        is_v3 = isinstance(cls, type) and issubclass(cls, _ComfyNodeInternal)
+    except Exception:
+        pass
+    if is_v3:
+        res = _io.get_finalized_class_inputs(cls.INPUT_TYPES(), kwargs)
+        v3_data = dict((res[-1] if isinstance(res, tuple) else None) or {})
+        v3_data.setdefault("hidden_inputs", {})
+        cls.VALIDATE_CLASS()
+        clone = cls.PREPARE_CLASS_CLONE(v3_data)
+        fn = make_locked_method_func(cls, fn_name, clone)
+        out = fn(**_io.build_nested_inputs(kwargs, v3_data))
+    else:
+        out = getattr(cls(), fn_name)(**kwargs)
+    if inspect.isawaitable(out):
+        out = _run_coroutine(out)
+    return _normalize_output(out)
 
 
 def _topo_order(nodes: list[dict], links: list[dict]) -> list[str]:
@@ -119,13 +202,19 @@ def execute_subgraph(
             + ". Install the packs that provide them, then re-run."
         )
 
-    # incoming[node_id][slot] = (src_id, src_slot)
+    # incoming[node_id][slot] = (src_id, src_slot); incoming_named[node_id][input name] = (src_id, src_slot)
     incoming: dict[str, dict[int, tuple[str, int]]] = {i: {} for i in by_id}
+    incoming_named: dict[str, dict[str, tuple[str, int]]] = {i: {} for i in by_id}
     for lk in links:
-        incoming[str(lk["to"])][int(lk["to_slot"])] = (str(lk["from"]), int(lk["from_slot"]))
+        src = (str(lk["from"]), int(lk["from_slot"]))
+        if lk.get("to_name"):
+            incoming_named[str(lk["to"])][str(lk["to_name"])] = src
+        else:
+            incoming[str(lk["to"])][int(lk["to_slot"])] = src
 
-    # boundary inputs feed specific (node, slot) pairs
+    # boundary inputs feed specific (node, input) pairs
     injected: dict[str, dict[int, Any]] = {i: {} for i in by_id}
+    injected_named: dict[str, dict[str, Any]] = {i: {} for i in by_id}
     widget_overrides: dict[str, dict[str, Any]] = {i: {} for i in by_id}
     for node_id, widgets in (extra_widget_overrides or {}).items():
         widget_overrides[str(node_id)].update(widgets)
@@ -137,6 +226,8 @@ def execute_subgraph(
         widget_name = spec.get("widget")
         if widget_name:
             widget_overrides[str(spec["to"])][str(widget_name)] = val
+        elif spec.get("to_name"):
+            injected_named[str(spec["to"])][str(spec["to_name"])] = val
         else:
             injected[str(spec["to"])][int(spec["to_slot"])] = val
 
@@ -165,11 +256,12 @@ def execute_subgraph(
         for slot, (src, src_slot) in incoming[node_id].items():
             if slot < len(slot_names):
                 kwargs[slot_names[slot]] = results[src][src_slot]
+        # by name (payloads locked since 2026-10-08): independent of socket order
+        kwargs.update(injected_named[node_id])
+        for name, (src, src_slot) in incoming_named[node_id].items():
+            kwargs[name] = results[src][src_slot]
 
-        out = getattr(cls(), fn_name)(**kwargs)
-        if isinstance(out, dict):          # {"ui":..., "result":...} form
-            out = out.get("result", ())
-        results[node_id] = tuple(out) if isinstance(out, tuple) else (out,)
+        results[node_id] = _call_node(cls, fn_name, _declared_only(cls, fn_name, kwargs))
 
     final: dict[str, Any] = {}
     for spec in b_out:

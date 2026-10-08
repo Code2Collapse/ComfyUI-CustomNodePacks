@@ -496,3 +496,146 @@ def test_multi_output_boundary_mapping(registry):
     assert result[0] == 3.0
     assert result[1] == 6.0
     assert all(v is None for v in result[2:])
+
+
+# ── A9 / L2.24 regressions: the paths the vault actually runs through ────────
+# Every test above drove vault_crypto / vault_exec directly. The node paths a real workflow uses were never run,
+# and three of them were broken at once (docs/evidence/L2.24/vault_e2e.*.json).
+
+def test_locked_node_runs_with_an_open_session(registry):
+    # Was: ValueError "too many values to unpack (expected 6)" in _unlock_with_key - no Locked vault could run,
+    # whatever the password.
+    from nodes.vault_node import SESSIONS, C2C_VaultLocked, _open_session
+
+    payload = lock_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    SESSIONS.drop(VAULT_ID)
+    _open_session(VAULT_ID, payload, PASSWORD)
+    try:
+        out = C2C_VaultLocked().execute(vault_id=VAULT_ID, vault_payload=payload)
+    finally:
+        SESSIONS.drop(VAULT_ID)
+    assert out[0] == 7.0
+
+
+def test_open_session_with_a_wrong_password_does_not_run(registry):
+    from nodes.vault_node import SESSIONS, C2C_VaultLocked, _open_session
+
+    payload = lock_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    _open_session(VAULT_ID, payload, "not the password")
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            C2C_VaultLocked().execute(vault_id=VAULT_ID, vault_payload=payload)
+    finally:
+        SESSIONS.drop(VAULT_ID)
+    assert "wrong password" in str(exc.value)
+
+
+def test_executor_maps_wires_by_input_name_not_by_position(monkeypatch):
+    # A node whose first INPUT_TYPES key is a widget: by position, socket 0 fed `scale`, not `a`.
+    class _Scaled:
+        FUNCTION = "run"
+        RETURN_TYPES = ("FLOAT",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"scale": ("FLOAT", {"default": 10.0}), "a": ("FLOAT", {})}}
+
+        def run(self, scale, a):
+            return (float(a) * float(scale),)
+
+    class _Constant:
+        FUNCTION = "run"
+        RETURN_TYPES = ("FLOAT",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"value": ("FLOAT", {})}}
+
+        def run(self, value):
+            return (float(value),)
+
+    mod = types.ModuleType("nodes")
+    mod.NODE_CLASS_MAPPINGS = {"_S": _Scaled, "_C": _Constant}
+    monkeypatch.setitem(sys.modules, "nodes", mod)
+    sub = {
+        "nodes": [{"id": "1", "class_type": "_C", "widgets": {"value": 3.0}},
+                  {"id": "2", "class_type": "_S", "widgets": {"scale": 10.0}}],
+        "links": [{"from": "1", "from_slot": 0, "to": "2", "to_slot": 0, "to_name": "a"}],
+        "boundary_in": [{"name": "x", "to": "1", "to_slot": 0, "to_name": "value"}],
+        "boundary_out": [{"name": "y", "from": "2", "from_slot": 0}],
+    }
+    assert execute_subgraph(sub, {"x": 4.0})["y"] == 40.0
+
+
+def test_executor_unpacks_a_v3_style_node_output(monkeypatch):
+    # V3 nodes return a NodeOutput (outputs in .args); passed on as-is, the next node received the object.
+    class _Out:
+        def __init__(self, *args):
+            self.args = args
+
+    class _V3ish:
+        FUNCTION = "run"
+        RETURN_TYPES = ("FLOAT",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"value": ("FLOAT", {})}}
+
+        def run(self, value):
+            return _Out(float(value) + 1.0)
+
+    mod = types.ModuleType("nodes")
+    mod.NODE_CLASS_MAPPINGS = {"_V": _V3ish}
+    monkeypatch.setitem(sys.modules, "nodes", mod)
+    sub = {"nodes": [{"id": "1", "class_type": "_V", "widgets": {"value": 1.0}}], "links": [],
+           "boundary_in": [], "boundary_out": [{"name": "y", "from": "1", "from_slot": 0}]}
+    assert execute_subgraph(sub, {})["y"] == 2.0
+
+
+def test_js_vault_lock_flow_regressions():
+    # The browser e2e (docs/evidence/L2.24/scripts/vault_e2e.py) is the proof; these pin the three JS faults.
+    js = (PACK_ROOT / "js" / "c2c_vault.js").read_text(encoding="utf-8")
+    a = js.index("function modalBoundaryStep")
+    b = js.index("\nfunction ", a + 10)
+    assert "document.body.append(back)" in js[a:b], "boundary step is never shown: Lock/Seal hang"
+    assert "graph.links[" not in js, "frontend 1.52 keeps links in a Map: index lookups miss every wire"
+    c = js.index("function applyVaultInterface")
+    d = js.index("\nfunction ", c + 10)
+    assert "slot.name =" not in js[c:d], "socket NAMES are prompt keys; show boundary names as labels"
+
+
+def test_executor_drops_display_widgets(monkeypatch):
+    # `$$canvas-image-preview` (front-end only) reached ImageInvert.invert() as a keyword argument.
+    class _Inv:
+        FUNCTION = "run"
+        RETURN_TYPES = ("FLOAT",)
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"value": ("FLOAT", {})}}
+
+        def run(self, value):
+            return (-float(value),)
+
+    mod = types.ModuleType("nodes")
+    mod.NODE_CLASS_MAPPINGS = {"_I": _Inv}
+    monkeypatch.setitem(sys.modules, "nodes", mod)
+    sub = {"nodes": [{"id": "1", "class_type": "_I", "widgets": {"value": 2.0, "$$canvas-image-preview": ""}}],
+           "links": [], "boundary_in": [], "boundary_out": [{"name": "y", "from": "1", "from_slot": 0}]}
+    assert execute_subgraph(sub, {})["y"] == -2.0
+
+
+def test_lock_session_changes_the_cache_key():
+    # After "Lock session" a re-queue must check the password again, not serve the cached result.
+    from nodes.vault_node import SESSIONS, C2C_VaultLocked, C2C_VaultSealed, _open_session
+
+    payload = lock_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    kw = {"vault_id": VAULT_ID, "vault_payload": payload, "vault_interface": "{}"}
+    _open_session(VAULT_ID, payload, PASSWORD)
+    open_key = C2C_VaultLocked.IS_CHANGED(**kw)
+    SESSIONS.drop(VAULT_ID)
+    locked_key = C2C_VaultLocked.IS_CHANGED(**kw)
+    assert open_key != locked_key
+    # a sealed vault never needs a session, so its key does not depend on one
+    assert C2C_VaultSealed.IS_CHANGED(**kw) == C2C_VaultSealed.IS_CHANGED(**kw)
+    assert ":" not in C2C_VaultSealed.IS_CHANGED(**kw)
