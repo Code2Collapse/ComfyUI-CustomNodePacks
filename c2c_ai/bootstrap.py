@@ -321,6 +321,31 @@ def _auto_discover_backends() -> list[dict]:
     return out
 
 
+def reapply_backends(router, cfg: dict) -> None:
+    """Re-register the configured backends after a settings save.
+
+    The built-in deterministic backends (the offline rule pack) are not part of the saved list, so they stay:
+    unregistering everything left ZERO backends after any save (the first-run wizard's Skip included), and
+    every AI feature failed until ComfyUI restarted (A9, L2.29).
+    """
+    from .types import Tier
+    for b in list(router.all_backends()):
+        if getattr(b.info, "tier", None) == Tier.DETERMINISTIC:
+            continue
+        router.unregister(b.info.id)
+    if bool(cfg.get("borrowed_encoder_enabled", False)):
+        try:
+            from .backends.borrowed import BorrowedEncoderBackend
+            router.register(BorrowedEncoderBackend())
+        except Exception as exc:
+            log.warning("config: borrowed encoder not registered: %s", exc)
+    for entry in cfg.get("backends", []) or []:
+        try:
+            router.register(build_backend(entry))
+        except Exception as exc:
+            log.warning("config: skipping %s: %s", entry, exc)
+
+
 def bootstrap() -> None:
     """Register every backend from ``ai_config.json`` into the router and
     start the periodic health probe. Idempotent — safe to call from

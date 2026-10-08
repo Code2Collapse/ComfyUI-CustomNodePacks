@@ -496,15 +496,8 @@ def register_routes(server) -> None:
         if not isinstance(body, dict):
             return _err("BAD_BODY", "body must be a JSON object")
         bs.save_config(body)
-        # Re-register backends from scratch
         router = get_router()
-        for b in list(router.all_backends()):
-            router.unregister(b.info.id)
-        for entry in body.get("backends", []):
-            try:
-                router.register(bs.build_backend(entry))
-            except Exception as exc:
-                log.warning("config: skipping %s: %s", entry, exc)
+        bs.reapply_backends(router, body)
         # kick a probe so status is fresh by the time the UI reads it
         asyncio.get_event_loop().run_in_executor(None, router.probe_all)
         return _ok({"saved": True, "backend_count": len(router.all_backends())})

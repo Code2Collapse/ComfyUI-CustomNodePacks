@@ -141,7 +141,7 @@ def diagnose(payload: Dict[str, Any]) -> Dict[str, Any]:
         f"Error: {exc_type}: {message[:500]}\n"
         f"Traceback tail:\n{tb_tail[:600]}\n\nJSON:"
     )
-    text, provider = _complete(prompt, system=_DIAG_SYSTEM)
+    text, provider = _complete(prompt, system=_DIAG_SYSTEM, feature="error_assistant")
     if text:
         # accept the last JSON object that has a "cause" key
         obj = None

@@ -297,8 +297,48 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return best
 
 
-def _complete(prompt: str, system: Optional[str] = None) -> Tuple[Optional[str], str]:
-    """Try tier2 (local/ollama) then tier3 (cloud). Returns (text, provider).
+def _complete_router(prompt: str, system: Optional[str], feature: str) -> Tuple[Optional[str], str]:
+    """Ask the C2C AI router: the models configured in Settings > C2C > AI.
+
+    Only real models count. The built-in offline rule pack answers every request but cannot write a JSON
+    plan, so a router with nothing else registered is "no model" here, and so is a reply it produced.
+    """
+    try:
+        from ..c2c_ai.router import get_router  # type: ignore
+        from ..c2c_ai.types import Message, Tier  # type: ignore
+    except Exception:
+        try:
+            import importlib
+            get_router = importlib.import_module("c2c_ai.router").get_router
+            types_mod = importlib.import_module("c2c_ai.types")
+            Message, Tier = types_mod.Message, types_mod.Tier
+        except Exception:
+            return None, "none"
+    try:
+        router = get_router()
+        models = [b for b in router.all_backends()
+                  if getattr(b.info, "tier", None) != Tier.DETERMINISTIC and getattr(b.info, "enabled", True)]
+        if not models:
+            return None, "none"
+        msgs = ([Message(role="system", content=system)] if system else []) + [Message(role="user", content=prompt)]
+        resp = router.ask(feature, msgs, max_tokens=1600, temperature=0.2)
+    except Exception as exc:  # noqa: BLE001 - fall back to the legacy tiers
+        log.warning("[ai] C2C AI router failed for %s: %s", feature, exc)
+        return None, "none"
+    backend_id = str(getattr(resp, "backend_id", "") or "")
+    if not getattr(resp, "text", None) or backend_id.startswith("deterministic"):
+        return None, "none"
+    return resp.text, backend_id
+
+
+def _complete(prompt: str, system: Optional[str] = None,
+              feature: str = "workflow_builder") -> Tuple[Optional[str], str]:
+    """The C2C AI router first, then the legacy Error Assistant tier2 (local) / tier3 (cloud). Returns
+    (text, provider).
+
+    The router comes first because it is what Settings > C2C > AI configures. This used to read ONLY the old
+    Error Assistant tiers, so a model set up in the C2C AI settings was never asked, and the workflow builder
+    answered "no AI backend produced a valid plan" with zero attempts (A9 "AI things are not working", L2.29).
 
     `system` replaces the local backend's default CAUSE:/FIXES: persona —
     required whenever the caller wants a different output contract (JSON),
@@ -311,6 +351,9 @@ def _complete(prompt: str, system: Optional[str] = None) -> Tuple[Optional[str],
         import importlib
         ea = importlib.import_module("nodes.error_assistant", package=__package__)
         local_llm = importlib.import_module("nodes.local_llm", package=__package__)
+    txt, provider = _complete_router(prompt, system, feature)
+    if txt:
+        return local_llm._strip_reasoning(txt), provider
     settings = ea.load_settings()
     settings = dict(settings)
     settings["max_tokens"] = 1600
@@ -371,8 +414,8 @@ def build_workflow(request: str, plan_override: Optional[Dict[str, Any]] = None)
                                       request, re.I):
             plan, provider = dict(_TXT2IMG_PLAN), "deterministic-template"
     if plan is None:
-        return {"ok": False, "error": "no AI backend produced a valid plan "
-                "(enable Tier-2/Tier-3 in C2C AI settings)", "attempts": attempts}
+        return {"ok": False, "error": "no AI model produced a valid plan: add a model in Settings > C2C > AI "
+                "(a local server such as Ollama / LM Studio, or a cloud key)", "attempts": attempts}
     errs = validate_plan(plan)
     if errs:
         return {"ok": False, "error": "plan failed validation", "details": errs[:10],
