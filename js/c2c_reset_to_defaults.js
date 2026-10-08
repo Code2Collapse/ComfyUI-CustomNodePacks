@@ -7,10 +7,15 @@
 //   and re-adding them. Vanilla ComfyUI has no such shortcut.
 //
 // What this does:
-//   - Ctrl+R: reset the currently selected nodes (or all nodes if no
-//     selection) to the defaults declared in /object_info.
-//   - Command "c2c.reset.selectedDefaults" registered for the command
-//     palette.
+//   - Right-click a node > "Reset to ORIGINAL", the canvas menu, or the
+//     command "c2c.reset.selectedDefaults": reset the selected nodes (all
+//     nodes only after a confirmation) to the defaults declared in
+//     /object_info. One undo step.
+//   - Ctrl+R does the same ONLY when "c2c.reset.enabled" is switched on
+//     (default off since A9: it is the browser's reload key).
+//   - Settings > C2C > Reset to Defaults: a button that resets the C2C
+//     settings themselves (secrets kept, confirmation first); also the
+//     command "c2c.reset.allSettings".
 //   - On every node, for each widget, looks up the matching INPUT spec by
 //     name in /object_info, reads `default` (or the third element of the
 //     legacy [type, opts] tuple), and assigns it.
@@ -35,6 +40,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { legacyCanvasMenu } from "./_c2c_compat.js";
+import { c2cConfirm } from "./_c2c_dialog.js";
+import { asOneUndoStep } from "./_c2c_undo_scope.js";
 
 const LOG = (...a) => console.debug("[c2c-reset]", ...a);
 
@@ -131,22 +138,37 @@ function resetNode(node, objectInfo) {
     return { changed };
 }
 
+/**
+ * Reset the selected nodes, or - only after a confirmation - every node of the graph on screen. ONE undo step.
+ * (A9: Ctrl+R used to reset every widget of every node at once, silently, when nothing was selected.)
+ */
 async function resetSelectedOrAll() {
     const objectInfo = await getObjectInfo();
-    const graph = app?.graph;
+    const canvas = app.canvas;
+    const graph = canvas?.graph || app?.graph;
     if (!graph) return;
-    const selected = Object.values(app.canvas?.selected_nodes || {});
+    const selected = Object.values(canvas?.selected_nodes || {});
     const targets = selected.length > 0
         ? selected
         : (graph._nodes || graph.nodes || []);
+    if (!targets.length) return;
+    if (!selected.length) {
+        const ok = await c2cConfirm(
+            `Reset the widgets of ALL ${targets.length} nodes in this graph to their defaults?\n\n` +
+            "Select nodes first to reset only those. Ctrl+Z undoes the reset in one step.",
+            { title: "Reset to defaults", okLabel: "Reset all nodes", cancelLabel: "Cancel" });
+        if (!ok) return;
+    }
     let resetCount = 0;
     let skipCount = 0;
     let nodesTouched = 0;
-    for (const n of targets) {
-        const r = resetNode(n, objectInfo);
-        if (r.skipped) { skipCount++; continue; }
-        if (r.changed > 0) { nodesTouched++; resetCount += r.changed; }
-    }
+    asOneUndoStep(canvas, () => {
+        for (const n of targets) {
+            const r = resetNode(n, objectInfo);
+            if (r.skipped) { skipCount++; continue; }
+            if (r.changed > 0) { nodesTouched++; resetCount += r.changed; }
+        }
+    });
     const scope = selected.length > 0 ? `${selected.length} selected node(s)` : "ALL nodes";
     const msg = `Reset ${resetCount} widget(s) on ${nodesTouched} node(s) (${scope}).` +
                 (skipCount > 0 ? ` Skipped ${skipCount}.` : "");
@@ -186,6 +208,85 @@ function captureKeydown(e) {
     resetSelectedOrAll();
 }
 
+// ------------------------------------------------- reset the C2C SETTINGS
+// "Reset to defaults" in Settings > C2C used to hold only the Ctrl+R toggle above: there was no way to put the
+// C2C settings themselves back (A9, "reset to defaults is not working"). Secrets (API keys, tokens, passwords)
+// are never reset, and nothing is written without a confirmation listing what will change.
+const OUR_SETTING = /^(c2c|mec)\./i;
+const SECRET_SETTING = /(api[_.-]?key|apikey|token|secret|password|passphrase|credential)/i;
+const RESET_SETTINGS_ID = "c2c.reset.settingsButton";
+
+function _settingDefault(param) {
+    try { return typeof param.defaultValue === "function" ? param.defaultValue() : param.defaultValue; }
+    catch { return undefined; }
+}
+
+/** Every registered C2C setting whose value differs from its default (secrets excluded). */
+function changedC2CSettings() {
+    const store = app.extensionManager?.setting?.settings || {};
+    const out = [];
+    for (const [id, param] of Object.entries(store)) {
+        if (!OUR_SETTING.test(id) || SECRET_SETTING.test(id) || id === RESET_SETTINGS_ID) continue;
+        if (param?.type === "hidden" || typeof param?.type === "function") continue;
+        const def = _settingDefault(param);
+        if (def === undefined) continue;
+        let cur;
+        try { cur = app.ui.settings.getSettingValue(id); } catch { continue; }
+        if (cur === undefined || JSON.stringify(cur) === JSON.stringify(def)) continue;
+        out.push({ id, name: param.name || id, def });
+    }
+    return out;
+}
+
+async function resetC2CSettings() {
+    const changed = changedC2CSettings();
+    if (!changed.length) {
+        try {
+            app.extensionManager?.toast?.add?.({ severity: "info", summary: "C2C settings",
+                detail: "Every C2C setting is already at its default.", life: 3500 });
+        } catch { /* best-effort */ }
+        return 0;
+    }
+    const shown = changed.slice(0, 12).map((c) => "  - " + c.name).join("\n");
+    const more = changed.length > 12 ? `\n  ... and ${changed.length - 12} more` : "";
+    const ok = await c2cConfirm(
+        `Reset ${changed.length} C2C setting(s) to their defaults?\n\n${shown}${more}\n\n` +
+        "API keys, tokens and passwords are kept. Some settings take effect after a page reload.",
+        { title: "Reset C2C settings", okLabel: "Reset settings", cancelLabel: "Cancel" });
+    if (!ok) return 0;
+    let done = 0;
+    const S = app.ui.settings;
+    for (const c of changed) {
+        // one at a time: rapid parallel writes to /api/settings returned 500s (server write contention)
+        try {
+            if (typeof S.setSettingValueAsync === "function") await S.setSettingValueAsync(c.id, c.def);
+            else await S.setSettingValue(c.id, c.def);
+            done++;
+        } catch (exc) { console.warn("[c2c-reset] setting", c.id, "not reset:", exc); }
+    }
+    try {
+        app.extensionManager?.toast?.add?.({ severity: done === changed.length ? "success" : "warn",
+            summary: "C2C settings", detail: `Reset ${done} of ${changed.length} setting(s) to defaults.`, life: 4000 });
+    } catch { /* best-effort */ }
+    return done;
+}
+
+/** Settings-panel control: a button (core renders a function `type` as a custom element). */
+function _renderResetSettingsButton() {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;align-items:center;gap:8px;";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Reset C2C settings…";
+    btn.className = "p-button p-component p-button-sm p-button-secondary";
+    btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try { await resetC2CSettings(); } finally { btn.disabled = false; }
+    });
+    wrap.appendChild(btn);
+    return wrap;
+}
+
 // ================================================================ extension
 function _canvasMenuItems() {
     return [null, {
@@ -203,11 +304,21 @@ app.registerExtension({
     name: "c2c.reset_to_defaults",
     settings: [
         {
+            id: RESET_SETTINGS_ID,
+            name: "Reset every C2C setting to its default (API keys are kept)",
+            tooltip: "Lists the C2C settings that differ from their defaults and asks before changing anything.",
+            type: _renderResetSettingsButton,
+            defaultValue: "",
+        },
+        {
             id: "c2c.reset.enabled",
-            name: "C2C \u25B8 Reset-to-defaults \u25B8 Capture Ctrl+R",
-            tooltip: "When ON, Ctrl+R resets selected (or all) nodes to /object_info defaults instead of reloading the browser. Turn OFF to restore browser reload.",
+            name: "Ctrl+R resets nodes to their defaults (instead of reloading the page)",
+            // OFF by default (A9): Ctrl+R is the browser's reload key, and with nothing selected it reset every
+            // widget of every node at once. When on, an all-nodes reset now asks first and is one undo step.
+            tooltip: "When ON, Ctrl+R resets the selected nodes (or, after a confirmation, all nodes) to their " +
+                     "defaults. OFF: Ctrl+R reloads the page as usual. Right-click a node for 'Reset to ORIGINAL'.",
             type: "boolean",
-            defaultValue: true,
+            defaultValue: false,
         },
     ],
     commands: [
@@ -215,6 +326,11 @@ app.registerExtension({
             id: "c2c.reset.selectedDefaults",
             label: "C2C: Reset selected nodes to defaults",
             function: resetSelectedOrAll,
+        },
+        {
+            id: "c2c.reset.allSettings",
+            label: "C2C: Reset C2C settings to defaults",
+            function: resetC2CSettings,
         },
     ],
     // Per-node right-click: reset THIS node to the ORIGINAL defaults declared by
@@ -228,7 +344,8 @@ app.registerExtension({
             content: "↺ Reset to ORIGINAL (node author / ComfyUI defaults)",
             callback: async () => {
                 const oi = await getObjectInfo();
-                const r = resetNode(node, oi);
+                let r = { skipped: true, reason: "not run" };
+                asOneUndoStep(app.canvas, () => { r = resetNode(node, oi); });
                 const det = r.skipped
                     ? `Skipped: ${r.reason}`
                     : (r.changed > 0 ? `Reset ${r.changed} widget(s) to ${node.type} originals.`
@@ -253,8 +370,8 @@ app.registerExtension({
     async setup() {
         // Capture-phase fallback so we beat the browser's reload-page.
         window.addEventListener("keydown", (e) => {
-            const enabled = app.ui?.settings?.getSettingValue?.("c2c.reset.enabled", true);
-            if (enabled === false) return;
+            const enabled = app.ui?.settings?.getSettingValue?.("c2c.reset.enabled", false);
+            if (enabled !== true) return;
             captureKeydown(e);
         }, { capture: true });
         legacyCanvasMenu("reset_to_defaults", _mergeCanvasMenuItems);
