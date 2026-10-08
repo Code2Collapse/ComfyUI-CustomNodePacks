@@ -155,26 +155,23 @@ function slotUnder(x, y) {
 
 app.registerExtension({
     name: "C2C.SlotGetSet",
+    // ONE setting decides what a slot double-click does. Two features used to listen on the same
+    // canvas at once (this one and the auto-connect predictor), so one double-click spawned a Get/Set
+    // node AND inserted a predicted node (A9, 2026-10-08).
+    settings: [{
+        id: DBL_SETTING_ID,
+        name: "Double-click a slot",
+        tooltip: "What a double-click on a node's slot does.\n" +
+            "Nothing: ComfyUI's own behaviour.\n" +
+            "Get/Set variable: an output gets a SetNode named after the slot, an input a GetNode wired to " +
+            "the most recent matching Set (needs KJNodes).\n" +
+            "Suggest and connect a node (experimental): inserts the node the predictor expects next.",
+        type: "combo",
+        options: DBL_OPTIONS,
+        defaultValue: DBL_GETSET,
+        category: ["c2c", "Productivity", "Slot double-click"],
+    }],
     async setup() {
-        try {
-            // ONE setting decides what a slot double-click does. Two features used to listen on the same
-            // canvas at once (this one and the auto-connect predictor), so one double-click spawned a Get/Set
-            // node AND inserted a predicted node (A9, 2026-10-08).
-            app.ui.settings.addSetting({
-                id: DBL_SETTING_ID,
-                name: "Double-click a slot",
-                tooltip: "What a double-click on a node's slot does.\n" +
-                    "Nothing: ComfyUI's own behaviour.\n" +
-                    "Get/Set variable: an output gets a SetNode named after the slot, an input a GetNode wired to " +
-                    "the most recent matching Set (needs KJNodes).\n" +
-                    "Suggest and connect a node (experimental): inserts the node the predictor expects next.",
-                type: "combo",
-                options: DBL_OPTIONS,
-                defaultValue: DBL_GETSET,
-                category: ["c2c", "Productivity", "Slot double-click"],
-            });
-        } catch {}
-
         // Hook double-click on canvas.
         const c = app.canvas;
         if (!c) return;

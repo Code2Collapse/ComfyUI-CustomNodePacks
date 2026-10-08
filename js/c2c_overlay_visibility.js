@@ -203,6 +203,7 @@ const OVERLAYS = [
 // ── Visibility state in-memory ─────────────────────────────────────
 const STATE = Object.create(null);
 for (const o of OVERLAYS) STATE[o.id] = o.defaultOn;
+let _ready = false;
 
 function _readSettings() {
     const s = app.ui?.settings;
@@ -237,28 +238,22 @@ function _applyCss() {
 
 function _onSettingChange(id, value) {
     STATE[id] = !!value;
+    if (!_ready) return;
     _applyCss();
 }
 
 app.registerExtension({
     name: "C2C.OverlayVisibility",
+    settings: OVERLAYS.map((o) => ({
+        id: SETTING_PREFIX + o.id,
+        name: o.label,
+        category: o.category,
+        type: "boolean",
+        defaultValue: o.defaultOn,
+        tooltip: o.tip,
+        onChange: (v) => _onSettingChange(o.id, v),
+    })),
     async setup() {
-        // Register one setting per overlay, grouped under "C2C Overlays".
-        for (const o of OVERLAYS) {
-            try {
-                app.ui.settings.addSetting({
-                    id: SETTING_PREFIX + o.id,
-                    name: o.label,
-                    category: o.category,
-                    type: "boolean",
-                    defaultValue: o.defaultOn,
-                    tooltip: o.tip,
-                    onChange: (v) => _onSettingChange(o.id, v),
-                });
-            } catch (err) {
-                console.warn("[C2C.OverlayVisibility] addSetting failed:", o.id, err);
-            }
-        }
         _readSettings();
         _applyCss();
 
@@ -266,5 +261,6 @@ app.registerExtension({
         // create their DOM in response to user actions (e.g. flyouts).
         const mo = new MutationObserver(() => _applyCss());
         mo.observe(document.body, { childList: true, subtree: false });
+        _ready = true;
     },
 });

@@ -32,6 +32,7 @@ const PILL_ID = "c2c-linked-values-pill";
 let _propagating = false;       // re-entrancy guard
 let _enabled = true;
 let _masterOnly = false;
+let _ready = false;
 
 function getStore() {
     const g = app.graph;
@@ -301,17 +302,19 @@ function widgetMenuItems(node) {
 // ── Extension wiring ──────────────────────────────────────────────────
 app.registerExtension({
     name: "C2C.LinkedValues",
-    async setup() {
-        app.ui.settings.addSetting({
+    settings: [
+        {
             id: SETTING_ENABLED, name: "C2C ▸ Linked Values: enabled",
             type: "boolean", defaultValue: true,
-            onChange: v => { _enabled = !!v; refreshPill(); },
-        });
-        app.ui.settings.addSetting({
+            onChange: v => { _enabled = !!v; if (_ready) refreshPill(); },
+        },
+        {
             id: SETTING_MASTER_ONLY, name: "C2C ▸ Linked Values: master-only propagation",
             type: "boolean", defaultValue: false,
             onChange: v => { _masterOnly = !!v; },
-        });
+        },
+    ],
+    async setup() {
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
         _masterOnly = app.ui.settings.getSettingValue(SETTING_MASTER_ONLY, false);
 
@@ -341,6 +344,7 @@ app.registerExtension({
         }
         rehookAll();
         refreshPill();
+        _ready = true;
     },
     async beforeRegisterNodeDef(nodeType /*, nodeData, app */) {
         const orig = nodeType.prototype.getExtraMenuOptions;

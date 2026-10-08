@@ -19,6 +19,7 @@ const NEIGHBOUR_OPACITY = 0.85;
 const z = { focusOverlay: 1500 };
 
 let _enabled  = false;
+let _ready    = false;
 let _canvas   = null;
 let _origDraw = null;
 let _slot     = null;
@@ -121,9 +122,9 @@ function _unpatchDraw() {
 
 /* ─── toggle ─── */
 
-function _setEnabled(v) {
+function _applyEnabledState(v) {
   _enabled = !!v;
-  app.ui.settings.setSettingValue(SETTING_ID, _enabled);
+  if (!_ready) return;
   if (_enabled) {
     _canvas = app.canvas;
     _patchDraw();
@@ -133,6 +134,11 @@ function _setEnabled(v) {
   }
   _canvas && _canvas.setDirty(true, true);
   _updateSlot();
+}
+
+function _setEnabled(v) {
+  try { app.ui.settings.setSettingValue(SETTING_ID, !!v); } catch (_e) { /* */ }
+  _applyEnabledState(v);
 }
 
 function _updateSlot() {
@@ -176,17 +182,16 @@ function _onKeyDown(e) {
 
 app.registerExtension({
   name: "C2C.FocusMode",
+  settings: [{
+    id: SETTING_ID,
+    name: "C2C › Focus mode",
+    type: "boolean",
+    defaultValue: false,
+    onChange(v) { _applyEnabledState(v); },
+  }],
 
   async setup() {
-    app.ui.settings.addSetting({
-      id: SETTING_ID,
-      name: "C2C › Focus mode",
-      type: "boolean",
-      defaultValue: false,
-      onChange(v) { if (_enabled !== !!v) _setEnabled(!!v); }
-    });
-
-    _enabled = app.ui.settings.getSettingValue(SETTING_ID, false);
+    _applyEnabledState(app.ui.settings.getSettingValue(SETTING_ID, false));
 
     document.addEventListener("keydown", _onKeyDown);
 
@@ -224,5 +229,7 @@ app.registerExtension({
         poll();
       }
     } catch (_err) { /* canvas not ready yet; tryRegister loop handles it */ }
+
+    _ready = true;
   }
 });

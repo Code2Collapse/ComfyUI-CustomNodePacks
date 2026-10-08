@@ -233,12 +233,12 @@ function installDropInterceptor() {
 
 app.registerExtension({
     name: "C2C.MetadataInspector",
+    settings: [{
+        id: SETTING_ENABLED, name: "C2C ▸ Metadata Inspector on PNG drop",
+        type: "boolean", defaultValue: true,
+        onChange: v => { _enabled = !!v; },
+    }],
     async setup() {
-        app.ui.settings.addSetting({
-            id: SETTING_ENABLED, name: "C2C ▸ Metadata Inspector on PNG drop",
-            type: "boolean", defaultValue: true,
-            onChange: v => { _enabled = !!v; },
-        });
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
         app.__c2cMetaInspectPrompt = metaInspectPrompt;
         installDropInterceptor();

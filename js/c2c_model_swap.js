@@ -269,17 +269,19 @@ function onKey(e) {
 
 app.registerExtension({
     name: "C2C.ModelSwap",
-    async setup() {
-        app.ui.settings.addSetting({
+    settings: [
+        {
             id: SETTING_ENABLED, name: "C2C ▸ Quick-Swap Models (Ctrl+M)",
             type: "boolean", defaultValue: true,
             onChange: v => { _enabled = !!v; },
-        });
-        app.ui.settings.addSetting({
+        },
+        {
             id: SETTING_LORAS_ONLY, name: "C2C ▸ Quick-Swap: LoRA loaders only",
             type: "boolean", defaultValue: false,
             onChange: v => { _lorasOnly = !!v; },
-        });
+        },
+    ],
+    async setup() {
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
         _lorasOnly = app.ui.settings.getSettingValue(SETTING_LORAS_ONLY, false);
         window.addEventListener("keydown", onKey, true);

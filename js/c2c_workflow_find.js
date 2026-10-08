@@ -583,20 +583,18 @@ function _mergeNodeMenuItems(opts, node) {
 
 app.registerExtension({
     name: "C2C.WorkflowFind",
+    settings: [{
+        id: SETTING_ID,
+        name: "In-workflow finder (Ctrl+F searches THIS graph)",
+        tooltip:
+            "When enabled, Ctrl+F opens a fuzzy finder over the " +
+            "nodes already on the canvas. Disable to restore the " +
+            "stock ComfyUI add-node search.",
+        type: "boolean",
+        defaultValue: true,
+        category: ["c2c", "Overlays", "Workflow Find"],
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "In-workflow finder (Ctrl+F searches THIS graph)",
-                tooltip:
-                    "When enabled, Ctrl+F opens a fuzzy finder over the " +
-                    "nodes already on the canvas. Disable to restore the " +
-                    "stock ComfyUI add-node search.",
-                type: "boolean",
-                defaultValue: true,
-                category: ["c2c", "Overlays", "Workflow Find"],
-            });
-        } catch (e) { __c2cReport("c2c_workflow_find", e); }
         // Kick off synonym table load — search still works without it.
         loadSynonyms().catch(() => { /* already logged */ });
         window.addEventListener("keydown", onGlobalKey, true);

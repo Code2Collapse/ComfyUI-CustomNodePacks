@@ -498,20 +498,18 @@ function onGlobalKey(ev) {
 
 app.registerExtension({
     name: "C2C.CommandPalette",
+    settings: [{
+        id: SETTING_ID,
+        name: "Command Palette (Ctrl+K)",
+        tooltip:
+            "Open a universal fuzzy launcher that searches across " +
+            "workflow nodes, add-node types, settings, and " +
+            "extension commands.",
+        type: "boolean",
+        defaultValue: true,
+        category: ["c2c", "Overlays", "Command Palette"],
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Command Palette (Ctrl+K)",
-                tooltip:
-                    "Open a universal fuzzy launcher that searches across " +
-                    "workflow nodes, add-node types, settings, and " +
-                    "extension commands.",
-                type: "boolean",
-                defaultValue: true,
-                category: ["c2c", "Overlays", "Command Palette"],
-            });
-        } catch { /* settings API not ready */ }
         window.addEventListener("keydown", onGlobalKey, true);
         console.log("[C2C.CommandPalette] Ctrl+K palette armed.");
     },

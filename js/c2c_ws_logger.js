@@ -35,6 +35,7 @@ const EVENT_TYPES = [
 
 let _enabled = true;
 let _bufSize = 500;
+let _ready = false;
 let _seq = 0;
 const _ring = []; // newest at end
 let _paused = false;
@@ -237,18 +238,24 @@ function toggleSidebar() {
 
 app.registerExtension({
     name: "C2C.WSLogger",
-    async setup() {
-        app.ui.settings.addSetting({
+    settings: [
+        {
             id: SETTING_ENABLED, name: "C2C ▸ WebSocket Logger: enabled",
             type: "boolean", defaultValue: true,
-            onChange: v => { _enabled = !!v; if (_enabled) attachListeners(); },
-        });
-        app.ui.settings.addSetting({
+            onChange: v => { _enabled = !!v; if (_ready && _enabled) attachListeners(); },
+        },
+        {
             id: SETTING_BUFFER, name: "C2C ▸ WebSocket Logger: buffer size",
             type: "slider", attrs: { min: 50, max: 5000, step: 50 },
             defaultValue: 500,
-            onChange: v => { _bufSize = Math.max(50, parseInt(v) || 500); while (_ring.length > _bufSize) _ring.shift(); renderRows(); },
-        });
+            onChange: v => {
+                _bufSize = Math.max(50, parseInt(v) || 500);
+                while (_ring.length > _bufSize) _ring.shift();
+                if (_ready) renderRows();
+            },
+        },
+    ],
+    async setup() {
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
         _bufSize = app.ui.settings.getSettingValue(SETTING_BUFFER, 500);
 
@@ -271,5 +278,6 @@ app.registerExtension({
                 e.preventDefault(); toggleSidebar();
             }
         }, true);
+        _ready = true;
     },
 });

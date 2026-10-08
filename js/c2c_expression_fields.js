@@ -234,16 +234,14 @@ function reevalAll() {
 
 app.registerExtension({
     name: "C2C.ExpressionFields",
+    settings: [{
+        id: SETTING_ID,
+        name: "Expression fields in numeric widgets (=expr)",
+        tooltip: "Type `=512*2` or `=$5.width/2` into any INT/FLOAT widget.",
+        type: "boolean", defaultValue: true,
+        category: ["c2c", "Editing", "Expressions"],
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Expression fields in numeric widgets (=expr)",
-                tooltip: "Type `=512*2` or `=$5.width/2` into any INT/FLOAT widget.",
-                type: "boolean", defaultValue: true,
-                category: ["c2c", "Editing", "Expressions"],
-            });
-        } catch { /* */ }
         // Initial pass + watch for node creation.
         setTimeout(rebindAll, 250);
         const G = window.LGraph?.prototype;

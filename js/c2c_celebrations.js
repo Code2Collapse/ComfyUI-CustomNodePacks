@@ -251,34 +251,19 @@ function _trigger(reason) {
 
 /* ─── settings binding ─── */
 function _readSetting(id, fallback) {
-  try { return app.ui.settings.getSettingValue(id, fallback); }
-  catch (_e) { return fallback; }
-}
-
-function _registerSettings() {
-  const defs = [
-    [SETTING.master  , "C2C › Celebrations › Enabled"      , true ],
-    [SETTING.confetti, "C2C › Celebrations › Confetti"     , true ],
-    [SETTING.sound   , "C2C › Celebrations › Sound chime"  , false],
-    [SETTING.easter  , "C2C › Celebrations › Easter eggs"  , true ],
-  ];
-  for (const [id, name, def] of defs) {
-    try {
-      app.ui.settings.addSetting({
-        id, name, type: "boolean", defaultValue: def,
-        onChange: (v) => { _refreshFlags(); },
-      });
-    } catch (e) {
-      console.warn(`[c2c.celebrations] addSetting failed for ${id}:`, e?.message || e);
-    }
-  }
+  try {
+    const v = app.ui?.settings?.getSettingValue?.(id, fallback);
+    return v === undefined ? fallback : v;
+  } catch (_e) { return fallback; }
 }
 
 function _refreshFlags() {
-  _enabled.master   = !!_readSetting(SETTING.master   , true );
-  _enabled.confetti = !!_readSetting(SETTING.confetti , true );
-  _enabled.sound    = !!_readSetting(SETTING.sound    , false);
-  _enabled.easter   = !!_readSetting(SETTING.easter   , true );
+  try {
+    _enabled.master   = !!_readSetting(SETTING.master   , true );
+    _enabled.confetti = !!_readSetting(SETTING.confetti , true );
+    _enabled.sound    = !!_readSetting(SETTING.sound    , false);
+    _enabled.easter   = !!_readSetting(SETTING.easter   , true );
+  } catch (_e) { /* registration-time onChange: not all ids exist yet */ }
 }
 
 /* ─── event wiring ─── */
@@ -322,10 +307,15 @@ function _wireEvents() {
 /* ─── extension ─── */
 app.registerExtension({
   name: NS,
+  settings: [
+    { id: SETTING.master,   name: "C2C › Celebrations › Enabled",     type: "boolean", defaultValue: true,  onChange: () => _refreshFlags() },
+    { id: SETTING.confetti, name: "C2C › Celebrations › Confetti",    type: "boolean", defaultValue: true,  onChange: () => _refreshFlags() },
+    { id: SETTING.sound,    name: "C2C › Celebrations › Sound chime", type: "boolean", defaultValue: false, onChange: () => _refreshFlags() },
+    { id: SETTING.easter,   name: "C2C › Celebrations › Easter eggs", type: "boolean", defaultValue: true,  onChange: () => _refreshFlags() },
+  ],
 
   async setup() {
     _watchMotionPreference();
-    _registerSettings();
     _refreshFlags();
     _wireEvents();
 

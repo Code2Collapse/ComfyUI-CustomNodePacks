@@ -46,6 +46,7 @@ let _cycleSet = new Set();
 let _dangByNode = new Map();   // nodeId -> [{ id, slot, name }, ...]
 let _scheduled = 0;
 let _enabled = true;
+let _ready = false;
 
 function injectStyle() {
     if (document.getElementById("c2c-graph-health-style")) return;
@@ -361,17 +362,14 @@ function schedule() {
 
 app.registerExtension({
     name: "C2C.GraphHealth",
+    settings: [{
+        id: SETTING_ID,
+        name: "Graph health overlay (dead/cycle/dangling)",
+        type: "boolean", defaultValue: true,
+        category: ["c2c", "Diagnostics", "Graph Health"],
+        onChange(v) { _enabled = v !== false; if (!_ready) return; renderUI(); },
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Graph health overlay (dead/cycle/dangling)",
-                type: "boolean", defaultValue: true,
-                category: ["c2c", "Diagnostics", "Graph Health"],
-                onChange: renderUI,
-            });
-        } catch { /* */ }
-
         // Patch loadGraphData + node add/remove + link change for invalidation.
         const _origLoad = app.loadGraphData?.bind(app);
         if (typeof _origLoad === "function") {
@@ -399,6 +397,8 @@ app.registerExtension({
         }
         // Initial.
         setTimeout(() => { installDrawPatch(); schedule(); }, 600);
+        _ready = true;
+        renderUI();
         console.log("[C2C.GraphHealth] ready.");
     },
 });

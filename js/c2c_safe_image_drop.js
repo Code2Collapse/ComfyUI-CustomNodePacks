@@ -129,15 +129,15 @@ function _installHandleFileWrap() {
 
 app.registerExtension({
     name: "C2C.SafeImageDrop",
-    async setup() {
-        app.ui.settings.addSetting({
+    settings: [
+        {
             id: SETTING_ENABLED,
             name: "C2C ▸ Safe image drop (corrupt metadata fallback)",
             type: "boolean",
             defaultValue: true,
             onChange: (v) => { _enabled = !!v; },
-        });
-        app.ui.settings.addSetting({
+        },
+        {
             id: SETTING_MODE,
             name: "C2C ▸ Safe drop mode",
             type: "combo",
@@ -148,15 +148,17 @@ app.registerExtension({
                 { value: "comfy_default", text: "Comfy default (disable safe fallback)" },
             ],
             onChange: (v) => { _mode = v || "auto"; },
-        });
-        app.ui.settings.addSetting({
+        },
+        {
             id: SETTING_CONFIRM,
             name: "C2C ▸ Confirm before loading embedded workflow",
             tooltip: "Off (default): dropping an image with an embedded ComfyUI workflow loads it automatically. On: show the metadata inspector first.",
             type: "boolean",
             defaultValue: false,
             onChange: (v) => { _confirmWorkflow = !!v; },
-        });
+        },
+    ],
+    async setup() {
         _enabled = app.ui.settings.getSettingValue(SETTING_ENABLED, true);
         _mode = app.ui.settings.getSettingValue(SETTING_MODE, "auto");
         _confirmWorkflow = app.ui.settings.getSettingValue(SETTING_CONFIRM, false);

@@ -32,6 +32,7 @@ import "./_c2c_lite.js";
 const ROOT_ID = "c2c-bookmarks-root";
 const SETTING_ID = "c2c.bookmarks.enabled";
 const PULSE_MS = 900;
+let _ready = false;
 
 function injectStyle() {
     if (document.getElementById("c2c-bookmarks-style")) return;
@@ -226,16 +227,14 @@ function onKey(ev) {
 
 app.registerExtension({
     name: "C2C.NodeBookmarks",
+    settings: [{
+        id: SETTING_ID,
+        name: "Node bookmarks strip (Alt+B, Ctrl+Shift+1..9)",
+        type: "boolean", defaultValue: true,
+        category: ["c2c", "Overlays", "Bookmarks"],
+        onChange() { if (!_ready) return; render(); },
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Node bookmarks strip (Alt+B, Ctrl+Shift+1..9)",
-                type: "boolean", defaultValue: true,
-                category: ["c2c", "Overlays", "Bookmarks"],
-                onChange: render,
-            });
-        } catch { /* */ }
         window.addEventListener("keydown", onKey, true);
         // Render after each graph load/change.
         const _origLoad = app.loadGraphData?.bind(app);
@@ -256,6 +255,7 @@ app.registerExtension({
             if (!document.hidden && graphReadable()) render();
         }, "node_bookmarks:graph"));
         render();
+        _ready = true;
         console.log("[C2C.NodeBookmarks] ready.");
     },
 });

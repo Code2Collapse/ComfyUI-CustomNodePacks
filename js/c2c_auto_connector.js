@@ -83,17 +83,14 @@ function autoWire(newNode) {
 
 app.registerExtension({
     name: "C2C.AutoConnector",
+    settings: [{
+        id: SETTING_ID,
+        name: "Auto-connect newly added nodes",
+        tooltip: "When you add a new node to the canvas, automatically wire it to the previously-selected node's first compatible output. Opt-in.",
+        type: "boolean", defaultValue: false,
+        category: ["c2c", "Productivity", "Auto Connector"],
+    }],
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Auto-connect newly added nodes",
-                tooltip: "When you add a new node to the canvas, automatically wire it to the previously-selected node's first compatible output. Opt-in.",
-                type: "boolean", defaultValue: false,
-                category: ["c2c", "Productivity", "Auto Connector"],
-            });
-        } catch {}
-
         // Track last clicked/selected node.
         const c = app.canvas;
         if (c) {

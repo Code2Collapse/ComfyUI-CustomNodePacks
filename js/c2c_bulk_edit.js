@@ -258,18 +258,16 @@ function _mergeCanvasMenuItems(opts, canvas) {
 
 app.registerExtension({
     name: "C2C.BulkEdit",
+    settings: [{
+        id: SETTING_ID,
+        name: "Bulk Value Editor (Ctrl+Shift+E)",
+        type: "boolean", defaultValue: true,
+        category: ["c2c", "Editing", "Bulk Edit"],
+    }],
     getCanvasMenuItems(canvas) {
         return _canvasMenuItems(canvas);
     },
     async setup() {
-        try {
-            app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Bulk Value Editor (Ctrl+Shift+E)",
-                type: "boolean", defaultValue: true,
-                category: ["c2c", "Editing", "Bulk Edit"],
-            });
-        } catch { /* */ }
         window.addEventListener("keydown", onKey, true);
         legacyCanvasMenu("bulk_edit", _mergeCanvasMenuItems);
         console.log("[C2C.BulkEdit] ready (Ctrl+Shift+E).");
