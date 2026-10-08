@@ -64,6 +64,9 @@ def _stub_prompt_server() -> None:
 
 
 def load_pack_summary() -> Dict[str, Any]:
+    # Count what this pack SHIPS: its Magnific copy stands down when ComfyUI-OmniScale sits next to it (L2.28),
+    # which would make the documented node count depend on the neighbouring folders.
+    os.environ.setdefault("C2C_MAGNIFIC_KEEP_CNP", "1")
     core = _resolve_comfy_core()
     saved_path = list(sys.path)
     if str(core) not in sys.path:

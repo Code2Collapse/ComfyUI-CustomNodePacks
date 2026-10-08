@@ -24,7 +24,8 @@
  */
 import { app } from "../../scripts/app.js";
 
-const OURS = /^(c2c|mec)\./i;
+// OmniScale is a C2C pack too: its API key belongs under C2C (owner A9: "not all settings are in C2C").
+const OURS = /^(c2c|mec|omniscale)\./i;
 
 // Nicer sub-group labels for a few ids where Title-Case of the segment looks off.
 const PRETTY = {

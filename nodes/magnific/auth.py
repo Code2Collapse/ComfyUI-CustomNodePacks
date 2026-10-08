@@ -26,7 +26,9 @@ class AuthError(RuntimeError):
 class NotSignedInError(AuthError):
     def __init__(self) -> None:
         super().__init__(
-            "Not signed in to Magnific. Use the ComfyUI menu (Magnific → Sign in) and retry."
+            "Not signed in to Magnific. Use the ComfyUI menu (Magnific → Sign in) and retry. "
+            "To use an API key instead, install the OmniScale pack (ComfyUI-OmniScale): it replaces these "
+            "nodes and takes the key in Settings → C2C → OmniScale → API key."
         )
 
 

@@ -331,11 +331,38 @@ except Exception as _tile_exc:  # pragma: no cover
             "[MEC] tiling import failed: %s", _tile_exc,
         )
 # Magnific (vendor pack ported in — hosted generation / upscale / stock)
+#
+# ComfyUI-OmniScale (the owner's API-key pack, D0.14) registers the same 15 Magnific* node ids and the same
+# /magnific/* routes. Node ids go to the pack loaded LAST, routes to the one registered FIRST, so with both
+# installed OmniScale's nodes talked to this copy's sign-in routes and asked for a key they could never receive
+# (A9, L2.28). When OmniScale is installed and enabled, this copy stands down; C2C_MAGNIFIC_KEEP_CNP=1 keeps it.
+def _c2c_omniscale_installed() -> bool:
+    import os as _os
+    try:
+        parent = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        for _name in _os.listdir(parent):
+            low = _name.lower()
+            if low.startswith("comfyui-omniscale") and not low.endswith(".disabled") \
+                    and _os.path.isfile(_os.path.join(parent, _name, "__init__.py")):
+                return True
+    except OSError:
+        pass
+    return False
+
+
 try:
-    from .nodes.magnific import (
-        NODE_CLASS_MAPPINGS as _MAGNIFIC_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _MAGNIFIC_DISPLAY,
-    )
+    import os as _c2c_os
+    if _c2c_omniscale_installed() and _c2c_os.environ.get("C2C_MAGNIFIC_KEEP_CNP") != "1":
+        _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY = {}, {}
+        import logging as _lg
+        _lg.getLogger("MEC").info(
+            "[C2C] ComfyUI-OmniScale is installed: its API-key nodes provide Magnific*; CustomNodePacks' "
+            "sign-in copy is not registered (set C2C_MAGNIFIC_KEEP_CNP=1 to keep it).")
+    else:
+        from .nodes.magnific import (
+            NODE_CLASS_MAPPINGS as _MAGNIFIC_MAPPINGS,
+            NODE_DISPLAY_NAME_MAPPINGS as _MAGNIFIC_DISPLAY,
+        )
 except Exception as _mag_exc:  # pragma: no cover
     _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY = {}, {}
     try:

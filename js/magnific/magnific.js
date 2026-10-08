@@ -759,15 +759,32 @@ const checkSignedInOnce = () => {
   checkSignedIn();
 };
 
+// ComfyUI-OmniScale (the owner's API-key pack) registers the same Magnific* node ids. When it is installed the
+// server-side copy in CustomNodePacks stands down, and this UI must only ever touch nodes CustomNodePacks itself
+// registered: attached to OmniScale's nodes it added sign-in buttons that called the wrong routes (A9, L2.28).
+const cnpOwns = (nodeData) => String(nodeData?.python_module || "").includes("ComfyUI-CustomNodePacks");
+const cnpOwnsMagnific = () => cnpOwns(LiteGraph.registered_node_types?.MagnificGenerateImage?.nodeData);
+
+function omniScaleActiveNotice() {
+  app.extensionManager?.toast?.add?.({
+    severity: "info", summary: "OmniScale", life: 6000,
+    detail: "The OmniScale pack provides these nodes here: they use an API key, not a sign-in. "
+      + "Paste it in Settings › C2C › OmniScale › API key.",
+  });
+}
+
 app.registerExtension({
   name: "magnific.auth",
   setup() {
+    if (!cnpOwnsMagnific()) return;
     checkForUpdate();
   },
   nodeCreated(node) {
+    if (!cnpOwns(node?.constructor?.nodeData)) return;
     if (String(node?.comfyClass || "").startsWith("Magnific")) checkSignedInOnce();
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
+    if (!cnpOwns(nodeData)) return;
     const isSaveTo = nodeData.name === "MagnificSaveTo";
     const isVideo = nodeData.name === "MagnificGenerateVideo";
     const isImage = nodeData.name === "MagnificGenerateImage";
@@ -800,11 +817,13 @@ app.registerExtension({
   // point where widgets_values can still be reordered to match the current
   // node definitions.
   beforeConfigureGraph(graphData) {
+    if (!cnpOwnsMagnific()) return;
     remapMagnificWidgetValues(graphData, LiteGraph.registered_node_types);
   },
   // Runs after configure() has restored a saved workflow's widget values —
   // the point where a pre-label slug value can be rewritten to its label.
   loadedGraphNode(node) {
+    if (!cnpOwns(node?.constructor?.nodeData)) return;
     migrateLegacyComboValues(node);
     // onNodeCreated narrowed `resolution` for the *default* model — the saved
     // one only lands here, and restoring it fires no widget callback.
@@ -814,8 +833,8 @@ app.registerExtension({
   commands: [
     // No "Magnific:" prefix: the commands live under the Magnific submenu, so
     // the prefix read as a repetition there (Slack: C0BQN1KSRDY/p1788162284466149).
-    { id: "magnific.signin", label: "Sign in", function: signIn },
-    { id: "magnific.signout", label: "Sign out", function: signOut },
+    { id: "magnific.signin", label: "Sign in", function: () => (cnpOwnsMagnific() ? signIn() : omniScaleActiveNotice()) },
+    { id: "magnific.signout", label: "Sign out", function: () => (cnpOwnsMagnific() ? signOut() : omniScaleActiveNotice()) },
   ],
   menuCommands: [{ path: ["Magnific"], commands: ["magnific.signin", "magnific.signout"] }],
 });

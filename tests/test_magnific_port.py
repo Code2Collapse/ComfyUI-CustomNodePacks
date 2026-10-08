@@ -258,3 +258,33 @@ def test_no_node_calls_out_at_import_or_schema_time(node_id):
     spec = cls.INPUT_TYPES()
     assert isinstance(spec, dict)
     assert isinstance(cls.RETURN_TYPES, tuple)
+
+
+# ── L2.28: this copy stands down when the OmniScale pack is installed ───────────────────────────────────────
+
+def _gate_fn(fake_init):
+    """_c2c_omniscale_installed from __init__.py, with __file__ pointing into a fake custom_nodes folder."""
+    import ast
+    src = (Path(__file__).resolve().parents[1] / "__init__.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "_c2c_omniscale_installed")
+    ns = {"__file__": str(fake_init)}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "__init__.py", "exec"), ns)
+    return ns["_c2c_omniscale_installed"]
+
+
+def test_omniscale_next_door_makes_this_copy_stand_down(tmp_path):
+    cnp = tmp_path / "ComfyUI-CustomNodePacks"
+    cnp.mkdir()
+    gate = _gate_fn(cnp / "__init__.py")
+    assert gate() is False
+    (tmp_path / "ComfyUI-OmniScale.disabled").mkdir()
+    (tmp_path / "ComfyUI-OmniScale.disabled" / "__init__.py").write_text("")
+    assert gate() is False, "a disabled OmniScale must not take the nodes away"
+    (tmp_path / "ComfyUI-OmniScale").mkdir()
+    (tmp_path / "ComfyUI-OmniScale" / "__init__.py").write_text("")
+    assert gate() is True
+
+
+def test_the_gate_has_an_override_and_says_what_it_did():
+    src = (Path(__file__).resolve().parents[1] / "__init__.py").read_text(encoding="utf-8")
+    assert 'C2C_MAGNIFIC_KEEP_CNP' in src and "sign-in copy is not registered" in src
