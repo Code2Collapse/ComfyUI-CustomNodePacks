@@ -2,6 +2,46 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-08 (owner list A9: graph-damaging bugs, settings, Vault)
+
+Evidence for every item: `docs/evidence/L2.15`, `L2.23` and `L2.24` in the work area (Playwright runs on a
+ComfyUI 0.36.0 / frontend 1.52.7 testbed, classic canvas and Nodes 2.0).
+
+### Changed defaults (each one is still a setting)
+
+- **Smart guides while dragging: off.** Settings › C2C › Canvas › Align turns them back on.
+- **Floating ports: off.** With them on, a wire to a node above or below ends at a dot on that node's edge,
+  which read as a stale line. Settings › C2C › Canvas › Floating ports turns them back on.
+- **Ctrl+R reloads the page again.** Resetting nodes to their defaults with Ctrl+R is now opt-in
+  (Settings › C2C › Reset to Defaults). Right-click a node › "Reset to ORIGINAL" still works.
+- **Double-click a slot** is one setting: Nothing, Get/Set variable (default), or Suggest (experimental).
+
+### Fixed
+
+- **Ctrl+Z inside a C2C editor no longer undoes the whole workflow.** ComfyUI catches Ctrl+Z before any editor
+  sees it, so one press undid the editor stroke and reloaded the entire graph. This affected the points/box
+  editor, the spline editor and tracker, the video mask editor and Face Controller 3D. Ctrl+Z on the canvas
+  still undoes the graph.
+- **Tidy layout** runs only when you ask: on the selected nodes, or on the whole graph after a confirmation. It
+  keeps the graph where it was, moves each group as one block, never moves pinned nodes, and is one undo step.
+  It used to send every node to the origin and stack the graph in a single column.
+- **Alt-drag duplicate** no longer drags the original along.
+- **Dragging a group** no longer picks up nodes that merely overlap its new position.
+- **Insert Reroute** (canvas menu on a link) works again.
+- **Auto-connect** never wires nodes while a workflow loads, an undo replays, a paste runs or an Alt-drag copies.
+- **The command palette** closes on Escape.
+- **Get/Set by slot double-click** works at every zoom level and inside subgraphs. Its module had failed to load.
+- **Reset to defaults:**
+  - Settings › C2C › Reset to Defaults has a button that resets the C2C settings themselves. API keys are kept.
+  - Resetting all nodes asks first and is one undo step.
+- **C2C Vault works.**
+  - Lock and Seal used to hang after the password.
+  - A Locked vault could never run, and Unlock always failed.
+  - Wires went into the wrong inputs.
+  - Core V3 nodes returned the wrong value inside a vault.
+  - The creator's session now opens on lock. "Lock session" takes effect on the next queue. The node shows only
+    its real sockets.
+
 ## [1.14.1] – 2026-05-04
 
 ### Fixed
