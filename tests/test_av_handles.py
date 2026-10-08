@@ -354,3 +354,91 @@ def test_add_never_caches_away_its_recording():
     a = AVHandlesMEC.IS_CHANGED(mode="add", handle_frames=4)
     b = AVHandlesMEC.IS_CHANGED(mode="trim", handle_frames=4)
     assert a != b
+
+
+# ── A9 / L2.25: both ends, the trim follows the add, a memory that survives a restart ────────────────────
+
+def test_both_puts_handles_on_the_head_and_the_tail():
+    src = clip(12)
+    out, _, n, sig, info = run(mode="add", handle_frames=4, images=src, side="both")
+    assert n == 20
+    assert torch.equal(out[0], src[0]) and torch.equal(out[3], src[0])      # head handles repeat frame 0
+    assert torch.equal(out[-1], src[-1]) and torch.equal(out[-4], src[-1])  # tail handles repeat the last
+    assert torch.equal(out[4:16], src)
+    assert (sig["head"], sig["tail"]) == (4, 4)
+    assert "head (4) and tail (4)" in info
+
+
+def test_both_round_trips_exactly():
+    src = clip(12)
+    added, _, _, _, _ = run(mode="add", handle_frames=4, images=src, side="both")
+    back, _, n, _, _ = run(mode="trim", images=added)       # trim's own side left at the default
+    assert n == 12 and torch.equal(back, src)
+
+
+def test_both_with_a_grid_puts_the_rounding_on_the_tail():
+    src = clip(30)
+    out, _, n, sig, _ = run(mode="add", handle_frames=2, images=src, side="both", padding_mode="WAN (4n+1)")
+    assert n % 4 == 1 and sig["head"] == 2 and sig["tail"] == n - 30 - 2
+    back, _, _, _, _ = run(mode="trim", images=out)
+    assert torch.equal(back, src)
+
+
+def test_fit_on_both_ends_splits_the_padding_and_comes_back():
+    src = clip(30)
+    out, _, n, sig, _ = run(mode="fit", images=src, side="both", model="Wan 2.x (4n+1)")
+    assert n == 33 and (sig["head"], sig["tail"]) == (2, 1)
+    back, _, m, _, _ = run(mode="trim", images=out)
+    assert m == 30 and torch.equal(back, src)
+
+
+def test_an_automatic_trim_cuts_the_end_the_add_used():
+    """Added at the tail, trim left at its default (head): the old code cut the head and kept the handles."""
+    src = clip(12)
+    added, _, _, _, _ = run(mode="add", handle_frames=4, images=src, side="tail")
+    back, _, _, _, info = run(mode="trim", images=added, side="head")
+    assert torch.equal(back, src)
+    assert "the tail" in info
+
+
+def test_a_wired_both_signal_trims_both_ends():
+    src = clip(10)
+    added, _, _, sig, _ = run(mode="add", handle_frames=3, images=src, side="both")
+    forget_all()
+    back, _, _, _, info = run(mode="trim", images=added, handles=sig)
+    assert torch.equal(back, src) and "wire" in info
+
+
+def test_manual_trim_on_both_takes_the_count_off_each_end():
+    src = clip(10)
+    added, _, _, _, _ = run(mode="add", handle_frames=3, images=src, side="both")
+    back, _, n, _, _ = run(mode="trim", images=added, trim_amount="manual", handle_frames=3, side="both")
+    assert n == 10 and torch.equal(back, src)
+
+
+def test_audio_moves_on_both_ends():
+    a = audio(1.0, sr=1000, dims=2)
+    _, out, _, _, _ = run(mode="add", handle_frames=10, audio=a, side="both", manual_fps=10.0)
+    assert out["waveform"].shape[-1] == 1000 + 2 * 1000          # 10 frames at 10 fps = 1 s on each end
+    _, back, _, _, _ = run(mode="trim", trim_amount="manual", handle_frames=10, audio=out, side="both",
+                           manual_fps=10.0)
+    assert back["waveform"].shape[-1] == 1000
+
+
+def test_the_memory_survives_a_restart(tmp_path, monkeypatch):
+    import nodes.av_handles as avh
+    monkeypatch.setattr(avh, "_mem_file", lambda: str(tmp_path / "avh.json"))
+    src = clip(8)
+    added, _, _, _, _ = run(mode="add", handle_frames=2, images=src, side="tail")
+    # a new process: the in-memory table is empty and has not read the file yet
+    avh._MEM.clear()
+    monkeypatch.setattr(avh, "_LOADED", False)
+    back, _, _, _, info = run(mode="trim", images=added)
+    assert torch.equal(back, src)
+    assert "remembered" in info
+
+
+def test_the_report_is_shown_on_the_node():
+    res = AVHandlesMEC().execute(mode="add", handle_frames=2, images=clip(4))
+    assert res["result"][2] == 6
+    assert res["ui"]["text"] and "Added 2 frame(s)" in res["ui"]["text"][0]

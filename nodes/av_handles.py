@@ -68,7 +68,7 @@ GRIDS = {
     "H3 (17n+5)": (17, 5),
 }
 MODES = ("add", "trim", "fit")
-SIDES = ("head", "tail")
+SIDES = ("head", "tail", "both")
 TRIM_SOURCES = ("auto", "manual")
 
 
@@ -90,9 +90,71 @@ class Handle:
     #: common, and subtracting a remembered count from an unexpected length is
     #: how a clip ends up short with nothing to explain it.
     target: int = 0
+    #: Frames on each end. `side = both` puts frames on the head AND the tail; -1 = derive from side/frames
+    #: (records made before "both" existed).
+    head: int = -1
+    tail: int = -1
+
+    def ends(self) -> tuple[int, int]:
+        if self.head >= 0 and self.tail >= 0:
+            return self.head, self.tail
+        return split_ends(self.frames, self.side)
 
 _MEM: dict[str, Handle] = {}
 _LOCK = threading.Lock()
+_LOADED = False
+
+
+def _mem_file():
+    """Where the memory survives a ComfyUI restart (add in one session, trim in the next). None outside ComfyUI."""
+    try:
+        import os
+        import folder_paths  # type: ignore
+        base = folder_paths.get_user_directory()
+        if not base:
+            return None
+        return os.path.join(base, "c2c", "av_handles_memory.json")
+    except Exception:  # noqa: BLE001 - tests / stubbed ComfyUI
+        return None
+
+
+def _load_disk() -> None:
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    path = _mem_file()
+    if not path:
+        return
+    try:
+        import json
+        import os
+        if not os.path.isfile(path):
+            return
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        for k, v in (raw or {}).items():
+            if isinstance(v, dict) and k not in _MEM:
+                _MEM[k] = Handle(**{f: v[f] for f in Handle.__dataclass_fields__ if f in v})
+    except Exception:  # noqa: BLE001 - a broken file must never stop a run
+        pass
+
+
+def _save_disk() -> None:
+    path = _mem_file()
+    if not path:
+        return
+    try:
+        import dataclasses
+        import json
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({k: dataclasses.asdict(v) for k, v in _MEM.items()}, fh)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _run_id() -> str | None:
@@ -107,18 +169,23 @@ def _run_id() -> str | None:
 
 def remember(key: str, h: Handle) -> None:
     with _LOCK:
+        _load_disk()
         _MEM[key or "default"] = h
+        _save_disk()
 
 
 def recall(key: str) -> Handle | None:
     with _LOCK:
+        _load_disk()
         return _MEM.get(key or "default")
 
 
 def forget_all() -> None:
     """Tests only."""
+    global _LOADED
     with _LOCK:
         _MEM.clear()
+        _LOADED = True     # and do not read a saved memory back in
 
 
 # ── frame grids ─────────────────────────────────────────────────────────────
@@ -174,6 +241,25 @@ def trim_images(images: torch.Tensor, count: int, side: str) -> torch.Tensor:
     return images[count:] if side == "head" else images[:-count]
 
 
+def split_ends(count: int, side: str) -> tuple[int, int]:
+    """(head, tail) for `count` frames on `side`. `both` splits a total, the extra frame going to the head."""
+    count = max(0, int(count))
+    if side == "head":
+        return count, 0
+    if side == "tail":
+        return 0, count
+    head = (count + 1) // 2
+    return head, count - head
+
+
+def pad_ends(images: torch.Tensor, head: int, tail: int) -> torch.Tensor:
+    return pad_images(pad_images(images, head, "head"), tail, "tail")
+
+
+def trim_ends(images: torch.Tensor, head: int, tail: int) -> torch.Tensor:
+    return trim_images(trim_images(images, head, "head"), tail, "tail")
+
+
 def _waveform_parts(audio: dict):
     """(2D waveform, restore fn) for 1D/2D/3D audio, so the shape that comes
     out is the shape that went in — a node that silently changes an audio
@@ -217,6 +303,15 @@ def shift_audio(audio: dict, frames: int, fps: float, side: str,
     return {"waveform": restore(out), "sample_rate": sr}
 
 
+def shift_audio_ends(audio: dict, head: int, tail: int, fps: float, add: bool) -> dict:
+    """shift_audio on each end that has frames."""
+    if head > 0:
+        audio = shift_audio(audio, head, fps, "head", add)
+    if tail > 0:
+        audio = shift_audio(audio, tail, fps, "tail", add)
+    return audio
+
+
 def resolve_fps(images, audio, manual_fps: float, source_frames: int) -> tuple[float, str]:
     """fps, and where it came from.
 
@@ -234,16 +329,25 @@ def resolve_fps(images, audio, manual_fps: float, source_frames: int) -> tuple[f
     return 30.0, "ASSUMED 30 — no audio to measure against"
 
 
+def _where(side: str, head: int, tail: int) -> str:
+    if side == "both":
+        return f"head ({head}) and tail ({tail})"
+    return f"the {side}"
+
+
 def describe(mode: str, used: int, src: int, out: int, side: str, grid: str,
-             fps: float, fps_from: str, origin: str, has_audio: bool) -> str:
+             fps: float, fps_from: str, origin: str, has_audio: bool,
+             head: int | None = None, tail: int | None = None) -> str:
     lines = []
+    if head is None or tail is None:
+        head, tail = split_ends(used, side)
     if mode == "add":
-        lines.append(f"Added {used} frame(s) at the {side}: {src} -> {out}.")
+        lines.append(f"Added {used} frame(s) at {_where(side, head, tail)}: {src} -> {out}.")
         if used == 0:
             lines.append("Nothing was added. With a grid selected that means "
                          "the clip already lands on it.")
     else:
-        lines.append(f"Trimmed {used} frame(s) off the {side}: {src} -> {out}.")
+        lines.append(f"Trimmed {used} frame(s) off {_where(side, head, tail)}: {src} -> {out}.")
         lines.append("Count came from: " + origin)
         if used == 0:
             lines.append(
@@ -288,7 +392,7 @@ class AVHandlesMEC:
         "different workflows.",
         "What happened, including WHERE the trim count came from.",
     )
-    FUNCTION = "run"
+    FUNCTION = "execute"
     DESCRIPTION = (
         "Add repeated frames at the head (or tail) to stabilise a video model, "
         "then trim exactly those back off afterwards — without retyping the "
@@ -354,8 +458,12 @@ class AVHandlesMEC:
                     "tooltip": "Only used when model is 'custom'."}),
                 "side": (list(SIDES), {"default": "head", "tooltip":
                     "Which end. Handles go on the head because that is the run "
-                    "a video model uses to settle; trim takes them off the "
-                    "same end."}),
+                    "a video model uses to settle.\n\n"
+                    "both: handle_frames on the head AND the tail (fit splits "
+                    "its padding across the two ends).\n\n"
+                    "TRIM takes a wired or remembered count off exactly the "
+                    "ends it went on; this setting only matters for a manual "
+                    "count."}),
                 "padding_mode": (list(GRIDS), {"default": "disabled", "tooltip":
                     "Round the total onto a model's frame grid. A model that "
                     "wants 4n+1 and is handed 4n does not complain — it "
@@ -398,6 +506,13 @@ class AVHandlesMEC:
             h.update(b"|records-state")
         return h.hexdigest()
 
+    def execute(self, **kw):
+        """`run`, plus its report shown on the node after the run. A trim with nothing to go on passes the clip
+        through unchanged, and with the report only on the `info` output nobody saw that it had done nothing
+        (A9: "not adding or trimming at all")."""
+        out = self.run(**kw)
+        return {"ui": {"text": [out[4]]}, "result": out}
+
     def run(self, mode="fit", handle_frames=8, trim_amount="auto",
             target_frames=0, model="MiniMax H3 (17n+5)", custom_step=4,
             custom_plus=1, images=None, audio=None, side="head",
@@ -405,9 +520,9 @@ class AVHandlesMEC:
             memo_key=""):
         if mode not in MODES:
             raise AVHandlesError(
-                f"Unknown mode {mode!r}. Use 'add' or 'trim'.")
+                f"Unknown mode {mode!r}. Use 'fit', 'add' or 'trim'.")
         if side not in SIDES:
-            raise AVHandlesError(f"Unknown side {side!r}. Use 'head' or 'tail'.")
+            raise AVHandlesError(f"Unknown side {side!r}. Use 'head', 'tail' or 'both'.")
         if images is None and audio is None:
             raise AVHandlesError(
                 "Connect at least an image batch or an audio clip — there is "
@@ -434,37 +549,48 @@ class AVHandlesMEC:
                     f"This clip is already {src_frames} frames but the target "
                     f"is {want}. fit only pads — trim it down first, or set "
                     "the target to the length you actually want.")
+            head, tail = split_ends(used, side)
             fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
-            out_img = pad_images(images, used, side)
-            out_aud = shift_audio(audio, used, fps, side, add=True)
+            out_img = pad_ends(images, head, tail)
+            out_aud = shift_audio_ends(audio, head, tail, fps, add=True)
             total = int(out_img.shape[0])
             remember(key, Handle(frames=used, side=side, fps=fps,
                                  source_frames=src_frames, run=_run_id(),
-                                 target=plan.target))
+                                 target=plan.target, head=head, tail=tail))
             info = (describe_fit(plan, model) + "\n" +
                     describe("add", used, src_frames, total, side, "disabled",
                              fps, fps_from, "recorded for the trim side",
-                             audio is not None))
+                             audio is not None, head, tail))
             return (out_img, out_aud, total,
                     {"frames": used, "side": side, "fps": fps,
-                     "source_frames": src_frames, "target": plan.target},
+                     "source_frames": src_frames, "target": plan.target,
+                     "head": head, "tail": tail},
                     info)
 
         if mode == "add":
-            used = plan_add(src_frames, int(handle_frames), padding_mode) \
-                if images is not None else max(0, int(handle_frames))
+            want = max(0, int(handle_frames))
+            if side == "both":
+                # handle_frames on EACH end; a grid's rounding frames go on the tail, so the head (the run the
+                # model settles on) is exactly what was asked for
+                needed = plan_add(src_frames, 2 * want, padding_mode) if images is not None else 2 * want
+                head, tail = want, needed - want
+            else:
+                used0 = plan_add(src_frames, want, padding_mode) if images is not None else want
+                head, tail = split_ends(used0, side)
+            used = head + tail
             fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
-            out_img = pad_images(images, used, side) if images is not None else None
-            out_aud = shift_audio(audio, used, fps, side, add=True)
+            out_img = pad_ends(images, head, tail) if images is not None else None
+            out_aud = shift_audio_ends(audio, head, tail, fps, add=True)
             total = int(out_img.shape[0]) if out_img is not None else used + src_frames
 
             rec = Handle(frames=used, side=side, fps=fps,
-                         source_frames=src_frames, run=_run_id(), target=0)
+                         source_frames=src_frames, run=_run_id(), target=0,
+                         head=head, tail=tail)
             remember(key, rec)
             origin = "recorded for the trim side"
         else:
-            used, origin = self._trim_count(
-                handle_frames, trim_amount, handles, key)
+            used, origin, (head, tail), rec_side = self._trim_count(
+                handle_frames, trim_amount, handles, key, side)
             # A recorded TARGET wins over a recorded count. `fit` set one, and
             # trimming to a length survives a sampler that returned one frame
             # more or fewer than it was asked for — subtracting a remembered
@@ -477,9 +603,13 @@ class AVHandlesMEC:
                     rem = recall(key)
                     tgt = int(getattr(rem, "target", 0) or 0) if rem else 0
                 if tgt:
-                    used = trim_to(src_frames, tgt)
+                    excess = trim_to(src_frames, tgt)
+                    if excess != head + tail:      # not what was added: split it the way it went on
+                        head, tail = split_ends(excess, rec_side)
+                    used = excess
                     origin = (f"the target of {tgt} frames recorded by fit "
                               f"({src_frames} arrived, so {used} come off)")
+            side = rec_side
             if images is not None and used >= src_frames:
                 raise AVHandlesError(
                     f"Trimming {used} frames off a {src_frames}-frame clip "
@@ -493,39 +623,56 @@ class AVHandlesMEC:
                 src_frames)
             if remembered and not manual_fps:
                 fps_from = "carried from the add side"
-            out_img = trim_images(images, used, side) if images is not None else None
-            out_aud = shift_audio(audio, used, fps, side, add=False)
+            out_img = trim_ends(images, head, tail) if images is not None else None
+            out_aud = shift_audio_ends(audio, head, tail, fps, add=False)
             total = int(out_img.shape[0]) if out_img is not None else max(0, src_frames - used)
+            if used == 0:
+                import logging
+                logging.getLogger("C2C.AVHandles").warning(
+                    "AV Handles trim: nothing was trimmed (%s). Wire the add node's `handles` output to this "
+                    "node, or set trim_amount to 'manual'.", origin)
 
         info = describe(mode, used, src_frames, total, side, padding_mode,
-                        fps, fps_from, origin, audio is not None)
+                        fps, fps_from, origin, audio is not None, head, tail)
         _rem = recall(key)
         return (out_img, out_aud, total,
                 {"frames": used, "side": side, "fps": fps,
                  "source_frames": src_frames,
-                 "target": int(getattr(_rem, "target", 0) or 0) if _rem else 0},
+                 "target": int(getattr(_rem, "target", 0) or 0) if _rem else 0,
+                 "head": head, "tail": tail},
                 info)
 
     @staticmethod
-    def _trim_count(typed, source, wired, key) -> tuple[int, str]:
-        """The number, and where it came from — in priority order.
+    def _trim_count(typed, source, wired, key, side="head"):
+        """(count, where it came from, (head, tail), side) - in priority order.
 
         `manual` is checked FIRST because it is an explicit instruction; a
         wired signal would otherwise silently override a deliberate choice.
+        A wired or remembered count comes off exactly the ends it went on: the
+        trim's own `side` widget only matters for a manual count (left at
+        `head` after an add at the tail, it used to cut the wrong end).
         """
         if source == "manual":
-            return int(typed or 0), "handle_frames, because trim_amount is 'manual'"
+            n = int(typed or 0)
+            if side == "both":
+                return 2 * n, "handle_frames on each end, because trim_amount is 'manual'", (n, n), side
+            return n, "handle_frames, because trim_amount is 'manual'", split_ends(n, side), side
         if isinstance(wired, dict) and "frames" in wired:
-            return int(wired["frames"]), "the `handles` wire from the add node"
+            n = int(wired["frames"])
+            w_side = str(wired.get("side") or side)
+            if "head" in wired and "tail" in wired and int(wired["head"]) + int(wired["tail"]) == n:
+                ends = (int(wired["head"]), int(wired["tail"]))
+            else:
+                ends = split_ends(n, w_side)
+            return n, "the `handles` wire from the add node", ends, w_side
         rec = recall(key)
         if rec:
             same = rec.run is not None and rec.run == _run_id()
             return rec.frames, (
                 "remembered from the add node earlier in THIS run" if same else
                 "remembered from the add node in an EARLIER run — worth a "
-                "glance that it belongs to this clip")
-        return 0, "nothing to go on"
-
+                "glance that it belongs to this clip"), rec.ends(), rec.side
+        return 0, "nothing to go on", (0, 0), side
 
 NODE_CLASS_MAPPINGS = {"AVHandlesMEC": AVHandlesMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {"AVHandlesMEC": "AV Handles — Add / Trim"}
