@@ -26,7 +26,9 @@ Config file (``user/default/c2c/autobatch.json``, overridable via
       }
     }
 
-``mode``: ``off`` (default), ``curated``, or ``universal``. Legacy
+``mode``: ``internal`` (default since 2026-10-08, owner D0.14), ``off``, ``universal``, or the legacy
+``curated``. ``internal`` = the measured core list plus every node of the C2C packs that passes the same
+discovery, exclusions and frame-independence probe as universal; ``universal`` = any author's nodes. Legacy
 ``{"enabled": true, "curated": false, "nodes": {...}}`` without ``mode``
 remains explicit-only (strict path for listed nodes).
 
@@ -113,6 +115,21 @@ CURATED: dict[str, dict[str, Any]] = {
     "ImageBlur": {"frames": ["image"], "work_factor": 2.5},
     "ImageUpscaleWithModel": {"frames": ["image"], "work_factor": 6.0},
 }
+
+
+#: Folder names of the C2C packs: "internal" mode batches their nodes (and the CURATED core list) only.
+C2C_PACKS = (
+    "ComfyUI-CustomNodePacks", "ComfyUI-NukeMaxNodes", "ComfyUI-WanNodeExperiments", "ComfyUI-MiniMaxSuite",
+    "ComfyUI-WanAnimatePreprocessV2", "ComfyUI-OmniScale", "ComfyUI-GLM_Image", "ComfyUI-WanAnimalPreprocessor",
+)
+
+MODES = ("off", "internal", "universal", "curated")
+
+
+def _is_c2c_class(cls: type) -> bool:
+    """True for a node class shipped by a C2C pack (ComfyUI stamps RELATIVE_PYTHON_MODULE on custom nodes)."""
+    where = str(getattr(cls, "RELATIVE_PYTHON_MODULE", "") or "") + " " + str(getattr(cls, "__module__", "") or "")
+    return any(pack in where for pack in C2C_PACKS)
 
 
 class AutobatchError(RuntimeError):
@@ -290,7 +307,7 @@ def _config_path() -> Path | None:
 
 def _default_config() -> dict[str, Any]:
     return {
-        "mode": "off",
+        "mode": "internal",
         "enabled": False,
         "curated": False,
         "max_frames": 0,
@@ -307,12 +324,12 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
-def _resolve_mode(cfg: Mapping[str, Any]) -> Literal["off", "explicit", "curated", "universal"]:
-    # An explicit curated/universal mode wins. "off" or no mode leaves the decision to the legacy switch, so an
-    # old {"enabled": true, "nodes": {...}} file keeps working as explicit (or curated).
+def _resolve_mode(cfg: Mapping[str, Any]) -> Literal["off", "explicit", "curated", "universal", "internal"]:
+    # An explicit internal/curated/universal mode wins. "off" or no mode leaves the decision to the legacy switch,
+    # so an old {"enabled": true, "nodes": {...}} file keeps working as explicit (or curated).
     mode = cfg.get("mode")
     lowered = mode.strip().lower() if isinstance(mode, str) else None
-    if lowered in ("curated", "universal"):
+    if lowered in ("curated", "universal", "internal"):
         return lowered
     if not cfg.get("enabled"):
         return "off"
@@ -322,8 +339,8 @@ def _resolve_mode(cfg: Mapping[str, Any]) -> Literal["off", "explicit", "curated
 def validate_config(patch: Mapping[str, Any]) -> None:
     if "mode" in patch:
         mode = patch.get("mode")
-        if mode not in ("off", "curated", "universal"):
-            raise ValueError('autobatch "mode" must be off, curated, or universal')
+        if mode not in MODES:
+            raise ValueError('autobatch "mode" must be off, internal, universal, or curated')
     for key in ("allow", "never"):
         if key in patch and not isinstance(patch.get(key), list):
             raise ValueError(f'autobatch "{key}" must be a list of class id strings')
@@ -353,7 +370,7 @@ def save_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("autobatch config path is not available")
     normalized = merge_config(_default_config(), cfg)
     mode_field = cfg.get("mode")
-    if isinstance(mode_field, str) and mode_field.strip().lower() in ("off", "curated", "universal"):
+    if isinstance(mode_field, str) and mode_field.strip().lower() in MODES:
         m = mode_field.strip().lower()
         normalized["mode"] = m
         # Choosing a mode sets the legacy switches too, so "off" really turns a legacy file off.
@@ -366,7 +383,7 @@ def save_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
     else:
         normalized["enabled"] = resolved != "off"
         normalized["curated"] = resolved == "curated"
-        if isinstance(mode_field, str) and mode_field.strip().lower() in ("off", "curated", "universal"):
+        if isinstance(mode_field, str) and mode_field.strip().lower() in MODES:
             normalized["mode"] = mode_field.strip().lower()
     normalized["allow"] = _normalize_string_list(normalized.get("allow"))
     normalized["never"] = _normalize_string_list(normalized.get("never"))
@@ -428,15 +445,20 @@ def load_config() -> dict[str, Any]:
     out["allow"] = _normalize_string_list(data.get("allow"))
     out["never"] = _normalize_string_list(data.get("never"))
     mode = data.get("mode")
-    if isinstance(mode, str) and mode.strip().lower() in ("off", "curated", "universal"):
+    if isinstance(mode, str) and mode.strip().lower() in MODES:
         out["mode"] = mode.strip().lower()
     else:
-        resolved = _resolve_mode(out)
+        # A file written before modes existed: its own enabled/curated switches decide. Resolving it with the
+        # default mode still in `out` would have turned every old "off" file on.
+        legacy = dict(out)
+        legacy["mode"] = None
+        resolved = _resolve_mode(legacy)
         out["mode"] = {
             "off": "off",
             "explicit": "off",
             "curated": "curated",
             "universal": "universal",
+            "internal": "internal",
         }[resolved]
     return out
 
@@ -623,18 +645,21 @@ def _effective_wrap_specs(
     nodes_dict = nodes_cfg if isinstance(nodes_cfg, dict) else {}
     allow = _normalize_string_list(cfg.get("allow"))
 
-    if mode == "curated":
+    if mode in ("curated", "internal"):
         for name, spec in CURATED.items():
             if name not in never:
                 specs[name] = dict(spec)
 
-    if mode == "universal":
+    if mode in ("universal", "internal"):
         discovered = discover_universal_candidates(
             node_class_mappings, display_mappings, cfg,
         )
         for name, spec in discovered.items():
-            if name not in never:
-                specs[name] = dict(spec)
+            if name in never:
+                continue
+            if mode == "internal" and not _is_c2c_class(node_class_mappings[name]):
+                continue
+            specs[name] = dict(spec)
 
     for name, spec in nodes_dict.items():
         if name in never or not isinstance(spec, dict):

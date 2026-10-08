@@ -1,5 +1,11 @@
 /**
- * c2c_autobatch.js — universal / curated automatic frame batching controls.
+ * c2c_autobatch.js — automatic frame batching: Off / Internal / Universal (owner D0.14, A9).
+ *
+ *   Internal (default) — C2C's own image / mask nodes, plus the measured core list, split long batches into
+ *                        memory-sized chunks automatically when a call would not fit.
+ *   Universal          — any author's image / mask nodes, each proven frame-independent first (experimental).
+ *   Off                — never split.
+ * A saved "curated" (the old core-only mode) shows as Internal, which includes it.
  */
 import { app } from "../../scripts/app.js";
 import { legacyNodeMenu } from "./_c2c_compat.js";
@@ -9,14 +15,49 @@ const SETTING_MODE = "c2c.autobatch.mode";
 const ROUTE_CONFIG = "/c2c/autobatch/config";
 
 const MODE_OFF = "off";
-const MODE_CURATED = "curated";
+const MODE_INTERNAL = "internal";
+const MODE_CURATED = "curated";      // legacy: the measured core list only; Internal includes it
 const MODE_UNIVERSAL = "universal";
 
 const MODE_LABELS = {
     [MODE_OFF]: "Off",
-    [MODE_CURATED]: "Curated",
-    [MODE_UNIVERSAL]: "Universal (experimental)",
+    [MODE_INTERNAL]: "Internal",
+    [MODE_UNIVERSAL]: "Universal",
 };
+const MODE_HINTS = {
+    [MODE_OFF]: "Never split a batch.",
+    [MODE_INTERNAL]: "C2C's own image / mask nodes (and the measured core list) split long batches automatically.",
+    [MODE_UNIVERSAL]: "Any author's image / mask nodes, each proven frame-independent first (experimental).",
+};
+
+/** Settings-panel control: three buttons (owner D0.14: "3 buttons would be better"). */
+function renderModeButtons(_name, setter, value) {
+    const shown = value === MODE_CURATED ? MODE_INTERNAL : (value || MODE_INTERNAL);
+    const wrap = document.createElement("div");
+    wrap.setAttribute("role", "radiogroup");
+    wrap.setAttribute("aria-label", "Image batching mode");
+    wrap.style.cssText = "display:inline-flex;gap:0;border:1px solid var(--p-content-border-color, #555);"
+        + "border-radius:6px;overflow:hidden;";
+    for (const mode of [MODE_OFF, MODE_INTERNAL, MODE_UNIVERSAL]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = MODE_LABELS[mode];
+        b.title = MODE_HINTS[mode];
+        b.setAttribute("role", "radio");
+        b.setAttribute("aria-checked", String(mode === shown));
+        const on = mode === shown;
+        b.style.cssText = "padding:4px 12px;border:0;cursor:pointer;font:inherit;"
+            + (on ? "background:var(--p-primary-color, #4a7dff);color:var(--p-primary-contrast-color, #fff);"
+                  : "background:transparent;color:inherit;");
+        b.addEventListener("click", () => {
+            if (mode === shown) return;
+            setter(mode);
+            _setMode(mode);
+        });
+        wrap.appendChild(b);
+    }
+    return wrap;
+}
 
 let _syncingFromServer = false;
 
@@ -95,7 +136,7 @@ function _nodeMenuItems(node) {
     if (!_hasFrameInput(node)) return [];
     const classId = _nodeClass(node);
     return [null, {
-        content: "Auto-batch this node type",
+        content: "Image batching for this node type",
         submenu: {
             options: [
                 {
@@ -117,7 +158,7 @@ function _nodeMenuItems(node) {
 
 function _mergeNodeMenuItems(opts, node) {
     if (!Array.isArray(opts)) return opts;
-    if (opts.some((o) => o && /Auto-batch this node type/.test(o.content || ""))) return opts;
+    if (opts.some((o) => o && /(Auto-batch|Image batching (for)?) this node type/.test(o.content || ""))) return opts;
     const items = _nodeMenuItems(node);
     if (items.length) opts.push(...items);
     return opts;
@@ -126,7 +167,7 @@ function _mergeNodeMenuItems(opts, node) {
 async function _syncModeFromServer() {
     try {
         const cfg = await _loadConfig();
-        const mode = (cfg && cfg.mode) || MODE_OFF;
+        const mode = (cfg && cfg.mode) || MODE_INTERNAL;
         _syncingFromServer = true;
         try {
             app.ui?.settings?.setSettingValue?.(SETTING_MODE, mode);
@@ -144,19 +185,17 @@ if (!(app.extensions || []).some((e) => e?.name === EXT_NAME)) {
         settings: [
             {
                 id: SETTING_MODE,
-                name: "C2C ▸ Performance ▸ Auto-batch mode",
-                type: "combo",
-                options: [
-                    { value: MODE_OFF, text: MODE_LABELS[MODE_OFF] },
-                    { value: MODE_CURATED, text: MODE_LABELS[MODE_CURATED] },
-                    { value: MODE_UNIVERSAL, text: MODE_LABELS[MODE_UNIVERSAL] },
-                ],
-                defaultValue: MODE_OFF,
-                category: ["c2c", "Performance", "Auto-batch"],
+                // Named the way the owner asks for it ("image batching"): the Settings search matches the name.
+                name: "Image batching (auto-batch long image / mask / video frame batches)",
+                type: renderModeButtons,
+                defaultValue: MODE_INTERNAL,
+                category: ["c2c", "Image batching", "Mode"],
                 tooltip:
-                    "Off — no automatic chunking. Curated — measured core nodes only. "
-                    + "Universal (experimental) — auto-detect image nodes and probe frame "
-                    + "independence before chunking.",
+                    "Internal (default): C2C's own image / mask nodes and the measured core list split a long batch "
+                    + "into memory-sized chunks when it would not fit, and give the same result. "
+                    + "Universal: any author's image / mask nodes, each checked frame-independent first "
+                    + "(experimental). Off: never split. Per node type: right-click a node > Image batching for this node type. "
+                    + "Env C2C_AUTOBATCH=0 overrides everything.",
                 // Frontend 1.52 calls onChange(value, undefined) when the setting is REGISTERED, at every
                 // page load; posting then overwrote the server file with the browser's stored value. Only
                 // a real change (old value known) and not our own server sync writes the file.
@@ -166,6 +205,17 @@ if (!(app.extensions || []).some((e) => e?.name === EXT_NAME)) {
                 },
             },
         ],
+        commands: [MODE_OFF, MODE_INTERNAL, MODE_UNIVERSAL].map((mode) => ({
+            id: `c2c.autobatch.mode.${mode}`,
+            label: `C2C: Image batching ${MODE_LABELS[mode]}`,
+            function: () => {
+                _syncingFromServer = true;
+                try { app.ui?.settings?.setSettingValue?.(SETTING_MODE, mode); } finally { _syncingFromServer = false; }
+                _setMode(mode);
+                app.extensionManager?.toast?.add?.({ severity: "info", summary: "Image batching",
+                    detail: `${MODE_LABELS[mode]}: ${MODE_HINTS[mode]}`, life: 4000 });
+            },
+        })),
         getNodeMenuItems(node) {
             return _nodeMenuItems(node);
         },

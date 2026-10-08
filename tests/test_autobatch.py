@@ -923,3 +923,48 @@ def test_saved_mode_resolves_to_itself(config_dir):
         assert ab._resolve_mode(ab.load_config()) == mode
     legacy = {"enabled": True, "curated": False, "nodes": {"X": {"frames": ["image"]}}}
     assert ab._resolve_mode(legacy) == "explicit"
+
+
+# ── Internal mode: C2C's own frame nodes batch by default (owner D0.14, A9 / L2.30) ─────────────────────────
+
+def _frame_node(name, module):
+    def run(self, image):
+        return (image * 0.5,)
+    cls = type(name, (), {
+        "INPUT_TYPES": classmethod(lambda c: {"required": {"image": ("IMAGE",)}}),
+        "RETURN_TYPES": ("IMAGE",), "FUNCTION": "run", "run": run, "CATEGORY": "test",
+    })
+    cls.RELATIVE_PYTHON_MODULE = module
+    return cls
+
+
+def test_internal_mode_wraps_c2c_nodes_and_the_core_list_only():
+    mappings = {
+        "MyC2CGrade": _frame_node("MyC2CGrade", "custom_nodes.ComfyUI-NukeMaxNodes"),
+        "SomeoneElsesGrade": _frame_node("SomeoneElsesGrade", "custom_nodes.ComfyUI-OtherPack"),
+        "ImageBlur": _frame_node("ImageBlur", "nodes"),
+    }
+    specs = ab._effective_wrap_specs({"mode": "internal"}, mappings)
+    assert "MyC2CGrade" in specs and "ImageBlur" in specs        # C2C node + the measured core list
+    assert "SomeoneElsesGrade" not in specs                      # another author's node needs Universal
+    universal = ab._effective_wrap_specs({"mode": "universal"}, mappings)
+    assert "SomeoneElsesGrade" in universal
+
+
+def test_a_fresh_install_defaults_to_internal(config_dir):
+    assert not config_dir.exists()
+    assert ab._resolve_mode(ab.load_config()) == "internal"
+
+
+def test_an_old_file_without_a_mode_keeps_its_own_switch(config_dir):
+    """A file written before modes existed and switched off must stay off, not inherit the new default."""
+    _write_config(config_dir, enabled=False)
+    assert ab._resolve_mode(ab.load_config()) == "off"
+    _write_config(config_dir, enabled=True, curated=True)
+    assert ab._resolve_mode(ab.load_config()) == "curated"
+
+
+def test_internal_round_trips_through_the_config_file(config_dir):
+    saved = ab.save_config({"mode": "internal", "budget_mb": 64})
+    assert ab._resolve_mode(saved) == "internal"
+    assert ab._resolve_mode(ab.load_config()) == "internal"
