@@ -38,6 +38,9 @@ from nodes.vault_crypto import (  # noqa: E402
 )
 from nodes.vault_boundary import build_interface_manifest, derive_boundary  # noqa: E402
 from nodes.vault_exec import VaultExecError, execute_subgraph  # noqa: E402
+# Imported at collection, before any fixture swaps sys.modules["nodes"] for a stub: the tests that import it
+# later failed whenever they ran without an earlier test having loaded it (order-dependent, seen 2026-10-08).
+import nodes.vault_node  # noqa: E402,F401
 
 PASSWORD = "correct horse battery staple"
 VAULT_ID = "vault-abc123"
