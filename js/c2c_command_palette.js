@@ -461,7 +461,19 @@ function ensureSelVisible() {
 }
 
 // ── Global Ctrl+K / Cmd+K ─────────────────────────────────────────────
+function isOpen() {
+    return !!_root && _root.classList.contains("is-open");
+}
+
 function onGlobalKey(ev) {
+    // Escape closes the palette wherever focus is (the list, the backdrop, the page): only the input used to
+    // listen for it, so after a click on the list Escape did nothing (A9: "command palette not closing").
+    if (ev.key === "Escape" && isOpen()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        close();
+        return;
+    }
     if (!(ev.ctrlKey || ev.metaKey)) return;
     if (ev.key !== "k" && ev.key !== "K") return;
     try {

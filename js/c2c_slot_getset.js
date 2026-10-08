@@ -25,12 +25,18 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
+import { DBL_SETTING_ID, DBL_OPTIONS, DBL_GETSET, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
 
 const SETTING_ID = "c2c.slotGetSet.enabled";
 
 function enabled() {
     try { return app.ui.settings.getSettingValue(SETTING_ID, true); }
     catch { return true; }
+}
+
+/** The graph on screen: inside a subgraph that is the subgraph, not the root graph. */
+function curGraph() {
+    return app.canvas?.graph || app.graph;
 }
 
 function hasKJSetGet() {
@@ -45,7 +51,7 @@ function suggestName(base, slotType) {
 }
 
 function findSetByName(name) {
-    const g = app.graph;
+    const g = curGraph();
     if (!g) return null;
     for (const n of g._nodes || []) {
         if (n.type !== "SetNode") continue;
@@ -57,7 +63,7 @@ function findSetByName(name) {
 
 function listSetNames(matchType) {
     const out = [];
-    for (const n of app.graph?._nodes || []) {
+    for (const n of curGraph()?._nodes || []) {
         if (n.type !== "SetNode") continue;
         const w = (n.widgets || []).find(w => w.name === "Constant");
         if (!w) continue;
@@ -73,7 +79,8 @@ function spawnSetForOutput(srcNode, outSlot) {
     const out = srcNode.outputs?.[outSlot];
     if (!out) return null;
     const sn = LiteGraph.createNode("SetNode");
-    app.graph.add(sn);
+    const g = curGraph();
+    g.add(sn);
     // Place a touch to the right of the source slot.
     const sp = srcNode.getConnectionPos(false, outSlot);
     sn.pos = [sp[0] + 30, sp[1] - 10];
@@ -84,7 +91,7 @@ function spawnSetForOutput(srcNode, outSlot) {
         w.callback?.(name);
     }
     try { srcNode.connect(outSlot, sn, 0); } catch (e) { console.warn(e); }
-    app.graph.setDirtyCanvas(true, true);
+    g.setDirtyCanvas(true, true);
     return sn;
 }
 
@@ -107,7 +114,8 @@ function spawnGetForInput(dstNode, inSlot) {
         return null;
     }
     const gn = LiteGraph.createNode("GetNode");
-    app.graph.add(gn);
+    const g = curGraph();
+    g.add(gn);
     const dp = dstNode.getConnectionPos(true, inSlot);
     gn.pos = [dp[0] - 180, dp[1] - 10];
     const w = (gn.widgets || []).find(w => w.name === "Constant");
@@ -118,7 +126,7 @@ function spawnGetForInput(dstNode, inSlot) {
         w.callback?.(choice);
     }
     try { gn.connect(0, dstNode, inSlot); } catch (e) { console.warn(e); }
-    app.graph.setDirtyCanvas(true, true);
+    g.setDirtyCanvas(true, true);
     return gn;
 }
 
@@ -126,7 +134,7 @@ function spawnGetForInput(dstNode, inSlot) {
 // Returns {node, slot, isInput} or null for the slot under canvas-local
 // (graphspace) coords (x, y).
 function slotUnder(x, y) {
-    const nodes = app.graph?._nodes || [];
+    const nodes = curGraph()?._nodes || [];
     for (let i = nodes.length - 1; i >= 0; i--) {
         const n = nodes[i];
         if (!n.flags || n.flags.collapsed) continue;
@@ -149,12 +157,21 @@ app.registerExtension({
     name: "C2C.SlotGetSet",
     async setup() {
         try {
+            // ONE setting decides what a slot double-click does. Two features used to listen on the same
+            // canvas at once (this one and the auto-connect predictor), so one double-click spawned a Get/Set
+            // node AND inserted a predicted node (A9, 2026-10-08).
             app.ui.settings.addSetting({
-                id: SETTING_ID,
-                name: "Double-click slot to spawn Get/Set Node (requires KJNodes)",
-                tooltip: "Double-click an output slot → creates a SetNode and registers a variable named after the slot. Double-click an input → spawns a GetNode wired to the most-recent matching Set.",
-                type: "boolean", defaultValue: true,
-                category: ["c2c", "Productivity", "Slot Get/Set"],
+                id: DBL_SETTING_ID,
+                name: "Double-click a slot",
+                tooltip: "What a double-click on a node's slot does.\n" +
+                    "Nothing: ComfyUI's own behaviour.\n" +
+                    "Get/Set variable: an output gets a SetNode named after the slot, an input a GetNode wired to " +
+                    "the most recent matching Set (needs KJNodes).\n" +
+                    "Suggest and connect a node (experimental): inserts the node the predictor expects next.",
+                type: "combo",
+                options: DBL_OPTIONS,
+                defaultValue: DBL_GETSET,
+                category: ["c2c", "Productivity", "Slot double-click"],
             });
         } catch {}
 
@@ -168,14 +185,16 @@ app.registerExtension({
         if (cvsEl && !cvsEl._c2c_getset_hooked) {
             cvsEl._c2c_getset_hooked = true;
             cvsEl.addEventListener("dblclick", (e) => {
-                if (!enabled() || !hasKJSetGet()) return;
+                if (slotDoubleClickMode() !== DBL_GETSET || !hasKJSetGet()) return;
+                // Screen -> graph is  graph = screen / scale - offset.  The old (screen - offset) / scale only
+                // matched at 100% zoom: at any other zoom the double-click missed the slot or hit a neighbour (A9).
                 const rect = cvsEl.getBoundingClientRect();
-                const cx = (e.clientX - rect.left - c.ds.offset[0]) / c.ds.scale;
-                const cy = (e.clientY - rect.top  - c.ds.offset[1]) / c.ds.scale;
+                const cx = (e.clientX - rect.left) / c.ds.scale - c.ds.offset[0];
+                const cy = (e.clientY - rect.top) / c.ds.scale - c.ds.offset[1];
                 const hit = slotUnder(cx, cy);
                 if (!hit) return;
                 // Don't fire if user is double-clicking to add a node (no slot under).
-                e.preventDefault(); e.stopPropagation();
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
                 if (hit.isInput) spawnGetForInput(hit.node, hit.slot);
                 else             spawnSetForOutput(hit.node, hit.slot);
             }, true);  // capture

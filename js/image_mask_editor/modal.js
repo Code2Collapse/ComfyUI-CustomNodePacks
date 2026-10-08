@@ -549,7 +549,7 @@ export function openModal(node, editorId, onSaved) {
     function closeModal() {
         if (closed) return;
         closed = true;
-        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keydown", onKeyCapture, true);
         window.removeEventListener("keyup", onKeyUp);
         window.removeEventListener("click", hideFrameMenu);
         window.removeEventListener("click", hideLayersPanel);
@@ -714,7 +714,11 @@ export function openModal(node, editorId, onSaved) {
     function onKeyUp(e) {
         if (e.key === " ") ed.spacePan = false;
     }
-    window.addEventListener("keydown", onKey);
+    // Capture phase on window, so the editor sees keys before ComfyUI's window-level keybindings; a key it handled
+    // goes no further. As a bubble listener added after the core one, Ctrl+Z undid the stroke AND reloaded the
+    // whole graph behind the modal (ORDERS A9, L2.15).
+    function onKeyCapture(e) { onKey(e); if (e.defaultPrevented) e.stopPropagation(); }
+    window.addEventListener("keydown", onKeyCapture, true);
     window.addEventListener("keyup", onKeyUp);
 
     const origRemoved = node.onRemoved;

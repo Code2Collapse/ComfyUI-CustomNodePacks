@@ -31,6 +31,7 @@ import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
 import { drawEditorEmptyState } from "./_editor_empty_state.js";
+import { claimUndo } from "./_c2c_undo_scope.js";
 
 // Targets unified SplineMaskMEC (mode=track) and any legacy
 // SplineMaskTrackerMEC nodes on saved graphs.
@@ -488,6 +489,7 @@ function installEditor(node) {
     const canvas = document.createElement("canvas");
     canvas.style.cssText = "display:block;width:100%;height:100%;outline:none;";
     canvas.tabIndex = 0;
+    claimUndo(canvas);   // Ctrl+Z here undoes the editor, not the graph (L2.15)
     canvasWrap.appendChild(canvas);
 
     const status = document.createElement("div");
@@ -911,6 +913,9 @@ function installEditor(node) {
             e.preventDefault(); render();
         }
     });
+    // A key the editor handled stays in the editor: without this, Ctrl+Z / Ctrl+Y / Delete also reach ComfyUI's
+    // window-level keybindings and undo or edit the whole graph (ORDERS A9, L2.15).
+    canvas.addEventListener("keydown", (e) => { if (e.defaultPrevented) e.stopPropagation(); });
 
     // Refresh frames on every executed event (so user's Queue Prompt
     // automatically populates the editor without clicking ↻).

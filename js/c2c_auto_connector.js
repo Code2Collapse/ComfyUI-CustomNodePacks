@@ -14,6 +14,22 @@ const SETTING_ID = "c2c.autoConnector.enabled";
 let _lastNode = null;          // last node the user clicked / created.
 let _lastAddTs = 0;             // dedupe rapid double-add.
 
+// Only a node the user just added ON ITS OWN may be auto-wired. Graph load and ComfyUI's undo (which reloads
+// the whole graph) add every node again; paste and Alt-drag duplicate add copies. Wiring those rewired whole
+// workflows on every Ctrl+Z (A9, 2026-10-08: "undo is damaging my entire workflow", "connections damaged
+// because of autoconnect").
+let _altPointerDown = false;    // Alt held while a pointer is down = core's clone-drag
+let _pasting = 0;               // depth of paste calls in progress
+let _addsThisTick = 0;          // several adds in one tick = paste / load / subgraph, never wire
+
+function graphLoading() {
+    try {
+        const CT = window.comfyAPI?.changeTracker?.ChangeTracker;
+        if (CT && CT.isLoadingGraph) return true;
+    } catch { /* ignore */ }
+    return false;
+}
+
 function enabled() {
     try { return app.ui.settings.getSettingValue(SETTING_ID, false); }
     catch { return false; }
@@ -96,9 +112,17 @@ app.registerExtension({
             if (typeof _orig !== "function") return;
             target.add = function (node, ...rest) {
                 const r = _orig.call(this, node, ...rest);
+                if (!enabled()) return r;
+                // rest[0] === true is LiteGraph's skip_compute_order: configure()/load, never a user add.
+                const loading = rest[0] === true || graphLoading();
+                const copying = _altPointerDown || _pasting > 0;
+                _addsThisTick += 1;
+                if (_addsThisTick === 1) setTimeout(() => { _addsThisTick = 0; }, 0);
+                if (loading || copying) return r;
                 queueMicrotask(() => {
                     try {
-                        if (!enabled()) return;
+                        if (_addsThisTick > 1) return;               // a batch add (paste, template, load)
+                        if (node?.inputs?.some?.((i) => i.link != null)) return;   // already wired by core
                         if (Date.now() - _lastAddTs < 80) return;
                         _lastAddTs = Date.now();
                         if (node && node !== _lastNode) {
@@ -114,6 +138,27 @@ app.registerExtension({
         };
         installHook(app.graph);                                       // instance
         installHook(LiteGraph?.LGraph?.prototype);                    // prototype
+
+        window.addEventListener("pointerdown", (e) => { _altPointerDown = !!e.altKey; }, { capture: true, passive: true });
+        const up = () => { _altPointerDown = false; };
+        window.addEventListener("pointerup", up, { capture: true, passive: true });
+        window.addEventListener("pointercancel", up, { capture: true, passive: true });
+        const LGC = window.LiteGraph?.LGraphCanvas?.prototype;
+        for (const name of ["pasteFromClipboard", "_pasteFromClipboard"]) {
+            const orig = LGC?.[name];
+            if (typeof orig !== "function" || orig.__c2cAcPaste) continue;
+            const wrapped = function (...args) {
+                _pasting += 1;
+                try {
+                    const r = orig.apply(this, args);
+                    if (r && typeof r.then === "function") return r.finally(() => { _pasting -= 1; });
+                    _pasting -= 1;
+                    return r;
+                } catch (e) { _pasting -= 1; throw e; }
+            };
+            wrapped.__c2cAcPaste = true;
+            LGC[name] = wrapped;
+        }
         console.log("[C2C.AutoConnector] ready.");
     },
 });

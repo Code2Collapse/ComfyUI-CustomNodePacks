@@ -28,6 +28,7 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import { drawEditorEmptyState } from "./_editor_empty_state.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
+import { claimUndo } from "./_c2c_undo_scope.js";
 
 // Targets the unified MaskEditMEC (mode=points_bbox) plus legacy classes.
 //
@@ -546,6 +547,7 @@ function installEditor(node) {
     const canvas = document.createElement("canvas");
     canvas.style.cssText = "display:block;width:100%;height:100%;outline:none;";
     canvas.tabIndex = 0;
+    claimUndo(canvas);   // Ctrl+Z here undoes the editor, not the graph (L2.15)
     canvasWrap.appendChild(canvas);
 
     // status pill (image res + zoom only — no live cursor coords)
@@ -1047,6 +1049,9 @@ function installEditor(node) {
             render();
         }
     });
+    // A key the editor handled stays in the editor: without this, Ctrl+Z / Ctrl+Y / Delete also reach ComfyUI's
+    // window-level keybindings and undo or edit the whole graph (ORDERS A9, L2.15).
+    canvas.addEventListener("keydown", (e) => { if (e.defaultPrevented) e.stopPropagation(); });
 
     for (const wn of ["width", "height"]) {
         const w = node.widgets?.find(x => x.name === wn);

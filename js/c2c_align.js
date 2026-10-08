@@ -41,7 +41,9 @@ function setting(id, fallback) {
 }
 
 function guidesEnabled() {
-    return setting(SETTING_GUIDES, true) !== false;
+    // Off unless the user switches it on: snapping while dragging moved nodes the owner did not ask to move
+    // (A9, 2026-10-08). Alt+Shift+G or the C2C > Canvas > Align setting turns it on.
+    return setting(SETTING_GUIDES, false) === true;
 }
 
 function snapPx() {
@@ -124,10 +126,17 @@ function unitsToRects(units) {
  *  descendant (nested groups' nodes included), so one flat pass moves each
  *  item once. Nodes go through the pos setter (layout store); groups and
  *  reroutes through move(..., skipChildren). */
-function moveGroupDeep(group, dx, dy) {
-    if (!dx && !dy) return;
+function groupKids(group) {
     try { group.recomputeInsideNodes?.(); } catch { /* ignore */ }
-    const kids = Array.from(group._children ?? group.children ?? []);
+    return Array.from(group._children ?? group.children ?? []);
+}
+
+/** Move a group and its members. During a drag pass the members frozen at drag start: recomputing them
+ *  after the group has moved swept in nodes that only overlapped its new position (A9 probe: dragging a group
+ *  also dragged a node lying half outside it). */
+function moveGroupDeep(group, dx, dy, frozenKids = null) {
+    if (!dx && !dy) return;
+    const kids = frozenKids ?? groupKids(group);
     group.move(dx, dy, true);
     for (const c of kids) {
         if (c?.pinned) continue;
@@ -340,7 +349,7 @@ function setUnitAbsolute(u, x, y) {
         const dx = x - cur.x;
         const dy = y - cur.y;
         if (!dx && !dy) return;
-        moveGroupDeep(item, dx, dy);
+        moveGroupDeep(item, dx, dy, u.kids ?? null);
     } else {
         const titleH = nodeTitleHeight(item, lgOpts());
         const pos = nodePosFromRect({ x, y, w: u.w, h: u.h }, titleH);
@@ -384,6 +393,9 @@ function onPointerDown(e) {
         starts: new Map(),
         targets: [],
         vueHeader: isLgNodeHeaderTarget(e.target, e.clientY),
+        // Alt+drag is core's duplicate: core drags the CLONE. The node under the pointer is the original and
+        // must stay where it is (A9: "alt duplicate getting stuck onto the og node").
+        alt: !!e.altKey,
         moved: false,
         beforeChangeDone: false,
     };
@@ -395,7 +407,7 @@ function ensureDragStarted(totalDx, totalDy) {
     if (!_drag.units) {
         let units = collectUnits();
         // Dragging an unselected node moves that node alone.
-        const down = _drag.downItem;
+        const down = _drag.alt ? null : _drag.downItem;
         if (down && (isNode(down) || isGroup(down)) && !down.pinned
             && !units.some((u) => u.ref === down)
             && !units.some((u) => isGroup(u.ref) && groupContainsNode(u.ref, down))) {
@@ -408,6 +420,7 @@ function ensureDragStarted(totalDx, totalDy) {
 
     for (const u of _drag.units) {
         const r = rectOf(u.ref);
+        if (isGroup(u.ref)) u.kids = groupKids(u.ref);   // membership as it was when the drag began
         u.x = r.x;
         u.y = r.y;
         u.w = r.w;
@@ -625,7 +638,7 @@ app.registerExtension({
             id: SETTING_GUIDES,
             name: "C2C › Align › Smart guides while dragging",
             type: "boolean",
-            defaultValue: true,
+            defaultValue: false,
             category: ["c2c", "Canvas", "Align"],
         },
         {

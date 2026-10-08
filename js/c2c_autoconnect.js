@@ -12,6 +12,7 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
+import { DBL_SUGGEST, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
 
 const TAG = "[C2C/autoconnect]";
 const SLOT_RADIUS = 10;      // graph-px tolerance for slot dot hit-tests
@@ -400,6 +401,8 @@ function _attachDoubleClickHandler() {
     const canvasEl = app.canvas?.canvas;
     if (!canvasEl || canvasEl.__c2c_ac_dblclick) return;
     canvasEl.addEventListener("dblclick", (e) => {
+        // Only when "Double-click a slot" is set to the predictor (see _c2c_slot_dblclick.js).
+        if (slotDoubleClickMode() !== DBL_SUGGEST) return;
         try {
             const { gx, gy } = _eventToGraph(e);
             const hit = _slotHitTest(gx, gy);
@@ -411,6 +414,7 @@ function _attachDoubleClickHandler() {
             // Stop LiteGraph's own double-click handler (which spawns Reroute / Get/Set)
             e.preventDefault();
             e.stopPropagation();
+            e.stopImmediatePropagation();
             const chain = !!e.shiftKey;
             autoconnectFromSlot(hit.node, hit.isInput, hit.slotIndex, { chain });
         } catch (err) {
@@ -428,7 +432,9 @@ app.registerExtension({
     settings: [
         {
             id: "c2c.autoconnect.enabled",
-            name: "Auto-connect: double-click slot to insert predicted node",
+            name: "Auto-connect: learn from my connections (predictor)",
+            tooltip: "Records which nodes you connect so the predictor behind 'Double-click a slot -> Suggest and " +
+                "connect a node' improves. The double-click itself is chosen in C2C > Productivity > Slot double-click.",
             type: "boolean",
             defaultValue: true,
         },
@@ -453,10 +459,10 @@ app.registerExtension({
         let attempts = 0;
         const tryAttach = () => {
             if (app.canvas?.canvas) {
+                _attachDoubleClickHandler();          // acts only in "Suggest and connect" mode
                 if (enabled()) {
-                    _attachDoubleClickHandler();
                     _hookConnect();
-                    console.info(TAG, "ready (double-click + session tracker installed)");
+                    console.info(TAG, "ready (double-click handler + session tracker installed)");
                 }
             } else if (attempts++ < 60) {
                 setTimeout(tryAttach, 250);

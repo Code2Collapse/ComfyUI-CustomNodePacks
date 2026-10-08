@@ -33,6 +33,7 @@ import { ensureC2CKit } from "./_c2c_ui_kit.js";
 import {
     ROTO_NODES, rotoToShapes, shapesToRoto, keyframesAgree,
 } from "./_roto_format.js";
+import { claimUndo } from "./_c2c_undo_scope.js";
 
 // VectorRotoMEC joins this editor rather than getting its own.
 //
@@ -836,6 +837,7 @@ function installEditor(node) {
     const canvas = document.createElement("canvas");
     canvas.style.cssText = "display:block;width:100%;height:100%;outline:none;";
     canvas.tabIndex = 0;
+    claimUndo(canvas);   // Ctrl+Z here undoes the editor, not the graph (L2.15)
     canvasWrap.appendChild(canvas);
 
     const status = document.createElement("div");
@@ -1353,9 +1355,11 @@ function installEditor(node) {
                 ed.hover = { shape: -1, point: -1 };
                 ed.save(); render();
             }
-        } else if (e.key.toLowerCase() === "n") {
+        } else if (e.key.toLowerCase() === "n" && !(e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
             ed.pushUndo(); ed.newPath(); ed.save(); render();
-        } else if (e.key.toLowerCase() === "c") {
+        } else if (e.key.toLowerCase() === "c" && !(e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
             if (ed.active >= 0) {
                 ed.pushUndo();
                 ed.shapes[ed.active].closed = !ed.shapes[ed.active].closed;
@@ -1377,6 +1381,9 @@ function installEditor(node) {
             render();
         }
     });
+    // A key the editor handled stays in the editor: without this, Ctrl+Z / Ctrl+Y / Delete also reach ComfyUI's
+    // window-level keybindings and undo or edit the whole graph (ORDERS A9, L2.15).
+    canvas.addEventListener("keydown", (e) => { if (e.defaultPrevented) e.stopPropagation(); });
 
     // React to widget edits
     for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height", "centripetal_alpha"]) {

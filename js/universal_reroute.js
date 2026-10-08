@@ -17,6 +17,7 @@ import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { legacyCanvasMenu } from "./_c2c_compat.js";
+import { asOneUndoStep } from "./_c2c_undo_scope.js";
 // Optional: noodle-style helpers (separate extension). Import is lazy /
 // non-fatal — if the file is missing or the extension hasn't registered
 // yet, we degrade gracefully and just don't show the noodle submenu.
@@ -71,9 +72,14 @@ function typeColor(t) {
 }
 
 function _canvasMenuItems(canvas) {
+  // The menu is built at the right-click, so this is where the user pointed. graph_mouse is already in graph
+  // coordinates; by the time the callback runs the mouse is over the menu item instead.
+  const c = canvas || app.canvas;
+  const gm = c?.graph_mouse || c?.canvas_mouse;
+  const at = gm ? [gm[0], gm[1]] : null;
   return [null, {
     content: "Insert Reroute (MEC)",
-    callback: () => insertRerouteAtMouse(canvas || app.canvas),
+    callback: () => insertRerouteAtMouse(c, at),
   }];
 }
 
@@ -416,34 +422,39 @@ function tryWireOnDrop(node) {
 //  Insert Reroute at mouse position
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function insertRerouteAtMouse(canvas) {
+function insertRerouteAtMouse(canvas, at = null) {
   const g = canvas.graph || app.graph;
   if (!g) return;
 
-  const pos = canvas.canvas_mouse || canvas.last_mouse_position;
-  if (!pos) return;
-  const gp = canvas.convertEventToCanvasOffset({ clientX: pos[0], clientY: pos[1] });
-  const gx = gp[0] || pos[0], gy = gp[1] || pos[1];
+  // Graph coordinates. (The old code passed canvas_mouse - already graph space - through
+  // convertEventToCanvasOffset as if it were a screen position, so the reroute landed away from every link
+  // and nothing was inserted: A9 "insert reroute is not working".)
+  const gm = at || canvas.graph_mouse || canvas.canvas_mouse;
+  if (!gm) return;
+  const gx = gm[0], gy = gm[1];
 
   const near = linksNearPoint(g, gx, gy, -1);
   const rr = LiteGraph.createNode(NODE_TYPE);
   if (!rr) return;
-  rr.pos = [gx - NODE_WIDTH / 2, gy - NODE_HEIGHT / 2];
-  g.add(rr);
+  // One undo step for the whole insertion (node + rewiring).
+  asOneUndoStep(canvas, () => {
+    rr.pos = [gx - NODE_WIDTH / 2, gy - NODE_HEIGHT / 2];
+    g.add(rr);
 
-  if (near.length) {
-    const h = near[0];
-    const sn = g.getNodeById(h.link.origin_id);
-    const tn = g.getNodeById(h.link.target_id);
-    if (sn && tn) {
-      const sType = sn.outputs?.[h.link.origin_slot]?.type || "*";
-      if (rr.inputs?.[0])  rr.inputs[0].type = sType;
-      if (rr.outputs?.[0]) rr.outputs[0].type = sType;
-      g.removeLink(h.link.id);
-      forceConnect(g, sn, h.link.origin_slot, rr, 0);
-      forceConnect(g, rr, 0, tn, h.link.target_slot);
+    if (near.length) {
+      const h = near[0];
+      const sn = g.getNodeById(h.link.origin_id);
+      const tn = g.getNodeById(h.link.target_id);
+      if (sn && tn) {
+        const sType = sn.outputs?.[h.link.origin_slot]?.type || "*";
+        if (rr.inputs?.[0])  rr.inputs[0].type = sType;
+        if (rr.outputs?.[0]) rr.outputs[0].type = sType;
+        g.removeLink(h.link.id);
+        forceConnect(g, sn, h.link.origin_slot, rr, 0);
+        forceConnect(g, rr, 0, tn, h.link.target_slot);
+      }
     }
-  }
+  });
   g.setDirtyCanvas?.(true, true);
 }
 

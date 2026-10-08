@@ -1061,6 +1061,9 @@ function openModal(node) {
                    0 24px 70px rgba(0,0,0,0.55);
         font-family:Inter,system-ui,sans-serif;
     `;
+    // A real modal dialog: ComfyUI's undo tracker skips Ctrl+Z while one is open (L2.15).
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
     document.body.appendChild(overlay);
 
     // ── Top bar ────────────────────────────────────────────────────
@@ -1511,8 +1514,12 @@ function openModal(node) {
         if ((e.key === "y" || e.key === "Y") && (e.ctrlKey || e.metaKey)) { ed.redoOp(); e.preventDefault(); return; }
         if (e.key === "Z" && (e.ctrlKey || e.metaKey) && e.shiftKey) { ed.redoOp(); e.preventDefault(); return; }
     };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("keyup", onKey);
+    // Capture phase on window, so the editor sees keys before ComfyUI's window-level keybindings; a key it handled
+    // goes no further. A bubble listener added here ran AFTER the core one: Ctrl+Z undid the mask edit AND
+    // reloaded the whole graph behind the modal (ORDERS A9, L2.15).
+    const onKeyCapture = (e) => { onKey(e); if (e.defaultPrevented) e.stopPropagation(); };
+    window.addEventListener("keydown", onKeyCapture, true);
+    window.addEventListener("keyup", onKeyCapture, true);
 
     // Scrubber.
     let scrubbing = false;
@@ -1540,8 +1547,8 @@ function openModal(node) {
     const close = async (commit) => {
         if (closing) return;
         closing = true;
-        window.removeEventListener("keydown", onKey);
-        window.removeEventListener("keyup", onKey);
+        window.removeEventListener("keydown", onKeyCapture, true);
+        window.removeEventListener("keyup", onKeyCapture, true);
         ro.disconnect();
         if (commit) {
             btnSave.disabled = true;

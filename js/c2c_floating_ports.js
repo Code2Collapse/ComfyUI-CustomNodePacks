@@ -34,7 +34,7 @@ function enabledNow() {
         const t = (window.performance && performance.now()) || Date.now();
         if (t - _lastCheck >= 250) {
             _lastCheck = t;
-            try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = (v === undefined || v === null) ? true : v === true; } catch (_) {}
+            try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = v === true; } catch (_) {}
         }
     }
     return _enabled;
@@ -181,11 +181,14 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.FloatingPorts")) app.re
         {
             id: SETTING_ID,
             name: "Floating ports (perimeter wire routing, Nuke-style)",
-            tooltip: "Nuke-style 360° pipes: the wire's exit slides around the node perimeter to "
-                   + "face the connected node. Slots never move (a thin colour tether keeps the "
-                   + "slot connection visible). Off = classic left/right wires.",
+            tooltip: "Nuke-style 360° pipes: the wire's drawn end slides around the node edge to face the "
+                   + "connected node and ends at a small dot there; the real slot does not move. "
+                   + "Off = classic left/right wires that end at the slot.",
             type: "boolean",
-            defaultValue: true,
+            // OFF by default (A9, 2026-10-08): with it on, a wire to a node above or below ends at a dot on that
+            // node's edge, not at the slot - the owner read it as a stale line "hanging into" the node
+            // (docs/evidence/L2.15/floating_ports_on|off.*.png). One click turns it back on.
+            defaultValue: false,
             category: ["c2c", "Canvas", "Floating ports"],
             onChange: (v) => { _enabled = !!v; try { app.graph?.setDirtyCanvas(true, true); } catch (_) {} },
         },
@@ -194,7 +197,7 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.FloatingPorts")) app.re
         // Read the persisted value, then install the override LAST (in setup,
         // after other extensions — incl. NoodleStyles — have wrapped renderLink),
         // so floating-port rerouting is the outermost adjustment.
-        try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = (v === undefined || v === null) ? true : v === true; } catch (_) {}
+        try { const v = app.ui.settings.getSettingValue(SETTING_ID); _enabled = v === true; } catch (_) {}
         install();
     },
 });
