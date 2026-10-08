@@ -289,3 +289,103 @@ def list_input_media(subfolders: bool = True) -> list[str]:
             break
     out.sort()
     return out
+
+
+# ── previews of tensor inputs for the in-browser comparer (A9, L2.26) ─────────────────────────────────
+# The widget compares A and B LIVE in the browser, but it could only load files from the input folder: with
+# image_a / image_b wired from upstream nodes (the usual case) it had nothing to show, and the node returned no
+# `ui` payload either, so even a Queue left it empty. After each run the node now writes browser-playable
+# previews of its tensor inputs here and hands them to the widget.
+
+PREVIEW_MAX_LONG = 1280      # long edge of the browser preview; the server-side modes keep full precision
+PREVIEW_MAX_FRAMES = 600
+
+
+def _preview_dir() -> tuple[str, str]:
+    """(absolute dir, subfolder) inside ComfyUI's temp folder (cleared by ComfyUI at start-up)."""
+    import folder_paths  # type: ignore
+    sub = "c2c_compare"
+    path = os.path.join(folder_paths.get_temp_directory(), sub)
+    os.makedirs(path, exist_ok=True)
+    return path, sub
+
+
+def _even_scale(w: int, h: int, max_long: int) -> tuple[int, int]:
+    s = min(1.0, float(max_long) / float(max(w, h)))
+    return max(2, int(round(w * s)) // 2 * 2), max(2, int(round(h * s)) // 2 * 2)
+
+
+def _to_uint8_frames(images: torch.Tensor, max_frames: int, max_long: int) -> np.ndarray:
+    """[N,H,W,3] float 0-1 -> uint8, capped and downscaled with area filtering."""
+    x = images[:max_frames, ..., :3].detach().float().cpu().clamp(0, 1)
+    n, h, w, _ = x.shape
+    nw, nh = _even_scale(w, h, max_long)
+    if (nw, nh) != (w, h):
+        x = torch.nn.functional.interpolate(x.permute(0, 3, 1, 2), size=(nh, nw), mode="area").permute(0, 2, 3, 1)
+    return (x * 255.0 + 0.5).to(torch.uint8).numpy()
+
+
+def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24.0) -> Optional[dict]:
+    """Write a preview of an IMAGE batch the browser can show: one frame -> PNG, a batch -> H.264 MP4 (WebM when
+    no H.264 encoder exists, PNG of the first frame as the last resort). Returns ComfyUI's {filename, subfolder,
+    type} plus {kind, frames, fps}, or None when there is nothing to show."""
+    if images is None or not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[0] == 0:
+        return None
+    import hashlib
+    import time as _time
+
+    from PIL import Image
+
+    out_dir, sub = _preview_dir()
+    frames = _to_uint8_frames(images, PREVIEW_MAX_FRAMES, PREVIEW_MAX_LONG)
+    stem = f"{tag}_{hashlib.sha1(f'{_time.time_ns()}|{tag}|{frames.shape}'.encode()).hexdigest()[:12]}"
+    meta = {"subfolder": sub, "type": "temp", "frames": int(frames.shape[0]), "fps": float(fps or 24.0)}
+    if frames.shape[0] > 1:
+        try:
+            from fractions import Fraction
+
+            import av  # type: ignore
+            try:
+                from .c2c_video.routes import _pick_encoder
+                codec, ext = _pick_encoder()
+            except Exception:
+                codec, ext = "libx264", "mp4"
+            name = f"{stem}.{ext}"
+            container = av.open(os.path.join(out_dir, name), mode="w", format=ext,
+                                options={"movflags": "+faststart"} if ext == "mp4" else {})
+            try:
+                stream = container.add_stream(codec, rate=Fraction(meta["fps"]).limit_denominator(1_000_000))
+                stream.height, stream.width = int(frames.shape[1]), int(frames.shape[2])
+                stream.pix_fmt = "yuv420p"
+                if codec == "libx264":
+                    stream.options = {"crf": "18", "preset": "veryfast"}
+                for i, row in enumerate(frames):
+                    vf = av.VideoFrame.from_ndarray(row, format="rgb24")
+                    vf.pts = i
+                    for packet in stream.encode(vf):
+                        container.mux(packet)
+                for packet in stream.encode(None):
+                    container.mux(packet)
+            finally:
+                container.close()
+            return {**meta, "filename": name, "kind": "video"}
+        except Exception:  # noqa: BLE001 - no encoder: still show the first frame
+            pass
+    name = f"{stem}.png"
+    Image.fromarray(frames[0]).save(os.path.join(out_dir, name), compress_level=1)
+    return {**meta, "filename": name, "kind": "image", "frames": 1}
+
+
+def save_preview_png(rgb01: np.ndarray, tag: str) -> Optional[dict]:
+    """A server-rendered panel (scope, audio plot, diff) as PNG for the widget."""
+    if rgb01 is None:
+        return None
+    from PIL import Image
+
+    out_dir, sub = _preview_dir()
+    arr = (np.clip(rgb01[..., :3].astype(np.float32), 0, 1) * 255.0 + 0.5).astype(np.uint8)
+    import hashlib
+    import time as _time
+    name = f"{tag}_{hashlib.sha1(f'{_time.time_ns()}|{tag}'.encode()).hexdigest()[:12]}.png"
+    Image.fromarray(arr).save(os.path.join(out_dir, name), compress_level=1)
+    return {"filename": name, "subfolder": sub, "type": "temp", "kind": "image"}

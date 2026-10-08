@@ -146,6 +146,33 @@ function loadSource(filename) {
     });
 }
 
+/** Load a preview the node wrote to ComfyUI's temp folder after a run (from wired image_a / image_b), in the
+ *  same {kind, el, w, h} shape as loadSource. */
+function loadServerMedia(meta) {
+    return new Promise((resolve) => {
+        if (!meta?.filename) { resolve(null); return; }
+        const url = api.apiURL(`/view?filename=${encodeURIComponent(meta.filename)}&type=${meta.type || "temp"}` +
+                               `&subfolder=${encodeURIComponent(meta.subfolder || "")}`);
+        if (meta.kind === "video") {
+            const v = document.createElement("video");
+            v.src = url;
+            v.muted = true;
+            v.crossOrigin = "anonymous";
+            v.preload = "auto";
+            v.playsInline = true;
+            v.addEventListener("loadeddata", () => resolve({ kind: "video", el: v, w: v.videoWidth, h: v.videoHeight,
+                                                           dur: v.duration, fps: meta.fps, fromRun: true }), { once: true });
+            v.addEventListener("error", () => resolve(null), { once: true });
+        } else {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.onload = () => resolve({ kind: "image", el: img, w: img.naturalWidth, h: img.naturalHeight, fromRun: true });
+            img.onerror = () => resolve(null);
+            img.src = url;
+        }
+    });
+}
+
 function getW(node, name) { return node.widgets?.find((w) => w.name === name); }
 function getVal(node, name, def) { const w = getW(node, name); return w ? w.value : def; }
 
@@ -398,9 +425,9 @@ app.registerExtension({
             const _sp = { active: false, raf: 0, master: vidA, slave: vidB, fps: 30, rvfcA: 0, rvfcB: 0 };
 
             const _spDetectFps = () => {
-                // Best-effort fps: prefer rVFC-reported processingDuration, else fall back to 30.
-                // We can also derive it lazily from successive timestamps.
-                return _sp.fps;
+                // A preview written by a run knows its rate (preview_fps); otherwise best effort (rVFC, else 30).
+                const known = Number(S.srcA?.fps || S.srcB?.fps);
+                return known > 0 ? known : _sp.fps;
             };
 
             const _spPickMaster = () => {
@@ -564,7 +591,7 @@ app.registerExtension({
             // ── Frame scrubbing for videos ───────────────────
             const applyFrameToVideos = () => {
                 const fIdx = Math.max(0, getVal(node, "frame_index", 0) | 0);
-                const fps = 24;
+                const fps = Number(S.srcA?.fps || S.srcB?.fps) || 24;   // a run's preview knows its rate
                 const t = fIdx / fps;
                 for (const s of [S.srcA, S.srcB]) {
                     if (s && s.kind === "video" && Math.abs(s.el.currentTime - t) > 0.02) {
@@ -644,7 +671,7 @@ app.registerExtension({
                     ctx.fillStyle = C.sub;
                     ctx.font = "12px system-ui,sans-serif";
                     ctx.textAlign = "center";
-                    ctx.fillText("Upload A and B to begin (live for wipe/onion/diff/per-channel/false-color/crush)", cw / 2, ch / 2);
+                    ctx.fillText("Connect image_a / image_b and press Run, or upload A and B with the buttons below", cw / 2, ch / 2);
                     modeBadge.textContent = mode;
                     liveBadge.textContent = isLive ? "● LIVE" : "○ Queue";
                     liveBadge.style.background = isLive ? "rgba(40,180,80,0.85)" : "rgba(200,140,40,0.85)";
@@ -917,6 +944,7 @@ app.registerExtension({
 
             S.wipePos = +getVal(node, "wipe_position", 0.5);
             S.onionAlpha = +getVal(node, "onion_alpha", 0.5);
+            S.refresh = () => { applyFrameToVideos(); render(); };
 
             queueMicrotask(async () => {
                 const fa = getVal(node, "file_a", "");
@@ -940,34 +968,20 @@ app.registerExtension({
             _exec?.apply(this, arguments);
             const S = this._VC;
             if (!S) return;
-            const previews = msg?.images;
-            if (!previews || !previews[0]) return;
-            const info = previews[0];
-            const url = api.apiURL(
-                `/view?filename=${encodeURIComponent(info.filename)}&type=${info.type || "temp"}&subfolder=${encodeURIComponent(info.subfolder || "")}`,
-            );
-            const img = new Image();
-            img.crossOrigin = "anonymous";
-            img.onload = () => {
-                S.serverPreview = { kind: "image", el: img, w: img.naturalWidth, h: img.naturalHeight };
-                this.setDirtyCanvas(true, true);
-                // Trigger a redraw — find the canvas inside the DOM widget.
-                try {
-                    const wrap = this.widgets?.find((w) => w.type === "COMPARER")?.element
-                              || this.widgets?.find((w) => w.name === "comparer_view")?.element;
-                    const c = wrap?.querySelector?.("canvas");
-                    if (c) {
-                        const ctx = c.getContext("2d");
-                        const cw = c.width;
-                        const ar = img.naturalHeight / img.naturalWidth;
-                        const ch = Math.max(180, Math.min(720, Math.round(cw * ar)));
-                        if (c.height !== ch) c.height = ch;
-                        ctx.clearRect(0, 0, cw, ch);
-                        ctx.drawImage(img, 0, 0, cw, ch);
-                    }
-                } catch {}
-            };
-            img.src = url;
+            // Previews of the WIRED image_a / image_b (the node writes them after each run) and the panel the
+            // server rendered for the chosen mode. A wired input wins over an uploaded file for its side.
+            const ab = msg?.c2c_ab?.[0];
+            const panel = msg?.c2c_preview?.[0] || msg?.images?.[0];
+            (async () => {
+                if (ab?.a) S.srcA = swapSource(S.srcA, await loadServerMedia(ab.a));
+                if (ab?.b) S.srcB = swapSource(S.srcB, await loadServerMedia(ab.b));
+                if (panel) {
+                    const p = await loadServerMedia({ ...panel, kind: "image" });
+                    if (p) S.serverPreview = p;
+                }
+                S.refresh?.();
+                this.setDirtyCanvas?.(true, true);
+            })();
         };
 
         const _removed = nodeType.prototype.onRemoved;

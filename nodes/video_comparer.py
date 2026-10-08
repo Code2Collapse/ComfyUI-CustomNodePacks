@@ -490,6 +490,10 @@ class VideoComparerC2C:
                 "audio_b": ("AUDIO",),
                 "file_a": (files, {"default": files[0] if files else ""}),
                 "file_b": (files, {"default": files[0] if files else ""}),
+                "preview_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.001, "tooltip":
+                    "Playback rate of the browser preview made from image_a / image_b batches after a run (the "
+                    "tensors carry no frame rate). The preview is downscaled to 1280 px and capped at 600 frames; "
+                    "the server-side modes always use the full-precision frames."}),
             },
         }
 
@@ -528,7 +532,33 @@ class VideoComparerC2C:
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
                 label_a, label_b,
                 image_a=None, image_b=None, audio_a=None, audio_b=None,
-                file_a="", file_b=""):
+                file_a="", file_b="", preview_fps=24.0):
+        result = self._compute(mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+                               diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+                               label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b)
+        # The widget compares LIVE in the browser but could only load files from the input folder, and this node
+        # returned no `ui` payload: with image_a / image_b wired (the usual case) it showed nothing, before or
+        # after a Queue (A9, L2.26). Hand it previews of the wired tensors and the server-rendered panel.
+        ui = {}
+        try:
+            from ._video_comparer_io import save_preview_media, save_preview_png
+            a = save_preview_media(image_a, "A", preview_fps)
+            b = save_preview_media(image_b, "B", preview_fps)
+            if a or b:
+                ui["c2c_ab"] = [{"a": a, "b": b, "label_a": label_a, "label_b": label_b}]
+            panel = save_preview_png(result[0][0].cpu().numpy(), "panel")
+            if panel:
+                ui["c2c_preview"] = [{**panel, "mode": mode}]
+        except Exception as exc:  # noqa: BLE001 - a preview must never fail the run
+            import logging
+            logging.getLogger("C2C.VideoComparer").warning("browser preview not written: %s", exc)
+        return {"ui": ui, "result": result}
+
+    def _compute(self, mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
+                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
+                 label_a, label_b,
+                 image_a=None, image_b=None, audio_a=None, audio_b=None,
+                 file_a="", file_b=""):
 
         for name, img in (("image_a", image_a), ("image_b", image_b)):
             if img is not None and (not isinstance(img, torch.Tensor) or img.ndim != 4):
