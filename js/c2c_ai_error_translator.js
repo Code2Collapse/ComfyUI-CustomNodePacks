@@ -373,11 +373,11 @@ app.registerExtension({
         { id: SETTING_ENABLED,
           name: "C2C ▸ Errors ▸ Show big plain-English error panel",
           tooltip: "When a workflow fails, pop a large red panel that explains the error in simple English with fix steps.",
-          type: "boolean", default: true },
+          type: "boolean", defaultValue: true },
         { id: SETTING_AUTO_AI,
           name: "C2C ▸ Errors ▸ Auto-ask AI for a deeper explanation",
           tooltip: "Also stream a model-written explanation automatically (needs Ollama or a cloud key). Off = offline rule pack only.",
-          type: "boolean", default: false },
+          type: "boolean", defaultValue: false },
     ],
     async setup() {
         const _enabledNow = () => {

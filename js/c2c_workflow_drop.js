@@ -122,7 +122,7 @@ app.registerExtension({
             name: "C2C ▸ Drag-JSON ▸ Load workflow on .json drop",
             tooltip: "Drop a workflow/API .json onto the canvas to load it. Hold Shift to use ComfyUI's native handler instead.",
             type: "boolean",
-            default: true,
+            defaultValue: true,
         },
     ],
     async setup() {

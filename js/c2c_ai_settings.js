@@ -791,7 +791,7 @@ app.registerExtension({
     name: "c2c.ai.settings",
     settings: [
         { id: SETTING_FIRSTRUN, name: "C2C ▸ AI ▸ First-run completed",
-          type: "hidden", default: false },
+          type: "hidden", defaultValue: false },
     ],
     async setup() {
         // Moved OUT of the sidebar into OmniPill's "AI Assist" section.

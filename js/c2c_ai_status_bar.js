@@ -415,9 +415,9 @@ app.registerExtension({
     name: "c2c.ai.statusBar",
     settings: [
         { id: SETTING_HUD,   name: "C2C ▸ AI ▸ Show OmniBar AI chip",
-          type: "boolean", default: true,  onChange: () => refresh() },
+          type: "boolean", defaultValue: true,  onChange: () => refresh() },
         { id: SETTING_PAUSE, name: "C2C ▸ AI ▸ Pause all AI calls",
-          type: "boolean", default: false, onChange: () => refresh() },
+          type: "boolean", defaultValue: false, onChange: () => refresh() },
     ],
     async setup() {
         // Wait for OmniBar host (up to ~4 s).
