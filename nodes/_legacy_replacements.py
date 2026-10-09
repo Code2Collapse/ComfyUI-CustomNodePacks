@@ -38,18 +38,19 @@ def load_table() -> list[dict[str, Any]]:
 def register(server: Any = None) -> int:
     """Register every replacement with core's NodeReplaceManager. Returns how many were registered;
     0 (and no error) on a core that predates node replacements, so the pack still loads there."""
-    try:
-        from comfy_api.latest import io as _io  # NodeReplace lives in comfy_api.latest._io
-        node_replace = getattr(_io, "NodeReplace")
-    except Exception:
-        _log.info("[C2C] node replacements unavailable in this ComfyUI core; legacy ids stay unmapped")
-        return 0
     if server is None:
         try:
             from server import PromptServer
             server = getattr(PromptServer, "instance", None)
         except Exception:
             server = None
+    _register_route(server)          # the front end's automatic migration works even where core cannot replace
+    try:
+        from comfy_api.latest import io as _io  # NodeReplace lives in comfy_api.latest._io
+        node_replace = getattr(_io, "NodeReplace")
+    except Exception:
+        _log.info("[C2C] node replacements unavailable in this ComfyUI core; legacy ids stay unmapped")
+        return 0
     manager = getattr(server, "node_replace_manager", None)
     if manager is None:
         _log.info("[C2C] no node_replace_manager on this server; legacy ids stay unmapped")
@@ -69,3 +70,28 @@ def register(server: Any = None) -> int:
             _log.warning("[C2C] could not register replacement %s -> %s: %s",
                          row.get("old_node_id"), row.get("new_node_id"), exc)
     return count
+
+
+_ROUTE = False
+
+
+def _register_route(server: Any) -> None:
+    """GET /c2c/legacy_replacements - C2C's own rows (not every pack's, as core's /node_replacements serves) for the
+    automatic migration on workflow load (js/c2c_auto_migrate.js)."""
+    global _ROUTE
+    if _ROUTE or server is None or getattr(server, "routes", None) is None:
+        return
+    try:
+        from aiohttp import web
+    except Exception:
+        return
+
+    async def _table(_request):
+        try:
+            return web.json_response(load_table())
+        except Exception as exc:  # noqa: BLE001
+            return web.json_response({"error": str(exc)[:200]}, status=500)
+
+    server.routes.get("/c2c/legacy_replacements")(_table)
+    _ROUTE = True
+
