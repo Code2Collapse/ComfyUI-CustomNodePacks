@@ -9,6 +9,12 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Fixed
 
+- **Clear workflow no longer leaks old widget values into new nodes** (a ComfyUI bug, fixed on our side). After
+  "Clear workflow", a node added in the same spot of the id sequence took a deleted node's value for every widget with
+  the same name, for example a new sampler node came up with the old sampler. Seen in ComfyUI 1.52.7 with every C2C
+  front-end switched off, in both renderers. Setting: Settings › C2C › Canvas › Clear workflow (Off = ComfyUI's own
+  behaviour).
+- **No more "inputEl is deprecated" warnings** from the Folder Incrementer (it now uses the widget's element).
 - **C2C settings no longer disappear.** Lite mode (it switches on by itself when the browser draws without the GPU)
   hid 23 settings, including every overlay switch, because they were registered when an extension started up and
   Lite skips that. Every C2C setting is now declared up front: 144 in Full and in Lite.

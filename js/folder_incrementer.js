@@ -511,18 +511,22 @@ app.registerExtension({
         function forceWidgetRefresh(w, value) {
             if (!w) return;
             const v = value !== undefined ? value : w.value;
-            if (w.value === v && (!w.inputEl || w.inputEl.value === v)) return;
+            // widget.element first: frontend 1.52 deprecates inputEl (warns on every read, L7.35); older frontends
+            // only have inputEl.
+            const el = w.element || w.inputEl;
+            const hasValue = el && "value" in el;
+            if (w.value === v && (!hasValue || el.value === v)) return;
             w.value = v;
             node._fiWriting = true;
             try {
                 try { w.callback?.(v, app.canvas, node); } catch (_) {
                     try { w.callback?.(v); } catch (_2) {}
                 }
-                if (w.inputEl) {
-                    w.inputEl.value = v;
+                if (hasValue) {
+                    el.value = v;
                     try {
-                        w.inputEl.dispatchEvent(new Event("input", { bubbles: true }));
-                        w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+                        el.dispatchEvent(new Event("input", { bubbles: true }));
+                        el.dispatchEvent(new Event("change", { bubbles: true }));
                     } catch (_) {}
                 }
                 try { node.onWidgetChanged?.(); } catch (_) {}
