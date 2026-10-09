@@ -12,7 +12,7 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
-import { DBL_SUGGEST, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
+import { DBL_SUGGEST, onDomSlotDoubleClick, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
 
 const TAG = "[C2C/autoconnect]";
 const SLOT_RADIUS = 10;      // graph-px tolerance for slot dot hit-tests
@@ -422,6 +422,14 @@ function _attachDoubleClickHandler() {
         }
     }, true);  // capture so we run before LiteGraph
     canvasEl.__c2c_ac_dblclick = true;
+    // Nodes 2.0: slots are DOM elements (L2.35); same rules as above.
+    onDomSlotDoubleClick(({ node, isInput, slot, event }) => {
+        if (slotDoubleClickMode() !== DBL_SUGGEST) return false;
+        const s = (isInput ? node.inputs : node.outputs)?.[slot];
+        if (!s || (isInput && s.link != null)) return false;
+        autoconnectFromSlot(node, isInput, slot, { chain: !!event.shiftKey });
+        return true;
+    });
 }
 
 // ---------------------------------------------------------------------------

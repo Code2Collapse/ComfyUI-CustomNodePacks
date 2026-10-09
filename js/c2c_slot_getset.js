@@ -25,7 +25,7 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
-import { DBL_SETTING_ID, DBL_OPTIONS, DBL_GETSET, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
+import { DBL_SETTING_ID, DBL_OPTIONS, DBL_GETSET, onDomSlotDoubleClick, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
 
 const SETTING_ID = "c2c.slotGetSet.enabled";
 
@@ -196,6 +196,14 @@ app.registerExtension({
                 else             spawnSetForOutput(hit.node, hit.slot);
             }, true);  // capture
         }
+
+        // Nodes 2.0: the slot is a DOM element, so the canvas listener above never sees it (L2.35).
+        onDomSlotDoubleClick(({ node, isInput, slot }) => {
+            if (slotDoubleClickMode() !== DBL_GETSET || !hasKJSetGet()) return false;
+            if (isInput) spawnGetForInput(node, slot);
+            else spawnSetForOutput(node, slot);
+            return true;
+        });
 
         // Augment per-node slot context menu.
         const proto = window.LGraphNode?.prototype;
