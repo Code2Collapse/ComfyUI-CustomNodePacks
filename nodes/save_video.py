@@ -75,6 +75,13 @@ class SaveVideoC2C:
                                                  "keeping the VAE's causal state - the full frame batch is never held in "
                                                  "RAM. Wire this and vae instead of images."}),
                 "vae": ("VAE", {"tooltip": "The VAE for latent (stream save)."}),
+                "tile_mode": (["auto", "off", "manual"], {
+                    "default": "auto",
+                    "tooltip": "Stream save, Wan VAEs: auto tiles only when the frame would not fit the GPU (2K on 8 GB -> "
+                               "512 px). Each tile is decoded over the whole clip in one causal pass and blended on disk, "
+                               "so the clip never sits in RAM. off: no tiles. manual: tile_size."}),
+                "tile_size": ("INT", {"default": 512, "min": 64, "max": 2048, "step": 64,
+                                      "tooltip": "Tile size in pixels when tile_mode is manual."}),
             },
         }
 
@@ -116,6 +123,8 @@ class SaveVideoC2C:
         save_output=True,
         latent=None,
         vae=None,
+        tile_mode="auto",
+        tile_size=512,
     ):
         stream_info = None
         if latent is not None or vae is not None:
@@ -124,7 +133,15 @@ class SaveVideoC2C:
             if latent is None or vae is None:
                 raise SaveVideoError("Stream save needs both latent and vae wired.")
             from .c2c_video.stream_decode import stream_decode
-            images, stream_info = stream_decode(vae, latent)
+            tile_px = 0
+            if tile_mode == "manual":
+                tile_px = int(tile_size)
+            elif tile_mode != "off":
+                from .hdr_color_science import C2CVAEQualityDecode
+                z = latent.get("samples") if isinstance(latent, dict) else None
+                if torch.is_tensor(z):
+                    tile_px = C2CVAEQualityDecode._auto_tile_px(vae, z, False)
+            images, stream_info = stream_decode(vae, latent, tile_px=tile_px)
             src = latent.get("c2c_source_frames") if isinstance(latent, dict) else None
             if isinstance(src, int) and 0 < src < images.shape[0]:
                 images.shape = (src,) + tuple(images.shape[1:])        # the frames the clip really had

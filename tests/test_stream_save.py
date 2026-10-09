@@ -190,3 +190,40 @@ def test_images_and_latent_together_are_refused(node):
     with pytest.raises(SaveVideoError, match="both latent and vae"):
         n.execute(format="MKV FFV1 (lossless)", fps=24.0, filename_prefix="s/x", quality=80,
                   latent={"samples": torch.zeros(1, 16, 2, 1, 1)})
+
+
+def test_disk_tiles_equal_the_spatial_tiled_decode(sd, tmp_path):
+    # Real-weight proof (Wan 2.1): docs/evidence/L7.59/tiled_stream_exactness.py. Here: a causal stand-in whose output
+    # depends on the latent content, so every tile differs and the blend is really exercised.
+    from nodes._vae_tiled import decode_wan_spatial_tiled
+
+    mod = types.ModuleType("standin2.wan.vae")
+
+    class Decoder:
+        def __call__(self, x, feat_cache=None, feat_idx=None):
+            reps = 1 if x.shape[2] == 1 and feat_cache[0] is None else 4
+            feat_cache[0] = True
+            up = x[:, :3].repeat_interleave(8, -1).repeat_interleave(8, -2)        # 8x spatial, content-dependent
+            return [torch.tanh(up.repeat_interleave(reps, 2))]
+
+    class WanVAE:
+        def __init__(self):
+            self.decoder = Decoder()
+            self.conv2 = lambda z: z
+
+    WanVAE.__module__ = mod.__name__
+    mod.WanVAE, mod.count_cache_layers = WanVAE, (lambda dec: 1)
+    sys.modules[mod.__name__] = mod
+    fsm = WanVAE()
+    vae = _vae(fsm)
+
+    def full_decode(z):                       # what core's VAE.decode returns for the stand-in
+        out = torch.cat(list(sd._wan_steps(fsm, z, "wan21")), 2).float()
+        return vae.process_output(out).movedim(1, -1)
+
+    vae.decode = full_decode
+    z = torch.randn(1, 16, 3, 10, 14, generator=torch.Generator().manual_seed(1))
+    ref = decode_wan_spatial_tiled(vae, z, 4, 1)
+    got = torch.cat(list(sd._wan_tiles_via_disk(vae, fsm, z, "wan21", 32, str(tmp_path))), 0)
+    assert torch.equal(ref.reshape(-1, *ref.shape[-3:]), got)
+    assert not list(tmp_path.iterdir())                          # tile files removed

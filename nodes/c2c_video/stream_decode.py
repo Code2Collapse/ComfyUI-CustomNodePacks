@@ -213,7 +213,69 @@ def _chunked_steps(fsm, z: torch.Tensor) -> Iterator[torch.Tensor]:
         th.join(timeout=60)
 
 
-def stream_decode(vae, latent: dict) -> tuple[FrameStream, StreamInfo]:
+def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_dir: str) -> Iterator[torch.Tensor]:
+    """Tile by tile, each tile decoded over the WHOLE clip in one causal pass and written to its own file; then the
+    frames are assembled chunk by chunk from those files and handed on in order.
+
+    Why not every tile at once, step by step: the Wan 2.1 causal cache is ~1.2 GB per 512 px tile (bf16, measured),
+    so all tiles of a 2K frame hold ~10-12 GB of state. One tile at a time needs one tile's cache. Plain sequential
+    file writes and reads (not a memory map, whose touched pages count as resident RAM: measured 2.8 GB at 2K x 81).
+    The arithmetic is decode_wan_spatial_tiled's - same tiles, same masks, tiles added in the same order - so the frames
+    are identical to it."""
+    import os
+    import uuid
+
+    import numpy as np
+
+    from .._vae_tiled import _build_feather_mask, _plan_tile_spans
+
+    _B, _C, T, H, W = zb.shape
+    factor = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+    tile_lat = max(1, tile_px // factor)
+    eff = min(max(0, tile_lat // 4), (tile_lat - 1) // 2)
+    h_tiles, w_tiles = _plan_tile_spans(H, tile_lat, eff), _plan_tile_spans(W, tile_lat, eff)
+    out_h, out_w, ov_px = H * factor, W * factor, eff * factor
+    t_out = 1 + 4 * (T - 1)
+    os.makedirs(tmp_dir, exist_ok=True)
+    tag = uuid.uuid4().hex[:12]
+    tiles = []                                                # (path, oh0, oh1, ow0, ow1, mask)
+    weight = torch.zeros((1, out_h, out_w, 1), dtype=torch.float32)
+    try:
+        for hs, he in h_tiles:
+            for ws, we in w_tiles:
+                oh0, oh1, ow0, ow1 = hs * factor, he * factor, ws * factor, we * factor
+                mask = _build_feather_mask(oh1 - oh0, ow1 - ow0, ov_px, hs == 0, he == H, ws == 0, we == W,
+                                           torch.float32, torch.device("cpu"))[0]          # [1, h, w, 1]
+                path = os.path.join(tmp_dir, f"c2c_stream_{tag}_{len(tiles)}.f32")
+                written = 0
+                with open(path, "wb") as fh:
+                    for raw in _wan_steps(fsm, zb[:, :, :, hs:he, ws:we], fam):
+                        px = vae.process_output(raw.to(device="cpu", dtype=torch.float32, copy=True))[0].movedim(0, -1)
+                        n = min(px.shape[0], t_out - written)
+                        px[:n].contiguous().numpy().tofile(fh)
+                        written += n
+                tiles.append((path, oh0, oh1, ow0, ow1, mask))
+                weight[:, oh0:oh1, ow0:ow1, :] += mask
+        weight = weight.clamp(min=1e-6)
+        step = max(1, int(64 * 2**20 // max(1, out_h * out_w * 3 * 4)))
+        for t0 in range(0, t_out, step):
+            k = min(step, t_out - t0)
+            out = torch.zeros((k, out_h, out_w, 3), dtype=torch.float32)
+            for path, oh0, oh1, ow0, ow1, mask in tiles:
+                th, tw = oh1 - oh0, ow1 - ow0
+                per = th * tw * 3
+                part = np.fromfile(path, dtype=np.float32, count=k * per, offset=t0 * per * 4).reshape(k, th, tw, 3)
+                out[:, oh0:oh1, ow0:ow1, :] += torch.from_numpy(part) * mask
+            yield out / weight
+    finally:
+        for path, *_ in tiles:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def stream_decode(vae, latent: dict, tile_px: int = 0) -> tuple[FrameStream, StreamInfo]:
     """FrameStream of [k, H, W, 3] float32 chunks in 0..1 (core's process_output applied), and how it was made."""
     z = latent["samples"] if isinstance(latent, dict) else latent
     if not torch.is_tensor(z) or z.ndim != 5:
@@ -238,12 +300,26 @@ def stream_decode(vae, latent: dict) -> tuple[FrameStream, StreamInfo]:
         except Exception:  # noqa: BLE001
             out_shape = None
 
+    sf = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+    tiled = fam == "wan21" and tile_px > 0 and max(z.shape[3], z.shape[4]) * sf > tile_px
+    tmp_dir = ""
+    if tiled:
+        try:
+            import folder_paths
+            tmp_dir = folder_paths.get_temp_directory()
+        except Exception:  # noqa: BLE001
+            import tempfile
+            tmp_dir = tempfile.gettempdir()
+
     def per_item(b: int) -> Iterator[torch.Tensor]:
         if fam == "whole":                      # core's full decode: already processed, [B, T, H, W, C]
             px = vae.decode(z[b:b + 1])
             yield px.reshape(-1, *px.shape[-3:]).to(device="cpu", dtype=torch.float32)
             return
         zb = z[b:b + 1].to(device=vae.device, dtype=vae.vae_dtype)
+        if fam == "wan21" and tiled:
+            yield from _wan_tiles_via_disk(vae, fsm, zb, fam, tile_px, tmp_dir)
+            return
         steps = _wan_steps(fsm, zb, fam) if fam in ("wan21", "wan22") else _chunked_steps(fsm, zb)
         for raw in steps:
             # a copy: the chunk may be a view into the decoder's buffer, and core's process_output works in place
@@ -264,7 +340,9 @@ def stream_decode(vae, latent: dict) -> tuple[FrameStream, StreamInfo]:
         h, w = z.shape[3] * sf, z.shape[4] * sf
     frames *= z.shape[0]
     info = StreamInfo(
-        method={"wan21": "Wan 2.1 VAE, streamed step by step with one causal cache",
+        method={"wan21": (f"Wan 2.1 VAE, {tile_px} px tiles, each decoded over the whole clip in one causal pass, "
+                          f"blended on disk, streamed in order") if tiled
+                else "Wan 2.1 VAE, streamed step by step with one causal cache",
                 "wan22": "Wan 2.2 VAE, streamed step by step with one causal cache",
                 "chunked_io": f"{type(fsm).__name__}: core's chunked output, streamed in order",
                 "whole": f"{type(fsm).__name__}: decoded whole (no exact streaming for this VAE)"}[fam],
