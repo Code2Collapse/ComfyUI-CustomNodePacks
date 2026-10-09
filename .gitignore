@@ -213,6 +213,7 @@ node.zip
 param_history.db
 counters.json
 *.bak
+*.bak_*
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
