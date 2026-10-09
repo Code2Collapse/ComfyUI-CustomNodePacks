@@ -202,6 +202,9 @@ def get_device(preferred: Optional[torch.device] = None) -> torch.device:
 
 # ---------- weight download ------------------------------------------
 def _download(url: str, dst: str) -> None:
+    # Offline switch: unit tests set it (L2.37), and so can a machine that must never reach the network.
+    if os.environ.get("C2C_NO_DOWNLOADS") == "1":
+        raise OSError(f"download disabled by C2C_NO_DOWNLOADS=1: {url}")
     log.info("[propainter_bridge] downloading %s -> %s", url, dst)
     tmp = dst + ".part"
     with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:

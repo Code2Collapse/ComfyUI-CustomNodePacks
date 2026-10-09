@@ -30,3 +30,14 @@ def _safe_setup(self):
 Package.setup = _safe_setup
 
 
+
+
+# ── 3. No network downloads from unit tests (L2.37) ─────────────────────
+# The optical-flow test reached ProPainter's RAFT weight downloader (21 MB) mid-suite and only fell back to LK when
+# the download failed. Unit tests must not touch the network: C2C_NO_DOWNLOADS=1 makes the downloader refuse at
+# once, so nodes take their documented offline fallback; a weight already on disk still loads. Set as an env var
+# (not a patch) so nothing is imported early. C2C_TESTS_ALLOW_DOWNLOADS=1 opts a deliberate real-weights run back in.
+import os as _os
+
+if _os.environ.get("C2C_TESTS_ALLOW_DOWNLOADS") != "1":
+    _os.environ.setdefault("C2C_NO_DOWNLOADS", "1")

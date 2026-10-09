@@ -134,14 +134,22 @@ def compute_flow(frame_a: torch.Tensor, frame_b: torch.Tensor,
     if a.shape != b.shape:
         raise ValueError(f"frame_a/b shape mismatch: {a.shape} vs {b.shape}")
 
+    models = None
     if HAS_PROPAINTER:
-        models = load_models(half=False)
+        # The RAFT code can be present while its weights are not (offline machine, failed download): fall back to
+        # LK then too, as the node's description promises, instead of failing the run (found by L2.37).
+        try:
+            models = load_models(half=False)
+        except FileNotFoundError as exc:
+            log.warning("[FlowRefineMEC] RAFT weights unavailable (%s) — using LK fallback", exc)
+    if models is not None:
         a_pp = _to_raft(a, models.device)
         b_pp = _to_raft(b, models.device)
         fwd = _raft_pair(models.raft, a_pp, b_pp, iters=iters)
         bwd = _raft_pair(models.raft, b_pp, a_pp, iters=iters)
     else:
-        log.warning("[FlowRefineMEC] ProPainter unavailable — using LK fallback")
+        if not HAS_PROPAINTER:
+            log.warning("[FlowRefineMEC] ProPainter unavailable — using LK fallback")
         a_g = _rgb_to_gray(a.permute(0, 3, 1, 2).contiguous())
         b_g = _rgb_to_gray(b.permute(0, 3, 1, 2).contiguous())
         fwd = _lk_pyramid_flow(a_g, b_g, levels=3, win=9, iters=5)

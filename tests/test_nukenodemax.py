@@ -269,3 +269,18 @@ def test_integrity_guard_runs_pip_check_actively():
     assert "rc" in rep["pip_check"], "pip_check did not store subprocess rc -> STATIC_GUARD"
     # The subprocess must have been invoked; rc is an int (0=clean, 1=conflicts).
     assert isinstance(rep["pip_check"]["rc"], int)
+
+
+def test_optical_flow_falls_back_to_lk_when_raft_weights_are_unavailable(monkeypatch):
+    # L2.37: with the RAFT code present but its weights missing (offline), the node must fall back to LK as its
+    # description says - it used to raise FileNotFoundError, and the suite downloaded 21 MB per run to hide it.
+    import nodes.propainter_flow_refine as fr
+    monkeypatch.setattr(fr, "HAS_PROPAINTER", True)
+
+    def _missing(*a, **k):
+        raise FileNotFoundError("raft-things.pth not present")
+    monkeypatch.setattr(fr, "load_models", _missing)
+    a = torch.zeros(1, 32, 32, 3); a[:, :, 8:12, :] = 1.0
+    b = torch.zeros(1, 32, 32, 3); b[:, :, 10:14, :] = 1.0
+    flow, warped, consistency = fr.compute_flow(a, b)
+    assert flow.shape == (1, 32, 32, 2) and warped.shape == a.shape and consistency.shape == (1, 32, 32)
