@@ -278,6 +278,49 @@ def test_container_pool_closes(tmp_path, cfr_clip):
     assert len(proc.open_files()) <= baseline + 2
 
 
+def _drain_spy(monkeypatch):
+    """Wrap reader._quiesce: after it runs, the decoder must be at EOF (a second drain raises EOFError)."""
+    reader = sys.modules["c2c_video.reader"]
+    orig = reader._quiesce
+    drained = []
+
+    def spy(container):
+        orig(container)
+        for st in container.streams.video:
+            cc = st.codec_context
+            if cc.is_open:
+                with pytest.raises(EOFError):
+                    cc.decode(None)
+                drained.append(True)
+
+    monkeypatch.setattr(reader, "_quiesce", spy)
+    return drained
+
+
+def test_capped_selection_drains_its_decoder_before_release(cfr_clip, monkeypatch):
+    # L2.36: a cap / every-nth stops mid-file with ~17 frames in flight in the frame-threaded decoder (measured);
+    # freeing it like that is where the suite hung (avcodec_free_context, from a Stream dealloc)
+    drained = _drain_spy(monkeypatch)
+    h = cv.probe_file(cfr_clip).trimmed(5).every(3).capped(4)
+    got = [cv.decode_index(f) for chunk in cv.iter_chunks(h, 2, fmt="uint8") for f in chunk]
+    assert got == [5, 8, 11, 14]
+    assert drained == [True]
+
+
+def test_pool_drains_decoders_on_eviction_and_drain(tmp_path, monkeypatch):
+    drained = _drain_spy(monkeypatch)
+    paths = []
+    for i in range(5):                      # one more than the pool holds: the first is evicted
+        p = str(tmp_path / f"clip{i}.mp4")
+        cv.make_test_clip("h264_cfr_b", p, frames=20, width=256, height=64)
+        paths.append(p)
+    for p in paths:
+        cv.read(cv.probe_file(p), [2])      # mid-file: frames left in flight
+    assert drained == [True]                # the evicted one
+    cv.drain_container_pool()
+    assert drained == [True] * 5
+
+
 def test_concurrent_reads(cfr_clip):
     h = cv.probe_file(cfr_clip, index="exact")
     positions_a = list(range(0, len(h), 3))

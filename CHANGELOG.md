@@ -39,6 +39,9 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 - **Load Video: "select every nth"** keeps the audio for the whole clip and reports the real frame rate (fps / n),
   as VHS does. The audio used to stop halfway.
 - **Nodes 2.0: double-clicking a slot** (Get/Set, Suggest) works; it did nothing there.
+- **C2C video reads that stop part-way through a file release their decoder cleanly.** A frame cap, every-nth or
+  random read left about 17 frames in flight in the decoder's threads, and freeing it like that hung once in the
+  test suite (inside FFmpeg). The decoder is now drained first; this costs nothing measurable on 1080p reads.
 - **Image batching is findable.** The setting is called "Image batching" (Settings › C2C › Image batching, also
   found by searching the Settings dialog): Off / Internal (default) / Universal. Per node type: right-click a
   node › Image batching for this node type.

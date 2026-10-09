@@ -60,6 +60,35 @@ def _open_container(path: str):
     return container
 
 
+def _quiesce(container) -> None:
+    """Drain every opened video decoder before the container is released (L2.36).
+
+    A selection that stops mid-file (a cap, every-nth, a random read) leaves the frame-threaded decoder with
+    frames in flight in its worker threads. PyAV frees the decoder when the Stream object is deallocated - after
+    close(), on a refcount drop or in a cyclic-GC pass at any later moment - and avcodec_free_context then waits
+    for those workers (the suite hang: SleepConditionVariableSRW inside avcodec_free_context, called from
+    av/stream.pyd). Sending EOF here finishes the in-flight frames, so every worker is idle when the free comes."""
+    try:
+        streams = list(container.streams.video)
+    except Exception:
+        return
+    for st in streams:
+        try:
+            cc = st.codec_context
+            if cc.is_open:
+                cc.decode(None)
+        except Exception:
+            pass
+
+
+def _release(container) -> None:
+    _quiesce(container)
+    try:
+        container.close()
+    except Exception:
+        pass
+
+
 class _ContainerEntry:
     def __init__(self, path: str):
         self.path = path
@@ -71,10 +100,7 @@ class _ContainerEntry:
         with self.lock:
             if not self.closed:
                 self.closed = True
-                try:
-                    self.container.close()
-                except Exception:
-                    pass
+                _release(self.container)
 
 
 def _pool_get(path: str) -> _ContainerEntry:
@@ -701,4 +727,4 @@ def _iter_file_chunks(handle: C2CVideo, sel, chunk_frames: int, fmt: OutputFmt) 
         if rest is not None:
             yield rest
     finally:
-        container.close()
+        _release(container)
