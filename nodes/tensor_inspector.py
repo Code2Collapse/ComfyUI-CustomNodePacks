@@ -38,6 +38,68 @@ _INSTALLED = False
 # ---------------------------------------------------------------------
 # Stat extraction (cheap, allocation-aware)
 # ---------------------------------------------------------------------
+_STAT_CHUNK = 1 << 22    # elements per reduction step (16 MB of fp32)
+
+
+def _flat_chunks(value):
+    """The tensor's elements as 1-D pieces of at most _STAT_CHUNK, without copying a contiguous tensor; a strided
+    one is copied one leading slice at a time."""
+    if value.ndim == 0:
+        yield value.reshape(1)
+        return
+    if value.is_contiguous():
+        flat = value.view(-1)
+        for i in range(0, flat.numel(), _STAT_CHUNK):
+            yield flat[i:i + _STAT_CHUNK]
+        return
+    for part in value.unbind(0):
+        yield from _flat_chunks(part)
+
+
+def _tensor_stats(value) -> Dict[str, Any]:
+    """Exact min / max / mean / std (unbiased) and NaN / Inf counts, reduced chunk by chunk in float64.
+
+    The whole-tensor version (`value[torch.isfinite(value)]`) made boolean-mask indexing build an int64 index of
+    [elements, ndim]: summarising one 2K x 24 IMAGE batch (0.59 GB) peaked at 6.1 GB and took 2.4 s - after EVERY
+    node, every run (L7.59 / L2.42). Here the extra memory is a few chunks, whatever the size."""
+    import math
+
+    import torch
+
+    is_float = value.is_floating_point()
+    n = n_nan = n_inf = 0
+    vmin, vmax, s, ss = math.inf, -math.inf, 0.0, 0.0
+    for c in _flat_chunks(value.detach()):
+        if is_float:
+            nan, inf = torch.isnan(c), torch.isinf(c)
+            k_nan, k_inf = int(nan.sum()), int(inf.sum())
+            n_nan += k_nan
+            n_inf += k_inf
+            if k_nan or k_inf:
+                c = c[~(nan | inf)]                       # a chunk-sized copy at most
+        if c.numel() == 0:
+            continue
+        c64 = c.double()
+        vmin = min(vmin, float(c64.min()))
+        vmax = max(vmax, float(c64.max()))
+        s += float(c64.sum())
+        ss += float((c64 * c64).sum())
+        n += c.numel()
+    out: Dict[str, Any] = {}
+    if is_float:
+        out["n_nan"], out["n_inf"] = n_nan, n_inf
+    if n == 0:
+        out["min"] = out["max"] = out["mean"] = None
+        return out
+    mean = s / n
+    out["min"] = vmin if is_float else int(vmin)
+    out["max"] = vmax if is_float else int(vmax)
+    out["mean"] = mean
+    if n > 1:
+        out["std"] = math.sqrt(max(0.0, (ss - s * mean) / (n - 1)))
+    return out
+
+
 def _summarize_value(value: Any) -> Dict[str, Any]:
     """Return a JSON-serializable summary for any node output value.
 
@@ -61,26 +123,7 @@ def _summarize_value(value: Any) -> Dict[str, Any]:
                 info["empty"] = True
                 return info
             try:
-                if value.is_floating_point():
-                    finite = torch.isfinite(value)
-                    n_finite = int(finite.sum().item())
-                    info["n_nan"] = int(torch.isnan(value).sum().item())
-                    info["n_inf"] = int(torch.isinf(value).sum().item())
-                    if n_finite > 0:
-                        clean = value[finite]
-                        info["min"] = float(clean.min().item())
-                        info["max"] = float(clean.max().item())
-                        info["mean"] = float(clean.mean().item())
-                        try:
-                            info["std"] = float(clean.float().std().item())
-                        except Exception:
-                            pass
-                    else:
-                        info["min"] = info["max"] = info["mean"] = None
-                else:
-                    info["min"] = int(value.min().item())
-                    info["max"] = int(value.max().item())
-                    info["mean"] = float(value.float().mean().item())
+                info.update(_tensor_stats(value))
             except Exception as e:
                 info["stat_error"] = str(e)
             return info

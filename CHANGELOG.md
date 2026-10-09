@@ -9,6 +9,10 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Fixed
 
+- **Big image batches no longer need 10x their size in RAM.** The C2C tensor inspector, which records min / max /
+  mean for every node output, built a huge index while doing it. A 2K x 24 frame batch (0.6 GB) briefly took 6 GB more
+  after every node, and runs on 16 GB machines could run out of memory. Measured on a 4K chain load → grade → blur →
+  save: 9.0 GB → 3.4 GB peak and 15.7 s → 9.9 s. The statistics are the same.
 - **Clear workflow no longer leaks old widget values into new nodes** (a ComfyUI bug, fixed on our side). After
   "Clear workflow", a node added in the same spot of the id sequence took a deleted node's value for every widget with
   the same name, for example a new sampler node came up with the old sampler. Seen in ComfyUI 1.52.7 with every C2C
