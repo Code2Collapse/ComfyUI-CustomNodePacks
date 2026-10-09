@@ -135,9 +135,8 @@ class C2CVAEQualityDecode:
                 }),
                 "tile_size": ("INT", {
                     "default": 0, "min": 0, "max": 1024, "step": 64,
-                    "tooltip": "Spatial tile size in PIXELS (0=no tiling). "
-                               "Converted with the VAE spatial factor (usually 8). "
-                               "256+ suits 1080p when memory is tight.",
+                    "tooltip": "Spatial tile size in PIXELS, used when tile_mode is manual (0 = no tiling). "
+                               "Converted with the VAE spatial factor (usually 8). 512 measured best for Wan on 8 GB.",
                 }),
                 "apply_aces": ("BOOLEAN", {
                     "default": False,
@@ -155,6 +154,13 @@ class C2CVAEQualityDecode:
                     "tooltip": "Core clamps decoder output to 0..1. Off keeps "
                                "out-of-range values (4.6x / 5.3x more accurate "
                                "there on Flux/Wan, measured M2). For HDR/EXR chains.",
+                }),
+                "tile_mode": (["auto", "off", "manual"], {
+                    "default": "auto",
+                    "tooltip": "auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB "
+                               "card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, "
+                               "with the same picture). off: never tile. manual: tile at tile_size. Video is tiled "
+                               "in space only - splitting a video VAE in time costs ~21 dB.",
                 }),
             },
         }
@@ -213,25 +219,66 @@ class C2CVAEQualityDecode:
                     "Try a larger tile_size, tile_size=0 for no tiling, "
                     "or check that the VAE supports 5D video latents."
                 ) from exc
+        if latent.ndim == 4 and tile_size > 0 and hasattr(vae, "decode_tiled"):
+            factor = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+            t = max(1, tile_size // factor)
+            return vae.decode_tiled(latent, tile_x=t, tile_y=t, overlap=max(1, t // 4))
         return vae.decode(latent)
 
+    @staticmethod
+    def _auto_tile_px(vae, latent, use_fp32: bool) -> int:
+        """0 when the untiled decode fits the GPU, else the largest tile (px) that does, by core's own estimate.
+
+        On a CPU nothing spills, and the untiled decode is the reference: 0."""
+        try:
+            import comfy.model_management as mm
+
+            dev = getattr(vae, "device", None)
+            if dev is None or getattr(dev, "type", "cpu") == "cpu" or not hasattr(vae, "memory_used_decode"):
+                return 0
+            dtype = torch.float32 if use_fp32 else getattr(vae, "vae_dtype", torch.float16)
+            budget = mm.get_free_memory(dev) * 0.8
+            if vae.memory_used_decode(tuple(latent.shape), dtype) <= budget:
+                return 0
+            factor = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+            for px in (1024, 768, 512, 384, 256):
+                lat = max(1, px // factor)
+                shape = list(latent.shape)
+                shape[-1], shape[-2] = min(shape[-1], lat), min(shape[-2], lat)
+                if vae.memory_used_decode(tuple(shape), dtype) <= budget:
+                    return px
+            return 256
+        except Exception as exc:  # noqa: BLE001 - an estimate failing must not stop the decode
+            log.debug("auto tile estimate failed: %s", exc)
+            return 0
+
     def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure,
-               clamp_output=True):
+               clamp_output=True, tile_mode="auto"):
         from contextlib import nullcontext
 
-        from ._vae_tiled import unclamped_output, vae_compute_dtype
+        from ._vae_tiled import fp32_vae_copy, unclamped_output, vae_compute_dtype
 
         with torch.no_grad():
             latent = samples["samples"]
+            if tile_mode == "off":
+                tile_size = 0
+            elif tile_mode != "manual":                       # "auto", and anything unknown
+                tile_size = self._auto_tile_px(vae, latent, bool(force_fp32))
+            self._last_tile_px = tile_size
 
             def _decode_with_contexts(use_fp32: bool):
-                dtype_ctx = (
-                    vae_compute_dtype(vae, torch.float32)
-                    if use_fp32 else nullcontext()
-                )
-                unclamp_ctx = unclamped_output(vae) if not clamp_output else nullcontext()
+                target, dtype_ctx = vae, nullcontext()
+                if use_fp32:
+                    # a core VAE gets its own fp32 copy (in-place casting broke core's pinned weights on a GPU);
+                    # anything else (dynamic VAEs, stand-ins) keeps the old cast-for-one-decode
+                    copy = None if self._is_vae_dynamic(vae) else fp32_vae_copy(vae)
+                    if copy is not None:
+                        target = copy
+                    else:
+                        dtype_ctx = vae_compute_dtype(vae, torch.float32)
+                unclamp_ctx = unclamped_output(target) if not clamp_output else nullcontext()
                 with dtype_ctx, unclamp_ctx:
-                    return self._run_decode(vae, latent, tile_size)
+                    return self._run_decode(target, latent, tile_size)
 
             try:
                 result = _decode_with_contexts(force_fp32)

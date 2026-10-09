@@ -30,6 +30,33 @@ def _is_vae_dynamic(vae) -> bool:
     return False
 
 
+_FP32_COPY: dict = {}          # id(vae) -> (vae, fp32 copy); one at a time (a second VAE replaces the first)
+
+
+def fp32_vae_copy(vae):
+    """An fp32 VAE built from this VAE's weights through core's own constructor, or None if `vae` is not a core VAE.
+
+    Casting the shared VAE's weights in place (vae_compute_dtype) breaks core 0.36 on a GPU: core pins those weights in
+    host memory and tracks each parameter's dtype, so after the cast it moved stale pinned buffers and CUDA refused
+    ("invalid argument"; L7.59 - the node's default force_fp32 crashed on an 8 GB card). A separate fp32 copy leaves
+    the shared VAE untouched. Cached for the next run; costs the weights once more in RAM (Wan 2.1: ~0.5 GB fp32)."""
+    try:
+        import importlib
+        core_sd = importlib.import_module("comfy.sd")
+    except Exception:
+        return None
+    if not isinstance(vae, core_sd.VAE) or not hasattr(vae, "get_sd"):
+        return None
+    hit = _FP32_COPY.get(id(vae))
+    if hit is not None and hit[0] is vae:
+        return hit[1]
+    sd = {k: v.detach().to("cpu", torch.float32) for k, v in vae.get_sd().items()}
+    copy = core_sd.VAE(sd=sd, dtype=torch.float32)
+    _FP32_COPY.clear()
+    _FP32_COPY[id(vae)] = (vae, copy)
+    return copy
+
+
 @contextmanager
 def vae_compute_dtype(vae, dtype: torch.dtype) -> Iterator[None]:
     """Set vae.vae_dtype for one decode; cast legacy (non-dynamic) weights."""

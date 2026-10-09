@@ -9,6 +9,9 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Fixed
 
+- **VAE Quality Decode works on the GPU with its defaults.** With "force fp32" on (the default) it changed the shared VAE's
+  weights in place. ComfyUI 0.36 pins those weights in memory, so the decode failed with "CUDA error: invalid argument".
+  It now decodes with its own fp32 copy of the VAE and leaves yours untouched.
 - **Big image batches no longer need 10x their size in RAM.** The C2C tensor inspector, which records min / max /
   mean for every node output, built a huge index while doing it. A 2K x 24 frame batch (0.6 GB) briefly took 6 GB more
   after every node, and runs on 16 GB machines could run out of memory. Measured on a 4K chain load → grade → blur →
@@ -68,6 +71,13 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Added
 
+- **VAE Quality Decode tiles by itself when the GPU is too small: tile mode Auto (default) / Off / Manual.** On an
+  8 GB card a 2K Wan decode took 502 s untiled, because Windows moved the overflow into system RAM. Tiled it took
+  37 s with the same picture. Video is tiled in space only: splitting a video VAE in time cost 21 dB. Saved workflows
+  that set a tile size open as Manual.
+- **A notice when a run spills GPU memory into system RAM** (Windows' NVIDIA driver does this instead of reporting
+  out-of-memory). It tells you the driver setting that fixes it. Shown once per session; Settings › C2C ›
+  Performance › GPU memory.
 - **SeedVR2 preview.** The SeedVR2 Video Upscaler node (numz pack, unchanged) shows each decoded batch while it runs, with
   a before/after wipe. When it finishes, a frame slider steps through every frame, and Difference and Alpha views show
   what changed. Settings › C2C › Video › SeedVR2 preview.

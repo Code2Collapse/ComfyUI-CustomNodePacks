@@ -1117,6 +1117,12 @@ try:
     except Exception as _vh:
         print(f"[C2C] browser VRAM headroom deferred: {_vh}")
     try:
+        from .nodes._c2c_gpu_spill import register_routes as _register_gpu_spill_routes
+        if _register_gpu_spill_routes():
+            print("[C2C] GPU spill check registered (/c2c/gpu/peak).")
+    except Exception as _gs:
+        print(f"[C2C] GPU spill check deferred: {_gs}")
+    try:
         from .nodes.c2c_video.routes import register_routes as _register_c2c_video_routes
         _register_c2c_video_routes()
         print("[C2C] video loader routes registered (/c2c/video/probe, /c2c/video/preview).")

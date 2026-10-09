@@ -2572,9 +2572,11 @@ High-fidelity VAE decode for Wan video. Forces fp32 precision, uses spatial-only
 | `samples` | `LATENT` |  | — |
 | `vae` | `VAE` |  | — |
 | `force_fp32` | `BOOLEAN` | default `True` | Force fp32 during VAE decode for maximum quality. |
-| `tile_size` | `INT` | default `0`, range 0…1024, step 64 | Spatial tile size (0=auto/no tiling). Set 256+ for 1080p. |
+| `tile_size` | `INT` | default `0`, range 0…1024, step 64 | Spatial tile size in pixels, used when tile_mode is manual (0 = no tiling). 512 measured best for Wan on 8 GB. |
 | `apply_aces` | `BOOLEAN` | default `False` | Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: linearised, tone-mapped, encoded once - same as C2C ACES Tonemap from sRGB). |
 | `exposure` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.05 | Exposure for ACES (only used if apply_aces=True). |
+| `clamp_output` | `BOOLEAN` | optional, default `True` | Core clamps decoder output to 0..1. Off keeps out-of-range values (for HDR/EXR chains). |
+| `tile_mode` | `auto` / `off` / `manual` | optional, default `auto` | auto: tile only when the untiled decode would not fit the GPU (2K Wan on 8 GB: 502 s untiled, 37 s tiled, same picture). off: never tile. manual: tile at tile_size. Video tiles in space only. Saves from before this option open as manual if they set a tile size, else auto. |
 
 **Outputs**
 

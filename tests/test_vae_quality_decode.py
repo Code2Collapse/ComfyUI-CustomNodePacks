@@ -327,7 +327,7 @@ def test_decode_tiled_failure_is_runtime_error_not_fallback(decode_node):
     vae.decode = boom
     lat = torch.randn(1, 4, 2, 32, 32)
     with pytest.raises(RuntimeError, match="Spatial-tiled VAE decode failed"):
-        decode_node.decode({"samples": lat}, vae, False, 256, False, 1.0, True)
+        decode_node.decode({"samples": lat}, vae, False, 256, False, 1.0, True, tile_mode="manual")
 
 
 def test_b1_legacy_fp32_decode_succeeds(decode_node):
@@ -385,3 +385,83 @@ def test_aces_decode_no_double_gamma(decode_node, monkeypatch):
     assert abs(float(out[0, 0, i, 0]) - 0.553) < 0.01
     assert float(out[0, 0, 0, 0]) == 0.0                       # black stays black
     assert torch.all(out[0, 0, 1:, 0] >= out[0, 0, :-1, 0])     # monotonic
+
+
+# ── L7.59: tile_mode off / auto / manual ────────────────────────────────────
+
+class _GpuLikeWanVAE(LegacyFakeVAE):
+    """Core's Wan 2.1 estimate on a pretend 8 GB card (the decode itself is the fake's)."""
+
+    device = types.SimpleNamespace(type="cuda")
+
+    def memory_used_decode(self, shape, dtype):
+        return (2200 if shape[2] <= 4 else 7000) * shape[3] * shape[4] * 64 * 2   # bytes, bf16
+
+
+def _free(monkeypatch, gb):
+    import comfy
+    mm = types.ModuleType("comfy.model_management")
+    mm.get_free_memory = lambda dev=None: gb * 2**30
+    monkeypatch.setitem(sys.modules, "comfy.model_management", mm)
+    monkeypatch.setattr(comfy, "model_management", mm, raising=False)
+
+
+def test_auto_picks_the_largest_tile_that_fits(decode_node, monkeypatch):
+    _free(monkeypatch, 6.5)
+    vae = _GpuLikeWanVAE()
+    lat_2k = torch.zeros(1, 16, 5, 135, 256)          # 2048x1080, 17 frames: ~31 GB untiled by core's estimate
+    assert decode_node._auto_tile_px(vae, lat_2k, False) == 512     # what the 8 GB measurement found best
+    small = torch.zeros(1, 16, 5, 30, 40)              # 320x240: fits -> untiled
+    assert decode_node._auto_tile_px(vae, small, False) == 0
+    assert decode_node._auto_tile_px(LegacyFakeVAE(), lat_2k, False) == 0   # no GPU device: untiled reference
+
+
+def test_off_and_manual_and_auto_route_the_decode(decode_node, monkeypatch):
+    seen = []
+    monkeypatch.setattr(decode_node, "_run_decode", lambda vae, latent, tile: seen.append(tile) or torch.zeros(1, 4, 8, 8, 3))
+    monkeypatch.setattr(decode_node, "_auto_tile_px", lambda vae, latent, fp32: 512)
+    lat = torch.zeros(1, 4, 2, 4, 4)
+    for mode, size, want in (("off", 256, 0), ("manual", 256, 256), ("manual", 0, 0), ("auto", 0, 512), ("auto", 256, 512)):
+        decode_node.decode({"samples": lat}, LegacyFakeVAE(), False, size, False, 1.0, True, tile_mode=mode)
+        assert seen[-1] == want, (mode, size)
+
+
+def test_image_latents_tile_through_core(decode_node):
+    calls = {}
+
+    class ImgVAE:
+        def spacial_compression_decode(self):
+            return 8
+
+        def decode_tiled(self, latent, tile_x, tile_y, overlap):
+            calls.update(tile_x=tile_x, tile_y=tile_y, overlap=overlap)
+            return torch.zeros(1, 64, 64, 3)
+
+    out = decode_node._run_decode(ImgVAE(), torch.zeros(1, 4, 8, 8), 512)
+    assert calls == {"tile_x": 64, "tile_y": 64, "overlap": 16} and out.shape == (1, 64, 64, 3)
+
+
+def test_fp32_copy_leaves_the_shared_vae_alone(monkeypatch):
+    # L7.59: casting the shared VAE in place broke core's pinned weights on a GPU; fp32 now uses a separate copy
+    import nodes._vae_tiled as VT
+
+    built = []
+
+    class FakeCoreVAE:
+        def __init__(self, sd=None, dtype=None, **_k):
+            self.sd, self.dtype = sd, dtype
+            built.append(self)
+
+        def get_sd(self):
+            return {"w": torch.ones(3, dtype=torch.bfloat16)}
+
+    fake_sd = types.ModuleType("comfy.sd")
+    fake_sd.VAE = FakeCoreVAE
+    monkeypatch.setitem(sys.modules, "comfy.sd", fake_sd)
+    monkeypatch.setattr(VT, "_FP32_COPY", {})
+    shared = FakeCoreVAE.__new__(FakeCoreVAE)          # the user's VAE (not built through __init__)
+    copy = VT.fp32_vae_copy(shared)
+    assert copy is not shared and copy.dtype == torch.float32 and copy.sd["w"].dtype == torch.float32
+    assert shared.get_sd()["w"].dtype == torch.bfloat16
+    assert VT.fp32_vae_copy(shared) is copy and len(built) == 1          # cached
+    assert VT.fp32_vae_copy(LegacyFakeVAE()) is None                    # not a core VAE: old path
