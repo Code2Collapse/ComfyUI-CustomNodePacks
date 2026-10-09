@@ -235,6 +235,24 @@ def resolve_output_path(
     return full, fname, rel, folder_type
 
 
+def build_preview_from_saved(paths: list[str], spec: FormatSpec) -> dict:
+    """An H.264 preview read back from the file just written, in chunks - for a streamed save, whose frames are gone
+    by the time the file is closed."""
+    import uuid
+
+    from .probe import probe_file, probe_sequence
+    from .routes import _DEFAULT_MAX_FRAMES, _encode_preview, _pick_encoder
+
+    fp = _import_folder_paths()
+    raw = probe_sequence(os.path.dirname(paths[0])) if spec.sequence else probe_file(paths[0])
+    _codec, ext = _pick_encoder()
+    name = f"c2c_save_preview_{uuid.uuid4().hex[:12]}.{ext}"
+    temp = fp.get_temp_directory()
+    os.makedirs(temp, exist_ok=True)
+    _encode_preview(raw, raw, os.path.join(temp, name), _DEFAULT_MAX_FRAMES)
+    return {"filename": name, "subfolder": "", "type": "temp"}
+
+
 def build_preview(images: torch.Tensor, fps: float, spec: FormatSpec, saved: dict) -> dict:
     if spec.browser_playable:
         return {
@@ -581,7 +599,10 @@ def encode_video(
         "subfolder": ui_subfolder,
         "type": folder_type,
     }
-    preview = build_preview(images, fps, spec, saved_meta)
+    if getattr(images, "delivered", None) is not None and not spec.browser_playable:
+        preview = build_preview_from_saved(paths, spec)          # streamed: the frames are already gone
+    else:
+        preview = build_preview(images, fps, spec, saved_meta)
 
     return {
         "paths": paths,

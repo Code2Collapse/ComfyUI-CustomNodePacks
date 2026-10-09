@@ -46,7 +46,6 @@ class SaveVideoC2C:
         default_in = default_colorspace_in()
         return {
             "required": {
-                "images": ("IMAGE",),
                 "format": (available_formats(),),
                 "fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 240.0, "step": 0.001,
@@ -61,6 +60,9 @@ class SaveVideoC2C:
                 }),
             },
             "optional": {
+                # first optional slot: saved workflows keep images on input 0 (it used to be the only required socket)
+                "images": ("IMAGE", {"tooltip": "The frames to save. Or wire latent + vae instead to decode and save "
+                                                "as one stream."}),
                 "audio": ("AUDIO",),
                 "video_info": ("VHS_VIDEOINFO",),
                 "colorspace_in": (spaces, {"default": default_in}),
@@ -69,11 +71,15 @@ class SaveVideoC2C:
                 "naming_resolved": ("STRING", {"default": "", "tooltip": "Set by the UI from c2c.saveVideo.naming."}),
                 "subfolder": ("STRING", {"default": ""}),
                 "save_output": ("BOOLEAN", {"default": True}),
+                "latent": ("LATENT", {"tooltip": "Stream save: a video latent decoded straight into the file, in order, "
+                                                 "keeping the VAE's causal state - the full frame batch is never held in "
+                                                 "RAM. Wire this and vae instead of images."}),
+                "vae": ("VAE", {"tooltip": "The VAE for latent (stream save)."}),
             },
         }
 
     @classmethod
-    def IS_CHANGED(cls, images, format, fps, filename_prefix, quality,  # noqa: A002
+    def IS_CHANGED(cls, format, fps, filename_prefix, quality, images=None,  # noqa: A002
                    audio=None, video_info=None, colorspace_in=None, colorspace_out=None,
                    naming="default", naming_resolved="", subfolder="", save_output=True, **kw):
         h = hashlib.md5()
@@ -95,11 +101,11 @@ class SaveVideoC2C:
 
     def execute(
         self,
-        images,
         format,  # noqa: A002
         fps,
         filename_prefix,
         quality=80,
+        images=None,
         audio=None,
         video_info=None,
         colorspace_in=None,
@@ -108,9 +114,22 @@ class SaveVideoC2C:
         naming_resolved="",
         subfolder="",
         save_output=True,
+        latent=None,
+        vae=None,
     ):
+        stream_info = None
+        if latent is not None or vae is not None:
+            if images is not None:
+                raise SaveVideoError("Wire images, OR latent + vae - not both.")
+            if latent is None or vae is None:
+                raise SaveVideoError("Stream save needs both latent and vae wired.")
+            from .c2c_video.stream_decode import stream_decode
+            images, stream_info = stream_decode(vae, latent)
+            src = latent.get("c2c_source_frames") if isinstance(latent, dict) else None
+            if isinstance(src, int) and 0 < src < images.shape[0]:
+                images.shape = (src,) + tuple(images.shape[1:])        # the frames the clip really had
         if images is None:
-            raise SaveVideoError("Connect an IMAGE batch to save.")
+            raise SaveVideoError("Connect an IMAGE batch, or latent + vae, to save.")
         if images.ndim == 3:
             images = images.unsqueeze(0)
         if images.shape[0] == 0:
@@ -127,7 +146,13 @@ class SaveVideoC2C:
             cs_out = default_colorspace_out_exr()
 
         pad_note = None
-        if spec.yuv420:
+        if spec.yuv420 and stream_info is not None:
+            n0, h0, w0, c0 = images.shape
+            if h0 % 2 or w0 % 2:                                      # pad each chunk as it arrives
+                images._transform = lambda chunk: pad_edge_replicate(chunk)[0]
+                images.shape = (n0, h0 + h0 % 2, w0 + w0 % 2, c0)
+                pad_note = f"{w0}x{h0} -> {w0 + w0 % 2}x{h0 + h0 % 2}"
+        elif spec.yuv420:
             images, pad_note = pad_edge_replicate(images)
 
         _, h, w, _ = images.shape
@@ -154,6 +179,10 @@ class SaveVideoC2C:
             pad_note=pad_note,
         )
 
+        if stream_info is not None:
+            result["warnings"] = list(result.get("warnings") or []) + list(stream_info.warnings)
+            images.close()
+            images = images.last_frame if images.last_frame is not None else torch.zeros(1, 64, 64, 3)
         filenames = "\n".join(result["paths"])
         ui_entry: dict[str, Any] = {
             "filename": result["filename"],
@@ -170,6 +199,8 @@ class SaveVideoC2C:
             "preview": result["preview"],
             "warnings": result.get("warnings") or [],
             "codec": spec.codec,
+            "stream": None if stream_info is None else {"method": stream_info.method, "exact": stream_info.exact,
+                                                        "bounded": stream_info.bounded},
         }
         return {
             "ui": {"c2c_save_video": [ui_entry]},

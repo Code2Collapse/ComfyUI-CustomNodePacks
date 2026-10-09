@@ -71,6 +71,11 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Added
 
+- **Save Video (C2C) stream save: wire a video latent and its VAE instead of images.** The clip is decoded in order,
+  keeping the VAE's causal state, and each frame goes straight into the file, so the full frame batch is never held in
+  RAM. The frames are identical to decoding first and then saving (checked on Wan 2.1, Wan 2.2, MiniMax H3 and LTX).
+  Measured with Wan 2.1 at 960x544 x 81 frames: 0.48 GB peak RAM instead of 1.57 GB, and the peak stays flat as clips
+  get longer. A VAE that cannot be streamed exactly is decoded whole, and the node says so.
 - **VAE Quality Decode tiles by itself when the GPU is too small: tile mode Auto (default) / Off / Manual.** On an
   8 GB card a 2K Wan decode took 502 s untiled, because Windows moved the overflow into system RAM. Tiled it took
   37 s with the same picture. Video is tiled in space only: splitting a video VAE in time cost 21 dB. Saved workflows
