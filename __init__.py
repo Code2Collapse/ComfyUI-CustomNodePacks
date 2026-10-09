@@ -74,7 +74,7 @@ from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
-# ── MEC Paint Suite (Advanced Paint Canvas + Fixer + Refiner + Builder) ───
+# ── MEC Paint Suite (Advanced Paint Canvas + Context Inpainter) ───
 from .nodes.mec_paint_suite import (
     NODE_CLASS_MAPPINGS as _PAINT_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
@@ -564,7 +564,7 @@ except Exception as _exc:  # pragma: no cover
     )
     _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY = {}, {}
 
-# HDR Color Science nodes (ACES tonemap, VAE quality decode, color space)
+# HDR Color Science (VAE quality decode)
 try:
     from .nodes.hdr_color_science import (
         NODE_CLASS_MAPPINGS as _HDR_MAPPINGS,
@@ -573,7 +573,7 @@ try:
 except Exception as _exc:  # pragma: no cover
     _c2c_rec_fail(
         "HDR Color Science", _exc,
-        hint="HDR color science nodes for ACES tonemap, VAE quality decode, and color space conversion.",
+        hint="HDR VAE quality decode node (fp32, tiling, optional ACES on decode).",
         group="nodes",
     )
     _HDR_MAPPINGS, _HDR_DISPLAY = {}, {}
@@ -625,22 +625,17 @@ from .nodes.video_stabilizer_mec import (
 #   - Tcl/Nk   (TclSerialize/Parse -> NukeMax_NkScriptSerialize / Parse)
 # FlowRefineMEC (post-flow inpainting prep) is kept here because it is part of
 # the ProPainter pipeline, not a generic Nuke flow utility.
-from .nodes.insight import InsightStatusMEC, install as _install_insight_hook
+from .nodes.insight import install as _install_insight_hook
 from .nodes.integrity_guard import (
-    IntegrityStatusMEC,
     register_routes as _register_integrity_routes,
     start_background_scan as _start_integrity_scan,
 )
 
 _NUKEMAX_MAPPINGS = {
     "ProPainterMEC": ProPainterMEC,
-    "InsightStatusMEC": InsightStatusMEC,
-    "IntegrityStatusMEC": IntegrityStatusMEC,
 }
 _NUKEMAX_DISPLAY = {
     "ProPainterMEC": "ProPainter \u2014 Temporal / Remove / Stitch / Refine / Flow",
-    "InsightStatusMEC": "Insight Status",
-    "IntegrityStatusMEC": "Integrity Status",
 }
 
 # ── VFX nodes migrated to ComfyUI-NukeMaxNodes (Apr 2026) ─────────────

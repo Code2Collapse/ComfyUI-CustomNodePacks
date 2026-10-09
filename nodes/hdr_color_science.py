@@ -1,118 +1,19 @@
-"""HDR Color Science nodes for professional video output.
+"""HDR-aware VAE decode for Wan video outputs.
 
-Provides ACES filmic tone mapping, linear/sRGB conversion, and
-HDR-aware processing for Wan video outputs. These nodes sit
-between VAE decode and final output to improve color quality.
+Registered node: C2CVAEQualityDecode (fp32, spatial tiling, optional ACES on decode).
 
-Inspired by fxtdstudios/radiance's 32-bit color science pipeline.
-Clean-room implementation of standard color science operations.
+Tone map and colour-space convert nodes (C2CACESTonemap, C2CColorSpaceConvert) were
+removed in L7.65; use ComfyUI-NukeMaxNodes HDR Tone Map and Color Space Convert instead.
 """
 from __future__ import annotations
 
 import logging
-import math
-from typing import Tuple
 
 import torch
 
 from ._is_changed_util import hash_args_and_kwargs
 
 log = logging.getLogger("MEC.HDRColor")
-
-
-class C2CACESTonemap:
-    """Apply ACES filmic tone mapping for HDR-to-SDR conversion.
-
-    Uses the Stephen Hill ACES approximation (from Unity/Unreal standard
-    libraries). Converts linear-light RGB to display-referred sRGB with
-    film-like highlight rolloff and shadow lift.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "source_space": (["sRGB", "Linear", "Log C3"], {
-                    "default": "sRGB",
-                    "tooltip": "Input color space. The image is linearised from this space before ACES processing.",
-                }),
-                "exposure": ("FLOAT", {
-                    "default": 1.0, "min": 0.01, "max": 10.0, "step": 0.05,
-                    "tooltip": "Exposure multiplier applied before tone mapping.",
-                }),
-                "contrast": ("FLOAT", {
-                    "default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05,
-                    "tooltip": "Contrast adjustment (applied in log space).",
-                }),
-                "saturation": ("FLOAT", {
-                    "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
-                    "tooltip": "Color saturation. <1 desaturates, >1 boosts.",
-                }),
-                "output_colorspace": (["sRGB (gamma)", "Linear", "ACES AP1"], {
-                    "default": "sRGB (gamma)",
-                    "tooltip": "Output color space. sRGB for display, Linear for compositing.",
-                }),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "apply_tonemap"
-    CATEGORY = "MEC/Color Science"
-    DESCRIPTION = (
-        "ACES filmic tone mapping with exposure, contrast, and saturation "
-        "controls. Converts linear-light or overbright pixels to "
-        "display-ready output with film-like highlight rolloff."
-    )
-
-    @classmethod
-    def IS_CHANGED(cls, image, source_space, exposure, contrast, saturation,
-                   output_colorspace, **kwargs):
-        return hash_args_and_kwargs(
-            image, source_space, exposure, contrast, saturation, output_colorspace, **kwargs,
-        )
-
-    def apply_tonemap(self, image, source_space, exposure, contrast, saturation,
-                      output_colorspace):
-        if not isinstance(image, torch.Tensor) or image.ndim != 4:
-            raise ValueError("C2CACESTonemap expects IMAGE tensor [B,H,W,C]")
-        with torch.no_grad():
-            x = image.clone().float()
-
-            # Linearise from source color space
-            if source_space == "sRGB":
-                x = _srgb_to_linear(x)
-            elif source_space == "Log C3":
-                x = _logc3_to_linear(x)
-            # "Linear" → already linear, no conversion needed
-
-            # Exposure
-            x = x * exposure
-
-            # Contrast in log space (around mid-gray 0.18)
-            if abs(contrast - 1.0) > 0.01:
-                x = x.clamp(min=1e-6)
-                log_x = torch.log2(x / 0.18)
-                log_x = log_x * contrast
-                x = 0.18 * (2.0 ** log_x)
-
-            # Saturation
-            if abs(saturation - 1.0) > 0.01:
-                luma = 0.2126 * x[..., 0:1] + 0.7152 * x[..., 1:2] + 0.0722 * x[..., 2:3]
-                x = luma + saturation * (x - luma)
-                x = x.clamp(min=0.0)
-
-            # ACES filmic curve
-            result = _aces_fit(x)
-
-            # Output colorspace
-            if output_colorspace == "sRGB (gamma)":
-                result = _linear_to_srgb(result)
-            elif output_colorspace == "Linear":
-                pass  # already linear after ACES
-            # ACES AP1 stays as-is (ACES output)
-
-            return (result,)
 
 
 class C2CVAEQualityDecode:
@@ -327,71 +228,7 @@ class C2CVAEQualityDecode:
             return (result,)
 
 
-class C2CColorSpaceConvert:
-    """Convert between color spaces (sRGB, Linear, Log).
-
-    Professional workflows need to move between color spaces:
-    - sRGB → Linear for compositing / blending
-    - Linear → sRGB for display
-    - Linear → Log C3 for color grading (DaVinci Resolve)
-    - Log C3 → Linear for returning to pipeline
-    """
-
-    DESCRIPTION = (
-        "Move an image between sRGB, scene-linear and ARRI Log C3. Compositing "
-        "and blending are only correct in LINEAR - adding two sRGB images "
-        "together adds their display curves as well as their light, which is "
-        "why a screen blend in sRGB looks wrong. Convert in, work, convert "
-        "back out. Log C3 is for handing off to a grade."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "source_space": (["sRGB", "Linear", "Log C3"], {
-                    "default": "sRGB",
-                }),
-                "target_space": (["sRGB", "Linear", "Log C3"], {
-                    "default": "Linear",
-                }),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "convert"
-    CATEGORY = "MEC/Color Science"
-
-    @classmethod
-    def IS_CHANGED(cls, image, source_space, target_space, **kwargs):
-        return hash_args_and_kwargs(image, source_space, target_space, **kwargs)
-
-    def convert(self, image, source_space, target_space):
-        if not isinstance(image, torch.Tensor) or image.ndim != 4:
-            raise ValueError("C2CColorSpaceConvert expects IMAGE tensor [B,H,W,C]")
-        if source_space == target_space:
-            return (image,)
-
-        with torch.no_grad():
-            x = image.clone().float()
-
-            # To linear first
-            if source_space == "sRGB":
-                x = _srgb_to_linear(x)
-            elif source_space == "Log C3":
-                x = _logc3_to_linear(x)
-
-            # From linear to target
-            if target_space == "sRGB":
-                x = _linear_to_srgb(x)
-            elif target_space == "Log C3":
-                x = _linear_to_logc3(x)
-
-            return (x.clamp(0.0, 1.0),)
-
-
-# ── Color space conversion helpers ────────────────────────────────────
+# ── Color space helpers (VAE decode ACES path) ─────────────────────────
 
 def _aces_fit(x: torch.Tensor) -> torch.Tensor:
     """Narkowicz's fit of the ACES filmic curve, scene-linear in, display-linear 0..1 out."""
@@ -411,33 +248,10 @@ def _srgb_to_linear(x: torch.Tensor) -> torch.Tensor:
     return torch.where(x <= 0.04045, low, high)
 
 
-def _linear_to_logc3(x: torch.Tensor) -> torch.Tensor:
-    """ARRI LogC3 (EI 800) encode."""
-    cut = 0.010591
-    a, b, c, d, e, f = 5.555556, 0.052272, 0.247190, 0.385537, -0.052272, 5.367655
-    low = e * x + f
-    high = c * torch.log10(a * x.clamp(min=1e-10) + b) + d
-    return torch.where(x < cut, low, high)
-
-
-def _logc3_to_linear(x: torch.Tensor) -> torch.Tensor:
-    """ARRI LogC3 (EI 800) decode."""
-    cut_log = 0.010591
-    a, b, c, d, e, f = 5.555556, 0.052272, 0.247190, 0.385537, -0.052272, 5.367655
-    cut_logc = c * math.log10(a * cut_log + b) + d
-    low = (x - f) / e
-    high = (10.0 ** ((x - d) / c) - b) / a
-    return torch.where(x < cut_logc, low, high)
-
-
 NODE_CLASS_MAPPINGS = {
-    "C2CACESTonemap":        C2CACESTonemap,
     "C2CVAEQualityDecode":   C2CVAEQualityDecode,
-    "C2CColorSpaceConvert":  C2CColorSpaceConvert,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "C2CACESTonemap":        "C2C ACES Tonemap",
     "C2CVAEQualityDecode":   "C2C VAE Quality Decode (HDR)",
-    "C2CColorSpaceConvert":  "C2C Color Space Convert",
 }

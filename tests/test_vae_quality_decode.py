@@ -369,11 +369,11 @@ def _ramp_decode(node, monkeypatch, exposure=1.0):
     return ramp, out
 
 
-def test_aces_decode_matches_the_tonemap_node_from_srgb(decode_node, monkeypatch):
-    from nodes.hdr_color_science import C2CACESTonemap
+def test_aces_decode_matches_the_aces_reference_from_srgb(decode_node, monkeypatch):
+    from nodes.hdr_color_science import _aces_fit, _linear_to_srgb, _srgb_to_linear
     for exposure in (1.0, 1.6):
         ramp, out = _ramp_decode(decode_node, monkeypatch, exposure)
-        (ref,) = C2CACESTonemap().apply_tonemap(ramp, "sRGB", exposure, 1.0, 1.0, "sRGB (gamma)")
+        ref = _linear_to_srgb(_aces_fit(_srgb_to_linear(ramp) * exposure))
         torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-5)
 
 

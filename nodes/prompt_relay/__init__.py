@@ -10,23 +10,17 @@ from __future__ import annotations
 from ._nodes import (
     PromptRelayAdvancedOptionsC2C,
     PromptRelayEncodeC2C,
-    PromptRelayEncodeKijaiC2C,
-    PromptRelayEncodeSmartC2C,
     PromptRelayRestoreKijaiC2C,
 )
 
 NODE_CLASS_MAPPINGS = {
     "PromptRelayEncodeC2C":          PromptRelayEncodeC2C,
-    "PromptRelayEncodeSmartC2C":     PromptRelayEncodeSmartC2C,
-    "PromptRelayEncodeKijaiC2C":     PromptRelayEncodeKijaiC2C,
     "PromptRelayRestoreKijaiC2C":    PromptRelayRestoreKijaiC2C,
     "PromptRelayAdvancedOptionsC2C": PromptRelayAdvancedOptionsC2C,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptRelayEncodeC2C":          "Prompt Relay Encode",
-    "PromptRelayEncodeSmartC2C":     "Prompt Relay Encode (Smart) — deprecated",
-    "PromptRelayEncodeKijaiC2C":     "Prompt Relay Encode (Kijai) — deprecated",
     "PromptRelayRestoreKijaiC2C":    "Prompt Relay Restore (Kijai)",
     "PromptRelayAdvancedOptionsC2C": "Prompt Relay Advanced Options",
 }

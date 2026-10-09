@@ -88,14 +88,6 @@ const OVERLAYS = [
         defaultOn: false,
     },
     {
-        id: "moodBoardBtn",
-        selector: "#mec-mood-btn",
-        label: "Mood Board button",
-        category: ["C2C Overlays", "Right-rail buttons"],
-        tip: "🎨 reference image palette.",
-        defaultOn: false,
-    },
-    {
         id: "surpriseBtn",
         selector: "#mec-surprise-btn",
         label: "Surprise Me button",

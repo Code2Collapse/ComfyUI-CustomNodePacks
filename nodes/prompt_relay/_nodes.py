@@ -1,9 +1,8 @@
 # Prompt Relay — node classes (refined port).
 #
-# Four nodes registered:
-#   - PromptRelayEncodeC2C        : native MODEL+CLIP path
-#   - PromptRelayEncodeSmartC2C   : native, smart-prompt syntax
-#   - PromptRelayEncodeKijaiC2C   : Kijai WANVIDEOMODEL + WANTEXTENCODER path
+# Nodes registered:
+#   - PromptRelayEncodeC2C        : unified encoder (native / smart / kijai backends)
+#   - PromptRelayRestoreKijaiC2C  : undo Kijai patch
 #   - PromptRelayAdvancedOptionsC2C : RELAY_OPTIONS bundle (optional)
 #
 # Display names follow ComfyUI-CustomNodePacks convention (no _C2C suffix in UI).
@@ -125,8 +124,8 @@ def _encode_native(
 #
 # Replaces:
 #   - PromptRelayEncodeC2C       (native)        -> backend="native"
-#   - PromptRelayEncodeSmartC2C  (smart syntax)  -> backend="smart"
-#   - PromptRelayEncodeKijaiC2C  (Kijai Wan path) -> backend="kijai"
+#   - PromptRelayEncodeSmartC2C  (removed L7.65) -> backend="smart" (auto-migrate on load)
+#   - PromptRelayEncodeKijaiC2C  (removed L7.65) -> backend="kijai" (auto-migrate on load)
 #
 # One node, dynamic sockets. The JS extension (web/extensions/c2c/
 # prompt_relay_dyn.js) hides the inputs/outputs that don't apply to the
@@ -350,91 +349,6 @@ class PromptRelayEncodeC2C:
                 segment_lengths, epsilon, relay_options,
             )
         return (patched, conditioning, None, None)
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Deprecated alias shims — keep for ONE release, then drop.
-# ────────────────────────────────────────────────────────────────────────
-class _DeprecatedPRBase:
-    _WARNED: set = set()
-
-    @classmethod
-    def _warn_once(cls, replacement_backend: str):
-        if cls.__name__ in _DeprecatedPRBase._WARNED:
-            return
-        _DeprecatedPRBase._WARNED.add(cls.__name__)
-        log.warning(
-            "[prompt_relay] %s is deprecated and will be removed next release. "
-            "Use PromptRelayEncodeC2C with backend='%s'.",
-            cls.__name__, replacement_backend,
-        )
-
-
-class PromptRelayEncodeSmartC2C(_DeprecatedPRBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
-                "latent": ("LATENT",),
-                "global_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "smart_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "normalize_by_tokens": ("BOOLEAN", {"default": False}),
-                "epsilon": ("FLOAT", {"default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4}),
-            },
-            "optional": {"relay_options": ("RELAY_OPTIONS",)},
-        }
-
-    RETURN_TYPES = ("MODEL", "CONDITIONING")
-    RETURN_NAMES = ("model", "positive")
-    FUNCTION = "execute"
-    CATEGORY = _CATEGORY
-    DESCRIPTION = "DEPRECATED — use PromptRelayEncodeC2C with backend='smart'."
-
-    def execute(self, model, clip, latent, global_prompt, smart_prompt,
-                normalize_by_tokens, epsilon, relay_options=None):
-        self._warn_once("smart")
-        patched, conditioning = _encode_smart(
-            model, clip, latent, global_prompt, smart_prompt,
-            normalize_by_tokens, epsilon, relay_options,
-        )
-        return (patched, conditioning)
-
-
-class PromptRelayEncodeKijaiC2C(_DeprecatedPRBase):
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("WANVIDEOMODEL",),
-                "t5": ("WANTEXTENCODER",),
-                "latent_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1}),
-                "global_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "local_prompts": ("STRING", {"multiline": True, "default": ""}),
-                "segment_lengths": ("STRING", {"default": ""}),
-                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "epsilon": ("FLOAT", {"default": 1e-3, "min": 1e-6, "max": 0.99, "step": 1e-4}),
-                "encode_device": (["gpu", "cpu"], {"default": "gpu"}),
-            },
-            "optional": {"relay_options": ("RELAY_OPTIONS",)},
-        }
-
-    RETURN_TYPES = ("WANVIDEOMODEL", "WANVIDEOTEXTEMBEDS")
-    RETURN_NAMES = ("model", "text_embeds")
-    FUNCTION = "execute"
-    CATEGORY = _CATEGORY
-    DESCRIPTION = "DEPRECATED — use PromptRelayEncodeC2C with backend='kijai'."
-
-    def execute(self, model, t5, latent_frames, global_prompt, local_prompts,
-                segment_lengths, negative_prompt, epsilon, encode_device,
-                relay_options=None):
-        self._warn_once("kijai")
-        patched_model, text_embeds = _encode_kijai(
-            model, t5, latent_frames, global_prompt, local_prompts,
-            segment_lengths, negative_prompt, epsilon, encode_device, relay_options,
-        )
-        return (patched_model, text_embeds)
 
 
 # ────────────────────────────────────────────────────────────────────────

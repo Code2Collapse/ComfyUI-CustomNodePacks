@@ -1,0 +1,276 @@
+{
+ "KSampler": {
+  "pack": "core",
+  "inputs": {
+   "model": [
+    "required",
+    "MODEL",
+    null
+   ],
+   "seed": [
+    "required",
+    "INT",
+    null
+   ],
+   "steps": [
+    "required",
+    "INT",
+    null
+   ],
+   "cfg": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "sampler_name": [
+    "required",
+    "COMBO",
+    [
+     "euler",
+     "euler_cfg_pp",
+     "euler_ancestral",
+     "euler_ancestral_cfg_pp",
+     "heun",
+     "heunpp2",
+     "exp_heun_2_x0",
+     "exp_heun_2_x0_sde",
+     "dpm_2",
+     "dpm_2_ancestral",
+     "lms",
+     "dpm_fast",
+     "dpm_adaptive",
+     "dpmpp_2s_ancestral",
+     "dpmpp_2s_ancestral_cfg_pp",
+     "dpmpp_sde",
+     "dpmpp_sde_gpu",
+     "dpmpp_2m",
+     "dpmpp_2m_cfg_pp",
+     "dpmpp_2m_sde",
+     "dpmpp_2m_sde_gpu",
+     "dpmpp_2m_sde_heun",
+     "dpmpp_2m_sde_heun_gpu",
+     "dpmpp_3m_sde",
+     "dpmpp_3m_sde_gpu",
+     "ddpm",
+     "lcm",
+     "ipndm",
+     "ipndm_v",
+     "deis",
+     "cfgpp_ud10_ab",
+     "res_multistep",
+     "res_multistep_cfg_pp",
+     "res_multistep_ancestral",
+     "res_multistep_ancestral_cfg_pp",
+     "gradient_estimation",
+     "gradient_estimation_cfg_pp",
+     "er_sde",
+     "seeds_2",
+     "seeds_3",
+     "sa_solver",
+     "sa_solver_pece",
+     "ddim",
+     "uni_pc",
+     "uni_pc_bh2"
+    ]
+   ],
+   "scheduler": [
+    "required",
+    "COMBO",
+    [
+     "simple",
+     "sgm_uniform",
+     "karras",
+     "exponential",
+     "ddim_uniform",
+     "beta",
+     "normal",
+     "linear_quadratic",
+     "kl_optimal"
+    ]
+   ],
+   "positive": [
+    "required",
+    "CONDITIONING",
+    null
+   ],
+   "negative": [
+    "required",
+    "CONDITIONING",
+    null
+   ],
+   "latent_image": [
+    "required",
+    "LATENT",
+    null
+   ],
+   "denoise": [
+    "required",
+    "FLOAT",
+    null
+   ]
+  },
+  "outputs": [
+   "LATENT"
+  ]
+ },
+ "NukeMax_Grade": {
+  "pack": "ComfyUI-NukeMaxNodes",
+  "inputs": {
+   "image": [
+    "required",
+    "IMAGE",
+    null
+   ],
+   "blackpoint": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "whitepoint": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "lift": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "gain": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "multiply": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "offset": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "gamma": [
+    "required",
+    "FLOAT",
+    null
+   ],
+   "mask": [
+    "optional",
+    "MASK",
+    null
+   ]
+  },
+  "outputs": [
+   "IMAGE"
+  ]
+ },
+ "ColorSpaceConvertMEC": {
+  "pack": "ComfyUI-NukeMaxNodes",
+  "inputs": {
+   "image": [
+    "required",
+    "IMAGE",
+    null
+   ],
+   "src_space": [
+    "required",
+    "COMBO",
+    [
+     "srgb",
+     "linear",
+     "rec709",
+     "acescg",
+     "logc3"
+    ]
+   ],
+   "dst_space": [
+    "required",
+    "COMBO",
+    [
+     "srgb",
+     "linear",
+     "rec709",
+     "acescg",
+     "logc3"
+    ]
+   ]
+  },
+  "outputs": [
+   "IMAGE"
+  ]
+ },
+ "NukeMax_HDRToneMap": {
+  "pack": "ComfyUI-NukeMaxNodes",
+  "inputs": {
+   "image": [
+    "required",
+    "IMAGE",
+    null
+   ],
+   "preset": [
+    "optional",
+    "COMBO",
+    [
+     "None (Custom)",
+     "Cinematic Film",
+     "HDR Display",
+     "Web / Social"
+    ]
+   ],
+   "operator": [
+    "optional",
+    "COMBO",
+    [
+     "filmic_aces",
+     "filmic_uncharted2",
+     "agx",
+     "reinhard",
+     "reinhard_extended",
+     "reinhard_luminance",
+     "linear_clamp",
+     "exposure_only"
+    ]
+   ],
+   "exposure": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "gamma": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "white_point": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "contrast": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "saturation": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "highlight_compression": [
+    "optional",
+    "FLOAT",
+    null
+   ],
+   "shadow_lift": [
+    "optional",
+    "FLOAT",
+    null
+   ]
+  },
+  "outputs": [
+   "IMAGE"
+  ]
+ }
+}

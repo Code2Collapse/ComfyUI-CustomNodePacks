@@ -31,6 +31,8 @@ function describe(type) {
     try {
         const n = LiteGraph.createNode(type);
         if (n) {
+            // configure() hands widgets_values out in order to the widgets that serialize; match that list
+            const ws = (n.widgets || []).filter((w) => w.serialize !== false);
             info = {
                 inputs: (n.inputs || []).map((i) => {
                     const o = { name: i.name, type: i.type };
@@ -39,8 +41,11 @@ function describe(type) {
                     return o;
                 }),
                 outputs: (n.outputs || []).map((o) => ({ name: o.name, type: o.type })),
-                widgets: (n.widgets || []).map((w) => w.name),
-                values: (n.widgets || []).map((w) => (typeof w.value === "object" ? null : w.value)),
+                widgets: ws.map((w) => w.name),
+                // as LGraphNode.serialize writes them: objects JSON-cloned, undefined -> null
+                values: ws.map((w) => (typeof w.value === "object" && w.value
+                    ? JSON.parse(JSON.stringify(w.value)) : (w.value ?? null))),
+                required: Object.keys(LiteGraph.registered_node_types[type]?.nodeData?.input?.required || {}),
             };
             n.onRemoved?.();
         }
@@ -52,14 +57,19 @@ function describe(type) {
 const isRegistered = (type) => !!LiteGraph.registered_node_types?.[type];
 
 function tell(report) {
-    if (!report.migrated.length && !report.problems.length) return;
+    if (!report.migrated.length && !report.removed.length && !report.problems.length) return;
+    const end = (s) => (/[.!?]$/.test(s) ? s : `${s}.`);
+    const list = (xs) => end(xs.map((x) => x.replace(/[.]$/, "")).join("; "));
     const lines = [];
-    if (report.migrated.length) lines.push(`Updated ${report.migrated.length} old C2C node(s): ${report.migrated.join("; ")}.`);
-    if (report.problems.length) lines.push(`Not carried over: ${report.problems.join("; ")}.`);
+    if (report.migrated.length) lines.push(`Updated ${report.migrated.length} old C2C node(s): ${list(report.migrated)}`);
+    if (report.removed.length) lines.push(`Removed (no successor): ${list(report.removed)}`);
+    if (report.notes.length) lines.push(`Check: ${report.notes.map(end).join(" ")}`);
+    if (report.problems.length) lines.push(`Not carried over: ${list(report.problems)}`);
+    const attention = report.problems.length || report.notes.length || report.removed.length;
     const toast = app.extensionManager?.toast;
     if (toast?.add) {
-        toast.add({ severity: report.problems.length ? "warn" : "info", summary: "C2C: old nodes updated",
-                    detail: lines.join(" "), life: report.problems.length ? 20000 : 8000 });
+        toast.add({ severity: attention ? "warn" : "info", summary: "C2C: old nodes updated",
+                    detail: lines.join(" "), life: attention ? 30000 : 8000 });
     }
     console.info(`[C2C] ${lines.join(" ")}`);
 }

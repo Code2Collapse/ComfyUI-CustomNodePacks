@@ -47,7 +47,6 @@ const PRETTY = {
     cost_estimator: "Cost Estimator",
     complexity_hud: "Complexity HUD",
     compatibility_hints: "Compatibility Hints",
-    style_presets: "Style Presets",
     frame_overlay: "Frame Overlay",
     insight_overlay: "Insight Overlay",
     isolate: "Isolate Subgraph",

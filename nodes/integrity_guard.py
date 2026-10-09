@@ -22,9 +22,9 @@ Findings are pushed to the JS frontend via PromptServer socket
 "nukenodemax.integrity". The JS overlay draws warning badges on affected
 nodes (or globally if pip).
 
-Exposes a node `IntegrityStatusMEC` so users can request a status string
-mid-graph (with optional force-rescan) and an HTTP endpoint
-`/nukenodemax/reinstall?package=NAME` that runs `uv pip install --reinstall`
+The latest report is also in the Diagnostics sidebar's Integrity tab (the
+Integrity Status node that printed it was removed in L7.65). An HTTP endpoint
+`/nukenodemax/reinstall?package=NAME` runs `uv pip install --reinstall`
 (or `pip install --force-reinstall` as fallback), guarded behind a confirm
 flag.
 """
@@ -952,38 +952,5 @@ def register_routes(server) -> None:
     log.info("[integrity] routes registered")
 
 
-# =====================================================================
-# Node
-# =====================================================================
-class IntegrityStatusMEC:
-    DESCRIPTION = "Returns the latest integrity scan as a string."
-    CATEGORY = "C2C/Diagnostics"
-    FUNCTION = "status"
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("report",)
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"trigger_rescan": ("BOOLEAN", {"default": False})}}
-
-    def status(self, trigger_rescan: bool):
-        if trigger_rescan:
-            # User-initiated: bypass cache and run immediately.
-            start_background_scan(force=True, delay=0.0)
-        elif not _LAST_REPORT.get("ready"):
-            # Auto-load from cache if available, else spawn a fresh scan
-            # with no delay (the user is actively asking for a result).
-            start_background_scan(force=False, delay=0.0)
-        with _LOCK:
-            r = dict(_LAST_REPORT)
-        if not r.get("ready"):
-            return ("integrity scan running…",)
-        events = r.get("events", [])
-        head = (f"events={len(events)} pip_check_ok={r['pip_check']['ok']} "
-                f"checksum_drift={len(r.get('checksum_drift', []))}")
-        body = "\n".join(f"  - {e['kind']}: {e['message']}" for e in events[:20])
-        return (head + ("\n" + body if body else ""),)
-
-
-NODE_CLASS_MAPPINGS = {"IntegrityStatusMEC": IntegrityStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"IntegrityStatusMEC": "Integrity Status"}
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

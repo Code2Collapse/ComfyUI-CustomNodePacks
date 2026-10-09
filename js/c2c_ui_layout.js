@@ -2,8 +2,8 @@
  * c2c_ui_layout.js — single source of truth for C2C quick-action surface.
  *
  * Why this exists:
- *   Pre-v2.1, C2C had two competing surfaces for the eight quick-action
- *   buttons (Workflow Wizard, Group Presets, Mood Board, Surprise Me,
+ *   Pre-v2.1, C2C had two competing surfaces for the seven quick-action
+ *   buttons (Workflow Wizard, Group Presets, Surprise Me,
  *   A/B Split, Cost Estimator, Flame Graph, Undo Panel):
  *     1) Per-module floating buttons on document.body (right-rail).
  *     2) The c2c.launcher sidebar tab (which delegates by .click()).
@@ -13,7 +13,7 @@
  *   `c2c.ui.layout` setting:
  *
  *     "mini-row"  — horizontal toolbar pinned under the top menu,
- *                   eight color-coded tiles (this file).
+ *                   seven color-coded tiles (this file).
  *     "sidebar"   — sidebar tab only (legacy launcher behaviour).
  *     "floating"  — original right-rail floating buttons (legacy v1).
  *
@@ -27,7 +27,6 @@
  * Color coding (Catppuccin Mocha palette, by category):
  *     Workflow Wizard  blue       (workflow)
  *     Group Presets    mauve      (templates)
- *     Mood Board       pink       (creative)
  *     Surprise Me      yellow     (random)
  *     A/B Split        green      (compare)
  *     Cost Estimator   peach      (economics)
@@ -55,7 +54,6 @@ const SIDEBAR_STYLE_ID = "c2c-launcher-sidebar-style";
 const TARGETS = [
     { btnId: "mec-wizard-btn",        icon: "🧙", label: "Wizard",   tip: "Step-through workflow builder", color: "var(--c2c-blue)" },
     { btnId: "mec-group-presets-btn", icon: "📚", label: "Presets",  tip: "Save & recall node-group templates", color: "var(--c2c-mauve)" },
-    { btnId: "mec-mood-btn",          icon: "🎨", label: "Mood",     tip: "Reference image palette", color: "var(--c2c-pink)" },
     { btnId: "mec-surprise-btn",      icon: "🎰", label: "Surprise", tip: "Randomize seeds & queue", color: "var(--c2c-yellow)" },
     { btnId: "mec-ab-btn",            icon: "⚖",  label: "A/B",      tip: "Compare last two outputs", color: "var(--c2c-green)" },
     { btnId: "mec-cost-btn",          icon: "💰", label: "Cost",     tip: "Estimate render cost", color: "var(--c2c-peach)" },

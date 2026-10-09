@@ -2,7 +2,7 @@
 // ---------------------------------------------------------------------------
 // This pack ships 100+ JS extensions. On a busy graph (1000s of nodes) the
 // cumulative per-frame + per-event overhead of the *visual extras* (completion
-// FX, animated noodles, always-on HUD pills, per-node badges, mood board, etc.)
+// FX, animated noodles, always-on HUD pills, per-node badges, etc.)
 // is what makes a loaded box feel sluggish/unresponsive. Lite mode lets the user
 // switch those OFF so only the functional tools remain.
 //
@@ -47,7 +47,7 @@ export const LITE = TIER === "lite";
 // script leaves that node with no UI, which is a bug, not a saving.
 const SKIP_WHEN_LITE = new Set([
     "C2C.StatsPill", "C2C.IntBadge", "C2C.StatusStrip", "C2C.TopDock",
-    "C2C.UILayout", "C2C.MoodBoard", "C2C.FrameOverlay", "C2C.GraphHealth",
+    "C2C.UILayout", "C2C.FrameOverlay", "C2C.GraphHealth",
     "C2C.NodeBookmarks", "tokens",   // NOT "C2C.TokenCounter" — that name never existed
     "C2C.SurpriseMe",
     "C2C.CostEstimator", "C2C.MetadataInspector", "C2C.OverlayVisibility",

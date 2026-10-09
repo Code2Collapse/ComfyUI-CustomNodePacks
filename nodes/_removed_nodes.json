@@ -1,0 +1,18 @@
+[
+ {
+  "old_node_id": "InsightStatusMEC",
+  "outputs": [
+   "STRING"
+  ],
+  "note": "L7.65 P26 (owner-approved removal): printed whether the Insight executor wrap is installed; the Insight overlay (js/nukenodemax/insight_overlay.js) shows per-node time and memory itself.",
+  "c2c_note": "per-node time and memory show as the Insight badges under each node."
+ },
+ {
+  "old_node_id": "IntegrityStatusMEC",
+  "outputs": [
+   "STRING"
+  ],
+  "note": "L7.65 P26 (owner-approved removal): printed the latest integrity scan; the Diagnostics sidebar's Integrity tab shows it.",
+  "c2c_note": "the integrity report is in the Diagnostics sidebar, Integrity tab."
+ }
+]

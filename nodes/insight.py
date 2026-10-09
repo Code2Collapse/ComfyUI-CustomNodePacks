@@ -273,33 +273,5 @@ def install() -> bool:
     return True
 
 
-# =====================================================================
-# Diagnostic node — exposes status into the graph
-# =====================================================================
-class InsightStatusMEC:
-    DESCRIPTION = ("Reports whether the Insight executor wrap is installed, plus "
-                   "the current torch/cuda memory snapshot.")
-    CATEGORY = "C2C/Diagnostics"
-    FUNCTION = "report"
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("status",)
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {}}
-
-    def report(self):
-        installed = install()
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info()
-            mb = lambda x: f"{x / (1 << 20):.0f}MB"
-            mem = (f"cuda free={mb(free)}/{mb(total)} "
-                   f"alloc={mb(torch.cuda.memory_allocated())} "
-                   f"peak={mb(torch.cuda.max_memory_allocated())}")
-        else:
-            mem = "cpu"
-        return (f"insight_installed={installed} | {mem}",)
-
-
-NODE_CLASS_MAPPINGS = {"InsightStatusMEC": InsightStatusMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"InsightStatusMEC": "Insight Status"}
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

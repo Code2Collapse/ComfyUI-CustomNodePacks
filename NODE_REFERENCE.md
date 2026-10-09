@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **143** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **135** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -13,7 +13,7 @@
 | MaskEditControl | 17 |
 | Image Mask Editor | 1 |
 | Model analysis | 2 |
-| MEC Paint Suite | 4 |
+| MEC Paint Suite | 2 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 3 |
@@ -33,12 +33,12 @@
 | Luminance Keyer | 1 |
 | Background Remover | 1 |
 | Semantic Segment | 1 |
-| NukeNodeMax | 3 |
+| NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
 | C2C helpers | 12 |
-| Prompt Relay | 5 |
+| Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
-| HDR Color Science | 3 |
+| HDR Color Science | 1 |
 | LocateAnything | 2 |
 | Nano Banana | 1 |
 | Control AOV | 1 |
@@ -48,7 +48,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 143 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Image Mask Editor 1, Model analysis 2, MEC Paint Suite 4, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 3, Video Stabilizer 4, C2C helpers 12, Prompt Relay 5, AsymFlow sampler 1, HDR Color Science 3, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 135 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Image Mask Editor 1, Model analysis 2, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 12, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -332,40 +332,6 @@ VFX-AOV control fusion: emit depth/canny/pose/normal/motion/ID as separate passe
 ---
 
 ## C2C/Diagnostics
-
-
-### InsightStatusMEC
-
-**Shown in the menu as:** Insight Status
-
-Reports whether the Insight executor wrap is installed, plus the current torch/cuda memory snapshot.
-
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `status` | `STRING` | — |
-
-
-### IntegrityStatusMEC
-
-**Shown in the menu as:** Integrity Status
-
-Returns the latest integrity scan as a string.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `trigger_rescan` | `BOOLEAN` | default `False` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `report` | `STRING` | — |
 
 
 ### MaskFailureExplainerMEC
@@ -1201,49 +1167,6 @@ Interactive paint canvas with procedural mask math: hardness, expansion, and blu
 | 1 | `processed_mask` | `MASK` | Processed mask after hardness, expansion, and blur stages. |
 
 
-### MECBuilderSampler
-
-**Shown in the menu as:** Builder Sampler
-
-KSampler with adaptive CFG curves (Constant, Linear, Ease Down) plus an optional self-correction polish pass and resolution presets.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `model` | `MODEL` |  | Diffusion model to sample with. |
-| `positive` | `CONDITIONING` |  | Positive conditioning. |
-| `negative` | `CONDITIONING` |  | Negative conditioning. |
-| `steps` | `INT` | default `20`, range 1…200 | Number of sampling steps. |
-| `cfg` | `FLOAT` | default `8.0`, range 0.0…30.0, step 0.1 | Starting CFG scale (also constant CFG when cfg_mode is Constant). |
-| `sampler_name` | choice: `euler`, `dpmpp_2m` |  | Sampler algorithm. |
-| `scheduler` | choice: `normal`, `karras` |  | Sigma schedule. |
-| `denoise` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Denoise strength (1.0 = full sampling, lower = partial img2img). |
-| `cfg_mode` | choice: `Constant`, `Linear`, `Ease Down` | default `"Constant"` | Adaptive CFG curve shape across steps. |
-| `cfg_finish` | `FLOAT` | default `4.0`, range 0.0…30.0, step 0.1 | Final CFG value at the end of the schedule (used by Linear / Ease Down). |
-| `cfg_pivot` | `FLOAT` | default `5.0`, range 0.0…30.0, step 0.1 | Pivot CFG value used by Ease Down to control the curve knee. |
-| `self_correction` | `BOOLEAN` | default `False` | Run a 2-step polish pass after the main sampling. |
-| `resolution_preset` | choice: `SDXL (1024x1024)`, `SD1.5 (512x512)`, `Custom` | default `"SD1.5 (512x512)"` | Preset resolution; choose Custom to use custom_width/custom_height. |
-| `custom_width` | `INT` | default `512`, range 64…4096, step 8 | Custom output width in pixels (used when preset is Custom). |
-| `custom_height` | `INT` | default `512`, range 64…4096, step 8 | Custom output height in pixels (used when preset is Custom). |
-| `seed` | `INT` | default `0`, range 0…18446744073709551615 | Random seed. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `vae` | `VAE` |  | Optional VAE; when provided, decodes the latent into preview_image. |
-| `latent_image` | `LATENT` |  | Optional input latent (img2img). When omitted, an empty latent is created. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `latent` | `LATENT` | Sampled latent (with optional polish pass applied). |
-| 1 | `preview_image` | `IMAGE` | VAE-decoded preview image when a VAE is provided (zero image otherwise). |
-
-
 ### MECContextInpainter
 
 **Shown in the menu as:** Context Inpainter / Fixer
@@ -1331,47 +1254,6 @@ Auto face detection (YOLO11) + per-face crop + AI pre-upscale + context-aware sa
 | 0 | `image` | `IMAGE` | Image with detected faces detailed and blended back over the original. |
 | 1 | `face_mask` | `MASK` | Combined face-detection mask covering all processed faces. |
 | 2 | `info_json` | `STRING` | JSON metadata: per-face bbox, score, prompt, denoise. |
-
-
-### MECToneRefiner
-
-**Shown in the menu as:** Tone Refiner
-
-Auto-correct tone (black/white-point + gray-world), optionally upscale, and apply a fake center-focus depth-of-field blur.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | Image to refine. |
-| `neural_corrector` | `BOOLEAN` | default `True` | Enable deterministic tone + gray-world correction (not a learned model). |
-| `corrector_tone` | `FLOAT` | default `0.6`, range 0.0…1.0, step 0.01 | Blend amount toward the tone-corrected image (0 = original, 1 = full correction). |
-| `corrector_color` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.01 | Blend amount toward the gray-world color-corrected image. |
-| `highlight_protection` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Roll-off applied above 95th-percentile to prevent highlight clipping (0 = none, 1 = strong). |
-| `shadow_lift` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Lift shadows below the 5th-percentile (0 = none, 1 = strong; mirrors highlight_protection on the dark side). |
-| `enable_upscale` | `BOOLEAN` | default `False` | Upscale by upscale_factor; uses upscale_model if provided, bicubic otherwise. |
-| `upscale_factor` | `FLOAT` | default `1.5`, range 1.0…4.0, step 0.05 | Upscale multiplier applied when enable_upscale is True. |
-| `ai_enable_dof` | `BOOLEAN` | default `False` | Apply depth-based DOF (uses depth_map if connected, else fake center-focus). |
-| `ai_dof_strength` | `FLOAT` | default `1.0`, range 0.0…4.0, step 0.05 | Strength of the DOF blur (also scales the maximum blur radius). |
-| `ai_dof_focus_depth` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.01 | Focus plane: when depth_map is connected this is the in-focus depth value (0=near,1=far); without depth_map it controls center-focus tightness. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `latent` | `LATENT` |  | Optional pre-existing latent; passed through when supplied (skips VAE encode). |
-| `vae` | `VAE` |  | VAE used to encode the refined image into refined_latent (when auto_upscale is True). |
-| `upscale_model` | `UPSCALE_MODEL` |  | Optional UPSCALE_MODEL (RealESRGAN / 4x-NMKD / etc.). When connected and enable_upscale is True, used instead of bicubic and resized to upscale_factor. |
-| `depth_map` | `MASK` |  | Optional depth map (0=near,1=far). Drives DOF when connected; replaces the fake center-focus radial gradient. |
-| `auto_upscale` | `BOOLEAN` | default `True` | When True (default, back-compat), encode the refined image through the supplied VAE to produce `refined_latent`. Set False to skip the VAE-encode and return a zero placeholder. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `refined_image` | `IMAGE` | Tone- and color-corrected image (optionally upscaled and DOF-blurred). |
-| 1 | `refined_latent` | `LATENT` | VAE-encoded latent of the refined image (zero placeholder when auto_upscale is False). |
 
 
 ---
@@ -2394,74 +2276,6 @@ Unified Prompt Relay encoder (native / smart / kijai). Dynamic sockets via the J
 | 3 | `wan_text_embeds` | `WANVIDEOTEXTEMBEDS` | — |
 
 
-### PromptRelayEncodeKijaiC2C
-
-**Shown in the menu as:** Prompt Relay Encode (Kijai) — deprecated
-
-DEPRECATED — use PromptRelayEncodeC2C with backend='kijai'.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `model` | `WANVIDEOMODEL` |  | — |
-| `t5` | `WANTEXTENCODER` |  | — |
-| `latent_frames` | `INT` | default `81`, range 1…10000, step 1 | — |
-| `global_prompt` | `STRING` | default `""`, multiline | — |
-| `local_prompts` | `STRING` | default `""`, multiline | — |
-| `segment_lengths` | `STRING` | default `""` | — |
-| `negative_prompt` | `STRING` | default `""`, multiline | — |
-| `epsilon` | `FLOAT` | default `0.001`, range 1e-06…0.99, step 0.0001 | — |
-| `encode_device` | choice: `gpu`, `cpu` | default `"gpu"` | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `relay_options` | `RELAY_OPTIONS` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `model` | `WANVIDEOMODEL` | — |
-| 1 | `text_embeds` | `WANVIDEOTEXTEMBEDS` | — |
-
-
-### PromptRelayEncodeSmartC2C
-
-**Shown in the menu as:** Prompt Relay Encode (Smart) — deprecated
-
-DEPRECATED — use PromptRelayEncodeC2C with backend='smart'.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `model` | `MODEL` |  | — |
-| `clip` | `CLIP` |  | — |
-| `latent` | `LATENT` |  | — |
-| `global_prompt` | `STRING` | default `""`, multiline | — |
-| `smart_prompt` | `STRING` | default `""`, multiline | — |
-| `normalize_by_tokens` | `BOOLEAN` | default `False` | — |
-| `epsilon` | `FLOAT` | default `0.001`, range 1e-06…0.99, step 0.0001 | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `relay_options` | `RELAY_OPTIONS` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `model` | `MODEL` | — |
-| 1 | `positive` | `CONDITIONING` | — |
-
-
 ### PromptRelayRestoreKijaiC2C
 
 **Shown in the menu as:** Prompt Relay Restore (Kijai)
@@ -2511,51 +2325,6 @@ Reverses the audio waveform (torch.flip on the sample dim), preserving sample ra
 ---
 
 ## MEC/Color Science
-
-
-### C2CACESTonemap
-
-**Shown in the menu as:** C2C ACES Tonemap
-
-ACES filmic tone mapping with exposure, contrast, and saturation controls. Converts linear-light or overbright pixels to display-ready output with film-like highlight rolloff.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `source_space` | choice: `sRGB`, `Linear`, `Log C3` | default `"sRGB"` | Input color space. The image is linearised from this space before ACES processing. |
-| `exposure` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.05 | Exposure multiplier applied before tone mapping. |
-| `contrast` | `FLOAT` | default `1.0`, range 0.5…2.0, step 0.05 | Contrast adjustment (applied in log space). |
-| `saturation` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | Color saturation. <1 desaturates, >1 boosts. |
-| `output_colorspace` | choice: `sRGB (gamma)`, `Linear`, `ACES AP1` | default `"sRGB (gamma)"` | Output color space. sRGB for display, Linear for compositing. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `out0` | `IMAGE` | — |
-
-
-### C2CColorSpaceConvert
-
-**Shown in the menu as:** C2C Color Space Convert
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `source_space` | choice: `sRGB`, `Linear`, `Log C3` | default `"sRGB"` | — |
-| `target_space` | choice: `sRGB`, `Linear`, `Log C3` | default `"Linear"` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `out0` | `IMAGE` | — |
 
 
 ### C2CVAEQualityDecode

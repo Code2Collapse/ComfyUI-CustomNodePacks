@@ -1607,5 +1607,391 @@
   ],
   "dropped": [],
   "note": "Deprecated shim; force_backend becomes method. Its 'flow' arrives verbatim and VideoStabilizerMEC accepts it as an alias of raft_flow."
+ },
+ {
+  "old_node_id": "MECBuilderSampler",
+  "new_node_id": "KSampler",
+  "old_widget_ids": [
+   "steps",
+   "cfg",
+   "sampler_name",
+   "scheduler",
+   "denoise",
+   "cfg_mode",
+   "cfg_finish",
+   "cfg_pivot",
+   "self_correction",
+   "resolution_preset",
+   "custom_width",
+   "custom_height",
+   "seed",
+   "control_after_generate"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "model",
+    "old_id": "model"
+   },
+   {
+    "new_id": "positive",
+    "old_id": "positive"
+   },
+   {
+    "new_id": "negative",
+    "old_id": "negative"
+   },
+   {
+    "new_id": "latent_image",
+    "old_id": "latent_image"
+   },
+   {
+    "new_id": "seed",
+    "old_id": "seed"
+   },
+   {
+    "new_id": "steps",
+    "old_id": "steps"
+   },
+   {
+    "new_id": "cfg",
+    "old_id": "cfg"
+   },
+   {
+    "new_id": "sampler_name",
+    "old_id": "sampler_name"
+   },
+   {
+    "new_id": "scheduler",
+    "old_id": "scheduler"
+   },
+   {
+    "new_id": "denoise",
+    "old_id": "denoise"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [
+   "cfg_mode",
+   "cfg_finish",
+   "cfg_pivot",
+   "self_correction",
+   "resolution_preset",
+   "custom_width",
+   "custom_height",
+   "vae"
+  ],
+  "note": "L7.65 P10 (owner-approved removal): Builder Sampler duplicated core KSampler.",
+  "c2c_note": "KSampler runs one constant CFG (the old CFG curve, 2-step polish pass, size preset and preview image are gone). If latent_image is empty, connect an Empty Latent Image - the old node made one itself."
+ },
+ {
+  "old_node_id": "MECToneRefiner",
+  "new_node_id": "NukeMax_Grade",
+  "old_widget_ids": [
+   "neural_corrector",
+   "corrector_tone",
+   "corrector_color",
+   "highlight_protection",
+   "shadow_lift",
+   "enable_upscale",
+   "upscale_factor",
+   "ai_enable_dof",
+   "ai_dof_strength",
+   "ai_dof_focus_depth",
+   "auto_upscale"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [
+   "neural_corrector",
+   "corrector_tone",
+   "corrector_color",
+   "highlight_protection",
+   "shadow_lift",
+   "enable_upscale",
+   "upscale_factor",
+   "ai_enable_dof",
+   "ai_dof_strength",
+   "ai_dof_focus_depth",
+   "auto_upscale",
+   "latent",
+   "vae",
+   "upscale_model",
+   "depth_map"
+  ],
+  "note": "L7.65 P11 (owner-approved removal): an automatic levels + gray-world grade and a fake blur; no setting maps.",
+  "c2c_note": "Grade starts neutral, so the picture changes: Tone Refiner's automatic levels and colour balance, upscale and depth-of-field have no Grade equivalent. Set Grade by eye; the refined_latent output is gone."
+ },
+ {
+  "old_node_id": "C2CColorSpaceConvert",
+  "new_node_id": "ColorSpaceConvertMEC",
+  "old_widget_ids": [
+   "source_space",
+   "target_space"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "src_space",
+    "old_id": "source_space"
+   },
+   {
+    "new_id": "dst_space",
+    "old_id": "target_space"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "c2c_values": [
+   {
+    "new_id": "src_space",
+    "old_id": "source_space",
+    "map": {
+     "sRGB": "srgb",
+     "Linear": "linear",
+     "Log C3": "logc3"
+    }
+   },
+   {
+    "new_id": "dst_space",
+    "old_id": "target_space",
+    "map": {
+     "sRGB": "srgb",
+     "Linear": "linear",
+     "Log C3": "logc3"
+    }
+   }
+  ],
+  "note": "L7.65 P14 (owner-approved removal): NukeMax Color Space Convert (gained logc3 for this). The CNP Log C3 toe had scrambled constants (near-black encoded to white).",
+  "c2c_note": "Same conversion; linear and Log C3 results are no longer clipped at 1.0, and the Log C3 toe now follows ARRI's curve (the old one turned near-black pixels white)."
+ },
+ {
+  "old_node_id": "C2CACESTonemap",
+  "new_node_id": "NukeMax_HDRToneMap",
+  "old_widget_ids": [
+   "source_space",
+   "exposure",
+   "contrast",
+   "saturation",
+   "output_colorspace"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "contrast",
+    "old_id": "contrast"
+   },
+   {
+    "new_id": "saturation",
+    "old_id": "saturation"
+   },
+   {
+    "new_id": "preset",
+    "set_value": "None (Custom)"
+   },
+   {
+    "new_id": "operator",
+    "set_value": "filmic_aces"
+   },
+   {
+    "new_id": "white_point",
+    "set_value": 1.0
+   },
+   {
+    "new_id": "highlight_compression",
+    "set_value": 0.0
+   },
+   {
+    "new_id": "shadow_lift",
+    "set_value": 0.0
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [
+   "source_space"
+  ],
+  "c2c_values": [
+   {
+    "new_id": "exposure",
+    "old_id": "exposure",
+    "fn": "log2",
+    "clamp": [
+     -5.0,
+     5.0
+    ]
+   },
+   {
+    "new_id": "gamma",
+    "old_id": "output_colorspace",
+    "map": {
+     "sRGB (gamma)": 2.2,
+     "Linear": 1.0,
+     "ACES AP1": 1.0
+    }
+   }
+  ],
+  "note": "L7.65 P14 (owner-approved removal): NukeMax HDR Tone Map. exposure multiplier -> stops (log2). Measured (docs/evidence/L7.65/wave1_equivalence.json): same Narkowicz curve (linear out: 0.0 difference), sRGB out max 0.034, contrast 1.2 / saturation 0.8 max 0.41.",
+  "c2c_note": "HDR Tone Map expects scene-linear input: if the image is sRGB or Log C3 (the old node converted it itself), put Color Space Convert (srgb or logc3 -> linear) in front. The ACES curve is the same; the sRGB output now uses gamma 2.2 (up to 3% brighter or darker), and contrast and saturation act on the tone-mapped image, so if you changed them from 1.0, set them again by eye."
+ },
+ {
+  "old_node_id": "PromptRelayEncodeKijaiC2C",
+  "new_node_id": "PromptRelayEncodeC2C",
+  "old_widget_ids": [
+   "latent_frames",
+   "global_prompt",
+   "local_prompts",
+   "segment_lengths",
+   "negative_prompt",
+   "epsilon",
+   "encode_device"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "wan_model",
+    "old_id": "model"
+   },
+   {
+    "new_id": "wan_t5",
+    "old_id": "t5"
+   },
+   {
+    "new_id": "latent_frames",
+    "old_id": "latent_frames"
+   },
+   {
+    "new_id": "global_prompt",
+    "old_id": "global_prompt"
+   },
+   {
+    "new_id": "local_prompts",
+    "old_id": "local_prompts"
+   },
+   {
+    "new_id": "segment_lengths",
+    "old_id": "segment_lengths"
+   },
+   {
+    "new_id": "negative_prompt",
+    "old_id": "negative_prompt"
+   },
+   {
+    "new_id": "epsilon",
+    "old_id": "epsilon"
+   },
+   {
+    "new_id": "encode_device",
+    "old_id": "encode_device"
+   },
+   {
+    "new_id": "relay_options",
+    "old_id": "relay_options"
+   },
+   {
+    "new_id": "backend",
+    "set_value": "kijai"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P31 (owner-approved removal): both call nodes.prompt_relay._nodes._encode_kijai with the same arguments."
+ },
+ {
+  "old_node_id": "PromptRelayEncodeSmartC2C",
+  "new_node_id": "PromptRelayEncodeC2C",
+  "old_widget_ids": [
+   "global_prompt",
+   "smart_prompt",
+   "normalize_by_tokens",
+   "epsilon"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "model",
+    "old_id": "model"
+   },
+   {
+    "new_id": "clip",
+    "old_id": "clip"
+   },
+   {
+    "new_id": "latent",
+    "old_id": "latent"
+   },
+   {
+    "new_id": "global_prompt",
+    "old_id": "global_prompt"
+   },
+   {
+    "new_id": "smart_prompt",
+    "old_id": "smart_prompt"
+   },
+   {
+    "new_id": "normalize_by_tokens",
+    "old_id": "normalize_by_tokens"
+   },
+   {
+    "new_id": "epsilon",
+    "old_id": "epsilon"
+   },
+   {
+    "new_id": "relay_options",
+    "old_id": "relay_options"
+   },
+   {
+    "new_id": "backend",
+    "set_value": "smart"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P31 (owner-approved removal): both call nodes.prompt_relay._nodes._encode_smart with the same arguments."
  }
 ]

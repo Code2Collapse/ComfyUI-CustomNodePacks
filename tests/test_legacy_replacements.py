@@ -32,7 +32,14 @@ NEW_NODE_MODULES = {
     "ProPainterMEC": "nodes.propainter_unified",
     "MaskOpsMEC": "nodes.mask_matting.node",
     "VideoStabilizerMEC": "nodes.video_stabilizer_mec",
+    "PromptRelayEncodeC2C": "nodes.prompt_relay._nodes",
 }
+
+# Successors outside this pack (core, NukeMax - L7.65 consolidation): their signatures are recorded from the live
+# definitions (docs/evidence/L7.65/scripts/wave_fixtures.py) and re-checked against the real packs by the workspace
+# test tests/test_cross_pack_migrations.py; this pack's CI has neither NukeMax nor always core.
+EXTERNAL_PATH = PACK_ROOT / "tests" / "fixtures_external_targets.json"
+REMOVED_PATH = PACK_ROOT / "nodes" / "_removed_nodes.json"
 
 EXTERNAL_ALLOWLIST = {
     "VHS_LoadVideo": "ComfyUI-VideoHelperSuite",
@@ -84,6 +91,22 @@ def _resolve_new_class(new_node_id: str) -> type:
     if cls is None:
         pytest.fail(f"{new_node_id} not found in {module_name}")
     return cls
+
+
+def _new_signature(new_node_id: str) -> tuple[dict[str, tuple[str, str, list[str] | None]], list[str]]:
+    """{input name: (section, type, combo options)}, output types - from the class, or the recorded external one."""
+    if new_node_id in NEW_NODE_MODULES:
+        cls = _resolve_new_class(new_node_id)
+        raw = cls.INPUT_TYPES()
+        ins = {}
+        for section in ("required", "optional"):
+            for name, spec in (raw.get(section) or {}).items():
+                ins[name] = (section, _input_type_name(spec), _combo_options(spec))
+        return ins, [str(t) for t in cls.RETURN_TYPES]
+    ext = _load_json(EXTERNAL_PATH).get(new_node_id)
+    if ext is None:
+        pytest.fail(f"{new_node_id}: neither in NEW_NODE_MODULES nor in {EXTERNAL_PATH.name}")
+    return {k: tuple(v) for k, v in ext["inputs"].items()}, list(ext["outputs"])
 
 
 def _expected_widget_ids(fixture_inputs: list[dict[str, Any]]) -> list[str]:
@@ -157,15 +180,15 @@ def legacy_fixtures() -> dict[str, Any]:
 class TestReplacementTable:
     def test_every_new_node_importable(self, replacement_table):
         seen = {row["new_node_id"] for row in replacement_table}
-        assert seen == set(NEW_NODE_MODULES)
-        for new_id in seen:
+        external = set(_load_json(EXTERNAL_PATH))
+        assert seen - external == set(NEW_NODE_MODULES)
+        for new_id in seen - external:
             _resolve_new_class(new_id)
 
     def test_input_mappings_valid(self, replacement_table, legacy_fixtures):
         for row in replacement_table:
             old_id = row["old_node_id"]
-            new_cls = _resolve_new_class(row["new_node_id"])
-            new_inputs = _flatten_input_types(new_cls)
+            new_inputs, _ = _new_signature(row["new_node_id"])
             fixture = legacy_fixtures[old_id]
             set_value_new_ids = set()
             mapped_new_ids = set()
@@ -176,10 +199,7 @@ class TestReplacementTable:
                 )
                 if "set_value" in entry:
                     set_value_new_ids.add(new_key)
-                    options = _combo_options(
-                        (new_cls.INPUT_TYPES().get("required") or {}).get(new_key)
-                        or (new_cls.INPUT_TYPES().get("optional") or {}).get(new_key)
-                    )
+                    options = new_inputs[new_key][2]
                     if options is not None:
                         assert entry["set_value"] in options, (
                             f"{old_id}: set_value {entry['set_value']!r} not in combo {new_key}"
@@ -195,9 +215,8 @@ class TestReplacementTable:
     def test_output_mappings_valid(self, replacement_table, legacy_fixtures):
         for row in replacement_table:
             old_id = row["old_node_id"]
-            new_cls = _resolve_new_class(row["new_node_id"])
+            _, new_out = _new_signature(row["new_node_id"])
             old_out = legacy_fixtures[old_id]["outputs"]
-            new_out = new_cls.RETURN_TYPES
             for mapping in row.get("output_mapping") or []:
                 oi = mapping["old_idx"]
                 ni = mapping["new_idx"]
@@ -219,7 +238,7 @@ class TestReplacementTable:
             )
             mapped_old = {
                 e["old_id"] for e in (row.get("input_mapping") or []) if "old_id" in e
-            }
+            } | {v["old_id"] for v in (row.get("c2c_values") or []) if "old_id" in v}
             dropped = set(row.get("dropped") or [])
             for inp in fixture["inputs"]:
                 name = inp["name"]
@@ -228,6 +247,69 @@ class TestReplacementTable:
                 pytest.fail(
                     f"{old_id}: fixture input {name!r} not in input_mapping or dropped"
                 )
+
+    def test_c2c_values_translate_every_old_value(self, replacement_table, legacy_fixtures):
+        """A value map must cover every option the old combo offered, land inside the new combo, and target a
+        widget of the successor - otherwise a saved value would arrive untranslated (and fail validation)."""
+        for row in replacement_table:
+            values = row.get("c2c_values") or []
+            if not values:
+                continue
+            new_inputs, _ = _new_signature(row["new_node_id"])
+            old_inputs = _fixture_inputs_by_name(legacy_fixtures[row["old_node_id"]])
+            for v in values:
+                assert v["new_id"] in new_inputs, f"{row['old_node_id']}: c2c_values new_id {v['new_id']!r}"
+                new_opts = new_inputs[v["new_id"]][2]
+                if "set" in v:
+                    assert new_opts is None or v["set"] in new_opts
+                    continue
+                assert v["old_id"] in old_inputs and old_inputs[v["old_id"]]["widget"], v
+                assert v.get("fn") in (None, "log2"), v
+                if "map" in v:
+                    old_opts = old_inputs[v["old_id"]].get("options")
+                    if old_opts is not None:
+                        assert set(old_opts) <= set(v["map"]), (
+                            f"{row['old_node_id']}.{v['old_id']}: no translation for {set(old_opts) - set(v['map'])}")
+                    if new_opts is not None:
+                        assert set(map(str, v["map"].values())) <= set(new_opts), v
+
+    def test_rows_with_a_successor_are_not_also_removals(self, replacement_table):
+        removed = {r["old_node_id"] for r in _load_json(REMOVED_PATH)}
+        assert not removed & {r["old_node_id"] for r in replacement_table}
+
+
+class TestRemovedNodes:
+    """L7.65: nodes removed with no successor are not core NodeReplace rows; the route marks them for the front end."""
+
+    def test_removed_ids_are_no_longer_registered(self):
+        removed = {r["old_node_id"] for r in _load_json(REMOVED_PATH)}
+        assert removed and not removed & _pack_node_ids()
+
+    def test_route_serves_replacements_then_removals(self):
+        from nodes._legacy_replacements import load_table, migration_rows
+
+        rows = migration_rows()
+        table = load_table()
+        assert rows[: len(table)] == table
+        tail = rows[len(table):]
+        assert [r["old_node_id"] for r in tail] == [r["old_node_id"] for r in _load_json(REMOVED_PATH)]
+        assert all(r["c2c_remove"] is True and r.get("c2c_note") for r in tail)
+
+    def test_removals_are_not_registered_with_core(self, monkeypatch):
+        _patch_node_replace(monkeypatch)
+        from nodes._legacy_replacements import register
+
+        calls: list[Any] = []
+
+        class _Server:
+            class node_replace_manager:  # noqa: N801 - stands in for the instance
+                @staticmethod
+                def register(node_replace):
+                    calls.append(node_replace.old_node_id)
+
+        register(_Server())
+        removed = {r["old_node_id"] for r in _load_json(REMOVED_PATH)}
+        assert calls and not removed & set(calls)
 
 
 class _StubNodeReplace:
@@ -263,8 +345,8 @@ class TestRegister:
             node_replace_manager = _Manager()
 
         count = register(_Server())
-        assert count == len(replacement_table) == 17
-        assert len(calls) == 17
+        assert count == len(replacement_table) == 23
+        assert len(calls) == 23
         for row, call in zip(replacement_table, calls):
             assert call.old_node_id == row["old_node_id"]
             assert call.new_node_id == row["new_node_id"]
@@ -285,7 +367,7 @@ class TestRegister:
         """Real io.NodeReplace + real NodeReplaceManager, in a fresh interpreter with real core
         (this process has stubbed comfy modules, so it cannot import app.node_replace_manager)."""
         live = _live()["C2C_REPLACEMENTS_JSON="]
-        assert live["registered"] == len(replacement_table) == 17
+        assert live["registered"] == len(replacement_table) == 23
         for row in replacement_table:
             [entry] = live["table"][row["old_node_id"]]
             assert entry["new_node_id"] == row["new_node_id"]
@@ -475,3 +557,37 @@ class TestMigrationDoc:
         if not doc_path.is_file():
             pytest.skip("docs/MIGRATION.md not written yet — run tests/_migration_doc.py --write")
         assert doc_path.read_text(encoding="utf-8") == generate_migration_markdown()
+
+
+class TestPromptRelayMigration:
+    """L7.65 P31: a migrated deprecated encoder calls the same backend helper with the same arguments, and its old
+    outputs land where output_mapping says (the removed classes passed their inputs straight to these helpers)."""
+
+    OLD_ORDER = {
+        "PromptRelayEncodeKijaiC2C": ("_encode_kijai", ["model", "t5", "latent_frames", "global_prompt",
+                                       "local_prompts", "segment_lengths", "negative_prompt", "epsilon",
+                                       "encode_device", "relay_options"]),
+        "PromptRelayEncodeSmartC2C": ("_encode_smart", ["model", "clip", "latent", "global_prompt", "smart_prompt",
+                                       "normalize_by_tokens", "epsilon", "relay_options"]),
+    }
+
+    @pytest.mark.parametrize("old_id", sorted(OLD_ORDER))
+    def test_same_helper_same_arguments_same_outputs(self, old_id, replacement_table, monkeypatch):
+        mod = importlib.import_module("nodes.prompt_relay._nodes")
+        helper, order = self.OLD_ORDER[old_id]
+        row = next(r for r in replacement_table if r["old_node_id"] == old_id)
+        old_values = {name: object() for name in order}                       # one sentinel per old input
+        kwargs = {}
+        for m in row["input_mapping"]:
+            kwargs[m["new_id"]] = m["set_value"] if "set_value" in m else old_values[m["old_id"]]
+        seen = {}
+
+        def fake(*args):
+            seen["args"] = args
+            return ("OUT0", "OUT1")
+
+        monkeypatch.setattr(mod, helper, fake)
+        out = mod.PromptRelayEncodeC2C().execute(**kwargs)
+        assert seen["args"] == tuple(old_values[n] for n in order)
+        for m in row["output_mapping"]:
+            assert out[m["new_idx"]] == ("OUT0", "OUT1")[m["old_idx"]]

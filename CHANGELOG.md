@@ -2,6 +2,37 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 1)
+
+Evidence: `docs/evidence/L7.65` in the work area (ComfyUI 0.36.0 / frontend 1.52.7 testbed, classic canvas and
+Nodes 2.0). Every removal below was approved card by card by the owner.
+
+### Added
+
+- **Old workflows update themselves.** When a workflow uses a C2C node that was merged or removed, it is replaced
+  with its successor as the workflow loads: links, values and seed settings move over, values are translated where
+  the successor names them differently, and one notice lists what was updated, what behaves differently now and
+  anything that could not be carried over. Nothing is dropped silently. Setting: Settings › C2C › Workflows ›
+  Migrate old C2C nodes on load (off = ComfyUI offers the replacement instead). The full table is `docs/MIGRATION.md`.
+
+### Removed (saved workflows migrate automatically)
+
+- **Builder Sampler** → core **KSampler** (same seed, steps, CFG, sampler, scheduler, denoise). KSampler has no CFG
+  curve, polish pass, size preset or preview image; connect an Empty Latent Image if nothing feeds `latent_image`.
+- **Tone Refiner** → NukeMax **Grade**. Grade starts neutral, so the picture changes; set it by eye.
+- **C2C Color Space Convert** → NukeMax **Color Space Convert** (which gained `logc3`). sRGB ↔ linear is
+  bit-identical. The old Log C3 conversion turned near-black pixels white (wrong constants in the toe) and clipped
+  linear values at 1.0; the new one follows ARRI's curve and keeps highlights.
+- **C2C ACES Tonemap** → NukeMax **HDR Tone Map**. Same ACES curve; it expects linear input (add Color Space
+  Convert in front for sRGB or Log C3 images), its sRGB output uses gamma 2.2, and contrast / saturation act after
+  the curve - re-set them by eye if you had changed them.
+- **Prompt Relay Encode (Smart) / (Kijai)** (deprecated) → **Prompt Relay Encode** with backend `smart` / `kijai`;
+  identical results.
+- **Insight Status** and **Integrity Status** (no successor): the Insight badges under each node and the Diagnostics
+  sidebar's Integrity tab show the same information.
+- **Mood Board** and **Style Presets** (front-end extras) and their settings. The Prompt Wizard still offers the
+  built-in style presets.
+
 ## Unreleased – 2026-10-09 (owner list A9: settings, link snapping, auto-connect, Vault, image batching)
 
 Evidence: `docs/evidence/L2.30`, `L2.38` and `L2.40` in the work area (ComfyUI 0.36.0 / frontend 1.52.7 testbed,

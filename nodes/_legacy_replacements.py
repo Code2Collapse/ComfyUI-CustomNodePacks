@@ -28,11 +28,27 @@ from typing import Any
 
 _log = logging.getLogger("C2C.legacy")
 TABLE_PATH = Path(__file__).with_name("_legacy_replacements.json")
+# Nodes removed with no successor (L7.65 consolidation): core's NodeReplace needs a new_node_id, so these are not
+# registered with core; the front end takes them out of a loading workflow and says so (js/c2c_auto_migrate.js).
+REMOVED_PATH = Path(__file__).with_name("_removed_nodes.json")
 
 
 def load_table() -> list[dict[str, Any]]:
     with open(TABLE_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_removed() -> list[dict[str, Any]]:
+    try:
+        with open(REMOVED_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+
+
+def migration_rows() -> list[dict[str, Any]]:
+    """What the front end migrates: every replacement row, then every removal marked ``c2c_remove``."""
+    return load_table() + [{**row, "c2c_remove": True} for row in load_removed()]
 
 
 def register(server: Any = None) -> int:
@@ -88,7 +104,7 @@ def _register_route(server: Any) -> None:
 
     async def _table(_request):
         try:
-            return web.json_response(load_table())
+            return web.json_response(migration_rows())
         except Exception as exc:  # noqa: BLE001
             return web.json_response({"error": str(exc)[:200]}, status=500)
 
