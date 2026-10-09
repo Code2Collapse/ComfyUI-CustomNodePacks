@@ -87,6 +87,9 @@ def quantize_rgb(rgb: np.ndarray, bit_depth: int, clamp_hdr: bool = True) -> np.
     return np.rint(x * scale).astype(np.uint16 if bit_depth <= 16 else np.uint32)
 
 
+_CHUNK_BYTES = 64 * 1024 * 1024
+
+
 def _rgb_to_av_frame(rgb: np.ndarray, pix_fmt: str, bit_depth: int):
     """float32 RGB(A) 0-1 -> an av.VideoFrame in `pix_fmt`.
 
@@ -267,7 +270,9 @@ def _encode_av_stream(
     n, h, w, c = images.shape
     channels = 4 if has_alpha and c >= 4 else 3
     bpf = bytes_per_frame(w, h, channels, np.float32)
-    chunk = max(1, min(64, frames_that_fit(w, h, channels, np.float32) or 1))
+    # By bytes too: each chunk is copied twice on its way to the encoder, so a whole-batch chunk cost 2x the batch
+    # (L7.59: Save alone peaked at 2.5x). The encoder sees the same frames in the same order.
+    chunk = max(1, min(64, frames_that_fit(w, h, channels, np.float32) or 1, _CHUNK_BYTES // max(1, bpf)))
 
     pix_fmt = spec.pix_fmt_for(has_alpha)
     # PyAV's muxer names differ from the file extension (mkv -> matroska), and muxer options must be given at open

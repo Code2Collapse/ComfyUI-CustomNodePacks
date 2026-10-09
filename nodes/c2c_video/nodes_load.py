@@ -17,7 +17,15 @@ from .reader import iter_chunks
 CATEGORY = "C2C/Video"
 DIMMAX = 16384
 BIGMAX = 1_000_000
-_CHUNK = 16
+_CHUNK = 16                         # frames per VAE-encode batch
+# IMAGE decode staging per chunk, by bytes: 16 float32 frames are 1.6 GB at 4K on top of the output batch (L7.59:
+# the loader alone peaked at 1.93x the batch at 2K). Same frames, same order - only the staging is smaller.
+_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _image_chunk_frames(h: C2CVideo) -> int:
+    per_frame = int(h.width) * int(h.height) * (4 if h.has_alpha else 3) * 4
+    return max(1, min(_CHUNK, _CHUNK_BYTES // max(1, per_frame)))
 _RAM_FRACTION = 0.5
 
 VIDEO_EXTENSIONS: tuple[str, ...] = (
@@ -312,7 +320,7 @@ def decode_to_image_and_mask(h: C2CVideo) -> tuple[Any, Any]:
     else:
         mask = torch.zeros((n, 64, 64), dtype=torch.float32)
     offset = 0
-    for chunk in iter_chunks(h, _CHUNK, fmt="float32"):
+    for chunk in iter_chunks(h, _image_chunk_frames(h), fmt="float32"):
         interrupt()
         bn = chunk.shape[0]
         if h.has_alpha and chunk.shape[-1] >= 4:

@@ -439,3 +439,20 @@ def test_ui_result_points_at_the_saved_file(fp_dirs):
                      colorspace_in="sRGB - Display", colorspace_out="same as input", audio=None, pad_note=None)
     assert os.path.isfile(os.path.join(str(out), r["subfolder"], r["filename"]))
     assert not r["subfolder"].endswith(r["filename"])
+
+
+@pytest.mark.skipif(not _codec_ok("ffv1"), reason="ffv1 unavailable")
+def test_chunk_size_never_changes_the_frames(fp_dirs, monkeypatch):
+    # L7.59: Save Video stages frames by bytes (64 MB) instead of a whole batch; the encoder must see the same frames
+    import nodes.c2c_video.save_encode as SE
+    images = gradient_batch(10, 64, 48)
+    spec = resolve_format("MKV FFV1 (lossless)")
+    decoded = []
+    for chunk_bytes in (1, SE._CHUNK_BYTES):            # 1 byte -> one frame per chunk
+        monkeypatch.setattr(SE, "_CHUNK_BYTES", chunk_bytes)
+        info = resolve_output_path(spec=spec, naming="ComfyUI counter", filename_prefix=f"chunk/{chunk_bytes}",
+                                   subfolder="", save_output=True, width=64, height=48)
+        r = encode_video(images, spec, path_info=info, fps=24.0, quality=80, colorspace_in="sRGB - Display",
+                         colorspace_out="same as input", audio=None, pad_note=None)
+        decoded.append(_decode_rgb(r["paths"][0], False)[0])
+    assert decoded[0].shape[0] == 10 and np.array_equal(decoded[0], decoded[1])

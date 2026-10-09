@@ -13,6 +13,9 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
   mean for every node output, built a huge index while doing it. A 2K x 24 frame batch (0.6 GB) briefly took 6 GB more
   after every node, and runs on 16 GB machines could run out of memory. Measured on a 4K chain load → grade → blur →
   save: 9.0 GB → 3.4 GB peak and 15.7 s → 9.9 s. The statistics are the same.
+- **Load Video (C2C) and Save Video (C2C) hold far less in RAM.** They staged 16 to 64 frames at a time, which is up to
+  1.6 GB at 4K. They now stage about 64 MB at a time. Measured server chain load → save: 2.6x → 1.7x the batch, at 2K
+  and at 4K. The frames are identical, and the speed is unchanged.
 - **Clear workflow no longer leaks old widget values into new nodes** (a ComfyUI bug, fixed on our side). After
   "Clear workflow", a node added in the same spot of the id sequence took a deleted node's value for every widget with
   the same name, for example a new sampler node came up with the old sampler. Seen in ComfyUI 1.52.7 with every C2C

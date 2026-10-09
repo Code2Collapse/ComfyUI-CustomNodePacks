@@ -402,3 +402,15 @@ def test_is_output_linked_string_uid(nl):
     assert nl.is_output_linked({"n": {"inputs": {"a": ["42", 0]}}}, 42, 0)
     assert not nl.is_output_linked({"n": {"inputs": {"a": ["42", 1]}}}, 42, 0)
     assert nl.is_output_linked(None, "1", 0)
+
+
+def test_decode_chunk_by_bytes_is_bit_identical(nl, cfr_clip, monkeypatch):
+    # L7.59: the loader stages by bytes (64 MB) instead of 16 frames; one frame at a time must give the same batch
+    h = nl.probe_file(cfr_clip)            # the loader's own package (a second copy's handle fails isinstance)
+    ref, _ = nl.decode_to_image_and_mask(h)
+    monkeypatch.setattr(nl, "_CHUNK_BYTES", 1)
+    assert nl._image_chunk_frames(h) == 1
+    one, _ = nl.decode_to_image_and_mask(h)
+    assert torch.equal(ref, one)
+    monkeypatch.setattr(nl, "_CHUNK_BYTES", 10**12)
+    assert nl._image_chunk_frames(h) == nl._CHUNK
