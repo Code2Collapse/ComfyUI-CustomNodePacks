@@ -671,3 +671,128 @@ def test_locked_error_points_at_the_password_field():
 def test_status_route_is_registered():
     src = (PACK_ROOT / "nodes" / "vault_node.py").read_text(encoding="utf-8")
     assert '@routes.post("/c2c_vault/status")' in src
+
+
+# ── whole-workflow encryption ────────────────────────────────────────────────
+
+def _workflow_graph():
+    return {
+        "last_node_id": 2,
+        "last_link_id": 1,
+        "nodes": [
+            {"id": 1, "type": "_VaultTestConstant", "widgets_values": [2.0]},
+            {"id": 2, "type": "_VaultTestAdd", "widgets_values": [5.0]},
+        ],
+        "links": [],
+        "version": 0.4,
+        "secret_layer": "SUPERSECRETLAYERNAME",
+    }
+
+
+def _workflow_subgraph(workflow):
+    return {
+        "nodes": [],
+        "links": [],
+        "boundary_in": [],
+        "boundary_out": [],
+        "workflow": workflow,
+    }
+
+
+def test_relock_with_key_round_trip():
+    from nodes.vault_crypto import _unpack_header, derive_key, relock_with_key
+
+    sg = _workflow_subgraph(_workflow_graph())
+    payload = lock_subgraph(sg, PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    key = derive_key(PASSWORD, _unpack_header(base64.b64decode(payload))[2], FAST)
+
+    updated = dict(sg)
+    updated["workflow"] = {**sg["workflow"], "edited": True}
+    new_payload = relock_with_key(payload, key, updated, vault_id=VAULT_ID)
+
+    old_hdr = _unpack_header(base64.b64decode(payload))
+    new_hdr = _unpack_header(base64.b64decode(new_payload))
+    assert old_hdr[2] == new_hdr[2]          # same salt
+    assert old_hdr[3] == new_hdr[3]          # same iterations
+    assert old_hdr[1] == new_hdr[1] == VAULT_ID
+    assert new_payload != payload
+
+    opened = unlock_subgraph(new_payload, PASSWORD, vault_id=VAULT_ID)
+    assert opened["workflow"]["edited"] is True
+
+
+def test_relock_with_key_refuses_sealed_mode():
+    from nodes.vault_crypto import derive_key, relock_with_key, _unpack_header
+
+    sealed = seal_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    key = derive_key(PASSWORD, _unpack_header(base64.b64decode(sealed))[2], FAST)
+    with pytest.raises(VaultError, match="not a locked vault"):
+        relock_with_key(sealed, key, _workflow_subgraph(_workflow_graph()), vault_id=VAULT_ID)
+
+
+def test_workflow_wrapper_lock_unlock_round_trip():
+    from nodes.vault_node import _unwrap_workflow, _workflow_subgraph
+
+    wf = _workflow_graph()
+    payload = lock_subgraph(_workflow_subgraph(wf), PASSWORD, vault_id="wf-test01", iterations=FAST)
+    sub = unlock_subgraph(payload, PASSWORD, vault_id="wf-test01")
+    assert _unwrap_workflow(sub) == wf
+
+
+def test_workflow_wrapper_wrong_password():
+    payload = lock_subgraph(
+        _workflow_subgraph(_workflow_graph()), PASSWORD, vault_id="wf-test01", iterations=FAST,
+    )
+    with pytest.raises(VaultError):
+        unlock_subgraph(payload, "wrong", vault_id="wf-test01")
+
+
+def test_workflow_wrapper_tamper_raises():
+    payload = lock_subgraph(
+        _workflow_subgraph(_workflow_graph()), PASSWORD, vault_id="wf-test01", iterations=FAST,
+    )
+    raw = bytearray(base64.b64decode(payload))
+    raw[-3] ^= 0x01
+    with pytest.raises(VaultError):
+        unlock_subgraph(base64.b64encode(bytes(raw)).decode(), PASSWORD, vault_id="wf-test01")
+
+
+def test_workflow_wrapper_vault_id_swap_raises():
+    payload = lock_subgraph(
+        _workflow_subgraph(_workflow_graph()), PASSWORD, vault_id="wf-test01", iterations=FAST,
+    )
+    with pytest.raises(VaultError):
+        unlock_subgraph(payload, PASSWORD, vault_id="wf-other99")
+
+
+def test_workflow_wrapper_no_plaintext_node_names():
+    wf = _workflow_graph()
+    payload = lock_subgraph(_workflow_subgraph(wf), PASSWORD, vault_id="wf-test01", iterations=FAST)
+    raw = base64.b64decode(payload)
+    for secret in (PASSWORD, "SUPERSECRETLAYERNAME", "_VaultTestConstant", "_VaultTestAdd"):
+        assert secret.encode() not in raw
+        assert secret not in payload
+
+
+def test_workflow_routes_registered():
+    src = (PACK_ROOT / "nodes" / "vault_node.py").read_text(encoding="utf-8")
+    assert '@routes.post("/c2c_vault/workflow/lock")' in src
+    assert '@routes.post("/c2c_vault/workflow/unlock")' in src
+    assert '@routes.post("/c2c_vault/workflow/relock")' in src
+    assert "C2C_VAULT_WORKFLOW" in src
+
+
+def test_js_whole_workflow_static():
+    js = (PACK_ROOT / "js" / "c2c_vault.js").read_text(encoding="utf-8")
+    assert 'id: SETTING_SCOPE' in js or 'id: "c2c.vault.scope"' in js
+    assert "Selected nodes" in js and "Whole workflow" in js
+    assert "settings: [" in js
+    assert "app._c2cVaultLoadHooked" in js
+    assert "api._c2cVaultStoreHooked" in js
+    assert '"/c2c_vault/workflow/relock"' in js
+    assert "c2c.vault.saveWorkflowEncrypted" in js
+    assert "c2c.vault.sealWholeWorkflow" in js
+    assert "Comfy.ExportWorkflow" in js
+    assert "Storage.prototype._c2cVaultSetItemHooked" in js
+    assert "workflowForRelock" in js
+    assert "deepCloneWorkflow" in js

@@ -28,6 +28,17 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
   the workflow or the queued prompt, and the field clears after unlocking. A Sealed vault shows the field for
   "Open for editing". The vault id is hidden, because it means nothing to a person. Double-click opens an
   unlocked vault for editing.
+- **C2C Vault protects a whole workflow** (Settings › C2C › Vault › Scope: Selected nodes / Whole workflow).
+  - Locked: "C2C Vault: Save workflow encrypted" writes the file as ciphertext. Opening it, by drag-drop or from
+    the workflow list, asks for the password, and without it nothing loads. Saving again keeps it encrypted. While
+    it is open, Export is refused, and the browser's tab-restore keeps only the ciphertext.
+  - Sealed: "C2C Vault: Seal whole workflow" puts every node except the outputs into one sealed vault. The workflow
+    runs without a password; the Preview / Save nodes stay outside so the results still show.
+- **Load Video (C2C) and OmniScale Load Video preview ProRes, DNxHR, HEVC 10-bit and FFV1.** They played the original
+  file in the browser, which cannot decode those formats. The preview is now transcoded on the server.
+- **Load Video: "select every nth"** keeps the audio for the whole clip and reports the real frame rate (fps / n),
+  as VHS does. The audio used to stop halfway.
+- **Nodes 2.0: double-clicking a slot** (Get/Set, Suggest) works; it did nothing there.
 - **Image batching is findable.** The setting is called "Image batching" (Settings › C2C › Image batching, also
   found by searching the Settings dialog): Off / Internal (default) / Universal. Per node type: right-click a
   node › Image batching for this node type.

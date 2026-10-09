@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from typing import Any
@@ -32,6 +33,7 @@ from .vault_crypto import (
     VaultError,
     lock_subgraph,
     payload_mode,
+    relock_with_key,
     seal_subgraph,
     unlock_subgraph,
     unseal_for_run,
@@ -330,6 +332,47 @@ def _open_session(vault_id: str, payload: str, password: str) -> None:
     hdr = _unpack_header(blob)   # 7 fields; Unlock failed with ValueError while it unpacked 6 (L2.24)
     SESSIONS.put(vault_id, derive_key(password, hdr[2], hdr[3]))
 
+_WORKFLOW_NOTE = (
+    "C2C Vault encrypted workflow: open it in ComfyUI with "
+    "ComfyUI-CustomNodePacks and the password."
+)
+
+
+def _workflow_enabled() -> bool:
+    return os.environ.get("C2C_VAULT_WORKFLOW", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _workflow_subgraph(workflow: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "nodes": [],
+        "links": [],
+        "boundary_in": [],
+        "boundary_out": [],
+        "workflow": workflow,
+    }
+
+
+def _unwrap_workflow(sub: dict[str, Any]) -> dict[str, Any]:
+    wf = sub.get("workflow")
+    if not isinstance(wf, dict):
+        raise VaultError("Vault opened but its contents are not a workflow object.")
+    return wf
+
+
+def _workflow_file(vault_id: str, payload: str) -> dict[str, Any]:
+    return {
+        "c2c_encrypted_workflow": 1,
+        "vault_id": vault_id,
+        "mode": "locked",
+        "payload": payload,
+        "note": _WORKFLOW_NOTE,
+    }
+
+
+def _new_workflow_vault_id() -> str:
+    return "wf-" + secrets.token_hex(4)
+
+
 # ─────────────────────────── HTTP routes ────────────────────────────
 _ROUTES_REGISTERED = False
 
@@ -442,6 +485,82 @@ def register_routes(server) -> None:
         body = await request.json()
         SESSIONS.drop(str(body.get("vault_id")) if body.get("vault_id") else None)
         return web.json_response({"ok": True})
+
+    @routes.post("/c2c_vault/workflow/lock")
+    async def _workflow_lock(request):
+        if not _workflow_enabled():
+            return web.json_response({"error": "disabled"}, status=404)
+        body = await request.json()
+        password = str(body.get("password") or "")
+        workflow = body.get("workflow")
+        if not isinstance(workflow, dict):
+            return web.json_response({"ok": False, "error": "workflow must be an object."}, status=400)
+        vault_id = _new_workflow_vault_id()
+        try:
+            payload = lock_subgraph(
+                _workflow_subgraph(workflow),
+                password,
+                vault_id=vault_id,
+            )
+        except VaultError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        try:
+            _open_session(vault_id, payload, password)
+        except Exception as exc:
+            log.warning("[C2C Vault] could not open workflow session after lock: %s", exc)
+        return web.json_response({"ok": True, "file": _workflow_file(vault_id, payload)})
+
+    @routes.post("/c2c_vault/workflow/unlock")
+    async def _workflow_unlock(request):
+        if not _workflow_enabled():
+            return web.json_response({"error": "disabled"}, status=404)
+        body = await request.json()
+        file = body.get("file") or {}
+        vault_id = str(file.get("vault_id") or "")
+        payload = str(file.get("payload") or "")
+        password = str(body.get("password") or "")
+
+        wait = SESSIONS.locked_out(vault_id)
+        if wait > 0:
+            return web.json_response(
+                {"ok": False, "error": f"Too many failed attempts. Try again in "
+                                       f"{int(wait // 60) + 1} minute(s)."},
+                status=429,
+            )
+        try:
+            sub = unlock_subgraph(payload, password, vault_id=vault_id)
+            workflow = _unwrap_workflow(sub)
+        except VaultError as exc:
+            SESSIONS.note_failure(vault_id)
+            return web.json_response({"ok": False, "error": str(exc)}, status=403)
+
+        _open_session(vault_id, payload, password)
+        return web.json_response({"ok": True, "workflow": workflow})
+
+    @routes.post("/c2c_vault/workflow/relock")
+    async def _workflow_relock(request):
+        if not _workflow_enabled():
+            return web.json_response({"error": "disabled"}, status=404)
+        body = await request.json()
+        vault_id = str(body.get("vault_id") or "")
+        payload = str(body.get("payload") or "")
+        workflow = body.get("workflow")
+        if not isinstance(workflow, dict):
+            return web.json_response({"ok": False, "error": "workflow must be an object."}, status=400)
+
+        key = SESSIONS.get(vault_id)
+        if key is None:
+            return web.json_response({"error": "session expired"}, status=403)
+        try:
+            new_payload = relock_with_key(
+                payload,
+                key,
+                _workflow_subgraph(workflow),
+                vault_id=vault_id,
+            )
+        except VaultError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        return web.json_response({"ok": True, "file": _workflow_file(vault_id, new_payload)})
 
     _ROUTES_REGISTERED = True
     log.info("[C2C Vault] routes registered")

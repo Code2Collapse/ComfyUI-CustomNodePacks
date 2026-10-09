@@ -193,6 +193,39 @@ def unlock_subgraph(payload: str, password: str, *, vault_id: str | None = None)
     return out
 
 
+def relock_with_key(
+    old_payload: str,
+    key: bytes,
+    subgraph: dict[str, Any],
+    *,
+    vault_id: str,
+) -> str:
+    """Re-encrypt with a session key: same salt/iterations/vault_id, fresh nonce."""
+    try:
+        blob = base64.b64decode(old_payload.encode("ascii"), validate=True)
+    except Exception as exc:
+        raise VaultError("Vault payload is not valid base64.") from exc
+
+    _header, hdr_vault_id, salt, iterations, _bhash, _hlen, mode = _unpack_header(blob)
+    if mode != MODE_LOCKED:
+        raise VaultError("This payload is not a locked vault.")
+    if not hmac.compare_digest(hdr_vault_id, vault_id):
+        raise VaultError("Vault payload does not belong to this vault.")
+
+    if not isinstance(subgraph, dict):
+        raise VaultError("Subgraph must be an object.")
+    for req in ("nodes", "links", "boundary_in", "boundary_out"):
+        if req not in subgraph:
+            raise VaultError(f"Subgraph missing required key {req!r}.")
+
+    bhash = boundary_hash(subgraph["boundary_in"], subgraph["boundary_out"])
+    new_header = _pack_header(vault_id, salt, iterations, bhash, mode=MODE_LOCKED)
+    nonce = os.urandom(NONCE_LEN)
+    plaintext = json.dumps(subgraph, separators=(",", ":")).encode("utf-8")
+    ct = _aesgcm()(key).encrypt(nonce, plaintext, new_header)
+    return base64.b64encode(new_header + nonce + ct).decode("ascii")
+
+
 def payload_vault_id(payload: str) -> str:
     """Read the vault id from a payload WITHOUT the password.
 

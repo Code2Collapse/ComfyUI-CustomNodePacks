@@ -22,6 +22,13 @@ const MAX_VAULT_OUTPUTS = 8;
 const MAX_VAULT_PARAMS = 8;
 const PROMOTED_VALUE_TYPES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
 
+const SETTING_SCOPE = "c2c.vault.scope";
+const SCOPE_SELECTED = "Selected nodes";
+const SCOPE_WHOLE = "Whole workflow";
+const WORKFLOW_VAULT_NOTE =
+  "C2C Vault encrypted workflow: open it in ComfyUI with ComfyUI-CustomNodePacks and the password.";
+const EXPORT_CMD_IDS = ["Comfy.ExportWorkflow", "Comfy.ExportWorkflowAPI"];
+
 /** @type {Map<string, { subgraph: object, panel: HTMLElement, dispose: () => void }>} */
 const vaultEditSessions = new Map();
 
@@ -1236,7 +1243,398 @@ async function lockSelection(sealed) {
   );
 }
 
+function vaultScope() {
+  try {
+    return app.ui?.settings?.getSettingValue?.(SETTING_SCOPE, SCOPE_SELECTED) || SCOPE_SELECTED;
+  } catch (_) {
+    return SCOPE_SELECTED;
+  }
+}
+
+function getWorkflowVaultMarker() {
+  const m = app.graph?.extra?.c2c_vault_workflow;
+  if (m?.vault_id && m?.payload) return m;
+  return null;
+}
+
+function buildWorkflowFileWrapper(marker) {
+  return {
+    c2c_encrypted_workflow: 1,
+    vault_id: marker.vault_id,
+    mode: "locked",
+    payload: marker.payload,
+    note: WORKFLOW_VAULT_NOTE,
+  };
+}
+
+function stampWorkflowVaultMarker(file) {
+  if (!app.graph) return;
+  app.graph.extra = app.graph.extra || {};
+  app.graph.extra.c2c_vault_workflow = { vault_id: file.vault_id, payload: file.payload };
+}
+
+function sanitizeWorkflowFilename(raw) {
+  let name = String(raw || "").trim();
+  name = name.replace(/^workflows\//i, "").replace(/\.json$/i, "");
+  name = name.replace(/[/\\:]/g, "_").slice(0, 200).trim();
+  return name;
+}
+
+function modalPromptFilename() {
+  if (headless()) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
+    css(back, {
+      position: "fixed", inset: "0", zIndex: "10000",
+      background: "rgba(0,0,0,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center",
+    });
+    const box = document.createElement("div");
+    css(box, {
+      background: "var(--c2c-bg2)", color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)", borderRadius: "6px",
+      padding: "18px 20px", minWidth: "340px", font: "13px sans-serif",
+    });
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.placeholder = "Workflow name";
+    css(inp, {
+      width: "100%", boxSizing: "border-box", margin: "10px 0",
+      padding: "7px 9px", borderRadius: "4px",
+      background: "var(--c2c-surface0)", color: "var(--c2c-fg)",
+      border: "1px solid var(--c2c-border)",
+    });
+    const row = document.createElement("div");
+    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    const ok = document.createElement("button");
+    ok.textContent = "Save";
+    for (const b of [cancel, ok]) css(b, { padding: "6px 14px", cursor: "pointer" });
+    const done = (v) => { back.remove(); resolve(v); };
+    cancel.onclick = () => done(null);
+    ok.onclick = () => {
+      const n = sanitizeWorkflowFilename(inp.value);
+      if (!n) { shakeEl(box); return; }
+      done(n);
+    };
+    box.append(
+      Object.assign(document.createElement("div"), {
+        textContent: "Save encrypted workflow",
+        style: { fontWeight: "600" },
+      }),
+      Object.assign(document.createElement("div"), {
+        textContent: "Enter a name for this workflow file.",
+        style: { opacity: "0.75", fontSize: "12px", marginTop: "6px" },
+      }),
+      inp, row,
+    );
+    row.append(cancel, ok);
+    back.append(box);
+    document.body.append(back);
+    inp.focus();
+  });
+}
+
+async function resolveWorkflowFilename() {
+  const aw = app.extensionManager?.workflow?.activeWorkflow;
+  const raw = aw?.filename ?? aw?.name ?? aw?.path ?? "";
+  const name = sanitizeWorkflowFilename(raw);
+  if (!name || /^unsaved/i.test(name)) return modalPromptFilename();
+  return name;
+}
+
+function deepCloneWorkflow(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function workflowForRelock(workflow) {
+  const copy = deepCloneWorkflow(workflow);
+  if (copy.extra?.c2c_vault_workflow) {
+    copy.extra = { ...copy.extra };
+    delete copy.extra.c2c_vault_workflow;
+  }
+  return copy;
+}
+
+function parseStoredWorkflowData(data) {
+  if (data == null) return null;
+  if (typeof data === "string") {
+    try { return JSON.parse(data); } catch (_) { return null; }
+  }
+  if (typeof data === "object") return data;
+  return null;
+}
+
+function isWorkflowSavePath(path) {
+  return typeof path === "string" && /^workflows\/.+\.json$/i.test(path);
+}
+
+function isComfyWorkflowObject(obj) {
+  return !!obj && typeof obj === "object" && Array.isArray(obj.nodes)
+    && obj.c2c_encrypted_workflow !== 1;
+}
+
+function workflowVaultMarkerFromData(parsed, fallback) {
+  const m = parsed?.extra?.c2c_vault_workflow;
+  if (m?.vault_id && m?.payload) return m;
+  return fallback;
+}
+
+async function unlockEncryptedWorkflowFile(file) {
+  while (true) {
+    const password = await modalPassword({
+      title: "Open encrypted workflow",
+      note: "Enter the password for this workflow file.",
+      confirmLabel: "Open",
+    });
+    if (password === null) return null;
+    const { ok, data, status } = await post("/c2c_vault/workflow/unlock", { file, password });
+    if (ok) return data.workflow;
+    if (status === 429) {
+      await modalAlert("Too many attempts", data.error || "Try again later.");
+      return null;
+    }
+    await modalAlert("Could not open workflow", data.error || "Wrong password or modified file.");
+  }
+}
+
+async function relockWorkflowForSave(workflow, marker) {
+  const wf = workflowForRelock(workflow);
+  let { ok, data, status } = await post("/c2c_vault/workflow/relock", {
+    vault_id: marker.vault_id,
+    payload: marker.payload,
+    workflow: wf,
+  });
+  if (ok) return data.file;
+  if (status === 403) {
+    const password = await modalPassword({
+      title: "Session expired",
+      note: "Re-enter the workflow password to save it encrypted.",
+      confirmLabel: "Unlock",
+    });
+    if (password === null) throw new Error("C2C Vault: save cancelled — session expired.");
+    const file = buildWorkflowFileWrapper(marker);
+    const unlock = await post("/c2c_vault/workflow/unlock", { file, password });
+    if (!unlock.ok) {
+      throw new Error(unlock.data?.error || "C2C Vault: unlock failed.");
+    }
+    marker = { vault_id: file.vault_id, payload: file.payload };
+    ({ ok, data, status } = await post("/c2c_vault/workflow/relock", {
+      vault_id: marker.vault_id,
+      payload: marker.payload,
+      workflow: wf,
+    }));
+    if (ok) return data.file;
+  }
+  throw new Error(data?.error || "C2C Vault: could not re-encrypt the workflow.");
+}
+
+async function saveWorkflowEncrypted() {
+  const pw = await modalPasswordStep({
+    title: "Save workflow encrypted",
+    note: "The saved file will be ciphertext. Nothing runs until the password is entered.",
+    sealed: false,
+  });
+  if (pw === null) return;
+
+  const workflow = app.graph?.serialize?.() ?? app.canvas?.graph?.serialize?.();
+  if (!workflow) {
+    await modalAlert("No workflow", "Nothing to encrypt.");
+    return;
+  }
+
+  const { ok, data } = await post("/c2c_vault/workflow/lock", { password: pw, workflow });
+  if (!ok) {
+    await modalAlert("Encrypt failed", data.error || "Could not encrypt the workflow.");
+    return;
+  }
+
+  const name = await resolveWorkflowFilename();
+  if (!name) return;
+
+  try {
+    await api.storeUserData(`workflows/${name}.json`, data.file, { overwrite: true, stringify: true });
+  } catch (e) {
+    await modalAlert("Save failed", String(e?.message || e));
+    return;
+  }
+
+  stampWorkflowVaultMarker(data.file);
+  await modalAlert("Saved encrypted", `Workflow saved as workflows/${name}.json`);
+}
+
+/** Output nodes (Preview / Save ...) stay OUTSIDE a whole-workflow seal: a graph whose only top-level node is the
+ *  vault has no output, so ComfyUI refuses to queue it ("Prompt has no outputs", measured), and the results would be
+ *  invisible anyway. Everything else goes inside and is wired to them through the vault's outputs. */
+function isOutputNode(n) {
+  return !!(n?.constructor?.nodeData?.output_node || n?.constructor?.nodeData?.output_node === "true");
+}
+
+function selectNodesForWholeSeal() {
+  const canvas = app.canvas;
+  const graph = canvas?.graph || app.graph;
+  if (!canvas || !graph) return 0;
+  canvas.selected_nodes = {};
+  let count = 0;
+  for (const n of graph._nodes || []) {
+    if (n && !isOutputNode(n) && !NODES.includes(n.type)) { canvas.selected_nodes[n.id] = n; count++; }
+  }
+  return count;
+}
+
+async function sealWholeWorkflow() {
+  if (!selectNodesForWholeSeal()) {
+    await modalAlert("Nothing to seal", "The workflow has no nodes other than its outputs.");
+    return;
+  }
+  await lockSelection(true);
+}
+
+function installLoadGraphDataHook() {
+  if (app._c2cVaultLoadHooked) return;
+  const orig = app.loadGraphData?.bind(app);
+  if (!orig) return;
+  app._c2cVaultLoadHooked = true;
+  app.loadGraphData = async function (graphData, ...rest) {
+    if (graphData?.c2c_encrypted_workflow === 1) {
+      const workflow = await unlockEncryptedWorkflowFile(graphData);
+      if (!workflow) return undefined;
+      workflow.extra = workflow.extra || {};
+      workflow.extra.c2c_vault_workflow = {
+        vault_id: graphData.vault_id,
+        payload: graphData.payload,
+      };
+      return orig(workflow, ...rest);
+    }
+    return orig(graphData, ...rest);
+  };
+}
+
+function installStoreUserDataHook() {
+  if (api._c2cVaultStoreHooked) return;
+  const orig = api.storeUserData?.bind(api);
+  if (!orig) return;
+  api._c2cVaultStoreHooked = true;
+  api.storeUserData = async function (path, data, opts) {
+    if (!isWorkflowSavePath(path)) return orig(path, data, opts);
+
+    const parsed = parseStoredWorkflowData(data);
+    if (!parsed) return orig(path, data, opts);
+
+    const marker = workflowVaultMarkerFromData(parsed, getWorkflowVaultMarker());
+    if (!marker || !isComfyWorkflowObject(parsed)) return orig(path, data, opts);
+
+    const file = await relockWorkflowForSave(parsed, marker);
+    stampWorkflowVaultMarker(file);
+    return orig(path, file, { overwrite: true, stringify: true });
+  };
+}
+
+/** A workflow object that was opened from an encrypted file (it carries the public marker). */
+function isMarkedWorkflow(o) {
+  const m = o?.extra?.c2c_vault_workflow;
+  return !!(o && typeof o === "object" && Array.isArray(o.nodes) && m?.vault_id && m?.payload);
+}
+
+/** Replace every marked workflow inside a stored value with its ciphertext wrapper, keeping the container: ComfyUI's
+ *  draft store keeps several workflows under one key (`Comfy.Workflow.Drafts`) and in envelopes whose workflow is a
+ *  JSON STRING, so the value is walked, never swapped whole (that would wipe the other drafts). */
+function rewriteMarkedWorkflows(v, depth = 0) {
+  if (depth > 6) return v;
+  if (typeof v === "string") {
+    if (!v.includes("c2c_vault_workflow")) return v;
+    try {
+      const parsed = JSON.parse(v);
+      const out = rewriteMarkedWorkflows(parsed, depth + 1);
+      return out === parsed ? v : JSON.stringify(out);
+    } catch (_) { return v; }
+  }
+  if (!v || typeof v !== "object") return v;
+  if (isMarkedWorkflow(v)) return buildWorkflowFileWrapper(v.extra.c2c_vault_workflow);
+  let changed = false;
+  const copy = Array.isArray(v) ? [] : {};
+  for (const [k, val] of Object.entries(v)) {
+    const nv = rewriteMarkedWorkflows(val, depth + 1);
+    if (nv !== val) changed = true;
+    copy[k] = nv;
+  }
+  return changed ? copy : v;
+}
+
+function installStoragePersistenceHook() {
+  if (Storage.prototype._c2cVaultSetItemHooked) return;
+  Storage.prototype._c2cVaultSetItemHooked = true;
+  const orig = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    // Tab restore and drafts keep the open workflow in browser storage: an encrypted workflow is kept there as its
+    // ciphertext wrapper, so a reload asks for the password instead of restoring plaintext.
+    if (typeof value === "string" && value.includes("c2c_vault_workflow")) {
+      let out = value;
+      try { out = rewriteMarkedWorkflows(value); } catch (_) { out = null; }
+      if (out === null || (out === value && /"nodes"\s*:/.test(value))) return;   // never write a marked plaintext workflow
+      return orig.call(this, key, out);
+    }
+    return orig.call(this, key, value);
+  };
+}
+
+function installExportGuard() {
+  if (window._c2cVaultExportGuard) return;
+  window._c2cVaultExportGuard = true;
+
+  const refuse = async () => {
+    await modalAlert(
+      "This workflow is encrypted",
+      "Use C2C Vault: Save workflow encrypted. Exporting would write it as plain JSON.",
+    );
+  };
+  const wrapOne = (cmd) => {
+    if (!cmd || cmd._c2cVaultExportWrapped || typeof cmd.function !== "function") return;
+    const orig = cmd.function;
+    cmd.function = async (...args) => (getWorkflowVaultMarker() ? refuse() : orig.apply(cmd, args));
+    cmd._c2cVaultExportWrapped = true;
+  };
+
+  let tries = 0;
+  const tick = () => {
+    const mgr = app.extensionManager?.command;
+    if (!mgr) {
+      if (tries++ < 80) setTimeout(tick, 250);
+      return;
+    }
+    // The command store's execute() is what the menu, keybindings and the palette call (frontend 1.52.7); its
+    // `commands` is an ARRAY of the command objects, so the old Map/object lookup never found Export at all.
+    if (typeof mgr.execute === "function" && !mgr._c2cVaultExecWrapped) {
+      const origExec = mgr.execute;
+      mgr.execute = function (id, ...rest) {
+        if (EXPORT_CMD_IDS.includes(id) && getWorkflowVaultMarker()) return refuse();
+        return origExec.call(this, id, ...rest);
+      };
+      mgr._c2cVaultExecWrapped = true;
+    }
+    const list = mgr.commands;
+    const all = Array.isArray(list) ? list : (list instanceof Map ? [...list.values()] : Object.values(list || {}));
+    for (const cmd of all) if (EXPORT_CMD_IDS.includes(cmd?.id)) wrapOne(cmd);   // a caller that runs .function()
+  };
+  tick();
+}
+
 function _vaultCanvasMenuItems() {
+  if (vaultScope() === SCOPE_WHOLE) {
+    return [
+      {
+        content: "C2C Vault → Save workflow encrypted…",
+        callback: () => saveWorkflowEncrypted(),
+      },
+      {
+        content: "C2C Vault → Seal whole workflow",
+        callback: () => sealWholeWorkflow(),
+      },
+    ];
+  }
   return [
     {
       content: "C2C Vault → Lock selection (password to run)",
@@ -1379,6 +1777,23 @@ function buildAccessWidget(node, isSealed) {
 app.registerExtension({
   name: "Code2Collapse.CustomNodePacks.Vault",
 
+  // Declarative: frontend 1.52 has no extensionManager.registerCommand (the call was silently skipped).
+  commands: [
+    { id: "c2c.vault.saveWorkflowEncrypted", label: "C2C Vault: Save workflow encrypted", function: () => saveWorkflowEncrypted() },
+    { id: "c2c.vault.sealWholeWorkflow", label: "C2C Vault: Seal whole workflow", function: () => sealWholeWorkflow() },
+  ],
+
+  settings: [{
+    id: SETTING_SCOPE,
+    name: "Vault scope",
+    tooltip: "Selected nodes: lock/seal a canvas selection into a vault node.\n"
+      + "Whole workflow: encrypt the entire saved file, or seal every node into one vault.",
+    type: "combo",
+    options: [SCOPE_SELECTED, SCOPE_WHOLE],
+    defaultValue: SCOPE_SELECTED,
+    category: ["c2c", "Vault", "Scope"],
+  }],
+
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (!NODES.includes(nodeData.name)) return;
     const isSealed = nodeData.name === "C2C_VaultSealed";
@@ -1467,6 +1882,10 @@ app.registerExtension({
 
   setup() {
     installSaveGuard();
+    installLoadGraphDataHook();
+    installStoreUserDataHook();
+    installStoragePersistenceHook();
+    installExportGuard();
     legacyCanvasMenu("vault", _mergeVaultCanvasMenuItems);
   },
 });
