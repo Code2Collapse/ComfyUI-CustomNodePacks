@@ -7,8 +7,9 @@ import { setHidden } from "./_widget_visibility.js";
 /**
  * C2C Vault — password-locked subgraph.
  *
- * Password is typed into a transient modal and POSTed to /c2c_vault/unlock or
- * /open. It is never written to a widget and never reaches the queued prompt.
+ * The password is typed into the field ON the node (or the double-click modal) and POSTed to
+ * /c2c_vault/unlock or /open. It lives only in that <input>: the widget's value is always "" and is not
+ * serialised, so it never reaches the workflow JSON, the queued prompt, undo history or the clipboard.
  *
  * Edit view uses a floating overlay — NEVER convertToSubgraph. ComfyUI's
  * native subgraph API exists, but a native subgraph serialises its inner nodes
@@ -1103,6 +1104,20 @@ async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
 
   const iface = parseInterface(widget(node, "vault_interface")?.value);
   applyVaultInterface(node, iface, isSealed);
+  node._vaultAccess?.refresh();
+}
+
+/** Double-click: a Locked vault whose session is open opens for editing at once (the key is already held);
+ *  otherwise the password is asked first. */
+async function openOnDoubleClick(node, isSealed) {
+  const id = widget(node, "vault_id")?.value || "";
+  if (!isSealed && unlockedSessions.has(id)) {
+    const { ok, data } = await post("/c2c_vault/open", { vault_id: id, payload: widget(node, "vault_payload")?.value || "" });
+    if (ok) { openVaultOverlay(node, data.subgraph, false); return; }
+    unlockedSessions.delete(id);       // expired on the server: fall through to the password
+    node._vaultAccess?.refresh();
+  }
+  return handleUnlockOrOpen(node, isSealed, isSealed);
 }
 
 async function lockSelection(sealed) {
@@ -1213,6 +1228,7 @@ async function lockSelection(sealed) {
 
     for (const n of sel) graph.remove(n);
   });
+  vault._vaultAccess?.refresh();      // the field now shows "Unlocked" (the creator's session) or "Sealed"
   graph.setDirtyCanvas(true, true);
   await modalAlert(
     sealed ? "Sealed" : "Locked",
@@ -1238,6 +1254,128 @@ function _mergeVaultCanvasMenuItems(opts) {
   return opts;
 }
 
+/** The vault's access row ON the node (owner A9: "there is no option to ask for password ... vault id? tf is
+ *  that?"). Locked: status + password field + Unlock, then "Lock again". Sealed: status + password field + "Open for
+ *  editing". The session state comes from the server (/c2c_vault/status), so it is right after a restart or expiry. */
+function buildAccessWidget(node, isSealed) {
+  const host = document.createElement("div");
+  css(host, { display: "flex", flexDirection: "column", gap: "4px", padding: "2px 2px 4px",
+    fontSize: "11px", color: "var(--c2c-fg)", boxSizing: "border-box", width: "100%" });
+  const status = document.createElement("div");
+  css(status, { opacity: "0.9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+  const row = document.createElement("div");
+  css(row, { display: "flex", gap: "4px", alignItems: "center" });
+  const pw = document.createElement("input");
+  pw.type = "password";
+  pw.autocomplete = "off";
+  pw.spellcheck = false;
+  pw.placeholder = isSealed ? "Password to open for editing" : "Password";
+  pw.setAttribute("aria-label", isSealed ? "Vault password (opens the vault for editing)" : "Vault password");
+  css(pw, { flex: "1", minWidth: "0", padding: "3px 6px", borderRadius: "4px", font: "inherit",
+    background: "var(--c2c-surface0)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)" });
+  const go = document.createElement("button");
+  go.type = "button";
+  go.textContent = isSealed ? "Open for editing" : "Unlock";
+  const relock = document.createElement("button");
+  relock.type = "button";
+  relock.textContent = "Lock again";
+  relock.title = "Forget this vault's key now; the password is needed again to run it.";
+  for (const b of [go, relock]) css(b, { padding: "3px 8px", cursor: "pointer", font: "inherit", whiteSpace: "nowrap" });
+  const err = document.createElement("div");
+  css(err, { color: "var(--c2c-dangerStrong)", minHeight: "0", whiteSpace: "normal" });
+  row.append(pw, go, relock);
+  for (const el of [status, row, err]) el.style.flexShrink = "0";
+  host.append(status, row, err);
+
+  const vaultId = () => widget(node, "vault_id")?.value || "";
+  const hasPayload = () => !!(widget(node, "vault_payload")?.value || "").trim();
+  let open = false;
+  const fit = () => {           // the error line adds a row: grow the node instead of spilling out of it
+    const sz = node.computeSize?.();
+    if (sz) node.setSize([Math.max(node.size?.[0] || 0, sz[0]), sz[1]]);
+    node.setDirtyCanvas?.(true, true);
+  };
+  const showError = (msg) => { err.textContent = msg; fit(); };
+  const retitle = () => {
+    if (isSealed) return;
+    const badge = open ? "🔓 UNLOCKED" : "🔒 LOCKED";
+    node.title = `${badge}  C2C Vault — Locked`;
+  };
+  const render = () => {
+    const hadError = !!err.textContent;
+    err.textContent = "";
+    if (hadError) fit();
+    retitle();
+    if (!hasPayload()) {
+      status.textContent = "Empty vault: select nodes, right-click the canvas, C2C Vault → Lock or Seal selection.";
+      pw.style.display = go.style.display = relock.style.display = "none";
+      return;
+    }
+    if (isSealed) {
+      status.textContent = "Sealed · runs without a password";
+      relock.style.display = "none";
+      pw.style.display = go.style.display = "";
+      return;
+    }
+    status.textContent = open ? "Unlocked for this ComfyUI session" : "Locked · type the password to run it";
+    pw.style.display = go.style.display = open ? "none" : "";
+    relock.style.display = open ? "" : "none";
+  };
+  const refresh = async () => {
+    if (!isSealed && hasPayload()) {
+      const { ok, data } = await post("/c2c_vault/status", { vault_id: vaultId() });
+      open = !!(ok && data.open);
+      if (open) unlockedSessions.add(vaultId()); else unlockedSessions.delete(vaultId());
+    }
+    render();
+  };
+  const submit = async () => {
+    const password = pw.value;
+    if (!password) { showError("Type the password first."); shakeEl(host); pw.focus(); return; }
+    go.disabled = true;
+    try {
+      const route = isSealed ? "/c2c_vault/open" : "/c2c_vault/unlock";
+      const { ok, data, status } = await post(route, { vault_id: vaultId(), password,
+        payload: widget(node, "vault_payload")?.value || "" });
+      if (!ok) {
+        // 403 = wrong password or modified payload (deliberately one message); 429 = locked out for a while
+        showError(status === 429 ? (data.error || "Too many attempts. Wait a few minutes.")
+          : "Wrong password (or the vault data was changed).");
+        shakeEl(host); pw.select(); return;
+      }
+      pw.value = "";
+      if (isSealed) openVaultOverlay(node, data.subgraph, true);
+      else { open = true; unlockedSessions.add(vaultId()); }
+      applyVaultInterface(node, parseInterface(widget(node, "vault_interface")?.value), isSealed);
+      render();
+    } finally {
+      go.disabled = false;
+    }
+  };
+  go.addEventListener("click", submit);
+  pw.addEventListener("keydown", (e) => {
+    e.stopPropagation();               // canvas shortcuts must not fire while typing a password
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+  });
+  relock.addEventListener("click", async () => {
+    await post("/c2c_vault/lock_session", { vault_id: vaultId() });
+    open = false;
+    unlockedSessions.delete(vaultId());
+    applyVaultInterface(node, parseInterface(widget(node, "vault_interface")?.value), isSealed);
+    render();
+  });
+  render();
+  node._vaultAccess = { refresh, focus: () => pw.focus() };
+  node.addDOMWidget("vault_access", "vault_access", host, {
+    serialize: false,
+    margin: 2,
+    getValue: () => "",
+    setValue: () => {},
+    getMinHeight: () => (err.textContent ? 70 : 52),
+    getHeight: () => (err.textContent ? 70 : 52),
+  });
+}
+
 app.registerExtension({
   name: "Code2Collapse.CustomNodePacks.Vault",
 
@@ -1252,7 +1390,9 @@ app.registerExtension({
 
       // Internal: the ciphertext and the public manifest travel in the workflow but are not for editing. Hidden in
       // both renderers (the old `inputEl.hidden` only worked on the classic canvas and is deprecated, L7.35).
-      for (const wn of ["vault_payload", "vault_interface"]) setHidden(widget(node, wn), true);
+      // vault_id is a public handle the UI matches sessions with; it means nothing to a person (A9), so it is
+      // hidden with the other two.
+      for (const wn of ["vault_id", "vault_payload", "vault_interface"]) setHidden(widget(node, wn), true);
 
       const host = document.createElement("div");
       css(host, {
@@ -1262,26 +1402,17 @@ app.registerExtension({
       });
       node._vaultSummaryEl = host;
       host.textContent = "0 nodes · 0 inputs · 0 outputs · 0 params";
-      node.addDOMWidget("vault_summary", "summary", host, { serialize: false });
+      // margin 2: ComfyUI draws a DOM element at computedHeight - 2*margin, and the default margin of 10 crushed this
+      // row to 10px and the access row below to 40 (its status line shrank to 2px).
+      node.addDOMWidget("vault_summary", "summary", host, { serialize: false, margin: 2, getMinHeight: () => 18, getHeight: () => 18 });
 
-      node.addWidget("button", isSealed ? "Open for editing…" : "Unlock…", null, () => {
-        handleUnlockOrOpen(node, isSealed, isSealed);
-      });
-
-      node.addWidget("button", "Lock session", null, async () => {
-        const id = widget(node, "vault_id")?.value || "";
-        await post("/c2c_vault/lock_session", { vault_id: id });
-        unlockedSessions.delete(id);
-        const iface = parseInterface(widget(node, "vault_interface")?.value);
-        applyVaultInterface(node, iface, isSealed);
-        await modalAlert("Session locked", "Vault session cleared. Enter the password again to queue.");
-      });
+      buildAccessWidget(node, isSealed);
 
       setTimeout(() => {
-        const iface = parseInterface(widget(node, "vault_interface")?.value);
-        if (iface.in.length || iface.out.length || iface.node_count || iface.params.length) {
-          applyVaultInterface(node, iface, isSealed);
-        }
+        // Also for an EMPTY vault: its 18 wire sockets and 8 outputs mean nothing until a selection is locked
+        // into it. A saved vault restores its own sockets in configure().
+        applyVaultInterface(node, parseInterface(widget(node, "vault_interface")?.value), isSealed);
+        node._vaultAccess?.refresh();
       }, 0);
 
       return r;
@@ -1309,13 +1440,14 @@ app.registerExtension({
       const r = configured?.apply(this, arguments);
       const iface = parseInterface(widget(this, "vault_interface")?.value);
       applyVaultInterface(this, iface, isSealed);
+      this._vaultAccess?.refresh();
       return r;
     };
 
     const dbl = nodeType.prototype.onDblClick;
     nodeType.prototype.onDblClick = function (...args) {
       const r = dbl?.apply(this, arguments);
-      handleUnlockOrOpen(this, isSealed, isSealed);
+      openOnDoubleClick(this, isSealed);
       return r;
     };
 

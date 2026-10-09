@@ -642,3 +642,32 @@ def test_lock_session_changes_the_cache_key():
     # a sealed vault never needs a session, so its key does not depend on one
     assert C2C_VaultSealed.IS_CHANGED(**kw) == C2C_VaultSealed.IS_CHANGED(**kw)
     assert ":" not in C2C_VaultSealed.IS_CHANGED(**kw)
+
+
+def test_password_field_is_on_the_node_and_never_serialised():
+    # Owner A9: "there is no option to ask for password ... vault id? tf is that?". The field lives ON the node,
+    # its widget value is always "" and it is not serialised (workflow JSON, prompt, undo, clipboard).
+    js = (PACK_ROOT / "js" / "c2c_vault.js").read_text(encoding="utf-8")
+    a = js.index("function buildAccessWidget")
+    b = js.index("\napp.registerExtension(", a)
+    body = js[a:b]
+    assert 'pw.type = "password"' in body
+    assert "serialize: false" in body and 'getValue: () => ""' in body
+    assert 'pw.value = ""' in body, "the password must be cleared from the field after a successful unlock"
+    assert '"vault_id", "vault_payload", "vault_interface"' in js, "vault_id must be hidden with the other two"
+    assert '"/c2c_vault/status"' in body, "the node must show the server's real session state"
+
+
+def test_locked_error_points_at_the_password_field():
+    from nodes.vault_node import SESSIONS, C2C_VaultLocked
+
+    payload = lock_subgraph(_subgraph(), PASSWORD, vault_id=VAULT_ID, iterations=FAST)
+    SESSIONS.drop(VAULT_ID)
+    with pytest.raises(RuntimeError) as exc:
+        C2C_VaultLocked().execute(vault_id=VAULT_ID, vault_payload=payload)
+    assert "password field" in str(exc.value)
+
+
+def test_status_route_is_registered():
+    src = (PACK_ROOT / "nodes" / "vault_node.py").read_text(encoding="utf-8")
+    assert '@routes.post("/c2c_vault/status")' in src

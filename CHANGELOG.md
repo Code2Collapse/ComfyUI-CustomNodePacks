@@ -2,6 +2,36 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-09 (owner list A9: settings, link snapping, auto-connect, Vault, image batching)
+
+Evidence: `docs/evidence/L2.30`, `L2.38` and `L2.40` in the work area (ComfyUI 0.36.0 / frontend 1.52.7 testbed,
+classic canvas and Nodes 2.0, with the owner's own C2C setting values).
+
+### Fixed
+
+- **C2C settings no longer disappear.** Lite mode (it switches on by itself when the browser draws without the GPU)
+  hid 23 settings, including every overlay switch, because they were registered when an extension started up and
+  Lite skips that. Every C2C setting is now declared up front: 144 in Full and in Lite.
+- **A wire released anywhere on a node connects to the matching slot again**, with the snap preview while you
+  hover. ComfyUI 1.52 turned every widget row into an input socket: over a widget of another type the wire got no
+  preview and the release did nothing. This was most of the body of our widget-heavy nodes. Measured on all 315 C2C
+  node types with an IMAGE input: 8 failed on the classic canvas, now 0. Setting: Settings › C2C › Canvas › Link
+  snapping. A drop on a slot that fits behaves exactly as before.
+- **Nodes 2.0: a wire released over the C2C wolf mark** (the empty-state logo in charts and editors) connects. An SVG
+  is not an HTML element, and ComfyUI's Nodes 2.0 drop ignored it.
+- **Auto-connect wires a new node to the nearest node on its left**, by exact type: every free input whose type has
+  exactly one matching output there. It used to wire the first input to whichever node was clicked last. Nothing
+  is wired when two nodes are about equally near, when the node arrives with a paste, or when ComfyUI already wired
+  it (a node created from a dragged wire). One Ctrl+Z removes the wires.
+- **C2C Vault asks for its password on the node.** A Locked vault shows a password field, Unlock, and "Lock again";
+  Enter unlocks. It shows the server's real session state, also after a reload. The password is never saved in
+  the workflow or the queued prompt, and the field clears after unlocking. A Sealed vault shows the field for
+  "Open for editing". The vault id is hidden, because it means nothing to a person. Double-click opens an
+  unlocked vault for editing.
+- **Image batching is findable.** The setting is called "Image batching" (Settings › C2C › Image batching, also
+  found by searching the Settings dialog): Off / Internal (default) / Universal. Per node type: right-click a
+  node › Image batching for this node type.
+
 ## Unreleased – 2026-10-08 (owner list A9: graph-damaging bugs, settings, Vault)
 
 Evidence for every item: `docs/evidence/L2.15`, `L2.23` and `L2.24` in the work area (Playwright runs on a

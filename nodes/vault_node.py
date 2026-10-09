@@ -160,8 +160,9 @@ class C2C_VaultLocked:
         "Run a password-locked subgraph. The wiring inside travels with the "
         "workflow as AES-GCM ciphertext, so a recipient sees an opaque blob "
         "instead of your node graph.\n\n"
-        "Lock a canvas selection via right-click → C2C Vault. Unlock once per "
-        "session to queue — the password never enters the workflow JSON.\n\n"
+        "Lock a canvas selection via right-click → C2C Vault. To run it, type the "
+        "password in the field on this node and press Enter; the unlock lasts for "
+        "the ComfyUI session and the password never enters the workflow JSON.\n\n"
         "SCOPE, honestly: this stops casual inspection and copying. It cannot "
         "stop someone who can run Python in this process - the subgraph must be "
         "decrypted to execute, so the plaintext exists in memory while it runs. "
@@ -219,8 +220,8 @@ class C2C_VaultLocked:
             # Deliberately says nothing about the contents. Before unlock the node
             # must not hint at what is inside, how many nodes, or what they need.
             raise RuntimeError(
-                "Vault locked. Open the vault and enter its password to run this "
-                "workflow. The unlock then lasts for the rest of the session."
+                "Vault locked. Type the password in the vault node's password field and press Enter "
+                "(or click Unlock), then queue again. The unlock lasts for this ComfyUI session."
             )
 
         try:
@@ -429,6 +430,12 @@ def register_routes(server) -> None:
             return web.json_response({"ok": True, "subgraph": _unlock_with_key(payload, key, vault_id)})
         except VaultError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=403)
+
+    @routes.post("/c2c_vault/status")
+    async def _status(request):
+        """Is this vault's session open? Lets the node show the real state after a restart or an expiry (A9)."""
+        body = await request.json()
+        return web.json_response({"ok": True, "open": SESSIONS.get(str(body.get("vault_id") or "")) is not None})
 
     @routes.post("/c2c_vault/lock_session")
     async def _lock_session(request):
