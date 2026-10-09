@@ -219,6 +219,29 @@ class SAMModelLoaderMEC:
             },
         }
 
+    @staticmethod
+    def _clean_name(model_name: str) -> str:
+        return model_name[len("[download] "):] if str(model_name).startswith("[download] ") else str(model_name)
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, model_name):
+        """Accept both spellings of a model (L2.13). The list offers '[download] x' until x is on disk and 'x'
+        after, so a workflow saved with one spelling stopped validating once the other applied - on the next machine
+        or right after the first download. Naming model_name here makes ComfyUI skip its own list check for it."""
+        clean = cls._clean_name(model_name)
+        if clean in _DOWNLOAD_REGISTRY:
+            return True
+        try:
+            options = cls.INPUT_TYPES()["required"]["model_name"][0]
+        except Exception:
+            return True
+        if model_name in options or clean in options or f"[download] {clean}" in options:
+            return True
+        if os.path.isabs(clean) and os.path.exists(clean):
+            return True
+        return (f"SAM model '{clean}' is not installed and cannot be downloaded automatically. "
+                f"Place it in models/sams/ or models/sam2/, or pick one of: {', '.join(options[:12])}")
+
     @classmethod
     def _scan_extra_paths(cls, model_files):
         """Scan additional common model directories."""
@@ -265,7 +288,7 @@ class SAMModelLoaderMEC:
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        model_path = self._resolve_path(model_name)
+        model_path = self._resolve_path(model_name, download_missing_registry=True)
         clean_name = model_name.replace("[download] ", "")
         detected_type = self._detect_type(clean_name) if model_type == "auto" else model_type
 
@@ -313,7 +336,10 @@ class SAMModelLoaderMEC:
 
     # ── Path resolution ───────────────────────────────────────────────
     @staticmethod
-    def _resolve_path(model_name):
+    def _resolve_path(model_name, download_missing_registry=False):
+        """Path of a SAM checkpoint. '[download] x' downloads x when it is missing. A plain registry name that is
+        missing downloads only with download_missing_registry=True, which load() passes: probes such as the image
+        mask editor's "is this installed?" must never start a multi-GB download."""
         # Handle auto-download prefix
         clean_name = model_name
         needs_download = False
@@ -349,8 +375,9 @@ class SAMModelLoaderMEC:
         if os.path.isabs(clean_name) and os.path.exists(clean_name):
             return clean_name
 
-        # Auto-download from HuggingFace Hub if flagged
-        if needs_download:
+        # Auto-download from HuggingFace Hub if flagged - or when a registry model saved under its plain name (it
+        # was on disk where the workflow was saved) is missing on this machine (L2.13).
+        if needs_download or (download_missing_registry and clean_name in _DOWNLOAD_REGISTRY):
             return SAMModelLoaderMEC._auto_download(clean_name)
 
         # Not found — give a helpful error

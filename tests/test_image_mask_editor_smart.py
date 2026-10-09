@@ -68,6 +68,12 @@ def mask_root(tmp_path, monkeypatch):
     fp.get_full_path = _get_full
     fp.get_folder_paths = lambda k: fp.folder_names_and_paths.get(k, ([], set()))[0]
     monkeypatch.setitem(sys.modules, "folder_paths", fp)
+    # The SAM loader binds folder_paths when it is first imported. If another suite imported it earlier, the
+    # sys.modules stub above never reaches it: patch its own reference too, so these tests do not depend on order.
+    loader = sys.modules.get("nodes.sam_model_loader")
+    if loader is not None:
+        monkeypatch.setattr(loader, "folder_paths", fp, raising=False)
+        monkeypatch.setattr(loader, "HAS_FOLDER_PATHS", True, raising=False)
     return tmp_path
 
 

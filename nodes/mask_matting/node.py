@@ -120,6 +120,31 @@ def _strip_badge(s: str) -> str:
     return s.split("  [")[0].strip()
 
 
+# Values a saved workflow can carry that the current lists no longer offer (L2.14): core's NodeReplace copies
+# MaskMattingMEC values verbatim, the SAM 1/2 segmenters were removed (531eb78), and the "  [missing-deps]" badge comes
+# and goes with what is installed.
+_LEGACY_SEGMENTERS = {"sam": "sam3.1", "sam1": "sam3.1", "sam2": "sam3.1", "sam2.1": "sam3.1", "sam2_1": "sam3.1",
+                      "sam_hq": "sam3.1", "hq-sam": "sam3.1"}
+
+
+def _normalize_legacy_choice(kind: str, value) -> str:
+    v = _strip_badge(str(value or ""))
+    if kind == "segmenter":
+        return _LEGACY_SEGMENTERS.get(v, v) or "auto_best"
+    if kind == "matter":
+        return v or "none"
+    if v in ("", "(auto)"):
+        return "(auto)"
+    opts = _all_weight_files()
+    if v in opts:
+        return v
+    tail = v.split("] ", 1)[-1].split("/", 1)[-1]
+    for o in opts:
+        if o.endswith("/" + tail) or o.endswith("] " + tail):
+            return o
+    return "(auto)"       # a weight this machine does not have: let the backend pick instead of failing
+
+
 def _all_weight_files() -> List[str]:
     """Aggregate weights + presets across every backend.
 
@@ -368,6 +393,18 @@ class MaskOpsMEC:
         "Suggested next masking method (string) from the failure explainer.",
         "Per-object alpha mattes stacked object-major as (O*B,H,W).",
     )
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, segmenter, matter, model, matter_model):
+        """Old saves keep working (L2.14). Naming these four inputs makes ComfyUI skip its own list check for them;
+        each value is normalised as execute() does, and only a backend that does not exist at all is refused."""
+        seg = _normalize_legacy_choice("segmenter", segmenter)
+        mat = _normalize_legacy_choice("matter", matter)
+        if seg not in ("auto", "auto_best") and seg not in all_segmenters():
+            return f"Unknown segmenter '{segmenter}'. Pick one of: {', '.join(_segmenter_choices())}"
+        if mat not in ("none", "auto") and mat not in all_matters():
+            return f"Unknown matter '{matter}'. Pick one of: {', '.join(_matter_choices())}"
+        return True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -742,6 +779,10 @@ class MaskOpsMEC:
         neg_points = negative_coords or neg_points or ""
         # Always auto: node infers mode (points/bbox/text/video) from wired inputs and B>1.
         input_mode = "auto"
+        segmenter = _normalize_legacy_choice("segmenter", segmenter)
+        matter = _normalize_legacy_choice("matter", matter)
+        model = _normalize_legacy_choice("weight", model)
+        matter_model = _normalize_legacy_choice("weight", matter_model)
         seg_key = _strip_badge(segmenter)
         mat_key = _strip_badge(matter)
         _use_onyx = str(pipeline).strip().lower() == "onyx"
