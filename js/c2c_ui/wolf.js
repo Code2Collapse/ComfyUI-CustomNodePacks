@@ -21,6 +21,9 @@ export function wolfMark(size = 40) {
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", "C2C");
     svg.classList.add("c2c-wolf-mark");
+    // Decorative: the pointer goes through it. Nodes 2.0 resolves a dropped wire with elementFromPoint and accepts
+    // only an HTMLElement (an SVG is not one), so a wire released over this mark connected to nothing (L2.39).
+    svg.style.pointerEvents = "none";
 
     const path = document.createElementNS(SVG_NS, "path");
     // One path, cut-outs via evenodd. Tall ears set close to the brow, cheek

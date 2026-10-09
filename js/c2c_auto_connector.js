@@ -1,17 +1,20 @@
-﻿/**
+/**
  * c2c_auto_connector.js — auto-connect newly added nodes.
  *
- * When the user adds a new node (palette, drag, paste, dblclick add-menu),
- * try to wire its first compatible input to the most-recently-selected
- * node's first compatible free output. Opt-in via setting.
+ * When the user adds a new node on its own (search box, node library, add menu), wire it to the NEAREST node on
+ * its left: every free input whose type has exactly one matching output there gets a wire (owner A9, 2026-10-09:
+ * "Nearest node, exact types" + "Every matching input"). Exact type strings only, never "*", never a widget input.
+ * Nothing is wired when no node matches, when two candidates are about equally near, or when core already wired the
+ * new node (a wire released on the canvas opens the search box and core connects that wire itself). The wires are
+ * one undo step. Opt-in via setting.
  *
  * Apache-2.0 © Code2Collapse.
  */
 
 import { app } from "../../scripts/app.js";
+import { asOneUndoStep } from "./_c2c_undo_scope.js";
 
 const SETTING_ID = "c2c.autoConnector.enabled";
-let _lastNode = null;          // last node the user clicked / created.
 let _lastAddTs = 0;             // dedupe rapid double-add.
 
 // Only a node the user just added ON ITS OWN may be auto-wired. Graph load and ComfyUI's undo (which reloads
@@ -20,7 +23,7 @@ let _lastAddTs = 0;             // dedupe rapid double-add.
 // because of autoconnect").
 let _altPointerDown = false;    // Alt held while a pointer is down = core's clone-drag
 let _pasting = 0;               // depth of paste calls in progress
-let _addsThisTick = 0;          // several adds in one tick = paste / load / subgraph, never wire
+let _tick = null;               // adds in the current tick; several = paste / load / subgraph, never wire
 
 function graphLoading() {
     try {
@@ -35,50 +38,62 @@ function enabled() {
     catch { return false; }
 }
 
-function typeMatches(srcType, dstType) {
-    if (!srcType || !dstType) return false;
-    if (srcType === "*" || dstType === "*") return true;
-    if (srcType === dstType) return true;
-    // LiteGraph allows comma-separated alternative types.
-    const srcList = String(srcType).split(",").map(s => s.trim());
-    const dstList = String(dstType).split(",").map(s => s.trim());
-    return srcList.some(s => dstList.includes(s));
+const SEARCH_RADIUS = 900;     // graph px from the new node's left edge
+const TIE_RATIO = 1.15;         // a second candidate within 15% of the nearest = ambiguous, wire nothing
+
+function wireable(inp) {
+    return inp && inp.link == null && !inp.widget && inp.type && inp.type !== "*";
 }
 
-function firstFreeOutput(srcNode, requiredType) {
-    if (!srcNode?.outputs) return -1;
-    for (let i = 0; i < srcNode.outputs.length; i++) {
-        const o = srcNode.outputs[i];
-        if (!typeMatches(o.type, requiredType)) continue;
-        // Don't reuse "links" — outputs can be re-fanned, but prefer free first.
-        if (!o.links || o.links.length === 0) return i;
+/** Inputs of `node` that `src` can feed by EXACT type with exactly one candidate output each. Only the FIRST free
+ *  input of a type is wired (as core's own drop-on-node picks): feeding one IMAGE into both "destination" and
+ *  "source" of a compositor would be nonsense. */
+function plan(src, node) {
+    const wires = [];
+    const seen = new Set();
+    (node.inputs || []).forEach((inp, i) => {
+        if (!wireable(inp) || seen.has(inp.type)) return;
+        seen.add(inp.type);
+        const outs = [];
+        (src.outputs || []).forEach((o, k) => { if (o && o.type === inp.type) outs.push(k); });
+        if (outs.length === 1) wires.push([outs[0], i]);
+    });
+    return wires;
+}
+
+/** The nearest node on the new node's left (its right edge left of our left edge), by edge-to-edge distance. */
+function candidates(node) {
+    const g = node.graph;
+    const left = node.pos[0], midY = node.pos[1] + (node.size?.[1] || 0) / 2;
+    const out = [];
+    for (const n of g?._nodes || []) {
+        if (n === node || !n.outputs?.length) continue;
+        const right = n.pos[0] + (n.size?.[0] || 0);
+        if (right > left + 20) continue;                    // not upstream
+        const dy = Math.max(0, Math.abs((n.pos[1] + (n.size?.[1] || 0) / 2) - midY) - (n.size?.[1] || 0) / 2);
+        const d = Math.hypot(left - right, dy);
+        if (d <= SEARCH_RADIUS) out.push({ n, d });
     }
-    // Fallback: allow re-fanning a busy output.
-    for (let i = 0; i < srcNode.outputs.length; i++) {
-        if (typeMatches(srcNode.outputs[i].type, requiredType)) return i;
-    }
-    return -1;
+    return out.sort((a, b) => a.d - b.d);
+}
+
+function alreadyWired(node) {
+    return (node.inputs || []).some((i) => i.link != null)
+        || (node.outputs || []).some((o) => o.links?.length);
 }
 
 function autoWire(newNode) {
-    if (!newNode || !_lastNode || _lastNode === newNode) return;
-    // The remembered node may since have been deleted, or belong to another
-    // workflow tab / subgraph: wiring it would fail ("node doesn't belong to
-    // any graph") or cross graphs. Only wire within the same live graph.
-    if (!_lastNode.graph || _lastNode.graph !== newNode.graph) { _lastNode = null; return; }
-    if (!_lastNode.outputs?.length || !newNode.inputs?.length) return;
-
-    // Try every input of newNode (first compatible wins).
-    for (let i = 0; i < newNode.inputs.length; i++) {
-        const inp = newNode.inputs[i];
-        if (inp.link != null) continue;
-        const outIdx = firstFreeOutput(_lastNode, inp.type);
-        if (outIdx < 0) continue;
-        try {
-            _lastNode.connect(outIdx, newNode, i);
-            return; // one auto-link is enough.
-        } catch (e) { console.warn("[C2C.AutoConnector] connect failed:", e); }
-    }
+    if (!newNode?.graph || !newNode.inputs?.some(wireable) || alreadyWired(newNode)) return;
+    const ranked = candidates(newNode).map((c) => ({ ...c, wires: plan(c.n, newNode) })).filter((c) => c.wires.length);
+    if (!ranked.length) return;
+    if (ranked.length > 1 && ranked[1].d <= ranked[0].d * TIE_RATIO + 4) return;   // two about equally near
+    const { n: src, wires } = ranked[0];
+    asOneUndoStep(app.canvas, () => {
+        for (const [outIdx, inIdx] of wires) {
+            try { src.connect(outIdx, newNode, inIdx); }
+            catch (e) { console.warn("[C2C.AutoConnector] connect failed:", e); }
+        }
+    });
 }
 
 app.registerExtension({
@@ -86,21 +101,13 @@ app.registerExtension({
     settings: [{
         id: SETTING_ID,
         name: "Auto-connect newly added nodes",
-        tooltip: "When you add a new node to the canvas, automatically wire it to the previously-selected node's first compatible output. Opt-in.",
+        tooltip: "When you add a node on its own, wire it to the nearest node on its left: every free input whose "
+            + "type has exactly one matching output there. Exact types only; nothing is wired when two nodes are "
+            + "about equally near or when ComfyUI already wired the new node. One Ctrl+Z removes the wires. Opt-in.",
         type: "boolean", defaultValue: false,
         category: ["c2c", "Productivity", "Auto Connector"],
     }],
     async setup() {
-        // Track last clicked/selected node.
-        const c = app.canvas;
-        if (c) {
-            const _origSel = c.onNodeSelected;
-            c.onNodeSelected = function (n) {
-                _lastNode = n || _lastNode;
-                return _origSel?.apply(this, arguments);
-            };
-        }
-
         // Hook .add on the instance (ComfyUI replaces it with its own wrapper)
         // AND on the prototype (in case future code calls super-style).
         const installHook = (target) => {
@@ -113,22 +120,23 @@ app.registerExtension({
                 // rest[0] === true is LiteGraph's skip_compute_order: configure()/load, never a user add.
                 const loading = rest[0] === true || graphLoading();
                 const copying = _altPointerDown || _pasting > 0;
-                _addsThisTick += 1;
-                if (_addsThisTick === 1) setTimeout(() => { _addsThisTick = 0; }, 0);
+                // One record per tick, held by reference: every add of the same tick (paste, template, load)
+                // sees the final count when its check runs.
+                if (!_tick) { _tick = { count: 0 }; setTimeout(() => { _tick = null; }, 0); }
+                const tick = _tick;
+                tick.count += 1;
                 if (loading || copying) return r;
-                queueMicrotask(() => {
+                // After core had its chance: a wire released on the canvas opens the search box, and core
+                // connects that wire to the node it creates (inputs OR outputs) after adding it.
+                setTimeout(() => {
                     try {
-                        if (_addsThisTick > 1) return;               // a batch add (paste, template, load)
-                        if (node?.inputs?.some?.((i) => i.link != null)) return;   // already wired by core
+                        if (tick.count > 1) return;                       // a batch add, never wire
                         if (Date.now() - _lastAddTs < 80) return;
                         _lastAddTs = Date.now();
-                        if (node && node !== _lastNode) {
-                            autoWire(node);
-                            _lastNode = node;
-                            app.graph?.setDirtyCanvas?.(true, true);
-                        }
+                        autoWire(node);
+                        node?.graph?.setDirtyCanvas?.(true, true);
                     } catch (e) { console.warn("[C2C.AutoConnector]", e); }
-                });
+                }, 60);
                 return r;
             };
             target._c2c_ac_patched = true;
