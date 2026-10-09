@@ -41,3 +41,8 @@ import os as _os
 
 if _os.environ.get("C2C_TESTS_ALLOW_DOWNLOADS") != "1":
     _os.environ.setdefault("C2C_NO_DOWNLOADS", "1")
+    # Hugging Face goes offline too (L2.41): the no-inference-tensors probe called the Hub for BiRefNet, segformer and
+    # a LocateAnything-3B snapshot_download. Offline, a model already in the HF cache still loads (measured: the same
+    # 41 passed / 13 skipped as online, with no hub request); a model that is not cached fails fast and its test skips.
+    _os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")

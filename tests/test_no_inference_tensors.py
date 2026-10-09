@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -86,13 +87,17 @@ def _fill_folder_paths_stub():
         return
     core = PACK.parent.parent / "ComfyUI_windows_portable" / "ComfyUI"
     folder_paths.base_path = str(core if core.is_dir() else PACK)
-    folder_paths.models_dir = str(Path(folder_paths.base_path) / "models")
+    # Models and outputs go to an empty scratch folder, never the owner's ComfyUI (standing order 5): a node that
+    # finds no weight file there would download INTO models_dir. A node that needs weights then skips below.
+    scratch = Path(tempfile.gettempdir()) / "c2c_cnp_test_no_inference"
+    scratch.mkdir(exist_ok=True)
+    folder_paths.models_dir = str(scratch / "models")
     folder_paths.get_full_path = lambda *_a, **_k: None
     folder_paths.get_filename_list = lambda *_a, **_k: []
     folder_paths.get_folder_paths = lambda *_a, **_k: []
-    folder_paths.get_temp_directory = lambda: str(PACK / "_test_models")
-    folder_paths.get_input_directory = lambda: str(PACK / "_test_models")
-    folder_paths.get_output_directory = lambda: str(PACK / "_test_models")
+    folder_paths.get_temp_directory = lambda: str(scratch)
+    folder_paths.get_input_directory = lambda: str(scratch)
+    folder_paths.get_output_directory = lambda: str(scratch)
 
 
 def _load_pack():
