@@ -103,9 +103,7 @@ class C2CACESTonemap:
                 x = x.clamp(min=0.0)
 
             # ACES filmic curve
-            a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
-            result = (x * (a * x + b)) / (x * (c * x + d) + e)
-            result = result.clamp(0.0, 1.0)
+            result = _aces_fit(x)
 
             # Output colorspace
             if output_colorspace == "sRGB (gamma)":
@@ -143,7 +141,8 @@ class C2CVAEQualityDecode:
                 }),
                 "apply_aces": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Apply ACES filmic tone mapping after decode.",
+                    "tooltip": "Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: "
+                               "linearised, tone-mapped, encoded once - same as C2C ACES Tonemap from sRGB).",
                 }),
                 "exposure": ("FLOAT", {
                     "default": 1.0, "min": 0.01, "max": 10.0, "step": 0.05,
@@ -273,11 +272,10 @@ class C2CVAEQualityDecode:
                 result = result.clamp(0.0, 1.0)
 
             if apply_aces:
-                a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
-                x = result * exposure
-                result = (x * (a * x + b)) / (x * (c * x + d) + e)
-                result = result.clamp(0.0, 1.0)
-                result = _linear_to_srgb(result)
+                # The decode is sRGB-ENCODED (display-referred), so linearise before the curve and encode once after
+                # it. Tone-mapping the encoded values as if linear, then encoding again, applied the gamma twice: a
+                # lifted, washed-out image (L7.42). Same result as C2C ACES Tonemap with source_space = sRGB.
+                result = _linear_to_srgb(_aces_fit(_srgb_to_linear(result) * exposure))
 
             return (result,)
 
@@ -347,6 +345,12 @@ class C2CColorSpaceConvert:
 
 
 # ── Color space conversion helpers ────────────────────────────────────
+
+def _aces_fit(x: torch.Tensor) -> torch.Tensor:
+    """Narkowicz's fit of the ACES filmic curve, scene-linear in, display-linear 0..1 out."""
+    a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
+    return ((x * (a * x + b)) / (x * (c * x + d) + e)).clamp(0.0, 1.0)
+
 
 def _linear_to_srgb(x: torch.Tensor) -> torch.Tensor:
     low = x * 12.92

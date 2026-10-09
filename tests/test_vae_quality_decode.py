@@ -358,3 +358,30 @@ def test_dynamic_fp32_retry_not_on_other_errors(decode_node):
     lat = torch.randn(1, 4, 2, 4, 4, dtype=torch.bfloat16)
     with pytest.raises(RuntimeError, match="out of memory"):
         decode_node.decode({"samples": lat}, vae, True, 0, False, 1.0, True)
+
+
+# ── L7.42: apply_aces on an sRGB-encoded decode ─────────────────────────────
+
+def _ramp_decode(node, monkeypatch, exposure=1.0):
+    ramp = torch.linspace(0.0, 1.0, 256).view(1, 1, 256, 1).expand(1, 4, 256, 3).contiguous()
+    monkeypatch.setattr(node, "_run_decode", lambda vae, latent, tile_size: ramp.clone())
+    (out,) = node.decode({"samples": torch.zeros(1, 4, 1, 1)}, LegacyFakeVAE(), False, 0, True, exposure, True)
+    return ramp, out
+
+
+def test_aces_decode_matches_the_tonemap_node_from_srgb(decode_node, monkeypatch):
+    from nodes.hdr_color_science import C2CACESTonemap
+    for exposure in (1.0, 1.6):
+        ramp, out = _ramp_decode(decode_node, monkeypatch, exposure)
+        (ref,) = C2CACESTonemap().apply_tonemap(ramp, "sRGB", exposure, 1.0, 1.0, "sRGB (gamma)")
+        torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-5)
+
+
+def test_aces_decode_no_double_gamma(decode_node, monkeypatch):
+    # sRGB 0.4614 is scene mid-grey 0.18. ACES(0.18) = 0.2669 linear = 0.553 sRGB. Treating the encoded value as
+    # linear (the bug) gave 0.79: every mid-tone lifted toward white.
+    ramp, out = _ramp_decode(decode_node, monkeypatch)
+    i = int(torch.argmin((ramp[0, 0, :, 0] - 0.4614).abs()))
+    assert abs(float(out[0, 0, i, 0]) - 0.553) < 0.01
+    assert float(out[0, 0, 0, 0]) == 0.0                       # black stays black
+    assert torch.all(out[0, 0, 1:, 0] >= out[0, 0, :-1, 0])     # monotonic
