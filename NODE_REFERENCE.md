@@ -2573,7 +2573,7 @@ High-fidelity VAE decode for Wan video. Forces fp32 precision, uses spatial-only
 | `vae` | `VAE` |  | — |
 | `force_fp32` | `BOOLEAN` | default `True` | Force fp32 during VAE decode for maximum quality. |
 | `tile_size` | `INT` | default `0`, range 0…1024, step 64 | Spatial tile size (0=auto/no tiling). Set 256+ for 1080p. |
-| `apply_aces` | `BOOLEAN` | default `False` | Apply ACES filmic tone mapping after decode. |
+| `apply_aces` | `BOOLEAN` | default `False` | Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: linearised, tone-mapped, encoded once - same as C2C ACES Tonemap from sRGB). |
 | `exposure` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.05 | Exposure for ACES (only used if apply_aces=True). |
 
 **Outputs**
