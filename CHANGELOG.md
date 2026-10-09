@@ -61,6 +61,9 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 
 ### Added
 
+- **SeedVR2 preview.** The SeedVR2 Video Upscaler node (numz pack, unchanged) shows each decoded batch while it runs, with
+  a before/after wipe. When it finishes, a frame slider steps through every frame, and Difference and Alpha views show
+  what changed. Settings › C2C › Video › SeedVR2 preview.
 - **Save Video (C2C)** (`🐺 C2C/…/Video`), the pro writer next to VHS Video Combine. It writes MP4 H.264 / H.265
   10-bit, MOV ProRes 422 / HQ / 4444 / 4444 XQ and DNxHR HQ / HQX / 444, lossless MKV FFV1, WebM VP9, GIF,
   animated WebP, and 16-bit PNG / half and float EXR sequences. Alpha is kept where the format has it, audio is

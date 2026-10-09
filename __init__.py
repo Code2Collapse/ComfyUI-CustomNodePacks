@@ -1123,6 +1123,12 @@ try:
     except Exception as _cvr:
         print(f"[C2C] video loader routes deferred: {_cvr}")
     try:
+        from .nodes.seedvr2_preview import register as _register_seedvr2_preview
+        if _register_seedvr2_preview():
+            print("[C2C] SeedVR2 preview ready (attaches to the numz SeedVR2 upscaler when it runs).")
+    except Exception as _s2p:
+        print(f"[C2C] SeedVR2 preview deferred: {_s2p}")
+    try:
         from .nodes._c2c_secrets import register_routes as _register_c2c_secrets_routes, backend_name as _c2c_secrets_backend
         _register_c2c_secrets_routes(_ps)
         print(f"[C2C] secrets vault routes registered (/c2c/secrets/*) backend={_c2c_secrets_backend()}.")
