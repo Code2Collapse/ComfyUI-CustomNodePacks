@@ -5,6 +5,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { ensureStyles, emptyState, statusLine, measureRootContent, installResizeFloor } from "./c2c_ui/index.js";
+import { setHidden } from "./_widget_visibility.js";
 
 const STYLE_ID = "c2c-vloader-v1";
 const DEBOUNCE_MS = 350;
@@ -17,9 +18,23 @@ const DEFAULT_ASPECT = 16 / 9;
 
 const LOADERS = {
     LoadVideoC2C: {
-        hasPreview: false,
+        // Our server-side preview, not core's: core's upload preview plays the ORIGINAL file in the browser, and
+        // Chrome cannot decode ProRes, DNxHR, HEVC 10-bit or FFV1/MKV - those showed no preview at all (L2.27,
+        // measured; the server transcodes each in under a second). Core's own preview widget is hidden.
+        hasPreview: true,
+        hideCorePreview: true,
         mode: "upload",
         emptyTitle: "Load Video (C2C)",
+        emptyHint: "Choose a video from the input folder.",
+    },
+    // OmniScale's loader (ComfyUI-OmniScale) uses core's upload preview too, with the same blind spot for pro
+    // formats (owner A9: "Load Video (C2C) and OmniScale Load Video"). With CustomNodePacks installed it gets our
+    // transcoded preview; without it, core's stays. Nothing is imported across packs.
+    OmniScaleLoadVideo: {
+        hasPreview: true,
+        hideCorePreview: true,
+        mode: "upload",
+        emptyTitle: "OmniScale Load Video",
         emptyHint: "Choose a video from the input folder.",
     },
     LoadVideoPathC2C: {
@@ -340,6 +355,7 @@ function mountLoaderWidget(node, cfg) {
 
         setLoading(ui, cfg.hasPreview, aspect);
         ui.status.setText("Loading preview…", "default");
+        if (cfg.hideCorePreview) hideCorePreview(node);
 
         try {
             const probeUrl = api.apiURL("/c2c/video/probe?" + params.toString());
@@ -441,10 +457,46 @@ function mountLoaderWidget(node, cfg) {
     return widgetRef;
 }
 
+/** Hide core's upload preview (a <video> of the original file) so the node shows one preview, ours. Core adds it
+ *  with the upload widget, possibly after onNodeCreated, so this runs again a few times and on every refresh. */
+function hideCorePreview(node) {
+    // Nodes 2.0 draws core's player from the node-output store, not from a widget: scope a CSS rule to this
+    // node's root (Vue leaves attributes it does not render alone, and every refresh re-applies it).
+    if (globalThis.LiteGraph?.vueNodesMode) {
+        if (!document.getElementById("c2c-no-core-video-preview")) {
+            const s = document.createElement("style");
+            s.id = "c2c-no-core-video-preview";
+            s.textContent = "[data-c2c-no-core-preview] .video-preview { display: none !important; }";
+            document.head.appendChild(s);
+        }
+        document.querySelector(`[data-node-id="${node.id}"]`)?.setAttribute("data-c2c-no-core-preview", "1");
+    }
+    const w = node.widgets?.find((x) => x.name === "video-preview" || (x.type === "video" && x.name !== "c2c_preview"));
+    if (!w) return false;
+    const v = w.element?.querySelector?.("video") || (w.element?.tagName === "VIDEO" ? w.element : null);
+    try { v?.pause(); } catch (_e) { /* ignore */ }
+    if (!w.__c2cHidden) {
+        w.__c2cHidden = true;
+        setHidden(w, true);
+        const need = node.computeSize?.();
+        if (need) node.setSize([node.size[0], need[1]]);
+        node.setDirtyCanvas?.(true, true);
+    }
+    return true;
+}
+
 function setupLoaderNode(node, cfg) {
     if (node._c2cVideoLoaderMounted) return;
     node._c2cVideoLoaderMounted = true;
     mountLoaderWidget(node, cfg);
+    if (cfg.hideCorePreview) {
+        for (const ms of [0, 250, 1000, 3000]) setTimeout(() => hideCorePreview(node), ms);
+        const cb = node.widgets?.find((x) => x.name === "video");
+        if (cb) {
+            const orig = cb.callback;
+            cb.callback = function (...a) { const r = orig?.apply(this, a); setTimeout(() => hideCorePreview(node), 0); return r; };
+        }
+    }
 }
 
 if (!globalThis.__c2cVideoLoadersExt) {
