@@ -106,7 +106,10 @@ class C2CVideo:
 
     def every(self, step: int) -> C2CVideo:
         step = max(1, int(step))
-        return self._selected(self.selected_indices()[::step], TransformOp("step", (step,)))
+        h = self._selected(self.selected_indices()[::step], TransformOp("step", (step,)))
+        # Every nth frame of a clip is a clip at fps / n (VHS: target_frame_time *= select_every_nth). Keeping the
+        # source rate made the audio cover only 1/n of the frames' span and video_info's loaded_fps wrong (L7.69).
+        return replace(h, fps=Fraction(h.fps).limit_denominator(1_000_000) / step) if step > 1 else h
 
     def capped(self, count: int) -> C2CVideo:
         """At most ``count`` frames; 0 means no cap (VHS's frame_load_cap)."""

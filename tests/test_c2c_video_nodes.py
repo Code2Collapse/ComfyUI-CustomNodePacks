@@ -347,6 +347,18 @@ def test_audio_offset_trim(nl, cv, tmp_path):
     assert _audio_rms(wf1, sr1, 0.0, 0.1) > 0.05
 
 
+def test_select_every_nth_keeps_the_audio_span(nl, cv, tmp_path):
+    # VHS parity (L7.69): every 2nd frame of a 24 fps clip is a 12 fps clip, and its audio covers the whole span.
+    path = str(tmp_path / "nth_audio.mp4")
+    _make_offset_audio_clip(cv, path, frames=48)
+    _i, count, audio, info, *_ = _run_path(nl, path, select_every_nth=2)
+    assert count == 24
+    assert info["loaded_fps"] == 12
+    sr = audio["sample_rate"]
+    expect = int(2.0 * sr)
+    assert abs(audio["waveform"].shape[-1] - expect) <= max(1, int(expect * 0.01))
+
+
 def test_validate_inputs_and_missing_is_changed(nl, tmp_path):
     assert nl.LoadVideoPathC2C.VALIDATE_INPUTS(None) is True
     assert "enter a video" in nl.LoadVideoPathC2C.VALIDATE_INPUTS("")
