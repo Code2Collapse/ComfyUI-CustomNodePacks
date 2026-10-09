@@ -43,6 +43,22 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
   found by searching the Settings dialog): Off / Internal (default) / Universal. Per node type: right-click a
   node › Image batching for this node type.
 
+### Added
+
+- **Save Video (C2C)** (`🐺 C2C/…/Video`), the pro writer next to VHS Video Combine. It writes MP4 H.264 / H.265
+  10-bit, MOV ProRes 422 / HQ / 4444 / 4444 XQ and DNxHR HQ / HQX / 444, lossless MKV FFV1, WebM VP9, GIF,
+  animated WebP, and 16-bit PNG / half and float EXR sequences. Alpha is kept where the format has it, audio is
+  muxed in (a WAV next to a sequence), and the frames stream to the encoder in chunks sized to free RAM.
+  - Optional OCIO colour-space conversion on write (for example sRGB → ACEScg for an EXR plate), from `$OCIO` or the
+    built-in ACES studio config.
+  - The node plays what it saved, with a scrub timeline and format chips. Formats a browser cannot play (ProRes,
+    DNxHR, FFV1, sequences) get a small H.264 preview.
+  - Naming: ComfyUI counter (`name_00001`, never overwrites) or Folder Version (wire `subfolder` from the Folder
+    Version Incrementer; an existing version is never overwritten), per node or from Settings › C2C › Video ›
+    Save Video.
+  - Measured round trip per format (PSNR, alpha, audio length): `docs/evidence/L7.56` in the work area.
+    For example, ProRes 4444 gives 65.8 dB with alpha, and FFV1, 16-bit PNG and float EXR are exact.
+
 ## Unreleased – 2026-10-08 (owner list A9: graph-damaging bugs, settings, Vault)
 
 Evidence for every item: `docs/evidence/L2.15`, `L2.23` and `L2.24` in the work area (Playwright runs on a

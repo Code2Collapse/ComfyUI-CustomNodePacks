@@ -310,6 +310,24 @@ except Exception as _avh_exc:  # pragma: no cover
     except Exception:
         import logging as _lg
         _lg.getLogger("MEC").warning("[MEC] av_handles import failed: %s", _avh_exc)
+# Save Video (C2C) — streaming pro-format writer
+try:
+    from .nodes.save_video import (
+        NODE_CLASS_MAPPINGS as _SAVEVIDEO_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _SAVEVIDEO_DISPLAY,
+    )
+except Exception as _sv_exc:  # pragma: no cover
+    _SAVEVIDEO_MAPPINGS, _SAVEVIDEO_DISPLAY = {}, {}
+    try:
+        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_sv
+        _c2c_rec_fail_sv(
+            "save_video", _sv_exc,
+            hint="Save Video (C2C) failed to import. Check nodes/save_video.py.",
+            group="nodes",
+        )
+    except Exception:
+        import logging as _lg
+        _lg.getLogger("MEC").warning("[MEC] save_video import failed: %s", _sv_exc)
 # Tiled video refinement (tile plan / split / merge / identity lock)
 try:
     from .nodes.tiling import (
@@ -819,6 +837,7 @@ _C2C_FAMILIES = [
     ("VAE Clean", _VAECLEAN_MAPPINGS, _VAECLEAN_DISPLAY),
     ("Magnific", _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY),
     ("AV Handles", _AVH_MAPPINGS, _AVH_DISPLAY),
+    ("Save Video", _SAVEVIDEO_MAPPINGS, _SAVEVIDEO_DISPLAY),
     ("Unified Segmentation", _USEG_MAPPINGS, _USEG_DISPLAY),
     ("SAM Multi-Mask Picker", _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY),
     ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
