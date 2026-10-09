@@ -42,6 +42,10 @@ classic canvas and Nodes 2.0, with the owner's own C2C setting values).
 - **C2C video reads that stop part-way through a file release their decoder cleanly.** A frame cap, every-nth or
   random read left about 17 frames in flight in the decoder's threads, and freeing it like that hung once in the
   test suite (inside FFmpeg). The decoder is now drained first; this costs nothing measurable on 1080p reads.
+- **Mask Ops with ViTMatte on the CPU uses a third of the memory.** Tiles now run one at a time on the CPU. Measured
+  with the real ViTMatte weights on a 1536×1152 hair plate at the node's defaults: peak RAM 7.7 GB → 2.5 GB,
+  9.3 s → 5.8 s, the same matte. The GPU keeps the "tiles per forward pass" setting. The same measurement shows the
+  tiled matte is as good as one full-frame pass (within 3 %), and downscaling the frame instead is far worse.
 - **Image batching is findable.** The setting is called "Image batching" (Settings › C2C › Image batching, also
   found by searching the Settings dialog): Off / Internal (default) / Universal. Per node type: right-click a
   node › Image batching for this node type.

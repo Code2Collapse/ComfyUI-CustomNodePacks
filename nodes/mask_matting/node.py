@@ -145,6 +145,17 @@ def _normalize_legacy_choice(kind: str, value) -> str:
     return "(auto)"       # a weight this machine does not have: let the backend pick instead of failing
 
 
+def _vitmatte_tile_kwargs(matte_tile, matte_overlap, matte_tile_batch, device) -> Dict[str, Any]:
+    """ViTMatte tiling for the cascade path. On the CPU tiles run one at a time (L2.12, real weights, 1536x1152,
+    1024 px tiles): a batch of 4 peaked at 7.66 GB and took 9.3 s, one at a time 2.54 GB and 5.8 s, the same
+    tiles and the same matte. Batching only pays on a GPU, where an out-of-memory error halves the batch; on the
+    CPU there is no such fallback, the machine pages or the process dies."""
+    batch = int(matte_tile_batch)
+    if str(device).startswith("cpu"):
+        batch = 1
+    return {"tile_size": max(64, int(matte_tile)), "tile_overlap": int(matte_overlap), "tile_batch": max(1, batch)}
+
+
 def _all_weight_files() -> List[str]:
     """Aggregate weights + presets across every backend.
 
@@ -601,7 +612,7 @@ class MaskOpsMEC:
                 "matte_tile_batch": ("INT", {
                     "default": 4, "min": 1, "max": 16, "step": 1,
                     "advanced": True,
-                    "tooltip": "How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors.",
+                    "tooltip": "How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors. On the CPU tiles always run one at a time (faster there, and a third of the memory).",
                 }),
             },
         }
@@ -1429,11 +1440,7 @@ class MaskOpsMEC:
                     )
                     _vit_kw: Dict[str, Any] = {}
                     if mat_key == "vitmatte":
-                        _vit_kw = {
-                            "tile_size": max(64, int(matte_tile)),
-                            "tile_overlap": int(matte_overlap),
-                            "tile_batch": int(matte_tile_batch),
-                        }
+                        _vit_kw = _vitmatte_tile_kwargs(matte_tile, matte_overlap, matte_tile_batch, device)
                     if use_multi:
                         n_obj = min(int(obj_masks_raw.shape[0]), len(obj_boxes_raw))
                         om_list = [
