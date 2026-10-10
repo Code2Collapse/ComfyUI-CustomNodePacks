@@ -2,6 +2,17 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 3: Layer Effects)
+
+Evidence: `docs/evidence/L7.65/wave3_le_live.json`, `wave3_le_nodes.*.png`; `tests/test_consolidation_wave3.py`.
+
+### Changed (saved workflows migrate automatically; results are identical)
+
+- **Layer Effects (C2C)** replaces the eight Layer Effect nodes (Drop Shadow, Inner Shadow, Outer Glow, Inner Glow,
+  Stroke, Color Overlay, Gradient Overlay, Gradient Map). Switch each effect on to show and use its controls - the
+  shadow dial, gradient ramps and colour swatches included. Several effects stack in the order you list (Photoshop's
+  order by default), each applied to the result of the one before - the same as chaining the old nodes.
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 2)
 
 Evidence: `docs/evidence/L7.65` (`wave2_live.json`, `wave2_nodes.*.png`; `tests/test_consolidation_wave2.py` checks every

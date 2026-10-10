@@ -361,7 +361,9 @@ class TestNoInferenceTensorsEscape:
         # future helper that opens an inference_mode block somewhere else in the
         # pack still gets caught here.
         names = sorted(self._all_nodes())
-        assert len(names) >= 14, f"expected both families, saw {names}"
+        # both families: the Layer Effects node (the eight effects in one since L7.65 P13) and the mask toolkit
+        from nodes.mask_toolkit import NODE_CLASS_MAPPINGS as MT
+        assert "LayerEffectsMEC" in names and set(MT) <= set(names) and len(MT) >= 5, f"expected both families, saw {names}"
 
     def test_a_downstream_node_can_mutate_our_output(self):
         # The failure as a user meets it: the NEXT node does an in-place op.

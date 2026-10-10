@@ -698,24 +698,164 @@ class LayerEffectGradientMapMEC:
             return _finish(final, mask, name, notes, b)
 
 
+# ── Layer Effects: the eight effects above in one node (L7.65 P13) ──────────────────────────────────────────────
+#
+# The classes above are the effect engines; only LayerEffectsMEC is registered. Each effect is switched on with its
+# own boolean and carries its own controls under a prefix. Enabled effects run in `order`: each one takes the previous
+# result as both its layer and its background, with the original matte - exactly what chaining the old single-effect
+# nodes did, so one enabled effect gives the old node's result bit for bit (saved workflows of the eight old nodes
+# migrate here with only their effect on).
+
+# key, engine, the engine's own parameters (beyond the shared layer / matte / seed / background)
+_EFFECTS = (
+    ("drop_shadow", LayerEffectDropShadowMEC,
+     ("blend_mode", "opacity", "distance_x", "distance_y", "grow", "blur", "shadow_color")),
+    ("outer_glow", LayerEffectOuterGlowMEC,
+     ("blend_mode", "opacity", "brightness", "glow_range", "blur", "light_color", "glow_color")),
+    ("gradient_map", LayerEffectGradientMapMEC,
+     ("start_color", "mid_color", "end_color", "mid_point", "opacity")),
+    ("gradient_overlay", LayerEffectGradientOverlayMEC,
+     ("blend_mode", "opacity", "start_color", "start_alpha", "end_color", "end_alpha", "angle")),
+    ("color_overlay", LayerEffectColorOverlayMEC, ("blend_mode", "opacity", "color")),
+    ("inner_glow", LayerEffectInnerGlowMEC,
+     ("blend_mode", "opacity", "brightness", "glow_range", "blur", "light_color", "glow_color")),
+    ("inner_shadow", LayerEffectInnerShadowMEC,
+     ("blend_mode", "opacity", "distance_x", "distance_y", "grow", "blur", "shadow_color")),
+    ("stroke", LayerEffectStrokeMEC, ("blend_mode", "opacity", "stroke_grow", "stroke_width", "blur", "stroke_color")),
+)
+# Photoshop's stacking, applied bottom-up: what sits behind the layer, then the adjustment and overlays, inner effects,
+# and the stroke on top.
+DEFAULT_ORDER = ", ".join(key for key, _cls, _p in _EFFECTS)
+_LABEL = {"drop_shadow": "Drop shadow", "outer_glow": "Outer glow", "gradient_map": "Gradient map",
+          "gradient_overlay": "Gradient overlay", "color_overlay": "Colour overlay", "inner_glow": "Inner glow",
+          "inner_shadow": "Inner shadow", "stroke": "Stroke"}
+
+
+def effect_widget_name(key: str, param: str) -> str:
+    """drop_shadow + shadow_color -> drop_shadow_color, outer_glow + glow_range -> outer_glow_range,
+    stroke + stroke_width -> stroke_width, color_overlay + color -> color_overlay_color."""
+    last = key.rsplit("_", 1)[-1]
+    if param.startswith(last + "_"):
+        return key + param[len(last):]
+    return f"{key}_{param}"
+
+
+def _engine_spec(cls) -> dict:
+    spec = cls.INPUT_TYPES()
+    return {**(spec.get("required") or {}), **(spec.get("optional") or {})}
+
+
+class LayerEffectsMEC:
+    """Layer Effects: drop shadow, outer glow, gradient map, gradient overlay, colour overlay, inner glow, inner
+    shadow and stroke on one layer, each switched on separately, applied in the order you set."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import copy
+
+        required = {
+            "layer_image": ("IMAGE", {"tooltip": "Foreground layer; its alpha or layer_mask defines where the effects "
+                                                 "go."}),
+            "invert_mask": ("BOOLEAN", {"default": True,
+                                        "tooltip": "Flip mask polarity when your matte is white-on-black."}),
+            "order": ("STRING", {"default": DEFAULT_ORDER,
+                                 "tooltip": "The order the switched-on effects are applied in, comma separated; each "
+                                            "is applied to the result of the one before. An effect that is on but not "
+                                            "listed runs after the listed ones, in the default order."}),
+            "dissolve_seed": _dissolve_seed_widget(),
+        }
+        for key, engine, params in _EFFECTS:
+            label = _LABEL[key]
+            required[key] = ("BOOLEAN", {"default": key == "drop_shadow", "label_on": "on", "label_off": "off",
+                                         "tooltip": f"{label}: switch it on to show and use its controls."})
+            spec = _engine_spec(engine)
+            for p in params:
+                s = copy.deepcopy(spec[p])
+                opts = dict(s[1]) if len(s) > 1 else {}
+                tip = opts.get("tooltip", "")
+                opts["tooltip"] = f"{label}: {tip}" if tip else label
+                required[effect_widget_name(key, p)] = (s[0], opts)
+        return {
+            "required": required,
+            "optional": {
+                "background_image": ("IMAGE", {"tooltip": "Plate to composite onto; empty = transparent canvas."}),
+                "layer_mask": ("MASK", {"tooltip": "Optional matte; overrides the layer's alpha when connected."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("image", "effect_mask", "report")
+    OUTPUT_TOOLTIPS = (
+        "The layer with its effects, over the background.",
+        "Where the effects landed: the union of every switched-on effect's footprint.",
+        "One line per effect applied, with anything worth knowing (clamped sizes, resized masks).",
+    )
+    FUNCTION = "execute"
+    CATEGORY = _CATEGORY
+    DESCRIPTION = (
+        "Photoshop-style layer effects in one node: drop shadow, outer glow, gradient map, gradient overlay, colour "
+        "overlay, inner glow, inner shadow and stroke. Switch each on and set its controls; they are applied in the "
+        "order you list, each on the result of the one before."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return hash_args_and_kwargs(**kwargs)
+
+    @staticmethod
+    def sequence(order: str, enabled: list[str]) -> list[str]:
+        known = [key for key, _c, _p in _EFFECTS]
+        listed = [s.strip() for s in str(order or "").replace(";", ",").split(",") if s.strip()]
+        unknown = [s for s in listed if s not in known]
+        if unknown:
+            raise ValueError(f"Layer Effects: unknown effect(s) in order: {', '.join(unknown)}. "
+                             f"Use names from: {', '.join(known)}.")
+        seq = [k for k in dict.fromkeys(listed) if k in enabled]
+        return seq + [k for k in known if k in enabled and k not in seq]
+
+    def execute(self, layer_image, invert_mask, order=DEFAULT_ORDER, dissolve_seed=0, background_image=None,
+                layer_mask=None, **kw):
+        engines = {key: (engine, params) for key, engine, params in _EFFECTS}
+        enabled = [key for key, _e, _p in _EFFECTS if kw.get(key, key == "drop_shadow")]
+        seq = self.sequence(order, enabled)
+        if not seq:                                        # nothing on: the layer over the background, unchanged
+            img, em, rep = LayerEffectColorOverlayMEC().execute(
+                layer_image, invert_mask, "normal", 0,
+                "#000000", dissolve_seed=dissolve_seed, background_image=background_image, layer_mask=layer_mask)
+            return img, em, "Layer Effects: no effect switched on - the layer over the background."
+        matte = None
+        if len(seq) > 1:                                   # the effects after the first share the original matte
+            try:
+                with torch.no_grad():
+                    _bg, _layer, matte, _notes, _b = _prepare_compositing(
+                        "Layer Effects", layer_image, background_image, layer_mask, invert_mask)
+            except ValueError:
+                if seq[0] != "gradient_map":               # gradient map alone needs no matte (full frame)
+                    raise
+                b, h, w = layer_image.shape[0], layer_image.shape[1], layer_image.shape[2]
+                matte = torch.ones((b, h, w), device=layer_image.device, dtype=layer_image.dtype)
+        cur_layer, cur_bg, cur_mask, cur_invert = layer_image, background_image, layer_mask, invert_mask
+        effect_mask, reports = None, []
+        for key in seq:
+            engine, params = engines[key]
+            args = {p: kw[effect_widget_name(key, p)] for p in params if effect_widget_name(key, p) in kw}
+            if key == "gradient_map":
+                img, em, rep = engine().execute(image=cur_layer, layer_mask=cur_mask, **args)
+            else:
+                img, em, rep = engine().execute(layer_image=cur_layer, invert_mask=cur_invert,
+                                                dissolve_seed=dissolve_seed, background_image=cur_bg,
+                                                layer_mask=cur_mask, **args)
+            # the next effect works on this result, with the original matte (already resolved, so not inverted again)
+            cur_layer, cur_bg, cur_mask, cur_invert = img, img, matte, False
+            effect_mask = em if effect_mask is None else torch.maximum(effect_mask, em)
+            reports.append(rep)
+        return img, effect_mask, "\n".join(reports)
+
+
 NODE_CLASS_MAPPINGS = {
-    "LayerEffectDropShadowMEC": LayerEffectDropShadowMEC,
-    "LayerEffectInnerShadowMEC": LayerEffectInnerShadowMEC,
-    "LayerEffectOuterGlowMEC": LayerEffectOuterGlowMEC,
-    "LayerEffectInnerGlowMEC": LayerEffectInnerGlowMEC,
-    "LayerEffectStrokeMEC": LayerEffectStrokeMEC,
-    "LayerEffectColorOverlayMEC": LayerEffectColorOverlayMEC,
-    "LayerEffectGradientOverlayMEC": LayerEffectGradientOverlayMEC,
-    "LayerEffectGradientMapMEC": LayerEffectGradientMapMEC,
+    "LayerEffectsMEC": LayerEffectsMEC,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "LayerEffectDropShadowMEC": "Layer Effect: Drop Shadow (MEC)",
-    "LayerEffectInnerShadowMEC": "Layer Effect: Inner Shadow (MEC)",
-    "LayerEffectOuterGlowMEC": "Layer Effect: Outer Glow (MEC)",
-    "LayerEffectInnerGlowMEC": "Layer Effect: Inner Glow (MEC)",
-    "LayerEffectStrokeMEC": "Layer Effect: Stroke (MEC)",
-    "LayerEffectColorOverlayMEC": "Layer Effect: Color Overlay (MEC)",
-    "LayerEffectGradientOverlayMEC": "Layer Effect: Gradient Overlay (MEC)",
-    "LayerEffectGradientMapMEC": "Layer Effect: Gradient Map (MEC)",
+    "LayerEffectsMEC": "Layer Effects (C2C)",
 }

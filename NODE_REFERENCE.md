@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **128** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **121** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -17,7 +17,7 @@
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 3 |
-| Layer Effects | 8 |
+| Layer Effects | 1 |
 | Mask toolkit | 5 |
 | Frequency / Grain | 3 |
 | Smart Crop/Stitch | 2 |
@@ -47,7 +47,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 128 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 121 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -134,6 +134,8 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Audio Reverser](#audioreversermec)
 - **MEC/Color Science** (1)
   - [VAE Decode (C2C)](#c2cvaequalitydecode)
+- **MEC/LayerEffects** (1)
+  - [Layer Effects (C2C)](#layereffectsmec)
 - **MEC/Masking** (1)
   - [Mask Placement — Prompt/Ref → Place → Track](#maskplacementmec)
 - **MEC/Plate** (2)
@@ -2259,6 +2261,102 @@ VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for
 | 1 | `report` | `STRING` | Clean: what was measured and corrected (empty when clean is off). |
 | 2 | `cast_strength` | `FLOAT` | Clean: how strong the colour cast was. |
 | 3 | `saturation` | `FLOAT` | Clean: measured saturation. |
+
+
+---
+
+## MEC/LayerEffects
+
+
+### LayerEffectsMEC
+
+**Shown in the menu as:** Layer Effects (C2C)
+
+Photoshop-style layer effects in one node: drop shadow, outer glow, gradient map, gradient overlay, colour overlay, inner glow, inner shadow and stroke. Switch each on and set its controls; they are applied in the order you list, each on the result of the one before.
+
+Saved workflows with the eight former single-effect nodes (Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Stroke, Color Overlay, Gradient Overlay, Gradient Map) load here with only that effect switched on and give the same image. Each effect's controls show while it is on.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `layer_image` | `IMAGE` |  | Foreground layer; its alpha or layer_mask defines where the effects go. |
+| `invert_mask` | `BOOLEAN` | default `True` | Flip mask polarity when your matte is white-on-black. |
+| `order` | `STRING` | default `'drop_shadow, outer_glow, gradient_map, gradient_overlay, color_overlay, inner_glow, inner_shadow, stroke'` | The order the switched-on effects are applied in, comma separated; each is applied to the result of the one before. An effect that is on but not listed runs after the listed ones, in the default order. |
+| `dissolve_seed` | `INT` | default `0`, range 0…2147483647, step 1 | Only used by the 'dissolve' blend mode. Upstream reseeds every frame, so a dissolve flickers through a sequence; a fixed seed here holds still. |
+| `drop_shadow` | `BOOLEAN` | default `True` | Drop shadow: switch it on to show and use its controls. |
+| `drop_shadow_blend_mode` | choice: `normal`, `dissolve`, `darken`, `multiply`, `color burn`, `linear burn`, `darker color`, `lighten`, `screen`, `color dodge`, `linear dodge(add)`, `lighter color`, … |  | Drop shadow |
+| `drop_shadow_opacity` | `INT` | default `50`, range 0…100, step 1 | Drop shadow |
+| `drop_shadow_distance_x` | `INT` | default `25`, range -9999…9999, step 1 | Drop shadow: Horizontal offset in pixels. Positive moves the shadow right — the opposite of the upstream LayerStyle node, which negated it. |
+| `drop_shadow_distance_y` | `INT` | default `25`, range -9999…9999, step 1 | Drop shadow: Vertical offset in pixels. Positive moves the shadow down — the opposite of the upstream LayerStyle node, which negated it. |
+| `drop_shadow_grow` | `INT` | default `6`, range -9999…9999, step 1 | Drop shadow: Expand the shadow before blurring. Positive spreads it past the subject edge; negative pulls it inside, which keeps a tight contact shadow from haloing. |
+| `drop_shadow_blur` | `INT` | default `18`, range 0…1000, step 1 | Drop shadow: Gaussian blur radius on the shadow matte. |
+| `drop_shadow_color` | `STRING` | default `'#000000'` | Drop shadow |
+| `outer_glow` | `BOOLEAN` | default `False` | Outer glow: switch it on to show and use its controls. |
+| `outer_glow_blend_mode` | choice: `screen`, `linear dodge(add)`, `color dodge`, `lighten`, `dodge`, `hard light`, `linear light`, `normal`, `dissolve`, `darken`, `multiply`, `color burn`, … |  | Outer glow |
+| `outer_glow_opacity` | `INT` | default `100`, range 0…100, step 1 | Outer glow |
+| `outer_glow_brightness` | `INT` | default `5`, range 2…20, step 1 | Outer glow: Number of glow passes from core to edge. |
+| `outer_glow_range` | `INT` | default `48`, range -9999…9999, step 1 | Outer glow: Initial spread for the outer glow; clamped to frame size. |
+| `outer_glow_blur` | `INT` | default `25`, range 0…9999, step 1 | Outer glow |
+| `outer_glow_light_color` | `STRING` | default `'#FFBF30'` | Outer glow |
+| `outer_glow_color` | `STRING` | default `'#FE0000'` | Outer glow |
+| `gradient_map` | `BOOLEAN` | default `False` | Gradient map: switch it on to show and use its controls. |
+| `gradient_map_start_color` | `STRING` | default `'#015A52'` | Gradient map |
+| `gradient_map_mid_color` | `STRING` | default `'#02AF9F'` | Gradient map |
+| `gradient_map_end_color` | `STRING` | default `'#7FFFEC'` | Gradient map |
+| `gradient_map_mid_point` | `FLOAT` | default `0.6`, range 0.0…1.0, step 0.01 | Gradient map |
+| `gradient_map_opacity` | `INT` | default `100`, range 0…100, step 1 | Gradient map |
+| `gradient_overlay` | `BOOLEAN` | default `False` | Gradient overlay: switch it on to show and use its controls. |
+| `gradient_overlay_blend_mode` | choice: `normal`, `dissolve`, `darken`, `multiply`, `color burn`, `linear burn`, `darker color`, `lighten`, `screen`, `color dodge`, `linear dodge(add)`, `lighter color`, … |  | Gradient overlay |
+| `gradient_overlay_opacity` | `INT` | default `100`, range 0…100, step 1 | Gradient overlay |
+| `gradient_overlay_start_color` | `STRING` | default `'#FFBF30'` | Gradient overlay |
+| `gradient_overlay_start_alpha` | `INT` | default `255`, range 0…255, step 1 | Gradient overlay |
+| `gradient_overlay_end_color` | `STRING` | default `'#FE0000'` | Gradient overlay |
+| `gradient_overlay_end_alpha` | `INT` | default `255`, range 0…255, step 1 | Gradient overlay |
+| `gradient_overlay_angle` | `INT` | default `0`, range -180…180, step 1 | Gradient overlay |
+| `color_overlay` | `BOOLEAN` | default `False` | Colour overlay: switch it on to show and use its controls. |
+| `color_overlay_blend_mode` | choice: `normal`, `dissolve`, `darken`, `multiply`, `color burn`, `linear burn`, `darker color`, `lighten`, `screen`, `color dodge`, `linear dodge(add)`, `lighter color`, … |  | Colour overlay |
+| `color_overlay_opacity` | `INT` | default `100`, range 0…100, step 1 | Colour overlay |
+| `color_overlay_color` | `STRING` | default `'#FFBF30'` | Colour overlay |
+| `inner_glow` | `BOOLEAN` | default `False` | Inner glow: switch it on to show and use its controls. |
+| `inner_glow_blend_mode` | choice: `screen`, `linear dodge(add)`, `color dodge`, `lighten`, `dodge`, `hard light`, `linear light`, `normal`, `dissolve`, `darken`, `multiply`, `color burn`, … |  | Inner glow |
+| `inner_glow_opacity` | `INT` | default `100`, range 0…100, step 1 | Inner glow |
+| `inner_glow_brightness` | `INT` | default `5`, range 2…20, step 1 | Inner glow: Number of glow passes from core to edge. |
+| `inner_glow_range` | `INT` | default `48`, range -9999…9999, step 1 | Inner glow: Initial spread for the outer glow; clamped to frame size. |
+| `inner_glow_blur` | `INT` | default `25`, range 0…9999, step 1 | Inner glow |
+| `inner_glow_light_color` | `STRING` | default `'#FFBF30'` | Inner glow |
+| `inner_glow_color` | `STRING` | default `'#FE0000'` | Inner glow |
+| `inner_shadow` | `BOOLEAN` | default `False` | Inner shadow: switch it on to show and use its controls. |
+| `inner_shadow_blend_mode` | choice: `normal`, `dissolve`, `darken`, `multiply`, `color burn`, `linear burn`, `darker color`, `lighten`, `screen`, `color dodge`, `linear dodge(add)`, `lighter color`, … |  | Inner shadow |
+| `inner_shadow_opacity` | `INT` | default `50`, range 0…100, step 1 | Inner shadow |
+| `inner_shadow_distance_x` | `INT` | default `5`, range -9999…9999, step 1 | Inner shadow: Horizontal offset in pixels. Positive moves the shadow right — the opposite of the upstream LayerStyle node, which negated it. |
+| `inner_shadow_distance_y` | `INT` | default `5`, range -9999…9999, step 1 | Inner shadow: Vertical offset in pixels. Positive moves the shadow down — the opposite of the upstream LayerStyle node, which negated it. |
+| `inner_shadow_grow` | `INT` | default `2`, range -9999…9999, step 1 | Inner shadow: Expand the shadow before blurring. Positive spreads it past the subject edge; negative pulls it inside, which keeps a tight contact shadow from haloing. |
+| `inner_shadow_blur` | `INT` | default `15`, range 0…1000, step 1 | Inner shadow: Gaussian blur radius on the shadow matte. |
+| `inner_shadow_color` | `STRING` | default `'#000000'` | Inner shadow |
+| `stroke` | `BOOLEAN` | default `False` | Stroke: switch it on to show and use its controls. |
+| `stroke_blend_mode` | choice: `normal`, `dissolve`, `darken`, `multiply`, `color burn`, `linear burn`, `darker color`, `lighten`, `screen`, `color dodge`, `linear dodge(add)`, `lighter color`, … |  | Stroke |
+| `stroke_opacity` | `INT` | default `100`, range 0…100, step 1 | Stroke |
+| `stroke_grow` | `INT` | default `0`, range -999…999, step 1 | Stroke |
+| `stroke_width` | `INT` | default `8`, range 0…999, step 1 | Stroke |
+| `stroke_blur` | `INT` | default `0`, range 0…100, step 1 | Stroke |
+| `stroke_color` | `STRING` | default `'#FF0000'` | Stroke |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `background_image` | `IMAGE` |  | Plate to composite onto; empty = transparent canvas. |
+| `layer_mask` | `MASK` |  | Optional matte; overrides the layer's alpha when connected. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | The layer with its effects, over the background. |
+| 1 | `effect_mask` | `MASK` | Where the effects landed: the union of every switched-on effect's footprint. |
+| 2 | `report` | `STRING` | One line per effect applied, with anything worth knowing (clamped sizes, resized masks). |
 
 
 ---

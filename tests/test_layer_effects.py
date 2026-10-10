@@ -158,9 +158,13 @@ class TestAlignBatch:
 
 
 class TestRegistration:
-    def test_registration_all_eight_ids(self):
+    def test_one_node_registered_and_the_eight_engines_remain(self):
+        # L7.65 P13: the eight effects are one node, Layer Effects (C2C); the eight classes are its engines
+        from nodes.layer_effects import nodes as _le
+
+        assert set(NODE_CLASS_MAPPINGS) == {"LayerEffectsMEC"}
         for nid in ALL_NODE_IDS:
-            assert nid in NODE_CLASS_MAPPINGS
+            assert isinstance(getattr(_le, nid), type)
 
 
 class TestDropShadowDefects:
@@ -571,8 +575,7 @@ class TestLivePackRegistration:
     def test_ids_merged_in_pack_init(self):
         init_src = (PACK_ROOT / "__init__.py").read_text(encoding="utf-8")
         assert "_LAYERFX_MAPPINGS" in init_src
-        for nid in ALL_NODE_IDS:
-            assert nid in NODE_CLASS_MAPPINGS
+        assert "LayerEffectsMEC" in NODE_CLASS_MAPPINGS
 
 # ── the front-end ───────────────────────────────────────────────────────────
 #
@@ -608,46 +611,47 @@ class TestFrontEndMatchesTheBackend:
                             capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
 
+    @staticmethod
+    def _unified_names():
+        from nodes.layer_effects import NODE_CLASS_MAPPINGS
+
+        spec = NODE_CLASS_MAPPINGS["LayerEffectsMEC"].INPUT_TYPES()
+        return set(spec.get("required", {})) | set(spec.get("optional", {}))
+
     def test_every_node_the_front_end_targets_actually_exists(self):
         from nodes.layer_effects import NODE_CLASS_MAPPINGS
+        from nodes.layer_effects.nodes import _EFFECTS
 
         src = _FX_JS.read_text(encoding="utf-8")
-        block = src.split("const NODES = new Set([", 1)[1].split("]);", 1)[0]
-        targeted = set(_re.findall(r'"([^"]+)"', block))
-        assert targeted == set(NODE_CLASS_MAPPINGS), (
-            "front-end targets and registered ids disagree: "
-            f"only in JS {sorted(targeted - set(NODE_CLASS_MAPPINGS))}, "
-            f"only in Python {sorted(set(NODE_CLASS_MAPPINGS) - targeted)}"
-        )
+        targeted = _re.search(r'const UNIFIED = "([^"]+)"', src).group(1)
+        assert set(NODE_CLASS_MAPPINGS) == {targeted}
+        keys = _re.findall(r'"([a-z_]+)"', src.split("const EFFECT_KEYS = [", 1)[1].split("];", 1)[0])
+        assert keys == [k for k, _e, _p in _EFFECTS], "the front end's effect list and the node's disagree"
 
     def test_the_dial_writes_widgets_that_exist(self):
-        from nodes.layer_effects import NODE_CLASS_MAPPINGS
-
         src = _FX_JS.read_text(encoding="utf-8")
-        block = src.split("const DIAL_NODES = new Set([", 1)[1].split("]);", 1)[0]
-        for node_id in _re.findall(r'"([^"]+)"', block):
-            spec = NODE_CLASS_MAPPINGS[node_id].INPUT_TYPES()
-            names = set(spec.get("required", {})) | set(spec.get("optional", {}))
-            for needed in ("distance_x", "distance_y"):
+        cond = src.split("function attachUnified", 1)[1].split("angleDial(", 1)[0]
+        keys = _re.findall(r'key === "([a-z_]+)"', cond)
+        assert keys, "the dial's effects were not found in js/c2c_layer_effects.js"
+        names = self._unified_names()
+        for key in keys:
+            for needed in (f"{key}_distance_x", f"{key}_distance_y"):
                 assert needed in names, (
-                    f"the dial writes {needed} on {node_id}, which has no such "
-                    "widget - the control would silently do nothing"
+                    f"the dial writes {needed}, which Layer Effects does not have - "
+                    "the control would silently do nothing"
                 )
 
     def test_the_ramp_reads_widgets_that_exist(self):
-        from nodes.layer_effects import NODE_CLASS_MAPPINGS
-
         src = _FX_JS.read_text(encoding="utf-8")
-        block = src.split("const RAMP_NODES = {", 1)[1].split("\n};", 1)[0]
-        # one entry per node: NodeId: { stops: [...], alphas: [...], angle: "x" }
-        for node_id, body in _re.findall(r"(\w+):\s*\{(.*?)\n  \}", block, _re.S):
-            spec = NODE_CLASS_MAPPINGS[node_id].INPUT_TYPES()
-            names = set(spec.get("required", {})) | set(spec.get("optional", {}))
-            for needed in _re.findall(r'"([^"]+)"', body):
-                assert needed in names, (
-                    f"the ramp reads {needed} on {node_id}, which has no such "
-                    "widget - the ramp would draw from undefined"
-                )
+        block = src.split("function attachUnified", 1)[1].split("function attach(", 1)[0]
+        names = self._unified_names()
+        needed = [n for n in _re.findall(r'"([a-z][a-z0-9_]*)"', block) if n.startswith("gradient_")]
+        assert needed, "the ramps' widget names were not found in js/c2c_layer_effects.js"
+        for n in needed:
+            assert n in names, (
+                f"the ramp reads {n}, which Layer Effects does not have - "
+                "the ramp would draw from undefined"
+            )
 
     def test_every_colour_widget_is_a_string_the_picker_can_drive(self):
         # The swatch writes a "#rrggbb" STRING back into the widget. A colour

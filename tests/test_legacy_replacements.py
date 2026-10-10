@@ -38,6 +38,7 @@ NEW_NODE_MODULES = {
     "ImageStatsProbeMEC": "nodes.helpers.helpers",
     "VAEBlockInspectorMEC": "nodes.model_analysis",
     "C2CVAEQualityDecode": "nodes.hdr_color_science",
+    "LayerEffectsMEC": "nodes.layer_effects.nodes",
 }
 
 # Successors outside this pack (core, NukeMax - L7.65 consolidation): their signatures are recorded from the live
@@ -350,8 +351,8 @@ class TestRegister:
             node_replace_manager = _Manager()
 
         count = register(_Server())
-        assert count == len(replacement_table) == 30
-        assert len(calls) == 30
+        assert count == len(replacement_table) == 38
+        assert len(calls) == 38
         for row, call in zip(replacement_table, calls):
             assert call.old_node_id == row["old_node_id"]
             assert call.new_node_id == row["new_node_id"]
@@ -372,7 +373,7 @@ class TestRegister:
         """Real io.NodeReplace + real NodeReplaceManager, in a fresh interpreter with real core
         (this process has stubbed comfy modules, so it cannot import app.node_replace_manager)."""
         live = _live()["C2C_REPLACEMENTS_JSON="]
-        assert live["registered"] == len(replacement_table) == 30
+        assert live["registered"] == len(replacement_table) == 38
         for row in replacement_table:
             [entry] = live["table"][row["old_node_id"]]
             assert entry["new_node_id"] == row["new_node_id"]

@@ -1,11 +1,11 @@
-// c2c_layer_effects.js — the front-end for the MEC/LayerEffects family.
+// c2c_layer_effects.js — the front-end for Layer Effects (C2C) (LayerEffectsMEC, the eight effects in one node).
 //
 // The upstream pack these nodes were ported from (ComfyUI_LayerStyle by
 // chflame163) ships no front-end for them at all, so this is written from the
 // controls up rather than copied. Three things a compositor cannot do with the
 // default widgets:
 //
-//   1. READ A COLOUR. Seven of the eight nodes take their colour as a STRING
+//   1. READ A COLOUR. Seven of the eight effects take their colour as a STRING
 //      holding "#FFBF30". Nobody knows what #FFBF30 looks like. Every colour
 //      widget gets a live swatch and the OS colour picker, and the hex stays
 //      editable for anyone matching a value from elsewhere.
@@ -38,35 +38,15 @@ import {
 
 const ST = "_c2cLayerFx";
 
-const NODES = new Set([
-  "LayerEffectDropShadowMEC",
-  "LayerEffectInnerShadowMEC",
-  "LayerEffectOuterGlowMEC",
-  "LayerEffectInnerGlowMEC",
-  "LayerEffectStrokeMEC",
-  "LayerEffectColorOverlayMEC",
-  "LayerEffectGradientOverlayMEC",
-  "LayerEffectGradientMapMEC",
-]);
-
-/** Nodes whose shadow is aimed with distance_x / distance_y. */
-const DIAL_NODES = new Set([
-  "LayerEffectDropShadowMEC",
-  "LayerEffectInnerShadowMEC",
-]);
-
-/** name -> the widgets that define its ramp. */
-const RAMP_NODES = {
-  LayerEffectGradientOverlayMEC: {
-    stops: ["start_color", "end_color"],
-    alphas: ["start_alpha", "end_alpha"],
-    angle: "angle",
-  },
-  LayerEffectGradientMapMEC: {
-    stops: ["start_color", "mid_color", "end_color"],
-    mid: "mid_point",
-  },
-};
+/**
+ * Layer Effects (C2C) - the eight effects in one node (L7.65 P13). Every control is prefixed with its effect
+ * ("drop_shadow_distance_x", "gradient_map_mid_point") and shown only while that effect is switched on.
+ */
+const UNIFIED = "LayerEffectsMEC";
+const EFFECT_KEYS = ["drop_shadow", "outer_glow", "gradient_map", "gradient_overlay", "color_overlay",
+                     "inner_glow", "inner_shadow", "stroke"];
+const effectOf = (name) => EFFECT_KEYS.find((k) => name === k || name.startsWith(k + "_")) || null;
+const isOn = (node, key) => !!node.widgets?.find((w) => w.name === key)?.value;
 
 /** Which widgets on this node hold a colour. */
 function colourWidgetNames(node) {
@@ -164,29 +144,42 @@ function buildRamp(node, cfg) {
 
 // ── assembly ────────────────────────────────────────────────────────────────
 
-function attach(node, nodeName) {
-  if (node[ST]) return node[ST];
-
+function attachUnified(node) {
   const parts = [];
   const bump = () => node[ST]?.invalidate?.();
-
-  if (DIAL_NODES.has(nodeName)) {
-    parts.push(angleDial(node, {
-      mode: "xy", x: "distance_x", y: "distance_y",
-      maxDistance: 200, zeroLabel: "centred \u2014 no offset",
-    }, bump));
+  const colours = colourWidgetNames(node);
+  for (const key of EFFECT_KEYS) {
+    const visible = () => isOn(node, key);
+    const mine = [];
+    if (key === "drop_shadow" || key === "inner_shadow") {
+      mine.push(angleDial(node, {
+        mode: "xy", x: `${key}_distance_x`, y: `${key}_distance_y`,
+        maxDistance: 200, zeroLabel: "centred — no offset",
+      }, bump));
+    }
+    if (key === "gradient_overlay") {
+      mine.push(buildRamp(node, {
+        stops: ["gradient_overlay_start_color", "gradient_overlay_end_color"],
+        alphas: ["gradient_overlay_start_alpha", "gradient_overlay_end_alpha"],
+        angle: "gradient_overlay_angle",
+      }));
+    }
+    if (key === "gradient_map") {
+      mine.push(buildRamp(node, {
+        stops: ["gradient_map_start_color", "gradient_map_mid_color", "gradient_map_end_color"],
+        mid: "gradient_map_mid_point",
+      }));
+    }
+    for (const name of colours.filter((n) => effectOf(n) === key)) mine.push(colourRow(node, name, bump));
+    for (const part of mine) part.visible = visible;
+    parts.push(...mine);
   }
-
-  const rampCfg = RAMP_NODES[nodeName];
-  if (rampCfg) parts.push(buildRamp(node, rampCfg));
-
-  for (const name of colourWidgetNames(node)) {
-    parts.push(colourRow(node, name, bump));
-  }
-
-  // mountParts owns the root element, the rAF-coalesced repaint, the widget
-  // height and the teardown, so all three families behave identically.
   return mountParts(node, ST, parts);
+}
+
+function attach(node) {
+  if (node[ST]) return node[ST];
+  return attachUnified(node);
 }
 
 app.registerExtension({
@@ -194,12 +187,12 @@ app.registerExtension({
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     const name = String(nodeData?.name || "");
-    if (!NODES.has(name)) return;
+    if (name !== UNIFIED) return;
 
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const r = onCreated?.apply(this, arguments);
-      try { attach(this, name); } catch (_e) { /* never break the node */ }
+      try { attach(this); } catch (_e) { /* never break the node */ }
       return r;
     };
 

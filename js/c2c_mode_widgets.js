@@ -12,8 +12,13 @@ import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const CLEAN = ["balance_mode", "balance_strength", "saturation", "contrast_restore", "chroma_cleanup",
                "restore_unchanged", "restore_radius"];
+// Layer Effects: each effect's controls carry its name as a prefix and show while the effect is switched on
+const EFFECTS = ["drop_shadow", "outer_glow", "gradient_map", "gradient_overlay", "color_overlay", "inner_glow",
+                 "inner_shadow", "stroke"];
+const effectOf = (name) => EFFECTS.find((k) => name.startsWith(k + "_")) || null;
 
-// node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides, visible(values) }
+// node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides (a list, or a test on the
+// name), visible(values, names) -> the managed widgets to show }
 const RULES = {
     ImageBatchSliceMEC: {
         watch: ["mode"],
@@ -39,6 +44,11 @@ const RULES = {
         managed: ["anomaly_threshold", "include_per_tensor"],
         visible: (v) => (v.mode === "compare" ? ["include_per_tensor"] : ["anomaly_threshold"]),
     },
+    LayerEffectsMEC: {
+        watch: EFFECTS,
+        managed: (name) => effectOf(name) !== null,
+        visible: (v, names) => names.filter((n) => v[effectOf(n)]),
+    },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],
         managed: ["tile_size", "exposure", ...CLEAN],
@@ -53,10 +63,11 @@ const RULES = {
 function apply(node, rule) {
     const widgets = node.widgets || [];
     const values = Object.fromEntries(widgets.filter((w) => rule.watch.includes(w.name)).map((w) => [w.name, w.value]));
-    const show = new Set(rule.visible(values));
+    const managed = typeof rule.managed === "function" ? rule.managed : (n) => rule.managed.includes(n);
+    const show = new Set(rule.visible(values, widgets.map((w) => w.name).filter(managed)));
     let changed = false;
     for (const w of widgets) {
-        if (!rule.managed.includes(w.name)) continue;
+        if (!managed(w.name)) continue;
         const want = show.has(w.name);
         if (want === (w.__mec_hidden === true)) {
             setWidgetVisible(w, want);

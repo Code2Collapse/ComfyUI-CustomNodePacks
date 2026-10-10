@@ -2342,5 +2342,860 @@
   ],
   "dropped": [],
   "note": "L7.65 P15 (owner-approved merge): VAE Decode (C2C) cleaning an already-decoded image - the same VAECleanMEC.clean code."
+ },
+ {
+  "old_node_id": "LayerEffectDropShadowMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "distance_x",
+   "distance_y",
+   "grow",
+   "blur",
+   "shadow_color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "drop_shadow_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "drop_shadow_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "drop_shadow_distance_x",
+    "old_id": "distance_x"
+   },
+   {
+    "new_id": "drop_shadow_distance_y",
+    "old_id": "distance_y"
+   },
+   {
+    "new_id": "drop_shadow_grow",
+    "old_id": "grow"
+   },
+   {
+    "new_id": "drop_shadow_blur",
+    "old_id": "blur"
+   },
+   {
+    "new_id": "drop_shadow_color",
+    "old_id": "shadow_color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": true
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only drop_shadow switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectInnerShadowMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "distance_x",
+   "distance_y",
+   "grow",
+   "blur",
+   "shadow_color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "inner_shadow_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "inner_shadow_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "inner_shadow_distance_x",
+    "old_id": "distance_x"
+   },
+   {
+    "new_id": "inner_shadow_distance_y",
+    "old_id": "distance_y"
+   },
+   {
+    "new_id": "inner_shadow_grow",
+    "old_id": "grow"
+   },
+   {
+    "new_id": "inner_shadow_blur",
+    "old_id": "blur"
+   },
+   {
+    "new_id": "inner_shadow_color",
+    "old_id": "shadow_color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": true
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only inner_shadow switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectOuterGlowMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "brightness",
+   "glow_range",
+   "blur",
+   "light_color",
+   "glow_color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "outer_glow_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "outer_glow_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "outer_glow_brightness",
+    "old_id": "brightness"
+   },
+   {
+    "new_id": "outer_glow_range",
+    "old_id": "glow_range"
+   },
+   {
+    "new_id": "outer_glow_blur",
+    "old_id": "blur"
+   },
+   {
+    "new_id": "outer_glow_light_color",
+    "old_id": "light_color"
+   },
+   {
+    "new_id": "outer_glow_color",
+    "old_id": "glow_color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": true
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only outer_glow switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectInnerGlowMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "brightness",
+   "glow_range",
+   "blur",
+   "light_color",
+   "glow_color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "inner_glow_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "inner_glow_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "inner_glow_brightness",
+    "old_id": "brightness"
+   },
+   {
+    "new_id": "inner_glow_range",
+    "old_id": "glow_range"
+   },
+   {
+    "new_id": "inner_glow_blur",
+    "old_id": "blur"
+   },
+   {
+    "new_id": "inner_glow_light_color",
+    "old_id": "light_color"
+   },
+   {
+    "new_id": "inner_glow_color",
+    "old_id": "glow_color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": true
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only inner_glow switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectStrokeMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "stroke_grow",
+   "stroke_width",
+   "blur",
+   "stroke_color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "stroke_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "stroke_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "stroke_grow",
+    "old_id": "stroke_grow"
+   },
+   {
+    "new_id": "stroke_width",
+    "old_id": "stroke_width"
+   },
+   {
+    "new_id": "stroke_blur",
+    "old_id": "blur"
+   },
+   {
+    "new_id": "stroke_color",
+    "old_id": "stroke_color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": true
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only stroke switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectColorOverlayMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "color",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "color_overlay_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "color_overlay_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "color_overlay_color",
+    "old_id": "color"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": true
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only color_overlay switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectGradientOverlayMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "invert_mask",
+   "blend_mode",
+   "opacity",
+   "start_color",
+   "start_alpha",
+   "end_color",
+   "end_alpha",
+   "angle",
+   "dissolve_seed"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "layer_image"
+   },
+   {
+    "new_id": "invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "gradient_overlay_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "gradient_overlay_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "gradient_overlay_start_color",
+    "old_id": "start_color"
+   },
+   {
+    "new_id": "gradient_overlay_start_alpha",
+    "old_id": "start_alpha"
+   },
+   {
+    "new_id": "gradient_overlay_end_color",
+    "old_id": "end_color"
+   },
+   {
+    "new_id": "gradient_overlay_end_alpha",
+    "old_id": "end_alpha"
+   },
+   {
+    "new_id": "gradient_overlay_angle",
+    "old_id": "angle"
+   },
+   {
+    "new_id": "dissolve_seed",
+    "old_id": "dissolve_seed"
+   },
+   {
+    "new_id": "background_image",
+    "old_id": "background_image"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": true
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only gradient_overlay switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "LayerEffectGradientMapMEC",
+  "new_node_id": "LayerEffectsMEC",
+  "old_widget_ids": [
+   "start_color",
+   "mid_color",
+   "end_color",
+   "mid_point",
+   "opacity"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "layer_image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "gradient_map_start_color",
+    "old_id": "start_color"
+   },
+   {
+    "new_id": "gradient_map_mid_color",
+    "old_id": "mid_color"
+   },
+   {
+    "new_id": "gradient_map_end_color",
+    "old_id": "end_color"
+   },
+   {
+    "new_id": "gradient_map_mid_point",
+    "old_id": "mid_point"
+   },
+   {
+    "new_id": "gradient_map_opacity",
+    "old_id": "opacity"
+   },
+   {
+    "new_id": "layer_mask",
+    "old_id": "layer_mask"
+   },
+   {
+    "new_id": "drop_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "outer_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "gradient_map",
+    "set_value": true
+   },
+   {
+    "new_id": "gradient_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "color_overlay",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_glow",
+    "set_value": false
+   },
+   {
+    "new_id": "inner_shadow",
+    "set_value": false
+   },
+   {
+    "new_id": "stroke",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only gradient_map switched on - the same effect code, the same result."
  }
 ]

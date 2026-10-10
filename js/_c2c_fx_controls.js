@@ -302,21 +302,28 @@ export function mountParts(node, stateKey, parts, extraHeight = 8) {
   const st = { parts, raf: 0, dead: false };
   node[stateKey] = st;
 
+  // A part may carry visible(): it is then shown only while that returns true (the merged Layer Effects node shows
+  // a control only while its effect is switched on). Parts without it are always shown.
+  const shown = (p) => { try { return !p.visible || !!p.visible(); } catch (_e) { return true; } };
+
   st.invalidate = () => {
     if (st.dead || st.raf) return;
     st.raf = requestAnimationFrame(() => {
       st.raf = 0;
       if (st.dead || !root.isConnected) return;
       for (const p of parts) {
+        const on = shown(p);
+        const el = p.wrap || p.row;
+        if (el) el.style.display = on ? "" : "none";
+        if (!on) continue;
         // One bad part must never blank the rest of the strip.
         try { p.paint(); } catch (_e) { /* keep going */ }
       }
     });
   };
 
-  const total = parts.reduce((a, p) => a + (p.height || 18), extraHeight);
   const widget = node.addDOMWidget(stateKey, "div", root, { serialize: false });
-  widget.computeSize = (width) => [width, total];
+  widget.computeSize = (width) => [width, parts.filter(shown).reduce((a, p) => a + (p.height || 18), extraHeight)];
 
   // Repaint on ANY widget change: these controls read several widgets each, so
   // watching only "their own" would leave them stale.
