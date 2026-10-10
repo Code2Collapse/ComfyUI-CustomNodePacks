@@ -3285,5 +3285,428 @@
    }
   ],
   "note": "L7.65 P29 (owner-approved merge): Folder Version Incrementer, layout show / shot / task / version - the same allocate() code. forward_slash True -> path_style linux, False -> auto (the OS's own separator)."
+ },
+ {
+  "old_node_id": "MaskFromColorMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "color",
+   "colorspace",
+   "tolerance",
+   "soft_falloff",
+   "invert"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "colour_key_color",
+    "old_id": "color"
+   },
+   {
+    "new_id": "colour_key_colorspace",
+    "old_id": "colorspace"
+   },
+   {
+    "new_id": "colour_key_tolerance",
+    "old_id": "tolerance"
+   },
+   {
+    "new_id": "colour_key_soft_falloff",
+    "old_id": "soft_falloff"
+   },
+   {
+    "new_id": "colour_key_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "key: colour"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'key: colour' - the same code, the same result."
+ },
+ {
+  "old_node_id": "LuminanceKeyerMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "mode",
+   "low",
+   "high",
+   "gamma",
+   "falloff",
+   "invert",
+   "channel",
+   "low_soft",
+   "high_soft",
+   "invert_key"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "luma_key_mode",
+    "old_id": "mode"
+   },
+   {
+    "new_id": "luma_key_low",
+    "old_id": "low"
+   },
+   {
+    "new_id": "luma_key_high",
+    "old_id": "high"
+   },
+   {
+    "new_id": "luma_key_gamma",
+    "old_id": "gamma"
+   },
+   {
+    "new_id": "luma_key_falloff",
+    "old_id": "falloff"
+   },
+   {
+    "new_id": "luma_key_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "luma_key_channel",
+    "old_id": "channel"
+   },
+   {
+    "new_id": "luma_key_low_soft",
+    "old_id": "low_soft"
+   },
+   {
+    "new_id": "luma_key_high_soft",
+    "old_id": "high_soft"
+   },
+   {
+    "new_id": "luma_key_invert_key",
+    "old_id": "invert_key"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "key: luma"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'key: luma' - the same code, the same result."
+ },
+ {
+  "old_node_id": "MaskGradientMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "width",
+   "height",
+   "gradient_type",
+   "angle",
+   "center_x",
+   "center_y",
+   "start",
+   "end"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "gradient_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "gradient_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "gradient_type",
+    "old_id": "gradient_type"
+   },
+   {
+    "new_id": "gradient_angle",
+    "old_id": "angle"
+   },
+   {
+    "new_id": "gradient_center_x",
+    "old_id": "center_x"
+   },
+   {
+    "new_id": "gradient_center_y",
+    "old_id": "center_y"
+   },
+   {
+    "new_id": "gradient_start",
+    "old_id": "start"
+   },
+   {
+    "new_id": "gradient_end",
+    "old_id": "end"
+   },
+   {
+    "new_id": "size_as",
+    "old_id": "size_as"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "gradient"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'gradient' - the same code, the same result."
+ },
+ {
+  "old_node_id": "MaskGrainMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "amount",
+   "seed",
+   "control_after_generate",
+   "grain_size",
+   "invert"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "grain_amount",
+    "old_id": "amount"
+   },
+   {
+    "new_id": "grain_seed",
+    "old_id": "seed"
+   },
+   {
+    "new_id": "grain_size",
+    "old_id": "grain_size"
+   },
+   {
+    "new_id": "grain_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "grain"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'grain' - the same code, the same result."
+ },
+ {
+  "old_node_id": "MaskMotionBlurMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "angle",
+   "distance",
+   "invert"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "motion_blur_angle",
+    "old_id": "angle"
+   },
+   {
+    "new_id": "motion_blur_distance",
+    "old_id": "distance"
+   },
+   {
+    "new_id": "motion_blur_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "motion blur"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'motion blur' - the same code, the same result."
+ },
+ {
+  "old_node_id": "EdgeSpreadMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "spread",
+   "invert_mask"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "edge_spread",
+    "old_id": "spread"
+   },
+   {
+    "new_id": "edge_spread_invert_mask",
+    "old_id": "invert_mask"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "edge spread"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'edge spread' - the same code, the same result."
+ },
+ {
+  "old_node_id": "MaskBatchCombineMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "op"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask_a"
+   },
+   {
+    "new_id": "mask_b",
+    "old_id": "mask_b"
+   },
+   {
+    "new_id": "combine_op",
+    "old_id": "op"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "combine"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'combine' - the same code, the same result."
+ },
+ {
+  "old_node_id": "ShuffleMEC",
+  "new_node_id": "MaskToolsMEC",
+  "old_widget_ids": [
+   "out_R",
+   "out_G",
+   "out_B",
+   "out_A",
+   "premultiply_output"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "shuffle_out_R",
+    "old_id": "out_R"
+   },
+   {
+    "new_id": "shuffle_out_G",
+    "old_id": "out_G"
+   },
+   {
+    "new_id": "shuffle_out_B",
+    "old_id": "out_B"
+   },
+   {
+    "new_id": "shuffle_out_A",
+    "old_id": "out_A"
+   },
+   {
+    "new_id": "shuffle_premultiply_output",
+    "old_id": "premultiply_output"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "shuffle"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'shuffle' - the same code, the same result."
  }
 ]

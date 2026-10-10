@@ -84,5 +84,6 @@ class ShuffleMEC:
         return (out, a.squeeze(-1))
 
 
-NODE_CLASS_MAPPINGS = {"ShuffleMEC": ShuffleMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"ShuffleMEC": "Shuffle — Channels (MEC)"}
+# L7.65 P03: the "shuffle" mode of Mask Tools (nodes/mask_toolkit) runs this class; not registered on its own.
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

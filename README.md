@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **120** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **113** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -62,7 +62,7 @@
 | Face/Pose Delta | 1 |
 | Mask + Matting | 3 |
 | Layer Effects | 1 |
-| Mask toolkit | 5 |
+| Mask toolkit | 1 |
 | Frequency / Grain | 3 |
 | Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
@@ -73,12 +73,11 @@
 | SAM Loader/Generator | 2 |
 | Mask Placement | 1 |
 | SAM + ViTMatte | 1 |
-| Luminance Keyer | 1 |
 | Background Remover | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
-| C2C helpers | 9 |
+| C2C helpers | 8 |
 | Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
@@ -86,12 +85,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 7 |
+| Restored VFX | 6 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 120 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 113 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -199,7 +198,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**VAE precision**](docs/vae-precision.md) ★ new | 2 | Where VAE round trips lose precision (measured) and the options that restrict it: fp32 and unclamped decode, tiled video decode, round-trip meter, original-pixel write-back |
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
 | [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, Background Remover, both pipelines |
-| [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Luminance Keyer |
+| [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Mask Tools (luma key) |
 | [Video, Temporal & BBox](docs/video-temporal-bbox.md) | 10 | Batch Range (C2C) single-frame modes, Mask Propagate (5 modes), Temporal Anchor (SDF), Motion Mask Tracker (4 methods), 6 BBox nodes |
 | [Utility & Interactive](docs/utility-nodes.md) | 8 | Points Mask Editor, Image Comparer, Mask Failure Explainer, Parameter History, Universal Reroute, 3 Folder Incrementer nodes |
 | [VAE Tools](docs/vae-merge.md) | 4 | VAE Merge (8 algorithms), VAE Inspect (inspect / compare), Probe (C2C) latent |
@@ -458,7 +457,9 @@ Generates a 3-region trimap (white = foreground, black = background, gray = unkn
 
 ### Keying
 
-#### Luminance Keyer (MEC)
+#### Luma key — Mask Tools (C2C)
+
+In **Mask Tools (C2C)** with `mode` = `key: luma` (this was the Luminance Keyer node; saved workflows migrate automatically). Its controls carry the prefix `luma_key_`, e.g. `luma_key_mode`, `luma_key_low`.
 
 Professional luminance keyer inspired by Nuke's LumaKeyer. Extracts a matte based on image brightness using ITU-R BT.709 luminance with smooth S-curve falloff and gamma correction.
 
@@ -1057,7 +1058,7 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 9 | Matting Node | Matting | 2 | Unified 7-backend alpha matting |
 | 10 | ViTMatte Edge Refiner | Matting | 2 | Standalone edge refinement (7 methods) |
 | 11 | Trimap Generator | Matting | 1 | Generate trimap for ViTMatte input |
-| 12 | Luminance Keyer | Keying | 1 | BT.709 luminance keying with smoothstep |
+| 12 | Mask Tools (C2C) | Keying / matte ops | 1 | colour, luma (BT.709, smoothstep) and difference keys; grade; directional grow / shrink; combine; gradient; grain; motion blur; edge spread; shuffle |
 | 13 | Mask Transform XY | Editing | 1 | Per-axis erode/expand/blur/offset |
 | 14 | Mask Draw Frame | Editing | 1 | Draw 12 shapes with rotation and SDF |
 | 15 | Draw Shape | Editing | 1 | Unified 12-shape dropdown with all params — replaces per-shape wrappers |
@@ -1210,10 +1211,10 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 ### Luminance Keying
 
 ```
-[Load Image]  →  [Luminance Keyer]
-                    mode: auto
-                    falloff: 1.0
-                    gamma: 1.0
+[Load Image]  →  [Mask Tools: key: luma]
+                    luma_key_mode: auto
+                    luma_key_falloff: 1.0
+                    luma_key_gamma: 1.0
                        ↓
                   luminance mask (highlights / shadows / midtones)
 ```

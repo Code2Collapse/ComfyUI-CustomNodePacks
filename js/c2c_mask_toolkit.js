@@ -1,34 +1,19 @@
-// c2c_mask_toolkit.js — the front-end for MEC/Mask and the extended
-// Luminance Keyer.
+// c2c_mask_toolkit.js — front-end previews for Mask Tools (MaskToolsMEC).
 //
-// Where the UI effort went, and why:
+// One merged node (L7.65 P03): a mode combo picks colour / luma / difference keys,
+// grade, grow-shrink, combine, gradient, grain, motion blur, edge spread, or shuffle.
+// Widget visibility per mode is handled in c2c_mode_widgets.js — not duplicated here.
 //
-//   Luminance Keyer   the four numbers low / high / low_soft / high_soft ARE a
-//                     Blend If split slider. Photoshop has drawn them that way
-//                     since 1994 because four numbers cannot be read as a
-//                     shape. Here the strip shows the channel's own ramp with
-//                     four draggable handles on it, and the keyed region
-//                     hatched, so the answer to "what does this key keep?" is
-//                     the picture rather than arithmetic.
+// Five modes get custom previews below; each is shown only while mode matches (mountParts
+// visible()). Edge spread deliberately has nothing — its result depends on the plate.
 //
-//   Mask Gradient     gradient_type / angle / centre / start / end is five
-//                     numbers describing a shape. The node draws the shape.
+//   key: luma        Blend If split slider (low / high / soft ends on the channel ramp).
+//   gradient         Shape preview for type / angle / centre / start / end.
+//   key: colour      Colour row + tolerance band strip.
+//   motion blur      Polar angle dial (same control as shadow nodes).
+//   grain            Live seeded grain tile.
 //
-//   Mask From Color   a colour as a hex STRING, with a tolerance and a falloff
-//                     that mean nothing until you can see the band they cut.
-//
-//   Mask Motion Blur  angle and distance - the same "which way, how far"
-//                     question the shadow dial already answers, so it uses the
-//                     same dial in polar mode.
-//
-//   Mask Grain        a live tile of the grain itself: amount and size are
-//                     invisible as numbers and obvious as a texture.
-//
-//   Edge Spread       deliberately nothing. Its result depends entirely on the
-//                     plate it is given, so a control-only preview would be a
-//                     decoration that implies knowledge it does not have.
-//
-// Plain ES module, no Vue. The shared controls live in _c2c_fx_controls.js.
+// Plain ES module, no Vue. Shared controls in _c2c_fx_controls.js.
 
 import { app } from "../../scripts/app.js";
 import { C } from "./_c2c_theme.js";
@@ -37,14 +22,68 @@ import {
 } from "./_c2c_fx_controls.js";
 
 const ST = "_c2cMaskKit";
+const NODE = "MaskToolsMEC";
 
-const KEYER = "LuminanceKeyerMEC";
+const MODE = {
+  colour: "key: colour",
+  luma: "key: luma",
+  gradient: "gradient",
+  grain: "grain",
+  motionBlur: "motion blur",
+};
+
+/** Logical param -> ComfyUI widget name (matches mask_tool_widget in nodes.py). */
+const W = {
+  colour: {
+    color: "colour_key_color",
+    colorspace: "colour_key_colorspace",
+    tolerance: "colour_key_tolerance",
+    soft_falloff: "colour_key_soft_falloff",
+  },
+  luma: {
+    mode: "luma_key_mode",
+    low: "luma_key_low",
+    high: "luma_key_high",
+    gamma: "luma_key_gamma",
+    invert: "luma_key_invert",
+    channel: "luma_key_channel",
+    low_soft: "luma_key_low_soft",
+    high_soft: "luma_key_high_soft",
+  },
+  gradient: {
+    width: "gradient_width",
+    height: "gradient_height",
+    gradient_type: "gradient_type",
+    angle: "gradient_angle",
+    center_x: "gradient_center_x",
+    center_y: "gradient_center_y",
+    start: "gradient_start",
+    end: "gradient_end",
+  },
+  grain: {
+    amount: "grain_amount",
+    seed: "grain_seed",
+    grain_size: "grain_size",
+    invert: "grain_invert",
+  },
+  motionBlur: {
+    angle: "motion_blur_angle",
+    distance: "motion_blur_distance",
+    invert: "motion_blur_invert",
+  },
+};
+
+function wOf(node, map) {
+  const all = widgetsOf(node);
+  const get = (key) => all[map[key]];
+  return { get, all };
+}
 
 // ── Blend If split slider ───────────────────────────────────────────────────
 
 const STRIP_H = 46;
 
-function blendIfStrip(node, onChange) {
+function blendIfStrip(node, map, onChange) {
   const wrap = document.createElement("div");
   css(wrap, { padding: "2px 0" });
 
@@ -63,11 +102,11 @@ function blendIfStrip(node, onChange) {
 
   /** The four handle positions in 0..1, left to right. */
   const handles = () => {
-    const w = widgetsOf(node);
-    const low = Number(w.low?.value ?? 0);
-    const high = Number(w.high?.value ?? 1);
-    const ls = Number(w.low_soft?.value ?? 0);
-    const hs = Number(w.high_soft?.value ?? 0);
+    const { get } = wOf(node, map);
+    const low = Number(get("low")?.value ?? 0);
+    const high = Number(get("high")?.value ?? 1);
+    const ls = Number(get("low_soft")?.value ?? 0);
+    const hs = Number(get("high_soft")?.value ?? 0);
     return [
       { key: "lowSoft", v: Math.max(0, low - ls) },
       { key: "low", v: low },
@@ -77,21 +116,20 @@ function blendIfStrip(node, onChange) {
   };
 
   const setFromHandle = (key, v) => {
-    const w = widgetsOf(node);
+    const { get, all } = wOf(node, map);
     const cur = handles();
     const clamp01 = (x) => Math.min(1, Math.max(0, x));
-    const set = (name, val) => {
-      const wi = w[name];
+    const set = (logical, val) => {
+      const wi = all[map[logical]];
       if (!wi) return;
       wi.value = Math.round(clamp01(val) * 1000) / 1000;
       wi.callback?.(wi.value);
     };
-    const low = Number(w.low?.value ?? 0);
-    const high = Number(w.high?.value ?? 1);
+    const low = Number(get("low")?.value ?? 0);
+    const high = Number(get("high")?.value ?? 1);
     if (key === "low") {
       const nv = Math.min(clamp01(v), high);
       set("low", nv);
-      // the soft end travels with its handle rather than snapping shut
       set("low_soft", Math.max(0, nv - cur[0].v));
     } else if (key === "high") {
       const nv = Math.max(clamp01(v), low);
@@ -107,20 +145,16 @@ function blendIfStrip(node, onChange) {
 
   /** What the key actually returns for a given input value, 0..1. */
   const response = (x) => {
-    const w = widgetsOf(node);
+    const { get } = wOf(node, map);
     const [a, b, c, d] = handles().map((h) => h.v);
-    const gamma = Math.max(0.01, Number(w.gamma?.value ?? 1));
-    const invert = !!w.invert?.value;
+    const gamma = Math.max(0.01, Number(get("gamma")?.value ?? 1));
+    const invert = !!get("invert")?.value;
     let v;
     if (x <= a) v = 0;
     else if (x >= d) v = 0;
     else if (x < b) v = (x - a) / Math.max(b - a, 1e-6);
     else if (x <= c) v = 1;
     else v = 1 - (x - c) / Math.max(d - c, 1e-6);
-    // A plateau is only right for a two-sided window; the widened-range key in
-    // the node ramps across the whole thing, so a single-sided range shows as
-    // a ramp. Either way this strip is a guide to the SHAPE, and the caption
-    // says which mode is actually in force.
     v = Math.pow(Math.min(1, Math.max(0, v)), 1 / gamma);
     return invert ? 1 - v : v;
   };
@@ -131,11 +165,9 @@ function blendIfStrip(node, onChange) {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     const h = cv.height;
-    const w = widgetsOf(node);
-    const channel = String(w.channel?.value ?? "luma");
+    const { get } = wOf(node, map);
+    const channel = String(get("channel")?.value ?? "luma");
 
-    // The channel's own ramp underneath, so the handles sit on the thing they
-    // are cutting rather than on an abstract bar.
     const grad = ctx.createLinearGradient(0, 0, width, 0);
     const ends = {
       luma: ["#000000", "#ffffff"],
@@ -159,7 +191,6 @@ function blendIfStrip(node, onChange) {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, width, h);
 
-    // The response curve on top.
     ctx.strokeStyle = "rgba(255,255,255,0.92)";
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -169,7 +200,6 @@ function blendIfStrip(node, onChange) {
     }
     ctx.stroke();
 
-    // Handles.
     const hs = handles();
     for (let i = 0; i < hs.length; i++) {
       const x = Math.round(hs[i].v * width);
@@ -192,17 +222,16 @@ function blendIfStrip(node, onChange) {
       ctx.globalAlpha = 1;
     }
 
-    const mode = String(w.mode?.value ?? "custom");
+    const keyMode = String(get("mode")?.value ?? "custom");
     const [a, b, c, d] = hs.map((x) => x.v);
     cap.textContent =
       `${channel}   keep ${b.toFixed(2)}–${c.toFixed(2)}` +
       `   soft ${(b - a).toFixed(2)} / ${(d - c).toFixed(2)}\n` +
-      (mode === "custom"
+      (keyMode === "custom"
         ? "custom — these handles are the key"
-        : `mode "${mode}" overrides low/high; switch to custom to use them`);
+        : `mode "${keyMode}" overrides low/high; switch to custom to use them`);
   };
 
-  // Dragging.
   let grabbed = null;
   const pick = (e) => {
     const r = cv.getBoundingClientRect();
@@ -244,7 +273,7 @@ function blendIfStrip(node, onChange) {
 
 const SHAPE_PX = 84;
 
-function gradientShape(node) {
+function gradientShape(node, map) {
   const wrap = document.createElement("div");
   css(wrap, { display: "flex", alignItems: "center", gap: "8px", padding: "2px 0" });
 
@@ -265,13 +294,13 @@ function gradientShape(node) {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     const s = cv.width;
-    const w = widgetsOf(node);
-    const type = String(w.gradient_type?.value ?? "linear");
-    const angle = Number(w.angle?.value ?? 0);
-    const cx = Number(w.center_x?.value ?? 0.5);
-    const cy = Number(w.center_y?.value ?? 0.5);
-    const start = Number(w.start?.value ?? 0);
-    const end = Number(w.end?.value ?? 1);
+    const { get } = wOf(node, map);
+    const type = String(get("gradient_type")?.value ?? "linear");
+    const angle = Number(get("angle")?.value ?? 0);
+    const cx = Number(get("center_x")?.value ?? 0.5);
+    const cy = Number(get("center_y")?.value ?? 0.5);
+    const start = Number(get("start")?.value ?? 0);
+    const end = Number(get("end")?.value ?? 1);
 
     ctx.clearRect(0, 0, s, s);
     const img = ctx.createImageData(s, s);
@@ -302,7 +331,6 @@ function gradientShape(node) {
     }
     ctx.putImageData(img, 0, 0);
 
-    // the centre, for the two types that have one
     if (type !== "linear") {
       ctx.strokeStyle = C.amberMid;
       ctx.lineWidth = 3;
@@ -311,8 +339,8 @@ function gradientShape(node) {
       ctx.stroke();
     }
 
-    const sizeW = w.width?.value ?? "?";
-    const sizeH = w.height?.value ?? "?";
+    const sizeW = get("width")?.value ?? "?";
+    const sizeH = get("height")?.value ?? "?";
     const linked = node.inputs?.some(
       (i) => i.name === "size_as" && i.link != null);
     cap.textContent =
@@ -331,7 +359,7 @@ function gradientShape(node) {
 
 const GRAIN_PX = 64;
 
-function grainTile(node) {
+function grainTile(node, map) {
   const wrap = document.createElement("div");
   css(wrap, { display: "flex", alignItems: "center", gap: "8px", padding: "2px 0" });
 
@@ -347,9 +375,6 @@ function grainTile(node) {
 
   wrap.append(cv, cap);
 
-  // A reproducible generator, so the tile does not crawl on every repaint the
-  // way an unseeded Math.random() would - which is exactly the defect the
-  // node's own seed widget exists to prevent.
   const rand = (seed) => {
     let s = (seed >>> 0) || 1;
     return () => {
@@ -363,11 +388,11 @@ function grainTile(node) {
   const paint = () => {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
-    const w = widgetsOf(node);
-    const amount = Number(w.amount?.value ?? 0);
-    const size = Math.max(1, Number(w.grain_size?.value ?? 1));
-    const seed = Number(w.seed?.value ?? 0);
-    const invert = !!w.invert?.value;
+    const { get } = wOf(node, map);
+    const amount = Number(get("amount")?.value ?? 0);
+    const size = Math.max(1, Number(get("grain_size")?.value ?? 1));
+    const seed = Number(get("seed")?.value ?? 0);
+    const invert = !!get("invert")?.value;
 
     const s = cv.width;
     const img = ctx.createImageData(s, s);
@@ -401,32 +426,8 @@ function grainTile(node) {
   return { wrap, paint, height: GRAIN_PX + 4 };
 }
 
-// ── assembly ────────────────────────────────────────────────────────────────
-
-function buildFor(node, name) {
-  const parts = [];
-  const bump = () => node[ST]?.invalidate?.();
-
-  if (name === KEYER) {
-    parts.push(blendIfStrip(node, bump));
-  } else if (name === "MaskGradientMEC") {
-    parts.push(gradientShape(node));
-  } else if (name === "MaskGrainMEC") {
-    parts.push(grainTile(node));
-  } else if (name === "MaskMotionBlurMEC") {
-    parts.push(angleDial(node, {
-      mode: "polar", angle: "angle", distance: "distance",
-      maxDistance: 300, zeroLabel: "no blur",
-    }, bump));
-  } else if (name === "MaskFromColorMEC") {
-    parts.push(colourRow(node, "color", bump));
-    parts.push(tolerancePreview(node));
-  }
-  return parts;
-}
-
 /** The tolerance band, as a strip from the picked colour outward. */
-function tolerancePreview(node) {
+function tolerancePreview(node, map) {
   const wrap = document.createElement("div");
   css(wrap, { padding: "2px 0" });
 
@@ -445,15 +446,12 @@ function tolerancePreview(node) {
     if (cv.width !== width) cv.width = width;
     const ctx = cv.getContext("2d");
     if (!ctx) return;
-    const w = widgetsOf(node);
-    const [r, g, b] = hexToRgb(w.color?.value);
-    const tol = Number(w.tolerance?.value ?? 0);
-    const soft = Number(w.soft_falloff?.value ?? 0);
-    const space = String(w.colorspace?.value ?? "rgb");
+    const { get } = wOf(node, map);
+    const [r, g, b] = hexToRgb(get("color")?.value);
+    const tol = Number(get("tolerance")?.value ?? 0);
+    const soft = Number(get("soft_falloff")?.value ?? 0);
+    const space = String(get("colorspace")?.value ?? "rgb");
 
-    // A strip running from the picked colour to a neutral, with the kept and
-    // the feathered parts marked on it. It shows WHERE the cut lands, not what
-    // the plate looks like - the node cannot know that from here.
     const grad = ctx.createLinearGradient(0, 0, width, 0);
     grad.addColorStop(0, `rgb(${r},${g},${b})`);
     grad.addColorStop(1, C.gray500);
@@ -487,23 +485,59 @@ function tolerancePreview(node) {
   return { wrap, paint, height: 36 };
 }
 
-const TARGETS = new Set([
-  KEYER, "MaskFromColorMEC", "MaskGradientMEC", "MaskGrainMEC",
-  "MaskMotionBlurMEC",
-]);
+// ── assembly ────────────────────────────────────────────────────────────────
+
+function attachMaskTools(node) {
+  const parts = [];
+  const bump = () => node[ST]?.invalidate?.();
+  const currentMode = () => String(widgetsOf(node).mode?.value ?? "");
+  const vis = (label) => () => currentMode() === label;
+
+  const lumaStrip = blendIfStrip(node, W.luma, bump);
+  lumaStrip.visible = vis(MODE.luma);
+  parts.push(lumaStrip);
+
+  const grad = gradientShape(node, W.gradient);
+  grad.visible = vis(MODE.gradient);
+  parts.push(grad);
+
+  const grain = grainTile(node, W.grain);
+  grain.visible = vis(MODE.grain);
+  parts.push(grain);
+
+  const dial = angleDial(node, {
+    mode: "polar",
+    angle: W.motionBlur.angle,
+    distance: W.motionBlur.distance,
+    maxDistance: 300,
+    zeroLabel: "no blur",
+  }, bump);
+  dial.visible = vis(MODE.motionBlur);
+  parts.push(dial);
+
+  const colour = colourRow(node, W.colour.color, bump);
+  colour.visible = vis(MODE.colour);
+  parts.push(colour);
+
+  const tol = tolerancePreview(node, W.colour);
+  tol.visible = vis(MODE.colour);
+  parts.push(tol);
+
+  return mountParts(node, ST, parts);
+}
 
 app.registerExtension({
   name: "C2C.MaskToolkit",
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     const name = String(nodeData?.name || "");
-    if (!TARGETS.has(name)) return;
+    if (name !== NODE) return;
 
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const r = onCreated?.apply(this, arguments);
       try {
-        mountParts(this, ST, buildFor(this, name));
+        attachMaskTools(this);
       } catch (_e) { /* never break the node */ }
       return r;
     };

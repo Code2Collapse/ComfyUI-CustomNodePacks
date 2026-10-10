@@ -48,7 +48,7 @@
 | Doc | Key nodes | What it covers |
 |---|---|---|
 | [`sam-segmentation.md`](sam-segmentation.md) | SAM Model Loader, SAM Mask Generator, **SAM Multi-Mask Picker**, Unified Segmentation, Semantic Segment, Background Remover, SAM+ViTMatte, SeC+MatAnyone | Loading SAM 2.1 / SAM 3, prompting (points / boxes / text), iterative refinement, multi-candidate visual picking, end-to-end pipelines |
-| [`matting-refinement.md`](matting-refinement.md) | Matting Node, ViTMatte Refiner, Trimap Generator, Luminance Keyer | 7 matting backends, 7 refinement methods, trimap construction, BT.709 luminance keying |
+| [`matting-refinement.md`](matting-refinement.md) | Matting Node, ViTMatte Refiner, Trimap Generator, Mask Tools (luma key) | 7 matting backends, 7 refinement methods, trimap construction, BT.709 luminance keying |
 | [**`mask-matting-pipeline.md`**](mask-matting-pipeline.md) ★ new | **MaskMattingMEC** (combined) | Single-node pipeline: pick segmenter + matter + weights, point/box/text/video auto-mode, slot-based positive/negative coords, subject presets |
 
 ### 🖌️ Mask Editing, Drawing & Painting

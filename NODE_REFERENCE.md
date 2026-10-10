@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **120** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **113** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -18,7 +18,7 @@
 | Face/Pose Delta | 1 |
 | Mask + Matting | 3 |
 | Layer Effects | 1 |
-| Mask toolkit | 5 |
+| Mask toolkit | 1 |
 | Frequency / Grain | 3 |
 | Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
@@ -29,12 +29,11 @@
 | SAM Loader/Generator | 2 |
 | Mask Placement | 1 |
 | SAM + ViTMatte | 1 |
-| Luminance Keyer | 1 |
 | Background Remover | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
-| C2C helpers | 9 |
+| C2C helpers | 8 |
 | Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
@@ -42,12 +41,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 7 |
+| Restored VFX | 6 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 120 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 113 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -66,13 +65,12 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **C2C/Diagnostics** (2)
   - [Mask Failure Explainer — Diagnostics](#maskfailureexplainermec)
   - [Model Metadata Extractor](#modelmetadataextractormec)
-- **C2C/Helpers** (9)
+- **C2C/Helpers** (8)
   - [Size (C2C)](#aspectpresetmec)
   - [Conditional Switch](#conditionalswitchmec)
   - [Execution Timer (C2C)](#executiontimermec)
   - [Batch Range (C2C)](#imagebatchslicemec)
   - [Probe (C2C)](#imagestatsprobemec)
-  - [Mask Batch Combine (C2C)](#maskbatchcombinemec)
   - [Number Lerp (C2C)](#numberlerpmec)
   - [Seed List Generator (C2C)](#seedlistmec)
   - [Text Template (C2C)](#texttemplatemec)
@@ -82,8 +80,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Inpaint Paste Back](#inpaintpastebackmec)
   - [Inpaint Stitch Pro](#inpaintstitchpromec)
   - [ProPainter — Temporal / Remove / Stitch / Refine / Flow](#propaintermec)
-- **C2C/Keying** (1)
-  - [Luminance Keyer — Highlights / Shadows / Custom](#luminancekeyermec)
 - **C2C/Matting** (1)
   - [Background Remover — RMBG / BiRefNet](#backgroundremovermec)
 - **C2C/ModelAnalysis** (1)
@@ -134,6 +130,8 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [VAE Decode (C2C)](#c2cvaequalitydecode)
 - **MEC/LayerEffects** (1)
   - [Layer Effects (C2C)](#layereffectsmec)
+- **MEC/Mask** (1)
+  - [Mask Tools (C2C)](#masktoolsmec)
 - **MEC/Masking** (1)
   - [Mask Placement — Prompt/Ref → Place → Track](#maskplacementmec)
 - **MEC/Plate** (2)
@@ -146,8 +144,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **MEC/Temporal** (2)
   - [Fluid Shot Decoder (Restore Timing)](#fluidshotdecodermec)
   - [Fluid Shot Encoder (Temporal Normalizer)](#fluidshotencodermec)
-- **MaskEditControl/Channels** (1)
-  - [Shuffle — Channels (MEC)](#shufflemec)
 - **MaskEditControl/Clipboard** (2)
   - [TCL Parse (MEC)](#tclparsemec)
   - [TCL Serialize (MEC)](#tclserializemec)
@@ -536,28 +532,6 @@ Pass-through probe for debugging: wire an image, a mask and/or a latent and read
 | 13 | `inf_count` | `INT` | Inf elements in the latent. |
 
 
-### MaskBatchCombineMEC
-
-**Shown in the menu as:** Mask Batch Combine (C2C)
-
-Combine two MASK batches with one of: union (max), intersect (min), diff (A - B), xor, add (clamp), subtract (clamp). Sizes must match.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mask_a` | `MASK` |  | — |
-| `mask_b` | `MASK` |  | — |
-| `op` | choice: `union`, `intersect`, `diff`, `xor`, `add`, `subtract` | default `"union"` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-
-
 ### NumberLerpMEC
 
 **Shown in the menu as:** Number Lerp (C2C)
@@ -850,41 +824,6 @@ Unified ProPainter node. Absorbs ProPainterTemporal / Remove / Stitch / StitchRe
 | 2 | `aux_image` | `IMAGE` | Auxiliary IMAGE (flow_field_rgb in 'flow' mode, zeros otherwise). |
 | 3 | `aux_mask` | `MASK` | Auxiliary MASK (reserved, zeros for now). |
 | 4 | `info` | `STRING` | Info string with timings, coverage, mode-specific stats. |
-
-
----
-
-## C2C/Keying
-
-
-### LuminanceKeyerMEC
-
-**Shown in the menu as:** Luminance Keyer — Highlights / Shadows / Custom
-
-Professional luminance keyer inspired by Nuke's LumaKeyer.
-Computes ITU-R BT.709 luminance from an image and extracts a matte
-using adjustable thresholds with smooth S-curve falloff and gamma.
-Modes: auto, highlights, midtones, shadows, custom.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | Input image(s) to extract luminance key from. |
-| `mode` | choice: `auto`, `highlights`, `midtones`, `shadows`, `custom` | default `"auto"` | Preset luminance range or custom thresholds. auto: Analyzes image brightness to pick best range. highlights: Keys bright regions (0.7–1.0). midtones: Keys mid-range luminance (0.3–0.7). shadows: Keys dark regions (0.0–0.3). custom: Uses the low/high sliders directly. |
-| `low` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Low threshold – pixels with luminance below this become 0 in the mask. Only used directly in custom mode; presets override this. |
-| `high` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | High threshold – pixels with luminance above this become 1 in the mask. Only used directly in custom mode; presets override this. |
-| `gamma` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.01 | Gamma correction applied after keying. >1 compresses mask toward black (reduces coverage). <1 expands mask toward white (increases coverage). |
-| `falloff` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | Smoothness of the transition between low and high thresholds. 0 = hard binary edge. 1 = standard smooth. >1 = very gradual transition. |
-| `invert` | `BOOLEAN` | default `False` | Invert the output mask (swap keyed and unkeyed regions). |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | Luminance-based matte for the chosen brightness range. |
-| 1 | `info` | `STRING` | JSON summary of effective mode and thresholds used. |
 
 
 ---
@@ -2310,6 +2249,95 @@ Saved workflows with the eight former single-effect nodes (Drop Shadow, Inner Sh
 
 ---
 
+## MEC/Mask
+
+
+### MaskToolsMEC
+
+**Shown in the menu as:** Mask Tools (C2C)
+
+Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; grain; motion blur; edge spread; channel shuffle.
+
+Saved workflows with the eight former nodes (Mask From Color, Luminance Keyer, Mask Gradient, Mask Grain, Mask Motion Blur, Edge Spread, Mask Batch Combine, Shuffle) load here in their mode and give the same result. Each mode shows only its own controls, and its preview (colour tolerance, luma window, gradient shape, grain tile, blur dial).
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mode` | choice: `key: colour`, `key: luma`, `key: difference`, `grade`, `grow / shrink`, `combine`, `gradient`, `grain`, `motion blur`, `edge spread`, `shuffle` | default `"key: colour"` | What the node does. Each mode shows only its own controls. |
+| `colour_key_color` | `STRING` | default `"#FFFFFF"` | key: colour: Target colour as #RRGGBB — the hue you want to keep or remove. |
+| `colour_key_colorspace` | choice: `rgb`, `hsv`, `lab` | default `"rgb"` | key: colour: Distance metric. LAB separates dark navy from dark brown; RGB treats them as similar luminance. |
+| `colour_key_tolerance` | `FLOAT` | default `50.0`, range 0.0…100.0, step 1.0 | key: colour: How far a pixel's colour can drift from the pick and still count as a match. |
+| `colour_key_soft_falloff` | `FLOAT` | default `10.0`, range 0.0…100.0, step 1.0 | key: colour: Graded band outside tolerance — stops a colour key from cutting like a pair of scissors. |
+| `colour_key_invert` | `BOOLEAN` | default `False` | key: colour: Swap matched and unmatched regions. |
+| `luma_key_mode` | choice: `auto`, `highlights`, `midtones`, `shadows`, `custom` | default `"auto"` | key: luma: Preset luminance range or custom thresholds. auto: Analyzes image brightness to pick best range. highlights: Keys bright regions (0.7–1.0). midtones: Keys mid-range luminance (0.3–0.7). shadows: Keys dark regions (0.0–0.3). custom: Uses the low/high sliders directly. |
+| `luma_key_low` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | key: luma: Low threshold – pixels with luminance below this become 0 in the mask. Only used directly in custom mode; presets override this. |
+| `luma_key_high` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | key: luma: High threshold – pixels with luminance above this become 1 in the mask. Only used directly in custom mode; presets override this. |
+| `luma_key_gamma` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.01 | key: luma: Gamma correction applied after keying. >1 compresses mask toward black (reduces coverage). <1 expands mask toward white (increases coverage). |
+| `luma_key_falloff` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | key: luma: Smoothness of the transition between low and high thresholds. 0 = hard binary edge. 1 = standard smooth. >1 = very gradual transition. |
+| `luma_key_invert` | `BOOLEAN` | default `False` | key: luma: Invert the output mask (swap keyed and unkeyed regions). |
+| `luma_key_channel` | choice: `luma`, `red`, `green`, `blue`, `hue`, `saturation`, `value`, `L`, `a`, `b` | default `"luma"` | key: luma: Channel to key on. Luma is BT.709; hue/sat/value and LAB a/b isolate coloured spill without three separate nodes. |
+| `luma_key_low_soft` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | key: luma: Blend-If split below low — ramp into the key instead of a hard cut that looks like a sticker. |
+| `luma_key_high_soft` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | key: luma: Blend-If split above high — feather the highlight side of the range. |
+| `luma_key_invert_key` | `BOOLEAN` | default `False` | key: luma: Invert the sampled channel before thresholding (ImageToMask behaviour). Distinct from invert, which flips the finished matte. |
+| `difference_key_tolerance` | `FLOAT` | default `0.08`, range 0.0…1.0, step 0.005 | key: difference: How far a pixel may differ from the clean plate and still count as background (0..1 of the RGB distance). |
+| `difference_key_softness` | `FLOAT` | default `0.05`, range 0.0…1.0, step 0.005 | key: difference: Width of the soft edge above the tolerance. |
+| `difference_key_invert` | `BOOLEAN` | default `False` | key: difference: Key the unchanged part instead of what changed. |
+| `grade_gain` | `FLOAT` | default `1.0`, range 0.0…16.0, step 0.01 | grade: Multiply the matte (above 1 pushes greys toward white). |
+| `grade_gamma` | `FLOAT` | default `1.0`, range 0.05…8.0, step 0.01 | grade: Bend the greys: above 1 lifts them, below 1 sinks them; black and white stay put. |
+| `grade_clamp` | `BOOLEAN` | default `True` | grade: Keep the result inside 0..1. |
+| `grade_invert` | `BOOLEAN` | default `False` | grade: Flip the matte at the end. |
+| `grow_left` | `INT` | default `0`, range -4096…4096, step 1 | grow / shrink: Pixels to grow the matte toward the left (negative shrinks its left edge). |
+| `grow_right` | `INT` | default `0`, range -4096…4096, step 1 | grow / shrink: Pixels to grow toward the right (negative shrinks its right edge). |
+| `grow_up` | `INT` | default `0`, range -4096…4096, step 1 | grow / shrink: Pixels to grow upward (negative shrinks its top edge). |
+| `grow_down` | `INT` | default `0`, range -4096…4096, step 1 | grow / shrink: Pixels to grow downward (negative shrinks its bottom edge). |
+| `grow_feather` | `INT` | default `0`, range 0…1000, step 1 | grow / shrink: Soften the result by this blur radius in pixels. |
+| `combine_op` | choice: `union`, `intersect`, `diff`, `xor`, `add`, `subtract` | default `"union"` | combine |
+| `gradient_width` | `INT` | default `512`, range 4…16384, step 1 | gradient: Output width when size_as is not connected. |
+| `gradient_height` | `INT` | default `512`, range 4…16384, step 1 | gradient: Output height when size_as is not connected. |
+| `gradient_type` | choice: `linear`, `radial`, `angular` | default `"linear"` | gradient: Ramp shape — linear edge fade, radial vignette, or angular wipe. |
+| `gradient_angle` | `FLOAT` | default `0.0`, range -360.0…360.0, step 0.1 | gradient: Direction for linear, or rotation offset for angular ramps. |
+| `gradient_center_x` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | gradient: Radial/angular origin, normalised 0–1 across the frame. |
+| `gradient_center_y` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | gradient: Radial/angular origin, normalised 0–1 down the frame. |
+| `gradient_start` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | gradient: Mask value at the ramp start (black end). |
+| `gradient_end` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | gradient: Mask value at the ramp end (white end). |
+| `grain_amount` | `INT` | default `6`, range 0…127, step 1 | grain: Noise strength — enough to hide banding, not enough to read as texture. |
+| `grain_seed` | `INT` | default `0`, range 0…2147483647, step 1 | grain: Fixed seed holds the grain still through a sequence; upstream reseeded every frame and the matte crawled. |
+| `grain_size` | `INT` | default `4`, range 1…64, step 1 | grain: Noise frequency — larger values give coarser, less speckly grain. |
+| `grain_invert` | `BOOLEAN` | default `False` | grain: Flip mask polarity before adding grain. |
+| `motion_blur_angle` | `FLOAT` | default `0.0`, range -360.0…360.0, step 0.1 | motion blur: Blur direction in degrees, 0 = horizontal right. |
+| `motion_blur_distance` | `INT` | default `20`, range 0…9999, step 1 | motion blur: Blur length in pixels along the angle. |
+| `motion_blur_invert` | `BOOLEAN` | default `False` | motion blur: Flip mask polarity before blurring. |
+| `edge_spread` | `INT` | default `4`, range 0…9999, step 1 | edge spread: How many pixels to push inward colour outward — kills the dark fringe on a lighter background. |
+| `edge_spread_invert_mask` | `BOOLEAN` | default `False` | edge spread: Flip mask polarity when your matte is white-on-black. |
+| `shuffle_out_R` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, `InvA`, `zero`, `one` | default `"R"` | shuffle |
+| `shuffle_out_G` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, `InvA`, `zero`, `one` | default `"G"` | shuffle |
+| `shuffle_out_B` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, `InvA`, `zero`, `one` | default `"B"` | shuffle |
+| `shuffle_out_A` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, `InvA`, `zero`, `one` | default `"A"` | shuffle |
+| `shuffle_premultiply_output` | `BOOLEAN` | default `False` | shuffle |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | keys, edge spread and shuffle: the picture to work on. |
+| `mask` | `MASK` |  | grade, grow / shrink, combine (first matte), grain, motion blur; edge spread's matte; gradient's size when nothing else gives one. |
+| `mask_b` | `MASK` |  | combine: the second matte. |
+| `plate` | `IMAGE` |  | key: difference - the clean plate (same shot, without the subject). |
+| `size_as` | `IMAGE` |  | gradient: take the size from this image. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `mask` | `MASK` | The matte (shuffle: the new alpha; edge spread: the matte it used). |
+| 1 | `image` | `IMAGE` | edge spread / shuffle: the processed picture. Other modes: the matte as a grey image, to look at. |
+| 2 | `report` | `STRING` | What the node did, and anything worth knowing (clamped values, resized inputs). |
+
+
+---
+
 ## MEC/Masking
 
 
@@ -2532,37 +2560,6 @@ Analyzes optical-flow speed and inserts in-between frames on fast sections so mo
 |---|---|---|---|
 | 0 | `normalized_images` | `IMAGE` | — |
 | 1 | `time_map` | `TIMEMAP` | — |
-
-
----
-
-## MaskEditControl/Channels
-
-
-### ShuffleMEC
-
-**Shown in the menu as:** Shuffle — Channels (MEC)
-
-Nuke-style 4-channel shuffle in a single node.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `out_R` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, … (+3) | default `"R"` | — |
-| `out_G` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, … (+3) | default `"G"` | — |
-| `out_B` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, … (+3) | default `"B"` | — |
-| `out_A` | choice: `R`, `G`, `B`, `A`, `Lum`, `InvR`, `InvG`, `InvB`, … (+3) | default `"A"` | — |
-| `premultiply_output` | `BOOLEAN` | default `False` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `alpha` | `MASK` | — |
 
 
 ---

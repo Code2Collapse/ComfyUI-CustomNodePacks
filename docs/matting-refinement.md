@@ -131,12 +131,14 @@ Convert a coarse segmentation mask into a trimap (white=foreground, black=backgr
 
 ---
 
-### 4. Luminance Keyer (MEC)
+### 4. Luma key — Mask Tools (C2C)
+
+In **Mask Tools (C2C)** with `mode` = `key: luma` (this was the Luminance Keyer node; saved workflows migrate automatically). Its controls carry the prefix `luma_key_`, e.g. `luma_key_mode`, `luma_key_low`.
 
 Professional luminance keyer using ITU-R BT.709 coefficients. Extract mattes based on image brightness with presets and smooth S-curve falloff.
 
-**File:** [`nodes/luminance_keyer.py`](../nodes/luminance_keyer.py)  
-**Category:** `MaskEditControl/Keying`
+**File:** [`nodes/luminance_keyer.py`](../nodes/luminance_keyer.py) (the keyer), [`nodes/mask_toolkit/nodes.py`](../nodes/mask_toolkit/nodes.py) (the node)  
+**Category:** `MEC/Mask`
 
 #### Parameters
 

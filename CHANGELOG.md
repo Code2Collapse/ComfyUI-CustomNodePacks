@@ -2,6 +2,22 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 3: Mask Tools)
+
+Evidence: `docs/evidence/L7.65/wave3_mt_live.json`, `wave3_mt_nodes.*.png`; `tests/test_consolidation_wave3.py`.
+
+### Added
+
+- **Mask Tools (C2C)**: keyers and matte operations in one node, one mode at a time - colour, luma and (new)
+  difference keys against a clean plate; (new) grade - gain, gamma, clamp, invert; (new) grow or shrink each side
+  separately - left / right / up / down - with a feather; combine; gradient; grain; motion blur; edge spread;
+  channel shuffle. Each mode shows only its own controls and its preview.
+
+### Changed (saved workflows migrate automatically; results are identical)
+
+- Mask From Color, Luminance Keyer, Mask Gradient, Mask Grain, Mask Motion Blur, Edge Spread, Mask Batch Combine and
+  Shuffle are modes of Mask Tools (C2C).
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 3: versioning)
 
 ### Changed (saved workflows migrate automatically; results are identical)

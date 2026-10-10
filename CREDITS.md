@@ -26,7 +26,7 @@ The source for two families:
   effect, carrying the union of upstream's V1/V2/V3 variants.
 - **`nodes/mask_toolkit/`** — Mask From Color, Mask Gradient, Mask Grain, Mask
   Motion Blur, Edge Spread, plus the channel selector and Blend-If soft ends
-  added to `LuminanceKeyerMEC`.
+  added to `LuminanceKeyerMEC`. Since L7.65 all of them are modes of one node, Mask Tools (C2C).
 
 Reimplemented in torch rather than copied verbatim, for a concrete reason:
 upstream's `blendmodes.py` imports the `blend_modes` pip package, which is not

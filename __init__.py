@@ -414,20 +414,7 @@ except Exception as _sc_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] smart_crop import failed: %s", _sc_exc,
         )
-# Luminance Keyer (Nuke-style luma key, pure tensor math)
-try:
-    from .nodes.luminance_keyer import LuminanceKeyerMEC
-    _LUMAKEY_MAPPINGS = {"LuminanceKeyerMEC": LuminanceKeyerMEC}
-    _LUMAKEY_DISPLAY = {
-        "LuminanceKeyerMEC": "Luminance Keyer \u2014 Highlights / Shadows / Custom",
-    }
-except Exception as _exc:  # pragma: no cover
-    _c2c_rec_fail(
-        "LuminanceKeyer", _exc,
-        hint="Luminance Keyer failed to import — check _interrupt_check / _progress helpers.",
-        group="nodes",
-    )
-    _LUMAKEY_MAPPINGS, _LUMAKEY_DISPLAY = {}, {}
+# Luminance Keyer, Shuffle and Mask Batch Combine are modes of Mask Tools (nodes/mask_toolkit, L7.65 P03).
 
 # Background Remover (RMBG-2.0 / BiRefNet one-click bg removal)
 try:
@@ -720,7 +707,7 @@ _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
 # this environment, and its SaveEXRMEC is the 6-input superset.
 # video_frame_extractor was merged into Batch Range (nodes/helpers, L7.65 P23).
 for _rmod in ("exr_io",
-              "optical_flow", "roto", "shuffle", "pixel_aspect"):
+              "optical_flow", "roto", "pixel_aspect"):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
         _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})
@@ -813,7 +800,6 @@ _C2C_FAMILIES = [
     ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
     ("Mask Placement", _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY),
     ("SAM + ViTMatte", _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY),
-    ("Luminance Keyer", _LUMAKEY_MAPPINGS, _LUMAKEY_DISPLAY),
     ("Background Remover", _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY),
     ("Semantic Segment", _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY),
     ("NukeNodeMax", _NUKEMAX_MAPPINGS, _NUKEMAX_DISPLAY),

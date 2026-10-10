@@ -74,9 +74,13 @@ def luma_keyer():
 
 
 class TestRegistration:
-    def test_five_ids_registered(self):
+    def test_one_node_registered_and_the_engines_remain(self):
+        # L7.65 P03: the five toolkit nodes (and the keyer, shuffle, batch combine) are modes of Mask Tools (C2C)
+        from nodes.mask_toolkit import nodes as _mt
+
+        assert set(NODE_CLASS_MAPPINGS) == {"MaskToolsMEC"}
         for nid in ALL_NODE_IDS:
-            assert nid in NODE_CLASS_MAPPINGS
+            assert isinstance(getattr(_mt, nid), type)
 
     def test_ids_merged_in_pack_init(self):
         import re
@@ -363,7 +367,8 @@ class TestNoInferenceTensorsEscape:
         names = sorted(self._all_nodes())
         # both families: the Layer Effects node (the eight effects in one since L7.65 P13) and the mask toolkit
         from nodes.mask_toolkit import NODE_CLASS_MAPPINGS as MT
-        assert "LayerEffectsMEC" in names and set(MT) <= set(names) and len(MT) >= 5, f"expected both families, saw {names}"
+        assert "LayerEffectsMEC" in names and "MaskToolsMEC" in names and set(MT) <= set(names), (
+            f"expected both families, saw {names}")
 
     def test_a_downstream_node_can_mutate_our_output(self):
         # The failure as a user meets it: the NEXT node does an in-place op.
@@ -383,6 +388,6 @@ class TestNoInferenceTensorsEscape:
             assert not t.is_inference(), f"{label} came back an inference tensor"
             t.add_(0.0)                      # must not raise
 
-        blurred, _ = MT["MaskMotionBlurMEC"]().execute(mask, 0.0, 3, False)
+        blurred, _ = MaskMotionBlurMEC().execute(mask, 0.0, 3, False)
         assert not blurred.is_inference()
         blurred.add_(0.0)

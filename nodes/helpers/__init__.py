@@ -1,5 +1,5 @@
 """
-C2C Helpers — 9 small utility nodes that compose with the rest of the
+C2C Helpers — 8 small utility nodes that compose with the rest of the
 ComfyUI-CustomNodePacks ecosystem (Wan Director, Inpaint, Mask, AI spine).
 
 These are intentionally tiny, single-purpose, dependency-free and 100%
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from .helpers import (
     ImageBatchSliceMEC,
-    MaskBatchCombineMEC,
     SeedListMEC,
     ConditionalSwitchMEC,
     TextTemplateMEC,
@@ -28,7 +27,6 @@ from .helpers import (
 
 NODE_CLASS_MAPPINGS = {
     "ImageBatchSliceMEC":   ImageBatchSliceMEC,
-    "MaskBatchCombineMEC":  MaskBatchCombineMEC,
     "SeedListMEC":          SeedListMEC,
     "ConditionalSwitchMEC": ConditionalSwitchMEC,
     "TextTemplateMEC":      TextTemplateMEC,
@@ -39,7 +37,6 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageBatchSliceMEC":   "Batch Range (C2C)",
-    "MaskBatchCombineMEC":  "Mask Batch Combine (C2C)",
     "SeedListMEC":          "Seed List Generator (C2C)",
     "ConditionalSwitchMEC": "Conditional Switch",
     "TextTemplateMEC":      "Text Template (C2C)",

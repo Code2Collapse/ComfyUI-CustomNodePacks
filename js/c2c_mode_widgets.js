@@ -16,6 +16,13 @@ const CLEAN = ["balance_mode", "balance_strength", "saturation", "contrast_resto
 const EFFECTS = ["drop_shadow", "outer_glow", "gradient_map", "gradient_overlay", "color_overlay", "inner_glow",
                  "inner_shadow", "stroke"];
 const effectOf = (name) => EFFECTS.find((k) => name.startsWith(k + "_")) || null;
+// Mask Tools: mode label -> the prefix its controls carry
+const MT_MODES = {
+    "key: colour": "colour_key", "key: luma": "luma_key", "key: difference": "difference_key", "grade": "grade",
+    "grow / shrink": "grow", "combine": "combine", "gradient": "gradient", "grain": "grain",
+    "motion blur": "motion_blur", "edge spread": "edge_spread", "shuffle": "shuffle",
+};
+const mtKeyOf = (name) => Object.values(MT_MODES).find((k) => name === k || name.startsWith(k + "_")) || null;
 // Folder Version Incrementer: the pipeline layout's controls, and the source / date layout's
 const FI_PIPELINE = ["show", "shot", "task", "min_version", "max_retries", "write_manifest"];
 const FI_SOURCE = ["prefix", "suffix", "suffix_mode", "label", "date_format", "source_choice", "name_format",
@@ -54,6 +61,13 @@ const RULES = {
         managed: (name) => effectOf(name) !== null,
         visible: (v, names) => names.filter((n) => v[effectOf(n)]),
     },
+    MaskToolsMEC: {
+        // the luma key's presets set the window themselves: low / high only matter in its "custom" setting
+        watch: ["mode", "luma_key_mode"],
+        managed: (name) => mtKeyOf(name) !== null,
+        visible: (v, names) => names.filter((n) => mtKeyOf(n) === MT_MODES[v.mode]
+            && !((n === "luma_key_low" || n === "luma_key_high") && v.luma_key_mode !== "custom")),
+    },
     FolderIncrementer: {
         // layout "show / shot / task / version" (the former Batch Version Manager) uses none of the source / date
         // controls; the default layout uses none of the pipeline ones. source_extension is the node's own (hidden).
@@ -78,9 +92,12 @@ function apply(node, rule) {
     const managed = typeof rule.managed === "function" ? rule.managed : (n) => rule.managed.includes(n);
     const show = new Set(rule.visible(values, widgets.map((w) => w.name).filter(managed)));
     let changed = false;
+    let prevWant = null;                                 // a seed's control_after_generate follows its seed
     for (const w of widgets) {
-        if (!managed(w.name)) continue;
-        const want = show.has(w.name);
+        const isControl = w.name === "control_after_generate";
+        if (!managed(w.name) && !(isControl && prevWant !== null)) { prevWant = null; continue; }
+        const want = isControl ? prevWant : show.has(w.name);
+        prevWant = isControl ? null : want;
         if (want === (w.__mec_hidden === true)) {
             setWidgetVisible(w, want);
             changed = true;
