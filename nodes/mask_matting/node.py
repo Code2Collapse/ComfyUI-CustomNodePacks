@@ -339,6 +339,32 @@ def _la_sam_text_grounding(
 
 
 # ══════════════════════════════════════════════════════════════════════
+# L7.81: advanced controls the current backend always reads. Each is flagged core's own "advanced" (Nodes 2.0 folds
+# them behind its "Show advanced inputs" button and the properties panel lists them as ADVANCED INPUTS) and carries a
+# "c2c_section" name, which the classic canvas - where core hides nothing - uses for the node's "More" bar
+# (js/_c2c_sections.js). Feature groups gated by their own switch (luma key, diagnostics, advanced trimap, robust
+# propagation, despill / post-refine strengths) are not here: switching one on already says "show me".
+_SECTIONS = {
+    **dict.fromkeys(("individual_objects", "tracking_direction", "frame_annotation", "object_id", "max_frames_to_track",
+                     "memory_size", "start_frame", "end_frame", "temporal_stabilise"), "Video"),
+    **dict.fromkeys(("tta_flip", "multiscale"), "Accuracy"),
+    **dict.fromkeys(("lightwrap_strength", "lightwrap_radius", "edge_band_radius", "premultiply"), "Output"),
+    **dict.fromkeys(("trimap_dilate", "trimap_erode"), "Trimap"),
+    **dict.fromkeys(("precision", "attention", "offload", "matte_tile", "matte_overlap", "matte_tile_batch",
+                     "band_scale", "auto_download", "seed"), "Performance"),
+}
+
+
+def _with_sections(spec):
+    for group in ("required", "optional"):
+        for name, s in (spec.get(group) or {}).items():
+            section = _SECTIONS.get(name)
+            if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
+                s[1]["c2c_section"] = section
+                s[1]["advanced"] = True
+    return spec
+
+
 class MaskOpsMEC:
     """Unified segmenter + matter + refine + diagnose node.
 
@@ -419,7 +445,7 @@ class MaskOpsMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return _with_sections({
             "required": {
                 "image": ("IMAGE", {"tooltip": "Source image or video frames (B,H,W,C)."}),
                 "segmenter": (_segmenter_choices(), {
@@ -615,7 +641,7 @@ class MaskOpsMEC:
                     "tooltip": "How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors. On the CPU tiles always run one at a time (faster there, and a third of the memory).",
                 }),
             },
-        }
+        })
 
     @classmethod
     def IS_CHANGED(cls, image, segmenter, matter, model, matter_model,

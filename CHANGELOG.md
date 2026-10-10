@@ -2,6 +2,18 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (control sections)
+
+Evidence: `docs/evidence/L7.81` (classic and Nodes 2.0, save + reload round trip).
+
+### Added
+
+- **Control sections on Mask + Matting.** Its advanced controls (Video, Accuracy, Output, Trimap, Performance) fold
+  away. On the classic canvas a "More" bar under the node opens each section; your choice is saved with the
+  workflow. In Nodes 2.0 the same controls sit behind ComfyUI's own "Show advanced inputs" button and appear under
+  ADVANCED INPUTS in the properties panel. Setting: C2C › Canvas › Control sections; ComfyUI's "Always show advanced
+  widgets" opens them all.
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 3: Mask Track)
 
 ### Changed (saved workflows migrate automatically; results are identical)

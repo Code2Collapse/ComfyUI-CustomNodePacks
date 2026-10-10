@@ -394,3 +394,22 @@ def test_vitmatte_tiling_widgets_hidden_for_other_matters():
     shown = _visible("sam3.1", "rvm", "cascade (legacy)")
     for name in ("matte_tile", "matte_overlap", "matte_tile_batch"):
         assert name not in shown
+
+
+def test_section_members_are_also_core_advanced_and_never_sockets():
+    """L7.81: the classic canvas folds `c2c_section` members behind the node's "More" bar; Nodes 2.0 folds the same
+    inputs through core's own "advanced" flag - so every member must carry both, and no wired input may be folded."""
+    from nodes.mask_matting import _visibility as V
+    from nodes.mask_matting.node import MaskOpsMEC
+
+    spec = MaskOpsMEC.INPUT_TYPES()
+    members = {}
+    for group in ("required", "optional"):
+        for name, s in spec[group].items():
+            opts = s[1] if len(s) > 1 and isinstance(s[1], dict) else {}
+            if opts.get("c2c_section"):
+                members[name] = opts
+    assert members, "no section members declared"
+    assert all(o.get("advanced") is True for o in members.values())
+    assert not set(members) & set(V.SOCKETS)
+    assert {o["c2c_section"] for o in members.values()} <= {"Video", "Accuracy", "Output", "Trimap", "Performance"}

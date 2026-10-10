@@ -22,6 +22,7 @@
 
 import { app } from "../../scripts/app.js";
 import { setWidgetVisible, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 
 const NODE_ID = "MaskOpsMEC";
 const ROUTE = "/c2c/mask/visibility";
@@ -124,17 +125,29 @@ function apply(node) {
     const keep = relevant(node, spec);
     const sockets = new Set(spec.sockets || []);
     let hidden = 0;
+    const shown = [];                                    // what the rules want, before sections close some of it
+    let prevWanted = null;                               // a seed's control_after_generate follows its seed
 
     for (const w of node.widgets) {
+        if (w.name === "control_after_generate" && prevWanted !== null) {
+            setWidgetVisible(w, prevWanted);
+            if (!prevWanted) hidden += 1;
+            prevWanted = null;
+            continue;
+        }
         // Helper widgets (the status strip) are not inputs and carry no
         // value: folding one zeroed its layout height while its element
         // stayed on screen, so it sat on top of the next parameter row.
         if (w.options?.serialize === false || w.serialize === false) continue;
         const isSocket = sockets.has(w.name);
-        const wanted = isSocket
+        const ruled = isSocket
             || keep === null                       // undeclared: show all
             || (keep.has(w.name) && toggleAllows(node, w.name, spec)
                 && tilingAllows(node, w.name, spec));
+        if (ruled && !isSocket) shown.push(w.name);
+        // a closed section folds its members too (L7.81); sockets never sit in a section
+        const wanted = ruled && (isSocket || sectionOpen(node, w.name));
+        prevWanted = wanted;
 
         // The shared helper folds BOTH layers: the LiteGraph row (type + zero height) and, for DOM-backed
         // widgets such as the scene_prompts textarea, the element and its .dom-widget wrapper - a bare type
@@ -145,6 +158,7 @@ function apply(node) {
     }
 
     node.__c2cHiddenCount = hidden;
+    updateSectionBar(node, shown, () => apply(node));
     // Nodes 2.0 rebuilds its rows from options.hidden; mask_matting.js syncs after ITS refresh, which can
     // run before this fold, leaving empty rows where folded widgets were (ledger L9.19). Sync here too.
     vueSyncNodeWidgets(node);
