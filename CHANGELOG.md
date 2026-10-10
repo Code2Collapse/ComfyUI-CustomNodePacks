@@ -2,6 +2,14 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 3: Mask Track)
+
+### Changed (saved workflows migrate automatically; results are identical)
+
+- **Mask Track** (was Mask Tracker) gains the mode **stabilize** - the former Mask Temporal Stabilizer + Integrity
+  (temporal smoothing and the per-frame integrity check), which it replaces. A `warning` output is added; every mode
+  shows only its own controls.
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 3: Mask Tools)
 
 Evidence: `docs/evidence/L7.65/wave3_mt_live.json`, `wave3_mt_nodes.*.png`; `tests/test_consolidation_wave3.py`.

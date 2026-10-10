@@ -7,6 +7,8 @@ the way the old node was.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -288,3 +290,49 @@ def test_each_mode_says_what_it_needs():
         _run_mode("combine", mask=_MASK)
     with pytest.raises(ValueError, match="clean plate"):
         _run_mode("key: difference", image=_IMG)
+
+
+# ── P07: Mask Temporal -> Mask Track, mode "stabilize" ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("temporal_mode", ["none", "gaussian"])
+def test_mask_temporal_through_mask_track(temporal_mode):
+    from nodes.mask_matting.temporal_node import MaskTemporalMEC
+    from nodes.mask_tracker_mec import MaskTrackerMEC
+
+    g = torch.Generator().manual_seed(21)
+    video = torch.rand(6, 20, 28, 3, generator=g)
+    mask = (torch.rand(6, 20, 28, generator=g) > 0.4).float()
+    old = {"image": video, "mask": mask, "temporal_mode": temporal_mode, "blend": 0.6, "sigma": 1.5, "device": "cpu",
+           "drop_threshold": 0.35, "jump_threshold": 0.2}
+    expected = MaskTemporalMEC().run(**old)
+    spec = MaskTrackerMEC.INPUT_TYPES()
+    defaults = {k: (v[1].get("default") if len(v) > 1 and "default" in v[1] else
+                    (v[0][0] if isinstance(v[0], (list, tuple)) else None))
+                for k, v in {**spec["required"], **spec["optional"]}.items() if k not in ("mask", "video", "sam_model")}
+    check("MaskTemporalMEC", old, expected, lambda **k: MaskTrackerMEC().execute(**{**defaults, **k}))
+
+
+def test_mask_track_other_modes_gain_an_empty_warning():
+    from nodes.mask_tracker_mec import MaskTrackerMEC
+
+    spec = MaskTrackerMEC.INPUT_TYPES()
+    kw = {k: (v[1].get("default") if len(v) > 1 and "default" in v[1] else
+              (v[0][0] if isinstance(v[0], (list, tuple)) else None))
+          for k, v in {**spec["required"], **spec["optional"]}.items() if k not in ("mask", "video", "sam_model")}
+    g = torch.Generator().manual_seed(22)
+    out = MaskTrackerMEC().execute(**{**kw, "mode": "consistency_check", "video": torch.rand(4, 16, 16, 3, generator=g),
+                                      "mask": torch.rand(4, 16, 16, generator=g)})
+    assert len(out) == len(MaskTrackerMEC.RETURN_TYPES) == 6 and out[5] == ""
+    with pytest.raises(ValueError, match="connect the video"):
+        MaskTrackerMEC().execute(**{**kw, "mode": "stabilize"})
+
+
+def test_the_tracker_front_end_shows_every_stabilize_control():
+    import re
+
+    from nodes.mask_tracker_mec import MaskTrackerMEC
+
+    src = (Path(__file__).resolve().parents[1] / "js" / "motion_mask_tracker.js").read_text(encoding="utf-8")
+    group = re.findall(r'"([a-z_]+)"', src.split("const STABILIZE = [", 1)[1].split("];", 1)[0])
+    backend = [n for n in MaskTrackerMEC.INPUT_TYPES()["optional"] if n.startswith("stabilize_")]
+    assert group == backend

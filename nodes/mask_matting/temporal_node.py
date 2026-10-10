@@ -384,5 +384,6 @@ class MaskTemporalMEC:
         return (out, json.dumps(report), warning)
 
 
-NODE_CLASS_MAPPINGS = {"MaskTemporalMEC": MaskTemporalMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"MaskTemporalMEC": "Mask Temporal Stabilizer + Integrity"}
+# L7.65 P07: the "stabilize" mode of Mask Track (nodes/mask_tracker_mec.py) runs this class; not registered on its own.
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

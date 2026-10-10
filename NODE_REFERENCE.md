@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **113** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **112** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -16,7 +16,7 @@
 | MEC Paint Suite | 2 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
-| Mask + Matting | 3 |
+| Mask + Matting | 2 |
 | Layer Effects | 1 |
 | Mask toolkit | 1 |
 | Frequency / Grain | 3 |
@@ -46,7 +46,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 113 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 112 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -113,7 +113,7 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **C2C/VAE** (1)
   - [VAE Merge](#vaemergemec)
 - **C2C/Video** (1)
-  - [Mask Tracker — Motion/Propagate/Anchor/Consistency](#masktrackermec)
+  - [Mask Track — Motion/Propagate/Anchor/Consistency/Stabilize](#masktrackermec)
 - **C2C/VideoMask** (1)
   - [Video Mask Editor](#videomaskeditormec)
 - **C2C/Wan_Director** (1)
@@ -161,8 +161,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [EXR Metadata Reader (MEC)](#exrmetadatareadermec)
   - [Load EXR (MEC)](#loadexrmec)
   - [Save EXR (MEC)](#saveexrmec)
-- **MaskEditControl/MaskMatting** (1)
-  - [Mask Temporal Stabilizer + Integrity](#masktemporalmec)
 - **MaskEditControl/Metadata** (3)
   - [Frame Range Router (MEC)](#framerangeroutermec)
   - [Metadata Writer (MEC)](#metadatawritermec)
@@ -1757,7 +1755,7 @@ Merge 2 or 3 VAEs with 13 strategies (weighted_sum, sigmoid, geometric, slerp, d
 
 ### MaskTrackerMEC
 
-**Shown in the menu as:** Mask Tracker — Motion/Propagate/Anchor/Consistency
+**Shown in the menu as:** Mask Track — Motion/Propagate/Anchor/Consistency/Stabilize
 
 Unified video-mask tracker. Pick a mode and the corresponding engine runs. All modes share the (mask, video) input pair. Heavy work is chunked/vectorized; CPU fallback always available.
 
@@ -1766,7 +1764,7 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `mode` | choice: `motion`, `propagate`, `anchor`, `consistency_check` | default `"motion"` | motion: per-frame motion mask (pixel/flow/bg/hist). propagate: seed mask on one frame, push to all frames. anchor: SDF interpolation between anchor masks. consistency_check: score flicker between consecutive frames. |
+| `mode` | choice: `motion`, `propagate`, `anchor`, `consistency_check`, `stabilize` | default `"motion"` | motion: per-frame motion mask (pixel/flow/bg/hist). propagate: seed mask on one frame, push to all frames. anchor: SDF interpolation between anchor masks. consistency_check: score flicker between consecutive frames. |
 | `camera_compensation` | `BOOLEAN` | default `True` | [motion] subtract global camera motion |
 | `stabilization_method` | choice: `homography`, `affine`, `translation` | default `"homography"` | [motion] camera-motion model |
 | `detection_mode` | choice: `combined`, `pixel_diff`, `optical_flow`, `background_sub`, `histogram_diff` | default `"combined"` | [motion] active method(s) |
@@ -1806,7 +1804,13 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | `mask` | `MASK` |  | Required by propagate (seed), anchor (anchor stack), consistency_check (mask_iou). Optional for motion. |
 | `video` | `IMAGE` |  | Video frame batch (B,H,W,C). Required by motion, propagate, anchor flow_refinement, and pixel/flow consistency. |
 | `sam_model` | `SAM_MODEL` |  | [propagate sam2_video mode] SAM2 model |
-| `points_json` | `STRING` | default `""`, multiline | [propagate sam2_video mode] point prompts |
+| `points_json` | `STRING` | default `""` | [propagate sam2_video mode] point prompts |
+| `stabilize_temporal_mode` | choice: `none`, `gaussian`, `raft_flow` | default `"none"` | [stabilize] none = integrity report only; gaussian = smooth across frames; raft_flow = blend each frame with the flow-warped previous one. |
+| `stabilize_blend` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | [stabilize] mix factor: 1.0 = pure warped-previous, 0.0 = current only. |
+| `stabilize_sigma` | `FLOAT` | default `1.0`, range 0.0…8.0, step 0.1 | [stabilize] gaussian sigma (gaussian only). |
+| `stabilize_device` | choice: `cuda`, `cpu` | default `"cuda"` | [stabilize] where to run. |
+| `stabilize_drop_threshold` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.05 | [stabilize] area ratio / IoU below this flags the frame. |
+| `stabilize_jump_threshold` | `FLOAT` | default `0.15`, range 0.0…1.0, step 0.01 | [stabilize] centroid jump (normalized) above this flags the frame. |
 
 **Outputs**
 
@@ -1817,6 +1821,7 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | 2 | `score` | `FLOAT` | Mode-specific scalar: motion intensity / mean confidence / flicker score. |
 | 3 | `info_json` | `STRING` | Mode-specific JSON diagnostic payload. |
 | 4 | `metric` | `STRING` | Mode/metric label string. |
+| 5 | `warning` | `STRING` | [stabilize] frames whose mask dropped or jumped, in words; empty when none (and in the other modes). |
 
 
 ---
@@ -2953,40 +2958,6 @@ Save IMAGE batch as EXR(s).
 | # | Name | Type | What it is |
 |---|---|---|---|
 | 0 | `info_json` | `STRING` | — |
-
-
----
-
-## MaskEditControl/MaskMatting
-
-
-### MaskTemporalMEC
-
-**Shown in the menu as:** Mask Temporal Stabilizer + Integrity
-
-Temporal stabilization + integrity check for video mask batches. Modes: none/gaussian/raft_flow. Emits a per-frame integrity report (area / centroid / IoU drift) and a human-readable warning string listing flagged frame indices.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `mask` | `MASK` |  | — |
-| `temporal_mode` | choice: `none`, `gaussian`, `raft_flow` | default `"none"` | — |
-| `blend` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | Mix factor: 1.0 = pure warped-prev, 0.0 = current only. |
-| `sigma` | `FLOAT` | default `1.0`, range 0.0…8.0, step 0.1 | Gaussian sigma (gaussian mode only). |
-| `device` | choice: `cuda`, `cpu` | default `"cuda"` | — |
-| `drop_threshold` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.05 | Area-ratio / IoU below this flags the frame. |
-| `jump_threshold` | `FLOAT` | default `0.15`, range 0.0…1.0, step 0.01 | Centroid jump in normalized coords above this flags the frame. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-| 1 | `integrity_json` | `STRING` | — |
-| 2 | `warning` | `STRING` | — |
 
 
 ---

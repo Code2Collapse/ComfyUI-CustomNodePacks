@@ -643,7 +643,7 @@ _MEC_MAPPINGS = {
 _MEC_DISPLAY = {
     "MaskEditMEC": "Mask Edit \u2014 Transform/Draw/Points/BBox",
     "SplineMaskMEC": "Spline Mask \u2014 Edit/Track/Flow-Path",
-    "MaskTrackerMEC": "Mask Tracker \u2014 Motion/Propagate/Anchor/Consistency",
+    "MaskTrackerMEC": "Mask Track \u2014 Motion/Propagate/Anchor/Consistency/Stabilize",
     "ParameterHistoryMEC": "Parameter History",
     "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline",
     "InpaintCropProMEC": "Inpaint Crop Pro",

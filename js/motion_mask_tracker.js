@@ -4,8 +4,8 @@
 // and does the resize — no cross-extension stomping, per the spline-editor
 // mode-gate lesson):
 //
-//   1. MODE level (unified MaskTrackerMEC only): the node has 4 modes
-//      (motion / propagate / anchor / consistency_check) but 33 widgets. Each
+//   1. MODE level (unified MaskTrackerMEC only): the node has 5 modes
+//      (motion / propagate / anchor / consistency_check / stabilize) but 39 widgets. Each
 //      non-motion mode uses a tiny param group; show only the active mode's
 //      group and hide the rest. Groups are taken from the backend dispatch in
 //      mask_tracker_mec.py `_execute_impl` (the source of truth) — a hidden
@@ -35,6 +35,9 @@ const PROPAGATE = ["source_frame", "propagate_mode", "prop_flow_threshold",
 const ANCHOR = ["anchor_frames", "total_frames", "easing", "sdf_iterations",
     "flow_refinement"];
 const CONSISTENCY = ["metric", "binarize_threshold"];
+// the former Mask Temporal Stabilizer + Integrity (L7.65 P07)
+const STABILIZE = ["stabilize_temporal_mode", "stabilize_blend", "stabilize_sigma", "stabilize_device",
+    "stabilize_drop_threshold", "stabilize_jump_threshold"];
 
 function _setGroup(get, names, show) {
     for (const n of names) { const w = get(n); if (w) setHidden(w, !show); }
@@ -76,6 +79,7 @@ function applyVisibility(node) {
         _setGroup(get, PROPAGATE, false);
         _setGroup(get, ANCHOR, false);
         _setGroup(get, CONSISTENCY, false);
+        _setGroup(get, STABILIZE, false);
     } else {
         // leaving motion: hide every motion + detection widget
         _setGroup(get, MOTION_ALWAYS, false);
@@ -83,6 +87,7 @@ function applyVisibility(node) {
         _setGroup(get, PROPAGATE,   mode === "propagate");
         _setGroup(get, ANCHOR,      mode === "anchor");
         _setGroup(get, CONSISTENCY, mode === "consistency_check");
+        _setGroup(get, STABILIZE,   mode === "stabilize");
     }
     _resize(node);
 }

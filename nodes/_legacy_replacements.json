@@ -3708,5 +3708,71 @@
   ],
   "dropped": [],
   "note": "L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'shuffle' - the same code, the same result."
+ },
+ {
+  "old_node_id": "MaskTemporalMEC",
+  "new_node_id": "MaskTrackerMEC",
+  "old_widget_ids": [
+   "temporal_mode",
+   "blend",
+   "sigma",
+   "device",
+   "drop_threshold",
+   "jump_threshold"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "video",
+    "old_id": "image"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "stabilize_temporal_mode",
+    "old_id": "temporal_mode"
+   },
+   {
+    "new_id": "stabilize_blend",
+    "old_id": "blend"
+   },
+   {
+    "new_id": "stabilize_sigma",
+    "old_id": "sigma"
+   },
+   {
+    "new_id": "stabilize_device",
+    "old_id": "device"
+   },
+   {
+    "new_id": "stabilize_drop_threshold",
+    "old_id": "drop_threshold"
+   },
+   {
+    "new_id": "stabilize_jump_threshold",
+    "old_id": "jump_threshold"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "stabilize"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 5
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P07 (owner-approved merge): Mask Track in mode stabilize - the same Mask Temporal code; integrity_json -> info_json, warning -> warning."
  }
 ]

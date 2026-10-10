@@ -59,7 +59,9 @@ class MaskTrackerMEC:
     automatically when available.
     """
 
-    MODES = ["motion", "propagate", "anchor", "consistency_check"]
+    # "stabilize" is the former Mask Temporal Stabilizer + Integrity node (L7.65 P07; engine
+    # nodes/mask_matting/temporal_node.py), appended so saved mode values keep their meaning
+    MODES = ["motion", "propagate", "anchor", "consistency_check", "stabilize"]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -185,17 +187,36 @@ class MaskTrackerMEC:
                     "default": "", "multiline": True,
                     "tooltip": "[propagate sam2_video mode] point prompts",
                 }),
+                # [stabilize] - appended after the existing inputs so saved Mask Tracker values keep their positions
+                "stabilize_temporal_mode": (["none", "gaussian", "raft_flow"], {
+                    "default": "none",
+                    "tooltip": "[stabilize] none = integrity report only; gaussian = smooth across frames; "
+                               "raft_flow = blend each frame with the flow-warped previous one."}),
+                "stabilize_blend": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "[stabilize] mix factor: 1.0 = pure warped-previous, 0.0 = current only."}),
+                "stabilize_sigma": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 8.0, "step": 0.1,
+                    "tooltip": "[stabilize] gaussian sigma (gaussian only)."}),
+                "stabilize_device": (["cuda", "cpu"], {"default": "cuda", "tooltip": "[stabilize] where to run."}),
+                "stabilize_drop_threshold": ("FLOAT", {
+                    "default": 0.40, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "[stabilize] area ratio / IoU below this flags the frame."}),
+                "stabilize_jump_threshold": ("FLOAT", {
+                    "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "[stabilize] centroid jump (normalized) above this flags the frame."}),
             },
         }
 
-    RETURN_TYPES = ("MASK", "IMAGE", "FLOAT", "STRING", "STRING")
-    RETURN_NAMES = ("masks", "preview", "score", "info_json", "metric")
+    RETURN_TYPES = ("MASK", "IMAGE", "FLOAT", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("masks", "preview", "score", "info_json", "metric", "warning")
     OUTPUT_TOOLTIPS = (
         "Per-frame mask batch (B,H,W).",
         "Preview overlay (propagate) or video passthrough.",
         "Mode-specific scalar: motion intensity / mean confidence / flicker score.",
         "Mode-specific JSON diagnostic payload.",
         "Mode/metric label string.",
+        "[stabilize] frames whose mask dropped or jumped, in words; empty when none (and in the other modes).",
     )
     FUNCTION = "execute"
     CATEGORY = "C2C/Video"
@@ -244,8 +265,10 @@ class MaskTrackerMEC:
                 anchor_frames, total_frames, easing, sdf_iterations,
                 flow_refinement,
                 metric, binarize_threshold,
-                mask=None, video=None, sam_model=None, points_json=""):
+                mask=None, video=None, sam_model=None, points_json="", **stabilize):
 
+        if mode == "stabilize":
+            return self._mode_stabilize(video, mask, stabilize)
         if video is not None and (
             not isinstance(video, torch.Tensor) or video.ndim != 4
         ):
@@ -256,7 +279,7 @@ class MaskTrackerMEC:
             raise ValueError("MaskTrackerMEC expects MASK tensor [H,W] or [B,H,W]")
 
         with torch.no_grad():
-            return self._execute_impl(
+            return (*self._execute_impl(
                 mode, camera_compensation, stabilization_method, detection_mode,
                 pixel_diff_enabled, pixel_diff_threshold, flow_enabled,
                 flow_threshold, flow_algorithm, bg_sub_enabled, bg_model_frames,
@@ -266,7 +289,20 @@ class MaskTrackerMEC:
                 fade_end, bidirectional, anchor_frames, total_frames, easing,
                 sdf_iterations, flow_refinement, metric, binarize_threshold,
                 mask, video, sam_model, points_json,
-            )
+            ), "")
+
+    @staticmethod
+    def _mode_stabilize(video, mask, a):
+        """The former Mask Temporal Stabilizer + Integrity, by its own code: (masks, preview = the video, 0.0,
+        integrity JSON, label, warning)."""
+        if video is None or mask is None:
+            raise ValueError("Mask Track (stabilize): connect the video (IMAGE) and the mask.")
+        from .mask_matting.temporal_node import MaskTemporalMEC
+        out, integrity, warning = MaskTemporalMEC().run(
+            video, mask, a.get("stabilize_temporal_mode", "none"), a.get("stabilize_blend", 0.5),
+            a.get("stabilize_sigma", 1.0), a.get("stabilize_device", "cuda"), a.get("stabilize_drop_threshold", 0.40),
+            a.get("stabilize_jump_threshold", 0.15))
+        return (out, video, 0.0, integrity, f"stabilize:{a.get('stabilize_temporal_mode', 'none')}", warning)
 
     def _execute_impl(self, mode,
                 camera_compensation, stabilization_method, detection_mode,

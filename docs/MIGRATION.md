@@ -1,6 +1,6 @@
 # Node migration guide (legacy → unified)
 
-47 node ids have a unified successor. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one. Core only rewrites an id that is no longer registered, so rows for deprecated nodes that still load change nothing until those nodes are removed.
+48 node ids have a unified successor. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one. Core only rewrites an id that is no longer registered, so rows for deprecated nodes that still load change nothing until those nodes are removed.
 
 When a workflow loads, the pack migrates every node whose id is gone automatically (setting: C2C › Workflows › Migrate old C2C nodes on load; off = ComfyUI offers the replacement instead). Links and values move to the successor; one notice lists what was updated, what changes on the successor, and anything that could not be carried over - nothing is dropped silently. A successor from another pack (core, NukeMax) has to be installed; otherwise the node is left as it was and the notice says so.
 
@@ -55,6 +55,7 @@ When a workflow loads, the pack migrates every node whose id is gone automatical
 | EdgeSpreadMEC | MaskToolsMEC | mode='edge spread' | spread→edge_spread, invert_mask→edge_spread_invert_mask | — | — | 0→1, 1→2 | L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'edge spread' - the same code, the same result. |
 | MaskBatchCombineMEC | MaskToolsMEC | mode='combine' | mask_a→mask, op→combine_op | — | — | 0→0 | L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'combine' - the same code, the same result. |
 | ShuffleMEC | MaskToolsMEC | mode='shuffle' | out_R→shuffle_out_R, out_G→shuffle_out_G, out_B→shuffle_out_B, out_A→shuffle_out_A, premultiply_output→shuffle_premultiply_output | — | — | 0→1, 1→0 | L7.65 P03 (owner-approved merge, ORDERS 11.4): Mask Tools (C2C) in mode 'shuffle' - the same code, the same result. |
+| MaskTemporalMEC | MaskTrackerMEC | mode='stabilize' | image→video, temporal_mode→stabilize_temporal_mode, blend→stabilize_blend, sigma→stabilize_sigma, device→stabilize_device, drop_threshold→stabilize_drop_threshold, jump_threshold→stabilize_jump_threshold | — | — | 0→0, 1→3, 2→5 | L7.65 P07 (owner-approved merge): Mask Track in mode stabilize - the same Mask Temporal code; integrity_json -> info_json, warning -> warning. |
 
 ## Removed nodes with no successor (2)
 
