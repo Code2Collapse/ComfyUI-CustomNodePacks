@@ -9,36 +9,36 @@ Ten nodes for video frame handling, mask propagation, temporal interpolation, mo
 
 ## Video Nodes
 
-### 1. Video Frame Extractor (MEC)
+### 1. Batch Range (C2C) — single-frame modes
 
-Extract a single frame from a video image batch. Single images pass through unchanged.
+Extract a single frame from a video image batch with **Batch Range (C2C)** (`ImageBatchSliceMEC`). Set `mode` to `first frame`, `last frame`, `middle frame`, or `frame at index` (use `frame_index` when needed). Single-frame batches still work; multi-frame batches set `is_video` true.
 
-**File:** [`nodes/video_frame_extractor.py`](../nodes/video_frame_extractor.py)  
-**Category:** `MaskEditControl/Video`
+**File:** [`nodes/helpers/helpers.py`](../nodes/helpers/helpers.py)  
+**Category:** `C2C/Helpers`
 
 #### Parameters
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
-| `images` | IMAGE | — | — | Image batch (B,H,W,C). Single images pass through. |
-| `frame_index` | INT | `0` | 0 – 999999 | Frame to extract (0-based). Clamped to batch length. |
-| `mode` | COMBO | `first` | `specific_frame`, `first`, `last`, `middle` | Frame selection mode |
+| `images` | IMAGE | — | — | Image batch (B,H,W,C). |
+| `mode` | COMBO | `range` | `first frame`, `last frame`, `middle frame`, `frame at index`, … | Single-frame modes listed above. |
+| `frame_index` | INT | `0` | 0 – 999999 | Used when `mode` is `frame at index` (0-based, clamped to last frame). |
 
 #### Mode Details
 
 | Mode | Behavior |
 |------|----------|
-| `first` | Always frame 0 |
-| `last` | Final frame |
-| `middle` | Middle frame (B//2) |
-| `specific_frame` | Uses `frame_index` value |
+| `first frame` | Always frame 0 |
+| `last frame` | Final frame |
+| `middle frame` | Middle frame (B//2) |
+| `frame at index` | Uses `frame_index` value |
 
 #### Outputs
 
 | Output | Type | Description |
 |--------|------|-------------|
-| `frame` | IMAGE | Extracted single frame |
-| `total_frames` | INT | Total frames in input batch |
+| `images` | IMAGE | Selected frame(s) as a batch (one frame for these modes) |
+| `total_frames` | INT | Total frames in input batch (`total_frames` output) |
 | `is_video` | BOOLEAN | True if input had B>1 |
 
 ---

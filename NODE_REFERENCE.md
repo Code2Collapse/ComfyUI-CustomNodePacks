@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **135** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **128** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -10,9 +10,9 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 17 |
+| MaskEditControl | 16 |
 | Image Mask Editor | 1 |
-| Model analysis | 2 |
+| Model analysis | 1 |
 | MEC Paint Suite | 2 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
@@ -22,7 +22,6 @@
 | Frequency / Grain | 3 |
 | Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
-| VAE Clean | 1 |
 | Magnific | 15 |
 | AV Handles | 1 |
 | Save Video | 1 |
@@ -35,7 +34,7 @@
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
-| C2C helpers | 12 |
+| C2C helpers | 9 |
 | Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
@@ -43,12 +42,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 8 |
+| Restored VFX | 7 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 135 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Image Mask Editor 1, Model analysis 2, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 12, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 128 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -64,21 +63,15 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Nano Banana · Gemini Image (C2C)](#nanobananac2c)
 - **C2C/Control** (1)
   - [Control AOV — Multi-Control Fusion (C2C)](#controlaovc2c)
-- **C2C/Diagnostics** (5)
-  - [Insight Status](#insightstatusmec)
-  - [Integrity Status](#integritystatusmec)
+- **C2C/Diagnostics** (2)
   - [Mask Failure Explainer — Diagnostics](#maskfailureexplainermec)
   - [Model Metadata Extractor](#modelmetadataextractormec)
-  - [VAE Latent Inspector](#vaelatentinspectormec)
-- **C2C/Helpers** (12)
-  - [Aspect Ratio Preset (C2C)](#aspectpresetmec)
+- **C2C/Helpers** (9)
+  - [Size (C2C)](#aspectpresetmec)
   - [Conditional Switch](#conditionalswitchmec)
-  - [Dimensions Snap (C2C)](#dimensionssnapmec)
   - [Execution Timer (C2C)](#executiontimermec)
-  - [Image Batch Slice (C2C)](#imagebatchslicemec)
-  - [Image Batch Split (C2C)](#imagebatchsplitmec)
-  - [Image Stats Probe (C2C)](#imagestatsprobemec)
-  - [Mask Area Probe (C2C)](#maskareaprobemec)
+  - [Batch Range (C2C)](#imagebatchslicemec)
+  - [Probe (C2C)](#imagestatsprobemec)
   - [Mask Batch Combine (C2C)](#maskbatchcombinemec)
   - [Number Lerp (C2C)](#numberlerpmec)
   - [Seed List Generator (C2C)](#seedlistmec)
@@ -95,15 +88,12 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Luminance Keyer — Highlights / Shadows / Custom](#luminancekeyermec)
 - **C2C/Matting** (1)
   - [Background Remover — RMBG / BiRefNet](#backgroundremovermec)
-- **C2C/ModelAnalysis** (2)
-  - [VAE Block Inspector](#vaeblockinspectormec)
-  - [VAE Similarity Analyser](#vaesimilarityanalysermec)
-- **C2C/Paint** (5)
+- **C2C/ModelAnalysis** (1)
+  - [VAE Inspect](#vaeblockinspectormec)
+- **C2C/Paint** (3)
   - [Advanced Paint Canvas](#mecadvancedpaintcanvas)
-  - [Builder Sampler](#mecbuildersampler)
   - [Context Inpainter / Fixer](#meccontextinpainter)
   - [Face Fixer](#mecfacefixer)
-  - [Tone Refiner](#mectonerefiner)
 - **C2C/Pipeline** (3)
   - [Mask Refiner](#maskrefinemec)
   - [SAM + ViTMatte Pipeline — Full Quality](#samvitmattepipelinemec)
@@ -136,27 +126,23 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Wan Director](#wandirectorc2c)
 - **Code2Collapse/Sampling** (1)
   - [AsymFlow Sampler Patch (Lakonik signal-shift)](#asymflowsamplerpatch)
-- **ComfyUI-CustomNodePacks/PromptRelay** (5)
+- **ComfyUI-CustomNodePacks/PromptRelay** (3)
   - [Prompt Relay Advanced Options](#promptrelayadvancedoptionsc2c)
   - [Prompt Relay Encode](#promptrelayencodec2c)
-  - [Prompt Relay Encode (Kijai) — deprecated](#promptrelayencodekijaic2c)
-  - [Prompt Relay Encode (Smart) — deprecated](#promptrelayencodesmartc2c)
   - [Prompt Relay Restore (Kijai)](#promptrelayrestorekijaic2c)
 - **MEC/Audio** (1)
   - [Audio Reverser](#audioreversermec)
-- **MEC/Color Science** (3)
-  - [C2C ACES Tonemap](#c2cacestonemap)
-  - [C2C Color Space Convert](#c2ccolorspaceconvert)
-  - [C2C VAE Quality Decode (HDR)](#c2cvaequalitydecode)
+- **MEC/Color Science** (1)
+  - [VAE Decode (C2C)](#c2cvaequalitydecode)
 - **MEC/Masking** (1)
   - [Mask Placement — Prompt/Ref → Place → Track](#maskplacementmec)
 - **MEC/Plate** (2)
   - [PAR Desqueeze (anamorphic → square px)](#pardesqueezemec)
   - [PAR Resqueeze (back to plate)](#parresqueezemec)
 - **MEC/RenderFarm** (3)
-  - [C2C Farm Cluster Status](#c2c-clusterstatus)
-  - [C2C Farm Job History (Audit Log)](#c2c-jobhistory)
-  - [C2C Farm Submit — Remote Render](#c2c-submit)
+  - [C2C Farm Cluster Status](#c2c_clusterstatus)
+  - [C2C Farm Job History (Audit Log)](#c2c_jobhistory)
+  - [C2C Farm Submit — Remote Render](#c2c_submit)
 - **MEC/Temporal** (2)
   - [Fluid Shot Decoder (Restore Timing)](#fluidshotdecodermec)
   - [Fluid Shot Encoder (Temporal Normalizer)](#fluidshotencodermec)
@@ -201,8 +187,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Vector Roto — Bezier (MEC)](#vectorrotomec)
 - **MaskEditControl/VFX** (1)
   - [Optical Flow Re-Vector (MEC)](#opticalflowmec)
-- **MaskEditControl/Video** (1)
-  - [Video Frame Extractor (MEC)](#videoframeextractormec)
 - **MaskEnhancedControl/Grounding** (2)
   - [LocateAnything Grounding (MEC)](#locateanythinggroundingmec)
   - [LocateAnything → SAM Prompt (MEC)](#locateanythingtosammec)
@@ -396,36 +380,6 @@ Inspect model file metadata WITHOUT unpickling or loading weights. Safe to run o
 | 4 | `lineage_json` | `STRING` | License + lineage information as JSON when present in metadata. |
 
 
-### VAELatentInspectorMEC
-
-**Shown in the menu as:** VAE Latent Inspector
-
-Inspect a LATENT tensor: per-channel min/max/mean/std, NaN & Inf counts, and a one-word verdict (healthy/low_contrast/saturated/corrupt). Latent is passed through unchanged.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `latent` | `LATENT` |  | ComfyUI LATENT dict (must contain 'samples'). |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `fail_on_corrupt` | `BOOLEAN` | default `False` | If True, raise ValueError when NaN/Inf detected. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `latent_passthrough` | `LATENT` | Pass-through of the original LATENT input (unchanged). |
-| 1 | `info_json` | `STRING` | JSON with shape, dtype, device, per-channel stats, range, and verdict. |
-| 2 | `verdict` | `STRING` | One-word verdict: healthy / low_contrast / saturated / corrupt. |
-| 3 | `nan_count` | `INT` | Total NaN element count in latent['samples']. |
-| 4 | `inf_count` | `INT` | Total Inf element count in latent['samples']. |
-
-
 ---
 
 ## C2C/Helpers
@@ -433,18 +387,26 @@ Inspect a LATENT tensor: per-channel min/max/mean/std, NaN & Inf counts, and a o
 
 ### AspectPresetMEC
 
-**Shown in the menu as:** Aspect Ratio Preset (C2C)
+**Shown in the menu as:** Size (C2C)
 
-Common aspect ratios scaled to a base resolution and snapped to a multiple. Wan 480p/720p presets emit native Wan target sizes directly.
+Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give Wan's native sizes), or your own width x height — snapped to a multiple of N, because Wan, Flux and SDXL need sizes divisible by 8 / 16 / 64.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `preset` | choice: `1:1 square`, `16:9 landscape`, `9:16 portrait`, `4:3 landscape`, `3:4 portrait`, `21:9 ultrawide`, `2.39:1 cinema`, `Wan 480p land`, … (+3) | default `"16:9 landscape"` | — |
-| `base` | `INT` | default `1024`, range 64…8192 | Long edge target (ignored for Wan presets). |
+| `preset` | choice: `1:1 square`, `16:9 landscape`, `9:16 portrait`, `4:3 landscape`, `3:4 portrait`, `21:9 ultrawide`, `2.39:1 cinema`, `Wan 480p land`, `Wan 480p port`, `Wan 720p land`, `Wan 720p port`, `Custom (width x height)` | default `"16:9 landscape"` | — |
+| `base` | `INT` | default `1024`, range 64…8192 | Long edge target (ignored for Wan presets and Custom). |
 | `multiple` | `INT` | default `64`, range 1…256 | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `width` | `INT` | default `1024`, range 8…16384 | Custom: width before snapping. |
+| `height` | `INT` | default `1024`, range 8…16384 | Custom: height before snapping. |
+| `direction` | choice: `down`, `nearest`, `up` | default `"down"` | Snap to the multiple below, the nearest one, or the one above. |
 
 **Outputs**
 
@@ -476,30 +438,6 @@ Return value_true when condition is True, else value_false. Both inputs are wild
 | 0 | `out` | `*` | — |
 
 
-### DimensionsSnapMEC
-
-**Shown in the menu as:** Dimensions Snap (C2C)
-
-Round (w,h) to the nearest multiple of N (default 64). Wan/Flux/SDXL all require dimensions divisible by 8/16/64 — this prevents shape-mismatch crashes at sample time.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `width` | `INT` | default `1024`, range 8…16384 | — |
-| `height` | `INT` | default `1024`, range 8…16384 | — |
-| `multiple` | `INT` | default `64`, range 1…256 | — |
-| `direction` | choice: `nearest`, `down`, `up` | default `"down"` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `width` | `INT` | — |
-| 1 | `height` | `INT` | — |
-
-
 ### ExecutionTimerMEC
 
 **Shown in the menu as:** Execution Timer (C2C)
@@ -526,33 +464,9 @@ Stopwatch: returns seconds since the *previous* execution of the same label. Fir
 
 ### ImageBatchSliceMEC
 
-**Shown in the menu as:** Image Batch Slice (C2C)
+**Shown in the menu as:** Batch Range (C2C)
 
-Extract a [start:end:step] range from an IMAGE batch. Negative end values count back from the end. step=2 keeps every second frame, etc.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `images` | `IMAGE` |  | — |
-| `start` | `INT` | default `0`, range -100000…100000 | — |
-| `end` | `INT` | default `-1`, range -100000…100000 | Exclusive. -1 = end of batch. |
-| `step` | `INT` | default `1`, range 1…1024 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `frame_count` | `INT` | — |
-
-
-### ImageBatchSplitMEC
-
-**Shown in the menu as:** Image Batch Split (C2C)
-
-Split an IMAGE batch into two pieces at a frame index OR by a fractional ratio (0.0–1.0).
+Pick frames from an IMAGE batch: a start:end:step range (negative values count from the end, step=2 keeps every second frame), a split at a frame index or a fraction, or a single frame (first, middle, last or by index).
 
 
 **Required inputs**
@@ -560,67 +474,66 @@ Split an IMAGE batch into two pieces at a frame index OR by a fractional ratio (
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `images` | `IMAGE` |  | — |
-| `mode` | choice: `index`, `ratio` | default `"index"` | — |
-| `index` | `INT` | default `1`, range 0…100000 | — |
-| `ratio` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
+| `start` | `INT` | default `0`, range -100000…100000 | Range mode: first frame. Negative counts from the end. |
+| `end` | `INT` | default `-1`, range -100000…100000 | Range mode: exclusive end. -1 = end of batch. |
+| `step` | `INT` | default `1`, range 1…1024 | Range mode: keep every Nth frame. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mode` | choice: `range`, `split at index`, `split at ratio`, `first frame`, `middle frame`, `last frame`, `frame at index` | default `"range"` | What to pick: a start:end:step range, a split (at a frame index or a fraction), or one frame (first, middle, last or by index). |
+| `split_index` | `INT` | default `1`, range 0…100000 | `split at index`: frames before this index go to `images`. |
+| `split_ratio` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | `split at ratio`: this fraction of the batch goes to `images`. |
+| `frame_index` | `INT` | default `0`, range 0…999999 | `frame at index`: 0-based, clamped to the last frame. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `first_part` | `IMAGE` | — |
-| 1 | `remainder` | `IMAGE` | — |
-| 2 | `first_count` | `INT` | — |
-| 3 | `remainder_count` | `INT` | — |
+| 0 | `images` | `IMAGE` | The selected frames (the first part when splitting). |
+| 1 | `frame_count` | `INT` | How many frames `images` holds. |
+| 2 | `remainder` | `IMAGE` | Split modes: the frames after the split point. Empty in the other modes. |
+| 3 | `remainder_count` | `INT` | How many frames `remainder` holds. |
+| 4 | `total_frames` | `INT` | How many frames came in. |
+| 5 | `is_video` | `BOOLEAN` | True when more than one frame came in. |
 
 
 ### ImageStatsProbeMEC
 
-**Shown in the menu as:** Image Stats Probe (C2C)
+**Shown in the menu as:** Probe (C2C)
 
-Passthrough: returns the input image unchanged plus a stats report. Useful for debugging black-frame / over-bright generations.
+Pass-through probe for debugging: wire an image, a mask and/or a latent and read their statistics — black or blown-out frames, how much of each frame a mask covers, NaN / Inf or saturated latents. Connect at least one of `images`, `mask`, or `latent`.
 
 
-**Required inputs**
+**Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `images` | `IMAGE` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `report` | `STRING` | — |
-| 2 | `mean` | `FLOAT` | — |
-| 3 | `std` | `FLOAT` | — |
-| 4 | `bright_pct` | `FLOAT` | — |
-
-
-### MaskAreaProbeMEC
-
-**Shown in the menu as:** Mask Area Probe (C2C)
-
-Passthrough: returns the mask unchanged plus a coverage report. Per-frame coverage = (mask > threshold).mean().
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
 | `mask` | `MASK` |  | — |
-| `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
+| `latent` | `LATENT` |  | ComfyUI LATENT dict (must contain `samples`). |
+| `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Mask: a pixel counts as covered above this value. |
+| `fail_on_corrupt` | `BOOLEAN` | default `False` | Latent: stop the run when it holds NaN or Inf. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-| 1 | `report` | `STRING` | — |
-| 2 | `coverage_mean_pct` | `FLOAT` | — |
-| 3 | `coverage_min_pct` | `FLOAT` | — |
-| 4 | `coverage_max_pct` | `FLOAT` | — |
+| 0 | `images` | `IMAGE` | The image, unchanged. |
+| 1 | `report` | `STRING` | One line per wired input (image stats, mask coverage, latent verdict). |
+| 2 | `mean` | `FLOAT` | Image mean (0 when no image is wired). |
+| 3 | `std` | `FLOAT` | Image standard deviation. |
+| 4 | `bright_pct` | `FLOAT` | Percent of image pixels brighter than 0.95. |
+| 5 | `mask` | `MASK` | The mask, unchanged. |
+| 6 | `coverage_mean_pct` | `FLOAT` | Mean per-frame mask coverage in percent (pixels above threshold). |
+| 7 | `coverage_min_pct` | `FLOAT` | Lowest per-frame coverage in percent. |
+| 8 | `coverage_max_pct` | `FLOAT` | Highest per-frame coverage in percent. |
+| 9 | `latent` | `LATENT` | The latent, unchanged. |
+| 10 | `info_json` | `STRING` | Latent shape, dtype, per-channel stats, NaN / Inf counts and verdict as JSON. |
+| 11 | `verdict` | `STRING` | Latent verdict: healthy / low_contrast / saturated / corrupt. |
+| 12 | `nan_count` | `INT` | NaN elements in the latent. |
+| 13 | `inf_count` | `INT` | Inf elements in the latent. |
 
 
 ### MaskBatchCombineMEC
@@ -1069,59 +982,35 @@ Ideal for portraits, product photos, and compositing workflows.
 
 ### VAEBlockInspectorMEC
 
-**Shown in the menu as:** VAE Block Inspector
+**Shown in the menu as:** VAE Inspect
 
-Per-block weight stats for a VAE (mean/std/abs_mean/count).
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `vae` | `VAE` |  | VAE whose per-block weight statistics will be inspected. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `anomaly_threshold` | `FLOAT` | default `5.0`, range 1.5…50.0, step 0.5 | Tensors whose abs_mean exceeds this multiple of the cohort median are flagged as magnitude outliers. Lower => more sensitive (more flags). |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `report_json` | `STRING` | Per-block weight statistics (mean/std/abs_mean/count) plus outlier details as JSON. |
-| 1 | `outlier_tensor_names` | `STRING` | Newline-separated list of tensor names flagged as outliers. |
-| 2 | `anomaly_score` | `FLOAT` | Aggregate anomaly score in [0, 1] (higher means more outliers detected). |
-
-
-### VAESimilarityAnalyserMEC
-
-**Shown in the menu as:** VAE Similarity Analyser
-
-Cosine similarity between two VAEs (per tensor + per block).
+Inspect a VAE's per-block weight statistics and outlier tensors, or compare two VAEs block by block (cosine similarity) — for checking merges and broken checkpoints.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `vae_a` | `VAE` |  | First VAE to compare. |
-| `vae_b` | `VAE` |  | Second VAE to compare. |
+| `vae` | `VAE` |  | VAE to inspect (compare mode: the first VAE). |
 
 **Optional inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `include_per_tensor` | `BOOLEAN` | default `False` | Include per-tensor cosine entries in the JSON report (verbose). |
+| `anomaly_threshold` | `FLOAT` | default `5.0`, range 1.5…50.0, step 0.5 | Inspect: tensors whose abs_mean exceeds this multiple of the cohort median are flagged as magnitude outliers. Lower => more sensitive (more flags). |
+| `mode` | choice: `inspect`, `compare` | default `"inspect"` | inspect = weight statistics of one VAE; compare = cosine similarity to vae_b. |
+| `vae_b` | `VAE` |  | Compare: the second VAE. |
+| `include_per_tensor` | `BOOLEAN` | default `False` | Compare: include per-tensor cosine entries in the JSON report (verbose). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `report_json` | `STRING` | Full similarity report as JSON (per-block cosine, missing keys, optional per-tensor). |
-| 1 | `global_cosine` | `FLOAT` | Global cosine similarity across all common tensors. |
-| 2 | `most_divergent_blocks` | `STRING` | JSON list of the 10 most divergent blocks (lowest cosine first). |
+| 0 | `report_json` | `STRING` | Inspect: per-block weight statistics plus outlier details. Compare: per-block cosine, missing keys and optional per-tensor entries. JSON. |
+| 1 | `outlier_tensor_names` | `STRING` | Inspect: JSON list of tensor names flagged as outliers. |
+| 2 | `anomaly_score` | `FLOAT` | Inspect: aggregate anomaly score in [0, 1] (higher means more outliers detected). |
+| 3 | `global_cosine` | `FLOAT` | Compare: global cosine similarity across all common tensors. |
+| 4 | `most_divergent_blocks` | `STRING` | Compare: JSON list of the 10 most divergent blocks (lowest cosine first). |
 
 
 ---
@@ -2329,29 +2218,47 @@ Reverses the audio waveform (torch.flip on the sample dim), preserving sample ra
 
 ### C2CVAEQualityDecode
 
-**Shown in the menu as:** C2C VAE Quality Decode (HDR)
+**Shown in the menu as:** VAE Decode (C2C)
 
-High-fidelity VAE decode for Wan video. Forces fp32 precision, uses spatial-only tiling to prevent frame flickering, and optionally applies ACES tone mapping for HDR-quality output.
+VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for Wan video, optional unclamped output for HDR chains, optional ACES tone mapping, and an optional clean step that measures and corrects colour cast, oversaturation and decode speckle (also for an already-decoded image).
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `samples` | `LATENT` |  | — |
-| `vae` | `VAE` |  | — |
-| `force_fp32` | `BOOLEAN` | default `True` | Force fp32 during VAE decode for maximum quality. |
-| `tile_size` | `INT` | default `0`, range 0…1024, step 64 | Spatial tile size in pixels, used when tile_mode is manual (0 = no tiling). 512 measured best for Wan on 8 GB. |
-| `apply_aces` | `BOOLEAN` | default `False` | Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: linearised, tone-mapped, encoded once - same as C2C ACES Tonemap from sRGB). |
+| `force_fp32` | `BOOLEAN` | default `True` | Decode in fp32. Measured gain: at most 0.17 dB on Flux/Wan 2.1 round-trip (~2x VAE memory). |
+| `tile_size` | `INT` | default `0`, range 0…1024, step 64 | Spatial tile size in PIXELS, used when tile_mode is manual (0 = no tiling). Converted with the VAE spatial factor (usually 8). 512 measured best for Wan on 8 GB. |
+| `apply_aces` | `BOOLEAN` | default `False` | Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: linearised, tone-mapped with the ACES fit, encoded once). |
 | `exposure` | `FLOAT` | default `1.0`, range 0.01…10.0, step 0.05 | Exposure for ACES (only used if apply_aces=True). |
-| `clamp_output` | `BOOLEAN` | optional, default `True` | Core clamps decoder output to 0..1. Off keeps out-of-range values (for HDR/EXR chains). |
-| `tile_mode` | `auto` / `off` / `manual` | optional, default `auto` | auto: tile only when the untiled decode would not fit the GPU (2K Wan on 8 GB: 502 s untiled, 37 s tiled, same picture). off: never tile. manual: tile at tile_size. Video tiles in space only. Saves from before this option open as manual if they set a tile size, else auto. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `clamp_output` | `BOOLEAN` | default `True` | Core clamps decoder output to 0..1. Off keeps out-of-range values (4.6x / 5.3x more accurate there on Flux/Wan, measured M2). For HDR/EXR chains. |
+| `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, with the same picture). off: never tile. manual: tile at tile_size. Video is tiled in space only — splitting a video VAE in time costs ~21 dB. |
+| `samples` | `LATENT` |  | The latent to decode (with vae). Leave empty to clean `image`. |
+| `vae` | `VAE` |  | — |
+| `image` | `IMAGE` |  | An already-decoded picture to clean instead of decoding a latent. |
+| `clean` | `BOOLEAN` | default `False` | Measure the decode and correct what is wrong with it: colour cast, oversaturation, crushed shadows, chroma speckle. The report says what it found, including clipping it cannot undo. |
+| `balance_mode` | choice: `off`, `grey world`, `match reference`, `white point` | default `"off"` | Clean (when clean is on): off = measure only; grey world / white point / match reference — see node tooltip for when each is safe. |
+| `balance_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.05 | Clean (when clean is on): how far toward neutral (1.0 = full correction). |
+| `saturation` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.01 | Clean (when clean is on): chroma scale about luma (1.0 leaves it alone). |
+| `contrast_restore` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.05 | Clean (when clean is on): lift crushed shadows / reduce excess contrast. |
+| `chroma_cleanup` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.05 | Clean (when clean is on): smooth colour noise (VAE decode speckle) without blurring luma detail. |
+| `reference` | `IMAGE` |  | Clean (when clean is on): required by `match reference`; plate for round-trip meter and `restore_unchanged`. |
+| `restore_unchanged` | `FLOAT` | default `0.0`, range 0.0…0.5, step 0.005 | Clean (when clean is on): experimental write-back of unchanged pixels from `reference` (0 = off). |
+| `restore_radius` | `INT` | default `8`, range 1…64 | Clean (when clean is on): window in pixels for write-back (experimental). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `out0` | `IMAGE` | — |
+| 0 | `IMAGE` | `IMAGE` | The decoded (and, with clean on, corrected) picture. |
+| 1 | `report` | `STRING` | Clean: what was measured and corrected (empty when clean is off). |
+| 2 | `cast_strength` | `FLOAT` | Clean: how strong the colour cast was. |
+| 3 | `saturation` | `FLOAT` | Clean: measured saturation. |
 
 
 ---
@@ -3529,35 +3436,6 @@ Dense optical flow re-vector. RAFT primary, LK pyramid fallback. Re-vectoring is
 | 0 | `re_vectored` | `IMAGE` | — |
 | 1 | `flow_rgb` | `IMAGE` | — |
 | 2 | `consistency` | `MASK` | — |
-
-
----
-
-## MaskEditControl/Video
-
-
-### VideoFrameExtractorMEC
-
-**Shown in the menu as:** Video Frame Extractor (MEC)
-
-Extract a single frame from a video batch. Single images pass through unchanged. Reports total frame count and whether input is a video batch.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `images` | `IMAGE` |  | Image batch (B,H,W,C). Single images pass through; video batches select one frame. |
-| `frame_index` | `INT` | default `0`, range 0…999999, step 1 | Which frame to extract (0-based). Clamped to batch length. |
-| `mode` | choice: `specific_frame`, `first`, `last`, `middle` | default `"first"` | Frame selection mode: first: always frame 0 last: final frame middle: middle frame (B//2) specific_frame: use frame_index value |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `frame` | `IMAGE` | — |
-| 1 | `total_frames` | `INT` | — |
-| 2 | `is_video` | `BOOLEAN` | — |
 
 
 ---

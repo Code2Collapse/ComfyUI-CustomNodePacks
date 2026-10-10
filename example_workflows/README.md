@@ -16,7 +16,7 @@ either one you have installed, or one of its `[download]` entries.
 | `draw_shape_multi.json` | Two parametric shapes (rectangle, ellipse) combined into one mask | Mask Edit (draw_shape), Mask Composite Advanced, Mask Preview Overlay |
 | `spline_mask_editor.json` | Draw a spline mask, invert it, and send its control points to SAM as prompts | Spline Mask (edit), Mask Math, SAM Model Loader, SAM Mask Generator, Mask Preview Overlay |
 | `bbox_pipeline.json` | Bounding box from a mask, padded, cropped out, and drawn back as a mask | BBox From Mask, BBox Pad, BBox Crop, BBox To Mask, Mask Preview Overlay |
-| `video_mask_propagation.json` | Mark the subject on the first frame and propagate the mask through the clip | Load Video (C2C), Video Frame Extractor, Mask Edit (points_bbox), Mask Tracker (propagate) |
+| `video_mask_propagation.json` | Mark the subject on the first frame and propagate the mask through the clip | Load Video (C2C), Batch Range (C2C), Mask Edit (points_bbox), Mask Tracker (propagate) |
 | `video_motion_detection.json` | Motion masks from a clip, overlaid on the video, plus a bounding box of the motion | Load Video (C2C), Mask Tracker (motion), Mask Preview Overlay, BBox From Mask |
 | `master_workflow.json` | Points into a SAM mask, ProPainter temporal inpaint, stabilise, save | SAM Model Loader, Mask Edit (points_bbox), SAM Mask Generator, ProPainter (temporal), Video Stabilizer (auto) |
 

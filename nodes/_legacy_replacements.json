@@ -1993,5 +1993,354 @@
   ],
   "dropped": [],
   "note": "L7.65 P31 (owner-approved removal): both call nodes.prompt_relay._nodes._encode_smart with the same arguments."
+ },
+ {
+  "old_node_id": "DimensionsSnapMEC",
+  "new_node_id": "AspectPresetMEC",
+  "old_widget_ids": [
+   "width",
+   "height",
+   "multiple",
+   "direction"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "multiple",
+    "old_id": "multiple"
+   },
+   {
+    "new_id": "direction",
+    "old_id": "direction"
+   },
+   {
+    "new_id": "preset",
+    "set_value": "Custom (width x height)"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P22 (owner-approved merge): Size (C2C), preset Custom - the same snap function, same sizes."
+ },
+ {
+  "old_node_id": "ImageBatchSplitMEC",
+  "new_node_id": "ImageBatchSliceMEC",
+  "old_widget_ids": [
+   "mode",
+   "index",
+   "ratio"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "images",
+    "old_id": "images"
+   },
+   {
+    "new_id": "mode",
+    "old_id": "mode"
+   },
+   {
+    "new_id": "split_index",
+    "old_id": "index"
+   },
+   {
+    "new_id": "split_ratio",
+    "old_id": "ratio"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "c2c_values": [
+   {
+    "new_id": "mode",
+    "old_id": "mode",
+    "map": {
+     "index": "split at index",
+     "ratio": "split at ratio"
+    }
+   }
+  ],
+  "note": "L7.65 P23 (owner-approved merge): Batch Range (C2C) in a split mode - the same cut."
+ },
+ {
+  "old_node_id": "VideoFrameExtractorMEC",
+  "new_node_id": "ImageBatchSliceMEC",
+  "old_widget_ids": [
+   "frame_index",
+   "mode"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "images",
+    "old_id": "images"
+   },
+   {
+    "new_id": "frame_index",
+    "old_id": "frame_index"
+   },
+   {
+    "new_id": "mode",
+    "old_id": "mode"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 4
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 5
+   }
+  ],
+  "dropped": [],
+  "c2c_values": [
+   {
+    "new_id": "mode",
+    "old_id": "mode",
+    "map": {
+     "specific_frame": "frame at index",
+     "first": "first frame",
+     "last": "last frame",
+     "middle": "middle frame"
+    }
+   }
+  ],
+  "note": "L7.65 P23 (owner-approved merge): Batch Range (C2C) in a single-frame mode - the same frame."
+ },
+ {
+  "old_node_id": "MaskAreaProbeMEC",
+  "new_node_id": "ImageStatsProbeMEC",
+  "old_widget_ids": [
+   "threshold"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "threshold",
+    "old_id": "threshold"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 6
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 7
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 8
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P24 (owner-approved merge, all outputs kept - owner 2026-10-10): Probe (C2C) with the mask wired."
+ },
+ {
+  "old_node_id": "VAELatentInspectorMEC",
+  "new_node_id": "ImageStatsProbeMEC",
+  "old_widget_ids": [
+   "fail_on_corrupt"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "latent",
+    "old_id": "latent"
+   },
+   {
+    "new_id": "fail_on_corrupt",
+    "old_id": "fail_on_corrupt"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 9
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 11
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 12
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 13
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P24 (owner-approved merge, all outputs kept): Probe (C2C) with the latent wired."
+ },
+ {
+  "old_node_id": "VAESimilarityAnalyserMEC",
+  "new_node_id": "VAEBlockInspectorMEC",
+  "old_widget_ids": [
+   "include_per_tensor"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "vae",
+    "old_id": "vae_a"
+   },
+   {
+    "new_id": "vae_b",
+    "old_id": "vae_b"
+   },
+   {
+    "new_id": "include_per_tensor",
+    "old_id": "include_per_tensor"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "compare"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P27 (owner-approved merge): VAE Inspect in compare mode - the same comparison code."
+ },
+ {
+  "old_node_id": "VAECleanMEC",
+  "new_node_id": "C2CVAEQualityDecode",
+  "old_widget_ids": [
+   "balance_mode",
+   "balance_strength",
+   "saturation",
+   "contrast_restore",
+   "chroma_cleanup",
+   "restore_unchanged",
+   "restore_radius"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "reference",
+    "old_id": "reference"
+   },
+   {
+    "new_id": "balance_mode",
+    "old_id": "balance_mode"
+   },
+   {
+    "new_id": "balance_strength",
+    "old_id": "balance_strength"
+   },
+   {
+    "new_id": "saturation",
+    "old_id": "saturation"
+   },
+   {
+    "new_id": "contrast_restore",
+    "old_id": "contrast_restore"
+   },
+   {
+    "new_id": "chroma_cleanup",
+    "old_id": "chroma_cleanup"
+   },
+   {
+    "new_id": "restore_unchanged",
+    "old_id": "restore_unchanged"
+   },
+   {
+    "new_id": "restore_radius",
+    "old_id": "restore_radius"
+   },
+   {
+    "new_id": "clean",
+    "set_value": true
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P15 (owner-approved merge): VAE Decode (C2C) cleaning an already-decoded image - the same VAECleanMEC.clean code."
  }
 ]

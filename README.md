@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **135** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **128** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -54,9 +54,9 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 17 |
+| MaskEditControl | 16 |
 | Image Mask Editor | 1 |
-| Model analysis | 2 |
+| Model analysis | 1 |
 | MEC Paint Suite | 2 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
@@ -66,7 +66,6 @@
 | Frequency / Grain | 3 |
 | Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
-| VAE Clean | 1 |
 | Magnific | 15 |
 | AV Handles | 1 |
 | Save Video | 1 |
@@ -79,7 +78,7 @@
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
-| C2C helpers | 12 |
+| C2C helpers | 9 |
 | Prompt Relay | 3 |
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
@@ -87,12 +86,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 8 |
+| Restored VFX | 7 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 135 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 17, Image Mask Editor 1, Model analysis 2, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, VAE Clean 1, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 12, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 8, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 128 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 8, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -201,9 +200,9 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
 | [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, Background Remover, both pipelines |
 | [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Luminance Keyer |
-| [Video, Temporal & BBox](docs/video-temporal-bbox.md) | 10 | Frame Extractor, Mask Propagate (5 modes), Temporal Anchor (SDF), Motion Mask Tracker (4 methods), 6 BBox nodes |
+| [Video, Temporal & BBox](docs/video-temporal-bbox.md) | 10 | Batch Range (C2C) single-frame modes, Mask Propagate (5 modes), Temporal Anchor (SDF), Motion Mask Tracker (4 methods), 6 BBox nodes |
 | [Utility & Interactive](docs/utility-nodes.md) | 8 | Points Mask Editor, Image Comparer, Mask Failure Explainer, Parameter History, Universal Reroute, 3 Folder Incrementer nodes |
-| [VAE Tools](docs/vae-merge.md) | 4 | VAE Merge (8 algorithms), Latent Inspector, Similarity Analyser, Block Inspector |
+| [VAE Tools](docs/vae-merge.md) | 4 | VAE Merge (8 algorithms), VAE Inspect (inspect / compare), Probe (C2C) latent |
 | [Color Science](docs/color-science.md) | 3 | sRGB/linear/Rec.709/ACEScg convert, `.cube` LUT apply, exposure/WB/contrast grade |
 | [EXR I/O](docs/exr-io.md) | 2 | Load and save OpenEXR with imageio + TIFF fallback chain |
 | [Render Passes](docs/render-pass.md) | 2 | Merge beauty + AO/diffuse/spec/emission, depth→CoC mask |
@@ -770,16 +769,16 @@ Mask interpolation over time using Signed Distance Fields (SDF). Define masks on
 
 ---
 
-#### Video Frame Extractor (MEC)
+#### Batch Range (C2C) — single frame
 
-Extract a single frame from a video batch.
+Extract a single frame from a video batch with **Batch Range (C2C)** (`ImageBatchSliceMEC`, C2C/Helpers).
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `mode` | `first` | `first` / `last` / `middle` / `specific_frame` |
-| `frame_index` | `0` | Frame index for `specific_frame` mode (clamped to batch size) |
+| `mode` | `first frame` | `first frame` / `last frame` / `middle frame` / `frame at index` |
+| `frame_index` | `0` | Frame index for `frame at index` mode (clamped to batch size) |
 
-**Outputs:** `frame` (IMAGE), `total_frames` (INT), `is_video` (BOOLEAN)
+**Outputs:** `images` (IMAGE), `total_frames` (INT), `is_video` (BOOLEAN)
 
 ---
 
@@ -1075,7 +1074,7 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 25 | Mask Propagate Video | Video | 1–2 | Propagate mask across video frames |
 | 26 | Temporal Anchor System | Video | 2 | SDF-based mask interpolation between keyframes |
 | 27 | Motion Mask Tracker | Video | 1 | Per-frame motion detection (4 methods, camera stabilization) |
-| 28 | Video Frame Extractor | Video | 1 | Extract single frame from batch |
+| 28 | Batch Range (C2C) | Helpers | 1 | Extract single frame (`first frame` / `last` / `middle` / `frame at index`) |
 | 29 | BBox Create | BBox | 1 | Manual bbox entry |
 | 30 | BBox From Mask | BBox | 1 | Extract bbox from mask |
 | 31 | BBox To Mask | BBox | 1 | Convert bbox to mask |
@@ -1092,9 +1091,9 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 42 | Folder Version Set | Output | 1 | Reserve version slots |
 | 43–47 | Draw Circle / Rectangle / Ellipse / Polygon / Line | Editing | 1 | *(Deprecated)* Legacy per-shape wrappers — use Draw Shape instead |
 | 48 | VAE Merge | VAE | 1 | Merge 2/3 VAEs (8 algorithms, per-block alpha) |
-| 49 | VAE Latent Inspector | VAE | 1 | Per-channel stats, NaN/Inf checks, health verdict |
-| 50 | VAE Similarity Analyser | VAE | 1 | Cosine similarity (global + per-block) between two VAEs |
-| 51 | VAE Block Inspector | VAE | 1 | Per-block weight stats for a single VAE |
+| 49 | Probe (C2C) | Helpers | 1 | Latent stats, NaN/Inf checks, health verdict (wire `latent`) |
+| 50 | VAE Inspect | Model analysis | 1 | Compare two VAEs (`mode` compare, `vae` + `vae_b`) |
+| 51 | VAE Inspect | Model analysis | 1 | Per-block weight stats for a single VAE (`mode` inspect) |
 | 52 | Color Space Convert | Color | 1 | sRGB ↔ linear ↔ Rec.709 ↔ ACEScg |
 | 53 | LUT Apply (.cube) | Color | 1 | Adobe `.cube` 1D/3D LUT with strength blend |
 | 54 | Exposure Grade | Color | 1 | Stops + WB temp/tint + contrast pivot |
@@ -1167,8 +1166,8 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 ### Video Masking
 
 ```
-[Load Video]  →  [Video Frame Extractor]  →  [Points Mask Editor]
-                   mode: first                      ↓
+[Load Video]  →  [Batch Range (C2C)]  →  [Points Mask Editor]
+                   mode: first frame              ↓
                                             [SAM Mask Generator]
                                                     ↓
                                             [Mask Propagate Video]
@@ -1430,7 +1429,7 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 
 | Model family | Recommended bridges |
 |---|---|
-| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `SAMViTMattePipelineMEC` and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` / `VAELatentInspectorMEC` are useful when comparing Flux VAE variants. |
+| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `SAMViTMattePipelineMEC` and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
 | **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskTransformXY` and `MaskPropagateVideo` are useful when reusing a single Qwen-Image generated mask across a small sequence. `ImageComparerMEC` for A/B sweeps over guidance / sampler choices. |
 | **Wan 2.x (video)** | `MotionMaskTrackerMEC`, `MaskPropagateVideo`, `TemporalAnchorMEC`, `SeCMatAnyonePipelineMEC` and `TemporalConsistencyCheckerMEC` are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
 | **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |

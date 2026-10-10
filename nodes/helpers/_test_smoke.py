@@ -1,26 +1,27 @@
 """Smoke tests for C2C helpers nodes."""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# the pack root, so nodes.helpers keeps its package (helpers.py imports ``.._is_changed_util``)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import torch
-import helpers as H
+from nodes import helpers as H
 
-# 1. ImageBatchSlice
+# 1. Batch Range (range, split - was Image Batch Split - and single frames - was Video Frame Extractor)
 n = H.helpers.ImageBatchSliceMEC()
 clip = torch.arange(10 * 4 * 4 * 3, dtype=torch.float32).reshape(10, 4, 4, 3)
-out, count = n.slice(clip, 2, 8, 1)
+out, count, *_ = n.slice(clip, 2, 8, 1)
 assert out.shape[0] == 6 and count == 6
-out_neg, _ = n.slice(clip, 0, -1, 2)
+out_neg, *_ = n.slice(clip, 0, -1, 2)
 assert out_neg.shape[0] == 5  # 0,2,4,6,8
-print("OK ImageBatchSlice")
-
-# 2. ImageBatchSplit
-n2 = H.helpers.ImageBatchSplitMEC()
-a, r, ac, rc = n2.split(clip, "index", 3, 0.5)
+a, ac, r, rc, total, is_video = n.slice(clip, 0, -1, 1, "split at index", 3, 0.5)
+assert ac == 3 and rc == 7 and total == 10 and is_video
+a, ac, r, rc, *_ = n.slice(clip, 0, -1, 1, "split at ratio", 0, 0.3)
 assert ac == 3 and rc == 7
-a, r, ac, rc = n2.split(clip, "ratio", 0, 0.3)
-assert ac == 3 and rc == 7
-print("OK ImageBatchSplit")
+f, fc, *_ = n.slice(clip, 0, -1, 1, "middle frame")
+assert fc == 1 and torch.equal(f[0], clip[5])
+f, *_ = n.slice(clip, 0, -1, 1, "frame at index", 1, 0.5, 99)
+assert torch.equal(f[0], clip[9])  # clamped to the last frame
+print("OK Batch Range")
 
 # 3. MaskBatchCombine
 n3 = H.helpers.MaskBatchCombineMEC()
@@ -64,46 +65,39 @@ f3, _ = n7.lerp(0.0, 10.0, 1.5, "linear")
 assert f3 == 10.0  # clamped
 print("OK NumberLerp")
 
-# 8. DimensionsSnap
-n8 = H.helpers.DimensionsSnapMEC()
-w, h = n8.snap(1000, 600, 64, "down")
-assert w == 960 and h == 576, (w, h)
-w2, h2 = n8.snap(1000, 600, 64, "up")
-assert w2 == 1024 and h2 == 640
-w3, h3 = n8.snap(1000, 600, 64, "nearest")
-assert w3 == 1024 and h3 == 576
-print("OK DimensionsSnap")
-
-# 9. AspectPreset
+# 7. Size (custom size snapping - was Dimensions Snap - and presets)
 n9 = H.helpers.AspectPresetMEC()
+C = n9.CUSTOM
+w, h = n9.pick(C, 1024, 64, 1000, 600, "down")
+assert w == 960 and h == 576, (w, h)
+w2, h2 = n9.pick(C, 1024, 64, 1000, 600, "up")
+assert w2 == 1024 and h2 == 640
+w3, h3 = n9.pick(C, 1024, 64, 1000, 600, "nearest")
+assert w3 == 1024 and h3 == 576
 w, h = n9.pick("16:9 landscape", 1024, 64)
 assert w == 1024 and h == 576, (w, h)
 w, h = n9.pick("Wan 480p land", 0, 64)
 assert w == 832 and h == 448, (w, h)  # 480 -> 448 after snap-down
 w, h = n9.pick("1:1 square", 1024, 64)
 assert w == 1024 and h == 1024
-print("OK AspectPreset")
+print("OK Size")
 
-# 10. ImageStatsProbe
+# 8. Probe (image stats, mask coverage - was Mask Area Probe - and latent - was VAE Latent Inspector)
 n10 = H.helpers.ImageStatsProbeMEC()
 img = torch.full((1, 8, 8, 3), 0.5)
 img[0, 0, 0, 0] = 1.0
-out, report, mean, std, bright = n10.probe(img)
+out, report, mean, std, bright = n10.probe(images=img)[:5]
 assert out is img
 assert abs(mean - 0.5) < 0.01
 assert "mean=" in report
-print("OK ImageStatsProbe")
-
-# 11. MaskAreaProbe
-n11 = H.helpers.MaskAreaProbeMEC()
 m = torch.zeros(2, 4, 4)
 m[0, :2, :] = 1.0  # 8/16 = 50%
 m[1, :, :] = 1.0   # 100%
-mm, rep, cmean, cmin, cmax = n11.probe(m, 0.5)
-assert cmean == 75.0 and cmin == 50.0 and cmax == 100.0
-print("OK MaskAreaProbe")
+mm, cmean, cmin, cmax = n10.probe(mask=m, threshold=0.5)[5:9]
+assert mm is m and cmean == 75.0 and cmin == 50.0 and cmax == 100.0
+print("OK Probe")
 
-# 12. ExecutionTimer
+# 9. ExecutionTimer
 n12 = H.helpers.ExecutionTimerMEC()
 import time
 out1 = n12.tick("payload", "test", False)
@@ -115,5 +109,5 @@ out3 = n12.tick("payload", "test", True)
 assert out3[2] == 0.0  # reset
 print("OK ExecutionTimer")
 
-print("\nALL 12 HELPER NODES PASSED")
+print("\nALL 9 HELPER NODES PASSED")
 print("Registered classes:", list(H.NODE_CLASS_MAPPINGS.keys()))

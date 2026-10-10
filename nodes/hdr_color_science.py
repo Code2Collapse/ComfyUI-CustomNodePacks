@@ -17,7 +17,9 @@ log = logging.getLogger("MEC.HDRColor")
 
 
 class C2CVAEQualityDecode:
-    """VAE decode with optional fp32, spatial-only tiling, and unclamped output.
+    """VAE Decode (C2C): decode with optional fp32, spatial-only tiling and unclamped output, then optionally clean
+    the colour (cast, saturation, crushed shadows, chroma speckle - the former VAE Clean node, merged in L7.65 P15;
+    its saved workflows migrate here with an image wired instead of a latent).
 
     Measured (L7.41 M1): fp32 adds at most 0.17 dB to round-trip on Flux/Wan 2.1
     at roughly 2x VAE memory. Spatial tiling preserves temporal coherence.
@@ -25,10 +27,17 @@ class C2CVAEQualityDecode:
 
     @classmethod
     def INPUT_TYPES(cls):
+        from .vae_clean import VAECleanMEC
+        clean = VAECleanMEC.INPUT_TYPES()
+        clean_req, clean_opt = clean["required"], clean["optional"]
+
+        def _clean_tip(name, spec):
+            t, o = spec[0], dict(spec[1]) if len(spec) > 1 else {}
+            o["tooltip"] = "Clean (when clean is on): " + o.get("tooltip", "")
+            return (t, o)
+
         return {
             "required": {
-                "samples": ("LATENT",),
-                "vae": ("VAE",),
                 "force_fp32": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Decode in fp32. Measured gain: at most 0.17 dB on "
@@ -42,7 +51,7 @@ class C2CVAEQualityDecode:
                 "apply_aces": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Apply ACES filmic tone mapping after decode (the decode is treated as sRGB: "
-                               "linearised, tone-mapped, encoded once - same as C2C ACES Tonemap from sRGB).",
+                               "linearised, tone-mapped with the ACES fit, encoded once).",
                 }),
                 "exposure": ("FLOAT", {
                     "default": 1.0, "min": 0.01, "max": 10.0, "step": 0.05,
@@ -63,20 +72,41 @@ class C2CVAEQualityDecode:
                                "with the same picture). off: never tile. manual: tile at tile_size. Video is tiled "
                                "in space only - splitting a video VAE in time costs ~21 dB.",
                 }),
+                # sockets were required before L7.65; optional now so an already-decoded image can be cleaned
+                "samples": ("LATENT", {"tooltip": "The latent to decode (with vae). Leave empty to clean 'image'."}),
+                "vae": ("VAE",),
+                "image": ("IMAGE", {"tooltip": "An already-decoded picture to clean instead of decoding a latent."}),
+                # appended after tile_mode so saved VAE Quality Decode values keep their positions
+                "clean": ("BOOLEAN", {"default": False,
+                          "tooltip": "Measure the decode and correct what is wrong with it: colour cast, "
+                                     "oversaturation, crushed shadows, chroma speckle. The report says what it "
+                                     "found, including clipping it cannot undo."}),
+                **{k: _clean_tip(k, v) for k, v in clean_req.items() if k != "image"},
+                **{k: _clean_tip(k, v) for k, v in clean_opt.items()},
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("IMAGE", "report", "cast_strength", "saturation")
+    OUTPUT_TOOLTIPS = (
+        "The decoded (and, with clean on, corrected) picture.",
+        "Clean: what was measured and corrected (empty when clean is off).",
+        "Clean: how strong the colour cast was.",
+        "Clean: measured saturation.",
+    )
     FUNCTION = "decode"
     CATEGORY = "MEC/Color Science"
     DESCRIPTION = (
         "VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only "
-        "tiling for Wan video, optional unclamped output for HDR chains, and "
-        "optional ACES tone mapping."
+        "tiling for Wan video, optional unclamped output for HDR chains, "
+        "optional ACES tone mapping, and an optional clean step that measures "
+        "and corrects colour cast, oversaturation and decode speckle (also for "
+        "an already-decoded image)."
     )
 
     @classmethod
-    def IS_CHANGED(cls, samples, vae, force_fp32, tile_size, apply_aces, exposure, **kwargs):
+    def IS_CHANGED(cls, samples=None, vae=None, force_fp32=True, tile_size=0, apply_aces=False, exposure=1.0,
+                   **kwargs):
         return hash_args_and_kwargs(
             samples, vae, force_fp32, tile_size, apply_aces, exposure, **kwargs,
         )
@@ -153,8 +183,39 @@ class C2CVAEQualityDecode:
             log.debug("auto tile estimate failed: %s", exc)
             return 0
 
-    def decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure,
-               clamp_output=True, tile_mode="auto"):
+    def decode(self, samples=None, vae=None, force_fp32=True, tile_size=0, apply_aces=False, exposure=1.0,
+               clamp_output=True, tile_mode="auto", image=None, clean=False, reference=None, **clean_args):
+        if image is not None:
+            if samples is not None:
+                raise ValueError("VAE Decode (C2C): wire a latent (with its VAE) OR an image to clean - not both.")
+            result = image.float()
+            if apply_aces:
+                result = _linear_to_srgb(_aces_fit(_srgb_to_linear(result) * exposure))
+            if not clean:
+                return (result, "", 0.0, 0.0)
+            return self._clean(result, reference, clean_args)
+        if samples is None or vae is None:
+            raise ValueError("VAE Decode (C2C): connect a latent and its VAE, or an image to clean.")
+        if not clean:
+            return (*self._decode(samples, vae, force_fp32, tile_size, apply_aces, exposure, clamp_output,
+                                  tile_mode), "", 0.0, 0.0)
+        (decoded,) = self._decode(samples, vae, force_fp32, tile_size, False, exposure, clamp_output, tile_mode)
+        image_out, report, cast, sat = self._clean(decoded, reference, clean_args)
+        if apply_aces:                                   # clean measures the decode itself, then the curve
+            image_out = _linear_to_srgb(_aces_fit(_srgb_to_linear(image_out) * exposure))
+        return (image_out, report, cast, sat)
+
+    @staticmethod
+    def _clean(image, reference, clean_args):
+        from .vae_clean import VAECleanMEC
+        spec = VAECleanMEC.INPUT_TYPES()
+        args = {k: v[1].get("default") for k, v in {**spec["required"], **spec["optional"]}.items()
+                if k not in ("image", "reference") and len(v) > 1}
+        args.update({k: v for k, v in clean_args.items() if k in args})
+        return VAECleanMEC().clean(image=image, reference=reference, **args)
+
+    def _decode(self, samples, vae, force_fp32, tile_size, apply_aces, exposure, clamp_output=True,
+                tile_mode="auto"):
         from contextlib import nullcontext
 
         from ._vae_tiled import fp32_vae_copy, unclamped_output, vae_compute_dtype
@@ -222,7 +283,7 @@ class C2CVAEQualityDecode:
             if apply_aces:
                 # The decode is sRGB-ENCODED (display-referred), so linearise before the curve and encode once after
                 # it. Tone-mapping the encoded values as if linear, then encoding again, applied the gamma twice: a
-                # lifted, washed-out image (L7.42). Same result as C2C ACES Tonemap with source_space = sRGB.
+                # lifted, washed-out image (L7.42). (Same result the removed C2C ACES Tonemap gave from sRGB.)
                 result = _linear_to_srgb(_aces_fit(_srgb_to_linear(result) * exposure))
 
             return (result,)
@@ -253,5 +314,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "C2CVAEQualityDecode":   "C2C VAE Quality Decode (HDR)",
+    "C2CVAEQualityDecode":   "VAE Decode (C2C)",
 }

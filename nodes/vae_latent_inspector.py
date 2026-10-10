@@ -1,5 +1,5 @@
 """
-VAELatentInspectorMEC – Inspect a LATENT tensor for sanity and stats.
+Latent inspection for the Probe node (was the VAE Latent Inspector node, merged into Probe in L7.65 P24).
 
 Reports min/max/mean/std/abs-mean per channel, NaN/Inf counts, dynamic
 range, and an actionable verdict (``healthy`` / ``low_contrast`` /
@@ -16,8 +16,6 @@ import logging
 import math
 
 import torch
-
-from ._is_changed_util import hash_args_and_kwargs
 
 logger = logging.getLogger("MEC.VAELatentInspector")
 
@@ -58,91 +56,50 @@ def _verdict(min_v: float, max_v: float, std: float, nan_count: int, inf_count: 
     return "healthy"
 
 
-class VAELatentInspectorMEC:
-    """Inspect a LATENT for NaNs, Infs, range, and per-channel stats."""
+def inspect_latent(latent, fail_on_corrupt: bool = False) -> tuple[str, str, int, int]:
+    """(info_json, verdict, nan_count, inf_count) for a LATENT - what VAE Latent Inspector returned (that node was
+    merged into Probe, nodes/helpers, in L7.65 P24)."""
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise ValueError("LATENT input must be a dict with key 'samples'.")
+    t = latent["samples"]
+    if not torch.is_tensor(t):
+        raise ValueError("latent['samples'] must be a torch.Tensor.")
 
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "latent": ("LATENT", {"tooltip": "ComfyUI LATENT dict (must contain 'samples')."}),
-            },
-            "optional": {
-                "fail_on_corrupt": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "If True, raise ValueError when NaN/Inf detected.",
-                }),
-            },
-        }
+    nan_count = int(torch.isnan(t).sum().item())
+    inf_count = int(torch.isinf(t).sum().item())
+    finite = t[torch.isfinite(t)] if (nan_count + inf_count) > 0 else t
+    if finite.numel() == 0:
+        min_v = max_v = mean_v = std_v = float("nan")
+    else:
+        min_v = float(finite.min().item())
+        max_v = float(finite.max().item())
+        mean_v = float(finite.mean().item())
+        std_v = float(finite.std().item()) if finite.numel() > 1 else 0.0
 
-    RETURN_TYPES = ("LATENT", "STRING", "STRING", "INT", "INT")
-    RETURN_NAMES = ("latent_passthrough", "info_json", "verdict", "nan_count", "inf_count")
-    OUTPUT_TOOLTIPS = (
-        "Pass-through of the original LATENT input (unchanged).",
-        "JSON with shape, dtype, device, per-channel stats, range, and verdict.",
-        "One-word verdict: healthy / low_contrast / saturated / corrupt.",
-        "Total NaN element count in latent['samples'].",
-        "Total Inf element count in latent['samples'].",
-    )
-    FUNCTION = "inspect"
-    CATEGORY = "C2C/Diagnostics"
-    DESCRIPTION = (
-        "Inspect a LATENT tensor: per-channel min/max/mean/std, NaN & Inf counts, "
-        "and a one-word verdict (healthy/low_contrast/saturated/corrupt). "
-        "Latent is passed through unchanged."
-    )
+    info = {
+        "shape": list(t.shape),
+        "dtype": str(t.dtype),
+        "device": str(t.device),
+        "numel": int(t.numel()),
+        "nan_count": nan_count,
+        "inf_count": inf_count,
+        "min": min_v,
+        "max": max_v,
+        "mean": mean_v,
+        "std": std_v,
+        "dynamic_range": (max_v - min_v) if math.isfinite(max_v - min_v) else None,
+        "channels": _channel_stats(t),
+    }
+    verdict = _verdict(min_v, max_v, std_v, nan_count, inf_count)
+    info["verdict"] = verdict
 
-    @classmethod
-    def IS_CHANGED(cls, latent, fail_on_corrupt=False, **kwargs):
-        samples = latent.get("samples") if isinstance(latent, dict) else None
-        return hash_args_and_kwargs(samples, fail_on_corrupt, **kwargs)
-
-    def inspect(self, latent, fail_on_corrupt: bool = False):
-        if not isinstance(latent, dict) or "samples" not in latent:
-            raise ValueError("LATENT input must be a dict with key 'samples'.")
-        t = latent["samples"]
-        if not torch.is_tensor(t):
-            raise ValueError("latent['samples'] must be a torch.Tensor.")
-
-        nan_count = int(torch.isnan(t).sum().item())
-        inf_count = int(torch.isinf(t).sum().item())
-        finite = t[torch.isfinite(t)] if (nan_count + inf_count) > 0 else t
-        if finite.numel() == 0:
-            min_v = max_v = mean_v = std_v = float("nan")
-        else:
-            min_v = float(finite.min().item())
-            max_v = float(finite.max().item())
-            mean_v = float(finite.mean().item())
-            std_v = float(finite.std().item()) if finite.numel() > 1 else 0.0
-
-        info = {
-            "shape": list(t.shape),
-            "dtype": str(t.dtype),
-            "device": str(t.device),
-            "numel": int(t.numel()),
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "min": min_v,
-            "max": max_v,
-            "mean": mean_v,
-            "std": std_v,
-            "dynamic_range": (max_v - min_v) if math.isfinite(max_v - min_v) else None,
-            "channels": _channel_stats(t),
-        }
-        verdict = _verdict(min_v, max_v, std_v, nan_count, inf_count)
-        info["verdict"] = verdict
-
-        if fail_on_corrupt and verdict == "corrupt":
-            raise ValueError(
-                f"LATENT contains NaN={nan_count}, Inf={inf_count}; refusing to pass through."
-            )
-
-        logger.info(
-            "[MEC] LatentInspector: shape=%s verdict=%s NaN=%d Inf=%d range=[%.4g, %.4g]",
-            list(t.shape), verdict, nan_count, inf_count, min_v, max_v,
+    if fail_on_corrupt and verdict == "corrupt":
+        raise ValueError(
+            f"LATENT contains NaN={nan_count}, Inf={inf_count}; refusing to pass through."
         )
-        return (latent, json.dumps(info, indent=2), verdict, nan_count, inf_count)
 
-
-NODE_CLASS_MAPPINGS = {"VAELatentInspectorMEC": VAELatentInspectorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VAELatentInspectorMEC": "VAE Latent Inspector"}
+    logger.info(
+        "[MEC] LatentInspector: shape=%s verdict=%s NaN=%d Inf=%d range=[%.4g, %.4g]",
+        list(t.shape), verdict, nan_count, inf_count, min_v, max_v,
+    )
+    return json.dumps(info, indent=2), verdict, nan_count, inf_count

@@ -35,32 +35,24 @@ The merged VAE is returned as a fresh `deepcopy`; the inputs are never
 modified. The merge runs on CPU in float32 and is cast back to the
 source dtype before being installed into the wrapper.
 
-## VAELatentInspectorMEC
+## Probe (C2C) — latent
 
-Per-channel min / max / mean / std / abs_mean stats across the latent,
-plus NaN/Inf counts and an overall `verdict`:
+Wire a **LATENT** into **Probe (C2C)** (`ImageStatsProbeMEC` under C2C/Helpers).
+Read `info_json`, `verdict`, `nan_count`, and `inf_count` (outputs 10–13); the
+latent passes through on output `latent`. Use `fail_on_corrupt=True` to stop
+the run when NaN or Inf are present. **VAELatentInspectorMEC** was merged into
+this node; saved workflows migrate on load (see `docs/MIGRATION.md`).
 
-- `corrupt` — non-zero NaN or Inf count
-- `saturated` — channel abs_mean exceeds 30 (suggests clipping)
-- `low_contrast` — channel std below 0.05
-- `healthy` — none of the above
+## VAE Inspect — compare mode
 
-Use `fail_on_corrupt=True` to raise hard on corrupt latents (useful as a
-sentinel in long batched runs).
+Wire two VAEs into **VAE Inspect** (`VAEBlockInspectorMEC`): `vae` (first) and
+`vae_b` (second), set `mode` to **compare**, and optionally
+`include_per_tensor` for verbose JSON. Read `report_json`, `global_cosine`, and
+`most_divergent_blocks`. **VAESimilarityAnalyserMEC** was merged into this
+node; saved workflows migrate on load (see `docs/MIGRATION.md`).
 
-## VAESimilarityAnalyserMEC
-
-Computes cosine similarity between two VAEs:
-
-- Globally (over all common parameters)
-- Per block (using the same SD/SDXL layout as VAEMerge)
-- Optionally per tensor
-
-Reports tensors that exist only in one model — handy for debugging
-mismatched checkpoints.
-
-## VAEBlockInspectorMEC
+## VAE Inspect — inspect mode
 
 Per-block weight statistics (mean / std / abs_mean / count) for a single
-VAE. Useful to spot blocks dominated by NaN/zeros, or to compare
-fine-tunes against a reference.
+VAE on **VAE Inspect** with `mode` **inspect**. Useful to spot blocks dominated
+by NaN/zeros, or to compare fine-tunes against a reference.

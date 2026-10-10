@@ -1,6 +1,6 @@
 # Node migration guide (legacy → unified)
 
-23 node ids have a unified successor. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one. Core only rewrites an id that is no longer registered, so rows for deprecated nodes that still load change nothing until those nodes are removed.
+30 node ids have a unified successor. ComfyUI core's NodeReplaceManager (and this pack's server registration) maps saved workflows and API prompts from the old id to the new one. Core only rewrites an id that is no longer registered, so rows for deprecated nodes that still load change nothing until those nodes are removed.
 
 When a workflow loads, the pack migrates every node whose id is gone automatically (setting: C2C › Workflows › Migrate old C2C nodes on load; off = ComfyUI offers the replacement instead). Links and values move to the successor; one notice lists what was updated, what changes on the successor, and anything that could not be carried over - nothing is dropped silently. A successor from another pack (core, NukeMax) has to be installed; otherwise the node is left as it was and the notice says so.
 
@@ -31,6 +31,13 @@ When a workflow loads, the pack migrates every node whose id is gone automatical
 | C2CACESTonemap | NukeMax_HDRToneMap | preset='None (Custom)', operator='filmic_aces', white_point=1.0, highlight_compression=0.0, shadow_lift=0.0 | — | exposure→exposure (log2: multiplier to stops, clamped to -5..5); output_colorspace→gamma (sRGB (gamma)→2.2, Linear→1.0, ACES AP1→1.0) | source_space | 0→0 | L7.65 P14 (owner-approved removal): NukeMax HDR Tone Map. exposure multiplier -> stops (log2). Measured (docs/evidence/L7.65/wave1_equivalence.json): same Narkowicz curve (linear out: 0.0 difference), sRGB out max 0.034, contrast 1.2 / saturation 0.8 max 0.41. What changes: HDR Tone Map expects scene-linear input: if the image is sRGB or Log C3 (the old node converted it itself), put Color Space Convert (srgb or logc3 -> linear) in front. The ACES curve is the same; the sRGB output now uses gamma 2.2 (up to 3% brighter or darker), and contrast and saturation act on the tone-mapped image, so if you changed them from 1.0, set them again by eye. |
 | PromptRelayEncodeKijaiC2C | PromptRelayEncodeC2C | backend='kijai' | model→wan_model, t5→wan_t5 | — | — | 0→2, 1→3 | L7.65 P31 (owner-approved removal): both call nodes.prompt_relay._nodes._encode_kijai with the same arguments. |
 | PromptRelayEncodeSmartC2C | PromptRelayEncodeC2C | backend='smart' | — | — | — | 0→0, 1→1 | L7.65 P31 (owner-approved removal): both call nodes.prompt_relay._nodes._encode_smart with the same arguments. |
+| DimensionsSnapMEC | AspectPresetMEC | preset='Custom (width x height)' | — | — | — | 0→0, 1→1 | L7.65 P22 (owner-approved merge): Size (C2C), preset Custom - the same snap function, same sizes. |
+| ImageBatchSplitMEC | ImageBatchSliceMEC | — | index→split_index, ratio→split_ratio | mode→mode (index→split at index, ratio→split at ratio) | — | 0→0, 1→2, 2→1, 3→3 | L7.65 P23 (owner-approved merge): Batch Range (C2C) in a split mode - the same cut. |
+| VideoFrameExtractorMEC | ImageBatchSliceMEC | — | — | mode→mode (specific_frame→frame at index, first→first frame, last→last frame, middle→middle frame) | — | 0→0, 1→4, 2→5 | L7.65 P23 (owner-approved merge): Batch Range (C2C) in a single-frame mode - the same frame. |
+| MaskAreaProbeMEC | ImageStatsProbeMEC | — | — | — | — | 0→5, 1→1, 2→6, 3→7, 4→8 | L7.65 P24 (owner-approved merge, all outputs kept - owner 2026-10-10): Probe (C2C) with the mask wired. |
+| VAELatentInspectorMEC | ImageStatsProbeMEC | — | — | — | — | 0→9, 1→10, 2→11, 3→12, 4→13 | L7.65 P24 (owner-approved merge, all outputs kept): Probe (C2C) with the latent wired. |
+| VAESimilarityAnalyserMEC | VAEBlockInspectorMEC | mode='compare' | vae_a→vae | — | — | 0→0, 1→3, 2→4 | L7.65 P27 (owner-approved merge): VAE Inspect in compare mode - the same comparison code. |
+| VAECleanMEC | C2CVAEQualityDecode | clean=True | — | — | — | 0→0, 1→1, 2→2, 3→3 | L7.65 P15 (owner-approved merge): VAE Decode (C2C) cleaning an already-decoded image - the same VAECleanMEC.clean code. |
 
 ## Removed nodes with no successor (2)
 

@@ -13,7 +13,7 @@
       ],
       "size": [
         270,
-        679.65625
+        555
       ],
       "flags": {},
       "order": 0,
@@ -322,14 +322,14 @@
     },
     {
       "id": 2,
-      "type": "VideoFrameExtractorMEC",
+      "type": "ImageBatchSliceMEC",
       "pos": [
         430,
         110
       ],
       "size": [
         296.390625,
-        155
+        158
       ],
       "flags": {},
       "order": 1,
@@ -356,15 +356,49 @@
           "color_on": null,
           "dir": null,
           "label": null,
-          "localized_name": "frame_index",
+          "localized_name": "start",
           "locked": null,
-          "name": "frame_index",
+          "name": "start",
           "nameLocked": null,
           "removable": null,
           "shape": null,
           "type": "INT",
           "widget": {
-            "name": "frame_index"
+            "name": "start"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "end",
+          "locked": null,
+          "name": "end",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "end"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "step",
+          "locked": null,
+          "name": "step",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "widget": {
+            "name": "step"
           },
           "link": null
         },
@@ -378,10 +412,61 @@
           "name": "mode",
           "nameLocked": null,
           "removable": null,
-          "shape": null,
+          "shape": 7,
           "type": "COMBO",
           "widget": {
             "name": "mode"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "split_index",
+          "locked": null,
+          "name": "split_index",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "split_index"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "split_ratio",
+          "locked": null,
+          "name": "split_ratio",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "FLOAT",
+          "widget": {
+            "name": "split_ratio"
+          },
+          "link": null
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "frame_index",
+          "locked": null,
+          "name": "frame_index",
+          "nameLocked": null,
+          "removable": null,
+          "shape": 7,
+          "type": "INT",
+          "widget": {
+            "name": "frame_index"
           },
           "link": null
         }
@@ -392,9 +477,9 @@
           "color_on": null,
           "dir": null,
           "label": null,
-          "localized_name": "frame",
+          "localized_name": "images",
           "locked": null,
-          "name": "frame",
+          "name": "images",
           "nameLocked": null,
           "removable": null,
           "shape": null,
@@ -410,6 +495,54 @@
           "color_on": null,
           "dir": null,
           "label": null,
+          "localized_name": "frame_count",
+          "locked": null,
+          "name": "frame_count",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": []
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "remainder",
+          "locked": null,
+          "name": "remainder",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "IMAGE",
+          "pos": null,
+          "slot_index": null,
+          "links": []
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
+          "localized_name": "remainder_count",
+          "locked": null,
+          "name": "remainder_count",
+          "nameLocked": null,
+          "removable": null,
+          "shape": null,
+          "type": "INT",
+          "pos": null,
+          "slot_index": null,
+          "links": []
+        },
+        {
+          "color_off": null,
+          "color_on": null,
+          "dir": null,
+          "label": null,
           "localized_name": "total_frames",
           "locked": null,
           "name": "total_frames",
@@ -419,7 +552,7 @@
           "type": "INT",
           "pos": null,
           "slot_index": null,
-          "links": null
+          "links": []
         },
         {
           "color_off": null,
@@ -435,20 +568,30 @@
           "type": "BOOLEAN",
           "pos": null,
           "slot_index": null,
-          "links": null
+          "links": []
         }
       ],
       "title": "Extract First Frame",
       "properties": {
-        "Node name for S&R": "VideoFrameExtractorMEC"
+        "Node name for S&R": "ImageBatchSliceMEC"
       },
       "widgets_values": [
         0,
-        "first"
+        -1,
+        1,
+        "first frame",
+        1,
+        0.5,
+        0
       ],
       "widgets_values_named": {
-        "frame_index": 0,
-        "mode": "first"
+        "start": 0,
+        "end": -1,
+        "step": 1,
+        "mode": "first frame",
+        "split_index": 1,
+        "split_ratio": 0.5,
+        "frame_index": 0
       },
       "color": "#12132f",
       "bgcolor": "#0c0d23"
@@ -462,7 +605,7 @@
       ],
       "size": [
         600,
-        806
+        782
       ],
       "flags": {},
       "order": 2,
@@ -2345,7 +2488,7 @@
         110
       ],
       "size": [
-        225,
+        286.5611328125,
         34
       ],
       "flags": {},
@@ -2478,9 +2621,17 @@
   "config": {},
   "extra": {
     "c2c": {
-      "bookmarks": {}
+      "bookmarks": {},
+      "linkedValues": {}
     },
-    "reroutes": null
+    "reroutes": null,
+    "ds": {
+      "scale": 0.6371751899910397,
+      "offset": [
+        273.88541666666674,
+        169.21354166666663
+      ]
+    }
   },
   "version": 0.4
 }

@@ -2,6 +2,31 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 2)
+
+Evidence: `docs/evidence/L7.65` (`wave2_live.json`, `wave2_nodes.*.png`; `tests/test_consolidation_wave2.py` checks every
+merged node against its last shipped code, output by output).
+
+### Changed (saved workflows migrate automatically; results are identical)
+
+- **Size (C2C)** (was Aspect Ratio Preset) also takes a custom width x height and a snap direction - it replaces
+  **Dimensions Snap**.
+- **Batch Range (C2C)** (was Image Batch Slice) also splits a batch (at a frame or a fraction) and picks one frame
+  (first, middle, last or by index) - it replaces **Image Batch Split** and **Video Frame Extractor**. New outputs:
+  remainder, remainder_count, total_frames, is_video.
+- **Probe (C2C)** (was Image Stats Probe) reports on whatever is wired in - image, mask and/or latent - and keeps every
+  output of **Mask Area Probe** and **VAE Latent Inspector**, which it replaces.
+- **VAE Inspect** (was VAE Block Inspector) also compares two VAEs (mode compare) - it replaces **VAE Similarity
+  Analyser**.
+- **VAE Decode (C2C)** (was C2C VAE Quality Decode) gains the clean step (colour cast, saturation, crushed shadows,
+  chroma speckle) and accepts an already-decoded image - it replaces **VAE Clean**. Clean is off by default, so
+  existing decodes are unchanged.
+- These nodes show only the controls their current mode uses.
+
+### Fixed
+
+- **Seed List** in "hash" mode stopped the run with an error (a missing import); it works now.
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 1)
 
 Evidence: `docs/evidence/L7.65` in the work area (ComfyUI 0.36.0 / frontend 1.52.7 testbed, classic canvas and

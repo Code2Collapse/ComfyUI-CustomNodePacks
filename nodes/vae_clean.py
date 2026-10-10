@@ -781,7 +781,7 @@ class VAECleanMEC:
                 float(cast), float(before["saturation"]))
 
 
-NODE_CLASS_MAPPINGS = {"VAECleanMEC": VAECleanMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "VAECleanMEC": "VAE Clean \u2014 cast / saturation / decode artifacts",
-}
+# L7.65 P15: merged into VAE Decode (C2C) (hdr_color_science.C2CVAEQualityDecode, which runs this class's
+# clean()); saved workflows migrate there. Not registered on its own any more.
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

@@ -17,7 +17,23 @@ import pytest
 import torch
 
 from nodes.exr_io import LoadEXRMEC, SaveEXRMEC
-from nodes.model_analysis import VAEBlockInspectorMEC, VAESimilarityAnalyserMEC
+from nodes.model_analysis import VAEBlockInspectorMEC as _VAEInspect
+
+
+class VAESimilarityAnalyserMEC:
+    """VAE Inspect in compare mode (VAE Similarity Analyser was merged into it, L7.65 P27): the old node's
+    three outputs are VAE Inspect's outputs 0, 3 and 4."""
+
+    def analyse(self, vae_a, vae_b, include_per_tensor=False):
+        out = _VAEInspect().inspect(vae_a, mode="compare", vae_b=vae_b, include_per_tensor=include_per_tensor)
+        return out[0], out[3], out[4]
+
+
+class VAEBlockInspectorMEC:
+    """VAE Inspect in inspect mode: the original three outputs are its outputs 0-2."""
+
+    def inspect(self, vae, anomaly_threshold=5.0):
+        return _VAEInspect().inspect(vae, anomaly_threshold)[:3]
 
 
 # ──────────────────────────────────────────────────────────────────────

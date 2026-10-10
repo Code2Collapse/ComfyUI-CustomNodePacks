@@ -297,14 +297,14 @@ def decode_node():
 def test_decode_never_casts_latent(decode_node):
     vae = LegacyFakeVAE()
     lat = torch.randn(1, 4, 2, 8, 8, dtype=torch.float16)
-    (out,) = decode_node.decode({"samples": lat}, vae, False, 0, False, 1.0, True)
+    out, *_ = decode_node.decode({"samples": lat}, vae, False, 0, False, 1.0, True)
     assert lat.dtype == torch.float16
 
 
 def test_decode_reshapes_five_d_to_four_d(decode_node):
     vae = LegacyFakeVAE()
     lat = torch.randn(1, 4, 3, 4, 4)
-    (out,) = decode_node.decode({"samples": lat}, vae, False, 0, False, 1.0, True)
+    out, *_ = decode_node.decode({"samples": lat}, vae, False, 0, False, 1.0, True)
     assert out.ndim == 4
     assert out.shape[0] == 1 + 4 * (3 - 1)
 
@@ -312,7 +312,7 @@ def test_decode_reshapes_five_d_to_four_d(decode_node):
 def test_decode_trims_c2c_source_frames(decode_node):
     vae = LegacyFakeVAE()
     lat = torch.randn(1, 4, 5, 4, 4)
-    (out,) = decode_node.decode(
+    out, *_ = decode_node.decode(
         {"samples": lat, "c2c_source_frames": 3}, vae, False, 0, False, 1.0, True,
     )
     assert out.shape[0] == 3
@@ -334,7 +334,7 @@ def test_b1_legacy_fp32_decode_succeeds(decode_node):
     vae = LegacyFakeVAE(weight_dtype=torch.bfloat16)
     vae.vae_dtype = torch.bfloat16
     lat = torch.randn(1, 4, 2, 4, 4, dtype=torch.bfloat16)
-    (out,) = decode_node.decode({"samples": lat}, vae, True, 0, False, 1.0, True)
+    out, *_ = decode_node.decode({"samples": lat}, vae, True, 0, False, 1.0, True)
     assert out.ndim == 4
     assert vae.vae_dtype == torch.bfloat16
     assert vae.first_stage_model.weight.dtype == torch.bfloat16
@@ -343,7 +343,7 @@ def test_b1_legacy_fp32_decode_succeeds(decode_node):
 def test_dynamic_fp32_retry(decode_node):
     vae = DynamicFp32RejectVAE()
     lat = torch.randn(1, 4, 2, 4, 4, dtype=torch.bfloat16)
-    (out,) = decode_node.decode({"samples": lat}, vae, True, 0, False, 1.0, True)
+    out, *_ = decode_node.decode({"samples": lat}, vae, True, 0, False, 1.0, True)
     assert out.ndim == 4
     assert vae.vae_dtype == torch.bfloat16
 
@@ -365,7 +365,7 @@ def test_dynamic_fp32_retry_not_on_other_errors(decode_node):
 def _ramp_decode(node, monkeypatch, exposure=1.0):
     ramp = torch.linspace(0.0, 1.0, 256).view(1, 1, 256, 1).expand(1, 4, 256, 3).contiguous()
     monkeypatch.setattr(node, "_run_decode", lambda vae, latent, tile_size: ramp.clone())
-    (out,) = node.decode({"samples": torch.zeros(1, 4, 1, 1)}, LegacyFakeVAE(), False, 0, True, exposure, True)
+    out, *_ = node.decode({"samples": torch.zeros(1, 4, 1, 1)}, LegacyFakeVAE(), False, 0, True, exposure, True)
     return ramp, out
 
 

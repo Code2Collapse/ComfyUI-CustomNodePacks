@@ -69,7 +69,6 @@ from .nodes.video_mask_editor import (
     register_routes as _register_vme_routes,
 )
 from .nodes.vae_merge import VAEMergeMEC
-from .nodes.vae_latent_inspector import VAELatentInspectorMEC
 from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
@@ -395,26 +394,7 @@ except Exception as _mag_exc:  # pragma: no cover
         _lg.getLogger("MEC").warning(
             "[MEC] magnific import failed: %s", _mag_exc,
         )
-# VAE Clean (colour cast / oversaturation / decode artefacts after a decode)
-try:
-    from .nodes.vae_clean import (
-        NODE_CLASS_MAPPINGS as _VAECLEAN_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _VAECLEAN_DISPLAY,
-    )
-except Exception as _vc_exc:  # pragma: no cover
-    _VAECLEAN_MAPPINGS, _VAECLEAN_DISPLAY = {}, {}
-    try:
-        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_vc
-        _c2c_rec_fail_vc(
-            "vae_clean", _vc_exc,
-            hint="VAE Clean failed to import. Check nodes/vae_clean.py.",
-            group="nodes",
-        )
-    except Exception:
-        import logging as _lg
-        _lg.getLogger("MEC").warning(
-            "[MEC] vae_clean import failed: %s", _vc_exc,
-        )
+# VAE Clean was merged into VAE Decode (C2C), nodes/hdr_color_science.py (L7.65 P15).
 # Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
 try:
     from .nodes.smart_crop import (
@@ -670,7 +650,6 @@ _MEC_MAPPINGS = {
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
-    "VAELatentInspectorMEC": VAELatentInspectorMEC,
     "BatchVersionManagerMEC": BatchVersionManagerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
     "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
@@ -690,7 +669,6 @@ _MEC_DISPLAY = {
     "VideoFramePlayerMEC": "Video Frame Player",
     "VideoMaskEditorMEC": "Video Mask Editor",
     "VAEMergeMEC": "VAE Merge",
-    "VAELatentInspectorMEC": "VAE Latent Inspector",
     "BatchVersionManagerMEC": "Batch Version Manager",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor",
     "MaskFailureExplainerMEC": "Mask Failure Explainer \u2014 Diagnostics",
@@ -743,7 +721,8 @@ _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
 # os.listdir order (ComfyUI/nodes.py:2295 last-write-wins, :2356 unsorted).
 # exr_io STAYS here: its OpenImageIO backend is the only EXR path that works in
 # this environment, and its SaveEXRMEC is the 6-input superset.
-for _rmod in ("exr_io", "video_frame_extractor",
+# video_frame_extractor was merged into Batch Range (nodes/helpers, L7.65 P23).
+for _rmod in ("exr_io",
               "optical_flow", "roto", "shuffle", "pixel_aspect"):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
@@ -829,7 +808,6 @@ _C2C_FAMILIES = [
     ("Frequency / Grain", _FREQGRAIN_MAPPINGS, _FREQGRAIN_DISPLAY),
     ("Smart Crop/Stitch", _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY),
     ("Tiled refinement", _TILING_MAPPINGS, _TILING_DISPLAY),
-    ("VAE Clean", _VAECLEAN_MAPPINGS, _VAECLEAN_DISPLAY),
     ("Magnific", _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY),
     ("AV Handles", _AVH_MAPPINGS, _AVH_DISPLAY),
     ("Save Video", _SAVEVIDEO_MAPPINGS, _SAVEVIDEO_DISPLAY),

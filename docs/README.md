@@ -79,8 +79,8 @@
 | [`exr-io.md`](exr-io.md) | EXR Load, EXR Save | Multi-layer OpenEXR with imageio + TIFF fallback, metadata pass-through |
 | [`render-pass.md`](render-pass.md) | Merge Passes, Depth→CoC | Beauty + AO/diffuse/spec/emission compositing, depth-of-field mask synthesis |
 | [`plate-tools.md`](plate-tools.md) | Grain Match, Plate Stabilizer (ORB/FFT), Clean Plate, Difference Matte | Grain transplant, sparse plate stabilisation, multi-frame median clean plate |
-| [`vae-merge.md`](vae-merge.md) | VAE Merge, Latent Inspector, Similarity Analyser, Block Inspector | 8 merge algorithms, per-block alpha, latent statistics |
-| [`vae-precision.md`](vae-precision.md) | C2C VAE Quality Decode, VAE Clean | Where VAE round trips lose precision (measured), fp32 / unclamped decode, tiled decode, round-trip meter, original-pixel write-back |
+| [`vae-merge.md`](vae-merge.md) | VAE Merge, VAE Inspect, Probe (C2C) latent | 8 merge algorithms, per-block alpha, latent statistics |
+| [`vae-precision.md`](vae-precision.md) | VAE Decode (C2C) (with its clean step) | Where VAE round trips lose precision (measured), fp32 / unclamped decode, tiled decode, round-trip meter, original-pixel write-back |
 
 ---
 

@@ -1,12 +1,12 @@
 """
-Model-analysis nodes (C2C):
-  - VAESimilarityAnalyserMEC: Tensor-by-tensor cosine similarity between
-    two VAEs (or any two state-dict-bearing model objects).
-  - VAEBlockInspectorMEC: Per-block weight statistics for a VAE.
+Model-analysis node (C2C): VAE Inspect (VAEBlockInspectorMEC), two modes -
+  - inspect: per-block weight statistics and outlier tensors for one VAE;
+  - compare: tensor-by-tensor cosine similarity between two VAEs (or any two
+    state-dict-bearing model objects). This was the VAE Similarity Analyser
+    node, merged in L7.65 P27; its saved workflows migrate to mode "compare".
 
-These are diagnostic nodes; they never modify the input models.
-Both work on whatever ``state_dict()`` the wrapped object exposes; if the
-input is already a plain ``dict`` of tensors, they accept that too.
+Diagnostic only; it never modifies the input models. It works on whatever
+``state_dict()`` the wrapped object exposes; a plain ``dict`` of tensors works too.
 """
 from __future__ import annotations
 
@@ -51,123 +51,123 @@ def _block_of(key: str) -> str:
     return parts[0]
 
 
-class VAESimilarityAnalyserMEC:
-    """Cosine similarity between two VAE state dicts, per tensor & per block."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "vae_a": ("VAE", {"tooltip": "First VAE to compare."}),
-                "vae_b": ("VAE", {"tooltip": "Second VAE to compare."}),
-            },
-            "optional": {
-                "include_per_tensor": ("BOOLEAN", {"default": False, "tooltip": "Include per-tensor cosine entries in the JSON report (verbose)."}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "FLOAT", "STRING")
-    RETURN_NAMES = ("report_json", "global_cosine", "most_divergent_blocks")
-    OUTPUT_TOOLTIPS = (
-        "Full similarity report as JSON (per-block cosine, missing keys, optional per-tensor).",
-        "Global cosine similarity across all common tensors.",
-        "JSON list of the 10 most divergent blocks (lowest cosine first).",
-    )
-    FUNCTION = "analyse"
-    CATEGORY = "C2C/ModelAnalysis"
-    DESCRIPTION = "Cosine similarity between two VAEs (per tensor + per block)."
-
-    def analyse(self, vae_a, vae_b, include_per_tensor: bool = False):
-        sd_a = _to_state_dict(vae_a)
-        sd_b = _to_state_dict(vae_b)
-        common = sorted(set(sd_a) & set(sd_b))
-        only_a = sorted(set(sd_a) - set(sd_b))
-        only_b = sorted(set(sd_b) - set(sd_a))
-        per_tensor: list[dict] = []
-        block_dot: dict[str, float] = {}
-        block_norm_a: dict[str, float] = {}
-        block_norm_b: dict[str, float] = {}
-        global_dot = 0.0
-        global_na = 0.0
-        global_nb = 0.0
-        for k in common:
-            ta = sd_a[k].detach().to(torch.float32).flatten()
-            tb = sd_b[k].detach().to(torch.float32).flatten()
-            if ta.shape != tb.shape:
-                continue
-            dot = float((ta * tb).sum().item())
-            na = float((ta * ta).sum().item())
-            nb = float((tb * tb).sum().item())
-            global_dot += dot
-            global_na += na
-            global_nb += nb
-            blk = _block_of(k)
-            block_dot[blk] = block_dot.get(blk, 0.0) + dot
-            block_norm_a[blk] = block_norm_a.get(blk, 0.0) + na
-            block_norm_b[blk] = block_norm_b.get(blk, 0.0) + nb
-            if include_per_tensor:
-                cos = dot / max((na ** 0.5) * (nb ** 0.5), 1e-12)
-                per_tensor.append({"key": k, "cos": cos, "shape": list(ta.shape)})
-        block_cos = {
-            blk: block_dot[blk] / max((block_norm_a[blk] ** 0.5) * (block_norm_b[blk] ** 0.5), 1e-12)
-            for blk in block_dot
-        }
-        global_cos = global_dot / max((global_na ** 0.5) * (global_nb ** 0.5), 1e-12)
-        # MANUAL bug-fix (Apr 2026): expose the lowest-cosine blocks for
-        # quick triage; ascending cosine == most divergent first.
-        divergent_sorted = sorted(block_cos.items(), key=lambda kv: kv[1])
-        most_divergent_blocks = [
-            {"block": blk, "cosine": cos} for blk, cos in divergent_sorted[:10]
-        ]
-        report = {
-            "global_cosine": global_cos,
-            "common_tensors": len(common),
-            "only_in_a": only_a[:50],
-            "only_in_b": only_b[:50],
-            "per_block_cosine": block_cos,
-            "most_divergent_blocks": most_divergent_blocks,
-        }
+def _compare(vae_a, vae_b, include_per_tensor: bool = False) -> tuple[str, float, str]:
+    """Cosine similarity between two VAE state dicts, per tensor & per block: (report_json, global_cosine,
+    most_divergent_blocks_json). Was VAESimilarityAnalyserMEC.analyse (merged into VAE Inspect, L7.65 P27)."""
+    sd_a = _to_state_dict(vae_a)
+    sd_b = _to_state_dict(vae_b)
+    common = sorted(set(sd_a) & set(sd_b))
+    only_a = sorted(set(sd_a) - set(sd_b))
+    only_b = sorted(set(sd_b) - set(sd_a))
+    per_tensor: list[dict] = []
+    block_dot: dict[str, float] = {}
+    block_norm_a: dict[str, float] = {}
+    block_norm_b: dict[str, float] = {}
+    global_dot = 0.0
+    global_na = 0.0
+    global_nb = 0.0
+    for k in common:
+        ta = sd_a[k].detach().to(torch.float32).flatten()
+        tb = sd_b[k].detach().to(torch.float32).flatten()
+        if ta.shape != tb.shape:
+            continue
+        dot = float((ta * tb).sum().item())
+        na = float((ta * ta).sum().item())
+        nb = float((tb * tb).sum().item())
+        global_dot += dot
+        global_na += na
+        global_nb += nb
+        blk = _block_of(k)
+        block_dot[blk] = block_dot.get(blk, 0.0) + dot
+        block_norm_a[blk] = block_norm_a.get(blk, 0.0) + na
+        block_norm_b[blk] = block_norm_b.get(blk, 0.0) + nb
         if include_per_tensor:
-            report["per_tensor"] = per_tensor
-        return (
-            json.dumps(report, indent=2),
-            float(global_cos),
-            json.dumps(most_divergent_blocks, indent=2),
-        )
+            cos = dot / max((na ** 0.5) * (nb ** 0.5), 1e-12)
+            per_tensor.append({"key": k, "cos": cos, "shape": list(ta.shape)})
+    block_cos = {
+        blk: block_dot[blk] / max((block_norm_a[blk] ** 0.5) * (block_norm_b[blk] ** 0.5), 1e-12)
+        for blk in block_dot
+    }
+    global_cos = global_dot / max((global_na ** 0.5) * (global_nb ** 0.5), 1e-12)
+    # MANUAL bug-fix (Apr 2026): expose the lowest-cosine blocks for
+    # quick triage; ascending cosine == most divergent first.
+    divergent_sorted = sorted(block_cos.items(), key=lambda kv: kv[1])
+    most_divergent_blocks = [
+        {"block": blk, "cosine": cos} for blk, cos in divergent_sorted[:10]
+    ]
+    report = {
+        "global_cosine": global_cos,
+        "common_tensors": len(common),
+        "only_in_a": only_a[:50],
+        "only_in_b": only_b[:50],
+        "per_block_cosine": block_cos,
+        "most_divergent_blocks": most_divergent_blocks,
+    }
+    if include_per_tensor:
+        report["per_tensor"] = per_tensor
+    return (
+        json.dumps(report, indent=2),
+        float(global_cos),
+        json.dumps(most_divergent_blocks, indent=2),
+    )
 
 
 class VAEBlockInspectorMEC:
-    """Per-block parameter statistics (mean / std / abs_mean / count)."""
+    """VAE Inspect: per-block parameter statistics of one VAE, or how similar two VAEs are."""
+
+    MODES = ("inspect", "compare")
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {"vae": ("VAE", {"tooltip": "VAE whose per-block weight statistics will be inspected."})},
+            "required": {"vae": ("VAE", {"tooltip": "VAE to inspect (compare mode: the first VAE)."})},
             "optional": {
                 # Phase 3b v2 - Feature A: anomaly scoring vs reference dist.
                 "anomaly_threshold": ("FLOAT", {
                     "default": 5.0, "min": 1.5, "max": 50.0, "step": 0.5,
                     "tooltip": (
-                        "Tensors whose abs_mean exceeds this multiple of "
+                        "Inspect: tensors whose abs_mean exceeds this multiple of "
                         "the cohort median are flagged as magnitude outliers. "
                         "Lower => more sensitive (more flags)."
                     ),
                 }),
+                # appended after anomaly_threshold so saved Block Inspector values keep their positions
+                "mode": (list(cls.MODES), {"default": "inspect",
+                         "tooltip": "inspect = weight statistics of one VAE; compare = cosine similarity to vae_b."}),
+                "vae_b": ("VAE", {"tooltip": "Compare: the second VAE."}),
+                "include_per_tensor": ("BOOLEAN", {"default": False,
+                                       "tooltip": "Compare: include per-tensor cosine entries in the JSON report "
+                                                  "(verbose)."}),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "FLOAT")
-    RETURN_NAMES = ("report_json", "outlier_tensor_names", "anomaly_score")
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING")
+    RETURN_NAMES = ("report_json", "outlier_tensor_names", "anomaly_score", "global_cosine", "most_divergent_blocks")
     OUTPUT_TOOLTIPS = (
-        "Per-block weight statistics (mean/std/abs_mean/count) plus outlier details as JSON.",
-        "Newline-separated list of tensor names flagged as outliers.",
-        "Aggregate anomaly score in [0, 1] (higher means more outliers detected).",
+        "Inspect: per-block weight statistics plus outlier details. Compare: per-block cosine, missing keys and "
+        "optional per-tensor entries. JSON.",
+        "Inspect: JSON list of tensor names flagged as outliers.",
+        "Inspect: aggregate anomaly score in [0, 1] (higher means more outliers detected).",
+        "Compare: global cosine similarity across all common tensors.",
+        "Compare: JSON list of the 10 most divergent blocks (lowest cosine first).",
     )
     FUNCTION = "inspect"
     CATEGORY = "C2C/ModelAnalysis"
-    DESCRIPTION = "Per-block weight stats for a VAE (mean/std/abs_mean/count)."
+    DESCRIPTION = ("Inspect a VAE's per-block weight statistics and outlier tensors, or compare two VAEs block by "
+                   "block (cosine similarity) - for checking merges and broken checkpoints.")
 
-    def inspect(self, vae, anomaly_threshold: float = 5.0):
+    def inspect(self, vae, anomaly_threshold: float = 5.0, mode: str = "inspect", vae_b=None,
+                include_per_tensor: bool = False):
+        if mode == "compare":
+            if vae_b is None:
+                raise ValueError("VAE Inspect (compare): connect the second VAE to vae_b.")
+            report, global_cos, divergent = _compare(vae, vae_b, include_per_tensor)
+            return (report, "[]", 0.0, global_cos, divergent)
+        if mode != "inspect":
+            raise ValueError(f"VAE Inspect: unknown mode {mode!r}; choose inspect or compare")
+        return (*self._inspect(vae, anomaly_threshold), 0.0, "[]")
+
+    def _inspect(self, vae, anomaly_threshold: float = 5.0):
         sd = _to_state_dict(vae)
         agg: dict[str, dict[str, float]] = {}
         # MANUAL bug-fix (Apr 2026): track per-tensor stats too so we can
@@ -249,10 +249,8 @@ class VAEBlockInspectorMEC:
 
 
 NODE_CLASS_MAPPINGS = {
-    "VAESimilarityAnalyserMEC": VAESimilarityAnalyserMEC,
     "VAEBlockInspectorMEC": VAEBlockInspectorMEC,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VAESimilarityAnalyserMEC": "VAE Similarity Analyser",
-    "VAEBlockInspectorMEC": "VAE Block Inspector",
+    "VAEBlockInspectorMEC": "VAE Inspect",
 }

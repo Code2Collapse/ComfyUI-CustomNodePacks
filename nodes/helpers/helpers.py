@@ -1,6 +1,7 @@
-"""C2C Helpers — 12 utility nodes.  See package __init__ for the index."""
+"""C2C Helpers — 9 utility nodes.  See package __init__ for the index."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import Any
@@ -22,70 +23,79 @@ class _AnyType(str):
 ANY = _AnyType("*")
 
 
-# ─────────────────────────── 1. Image Batch Slice ────────────────────────
+# ─────────────────────────── 1. Batch Range ──────────────────────────────
 class ImageBatchSliceMEC:
+    """Batch Range (L7.65 P23): a [start:end:step] range, a split point, or one frame. Image Batch Split and Video
+    Frame Extractor were merged in; their saved workflows migrate here (mode + values + outputs)."""
+
+    MODES = ("range", "split at index", "split at ratio", "first frame", "middle frame", "last frame",
+             "frame at index")
     CATEGORY = "C2C/Helpers"
     FUNCTION = "slice"
-    RETURN_TYPES = ("IMAGE", "INT")
-    RETURN_NAMES = ("images", "frame_count")
+    RETURN_TYPES = ("IMAGE", "INT", "IMAGE", "INT", "INT", "BOOLEAN")
+    RETURN_NAMES = ("images", "frame_count", "remainder", "remainder_count", "total_frames", "is_video")
+    OUTPUT_TOOLTIPS = (
+        "The selected frames (the first part when splitting).",
+        "How many frames 'images' holds.",
+        "Split modes: the frames after the split point. Empty in the other modes.",
+        "How many frames 'remainder' holds.",
+        "How many frames came in.",
+        "True when more than one frame came in.",
+    )
     DESCRIPTION = (
-        "Extract a [start:end:step] range from an IMAGE batch. "
-        "Negative end values count back from the end. step=2 keeps every "
-        "second frame, etc."
+        "Pick frames from an IMAGE batch: a start:end:step range (negative values count from the end, step=2 keeps "
+        "every second frame), a split at a frame index or a fraction, or a single frame (first, middle, last or by "
+        "index)."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
             "images": ("IMAGE",),
-            "start":  ("INT", {"default": 0,    "min": -100000, "max": 100000}),
+            "start":  ("INT", {"default": 0,    "min": -100000, "max": 100000,
+                               "tooltip": "Range mode: first frame. Negative counts from the end."}),
             "end":    ("INT", {"default": -1,   "min": -100000, "max": 100000,
-                               "tooltip": "Exclusive. -1 = end of batch."}),
-            "step":   ("INT", {"default": 1,    "min": 1,        "max": 1024}),
+                               "tooltip": "Range mode: exclusive end. -1 = end of batch."}),
+            "step":   ("INT", {"default": 1,    "min": 1,        "max": 1024,
+                               "tooltip": "Range mode: keep every Nth frame."}),
+        }, "optional": {
+            # appended after the original three so saved Image Batch Slice values keep their positions
+            "mode":        (list(cls.MODES), {"default": "range",
+                            "tooltip": "What to pick: a start:end:step range, a split (at a frame index or a "
+                                       "fraction), or one frame (first, middle, last or by index)."}),
+            "split_index": ("INT",   {"default": 1, "min": 0, "max": 100000,
+                                      "tooltip": "'split at index': frames before this index go to 'images'."}),
+            "split_ratio": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                                      "tooltip": "'split at ratio': this fraction of the batch goes to 'images'."}),
+            "frame_index": ("INT",   {"default": 0, "min": 0, "max": 999999,
+                                      "tooltip": "'frame at index': 0-based, clamped to the last frame."}),
         }}
 
-    def slice(self, images, start, end, step):
+    def slice(self, images, start, end, step, mode="range", split_index=1, split_ratio=0.5, frame_index=0):
         if not isinstance(images, torch.Tensor) or images.ndim != 4:
-            raise ValueError("ImageBatchSlice expects IMAGE tensor")
+            raise ValueError("Batch Range expects an IMAGE batch")
         b = images.shape[0]
-        s = start if start >= 0 else max(0, b + start)
-        e = end if end >= 0 else b + end + 1
-        s = max(0, min(b, s)); e = max(0, min(b, e))
-        out = images[s:e:max(1, step)].contiguous()
-        return (out, int(out.shape[0]))
-
-
-# ─────────────────────────── 2. Image Batch Split ────────────────────────
-class ImageBatchSplitMEC:
-    CATEGORY = "C2C/Helpers"
-    FUNCTION = "split"
-    RETURN_TYPES = ("IMAGE", "IMAGE", "INT", "INT")
-    RETURN_NAMES = ("first_part", "remainder", "first_count", "remainder_count")
-    DESCRIPTION = (
-        "Split an IMAGE batch into two pieces at a frame index OR "
-        "by a fractional ratio (0.0–1.0)."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {
-            "images": ("IMAGE",),
-            "mode":   (["index", "ratio"], {"default": "index"}),
-            "index":  ("INT",   {"default": 1, "min": 0, "max": 100000}),
-            "ratio":  ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
-        }}
-
-    def split(self, images, mode, index, ratio):
-        b = images.shape[0]
-        if mode == "ratio":
-            cut = max(0, min(b, int(round(b * ratio))))
+        rest = images[:0]
+        if mode == "range":
+            s = start if start >= 0 else max(0, b + start)
+            e = end if end >= 0 else b + end + 1
+            s = max(0, min(b, s)); e = max(0, min(b, e))
+            out = images[s:e:max(1, step)].contiguous()
+        elif mode in ("split at index", "split at ratio"):
+            if mode == "split at ratio":
+                cut = max(0, min(b, int(round(b * split_ratio))))
+            else:
+                cut = max(0, min(b, int(split_index)))
+            out, rest = images[:cut].contiguous(), images[cut:].contiguous()
+        elif mode in ("first frame", "middle frame", "last frame", "frame at index"):
+            idx = {"first frame": 0, "middle frame": b // 2, "last frame": b - 1}.get(mode, min(frame_index, b - 1))
+            out = images[idx].unsqueeze(0)
         else:
-            cut = max(0, min(b, int(index)))
-        a, r = images[:cut].contiguous(), images[cut:].contiguous()
-        return (a, r, int(a.shape[0]), int(r.shape[0]))
+            raise ValueError(f"Batch Range: unknown mode {mode!r}; choose one of {', '.join(self.MODES)}")
+        return (out, int(out.shape[0]), rest, int(rest.shape[0]), int(b), b > 1)
 
 
-# ─────────────────────────── 3. Mask Batch Combine ───────────────────────
+# ─────────────────────────── 2. Mask Batch Combine ───────────────────────
 class MaskBatchCombineMEC:
     CATEGORY = "C2C/Helpers"
     FUNCTION = "combine"
@@ -120,7 +130,7 @@ class MaskBatchCombineMEC:
         return (out.contiguous(),)
 
 
-# ─────────────────────────── 4. Seed List ────────────────────────────────
+# ─────────────────────────── 3. Seed List ────────────────────────────────
 class SeedListMEC:
     CATEGORY = "C2C/Helpers"
     FUNCTION = "build"
@@ -156,7 +166,7 @@ class SeedListMEC:
         return (int(seeds[0]), csv)
 
 
-# ─────────────────────────── 5. Conditional Switch ───────────────────────
+# ─────────────────────────── 4. Conditional Switch ───────────────────────
 class ConditionalSwitchMEC:
     CATEGORY = "C2C/Helpers"
     FUNCTION = "pick"
@@ -179,7 +189,7 @@ class ConditionalSwitchMEC:
         return (value_true if bool(condition) else value_false,)
 
 
-# ─────────────────────────── 6. Text Template ────────────────────────────
+# ─────────────────────────── 5. Text Template ────────────────────────────
 class TextTemplateMEC:
     CATEGORY = "C2C/Helpers"
     FUNCTION = "format"
@@ -212,7 +222,7 @@ class TextTemplateMEC:
         return (out,)
 
 
-# ─────────────────────────── 7. Number Lerp ──────────────────────────────
+# ─────────────────────────── 6. Number Lerp ──────────────────────────────
 class NumberLerpMEC:
     CATEGORY = "C2C/Helpers"
     FUNCTION = "lerp"
@@ -245,38 +255,21 @@ class NumberLerpMEC:
         return (float(v), int(round(v)))
 
 
-# ─────────────────────────── 8. Dimensions Snap ──────────────────────────
-class DimensionsSnapMEC:
-    CATEGORY = "C2C/Helpers"
-    FUNCTION = "snap"
-    RETURN_TYPES = ("INT", "INT")
-    RETURN_NAMES = ("width", "height")
-    DESCRIPTION = (
-        "Round (w,h) to the nearest multiple of N (default 64). "
-        "Wan/Flux/SDXL all require dimensions divisible by 8/16/64 — "
-        "this prevents shape-mismatch crashes at sample time."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {
-            "width":     ("INT", {"default": 1024, "min": 8, "max": 16384}),
-            "height":    ("INT", {"default": 1024, "min": 8, "max": 16384}),
-            "multiple":  ("INT", {"default": 64,   "min": 1, "max": 256}),
-            "direction": (["nearest", "down", "up"], {"default": "down"}),
-        }}
-
-    def snap(self, width, height, multiple, direction):
-        m = max(1, int(multiple))
-        def _snap(v):
-            if direction == "down":    return max(m, (v // m) * m)
-            if direction == "up":      return max(m, ((v + m - 1) // m) * m)
-            return max(m, int(round(v / m)) * m)
-        return (int(_snap(width)), int(_snap(height)))
+def _snap(v: int, m: int, direction: str) -> int:
+    """Round v to a multiple of m (never below m): down, up or nearest."""
+    if direction == "down":
+        return max(m, (v // m) * m)
+    if direction == "up":
+        return max(m, ((v + m - 1) // m) * m)
+    return max(m, int(round(v / m)) * m)
 
 
-# ─────────────────────────── 9. Aspect Preset ────────────────────────────
+# ─────────────────────────── 7. Size ─────────────────────────────────────
 class AspectPresetMEC:
+    """Size (L7.65 P22): a preset aspect ratio scaled to a long edge, or a custom width x height, snapped to a
+    multiple. Dimensions Snap was merged in; its saved workflows migrate here as preset 'Custom'."""
+
+    CUSTOM = "Custom (width x height)"
     PRESETS = {
         "1:1 square":      (1.0,    1.0),
         "16:9 landscape":  (16.0,   9.0),
@@ -295,111 +288,152 @@ class AspectPresetMEC:
     RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("width", "height")
     DESCRIPTION = (
-        "Common aspect ratios scaled to a base resolution and snapped to "
-        "a multiple. Wan 480p/720p presets emit native Wan target sizes "
-        "directly."
+        "Width and height for a render: a common aspect ratio scaled to a long edge (Wan 480p / 720p presets give "
+        "Wan's native sizes), or your own width x height - snapped to a multiple of N, because Wan, Flux and SDXL "
+        "need sizes divisible by 8 / 16 / 64."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "preset":   (list(cls.PRESETS.keys()), {"default": "16:9 landscape"}),
+            "preset":   ([*cls.PRESETS.keys(), cls.CUSTOM], {"default": "16:9 landscape"}),
             "base":     ("INT", {"default": 1024, "min": 64, "max": 8192,
-                "tooltip": "Long edge target (ignored for Wan presets)."}),
+                "tooltip": "Long edge target (ignored for Wan presets and Custom)."}),
             "multiple": ("INT", {"default": 64, "min": 1, "max": 256}),
+        }, "optional": {
+            # appended after the original three so saved Aspect Preset values keep their positions
+            "width":     ("INT", {"default": 1024, "min": 8, "max": 16384, "tooltip": "Custom: width before snapping."}),
+            "height":    ("INT", {"default": 1024, "min": 8, "max": 16384, "tooltip": "Custom: height before snapping."}),
+            "direction": (["down", "nearest", "up"], {"default": "down",
+                          "tooltip": "Snap to the multiple below, the nearest one, or the one above."}),
         }}
 
-    def pick(self, preset, base, multiple):
-        if preset not in self.PRESETS:
-            raise ValueError(
-                f"[AspectPresetMEC] Unknown preset '{preset}'. "
-                f"Valid presets: {list(self.PRESETS.keys())}"
-            )
-        w_r, h_r = self.PRESETS[preset]
+    def pick(self, preset, base, multiple, width=1024, height=1024, direction="down"):
         m = max(1, int(multiple))
-        if preset.startswith("Wan"):
-            w, h = int(w_r), int(h_r)
+        if preset == self.CUSTOM:
+            w, h = int(width), int(height)
+        elif preset not in self.PRESETS:
+            raise ValueError(
+                f"[Size] Unknown preset '{preset}'. "
+                f"Valid presets: {[*self.PRESETS.keys(), self.CUSTOM]}"
+            )
         else:
-            long_edge = base
-            if w_r >= h_r:
-                w = long_edge
-                h = int(round(long_edge * h_r / w_r))
+            w_r, h_r = self.PRESETS[preset]
+            if preset.startswith("Wan"):
+                w, h = int(w_r), int(h_r)
             else:
-                h = long_edge
-                w = int(round(long_edge * w_r / h_r))
-        w = max(m, (w // m) * m)
-        h = max(m, (h // m) * m)
-        return (int(w), int(h))
+                long_edge = base
+                if w_r >= h_r:
+                    w = long_edge
+                    h = int(round(long_edge * h_r / w_r))
+                else:
+                    h = long_edge
+                    w = int(round(long_edge * w_r / h_r))
+        return (int(_snap(w, m, direction)), int(_snap(h, m, direction)))
 
 
-# ─────────────────────────── 10. Image Stats Probe ──────────────────────
+# ─────────────────────────── 8. Probe ────────────────────────────────────
+def _image_stats(t: torch.Tensor) -> tuple[str, float, float, float]:
+    mean   = float(t.mean().item())
+    std    = float(t.std().item())
+    mn, mx = float(t.min().item()), float(t.max().item())
+    # Fraction of pixels brighter than 0.95.
+    bright = float((t > 0.95).float().mean().item()) * 100.0
+    report = (f"shape={tuple(t.shape)} dtype={t.dtype} "
+              f"mean={mean:.4f} std={std:.4f} "
+              f"min={mn:.4f} max={mx:.4f} bright>{0.95:.2f}={bright:.1f}%")
+    return report, mean, std, bright
+
+
+def _mask_coverage(mask: torch.Tensor, threshold: float) -> tuple[str, float, float, float]:
+    if not isinstance(mask, torch.Tensor):
+        raise ValueError("Probe: the mask input must be a MASK tensor")
+    t = mask
+    if t.ndim == 2:
+        t_b = t.unsqueeze(0)
+    elif t.ndim == 3:
+        t_b = t
+    else:
+        t_b = t.reshape(-1, *t.shape[-2:])
+    per = (t_b > float(threshold)).float().mean(dim=(-2, -1)) * 100.0
+    cmin = float(per.min().item())
+    cmax = float(per.max().item())
+    cmean = float(per.mean().item())
+    report = (f"frames={t_b.shape[0]} thr={threshold:.2f} "
+              f"coverage mean={cmean:.2f}% min={cmin:.2f}% max={cmax:.2f}%")
+    return report, cmean, cmin, cmax
+
+
 class ImageStatsProbeMEC:
+    """Probe (L7.65 P24): reports on whatever is wired in - image, mask and/or latent - and passes each through.
+    Mask Area Probe and VAE Latent Inspector were merged in; every one of their outputs kept its place here (owner
+    2026-10-10: keep all outputs)."""
+
     CATEGORY = "C2C/Helpers"
     FUNCTION = "probe"
-    RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT", "FLOAT")
-    RETURN_NAMES = ("images", "report", "mean", "std", "bright_pct")
+    RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT", "FLOAT",
+                    "MASK", "FLOAT", "FLOAT", "FLOAT",
+                    "LATENT", "STRING", "STRING", "INT", "INT")
+    RETURN_NAMES = ("images", "report", "mean", "std", "bright_pct",
+                    "mask", "coverage_mean_pct", "coverage_min_pct", "coverage_max_pct",
+                    "latent", "info_json", "verdict", "nan_count", "inf_count")
+    OUTPUT_TOOLTIPS = (
+        "The image, unchanged.",
+        "One line per wired input (image stats, mask coverage, latent verdict).",
+        "Image mean (0 when no image is wired).",
+        "Image standard deviation.",
+        "Percent of image pixels brighter than 0.95.",
+        "The mask, unchanged.",
+        "Mean per-frame mask coverage in percent (pixels above threshold).",
+        "Lowest per-frame coverage in percent.",
+        "Highest per-frame coverage in percent.",
+        "The latent, unchanged.",
+        "Latent shape, dtype, per-channel stats, NaN / Inf counts and verdict as JSON.",
+        "Latent verdict: healthy / low_contrast / saturated / corrupt.",
+        "NaN elements in the latent.",
+        "Inf elements in the latent.",
+    )
     DESCRIPTION = (
-        "Passthrough: returns the input image unchanged plus a stats report. "
-        "Useful for debugging black-frame / over-bright generations."
+        "Pass-through probe for debugging: wire an image, a mask and/or a latent and read their statistics - "
+        "black or blown-out frames, how much of each frame a mask covers, NaN / Inf or saturated latents."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"images": ("IMAGE",)}}
-
-    def probe(self, images):
-        t = images
-        mean   = float(t.mean().item())
-        std    = float(t.std().item())
-        mn, mx = float(t.min().item()), float(t.max().item())
-        # Fraction of pixels brighter than 0.95.
-        bright = float((t > 0.95).float().mean().item()) * 100.0
-        report = (f"shape={tuple(t.shape)} dtype={t.dtype} "
-                  f"mean={mean:.4f} std={std:.4f} "
-                  f"min={mn:.4f} max={mx:.4f} bright>{0.95:.2f}={bright:.1f}%")
-        log.info("[ImageStatsProbe] %s", report)
-        return (t, report, mean, std, bright)
-
-
-# ─────────────────────────── 11. Mask Area Probe ─────────────────────────
-class MaskAreaProbeMEC:
-    CATEGORY = "C2C/Helpers"
-    FUNCTION = "probe"
-    RETURN_TYPES = ("MASK", "STRING", "FLOAT", "FLOAT", "FLOAT")
-    RETURN_NAMES = ("mask", "report", "coverage_mean_pct", "coverage_min_pct", "coverage_max_pct")
-    DESCRIPTION = (
-        "Passthrough: returns the mask unchanged plus a coverage report. "
-        "Per-frame coverage = (mask > threshold).mean()."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {
+        return {"required": {}, "optional": {
+            "images":    ("IMAGE",),
             "mask":      ("MASK",),
-            "threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+            "latent":    ("LATENT", {"tooltip": "ComfyUI LATENT dict (must contain 'samples')."}),
+            "threshold": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+                                    "tooltip": "Mask: a pixel counts as covered above this value."}),
+            "fail_on_corrupt": ("BOOLEAN", {"default": False,
+                                            "tooltip": "Latent: stop the run when it holds NaN or Inf."}),
         }}
 
-    def probe(self, mask, threshold):
-        if not isinstance(mask, torch.Tensor):
-            raise ValueError("MaskAreaProbe expects MASK tensor")
-        t = mask
-        if t.ndim == 2:
-            t_b = t.unsqueeze(0)
-        elif t.ndim == 3:
-            t_b = t
-        else:
-            t_b = t.reshape(-1, *t.shape[-2:])
-        per = (t_b > float(threshold)).float().mean(dim=(-2, -1)) * 100.0
-        cmin = float(per.min().item())
-        cmax = float(per.max().item())
-        cmean = float(per.mean().item())
-        report = (f"frames={t_b.shape[0]} thr={threshold:.2f} "
-                  f"coverage mean={cmean:.2f}% min={cmin:.2f}% max={cmax:.2f}%")
-        log.info("[MaskAreaProbe] %s", report)
-        return (mask, report, cmean, cmin, cmax)
+    def probe(self, images=None, mask=None, latent=None, threshold=0.5, fail_on_corrupt=False):
+        if images is None and mask is None and latent is None:
+            raise ValueError("Probe: connect an image, a mask or a latent.")
+        lines = []
+        mean = std = bright = 0.0
+        cmean = cmin = cmax = 0.0
+        info_json, verdict, nan_count, inf_count = "", "", 0, 0
+        if images is not None:
+            r, mean, std, bright = _image_stats(images)
+            log.info("[ImageStatsProbe] %s", r)
+            lines.append(r)
+        if mask is not None:
+            r, cmean, cmin, cmax = _mask_coverage(mask, threshold)
+            log.info("[MaskAreaProbe] %s", r)
+            lines.append(r)
+        if latent is not None:
+            from ..vae_latent_inspector import inspect_latent
+            info_json, verdict, nan_count, inf_count = inspect_latent(latent, fail_on_corrupt)
+            lines.append(f"latent verdict={verdict} NaN={nan_count} Inf={inf_count}")
+        return (images, "\n".join(lines), mean, std, bright, mask, cmean, cmin, cmax,
+                latent, info_json, verdict, nan_count, inf_count)
 
 
-# ─────────────────────────── 12. Execution Timer ────────────────────────
+# ─────────────────────────── 9. Execution Timer ─────────────────────────
 class ExecutionTimerMEC:
     """
     Wallclock timer node.  Place between two stages of a workflow: the

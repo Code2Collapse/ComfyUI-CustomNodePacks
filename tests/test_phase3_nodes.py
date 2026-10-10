@@ -19,7 +19,16 @@ from nodes.model_metadata_extractor import (
     _detect_model_kind,
 )
 from nodes.temporal_consistency_checker import TemporalConsistencyCheckerMEC, _mask_iou
-from nodes.vae_latent_inspector import VAELatentInspectorMEC, _verdict
+from nodes.helpers.helpers import ImageStatsProbeMEC
+from nodes.vae_latent_inspector import _verdict
+
+
+class VAELatentInspectorMEC:
+    """The latent half of Probe (VAE Latent Inspector was merged into it, L7.65 P24): the old node's five
+    outputs are Probe's outputs 9-13, unchanged."""
+
+    def inspect(self, latent, fail_on_corrupt=False):
+        return ImageStatsProbeMEC().probe(latent=latent, fail_on_corrupt=fail_on_corrupt)[9:14]
 
 
 # ══════════════════════════════════════════════════════════════════════
