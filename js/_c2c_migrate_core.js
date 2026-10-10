@@ -10,7 +10,8 @@
  *
  * C2C-only row fields (core never sees them; nodes/_legacy_replacements.register passes only core's fields):
  *   c2c_values  [{new_id, old_id, map?, fn?: "log2", clamp?: [min, max]} | {new_id, set}] - a value that needs
- *               translating (another combo vocabulary, a multiplier that became stops); applied after the core mapping
+ *               translating (another combo vocabulary, a multiplier that became stops); applied after the core mapping.
+ *               map keys are String(old value): booleans are "true" / "false"
  *   c2c_note    what behaves differently on the successor - reported once per type
  *   c2c_remove  the node has no successor: it is taken out of the graph, its links removed, all of it reported
  * A seed's control_after_generate travels with the seed; when the old node had none it becomes "fixed", because the

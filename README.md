@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **121** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **120** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -54,7 +54,7 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 16 |
+| MaskEditControl | 15 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
 | MEC Paint Suite | 2 |
@@ -91,7 +91,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 121 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 120 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -1112,7 +1112,7 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 67 | Metadata Writer | Metadata | 1 | Write/merge JSON sidecars next to outputs |
 | 68 | Frame Range Router | Metadata | 1 | Slice IMAGE/MASK batches `[start:end:step]` |
 | 69 | Shot Metadata Reader | Metadata | 1 | Read shot.json (show / shot / task / frame in/out / fps) |
-| 70 | Batch Version Manager | Output | 1 | `<root>/<show>/<shot>/<task>/v###/` with atomic reservation |
+| 70 | Folder Version Incrementer (layout show / shot / task / version) | Output | 1 | `<root>/<show>/<shot>/<task>/v###/` with atomic reservation (was Batch Version Manager) |
 | 71 | Temporal Consistency Checker | Diagnostics | 1 | Flicker score (mask_iou / pixel_diff / Farneback flow) |
 | 72 | Model Metadata Extractor | Diagnostics | 1 | Inspect safetensors/checkpoints **without unpickling** |
 
@@ -1439,7 +1439,7 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 Two general patterns recur across all sampler families:
 
 1. **Inpaint trio** — `InpaintCropProMEC` → diffusion sampler (any family) → `InpaintPasteBackMEC` (or `InpaintStitchProMEC` for soft seams). Allows full-resolution refinement at a fraction of the VRAM, regardless of which model is loaded.
-2. **Versioned saves** — wire `BatchVersionManagerMEC` (or the standalone `FolderIncrementer`) `version_string` into the sampler's `Save Image.filename_prefix` so every queued prompt produces a clean, ordered file series.
+2. **Versioned saves** — wire the Folder Version Incrementer's `version_string` (layout show / shot / task / version for a pipeline tree) into the sampler's `Save Image.filename_prefix` so every queued prompt produces a clean, ordered file series.
 
 The `UniversalRerouteMEC`-equivalent typed reroutes (and the SAM / ViT-Matte loaders) keep the graph readable as it scales from a single Flux T2I bench into a multi-model Wan + Qwen-refine + Flux-detail composite.
 

@@ -69,7 +69,6 @@ from .nodes.video_mask_editor import (
     register_routes as _register_vme_routes,
 )
 from .nodes.vae_merge import VAEMergeMEC
-from .nodes.batch_version_manager import BatchVersionManagerMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
@@ -650,7 +649,6 @@ _MEC_MAPPINGS = {
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
     "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
-    "BatchVersionManagerMEC": BatchVersionManagerMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
     "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
 }
@@ -669,7 +667,6 @@ _MEC_DISPLAY = {
     "VideoFramePlayerMEC": "Video Frame Player",
     "VideoMaskEditorMEC": "Video Mask Editor",
     "VAEMergeMEC": "VAE Merge",
-    "BatchVersionManagerMEC": "Batch Version Manager",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor",
     "MaskFailureExplainerMEC": "Mask Failure Explainer \u2014 Diagnostics",
 }

@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **121** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **120** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -10,7 +10,7 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 16 |
+| MaskEditControl | 15 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
 | MEC Paint Suite | 2 |
@@ -47,7 +47,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 121 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 16, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 120 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 3, Layer Effects 1, Mask toolkit 5, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Luminance Keyer 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 9, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 7, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -76,8 +76,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Number Lerp (C2C)](#numberlerpmec)
   - [Seed List Generator (C2C)](#seedlistmec)
   - [Text Template (C2C)](#texttemplatemec)
-- **C2C/IO** (1)
-  - [Batch Version Manager](#batchversionmanagermec)
 - **C2C/Inpaint** (5)
   - [Inpaint Crop Pro](#inpaintcroppromec)
   - [Inpaint Mask Prepare](#inpaintmaskpreparemec)
@@ -629,55 +627,6 @@ Substitute {a}{b}{c}{d} placeholders in a template string. Useful for building p
 | # | Name | Type | What it is |
 |---|---|---|---|
 | 0 | `text` | `STRING` | — |
-
-
----
-
-## C2C/IO
-
-
-### BatchVersionManagerMEC
-
-**Shown in the menu as:** Batch Version Manager
-
-Compute (and optionally atomically reserve) the next v### directory under <root>/<show>/<shot>/<task>/. Forward-slash output paths.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `root` | `STRING` | default `""` | Absolute output root (e.g. D:/projects/renders). |
-| `show` | `STRING` | default `"show"` | Show / project name (top-level folder under root) |
-| `shot` | `STRING` | default `"sh010"` | Shot identifier (folder under show) |
-| `task` | `STRING` | default `"comp"` | Task name (folder under shot, e.g. comp, matte, render) |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `reserve` | `BOOLEAN` | default `False` | Atomically reserve the version with a .lock file. When False, only computes the path — no disk writes. |
-| `padding` | `INT` | default `3`, range 1…6 | Zero-pad width for v### (3 → v001, 4 → v0001). |
-| `max_retries` | `INT` | default `5`, range 1…50 | On lock-race contention, advance version and retry this many times. |
-| `min_version` | `INT` | default `1`, range 1…999999 | Floor for the first version when no v### exists yet. |
-| `forward_slash` | `BOOLEAN` | default `True` | When True (default), output paths use forward slashes for cross-platform compatibility. Set False to keep native (Windows backslash) separators. |
-| `write_manifest` | `BOOLEAN` | default `True` | When `reserve=True`, also write `version_manifest.json` alongside the .lock containing workflow_hash + user + host + timestamp + show/shot/task triple. Provides full audit trail. Ignored when reserve=False. |
-
-**Hidden inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `prompt` | `PROMPT` |  | — |
-| `extra_pnginfo` | `EXTRA_PNGINFO` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `version_path` | `STRING` | Full path to the next-version directory (forward-slash by default). |
-| 1 | `version_int` | `INT` | Integer version number that was allocated. |
-| 2 | `version_label` | `STRING` | Padded version label such as v001. |
-| 3 | `info_json` | `STRING` | JSON metadata: show, shot, task, user, host, timestamp, reservation status. |
 
 
 ---
@@ -3620,8 +3569,9 @@ Auto-incrementing per-label / per-date version counter. Scans the output directo
 | `label` | `STRING` | default `"default"` | Fallback folder name (used only when no source file is connected) |
 | `date_format` | choice: `MM-DD-YYYY`, `DD-MM-YYYY`, `YYYY-MM-DD` | default `"MM-DD-YYYY"` | Date format for the date subfolder (e.g. 02-22-2026 or 2026-02-22) |
 | `path_style` | choice: `auto`, `windows`, `linux`, `macos` | default `"auto"` | Path separator style for output strings. auto=detect from current OS, windows=backslash, linux/macos=forward slash. Use 'auto' unless you design workflows on one OS and run on another. |
-| `source_choice` | choice: `auto`, `image`, `video`, `custom` | default `"auto"` | Where the source name comes from. 'image' → trigger_image, 'video' → trigger_video, 'auto' → prefer video if connected, else image, else legacy `trigger`. 'custom' → use the ``custom_name`` widget verbatim and ignore all triggers. |
+| `source_choice` | choice: `auto`, `image`, `video`, `exr`, `custom` | default `"auto"` | Where the source name comes from. 'image' → trigger_image, 'video' → trigger_video, 'auto' → prefer video if connected, else image, else legacy `trigger`. 'exr' → prefer an EXR/DPX/CIN plate (sequence or single); works WITHOUT a trigger — wire the plate path STRING into `source_path` and the stem is derived from it. 'custom' → use the ``custom_name`` widget verbatim and ignore all triggers. |
 | `name_format` | choice: `basename`, `strip_tags`, `first_segment` | default `"basename"` | How to format the detected filename for folder + prefix:   basename      — strip extension only (e.g. clip_2160_25fps)   strip_tags    — also strip trailing res/fps tags (clip)   first_segment — keep only the first chunk before . or _ (clip) The original file extension is preserved on output_filename. |
+| `numbered_still_mode` | choice: `auto`, `sequence`, `identity` | default `"auto"` | What a trailing number on a STILL means (png/exr/dpx/tif...):   auto     — >=4 digits is a frame index and is stripped              (plate.0001.png -> plate); <=3 digits is a shot              number and is KEPT (shot_010.png -> shot_010).   sequence — always strip a trailing 2-8 digit number. Use when              your frames are bare-numbered (plate_01.png ...).   identity — never strip bare digits; only #### and %04d go. #### and %04d are stripped in every mode — they are never part of a real name. auto errs toward KEEPING the number, because over-grouping silently mixes unrelated plates into one sequence, while over-splitting is merely inconvenient and visible. |
 
 **Optional inputs**
 
@@ -3630,12 +3580,21 @@ Auto-incrementing per-label / per-date version counter. Scans the output directo
 | `trigger` | `*` |  | Legacy generic trigger – connect any output here. |
 | `trigger_image` | `IMAGE` |  | Connect a LoadImage / image source here. Used when source_choice = 'image' or 'auto'. |
 | `trigger_video` | `*` |  | Connect a LoadVideo / VHS_LoadVideo / video source here. Used when source_choice = 'video' or 'auto' (preferred). |
-| `source_filename` | `STRING` | default `""` | Auto-filled from the connected loader (basename only, no extension). Drives folder name + output basename. Extension is stored separately in source_extension for output_filename. |
+| `source_filename` | `STRING` | default `""` | Auto-filled from the connected loader (basename only, no extension). Drives folder name + output basename. Extension is stored separately in source_extension for output_filename. May also be a FULL PATH — the basename is extracted automatically. |
 | `source_extension` | `STRING` | default `""` | Auto-filled file extension from the connected loader (e.g. .mp4, .mov). Used only for output_filename — not part of the folder name. |
+| `source_path` | `STRING` | default `""` | Full path to a source media file (image / video / EXR / DPX sequence). When provided, the node extracts the filename stem from this path and uses it as the source name — this takes PRECEDENCE over source_filename and custom_name. Connect a STRING output here (e.g. an OCIORead 'source' widget, or any loader that exposes its file path as STRING). The extracted stem is returned on the `source_stem` output, and a trailing version token (e.g. _v001) is incremented to _v002 on the `next_version_token` / `next_version_stem` outputs. |
 | `custom_name` | `STRING` | default `""` | Manual source name. Only used when source_choice='custom'. May include an extension (e.g. 'my_shot.mp4'); if no extension is given, output_filename will have none either. Sanitized for cross-platform safety. |
 | `base_path` | `STRING` | default `""` | Override base output directory.  Leave empty → ComfyUI output dir. |
 | `folder_name_override` | `STRING` | default `""` | Force a specific folder name instead of deriving from the input filename. Sanitized for cross-platform safety. |
+| `version_group` | `STRING` | default `""` | Which outputs share one version number.  LEAVE IT EMPTY (the normal case). Every incrementer in the same run whose folder is the same shot - including its _mask, _exr and _png variants - is handed the SAME version, so one render files as one version. An unrelated job in the same workflow keeps its own counter and is never dragged along.  Set a name here only when two outputs belong together but their folder names do not say so. Incrementers sharing a name share a version, whatever their folders. |
 | `reserve_version` | `BOOLEAN` | default `False` | If True, create the version directory and write a `.reserved` marker file to claim the version number atomically. Prevents collisions in batch/render-farm workflows. Leave False for normal use (the directory will be created by ComfyUI's Save node when output is actually written). |
+| `layout` | choice: `source / date / version`, `show / shot / task / version` | default `"source / date / version"` | Folder layout.   source / date / version  - <base>/<source name>/<date>/v### (the usual one)   show / shot / task / version - <base>/<show>/<shot>/<task>/v###, the pipeline layout: no date folder, versions always v###, and with reserve_version each version is claimed with an exclusive .lock (retrying when another job took it) plus an optional version_manifest.json. |
+| `show` | `STRING` | default `"show"` | show / shot / task layout: show or project name (top folder under base). |
+| `shot` | `STRING` | default `"sh010"` | show / shot / task layout: shot identifier (folder under show). |
+| `task` | `STRING` | default `"comp"` | show / shot / task layout: task name (folder under shot, e.g. comp, matte). |
+| `min_version` | `INT` | default `1`, range 0…999999 | show / shot / task layout: never hand out a version below this. |
+| `max_retries` | `INT` | default `5`, range 1…100 | show / shot / task layout, reserve_version on: how many next numbers to try when another job claimed the version first. |
+| `write_manifest` | `BOOLEAN` | default `True` | show / shot / task layout, reserve_version on: also write version_manifest.json (workflow hash, user, host, time) into the reserved folder. |
 
 **Outputs**
 
@@ -3647,6 +3606,12 @@ Auto-incrementing per-label / per-date version counter. Scans the output directo
 | 3 | `subfolder_path` | `STRING` | Full subfolder path: `<base>/<folder>/<date>/<version>`. |
 | 4 | `filename_prefix` | `STRING` | Filename prefix combining folder + version (for SaveImage). |
 | 5 | `output_filename` | `STRING` | Final output filename including extension. |
+| 6 | `source_stem` | `STRING` | Filename stem extracted from the connected source (extension and frame token stripped). e.g. `B_0151C002_260527_134258_a1IE7_v001`. |
+| 7 | `current_version_token` | `STRING` | Version token found at the end of the source stem, e.g. `v001`. Empty when the source name has no trailing version token. |
+| 8 | `next_version_token` | `STRING` | Source version token incremented by one, e.g. `v002`. Empty when the source name has no trailing version token. |
+| 9 | `next_version_stem` | `STRING` | Source stem with its version token incremented, e.g. `B_0151C002_260527_134258_a1IE7_v002`. Empty when the source name has no trailing version token. |
+| 10 | `version_path` | `STRING` | Absolute path of the version folder (show / shot / task layout: the folder it allocated, forward slashes unless path_style says otherwise). |
+| 11 | `info_json` | `STRING` | JSON: what was allocated - folder, version, paths, whether it was reserved. |
 
 
 ### FolderIncrementerReset

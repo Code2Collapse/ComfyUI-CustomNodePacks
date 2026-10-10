@@ -90,7 +90,7 @@ def migrate_kwargs(old_id: str, old: dict) -> dict:
             continue
         x = old[v["old_id"]]
         if "map" in v:
-            x = v["map"][str(x)]
+            x = v["map"][("true" if x else "false") if isinstance(x, bool) else str(x)]   # JS String(true) = "true"
         if v.get("fn") == "log2":
             x = math.log2(float(x))
         if v.get("clamp"):

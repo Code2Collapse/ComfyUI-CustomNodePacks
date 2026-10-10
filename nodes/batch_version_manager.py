@@ -1,5 +1,6 @@
 """
-BatchVersionManagerMEC – Shot/task hierarchy with atomic version reservation.
+Show / shot / task version allocation with atomic reservation - the engine of Folder Version Incrementer's
+"show / shot / task / version" layout (this was the Batch Version Manager node, merged in L7.65 P29).
 
 Layout:
     <root>/<show>/<shot>/<task>/v<NNN>/
@@ -273,5 +274,7 @@ class BatchVersionManagerMEC:
         return (path_out, next_v, label, json.dumps(info, indent=2))
 
 
-NODE_CLASS_MAPPINGS = {"BatchVersionManagerMEC": BatchVersionManagerMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"BatchVersionManagerMEC": "Batch Version Manager"}
+# L7.65 P29: merged into Folder Version Incrementer (folder_incrementer.py, layout "show / shot / task / version"),
+# which runs this class's allocate(); saved workflows migrate there. Not registered on its own any more.
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

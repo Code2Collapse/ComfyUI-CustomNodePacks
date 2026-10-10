@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import sys
@@ -55,6 +56,27 @@ NAME_FORMAT_CHOICES = ["basename", "strip_tags", "first_segment"]
 #   subfolder — nest a folder AFTER the version (.../v001/mask/clip.mov)
 #   folder    — append to the TOP folder name  (ATG_..._mask/date/v001/clip.mov)
 SUFFIX_MODE_CHOICES = ["filename", "subfolder", "folder"]
+# L7.65 P29: the second layout is the former Batch Version Manager (nodes/batch_version_manager.py is its engine)
+LAYOUT_CHOICES = ["source / date / version", "show / shot / task / version"]
+
+
+def _bvm_engine():
+    try:                                  # inside the pack (how ComfyUI loads this file)
+        from .nodes.batch_version_manager import BatchVersionManagerMEC
+    except ImportError:                   # loaded on its own (tests import folder_incrementer top-level)
+        from nodes.batch_version_manager import BatchVersionManagerMEC
+    return BatchVersionManagerMEC
+
+
+def _bvm_kwargs(**kw):
+    """This node's inputs in the engine's names (base_path -> root, reserve_version -> reserve, path_style ->
+    forward_slash: linux / macos give forward slashes, auto keeps the OS's own, as the old node's False did)."""
+    return {"root": kw.get("base_path") or "", "show": kw.get("show", "show"), "shot": kw.get("shot", "sh010"),
+            "task": kw.get("task", "comp"), "reserve": bool(kw.get("reserve_version", False)),
+            "padding": int(kw.get("padding", 3)), "max_retries": int(kw.get("max_retries", 5)),
+            "min_version": int(kw.get("min_version", 1)),
+            "forward_slash": kw.get("path_style", "auto") in ("linux", "macos"),
+            "write_manifest": bool(kw.get("write_manifest", True))}
 
 _TRAILING_TAG_RE = re.compile(
     r"[._\-](\d{3,4}p?|\d{2,3}fps|[248]k|uhd|hd|sd|sdr|hdr|raw|proxy|final|wip)$",
@@ -709,6 +731,29 @@ class FolderIncrementer:
                                "to claim the version number atomically. Prevents collisions in batch/render-farm "
                                "workflows. Leave False for normal use (the directory will be created by "
                                "ComfyUI's Save node when output is actually written)."}),
+                # L7.65 P29: the show / shot / task layout of the former Batch Version Manager. Appended after the
+                # existing widgets so saved Folder Version Incrementer values keep their positions.
+                "layout": (LAYOUT_CHOICES, {"default": LAYOUT_CHOICES[0],
+                    "tooltip": "Folder layout.\n"
+                               "  source / date / version  - <base>/<source name>/<date>/v### (the usual one)\n"
+                               "  show / shot / task / version - <base>/<show>/<shot>/<task>/v###, the pipeline "
+                               "layout: no date folder, versions always v###, and with reserve_version each "
+                               "version is claimed with an exclusive .lock (retrying when another job took it) "
+                               "plus an optional version_manifest.json."}),
+                "show": ("STRING", {"default": "show",
+                    "tooltip": "show / shot / task layout: show or project name (top folder under base)."}),
+                "shot": ("STRING", {"default": "sh010",
+                    "tooltip": "show / shot / task layout: shot identifier (folder under show)."}),
+                "task": ("STRING", {"default": "comp",
+                    "tooltip": "show / shot / task layout: task name (folder under shot, e.g. comp, matte)."}),
+                "min_version": ("INT", {"default": 1, "min": 0, "max": 999999,
+                    "tooltip": "show / shot / task layout: never hand out a version below this."}),
+                "max_retries": ("INT", {"default": 5, "min": 1, "max": 100,
+                    "tooltip": "show / shot / task layout, reserve_version on: how many next numbers to try "
+                               "when another job claimed the version first."}),
+                "write_manifest": ("BOOLEAN", {"default": True,
+                    "tooltip": "show / shot / task layout, reserve_version on: also write version_manifest.json "
+                               "(workflow hash, user, host, time) into the reserved folder."}),
             },
             # The whole prompt, so a run whose source_filename arrived empty
             # (API submit, or a loader the UI did not recognise) can still
@@ -717,11 +762,11 @@ class FolderIncrementer:
         }
 
     RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING",
-                     "STRING", "STRING", "STRING", "STRING")
+                     "STRING", "STRING", "STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES  = ("version_string", "version_number", "folder_name",
                      "subfolder_path", "filename_prefix", "output_filename",
                      "source_stem", "current_version_token",
-                     "next_version_token", "next_version_stem")
+                     "next_version_token", "next_version_stem", "version_path", "info_json")
     OUTPUT_TOOLTIPS = (
         "Zero-padded version string, e.g. `v001`.",
         "Raw integer version number.",
@@ -738,6 +783,9 @@ class FolderIncrementer:
         "Source stem with its version token incremented, e.g. "
         "`B_0151C002_260527_134258_a1IE7_v002`. Empty when the source name "
         "has no trailing version token.",
+        "Absolute path of the version folder (show / shot / task layout: the folder it allocated, forward slashes "
+        "unless path_style says otherwise).",
+        "JSON: what was allocated - folder, version, paths, whether it was reserved.",
     )
     FUNCTION = "increment"
     CATEGORY = "utils"
@@ -750,6 +798,8 @@ class FolderIncrementer:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
+        if kwargs.get("layout") == LAYOUT_CHOICES[1]:
+            return _bvm_engine().IS_CHANGED(**_bvm_kwargs(**kwargs))
         # Assumption: inputs + on-disk version dirs determine the next counter.
         h = hashlib.md5(hash_kwargs(**kwargs).encode())
         label = kwargs.get("label", "default")
@@ -801,9 +851,13 @@ class FolderIncrementer:
                   source_filename="", custom_name="", base_path="",
                   folder_name_override="", version_group="", reserve_version=False,
                   suffix="", suffix_mode="filename", source_extension="",
-                  source_path="", prompt=None, unique_id=None):
+                  source_path="", layout=LAYOUT_CHOICES[0], show="show", shot="sh010", task="comp",
+                  min_version=1, max_retries=5, write_manifest=True, prompt=None, unique_id=None):
 
         sep = _get_path_sep(path_style)
+        if layout == LAYOUT_CHOICES[1]:
+            return self._show_shot_task(base_path, show, shot, task, reserve_version, padding, max_retries,
+                                        min_version, path_style, write_manifest, label, sep, prompt)
         detected_os = _get_current_os()
 
         # MANUAL bug-fix (Apr 2026): when source_choice='custom', the
@@ -989,10 +1043,37 @@ class FolderIncrementer:
             next_version_token = ""
             next_version_stem = ""
 
+        abs_parts = [str(base_dir).replace("\\", "/").rstrip("/"), *path_parts]
+        version_path = "/".join(abs_parts)
+        if sep == "\\":
+            version_path = version_path.replace("/", "\\")
+        info_json = json.dumps({
+            "layout": LAYOUT_CHOICES[0], "folder": folder_name, "date": today_date, "version": version_num,
+            "label": version_string, "subfolder_path": subfolder_path, "path": version_path,
+            "reserved": bool(reserve_version), "shared_with_run": bool(version_shared),
+        }, indent=2)
         return (version_string, version_num, folder_name,
                 subfolder_path, filename_prefix, output_filename,
                 source_stem, current_version_token,
-                next_version_token, next_version_stem)
+                next_version_token, next_version_stem, version_path, info_json)
+
+    @staticmethod
+    def _show_shot_task(base_path, show, shot, task, reserve, padding, max_retries, min_version, path_style,
+                        write_manifest, label, sep, prompt):
+        """<base>/<show>/<shot>/<task>/v### - the former Batch Version Manager's allocation, by its own code."""
+        root = base_path.strip() if base_path and base_path.strip() else _get_output_dir()
+        path_out, version_num, version_string, info = _bvm_engine()().allocate(
+            **_bvm_kwargs(base_path=root, show=show, shot=shot, task=task, reserve_version=reserve, padding=padding,
+                          max_retries=max_retries, min_version=min_version, path_style=path_style,
+                          write_manifest=write_manifest),
+            prompt=prompt)
+        meta = json.loads(info)
+        show_s, shot_s, task_s = meta["show"], meta["shot"], meta["task"]
+        subfolder_path = sep.join([show_s, shot_s, task_s, version_string])
+        stem = "_".join(x for x in (shot_s, task_s, version_string) if x)
+        filename_prefix = sep.join([subfolder_path, stem])
+        return (version_string, version_num, shot_s, subfolder_path, filename_prefix, filename_prefix,
+                "", "", "", "", path_out, info)
 
 
 class FolderIncrementerReset:

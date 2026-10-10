@@ -134,3 +134,38 @@ def test_gradient_map_alone_needs_no_matte():
     ref = LE.LayerEffectGradientMapMEC().execute(img, *[kw[LE.effect_widget_name("gradient_map", q)] for q in
                                                         ("start_color", "mid_color", "end_color", "mid_point", "opacity")])
     assert torch.equal(out, ref[0])
+
+
+# ── P29: Batch Version Manager -> Folder Version Incrementer, layout "show / shot / task / version" ────────────────
+
+@pytest.mark.parametrize("reserve", [False, True])
+@pytest.mark.parametrize("forward_slash", [True, False])
+@pytest.mark.parametrize("existing", [[], ["v001", "v002", "v007"], ["v001", "x", "v12"]])
+def test_batch_version_manager_through_folder_incrementer(tmp_path, reserve, forward_slash, existing):
+    import shutil
+
+    from folder_incrementer import FolderIncrementer
+    from nodes.batch_version_manager import BatchVersionManagerMEC
+
+    task_dir = tmp_path / "proj" / "sh020" / "comp"
+    for d in existing:
+        (task_dir / d).mkdir(parents=True)
+    old = {"root": str(tmp_path), "show": "proj", "shot": "sh020", "task": "comp", "reserve": reserve, "padding": 3,
+           "max_retries": 5, "min_version": 2, "forward_slash": forward_slash, "write_manifest": True}
+    expected = BatchVersionManagerMEC().allocate(**old)
+    if reserve:                                        # put the tree back exactly as it was before the second run
+        shutil.rmtree(task_dir / expected[2])
+    check("BatchVersionManagerMEC", old, expected, lambda **k: FolderIncrementer().increment(**k))
+
+
+def test_folder_incrementer_default_layout_keeps_its_ten_outputs(tmp_path):
+    from folder_incrementer import FolderIncrementer
+
+    out = FolderIncrementer().increment(source_filename="shotA.mov", base_path=str(tmp_path), path_style="linux")
+    assert len(out) == 12
+    version_string, num, folder, sub, prefix, filename = out[:6]
+    assert (version_string, num, folder) == ("v001", 1, "shotA")
+    assert out[10] == "/".join([str(tmp_path).replace("\\", "/"), sub])          # absolute twin of subfolder_path
+    import json as _json
+    info = _json.loads(out[11])
+    assert info["path"] == out[10] and info["label"] == "v001" and info["layout"].startswith("source")

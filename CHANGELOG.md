@@ -2,6 +2,15 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-10 (node consolidation, wave 3: versioning)
+
+### Changed (saved workflows migrate automatically; results are identical)
+
+- **Folder Version Incrementer** gains the layout "show / shot / task / version" -
+  `<base>/<show>/<shot>/<task>/v###`, with exclusive version claiming, retries and a version manifest - and replaces
+  **Batch Version Manager**. Two new outputs on every layout: `version_path` (the absolute version folder) and
+  `info_json`. Each layout shows only its own controls.
+
 ## Unreleased – 2026-10-10 (node consolidation, wave 3: Layer Effects)
 
 Evidence: `docs/evidence/L7.65/wave3_le_live.json`, `wave3_le_nodes.*.png`; `tests/test_consolidation_wave3.py`.

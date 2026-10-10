@@ -16,6 +16,11 @@ const CLEAN = ["balance_mode", "balance_strength", "saturation", "contrast_resto
 const EFFECTS = ["drop_shadow", "outer_glow", "gradient_map", "gradient_overlay", "color_overlay", "inner_glow",
                  "inner_shadow", "stroke"];
 const effectOf = (name) => EFFECTS.find((k) => name.startsWith(k + "_")) || null;
+// Folder Version Incrementer: the pipeline layout's controls, and the source / date layout's
+const FI_PIPELINE = ["show", "shot", "task", "min_version", "max_retries", "write_manifest"];
+const FI_SOURCE = ["prefix", "suffix", "suffix_mode", "label", "date_format", "source_choice", "name_format",
+                   "numbered_still_mode", "source_filename", "source_path", "custom_name", "folder_name_override",
+                   "version_group"];
 
 // node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides (a list, or a test on the
 // name), visible(values, names) -> the managed widgets to show }
@@ -48,6 +53,13 @@ const RULES = {
         watch: EFFECTS,
         managed: (name) => effectOf(name) !== null,
         visible: (v, names) => names.filter((n) => v[effectOf(n)]),
+    },
+    FolderIncrementer: {
+        // layout "show / shot / task / version" (the former Batch Version Manager) uses none of the source / date
+        // controls; the default layout uses none of the pipeline ones. source_extension is the node's own (hidden).
+        watch: ["layout"],
+        managed: [...FI_PIPELINE, ...FI_SOURCE],
+        visible: (v) => (String(v.layout ?? "").startsWith("show") ? FI_PIPELINE : FI_SOURCE),
     },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],

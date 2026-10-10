@@ -3197,5 +3197,93 @@
   ],
   "dropped": [],
   "note": "L7.65 P13 (owner-approved merge): Layer Effects (C2C) with only gradient_map switched on - the same effect code, the same result."
+ },
+ {
+  "old_node_id": "BatchVersionManagerMEC",
+  "new_node_id": "FolderIncrementer",
+  "old_widget_ids": [
+   "root",
+   "show",
+   "shot",
+   "task",
+   "reserve",
+   "padding",
+   "max_retries",
+   "min_version",
+   "forward_slash",
+   "write_manifest"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "base_path",
+    "old_id": "root"
+   },
+   {
+    "new_id": "reserve_version",
+    "old_id": "reserve"
+   },
+   {
+    "new_id": "show",
+    "old_id": "show"
+   },
+   {
+    "new_id": "shot",
+    "old_id": "shot"
+   },
+   {
+    "new_id": "task",
+    "old_id": "task"
+   },
+   {
+    "new_id": "padding",
+    "old_id": "padding"
+   },
+   {
+    "new_id": "max_retries",
+    "old_id": "max_retries"
+   },
+   {
+    "new_id": "min_version",
+    "old_id": "min_version"
+   },
+   {
+    "new_id": "write_manifest",
+    "old_id": "write_manifest"
+   },
+   {
+    "new_id": "layout",
+    "set_value": "show / shot / task / version"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 11
+   }
+  ],
+  "dropped": [],
+  "c2c_values": [
+   {
+    "new_id": "path_style",
+    "old_id": "forward_slash",
+    "map": {
+     "true": "linux",
+     "false": "auto"
+    }
+   }
+  ],
+  "note": "L7.65 P29 (owner-approved merge): Folder Version Incrementer, layout show / shot / task / version - the same allocate() code. forward_slash True -> path_style linux, False -> auto (the OS's own separator)."
  }
 ]

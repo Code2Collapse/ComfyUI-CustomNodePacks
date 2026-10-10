@@ -207,3 +207,15 @@ def test_a_removed_node_leaves_the_graph_with_its_links_and_is_reported():
     assert next(n for n in out["wf"]["nodes"] if n["id"] == 6)["inputs"][0]["link"] is None
     assert out["r"]["removed"] == ["OldStatus (#5) - see the panel."]
     assert any('output "status" fed other nodes' in p for p in out["r"]["problems"])
+
+
+def test_a_boolean_maps_by_its_lowercase_name():
+    """map keys are String(value) - a saved true / false looks up "true" / "false" (L7.65 P29 forward_slash)."""
+    table = [{"old_node_id": "OldFlag", "new_node_id": "NewSampler", "old_widget_ids": ["flag"], "input_mapping": [],
+              "output_mapping": [], "c2c_values": [{"new_id": "space", "old_id": "flag",
+                                                    "map": {"true": "linux", "false": "auto"}}]}]
+    shapes = {"NewSampler": {**SAMPLER, "values": [0, "randomize", "auto", 0.0]}}
+    for saved, want in ((True, "linux"), (False, "auto")):
+        out = _run({"nodes": [{"id": 2, "type": "OldFlag", "inputs": [], "outputs": [], "widgets_values": [saved]}],
+                    "links": []}, registered=("NewSampler",), table=table, shapes=shapes)
+        assert out["wf"]["nodes"][0]["widgets_values"][2] == want
