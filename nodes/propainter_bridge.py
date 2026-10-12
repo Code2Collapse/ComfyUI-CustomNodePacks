@@ -18,7 +18,6 @@ import logging
 import os
 import sys
 import threading
-import urllib.request
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -27,21 +26,22 @@ import torch
 log = logging.getLogger("MEC.propainter")
 
 
-# ---------- vendored ProPainter (sczhou/ProPainter has no setup.py) --
-# The PyPI package named `propainter` is an unrelated name-squatter (~6 KB).
-# We vendor the real upstream repo at `third_party/ProPainter/` and inject
-# its path so its top-level modules `RAFT`, `model.propainter`,
-# `model.recurrent_flow_completion` resolve.
-#
-# If the directory is missing (fresh git clone — `third_party/` is gitignored
-# so it never ships in the pack), fetch the upstream zip from GitHub on first
-# import. No git binary required, no pip install — just urllib + zipfile.
-_PROPAINTER_ZIP_URL = "https://github.com/sczhou/ProPainter/archive/refs/heads/main.zip"
+# ---------- ProPainter, only where the USER put it --------------------
+# ProPainter (sczhou/ProPainter) is under the S-Lab License 1.0: non-commercial use only. This pack never ships,
+# downloads or installs it (owner 2026-10-12, ledger L7.92) - it used to fetch the GitHub zip into third_party/ on
+# the first import, i.e. at every fresh ComfyUI start, without asking. It is used when the user already has a
+# checkout (it has no setup.py, and the PyPI name `propainter` is an unrelated ~6 KB package):
+#   1. the folder in the environment variable C2C_PROPAINTER_DIR, or
+#   2. <this pack>/third_party/ProPainter (a copy the user placed there; third_party/ is not part of the repo).
+PROPAINTER_REPO = "https://github.com/sczhou/ProPainter"
+PROPAINTER_LICENSE_NOTE = ("ProPainter is licensed under the S-Lab License 1.0 (non-commercial use only); see "
+                           f"{PROPAINTER_REPO}/blob/main/LICENSE. Using it is your decision - this pack does not "
+                           "download or install it.")
 
 
 def _propainter_dir_is_valid(d: str) -> bool:
     """Verify the directory looks like a checkout of sczhou/ProPainter."""
-    if not os.path.isdir(d):
+    if not d or not os.path.isdir(d):
         return False
     return (
         os.path.isfile(os.path.join(d, "model", "propainter.py"))
@@ -50,62 +50,28 @@ def _propainter_dir_is_valid(d: str) -> bool:
     )
 
 
-def _fetch_propainter_source(target_dir: str) -> bool:
-    """Download + extract sczhou/ProPainter main.zip into target_dir.
-    Returns True on success."""
-    import io
-    import shutil
-    import tempfile
-    import zipfile
-
-    parent = os.path.dirname(target_dir)
-    os.makedirs(parent, exist_ok=True)
-    log.info("[propainter_bridge] fetching ProPainter source from %s", _PROPAINTER_ZIP_URL)
-    try:
-        with urllib.request.urlopen(_PROPAINTER_ZIP_URL, timeout=120) as resp:
-            blob = resp.read()
-    except Exception as e:
-        log.warning("[propainter_bridge] download failed: %s", e)
-        return False
-    try:
-        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-            with tempfile.TemporaryDirectory(dir=parent) as tmp:
-                zf.extractall(tmp)
-                # Top-level inside the zip is `ProPainter-main/`.
-                roots = [os.path.join(tmp, n) for n in os.listdir(tmp)]
-                roots = [r for r in roots if os.path.isdir(r)]
-                if not roots:
-                    log.warning("[propainter_bridge] zip had no top-level dir")
-                    return False
-                src = roots[0]
-                # Atomic-ish: move into place. If target already exists, replace.
-                if os.path.exists(target_dir):
-                    shutil.rmtree(target_dir, ignore_errors=True)
-                shutil.move(src, target_dir)
-        ok = _propainter_dir_is_valid(target_dir)
-        if ok:
-            log.info("[propainter_bridge] ProPainter source installed at %s", target_dir)
-        else:
-            log.warning("[propainter_bridge] extracted dir failed validation: %s", target_dir)
-        return ok
-    except Exception as e:
-        log.warning("[propainter_bridge] extract failed: %s", e)
-        return False
-
-
-def _add_vendored_propainter_to_path() -> Optional[str]:
+def _propainter_candidates() -> list:
     here = os.path.dirname(os.path.abspath(__file__))
     pack_root = os.path.dirname(here)
-    candidate = os.path.join(pack_root, "third_party", "ProPainter")
-    if not _propainter_dir_is_valid(candidate):
-        if not _fetch_propainter_source(candidate):
-            return None
-    if candidate not in sys.path:
-        sys.path.insert(0, candidate)
-    return candidate
+    out = []
+    env = (os.environ.get("C2C_PROPAINTER_DIR") or "").strip()
+    if env:
+        out.append(os.path.abspath(env))
+    out.append(os.path.join(pack_root, "third_party", "ProPainter"))
+    return out
 
 
-_VENDORED_DIR = _add_vendored_propainter_to_path()
+def _add_installed_propainter_to_path() -> Optional[str]:
+    """Put an existing ProPainter checkout on sys.path. Never downloads, never creates anything."""
+    for candidate in _propainter_candidates():
+        if _propainter_dir_is_valid(candidate):
+            if candidate not in sys.path:
+                sys.path.insert(0, candidate)
+            return candidate
+    return None
+
+
+_VENDORED_DIR = _add_installed_propainter_to_path()
 
 
 # ---------- guarded propainter imports --------------------------------
@@ -117,6 +83,10 @@ HAS_PROPAINTER = False
 _IMPORT_ERROR: Optional[BaseException] = None
 
 try:
+    if _VENDORED_DIR is None:
+        # Without a checkout the bare `model` / `RAFT` names below could resolve to some OTHER package's top-level
+        # modules - never import code we did not locate on purpose.
+        raise ImportError("no ProPainter checkout found in: " + ", ".join(_propainter_candidates()))
     # Real sczhou/ProPainter — top-level layout (no `propainter.` prefix).
     from model.recurrent_flow_completion import RecurrentFlowCompleteNet as _RFC  # type: ignore
     from model.propainter import InpaintGenerator as _IG  # type: ignore
@@ -153,9 +123,9 @@ except Exception:
         os.path.join(os.path.dirname(__file__), "..", "..", "..", "models", "propainter")
     )
 
-os.makedirs(_MODELS_ROOT, exist_ok=True)
+# Nothing is created at import: the folder is the user's to make when they add the weights.
 
-
+# Where the user gets the weights themselves (the official v0.1.0 release). Not downloaded by this pack.
 _DEFAULT_URLS = {
     "raft-things.pth":
         "https://github.com/sczhou/ProPainter/releases/download/v0.1.0/raft-things.pth",
@@ -175,16 +145,14 @@ def require_propainter() -> None:
     """Call before any ProPainter use. Single chokepoint for the error msg."""
     if HAS_PROPAINTER:
         return
-    here = os.path.dirname(os.path.abspath(__file__))
-    pack_root = os.path.dirname(here)
-    target = os.path.join(pack_root, "third_party", "ProPainter")
+    target = _propainter_candidates()[-1]
     raise ProPainterMissingError(
-        "ProPainter source not available. The bridge tries to auto-download it\n"
-        f"from {_PROPAINTER_ZIP_URL} into {target}\n"
-        "but that step failed (no internet, blocked URL, or extraction error).\n"
-        "Manual fix: clone the repo there yourself:\n"
-        f"    git clone https://github.com/sczhou/ProPainter.git \"{target}\"\n"
-        f"Original import error: {type(_IMPORT_ERROR).__name__}: {_IMPORT_ERROR}"
+        "ProPainter is not installed. This node uses it only when you already have it.\n"
+        f"{PROPAINTER_LICENSE_NOTE}\n"
+        "To use it: get the code yourself and either set the environment variable C2C_PROPAINTER_DIR to that "
+        f"folder or put it at\n    {target}\n(e.g. git clone {PROPAINTER_REPO}.git \"{target}\"), then restart "
+        "ComfyUI.\n"
+        f"Details: {type(_IMPORT_ERROR).__name__}: {_IMPORT_ERROR}"
     )
 
 
@@ -200,42 +168,19 @@ def get_device(preferred: Optional[torch.device] = None) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# ---------- weight download ------------------------------------------
-def _download(url: str, dst: str) -> None:
-    # Offline switch: unit tests set it (L2.37), and so can a machine that must never reach the network.
-    if os.environ.get("C2C_NO_DOWNLOADS") == "1":
-        raise OSError(f"download disabled by C2C_NO_DOWNLOADS=1: {url}")
-    log.info("[propainter_bridge] downloading %s -> %s", url, dst)
-    tmp = dst + ".part"
-    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:
-        while True:
-            chunk = resp.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
-    os.replace(tmp, dst)
-
-
+# ---------- weights: the user's own files ----------------------------
 def ensure_weight(name: str) -> str:
-    """Resolve a weight filename inside the propainter models folder, downloading
-    if missing. Returns the absolute path. Raises FileNotFoundError on failure."""
+    """The absolute path of a ProPainter weight the user placed in models/propainter/. Never downloads (the
+    weights carry the same non-commercial licence as the code). Raises FileNotFoundError naming where to put it."""
     path = os.path.join(_MODELS_ROOT, name)
     if os.path.isfile(path):
         return path
     url = _DEFAULT_URLS.get(name)
-    if not url:
-        raise FileNotFoundError(
-            f"Unknown ProPainter weight '{name}'. "
-            f"Drop the .pth file under {_MODELS_ROOT}."
-        )
-    try:
-        _download(url, path)
-    except Exception as e:
-        raise FileNotFoundError(
-            f"Could not download {name} from {url}: {e}.\n"
-            f"Manually place the file at {path}."
-        ) from e
-    return path
+    raise FileNotFoundError(
+        f"ProPainter weight '{name}' is not in {_MODELS_ROOT}. This pack does not download it. "
+        + (f"The official file is {url}. " if url else "")
+        + f"Put it at {path} and run again. {PROPAINTER_LICENSE_NOTE}"
+    )
 
 
 # ---------- model bundle ---------------------------------------------

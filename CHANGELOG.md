@@ -2,6 +2,17 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (ProPainter is never downloaded)
+
+### Fixed
+
+- **The pack no longer downloads ProPainter.** On every fresh install it fetched the ProPainter source from GitHub
+  into `third_party/` the first time ComfyUI started, and the ProPainter nodes downloaded its weights on first use.
+  ProPainter is non-commercial (S-Lab License 1.0), so whether to use it is your decision: the nodes now use it only
+  when you already have it (environment variable `C2C_PROPAINTER_DIR`, or `third_party/ProPainter`) and the weights
+  are in `models/propainter/`; otherwise they say what is missing and how to add it. Nothing is created in your
+  models folder at start-up any more. See docs/propainter.md.
+
 ## Unreleased – 2026-10-12 (Folder Version Incrementer: filename versioning)
 
 Evidence: `docs/evidence/L7.94/`; tests/test_folder_incrementer_filename_versioning.py.

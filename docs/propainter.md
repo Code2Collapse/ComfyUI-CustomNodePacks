@@ -1,9 +1,25 @@
 # ProPainter Suite (MEC)
 
-> **Temporal video inpainting + model-free object/wire/plate removal.**
-> Wraps the vendored ProPainter (RAFT + Recurrent Flow Completion +
-> InpaintGenerator) with a ComfyUI-native API and chunked VRAM-safe
-> execution.
+> **Temporal video inpainting + object/wire/plate removal with ProPainter.**
+> Wraps ProPainter (RAFT + Recurrent Flow Completion + InpaintGenerator) with a
+> ComfyUI-native API and chunked VRAM-safe execution.
+
+## Installing ProPainter (your decision)
+
+ProPainter is licensed under the **S-Lab License 1.0 - non-commercial use only**
+(<https://github.com/sczhou/ProPainter/blob/main/LICENSE>). This pack does not ship,
+download or install it, nor its weights. The nodes use it when you already have it:
+
+1. Get the code yourself, e.g. `git clone https://github.com/sczhou/ProPainter.git`, and
+   either set the environment variable `C2C_PROPAINTER_DIR` to that folder or put it at
+   `ComfyUI-CustomNodePacks/third_party/ProPainter`.
+2. Put the three weights from the official release
+   (<https://github.com/sczhou/ProPainter/releases/tag/v0.1.0>: `raft-things.pth`,
+   `recurrent_flow_completion.pth`, `ProPainter.pth`) in `models/propainter/`.
+3. Restart ComfyUI.
+
+Without it, the ProPainter nodes say what is missing and how to add it. (Until 2026-10-12 the
+pack fetched the code from GitHub on its first start; it no longer does.)
 
 All ProPainter nodes live under `MaskEditControl/Inpaint` (except
 `Flow Refine — RAFT (MEC)` which lives under `MaskEditControl/VFX`).
@@ -219,7 +235,8 @@ installed.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ProPainterMissingError` | Vendored ProPainter not installed | `pip install -r requirements.txt`; ensure `third_party/ProPainter/` exists |
+| `ProPainterMissingError` | ProPainter is not installed | See *Installing ProPainter* above (`C2C_PROPAINTER_DIR` or `third_party/ProPainter/`) |
+| `weight 'ProPainter.pth' is not in models/propainter` | Weights not placed | Put the three official `.pth` files in `models/propainter/` |
 | OOM at RAFT stage | `raft_chunk` too high | Drop to 8 or 4 |
 | OOM at InpaintGenerator | `subvideo_length` too high | Drop to 16–24 on 8 GB |
 | Flicker on filled region | Color shift between windows | Set `color_match_mode=lab_transfer` |
