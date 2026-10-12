@@ -12,6 +12,13 @@
 //     (core's own connectToNode, the path it already takes over the title or a gap);
 //   - hover: if core found no snap target on a node that can take the wire, preview that first matching slot.
 // A drop on a slot that fits is unchanged (a compatible widget input still takes the wire). Off = core exactly.
+//
+// Only over a WIDGET row (L7.83, owner 2026-10-12: "native-compatible snapping behaviour across the entire canvas").
+// Over a real slot row of another type core deliberately shows no lock-in and drops nothing; the fallback used to
+// lock onto the first matching slot there instead - a wire aimed at "negative" connected "positive" (measured on 24
+// core / third-party / C2C nodes against C2C disabled, docs/evidence/L7.83/snap_matrix.json). Which input is under
+// the pointer is read from core's own hover result (node.mouseOver.inputId, set by processMouseMove), so the two
+// never disagree about where the pointer is.
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
@@ -19,10 +26,21 @@ import { getRuntime } from "./_c2c_runtime.js";
 const SETTING_ID = "c2c.linkSnap.matchingSlot";
 let _enabled = true;
 
+/** The input core's hover marks under the pointer (node.mouseOver.inputId), or null. */
+function hoveredInput(node) {
+    const i = node?.mouseOver?.inputId;
+    return Number.isInteger(i) && i >= 0 ? node.inputs?.[i] ?? null : null;
+}
+
 /** The input (or output) slot core would drop on at this canvas position, as in LinkConnector.dropOnNode. */
 function slotUnderPointer(lc, node, x, y) {
     if (lc.state?.connectingTo === "output") return node.getOutputOnPos?.([x, y]);
-    return node.getInputOnPos?.([x, y]) ?? node.getSlotFromWidget?.(lc.overWidget);
+    return hoveredInput(node) ?? node.getInputOnPos?.([x, y]) ?? node.getSlotFromWidget?.(lc.overWidget);
+}
+
+/** A real input slot (not a widget's socket): core's own rules apply there, untouched. */
+function isSlotRow(lc, slot) {
+    return lc.state?.connectingTo !== "output" && slot && !slot.widget;
 }
 
 function fits(lc, node, slot) {
@@ -36,7 +54,7 @@ function patchDrop(lc) {
     getRuntime().safePatch(proto, "dropOnNode", (orig) => function (node, event) {
         if (_enabled && node && event && !this.renderLinks.every((l) => l.node === node)) {
             const slot = slotUnderPointer(this, node, event.canvasX, event.canvasY);
-            if (slot && !fits(this, node, slot)) return this.connectToNode(node, event);
+            if (slot && !fits(this, node, slot) && !isSlotRow(this, slot)) return this.connectToNode(node, event);
         }
         return orig.call(this, node, event);
     }, { id: "linksnap.dropOnNode" });
@@ -56,6 +74,7 @@ function installPreview(canvas) {
         if (!lc?.isConnecting || !node || canvas._highlight_pos || lc.state?.connectingTo !== "input") return;
         const link = lc.renderLinks?.[0];
         if (!link || link.node === node || !lc.isNodeValidDrop(node)) return;
+        if (isSlotRow(lc, hoveredInput(node))) return;            // a slot of another type: native shows nothing
         const found = node.findInputByType?.(link.fromSlot?.type);
         if (!found?.slot || typeof node.getInputSlotPos !== "function") return;
         canvas._highlight_pos = node.getInputSlotPos(found.slot);

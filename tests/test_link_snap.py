@@ -22,7 +22,8 @@ def test_drop_falls_back_only_when_the_slot_under_the_pointer_does_not_fit():
     a = JS.index("function patchDrop")
     body = JS[a:JS.index("\nfunction ", a + 10)]
     assert 'safePatch(proto, "dropOnNode"' in body, "dropOnNode is looked up at call time: patch the prototype"
-    assert "if (slot && !fits(this, node, slot)) return this.connectToNode(node, event);" in body
+    assert ("if (slot && !fits(this, node, slot) && !isSlotRow(this, slot)) return this.connectToNode(node, event);"
+            in body)
     assert "return orig.call(this, node, event);" in body
 
 
@@ -31,3 +32,14 @@ def test_preview_is_a_listener_not_a_processMouseMove_patch():
     assert '"processMouseMove"' not in JS
     assert 'addEventListener("pointermove"' in JS
     assert "canvas._highlight_pos = node.getInputSlotPos(found.slot);" in JS
+
+
+def test_a_real_slot_of_another_type_keeps_native_behaviour():
+    """L7.83 (owner 2026-10-12): over a real slot row of another type core shows no lock-in and drops nothing; the
+    fallback locked onto the first matching slot there (a wire aimed at "negative" connected "positive").
+    docs/evidence/L7.83/snap_matrix.json: 0 differences from C2C disabled on 24 core / third-party / C2C nodes."""
+    assert "const i = node?.mouseOver?.inputId;" in JS            # core's own hover result decides
+    a = JS.index("function isSlotRow")
+    body = JS[a:JS.index("\n}", a)]
+    assert "!slot.widget" in body and 'connectingTo !== "output"' in body
+    assert "if (isSlotRow(lc, hoveredInput(node))) return;" in JS   # no preview over such a row
