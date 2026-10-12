@@ -288,7 +288,6 @@ class SAMModelLoaderMEC:
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        model_path = self._resolve_path(model_name, download_missing_registry=True)
         clean_name = model_name.replace("[download] ", "")
         detected_type = self._detect_type(clean_name) if model_type == "auto" else model_type
 
@@ -302,14 +301,28 @@ class SAMModelLoaderMEC:
                 f"Legacy SAM 1 (vit_h/l/b) and SAM 2.0 have been removed."
             )
 
-        sam_model, load_method = self._load_sam2_family(
-            model_path, clean_name, detected_type, torch_dtype, device, offload_to_cpu
-        )
-
-        if sam_model is None:
-            sam_model, load_method = self._load_generic_fallback(
-                model_path, torch_dtype, device, offload_to_cpu
+        try:
+            model_path = self._resolve_path(model_name, download_missing_registry=True)
+            sam_model, load_method = self._load_sam2_family(
+                model_path, clean_name, detected_type, torch_dtype, device, offload_to_cpu
             )
+
+            if sam_model is None:
+                sam_model, load_method = self._load_generic_fallback(
+                    model_path, torch_dtype, device, offload_to_cpu
+                )
+        except Exception as exc:
+            # L7.98: no SAM model here (none placed, the `sam2` package missing, no internet for a [download]).
+            # Hand out the model-free stand-in instead: the SAM nodes downstream run GrabCut and label their result
+            # approximate. C2C_MODEL_FALLBACK=off keeps the error.
+            from .mask_matting import _classic
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            stand_in = _classic.model_free_sam(clean_name, exc)
+            logger.warning("[MEC] SAM model '%s' not available (%s) - handing out the model-free stand-in; SAM "
+                           "nodes using it give approximate GrabCut masks.", clean_name,
+                           stand_in["fallback_from"]["why"][:160])
+            return (stand_in,)
 
         result = {
             "model": sam_model,

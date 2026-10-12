@@ -559,6 +559,13 @@ def get_sam_predictor(model, model_type, img_np):
     """
     predictor = None
 
+    if model_type == "model-free":
+        # L7.98: the SAM Model Loader found no SAM model - GrabCut behind the same predictor API
+        from .mask_matting._classic import ClassicSamPredictor
+        predictor = ClassicSamPredictor()
+        predictor.set_image(img_np)
+        return predictor
+
     if model_type in ("sam2.1", "sam2", "sam3"):
         try:
             from sam2.sam2_image_predictor import SAM2ImagePredictor

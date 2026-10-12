@@ -494,6 +494,9 @@ class SAMMaskGeneratorMEC:
             "selected_index": idx,
             "detected_bbox": det_bbox,
             "refine_iterations": refine_iterations,
+            # L7.98: a model-free stand-in from the SAM Model Loader made this mask - say so
+            **({"approximate": True, "model_free": model_info.get("fallback_from")}
+               if isinstance(model_info, dict) and model_info.get("model_free") else {}),
         }, indent=2)
 
         return (selected_mask, all_masks_t, det_bbox, selected_score, info)

@@ -297,6 +297,62 @@ class ClassicVideoTracker:
         state.clear()
 
 
+class ClassicSamPredictor:
+    """The SAM 2 image-predictor API (``set_image`` / ``predict``) over GrabCut, for the model-free SAM_MODEL the
+    SAM Model Loader hands out when no SAM model is installed (L7.98). Pixel coordinates; labels 1 = positive,
+    0 = negative. One mask per call - no invented alternatives - with the GrabCut agreement as its score.
+    ``mask_input`` (the low-res logits of an earlier pass) seeds the next pass, as SAM's refinement loop expects."""
+
+    MODEL_FREE = True
+
+    def __init__(self):
+        self._img: Optional[np.ndarray] = None
+
+    def set_image(self, img_np) -> None:
+        a = np.asarray(img_np)
+        if a.dtype != np.uint8:
+            a = (np.clip(a, 0, 1) * 255).astype(np.uint8) if float(a.max()) <= 1.0 else a.astype(np.uint8)
+        self._img = np.ascontiguousarray(a[..., :3])
+
+    def predict(self, point_coords=None, point_labels=None, box=None, mask_input=None, multimask_output=True,
+                return_logits=False, normalize_coords=True, **_kw):
+        if self._img is None:
+            raise RuntimeError("set_image() first")
+        cv2 = _cv2()
+        H, W = self._img.shape[:2]
+        pos: List[Tuple[float, float]] = []
+        neg: List[Tuple[float, float]] = []
+        if point_coords is not None and len(point_coords):
+            pc = np.asarray(point_coords, np.float64).reshape(-1, 2)
+            pl = (np.asarray(point_labels).reshape(-1) if point_labels is not None else np.ones(len(pc), int))
+            for (x, y), lab in zip(pc, pl):
+                if int(lab) == 1:
+                    pos.append((float(x), float(y)))
+                elif int(lab) == 0:
+                    neg.append((float(x), float(y)))
+        b = tuple(float(v) for v in np.asarray(box, np.float64).reshape(-1)[:4]) if box is not None else None
+        seed = None
+        if mask_input is not None:
+            mi = np.asarray(mask_input, np.float32)
+            mi = mi.reshape((-1,) + mi.shape[-2:])[0]
+            seed = cv2.resize((mi > 0).astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR) > 0.5
+        if seed is not None and seed.any():
+            m, score = grabcut_segment(self._img, pos, neg, None, mask=seed)
+        else:
+            m, score = grabcut_segment(self._img, pos, neg, b)
+        low = (cv2.resize(m, (256, 256), interpolation=cv2.INTER_LINEAR) * 20.0 - 10.0)[None].astype(np.float32)
+        masks = m[None].astype(np.float32) if return_logits else (m[None] > 0.5)
+        return masks, np.array([score], np.float32), low
+
+
+def model_free_sam(wanted: str, exc: BaseException) -> dict:
+    """The SAM_MODEL the loader hands out when the chosen SAM model cannot be loaded: no weights inside - every SAM
+    node that receives it runs GrabCut and labels its result model-free / approximate."""
+    return {"model": None, "model_type": "model-free", "device": "cpu", "original_device": "cpu",
+            "offload_to_cpu": False, "dtype": torch.float32, "model_path": "", "load_method": "model-free",
+            "model_free": True, "label": LABEL_SEGMENT, "fallback_from": describe_fallback(wanted, exc)}
+
+
 def text_needs_model(*_a, **_kw):
     """The ONYX ``seg_one_fn`` slot when no text-capable model is installed (only text keyframes call it)."""
     raise ValueError(TEXT_NEEDS_MODEL)

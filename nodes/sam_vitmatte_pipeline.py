@@ -429,6 +429,9 @@ class SAMViTMattePipelineMEC:
 
         info = json.dumps({
             "model_type": model_type,
+            # L7.98: a model-free stand-in from the SAM Model Loader made this mask - say so
+            **({"approximate": True, "model_free": model_info.get("fallback_from")}
+               if isinstance(model_info, dict) and model_info.get("model_free") else {}),
             "subject_type": subject_type,
             "frames_processed": num_frames,
             "batch_mode": bool(batch_mode),

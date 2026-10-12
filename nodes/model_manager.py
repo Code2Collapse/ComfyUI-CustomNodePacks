@@ -27,10 +27,11 @@ logger = logging.getLogger("MEC")
 # ── ComfyUI path helpers ──────────────────────────────────────────────
 try:
     import folder_paths
-    _MODELS_DIR: str = getattr(
-        folder_paths, "models_dir",
-        os.path.join(folder_paths.base_path, "models"),
-    )
+    # the fallback only when models_dir is missing: getattr's default is evaluated first, so the old one-liner
+    # raised AttributeError at import wherever folder_paths had models_dir but no base_path
+    _MODELS_DIR: str = getattr(folder_paths, "models_dir", None) or os.path.join(
+        getattr(folder_paths, "base_path", None) or os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "models")
 except ImportError:
     folder_paths = None  # type: ignore[assignment]
     _MODELS_DIR = os.path.join(
