@@ -61,7 +61,8 @@ def _model_path_or_repo(models_key: str, model_name: str, default_repo: str) -> 
     # MaskOps' auto_download - a download into models/<folder>/<name>, else a message naming that absolute folder
     from ...model_manager import resolve_transformers_repo
     from ..utils import _BACKEND_FOLDERS
-    return resolve_transformers_repo(default_repo, _BACKEND_FOLDERS.get(models_key, models_key))
+    return resolve_transformers_repo(default_repo, _BACKEND_FOLDERS.get(models_key, models_key),
+                                     widget="auto_download")
 
 
 def _to_pil(img_hwc: np.ndarray):

@@ -395,6 +395,7 @@ def test_locate_anything_segmenter_same_message(mm, pol, tmp_path):
     with pytest.raises(pol.ModelNotDownloaded) as e:
         s.load()
     assert os.path.abspath(str(tmp_path / "LLM" / "LocateAnything-3B")) in str(e.value)
+    assert "'auto_download'" in str(e.value)                           # MaskOps' own switch, not the node's
 
 
 @pytest.fixture
@@ -461,6 +462,7 @@ def test_maskops_vitmatte_missing_names_the_absolute_folder(mm, pol, tmp_path, m
     want = os.path.abspath(str(tmp_path / "vitmatte" / "vitmatte-small-composition-1k"))
     assert e.value.target == want and want in str(e.value)
     assert "huggingface.co/hustvl/vitmatte-small-composition-1k" in str(e.value)
+    assert "'auto_download'" in str(e.value)
     assert not (tmp_path / "vitmatte").exists()
 
 
@@ -479,6 +481,7 @@ def test_maskops_segmenters_missing_name_the_absolute_folder(mm, pol, tmp_path, 
         getattr(m, cls)(model_name="", device="cpu").load()
     want = os.path.abspath(str(tmp_path / folder / repo.split("/")[-1]))
     assert e.value.target == want and f"huggingface.co/{repo}" in str(e.value)
+    assert "'auto_download'" in str(e.value)
     assert not (tmp_path / folder).exists()
 
 
@@ -489,3 +492,4 @@ def test_maskops_dinov2_reanchor_missing_names_the_absolute_folder(mm, pol, tmp_
     with pytest.raises(pol.ModelNotDownloaded) as e:
         ra._load_dinov2("cpu")
     assert e.value.target == os.path.abspath(str(tmp_path / "dino" / "dinov2-small"))
+    assert "'auto_download'" in str(e.value)

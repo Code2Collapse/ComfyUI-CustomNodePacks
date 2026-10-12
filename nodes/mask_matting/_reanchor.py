@@ -81,7 +81,7 @@ def _load_dinov2(device: str, repo_id: str = "facebook/dinov2-small"):
         )
     # L7.97: installed copy anywhere, else a permitted download into models/dino/<name>, else the absolute folder
     from ..model_manager import resolve_transformers_repo
-    src = resolve_transformers_repo(repo_id, "dino")
+    src = resolve_transformers_repo(repo_id, "dino", widget="auto_download")
     processor = AutoImageProcessor.from_pretrained(src)
     model = AutoModel.from_pretrained(src).to(device).eval()
     _DINO_MODEL = (model, processor, device)

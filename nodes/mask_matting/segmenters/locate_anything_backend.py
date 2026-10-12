@@ -82,7 +82,7 @@ class LocateAnythingSegmenter(BaseSegmenter):
         # L7.97: same look-up and message as the LocateAnything node (models/LLM/<name>, other packs, HF cache)
         from ...model_manager import resolve_transformers_repo
         from ...locate_anything import LOCATE_ANYTHING_MODEL_DIR
-        folder = resolve_transformers_repo(self._repo, LOCATE_ANYTHING_MODEL_DIR)
+        folder = resolve_transformers_repo(self._repo, LOCATE_ANYTHING_MODEL_DIR, widget="auto_download")
         tokenizer = AutoTokenizer.from_pretrained(
             folder, trust_remote_code=True,
         )

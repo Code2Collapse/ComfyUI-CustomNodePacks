@@ -213,7 +213,7 @@ class ViTMatteMatter(BaseMatter):
             # models/vitmatte/<name>; without permission a message naming that absolute folder, not transformers'
             # generic "Can't load image processor" text.
             from ...model_manager import resolve_transformers_repo
-            src = resolve_transformers_repo(src, "vitmatte")
+            src = resolve_transformers_repo(src, "vitmatte", widget="auto_download")
             logger.info("[ViTMatte] loading %s", src)
 
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(

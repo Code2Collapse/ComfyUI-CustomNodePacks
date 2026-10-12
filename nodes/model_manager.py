@@ -457,12 +457,13 @@ def _complete_hf_folder(path: Optional[str]) -> bool:
         return False
 
 
-def resolve_transformers_repo(repo_or_path: str, model_dir: str) -> str:
+def resolve_transformers_repo(repo_or_path: str, model_dir: str, widget: str = "allow_download") -> str:
     """The folder a Transformers model given as a repo id or a local folder loads from (L7.97, owner D7.91).
 
     Order: the local folder as given; ``models/<model_dir>/<repo name>``; another pack's ``models/*/<repo name>``;
     the Hugging Face cache. Missing: downloaded into ``models/<model_dir>/<repo name>`` when the node allows it,
-    otherwise ``ModelNotDownloaded`` names that absolute folder. No folder is created without permission."""
+    otherwise ``ModelNotDownloaded`` names that absolute folder and the node's switch (``widget``: MaskOps calls it
+    auto_download). No folder is created without permission."""
     from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_snapshot
 
     p = str(repo_or_path or "").strip()
@@ -478,7 +479,7 @@ def resolve_transformers_repo(repo_or_path: str, model_dir: str) -> str:
             logger.info("[MEC] model %s: found at %s", p, found)
             return found
     if not downloads_allowed():
-        raise ModelNotDownloaded(p, target=local_dir, source=f"https://huggingface.co/{p}")
+        raise ModelNotDownloaded(p, target=local_dir, source=f"https://huggingface.co/{p}", widget=widget)
     from huggingface_hub import snapshot_download
     os.makedirs(local_dir, exist_ok=True)
     logger.info("[MEC] Downloading %s into %s …", p, local_dir)
