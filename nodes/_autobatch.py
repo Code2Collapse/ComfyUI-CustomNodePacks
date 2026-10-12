@@ -280,12 +280,24 @@ def _decode_v3_chunk(out: Any) -> tuple[tuple[Any, ...] | None, bool]:
     return None, True
 
 
+def _reassemble(layout: Sequence[bool], buffers: Sequence[torch.Tensor], non_tensors: Sequence[Any]) -> tuple[Any, ...]:
+    """The outputs in the node's own order. ``layout[i]`` = output i is a frame tensor (L7.82, owner 2026-10-12: a node
+    returning (IMAGE, INT, MASK) came back as (IMAGE, MASK, INT), so the next node got the wrong value per slot)."""
+    tensors, others = iter(buffers), iter(non_tensors)
+    return tuple(next(tensors) if is_tensor else next(others) for is_tensor in layout)
+
+
+def _output_layout(out: Sequence[Any]) -> list[bool]:
+    return [isinstance(item, torch.Tensor) for item in out]
+
+
 def _encode_v3_result(
     cal_out_raw: Any,
     buffers: Sequence[torch.Tensor],
     non_tensors: Sequence[Any],
+    layout: Sequence[bool] | None = None,
 ) -> Any:
-    args = tuple(buffers) + tuple(non_tensors)
+    args = _reassemble(layout, buffers, non_tensors) if layout is not None else tuple(buffers) + tuple(non_tensors)
     if _is_node_output(cal_out_raw):
         node_cls = type(cal_out_raw)
         return node_cls(*args)
@@ -610,6 +622,12 @@ def _discovery_refused(
         return "no IMAGE/MASK input"
     if not _has_frame_tensor_output(info):
         return "no IMAGE/MASK output"
+    # L7.82: only frame tensors can be stitched back together. A per-frame list (POSE_KEYPOINT from controlnet_aux
+    # DWPose), a count or an info string differs between chunks; the run then aborted after the probe and the first
+    # chunks and ran the whole batch again (each call reloading the node's model).
+    others = sorted({str(t) for t in (info.get("output") or ()) if not _is_frame_type(t)})
+    if others:
+        return "non-frame output " + ", ".join(others)
     if _is_v3_node(cls):
         raw = inspect.getattr_static(cls, "execute", None)
         if raw is None or not isinstance(raw, classmethod):
@@ -1392,7 +1410,7 @@ def _run_chunked_impl(
     )
     _record_chunked_call(label, batch_size, chunk_count, full_chunk, budget)
     if cal_non_tensors:
-        return tuple(buffers) + tuple(cal_non_tensors)
+        return _reassemble(_output_layout(cal_out), buffers, cal_non_tensors)
     return tuple(buffers)
 
 
@@ -1525,7 +1543,7 @@ def _run_chunked_v3_impl(
         _format_bytes(budget),
     )
     _record_chunked_call(label, batch_size, chunk_count, full_chunk, budget)
-    return _encode_v3_result(cal_out_raw, buffers, cal_non_tensors)
+    return _encode_v3_result(cal_out_raw, buffers, cal_non_tensors, _output_layout(cal_out))
 
 
 def run_chunked_v3(

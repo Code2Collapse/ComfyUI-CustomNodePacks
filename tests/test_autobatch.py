@@ -1090,3 +1090,77 @@ def test_setup_chunk_keeps_setup_under_ten_percent():
     assert ab._setup_chunk({"setup_s": 1.0, "frame_s": 0.01}) == 900
     assert ab._setup_chunk({"setup_s": 0.0, "frame_s": 0.01}) == 1
     assert ab._setup_chunk(None) == 1
+
+
+def test_universal_never_takes_a_node_with_a_non_frame_output():
+    """DWPose-style (IMAGE + POSE_KEYPOINT): per-frame lists cannot be stitched from chunks (L7.82)."""
+    class PoseLike:
+        RETURN_TYPES = ("IMAGE", "POSE_KEYPOINT")
+        FUNCTION = "estimate_pose"
+        OUTPUT_NODE = False
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}}
+
+        def estimate_pose(self, image):
+            return (image, [{"frame": i} for i in range(image.shape[0])])
+
+    class Plain(PoseLike):
+        RETURN_TYPES = ("IMAGE", "MASK")
+
+    refused = ab._discovery_refused(PoseLike, "PoseLike", {}, {"mode": "universal"})
+    assert refused == "non-frame output POSE_KEYPOINT"
+    assert ab._discovery_refused(Plain, "Plain", {}, {"mode": "universal"}) is None
+    found = ab.discover_universal_candidates({"PoseLike": PoseLike, "Plain": Plain}, {}, {"mode": "universal"})
+    assert set(found) == {"Plain"}
+
+
+def test_chunked_outputs_keep_the_node_s_own_order():
+    """(IMAGE, INT, MASK) came back as (IMAGE, MASK, INT): the next node got a mask for the number and a number for
+    the mask (L7.82, owner 2026-10-12 "not being passed downstream as expected")."""
+    img = torch.rand(10, 4, 4, 3)
+    out = ab.run_chunked(lambda image: (image * 2, 7, image[..., 0]), {"image": img}, {},
+                         label="order", budget_bytes=4 * 4 * 3 * 4 * 6)
+    assert isinstance(out[0], torch.Tensor) and torch.equal(out[0], img * 2)
+    assert out[1] == 7
+    assert isinstance(out[2], torch.Tensor) and torch.equal(out[2], img[..., 0])
+
+
+def test_v3_chunked_outputs_keep_the_node_s_own_order():
+    class FakeNodeOutput:
+        def __init__(self, *args, ui=None, expand=None, block_execution=None):
+            self.args, self.ui, self.expand, self.block_execution = args, ui, expand, block_execution
+
+    class V3Like:
+        @classmethod
+        def execute(cls, image):
+            return FakeNodeOutput(image + 1, "info", image[..., 0])
+
+    img = torch.rand(9, 4, 4, 3)
+    out = ab.run_chunked_v3(V3Like.execute.__func__, V3Like, {"image": img}, {}, label="v3order",
+                            budget_bytes=4 * 4 * 3 * 4 * 6)
+    assert isinstance(out, FakeNodeOutput)
+    assert torch.equal(out.args[0], img + 1) and out.args[1] == "info" and torch.equal(out.args[2], img[..., 0])
+
+
+def test_kijai_resize_v2_shape_is_never_wrapped_by_universal():
+    """ImageResizeKJv2 returns (IMAGE, INT, INT, MASK) and batches internally (per_batch): universal wrapping it
+    scrambled its outputs. Nodes with non-frame outputs are left alone (L7.82)."""
+    class ImageResizeKJv2Like:
+        RETURN_TYPES = ("IMAGE", "INT", "INT", "MASK")
+        FUNCTION = "resize"
+        OUTPUT_NODE = False
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",), "width": ("INT", {}), "height": ("INT", {})},
+                    "optional": {"mask": ("MASK",)}}
+
+        def resize(self, image, width, height, mask=None):
+            return (image, width, height, mask)
+
+    assert ab._discovery_refused(ImageResizeKJv2Like, "ImageResizeKJv2", {}, {"mode": "universal"}) \
+        == "non-frame output INT"
+    assert "ImageResizeKJv2" not in ab._effective_wrap_specs({"mode": "universal"},
+                                                             {"ImageResizeKJv2": ImageResizeKJv2Like})
