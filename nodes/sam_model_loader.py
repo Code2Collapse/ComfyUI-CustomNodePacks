@@ -335,6 +335,8 @@ class SAMModelLoaderMEC:
             logger.warning("[MEC] SAM model '%s' not available (%s) - handing out the model-free stand-in; SAM "
                            "nodes using it give approximate GrabCut masks.", clean_name,
                            stand_in["fallback_from"]["why"][:160])
+            from ._download_policy import model_status
+            stand_in["model_status"] = model_status(fallback_why=stand_in["fallback_from"]["why"])
             return (stand_in,)
 
         result = {
@@ -349,6 +351,8 @@ class SAMModelLoaderMEC:
             "model_path": model_path,
             "load_method": load_method,
         }
+        from ._download_policy import model_status  # owner D7.91: found / loaded / missing / needs permission
+        result["model_status"] = model_status(path=model_path or "")
 
         gc.collect()
         if torch.cuda.is_available():
@@ -400,6 +404,15 @@ class SAMModelLoaderMEC:
         # Strategy 3: Check if it's an absolute path that exists
         if os.path.isabs(clean_name) and os.path.exists(clean_name):
             return clean_name
+
+        # Strategy 4 (L7.97, owner: no duplicate downloads): the same file in any folder ComfyUI knows (other packs)
+        try:
+            from .model_manager import _find_file_model_elsewhere
+            elsewhere = _find_file_model_elsewhere(clean_name)
+        except Exception:
+            elsewhere = None
+        if elsewhere:
+            return elsewhere
 
         # Auto-download from HuggingFace Hub if flagged - or when a registry model saved under its plain name (it
         # was on disk where the workflow was saved) is missing on this machine (L2.13).

@@ -347,15 +347,18 @@ def get_model_path(name: str) -> str:
 
     # L7.97 (owner 2026-10-12): reuse what is installed anywhere, download only with the node's permission
     from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_file, hf_cached_snapshot
+    from ._download_policy import note_found as _found  # the node's status line names installed copies
 
     # For directory-based models (HF Transformers), return the directory
     if fname is None:
         local_dir = os.path.join(_MODELS_DIR, model_dir, name)
         if os.path.isdir(local_dir):
+            _found(local_dir)
             return local_dir
         found = _find_dir_model_elsewhere(reg["repo_id"]) or hf_cached_snapshot(reg["repo_id"])
         if found:
             logger.info("[MEC] model %s: found at %s", name, found)
+            _found(found)
             return found
         if not downloads_allowed():
             raise ModelNotDownloaded(name, target=os.path.abspath(local_dir),
@@ -374,6 +377,7 @@ def get_model_path(name: str) -> str:
                 try:
                     p = folder_paths.get_full_path(key, fname)
                     if p and os.path.exists(p):
+                        _found(p)
                         return p
                 except Exception:
                     pass
@@ -385,17 +389,20 @@ def get_model_path(name: str) -> str:
             c = os.path.join(d, safetensors_alt)
             if os.path.exists(c):
                 logger.info("[MEC] Using .safetensors format: %s", safetensors_alt)
+                _found(c)
                 return c
 
     for d in dirs_to_check:
         c = os.path.join(d, fname)
         if os.path.exists(c):
+            _found(c)
             return c
 
     # Another pack's folder ComfyUI knows about, or the Hugging Face cache
     found = _find_file_model_elsewhere(fname) or hf_cached_file(reg["repo_id"], fname)
     if found:
         logger.info("[MEC] model %s: found at %s", name, found)
+        _found(found)
         return found
 
     # Not found anywhere — download only with permission
@@ -464,19 +471,22 @@ def resolve_transformers_repo(repo_or_path: str, model_dir: str, widget: str = "
     the Hugging Face cache. Missing: downloaded into ``models/<model_dir>/<repo name>`` when the node allows it,
     otherwise ``ModelNotDownloaded`` names that absolute folder and the node's switch (``widget``: MaskOps calls it
     auto_download). No folder is created without permission."""
-    from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_snapshot
+    from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_snapshot, note_found
 
     p = str(repo_or_path or "").strip()
     if os.path.isdir(p):
+        note_found(p)
         return p
     if not _REPO_ID_RX.fullmatch(p):
         raise FileNotFoundError(f"Model folder not found: {os.path.abspath(p)}")
     local_dir = os.path.abspath(os.path.join(_MODELS_DIR, model_dir, p.split("/")[-1]))
     if _complete_hf_folder(local_dir):
+        note_found(local_dir)
         return local_dir
     for found in (_find_dir_model_elsewhere(p, ok=_complete_hf_folder), hf_cached_snapshot(p)):
         if _complete_hf_folder(found):
             logger.info("[MEC] model %s: found at %s", p, found)
+            note_found(found)
             return found
     if not downloads_allowed():
         raise ModelNotDownloaded(p, target=local_dir, source=f"https://huggingface.co/{p}", widget=widget)

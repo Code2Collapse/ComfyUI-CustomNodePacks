@@ -288,8 +288,10 @@ class SemanticSegmentMEC:
             torch.cuda.empty_cache()
 
         matched = [all_classes[i] for i in sorted(target_indices) if i < len(all_classes)]
+        from ._download_policy import model_status  # owner D7.91: found / loaded / missing / needs permission
         info = json.dumps({
             "model": model_name,
+            "model_status": model_status(),
             "family": family,
             "matched_classes": matched,
             "frames": B,
@@ -316,8 +318,9 @@ class SemanticSegmentMEC:
         if invert:
             result = 1.0 - result
         logger.warning("[MEC] SemanticSegment: %s - skin by colour only (model-free).", str(exc)[:200])
+        from ._download_policy import model_status
         info = json.dumps({
-            "model": model_name, "model_status": "missing - model-free result", "approximate": True,
+            "model": model_name, "model_status": model_status(fallback_why=str(exc)), "approximate": True,
             "model_free": {**_classic.describe_fallback(model_name, exc), "used": _classic.LABEL_SKIN},
             "matched_classes": possible, "needs_the_model": [c for c in wanted if c != "skin"], "frames": B,
             "invert": invert,

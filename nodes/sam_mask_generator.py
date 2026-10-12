@@ -516,8 +516,10 @@ class SAMMaskGeneratorMEC:
             bx2, by2 = min(W, bx2), min(H, by2)
             selected_mask = selected_mask[:, by1:by2, bx1:bx2]
 
+        from ._download_policy import sam_model_status  # owner D7.91 status line
         info = json.dumps({
             "model_type": model_type,
+            "model_status": sam_model_status(model_info),
             "num_masks": len(scores_list),
             "scores": scores_list,
             "selected_index": idx,

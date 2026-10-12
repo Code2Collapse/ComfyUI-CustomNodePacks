@@ -775,6 +775,7 @@ class UnifiedSegmentation:
     def _resolve(reg: dict, need_dl: bool) -> str:
         fname = reg["filename"]
         dirs_to_check: list[str] = []
+        from ._download_policy import note_found  # the node's status line names installed copies
 
         for sub in (reg["model_dir"], "sams"):
             dirs_to_check.append(os.path.join(_MODELS_DIR, sub))
@@ -785,6 +786,7 @@ class UnifiedSegmentation:
                     try:
                         p = folder_paths.get_full_path(key, fname)
                         if p and os.path.exists(p):
+                            note_found(p)
                             return p
                     except Exception:
                         pass
@@ -792,6 +794,7 @@ class UnifiedSegmentation:
         for d in dirs_to_check:
             c = os.path.join(d, fname)
             if os.path.exists(c):
+                note_found(c)
                 return c
 
         # L7.97 (owner 2026-10-12): reuse a copy installed anywhere - another pack's folder ComfyUI knows, or the
@@ -801,6 +804,7 @@ class UnifiedSegmentation:
         found = _find_file_model_elsewhere(fname) or hf_cached_file(reg["repo_id"], fname)
         if found:
             logger.info("[MEC] model %s: found at %s", fname, found)
+            note_found(found)
             return found
 
         # Download only with the calling node's Allow Download. need_dl (a '[download] ' name) no longer decides on

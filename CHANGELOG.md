@@ -19,6 +19,12 @@ Evidence: `docs/evidence/L7.97/` (workspace); tests/test_download_policy.py.
 - When a model is missing and downloading is off, the node runs its labelled model-free method where one exists
   (Background Remover, Semantic Segment for `skin`, SAM nodes, SeC + MatAnyone) or says plainly that the model is
   needed. The message names the absolute folder and the expected file name.
+- Every node with an `allow_download` switch reports a `model_status` line in its info output (SAM Model Loader in
+  its SAM_MODEL): `loaded - found at <path>`, `needs permission - model-free result` (missing, downloading off),
+  `missing - model-free result` (missing for another reason), or `not used (source_mask wired)` on Mask Placement.
+  Background Remover's earlier `missing - model-free result` now says `needs permission …` when that is the reason.
+- SAM Model Loader reuses a checkpoint another pack keeps (any folder ComfyUI knows) instead of downloading a
+  second copy for a `[download] …` choice.
 - **Behaviour change:** a saved SAM Model Loader choice `[download] …` no longer downloads by itself; tick
   `allow_download` (owner decision 2026-10-12).
 

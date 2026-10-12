@@ -310,8 +310,11 @@ class MaskPlacementMEC:
                 cv2.circle(frame_u8, (int(cx), int(cy)), 5, (60, 180, 255), -1, cv2.LINE_AA)
             overlay[i] = frame_u8.astype(np.float32) / 255.0
 
+        from ._download_policy import sam_model_status  # owner D7.91 status line
         info = json.dumps({
             "source_mode": source_mode,
+            "model_status": ("not used (source_mask wired)" if source_mode == "byo_mask"
+                             else sam_model_status(sam_model)),
             "source_bbox": [sx1, sy1, sx2, sy2],
             "corners": corners.tolist(),
             "feather_px": feather,

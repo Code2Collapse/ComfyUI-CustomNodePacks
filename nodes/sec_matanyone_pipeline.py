@@ -368,6 +368,7 @@ class SeCMatAnyonePipelineMEC:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        from ._download_policy import model_status  # owner D7.91 status line
         info = json.dumps({
             "segmentation_model": segmentation_model,
             "matting_backend": actual_backend,
@@ -376,6 +377,10 @@ class SeCMatAnyonePipelineMEC:
             "seg_score": round(score, 4),
             "edge_refine": edge_refine_method,
             "n_warmup": n_warmup,
+            # owner D7.91: found / loaded / missing / needs permission, per model
+            "model_status": "; ".join(
+                f"{part}: " + (model_status(fallback_why=model_free[part].get("why", "")) if part in model_free
+                                else "loaded") for part in ("segmentation", "matting")),
             **({"approximate": True, "model_free": model_free} if model_free else {}),
         }, indent=2)
 

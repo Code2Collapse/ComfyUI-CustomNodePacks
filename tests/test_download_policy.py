@@ -262,7 +262,8 @@ def test_background_remover_model_free(monkeypatch):
     fg, mask, info = br.BackgroundRemoverMEC().remove_bg(as_image(img), "birefnet_general", 0.5, False, 0)
     info = json.loads(info)
     assert iou(mask[0].numpy(), gt) >= 0.8
-    assert info["approximate"] is True and info["model_status"].startswith("missing")
+    # downloading is off (not "the model is broken"): the owner's "requires user permission" status
+    assert info["approximate"] is True and info["model_status"] == "needs permission - model-free result"
     assert "border" in info["model_free"]["used"]
 
 
@@ -287,6 +288,7 @@ def test_multi_mask_picker_without_a_loader(monkeypatch):
     out = out["result"] if isinstance(out, dict) else out
     info = json.loads(out[-1])
     assert iou(out[0][0].numpy(), gt) >= 0.85 and info["approximate"] is True
+    assert info["model_status"] == "needs permission - model-free result"
 
 
 def test_sam_loader_download_entry_needs_permission(monkeypatch):
@@ -493,3 +495,62 @@ def test_maskops_dinov2_reanchor_missing_names_the_absolute_folder(mm, pol, tmp_
         ra._load_dinov2("cpu")
     assert e.value.target == os.path.abspath(str(tmp_path / "dino" / "dinov2-small"))
     assert "'auto_download'" in str(e.value)
+
+
+# ── status line (owner 2026-10-12: "Indicate whether the model was found, loaded, missing, or requires user
+#    permission to download") ──────────────────────────────────────────────────────────────────────────────────────
+
+def test_model_status_vocabulary(pol, tmp_path):
+    assert pol.model_status(fallback_why="Model 'x' is not installed and downloading is off. ...") ==         "needs permission - model-free result"
+    assert pol.model_status(fallback_why="No module named 'sam2'") == "missing - model-free result"
+    assert pol.model_status() == "loaded"
+    pol.note_found(str(tmp_path))                                     # outside a node: not recorded
+    assert pol.found_paths() == []
+    with pol.allow_downloads(False):
+        pol.note_found(str(tmp_path))
+        pol.note_found(str(tmp_path))                                 # once
+        assert pol.found_paths() == [os.path.abspath(str(tmp_path))]
+        assert pol.model_status() == f"loaded - found at {os.path.abspath(str(tmp_path))}"
+        assert pol.model_status(path="/x/y") == "loaded - found at /x/y"
+    assert pol.found_paths() == []                                    # the record ends with the node run
+
+
+def test_resolvers_report_the_installed_copy_they_hand_out(mm, pol, tmp_path):
+    other = tmp_path / "BiRefNet" / "BiRefNet"                       # another pack's copy
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("{}")
+    with pol.allow_downloads(False):
+        assert mm.get_model_path("birefnet_general") == str(other)
+        assert pol.found_paths() == [os.path.abspath(str(other))]
+        assert pol.model_status().endswith(os.path.abspath(str(other)))
+    la = tmp_path / "LLM" / "LocateAnything-3B"
+    la.mkdir(parents=True)
+    (la / "config.json").write_text("{}")
+    (la / "model.safetensors").write_bytes(b"x")
+    with pol.allow_downloads(False):
+        mm.resolve_transformers_repo(_LA, "LLM")
+        assert pol.found_paths() == [os.path.abspath(str(la))]
+
+
+def test_sam_model_dicts_carry_the_status(monkeypatch, tmp_path):
+    sml = pytest.importorskip("nodes.sam_model_loader")
+    pol = pytest.importorskip("nodes._download_policy")
+    L = sml.SAMModelLoaderMEC
+    monkeypatch.setattr(sml, "HAS_FOLDER_PATHS", False)
+    monkeypatch.setattr(L, "_auto_download", staticmethod(lambda n: pytest.fail("must not download")))
+    (sam,) = L().load("[download] sam2.1_hiera_large.pt", "auto", "cpu", False, "float32")
+    assert sam["model_status"] == "needs permission - model-free result"
+    assert pol.sam_model_status(sam) == "needs permission - model-free result"
+    assert pol.sam_model_status({"model": object(), "model_path": "/m/sam2/a.pt"}) == "loaded - found at /m/sam2/a.pt"
+
+
+def test_sam_loader_reuses_another_packs_copy(monkeypatch, tmp_path):
+    sml = pytest.importorskip("nodes.sam_model_loader")
+    mmod = pytest.importorskip("nodes.model_manager")
+    f = tmp_path / "other_pack" / "sam2.1_hiera_large.pt"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+    monkeypatch.setattr(sml, "HAS_FOLDER_PATHS", False)
+    monkeypatch.setattr(mmod, "_find_file_model_elsewhere", lambda name: str(f) if name == f.name else None)
+    monkeypatch.setattr(sml.SAMModelLoaderMEC, "_auto_download", staticmethod(lambda n: pytest.fail("duplicate")))
+    assert sml.SAMModelLoaderMEC._resolve_path(f"[download] {f.name}", download_missing_registry=True) == str(f)

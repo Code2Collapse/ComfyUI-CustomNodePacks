@@ -13,22 +13,52 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 
 _ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar("c2c_downloads_allowed", default=False)
+# Installed copies the resolvers found during the current node run (None outside a node)
+_FOUND: contextvars.ContextVar[Optional[List[str]]] = contextvars.ContextVar("c2c_models_found", default=None)
 
 
 @contextlib.contextmanager
 def allow_downloads(flag: bool) -> Iterator[None]:
     token = _ALLOWED.set(bool(flag) and os.environ.get("C2C_NO_DOWNLOADS") != "1")
+    found = _FOUND.set([])
     try:
         yield
     finally:
+        _FOUND.reset(found)
         _ALLOWED.reset(token)
 
 
 def downloads_allowed() -> bool:
     return bool(_ALLOWED.get()) and os.environ.get("C2C_NO_DOWNLOADS") != "1"
+
+
+def note_found(path: str) -> None:
+    """A resolver reports an installed copy it is about to hand out (not a download)."""
+    seen = _FOUND.get()
+    if seen is None or not path:
+        return
+    p = os.path.abspath(str(path))
+    if p not in seen:
+        seen.append(p)
+
+
+def found_paths() -> List[str]:
+    return list(_FOUND.get() or [])
+
+
+def model_status(*, fallback_why: Optional[str] = None, path: str = "") -> str:
+    """The status line a node puts in its info output. Owner 2026-10-12: "Show clear status messages: Indicate
+    whether the model was found, loaded, missing, or requires user permission to download." ``fallback_why`` is the
+    reason a model-free result was used; ``path`` defaults to the installed copies found during this run."""
+    if fallback_why is not None:
+        if "downloading is off" in str(fallback_why):
+            return "needs permission - model-free result"
+        return "missing - model-free result"
+    where = path or ", ".join(found_paths())
+    return "loaded" + (f" - found at {where}" if where else "")
 
 
 class ModelNotDownloaded(FileNotFoundError):
@@ -107,3 +137,10 @@ def require_hub_repo(repo: str, *, target_hint: str = "", weights_missing: bool 
     if not cached:
         raise ModelNotDownloaded(repo, target=target_hint or (hub or "the torch hub folder"),
                                  source=f"https://github.com/{repo}")
+
+
+def sam_model_status(model_info) -> str:
+    """Owner D7.91 status line for a SAM_MODEL from the SAM Model Loader."""
+    if isinstance(model_info, dict) and model_info.get("model_free"):
+        return model_status(fallback_why=(model_info.get("fallback_from") or {}).get("why", ""))
+    return model_status(path=model_info.get("model_path", "") if isinstance(model_info, dict) else "")

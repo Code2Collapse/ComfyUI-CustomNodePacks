@@ -274,9 +274,10 @@ class BackgroundRemoverMEC:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        from ._download_policy import model_status  # owner D7.91: found / loaded / missing / needs permission
         info = json.dumps({
             "model": model_name,
-            "model_status": "missing - model-free result" if model_free else "loaded",
+            "model_status": model_status(fallback_why=model_free["why"] if model_free else None),
             **({"approximate": True, "model_free": model_free} if model_free else {}),
             "frames": B,
             "threshold": threshold,
