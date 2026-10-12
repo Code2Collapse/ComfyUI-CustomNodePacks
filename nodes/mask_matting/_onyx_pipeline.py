@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
@@ -763,10 +764,13 @@ def ensure_sam31_video_model(
 
     if not _have_vendor():
         # Not a broken install: the SAM 3.1 library is not part of this repo (third_party/ is not shipped).
+        from .segmenters.sam31_backend import _vendor_root
+        from .utils import backend_first_root
         raise RuntimeError(
             "SAM 3.1 is not installed: its library is not part of ComfyUI-CustomNodePacks and was looked for in "
-            "ComfyUI-CustomNodePacks/third_party/sam3_lib; its weights go in models/sam3.1/. SAM 3 is under Meta's "
-            "SAM License. Without it the model-free mode (GrabCut, approximate) works with points, a box or a mask."
+            f"{_vendor_root()}; its weights go in {os.path.abspath(backend_first_root('sam3.1'))}. SAM 3 is under "
+            "Meta's SAM License. Without it the model-free mode (GrabCut, approximate) works with points, a box or a "
+            "mask."
         )
     cls = get_segmenter_cls("sam3.1")
     if cls is None:

@@ -112,12 +112,17 @@ class SAM31Segmenter(BaseSegmenter):
                 "SAM 3.1 vendored library not present. Expected at "
                 f"{_vendor_root()}. Reinstall ComfyUI-CustomNodePacks."
             )
-        ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name)
+        ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None
         if ckpt is None or not os.path.isfile(ckpt):
+            # L7.97: absolute folder + file. "(auto)" with nothing installed arrives here with no name: name the
+            # first preset as the file to get.
+            from ..utils import list_backend_presets
+            root = os.path.abspath(backend_first_root(self.MODELS_KEY))
+            presets = list_backend_presets(self.MODELS_KEY)
+            want = self.model_name or (presets[0]["name"] if presets else "a SAM 3.1 checkpoint")
             raise FileNotFoundError(
-                f"SAM 3.1 checkpoint '{self.model_name}' not under "
-                f"{backend_first_root(self.MODELS_KEY)}. Pick a "
-                "[preset:sam3.1] entry and tick auto_download."
+                f"SAM 3.1 checkpoint is not installed. Expected file '{want}' in folder: {root}. Place it "
+                "there, or pick a [preset:sam3.1] entry and tick auto_download to download it there."
             )
 
         mod, proc_mod = _import_vendor()

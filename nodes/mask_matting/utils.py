@@ -39,12 +39,8 @@ _BACKEND_FOLDERS: Dict[str, str] = {
 }
 
 
-def _register_backend_folders() -> None:
-    """Tell ``folder_paths`` about each backend's models dir.
-
-    Safe to call multiple times; uses ``add_model_folder_path`` if available
-    and falls back to mutating ``folder_names_and_paths`` directly.
-    """
+def _models_root() -> Optional[str]:
+    """ComfyUI's models folder, or None when nothing can anchor it."""
     # `models_dir` first, then `base_path`, and only then the module's own
     # location. `__file__` is not guaranteed to exist — a namespace package, a
     # frozen build or a stubbed folder_paths has none, and reaching for it
@@ -60,6 +56,16 @@ def _register_backend_folders() -> None:
         here = getattr(folder_paths, "__file__", None)
         models_root = (os.path.join(os.path.dirname(here), "models")
                        if here else None)
+    return models_root
+
+
+def _register_backend_folders() -> None:
+    """Tell ``folder_paths`` about each backend's models dir.
+
+    Safe to call multiple times; uses ``add_model_folder_path`` if available
+    and falls back to mutating ``folder_names_and_paths`` directly.
+    """
+    models_root = _models_root()
     if not models_root:
         # Nothing to anchor to. Registering nothing is correct here: the
         # backends fall back to their own search paths and report a missing
@@ -286,7 +292,8 @@ def backend_first_root(key: str) -> str:
             return roots[0]
     except Exception:
         pass
-    return os.path.join(folder_paths.models_dir, _BACKEND_FOLDERS.get(key, key))
+    # Same anchor as the registration above; a stubbed / partial folder_paths has no models_dir (it raised here).
+    return os.path.join(_models_root() or "models", _BACKEND_FOLDERS.get(key, key))
 
 
 # ──────────────────────────────────────────────────────────────────────

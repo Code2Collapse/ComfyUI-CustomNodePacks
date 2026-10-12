@@ -315,3 +315,135 @@ def test_sec_pipeline_model_free(monkeypatch):
     info = json.loads(out[-1])
     assert iou(out[1][0].numpy(), gt) >= 0.8
     assert info["approximate"] is True and set(info["model_free"]) == {"segmentation", "matting"}
+
+
+# ── L7.97 gaps (owner status note 2026-10-13): LocateAnything + SAM 3.1 name the absolute folder and file ───────────
+
+_LA = "nvidia/LocateAnything-3B"
+
+
+def _hf_folder(p, weights=True):
+    p.mkdir(parents=True)
+    (p / "config.json").write_text("{}")
+    if weights:
+        (p / "model.safetensors").write_bytes(b"x")
+    return p
+
+
+def test_transformers_repo_missing_names_the_absolute_folder(mm, pol, tmp_path):
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        mm.resolve_transformers_repo(_LA, "LLM")
+    want = os.path.abspath(str(tmp_path / "LLM" / "LocateAnything-3B"))
+    assert e.value.target == want and os.path.isabs(e.value.target) and want in str(e.value)
+    assert "huggingface.co/nvidia/LocateAnything-3B" in str(e.value) and "allow_download" in str(e.value)
+    assert not (tmp_path / "LLM").exists()                               # nothing created without permission
+
+
+def test_transformers_repo_found_in_own_folder_other_pack_or_cache(mm, pol, tmp_path, monkeypatch):
+    own = _hf_folder(tmp_path / "LLM" / "LocateAnything-3B")
+    assert mm.resolve_transformers_repo(_LA, "LLM") == str(own)
+    other = tmp_path / "other"
+    other.mkdir()
+    assert mm.resolve_transformers_repo(str(other), "LLM") == str(other)   # a local folder is used as given
+    (own / "model.safetensors").unlink()                                 # half a folder is not an installed copy
+    pack = _hf_folder(tmp_path / "VLM" / "LocateAnything-3B")
+    assert mm.resolve_transformers_repo(_LA, "LLM") == str(pack)
+    (pack / "model.safetensors").unlink()
+    cache = _hf_folder(tmp_path / "hf" / "snap")
+    monkeypatch.setattr(pol, "hf_cached_snapshot", lambda repo: str(cache) if repo == _LA else None)
+    assert mm.resolve_transformers_repo(_LA, "LLM") == str(cache)
+    (cache / "model.safetensors").unlink()                               # e.g. only the tokenizer was cached
+    with pytest.raises(pol.ModelNotDownloaded):
+        mm.resolve_transformers_repo(_LA, "LLM")
+
+
+def test_transformers_repo_permitted_download_goes_into_its_folder(mm, pol, tmp_path, monkeypatch):
+    hub = pytest.importorskip("huggingface_hub")
+    got = []
+    monkeypatch.setattr(hub, "snapshot_download", lambda **k: got.append(k) or k["local_dir"])
+    with pol.allow_downloads(True):
+        p = mm.resolve_transformers_repo(_LA, "LLM")
+    want = os.path.abspath(str(tmp_path / "LLM" / "LocateAnything-3B"))
+    assert p == want and got == [{"repo_id": _LA, "local_dir": want}]
+
+
+def test_transformers_repo_bad_local_path(mm, pol, tmp_path):
+    bad = str(tmp_path / "no" / "such" / "folder")
+    with pytest.raises(FileNotFoundError) as e:
+        mm.resolve_transformers_repo(bad, "LLM")
+    assert not isinstance(e.value, pol.ModelNotDownloaded) and os.path.abspath(bad) in str(e.value)
+
+
+def test_locate_anything_node_message_and_no_transformers_load(mm, pol, tmp_path, monkeypatch):
+    la = pytest.importorskip("nodes.locate_anything")
+    tf = pytest.importorskip("transformers")
+    for cls in ("AutoModel", "AutoTokenizer", "AutoProcessor"):
+        monkeypatch.setattr(getattr(tf, cls), "from_pretrained",
+                            classmethod(lambda c, *a, **k: pytest.fail("must not load before the model is found")))
+    monkeypatch.setattr(la.LocateAnythingGroundingMEC, "_model_cache", {})
+    img = torch.zeros(1, 32, 32, 3)
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        la.LocateAnythingGroundingMEC().run(img, "person", device="cpu")
+    assert os.path.abspath(str(tmp_path / "LLM" / "LocateAnything-3B")) in str(e.value)
+    assert not (tmp_path / "LLM").exists()
+
+
+def test_locate_anything_segmenter_same_message(mm, pol, tmp_path):
+    seg = pytest.importorskip("nodes.mask_matting.segmenters.locate_anything_backend")
+    pytest.importorskip("transformers")
+    s = seg.LocateAnythingSegmenter(device="cpu")
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        s.load()
+    assert os.path.abspath(str(tmp_path / "LLM" / "LocateAnything-3B")) in str(e.value)
+
+
+@pytest.fixture
+def mm_utils(monkeypatch, tmp_path):
+    """MaskOps' folder look-up as in a real ComfyUI: models_dir set, sam3.1 registered there."""
+    utils = pytest.importorskip("nodes.mask_matting.utils")
+    fp = types.SimpleNamespace(models_dir=str(tmp_path), base_path=str(tmp_path),
+                               get_folder_paths=lambda k: [str(tmp_path / "sam3.1")] if k == "sam3.1" else [])
+    monkeypatch.setattr(utils, "folder_paths", fp)
+    return utils
+
+
+def test_backend_first_root_survives_a_partial_folder_paths(monkeypatch):
+    utils = pytest.importorskip("nodes.mask_matting.utils")
+    monkeypatch.setattr(utils, "folder_paths", types.SimpleNamespace())    # no models_dir: it raised AttributeError
+    assert utils.backend_first_root("birefnet").replace("\\", "/").endswith("models/BiRefNet")
+
+
+def test_maskops_preset_message_absolute_folder_file_and_source(pol, monkeypatch, mm_utils, tmp_path):
+    node = pytest.importorskip("nodes.mask_matting.node")
+    utils = mm_utils
+    monkeypatch.setattr(node, "list_backend_files", lambda key: [])
+    monkeypatch.setattr(node, "download_preset", lambda *a, **k: pytest.fail("must not download"))
+    name = "sam3.1_multiplex_fp16.safetensors"
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        node._resolve_model_choice(f"[preset:sam3.1] {name}", "sam3.1", auto_download=False)
+    root = os.path.abspath(str(tmp_path / "sam3.1"))
+    assert e.value.target == root and e.value.file_name == name
+    assert root in str(e.value) and "huggingface.co/Comfy-Org/sam3.1" in str(e.value)
+    assert "'auto_download'" in str(e.value) and "models/sam3.1/" not in str(e.value)
+    with pytest.raises(FileNotFoundError):                               # callers catching FileNotFoundError still do
+        node._resolve_model_choice(f"[preset:sam3.1] {name}", "sam3.1", auto_download=False)
+
+
+def test_sam31_missing_checkpoint_and_library_messages_are_absolute(monkeypatch, mm_utils, tmp_path):
+    b = pytest.importorskip("nodes.mask_matting.segmenters.sam31_backend")
+    onyx = pytest.importorskip("nodes.mask_matting._onyx_pipeline")
+    root = os.path.abspath(str(tmp_path / "sam3.1"))
+    assert os.path.abspath(mm_utils.backend_first_root("sam3.1")) == root
+    monkeypatch.setattr(b, "_have_vendor", lambda: True)
+    monkeypatch.setattr(b, "resolve_backend_weight", lambda key, name: None)
+    with pytest.raises(FileNotFoundError) as e:
+        b.SAM31Segmenter(model_name="", device="cpu").load()             # "(auto)" with nothing installed
+    assert root in str(e.value) and "'sam3.1_multiplex_fp16.safetensors'" in str(e.value)
+    with pytest.raises(FileNotFoundError) as e:
+        b.SAM31Segmenter(model_name="mine.safetensors", device="cpu").load()
+    assert root in str(e.value) and "'mine.safetensors'" in str(e.value)
+    monkeypatch.setattr(b, "_have_vendor", lambda: False)
+    with pytest.raises(RuntimeError) as e:
+        onyx.ensure_sam31_video_model(model_name="", device="cpu", precision="fp32", attention="auto",
+                                      offload="none", auto_download=False)
+    assert root in str(e.value) and str(b._vendor_root()) in str(e.value) and "models/sam3.1/" not in str(e.value)

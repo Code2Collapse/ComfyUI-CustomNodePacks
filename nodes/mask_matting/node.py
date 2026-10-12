@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -65,6 +66,7 @@ except Exception as _reanchor_exc:  # noqa: BLE001 — any failure must not kill
         return None  # safe no-op cleanup
 from .utils import (
     apply_subject_preset,
+    backend_first_root,
     bbox_from_mask,
     bbox_to_json,
     download_preset,
@@ -219,11 +221,12 @@ def _resolve_model_choice(choice: str, expected_key: str,
         if name in avail:
             return name
         if not auto_download:
-            raise FileNotFoundError(
-                f"Preset '{name}' is not installed for '{expected_key}'. "
-                f"Tick `auto_download` to fetch it, or place the file in "
-                f"models/{expected_key}/ manually."
-            )
+            # L7.97: the absolute folder ComfyUI looks in (not a relative models/<key>/, which also named the wrong
+            # folder for keys whose folder differs, e.g. birefnet -> BiRefNet)
+            from .._download_policy import ModelNotDownloaded
+            url = next((p.get("url", "") for p in list_backend_presets(expected_key) if p.get("name") == name), "")
+            raise ModelNotDownloaded(name, target=os.path.abspath(backend_first_root(expected_key)), file_name=name,
+                                     source=url, widget="auto_download")
         download_preset(expected_key, name)
         return name
 

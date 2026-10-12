@@ -79,16 +79,18 @@ class LocateAnythingSegmenter(BaseSegmenter):
             ) from e
 
         dtype = torch.bfloat16 if self.precision != "fp32" else torch.float32
-        from ..._download_policy import hf_kwargs  # L7.97
-        kw = hf_kwargs(self._repo)
+        # L7.97: same look-up and message as the LocateAnything node (models/LLM/<name>, other packs, HF cache)
+        from ...model_manager import resolve_transformers_repo
+        from ...locate_anything import LOCATE_ANYTHING_MODEL_DIR
+        folder = resolve_transformers_repo(self._repo, LOCATE_ANYTHING_MODEL_DIR)
         tokenizer = AutoTokenizer.from_pretrained(
-            self._repo, trust_remote_code=True, **kw,
+            folder, trust_remote_code=True,
         )
         processor = AutoProcessor.from_pretrained(
-            self._repo, trust_remote_code=True, **kw,
+            folder, trust_remote_code=True,
         )
         model = AutoModel.from_pretrained(
-            self._repo, torch_dtype=dtype, trust_remote_code=True, **kw,
+            folder, torch_dtype=dtype, trust_remote_code=True,
         ).to(self.device).eval()
 
         bundle = (model, tokenizer, processor)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import re
 import shutil
 from typing import Any, Optional
 
@@ -419,9 +420,9 @@ def _find_file_model_elsewhere(fname: str) -> Optional[str]:
     return None
 
 
-def _find_dir_model_elsewhere(repo_id: str) -> Optional[str]:
+def _find_dir_model_elsewhere(repo_id: str, ok=None) -> Optional[str]:
     """A Transformers model folder another pack keeps, e.g. models/BiRefNet/BiRefNet or models/RMBG/RMBG-2.0: one
-    folder level under models/, named like the repo, holding a config.json. No download."""
+    folder level under models/, named like the repo, holding a config.json (or passing ``ok``). No download."""
     tail = (repo_id or "").split("/")[-1].lower()
     if not tail or not os.path.isdir(_MODELS_DIR):
         return None
@@ -436,9 +437,53 @@ def _find_dir_model_elsewhere(repo_id: str) -> Optional[str]:
         except OSError:
             pass
         for c in cands:
-            if os.path.isfile(os.path.join(c, "config.json")):
+            if (ok(c) if ok else os.path.isfile(os.path.join(c, "config.json"))):
                 return c
     return None
+
+
+_REPO_ID_RX = re.compile(r"[\w.\-]+/[\w.\-]+")
+_WEIGHT_EXTS = (".safetensors", ".bin", ".pt", ".pth")
+
+
+def _complete_hf_folder(path: Optional[str]) -> bool:
+    """A Transformers folder that can load: config.json plus at least one weight file (a cache snapshot can hold
+    only the tokenizer when an earlier load stopped half way)."""
+    if not path or not os.path.isfile(os.path.join(path, "config.json")):
+        return False
+    try:
+        return any(n.lower().endswith(_WEIGHT_EXTS) for n in os.listdir(path))
+    except OSError:
+        return False
+
+
+def resolve_transformers_repo(repo_or_path: str, model_dir: str) -> str:
+    """The folder a Transformers model given as a repo id or a local folder loads from (L7.97, owner D7.91).
+
+    Order: the local folder as given; ``models/<model_dir>/<repo name>``; another pack's ``models/*/<repo name>``;
+    the Hugging Face cache. Missing: downloaded into ``models/<model_dir>/<repo name>`` when the node allows it,
+    otherwise ``ModelNotDownloaded`` names that absolute folder. No folder is created without permission."""
+    from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_snapshot
+
+    p = str(repo_or_path or "").strip()
+    if os.path.isdir(p):
+        return p
+    if not _REPO_ID_RX.fullmatch(p):
+        raise FileNotFoundError(f"Model folder not found: {os.path.abspath(p)}")
+    local_dir = os.path.abspath(os.path.join(_MODELS_DIR, model_dir, p.split("/")[-1]))
+    if _complete_hf_folder(local_dir):
+        return local_dir
+    for found in (_find_dir_model_elsewhere(p, ok=_complete_hf_folder), hf_cached_snapshot(p)):
+        if _complete_hf_folder(found):
+            logger.info("[MEC] model %s: found at %s", p, found)
+            return found
+    if not downloads_allowed():
+        raise ModelNotDownloaded(p, target=local_dir, source=f"https://huggingface.co/{p}")
+    from huggingface_hub import snapshot_download
+    os.makedirs(local_dir, exist_ok=True)
+    logger.info("[MEC] Downloading %s into %s …", p, local_dir)
+    snapshot_download(repo_id=p, local_dir=local_dir)
+    return local_dir
 
 
 def _hf_kw(repo_or_path: str) -> dict:

@@ -24,6 +24,13 @@ Evidence: `docs/evidence/L7.97/` (workspace); tests/test_download_policy.py.
 
 ### Fixed
 
+- LocateAnything (node and MaskOps backend) answered a missing model with transformers' generic "couldn't connect"
+  text. It now looks in `models/LLM/LocateAnything-3B`, any `models/*/LocateAnything-3B` and the Hugging Face cache
+  (a cache holding only the tokenizer no longer counts as installed), names the absolute folder when the model is
+  missing, and a permitted download goes into `models/LLM/LocateAnything-3B` instead of the Hugging Face cache.
+- MaskOps SAM 3.1 messages named a relative `models/sam3.1/` (and the import hint the wrong folder, `models/sam3/`).
+  Preset-not-installed, checkpoint-missing and library-missing messages now give the absolute folder and the file.
+  `backend_first_root` no longer raises on a `folder_paths` without `models_dir`.
 - SeC + MatAnyone downloaded SAM 2 without asking: its segmentation loader ignored its own `[download]` flag and
   fetched any missing checkpoint, creating the model folder first.
 - `unified_segmentation.py` crashed at import wherever `folder_paths` had no `base_path` attribute.

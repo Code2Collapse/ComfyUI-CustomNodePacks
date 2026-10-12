@@ -20,6 +20,10 @@ from ._is_changed_util import hash_args_and_kwargs
 
 logger = logging.getLogger("MEC.LocateAnything")
 
+#: models/<this>/LocateAnything-3B: where a download goes and where an installed copy is looked for first (other
+#: packs' models/*/LocateAnything-3B and the Hugging Face cache are found too). LLM = the folder VLM packs share.
+LOCATE_ANYTHING_MODEL_DIR = "LLM"
+
 
 class LocateAnythingGroundingMEC:
     """Open-vocabulary object grounding via NVIDIA LocateAnything-3B."""
@@ -52,7 +56,7 @@ class LocateAnythingGroundingMEC:
                 # L7.97 (owner 2026-10-12): appended last; off = never download
                 "allow_download": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Download LocateAnything-3B (about 7 GB) if it is not installed. Off: an installed copy is used (a local folder in model_path, or the Hugging Face cache); without one the node names what to install. There is no model-free way to read a text prompt.",
+                    "tooltip": "Download LocateAnything-3B (about 7 GB) into models/LLM/LocateAnything-3B if it is not installed. Off: an installed copy is used (a local folder in model_path, models/*/LocateAnything-3B, or the Hugging Face cache); without one the node names the folder to put it in. There is no model-free way to read a text prompt.",
                 }),
             },
         }
@@ -77,16 +81,18 @@ class LocateAnythingGroundingMEC:
             return cls._model_cache[model_path]
         from transformers import AutoModel, AutoTokenizer, AutoProcessor
 
-        from ._download_policy import hf_kwargs  # L7.97
-        kw = hf_kwargs(model_path)
+        # L7.97: an installed copy anywhere ComfyUI keeps models, else models/LLM/<name> (with permission), else a
+        # message naming that folder - never transformers' generic "couldn't connect" text.
+        from .model_manager import resolve_transformers_repo
+        folder = resolve_transformers_repo(model_path, LOCATE_ANYTHING_MODEL_DIR)
         tokenizer = AutoTokenizer.from_pretrained(
-            model_path, trust_remote_code=True, **kw,
+            folder, trust_remote_code=True,
         )
         processor = AutoProcessor.from_pretrained(
-            model_path, trust_remote_code=True, **kw,
+            folder, trust_remote_code=True,
         )
         model = AutoModel.from_pretrained(
-            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True, **kw,
+            folder, torch_dtype=torch.bfloat16, trust_remote_code=True,
         ).to(device).eval()
         cls._model_cache[model_path] = (model, tokenizer, processor)
         return model, tokenizer, processor
