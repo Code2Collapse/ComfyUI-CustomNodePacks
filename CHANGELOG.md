@@ -2,6 +2,18 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (Video Stabilizer works on a fresh install)
+
+Evidence: `docs/evidence/L7.90/exec_stabilizer.json`; tests/test_video_stabilizer_engine.py.
+
+### Fixed
+
+- **The four Video Stabilizer nodes failed on every fresh install** ("not vendored"): their engine was read from a
+  folder that is not part of this repo. The engine (MIT, nomadoor/ComfyUI-Video-Stabilizer) now ships in
+  `nodes/video_stabilizer/`. It needs no model weights: both methods are OpenCV (point tracking / DIS optical flow);
+  on a synthetic shaky clip the frame-to-frame shake drops by more than half.
+- The stabiliser's padding mask could never be returned (the engine hands back an array, the node expected a list).
+
 ## Unreleased – 2026-10-12 (image batching measured per preprocessor)
 
 Evidence: `docs/evidence/L7.82/per_preprocessor_summary.json`, `canny_chunk_curve.json`, `canny_curated.json`.

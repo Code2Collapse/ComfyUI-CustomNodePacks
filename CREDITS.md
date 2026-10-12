@@ -129,8 +129,13 @@ that, and the claim predates this file.
 
 ## Bundled third-party code
 
-See `third_party/` and `THIRD_PARTY_LICENSES/` for vendored projects
-(ProPainter, SAM3, the video stabiliser, Prompt Relay) and their own licences.
+- **ComfyUI-Video-Stabilizer** by nomadoor and contributors (MIT) - the stabiliser engine (Lucas-Kanade and DIS
+  optical-flow backends) is in `nodes/video_stabilizer/` with its own `LICENSE`, used by the Video Stabilizer nodes.
+  <https://github.com/nomadoor/ComfyUI-Video-Stabilizer>
+
+`THIRD_PARTY_LICENSES/` keeps the licences of the other projects these nodes can use. Note: `third_party/` is not
+shipped with this repo (it is ignored by git); nodes whose engine lived only there (ProPainter, SAM 3.1, SeC,
+VideoMaMa) explain how to install it when it is missing (ledger L7.90).
 
 ---
 

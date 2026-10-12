@@ -45,7 +45,9 @@ log = logging.getLogger("MEC.video_stabilizer")
 # `nodes` package-name collision with our own pack.
 # ---------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-_VENDOR = _HERE.parent / "third_party" / "ComfyUI-Video-Stabilizer"
+# The engine (MIT, nomadoor/ComfyUI-Video-Stabilizer) lives IN the repo: it used to be read from the gitignored
+# third_party/ folder, so on every fresh install the four Video Stabilizer nodes failed (L7.90, 2026-10-12).
+_VENDOR = _HERE / "video_stabilizer"
 
 HAS_STABILIZER = False
 HAS_FLOW = False
@@ -70,9 +72,9 @@ try:
     if not _VENDOR.is_dir():
         raise ImportError(f"vendored stabilizer not found at {_VENDOR}")
     # Load utils first — both backends import from it.
-    _utils_path = _VENDOR / "nodes" / "stabilizer_utils.py"
-    _classic_path = _VENDOR / "nodes" / "video_stabilizer_classic.py"
-    _flow_path = _VENDOR / "nodes" / "video_stabilizer_flow.py"
+    _utils_path = _VENDOR / "stabilizer_utils.py"
+    _classic_path = _VENDOR / "video_stabilizer_classic.py"
+    _flow_path = _VENDOR / "video_stabilizer_flow.py"
 
     # Make `nodes.stabilizer_utils` importable for the inner relative imports.
     # The upstream files use `from .stabilizer_utils import ...` so we need to
@@ -82,7 +84,7 @@ try:
     pkg_spec = _ilu.spec_from_loader(pkg_name, loader=None,
                                      is_package=True)
     pkg = _ilu.module_from_spec(pkg_spec)
-    pkg.__path__ = [str(_VENDOR / "nodes")]                # type: ignore[attr-defined]
+    pkg.__path__ = [str(_VENDOR)]                # type: ignore[attr-defined]
     sys.modules[pkg_name] = pkg
 
     # Load utils as submodule of the synthetic package.
@@ -130,8 +132,8 @@ except Exception as e:
 def _require_stabilizer() -> None:
     if not HAS_STABILIZER:
         raise RuntimeError(
-            "ComfyUI-Video-Stabilizer not vendored or import failed. "
-            f"Expected at {_VENDOR}.  Underlying error: {_IMPORT_ERROR}"
+            "The video stabilizer engine failed to load "
+            f"({_VENDOR}): {_IMPORT_ERROR}"
         )
 
 
@@ -146,9 +148,16 @@ def _check_interrupt() -> None:
 def _masks_list_to_tensor(mask_list: List[Any], B: int, H: int, W: int) -> torch.Tensor:
     """Convert upstream mask output (list of numpy arrays) to (B,H,W) float tensor."""
     import numpy as np
-    if not mask_list:
+    # The engine hands back an ndarray (B,H,W[,1]) - `not mask_list` raised "truth value of an array is ambiguous",
+    # so the unified node never ran against the real engine (L7.90, 2026-10-12). Lists, arrays and tensors all work.
+    if mask_list is None or len(mask_list) == 0:
         return torch.zeros(B, H, W, dtype=torch.float32)
-    arr = np.stack([np.asarray(m, dtype=np.float32) for m in mask_list], axis=0)
+    if isinstance(mask_list, torch.Tensor):
+        arr = mask_list.detach().float().cpu().numpy()
+    elif isinstance(mask_list, np.ndarray):
+        arr = mask_list.astype(np.float32)
+    else:
+        arr = np.stack([np.asarray(m, dtype=np.float32) for m in mask_list], axis=0)
     if arr.ndim == 4:                # (B,H,W,1) -> (B,H,W)
         arr = arr[..., 0]
     if arr.shape[-2:] != (H, W):
