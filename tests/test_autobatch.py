@@ -34,6 +34,7 @@ def _reset_autobatch_state(monkeypatch):
     ab._REFUSAL_LOGGED.clear()
     ab._MEASURED_BPF.clear()
     ab._CALL_HISTORY.clear()
+    ab._PROFILES.clear()
     yield
 
 
@@ -968,3 +969,124 @@ def test_internal_round_trips_through_the_config_file(config_dir):
     saved = ab.save_config({"mode": "internal", "budget_mb": 64})
     assert ab._resolve_mode(saved) == "internal"
     assert ab._resolve_mode(ab.load_config()) == "internal"
+
+
+
+# ── L7.82 (owner 2026-10-12): chunk only when the batch does not fit; amortise per-call setup ─────────────────
+
+GB = 2 ** 30
+
+
+def _counting_node(name, *, setup_calls, scale=1.0):
+    class Node:
+        OUTPUT_NODE = False
+        INPUT_IS_LIST = False
+        RETURN_TYPES = ("IMAGE",)
+        FUNCTION = "execute"
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",)}, "optional": {}}
+
+        def execute(self, image):
+            setup_calls.append(int(image.shape[0]))
+            return (image * scale,)
+
+    Node.__name__ = name
+    return Node
+
+
+class _FakeRss:
+    """Stands in for the RSS sampler: the calibration chunk 'took' delta_per_frame bytes per frame."""
+    delta_per_frame = 0
+
+    def __init__(self):
+        self.delta = 0
+        self._frames = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.delta = _FakeRss.delta_per_frame * _FakeRss.frames
+        return False
+
+
+def _universal(mappings):
+    ab.install_wrappers(mappings, {"mode": "universal", "allow": [], "never": [], "nodes": {}})
+
+
+def test_a_batch_that_fits_runs_as_one_call(monkeypatch):
+    monkeypatch.setattr(ab, "_available_ram_bytes", lambda: 64 * GB)
+    monkeypatch.setattr(ab, "_available_vram_bytes", lambda _d: None)
+    calls = []
+    Node = _counting_node("FitsNode", setup_calls=calls)
+    _universal({"FitsNode": Node})
+    img = torch.rand(32, 8, 8, 3)
+    out = Node().execute(img)[0]
+    assert calls == [32] and torch.equal(out, img)
+    assert ab.status()["history"][-1]["reason"] == "fits: one call"
+
+
+def test_ram_that_does_not_grow_with_the_batch_is_measured_and_runs_one_call(monkeypatch):
+    """The guess (4x the input) says 'does not fit'; the calibration chunk measures only its output -> one call."""
+    img = torch.rand(32, 16, 16, 3)
+    frame = 16 * 16 * 3 * 4
+    monkeypatch.setattr(ab, "_available_ram_bytes", lambda: int(32 * frame * 3 / ab.FIT_RAM_FRACTION))
+    monkeypatch.setattr(ab, "_available_vram_bytes", lambda _d: None)
+    _FakeRss.delta_per_frame, _FakeRss.frames = frame, 8
+    monkeypatch.setattr(ab, "_RssPeak", _FakeRss)
+    calls = []
+    Node = _counting_node("FlatRam", setup_calls=calls)
+    _universal({"FlatRam": Node})
+    out = Node().execute(img)[0]
+    assert calls == [8, 32], calls                     # calibration chunk, then the whole batch; no single-frame call
+    assert torch.equal(out, img)
+    assert ab.status()["history"][-1]["reason"].startswith("fits (measured)")
+
+
+def test_setup_heavy_node_gets_chunks_as_big_as_fit(monkeypatch):
+    """Memory really is short (scaling intermediates), and each call costs 1 s of setup: chunks grow from the
+    conservative budget up to the largest chunk that fits, instead of one setup every couple of frames."""
+    n, frame = 64, 16 * 16 * 3 * 4
+    ram = 64 * frame * 4                                # cap = 0.8 * ram
+    monkeypatch.setattr(ab, "_available_ram_bytes", lambda: ram)
+    monkeypatch.setattr(ab, "_available_vram_bytes", lambda _d: None)
+    _FakeRss.delta_per_frame, _FakeRss.frames = frame * 5, 8   # output + 4x intermediates per frame
+    monkeypatch.setattr(ab, "_RssPeak", _FakeRss)
+    ticks = iter([0.0, 1.08, 2.0, 3.01])                # calibration: 1 s + 8 x 0.01 s; single: 1 s + 0.01 s
+    monkeypatch.setattr(ab, "_timer", lambda _d: next(ticks))
+    calls = []
+    Node = _counting_node("SetupHeavy", setup_calls=calls)
+    _universal({"SetupHeavy": Node})
+    img = torch.rand(n, 16, 16, 3)
+    out = Node().execute(img)[0]
+    assert torch.equal(out, img)
+    prof = ab.status()["profiles"]["SetupHeavy"]
+    assert prof["setup_s"] == pytest.approx(1.0, abs=1e-6) and prof["frame_s"] == pytest.approx(0.01, abs=1e-6)
+    fit, k_fit = ab._plan_fit(n, frame * 5, frame, 0, torch.device("cpu"))
+    assert fit == "chunk"
+    k_budget = int(ram * ab.RAM_FRACTION) // (frame * 4 + frame)
+    assert k_fit > k_budget
+    plan = ab.status()["history"][-1]
+    assert plan["chunk_size"] == k_fit, (plan, k_fit, k_budget)
+
+
+def test_vram_free_is_not_counted_twice():
+    class FakeMM:
+        @staticmethod
+        def get_free_memory(_dev=None, torch_free_too=False):
+            return (5 * GB, 3 * GB) if torch_free_too else 5 * GB
+
+    orig = ab._mm
+    ab._mm = lambda: FakeMM
+    try:
+        assert ab._available_vram_bytes(torch.device("cuda")) == 5 * GB
+    finally:
+        ab._mm = orig
+
+
+def test_setup_chunk_keeps_setup_under_ten_percent():
+    assert ab._setup_chunk({"setup_s": 1.0, "frame_s": 0.01}) == 900
+    assert ab._setup_chunk({"setup_s": 0.0, "frame_s": 0.01}) == 1
+    assert ab._setup_chunk(None) == 1

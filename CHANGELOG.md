@@ -2,6 +2,41 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (image batching no longer slows nodes down)
+
+Evidence: `docs/evidence/L7.82` (before.json, after.json, exec_ImageFlip.json; design
+`docs/research/autobatch_overhead.md`).
+
+### Fixed
+
+- **Image batching made nodes slower.** In the automatic modes (Internal / Universal) a batch was split into chunks
+  even when it fitted in memory, and every extra call repeated the node's setup (nodes that build a model or
+  detector each time they run). Measured on an 8 GB laptop GPU, 96 frames at 720p: a per-frame OpenCV node went
+  from 0.82 s to 0.91 s, the same node with a 1 s setup from 1.82 s to 5.53 s. Now a batch that fits runs as one call
+  (0.81 s and 2.19 s), and when a batch really does not fit, chunks are made as big as memory allows so the setup
+  stays under 10 % of the run. Core Canny, whose full batch spills past the card (238 s), still gets chunked:
+  3.1 - 3.8 s, identical output.
+- Free VRAM was over-counted (PyTorch's cached memory twice, and memory that had spilled into system RAM).
+- Your own limits (`budget_mb`, `max_frames`, per-node entries) work exactly as before. Off switch: Settings › C2C ›
+  Image batching › Off, or `C2C_AUTOBATCH=0`.
+
+## Unreleased – 2026-10-12 (control sections, second users)
+
+Evidence: `docs/evidence/L7.81` (sections_two_nodes_live.json, vue_dead_space.json, sections2.*.png).
+
+### Added
+
+- **Control sections on Mask Tools and Mask Track.** Mask Tools' luma key in "custom" keeps its four fine controls
+  (channel, low / high softness, invert) under "Advanced"; Mask Track's motion mode keeps its twelve detection
+  controls under "Detection". Same behaviour as Mask + Matting: a "More" bar on the classic canvas, ComfyUI's
+  "Show advanced inputs" in Nodes 2.0.
+
+### Fixed
+
+- **Mask Track in Nodes 2.0** showed every mode's controls at once; it now shows only the current mode's.
+- **Empty space under Mask + Matting, Mask Tools and Mask Track in Nodes 2.0** (up to 333 px): their height counted
+  the controls ComfyUI folds behind "Show advanced inputs". They now fit their content.
+
 ## Unreleased – 2026-10-10 (control sections)
 
 Evidence: `docs/evidence/L7.81` (classic and Nodes 2.0, save + reload round trip).

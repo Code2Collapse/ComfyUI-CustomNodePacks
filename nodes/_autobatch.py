@@ -52,7 +52,9 @@ import functools
 import inspect
 import json
 import logging
+import math
 import os
+import time
 import weakref
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -85,6 +87,14 @@ _REFUSAL_LOGGED: set[str] = set()
 _MEASURED_BPF: dict[str, int] = {}
 _CALL_HISTORY: collections.deque[dict[str, Any]] = collections.deque(maxlen=20)
 _PROBE_TOLERANCE = 2e-3
+
+# L7.82 (owner 2026-10-12, docs/research/autobatch_overhead.md): chunking a batch that fits only costs time, and every
+# extra call repeats the node's per-call setup (measured 2.7x / 8x slower). With no explicit cap a call is chunked
+# only when the whole batch would not fit, and chunks are made big enough that setup stays a small share of the run.
+FIT_RAM_FRACTION = 0.8      # more than this share of free RAM for the whole batch would swap
+FIT_VRAM_FRACTION = 0.9     # more than this share of free VRAM would spill into shared system RAM (F2.16)
+MAX_SETUP_SHARE = 0.10      # per-call setup at most this share of a chunked run
+_PROFILES: dict[str, dict[str, float]] = {}   # class -> setup_s / frame_s / gpu_bpf from the timed probe
 
 # Cross-frame by name — chunking would produce visible seams or wrong semantics.
 _NAME_EXCLUSION_WORDS: tuple[str, ...] = (
@@ -763,15 +773,18 @@ def _available_vram_bytes(device: torch.device) -> int | None:
     if mm is None:
         return None
     try:
-        free_mem, _torch_free = mm.get_free_memory(device, torch_free_too=True)
-        return int(free_mem + _torch_free)
-    except TypeError:
-        try:
-            return int(mm.get_free_memory(device))
-        except Exception:
-            return None
+        # get_free_memory already counts torch's cached-free blocks in its total (adding them again counted them
+        # twice); after a spill those blocks can live in shared system RAM (F2.16), so cap at the card's physical
+        # memory minus what is allocated (L7.82)
+        free = int(mm.get_free_memory(device))
     except Exception:
         return None
+    try:
+        physical = int(torch.cuda.get_device_properties(device).total_memory) - int(torch.cuda.memory_allocated(device))
+        free = min(free, max(0, physical))
+    except Exception:
+        pass
+    return free
 
 
 def _read_budget(
@@ -815,6 +828,96 @@ def _would_chunk(
     if budget is None:
         return False
     return batch_size * input_bpf > budget
+
+
+def _fit_caps(device: torch.device) -> tuple[int | None, int | None]:
+    """Bytes the whole batch may use before it would swap (RAM) or spill (VRAM); None = unknown."""
+    ram = _available_ram_bytes()
+    vram = _available_vram_bytes(device)
+    return (int(ram * FIT_RAM_FRACTION) if ram is not None else None,
+            int(vram * FIT_VRAM_FRACTION) if vram is not None else None)
+
+
+def _plan_fit(batch_size: int, ram_bpf: int, out_bpf: int, gpu_bpf: int, device: torch.device) -> tuple[str, int]:
+    """How the whole batch relates to free memory.
+
+    ``ram_bpf``: RAM per frame for the call (output included), ``out_bpf``: the output part, which exists at full size
+    whatever the chunk size, ``gpu_bpf``: VRAM per frame (0 = the node stays on the CPU). Returns ``("fits", N)``,
+    ``("chunk", k)`` with the largest chunk that fits, ``("no help", N)`` when only the output, which no chunk size can
+    shrink, is too big for RAM, or ``("unknown", 0)`` when free memory cannot be read.
+    """
+    ram_cap, vram_cap = _fit_caps(device)
+    if ram_cap is None and (not gpu_bpf or vram_cap is None):
+        return "unknown", 0
+    ram_over = ram_cap is not None and batch_size * ram_bpf > ram_cap
+    gpu_over = bool(gpu_bpf) and vram_cap is not None and batch_size * gpu_bpf > vram_cap
+    if not ram_over and not gpu_over:
+        return "fits", batch_size
+    k = batch_size
+    if ram_over:
+        scaling = max(0, ram_bpf - out_bpf)
+        room = ram_cap - batch_size * out_bpf
+        if scaling > 0 and room > 0:
+            k = min(k, room // scaling)
+        elif not gpu_over:
+            return "no help", batch_size
+    if gpu_over:
+        k = min(k, vram_cap // max(1, gpu_bpf))
+    return "chunk", max(1, int(k))
+
+
+class _RssPeak:
+    """Peak process RSS above the start while the block runs (2 ms sampler thread); ``delta`` 0 without psutil."""
+
+    def __enter__(self) -> "_RssPeak":
+        self.delta = 0
+        self._proc = None
+        try:
+            import psutil  # noqa: WPS433
+            import threading  # noqa: WPS433
+
+            self._proc = psutil.Process()
+            self._start = self._peak = int(self._proc.memory_info().rss)
+            self._stop = threading.Event()
+
+            def _sample() -> None:
+                while not self._stop.wait(0.002):
+                    try:
+                        self._peak = max(self._peak, int(self._proc.memory_info().rss))
+                    except Exception:
+                        return
+
+            self._thread = threading.Thread(target=_sample, name="c2c-autobatch-rss", daemon=True)
+            self._thread.start()
+        except Exception:
+            self._proc = None
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        if self._proc is not None:
+            self._stop.set()
+            self._thread.join(timeout=1.0)
+            try:
+                self._peak = max(self._peak, int(self._proc.memory_info().rss))
+            except Exception:
+                pass
+            self.delta = max(0, self._peak - self._start)
+        return False
+
+
+def _setup_chunk(profile: Mapping[str, float] | None) -> int:
+    """Smallest chunk that keeps the measured per-call setup at most MAX_SETUP_SHARE of a chunk's time."""
+    if not profile:
+        return 1
+    setup, frame = float(profile.get("setup_s", 0.0)), max(1e-6, float(profile.get("frame_s", 0.0)))
+    if setup <= 0:
+        return 1
+    return max(1, math.ceil(setup * (1.0 - MAX_SETUP_SHARE) / (MAX_SETUP_SHARE * frame) - 1e-9))
+
+
+def _record_decision(label: str, batch_size: int, reason: str) -> None:
+    _CALL_HISTORY.append({"label": label, "frames": int(batch_size), "chunks": 1, "chunk_size": int(batch_size),
+                          "budget": None, "reason": reason})
 
 
 def _mark_unsafe(class_name: str, reason: str) -> None:
@@ -893,6 +996,16 @@ def _probe_outputs_match(
     return True, max_diff
 
 
+def _timer(device: torch.device) -> float:
+    """perf_counter after the GPU queue drains, so a timed call includes its kernels."""
+    if device.type == "cuda":
+        try:
+            torch.cuda.synchronize(device)
+        except Exception:
+            pass
+    return time.perf_counter()
+
+
 def _measure_cuda_bpf(
     device: torch.device,
     class_name: str,
@@ -948,7 +1061,13 @@ def _run_frame_probe(
     class_name: str,
     v3: bool,
     device: torch.device,
+    stop_if_fits: Callable[[Mapping[str, float]], bool] | None = None,
 ) -> tuple[bool, Any | None, int, float, str]:
+    """Calibration chunk + one frame: frame independence, and the node's profile in ``_PROFILES``.
+
+    ``stop_if_fits(profile)``: after the calibration chunk has measured the node's memory, True ends the probe early
+    with reason ``"fits"`` (the whole batch runs as one call, so the frame-independence check is not needed).
+    """
     c = max(2, min(8, int(cal_size), _batch_size(frames)))
     start_bytes = 0
     if device.type == "cuda":
@@ -957,12 +1076,16 @@ def _run_frame_probe(
             start_bytes = int(torch.cuda.memory_allocated(device))
         except Exception:
             start_bytes = 0
+    t0 = _timer(device)
     try:
-        cal_out_raw, used_cal = _run_chunk_with_oom_retry(
-            fn, frames, static, 0, c, label=class_name,
-        )
+        with _RssPeak() as rss:
+            cal_out_raw, used_cal = _run_chunk_with_oom_retry(
+                fn, frames, static, 0, c, label=class_name,
+            )
     except (AutobatchError, _NodeRaised):
         return False, None, 0, float("inf"), "calibration failed"
+    t_cal = _timer(device) - t0
+    _MEASURED_BPF.pop(class_name, None)
     _measure_cuda_bpf(device, class_name, used_cal, start_bytes)
     cal_tensors, bad = _tensor_outputs_from_result(cal_out_raw, v3=v3)
     if bad:
@@ -985,12 +1108,32 @@ def _run_frame_probe(
         cal_tensors = [t for t in cal_valid if isinstance(t, torch.Tensor)]
     except AutobatchError:
         return False, None, used_cal, float("inf"), "calibration validation failed"
+    out_bpf = sum(_tensor_frame_bytes(t) for t in cal_tensors)
+    prev = _PROFILES.get(class_name, {})
+    _PROFILES[class_name] = {
+        "setup_s": float(prev.get("setup_s", 0.0)), "frame_s": float(prev.get("frame_s", 0.0)),
+        "gpu_bpf": int(_MEASURED_BPF.get(class_name, 0)),
+        # RAM the calibration chunk took per frame (its output included), never below the output
+        "ram_bpf": int(max(out_bpf, rss.delta // max(1, used_cal))), "out_bpf": int(out_bpf),
+    }
+    if stop_if_fits is not None and stop_if_fits(_PROFILES[class_name]):
+        return False, None, used_cal, 0.0, "fits"
+    t0 = _timer(device)
     try:
         single_out_raw, _ = _run_chunk_with_oom_retry(
             fn, frames, static, c - 1, 1, label=class_name,
         )
     except (AutobatchError, _NodeRaised):
         return False, None, used_cal, float("inf"), "single-frame probe failed"
+    t_one = _timer(device) - t0
+    # two calls: t_cal = setup + used_cal * frame, t_one = setup + frame (the cold first call inflates `frame`,
+    # which only shrinks the setup-driven chunk toward the old size)
+    if used_cal > 1:
+        frame_s = max(0.0, (t_cal - t_one) / (used_cal - 1))
+        setup_s = max(0.0, t_one - frame_s)
+    else:
+        frame_s, setup_s = max(0.0, t_cal), 0.0
+    _PROFILES[class_name].update(setup_s=round(setup_s, 6), frame_s=round(frame_s, 6))
     single_tensors, bad = _tensor_outputs_from_result(single_out_raw, v3=v3)
     if bad:
         return False, None, used_cal, float("inf"), "non-chunkable single-frame result"
@@ -1014,6 +1157,7 @@ def status() -> dict[str, Any]:
         "safe": dict(_SAFE),
         "unsafe": dict(_UNSAFE),
         "history": list(_CALL_HISTORY),
+        "profiles": {k: dict(v) for k, v in _PROFILES.items()},   # measured setup_s / frame_s / gpu_bpf (L7.82)
     }
 
 
@@ -1146,8 +1290,13 @@ def _run_chunked_impl(
     budget_bytes: int | None,
     strict: bool = True,
     cal_bootstrap: tuple[Any, int] | None = None,
+    force: bool = False,
+    min_chunk: int = 1,
 ) -> Any:
-    """Inner chunking body (exceptions converted by ``run_chunked``)."""
+    """Inner chunking body (exceptions converted by ``run_chunked``).
+
+    ``force``: the caller already decided this batch must be chunked (universal path, measured profile).
+    ``min_chunk``: chunks are at least this big (setup amortisation, already capped at what fits)."""
     if not _autobatch_enabled():
         return _call_node_fn(fn, **dict(frames), **dict(static))
 
@@ -1161,11 +1310,21 @@ def _run_chunked_impl(
     resolved_device = _resolve_device(device, frames)
     input_bpf = _input_bytes_per_frame(frames, work_factor)
     budget = _read_budget(resolved_device, budget_bytes=budget_bytes)
-    if not _would_chunk(batch_size, input_bpf, budget, max_frames):
-        return _call_node_fn(fn, **dict(frames), **dict(static))
+    if not force:
+        if budget_bytes is None and max_frames is None:
+            # automatic: chunk only a batch that would not fit (L7.82); unknown free memory = the old budget rule
+            raw_bpf = _input_bytes_per_frame(frames, 1.0)
+            fit, _k = _plan_fit(batch_size, input_bpf + raw_bpf, raw_bpf,
+                                input_bpf if resolved_device.type == "cuda" else 0, resolved_device)
+            if fit in ("fits", "no help") or (fit == "unknown" and not _would_chunk(batch_size, input_bpf, budget, max_frames)):
+                if fit != "unknown":
+                    _record_decision(label, batch_size, f"{fit}: one call")
+                return _call_node_fn(fn, **dict(frames), **dict(static))
+        elif not _would_chunk(batch_size, input_bpf, budget, max_frames):
+            return _call_node_fn(fn, **dict(frames), **dict(static))
 
     if budget is None:
-        if max_frames is not None and int(max_frames) > 0 and batch_size > int(max_frames):
+        if force or (max_frames is not None and int(max_frames) > 0 and batch_size > int(max_frames)):
             budget = (input_bpf * batch_size) + 1
         else:
             return _call_node_fn(fn, **dict(frames), **dict(static))
@@ -1195,6 +1354,7 @@ def _run_chunked_impl(
     output_bpf = sum(_tensor_frame_bytes(t) for t in cal_tensors)
     bytes_per_frame = max(1, input_bpf + output_bpf)
     full_chunk = max(1, min(batch_size, budget // bytes_per_frame))
+    full_chunk = max(full_chunk, min(batch_size, int(min_chunk)))  # setup amortisation (already capped at what fits)
     if max_frames is not None and int(max_frames) > 0:          # max_frames also caps the chunk size
         full_chunk = min(full_chunk, int(max_frames))
 
@@ -1248,8 +1408,10 @@ def _run_chunked_v3_impl(
     budget_bytes: int | None,
     strict: bool = True,
     cal_bootstrap: tuple[Any, int] | None = None,
+    force: bool = False,
+    min_chunk: int = 1,
 ) -> Any:
-    """Inner V3 chunking body (NodeOutput or tuple returns)."""
+    """Inner V3 chunking body (NodeOutput or tuple returns); ``force`` / ``min_chunk`` as in ``_run_chunked_impl``."""
     if not _autobatch_enabled():
         return _call_node_fn(fn, **dict(frames), **dict(static))
 
@@ -1263,11 +1425,21 @@ def _run_chunked_v3_impl(
     resolved_device = _resolve_device(device, frames)
     input_bpf = _input_bytes_per_frame(frames, work_factor)
     budget = _read_budget(resolved_device, budget_bytes=budget_bytes)
-    if not _would_chunk(batch_size, input_bpf, budget, max_frames):
-        return _call_node_fn(fn, **dict(frames), **dict(static))
+    if not force:
+        if budget_bytes is None and max_frames is None:
+            # automatic: chunk only a batch that would not fit (L7.82); unknown free memory = the old budget rule
+            raw_bpf = _input_bytes_per_frame(frames, 1.0)
+            fit, _k = _plan_fit(batch_size, input_bpf + raw_bpf, raw_bpf,
+                                input_bpf if resolved_device.type == "cuda" else 0, resolved_device)
+            if fit in ("fits", "no help") or (fit == "unknown" and not _would_chunk(batch_size, input_bpf, budget, max_frames)):
+                if fit != "unknown":
+                    _record_decision(label, batch_size, f"{fit}: one call")
+                return _call_node_fn(fn, **dict(frames), **dict(static))
+        elif not _would_chunk(batch_size, input_bpf, budget, max_frames):
+            return _call_node_fn(fn, **dict(frames), **dict(static))
 
     if budget is None:
-        if max_frames is not None and int(max_frames) > 0 and batch_size > int(max_frames):
+        if force or (max_frames is not None and int(max_frames) > 0 and batch_size > int(max_frames)):
             budget = (input_bpf * batch_size) + 1
         else:
             return _call_node_fn(fn, **dict(frames), **dict(static))
@@ -1311,6 +1483,7 @@ def _run_chunked_v3_impl(
     output_bpf = sum(_tensor_frame_bytes(t) for t in cal_tensors)
     bytes_per_frame = max(1, input_bpf + output_bpf)
     full_chunk = max(1, min(batch_size, budget // bytes_per_frame))
+    full_chunk = max(full_chunk, min(batch_size, int(min_chunk)))  # setup amortisation (already capped at what fits)
     if max_frames is not None and int(max_frames) > 0:          # max_frames also caps the chunk size
         full_chunk = min(full_chunk, int(max_frames))
 
@@ -1368,6 +1541,8 @@ def run_chunked_v3(
     budget_bytes: int | None = None,
     strict: bool = True,
     cal_bootstrap: tuple[Any, int] | None = None,
+    force: bool = False,
+    min_chunk: int = 1,
 ) -> Any:
     """Run a V3 ``execute`` classmethod in memory-bounded frame chunks."""
     fn = lambda **kw: orig_func(cls, **kw)
@@ -1381,6 +1556,8 @@ def run_chunked_v3(
             budget_bytes=budget_bytes,
             strict=strict,
             cal_bootstrap=cal_bootstrap,
+            force=force,
+            min_chunk=min_chunk,
         )
     except _NodeRaised as carrier:
         raise carrier.original from None
@@ -1404,6 +1581,8 @@ def run_chunked(
     budget_bytes: int | None = None,
     strict: bool = True,
     cal_bootstrap: tuple[Any, int] | None = None,
+    force: bool = False,
+    min_chunk: int = 1,
 ) -> Any:
     """Run ``fn`` in memory-bounded frame chunks.
 
@@ -1421,6 +1600,8 @@ def run_chunked(
             budget_bytes=budget_bytes,
             strict=strict,
             cal_bootstrap=cal_bootstrap,
+            force=force,
+            min_chunk=min_chunk,
         )
     except _NodeRaised as carrier:
         raise carrier.original from None
@@ -1589,20 +1770,38 @@ def _run_universal_chunked(
     budget_bytes: int | None,
     orig_call: Callable[[], Any],
 ) -> Any:
-    batch_size, budget, provisional_chunk = _chunk_plan(
-        frame_inputs,
-        _effective_work_factor(class_name, frame_inputs, spec),
-        max_frames,
-        budget_bytes,
-        None,
-    )
     work_factor = _effective_work_factor(class_name, frame_inputs, spec)
+    batch_size, budget, provisional_chunk = _chunk_plan(
+        frame_inputs, work_factor, max_frames, budget_bytes, None,
+    )
     resolved_device = _resolve_device(None, frame_inputs)
     input_bpf = _input_bytes_per_frame(frame_inputs, work_factor)
-    if not _would_chunk(batch_size, input_bpf, budget, max_frames):
-        return orig_call()
+    # RAM per frame: the heuristic intermediates + the output (GPU intermediates are measured separately, gpu_bpf)
+    ram_bpf = _input_bytes_per_frame(frame_inputs, float(spec.get("work_factor", DEFAULT_WORK_FACTOR)))         + _input_bytes_per_frame(frame_inputs, 1.0)
+    auto = budget_bytes is None and max_frames is None
 
     if class_name in _UNSAFE:
+        return orig_call()
+
+    def _plan(profile: Mapping[str, float] | None) -> tuple[str, int]:
+        if profile:   # measured by the probe
+            return _plan_fit(batch_size, int(profile["ram_bpf"]), int(profile["out_bpf"]), int(profile["gpu_bpf"]),
+                             resolved_device)
+        raw = _input_bytes_per_frame(frame_inputs, 1.0)
+        return _plan_fit(batch_size, ram_bpf, raw, input_bpf if resolved_device.type == "cuda" else 0,
+                         resolved_device)
+
+    if auto:
+        known = _PROFILES.get(class_name)
+        fit, _k = _plan(known)
+        # a guess may only say "fits"; "chunking cannot help" needs the measured profile (the GPU guess undercounts
+        # kornia's Canny 3x: one call spilled VRAM, 67 s vs 5 s)
+        if fit == "fits" or (known and fit == "no help"):
+            _record_decision(class_name, batch_size, f"{fit}: one call")
+            return orig_call()
+        if fit == "unknown" and not _would_chunk(batch_size, input_bpf, budget, max_frames):
+            return orig_call()
+    elif not _would_chunk(batch_size, input_bpf, budget, max_frames):
         return orig_call()
 
     cal_bootstrap: tuple[Any, int] | None = None
@@ -1615,7 +1814,12 @@ def _run_universal_chunked(
             class_name=class_name,
             v3=v3,
             device=resolved_device,
+            stop_if_fits=(lambda prof: _plan(prof)[0] in ("fits", "no help")) if auto else None,
         )
+        if reason == "fits":
+            # measured: less memory than the guess (a CPU node, or RAM that does not grow with the batch)
+            _record_decision(class_name, batch_size, f"{_plan(_PROFILES.get(class_name))[0]} (measured): one call")
+            return orig_call()
         if not passed:
             _mark_unsafe(class_name, reason or f"probe max diff {max_diff:.6g}")
             log.info(
@@ -1626,6 +1830,18 @@ def _run_universal_chunked(
             return orig_call()
         _mark_safe(class_name)
         cal_bootstrap = (cal_out, used_cal)
+        work_factor = _effective_work_factor(class_name, frame_inputs, spec)
+
+    profile = _PROFILES.get(class_name)
+    min_chunk = 1
+    if auto and profile:
+        fit, k_fit = _plan(profile)
+        if fit != "chunk":
+            k_fit = batch_size
+        min_chunk = min(_setup_chunk(profile), k_fit)
+        if min_chunk >= batch_size:
+            _record_decision(class_name, batch_size, "setup-bound and fits: one call")
+            return orig_call()
 
     try:
         if v3 and v3_cls is not None and v3_func is not None:
@@ -1638,6 +1854,8 @@ def _run_universal_chunked(
                 budget_bytes=budget_bytes,
                 strict=False,
                 cal_bootstrap=cal_bootstrap,
+                force=True,
+                min_chunk=min_chunk,
             )
         return run_chunked(
             fn,
@@ -1649,6 +1867,8 @@ def _run_universal_chunked(
             budget_bytes=budget_bytes,
             strict=False,
             cal_bootstrap=cal_bootstrap,
+            force=True,
+            min_chunk=min_chunk,
         )
     except AutobatchError as exc:
         _mark_unsafe(class_name, str(exc))
