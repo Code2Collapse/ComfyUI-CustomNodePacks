@@ -195,6 +195,20 @@ class TestInpaintCropPro:
 
 
 class TestInpaintStitchPro:
+    @pytest.mark.parametrize("plate_c,inp_c", [(4, 3), (3, 4)])
+    def test_rgba_and_rgb_mix_without_a_crash(self, crop_node, stitch_node, sample_image, sample_mask, plate_c, inp_c):
+        # Owner's Linux run 2026-10-12: an RGBA plate with an RGB sampler result raised "size of tensor a (4) must
+        # match the size of tensor b (3)". The colour is inpainted; the plate keeps its own alpha.
+        plate = sample_image[..., :3]
+        if plate_c == 4:
+            plate = torch.cat([plate, torch.full_like(plate[..., :1], 0.25)], dim=-1)
+        stitcher, cropped, _im, _bm, _i = _crop(crop_node, plate, sample_mask)
+        inp = cropped[..., :3] if inp_c == 3 else torch.cat([cropped[..., :3], torch.ones_like(cropped[..., :1])], -1)
+        result, _bu, _info = stitch_node.inpaint_stitch(stitcher=stitcher, inpainted_image=inp)
+        assert result.shape[-1] == plate_c and result.shape[:3] == plate.shape[:3]
+        if plate_c == 4:
+            assert torch.allclose(result[..., 3], plate[..., 3])
+
     def test_round_trip_shape(self, crop_node, stitch_node, sample_image, sample_mask):
         # INVARIANT: crop -> stitch returns the plate exact shape.
         stitcher, cropped, _im, _bm, _i = _crop(crop_node, sample_image, sample_mask)

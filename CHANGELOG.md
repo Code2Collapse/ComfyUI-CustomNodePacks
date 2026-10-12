@@ -2,6 +2,15 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (Inpaint Stitch with an RGBA plate)
+
+### Fixed
+
+- **Inpaint Stitch Pro crashed when the original plate had an alpha channel** and the sampler returned RGB
+  ("The size of tensor a (4) must match the size of tensor b (3) at non-singleton dimension 3", from the owner's
+  Linux run). The colour is now inpainted and the plate keeps its own alpha; an RGBA result on an RGB plate drops
+  the alpha. Any other channel mismatch gets a plain message instead of a tensor error.
+
 ## Unreleased – 2026-10-12 (Video Stabilizer works on a fresh install)
 
 Evidence: `docs/evidence/L7.90/exec_stabilizer.json`; tests/test_video_stabilizer_engine.py.

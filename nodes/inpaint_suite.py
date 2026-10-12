@@ -1870,6 +1870,19 @@ class InpaintStitchProMEC:
             resized_msk = resized_msk.clamp(0.0, 1.0)
 
             canvas_crop = canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
+            # The original plate may be RGBA while the sampler returns RGB (owner's Linux run 2026-10-12: "size of
+            # tensor a (4) must match ... b (3) at dimension 3"). Inpaint the colour, keep the plate's own alpha.
+            resized_inp = resized_inp.to(device=canvas_crop.device, dtype=canvas_crop.dtype)
+            resized_msk = resized_msk.to(device=canvas_crop.device)
+            c_can, c_inp = canvas_crop.shape[-1], resized_inp.shape[-1]
+            if c_inp != c_can:
+                if c_inp == 3 and c_can == 4:
+                    resized_inp = torch.cat([resized_inp, canvas_crop[..., 3:4]], dim=-1)
+                elif c_inp == 4 and c_can == 3:
+                    resized_inp = resized_inp[..., :3]
+                else:
+                    raise ValueError(f"Inpaint stitch: the inpainted image has {c_inp} channels, the original "
+                                     f"{c_can} - give both as RGB (3) or RGBA (4).")
 
             # Optional color match (mean+std on masked region)
             if color_match:
