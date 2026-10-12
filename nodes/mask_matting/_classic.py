@@ -32,7 +32,8 @@ TEXT_NEEDS_MODEL = ("Text prompts need a model (SAM 3 / SAM 3.1 or LocateAnythin
 _WORK_SIDE = 512
 _MISSING_RX = re.compile(
     r"not (present|found|installed|available|vendored)|missing|no such file|failed to load|cannot find|"
-    r"could not (find|load|locate)|couldn'?t (connect|find)|offline|download disabled|is required|"
+    r"could not (find|load|locate)|couldn'?t (connect|find)|can'?t load|cannot load|unable to load|"
+    r"offline|download disabled|is required|"
     r"no ([a-z0-9. ]+ )?(model|weights?|checkpoint)",
     re.IGNORECASE)
 
