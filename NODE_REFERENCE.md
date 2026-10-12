@@ -3563,6 +3563,9 @@ Auto-incrementing per-label / per-date version counter. Scans the output directo
 | `min_version` | `INT` | default `1`, range 0…999999 | show / shot / task layout: never hand out a version below this. |
 | `max_retries` | `INT` | default `5`, range 1…100 | show / shot / task layout, reserve_version on: how many next numbers to try when another job claimed the version first. |
 | `write_manifest` | `BOOLEAN` | default `True` | show / shot / task layout, reserve_version on: also write version_manifest.json (workflow hash, user, host, time) into the reserved folder. |
+| `versioning` | `COMBO` | default `folder`; folder, filename | Where the version goes. folder: a version folder, shot_A/<date>/v001/shot_A.png (the usual one). filename: on the file, no version folder, shot_A/<date>/shot_A_v001.png - the next number no file (or version folder) of this name has yet. |
+| `version_in_filename` | `BOOLEAN` | default `False` | folder versioning: also put the version on the file name - shot_A/<date>/v001/shot_A_v001.png. (Filename versioning always does.) |
+| `output_name` | `STRING` | default `""` | Optional name for the output FILE only - the folder keeps the source-derived name (final_render -> shot_A/<date>/v001/final_render.png). May carry an extension; otherwise the source's extension is kept. |
 
 **Outputs**
 

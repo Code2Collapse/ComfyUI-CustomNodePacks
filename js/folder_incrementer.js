@@ -797,8 +797,37 @@ app.registerExtension({
             const el = w._el;
             if (el && el.textContent !== text) {
                 el.textContent = text;
+                el.title = text;                  // one line, ellipsised on a narrow node: the full text on hover
                 G().setDirtyCanvas(true);
             }
+        }
+
+        // L7.94: the file name the run will write when filename versioning, version_in_filename or output_name is on
+        // ("" otherwise, so the default status line is unchanged). Mirrors folder_incrementer.py: output_name renames
+        // the file only, a version token already on the name is replaced, the version sits right before the extension.
+        function plannedFileLabel(stem, ext) {
+            const val = (n, d) => node.widgets?.find(w => w.name === n)?.value ?? d;
+            const byFile = String(val("versioning", "folder")) === "filename";
+            const withVer = byFile || !!val("version_in_filename", false);
+            const on = String(val("output_name", "") || "").trim();
+            if (!byFile && !withVer && !on) return "";
+            const own = stripExt(on);
+            let base = own.stem.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/^[ .]+|[ .]+$/g, "") || stem;
+            if (!base) return "";
+            const sfx = String(val("suffix", "") || "").trim();
+            const tag = String(val("suffix_mode", "filename")) === "filename" ? sfx : "";
+            const prefix = String(val("prefix", "v") || "");
+            const pad = Math.max(1, parseInt(val("padding", 3), 10) || 3);
+            if (withVer && prefix) {
+                const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                base = base.replace(new RegExp(`(?:^|[._-])${esc}\\d+$`, "i"), "");
+                base = `${base}${tag}${base || tag ? "_" : ""}${prefix}${"#".repeat(pad)}`;
+            } else {
+                base += tag;
+            }
+            // folder versioning writes into v###/, filename versioning straight into the date folder
+            const dir = byFile ? "" : `${prefix}${"#".repeat(pad)}/`;
+            return ` \u2192 ${dir}${base}${own.ext || ext || ""}`;
         }
 
         // ── Auto-fill source_filename + status display ───────────────
@@ -816,7 +845,7 @@ app.registerExtension({
                 const raw = origin ? getFilenameFromNode(origin) : null;
                 const stem = stemFromPath(raw);
                 if (stem) {
-                    setStatus(`🔗 ${stem} (path mode)`);
+                    setStatus(`🔗 ${stem} (path mode)${plannedFileLabel(stem, "")}`);
                 } else {
                     setStatus("🔗 path mode (stem resolved at run)");
                 }
@@ -843,7 +872,7 @@ app.registerExtension({
                           : result.mode === "input"  ? "\uD83D\uDD0C"  // plug for non-trigger input
                           : result.mode === "custom" ? "\u270D\uFE0F"  // hand-writing for custom
                                                      : "\uD83D\uDCC4"; // page for trigger
-                setStatus(`${tag} ${preview}${extLabel}${sfxLabel}`);   // redraws only on change
+                setStatus(`${tag} ${preview}${extLabel}${sfxLabel}${plannedFileLabel(preview, ext)}`);   // redraws only on change
             } else {
                 const manual = sfWidget?.value && sfWidget.value.trim();
                 if (manual) {
@@ -853,7 +882,8 @@ app.registerExtension({
                     const fmt = getNameFormat();
                     const extW = node.widgets?.find(w => w.name === "source_extension");
                     const extShown = ext || extW?.value || "";
-                    setStatus(`\uD83D\uDCDD ${formatSourceName(stem, fmt)}${extShown ? ` ${extShown}` : ""} (manual)`);
+                    const shown = formatSourceName(stem, fmt);
+                    setStatus(`\uD83D\uDCDD ${shown}${extShown ? ` ${extShown}` : ""} (manual)${plannedFileLabel(shown, extShown)}`);
                 } else {
                     setStatus("\uD83D\uDCC4 (no source connected)");
                 }
@@ -931,7 +961,8 @@ app.registerExtension({
 
         // Re-sync when suffix / suffix_mode change so the on-node status preview
         // reflects where the tag lands (filename vs subfolder vs folder) live.
-        for (const wName of ["suffix", "suffix_mode"]) {
+        for (const wName of ["suffix", "suffix_mode", "versioning", "version_in_filename", "output_name", "prefix",
+                             "padding"]) {
             const w = node.widgets?.find(x => x.name === wName);
             if (!w) continue;
             const origCb = w.callback;

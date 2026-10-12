@@ -58,6 +58,10 @@ NAME_FORMAT_CHOICES = ["basename", "strip_tags", "first_segment"]
 SUFFIX_MODE_CHOICES = ["filename", "subfolder", "folder"]
 # L7.65 P29: the second layout is the former Batch Version Manager (nodes/batch_version_manager.py is its engine)
 LAYOUT_CHOICES = ["source / date / version", "show / shot / task / version"]
+# L7.94 (owner 2026-10-12): where the allocated version goes.
+#   folder   - a version folder:       <base>/<name>/<date>/v001/<file>          [default, unchanged]
+#   filename - on the file, no folder: <base>/<name>/<date>/<file>_v001.<ext>
+VERSIONING_CHOICES = ["folder", "filename"]
 
 
 def _bvm_engine():
@@ -580,6 +584,87 @@ def _scan_next_version(scan_dir, prefix, padding):
     return max_ver + 1
 
 
+def _split_output_name(name: str):
+    """(stem, ext) of a custom output name; ext only when it is a real media extension (shot.v2 keeps its dot)."""
+    name = (name or "").strip()
+    if not name:
+        return "", ""
+    m = _KNOWN_EXT_RE.search(name)
+    if m:
+        return name[: m.start()], m.group(0)
+    return name, ""
+
+
+def _strip_version_token(stem: str, prefix: str) -> str:
+    """``stem`` without a trailing version token of this prefix (shot_A_v003 -> shot_A, v003 -> "")."""
+    if not stem or not prefix:
+        return stem or ""
+    m = re.search(rf"(?:^|[._\-]){re.escape(prefix)}\d+$", stem, re.IGNORECASE)
+    return stem[: m.start()] if m else stem
+
+
+def _versioned_stem(stem: str, version_string: str, prefix: str, suffix: str = "") -> str:
+    """``stem`` + ``suffix`` + ``_v001`` - the version right before the extension, never twice: a version token
+    already on the stem is replaced, not stacked (shot_A_v003 -> shot_A_v001, not shot_A_v003_v001)."""
+    base = _strip_version_token(stem, prefix) + (suffix or "")
+    return f"{base}_{version_string}" if base else version_string
+
+
+def _file_version_scanner(name_stem: str, prefix: str, padding: int):
+    """``scan_next`` for filename versioning: one more than the highest version a date folder already holds for
+    this name, counting files AND folders ``<name_stem>[_anything]_<prefix>NNN...`` - a saver's own counter or a
+    frame number may follow (shot_A_v002_00001_.png, shot_A_v002.1001.exr, a sequence folder shot_A_v002/), a
+    suffix may sit in between (shot_A_mask_v002.png), a reservation marker is hidden (.shot_A_v002.reserved).
+    Folders one level down are read too (suffix_mode = subfolder), and ``vNNN`` folders of folder versioning count,
+    so switching methods never hands out a number that already exists. ``shot_AB_v009`` is a different name and
+    does not count for ``shot_A``."""
+    pad = max(1, int(padding))
+    lead = re.escape(name_stem) + r"(?:[._\-].*?)?[._\-]" if name_stem else ""
+    rx = re.compile(rf"^\.?{lead}{re.escape(prefix)}(\d{{{pad},}})(?=$|[._\-])", re.IGNORECASE)
+    ver_dir = re.compile(rf"^{re.escape(prefix)}\d{{{pad},}}$")
+
+    def scan(scan_dir, prefix_, padding_):
+        best = _scan_next_version(scan_dir, prefix_, padding_) - 1
+        d = Path(scan_dir)
+        if not d.is_dir():
+            return best + 1
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            return best + 1
+        for e in list(entries):
+            # one level down for the subfolder suffix mode; a version folder or a sequence folder of this name is
+            # counted by its own name and not walked (it can hold thousands of frames)
+            if e.is_dir() and not rx.match(e.name) and not ver_dir.match(e.name):
+                try:
+                    entries.extend(e.iterdir())
+                except OSError:
+                    pass
+        for e in entries:
+            m = rx.match(e.name)
+            if m:
+                best = max(best, int(m.group(1)))
+        return best + 1
+
+    return scan
+
+
+def _files_fingerprint(date_dir) -> str:
+    """Cache key part for filename versioning: the date folder and its sub-folders change mtime when a file is
+    added or removed, which is when the next file version changes."""
+    d = Path(date_dir)
+    if not d.is_dir():
+        return "empty"
+    try:
+        parts = [f".:{d.stat().st_mtime_ns}"]
+        for e in sorted(d.iterdir(), key=lambda p: p.name):
+            if e.is_dir():
+                parts.append(f"{e.name}:{e.stat().st_mtime_ns}")
+    except OSError:
+        return "unreadable"
+    return "|".join(parts)
+
+
 class FolderIncrementer:
     """
     Automatic dynamic file output management node.
@@ -754,6 +839,23 @@ class FolderIncrementer:
                 "write_manifest": ("BOOLEAN", {"default": True,
                     "tooltip": "show / shot / task layout, reserve_version on: also write version_manifest.json "
                                "(workflow hash, user, host, time) into the reserved folder."}),
+                # L7.94 (owner 2026-10-12): filename versioning. Appended last so saved values keep their positions;
+                # the defaults give exactly the old paths.
+                "versioning": (VERSIONING_CHOICES, {"default": "folder",
+                    "tooltip": "Where the version goes.\n"
+                               "  folder   - a version folder: shot_A/<date>/v001/shot_A.png (the usual one)\n"
+                               "  filename - on the file, no version folder: shot_A/<date>/shot_A_v001.png\n"
+                               "Filename versioning takes the next number no file (or version folder) of this name "
+                               "has yet, so nothing is overwritten. Save nodes still add their own counter "
+                               "(shot_A_v001_00001_.png); Save Video (C2C) with 'Folder Version' naming does not."}),
+                "version_in_filename": ("BOOLEAN", {"default": False,
+                    "tooltip": "folder versioning: also put the version on the file name - "
+                               "shot_A/<date>/v001/shot_A_v001.png. (Filename versioning always does.)"}),
+                "output_name": ("STRING", {"default": "",
+                    "tooltip": "Optional name for the output FILE only - the folder keeps the source-derived name. "
+                               "e.g. final_render -> shot_A/<date>/v001/final_render.png. May carry an extension "
+                               "(final_render.mov); otherwise the source's extension is kept. Empty = the source "
+                               "name, as before."}),
             },
             # The whole prompt, so a run whose source_filename arrived empty
             # (API submit, or a loader the UI did not recognise) can still
@@ -812,6 +914,11 @@ class FolderIncrementer:
         today_date = datetime.now().strftime(fmt)
         folder_name_override = (kwargs.get("folder_name_override") or "").strip()
         source_filename = (kwargs.get("source_filename") or "").strip()
+        # the same precedence as increment(): in custom mode custom_name wins. Without it an API run (custom_name set,
+        # source_filename empty) fingerprinted the label's folder, the key never changed and every later queue was
+        # served from the cache - the same version again, nothing saved (L7.94 live check).
+        if str(kwargs.get("source_choice", "auto")).lower() == "custom" and (kwargs.get("custom_name") or "").strip():
+            source_filename = kwargs["custom_name"].strip()
         source_path = (kwargs.get("source_path") or "").strip()
         # source_path (full media path) takes precedence over source_filename.
         if source_path:
@@ -837,6 +944,8 @@ class FolderIncrementer:
                 folder_name = _sanitize_folder_name(folder_name + safe_suffix, fallback=label or "output")
         scan_dir = base_dir / folder_name / today_date
         h.update(dir_version_fingerprint(scan_dir, prefix, padding).encode())
+        if str(kwargs.get("versioning", "folder") or "folder").strip().lower() == "filename":
+            h.update(_files_fingerprint(scan_dir).encode())
         # NOT keyed on the lease. IS_CHANGED runs before execution, outside
         # any run context, so asking the lease here would both miss and
         # pollute it. The lease is resolved in increment(), where the run id
@@ -852,7 +961,8 @@ class FolderIncrementer:
                   folder_name_override="", version_group="", reserve_version=False,
                   suffix="", suffix_mode="filename", source_extension="",
                   source_path="", layout=LAYOUT_CHOICES[0], show="show", shot="sh010", task="comp",
-                  min_version=1, max_retries=5, write_manifest=True, prompt=None, unique_id=None):
+                  min_version=1, max_retries=5, write_manifest=True, versioning="folder",
+                  version_in_filename=False, output_name="", prompt=None, unique_id=None):
 
         sep = _get_path_sep(path_style)
         if layout == LAYOUT_CHOICES[1]:
@@ -967,6 +1077,22 @@ class FolderIncrementer:
             str(base_dir), folder_name, today_date,
             suffix=safe_suffix, group=version_group)
 
+        # L7.94: the output FILE name. output_name renames only the file (the folder keeps the source-derived
+        # name) and may bring its own extension; empty = exactly the old behaviour.
+        filename_versioning = str(versioning or "folder").strip().lower() == "filename"
+        out_stem, out_ext = _split_output_name(output_name)
+        out_stem = _sanitize_folder_name(out_stem, fallback="") if out_stem else ""
+        file_stem = out_stem or name_no_ext
+        ext_out = out_ext or ext
+        scanner = _scan_next_version
+        if filename_versioning:
+            # no source and no output_name: the file is named after its folder (minus a folder-mode suffix)
+            file_stem = file_stem or family_stem
+            scan_stem = _strip_version_token(file_stem, prefix)
+            scanner = _file_version_scanner(scan_stem, prefix, padding)
+            # each file name keeps its own counter, so only outputs of the SAME name share a run's version
+            lease_key = f"{lease_key}|file:{scan_stem.lower()}"
+
         def _compute_version():
             # The MAX across every tree in the family, not just this one.
             # Without it, a family whose trees sit at different depths hands
@@ -974,7 +1100,7 @@ class FolderIncrementer:
             # render silently overwrites finished work.
             return _lease.scan_family_next(
                 base_dir, family_stem, today_date, prefix, padding,
-                _scan_next_version)
+                scanner)
 
         version_num, version_shared = _lease.lease(
             _lease.current_run_id(), lease_key, _compute_version)
@@ -987,7 +1113,18 @@ class FolderIncrementer:
         #    reserve_version=True, we claim the version slot up-front
         #    by creating the directory and dropping a marker file —
         #    safe for parallel batch / render-farm workflows.
-        if reserve_version:
+        if reserve_version and filename_versioning:
+            # no version folder to create: a hidden marker with the file's name claims the number
+            try:
+                res_dir = date_dir / suffix_as_folder if (smode == "subfolder" and suffix_as_folder) else date_dir
+                res_dir.mkdir(parents=True, exist_ok=True)
+                marker = res_dir / f".{_versioned_stem(file_stem, version_string, prefix)}.reserved"
+                if not marker.exists():
+                    marker.write_text(f"reserved={datetime.now().isoformat()}\nfolder={folder_name}\n"
+                                      f"version={version_string}\n", encoding="utf-8")
+            except OSError as exc:
+                print(f"[MEC] FolderIncrementer: reserve_version failed: {exc}")
+        elif reserve_version:
             try:
                 ver_dir = date_dir / version_string
                 ver_dir.mkdir(parents=True, exist_ok=True)
@@ -1007,21 +1144,24 @@ class FolderIncrementer:
         #    subfolder mode nests `suffix_as_folder` right after the version
         #    dir, so masks/wan outputs of the SAME run sit side by side under
         #    one shared version (…/v001/mask/, …/v001/wan/).
-        path_parts = [folder_name, today_date, version_string]
+        path_parts = [folder_name, today_date] if filename_versioning else [folder_name, today_date, version_string]
         if smode == "subfolder" and suffix_as_folder:
             path_parts.append(suffix_as_folder)
         subfolder_path = sep.join(path_parts)
 
         # In `filename` mode the suffix tags the basename; in subfolder/folder
         # mode it has already shaped the path, so the basename stays clean.
-        basename_no_ext = (name_no_ext or version_string)
-        if smode == "filename" and safe_suffix:
-            basename_no_ext = basename_no_ext + safe_suffix
+        name_suffix = safe_suffix if (smode == "filename" and safe_suffix) else ""
+        if filename_versioning or (version_in_filename and file_stem):
+            # the version right before the extension (after the suffix), replacing one already on the name
+            basename_no_ext = _versioned_stem(file_stem, version_string, prefix, name_suffix)
+        else:
+            basename_no_ext = (file_stem or version_string) + name_suffix
 
         filename_prefix = sep.join([subfolder_path, basename_no_ext])
 
-        if name_no_ext and ext:
-            output_filename = sep.join([subfolder_path, f"{basename_no_ext}{ext}"])
+        if file_stem and ext_out:
+            output_filename = sep.join([subfolder_path, f"{basename_no_ext}{ext_out}"])
         else:
             output_filename = filename_prefix
 
@@ -1051,6 +1191,11 @@ class FolderIncrementer:
             "layout": LAYOUT_CHOICES[0], "folder": folder_name, "date": today_date, "version": version_num,
             "label": version_string, "subfolder_path": subfolder_path, "path": version_path,
             "reserved": bool(reserve_version), "shared_with_run": bool(version_shared),
+            # the L7.94 keys only when one of its options is on, so the default output stays what it was
+            **({"versioning": "filename" if filename_versioning else "folder",
+                "version_in_filename": bool(filename_versioning or version_in_filename),
+                "output_name": out_stem + out_ext, "file": basename_no_ext + (ext_out if file_stem else "")}
+               if (filename_versioning or version_in_filename or out_stem) else {}),
         }, indent=2)
         return (version_string, version_num, folder_name,
                 subfolder_path, filename_prefix, output_filename,

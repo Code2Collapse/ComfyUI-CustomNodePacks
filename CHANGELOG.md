@@ -2,6 +2,29 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (Folder Version Incrementer: filename versioning)
+
+Evidence: `docs/evidence/L7.94/`; tests/test_folder_incrementer_filename_versioning.py.
+
+### Added
+
+- **Filename versioning** (`versioning` = filename): the version goes on the file instead of a folder -
+  `shot_A/10-12-2026/shot_A_v001.png` instead of `shot_A/10-12-2026/v001/shot_A.png`. The number is the next one no
+  file of that name has yet, whatever wrote it: a Save Video (C2C) "Folder Version" file or image-sequence folder,
+  core Save Image's `shot_A_v002_00001_.png`, VHS's `shot_A_v003_00001.mp4`, any extension, and also any `v###`
+  folder from folder versioning, so switching methods never reuses a number. A version already on the name is
+  replaced, not doubled (`shot_A_v003` -> `shot_A_v001`).
+- **Version in the file name** (`version_in_filename`) for folder versioning:
+  `shot_A/10-12-2026/v001/shot_A_v001.png`.
+- **Output name** (`output_name`): renames the file only; the folder keeps the source-derived name
+  (`final_render` -> `shot_A/10-12-2026/v001/final_render_v001.png` with the option above). It may carry its own
+  extension.
+- The node's status line shows the file name a run will write when any of these is on.
+
+Folder versioning stays the default. With the new options off, every output is the same as before: compared against
+the previous version on 2016 input combinations, no difference. Saved workflows keep their values (the new inputs
+are added after the existing ones).
+
 ## Unreleased – 2026-10-12 (Inpaint Stitch with an RGBA plate)
 
 ### Fixed
