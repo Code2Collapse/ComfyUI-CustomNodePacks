@@ -2,6 +2,39 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (image batching hands on the complete batch, in order)
+
+Evidence: `docs/evidence/L7.82` (scramble_scan.json; tests in tests/test_autobatch.py).
+
+### Fixed
+
+- **Batched nodes passed the wrong values downstream.** When a batch was split, the node's outputs were put back
+  as "all images first, then everything else". A node returning image, width, height, mask (Kijai's Resize Image
+  v2 shape) came back as image, mask, width, height, so the next node got a mask where it expected a number. 29 of
+  the 469 nodes Universal could wrap had that output layout. Outputs now keep their own order.
+- **Image batching leaves nodes alone that return anything besides images and masks** (counts, sizes, info text,
+  pose keypoints, ...): only frame tensors can be stitched back together. 148 node types are no longer wrapped,
+  among them Kijai's Resize Image v2 (which batches internally itself) and controlnet_aux DWPose.
+
+### Changed
+
+- **Double-click a slot = suggest and connect a node** (owner's choice): it connects a matching node nearby or
+  inserts the predicted next node (Shift = a chain). Get/Set variable and Nothing stay in Settings › C2C ›
+  Productivity › Slot double-click.
+
+## Unreleased – 2026-10-12 (wire snapping matches ComfyUI again)
+
+Evidence: `docs/evidence/L7.83` (snap_matrix.json: 24 core, third-party and C2C nodes, every socket input, five drop
+points, C2C vs C2C disabled, with the owner's 17 third-party packs loaded).
+
+### Fixed
+
+- **Wires locked onto the wrong slot.** Holding a wire over a slot of a different type, ComfyUI shows no lock-in
+  and connects nothing; C2C's "Wire drop snaps to the matching slot" locked onto the first matching slot instead,
+  so a wire aimed at `negative` could connect `positive`. Over real slots C2C now does exactly what ComfyUI does
+  (0 differences in 148 measured drags). The setting still helps over widget rows, where ComfyUI 1.52 gives up
+  (three C2C nodes measured: Context Inpainter, OCIO Bridge, NukeMax Crop).
+
 ## Unreleased – 2026-10-12 (image batching no longer slows nodes down)
 
 Evidence: `docs/evidence/L7.82` (before.json, after.json, exec_ImageFlip.json; design

@@ -23,3 +23,14 @@ def test_both_features_register_and_respect_the_one_setting():
     suggest = (JS / "c2c_autoconnect.js").read_text(encoding="utf-8")
     assert "onDomSlotDoubleClick(" in getset and "slotDoubleClickMode() !== DBL_GETSET" in getset
     assert "onDomSlotDoubleClick(" in suggest and "slotDoubleClickMode() !== DBL_SUGGEST" in suggest
+
+
+def test_default_is_suggest_and_connect():
+    """Owner 2026-10-12 (L7.85): a slot double-click suggests and connects a node by default."""
+    from pathlib import Path
+    js = Path(__file__).resolve().parents[1] / "js"
+    core = (js / "_c2c_slot_dblclick.js").read_text(encoding="utf-8")
+    assert "export const DBL_DEFAULT = DBL_SUGGEST;" in core
+    assert "getSettingValue?.(DBL_SETTING_ID, DBL_DEFAULT)" in core
+    getset = (js / "c2c_slot_getset.js").read_text(encoding="utf-8")
+    assert "defaultValue: DBL_DEFAULT," in getset

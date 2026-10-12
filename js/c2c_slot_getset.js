@@ -25,7 +25,7 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
-import { DBL_SETTING_ID, DBL_OPTIONS, DBL_GETSET, onDomSlotDoubleClick, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
+import { DBL_SETTING_ID, DBL_OPTIONS, DBL_GETSET, DBL_DEFAULT, onDomSlotDoubleClick, slotDoubleClickMode } from "./_c2c_slot_dblclick.js";
 
 const SETTING_ID = "c2c.slotGetSet.enabled";
 
@@ -168,7 +168,7 @@ app.registerExtension({
             "Suggest and connect a node (experimental): inserts the node the predictor expects next.",
         type: "combo",
         options: DBL_OPTIONS,
-        defaultValue: DBL_GETSET,
+        defaultValue: DBL_DEFAULT,                   // owner 2026-10-12: suggest and connect (L7.85)
         category: ["c2c", "Productivity", "Slot double-click"],
     }],
     async setup() {

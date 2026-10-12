@@ -17,13 +17,16 @@ export const DBL_GETSET = "Get/Set variable";
 export const DBL_SUGGEST = "Suggest and connect a node (experimental)";
 export const DBL_OPTIONS = [DBL_NOTHING, DBL_GETSET, DBL_SUGGEST];
 
-/** The selected behaviour; Get/Set when the setting is unset or unreadable. */
+/** Owner 2026-10-12 (L7.85): a slot double-click suggests and connects a node by default. */
+export const DBL_DEFAULT = DBL_SUGGEST;
+
+/** The selected behaviour; the default when the setting is unset or unreadable. */
 export function slotDoubleClickMode() {
     try {
-        const v = app.ui?.settings?.getSettingValue?.(DBL_SETTING_ID, DBL_GETSET);
-        return DBL_OPTIONS.includes(v) ? v : DBL_GETSET;
+        const v = app.ui?.settings?.getSettingValue?.(DBL_SETTING_ID, DBL_DEFAULT);
+        return DBL_OPTIONS.includes(v) ? v : DBL_DEFAULT;
     } catch {
-        return DBL_GETSET;
+        return DBL_DEFAULT;
     }
 }
 
