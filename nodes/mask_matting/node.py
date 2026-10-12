@@ -1749,6 +1749,8 @@ class MaskOpsMEC:
             if _model_free:
                 info_obj["approximate"] = True
                 info_obj["model_free"] = _model_free
+            elif seg_key == "classic" or mat_key == "guided_filter":
+                info_obj["approximate"] = True             # picked directly: still a model-free approximation
             # Output luma-key mask (zeros if not run).
             if luma_mask_t is None:
                 luma_out = torch.zeros_like(alpha_cpu)

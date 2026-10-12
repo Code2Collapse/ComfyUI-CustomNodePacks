@@ -87,6 +87,7 @@ def test_missing_model_vs_bug():
     assert C.is_missing_model_error(FileNotFoundError("weights"))
     assert C.is_missing_model_error(RuntimeError("SAM 3.1 vendored library not present."))
     assert C.is_missing_model_error(OSError("We couldn't connect to 'https://huggingface.co' to load the files"))
+    assert C.is_missing_model_error(OSError("Can't load image processor for 'hustvl/vitmatte-small-composition-1k'"))
     assert not C.is_missing_model_error(TypeError("unexpected keyword"))
     assert not C.is_missing_model_error(RuntimeError("shape mismatch [1, 3] vs [1, 4]"))
 
@@ -270,8 +271,8 @@ def test_maskops_onyx_default_on_a_fresh_install(monkeypatch):
     assert info["model_free"]["segmenter"]["wanted"] == "sam3.1"
 
 
-def test_maskops_without_a_fallback_reports_nothing_new(missing_backends):
-    """A run that needs no fallback carries no model_free / approximate keys - the output is what it was."""
+def test_maskops_classic_picked_directly(missing_backends):
+    """No fallback happened, so no model_free entry - but the result is still labelled approximate."""
     node = pytest.importorskip("nodes.mask_matting.node")
     img, _ = scene()
     out = node.MaskOpsMEC().execute(**_maskops_kwargs(
@@ -279,6 +280,7 @@ def test_maskops_without_a_fallback_reports_nothing_new(missing_backends):
         positive_coords=json.dumps([{"x": CX, "y": CY}])))
     info = json.loads(out[node.MaskOpsMEC.RETURN_NAMES.index("info")])
     assert "model_free" not in info and info["segmenter"] == "classic"
+    assert info["approximate"] is True                  # picked directly, still labelled
 
 
 # ── small fixes that came with it ────────────────────────────────────────────────────────────────────────────────
