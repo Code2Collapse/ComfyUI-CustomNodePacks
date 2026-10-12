@@ -66,11 +66,9 @@ def _register_backend_folders() -> None:
         # model when asked to load, rather than the whole package vanishing.
         return
     for key, sub in _BACKEND_FOLDERS.items():
+        # Registered, not created (owner 2026-10-12): ComfyUI finds files a user puts there without the pack making
+        # 16 empty folders at every start; a folder is created only when weights are saved into it.
         abs_dir = os.path.join(models_root, sub)
-        try:
-            os.makedirs(abs_dir, exist_ok=True)
-        except OSError:
-            pass
         try:
             folder_paths.add_model_folder_path(key, abs_dir, is_default=False)
         except (AttributeError, TypeError):
@@ -356,6 +354,13 @@ def parse_points(points_json: str) -> Tuple[List[Tuple[float, float]], List[Tupl
                 continue
     elif isinstance(data, list):
         for item in data:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                # plain [x, y] pairs - the form the positive_coords tooltip documents; all positive
+                try:
+                    pos.append((float(item[0]), float(item[1])))
+                except (TypeError, ValueError):
+                    pass
+                continue
             if not isinstance(item, dict):
                 continue
             try:

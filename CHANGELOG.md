@@ -2,6 +2,33 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (MaskOps works without models, and says so)
+
+Evidence: `docs/evidence/L7.91/` (workspace); tests/test_mask_model_free.py. Design:
+docs/research/l791_masking_without_weights.md (workspace).
+
+### Fixed
+
+- **MaskOps produced nothing on a fresh install.** With no SAM 3.1 library, no weights or no internet, every
+  pipeline stopped with "SAM 3.1 library is missing ... Reinstall ComfyUI-CustomNodePacks" (reinstalling cannot
+  help: that library is not part of this repo). It now falls back to a model-free method - GrabCut on the prompted
+  frame, DIS optical flow plus GrabCut for the rest of a clip, a guided filter for the soft edge - and **labels the
+  result**: the `info` output gets `"approximate": true` and `"model_free"` (what was asked for, why it could not
+  run, what ran instead), the segmenter/matter fields name the model-free method, and the console says so. A
+  model-free result is never reported as SAM. Text prompts still need a model; without one the node says so instead
+  of guessing. To get the old error instead of an approximation, set the environment variable
+  `C2C_MODEL_FALLBACK=off`.
+- The missing-SAM-3.1 message now says what is missing, where it is looked for, where its weights go, its licence,
+  and that points / a box / a mask work without it.
+- `positive_coords` documents `[[x,y],...]`; that form was silently ignored (no points found). It is read now.
+- No model folders are created in `models/` at start-up any more (16 empty folders appeared on every install); a
+  folder is created only when weights are saved into it.
+
+### Added
+
+- `classic` segmenter and `guided_filter` matter in MaskOps: the model-free methods, also selectable directly. They
+  are listed after the existing ones; no default changes.
+
 ## Unreleased – 2026-10-12 (ProPainter is never downloaded)
 
 ### Fixed

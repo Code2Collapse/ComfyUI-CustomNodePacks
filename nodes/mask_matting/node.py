@@ -844,6 +844,8 @@ class MaskOpsMEC:
         _auto_routed = False
         _auto_route_reasons: list[str] = []
         _cascade_trail: list = []
+        # L7.91: what ran model-free instead of the chosen model, and why (empty = nothing did)
+        _model_free: Dict[str, Any] = {}
         # ── auto_best: full cascade (SAM2.1 + SAM3 ensemble → SeC video
         # fallback → BiRefNet salient fallback → trimap → ViTMatte +
         # guided polish + CLAHE pre-stage + motion-blur temporal median).
@@ -1026,6 +1028,14 @@ class MaskOpsMEC:
                 luma_mask_t = None
                 robust_info = {"enabled": False, "skipped": "onyx pipeline"}
                 onyx_pipeline_info = onyx.pipeline_info
+                # never report SAM 3.1 / the chosen matter when the model-free stand-ins did the work
+                if onyx_pipeline_info.get("fallback_from"):
+                    seg_key = "classic"
+                    _model_free["segmenter"] = {**onyx_pipeline_info["fallback_from"],
+                                                "used": onyx_pipeline_info.get("tracker", "")}
+                if onyx_pipeline_info.get("matter_fallback"):
+                    mat_key = "guided_filter"
+                    _model_free["matter"] = dict(onyx_pipeline_info["matter_fallback"])
                 onyx_objects_meta = onyx.objects_meta
                 d, e, edge = apply_subject_preset(
                     subject_preset, int(trimap_dilate), int(trimap_erode), int(edge_radius),
@@ -1113,12 +1123,32 @@ class MaskOpsMEC:
                     None if external_trimap is None else tuple(external_trimap.shape),
                 )
 
-                seg_inst = seg_cls(
-                    model_name=_resolve_model_choice(model, seg_cls.MODELS_KEY,
-                                                     auto_download=bool(auto_download)),
-                    device=device, precision=precision,
-                    attention=attention, offload=offload,
-                )
+                def _model_free_segmenter(exc: BaseException, wanted: str):
+                    """L7.91: the chosen model is not installed (no package / library / weights) -> the model-free
+                    segmenter, labelled. Anything else (a bug, a bad prompt) is raised as it was."""
+                    from . import _classic
+                    if wanted == "classic" or not (_classic.fallback_allowed()
+                                                   and _classic.is_missing_model_error(exc)):
+                        raise exc
+                    _model_free["segmenter"] = {**_classic.describe_fallback(wanted, exc),
+                                                "used": _classic.LABEL_SEGMENT}
+                    logger.warning("[MaskOps] segmenter '%s' unavailable (%s) - using the model-free segmenter; "
+                                   "the mask is approximate.", wanted, _model_free["segmenter"]["why"][:160])
+                    cls_ = get_segmenter_cls("classic")
+                    mode_ = self._resolve_mode(
+                        input_mode, B, has_pts=bool(pos_pts or neg_pts), has_bbox=bbox_used is not None,
+                        has_text=bool(text_prompt.strip()), supports=cls_.SUPPORTS_MODES)
+                    return "classic", cls_, cls_(device=device), mode_
+
+                try:
+                    seg_inst = seg_cls(
+                        model_name=_resolve_model_choice(model, seg_cls.MODELS_KEY,
+                                                         auto_download=bool(auto_download)),
+                        device=device, precision=precision,
+                        attention=attention, offload=offload,
+                    )
+                except Exception as _exc:
+                    seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
                 # Tell the backend whether to use smart pos/neg disambiguation
                 # when SAM returns multiple candidate masks.
                 try:
@@ -1167,17 +1197,24 @@ class MaskOpsMEC:
                 # the multi-object matte gate below still reads it.
                 seg_out: dict = {}
                 if not _la_done:
-                    seg_out = seg_inst.segment(
-                        seg_image, mode=mode,
-                        positive_points=pos_pts, negative_points=neg_pts,
-                        bbox=bbox_used, neg_bbox=neg_bbox_used,
-                        text_prompt=text_prompt,
-                        frame_annotation=int(frame_annotation), object_id=int(object_id),
-                        max_frames=int(max_frames_to_track), memory_size=int(memory_size),
-                        start_frame=int(start_frame), end_frame=int(end_frame),
-                        individual_objects=bool(individual_objects),
-                        tracking_direction=tracking_direction, seed=int(seed),
-                    )
+                    def _first_pass() -> dict:
+                        return seg_inst.segment(
+                            seg_image, mode=mode,
+                            positive_points=pos_pts, negative_points=neg_pts,
+                            bbox=bbox_used, neg_bbox=neg_bbox_used,
+                            text_prompt=text_prompt,
+                            frame_annotation=int(frame_annotation), object_id=int(object_id),
+                            max_frames=int(max_frames_to_track), memory_size=int(memory_size),
+                            start_frame=int(start_frame), end_frame=int(end_frame),
+                            individual_objects=bool(individual_objects),
+                            tracking_direction=tracking_direction, seed=int(seed),
+                        )
+                    try:
+                        seg_out = _first_pass()
+                    except Exception as _exc:
+                        # the backend loads lazily: a missing model shows up here, not at construction
+                        seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
+                        seg_out = _first_pass()
                     mask_t = seg_out["mask"].float().clamp(0, 1)
                     score = float(seg_out.get("score", 1.0))
 
@@ -1446,12 +1483,27 @@ class MaskOpsMEC:
 
                 # Matte
                 if mat_cls is not None:
-                    mat_inst = mat_cls(
-                        model_name=_resolve_model_choice(matter_model, mat_cls.MODELS_KEY,
-                                                         auto_download=bool(auto_download)),
-                        device=device, precision=precision,
-                        attention=attention, offload=offload,
-                    )
+                    try:
+                        mat_inst = mat_cls(
+                            model_name=_resolve_model_choice(matter_model, mat_cls.MODELS_KEY,
+                                                             auto_download=bool(auto_download)),
+                            device=device, precision=precision,
+                            attention=attention, offload=offload,
+                        )
+                        if getattr(mat_inst, "_model", None) is None and hasattr(mat_inst, "load"):
+                            mat_inst.load()        # load now, so a missing model is caught here, not mid-matte
+                    except Exception as _exc:
+                        from . import _classic
+                        if mat_key == "guided_filter" or not (_classic.fallback_allowed()
+                                                              and _classic.is_missing_model_error(_exc)):
+                            raise
+                        _model_free["matter"] = {**_classic.describe_fallback(mat_key, _exc),
+                                                 "used": _classic.LABEL_MATTE}
+                        logger.warning("[MaskOps] matter '%s' unavailable (%s) - using the model-free guided "
+                                       "filter.", mat_key, _model_free["matter"]["why"][:160])
+                        mat_key = "guided_filter"
+                        mat_cls = get_matter_cls("guided_filter")
+                        mat_inst = mat_cls(device=device)
                     # Multi-object path: activates when the segmenter returns
                     # per-object masks/boxes, B==1, and the backend has matte_multi.
                     # Falls back silently to the single-object path otherwise.
@@ -1694,6 +1746,9 @@ class MaskOpsMEC:
             if _use_onyx:
                 info_obj["onyx"] = onyx_pipeline_info
                 info_obj["objects"] = onyx_objects_meta
+            if _model_free:
+                info_obj["approximate"] = True
+                info_obj["model_free"] = _model_free
             # Output luma-key mask (zeros if not run).
             if luma_mask_t is None:
                 luma_out = torch.zeros_like(alpha_cpu)

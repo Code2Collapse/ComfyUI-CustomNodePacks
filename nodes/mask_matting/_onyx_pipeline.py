@@ -762,9 +762,11 @@ def ensure_sam31_video_model(
     from .node import _resolve_model_choice
 
     if not _have_vendor():
+        # Not a broken install: the SAM 3.1 library is not part of this repo (third_party/ is not shipped).
         raise RuntimeError(
-            "SAM 3.1 library is missing from this install. Reinstall "
-            "ComfyUI-CustomNodePacks (expected third_party/sam3_lib)."
+            "SAM 3.1 is not installed: its library is not part of ComfyUI-CustomNodePacks and was looked for in "
+            "ComfyUI-CustomNodePacks/third_party/sam3_lib; its weights go in models/sam3.1/. SAM 3 is under Meta's "
+            "SAM License. Without it the model-free mode (GrabCut, approximate) works with points, a box or a mask."
         )
     cls = get_segmenter_cls("sam3.1")
     if cls is None:
@@ -822,14 +824,29 @@ def run_onyx_pipeline(
     seg_inst = None
     model = video_model
     if model is None:
-        seg_inst, model = ensure_sam31_video_model(
-            model_name=sam31_model_name,
-            device=device,
-            precision=precision,
-            attention=attention,
-            offload=offload,
-            auto_download=auto_download,
-        )
+        try:
+            seg_inst, model = ensure_sam31_video_model(
+                model_name=sam31_model_name,
+                device=device,
+                precision=precision,
+                attention=attention,
+                offload=offload,
+                auto_download=auto_download,
+            )
+        except Exception as exc:
+            # L7.91: no SAM 3.1 here (fresh install: no third_party/, no weights). The model-free tracker speaks
+            # the same protocol, so the rest of ONYX runs unchanged - and the result says it is an approximation.
+            from . import _classic
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            model = _classic.ClassicVideoTracker()
+            if seg_one_fn is None:
+                seg_one_fn = _classic.text_needs_model
+            pipeline_info["approximate"] = True
+            pipeline_info["tracker"] = _classic.LABEL_SEGMENT
+            pipeline_info["fallback_from"] = _classic.describe_fallback("sam3.1", exc)
+            logger.warning("[ONYX] SAM 3.1 unavailable (%s) - using the model-free tracker; the mask is approximate.",
+                           pipeline_info["fallback_from"]["why"][:160])
     if seg_one_fn is None:
         if seg_inst is None:
             seg_inst, _ = ensure_sam31_video_model(
@@ -883,15 +900,27 @@ def run_onyx_pipeline(
         if matter_cls is None:
             raise RuntimeError(f"Unknown matter backend '{matter_key}'.")
         from .node import _resolve_model_choice as _rmc
-        matter = matter_cls(
-            model_name=_rmc(matter_model or "(auto)", matter_cls.MODELS_KEY,
-                            auto_download=bool(auto_download)),
-            device=device,
-            precision=precision,
-            attention=attention,
-            offload=offload,
-        )
-        matter.load()
+        try:
+            matter = matter_cls(
+                model_name=_rmc(matter_model or "(auto)", matter_cls.MODELS_KEY,
+                                auto_download=bool(auto_download)),
+                device=device,
+                precision=precision,
+                attention=attention,
+                offload=offload,
+            )
+            matter.load()
+        except Exception as exc:
+            from . import _classic
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            from .matters.guided_filter_backend import GuidedFilterMatter
+            matter = GuidedFilterMatter()
+            pipeline_info["approximate"] = True
+            pipeline_info["matter_fallback"] = {**_classic.describe_fallback(mat_key, exc),
+                                                "used": _classic.LABEL_MATTE}
+            logger.warning("[ONYX] matter '%s' unavailable (%s) - using the model-free guided filter.", mat_key,
+                           pipeline_info["matter_fallback"]["why"][:160])
     else:
         matter = None
 

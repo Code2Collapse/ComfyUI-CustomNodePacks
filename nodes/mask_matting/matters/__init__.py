@@ -81,6 +81,7 @@ def list_keys(installed_only: bool = False):
 
 
 _HINT_BY_MODULE = {
+    "guided_filter_backend":  "Model-free guided-filter matter (OpenCV/torch only) - should always load; report it if not.",
     "vitmatte_backend":       "Install `transformers` and download ViTMatte weights to models/vitmatte/.",
     "rvm_backend":            "Install `torchvision` and download Robust Video Matting weights to models/rvm/.",
     "bgmattingv2_backend":    "Install `torchvision` and download BackgroundMattingV2 weights to models/bgmatting/.",
@@ -97,7 +98,7 @@ def _import_all() -> None:
         record_failure = None  # type: ignore
     for mod in ("vitmatte_backend", "rvm_backend",
                 "bgmattingv2_backend", "matanyone_backend",
-                "salient_matter_backend"):
+                "salient_matter_backend", "guided_filter_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:

@@ -127,6 +127,7 @@ _HINT_BY_MODULE = {
     "experimental_backend": "Experimental backend — enable explicitly via the node widget; safe to ignore otherwise.",
     "video_backend":        "Cutie video propagation is unavailable; install its dependencies, or use SeC, which tracks a concept rather than an appearance and survives occlusion.",
     "locate_anything_backend": "Install `transformers` (for LocateAnything-3B) — open-vocabulary grounding segmenter.",
+    "classic_backend":      "Model-free GrabCut segmenter (OpenCV only) - should always load; report it if not.",
 }
 
 
@@ -142,7 +143,8 @@ def _import_all() -> None:
     # another thing that gets picked by accident and blamed for a bad matte.
     for mod in ("sam3_backend", "sam31_backend",
                 "salient_backend", "experimental_backend",
-                "video_backend", "locate_anything_backend"):
+                "video_backend", "locate_anything_backend",
+                "classic_backend"):
         try:
             import_module(f".{mod}", package=__name__)
         except Exception as exc:
