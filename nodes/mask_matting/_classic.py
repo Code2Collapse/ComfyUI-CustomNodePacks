@@ -297,6 +297,54 @@ class ClassicVideoTracker:
         state.clear()
 
 
+LABEL_FOREGROUND = ("model-free: GrabCut from the frame border (approximate, no model; assumes the subject does not "
+                    "touch the frame edge)")
+
+
+def grabcut_foreground(rgb_u8: np.ndarray, *, iterations: int = 5) -> np.ndarray:
+    """Background removal without a model: the frame border is background, the middle is probably the subject;
+    GrabCut settles the edge; the parts connected to the centre are kept. Returns (H,W) float32 0/1."""
+    cv2 = _cv2()
+    H, W = rgb_u8.shape[:2]
+    s = min(1.0, _WORK_SIDE / float(max(H, W)))
+    w, h = max(8, int(round(W * s))), max(8, int(round(H * s)))
+    small = np.ascontiguousarray((cv2.resize(rgb_u8, (w, h), interpolation=cv2.INTER_AREA) if s < 1.0
+                                  else rgb_u8)[..., :3].astype(np.uint8))
+    gc = np.full((h, w), cv2.GC_PR_BGD, np.uint8)
+    bx, by = max(1, int(w * 0.15)), max(1, int(h * 0.15))
+    gc[by:h - by, bx:w - bx] = cv2.GC_PR_FGD
+    band = max(1, int(round(min(h, w) * 0.03)))
+    gc[:band], gc[-band:], gc[:, :band], gc[:, -band:] = cv2.GC_BGD, cv2.GC_BGD, cv2.GC_BGD, cv2.GC_BGD
+    bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(small, gc, None, bgd, fgd, int(max(1, iterations)), cv2.GC_INIT_WITH_MASK)
+    except cv2.error as exc:
+        logger.warning("[ModelFree] GrabCut gave up on the frame (%s).", exc)
+    fg = (gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD)
+    n, lab = cv2.connectedComponents(fg.astype(np.uint8), connectivity=8)
+    if n > 2:
+        sizes = np.bincount(lab.ravel())
+        sizes[0] = 0
+        fg = lab == int(np.argmax(sizes))
+    if s < 1.0:
+        fg = cv2.resize(fg.astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR) > 0.5
+    return fg.astype(np.float32)
+
+
+LABEL_SKIN = "model-free: skin by colour (YCrCb range, approximate, no model)"
+
+
+def skin_mask(rgb_u8: np.ndarray) -> np.ndarray:
+    """Skin by colour alone - the classic YCrCb range (Cr 133..173, Cb 77..127, Chai & Ngan), cleaned with a small
+    opening. It knows colour, not anatomy: wood, sand or a warm wall can pass. Returns (H,W) float32 0/1."""
+    cv2 = _cv2()
+    ycc = cv2.cvtColor(np.ascontiguousarray(rgb_u8[..., :3].astype(np.uint8)), cv2.COLOR_RGB2YCrCb)
+    m = cv2.inRange(ycc, np.array([0, 133, 77], np.uint8), np.array([255, 173, 127], np.uint8))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k)
+    return (m > 0).astype(np.float32)
+
+
 class ClassicSamPredictor:
     """The SAM 2 image-predictor API (``set_image`` / ``predict``) over GrabCut, for the model-free SAM_MODEL the
     SAM Model Loader hands out when no SAM model is installed (L7.98). Pixel coordinates; labels 1 = positive,

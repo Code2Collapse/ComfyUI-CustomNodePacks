@@ -217,9 +217,10 @@ class ViTMatteMatter(BaseMatter):
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(
             self.precision, torch.float16,
         )
-        self._processor = VitMatteImageProcessor.from_pretrained(src)
+        from ..._download_policy import hf_kwargs  # L7.97: a repo id only with MaskOps' auto_download
+        self._processor = VitMatteImageProcessor.from_pretrained(src, **hf_kwargs(src))
         self._model = VitMatteForImageMatting.from_pretrained(
-            src, torch_dtype=dtype,
+            src, torch_dtype=dtype, **hf_kwargs(src),
         ).to(self.device).eval()
         self._dtype = dtype
 

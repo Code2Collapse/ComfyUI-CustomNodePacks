@@ -80,6 +80,14 @@ class BackgroundRemoverMEC:
                     "default": True,
                     "tooltip": "Keep model in VRAM between runs.",
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download the model if it is not installed (into models/<model>/). Off: an installed "
+                               "copy is used wherever it is (this pack's folder, another pack's, the Hugging Face "
+                               "cache); without one the node removes the background model-free (GrabCut, "
+                               "approximate) and says which model to install.",
+                }),
             },
         }
 
@@ -110,8 +118,10 @@ class BackgroundRemoverMEC:
         invert: bool,
         mask_blur: int,
         keep_model_loaded: bool = True,
+        allow_download: bool = False,
     ):
-        with _PB.session("BgRemover"):
+        from ._download_policy import allow_downloads
+        with _PB.session("BgRemover"), allow_downloads(allow_download):
             return self._remove_bg_impl(image, model_name, threshold, invert,
                                         mask_blur, keep_model_loaded)
 
@@ -138,14 +148,31 @@ class BackgroundRemoverMEC:
         else:
             device = "cpu"
 
-        loaded = get_or_load_model(model_name, precision="fp32", device=device)
-        model = loaded["model"]
-        processor = loaded.get("processor")
-        dev = next(model.parameters()).device
+        model_free = None
+        try:
+            loaded = get_or_load_model(model_name, precision="fp32", device=device)
+        except Exception as exc:
+            # L7.97: not installed and no permission to download (or offline) -> model-free, labelled
+            from .mask_matting import _classic
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            model_free = {**_classic.describe_fallback(model_name, exc), "used": _classic.LABEL_FOREGROUND}
+            logger.warning("[MEC] BackgroundRemover: %s - using the model-free method.", model_free["why"][:200])
+            loaded = None
 
         masks = []
+        if model_free is not None:
+            from .mask_matting import _classic
+            for i in _PB.track(range(B), B, "BgRemover"):
+                _IC.check()
+                img_np = (image[i, ..., :3].cpu().numpy() * 255).astype(np.uint8)
+                masks.append(torch.from_numpy(_classic.grabcut_foreground(img_np)))
+        else:
+            model = loaded["model"]
+            processor = loaded.get("processor")
+            dev = next(model.parameters()).device
 
-        for i in _PB.track(range(B), B, "BgRemover"):
+        for i in (_PB.track(range(B), B, "BgRemover") if model_free is None else ()):
             _IC.check()
             img_np = (image[i].cpu().numpy() * 255).astype(np.uint8)
             pil_img = PILImage.fromarray(img_np[:, :, :3])
@@ -249,6 +276,8 @@ class BackgroundRemoverMEC:
 
         info = json.dumps({
             "model": model_name,
+            "model_status": "missing - model-free result" if model_free else "loaded",
+            **({"approximate": True, "model_free": model_free} if model_free else {}),
             "frames": B,
             "threshold": threshold,
             "invert": invert,

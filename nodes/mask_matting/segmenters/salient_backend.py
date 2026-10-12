@@ -97,8 +97,9 @@ class _SalientBase(BaseSegmenter):
         logger.warning("[%s] loading %s", self.KEY, path)
         dtype = torch.float16 if self.precision == "fp16" else (
             torch.bfloat16 if self.precision == "bf16" else torch.float32)
+        from ..._download_policy import hf_kwargs  # L7.97
         m = AutoModelForImageSegmentation.from_pretrained(
-            path, trust_remote_code=self._TRUST_REMOTE_CODE
+            path, trust_remote_code=self._TRUST_REMOTE_CODE, **hf_kwargs(path)
         )
         try:
             m = m.to(self.device).to(dtype)

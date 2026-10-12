@@ -217,6 +217,13 @@ class SAMModelLoaderMEC:
                     "tooltip": "Model precision. float16 saves VRAM, bfloat16 for newer GPUs.",
                 }),
             },
+            "optional": {
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download a '[download]' model if it is not installed (into models/sam2/). Off: installed models are used wherever they are; a missing one gives the model-free stand-in (GrabCut, approximate, labelled by the SAM nodes) and the console names the file to install.",
+                }),
+            },
         }
 
     @staticmethod
@@ -277,7 +284,13 @@ class SAMModelLoaderMEC:
     )
 
     def load(self, model_name: str, model_type: str, device: str,
-             offload_to_cpu: bool, dtype: str):
+             offload_to_cpu: bool, dtype: str, allow_download: bool = False):
+        from ._download_policy import allow_downloads
+        with allow_downloads(allow_download):
+            return self._load_impl(model_name, model_type, device, offload_to_cpu, dtype)
+
+    def _load_impl(self, model_name: str, model_type: str, device: str,
+                   offload_to_cpu: bool, dtype: str):
 
         dtype_map = {
             "float32": torch.float32,
@@ -391,6 +404,10 @@ class SAMModelLoaderMEC:
         # Auto-download from HuggingFace Hub if flagged - or when a registry model saved under its plain name (it
         # was on disk where the workflow was saved) is missing on this machine (L2.13).
         if needs_download or (download_missing_registry and clean_name in _DOWNLOAD_REGISTRY):
+            from ._download_policy import ModelNotDownloaded, downloads_allowed
+            if not downloads_allowed():                  # L7.97: only with the node's Allow Download
+                raise ModelNotDownloaded(clean_name, target="models/sam2/",
+                                         source=f"https://huggingface.co/{_DOWNLOAD_REGISTRY.get(clean_name, {}).get('repo_id', '')}")
             return SAMModelLoaderMEC._auto_download(clean_name)
 
         # Not found — give a helpful error

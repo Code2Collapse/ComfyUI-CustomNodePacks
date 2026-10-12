@@ -147,6 +147,11 @@ class MaskPlacementMEC:
                                                     "anchor frame (e.g. a photo of the dog you want)."}),
                 "sam_model": ("SAM_MODEL", {"tooltip": "From SAM Model Loader — needed only for prompt-based "
                                                         "segmentation."}),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download the grounding model for a text prompt if it is not installed. Off: an installed copy is used wherever it is.",
+                }),
             },
         }
 
@@ -213,7 +218,15 @@ class MaskPlacementMEC:
     # ── main ─────────────────────────────────────────────────────────
     def execute(self, images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px,
-                source_mask=None, source_image=None, ref_image=None, sam_model=None):
+                source_mask=None, source_image=None, ref_image=None, sam_model=None, allow_download=False):
+        from ._download_policy import allow_downloads
+        with allow_downloads(allow_download):
+            return self._execute_impl(images, prompt, grounding_model, track_mode, anchor_frame, placement_json,
+                                      feather_px, source_mask, source_image, ref_image, sam_model)
+
+    def _execute_impl(self, images, prompt, grounding_model, track_mode, anchor_frame,
+                      placement_json, feather_px,
+                      source_mask=None, source_image=None, ref_image=None, sam_model=None):
         if not _CV2_OK:
             raise RuntimeError("MaskPlacementMEC needs opencv-python (cv2) installed.")
         with torch.no_grad():

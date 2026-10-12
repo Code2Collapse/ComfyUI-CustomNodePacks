@@ -344,13 +344,22 @@ def get_model_path(name: str) -> str:
     fname = reg["filename"]
     model_dir = reg["model_dir"]
 
+    # L7.97 (owner 2026-10-12): reuse what is installed anywhere, download only with the node's permission
+    from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_file, hf_cached_snapshot
+
     # For directory-based models (HF Transformers), return the directory
     if fname is None:
         local_dir = os.path.join(_MODELS_DIR, model_dir, name)
         if os.path.isdir(local_dir):
             return local_dir
-        # Not downloaded yet — return repo_id for from_pretrained()
-        return reg["repo_id"]
+        found = _find_dir_model_elsewhere(reg["repo_id"]) or hf_cached_snapshot(reg["repo_id"])
+        if found:
+            logger.info("[MEC] model %s: found at %s", name, found)
+            return found
+        if not downloads_allowed():
+            raise ModelNotDownloaded(name, target=local_dir, source=f"https://huggingface.co/{reg['repo_id']}")
+        # Allowed: into this model's own folder (models/<model_dir>/<name>), not the HF cache
+        return ensure_downloaded(name)
 
     # Check local filesystem — prefer .safetensors when available
     dirs_to_check = [os.path.join(_MODELS_DIR, model_dir)]
@@ -381,9 +390,62 @@ def get_model_path(name: str) -> str:
         if os.path.exists(c):
             return c
 
-    # Not found locally — download
+    # Another pack's folder ComfyUI knows about, or the Hugging Face cache
+    found = _find_file_model_elsewhere(fname) or hf_cached_file(reg["repo_id"], fname)
+    if found:
+        logger.info("[MEC] model %s: found at %s", name, found)
+        return found
+
+    # Not found anywhere — download only with permission
     dest_dir = dirs_to_check[0]
+    if not downloads_allowed():
+        raise ModelNotDownloaded(name, target=os.path.join(dest_dir, fname),
+                                 source=f"https://huggingface.co/{reg['repo_id']}")
     return ensure_downloaded(name, dest_dir)
+
+
+def _find_file_model_elsewhere(fname: str) -> Optional[str]:
+    """``fname`` in any folder ComfyUI knows (other packs register theirs too). No download."""
+    if folder_paths is None or not fname:
+        return None
+    for key in list(getattr(folder_paths, "folder_names_and_paths", {}) or {}):
+        try:
+            p = folder_paths.get_full_path(key, fname)
+            if p and os.path.isfile(p):
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _find_dir_model_elsewhere(repo_id: str) -> Optional[str]:
+    """A Transformers model folder another pack keeps, e.g. models/BiRefNet/BiRefNet or models/RMBG/RMBG-2.0: one
+    folder level under models/, named like the repo, holding a config.json. No download."""
+    tail = (repo_id or "").split("/")[-1].lower()
+    if not tail or not os.path.isdir(_MODELS_DIR):
+        return None
+    try:
+        tops = [e for e in os.scandir(_MODELS_DIR) if e.is_dir()]
+    except OSError:
+        return None
+    for top in tops:
+        cands = [top.path] if top.name.lower() == tail else []
+        try:
+            cands += [e.path for e in os.scandir(top.path) if e.is_dir() and e.name.lower() == tail]
+        except OSError:
+            pass
+        for c in cands:
+            if os.path.isfile(os.path.join(c, "config.json")):
+                return c
+    return None
+
+
+def _hf_kw(repo_or_path: str) -> dict:
+    """from_pretrained kwargs: a repo id (not a local folder) may only be fetched with the node's permission."""
+    from ._download_policy import hf_local_only
+    if repo_or_path and not os.path.isdir(str(repo_or_path)) and hf_local_only():
+        return {"local_files_only": True}
+    return {}
 
 
 def _get_safetensors_alternative(filename: str) -> Optional[str]:
@@ -767,7 +829,7 @@ def _load_vitmatte(path: str, reg: dict, device: str):
         repo_or_path = reg["repo_id"]
         logger.info("[MEC] Loading ViTMatte from HF: %s", repo_or_path)
 
-    model = VitMatteForImageMatting.from_pretrained(repo_or_path)
+    model = VitMatteForImageMatting.from_pretrained(repo_or_path, **_hf_kw(repo_or_path))
     processor = VitMatteImageProcessor()
     model.eval().to(device)
     logger.info("[MEC] ViTMatte ready (%s)", reg.get("version", "unknown"))
@@ -997,7 +1059,13 @@ def _load_videomama(path: str, reg: dict, dtype: torch.dtype, device: str):
     base_model_path = os.path.join(videomama_dir, "stable-video-diffusion-img2vid-xt")
     unet_path = os.path.join(videomama_dir, "VideoMaMa")
 
-    # Auto-download if needed
+    # Download only with the node's permission (L7.97): together these are many GB
+    from ._download_policy import ModelNotDownloaded, downloads_allowed
+    if (not os.path.isdir(base_model_path) or not os.listdir(base_model_path)) and not downloads_allowed():
+        raise ModelNotDownloaded("stable-video-diffusion-img2vid-xt (VideoMaMa base)", target=base_model_path,
+                                 source="https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt")
+    if (not os.path.isdir(unet_path) or not os.listdir(unet_path)) and not downloads_allowed():
+        raise ModelNotDownloaded("VideoMaMa UNet", target=unet_path, source="https://huggingface.co/SammyLim/VideoMaMa")
     if not os.path.isdir(base_model_path) or not os.listdir(base_model_path):
         try:
             from huggingface_hub import snapshot_download
@@ -1154,10 +1222,10 @@ def _load_rmbg(path: str, reg: dict, device: str):
     repo_or_path = path if os.path.isdir(path) else reg["repo_id"]
     logger.info("[MEC] Loading RMBG from %s", repo_or_path)
     model = AutoModelForImageSegmentation.from_pretrained(
-        repo_or_path, trust_remote_code=True,
+        repo_or_path, trust_remote_code=True, **_hf_kw(repo_or_path),
     )
     try:
-        processor = AutoImageProcessor.from_pretrained(repo_or_path, trust_remote_code=True)
+        processor = AutoImageProcessor.from_pretrained(repo_or_path, trust_remote_code=True, **_hf_kw(repo_or_path))
     except Exception:
         processor = None
     model = model.to(device).eval()
@@ -1178,10 +1246,10 @@ def _load_birefnet(path: str, reg: dict, device: str):
     repo_or_path = path if os.path.isdir(path) else reg["repo_id"]
     logger.info("[MEC] Loading BiRefNet from %s", repo_or_path)
     model = AutoModelForImageSegmentation.from_pretrained(
-        repo_or_path, trust_remote_code=True,
+        repo_or_path, trust_remote_code=True, **_hf_kw(repo_or_path),
     )
     try:
-        processor = AutoImageProcessor.from_pretrained(repo_or_path, trust_remote_code=True)
+        processor = AutoImageProcessor.from_pretrained(repo_or_path, trust_remote_code=True, **_hf_kw(repo_or_path))
     except Exception:
         processor = None
     model = model.to(device).eval()
@@ -1201,8 +1269,8 @@ def _load_segformer(path: str, reg: dict, device: str):
 
     repo_or_path = path if os.path.isdir(path) else reg["repo_id"]
     logger.info("[MEC] Loading SegFormer from %s", repo_or_path)
-    model = SegformerForSemanticSegmentation.from_pretrained(repo_or_path)
-    processor = SegformerImageProcessor.from_pretrained(repo_or_path)
+    model = SegformerForSemanticSegmentation.from_pretrained(repo_or_path, **_hf_kw(repo_or_path))
+    processor = SegformerImageProcessor.from_pretrained(repo_or_path, **_hf_kw(repo_or_path))
     model = model.to(device).eval()
     logger.info("[MEC] SegFormer loaded: %s (%s)", reg.get("version"), device)
     return {"model": model, "processor": processor}

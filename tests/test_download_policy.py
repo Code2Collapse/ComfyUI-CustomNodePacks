@@ -1,0 +1,192 @@
+"""L7.97: model weights are downloaded only with the node's "Allow Download" (owner 2026-10-12).
+
+Installed copies are found first - this pack's folder, another pack's folder, the Hugging Face cache; nothing is
+fetched without permission; a missing model gives the labelled model-free result where one exists, otherwise a
+message naming the model, where it goes and how to allow the download. No test touches the network.
+"""
+from __future__ import annotations
+
+import json
+import os
+import types
+import urllib.request
+
+import numpy as np
+import pytest
+import torch
+
+W, H, CX, CY, R = 256, 192, 128, 96, 40
+
+
+def scene(skin=False):
+    rng = np.random.default_rng(5)
+    g = (0.45 + 0.08 * rng.standard_normal((H, W, 1))).clip(0, 1).repeat(3, -1)
+    yy, xx = np.mgrid[:H, :W]
+    disk = (xx - CX) ** 2 + (yy - CY) ** 2 <= R ** 2
+    g[disk] = [0.88, 0.62, 0.50] if skin else [0.85, 0.12, 0.10]          # a skin tone / a red disk
+    return (g * 255).astype(np.uint8), disk
+
+
+def iou(m, gt):
+    m = np.asarray(m) > 0.5
+    return float(np.logical_and(m, gt).sum()) / float(np.logical_or(m, gt).sum())
+
+
+def as_image(u8):
+    return torch.from_numpy(u8).float().div(255.0).unsqueeze(0)
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def refuse(*_a, **_k):
+        raise AssertionError("no test may reach the network")
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.delenv("C2C_NO_DOWNLOADS", raising=False)
+
+
+@pytest.fixture
+def pol():
+    return pytest.importorskip("nodes._download_policy")
+
+
+@pytest.fixture
+def mm(monkeypatch, tmp_path, pol):
+    mm = pytest.importorskip("nodes.model_manager")
+    monkeypatch.setattr(mm, "_MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr(mm, "folder_paths", None)
+    monkeypatch.setattr(pol, "hf_cached_snapshot", lambda repo: None)
+    monkeypatch.setattr(pol, "hf_cached_file", lambda repo, f: None)
+    calls = []
+    monkeypatch.setattr(mm, "ensure_downloaded", lambda name, dest=None: calls.append(name) or "<downloaded>")
+    mm._test_download_calls = calls
+    return mm
+
+
+# ── the policy ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_off_unless_a_node_allows_it(pol, monkeypatch, tmp_path):
+    assert pol.downloads_allowed() is False
+    with pol.allow_downloads(True):
+        assert pol.downloads_allowed() is True
+        assert pol.hf_kwargs("org/repo") == {}
+    with pol.allow_downloads(False):
+        assert pol.hf_kwargs("org/repo") == {"local_files_only": True}
+        assert pol.hf_kwargs(str(tmp_path)) == {}                        # a local folder is never a download
+    monkeypatch.setenv("C2C_NO_DOWNLOADS", "1")
+    with pol.allow_downloads(True):
+        assert pol.downloads_allowed() is False                          # the machine-wide switch wins
+
+
+def test_torch_hub_needs_permission(pol, monkeypatch, tmp_path):
+    monkeypatch.setattr(torch.hub, "get_dir", lambda: str(tmp_path))
+    with pytest.raises(pol.ModelNotDownloaded):
+        pol.require_hub_repo("PeterL1n/RobustVideoMatting")
+    (tmp_path / "PeterL1n_RobustVideoMatting_master").mkdir()
+    pol.require_hub_repo("PeterL1n/RobustVideoMatting")                 # cached code: fine
+    with pytest.raises(pol.ModelNotDownloaded, match="weights"):
+        pol.require_hub_repo("PeterL1n/RobustVideoMatting", weights_missing=True)
+
+
+# ── model_manager: find first, download only when allowed ────────────────────────────────────────────────────────
+
+def test_directory_model_missing_is_not_downloaded(mm, pol):
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        mm.get_model_path("birefnet_general")
+    assert "birefnet" in str(e.value) and "allow_download" in str(e.value) and "huggingface.co" in str(e.value)
+    assert mm._test_download_calls == []
+    with pol.allow_downloads(True):
+        assert mm.get_model_path("birefnet_general") == "<downloaded>"
+    assert mm._test_download_calls == ["birefnet_general"]
+
+
+def test_another_packs_copy_and_the_hf_cache_are_reused(mm, pol, tmp_path, monkeypatch):
+    other = tmp_path / "BiRefNet" / "BiRefNet"                             # e.g. a BiRefNet pack's folder
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("{}")
+    assert mm.get_model_path("birefnet_general") == str(other)
+    monkeypatch.setattr(pol, "hf_cached_snapshot", lambda repo: "/hf/cache/segformer" if "segformer" in repo else None)
+    assert mm.get_model_path("segformer_clothes") == "/hf/cache/segformer"
+    assert mm._test_download_calls == []
+
+
+def test_file_model_found_in_any_known_folder(mm, pol, monkeypatch, tmp_path):
+    f = tmp_path / "elsewhere" / "sam2.1_hiera_base_plus.safetensors"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+    fp = types.SimpleNamespace(folder_names_and_paths={"other_pack_sams": ([str(f.parent)], set())},
+                               get_full_path=lambda key, name: str(f) if name == f.name else None)
+    monkeypatch.setattr(mm, "folder_paths", fp)
+    assert mm.get_model_path("sam2.1_hiera_base_plus") == str(f)
+    monkeypatch.setattr(mm, "folder_paths", None)
+    with pytest.raises(pol.ModelNotDownloaded):
+        mm.get_model_path("sam2.1_hiera_base_plus")
+    assert not (tmp_path / "sam2").exists()                              # no folder made for a download that never ran
+
+
+# ── nodes: model-free where one exists, a plain message where not ────────────────────────────────────────────────
+
+def _missing(*_a, **_k):
+    from nodes._download_policy import ModelNotDownloaded
+    raise ModelNotDownloaded("some_model", target="models/x/")
+
+
+def test_background_remover_model_free(monkeypatch):
+    br = pytest.importorskip("nodes.background_remover")
+    monkeypatch.setattr(br, "get_or_load_model", _missing)
+    img, gt = scene()
+    fg, mask, info = br.BackgroundRemoverMEC().remove_bg(as_image(img), "birefnet_general", 0.5, False, 0)
+    info = json.loads(info)
+    assert iou(mask[0].numpy(), gt) >= 0.8
+    assert info["approximate"] is True and info["model_status"].startswith("missing")
+    assert "border" in info["model_free"]["used"]
+
+
+def test_semantic_segment_skin_only_without_the_model(monkeypatch):
+    ss = pytest.importorskip("nodes.semantic_segment")
+    monkeypatch.setattr(ss, "get_or_load_model", _missing)
+    img, gt = scene(skin=True)
+    mask, info = ss.SemanticSegmentMEC().parse(as_image(img), "segformer_face", "skin,hair", 0.5, False)
+    info = json.loads(info)
+    assert iou(mask[0].numpy(), gt) >= 0.8
+    assert info["approximate"] is True and info["needs_the_model"] == ["hair"]
+    with pytest.raises(ValueError, match="needs the model"):
+        ss.SemanticSegmentMEC().parse(as_image(img), "segformer_clothes", "upper_clothes", 0.5, False)
+
+
+def test_multi_mask_picker_without_a_loader(monkeypatch):
+    pk = pytest.importorskip("nodes.sam_multi_mask_picker")
+    monkeypatch.setattr(pk, "get_or_load_model", _missing)
+    img, gt = scene()
+    out = pk.SamMultiMaskPickerMEC().pick_mask(as_image(img), "sam2.1_hiera_base_plus",
+                                               json.dumps([{"x": CX, "y": CY, "label": 1}]), "", "fp32", 0)
+    out = out["result"] if isinstance(out, dict) else out
+    info = json.loads(out[-1])
+    assert iou(out[0][0].numpy(), gt) >= 0.85 and info["approximate"] is True
+
+
+def test_sam_loader_download_entry_needs_permission(monkeypatch):
+    sml = pytest.importorskip("nodes.sam_model_loader")
+    L = sml.SAMModelLoaderMEC
+    monkeypatch.setattr(sml, "HAS_FOLDER_PATHS", False)
+    called = []
+    monkeypatch.setattr(L, "_auto_download", staticmethod(lambda n: called.append(n) or "/x/" + n))
+    (sam,) = L().load("[download] sam2.1_hiera_large.pt", "auto", "cpu", False, "float32")
+    assert called == [] and sam["model_type"] == "model-free"
+    assert "downloading is off" in sam["fallback_from"]["why"]
+    monkeypatch.setattr(L, "_load_sam2_family", lambda *a, **k: (object(), "stub"))
+    (sam,) = L().load("[download] sam2.1_hiera_large.pt", "auto", "cpu", False, "float32", allow_download=True)
+    assert called == ["sam2.1_hiera_large.pt"] and sam["load_method"] == "stub"
+
+
+def test_sec_pipeline_model_free(monkeypatch):
+    sec = pytest.importorskip("nodes.sec_matanyone_pipeline")
+    us = pytest.importorskip("nodes.unified_segmentation")
+    monkeypatch.setattr(us.UnifiedSegmentation, "segment", lambda self, **k: _missing())
+    monkeypatch.setattr(sec.SeCMatAnyonePipelineMEC, "_run_vitmatte", lambda self, *a, **k: _missing())
+    img, gt = scene()
+    out = sec.SeCMatAnyonePipelineMEC().process(as_image(img), "sam2.1_hiera_base_plus", "",
+                                                json.dumps([{"x": CX, "y": CY, "label": 1}]), "", "vitmatte_small",
+                                                8, 5, "fp32", False, 0)
+    info = json.loads(out[-1])
+    assert iou(out[1][0].numpy(), gt) >= 0.8
+    assert info["approximate"] is True and set(info["model_free"]) == {"segmentation", "matting"}

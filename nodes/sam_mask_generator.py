@@ -146,6 +146,11 @@ class SAMMaskGeneratorMEC:
                 "existing_mask": ("MASK", {
                     "tooltip": "Use this mask as the starting point instead of running SAM from scratch",
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download the grounding model for text prompts if it is not installed (into its models/ subfolder). Off: an installed copy is used wherever it is; without one a text prompt needs points or a box as well.",
+                }),
             },
         }
 
@@ -187,7 +192,22 @@ class SAMMaskGeneratorMEC:
                  multimask_output, mask_index, score_threshold,
                  apply_bbox_crop, refine_iterations=1,
                  auto_negative_points=False, edge_refine="guided", edge_radius=8,
-                 bbox=None, bboxes_json="", spline_json="", existing_mask=None):
+                 bbox=None, bboxes_json="", spline_json="", existing_mask=None, allow_download=False):
+        from ._download_policy import allow_downloads
+        with allow_downloads(allow_download):
+            return self._generate_entry(sam_model, image, points_json, bbox_json, text_prompt,
+                                        negative_text_prompt, grounding_model, text_threshold, text_box_threshold,
+                                        multimask_output, mask_index, score_threshold, apply_bbox_crop,
+                                        refine_iterations, auto_negative_points, edge_refine, edge_radius, bbox,
+                                        bboxes_json, spline_json, existing_mask)
+
+    def _generate_entry(self, sam_model, image, points_json, bbox_json,
+                        text_prompt, negative_text_prompt, grounding_model,
+                        text_threshold, text_box_threshold,
+                        multimask_output, mask_index, score_threshold,
+                        apply_bbox_crop, refine_iterations=1,
+                        auto_negative_points=False, edge_refine="guided", edge_radius=8,
+                        bbox=None, bboxes_json="", spline_json="", existing_mask=None):
 
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SAMMaskGeneratorMEC expects IMAGE tensor [B,H,W,C]")

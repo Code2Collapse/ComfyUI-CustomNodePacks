@@ -110,6 +110,13 @@ class SemanticSegmentMEC:
                     "default": True,
                     "tooltip": "Keep model in VRAM between runs.",
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download the SegFormer model if it is not installed (into models/segformer/). Off: an "
+                               "installed copy is used wherever it is; without one only 'skin' can be made "
+                               "model-free (by colour, approximate) and the node names the model to install.",
+                }),
             },
         }
 
@@ -144,10 +151,12 @@ class SemanticSegmentMEC:
         threshold: float,
         invert: bool,
         keep_model_loaded: bool = True,
+        allow_download: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SemanticSegmentMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.no_grad():
+        from ._download_policy import allow_downloads
+        with torch.no_grad(), allow_downloads(allow_download):
             return self._parse_impl(
                 image, model_name, classes_csv, threshold, invert,
                 keep_model_loaded,
@@ -171,7 +180,13 @@ class SemanticSegmentMEC:
         else:
             device = "cpu"
 
-        loaded = get_or_load_model(model_name, precision="fp32", device=device)
+        try:
+            loaded = get_or_load_model(model_name, precision="fp32", device=device)
+        except Exception as exc:
+            from .mask_matting import _classic
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            return self._model_free(image, model_name, classes_csv, invert, exc)
         model = loaded["model"]
         processor = loaded["processor"]
         dev = next(model.parameters()).device
@@ -282,4 +297,29 @@ class SemanticSegmentMEC:
             "invert": invert,
         }, indent=2)
 
+        return (result, info)
+
+    @staticmethod
+    def _model_free(image, model_name, classes_csv, invert, exc):
+        """L7.97: SegFormer is not installed and may not be downloaded. Only skin can be found without it (by
+        colour); every other class needs the model - said plainly, never faked."""
+        from .mask_matting import _classic
+        wanted = [c.strip().lower() for c in classes_csv.split(",") if c.strip()]
+        possible = [c for c in wanted if c == "skin"]
+        if not possible:
+            raise ValueError(f"{exc} Without the model only 'skin' can be found (by colour); "
+                             f"'{classes_csv}' needs the model.")
+        B, H, W, _C = image.shape
+        masks = [torch.from_numpy(_classic.skin_mask((image[i, ..., :3].cpu().numpy() * 255).astype(np.uint8)))
+                 for i in range(B)]
+        result = torch.stack(masks).clamp(0.0, 1.0)
+        if invert:
+            result = 1.0 - result
+        logger.warning("[MEC] SemanticSegment: %s - skin by colour only (model-free).", str(exc)[:200])
+        info = json.dumps({
+            "model": model_name, "model_status": "missing - model-free result", "approximate": True,
+            "model_free": {**_classic.describe_fallback(model_name, exc), "used": _classic.LABEL_SKIN},
+            "matched_classes": possible, "needs_the_model": [c for c in wanted if c != "skin"], "frames": B,
+            "invert": invert,
+        }, indent=2)
         return (result, info)

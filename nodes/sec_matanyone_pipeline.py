@@ -152,6 +152,14 @@ class SeCMatAnyonePipelineMEC:
                     "default": True,
                     "tooltip": "Keep models in VRAM between runs.",
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download the segmentation / matting models if they are not installed (into their "
+                               "models/ subfolders). Off: installed copies are used wherever they are; without them "
+                               "the node segments and mattes model-free (GrabCut + optical flow + guided filter, "
+                               "approximate) and names the models to install.",
+                }),
             },
         }
 
@@ -207,11 +215,13 @@ class SeCMatAnyonePipelineMEC:
         bbox=None,
         edge_refine_method: str = "none",
         keep_model_loaded: bool = True,
+        allow_download: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SeCMatAnyonePipelineMEC expects IMAGE tensor [B,H,W,C]")
 
-        with torch.no_grad():
+        from ._download_policy import allow_downloads
+        with torch.no_grad(), allow_downloads(allow_download):
             return self._process_impl(
                 image, segmentation_model, text_prompt, points_json, bbox_json,
                 matting_backend, edge_radius, n_warmup, precision,
@@ -249,20 +259,32 @@ class SeCMatAnyonePipelineMEC:
         # `_deprecated/`.  The active replacement is
         # `unified_segmentation.UnifiedSegmentation` whose `segment()` exposes
         # a smaller kwarg surface — call it with only the supported keys.
+        from .mask_matting import _classic
+        model_free: dict = {}
         from .unified_segmentation import UnifiedSegmentation
         seg_node = UnifiedSegmentation()
-        coarse_masks, score, seg_info = seg_node.segment(
-            image=image,
-            model_name=segmentation_model,
-            points_json=points_json,
-            bbox_json=bbox_json,
-            multimask=True,
-            mask_index=0,
-            precision=precision,
-            bbox=bbox,
-            text_prompt=text_prompt,
-            existing_mask=None,
-        )
+        try:
+            coarse_masks, score, seg_info = seg_node.segment(
+                image=image,
+                model_name=segmentation_model,
+                points_json=points_json,
+                bbox_json=bbox_json,
+                multimask=True,
+                mask_index=0,
+                precision=precision,
+                bbox=bbox,
+                text_prompt=text_prompt,
+                existing_mask=None,
+            )
+        except Exception as exc:
+            # L7.97: the segmentation model is not installed (and may not be downloaded) -> model-free, labelled
+            if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                raise
+            coarse_masks, score = self._model_free_segment(image, points_json, positive_coords, negative_coords,
+                                                           bbox_json, bbox, text_prompt)
+            model_free["segmentation"] = {**_classic.describe_fallback(segmentation_model, exc),
+                                          "used": _classic.LABEL_SEGMENT}
+            logger.warning("[MEC] SeC pipeline: %s - model-free segmentation.", str(exc)[:200])
 
         # ── Stage 2: Alpha Matting ────────────────────────────────────
         actual_backend = matting_backend
@@ -286,13 +308,32 @@ class SeCMatAnyonePipelineMEC:
                     type(e).__name__, str(e)[:120],
                 )
                 actual_backend = "vitmatte_small"
+                try:
+                    alpha_mask = self._run_vitmatte(
+                        image, coarse_masks, actual_backend, edge_radius, B, H, W, device,
+                    )
+                except Exception as exc:
+                    if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                        raise
+                    model_free["matting"] = {**_classic.describe_fallback("matanyone2 / vitmatte_small", exc),
+                                             "used": _classic.LABEL_MATTE}
+                    logger.warning("[MEC] SeC pipeline: %s - model-free guided-filter matte.", str(exc)[:200])
+                    actual_backend = "guided_filter (model-free)"
+                    alpha_mask = self._model_free_matte(image, coarse_masks, edge_radius)
+        else:
+            alpha_mask = None
+            try:
                 alpha_mask = self._run_vitmatte(
                     image, coarse_masks, actual_backend, edge_radius, B, H, W, device,
                 )
-        else:
-            alpha_mask = self._run_vitmatte(
-                image, coarse_masks, actual_backend, edge_radius, B, H, W, device,
-            )
+            except Exception as exc:
+                if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                    raise
+                model_free["matting"] = {**_classic.describe_fallback(actual_backend, exc),
+                                         "used": _classic.LABEL_MATTE}
+                logger.warning("[MEC] SeC pipeline: %s - model-free guided-filter matte.", str(exc)[:200])
+                actual_backend = "guided_filter (model-free)"
+                alpha_mask = self._model_free_matte(image, coarse_masks, edge_radius)
 
         # ── Stage 3: Optional Edge Refinement ─────────────────────────
         if edge_refine_method != "none":
@@ -335,9 +376,38 @@ class SeCMatAnyonePipelineMEC:
             "seg_score": round(score, 4),
             "edge_refine": edge_refine_method,
             "n_warmup": n_warmup,
+            **({"approximate": True, "model_free": model_free} if model_free else {}),
         }, indent=2)
 
         return (rgb, alpha_mask, coarse_masks, preview, info)
+
+    # ── model-free stand-ins (L7.97) ──────────────────────────────────
+
+    @staticmethod
+    def _model_free_segment(image, points_json, positive_coords, negative_coords, bbox_json, bbox, text_prompt):
+        """The prompts this node takes, through the model-free segmenter (GrabCut, tracked by optical flow)."""
+        from .mask_matting.segmenters.classic_backend import ClassicSegmenter
+        from .mask_matting.utils import parse_points
+        from .utils import parse_bbox_input
+        pos, neg = parse_points(points_json or "")
+        for raw, is_pos in ((positive_coords, True), (negative_coords, False)):
+            a, b = parse_points(raw or "")
+            (pos if is_pos else neg).extend(a + b)
+        box = parse_bbox_input(bbox_json, bbox)
+        box = tuple(float(v) for v in np.asarray(box).reshape(-1)[:4]) if box is not None else None
+        out = ClassicSegmenter().segment(image, positive_points=pos, negative_points=neg, bbox=box,
+                                         text_prompt=text_prompt or "", tracking_direction="bidirectional")
+        return out["mask"].float().clamp(0, 1), float(out["score"])
+
+    def _model_free_matte(self, image, coarse_masks, edge_radius):
+        from .mask_matting import _classic
+        alphas = []
+        for i in range(coarse_masks.shape[0]):
+            tri = torch.from_numpy(self._generate_trimap(coarse_masks[i].cpu().numpy().astype(np.float32),
+                                                         int(edge_radius)).astype(np.float32) / 255.0)
+            img = image[min(i, image.shape[0] - 1):min(i, image.shape[0] - 1) + 1, ..., :3].float().cpu()
+            alphas.append(_classic.guided_matte(img, tri.unsqueeze(0), radius=max(2, int(edge_radius)))[0])
+        return torch.stack(alphas)
 
     # ── MatAnyone2 matting ────────────────────────────────────────────
 

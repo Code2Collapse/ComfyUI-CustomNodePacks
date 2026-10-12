@@ -62,6 +62,8 @@ class RVMMatter(BaseMatter):
         variant = "mobilenetv3" if "mobilenet" in stem else "resnet50"
         self._variant = variant
         try:
+            from ..._download_policy import require_hub_repo  # L7.97: GitHub code + weights only with permission
+            require_hub_repo("PeterL1n/RobustVideoMatting", target_hint="models/rvm/", weights_missing=ckpt is None)
             model = torch.hub.load("PeterL1n/RobustVideoMatting", variant, pretrained=(ckpt is None))
             if ckpt is not None and os.path.isfile(ckpt):
                 state = torch.load(ckpt, map_location="cpu")

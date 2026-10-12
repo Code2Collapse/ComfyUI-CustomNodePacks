@@ -503,7 +503,7 @@ class MaskOpsMEC:
                 "memory_size": ("INT", {"default": 8, "min": 1, "max": 256}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 100000}),
                 "end_frame":   ("INT", {"default": -1, "min": -1, "max": 100000, "tooltip": "-1 = last frame."}),
-                "auto_download": ("BOOLEAN", {"default": False, "tooltip": "Allow lazy auto-download from HF/torch.hub when a weight is missing."}),
+                "auto_download": ("BOOLEAN", {"default": False, "tooltip": "Allow Download: fetch a missing weight from Hugging Face / torch.hub into its models/ subfolder. Off: installed copies are used wherever they are (this pack, other packs, the HF cache); without one the model-free method runs and the info output says so."}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
                 # ── VFX / production post-processing ────────────────────
                 "tta_flip": ("BOOLEAN", {"default": False, "tooltip": "Test-time augmentation: run segmenter on the H-flipped image and average. Slower but cleaner."}),
@@ -977,6 +977,11 @@ class MaskOpsMEC:
                     raise ValueError(f"Unknown matter '{mat_key}'.")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        # L7.97: auto_download (default off) is this node's "Allow Download" - for the presets it always was, and now
+        # for the backends' own Hugging Face / torch.hub loads too, which used to fetch weights regardless.
+        from .._download_policy import allow_downloads
+        _dl = allow_downloads(bool(auto_download))
+        _dl.__enter__()
         try:
             img_bhwc = to_bhwc(image)
             B, H, W, _ = img_bhwc.shape
@@ -1781,6 +1786,7 @@ class MaskOpsMEC:
                 object_alphas_out.cpu().float().clamp(0, 1),
             )
         finally:
+            _dl.__exit__(None, None, None)
             free_vram()
 
 

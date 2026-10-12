@@ -94,6 +94,8 @@ class BGMattingV2Matter(BaseMatter):
         logger.warning("[%s] loading variant=%s ckpt=%s", self.KEY, variant, ckpt)
         try:
             # Torch Hub entrypoint published by Peter Lin's repo.
+            from ..._download_policy import require_hub_repo  # L7.97
+            require_hub_repo("PeterL1n/BackgroundMattingV2", target_hint="models/bgmattingv2/", weights_missing=ckpt is None)
             model = torch.hub.load(
                 "PeterL1n/BackgroundMattingV2", variant,
                 pretrained=(ckpt is None),

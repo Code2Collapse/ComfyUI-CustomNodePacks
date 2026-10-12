@@ -49,6 +49,11 @@ class LocateAnythingGroundingMEC:
                 "confidence_threshold": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download LocateAnything-3B (about 7 GB) if it is not installed. Off: an installed copy is used (a local folder in model_path, or the Hugging Face cache); without one the node names what to install. There is no model-free way to read a text prompt.",
+                }),
             },
         }
 
@@ -72,14 +77,16 @@ class LocateAnythingGroundingMEC:
             return cls._model_cache[model_path]
         from transformers import AutoModel, AutoTokenizer, AutoProcessor
 
+        from ._download_policy import hf_kwargs  # L7.97
+        kw = hf_kwargs(model_path)
         tokenizer = AutoTokenizer.from_pretrained(
-            model_path, trust_remote_code=True,
+            model_path, trust_remote_code=True, **kw,
         )
         processor = AutoProcessor.from_pretrained(
-            model_path, trust_remote_code=True,
+            model_path, trust_remote_code=True, **kw,
         )
         model = AutoModel.from_pretrained(
-            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True,
+            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True, **kw,
         ).to(device).eval()
         cls._model_cache[model_path] = (model, tokenizer, processor)
         return model, tokenizer, processor
@@ -93,12 +100,14 @@ class LocateAnythingGroundingMEC:
         max_new_tokens: int = 2048,
         device: str = "cuda",
         confidence_threshold: float = 0.0,
+        allow_download: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError(
                 "LocateAnythingGroundingMEC expects IMAGE tensor [B,H,W,C]"
             )
-        with torch.no_grad():
+        from ._download_policy import allow_downloads
+        with torch.no_grad(), allow_downloads(allow_download):
             return self._run_impl(
                 image, prompt, model_path, generation_mode, max_new_tokens,
                 device, confidence_threshold,

@@ -79,14 +79,16 @@ class LocateAnythingSegmenter(BaseSegmenter):
             ) from e
 
         dtype = torch.bfloat16 if self.precision != "fp32" else torch.float32
+        from ..._download_policy import hf_kwargs  # L7.97
+        kw = hf_kwargs(self._repo)
         tokenizer = AutoTokenizer.from_pretrained(
-            self._repo, trust_remote_code=True,
+            self._repo, trust_remote_code=True, **kw,
         )
         processor = AutoProcessor.from_pretrained(
-            self._repo, trust_remote_code=True,
+            self._repo, trust_remote_code=True, **kw,
         )
         model = AutoModel.from_pretrained(
-            self._repo, torch_dtype=dtype, trust_remote_code=True,
+            self._repo, torch_dtype=dtype, trust_remote_code=True, **kw,
         ).to(self.device).eval()
 
         bundle = (model, tokenizer, processor)

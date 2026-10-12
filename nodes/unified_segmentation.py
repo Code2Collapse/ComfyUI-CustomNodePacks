@@ -44,10 +44,10 @@ logger = logging.getLogger("MEC")
 try:
     import folder_paths
 
-    _MODELS_DIR: str = getattr(
-        folder_paths, "models_dir",
-        os.path.join(folder_paths.base_path, "models"),
-    )
+    # the fallback only when models_dir is missing (getattr evaluates its default first - same bug as model_manager)
+    _MODELS_DIR: str = getattr(folder_paths, "models_dir", None) or os.path.join(
+        getattr(folder_paths, "base_path", None) or os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "models")
 except ImportError:
     folder_paths = None  # type: ignore[assignment]
     _MODELS_DIR = os.path.join(

@@ -140,6 +140,13 @@ class SamMultiMaskPickerMEC:
                 "bbox": ("BBOX", {
                     "tooltip": "Bounding box from BBox node (overrides bbox_json).",
                 }),
+                # L7.97 (owner 2026-10-12): appended last; off = never download
+                "allow_download": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Download model_name if it is not installed (into models/sam2/). Off: an installed "
+                               "copy is used wherever it is; without one the node gives a model-free GrabCut mask "
+                               "(approximate) and names the model to install.",
+                }),
             },
         }
 
@@ -161,10 +168,12 @@ class SamMultiMaskPickerMEC:
         selected_index: int,
         sam_model: Optional[dict] = None,
         bbox: Optional[list] = None,
+        allow_download: bool = False,
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("SamMultiMaskPickerMEC expects IMAGE tensor [B,H,W,C]")
-        with torch.no_grad():
+        from ._download_policy import allow_downloads
+        with torch.no_grad(), allow_downloads(allow_download):
             return self._pick_mask_impl(
                 image, model_name, points_json, bbox_json, precision,
                 selected_index, sam_model, bbox,
@@ -218,8 +227,19 @@ class SamMultiMaskPickerMEC:
 
         try:
             if loaded_here:
-                model_obj = get_or_load_model(model_name, precision=precision, device=device)
-                if isinstance(model_obj, dict):
+                try:
+                    model_obj = get_or_load_model(model_name, precision=precision, device=device)
+                except Exception as exc:
+                    # L7.97: not installed and no permission to download -> the model-free stand-in, labelled
+                    from .mask_matting import _classic
+                    if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
+                        raise
+                    model_obj = _classic.model_free_sam(model_name, exc)
+                    loaded_here = False
+                    logger.warning("[MEC] SamMultiMaskPicker: %s - model-free GrabCut mask.", str(exc)[:200])
+                if isinstance(model_obj, dict) and model_obj.get("model_free"):
+                    model, model_type, model_info = None, "model-free", model_obj
+                elif isinstance(model_obj, dict):
                     model = model_obj["model"]
                     model_type = model_obj.get("family", self._detect_model_type(model_name))
                     model_info = model_obj

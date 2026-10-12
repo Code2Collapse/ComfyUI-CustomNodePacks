@@ -44,12 +44,20 @@ def test_unknown_missing_model_gets_a_plain_error(L, monkeypatch):
 
 
 def test_plain_registry_name_missing_on_disk_downloads_on_load_only(sml, L, monkeypatch, tmp_path):
+    # L7.97 (owner 2026-10-12, DECISIONS D7.91): and only with the node's Allow Download - load() still asks for the
+    # download (download_missing_registry=True), the policy decides.
+    from nodes._download_policy import ModelNotDownloaded, allow_downloads
     called = {}
+    monkeypatch.delenv("C2C_NO_DOWNLOADS", raising=False)               # the suite's offline switch (L2.37) wins otherwise
     monkeypatch.setattr(sml, "HAS_FOLDER_PATHS", False)
     monkeypatch.setattr(L, "_auto_download", staticmethod(lambda n: called.setdefault("name", n) or str(tmp_path / n)))
-    out = L._resolve_path(NAME, download_missing_registry=True)       # what load() passes
+    with allow_downloads(True):
+        out = L._resolve_path(NAME, download_missing_registry=True)   # what load() passes
     assert called["name"] == NAME and out.endswith(NAME)
     called.clear()
+    with pytest.raises(ModelNotDownloaded):                             # Allow Download off: nothing fetched
+        L._resolve_path(NAME, download_missing_registry=True)
+    assert not called
     with pytest.raises(FileNotFoundError):                              # a probe never downloads
         L._resolve_path(NAME)
     assert not called
