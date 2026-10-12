@@ -357,7 +357,8 @@ def get_model_path(name: str) -> str:
             logger.info("[MEC] model %s: found at %s", name, found)
             return found
         if not downloads_allowed():
-            raise ModelNotDownloaded(name, target=local_dir, source=f"https://huggingface.co/{reg['repo_id']}")
+            raise ModelNotDownloaded(name, target=os.path.abspath(local_dir),
+                                     source=f"https://huggingface.co/{reg['repo_id']}")
         # Allowed: into this model's own folder (models/<model_dir>/<name>), not the HF cache
         return ensure_downloaded(name)
 
@@ -399,7 +400,7 @@ def get_model_path(name: str) -> str:
     # Not found anywhere — download only with permission
     dest_dir = dirs_to_check[0]
     if not downloads_allowed():
-        raise ModelNotDownloaded(name, target=os.path.join(dest_dir, fname),
+        raise ModelNotDownloaded(name, target=os.path.abspath(dest_dir), file_name=fname,
                                  source=f"https://huggingface.co/{reg['repo_id']}")
     return ensure_downloaded(name, dest_dir)
 

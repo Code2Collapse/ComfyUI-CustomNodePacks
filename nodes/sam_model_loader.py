@@ -406,8 +406,10 @@ class SAMModelLoaderMEC:
         if needs_download or (download_missing_registry and clean_name in _DOWNLOAD_REGISTRY):
             from ._download_policy import ModelNotDownloaded, downloads_allowed
             if not downloads_allowed():                  # L7.97: only with the node's Allow Download
-                raise ModelNotDownloaded(clean_name, target="models/sam2/",
-                                         source=f"https://huggingface.co/{_DOWNLOAD_REGISTRY.get(clean_name, {}).get('repo_id', '')}")
+                raise ModelNotDownloaded(
+                    clean_name,
+                    target=SAMModelLoaderMEC._download_dir(), file_name=clean_name,   # absolute folder + file name
+                    source=f"https://huggingface.co/{_DOWNLOAD_REGISTRY.get(clean_name, {}).get('repo_id', '')}")
             return SAMModelLoaderMEC._auto_download(clean_name)
 
         # Not found — give a helpful error
@@ -424,16 +426,9 @@ class SAMModelLoaderMEC:
         )
 
     @staticmethod
-    def _auto_download(model_name):
-        """Download model from HuggingFace Hub to the sam2 models directory."""
-        entry = _DOWNLOAD_REGISTRY.get(model_name)
-        if not entry:
-            raise FileNotFoundError(
-                f"Model '{model_name}' not in download registry. "
-                f"Available: {', '.join(_DOWNLOAD_REGISTRY.keys())}"
-            )
-
-        # Determine download directory
+    def _download_dir() -> str:
+        """Absolute folder a SAM download goes to: the first registered sam2 / sams path, else <models>/sam2. Shared
+        by the download and by the 'not installed' message, so the message names exactly where the file belongs."""
         download_dir = None
         if HAS_FOLDER_PATHS:
             for key in ("sam2", "sams"):
@@ -455,7 +450,19 @@ class SAMModelLoaderMEC:
                     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     "models", "sam2",
                 )
+        return os.path.abspath(download_dir)
 
+    @staticmethod
+    def _auto_download(model_name):
+        """Download model from HuggingFace Hub to the sam2 models directory."""
+        entry = _DOWNLOAD_REGISTRY.get(model_name)
+        if not entry:
+            raise FileNotFoundError(
+                f"Model '{model_name}' not in download registry. "
+                f"Available: {', '.join(_DOWNLOAD_REGISTRY.keys())}"
+            )
+
+        download_dir = SAMModelLoaderMEC._download_dir()
         os.makedirs(download_dir, exist_ok=True)
         dest_path = os.path.join(download_dir, model_name)
 

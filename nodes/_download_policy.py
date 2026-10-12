@@ -34,13 +34,27 @@ def downloads_allowed() -> bool:
 class ModelNotDownloaded(FileNotFoundError):
     """The model is not installed and the node may not download it. The message says what, where and how."""
 
-    def __init__(self, model: str, *, target: str = "", source: str = "", widget: str = "allow_download"):
-        self.model, self.target, self.source = model, target, source
-        where = f" Put it in {target}" if target else ""
-        frm = f" (from {source})" if source else ""
+    def __init__(self, model: str, *, target: str = "", source: str = "", widget: str = "allow_download",
+                 file_name: str = ""):
+        # target = the absolute FOLDER the weights belong in; file_name = the file expected there (empty for a model
+        # that is a whole folder, e.g. a Transformers repo). Not `filename`: that is OSError's own attribute, and
+        # setting it turns str(error) into "[Errno None] None: '<name>'".
+        self.model, self.target, self.source, self.file_name = model, target, source, file_name
+        if target and file_name:
+            where = f" Expected file '{file_name}' in folder: {target}"
+        elif target:
+            where = f" Expected in folder: {target}"
+        else:
+            where = ""
+        frm = f" (official source: {source})" if source else ""
         super().__init__(
-            f"Model '{model}' is not installed and downloading is off.{where}{frm}, or tick '{widget}' on the node "
-            "to download it there.")
+            f"Model '{model}' is not installed and downloading is off.{where}{frm}. Place it there, or tick "
+            f"'{widget}' on the node to download it there.")
+
+    @property
+    def expected_path(self) -> str:
+        """The full path the missing file is expected at ('' when only a folder is known)."""
+        return os.path.join(self.target, self.file_name) if self.target and self.file_name else ""
 
 
 def hf_local_only() -> bool:

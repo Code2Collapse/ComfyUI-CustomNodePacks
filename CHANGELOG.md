@@ -2,6 +2,32 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-13 (model weights are downloaded only with permission)
+
+Evidence: `docs/evidence/L7.97/` (workspace); tests/test_download_policy.py.
+
+### Changed
+
+- **No node downloads model weights unless you allow it.** Background Remover, Semantic Segment, SAM Multi-Mask
+  Picker, SeC + MatAnyone, SAM Mask Generator (its text grounding model), Mask Placement, LocateAnything and SAM
+  Model Loader each get an `allow_download` switch, off by default and added after the existing inputs (saved
+  workflows keep their values). MaskOps' existing `auto_download` now also covers its backends' own Hugging Face and
+  torch.hub loads, which used to fetch weights regardless. Before anything is called missing, an installed copy is
+  looked for in the node's own folder, every model folder ComfyUI knows (other packs' too), another pack's copy of a
+  Transformers model (`models/<anything>/<repo name>`) and the Hugging Face cache - and reused. A permitted download
+  goes into the model's own subfolder; the folder is created only then.
+- When a model is missing and downloading is off, the node runs its labelled model-free method where one exists
+  (Background Remover, Semantic Segment for `skin`, SAM nodes, SeC + MatAnyone) or says plainly that the model is
+  needed. The message names the absolute folder and the expected file name.
+- **Behaviour change:** a saved SAM Model Loader choice `[download] …` no longer downloads by itself; tick
+  `allow_download` (owner decision 2026-10-12).
+
+### Fixed
+
+- SeC + MatAnyone downloaded SAM 2 without asking: its segmentation loader ignored its own `[download]` flag and
+  fetched any missing checkpoint, creating the model folder first.
+- `unified_segmentation.py` crashed at import wherever `folder_paths` had no `base_path` attribute.
+
 ## Unreleased – 2026-10-12 (the SAM nodes work without a SAM model, and say so)
 
 Evidence: `docs/evidence/L7.91/inventory.fresh.after_l798.json` (workspace); tests/test_sam_model_free.py.

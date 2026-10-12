@@ -794,12 +794,29 @@ class UnifiedSegmentation:
             if os.path.exists(c):
                 return c
 
-        # Auto-download as fallback
-        dest_dir = dirs_to_check[0] if dirs_to_check else os.path.join(_MODELS_DIR, reg["model_dir"])
+        # L7.97 (owner 2026-10-12): reuse a copy installed anywhere - another pack's folder ComfyUI knows, or the
+        # Hugging Face cache - before calling the model missing. No network, nothing created.
+        from .model_manager import _find_file_model_elsewhere
+        from ._download_policy import ModelNotDownloaded, downloads_allowed, hf_cached_file
+        found = _find_file_model_elsewhere(fname) or hf_cached_file(reg["repo_id"], fname)
+        if found:
+            logger.info("[MEC] model %s: found at %s", fname, found)
+            return found
+
+        # Download only with the calling node's Allow Download. need_dl (a '[download] ' name) no longer decides on
+        # its own: it used to be ignored here, so every missing model was fetched silently.
+        dest_dir = os.path.abspath(dirs_to_check[0] if dirs_to_check else os.path.join(_MODELS_DIR, reg["model_dir"]))
+        if not downloads_allowed():
+            raise ModelNotDownloaded(fname, target=dest_dir, file_name=fname,
+                                     source=f"https://huggingface.co/{reg['repo_id']}")
         return UnifiedSegmentation._download(reg, dest_dir)
 
     @staticmethod
     def _download(reg: dict, dest_dir: str) -> str:
+        from ._download_policy import ModelNotDownloaded, downloads_allowed
+        if not downloads_allowed():   # second line of defence: never a folder or a request without permission
+            raise ModelNotDownloaded(reg["filename"], target=os.path.abspath(dest_dir), file_name=reg["filename"],
+                                     source=f"https://huggingface.co/{reg['repo_id']}")
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, reg["filename"])
         if os.path.exists(dest):
