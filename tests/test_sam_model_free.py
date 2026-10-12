@@ -117,3 +117,17 @@ def test_multi_mask_picker_labels_the_stand_in(sml, monkeypatch):
     assert iou(out[0][0].numpy(), gt) >= 0.85
     assert info["approximate"] is True and info["model_type"] == "model-free"
     assert info["scores_raw"][1:] == [0.0, 0.0]            # one real mask; the picker pads its three slots with empties
+
+
+def test_mask_tracker_sam2_video_with_the_stand_in_uses_optical_flow(sml, monkeypatch):
+    mt = pytest.importorskip("nodes.mask_tracker_mec")
+    monkeypatch.setattr(sml.SAMModelLoaderMEC, "_resolve_path", staticmethod(_no_model))
+    (sam,) = sml.SAMModelLoaderMEC().load("x.pt", "auto", "cpu", False, "float32")
+    img, gt = scene()
+    video = torch.from_numpy(np.stack([img] * 3)).float().div(255.0)
+    mask = torch.from_numpy(gt.astype(np.float32))[None]
+    out = mt.MaskTrackerMEC()._mode_propagate(video, mask, 0, "sam2_video", 1.0, 0.0, 1.0, False, sam, "")
+    info = json.loads(out[3])
+    assert info["approximate"] is True and info["model_free"]["used"].startswith("optical_flow")
+    assert "model-free" in out[4]
+    assert iou(out[0][2].numpy(), gt) >= 0.9          # a still clip: the mask stays put

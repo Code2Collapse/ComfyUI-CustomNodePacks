@@ -119,6 +119,19 @@ class MaskPropagateVideo:
         elif mode == "optical_flow":
             out_masks = self._optical_flow(images, src_mask, source_frame,
                                            flow_threshold, bidirectional)
+        elif mode == "sam2_video" and isinstance(sam_model, dict) and sam_model.get("model_free"):
+            # L7.98: the SAM Model Loader found no SAM model and handed out its model-free stand-in. SAM 2 video
+            # tracking cannot run on it; the model-free optical-flow propagation does, and the caller labels it.
+            from .mask_matting import _classic
+            if not _classic.fallback_allowed():
+                raise ValueError("mode='sam2_video' needs a SAM 2 model; none is installed (the SAM Model Loader "
+                                 "handed out its model-free stand-in). Use mode 'optical_flow', or install a sam2.1 "
+                                 "checkpoint in models/sam2/.")
+            logging.getLogger("MEC").warning("[MEC] sam2_video without a SAM model - propagating by optical flow "
+                                             "(model-free).")
+            out_masks = self._optical_flow(images, src_mask, source_frame, flow_threshold, bidirectional)
+            self.last_model_free = {"wanted": "sam2_video", "used": "optical_flow (model-free)",
+                                    "why": (sam_model.get("fallback_from") or {}).get("why", "no SAM model")}
         elif mode == "sam2_video":
             out_masks = self._sam2_video(images, src_mask, source_frame,
                                          sam_model, points_json)

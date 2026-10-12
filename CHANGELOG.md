@@ -2,6 +2,20 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (the SAM nodes work without a SAM model, and say so)
+
+Evidence: `docs/evidence/L7.91/inventory.fresh.after_l798.json` (workspace); tests/test_sam_model_free.py.
+
+### Fixed
+
+- **SAM Model Loader with no SAM model** (none placed, the `sam2` package missing, or no internet for a
+  `[download]` entry) stopped every SAM node behind it. It now hands out a model-free stand-in, and the nodes that
+  take it - SAM Mask Generator, SAM + ViTMatte, SAM Multi-Mask Picker, Mask Placement, the image mask editor's smart
+  select, Mask Tracker's `sam2_video` propagation - work through GrabCut (Mask Tracker: optical-flow propagation).
+  Their `info` output says `"model_type": "model-free"`, `"approximate": true` and why. A text prompt with no point
+  or box is refused with a plain reason (the stand-in cannot read text). `C2C_MODEL_FALLBACK=off` keeps the error.
+- `nodes/model_manager.py` crashed at import wherever `folder_paths` had no `base_path` attribute.
+
 ## Unreleased – 2026-10-12 (MaskOps works without models, and says so)
 
 Evidence: `docs/evidence/L7.91/` (workspace); tests/test_mask_model_free.py. Design:

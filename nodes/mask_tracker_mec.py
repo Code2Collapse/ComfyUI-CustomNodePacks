@@ -392,8 +392,10 @@ class MaskTrackerMEC:
             bidirectional=bool(bidirectional),
             sam_model=sam_model, points_json=str(points_json),
         )
-        info = json.dumps({"mode": mode, "source_frame": int(source_frame)})
-        return (masks, preview, 1.0, info, f"propagate:{mode}")
+        mf = getattr(impl, "last_model_free", None)
+        info = json.dumps({"mode": mode, "source_frame": int(source_frame),
+                           **({"approximate": True, "model_free": mf} if mf else {})})
+        return (masks, preview, 1.0, info, f"propagate:{mode}" + (" (model-free optical flow)" if mf else ""))
 
     # ── anchor ───────────────────────────────────────────────────────
     def _mode_anchor(self, mask, anchor_frames, total_frames, easing,
