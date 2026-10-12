@@ -79,9 +79,11 @@ def _load_dinov2(device: str, repo_id: str = "facebook/dinov2-small"):
         raise RuntimeError(
             f"transformers is required for DINOv2 re-anchoring: {exc}"
         )
-    from .._download_policy import hf_kwargs  # L7.97
-    processor = AutoImageProcessor.from_pretrained(repo_id, **hf_kwargs(repo_id))
-    model = AutoModel.from_pretrained(repo_id, **hf_kwargs(repo_id)).to(device).eval()
+    # L7.97: installed copy anywhere, else a permitted download into models/dino/<name>, else the absolute folder
+    from ..model_manager import resolve_transformers_repo
+    src = resolve_transformers_repo(repo_id, "dino")
+    processor = AutoImageProcessor.from_pretrained(src)
+    model = AutoModel.from_pretrained(src).to(device).eval()
     _DINO_MODEL = (model, processor, device)
     return model, processor
 

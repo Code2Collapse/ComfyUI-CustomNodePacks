@@ -64,7 +64,11 @@ def _model_path_or_repo(models_key: str, model_name: str, default_repo: str) -> 
                          os.path.join(root, os.path.splitext(model_name)[0])):
                 if os.path.isdir(cand) or os.path.isfile(cand):
                     return cand
-    return default_repo
+    # L7.97: an installed copy anywhere (models/<folder>/<name>, other packs' folders, the HF cache), else - with
+    # MaskOps' auto_download - a download into models/<folder>/<name>, else a message naming that absolute folder
+    from ...model_manager import resolve_transformers_repo
+    from ..utils import _BACKEND_FOLDERS
+    return resolve_transformers_repo(default_repo, _BACKEND_FOLDERS.get(models_key, models_key))
 
 
 # ══════════════════════════════════════════════════════════════════════

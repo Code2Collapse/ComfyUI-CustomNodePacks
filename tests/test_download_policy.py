@@ -447,3 +447,45 @@ def test_sam31_missing_checkpoint_and_library_messages_are_absolute(monkeypatch,
         onyx.ensure_sam31_video_model(model_name="", device="cpu", precision="fp32", attention="auto",
                                       offload="none", auto_download=False)
     assert root in str(e.value) and str(b._vendor_root()) in str(e.value) and "models/sam3.1/" not in str(e.value)
+
+
+def test_maskops_vitmatte_missing_names_the_absolute_folder(mm, pol, tmp_path, monkeypatch, mm_utils):
+    vb = pytest.importorskip("nodes.mask_matting.matters.vitmatte_backend")
+    tf = pytest.importorskip("transformers")
+    for cls in ("VitMatteForImageMatting", "VitMatteImageProcessor"):
+        monkeypatch.setattr(getattr(tf, cls), "from_pretrained",
+                            classmethod(lambda c, *a, **k: pytest.fail("must not load before the model is found")))
+    m = vb.ViTMatteMatter(model_name="", device="cpu", precision="fp32")
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        m.load()
+    want = os.path.abspath(str(tmp_path / "vitmatte" / "vitmatte-small-composition-1k"))
+    assert e.value.target == want and want in str(e.value)
+    assert "huggingface.co/hustvl/vitmatte-small-composition-1k" in str(e.value)
+    assert not (tmp_path / "vitmatte").exists()
+
+
+@pytest.mark.parametrize("mod, cls, folder, repo", [
+    ("salient_backend", "BiRefNetSegmenter", "BiRefNet", "ZhengPeng7/BiRefNet"),
+    ("salient_backend", "RMBG2Segmenter", "RMBG", "briaai/RMBG-2.0"),
+    ("experimental_backend", "DISSegmenter", "dis", "briaai/RMBG-1.4"),
+])
+def test_maskops_segmenters_missing_name_the_absolute_folder(mm, pol, tmp_path, monkeypatch, mm_utils,
+                                                             mod, cls, folder, repo):
+    m = pytest.importorskip(f"nodes.mask_matting.segmenters.{mod}")
+    tf = pytest.importorskip("transformers")
+    monkeypatch.setattr(tf.AutoModelForImageSegmentation, "from_pretrained",
+                        classmethod(lambda c, *a, **k: pytest.fail("must not load before the model is found")))
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        getattr(m, cls)(model_name="", device="cpu").load()
+    want = os.path.abspath(str(tmp_path / folder / repo.split("/")[-1]))
+    assert e.value.target == want and f"huggingface.co/{repo}" in str(e.value)
+    assert not (tmp_path / folder).exists()
+
+
+def test_maskops_dinov2_reanchor_missing_names_the_absolute_folder(mm, pol, tmp_path, monkeypatch):
+    ra = pytest.importorskip("nodes.mask_matting._reanchor")
+    pytest.importorskip("transformers")
+    monkeypatch.setattr(ra, "_DINO_MODEL", None)
+    with pytest.raises(pol.ModelNotDownloaded) as e:
+        ra._load_dinov2("cpu")
+    assert e.value.target == os.path.abspath(str(tmp_path / "dino" / "dinov2-small"))

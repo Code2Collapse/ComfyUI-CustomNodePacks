@@ -28,6 +28,9 @@ Evidence: `docs/evidence/L7.97/` (workspace); tests/test_download_policy.py.
   text. It now looks in `models/LLM/LocateAnything-3B`, any `models/*/LocateAnything-3B` and the Hugging Face cache
   (a cache holding only the tokenizer no longer counts as installed), names the absolute folder when the model is
   missing, and a permitted download goes into `models/LLM/LocateAnything-3B` instead of the Hugging Face cache.
+- MaskOps' other Transformers models (ViTMatte, BiRefNet, RMBG, InSPyReNet, DIS, Grounding-DINO, DINOv2
+  re-anchoring) did the same; they now share that look-up, message and download folder (`models/<backend
+  folder>/<repo name>`).
 - MaskOps SAM 3.1 messages named a relative `models/sam3.1/` (and the import hint the wrong folder, `models/sam3/`).
   Preset-not-installed, checkpoint-missing and library-missing messages now give the absolute folder and the file.
   `backend_first_root` no longer raises on a `folder_paths` without `models_dir`.

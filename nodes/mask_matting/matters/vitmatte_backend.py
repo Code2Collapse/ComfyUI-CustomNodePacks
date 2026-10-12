@@ -209,18 +209,19 @@ class ViTMatteMatter(BaseMatter):
             src = self.model_name or "hustvl/vitmatte-small-composition-1k"
             if "/" not in src and not os.path.isabs(src):
                 src = "hustvl/vitmatte-small-composition-1k"
-            logger.info(
-                "[ViTMatte] no local HF model dir found under "
-                "ComfyUI/models/vitmatte/ \u2014 falling back to HF Hub: %s", src,
-            )
+            # L7.97: another pack's copy or the HF cache, else (with MaskOps' auto_download) a download into
+            # models/vitmatte/<name>; without permission a message naming that absolute folder, not transformers'
+            # generic "Can't load image processor" text.
+            from ...model_manager import resolve_transformers_repo
+            src = resolve_transformers_repo(src, "vitmatte")
+            logger.info("[ViTMatte] loading %s", src)
 
         dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}.get(
             self.precision, torch.float16,
         )
-        from ..._download_policy import hf_kwargs  # L7.97: a repo id only with MaskOps' auto_download
-        self._processor = VitMatteImageProcessor.from_pretrained(src, **hf_kwargs(src))
+        self._processor = VitMatteImageProcessor.from_pretrained(src)
         self._model = VitMatteForImageMatting.from_pretrained(
-            src, torch_dtype=dtype, **hf_kwargs(src),
+            src, torch_dtype=dtype,
         ).to(self.device).eval()
         self._dtype = dtype
 
