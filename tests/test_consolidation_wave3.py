@@ -336,3 +336,44 @@ def test_the_tracker_front_end_shows_every_stabilize_control():
     group = re.findall(r'"([a-z_]+)"', src.split("const STABILIZE = [", 1)[1].split("];", 1)[0])
     backend = [n for n in MaskTrackerMEC.INPUT_TYPES()["optional"] if n.startswith("stabilize_")]
     assert group == backend
+
+
+@pytest.mark.parametrize("node_id, module, sections", [
+    ("MaskToolsMEC", "nodes.mask_toolkit.nodes", {"Advanced"}),
+    ("MaskTrackerMEC", "nodes.mask_tracker_mec", {"Detection"}),
+])
+def test_section_members_are_core_advanced_widgets(node_id, module, sections):
+    """L7.81: the classic canvas folds `c2c_section` members behind the "More" bar, Nodes 2.0 folds the same inputs
+    through core's "advanced" flag - so every member carries both, and none is a socket (a hidden wire)."""
+    import importlib
+
+    spec = getattr(importlib.import_module(module), node_id).INPUT_TYPES()
+    members = {n: s for g in ("required", "optional") for n, s in spec.get(g, {}).items()
+               if len(s) > 1 and isinstance(s[1], dict) and s[1].get("c2c_section")}
+    assert members
+    assert {s[1]["c2c_section"] for s in members.values()} == sections
+    assert all(s[1].get("advanced") is True for s in members.values())
+    widget_types = {"INT", "FLOAT", "BOOLEAN", "STRING"}
+    assert all(isinstance(s[0], (list, tuple)) or s[0] in widget_types for s in members.values())
+
+
+def test_the_tracker_front_end_syncs_nodes2_after_every_visibility_change():
+    """Nodes 2.0 draws widget rows from a snapshot keyed on options.hidden; without the sync every mode's controls
+    stayed visible there (docs/evidence/L7.81/sections2.nodes2.png, 2026-10-12)."""
+    src = (Path(__file__).resolve().parents[1] / "js" / "motion_mask_tracker.js").read_text(encoding="utf-8")
+    body = src.split("function _resize(node) {", 1)[1].split("\n}", 1)[0]
+    assert "vueSyncNodeWidgets(node)" in body
+
+
+@pytest.mark.parametrize("script", ["c2c_mode_widgets.js", "motion_mask_tracker.js", "mask_visibility.js",
+                                    "mask_matting.js"])
+def test_section_owners_fit_nodes2_to_content(script):
+    """Nodes 2.0 folds core-advanced rows that the classic computeSize still counts; owners that size their node fit
+    it to the content there instead (docs/evidence/L7.81/vue_dead_space.json: 0 px dead on every owner's node)."""
+    js = Path(__file__).resolve().parents[1] / "js"
+    src = (js / script).read_text(encoding="utf-8")
+    imports = [line for line in src.splitlines() if line.startswith("import ") and "_widget_visibility.js" in line]
+    assert imports and "vueFitNodeHeight" in imports[0]
+    assert "vueFitNodeHeight(node)" in src
+    helper = (js / "_widget_visibility.js").read_text(encoding="utf-8")
+    assert "export function vueFitNodeHeight(node)" in helper

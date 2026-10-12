@@ -21,7 +21,7 @@
  */
 
 import { app } from "../../scripts/app.js";
-import { setWidgetVisible, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { setWidgetVisible, vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 
 const NODE_ID = "MaskOpsMEC";
@@ -162,11 +162,17 @@ function apply(node) {
     // Nodes 2.0 rebuilds its rows from options.hidden; mask_matting.js syncs after ITS refresh, which can
     // run before this fold, leaving empty rows where folded widgets were (ledger L9.19). Sync here too.
     vueSyncNodeWidgets(node);
-    const size = node.computeSize();
-    // Only ever GROW to the computed height: shrinking a node the user has
-    // deliberately made taller is its own annoyance.
-    node.setSize([Math.max(node.size[0], size[0]),
-                  Math.max(node.size[1], size[1])]);
+    // Nodes 2.0: the content height - the classic height below counts rows core folds behind "Show advanced
+    // inputs" and left dead space there (docs/evidence/L7.81, 2026-10-12)
+    if (vueNodesActive()) {
+        vueFitNodeHeight(node);
+    } else {
+        const size = node.computeSize();
+        // Only ever GROW to the computed height: shrinking a node the user has
+        // deliberately made taller is its own annoyance.
+        node.setSize([Math.max(node.size[0], size[0]),
+                      Math.max(node.size[1], size[1])]);
+    }
     node.setDirtyCanvas(true, true);
 }
 

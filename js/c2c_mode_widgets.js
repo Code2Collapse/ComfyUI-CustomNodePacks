@@ -7,8 +7,9 @@
  * into the prompt (the shared _widget_visibility.js helper changes how it draws, not what it holds).
  */
 import { app } from "../../scripts/app.js";
-import { setWidgetVisible, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { setWidgetVisible, vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { sectionOf, sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 
 const CLEAN = ["balance_mode", "balance_strength", "saturation", "contrast_restore", "chroma_cleanup",
                "restore_unchanged", "restore_radius"];
@@ -93,20 +94,28 @@ function apply(node, rule) {
     const show = new Set(rule.visible(values, widgets.map((w) => w.name).filter(managed)));
     let changed = false;
     let prevWant = null;                                 // a seed's control_after_generate follows its seed
+    const shown = [];                                    // in a section and wanted by the rule (for the bar)
     for (const w of widgets) {
         const isControl = w.name === "control_after_generate";
-        if (!managed(w.name) && !(isControl && prevWant !== null)) { prevWant = null; continue; }
-        const want = isControl ? prevWant : show.has(w.name);
+        const inSection = !isControl && sectionOf(node, w.name) !== null;
+        if (!managed(w.name) && !inSection && !(isControl && prevWant !== null)) { prevWant = null; continue; }
+        // the rule decides what the mode uses; a closed section (L7.81, classic canvas) folds its members too
+        const ruled = isControl ? prevWant : (managed(w.name) ? show.has(w.name) : true);
+        if (ruled && inSection) shown.push(w.name);
+        const want = isControl ? prevWant : (ruled && sectionOpen(node, w.name));
         prevWant = isControl ? null : want;
         if (want === (w.__mec_hidden === true)) {
             setWidgetVisible(w, want);
             changed = true;
         }
     }
-    if (!changed) return;
+    const hadBar = node.widgets?.some((x) => x.name === "_c2c_sections");
+    updateSectionBar(node, shown, () => apply(node, rule));
+    if (!changed && hadBar === node.widgets?.some((x) => x.name === "_c2c_sections")) return;
     vueSyncNodeWidgets(node);
     const sz = node.computeSize?.();
     if (sz) node.setSize?.([Math.max(node.size?.[0] ?? 0, sz[0]), sz[1]]);
+    vueFitNodeHeight(node);                              // Nodes 2.0: content height, not the classic one
     node.setDirtyCanvas?.(true, true);
 }
 

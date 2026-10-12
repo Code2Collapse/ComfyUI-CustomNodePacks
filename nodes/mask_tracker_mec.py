@@ -62,9 +62,23 @@ class MaskTrackerMEC:
     # "stabilize" is the former Mask Temporal Stabilizer + Integrity node (L7.65 P07; engine
     # nodes/mask_matting/temporal_node.py), appended so saved mode values keep their meaning
     MODES = ["motion", "propagate", "anchor", "consistency_check", "stabilize"]
+    # L7.81: the per-method detection parameters (shown by detection_mode) sit in a "Detection" section - classic
+    # "More" bar / Nodes 2.0 advanced inputs - so motion mode shows a handful of controls by default
+    _DETECTION = ("pixel_diff_enabled", "pixel_diff_threshold", "flow_enabled", "flow_threshold", "flow_algorithm",
+                  "bg_sub_enabled", "bg_model_frames", "bg_sub_threshold", "hist_enabled", "hist_grid_size",
+                  "hist_threshold", "combine_method")
 
     @classmethod
     def INPUT_TYPES(cls):
+        spec = cls._input_types()
+        for name in cls._DETECTION:
+            opts = spec["required"][name][1]
+            opts["c2c_section"] = "Detection"
+            opts["advanced"] = True
+        return spec
+
+    @classmethod
+    def _input_types(cls):
         return {
             "required": {
                 "mode": (cls.MODES, {

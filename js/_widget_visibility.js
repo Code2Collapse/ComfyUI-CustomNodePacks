@@ -123,3 +123,38 @@ export function vueSyncNodeWidgets(node) {
         } catch (_) { /* node may be mid-removal */ }
     }));
 }
+
+// Nodes 2.0 keeps a node at least as tall as its content, so after the row rebuild a 1 px request makes the node's
+// element exactly as tall as its content; that height (layout px, unscaled) minus the title is written back, because
+// Nodes 2.0 only writes a size back when the element's height CHANGES. The classic computeSize counts the rows core
+// folds behind "Show advanced inputs", so owners that set that height left dead space under the node there
+// (measured 2026-10-12, docs/evidence/L7.81). Owners that fit their node to its content call this after
+// vueSyncNodeWidgets; it waits for the node's element and the pending rebuild, then settles.
+export function vueFitNodeHeight(node) {
+    if (!node || !_vueNodesActive() || node.__mecVueFitPending) return;
+    node.__mecVueFitPending = true;
+    let wait = 60, settle = 3;
+    const done = () => { node.__mecVueFitPending = false; };
+    const step = () => {
+        const el = document.querySelector(`[data-node-id="${node.id}"]`);
+        if ((!el || node.__mecVueNudgePending) && --wait > 0) { requestAnimationFrame(step); return; }
+        if (--settle > 0) { requestAnimationFrame(step); return; }
+        if (!el || !node.graph) { done(); return; }
+        const width = node.size[0];
+        try { node.setSize([width, 1]); } catch (_) { done(); return; }
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            done();
+            const title = globalThis.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
+            const h = (el.isConnected ? el.offsetHeight : 0) - title;
+            try {
+                if (h > 0 && node.graph) node.setSize([width, h]);
+                node.setDirtyCanvas?.(true, true);
+            } catch (_) { /* node may be mid-removal */ }
+        }));
+    };
+    requestAnimationFrame(step);
+}
+
+export function vueNodesActive() {
+    return _vueNodesActive();
+}

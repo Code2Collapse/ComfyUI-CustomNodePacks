@@ -466,6 +466,8 @@ _NEW_MODE_PARAMS = {
     },
 }
 _MODE_KEY = {label: key for label, key, _p in MASK_TOOL_MODES}
+# controls most keys never touch: in a section, so a mode shows at most 10 controls (ORDERS 11.4)
+_ADVANCED = {("luma_key", "channel"), ("luma_key", "low_soft"), ("luma_key", "high_soft"), ("luma_key", "invert_key")}
 
 
 def mask_tool_widget(key: str, param: str) -> str:
@@ -529,6 +531,9 @@ class MaskToolsMEC:
                 opts = dict(s[1]) if len(s) > 1 else {}
                 if key == "grain" and p == "seed":
                     opts["control_after_generate"] = True
+                if (key, p) in _ADVANCED:                  # L7.81: classic "More" bar / Nodes 2.0 advanced inputs
+                    opts["c2c_section"] = "Advanced"
+                    opts["advanced"] = True
                 tip = opts.get("tooltip", "")
                 opts["tooltip"] = f"{label}: {tip}" if tip else label
                 required[mask_tool_widget(key, p)] = (s[0], opts)

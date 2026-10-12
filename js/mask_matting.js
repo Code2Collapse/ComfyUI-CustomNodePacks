@@ -8,7 +8,7 @@
  * ``__mec_origType``.
  */
 import { app } from "../../scripts/app.js";
-import { vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports,vals) -> bool.
@@ -310,6 +310,7 @@ function refreshVisibility(node) {
     // 30+ visible params: LiteGraph's title-derived default width (~253px)
     // truncates almost every label. 340px fits the longest label + value.
     node.setSize([Math.max(node.size[0], sz[0], 340), sz[1]]);
+    vueFitNodeHeight(node);   // Nodes 2.0: the content height (core folds the advanced rows computeSize counts)
     node.setDirtyCanvas(true, true);
 }
 

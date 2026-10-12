@@ -15,7 +15,8 @@
 //      the per-method threshold/option widgets only show when their method is
 //      active in `detection_mode` (combined shows all).
 import { app } from "../../scripts/app.js";
-import { setHidden } from "./_widget_visibility.js";
+import { setHidden, vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { sectionOf, sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 
 const TARGET_NODES = ["MaskTrackerMEC", "MotionMaskTrackerMEC"];
 
@@ -39,8 +40,16 @@ const CONSISTENCY = ["metric", "binarize_threshold"];
 const STABILIZE = ["stabilize_temporal_mode", "stabilize_blend", "stabilize_sigma", "stabilize_device",
     "stabilize_drop_threshold", "stabilize_jump_threshold"];
 
+// `get.node` / `get.shown` (set by applyVisibility): a widget in a closed section (L7.81, classic canvas) folds too,
+// and what the mode wants shown in a section feeds the node's "More" bar
 function _setGroup(get, names, show) {
-    for (const n of names) { const w = get(n); if (w) setHidden(w, !show); }
+    for (const n of names) {
+        const w = get(n);
+        if (!w) continue;
+        const inSection = get.node && sectionOf(get.node, n) !== null;
+        if (show && inSection) get.shown.add(n);
+        setHidden(w, !(show && (!inSection || sectionOpen(get.node, n))));
+    }
 }
 
 // Detection sub-grouping: show each method's widgets only when active.
@@ -54,15 +63,21 @@ function _applyDetection(get) {
     _setGroup(get, COMBINE,    combined);
 }
 
+// Nodes 2.0 renders widget rows from a snapshot keyed on options.hidden; without this sync every mode's controls
+// stayed on screen there (measured 2026-10-12, docs/evidence/L7.81/sections2.nodes2.png)
 function _resize(node) {
+    vueSyncNodeWidgets(node);
     const sz = node.computeSize();
     node.size[0] = Math.max(node.size[0], sz[0]);
     node.size[1] = sz[1];
+    vueFitNodeHeight(node);
     node.setDirtyCanvas(true, true);
 }
 
 function applyVisibility(node) {
     const get = (n) => node.widgets?.find(w => w.name === n);
+    get.node = node;
+    get.shown = new Set();
 
     // Standalone motion tracker: detection sub-grouping only (no mode widget).
     if (node.comfyClass === "MotionMaskTrackerMEC") {
@@ -89,6 +104,7 @@ function applyVisibility(node) {
         _setGroup(get, CONSISTENCY, mode === "consistency_check");
         _setGroup(get, STABILIZE,   mode === "stabilize");
     }
+    updateSectionBar(node, [...get.shown], () => applyVisibility(node));
     _resize(node);
 }
 
