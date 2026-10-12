@@ -89,3 +89,31 @@ def test_sam_mask_generator_end_to_end(sml, monkeypatch):
     assert iou(mask[0].numpy(), gt) >= 0.85
     assert info["model_type"] == "model-free" and info["approximate"] is True
     assert "not found" in info["model_free"]["why"]
+
+
+def test_text_only_with_the_stand_in_is_refused_honestly(sml, monkeypatch):
+    gen = pytest.importorskip("nodes.sam_mask_generator")
+    monkeypatch.setattr(sml.SAMModelLoaderMEC, "_resolve_path", staticmethod(_no_model))
+    (sam,) = sml.SAMModelLoaderMEC().load("x.pt", "auto", "cpu", False, "float32")
+    img, _gt = scene()
+    image = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
+    with pytest.raises(ValueError, match="Text prompts need a model"):
+        gen.SAMMaskGeneratorMEC().generate(sam, image, "[]", "", "red disk", "", "none", 0.25, 0.3,
+                                           True, 0, 0.0, False)
+
+
+def test_multi_mask_picker_labels_the_stand_in(sml, monkeypatch):
+    picker = pytest.importorskip("nodes.sam_multi_mask_picker")
+    monkeypatch.setattr(sml.SAMModelLoaderMEC, "_resolve_path", staticmethod(_no_model))
+    (sam,) = sml.SAMModelLoaderMEC().load("x.pt", "auto", "cpu", False, "float32")
+    img, gt = scene()
+    image = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
+    node = picker.SamMultiMaskPickerMEC()
+    fn = getattr(node, node.FUNCTION)
+    out = fn(image=image, model_name="sam2.1_hiera_base_plus", points_json=json.dumps([{"x": CX, "y": CY, "label": 1}]),
+             bbox_json="", precision="fp32", selected_index=0, sam_model=sam)
+    out = out["result"] if isinstance(out, dict) else out          # the node also sends thumbnails to the UI
+    info = json.loads(out[-1])
+    assert iou(out[0][0].numpy(), gt) >= 0.85
+    assert info["approximate"] is True and info["model_type"] == "model-free"
+    assert info["scores_raw"][1:] == [0.0, 0.0]            # one real mask; the picker pads its three slots with empties

@@ -339,6 +339,10 @@ class SamMultiMaskPickerMEC:
         # Build detailed info
         info = json.dumps({
             "model_name": model_name,
+            # L7.98: the model-free stand-in gives one mask (the other slots are the usual empty padding) - and says
+            # it is approximate
+            **({"model_type": "model-free", "approximate": True, "model_free": model_info.get("fallback_from")}
+               if isinstance(model_info, dict) and model_info.get("model_free") else {}),
             "num_masks": 3,
             "scores_pct": [round(float(s) * 100, 1) for s in scores_list],
             "scores_raw": [round(float(s), 6) for s in scores_list],

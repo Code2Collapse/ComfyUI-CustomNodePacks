@@ -270,6 +270,15 @@ class SAMMaskGeneratorMEC:
             bbox_json = json.dumps(boxes[0])
             boxes = []
 
+        # L7.98: the model-free stand-in cannot read text; with no point, box or mask left there is nothing to
+        # segment - say why instead of returning an empty mask.
+        has_prompt = bool(boxes or (points_json and parse_points_json(points_json))
+                          or (bbox_json and bbox_json.strip()) or bbox is not None or existing_mask is not None)
+        if isinstance(model_info, dict) and model_info.get("model_free") and not has_prompt:
+            from .mask_matting._classic import TEXT_NEEDS_MODEL
+            raise ValueError(TEXT_NEEDS_MODEL if (text_prompt and text_prompt.strip()) else
+                             "No SAM model is installed, and the model-free stand-in needs a point, a box or a mask.")
+
         # ── Move model to GPU if offloaded ─────────────────────────────
         if offload and hasattr(model, "to"):
             model.to(target_device)
