@@ -124,6 +124,10 @@ _FRAME_TYPES: frozenset[str] = frozenset({"IMAGE", "MASK"})
 CURATED: dict[str, dict[str, Any]] = {
     "ImageBlur": {"frames": ["image"], "work_factor": 2.5},
     "ImageUpscaleWithModel": {"frames": ["image"], "work_factor": 6.0},
+    # Core Canny (kornia): 134 MB of VRAM per 720p frame, and the hysteresis loop costs MORE per frame the bigger the
+    # call - 0.107 s/frame alone vs 0.248 s/frame in one 32-frame call, identical edges (docs/evidence/L7.82/
+    # canny_chunk_curve.json). 96 frames as one call spilled past an 8 GB card: 1042 s (owner: "canny took 30 mins").
+    "Canny": {"frames": ["image"], "work_factor": 13.0, "max_frames": 1},
 }
 
 
@@ -673,11 +677,6 @@ def _effective_wrap_specs(
     nodes_dict = nodes_cfg if isinstance(nodes_cfg, dict) else {}
     allow = _normalize_string_list(cfg.get("allow"))
 
-    if mode in ("curated", "internal"):
-        for name, spec in CURATED.items():
-            if name not in never:
-                specs[name] = dict(spec)
-
     if mode in ("universal", "internal"):
         discovered = discover_universal_candidates(
             node_class_mappings, display_mappings, cfg,
@@ -688,6 +687,13 @@ def _effective_wrap_specs(
             if mode == "internal" and not _is_c2c_class(node_class_mappings[name]):
                 continue
             specs[name] = dict(spec)
+
+    # the measured specs win over the generic discovered one, in every mode that batches (L7.82: Canny's 1-frame
+    # chunks are measured; universal's generic spec would chunk it by memory only)
+    if mode in ("curated", "internal", "universal"):
+        for name, spec in CURATED.items():
+            if name not in never and (mode != "universal" or name in node_class_mappings):
+                specs[name] = {**specs.get(name, {}), **dict(spec)}
 
     for name, spec in nodes_dict.items():
         if name in never or not isinstance(spec, dict):

@@ -1164,3 +1164,25 @@ def test_kijai_resize_v2_shape_is_never_wrapped_by_universal():
         == "non-frame output INT"
     assert "ImageResizeKJv2" not in ab._effective_wrap_specs({"mode": "universal"},
                                                              {"ImageResizeKJv2": ImageResizeKJv2Like})
+
+
+def test_core_canny_gets_its_measured_one_frame_chunks_in_every_batching_mode():
+    """Core Canny costs more per frame the bigger the call (0.107 s/frame alone vs 0.248 in a 32-frame call) and
+    96 x 720p as one call spilled past an 8 GB card: 1042 s (owner: "canny took 30 mins"). The measured spec must win
+    over universal's generic one (L7.82, docs/evidence/L7.82/canny_chunk_curve.json)."""
+    class Canny:
+        RETURN_TYPES = ("IMAGE",)
+        FUNCTION = "detect_edge"
+        OUTPUT_NODE = False
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",), "low_threshold": ("FLOAT", {}), "high_threshold": ("FLOAT", {})}}
+
+        def detect_edge(self, image, low_threshold, high_threshold):
+            return (image,)
+
+    for mode in ("internal", "universal"):
+        spec = ab._effective_wrap_specs({"mode": mode}, {"Canny": Canny})["Canny"]
+        assert spec["max_frames"] == 1 and spec["frames"] == ["image"], (mode, spec)
+    assert "Canny" not in ab._effective_wrap_specs({"mode": "universal", "never": ["Canny"]}, {"Canny": Canny})

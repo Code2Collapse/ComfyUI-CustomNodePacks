@@ -2,6 +2,21 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-12 (image batching measured per preprocessor)
+
+Evidence: `docs/evidence/L7.82/per_preprocessor_summary.json`, `canny_chunk_curve.json`, `canny_curated.json`.
+
+### Fixed
+
+- **Core Canny is now batched by default.** Run on 96 frames of 720p in one call it spilled past an 8 GB card and
+  took 17 minutes (1042 s); the default Internal mode left it alone. It now runs one frame at a time in every
+  batching mode: 10.4 s, identical edges. (Its edge tracing also gets slower per frame the more frames it gets at
+  once - 0.107 s per frame alone vs 0.248 s in a 32-frame call - so single frames are fastest even when memory is
+  plentiful.)
+- Measured on the other preprocessors (same 96 frames): ControlNet Aux Canny and Depth Anything now run as one call
+  (1.13 s and 8.30 s, previously split into 3 chunks, which built Depth Anything's model 3 times); DWPose is no
+  longer touched by batching (5.03 s; previously a test run, an abort and a full run).
+
 ## Unreleased – 2026-10-12 (image batching hands on the complete batch, in order)
 
 Evidence: `docs/evidence/L7.82` (scramble_scan.json; tests in tests/test_autobatch.py).
