@@ -2,6 +2,17 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-13 (Nodes 2.0 shows a loaded workflow's own values)
+
+Evidence: `docs/evidence/L2.43/` (workspace); tests/test_widget_value_accessor.py.
+
+### Fixed
+
+- **Nodes 2.0 showed default widget values after a saved workflow loaded** (the node held and ran the saved values,
+  the inputs displayed the defaults). Parameter Memory replaced every widget's `value` accessor with its own copy,
+  which cut it off from the value store Nodes 2.0 draws; it now wraps the accessor. Parameter Memory still records
+  every change.
+
 ## Unreleased – 2026-10-13 (model weights are downloaded only with permission)
 
 Evidence: `docs/evidence/L7.97/` (workspace); tests/test_download_policy.py.

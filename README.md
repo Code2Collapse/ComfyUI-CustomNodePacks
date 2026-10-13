@@ -1044,6 +1044,9 @@ Tracks every parameter change across ComfyUI runs in a local SQLite database. Qu
 | `last_run_diff` | What changed between the last two runs |
 | `node_class_filter` | Filter history by node class name |
 
+The in-editor side (right-click a node > Parameter History; Alt + hover a widget) records every change in both
+renderers without taking over the widget's value, so a saved workflow shows its own values in Nodes 2.0.
+
 ---
 
 ### FolderIncrementer

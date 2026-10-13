@@ -344,21 +344,31 @@ app.registerExtension({
         if (origCb) return origCb.call(this || widgetRef, value);
       };
 
-      const desc = Object.getOwnPropertyDescriptor(w, "value");
+      // L2.43: WRAP the widget's own value accessor, never replace it. Frontend 1.53 defines value as
+      // `get value() { return this._state.value }` - the widget-value store entry Nodes 2.0 draws from. The old
+      // closure copy (`get() { return _v }`) cut that link: after a saved workflow loaded, the node held the saved
+      // values but Nodes 2.0 showed the defaults (docs/evidence/L2.43). A plain data property keeps the old copy.
+      const desc = Object.getOwnPropertyDescriptor(w, "value")
+        ?? (() => { for (let p = Object.getPrototypeOf(w); p; p = Object.getPrototypeOf(p)) {
+              const d = Object.getOwnPropertyDescriptor(p, "value"); if (d) return d; } return undefined; })();
       if (desc && desc.configurable !== false) {
+        const origGet = desc.get, origSet = desc.set;
         let _v = w.value;
+        const read = (self) => (origGet ? origGet.call(self) : _v);
         try {
           Object.defineProperty(w, "value", {
-            get() { return _v; },
+            get() { return read(this); },
             set(v) {
-              if (v !== _v) {
-                _recordChange(node, wName, _v, v);
+              const prev = read(this);
+              if (v !== prev) {
+                _recordChange(node, wName, prev, v);
                 lastVal = v;
               }
-              _v = v;
+              if (origSet) origSet.call(this, v);
+              else if (!origGet) _v = v;
             },
             configurable: true,
-            enumerable: true,
+            enumerable: desc.enumerable ?? true,
           });
         } catch { /* some widgets resist redefinition */ }
       }
