@@ -793,6 +793,119 @@ def _normalize_blend_mode(mode: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  L7.99: the crop preview is drawn from the EXECUTED window (owner A11)
+# ══════════════════════════════════════════════════════════════════════
+
+_PREVIEW_LONG_SIDE = 768
+
+
+def _fit_window_axis(pos: int, size: int, limit: int) -> int:
+    """Place a crop window on one axis. A window that fits stays inside the image (moved the least distance, so it
+    shows real pixels instead of smeared edge padding); a larger one covers the whole axis and is padded."""
+    lo, hi = min(0, limit - size), max(0, limit - size)
+    return int(min(max(pos, lo), hi))
+
+
+def _crop_plan_record(stitcher: dict, image_hw, out_hw, stable: bool, frames: int) -> dict:
+    """What ran, per frame, in processed-image coordinates (after pre-resize / outpaint extension)."""
+    recs = []
+    for j in range(len(stitcher["cropped_to_canvas_x"])):
+        x = int(stitcher["cropped_to_canvas_x"][j] - stitcher["canvas_to_orig_x"][j])
+        y = int(stitcher["cropped_to_canvas_y"][j] - stitcher["canvas_to_orig_y"][j])
+        w = int(stitcher["cropped_to_canvas_w"][j])
+        h = int(stitcher["cropped_to_canvas_h"][j])
+        recs.append({"window": [x, y, w, h],
+                     "padding": {"left": max(0, -x), "top": max(0, -y),
+                                 "right": max(0, x + w - int(image_hw[1])), "bottom": max(0, y + h - int(image_hw[0]))}})
+    return {"image_size": [int(image_hw[1]), int(image_hw[0])], "output_size": [int(out_hw[1]), int(out_hw[0])],
+            "frames_total": int(frames), "stable": bool(stable), "frames": recs}
+
+
+def _draw_crop_preview(frame_hwc: torch.Tensor, regen_mask_hw: torch.Tensor, window, cropped_hwc: torch.Tensor,
+                       lines) -> "np.ndarray":
+    """ONE picture: the original frame (discarded area dimmed, regenerated area tinted, the window outlined - orange
+    on a side where it runs past the image and is padded) next to the crop the sampler gets, with a label under both.
+    One image, not two: a node preview holding two images reads as a 2-frame clip (the frame scrubber picked it up).
+    Returns RGB float [0, 1]."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    def clean(t):
+        return np.nan_to_num(t[..., :3].detach().float().cpu().numpy(), nan=0.0, posinf=1.0, neginf=0.0).clip(0, 1)
+
+    img = clean(frame_hwc)
+    m = (regen_mask_hw.detach().float().cpu().numpy() > 0.5)
+    Hh, Ww = img.shape[:2]
+    x, y, w, h = (int(v) for v in window)
+    keep = np.zeros((Hh, Ww), bool)
+    keep[max(0, y):min(Hh, y + h), max(0, x):min(Ww, x + w)] = True
+    out = img.copy()
+    out[~keep] *= 0.30                                                   # discarded surroundings
+    tint = np.array([1.0, 0.25, 0.35], np.float32)
+    out[m & keep] = out[m & keep] * 0.55 + tint * 0.45                   # regenerated (masked) area
+    s = min(1.0, _PREVIEW_LONG_SIDE / float(max(Hh, Ww)))
+    pw, ph = max(1, int(round(Ww * s))), max(1, int(round(Hh * s)))
+    ov = Image.fromarray((out * 255 + 0.5).astype("uint8")).resize((pw, ph), Image.BILINEAR)
+    d = ImageDraw.Draw(ov)
+    x0, y0 = max(0, x) * s, max(0, y) * s
+    x1, y1 = min(Ww, x + w) * s - 1, min(Hh, y + h) * s - 1
+    ok, pad = (90, 220, 120), (255, 160, 40)
+    lw = max(2, pw // 256)
+    d.line([(x0, y0), (x1, y0)], fill=pad if y < 0 else ok, width=lw)
+    d.line([(x0, y1), (x1, y1)], fill=pad if y + h > Hh else ok, width=lw)
+    d.line([(x0, y0), (x0, y1)], fill=pad if x < 0 else ok, width=lw)
+    d.line([(x1, y0), (x1, y1)], fill=pad if x + w > Ww else ok, width=lw)
+    crop = clean(cropped_hwc)
+    ch, cw = crop.shape[:2]
+    rw = max(1, int(round(cw * ph / float(max(1, ch)))))
+    res = Image.fromarray((crop * 255 + 0.5).astype("uint8")).resize((rw, ph), Image.BILINEAR)
+    gap = max(6, pw // 64)
+    total_w = pw + gap + rw
+    fsize = max(14, total_w // 34)                                       # stays readable when the node shrinks it
+    try:
+        font = ImageFont.load_default(size=fsize)
+    except TypeError:                                                    # Pillow < 10.1
+        font = ImageFont.load_default()
+    bar = int(fsize * 1.35) * len(lines) + fsize // 2
+    canvas = Image.new("RGB", (total_w, ph + bar), (18, 20, 26))
+    canvas.paste(ov, (0, 0))
+    canvas.paste(res, (pw + gap, 0))
+    dc = ImageDraw.Draw(canvas)
+    for i, line in enumerate(lines):
+        dc.text((fsize // 2, ph + fsize // 4 + i * int(fsize * 1.35)), line, fill=(225, 228, 235), font=font)
+    return np.asarray(canvas, dtype=np.float32) / 255.0
+
+
+def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int) -> dict:
+    """Core's node preview (ui.images, both renderers): one picture of one frame - the window on the original next
+    to the crop. Display only; it never changes what is cropped."""
+    try:
+        from ._video_comparer_io import save_preview_png
+    except Exception:  # noqa: BLE001
+        return {}
+    B = int(image.shape[0])
+    k = max(0, min(int(preview_frame), B - 1))
+    fr = plan["frames"][k if len(plan["frames"]) > 1 else 0]
+    x, y, w, h = fr["window"]
+    ow, oh = plan["output_size"]
+    scale = ow / float(max(1, w))
+    where = (f"one window for all {B} frames (their union), frame {k} shown" if plan["stable"] and B > 1
+             else (f"own window per frame, frame {k} of {B} shown" if B > 1 else "single image"))
+    pads = ", ".join(f"{side} {v}" for side, v in fr["padding"].items() if v)
+    lines = [f"crop {w}x{h} at ({x}, {y}) of {plan['image_size'][0]}x{plan['image_size'][1]} -> {ow}x{oh} "
+             f"(x{scale:.2f})",
+             where + (f"; padded {pads}" if pads else "")]
+    try:
+        pic = _draw_crop_preview(image[k], regen_mask[k], fr["window"],
+                                 cropped[min(k, int(cropped.shape[0]) - 1)], lines)
+        saved = save_preview_png(pic, "inpaint_crop_preview")
+    except Exception as exc:  # noqa: BLE001 - a preview must never fail the crop
+        logger.warning("[InpaintCropPro] preview not drawn: %s", exc)
+        return {}
+    return {"images": [saved], "c2c_crop_plan": [plan]} if saved else {}
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  NODE 1: InpaintCropProMEC — lquesada-compatible API + Wan 2.2 Animate aware
 #
 #  Mirrors lquesada/ComfyUI-InpaintCropAndStitch::InpaintCropImproved
@@ -957,6 +1070,11 @@ class InpaintCropProMEC:
                                 "and pre-erodes the inpaint mask by 1 px so the stitch falls just "
                                 "inside the subject. Safe to leave OFF for general inpaint; turn ON "
                                 "for compositing / roto / VFX work where boundaries must not bleed.")}),
+                # L7.99 (owner A11): appended last so saved workflows keep their values
+                "preview_frame": ("INT", {
+                    "default": 0, "min": 0, "max": 100000, "step": 1,
+                    "tooltip": ("Which frame the preview under the node shows (0 = the first). Display only: "
+                                "every frame is still cropped exactly as before.")}),
             },
         }
 
@@ -1038,7 +1156,7 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False):
+                     roto_quality: bool = False, preview_frame: int = 0):
 
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("InpaintCropProMEC expects IMAGE tensor [B,H,W,C]")
@@ -1073,7 +1191,7 @@ class InpaintCropProMEC:
                 video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                 fill_masked_area,
                 mask, optional_context_mask,
-                roto_quality,
+                roto_quality, preview_frame,
             )
 
     def _inpaint_crop_core(self, image, downscale_algorithm, upscale_algorithm,
@@ -1097,7 +1215,7 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False):
+                     roto_quality: bool = False, preview_frame: int = 0):
         image = image.clone()
         # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
         # Applied here (single point) so every downstream branch — single
@@ -1294,6 +1412,7 @@ class InpaintCropProMEC:
 
         result_image_list = []
         result_mask_list = []
+        result_blend_src_list = []     # L7.99: the mask padded by edge replication (stitch blend source)
         result_stitcher = {
             "downscale_algorithm": downscale_algorithm,
             "upscale_algorithm": upscale_algorithm,
@@ -1322,7 +1441,7 @@ class InpaintCropProMEC:
 
             (canvas_image, cto_x, cto_y, cto_w, cto_h,
              cropped_image, cropped_mask,
-             ctc_x, ctc_y, ctc_w, ctc_h) = self._crop_magic(
+             ctc_x, ctc_y, ctc_w, ctc_h, cropped_blend_src) = self._crop_magic(
                 sub_img, sub_msk, bx, by, bw, bh,
                 tgt_w if tgt_w > 0 else bw,
                 tgt_h if tgt_h > 0 else bh,
@@ -1333,6 +1452,7 @@ class InpaintCropProMEC:
 
             result_image_list.append(cropped_image.squeeze(0))
             result_mask_list.append(cropped_mask.squeeze(0))
+            result_blend_src_list.append(cropped_blend_src.squeeze(0))
             result_stitcher["canvas_to_orig_x"].append(cto_x)
             result_stitcher["canvas_to_orig_y"].append(cto_y)
             result_stitcher["canvas_to_orig_w"].append(cto_w)
@@ -1348,17 +1468,21 @@ class InpaintCropProMEC:
         try:
             out_image = torch.stack(result_image_list, dim=0)
             out_mask  = torch.stack(result_mask_list,  dim=0)
+            blend_src = torch.stack(result_blend_src_list, dim=0)
         except RuntimeError:
             ref_h, ref_w = result_image_list[0].shape[0], result_image_list[0].shape[1]
-            tmp_img, tmp_msk = [], []
-            for im, mk in zip(result_image_list, result_mask_list):
+            tmp_img, tmp_msk, tmp_bs = [], [], []
+            for im, mk, bs in zip(result_image_list, result_mask_list, result_blend_src_list):
                 if im.shape[0] != ref_h or im.shape[1] != ref_w:
                     im = _resize_image_alg(im.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
                     mk = _resize_mask_alg(mk.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
+                    bs = _resize_mask_alg(bs.unsqueeze(0), ref_h, ref_w, upscale_algorithm).squeeze(0)
                 tmp_img.append(im)
                 tmp_msk.append(mk)
+                tmp_bs.append(bs)
             out_image = torch.stack(tmp_img, dim=0)
             out_mask  = torch.stack(tmp_msk, dim=0)
+            blend_src = torch.stack(tmp_bs, dim=0)
 
         # ── Step 6: post-process cropped image (fill_masked_area) ─────────
         if fill_masked_area != "none" and fill_masked_area != "original":
@@ -1373,8 +1497,11 @@ class InpaintCropProMEC:
 
         # ── Step 7: derive inpaint_mask (model-facing) and stitch_blend_mask ─
         inpaint_mask = _apply_inpaint_mask_mode(out_mask, inpaint_mask_mode)
+        # L7.99 D3: the blend comes from the mask padded by edge replication, not the model-facing mask (padded with
+        # 1.0 past the border): a mask that never touches the border cannot feather into the plate there, so an empty
+        # mask stitches back as an exact identity.
         stitch_blend_mask = _generate_stitch_blend_mask(
-            out_image, out_mask, stitch_blend_mode, blend_radius,
+            out_image, blend_src, stitch_blend_mode, blend_radius,
             video_stable_temporal_sigma=float(video_stable_temporal_sigma),
             video_stable_dilate_px=int(video_stable_dilate_px),
             video_stable_blur_sigma=float(video_stable_blur_sigma),
@@ -1408,7 +1535,16 @@ class InpaintCropProMEC:
             f"blend_radius={blend_radius} fill={fill_masked_area}\n"
             f"  device={device_mode}"
         )
-        return (result_stitcher, out_image, inpaint_mask, stitch_blend_mask, info)
+        # L7.99 D4: the preview is drawn from what just ran (the stitcher's windows), never estimated
+        plan = _crop_plan_record(result_stitcher, (H, W), (int(out_image.shape[1]), int(out_image.shape[2])),
+                                 bool(wan_stable_crop), B)
+        fr0 = plan["frames"][0]
+        info += (f"\n  window[0] (processed image {W}x{H}): x={fr0['window'][0]} y={fr0['window'][1]} "
+                 f"w={fr0['window'][2]} h={fr0['window'][3]}"
+                 + "".join(f" pad_{k}={v}" for k, v in fr0["padding"].items() if v))
+        result = (result_stitcher, out_image, inpaint_mask, stitch_blend_mask, info)
+        # Always the {"ui", "result"} form ComfyUI accepts, so a caller sees one shape whether or not a preview was drawn
+        return {"ui": _crop_preview_ui(image, bbox_mask, out_image, plan, preview_frame), "result": result}
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1583,7 +1719,7 @@ class InpaintCropProMEC:
         B, image_h, image_w, C = image.shape
 
         if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
-            return (image, 0, 0, image_w, image_h, image, mask, 0, 0, image_w, image_h)
+            return (image, 0, 0, image_w, image_h, image, mask, 0, 0, image_w, image_h, mask)
 
         # 1. Pad target dims to multiple of `padding` AND `align_multiple`
         m = max(padding, align_multiple, 1)
@@ -1633,6 +1769,12 @@ class InpaintCropProMEC:
                 new_y -= (target_h - new_h) // 2
                 new_h = target_h
 
+        # 3b. L7.99 D2: keep the window on real pixels. One that fits inside the image is moved the least distance
+        #     to lie inside it (it used to be padded with smeared edge pixels: 41 % of a 16:9 window at the left
+        #     border); a larger one covers the whole axis and only the excess is padded.
+        new_x = _fit_window_axis(new_x, new_w, image_w)
+        new_y = _fit_window_axis(new_y, new_h, image_h)
+
         # 4. Compute canvas padding
         up_padding = max(0, -new_y)
         down_padding = max(0, (new_y + new_h) - image_h)
@@ -1643,6 +1785,13 @@ class InpaintCropProMEC:
         canvas_mask = F.pad(mask.unsqueeze(1),
                             (left_padding, right_padding, up_padding, down_padding),
                             mode="constant", value=1.0).squeeze(1)
+        # The stitch blend's source: the same mask continued past the border by edge replication (L7.99 D3)
+        if up_padding or down_padding or left_padding or right_padding:
+            canvas_blend_src = F.pad(mask.unsqueeze(1),
+                                     (left_padding, right_padding, up_padding, down_padding),
+                                     mode="replicate").squeeze(1)
+        else:
+            canvas_blend_src = mask
 
         cto_x, cto_y = left_padding, up_padding
         cto_w, cto_h = image_w, image_h
@@ -1654,16 +1803,18 @@ class InpaintCropProMEC:
 
         cropped_image = canvas_image[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :]
         cropped_mask  = canvas_mask[:,  ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
+        cropped_blend_src = canvas_blend_src[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
 
         # 5. Resize to target
         if resize_output:
             alg = up_alg if (target_w > ctc_w or target_h > ctc_h) else down_alg
             cropped_image = _resize_image_alg(cropped_image, target_h, target_w, alg)
             cropped_mask  = _resize_mask_alg(cropped_mask,   target_h, target_w, alg)
+            cropped_blend_src = _resize_mask_alg(cropped_blend_src, target_h, target_w, alg)
 
         return (canvas_image, cto_x, cto_y, cto_w, cto_h,
                 cropped_image, cropped_mask,
-                ctc_x, ctc_y, ctc_w, ctc_h)
+                ctc_x, ctc_y, ctc_w, ctc_h, cropped_blend_src)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1911,6 +2062,11 @@ class InpaintStitchProMEC:
                 # gaussian / edge_aware / unknown -> simple alpha (mask already encodes mode)
                 m3 = resized_msk.unsqueeze(-1)
                 blended = (m3 * resized_inp + (1.0 - m3) * canvas_crop).clamp(0.0, 1.0)
+
+            # L7.99: where the blend weight is 0 the plate stays exactly as it was. The pyramid / FFT blends
+            # reconstruct the whole crop and leaked there (frequency_blend up to 0.0021 on ~2200 px, measured), so
+            # blend_mask_used is now the true footprint of the stitch.
+            blended = torch.where((resized_msk > 0).unsqueeze(-1), blended, canvas_crop)
 
             canvas[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w, :] = blended
 

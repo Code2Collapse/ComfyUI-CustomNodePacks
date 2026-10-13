@@ -2,6 +2,29 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-13 (Inpaint Crop Pro shows the crop that runs; Stitch Pro round trip)
+
+Evidence: `docs/evidence/L7.99/` (workspace); tests/test_inpaint_crop_geometry.py.
+
+### Fixed
+
+- **Inpaint Crop Pro: the crop window stays on real pixels.** Near a border the window was padded with smeared edge
+  pixels although a window of the same size fits inside the image (41 % of a 16:9 window at the left border). A
+  window that fits is now moved inside the image; only a window larger than the image is padded. Behaviour change:
+  crops of masks near the border move inward.
+- **An empty mask stitches back unchanged** (it changed the image by up to 0.033 through the stitch feather).
+- **Inpaint Stitch Pro changes nothing outside `blend_mask_used`** (Laplacian and frequency blends changed pixels up
+  to 0.0021 where the blend weight is 0).
+
+### Changed
+
+- **The crop preview is the crop that ran.** The old preview band drew a made-up centred mask. After a run the node
+  now shows one picture: the original with the discarded area dimmed, the regenerated area tinted and the window
+  outlined, next to the crop the model gets, with the window, output size, scale, padding and batch handling written
+  under it. New optional `preview_frame` (default 0, added last; saved workflows unchanged) picks the frame shown -
+  display only.
+- The node returns ComfyUI's `{"ui", "result"}` form; `info` also gives frame 0's window.
+
 ## Unreleased – 2026-10-13 (Nodes 2.0 shows a loaded workflow's own values)
 
 Evidence: `docs/evidence/L2.43/` (workspace); tests/test_widget_value_accessor.py.

@@ -616,81 +616,79 @@ All outputs are clamped to `[0, 1]`.
 
 ### Inpainting
 
-#### Inpaint Crop Pro (MEC)
+#### Inpaint Crop Pro
 
-Crop image tightly around the mask region for focused inpainting, with separate inpaint and stitch blend masks. Feed the crop to any inpaint model, then stitch back seamlessly.
+Crops the image around the mask so the inpaint model works on the region at its own resolution; **Inpaint Stitch
+Pro** puts the result back. Same workflow shape as lquesada's Inpaint Crop and Stitch, with Wan 2.2 Animate extras.
 
-**How it works:** Computes tight bounding box around the mask, expands by `context_expand`, produces two separate masks — one for the inpaint model (crisp or feathered) and one for compositing back (Gaussian, edge-aware, Laplacian pyramid, or FFT frequency blend). Supports video-stable cropping (union bbox across all frames).
+**What it does, in order:** optional pre-resize of the whole image; mask clean-up (fill holes, expand, invert,
+feather, hi-pass); optional outpaint extension; the context box = the mask's bounding box grown by
+`context_from_mask_extend_factor` (plus `optional_context_mask`); fit to the target aspect, rounded to
+`output_padding` and `wan_align_multiple`; resize to the target size.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `image` | — | Input image batch |
-| `mask` | — | Inpaint mask (white = area to inpaint) |
-| `context_expand` | `1.5` | Crop expansion factor beyond mask bounds (1.0 = tight) |
-| `inpaint_mask_mode` | `hard_binary` | What the model sees: `hard_binary` / `slight_feather` / `soft_blend` |
-| `stitch_blend_mode` | `gaussian` | Compositing mode: `edge_aware` / `gaussian` / `laplacian_pyramid` / `frequency_blend` |
-| `blend_radius` | `32` | Feather radius for stitch blend mask |
-| `size_mode` | `free_size` | `free_size` / `forced_size` (exact W×H) / `ranged_size` (min/max clamp) |
-| `forced_width` / `forced_height` | `1024` | Target dimensions for `forced_size` mode |
-| `min_size` / `max_size` | `512` / `2048` | Dimension clamp for `ranged_size` mode |
-| `padding_multiple` | `8` | Pad output to be divisible by N |
-| `video_stable_crop` | `false` | Lock bbox across all frames for video consistency |
-| `fill_masked_area` | `edge_pad` | Fill masked area in crop: `edge_pad` / `neutral_gray` / `original` |
-| `downscale_method` | `lanczos` | Interpolation for downscaling: `lanczos` / `bicubic` / `bilinear` / `nearest-exact` / `area` |
-| `upscale_method` | `lanczos` | Interpolation for upscaling: same options |
+**The crop window stays on real pixels.** A window that fits inside the image is moved inside it (the least
+distance); only a window larger than the image is padded with edge pixels. (Before 2026-10-13 a mask near the border
+got a window padded with smeared edges - 41 % of a 16:9 window - although one fitting the image existed.)
 
-**Outputs:** `stitch_data`, `cropped_image`, `inpaint_mask`, `stitch_blend_mask`, `crop_mask`, `cropped_composite`, `info`
+**Preview.** After a run the node shows one picture: the original with the discarded area dimmed, the regenerated
+area tinted and the window outlined (an orange side = padded past the image), next to the crop the model gets, with
+the window size, position, output size, scale and padding written under it. It is drawn from the window that ran.
+`preview_frame` picks the frame shown (default 0, the first); it changes nothing else.
 
-> `cropped_composite` is a red-tinted debug preview showing the mask overlay on the crop — useful for verifying region coverage.
+**Batches and video.** `wan_stable_crop` on (default): one window for every frame - the union of all frames'
+masks - so the crop does not jump. Off: each frame gets its own window, and every frame is cropped and stitched with
+its own placement. The preview label says which.
 
-> **Who is it for?** Inpainting power users who want crop → inpaint → stitch with professional blend modes (Laplacian pyramid, frequency blend, edge-aware).
+**Output size.** The stitched image has the size of the image the crop worked on: the input size, or the
+pre-resized size with `preresize`, or the extended size with `extend_for_outpainting`.
 
----
+| Parameter | Default | What it does |
+|-----------|---------|--------------|
+| `image`, `mask` | — | Image batch and the area to regenerate (white). `optional_context_mask` widens the context box |
+| `context_from_mask_extend_factor` | `1.2` | Context box size relative to the mask box; below 1 crops tighter than the mask box |
+| `auto_context_factor` | off | Picks the factor so the mask fills about 70 % of the crop |
+| `aspect_preset` | `Custom` | `Custom` = the target width / height as set; `Auto` or a named ratio keeps the shorter side and derives the other |
+| `output_resize_to_target_size`, `output_target_width`, `output_target_height` | on, 512, 512 | Size the crop is resized to |
+| `output_padding`, `wan_align_multiple` | 32, 16 | The crop size is rounded up to a multiple of the larger |
+| `mask_fill_holes`, `mask_expand_pixels`, `mask_invert`, `mask_blend_pixels`, `mask_hipass_filter` | on, 0, off, 32, 0.1 | Mask clean-up before the box is measured (blend and hi-pass shape the soft mask only) |
+| `preresize`, `preresize_mode`, `preresize_min/max_width/height` | off | Resize the whole image first (minimum / maximum / both) |
+| `extend_for_outpainting`, `extend_up/down/left/right_factor` | off, 1.0 | Grow the canvas for outpainting; the new area is masked |
+| `wan_stable_crop` | on | One window for the whole batch (see above) |
+| `wan_temporal_smooth_frames` | 0 | Smooth the mask over time (frames) |
+| `wan_mask_polarity` | `regenerate_subject` | `preserve_subject` = Wan replacement masks (1 = keep) |
+| `inpaint_mask_mode` | `hard_binary` | The mask the model sees: `hard_binary`, `slight_feather`, `soft_blend` |
+| `stitch_blend_mode`, `blend_radius` | `gaussian`, 32 | How the result is blended back: `gaussian`, `edge_aware`, `laplacian_pyramid`, `frequency_blend`, `video_stable` |
+| `video_stable_temporal_sigma`, `video_stable_dilate_px`, `video_stable_blur_sigma` | 3.0, -1, -1 | `video_stable` only |
+| `fill_masked_area` | `none` | Fill the masked area of the crop: `edge_pad`, `neutral_gray`, `original` |
+| `roto_quality` | off | Tighter seam for roto / compositing (Laplacian blend, half radius, 1 px erosion) |
+| `device_mode`, `downscale_algorithm`, `upscale_algorithm` | gpu, bilinear, bicubic | Where it runs and the resampling filters |
+| `preview_frame` | 0 | Frame shown in the preview (display only) |
 
-#### Inpaint Composite (MEC) — unified Stitch + Paste Back
-
-Single node that combines **Inpaint Stitch Pro** and **Inpaint Paste Back** behind one `mode` dropdown. The frontend hides parameters that don't apply to the current mode so the UI stays clean.
-
-| Parameter | Default | Used in mode | Description |
-|-----------|---------|--------------|-------------|
-| `stitch_data` | — | both | From Inpaint Crop Pro |
-| `inpainted_image` | — | both | Inpainted result from any model |
-| `mode` | `stitch_pro` | both | `stitch_pro` (advanced blend pipeline) or `paste_back` (clean resize + paste) |
-| `blend_mode_override` | `from_crop` | `stitch_pro` | Override blend mode or keep what the crop node configured |
-| `color_match` | `false` | `stitch_pro` | Reinhard mean+std color transfer before blending |
-| `upscale_method` | `lanczos` | `paste_back` | Resize interpolation for the inpainted crop |
-| `feather_edges` | `false` | `paste_back` | Gaussian-feather the paste-rect boundary |
-| `feather_radius` | `16` | `paste_back` | Feather radius in pixels (0 disables) |
-
-**Outputs:** `image`, `mask`, `info`
-- In `stitch_pro` mode `mask` is the actual blend mask used (Laplacian / edge-aware / FFT etc).
-- In `paste_back` mode `mask` is the paste rectangle (feathered if enabled), so downstream nodes always get a usable mask.
-
-**When to use which mode**
-
-| Mode | Use when… |
-|------|----------|
-| `stitch_pro` | You want pro-level seam-hiding (Laplacian pyramid, edge-aware, FFT frequency blend). Slightly heavier. |
-| `paste_back` | You just want a clean resize + paste (optionally feathered). Faster, deterministic, no blend pipeline. |
-
-> **Backward compatibility:** the legacy `Inpaint Stitch Pro (MEC)` and `Inpaint Paste Back (MEC)` nodes are still registered (now labelled "legacy") so existing workflows keep working. New workflows should use **Inpaint Composite (MEC)**.
+**Outputs:** `stitcher` (to Stitch Pro), `cropped_image`, `inpaint_mask` (for the model), `stitch_blend_mask`,
+`info` (settings and frame 0's window).
 
 ---
 
-#### Inpaint Stitch Pro (MEC) — *legacy, prefer Inpaint Composite*
+#### Inpaint Stitch Pro
 
-Composite inpainted image back into the original using stitch data from Inpaint Crop Pro.
+Puts the inpainted crop back into the image Inpaint Crop Pro worked on, frame by frame, at the window each frame
+was cropped from.
 
-**How it works:** Takes the inpainted result and the stitch data, resizes and places it back at the original crop location, blending using the stored blend mask. Optional mean+std color matching reduces color shift at boundaries.
+| Parameter | Default | What it does |
+|-----------|---------|--------------|
+| `stitcher` | — | From Inpaint Crop Pro |
+| `inpainted_image` | — | The sampler's result (RGB; an RGBA plate keeps its own alpha) |
+| `blend_mode_override` | `from_crop` | Use another blend mode than the crop chose |
+| `color_match` | off | Mean + std colour transfer before blending |
+| `stitch_temporal_sigma`, `stitch_dilate_px` | 0, 0 | Smooth / widen the blend mask over time for jittery video masks |
+| `roto_quality_override` | `from_crop` | `force_on` / `force_off` the crop's roto setting |
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `stitch_data` | — | From Inpaint Crop Pro |
-| `inpainted_image` | — | Inpainted result from any model |
-| `blend_mode_override` | `from_crop` | Override blend mode or keep original |
-| `color_match` | `false` | Apply mean+std color transfer before stitching |
+**Outputs:** `image`, `blend_mask_used` (exactly where the stitch changed pixels: everywhere it is 0 the original is
+untouched, bit for bit), `info`.
 
-**Outputs:** `image`, `blend_mask_used`, `info`
+Checked by `tests/test_inpaint_crop_geometry.py`: an empty mask stitches back as an exact identity; nothing outside
+the blend mask changes for every blend mode; without resizing the round trip is exact; the result lands where it
+was cropped; RGBA, odd sizes, `preserve_subject`, per-frame and stable batches.
 
 ---
 
@@ -718,7 +716,7 @@ Standalone mask cleanup and dual-mask preparation for inpainting workflows.
 
 ---
 
-#### Inpaint Paste Back (MEC) — *legacy, prefer Inpaint Composite*
+#### Inpaint Paste Back (MEC)
 
 Simple paste-back node: resize the inpainted crop and composite it onto the original with optional Gaussian-feathered alpha blending.
 
@@ -731,7 +729,7 @@ Simple paste-back node: resize the inpainted crop and composite it onto the orig
 
 **Outputs:** `image`, `info`
 
-> **Paste Back vs Stitch Pro vs Composite:** All three live in the same suite. The new **Inpaint Composite (MEC)** node merges Stitch Pro and Paste Back behind one mode dropdown — prefer it for new workflows. The two legacy nodes remain for backward compatibility.
+> **Paste Back vs Stitch Pro:** Stitch Pro blends the result back with the crop's blend mask (and its blend modes); Paste Back is a plain resize + paste with an optional feathered edge.
 
 ---
 
@@ -1106,9 +1104,8 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 17 | Mask Math | Editing | 1 | Mathematical mask operations (11 ops) |
 | 18 | Spline Mask Editor | Interactive | 1 | Interactive Catmull-Rom / Bezier / polyline spline drawing on canvas |
 | 19 | Inpaint Crop Pro | Inpaint | 1 | Crop around mask for inpainting |
-| 20 | **Inpaint Composite** | Inpaint | 1 | Unified Stitch Pro + Paste Back (mode dropdown) |
-| 20a | Inpaint Stitch Pro *(legacy)* | Inpaint | 1 | Composite inpainted result back |
-| 21 | Inpaint Paste Back *(legacy)* | Inpaint | 1 | Simple paste-back with feathered alpha |
+| 20 | Inpaint Stitch Pro | Inpaint | 1 | Blend the inpainted crop back at the window it came from |
+| 21 | Inpaint Paste Back | Inpaint | 1 | Simple paste-back with feathered alpha |
 | 22 | Inpaint Mask Prepare | Inpaint | 1 | Clean + dual-mask preparation |
 | 23 | Image Comparer | Preview | 1 | Interactive before/after comparison (3 modes) |
 | 24 | Mask Batch Manager | Video | 1 | Slice/concat/interleave mask batches |

@@ -18,7 +18,13 @@ import torch.nn.functional as F
 @pytest.fixture
 def crop_node():
     from nodes.inpaint_suite import InpaintCropProMEC
-    return InpaintCropProMEC()
+
+    class _Result(InpaintCropProMEC):
+        """L7.99: the node returns ComfyUI's {"ui": preview, "result": outputs}; these tests check the outputs."""
+        def inpaint_crop(self, *a, **k):
+            out = super().inpaint_crop(*a, **k)
+            return out["result"] if isinstance(out, dict) else out
+    return _Result()
 
 
 @pytest.fixture
