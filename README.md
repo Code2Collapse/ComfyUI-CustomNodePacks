@@ -169,7 +169,37 @@ For the highest-quality edge refinement (hair, fur, glass, lace):
 pip install transformers pillow
 ```
 
-The ViTMatte model (~400 MB) auto-downloads from HuggingFace on first use. For offline setups, place model files in `ComfyUI/models/vitmatte/`.
+ViTMatte (~400 MB) is used from an installed copy: `ComfyUI/models/vitmatte/<name>/`, another pack's
+`models/*/vitmatte-small-composition-1k`, or the Hugging Face cache. It is downloaded only when you tick MaskOps'
+`auto_download`; without it MaskOps uses a guided filter and labels the result approximate. See
+[Model weights and downloads](#model-weights-and-downloads).
+
+### Model weights and downloads
+
+No node downloads model weights unless you allow it (owner decision 2026-10-12). Before anything is called missing,
+the node looks for an installed copy in its own folder, in every model folder ComfyUI knows (other packs' folders
+too), in another pack's copy of a Transformers model (`models/<anything>/<repo name>`) and in the Hugging Face cache,
+and reuses it. The pack creates no model folders at start-up; a folder is created only when a permitted download
+saves into it.
+
+| Node | Switch (default off) | Without the model |
+|------|----------------------|-------------------|
+| Background Remover | `allow_download` | model-free cut-out from the frame border, labelled approximate |
+| Semantic Segment | `allow_download` | `skin` by colour, labelled approximate; other classes need the model |
+| SAM Model Loader, SAM Mask Generator, SAM Multi-Mask Picker, Mask Placement | `allow_download` | GrabCut stand-in, labelled approximate |
+| SeC + MatAnyone | `allow_download` | GrabCut + optical-flow tracking and a guided-filter matte, labelled approximate |
+| LocateAnything | `allow_download` | none (reading a text prompt needs the model): the node names the folder |
+| MaskOps | `auto_download` | its labelled model-free segmenter / matter |
+
+When a model is missing and downloading is off, the message names the model, the **absolute** folder and the file,
+for example `Expected file 'sam2.1_hiera_base_plus.safetensors' in folder: D:\ComfyUI\models\sam2`. Put the file
+there, or tick the switch to download it there. LocateAnything goes to `models/LLM/LocateAnything-3B`.
+
+Each of these nodes reports a `model_status` line in its `info` output (SAM Model Loader: in its `SAM_MODEL`):
+`loaded - found at <path>`, `needs permission - model-free result` (missing, downloading off),
+`missing - model-free result` (missing for another reason) or, on Mask Placement, `not used (source_mask wired)`.
+
+A saved SAM Model Loader choice `[download] ...` no longer downloads by itself: tick `allow_download`.
 
 ### 5. Restart ComfyUI
 
@@ -237,8 +267,10 @@ Loads SAM 2.1 / SAM 3 checkpoints with optional VRAM offload.
 | `device` | `cuda` | `cuda` / `cpu` |
 | `offload_to_cpu` | `false` | Keep model on CPU, move to GPU only during inference (saves ~2–4 GB VRAM) |
 | `dtype` | `float16` | `float16` / `bfloat16` / `float32` |
+| `allow_download` | `false` | Download a missing `[download] ...` checkpoint into `models/sam2/`. Off: an installed copy anywhere ComfyUI knows is used; none gives the labelled model-free stand-in |
 
-**Output:** `SAM_MODEL` — connect to SAM Mask Generator, SAM Multi-Mask Picker, or SAM + ViTMatte Pipeline.
+**Output:** `SAM_MODEL` — connect to SAM Mask Generator, SAM Multi-Mask Picker, or SAM + ViTMatte Pipeline. It
+carries `model_status`.
 
 ---
 
@@ -256,6 +288,7 @@ Runs SAM 2.1 / SAM 3 inference with point + bbox prompts, iterative refinement, 
 | `mask_index` | `0` | Which candidate (0–2) to use |
 | `refine_iterations` | `1` | Iterative SAM passes (each tightens boundaries) |
 | `auto_negative_points` | `0` | Sample N negative points from outside the mask |
+| `allow_download` | `false` | Allow its text-grounding model to download if missing |
 
 **Outputs:** `masks`, `best_score`, `info`
 
@@ -265,20 +298,21 @@ Runs SAM 2.1 / SAM 3 inference with point + bbox prompts, iterative refinement, 
 
 Run SAM inference and view **all 3 candidate masks** side-by-side with IoU scores. An interactive JS widget renders thumbnails — click a mask or press **1** / **2** / **3** to select it instantly.
 
-**How it works:** SAM always outputs 3 masks ranked by confidence. Instead of guessing which `mask_index` is best, this node shows all three with quality scores and lets you pick visually. Works with SAM1, SAM2, and HQ-SAM.
+**How it works:** SAM always outputs 3 masks ranked by confidence. Instead of guessing which `mask_index` is best, this node shows all three with quality scores and lets you pick visually. Works with SAM 2.1 and SAM 3 (or the labelled model-free stand-in when no SAM model is installed).
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `image` | — | Input image |
-| `model_name` | — | SAM model (SAM1 / SAM2 / HQ-SAM, auto-listed) |
+| `model_name` | — | SAM model (SAM 2.1 / SAM 3, auto-listed) |
 | `points_json` | `[{"x":256,"y":256,"label":1}]` | Point prompts JSON |
 | `bbox_json` | `""` | Optional bounding box `[x1,y1,x2,y2]` |
 | `precision` | `fp32` | `fp32` / `fp16` / `bf16` |
 | `selected_index` | `0` | Which candidate (0–2) — updated by widget click |
 | `sam_model` | (optional) | Pre-loaded SAM model from SAM Model Loader |
 | `bbox` | (optional) | BBox from BBox pipeline (overrides `bbox_json`) |
+| `allow_download` | `false` | Download the SAM checkpoint if it is not installed |
 
-**Outputs:** `selected_mask`, `all_masks` (3×H×W), `selected_index`, `scores` (JSON), `info`
+**Outputs:** `selected_mask`, `all_masks` (3×H×W), `selected_index`, `scores` (JSON), `info` (with `model_status`)
 
 > **Who is it for?** When SAM gives you 3 options and you don't know which is best — see them all at once, pick with one click, and pipe the winner downstream.
 
@@ -339,8 +373,9 @@ End-to-end pipeline: **SeC MLLM segmentation → MatAnyone2 temporal alpha matti
 | `edge_refine_method` | `none` | Optional post-matting refinement: `vitmatte` / `guided_filter` / `multi_scale_guided` |
 | `fill_holes_enabled` | `true` | Fill interior holes in alpha |
 | `min_region_size` | `64` | Remove isolated regions < N pixels |
+| `allow_download` | `false` | Download the segmentation / matting models if they are not installed |
 
-**Outputs:** `rgb` (premultiplied), `alpha_mask`, `coarse_mask`, `preview`, `info`
+**Outputs:** `rgb` (premultiplied), `alpha_mask`, `coarse_mask`, `preview`, `info` (`model_status` per model)
 
 **Pipeline stages:**
 1. SeC/SAM coarse segmentation (text or point/bbox prompts)
@@ -365,6 +400,7 @@ Face / body / clothes semantic parsing using SegFormer. Select classes by name t
 | `classes_csv` | `"skin,hair"` | Comma-separated class names to include |
 | `threshold` | `0.5` | Confidence threshold |
 | `invert` | `false` | Invert output mask |
+| `allow_download` | `false` | Download SegFormer if it is not installed; off without the model: `skin` by colour only |
 
 **Face classes:** skin, l_brow, r_brow, l_eye, r_eye, eye_g, l_ear, r_ear, ear_r, nose, mouth, u_lip, l_lip, neck, necklace, cloth, hair, hat
 
@@ -394,8 +430,9 @@ One-click background removal using RMBG-2.0 or BiRefNet. Outputs a clean foregro
 | `threshold` | `0.5` | Alpha threshold (0 = soft, 1 = hard) |
 | `invert` | `false` | Keep background instead |
 | `mask_blur` | `0` | Gaussian blur on mask edges |
+| `allow_download` | `false` | Download the model if it is not installed; off without it: a labelled model-free cut-out |
 
-**Outputs:** `foreground` (premultiplied RGB), `mask`, `info`
+**Outputs:** `foreground` (premultiplied RGB), `mask`, `info` (with `model_status`)
 
 > **Who is it for?** E-commerce product photography, quick compositing, batch background removal.
 
@@ -1309,9 +1346,11 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 | `ModuleNotFoundError: transformers` | `pip install transformers pillow` — only needed for ViTMatte matting |
 | Torch version mismatch after `pip install -r requirements.txt` | Reinstall your ComfyUI torch: check [PyTorch install page](https://pytorch.org/get-started/locally/) for your CUDA version |
 | SAM model not found | Place `.pth` / `.pt` / `.safetensors` in `ComfyUI/models/sams/` or `ComfyUI/models/sam2/` |
+| `Model '...' is not installed and downloading is off` | Put the named file in the folder the message gives, or tick the node's `allow_download` (MaskOps: `auto_download`) |
+| Result says `approximate` / `model-free` | The model is missing; the node used its model-free method. Its `model_status` says why |
 | CUDA out of memory | Enable `offload_to_cpu` in SAM Model Loader, use `float16` dtype, reduce image resolution |
 | Nodes not showing in menu | Check console for `[MEC] Loaded 44` message. If missing, check for import errors in the console output |
-| ViTMatte download fails | Download manually from [HuggingFace](https://huggingface.co/hustvl/vitmatte-small-composition-1k) → place in `ComfyUI/models/vitmatte/` |
+| ViTMatte download fails | Download manually from [HuggingFace](https://huggingface.co/hustvl/vitmatte-small-composition-1k) → place in `ComfyUI/models/vitmatte/vitmatte-small-composition-1k/` |
 | My mask looks bad | Connect your image + mask to **Mask Failure Explainer** — it will diagnose the issue and suggest the right method |
 
 ---
