@@ -639,6 +639,12 @@ the window size, position, output size, scale and padding written under it. It i
 masks - so the crop does not jump. Off: each frame gets its own window, and every frame is cropped and stitched with
 its own placement. The preview label says which.
 
+**Controls.** Nine are shown: `mask_expand_pixels`, `mask_blend_pixels`, `context_from_mask_extend_factor`,
+`aspect_preset`, `output_target_width`, `output_target_height`, `wan_stable_crop`, `stitch_blend_mode`,
+`preview_frame`. The rest sit in sections - Mask, Size, Resize / outpaint, Video, Stitch, Device - opened from the
+node's **More** bar (classic canvas) or core's **Show advanced inputs** (Nodes 2.0). A switch shows its own
+controls when it is on (pre-resize sizes, outpaint factors, the `video_stable` settings).
+
 **Output size.** The stitched image has the size of the image the crop worked on: the input size, or the
 pre-resized size with `preresize`, or the extended size with `extend_for_outpainting`.
 

@@ -905,6 +905,31 @@ def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int)
     return {"images": [saved], "c2c_crop_plan": [plan]} if saved else {}
 
 
+# L7.99 slice 3 (ORDERS 11.4: at most 10 visible controls): the rarely used inputs are flagged core's "advanced" (Nodes
+# 2.0 folds them behind "Show advanced inputs") and named a "c2c_section" for the classic canvas's "More" bar
+# (js/_c2c_sections.js). Inputs a switch reveals (pre-resize sizes, outpaint factors, target size, video_stable_*) are
+# not here: js/c2c_mode_widgets.js shows them when their switch is on. Order and defaults are unchanged.
+_CROP_SECTIONS = {
+    **dict.fromkeys(("mask_fill_holes", "mask_invert", "mask_hipass_filter", "wan_mask_polarity"), "Mask"),
+    **dict.fromkeys(("output_resize_to_target_size", "output_padding", "wan_align_multiple", "auto_context_factor",
+                     "downscale_algorithm", "upscale_algorithm"), "Size"),
+    **dict.fromkeys(("preresize", "extend_for_outpainting"), "Resize / outpaint"),
+    **dict.fromkeys(("wan_temporal_smooth_frames",), "Video"),
+    **dict.fromkeys(("inpaint_mask_mode", "blend_radius", "fill_masked_area", "roto_quality"), "Stitch"),
+    **dict.fromkeys(("device_mode",), "Device"),
+}
+
+
+def _with_crop_sections(spec):
+    for group in ("required", "optional"):
+        for name, s in (spec.get(group) or {}).items():
+            section = _CROP_SECTIONS.get(name)
+            if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
+                s[1]["c2c_section"] = section
+                s[1]["advanced"] = True
+    return spec
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  NODE 1: InpaintCropProMEC — lquesada-compatible API + Wan 2.2 Animate aware
 #
@@ -955,7 +980,7 @@ class InpaintCropProMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return _with_crop_sections({
             "required": {
                 "image": ("IMAGE",),
                 "downscale_algorithm": (cls.RESIZE_ALGS, {"default": "bilinear"}),
@@ -1076,7 +1101,7 @@ class InpaintCropProMEC:
                     "tooltip": ("Which frame the preview under the node shows (0 = the first). Display only: "
                                 "every frame is still cropped exactly as before.")}),
             },
-        }
+        })
 
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING")
     RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")

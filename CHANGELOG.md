@@ -24,6 +24,9 @@ Evidence: `docs/evidence/L7.99/` (workspace); tests/test_inpaint_crop_geometry.p
   under it. New optional `preview_frame` (default 0, added last; saved workflows unchanged) picks the frame shown -
   display only.
 - The node returns ComfyUI's `{"ui", "result"}` form; `info` also gives frame 0's window.
+- **Inpaint Crop Pro shows 9 controls instead of 28.** The others are in sections (classic: the More bar; Nodes
+  2.0: Show advanced inputs); a switch shows the controls it enables. Order, names and defaults unchanged.
+  `output_padding` is no longer hidden when resizing is off (it applies either way).
 
 ## Unreleased – 2026-10-13 (Nodes 2.0 shows a loaded workflow's own values)
 

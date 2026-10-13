@@ -11,10 +11,10 @@
 // `widgets_values` arrays with each widget's default value pulled from
 // `nodeData.input.required` / `nodeData.input.optional`. It is a no-op
 // for arrays that already have the right length (or are longer — which
-// is handled by per-node migrations like inpaint_crop_pro.js).
+// is handled by per-node migrations, e.g. c2c_auto_migrate.js).
 //
 // Pattern: GENERIC TAIL-PAD ONLY. Middle-insert reorders need per-node
-// logic (see inpaint_crop_pro.js for an example).
+// logic (c2c_auto_migrate.js rewrites removed / merged nodes on load).
 
 import { app } from "../../scripts/app.js";
 

@@ -30,6 +30,12 @@ const FI_SOURCE = ["prefix", "suffix", "suffix_mode", "label", "date_format", "s
                    "numbered_still_mode", "source_filename", "source_path", "custom_name", "folder_name_override",
                    "version_group", "versioning", "version_in_filename", "output_name"];
 
+// Inpaint Crop Pro: what each switch reveals
+const ICP_PRERESIZE = ["preresize_mode", "preresize_min_width", "preresize_min_height", "preresize_max_width",
+                       "preresize_max_height"];
+const ICP_EXTEND = ["extend_up_factor", "extend_down_factor", "extend_left_factor", "extend_right_factor"];
+const ICP_VSTABLE = ["video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma"];
+
 // node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides (a list, or a test on the
 // name), visible(values, names) -> the managed widgets to show }
 const RULES = {
@@ -77,6 +83,18 @@ const RULES = {
         managed: [...FI_PIPELINE, ...FI_SOURCE],
         visible: (v) => (String(v.layout ?? "").startsWith("show") ? FI_PIPELINE
             : FI_SOURCE.filter((n) => !(n === "version_in_filename" && v.versioning === "filename"))),
+    },
+    InpaintCropProMEC: {
+        // L7.99: a switch shows the controls it enables (this file is the node's one visibility owner since the
+        // separate inpaint_crop_pro.js was retired); the rarely used switches themselves sit in sections
+        watch: ["preresize", "extend_for_outpainting", "output_resize_to_target_size", "stitch_blend_mode"],
+        managed: [...ICP_PRERESIZE, ...ICP_EXTEND, "output_target_width", "output_target_height", ...ICP_VSTABLE],
+        visible: (v) => [
+            ...(v.preresize ? ICP_PRERESIZE : []),
+            ...(v.extend_for_outpainting ? ICP_EXTEND : []),
+            ...(v.output_resize_to_target_size !== false ? ["output_target_width", "output_target_height"] : []),
+            ...(v.stitch_blend_mode === "video_stable" ? ICP_VSTABLE : []),
+        ],
     },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],
