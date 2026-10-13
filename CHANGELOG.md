@@ -24,6 +24,13 @@ Evidence: `docs/evidence/L7.99/` (workspace); tests/test_inpaint_crop_geometry.p
   under it. New optional `preview_frame` (default 0, added last; saved workflows unchanged) picks the frame shown -
   display only.
 - The node returns ComfyUI's `{"ui", "result"}` form; `info` also gives frame 0's window.
+- **The crop preview follows a changed setting without a run**: after one run, changing a crop setting redraws the
+  picture from that run's masks with the node's own geometry (exact; checked against real runs for 17 settings).
+  Setting C2C > Canvas > Inpaint crop > Live crop preview (on). 81 x 1080p clip: 3.4 s per refresh on CPU.
+- Mask expand / blend / dilation in the inpaint suite is now separable: bit-identical, up to ~30x faster on CPU
+  (`mask_blend_pixels` 32 on a 1080p frame: 57 s -> 2 s).
+- Outpaint extension padded the box mask by an amount computed from the already-extended size, so the crop window
+  was measured on a mask larger than the image; both now use the same padding.
 - **Inpaint Crop Pro shows 9 controls instead of 28.** The others are in sections (classic: the More bar; Nodes
   2.0: Show advanced inputs); a switch shows the controls it enables. Order, names and defaults unchanged.
   `output_padding` is no longer hidden when resizing is off (it applies either way).

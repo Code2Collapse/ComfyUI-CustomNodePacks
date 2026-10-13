@@ -222,3 +222,16 @@ def test_preview_images_exist_and_show_the_executed_window(suite, temp_dir):
     (plan,) = ui["c2c_crop_plan"]                                       # ui values are lists (core merges them)
     assert plan["frames"][0]["window"] == list(windows(st)[0])
     assert plan["image_size"] == [W, H] and plan["output_size"] == [int(cropped.shape[2]), int(cropped.shape[1])]
+
+
+# ── dilation speed-up must not change a single value ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("shape, px", [((1, 48, 64), 8), ((3, 37, 51), 5), ((2, 64, 64), 20), ((1, 20, 90), 32)])
+def test_separable_dilation_is_bit_identical(suite, shape, px):
+    import torch.nn.functional as F
+    g = torch.Generator().manual_seed(px)
+    m = (torch.rand(*shape, generator=g) > 0.9).float() * torch.rand(*shape, generator=g)
+    k = 2 * px + 1
+    ref = F.max_pool2d(m.unsqueeze(1), kernel_size=k, stride=1, padding=px)
+    assert torch.equal(suite._max_pool_square(m.unsqueeze(1), k, px), ref)
+    assert torch.equal(suite._expand_mask_pixels(m, px), ref.squeeze(1).clamp(0.0, 1.0))

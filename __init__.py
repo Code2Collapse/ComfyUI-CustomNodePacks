@@ -956,6 +956,12 @@ try:
     except Exception as _diag_e:
         print(f"[MEC] mec_diagnostics deferred: {_diag_e}")
     try:
+        # L7.99: Inpaint Crop Pro's preview follows a changed setting without a run (/c2c/inpaint_crop/plan)
+        from .nodes._inpaint_preview_live import register_routes as _register_inpaint_live_routes
+        _register_inpaint_live_routes(_ps)
+    except Exception as _il:
+        print(f"[MEC] inpaint crop live preview deferred: {_il}")
+    try:
         from .nodes.node_explain import register_routes as _register_node_explain_routes
         _register_node_explain_routes(_ps)
         print("[MEC] node_explain routes registered.")

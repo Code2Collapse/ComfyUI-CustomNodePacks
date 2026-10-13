@@ -434,8 +434,8 @@ def _remove_small_regions_torch(mask: torch.Tensor, min_area: int) -> torch.Tens
             k_size += 1
         pad = k_size // 2
         m4 = mask.unsqueeze(1)
-        eroded = -F.max_pool2d(-m4, kernel_size=k_size, stride=1, padding=pad)
-        dilated = F.max_pool2d(eroded, kernel_size=k_size, stride=1, padding=pad)
+        eroded = -_max_pool_square(-m4, k_size, pad)
+        dilated = _max_pool_square(eroded, k_size, pad)
         return dilated.squeeze(1).clamp(0.0, 1.0)
 
 
@@ -541,7 +541,7 @@ def _generate_stitch_blend_mask_video_stable(
         k = int(spatial_dilate_px) * 2 + 1
         pad = int(spatial_dilate_px)
         m4 = binary.unsqueeze(1)  # (B, 1, H, W)
-        dilated = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pad)
+        dilated = _max_pool_square(m4, k, pad)
         binary = dilated.squeeze(1).clamp(0.0, 1.0)
 
     # Step 2: temporal smooth → re-binarize (kills jitter at the boundary)
@@ -750,13 +750,21 @@ def _hipass_filter(mask: torch.Tensor, threshold: float) -> torch.Tensor:
     return (mask * keep).clamp(0.0, 1.0)
 
 
+def _max_pool_square(m4: torch.Tensor, k: int, pad: int) -> torch.Tensor:
+    """F.max_pool2d(m4, k, stride=1, padding=pad) with a square kernel, as two 1-D passes (L7.99). A square
+    window's max is the max of its rows' maxima, so the result is bit-identical; the work is 2k instead of k*k per
+    pixel (mask_blend_pixels=32 on a 1080p frame: 57 s -> 2 s on CPU, measured)."""
+    out = F.max_pool2d(m4, kernel_size=(k, 1), stride=1, padding=(pad, 0))
+    return F.max_pool2d(out, kernel_size=(1, k), stride=1, padding=(0, pad))
+
+
 def _expand_mask_pixels(mask: torch.Tensor, pixels: int) -> torch.Tensor:
     """Max-pool dilation by `pixels` (lquesada-compatible)."""
     if pixels <= 0:
         return mask
     k = 2 * pixels + 1
     m4 = mask.unsqueeze(1)
-    out = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pixels)
+    out = _max_pool_square(m4, k, pixels)
     return out.squeeze(1).clamp(0.0, 1.0)
 
 
@@ -876,6 +884,19 @@ def _draw_crop_preview(frame_hwc: torch.Tensor, regen_mask_hw: torch.Tensor, win
     return np.asarray(canvas, dtype=np.float32) / 255.0
 
 
+def _crop_preview_lines(plan: dict, fr: dict, k: int, B: int) -> list:
+    """The label under the preview (shared by the run preview and the live one)."""
+    x, y, w, h = fr["window"]
+    ow, oh = plan["output_size"]
+    scale = ow / float(max(1, w))
+    where = (f"one window for all {B} frames (their union), frame {k} shown" if plan["stable"] and B > 1
+             else (f"own window per frame, frame {k} of {B} shown" if B > 1 else "single image"))
+    pads = ", ".join(f"{side} {v}" for side, v in fr["padding"].items() if v)
+    return [f"crop {w}x{h} at ({x}, {y}) of {plan['image_size'][0]}x{plan['image_size'][1]} -> {ow}x{oh} "
+            f"(x{scale:.2f})",
+            where + (f"; padded {pads}" if pads else "")]
+
+
 def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int) -> dict:
     """Core's node preview (ui.images, both renderers): one picture of one frame - the window on the original next
     to the crop. Display only; it never changes what is cropped."""
@@ -886,15 +907,7 @@ def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int)
     B = int(image.shape[0])
     k = max(0, min(int(preview_frame), B - 1))
     fr = plan["frames"][k if len(plan["frames"]) > 1 else 0]
-    x, y, w, h = fr["window"]
-    ow, oh = plan["output_size"]
-    scale = ow / float(max(1, w))
-    where = (f"one window for all {B} frames (their union), frame {k} shown" if plan["stable"] and B > 1
-             else (f"own window per frame, frame {k} of {B} shown" if B > 1 else "single image"))
-    pads = ", ".join(f"{side} {v}" for side, v in fr["padding"].items() if v)
-    lines = [f"crop {w}x{h} at ({x}, {y}) of {plan['image_size'][0]}x{plan['image_size'][1]} -> {ow}x{oh} "
-             f"(x{scale:.2f})",
-             where + (f"; padded {pads}" if pads else "")]
+    lines = _crop_preview_lines(plan, fr, k, B)
     try:
         pic = _draw_crop_preview(image[k], regen_mask[k], fr["window"],
                                  cropped[min(k, int(cropped.shape[0]) - 1)], lines)
@@ -918,6 +931,18 @@ _CROP_SECTIONS = {
     **dict.fromkeys(("inpaint_mask_mode", "blend_radius", "fill_masked_area", "roto_quality"), "Stitch"),
     **dict.fromkeys(("device_mode",), "Device"),
 }
+
+
+# The settings _geometry() reads; _LIVE_KEYS = every setting the live preview may change
+_GEOMETRY_KEYS = (
+    "downscale_algorithm", "upscale_algorithm", "preresize", "preresize_mode", "preresize_min_width",
+    "preresize_min_height", "preresize_max_width", "preresize_max_height", "mask_fill_holes", "mask_expand_pixels",
+    "mask_invert", "mask_blend_pixels", "mask_hipass_filter", "extend_for_outpainting", "extend_up_factor",
+    "extend_down_factor", "extend_left_factor", "extend_right_factor", "context_from_mask_extend_factor",
+    "auto_context_factor", "aspect_preset", "output_target_width", "output_target_height",
+    "wan_temporal_smooth_frames", "wan_stable_crop", "wan_mask_polarity",
+)
+_LIVE_KEYS = _GEOMETRY_KEYS + ("output_resize_to_target_size", "output_padding", "wan_align_multiple", "preview_frame")
 
 
 def _with_crop_sections(spec):
@@ -1101,6 +1126,8 @@ class InpaintCropProMEC:
                     "tooltip": ("Which frame the preview under the node shows (0 = the first). Display only: "
                                 "every frame is still cropped exactly as before.")}),
             },
+            # L7.99 slice 2: which node ran, so the live preview finds this run's masks (no widget)
+            "hidden": {"unique_id": "UNIQUE_ID"},
         })
 
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING")
@@ -1181,7 +1208,7 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False, preview_frame: int = 0):
+                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None):
 
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("InpaintCropProMEC expects IMAGE tensor [B,H,W,C]")
@@ -1216,7 +1243,7 @@ class InpaintCropProMEC:
                 video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                 fill_masked_area,
                 mask, optional_context_mask,
-                roto_quality, preview_frame,
+                roto_quality, preview_frame, unique_id,
             )
 
     def _inpaint_crop_core(self, image, downscale_algorithm, upscale_algorithm,
@@ -1240,7 +1267,7 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False, preview_frame: int = 0):
+                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None):
         image = image.clone()
         # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
         # Applied here (single point) so every downstream branch — single
@@ -1290,144 +1317,43 @@ class InpaintCropProMEC:
         output_padding_int = int(output_padding)
 
         B, H, W, _ = image.shape
-
-        # Default / shape-match the mask
-        if mask is None:
-            mask = torch.zeros((B, H, W), device=image.device, dtype=image.dtype)
-        if mask.dim() == 2:
-            mask = mask.unsqueeze(0)
-        if mask.shape[0] == 1 and B > 1:
-            mask = mask.expand(B, -1, -1).clone()
-        if mask.shape[0] != B:
-            if mask.shape[0] < B:
-                mask = mask[:1].expand(B, -1, -1).clone()
-            else:
-                mask = mask[:B]
-        if mask.shape[1] != H or mask.shape[2] != W:
-            mask = _resize_mask_alg(mask, H, W, "bilinear")
-
-        if optional_context_mask is None:
-            optional_context_mask = torch.zeros_like(mask)
-        else:
-            if optional_context_mask.dim() == 2:
-                optional_context_mask = optional_context_mask.unsqueeze(0)
-            if optional_context_mask.shape[0] == 1 and B > 1:
-                optional_context_mask = optional_context_mask.expand(B, -1, -1).clone()
-            if optional_context_mask.shape[0] != B:
-                if optional_context_mask.shape[0] < B:
-                    optional_context_mask = optional_context_mask[:1].expand(B, -1, -1).clone()
-                else:
-                    optional_context_mask = optional_context_mask[:B]
-            if optional_context_mask.shape[1] != H or optional_context_mask.shape[2] != W:
-                optional_context_mask = _resize_mask_alg(optional_context_mask, H, W, "bilinear")
-
-        # Wan polarity: invert mask up-front for "preserve_subject" so all
-        # downstream logic treats mask=1 as "regenerate" (lquesada-canonical).
-        if wan_mask_polarity == "preserve_subject":
-            mask = (1.0 - mask).clamp(0.0, 1.0)
-
-        # ── Step 1: pre-resize ─────────────────────────────────────────────
-        if preresize:
-            image, mask, optional_context_mask = self._preresize(
-                image, mask, optional_context_mask,
-                preresize_mode, preresize_min_width, preresize_min_height,
-                preresize_max_width, preresize_max_height,
-                downscale_algorithm, upscale_algorithm,
-            )
-            B, H, W = image.shape[0], image.shape[1], image.shape[2]
-
-        # ── Step 2: mask preprocessing (lquesada order) ────────────────────
-        # CRITICAL: bbox is computed from the *bbox_mask* (no blend feathering),
-        # while the *mask* used for output/stitch carries the soft feather.
-        if mask_fill_holes:
-            mask = _fill_holes_torch(mask)
-        if mask_expand_pixels > 0:
-            mask = _expand_mask_pixels(mask, mask_expand_pixels)
-        if mask_invert:
-            mask = (1.0 - mask).clamp(0.0, 1.0)
-
-        # Snapshot the *binary-ish* mask used for bbox computation BEFORE blend.
-        bbox_mask = mask.clone()
-
-        if mask_blend_pixels > 0:
-            mask = _expand_mask_pixels(mask, mask_blend_pixels)
-            mask = _gaussian_blur_mask(mask, sigma=mask_blend_pixels * 0.5)
-        if mask_hipass_filter >= 0.01:
-            mask = _hipass_filter(mask, mask_hipass_filter)
-            optional_context_mask = _hipass_filter(optional_context_mask, mask_hipass_filter)
-
-        # Wan: temporal coherence (apply to BOTH so they stay aligned)
-        if wan_temporal_smooth_frames > 0.0 and B > 1:
-            mask = _temporal_gaussian_smooth(mask, wan_temporal_smooth_frames)
-            bbox_mask = _temporal_gaussian_smooth(bbox_mask, wan_temporal_smooth_frames)
-
-        # ── Step 3: extend for outpainting ─────────────────────────────────
-        if extend_for_outpainting:
-            image, mask, optional_context_mask = self._extend_for_outpainting(
-                image, mask, optional_context_mask,
-                extend_up_factor, extend_down_factor,
-                extend_left_factor, extend_right_factor,
-            )
-            # Apply same padding to bbox_mask so its coords match
-            _, bbox_mask, _ = self._extend_for_outpainting(
-                image, bbox_mask, bbox_mask,
-                extend_up_factor, extend_down_factor,
-                extend_left_factor, extend_right_factor,
-            )
-            B, H, W = image.shape[0], image.shape[1], image.shape[2]
-
-        # ── Step 4: per-frame (or stable) context bbox ─────────────────────
-        # Always use *bbox_mask* (no blend feathering) so bbox is tight.
-        bx_list, by_list, bw_list, bh_list = [], [], [], []
-        # P0.4 resolve aspect_preset → (tgt_w, tgt_h) used both for AUTO
-        # factor heuristic and for the actual crop step downstream. Falls
-        # back to the manual widget values when preset == "Custom".
-        resolved_tgt_w, resolved_tgt_h = self._resolve_target_aspect(
-            aspect_preset, int(output_target_width), int(output_target_height),
-            bbox_mask,
+        if unique_id is not None:
+            try:
+                from . import _inpaint_preview_live as _live
+                _live_settings = {k: v for k, v in locals().items() if k in _LIVE_KEYS}
+                _k = max(0, min(int(preview_frame), B - 1))
+                _live.store(str(unique_id), shape_bhw=(B, H, W), mask=mask, opt_mask=optional_context_mask,
+                            frame=image[_k], frame_index=_k, settings=_live_settings)
+            except Exception as _exc:  # noqa: BLE001 - the live preview never fails a run
+                logger.debug("[InpaintCropPro] live preview cache skipped: %s", _exc)
+        # L7.99: masks and every window number come from _geometry(), which the live preview route calls too
+        geo = self._geometry(
+            (B, H, W), mask, optional_context_mask, device=image.device, dtype=image.dtype,
+            downscale_algorithm=downscale_algorithm, upscale_algorithm=upscale_algorithm,
+            preresize=preresize, preresize_mode=preresize_mode,
+            preresize_min_width=preresize_min_width, preresize_min_height=preresize_min_height,
+            preresize_max_width=preresize_max_width, preresize_max_height=preresize_max_height,
+            mask_fill_holes=mask_fill_holes, mask_expand_pixels=mask_expand_pixels, mask_invert=mask_invert,
+            mask_blend_pixels=mask_blend_pixels, mask_hipass_filter=mask_hipass_filter,
+            extend_for_outpainting=extend_for_outpainting, extend_up_factor=extend_up_factor,
+            extend_down_factor=extend_down_factor, extend_left_factor=extend_left_factor,
+            extend_right_factor=extend_right_factor,
+            context_from_mask_extend_factor=context_from_mask_extend_factor, auto_context_factor=auto_context_factor,
+            aspect_preset=aspect_preset, output_target_width=output_target_width,
+            output_target_height=output_target_height,
+            wan_temporal_smooth_frames=wan_temporal_smooth_frames, wan_stable_crop=wan_stable_crop,
+            wan_mask_polarity=wan_mask_polarity,
         )
-        # P0.4 AUTO context factor — overrides manual slider when ON.
-        resolved_factor = float(context_from_mask_extend_factor)
-        if bool(auto_context_factor):
-            resolved_factor = self._compute_auto_factor(
-                bbox_mask, resolved_tgt_w, resolved_tgt_h, target_fill=0.70,
-            )
-        if wan_stable_crop:
-            sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
-            if sw <= 0 or sh <= 0:
-                sx, sy, sw, sh = 0, 0, W, H
-            sx, sy, sw, sh = self._grow_context(sx, sy, sw, sh,
-                                                resolved_factor, W, H)
-            ox, oy, ow, oh = _compute_stable_bbox(optional_context_mask)
-            if ow > 0 and oh > 0:
-                nx = min(sx, ox)
-                ny = min(sy, oy)
-                nx2 = max(sx + sw, ox + ow)
-                ny2 = max(sy + sh, oy + oh)
-                sx, sy, sw, sh = nx, ny, nx2 - nx, ny2 - ny
-            for _ in range(B):
-                bx_list.append(sx)
-                by_list.append(sy)
-                bw_list.append(sw)
-                bh_list.append(sh)
-        else:
-            for i in range(B):
-                fx, fy, fw, fh = _compute_bbox_single(bbox_mask[i])
-                if fw <= 0 or fh <= 0:
-                    fx, fy, fw, fh = 0, 0, W, H
-                fx, fy, fw, fh = self._grow_context(fx, fy, fw, fh,
-                                                   resolved_factor, W, H)
-                ox, oy, ow, oh = _compute_bbox_single(optional_context_mask[i])
-                if ow > 0 and oh > 0:
-                    nx = min(fx, ox)
-                    ny = min(fy, oy)
-                    nx2 = max(fx + fw, ox + ow)
-                    ny2 = max(fy + fh, oy + oh)
-                    fx, fy, fw, fh = nx, ny, nx2 - nx, ny2 - ny
-                bx_list.append(fx)
-                by_list.append(fy)
-                bw_list.append(fw)
-                bh_list.append(fh)
+        if geo["preresize"] is not None:                                # Step 1 for the image
+            new_w, new_h, alg = geo["preresize"]
+            image = _resize_image_alg(image, new_h, new_w, alg)
+        if geo["extend_pads"] is not None:                              # Step 3 for the image
+            image = _edge_replicate_pad(image, *geo["extend_pads"])
+        B, H, W = geo["B"], geo["H"], geo["W"]
+        mask, bbox_mask, optional_context_mask = geo["mask"], geo["bbox_mask"], geo["optional_context_mask"]
+        bx_list, by_list, bw_list, bh_list = geo["bx"], geo["by"], geo["bw"], geo["bh"]
+        resolved_tgt_w, resolved_tgt_h = geo["resolved_tgt"]
+        resolved_factor = geo["resolved_factor"]
 
         # ── Step 5: per-frame crop_magic ───────────────────────────────────
         if output_resize_to_target_size:
@@ -1571,7 +1497,227 @@ class InpaintCropProMEC:
         # Always the {"ui", "result"} form ComfyUI accepts, so a caller sees one shape whether or not a preview was drawn
         return {"ui": _crop_preview_ui(image, bbox_mask, out_image, plan, preview_frame), "result": result}
 
+    # ── L7.99: geometry shared by the node and the live preview route ──────────────────────────────────────
+    @classmethod
+    def _geometry(cls, shape_bhw, mask, optional_context_mask, *, device, dtype, geometry_only=False, **s) -> dict:
+        """Masks and context boxes exactly as the crop computes them, without touching the image: returns the
+        processed masks, the per-frame context boxes, the resolved target / factor, and what the image needs (the
+        pre-resize size + filter, the outpaint padding). The order of operations is the node's (lquesada order)."""
+        B, H, W = (int(v) for v in shape_bhw)
+        if mask is None:
+            mask = torch.zeros((B, H, W), device=device, dtype=dtype)
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(0)
+        if mask.shape[0] == 1 and B > 1:
+            mask = mask.expand(B, -1, -1).clone()
+        if mask.shape[0] != B:
+            if mask.shape[0] < B:
+                mask = mask[:1].expand(B, -1, -1).clone()
+            else:
+                mask = mask[:B]
+        if mask.shape[1] != H or mask.shape[2] != W:
+            mask = _resize_mask_alg(mask, H, W, "bilinear")
+
+        if optional_context_mask is None:
+            optional_context_mask = torch.zeros_like(mask)
+        else:
+            if optional_context_mask.dim() == 2:
+                optional_context_mask = optional_context_mask.unsqueeze(0)
+            if optional_context_mask.shape[0] == 1 and B > 1:
+                optional_context_mask = optional_context_mask.expand(B, -1, -1).clone()
+            if optional_context_mask.shape[0] != B:
+                if optional_context_mask.shape[0] < B:
+                    optional_context_mask = optional_context_mask[:1].expand(B, -1, -1).clone()
+                else:
+                    optional_context_mask = optional_context_mask[:B]
+            if optional_context_mask.shape[1] != H or optional_context_mask.shape[2] != W:
+                optional_context_mask = _resize_mask_alg(optional_context_mask, H, W, "bilinear")
+
+        # Wan polarity: invert mask up-front for "preserve_subject" so all
+        # downstream logic treats mask=1 as "regenerate" (lquesada-canonical).
+        if s["wan_mask_polarity"] == "preserve_subject":
+            mask = (1.0 - mask).clamp(0.0, 1.0)
+
+        # ── Step 1: pre-resize ─────────────────────────────────────────────
+        preresize_plan = None
+        if s["preresize"]:
+            new_w, new_h = cls._preresize_dims(W, H, s["preresize_mode"], s["preresize_min_width"],
+                                               s["preresize_min_height"], s["preresize_max_width"],
+                                               s["preresize_max_height"])
+            if (new_w, new_h) != (W, H):
+                alg = s["upscale_algorithm"] if (new_w * new_h > W * H) else s["downscale_algorithm"]
+                mask = _resize_mask_alg(mask, new_h, new_w, alg)
+                optional_context_mask = _resize_mask_alg(optional_context_mask, new_h, new_w, alg)
+                preresize_plan = (new_w, new_h, alg)
+                H, W = new_h, new_w
+
+        # ── Step 2: mask preprocessing (lquesada order) ────────────────────
+        # CRITICAL: bbox is computed from the *bbox_mask* (no blend feathering),
+        # while the *mask* used for output/stitch carries the soft feather.
+        if s["mask_fill_holes"]:
+            mask = _fill_holes_torch(mask)
+        if s["mask_expand_pixels"] > 0:
+            mask = _expand_mask_pixels(mask, s["mask_expand_pixels"])
+        if s["mask_invert"]:
+            mask = (1.0 - mask).clamp(0.0, 1.0)
+
+        # Snapshot the *binary-ish* mask used for bbox computation BEFORE blend.
+        bbox_mask = mask.clone()
+
+        # geometry_only (the live preview): the feathered soft mask never reaches a window number - the boxes
+        # come from bbox_mask and the context mask - so its blend / hi-pass / smoothing is skipped (81 x 1080p: the
+        # bulk of the time). The returned "mask" is then the unfeathered one.
+        if s["mask_blend_pixels"] > 0 and not geometry_only:
+            mask = _expand_mask_pixels(mask, s["mask_blend_pixels"])
+            mask = _gaussian_blur_mask(mask, sigma=s["mask_blend_pixels"] * 0.5)
+        if s["mask_hipass_filter"] >= 0.01:
+            if not geometry_only:
+                mask = _hipass_filter(mask, s["mask_hipass_filter"])
+            optional_context_mask = _hipass_filter(optional_context_mask, s["mask_hipass_filter"])
+
+        # Wan: temporal coherence (apply to BOTH so they stay aligned)
+        if s["wan_temporal_smooth_frames"] > 0.0 and B > 1:
+            if not geometry_only:
+                mask = _temporal_gaussian_smooth(mask, s["wan_temporal_smooth_frames"])
+            bbox_mask = _temporal_gaussian_smooth(bbox_mask, s["wan_temporal_smooth_frames"])
+
+        # ── Step 3: extend for outpainting ─────────────────────────────────
+        extend_pads = None
+        if s["extend_for_outpainting"]:
+            pads = cls._extend_pads(H, W, s["extend_up_factor"], s["extend_down_factor"],
+                                    s["extend_left_factor"], s["extend_right_factor"])
+            if any(pads):
+                up_pad, down_pad, left_pad, right_pad = pads
+                fp = (left_pad, right_pad, up_pad, down_pad)
+                mask = F.pad(mask.unsqueeze(1), fp, mode="constant", value=1.0).squeeze(1).clamp(0.0, 1.0)
+                optional_context_mask = F.pad(optional_context_mask.unsqueeze(1), fp, mode="constant",
+                                              value=0.0).squeeze(1).clamp(0.0, 1.0)
+                # Apply same padding to bbox_mask so its coords match
+                bbox_mask = F.pad(bbox_mask.unsqueeze(1), fp, mode="constant", value=1.0).squeeze(1).clamp(0.0, 1.0)
+                extend_pads = pads
+                H, W = H + up_pad + down_pad, W + left_pad + right_pad
+
+        # ── Step 4: per-frame (or stable) context bbox ─────────────────────
+        # Always use *bbox_mask* (no blend feathering) so bbox is tight.
+        bx_list, by_list, bw_list, bh_list = [], [], [], []
+        # P0.4 resolve aspect_preset → (tgt_w, tgt_h) used both for AUTO
+        # factor heuristic and for the actual crop step downstream. Falls
+        # back to the manual widget values when preset == "Custom".
+        resolved_tgt_w, resolved_tgt_h = cls._resolve_target_aspect(
+            s["aspect_preset"], int(s["output_target_width"]), int(s["output_target_height"]),
+            bbox_mask,
+        )
+        # P0.4 AUTO context factor — overrides manual slider when ON.
+        resolved_factor = float(s["context_from_mask_extend_factor"])
+        if bool(s["auto_context_factor"]):
+            resolved_factor = cls._compute_auto_factor(
+                bbox_mask, resolved_tgt_w, resolved_tgt_h, target_fill=0.70,
+            )
+        if s["wan_stable_crop"]:
+            sx, sy, sw, sh = _compute_stable_bbox(bbox_mask)
+            if sw <= 0 or sh <= 0:
+                sx, sy, sw, sh = 0, 0, W, H
+            sx, sy, sw, sh = cls._grow_context(sx, sy, sw, sh,
+                                               resolved_factor, W, H)
+            ox, oy, ow, oh = _compute_stable_bbox(optional_context_mask)
+            if ow > 0 and oh > 0:
+                nx = min(sx, ox)
+                ny = min(sy, oy)
+                nx2 = max(sx + sw, ox + ow)
+                ny2 = max(sy + sh, oy + oh)
+                sx, sy, sw, sh = nx, ny, nx2 - nx, ny2 - ny
+            for _ in range(B):
+                bx_list.append(sx)
+                by_list.append(sy)
+                bw_list.append(sw)
+                bh_list.append(sh)
+        else:
+            for i in range(B):
+                fx, fy, fw, fh = _compute_bbox_single(bbox_mask[i])
+                if fw <= 0 or fh <= 0:
+                    fx, fy, fw, fh = 0, 0, W, H
+                fx, fy, fw, fh = cls._grow_context(fx, fy, fw, fh,
+                                                  resolved_factor, W, H)
+                ox, oy, ow, oh = _compute_bbox_single(optional_context_mask[i])
+                if ow > 0 and oh > 0:
+                    nx = min(fx, ox)
+                    ny = min(fy, oy)
+                    nx2 = max(fx + fw, ox + ow)
+                    ny2 = max(fy + fh, oy + oh)
+                    fx, fy, fw, fh = nx, ny, nx2 - nx, ny2 - ny
+                bx_list.append(fx)
+                by_list.append(fy)
+                bw_list.append(fw)
+                bh_list.append(fh)
+        return {"B": B, "H": H, "W": W, "mask": mask, "bbox_mask": bbox_mask,
+                "optional_context_mask": optional_context_mask, "bx": bx_list, "by": by_list, "bw": bw_list,
+                "bh": bh_list, "resolved_tgt": (resolved_tgt_w, resolved_tgt_h), "resolved_factor": resolved_factor,
+                "preresize": preresize_plan, "extend_pads": extend_pads}
+
+    @classmethod
+    def plan_windows(cls, shape_bhw, mask, optional_context_mask, **s) -> dict:
+        """The crop windows the node would execute for these inputs and settings (the live preview's numbers), plus
+        the processed masks. Same functions the node runs; no image work."""
+        geo = cls._geometry(shape_bhw, mask, optional_context_mask, device=torch.device("cpu"),
+                            dtype=torch.float32, geometry_only=True, **{k: s[k] for k in _GEOMETRY_KEYS})
+        if s["output_resize_to_target_size"]:
+            tgt_w, tgt_h = geo["resolved_tgt"]
+        else:
+            tgt_w, tgt_h = -1, -1
+        frames = []
+        out_size = None
+        for i in range(geo["B"]):
+            bx, by, bw, bh = geo["bx"][i], geo["by"][i], geo["bw"][i], geo["bh"][i]
+            win = cls._crop_window(bx, by, bw, bh, tgt_w if tgt_w > 0 else bw, tgt_h if tgt_h > 0 else bh,
+                                   int(s["output_padding"]), bool(s["output_resize_to_target_size"]),
+                                   int(s["wan_align_multiple"]), geo["W"], geo["H"],
+                                   context_factor=geo["resolved_factor"])
+            x, y, w, h = win["window"]
+            frames.append({"window": [x, y, w, h],
+                           "padding": {"left": max(0, -x), "top": max(0, -y), "right": max(0, x + w - geo["W"]),
+                                       "bottom": max(0, y + h - geo["H"])}})
+            if out_size is None:
+                out_size = list(win["output_size"])
+        return {"plan": {"image_size": [geo["W"], geo["H"]], "output_size": out_size, "frames_total": geo["B"],
+                         "stable": bool(s["wan_stable_crop"]), "frames": frames}, "geo": geo}
+
     # ── Helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _preresize_dims(W, H, mode, min_w, min_h, max_w, max_h):
+        """The pre-resize target size (pure; shared with the live preview)."""
+        new_w, new_h = W, H
+
+        def fit_min(w, h, mw, mh):
+            if w >= mw and h >= mh:
+                return w, h
+            sw = mw / max(w, 1)
+            sh = mh / max(h, 1)
+            s = max(sw, sh)
+            return max(int(round(w * s)), mw), max(int(round(h * s)), mh)
+
+        def fit_max(w, h, mw, mh):
+            if w <= mw and h <= mh:
+                return w, h
+            sw = mw / max(w, 1)
+            sh = mh / max(h, 1)
+            s = min(sw, sh)
+            return min(int(round(w * s)), mw), min(int(round(h * s)), mh)
+
+        if mode == "ensure minimum resolution":
+            new_w, new_h = fit_min(W, H, min_w, min_h)
+        elif mode == "ensure maximum resolution":
+            new_w, new_h = fit_max(W, H, max_w, max_h)
+        elif mode == "ensure minimum and maximum resolution":
+            new_w, new_h = fit_min(W, H, min_w, min_h)
+            new_w, new_h = fit_max(new_w, new_h, max_w, max_h)
+        return new_w, new_h
+
+    @staticmethod
+    def _extend_pads(H, W, up_f, down_f, left_f, right_f):
+        """Outpaint padding (up, down, left, right) in pixels (pure; shared with the live preview)."""
+        return (max(0, int(H * (up_f - 1.0))), max(0, int(H * (down_f - 1.0))),
+                max(0, int(W * (left_f - 1.0))), max(0, int(W * (right_f - 1.0))))
 
     @staticmethod
     def _preresize(image, mask, opt_mask, mode, min_w, min_h, max_w, max_h, down_alg, up_alg):
@@ -1729,10 +1875,9 @@ class InpaintCropProMEC:
         return max(0.30, min(10.0, float(factor)))
 
     @staticmethod
-    def _crop_magic(image, mask, x, y, w, h, target_w, target_h, padding,
-                    down_alg, up_alg, resize_output, align_multiple,
-                    context_factor=1.0):
-        """Aspect-ratio fit + edge-replicate canvas + crop + (optional) resize.
+    def _crop_window(x, y, w, h, target_w, target_h, padding, resize_output, align_multiple, image_w, image_h,
+                     context_factor=1.0) -> dict:
+        """The crop window for one frame (pure integers; shared by the node and the live preview).
 
         When ``context_factor < 1.0`` the caller has deliberately shrunk the
         bbox to request a TIGHTER crop. In that case the aspect-ratio step
@@ -1741,11 +1886,6 @@ class InpaintCropProMEC:
         non-square target aspect). Instead we SHRINK the longer axis to
         match the target aspect, keeping the centre fixed.
         """
-        B, image_h, image_w, C = image.shape
-
-        if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
-            return (image, 0, 0, image_w, image_h, image, mask, 0, 0, image_w, image_h, mask)
-
         # 1. Pad target dims to multiple of `padding` AND `align_multiple`
         m = max(padding, align_multiple, 1)
         target_w = _pad_to_multiple(target_w, m)
@@ -1799,6 +1939,32 @@ class InpaintCropProMEC:
         #     border); a larger one covers the whole axis and only the excess is padded.
         new_x = _fit_window_axis(new_x, new_w, image_w)
         new_y = _fit_window_axis(new_y, new_h, image_h)
+
+        return {"window": (new_x, new_y, new_w, new_h), "target": (target_w, target_h),
+                "output_size": ((target_w, target_h) if resize_output else (new_w, new_h))}
+
+    @staticmethod
+    def _crop_magic(image, mask, x, y, w, h, target_w, target_h, padding,
+                    down_alg, up_alg, resize_output, align_multiple,
+                    context_factor=1.0):
+        """Aspect-ratio fit + edge-replicate canvas + crop + (optional) resize.
+
+        When ``context_factor < 1.0`` the caller has deliberately shrunk the
+        bbox to request a TIGHTER crop. In that case the aspect-ratio step
+        must NOT grow the bbox back out (which would defeat the shrink and
+        leave the user wondering why values below 1.0 do nothing on a
+        non-square target aspect). Instead we SHRINK the longer axis to
+        match the target aspect, keeping the centre fixed.
+        """
+        B, image_h, image_w, C = image.shape
+
+        if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
+            return (image, 0, 0, image_w, image_h, image, mask, 0, 0, image_w, image_h, mask)
+
+        win = InpaintCropProMEC._crop_window(x, y, w, h, target_w, target_h, padding, resize_output, align_multiple,
+                                             image_w, image_h, context_factor=context_factor)
+        new_x, new_y, new_w, new_h = win["window"]
+        target_w, target_h = win["target"]
 
         # 4. Compute canvas padding
         up_padding = max(0, -new_y)
@@ -2001,7 +2167,7 @@ class InpaintStitchProMEC:
                     k = int(stitch_dilate_px) * 2 + 1
                     pad = int(stitch_dilate_px)
                     m4 = binary.unsqueeze(1)
-                    dilated = F.max_pool2d(m4, kernel_size=k, stride=1, padding=pad)
+                    dilated = _max_pool_square(m4, k, pad)
                     batch = dilated.squeeze(1).clamp(0.0, 1.0)
                 if stitch_temporal_sigma > 0.0:
                     batch = _temporal_gaussian_smooth(
@@ -2262,7 +2428,7 @@ class InpaintMaskPrepareMEC:
         if grow_pixels > 0:
             k = 2 * grow_pixels + 1
             m4 = working.unsqueeze(1)
-            working = F.max_pool2d(m4, kernel_size=k, stride=1, padding=grow_pixels).squeeze(1)
+            working = _max_pool_square(m4, k, grow_pixels).squeeze(1)
             working = working.clamp(0.0, 1.0)
 
         # Step 4: Generate inpaint mask

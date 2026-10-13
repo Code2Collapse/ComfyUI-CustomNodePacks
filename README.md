@@ -634,6 +634,10 @@ got a window padded with smeared edges - 41 % of a 16:9 window - although one fi
 area tinted and the window outlined (an orange side = padded past the image), next to the crop the model gets, with
 the window size, position, output size, scale and padding written under it. It is drawn from the window that ran.
 `preview_frame` picks the frame shown (default 0, the first); it changes nothing else.
+After that first run the picture follows the crop settings as you change them, without running the graph (the
+same geometry, from the last run's masks; marked "live"; Settings > C2C > Canvas > Inpaint crop > Live crop
+preview turns it off). The node's outputs change when it runs. Inside a subgraph, or for another preview frame,
+the picture changes on the next run.
 
 **Batches and video.** `wan_stable_crop` on (default): one window for every frame - the union of all frames'
 masks - so the crop does not jump. Off: each frame gets its own window, and every frame is cropped and stitched with
