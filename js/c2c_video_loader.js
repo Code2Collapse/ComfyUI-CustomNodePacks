@@ -1,5 +1,6 @@
 /**
- * C2C video loader nodes — probe info strip, selection timeline, H.264 preview.
+ * C2C video loader nodes — probe info strip, H.264 preview, and a real player (L2.50): transport, a scrubber over the
+ * whole clip, and in / out handles that write the node's frame selection (c2c_video_player.js).
  */
 
 import { app } from "../../scripts/app.js";
@@ -17,6 +18,8 @@ import {
     attachPauseObservers,
     reservedHeight,
 } from "./c2c_video_player_ui.js";
+import { attachPlayer, selectionFromWidgets, widgetsFromSelection } from "./c2c_video_player.js";
+import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
 
 const DEBOUNCE_MS = 350;
 
@@ -61,6 +64,32 @@ const VIDEO_WIDGETS = [
 ];
 const IMAGE_WIDGETS = ["image_load_cap", "skip_first_images", "select_every_nth"];
 const PATH_WIDGETS = ["video", "directory"];
+const PREVIEW_FRAME_LIMIT = 2000;   // the preview route's cap; longer clips preview every k-th frame
+
+/** The selection widgets of a loader: image folders use their own names. */
+function selectionNames(cfg) {
+    return cfg.mode === "images"
+        ? { skip: "skip_first_images", cap: "image_load_cap", nth: "select_every_nth" }
+        : { skip: "skip_first_frames", cap: "frame_load_cap", nth: "select_every_nth" };
+}
+
+/** The same request with no selection: the whole clip (after force_rate), optionally sampled every ``k`` frames. */
+function domainParams(params, cfg, k = 1, maxFrames = null) {
+    const d = new URLSearchParams(params.toString());
+    const n = selectionNames(cfg);
+    d.set(n.skip, "0");
+    d.set(n.cap, "0");
+    d.set(n.nth, String(Math.max(1, k)));
+    if (maxFrames) d.set("max_frames", String(maxFrames));
+    return d;
+}
+
+function setWidget(node, name, value) {
+    const w = node.widgets?.find((x) => x.name === name);
+    if (!w || w.value === value) return;
+    w.value = value;
+    try { w.callback?.(value, app.canvas, node); } catch (_e) { /* a downstream hook's error is not ours */ }
+}
 
 function widgetValue(node, name) {
     const w = node.widgets?.find((x) => x.name === name);
@@ -109,6 +138,26 @@ function mountLoaderWidget(node, cfg) {
     let abortCtrl = null;
     let debounceTimer = null;
     let cleanupVideo = () => {};
+    let domain = { frames: 1, fps: 24 };
+    let previewSrc = "";
+
+    // The player replaces the static selection bar: it shows the whole clip, the playhead and the selection, and its
+    // handles write the selection widgets (skip / cap), which then refresh the probe through their callbacks.
+    let player = null;
+    if (cfg.hasPreview && ui.video) {
+        ui.track.hidden = true;
+        ui.labelLeft.parentElement.hidden = true;
+        player = attachPlayer(ui.timeline, ui.video, {
+            onSelect: (inF, outF) => {
+                const n = selectionNames(cfg);
+                const nth = Number(widgetValue(node, n.nth) ?? 1) || 1;
+                const { skip, cap } = widgetsFromSelection(inF, outF, nth, domain.frames);
+                setWidget(node, n.skip, skip);
+                setWidget(node, n.cap, cap);
+                node.setDirtyCanvas?.(true, true);
+            },
+        });
+    }
 
     const refresh = async () => {
         if (abortCtrl) abortCtrl.abort();
@@ -118,6 +167,7 @@ function mountLoaderWidget(node, cfg) {
             setEmpty(ui, cfg);
             ui.status.setText("", "default");
             if (cfg.hasPreview) ui.video?.removeAttribute("src");
+            previewSrc = "";
             return;
         }
 
@@ -142,7 +192,47 @@ function mountLoaderWidget(node, cfg) {
             renderChips(ui.info, probeJson);
             ui.status.setText("", "default");
 
-            if (cfg.hasPreview && ui.video) {
+            if (cfg.hasPreview && ui.video && player) {
+                // whole clip (after force_rate) for the scrubber; the exact count of this selection from the probe
+                const dParams = domainParams(params, cfg);
+                const dResp = await fetch(api.apiURL("/c2c/video/probe?" + dParams.toString()), { signal: abortCtrl.signal });
+                const dJson = await dResp.json();
+                if (!dResp.ok) throw new Error(dJson.error || "Could not read video information.");
+                const frames = Math.max(1, dJson.selection?.count ?? dJson.frame_count ?? 1);
+                const fps = dJson.selection?.fps || dJson.fps || 24;
+                domain = { frames, fps };
+                const k = Math.max(1, Math.ceil(frames / PREVIEW_FRAME_LIMIT));
+                const pFrames = Math.ceil(frames / k);
+                const pParams = domainParams(params, cfg, k, Math.min(PREVIEW_FRAME_LIMIT, pFrames));
+                let pFps = fps / k;
+                if (k > 1) {
+                    const pResp = await fetch(api.apiURL("/c2c/video/probe?" + pParams.toString()), { signal: abortCtrl.signal });
+                    const pJson = await pResp.json();
+                    if (pResp.ok && pJson.selection?.fps) pFps = pJson.selection.fps;
+                }
+                player.setDomain({ frames, fps, step: k, previewFrames: pFrames, previewFps: pFps });
+                const n = selectionNames(cfg);
+                const nth = Number(widgetValue(node, n.nth) ?? 1) || 1;
+                const selW = selectionFromWidgets(Number(widgetValue(node, n.skip) ?? 0), Number(widgetValue(node, n.cap) ?? 0),
+                                                  nth, frames);
+                const count = probeJson.selection?.count ?? selW.count;
+                player.setSelection({ in: selW.in, out: selW.in + Math.max(0, count - 1) * nth, count, nth });
+
+                const previewUrl = api.apiURL("/c2c/video/preview?" + pParams.toString());
+                if (previewUrl !== previewSrc) {        // a new clip or rate; moving a handle never re-encodes
+                    previewSrc = previewUrl;
+                    ui.viewport.querySelector(".c2c-ui-empty")?.remove();
+                    setLoading(ui, true, aspect);
+                    ui.video.src = previewUrl;
+                    ui.video.onloadeddata = () => setLoading(ui, false, aspect);
+                    ui.video.onerror = () => {
+                        setLoading(ui, false, aspect);
+                        ui.status.setText("Could not play the preview.", "danger");
+                    };
+                } else {
+                    setLoading(ui, false, aspect);
+                }
+            } else if (cfg.hasPreview && ui.video) {
                 const previewUrl = api.apiURL("/c2c/video/preview?" + params.toString());
                 ui.viewport.querySelector(".c2c-ui-empty")?.remove();
                 setLoading(ui, true, aspect);
@@ -152,7 +242,6 @@ function mountLoaderWidget(node, cfg) {
                     setLoading(ui, false, aspect);
                     ui.status.setText("Could not play the preview.", "danger");
                 };
-                try { await ui.video.play(); } catch (_e) { /* autoplay blocked */ }
             } else {
                 setLoading(ui, false, aspect);
             }
@@ -186,6 +275,7 @@ function mountLoaderWidget(node, cfg) {
         getMinHeight: () => getReserved(nodeWidth()),
     });
     widgetRef.computeSize = (w) => [w, getReserved(w)];
+    tagDomWidget(widgetRef);       // Nodes 2.0 inside a new subgraph shows a stale copy; _vue_dom_rebind swaps ours in
 
     const uninstallFloor = installResizeFloor(ui.root, measureRootContent);
 
@@ -208,13 +298,38 @@ function mountLoaderWidget(node, cfg) {
         cleanupVideo = attachPauseObservers(node, ui.video);
     }
 
+    // Removal is not always deletion: "Convert to subgraph" removes the node from its graph and adds the SAME node
+    // to the subgraph (L2.50: the player and the preview vanished inside subgraphs in Nodes 2.0). So removal only
+    // pauses and cancels work; if the node is still in no graph a moment later it was deleted, and everything is
+    // released. Re-adding it refreshes the preview.
+    let teardownTimer = null;
+    let tornDown = false;
     const origRemoved = node.onRemoved;
     node.onRemoved = function (...args) {
         if (abortCtrl) abortCtrl.abort();
         if (debounceTimer) clearTimeout(debounceTimer);
-        cleanupVideo();
-        uninstallFloor();
+        try { ui.video?.pause(); } catch (_e) { /* ignore */ }
+        if (teardownTimer) clearTimeout(teardownTimer);
+        teardownTimer = setTimeout(() => {
+            teardownTimer = null;
+            if (node.graph) return;                     // moved (into or out of a subgraph), not deleted
+            tornDown = true;
+            cleanupVideo();
+            player?.destroy();
+            uninstallFloor();
+        }, 2000);
         return origRemoved?.apply(this, args);
+    };
+    const origAdded = node.onAdded;
+    node.onAdded = function (...args) {
+        const r = origAdded?.apply(this, args);
+        if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
+        if (!tornDown) {
+            previewSrc = "";                            // reload the preview in its new place
+            scheduleRefresh();
+        }
+        afterRender(() => rebindNode(node));
+        return r;
     };
 
     setEmpty(ui, cfg);
@@ -232,7 +347,12 @@ function hideCorePreview(node) {
         if (!document.getElementById("c2c-no-core-video-preview")) {
             const s = document.createElement("style");
             s.id = "c2c-no-core-video-preview";
-            s.textContent = "[data-c2c-no-core-preview] .video-preview { display: none !important; }";
+            // frontend 1.53 draws the upload's preview in an .image-preview panel ("Image failed to load" for a
+            // video); older releases used .video-preview. A loader is not an output node, so neither shows outputs.
+            // :has() also covers a node view that never got the attribute (a new subgraph instance, L2.50)
+            s.textContent = "[data-c2c-no-core-preview] .video-preview, [data-c2c-no-core-preview] .image-preview, "
+                + ".lg-node:has(.c2c-vloader) .video-preview, .lg-node:has(.c2c-vloader) .image-preview "
+                + "{ display: none !important; }";
             document.head.appendChild(s);
         }
         document.querySelector(`[data-node-id="${node.id}"]`)?.setAttribute("data-c2c-no-core-preview", "1");
