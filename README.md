@@ -244,7 +244,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 
 ### Legend
 
-All nodes appear in the ComfyUI menu under **MaskEditControl/** categories.
+All nodes appear in the Add Node menu under **🐺 C2C / 🧰 Core**. That is the one menu root shared by every Code2Collapse pack: NukeMax, MiniMax H3, Wan Experiments, Wan Animate Preprocess, GLM Image, Wan Animal Preprocess and LTX Enhanced each have their own branch under it.
 
 | Symbol | Meaning |
 |--------|---------|
