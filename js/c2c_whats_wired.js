@@ -22,7 +22,7 @@
  */
 
 import { app } from "../../scripts/app.js";
-import { forAllNodes } from "./_subgraph_walk.js";
+import { forAllNodes, linkOf, linksOf } from "./_subgraph_walk.js";
 import { getRuntime } from "./_c2c_runtime.js";
 import { graphReadable } from "./_c2c_compat.js";
 
@@ -398,9 +398,10 @@ function _scanGraph() {
             for (const out0 of (node.outputs || [])) {
                 if (!out0 || !out0.links) continue;
                 for (const lid of out0.links) {
-                    const link = app.graph.links && app.graph.links[lid];
+                    const g = node.graph ?? app.graph;      // links live in the node's own graph (L2.47)
+                    const link = linkOf(g, lid);
                     if (!link) continue;
-                    const dst = app.graph.getNodeById(link.target_id);
+                    const dst = g.getNodeById(link.target_id);
                     if (!dst) continue;
                     const inp = dst.inputs && dst.inputs[link.target_slot];
                     if (inp && /negative/i.test(inp.name)) { isNegative = true; break; }
@@ -422,10 +423,10 @@ function _scanGraph() {
         if (/^loadimage(mask)?$/i.test(cls)) out.loadImageNodes++;
     });
 
-    const links = app.graph.links;
-    if (links) {
-        out.linkCount = Array.isArray(links) ? links.filter(Boolean).length : Object.keys(links).length;
-    }
+    const graphs = new Set([app.graph]);
+    forAllNodes((_n, gr) => { graphs.add(gr); });
+    out.linkCount = 0;
+    for (const gr of graphs) out.linkCount += linksOf(gr).length;
     return out;
 }
 

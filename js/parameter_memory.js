@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { findNodeAnywhere } from "./_subgraph_walk.js";
+import { findNodeAnywhere, forAllNodes } from "./_subgraph_walk.js";
 import { C } from './_c2c_theme.js';
 import { c2cPrompt } from "./_c2c_dialog.js";
 
@@ -258,7 +258,8 @@ app.registerExtension({
         _runCounter++;
         _preQueueSnapshots.clear();
 
-        const allNodes = app.graph?._nodes || app.graph?.nodes || [];
+        const allNodes = [];                       // every node, subgraphs included (L2.47)
+        forAllNodes((n) => { allNodes.push(n); });
         const payload = {};
 
         for (const node of allNodes) {

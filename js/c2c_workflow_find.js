@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes } from "./_subgraph_walk.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import Fuse from "./_fuse.mjs";
@@ -210,7 +211,8 @@ function getGroupForNode(node) {
 }
 
 function searchGraph(query) {
-    const nodes = app.graph?._nodes || [];
+    const nodes = [];
+    forAllNodes((n) => { nodes.push(n); });   // nodes inside subgraphs are found too (L2.47)
     const q = (query || "").trim();
     if (!q) return [];
 

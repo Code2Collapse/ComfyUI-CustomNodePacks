@@ -2,6 +2,33 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-14 (every C2C canvas tool works inside subgraphs)
+
+Evidence: `docs/evidence/L2.47/sites.md` (every site and its rule) and `subgraph_sweep_live.json` (workspace);
+tests/test_subgraph_walk.py.
+
+### Fixed
+
+- **C2C tools assumed the root graph.** About 50 places in 29 files used `app.graph`, which is always the root. Inside
+  a subgraph they acted on the wrong graph, found no node, or missed nodes. Now:
+  - tools that act on what you are looking at use the graph on screen: align, command palette, AI-explainer insert,
+    PNG load, image drop, Pack to Single Node, group presets, TCL copy / paste, wire-on-drop;
+  - tools that follow a node the server names find it inside (nested) subgraphs, including composite ids such as
+    `12:5`: AI diagnose, cost estimator, flame graph, Doctor fixes and focus, farm progress, workflow doctor,
+    bookmarks, `#id` expressions;
+  - whole-workflow tools see nodes inside subgraphs: Surprise Me, Find, Wizard, settings recommender, parameter
+    memory, Magnific sync / migration, expression fields, linked values, complexity HUD;
+  - focusing a node inside a subgraph opens that subgraph first.
+- **Sticky notes and wire labels** are stored on the graph they were made on. A note made inside a subgraph used to
+  show on every graph, and a label could land on an unrelated root link with the same id.
+- **Frontend 1.52+ keeps `graph.links` in a Map**, and `Object.values()` of a Map is empty. Because of that:
+  - wire labels could not draw at all;
+  - graph health saw no wire;
+  - group presets saved no links;
+  - the complexity HUD counted no links.
+
+  All four now read the Map.
+
 ## Unreleased – 2026-10-14 (C2C Vault and copy / paste work inside subgraphs; the vault can be filled from the node)
 
 Evidence: `docs/evidence/L2.45/vault_subgraph_repro.before.json` / `.after.json` (workspace, live on the owner stack);

@@ -168,7 +168,7 @@ function highlight(text, hits) {
 
 // ── Source providers ──────────────────────────────────────────────────
 function provideWorkflowNodes() {
-    const nodes = app.graph?._nodes || [];
+    const nodes = (app.canvas?.graph ?? app.graph)?._nodes || [];
     return nodes.map((n) => ({
         kind: "node",
         icon: ICONS.node,
@@ -283,7 +283,7 @@ function addNodeAtCursor(type) {
             ];
         }
         node.pos = pos;
-        app.graph.add(node);
+        (app.canvas?.graph ?? app.graph).add(node);
         canvas?.selectNode?.(node, false);
         canvas?.setDirty(true, true);
     } catch (e) {
@@ -360,7 +360,7 @@ function gather(q) {
         if (tag === "@") return rank(rest, provideWorkflowNodes());
         if (tag === "#") {
             const id = rest.trim();
-            const n = (app.graph?._nodes || []).find((x) => String(x.id) === id);
+            const n = ((app.canvas?.graph ?? app.graph)?._nodes || []).find((x) => String(x.id) === id);
             return n ? [{
                 kind: "node", icon: ICONS.node,
                 label: n.title || n.type || `node ${n.id}`,

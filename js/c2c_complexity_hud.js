@@ -10,6 +10,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes, isSubgraphNode, linksOf } from "./_subgraph_walk.js";
 import { LITE } from "./_c2c_lite.js";
 import { getRuntime } from "./_c2c_runtime.js";
 import { graphReadable } from "./_c2c_compat.js";
@@ -260,18 +261,13 @@ function _classify(nodeCount, linkCount) {
 }
 
 function _countGraph() {
-    const g = app.graph;
-    if (!g) return { nodes: 0, links: 0 };
-    const nodes = g._nodes ? g._nodes.length : (g.nodes?.length || 0);
-    // links is a flat object/array of LiteGraph LLink entries
+    if (!app.graph) return { nodes: 0, links: 0 };
+    // the whole workflow, subgraphs included; links of a Map counted by linksOf (Object.keys of a Map is []) (L2.47)
+    let nodes = 0;
+    const graphs = new Set([app.graph]);
+    forAllNodes((n, g) => { graphs.add(g); if (!isSubgraphNode(n)) nodes++; });
     let links = 0;
-    if (g.links) {
-        if (Array.isArray(g.links)) {
-            for (const l of g.links) if (l) links++;
-        } else {
-            links = Object.keys(g.links).length;
-        }
-    }
+    for (const g of graphs) links += linksOf(g).length;
     return { nodes, links };
 }
 
@@ -333,8 +329,7 @@ function _update() {
     }
 }
 
-function _hookGraphMutations() {
-    const g = app.graph;
+function _hookGraphMutations(g = app.graph) {
     if (!g) return;
 
     // LiteGraph fires these on every relevant edit
@@ -376,6 +371,11 @@ app.registerExtension({
         _ensureHud();
         _hookGraphMutations();
         _update();
+        // opening a subgraph: edits there must update the count too (L2.47)
+        app.canvas?.canvas?.addEventListener?.("litegraph:set-graph", (e) => {
+            try { _hookGraphMutations(e.detail?.newGraph); } catch { /* swallow */ }
+            _scheduleUpdate();
+        });
 
         const rt = getRuntime();
         const onGraph = rt.guard(() => {

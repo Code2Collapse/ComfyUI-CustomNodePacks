@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere, forAllNodes } from "./_subgraph_walk.js";
 import { getRuntime } from "./_c2c_runtime.js";
 import { graphReadable } from "./_c2c_compat.js";
 
@@ -174,7 +175,7 @@ function evaluate(src, refResolver) {
 
 // ── Reference tracker ─────────────────────────────────────────────────
 function resolveRef(id, name) {
-    const node = (app.graph?._nodes || []).find((n) => String(n.id) === String(id));
+    const node = findNodeAnywhere(id)?.node;          // "#5" or "#12:5" inside a subgraph (L2.47)
     if (!node) throw new Error("no node #" + id);
     const w = (node.widgets || []).find((x) => x.name === name);
     if (!w) throw new Error("no widget '" + name + "' on #" + id);
@@ -212,13 +213,15 @@ function hookWidget(node, w) {
 }
 
 function rebindAll() {
-    for (const node of app.graph?._nodes || []) {
+    forAllNodes((node) => {
         for (const w of node.widgets || []) hookWidget(node, w);
-    }
+    });
 }
 
 function reevalAll() {
-    for (const node of app.graph?._nodes || []) {
+    const all = [];
+    forAllNodes((n) => { all.push(n); });      // subgraphs included (L2.47)
+    for (const node of all) {
         for (const w of node.widgets || []) {
             if (!w._expr) continue;
             try {

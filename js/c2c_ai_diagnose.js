@@ -10,9 +10,11 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 
 function gatherContext(nodeId) {
-    const n = app.graph?.getNodeById?.(Number(nodeId)) ||
+    // server ids of nodes inside subgraphs are composite ("12:5"): Number() of them is NaN (L2.47)
+    const n = findNodeAnywhere(nodeId)?.node ||
               (app.graph?._nodes || []).find(x => String(x.id) === String(nodeId));
     if (!n) return { node: null, ctx: {} };
     const widgets = {};

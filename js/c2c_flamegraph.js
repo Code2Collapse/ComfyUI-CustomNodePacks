@@ -18,6 +18,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { buildPanel } from "./_c2c_window.js";
@@ -195,8 +196,7 @@ function _liveExecuted(ev) {
             error: false,
         });
     }
-    const g = app.graph;
-    const gNode = g?.getNodeById?.(nodeId);
+    const gNode = findNodeAnywhere(nodeId)?.node;   // composite ids inside subgraphs (L2.47)
     L.currentNodeId = nodeId;
     L.currentNodeClass = gNode?.type || gNode?.comfyClass || `node_${nodeId}`;
     L.nodeStartTs = performance.now();

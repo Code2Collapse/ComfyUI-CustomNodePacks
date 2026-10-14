@@ -332,15 +332,18 @@ app.registerExtension({
                 return r;
             };
         }
-        const origAdd = app.graph.add ? app.graph.add.bind(app.graph) : null;
+        // the root and every subgraph share LGraph.prototype.add: a hook on app.graph alone missed subgraphs (L2.47)
+        const G = window.LGraph?.prototype ?? Object.getPrototypeOf(app.graph);
+        const origAdd = typeof G?.add === "function" && !G.add._c2cLinkedValues ? G.add : null;
         if (origAdd) {
-            app.graph.add = function (node, ...rest) {
-                const r = origAdd(node, ...rest);
+            G.add = function (node, ...rest) {
+                const r = origAdd.call(this, node, ...rest);
                 setTimeout(() => {
-                    for (const w of (node.widgets || [])) hookWidget(node, w);
+                    for (const w of (node?.widgets || [])) hookWidget(node, w);
                 }, 0);
                 return r;
             };
+            G.add._c2cLinkedValues = true;
         }
         rehookAll();
         refreshPill();

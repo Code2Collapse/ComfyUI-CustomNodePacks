@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------
 
 import { app } from "../../scripts/app.js";
-import { findNodeAnywhere, dirtyAllGraphs } from "./_subgraph_walk.js";
+import { dirtyAllGraphs, findNodeAnywhere, revealNode } from "./_subgraph_walk.js";
 import { getRuntime } from "./_c2c_runtime.js";
 import { graphReadable } from "./_c2c_compat.js";
 // Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
@@ -88,6 +88,7 @@ function findNode(id) {
 
 function pulseFocus(node) {
     const c = app.canvas; if (!c || !node) return;
+    if (node.graph && c.graph !== node.graph) revealNode(node);   // bookmarked inside a subgraph (L2.47)
     const ds = c.ds;
     if (ds) {
         const cx = node.pos[0] + node.size[0] * 0.5;

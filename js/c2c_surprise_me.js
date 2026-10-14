@@ -20,6 +20,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes } from "./_subgraph_walk.js";
 import { LITE } from "./_c2c_lite.js";
 import { streamAI } from "./_c2c_ai_client.js";
 
@@ -111,17 +112,22 @@ function _writeWidget(node, w, value) {
 
 const SAMPLER_TYPES = /^(KSampler|KSamplerAdvanced|SamplerCustom|SamplerCustomAdvanced)$/i;
 
+// every node of the workflow, subgraphs included (L2.47)
+function _allNodes() {
+    const out = [];
+    forAllNodes((n) => { out.push(n); });
+    return out;
+}
+
 function _findSamplerNodes() {
-    const g = app.graph;
-    if (!g || !g._nodes) return [];
-    return g._nodes.filter(n => SAMPLER_TYPES.test(n.type || n.comfyClass || ""));
+    if (!app.graph) return [];
+    return _allNodes().filter(n => SAMPLER_TYPES.test(n.type || n.comfyClass || ""));
 }
 
 function _randomizeSeeds() {
-    const g = app.graph;
-    if (!g || !g._nodes) return { count: 0, changes: [] };
+    if (!app.graph) return { count: 0, changes: [] };
     const changes = [];
-    for (const node of g._nodes) {
+    for (const node of _allNodes()) {
         for (const w of node.widgets || []) {
             if (!w || !w.name || !/seed/i.test(w.name) || typeof w.value !== "number") continue;
             const oldVal = w.value;
@@ -140,10 +146,9 @@ function _randomizeSeeds() {
 }
 
 function _nudgeNumeric(name, factor, lo, hi) {
-    const g = app.graph;
-    if (!g || !g._nodes) return 0;
+    if (!app.graph) return 0;
     let n = 0;
-    for (const node of g._nodes) {
+    for (const node of _allNodes()) {
         for (const w of node.widgets || []) {
             if (!w || !w.name || w.name.toLowerCase() !== name || typeof w.value !== "number") continue;
             const f = 1 + (Math.random() * 2 - 1) * factor; // ±factor
@@ -158,10 +163,9 @@ function _nudgeNumeric(name, factor, lo, hi) {
 }
 
 function _swapCombo(name, pool) {
-    const g = app.graph;
-    if (!g || !g._nodes) return 0;
+    if (!app.graph) return 0;
     let n = 0;
-    for (const node of g._nodes) {
+    for (const node of _allNodes()) {
         for (const w of node.widgets || []) {
             if (!w || !w.name || w.name.toLowerCase() !== name) continue;
             const opts = w.options?.values || w.values || null;
@@ -201,9 +205,8 @@ async function _generateStyleTag(original) {
 
 async function _maybeSpicePrompt() {
     if (!_spiceAllowed()) return null;
-    const g = app.graph;
-    if (!g || !g._nodes) return null;
-    for (const node of g._nodes) {
+    if (!app.graph) return null;
+    for (const node of _allNodes()) {
         if (!/cliptextencode/i.test(node.type || "")) continue;
         const w = (node.widgets || []).find((x) => x && (x.type === "customtext" || x.type === "string" || x.type === "STRING") && x.name === "text");
         if (!w) continue;

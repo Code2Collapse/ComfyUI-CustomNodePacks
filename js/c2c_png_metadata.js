@@ -141,7 +141,7 @@ export async function loadImageOnly(file, dropEvent) {
         imgW.value = imageName;
         try { imgW.callback?.(imageName, node, imgW); } catch (_) {}
     }
-    app.graph.add(node);
+    (app.canvas?.graph ?? app.graph).add(node);
     canvas?.selectNode?.(node);
     canvas?.setDirty?.(true, true);
     toast(`Loaded image only: ${file.name}`, "info");

@@ -3,6 +3,7 @@
 // INTEGRATES WITH: nodes/clipboard_tcl.py (/nukenodemax/copy_tcl, /nukenodemax/paste_tcl)
 
 import { app } from "../../../scripts/app.js";
+import { currentGraph, linkOf } from "../_subgraph_walk.js";
 import { legacyCanvasMenu } from "../_c2c_compat.js";
 
 function gather(selectedNodes) {
@@ -23,7 +24,7 @@ function gather(selectedNodes) {
         if (!n.inputs) continue;
         n.inputs.forEach((inp, slot) => {
             if (inp && inp.link != null) {
-                const lnk = app.graph.links[inp.link];
+                const lnk = linkOf(n.graph ?? currentGraph(), inp.link);
                 if (lnk && idSet.has(lnk.origin_id)) {
                     links.push([lnk.origin_id, lnk.origin_slot, n.id, slot]);
                 }
@@ -34,7 +35,7 @@ function gather(selectedNodes) {
 }
 
 async function copyTcl() {
-    const sel = Object.values(app.graph._nodes).filter(n => n.is_selected);
+    const sel = Object.values(currentGraph()._nodes).filter(n => n.is_selected);
     if (!sel.length) {
         alert("Select one or more nodes first.");
         return;
@@ -100,7 +101,7 @@ async function pasteTcl() {
             const w = (node.widgets || []).find(w => w.name === k);
             if (w) w.value = v;
         }
-        app.graph.add(node);
+        currentGraph().add(node);
         idMap.set(nd.id, node);
     }
     for (const [fId, fSlot, tId, tSlot] of parsed.links || []) {

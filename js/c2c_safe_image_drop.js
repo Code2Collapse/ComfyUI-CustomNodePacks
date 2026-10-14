@@ -23,13 +23,14 @@ let _confirmWorkflow = false;   // default: auto-load embedded workflow, no moda
 function _dropOnImageNode(evt) {
     try {
         const canvas = app.canvas;
-        if (!evt || !canvas?.canvas || !app.graph?._nodes) return false;
+        const graph = canvas?.graph ?? app.graph;      // the graph on screen, root or subgraph (L2.47)
+        if (!evt || !canvas?.canvas || !graph?._nodes) return false;
         const rect = canvas.canvas.getBoundingClientRect();
         const ds = canvas.ds;
         const gx = (evt.clientX - rect.left - ds.offset[0]) / ds.scale;
         const gy = (evt.clientY - rect.top  - ds.offset[1]) / ds.scale;
-        for (let i = app.graph._nodes.length - 1; i >= 0; i--) {
-            const n = app.graph._nodes[i];
+        for (let i = graph._nodes.length - 1; i >= 0; i--) {
+            const n = graph._nodes[i];
             const [nx, ny] = n.pos || [0, 0];
             const [nw, nh] = n.size || [0, 0];
             if (gx >= nx && gx <= nx + nw && gy >= ny - 30 && gy <= ny + nh) {

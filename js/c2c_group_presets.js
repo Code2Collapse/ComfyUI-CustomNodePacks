@@ -18,6 +18,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { linksOf } from "./_subgraph_walk.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 import { streamAI } from "./_c2c_ai_client.js";
@@ -418,10 +419,10 @@ function _selectedNodes() {
 function _serializeSubgraph(nodes) {
     const idSet = new Set(nodes.map((n) => n.id));
     const ser = nodes.map((n) => n.serialize ? n.serialize() : null).filter(Boolean);
-    const g = app.graph;
+    const g = nodes[0]?.graph ?? (app.canvas?.graph ?? app.graph);
     const links = [];
     if (g && g.links) {
-        const all = Array.isArray(g.links) ? g.links : Object.values(g.links);
+        const all = linksOf(g);   // a Map in frontend 1.52+: Object.values() of it is []
         for (const l of all) {
             if (!l) continue;
             if (idSet.has(l.origin_id) && idSet.has(l.target_id)) {
@@ -522,7 +523,7 @@ async function _loadPreset(id) {
     const sub = data.subgraph;
     if (!sub || !sub.nodes) return;
 
-    const g = app.graph;
+    const g = (app.canvas?.graph ?? app.graph);
     const canvas = app.canvas;
     if (!g || !canvas) return;
 

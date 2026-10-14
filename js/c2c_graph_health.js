@@ -24,6 +24,7 @@
 
 import { app } from "../../scripts/app.js";
 import { getRuntime } from "./_c2c_runtime.js";
+import { currentGraph, linksOf } from "./_subgraph_walk.js";
 // Side-effect import: _c2c_lite.js installs the LITE registerExtension filter at
 // module-eval time. ComfyUI discovers extensions with a plain glob, whose order
 // is filesystem-dependent and NOT guaranteed, so relying on this file loading
@@ -58,14 +59,14 @@ function injectStyle() {
 
 // ── Analysis ─────────────────────────────────────────────────────────
 function analyze() {
-    const g = app.graph;
+    const g = currentGraph();                 // the graph on screen: its highlights are drawn there (L2.47)
     const nodes = g?._nodes || [];
     if (!nodes.length) { _result = { dead: [], cycles: [], dangling: [] }; return; }
 
     // Build adjacency.
     const succ = new Map(), pred = new Map();
     for (const n of nodes) { succ.set(n.id, new Set()); pred.set(n.id, new Set()); }
-    for (const link of Object.values(g.links || {})) {
+    for (const link of linksOf(g)) {          // a Map in 1.52+: Object.values() of it saw no wire at all
         if (!link) continue;
         const a = link.origin_id, b = link.target_id;
         if (succ.has(a) && pred.has(b)) {
@@ -281,7 +282,7 @@ function ensurePill() { return null; }
 function ensurePanel() { return null; }
 function togglePanel() { /* no-op: INT popover replaces this */ }
 
-function findNode(id) { return (app.graph?._nodes || []).find((n) => String(n.id) === String(id)); }
+function findNode(id) { return (currentGraph()?._nodes || []).find((n) => String(n.id) === String(id)); }
 function pulse(node) {
     const c = app.canvas;
     if (!c || !node) return;
@@ -397,6 +398,7 @@ app.registerExtension({
         }
         // Initial.
         setTimeout(() => { installDrawPatch(); schedule(); }, 600);
+        app.canvas?.canvas?.addEventListener?.("litegraph:set-graph", () => schedule());   // subgraph opened / left
         _ready = true;
         renderUI();
         console.log("[C2C.GraphHealth] ready.");

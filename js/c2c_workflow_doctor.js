@@ -11,7 +11,7 @@
  *     into /c2c/ai/stream with feature="workflow_doctor".
  */
 import { app } from "../../scripts/app.js";
-import { findNodeAnywhere } from "./_subgraph_walk.js";
+import { findNodeAnywhere, revealNode } from "./_subgraph_walk.js";
 import { streamAI } from "./_c2c_ai_client.js";
 import { buildPanel, esc, C } from "./_c2c_window.js";
 import { getPrompt } from "./_c2c_prompts.js";
@@ -31,6 +31,7 @@ function focusNode(nid) {
     const resolved = findNodeAnywhere(nid);
     const n = resolved?.node || app.graph?.getNodeById?.(nid);
     if (!n) return;
+    if (resolved && n.graph && app.canvas?.graph !== n.graph) { revealNode(resolved); return; }   // inside a subgraph (L2.47)
     app.canvas?.deselectAllNodes?.();
     app.canvas?.selectNode?.(n);
     if (app.canvas?.centerOnNode) {

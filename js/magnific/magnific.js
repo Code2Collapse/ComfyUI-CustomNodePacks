@@ -3,6 +3,7 @@
 // only opens the verification URL, reports progress, and makes the login
 // discoverable (startup toast + a Sign in button on the Save To node).
 import { app } from "../../../scripts/app.js";
+import { forAllNodes } from "../_subgraph_walk.js";
 import { api } from "../../../scripts/api.js";
 import { C } from "../_c2c_theme.js";
 import { remapMagnificWidgetValues } from "./widget_remap.js";
@@ -148,8 +149,11 @@ const attachFolderNarrowing = (node) => {
   else loadFolderGroups().then(() => syncFolderOptions(node));
 };
 
+// every node of the workflow, subgraphs included: a Magnific node inside a subgraph was never synced (L2.47)
+const allNodes = () => { const out = []; forAllNodes((n) => { out.push(n); }); return out; };
+
 const syncAllSaveToNodes = () => {
-  for (const node of app.graph?._nodes ?? []) {
+  for (const node of allNodes()) {
     if (node.comfyClass !== "MagnificSaveTo" && node.comfyClass !== "MagnificCreationPicker") continue;
     syncSignInButton(node);
     syncFolderOptions(node);
@@ -233,7 +237,7 @@ const attachLibraryRefresh = (node) => {
 };
 
 const syncAllLibraryNodes = () => {
-  for (const node of app.graph?._nodes ?? []) {
+  for (const node of allNodes()) {
     if (node.comfyClass !== "MagnificLibraryReference") continue;
     syncSignInButton(node);
     syncLibraryOptions(node);
@@ -444,7 +448,7 @@ const attachVideoNarrowing = (node) => {
 };
 
 const syncAllVideoNodes = () => {
-  for (const node of app.graph?._nodes ?? []) {
+  for (const node of allNodes()) {
     if (node.comfyClass === "MagnificGenerateVideo") syncVideoOptions(node);
   }
 };
@@ -492,7 +496,7 @@ const attachImageNarrowing = (node) => {
 };
 
 const syncAllImageNodes = () => {
-  for (const node of app.graph?._nodes ?? []) {
+  for (const node of allNodes()) {
     if (node.comfyClass === "MagnificGenerateImage") syncImageOptions(node);
   }
 };
@@ -547,7 +551,7 @@ const migrateLegacyComboValues = (node) => {
 };
 
 const syncAllLegacyCombos = () => {
-  for (const node of app.graph?._nodes ?? []) migrateLegacyComboValues(node);
+  for (const node of allNodes()) migrateLegacyComboValues(node);
 };
 
 // --- Credit-cost estimate on generation nodes --------------------------------

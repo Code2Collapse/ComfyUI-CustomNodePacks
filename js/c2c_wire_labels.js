@@ -13,6 +13,7 @@ import { app } from "../../scripts/app.js";
 import { LITE } from "./_c2c_lite.js";
 import { C } from './_c2c_theme.js';
 import { getRuntime } from "./_c2c_runtime.js";
+import { currentGraph, linksOf } from "./_subgraph_walk.js";
 
 const STORE_KEY = "c2c_wire_labels"; // stored under graph.extra[STORE_KEY]
 const STYLE_ID  = "mec-wire-labels-style";
@@ -76,7 +77,7 @@ function _injectStyle() {
 }
 
 function _labelStore() {
-    const g = app.graph;
+    const g = currentGraph();                   // labels belong to the graph whose links they name (L2.47)
     if (!g) return {};
     g.extra = g.extra || {};
     g.extra[STORE_KEY] = g.extra[STORE_KEY] || {};
@@ -97,7 +98,7 @@ function _findLinkAt(canvas, e) {
         : [e.canvasX, e.canvasY];
     const graph = canvas.graph;
     if (!graph) return null;
-    const links = Array.isArray(graph.links) ? graph.links : Object.values(graph.links || {});
+    const links = linksOf(graph);               // a Map in 1.52+: Object.values() of it is []
     let best = null, bestDist = 8;
     for (const link of links) {
         if (!link) continue;
@@ -199,7 +200,7 @@ function _patchDrawConnections() {
             const store = (graph.extra && graph.extra[STORE_KEY]) || {};
             const linkIds = Object.keys(store);
             if (linkIds.length === 0) return r;
-            const links = Array.isArray(graph.links) ? graph.links : Object.values(graph.links || {});
+            const links = linksOf(graph);
             ctx.save();
             ctx.font = "bold 11px sans-serif";
             ctx.textBaseline = "middle";

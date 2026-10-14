@@ -19,6 +19,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 import { LITE } from "./_c2c_lite.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
@@ -86,8 +87,7 @@ function _onExecuted(ev) {
         const dur = performance.now() - L.nodeStartTs;
         L.nodeTimings.push({ ...L.currentNode, ms: dur });
     }
-    const g = app.graph;
-    const gNode = g?.getNodeById?.(nodeId);
+    const gNode = findNodeAnywhere(nodeId)?.node;   // composite ids inside subgraphs (L2.47)
     const classType = gNode?.type || gNode?.comfyClass || `node_${nodeId}`;
     L.currentNode = { nodeId, classType, vram: VRAM_HINTS[classType] || 0 };
     L.nodeStartTs = performance.now();

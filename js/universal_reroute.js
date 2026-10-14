@@ -394,7 +394,7 @@ function dissolveReroute(node) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function tryWireOnDrop(node) {
-  const g = app.graph;
+  const g = node.graph ?? (app.canvas?.graph ?? app.graph);
   if (!g) return;
   node._mecWired = true;
 

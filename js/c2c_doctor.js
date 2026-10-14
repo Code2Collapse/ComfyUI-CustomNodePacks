@@ -31,6 +31,7 @@
  *     so the INT badge / OmniBar can subscribe.
  */
 import { app } from "../../scripts/app.js";
+import { findNodeAnywhere, revealNode } from "./_subgraph_walk.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
@@ -538,19 +539,13 @@ function updateCounts() {
 }
 
 function _focusNode(nid) {
-    const n = app.graph && app.graph.getNodeById && app.graph.getNodeById(nid);
-    if (!n) return;
-    try {
-        app.canvas.deselectAllNodes && app.canvas.deselectAllNodes();
-        app.canvas.selectNode && app.canvas.selectNode(n);
-        if (app.canvas.centerOnNode) app.canvas.centerOnNode(n);
-        app.canvas.setDirty && app.canvas.setDirty(true, true);
-    } catch {}
+    // the node may live inside a subgraph: open it first (L2.47)
+    revealNode(nid);
 }
 
 async function _applyFix(fix) {
     if (!fix || !fix.node_id) return;
-    const n = app.graph.getNodeById(fix.node_id);
+    const n = findNodeAnywhere(fix.node_id)?.node;
     if (!n) return;
     try {
         if (fix.kind === "set_widget" && fix.widget) {

@@ -25,6 +25,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes } from "./_subgraph_walk.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { getRuntime } from "./_c2c_runtime.js";
 import { attachWindowChrome } from "./_c2c_window.js";
@@ -443,10 +444,11 @@ function _endWizard({ commit = false } = {}) {
 // ── Step view ────────────────────────────────────────────────────────────────
 
 function _stepNodeMatches(step) {
-    const g = app.graph;
-    if (!g || !g._nodes || !step?.node_type) return [];
+    if (!app.graph || !step?.node_type) return [];
     const want = step.node_type.toLowerCase();
-    return g._nodes.filter((n) => (n.type || "").toLowerCase() === want);
+    const out = [];
+    forAllNodes((n) => { if ((n.type || "").toLowerCase() === want) out.push(n); });   // subgraphs too (L2.47)
+    return out;
 }
 
 function _stepValidity(step) {
@@ -797,7 +799,9 @@ app.registerExtension({
     async function _scan() {
         const defs = await _defs();
         const out = [];
-        for (const n of (app.graph?._nodes || [])) {
+        const all = [];
+        forAllNodes((x) => { all.push(x); });
+        for (const n of all) {
             const def = defs[n.comfyClass || n.type];
             if (!def) continue;
             const req = (def.input && def.input.required) || {};

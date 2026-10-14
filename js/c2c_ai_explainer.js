@@ -294,7 +294,7 @@ async function showMe(nodeClass, refs) {
         if (Array.isArray(nd.widgets_values) && inst.widgets) {
             nd.widgets_values.forEach((v, wi) => { if (inst.widgets[wi]) inst.widgets[wi].value = v; });
         }
-        app.graph.add(inst);
+        (app.canvas?.graph ?? app.graph).add(inst);
         created.push(inst);
     });
     (payload.links || []).forEach((lk) => {

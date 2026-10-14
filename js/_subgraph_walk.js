@@ -156,6 +156,53 @@ export function forAllNodes(fn) {
     }
 }
 
+/** The graph the user is looking at: the root, or the subgraph they opened. `app.graph` is always the root. */
+export function currentGraph() {
+    return app.canvas?.graph ?? app.graph;
+}
+
+/** A link by id, whatever container the frontend uses (1.52+ keeps graph.links in a Map: graph.links[id] misses). */
+export function linkOf(graph, id) {
+    const L = graph?.links;
+    if (!L || id == null) return null;
+    if (typeof L.get === "function") return L.get(id) ?? null;
+    return L[id] ?? null;
+}
+
+/** Every link of one graph as an array. */
+export function linksOf(graph) {
+    const L = graph?.links;
+    if (!L) return [];
+    if (typeof L.values === "function") return [...L.values()].filter(Boolean);
+    if (Array.isArray(L)) return L.filter(Boolean);
+    return Object.values(L).filter(Boolean);
+}
+
+/** Show a node wherever it lives: open the graph that holds it (the frontend's own navigateToGraph does the same:
+ *  canvas.subgraph = graph or undefined for the root, then setGraph), then select and centre it. */
+export function revealNode(idLikeOrHit) {
+    const hit = idLikeOrHit && typeof idLikeOrHit === "object" && idLikeOrHit.node ? idLikeOrHit
+        : (idLikeOrHit && typeof idLikeOrHit === "object" && idLikeOrHit.graph !== undefined
+            ? { node: idLikeOrHit, graph: idLikeOrHit.graph } : findNodeAnywhere(idLikeOrHit));
+    const node = hit?.node;
+    const c = app.canvas;
+    if (!node || !c) return null;
+    const graph = node.graph || hit.graph;
+    try {
+        if (graph && c.graph !== graph && typeof c.setGraph === "function") {
+            c.subgraph = graph.isRootGraph || graph === app.graph ? undefined : graph;
+            c.setGraph(graph);
+        }
+    } catch (__c2cErr) { __c2cReport("_subgraph_walk", __c2cErr); }
+    try {
+        c.deselectAllNodes?.();
+        c.selectNode?.(node);
+        c.centerOnNode?.(node);
+        c.setDirty?.(true, true);
+    } catch (__c2cErr) { __c2cReport("_subgraph_walk", __c2cErr); }
+    return hit;
+}
+
 export function dirtyAllGraphs() {
     try {
         getRuntime().requestRedraw({ bg: true });

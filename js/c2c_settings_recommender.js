@@ -14,6 +14,7 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { forAllNodes } from "./_subgraph_walk.js";
 import { mountOmniTool } from "./_c2c_omni_tool.js";
 
 // ── Rule table ───────────────────────────────────────────────────────────────
@@ -99,9 +100,10 @@ const LOADER_HINT = /checkpoint|unet|loader|gguf|diffusion/i;
 
 function detectedModels() {
     const out = [];
-    const graph = app.graph;
-    if (!graph || !graph._nodes) return out;
-    for (const node of graph._nodes) {
+    if (!app.graph) return out;
+    const all = [];
+    forAllNodes((n) => { all.push(n); });   // loaders inside subgraphs count too (L2.47)
+    for (const node of all) {
         const cls = node.comfyClass || node.type || "";
         if (!LOADER_HINT.test(cls)) continue;
         for (const w of (node.widgets || [])) {

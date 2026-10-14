@@ -107,9 +107,13 @@ async function _onClick(ev) {
     // no separate convertWidgetToInput step needed.
     let subgraphNode;
     try {
-        const beforeIds = new Set((app.graph._nodes || []).map(n => n.id));
-        app.graph.convertToSubgraph(items);
-        for (const n of (app.graph._nodes || [])) {
+        // the graph on screen: packing a selection made inside a subgraph converted it on the root (L2.47)
+        const graph = (app.canvas?.graph ?? app.graph);
+        const beforeIds = new Set((graph._nodes || []).map(n => n.id));
+        const made = graph.convertToSubgraph(items);
+        subgraphNode = made?.node;
+        for (const n of (graph._nodes || [])) {
+            if (subgraphNode) break;
             if (!beforeIds.has(n.id)) { subgraphNode = n; break; }
         }
     } catch (e) {

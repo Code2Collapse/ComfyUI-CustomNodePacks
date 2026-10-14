@@ -14,6 +14,7 @@ import { app } from "../../scripts/app.js";
 import { C } from './_c2c_theme.js';
 import { c2cPrompt } from "./_c2c_dialog.js";
 import { getRuntime } from "./_c2c_runtime.js";
+import { currentGraph } from "./_subgraph_walk.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
 // mode it must never register at all — its rAF loops, timers and draw hooks are
 // then never installed. See _c2c_lite.js.
@@ -41,7 +42,7 @@ function _settingsEnabled() {
 }
 
 function _store() {
-    const g = app.graph;
+    const g = currentGraph();                   // notes belong to the graph they were made on, root or subgraph (L2.47)
     if (!g) return [];
     g.extra = g.extra || {};
     g.extra.mec_sticky_notes = g.extra.mec_sticky_notes || [];
@@ -59,7 +60,7 @@ function _addSticky(x, y) {
         color: 0,
         text: "Click to edit…",
     });
-    app.graph._mec_dirty = true;
+    currentGraph()._mec_dirty = true;
     app.canvas?.setDirty?.(true, true);
 }
 

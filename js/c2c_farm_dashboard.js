@@ -10,6 +10,7 @@
 // deps; renders whatever the server returns — role logic stays server-side.
 
 import { app } from "/scripts/app.js";
+import { findNodeAnywhere } from "./_subgraph_walk.js";
 import { api } from "/scripts/api.js";
 import { C } from "./_c2c_theme.js";
 
@@ -333,10 +334,10 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.FarmDashboard")) app.re
         // Submit-node progress bar (rides the same event style as other packs).
         api.addEventListener("c2c.farm.progress", (ev) => {
             const d = ev.detail || {};
-            const node = app.graph?._nodes?.find((n) => String(n.id) === String(d.node));
+            const node = findNodeAnywhere(d.node)?.node;   // composite ids inside subgraphs (L2.47)
             if (!node) return;
             node.__c2cFarmProg = { pct: +d.pct || 0, label: d.label || "", t: performance.now() };
-            app.graph.setDirtyCanvas(true, false);
+            app.canvas?.setDirty?.(true, false);
         });
     },
     // NOTE: beforeRegisterNodeDef fires BEFORE setup() in the extension

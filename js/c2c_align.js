@@ -185,7 +185,7 @@ function changeTracker() {
  *  may predate edits made without a key or mouse event - so capture it here
  *  first, then again after the change. */
 function withUndo(fn) {
-    const graph = app.graph;
+    const graph = (app.canvas?.graph ?? app.graph);
     if (!graph) return;
     const ct = changeTracker();
     try { ct?.captureCanvasState?.(); } catch { /* ignore */ }
@@ -296,7 +296,7 @@ function collectTargetRects(movingUnits) {
     const vis = visibleGraphBounds();
     const excluded = excludedTargetKeys(movingUnits);
     const out = [];
-    const graph = app.graph;
+    const graph = (app.canvas?.graph ?? app.graph);
     if (!graph) return out;
 
     const tryAdd = (item) => {
@@ -367,7 +367,7 @@ function onGraphSurface(target) {
 
 function snapshotPositions() {
     const snap = new Map();
-    const graph = app.graph;
+    const graph = (app.canvas?.graph ?? app.graph);
     for (const n of graph?._nodes ?? []) snap.set(unitKey(n), rectOf(n));
     for (const g of graph?._groups ?? []) snap.set(unitKey(g), rectOf(g));
     return snap;
@@ -375,7 +375,7 @@ function snapshotPositions() {
 
 function itemUnderPointer(e, p) {
     const el = e.target?.closest?.(".lg-node[data-node-id]");
-    const graph = app.graph;
+    const graph = (app.canvas?.graph ?? app.graph);
     if (el) return graph?.getNodeById?.(el.dataset.nodeId) ?? graph?.getNodeById?.(Number(el.dataset.nodeId)) ?? null;
     return graph?.getNodeOnPos?.(p.x, p.y) ?? graph?.getGroupOnPos?.(p.x, p.y) ?? null;
 }
