@@ -1343,7 +1343,7 @@ to run, it cannot stop someone who can run Python inside the same ComfyUI proces
 **Copy / paste with metadata** (Ctrl+C / Ctrl+V, or Ctrl+Alt+C / Ctrl+Alt+V) copies and pastes into the graph you
 are looking at, inside subgraphs too. Wires between the copied nodes are kept.
 
-The other C2C canvas tools work inside subgraphs too: sticky notes and wire labels belong to the graph they were made on, and align, find, Doctor, bookmarks and graph health act on, or open, the graph that holds the node.
+The other C2C canvas tools work inside subgraphs too: sticky notes and wire labels belong to the graph they were made on, and align, find, Doctor, bookmarks, graph health and the undo history act on, or open, the graph that holds the node.
 
 ## VRAM Management
 

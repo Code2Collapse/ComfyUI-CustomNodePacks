@@ -283,9 +283,11 @@ function _restore(id) {
     finally { setTimeout(() => { _suspend = false; }, 1200); }
 }
 
-function _hookGraphChanges() {
-    const g = app.graph;
+function _hookGraphChanges(g = app.graph) {
+    // also called for each subgraph the user opens: an edit inside one fires THAT graph's hooks, not the root's
+    // (L2.48). The snapshot is still app.graph.serialize(), which carries every subgraph definition.
     if (!g || g._mecUndoHooked) return;
+    const isRoot = g === app.graph;
     g._mecUndoHooked = true;
     const oC = g.onGraphChanged?.bind(g);
     g.onGraphChanged = function () { if (oC) oC.apply(g, arguments); _scheduleCapture(); };
@@ -297,6 +299,7 @@ function _hookGraphChanges() {
     const oNR = g.onNodeRemoved?.bind(g);
     g.onNodeRemoved = function (node) { if (oNR) oNR.apply(g, arguments); _scheduleCapture(); };
 
+    if (!isRoot) return;
     if (app.canvas) {
         const origPW = app.canvas.processWidgetChange;
         if (origPW) {
@@ -540,7 +543,12 @@ app.registerExtension({
         _ensureUi();
         let _graphWait = 0;
         const waitForGraph = setInterval(() => { // c2c-allow-interval: wait for graph, cap 50×200ms
-            if (app.graph) { _hookGraphChanges(); clearInterval(waitForGraph); return; }
+            if (app.graph) {
+                _hookGraphChanges();
+                app.canvas?.canvas?.addEventListener?.("litegraph:set-graph", (e) => _hookGraphChanges(e.detail?.newGraph));
+                clearInterval(waitForGraph);
+                return;
+            }
             if (++_graphWait >= 50) clearInterval(waitForGraph);
         }, 200);
         const enabled = _settingsEnabled();

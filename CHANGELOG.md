@@ -19,6 +19,8 @@ tests/test_subgraph_walk.py.
   - whole-workflow tools see nodes inside subgraphs: Surprise Me, Find, Wizard, settings recommender, parameter
     memory, Magnific sync / migration, expression fields, linked values, complexity HUD;
   - focusing a node inside a subgraph opens that subgraph first.
+- **Undo panel** takes a snapshot when you edit inside a subgraph. It hooked only the root graph's change events;
+  measured A/B: 0 snapshots before, 1 after, for the same edit (L2.48).
 - **Sticky notes and wire labels** are stored on the graph they were made on. A note made inside a subgraph used to
   show on every graph, and a label could land on an unrelated root link with the same id.
 - **Frontend 1.52+ keeps `graph.links` in a Map**, and `Object.values()` of a Map is empty. Because of that:
