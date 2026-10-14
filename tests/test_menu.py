@@ -27,6 +27,7 @@ PACKS = {
     "ComfyUI-WanAnimatePreprocessV2": "\U0001F9CD Wan Animate Preprocess",
     "ComfyUI-GLM_Image": "\U0001F5BC️ GLM Image",
     "ComfyUI-WanAnimalPreprocessor": "\U0001F43E Wan Animal Preprocess",
+    "ComfyUI-LTX-Enhanced": "\U0001F3A5 LTX Enhanced",
 }
 
 
