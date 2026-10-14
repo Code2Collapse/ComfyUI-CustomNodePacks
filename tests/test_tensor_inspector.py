@@ -70,3 +70,60 @@ def test_reduction_never_holds_more_than_a_chunk(ti):
     y = x.permute(2, 0, 1)                                      # strided: one leading slice at a time
     sizes = [c.numel() for c in ti._flat_chunks(y)]
     assert max(sizes) <= 1000 and sum(sizes) == y.numel()
+
+
+# ── L2.51: zero work per node at run time; exact statistics on request ──────────────────────────────────────────
+
+def test_expanded_view_from_mask_to_image_is_exact_and_fast(ti):
+    import time
+    mask = (torch.rand(16, 180, 320, generator=torch.Generator().manual_seed(1)) > 0.5).float()
+    view = mask.reshape((-1, 1, 180, 320)).movedim(1, -1).expand(-1, -1, -1, 3)   # what core Mask to Image returns
+    assert not view.is_contiguous() and 0 in view.stride()
+    t0 = time.perf_counter()
+    got = ti._summarize_value(view)
+    assert time.perf_counter() - t0 < 2.0                      # it used to walk every element in Python (> 60 s)
+    ref = _ref(view.contiguous())
+    for k in ("min", "max", "mean"):
+        assert math.isclose(got[k], ref[k], rel_tol=1e-9, abs_tol=1e-12), k
+    assert math.isclose(got["std"], ref["std"], rel_tol=1e-4)  # n-1 of the deduplicated copy: a 1e-6 relative change
+
+
+def test_broadcast_nan_counts_are_of_the_full_tensor(ti):
+    base = torch.zeros(4, 5, 1)
+    base[1, 2, 0] = float("nan")
+    view = base.expand(-1, -1, 3)
+    assert ti._summarize_value(view)["n_nan"] == 3
+
+
+def test_record_does_no_reductions_and_keeps_nothing_alive(ti):
+    import gc
+    import time
+    import weakref
+    big = torch.rand(97, 360, 640, 3)
+    t0 = time.perf_counter()
+    ti._record("7", "p1", [[big]])
+    assert time.perf_counter() - t0 < 0.05
+    slot = ti._STORE["7"]["slots"][0]
+    assert slot["stats"] == "on request" and "mean" not in slot and slot["shape"] == [97, 360, 640, 3]
+    data = ti.snapshot_with_stats("7")
+    assert data["slots"][0]["stats"] == "exact"
+    assert math.isclose(data["slots"][0]["mean"], float(big.double().mean()), rel_tol=1e-9)
+    assert "mean" not in ti._STORE["7"]["slots"][0]            # the stored snapshot stays metadata only
+    probe = weakref.ref(big)
+    del big
+    gc.collect()
+    assert probe() is None, "the inspector must not keep node outputs alive"
+    assert ti.snapshot_with_stats("7")["slots"][0]["stats"] == "no longer in memory"
+
+
+def test_latent_dict_stats_on_request(ti):
+    lat = {"samples": torch.ones(1, 4, 8, 8) * 2}
+    ti._record("9", "p2", [[lat]])
+    got = ti.snapshot_with_stats("9", 0)["slots"][0]
+    assert got["kind"] == "dict" and got["samples"]["mean"] == 2.0 and got["samples"]["stats"] == "exact"
+
+
+def test_kill_switch_installs_nothing(ti, monkeypatch):
+    monkeypatch.setenv("C2C_TENSOR_INSPECTOR", "0")
+    monkeypatch.setattr(ti, "_INSTALLED", False)
+    assert ti.install() is False

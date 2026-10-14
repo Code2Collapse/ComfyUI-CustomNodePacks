@@ -1186,3 +1186,111 @@ def test_core_canny_gets_its_measured_one_frame_chunks_in_every_batching_mode():
         spec = ab._effective_wrap_specs({"mode": mode}, {"Canny": Canny})["Canny"]
         assert spec["max_frames"] == 1 and spec["frames"] == ["image"], (mode, spec)
     assert "Canny" not in ab._effective_wrap_specs({"mode": "universal", "never": ["Canny"]}, {"Canny": Canny})
+
+
+
+# ── L2.51: a wildcard type that cannot be hashed (owner's Linux log 2026-10-14) ──────────────────────────────────
+
+class _AlwaysEqualProxy(str):
+    """The wildcard type several popular packs (Inspire, Impact, others) use for "*" sockets: a str that equals
+    everything. Overriding __eq__ without __hash__ makes it unhashable, so `t in some_set` raises TypeError."""
+
+    def __eq__(self, _other):
+        return True
+
+    def __ne__(self, _other):
+        return False
+
+
+class _FakeWildcardNode:
+    """IMAGE in, a wildcard input and a wildcard output (like Inspire's / Impact's "any" nodes)."""
+    FUNCTION = "execute"
+    OUTPUT_NODE = False
+    INPUT_IS_LIST = False
+    RETURN_TYPES = (_AlwaysEqualProxy("*"), "IMAGE")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image": ("IMAGE",), "anything": (_AlwaysEqualProxy("*"),)}, "optional": {}}
+
+    def execute(self, image, anything=None):
+        return (anything, image)
+
+
+def test_unhashable_wildcard_types_are_handled():
+    with pytest.raises(TypeError):
+        hash(_AlwaysEqualProxy("*"))                 # the premise: this is what crashed discovery
+    assert ab._is_frame_type(_AlwaysEqualProxy("*")) is False
+    assert ab._is_frame_type(_AlwaysEqualProxy("IMAGE")) is True
+    assert ab._is_frame_type(["a", "b"]) is False     # a combo list is never a frame type
+
+
+def test_one_wildcard_node_never_stops_discovery_of_the_others():
+    mappings = {"Wildcard": _FakeWildcardNode, "V1Image": _FakeV1Image}
+    cfg = {"mode": "universal", "enabled": True, "allow": [], "never": []}
+    found = ab.discover_universal_candidates(mappings, {}, cfg)
+    assert "V1Image" in found and "Wildcard" not in found     # refused: its wildcard output is not a frame tensor
+    assert ab._discovery_refused(_FakeWildcardNode, "Wildcard", {}, cfg).startswith("non-frame output")
+
+
+def test_a_class_whose_analysis_raises_is_refused_not_fatal(config_dir):
+    class Exploding(_FakeV1Image):
+        @classmethod
+        def INPUT_TYPES(cls):
+            raise RuntimeError("broken third-party node")
+
+    class Weird(_FakeV1Image):
+        RETURN_TYPES = property(lambda self: 1 / 0)   # an attribute that is not even a tuple
+
+    mappings = {"Exploding": Exploding, "Weird": Weird, "Wildcard": _FakeWildcardNode, "V1Image": _FakeV1Image}
+    cfg = {"mode": "universal", "enabled": True, "allow": [], "never": []}
+    wrapped = ab.install_wrappers(mappings, cfg)                  # must not raise
+    assert "V1Image" in wrapped and "Wildcard" not in wrapped
+    ab.uninstall_wrappers()
+
+
+def test_internal_mode_never_analyses_other_authors_nodes(monkeypatch):
+    seen = []
+
+    class Foreign(_FakeV1Image):
+        @classmethod
+        def INPUT_TYPES(cls):
+            seen.append("foreign")
+            return {"required": {"image": ("IMAGE",)}}
+
+    cfg = {"mode": "internal", "enabled": True, "allow": [], "never": []}
+    ab._effective_wrap_specs(cfg, {"Foreign": Foreign})
+    assert seen == [], "internal mode batches C2C nodes only, so it has no reason to call a foreign INPUT_TYPES"
+
+
+
+def test_canny_one_frame_chunks_only_on_a_gpu(monkeypatch):
+    """L2.51: the curated 1-frame Canny chunks protect VRAM; on the CPU they only cost time (2.64 s vs 2.10 s)."""
+    calls = []
+
+    class Canny:
+        RETURN_TYPES = ("IMAGE",)
+        FUNCTION = "detect_edge"
+        OUTPUT_NODE = False
+
+        @classmethod
+        def INPUT_TYPES(cls):
+            return {"required": {"image": ("IMAGE",), "low_threshold": ("FLOAT", {}), "high_threshold": ("FLOAT", {})}}
+
+        def detect_edge(self, image, low_threshold, high_threshold):
+            calls.append(image.shape[0])
+            return (image * 0.5,)
+
+    assert ab.CURATED["Canny"].get("gpu_only") is True
+    image = torch.rand(4, 8, 8, 3)
+    monkeypatch.setattr(ab, "_compute_on_gpu", lambda: False)
+    ab.install_wrappers({"Canny": Canny}, {"mode": "internal", "enabled": True})
+    out = Canny().detect_edge(image, 0.4, 0.8)[0]
+    assert calls == [4] and torch.allclose(out, image * 0.5)      # one plain call on the CPU
+    ab.uninstall_wrappers()
+    calls.clear()
+    monkeypatch.setattr(ab, "_compute_on_gpu", lambda: True)
+    ab.install_wrappers({"Canny": Canny}, {"mode": "internal", "enabled": True})
+    out = Canny().detect_edge(image, 0.4, 0.8)[0]
+    assert len(calls) > 1 and calls[-1] == 1 and torch.allclose(out, image * 0.5)   # probe, then 1-frame chunks
+    ab.uninstall_wrappers()

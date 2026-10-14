@@ -11,15 +11,22 @@ Design rules
 - Wrapper is async-safe and re-entrant.
 - On ANY internal error we still return the original outputs unchanged — we
   never break a running prompt for the sake of inspection.
-- Cap memory: keep only the last `_MAX_NODES` snapshots and never store raw
-  tensors. Only metadata + scalar reductions.
+- ZERO work per node at run time (L2.51): the wrapper records only metadata (shape, dtype, device) and a WEAK
+  reference to each output tensor. The statistics are computed when the inspector panel asks for them, and only
+  for that node. Reducing every output of every node cost 0.42 s per 97-frame 720p IMAGE on the CPU, and on the
+  expanded view core's Mask to Image returns it walked hundreds of millions of single elements (> 60 s for 16
+  frames; the owner: "convert mask to image why does it take time").
+- Never keep a tensor alive: weak references only. An output ComfyUI has dropped reports "no longer in memory".
+- Kill switch: environment C2C_TENSOR_INSPECTOR=0 installs nothing.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
@@ -41,9 +48,22 @@ _INSTALLED = False
 _STAT_CHUNK = 1 << 22    # elements per reduction step (16 MB of fp32)
 
 
+def _dedupe_broadcast(value):
+    """Drop the repeats of a broadcast (stride-0) dimension: ``expand`` views (core's Mask to Image returns one)
+    repeat the same elements, so their statistics come from one copy. Returns (tensor, repeat factor)."""
+    index, factor = [], 1
+    for size, stride in zip(value.shape, value.stride()):
+        if stride == 0 and size > 1:
+            index.append(slice(0, 1))
+            factor *= size
+        else:
+            index.append(slice(None))
+    return (value[tuple(index)] if factor > 1 else value), factor
+
+
 def _flat_chunks(value):
-    """The tensor's elements as 1-D pieces of at most _STAT_CHUNK, without copying a contiguous tensor; a strided
-    one is copied one leading slice at a time."""
+    """The tensor's elements as 1-D pieces of at most _STAT_CHUNK. A contiguous tensor is not copied; a strided one
+    is copied a bounded run of leading slices at a time (never element by element)."""
     if value.ndim == 0:
         yield value.reshape(1)
         return
@@ -52,8 +72,12 @@ def _flat_chunks(value):
         for i in range(0, flat.numel(), _STAT_CHUNK):
             yield flat[i:i + _STAT_CHUNK]
         return
-    for part in value.unbind(0):
-        yield from _flat_chunks(part)
+    per_slice = max(1, value[0].numel())
+    step = max(1, _STAT_CHUNK // per_slice)
+    for i in range(0, value.shape[0], step):
+        flat = value[i:i + step].contiguous().view(-1)
+        for j in range(0, flat.numel(), _STAT_CHUNK):
+            yield flat[j:j + _STAT_CHUNK]
 
 
 def _tensor_stats(value) -> Dict[str, Any]:
@@ -69,7 +93,8 @@ def _tensor_stats(value) -> Dict[str, Any]:
     is_float = value.is_floating_point()
     n = n_nan = n_inf = 0
     vmin, vmax, s, ss = math.inf, -math.inf, 0.0, 0.0
-    for c in _flat_chunks(value.detach()):
+    value, repeat = _dedupe_broadcast(value.detach())
+    for c in _flat_chunks(value):
         if is_float:
             nan, inf = torch.isnan(c), torch.isinf(c)
             k_nan, k_inf = int(nan.sum()), int(inf.sum())
@@ -87,7 +112,7 @@ def _tensor_stats(value) -> Dict[str, Any]:
         n += c.numel()
     out: Dict[str, Any] = {}
     if is_float:
-        out["n_nan"], out["n_inf"] = n_nan, n_inf
+        out["n_nan"], out["n_inf"] = n_nan * repeat, n_inf * repeat   # counts are of the full (broadcast) tensor
     if n == 0:
         out["min"] = out["max"] = out["mean"] = None
         return out
@@ -185,14 +210,68 @@ def _summarize_value(value: Any) -> Dict[str, Any]:
     return info
 
 
+def _describe(value: Any, refs: Dict[str, Any], path: str = "") -> Dict[str, Any]:
+    """Run-time description: metadata only, O(1). Tensors are held by WEAK reference in ``refs`` so their
+    statistics can be computed later, on request (``_fill_stats``)."""
+    try:
+        import torch  # type: ignore
+        if isinstance(value, torch.Tensor):
+            info = {"kind": "tensor", "shape": list(value.shape), "dtype": str(value.dtype).replace("torch.", ""),
+                    "device": str(value.device), "numel": int(value.numel()),
+                    "requires_grad": bool(value.requires_grad)}
+            if value.numel() == 0:
+                info["empty"] = True
+            else:
+                try:
+                    refs[path] = weakref.ref(value)
+                    info["stats"] = "on request"
+                except TypeError:
+                    info["stats"] = "unavailable"
+            return info
+    except Exception:
+        pass
+    if isinstance(value, dict):
+        info = {"kind": "dict", "keys": list(value.keys())[:32]}
+        if "samples" in value:
+            info["samples"] = _describe(value["samples"], refs, path + ".samples")
+        return info
+    if isinstance(value, (list, tuple)):
+        info = {"kind": type(value).__name__, "len": len(value)}
+        if value:
+            info["first"] = _describe(value[0], refs, path + ".first")
+        return info
+    return _summarize_value(value)          # strings, numbers, numpy, other: already cheap
+
+
+def _fill_stats(summary: Dict[str, Any], refs: Dict[str, Any], path: str = "") -> None:
+    """Compute the deferred statistics in place (exact, chunked). Called by the route, never during a run."""
+    if summary.get("kind") == "tensor" and summary.get("stats") == "on request":
+        ref = refs.get(path)
+        tensor = ref() if ref is not None else None
+        if tensor is None:
+            summary["stats"] = "no longer in memory"
+            return
+        try:
+            summary.update(_tensor_stats(tensor))
+            summary["stats"] = "exact"
+        except Exception as e:
+            summary["stat_error"] = str(e)
+            summary["stats"] = "failed"
+        return
+    if isinstance(summary.get("samples"), dict):
+        _fill_stats(summary["samples"], refs, path + ".samples")
+    if isinstance(summary.get("first"), dict):
+        _fill_stats(summary["first"], refs, path + ".first")
+
+
 def _record(node_id: Any, prompt_id: Any, output: Any) -> None:
-    """Record per-slot summaries for a single executed node."""
+    """Record per-slot descriptions for a single executed node. O(1) per slot: no reductions here."""
     if not isinstance(output, (list, tuple)):
         return
     slots: List[Dict[str, Any]] = []
+    refs: Dict[str, Any] = {}
     for slot_idx, slot_val in enumerate(output[:_MAX_SLOTS_PER_NODE]):
-        # ComfyUI's get_output_data returns [slot][batch] — sample the first
-        # batch item to keep cost bounded.
+        # ComfyUI's get_output_data returns [slot][batch] — describe the first batch item.
         try:
             if isinstance(slot_val, (list, tuple)) and slot_val:
                 sample = slot_val[0]
@@ -200,7 +279,7 @@ def _record(node_id: Any, prompt_id: Any, output: Any) -> None:
             else:
                 sample = slot_val
                 batch_len = 1
-            summary = _summarize_value(sample)
+            summary = _describe(sample, refs, str(slot_idx))
             summary["slot"] = slot_idx
             summary["batch_len"] = batch_len
             slots.append(summary)
@@ -212,6 +291,7 @@ def _record(node_id: Any, prompt_id: Any, output: Any) -> None:
         "prompt_id": str(prompt_id) if prompt_id is not None else None,
         "ts": time.time(),
         "slots": slots,
+        "_refs": refs,
     }
     with _STORE_LOCK:
         if key in _STORE:
@@ -219,6 +299,25 @@ def _record(node_id: Any, prompt_id: Any, output: Any) -> None:
         _STORE[key] = snapshot
         while len(_STORE) > _MAX_NODES:
             _STORE.popitem(last=False)
+
+
+def snapshot_with_stats(node_id: Any, slot: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """The stored snapshot of one node with its statistics computed now (JSON-ready), or None."""
+    import copy
+
+    with _STORE_LOCK:
+        snap = _STORE.get(str(node_id))
+        if snap is None:
+            return None
+        refs = snap.get("_refs") or {}
+        slots = copy.deepcopy(snap["slots"])
+        data = {"prompt_id": snap.get("prompt_id"), "ts": snap.get("ts")}
+    if slot is not None:
+        slots = [x for x in slots if x.get("slot") == slot]
+    for summary in slots:
+        _fill_stats(summary, refs, str(summary.get("slot")))
+    data["slots"] = slots
+    return data
 
 
 # ---------------------------------------------------------------------
@@ -229,6 +328,9 @@ def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
         return True
+    if os.environ.get("C2C_TENSOR_INSPECTOR", "").strip() == "0":
+        log.info("[tensor_inspector] disabled by C2C_TENSOR_INSPECTOR=0")
+        return False
 
     try:
         import execution as _exec  # type: ignore
@@ -291,21 +393,19 @@ def register_routes(server: Any) -> None:
         if not node_id:
             return web.json_response(
                 {"success": False, "error": "missing_node_id"}, status=400)
-        with _STORE_LOCK:
-            snap = _STORE.get(str(node_id))
-            data = dict(snap) if snap else None
-        if data is None:
-            return web.json_response({
-                "success": True,
-                "data": {"available": False, "node_id": node_id},
-            })
+        slot_idx = None
         if slot is not None:
             try:
                 slot_idx = int(slot)
             except ValueError:
                 slot_idx = -1
-            data["slots"] = [s for s in data["slots"]
-                             if s.get("slot") == slot_idx]
+        # exact statistics of this one node, computed now and off the event loop (L2.51: never during a run)
+        data = await asyncio.get_running_loop().run_in_executor(None, snapshot_with_stats, node_id, slot_idx)
+        if data is None:
+            return web.json_response({
+                "success": True,
+                "data": {"available": False, "node_id": node_id},
+            })
         data["available"] = True
         data["node_id"] = node_id
         return web.json_response({"success": True, "data": data})

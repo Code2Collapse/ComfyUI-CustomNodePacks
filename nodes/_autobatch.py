@@ -127,7 +127,9 @@ CURATED: dict[str, dict[str, Any]] = {
     # Core Canny (kornia): 134 MB of VRAM per 720p frame, and the hysteresis loop costs MORE per frame the bigger the
     # call - 0.107 s/frame alone vs 0.248 s/frame in one 32-frame call, identical edges (docs/evidence/L7.82/
     # canny_chunk_curve.json). 96 frames as one call spilled past an 8 GB card: 1042 s (owner: "canny took 30 mins").
-    "Canny": {"frames": ["image"], "work_factor": 13.0, "max_frames": 1},
+    # gpu_only (L2.51): on the CPU the 1-frame chunks are SLOWER - 8 x 720p: 2.10 s as one call, 2.64 s chunked
+    # (docs/evidence/L2.51/autobatch_overhead.before.json in the work area) - and there is no VRAM to protect.
+    "Canny": {"frames": ["image"], "work_factor": 13.0, "max_frames": 1, "gpu_only": True},
 }
 
 
@@ -138,6 +140,13 @@ C2C_PACKS = (
 )
 
 MODES = ("off", "internal", "universal", "curated")
+
+
+def _safe_is_c2c(cls: Any) -> bool:
+    try:
+        return _is_c2c_class(cls)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _is_c2c_class(cls: type) -> bool:
@@ -500,7 +509,12 @@ def _config_mtime() -> float | None:
 
 
 def _is_frame_type(type_value: Any) -> bool:
-    return isinstance(type_value, str) and type_value in _FRAME_TYPES
+    """IMAGE / MASK? Safe for wildcard types: several packs use a ``str`` subclass that equals everything (Inspire's
+    / Impact's AlwaysEqualProxy), which overrides __eq__ and is therefore unhashable - `x in set` raised TypeError
+    and stopped the whole install (owner's log 2026-10-14, L2.51). The plain-string copy is compared instead."""
+    if not isinstance(type_value, str):
+        return False
+    return str.__str__(type_value) in _FRAME_TYPES
 
 
 def _get_node_info(cls: type) -> dict[str, Any] | None:
@@ -655,9 +669,13 @@ def discover_universal_candidates(
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for class_id, cls in node_class_mappings.items():
-        if _discovery_refused(cls, class_id, display_mappings, cfg) is not None:
+        try:      # one odd third-party class must never stop the analysis of the others (L2.51)
+            if _discovery_refused(cls, class_id, display_mappings, cfg) is not None:
+                continue
+            spec = _spec_from_class(cls, class_id)
+        except Exception as exc:  # noqa: BLE001
+            _log_refusal_once(str(class_id), f"could not be analysed ({type(exc).__name__}: {exc})")
             continue
-        spec = _spec_from_class(cls, class_id)
         if spec is not None:
             out[class_id] = dict(spec)
     return out
@@ -678,13 +696,13 @@ def _effective_wrap_specs(
     allow = _normalize_string_list(cfg.get("allow"))
 
     if mode in ("universal", "internal"):
-        discovered = discover_universal_candidates(
-            node_class_mappings, display_mappings, cfg,
-        )
+        # internal batches C2C nodes only, so other authors' classes are not even analysed (their INPUT_TYPES can
+        # be slow or odd); universal looks at every class
+        pool = node_class_mappings if mode == "universal" else {
+            name: cls for name, cls in node_class_mappings.items() if _safe_is_c2c(cls)}
+        discovered = discover_universal_candidates(pool, display_mappings, cfg)
         for name, spec in discovered.items():
             if name in never:
-                continue
-            if mode == "internal" and not _is_c2c_class(node_class_mappings[name]):
                 continue
             specs[name] = dict(spec)
 
@@ -1780,6 +1798,16 @@ def _chunk_plan(
     return batch_size, budget, provisional_chunk
 
 
+def _compute_on_gpu() -> bool:
+    """True when ComfyUI computes on a GPU (its torch device is not the CPU). False when it cannot be told."""
+    try:
+        import comfy.model_management as mm  # noqa: WPS433
+
+        return getattr(mm.get_torch_device(), "type", "cpu") != "cpu"
+    except Exception:
+        return False
+
+
 def _run_universal_chunked(
     fn: Callable[..., Any],
     class_name: str,
@@ -1806,6 +1834,8 @@ def _run_universal_chunked(
 
     if class_name in _UNSAFE:
         return orig_call()
+    if spec.get("gpu_only") and not _compute_on_gpu():
+        return orig_call()                      # a GPU-memory rule; on the CPU it only adds per-chunk overhead
 
     def _plan(profile: Mapping[str, float] | None) -> tuple[str, int]:
         if profile:   # measured by the probe
@@ -2139,73 +2169,87 @@ def install_wrappers(
     for class_name, spec in specs.items():
         if class_name in _WRAPPED:
             continue
-        cls = node_class_mappings.get(class_name)
-        if cls is None:
-            _refuse_class(class_name, "class not found")
-            continue
-        if getattr(cls, "OUTPUT_NODE", False):
-            _refuse_class(class_name, "OUTPUT_NODE")
-            continue
-        if getattr(cls, "INPUT_IS_LIST", False):
-            _refuse_class(class_name, "INPUT_IS_LIST")
-            continue
-        frames_spec = spec.get("frames", ["image"])
-        if not isinstance(frames_spec, (list, tuple)) or not frames_spec:
-            _refuse_class(class_name, "invalid frames spec")
-            continue
-        wf = float(spec.get("work_factor", DEFAULT_WORK_FACTOR))
-        node_max_frames = _max_frames_from_config(config, spec)
-        strict = _is_strict_class(class_name, config)
-        if _is_v3_node(cls):
-            orig_cm = inspect.getattr_static(cls, "execute", None)
-            if orig_cm is None or not isinstance(orig_cm, classmethod):
-                _refuse_class(class_name, "execute missing")
-                continue
-            orig_func = orig_cm.__func__
-            if inspect.iscoroutinefunction(orig_func):
-                _refuse_class(class_name, "async execute")
-                continue
-            if strict:
-                wrapper = _make_v3_wrapper(
-                    orig_cm, class_name, frames_spec, wf, node_max_frames, budget_bytes,
-                )
-            else:
-                wrapper = _make_universal_v3_wrapper(
-                    orig_cm, class_name, frames_spec, wf, node_max_frames, budget_bytes, spec,
-                )
-            _DEFINED_HERE[class_name] = "execute" in cls.__dict__
-            cls.execute = wrapper
-            setattr(cls, _ORIG_ATTR, orig_cm)
-            _WRAPPED[class_name] = (cls, orig_cm, "execute")
-            _WRAP_STRICT[class_name] = strict
-            wrapped_now.append(class_name)
-            continue
-        fn_name = getattr(cls, "FUNCTION", None)
-        if not fn_name or not isinstance(fn_name, str):
-            _refuse_class(class_name, "FUNCTION missing")
-            continue
-        orig = getattr(cls, fn_name, None)
-        if orig is None or not callable(orig):
-            _refuse_class(class_name, "FUNCTION missing")
-            continue
-        if strict:
-            wrapper = _make_wrapper(
-                orig, class_name, frames_spec, wf, node_max_frames, budget_bytes,
-            )
-        else:
-            wrapper = _make_universal_wrapper(
-                orig, class_name, frames_spec, wf, node_max_frames, budget_bytes, spec,
-            )
-        _DEFINED_HERE[class_name] = fn_name in cls.__dict__
-        setattr(cls, fn_name, wrapper)
-        setattr(cls, _ORIG_ATTR, orig)
-        _WRAPPED[class_name] = (cls, orig, fn_name)
-        _WRAP_STRICT[class_name] = strict
-        wrapped_now.append(class_name)
+        try:
+            if _install_one(class_name, spec, node_class_mappings, config, budget_bytes):
+                wrapped_now.append(class_name)
+        except Exception as exc:  # noqa: BLE001 - one class never costs the others their batching (L2.51)
+            _refuse_class(class_name, f"could not be wrapped ({type(exc).__name__}: {exc})")
 
     if wrapped_now:
         log.info("[C2C autobatch] wrapped: %s", ", ".join(sorted(wrapped_now)))
     return wrapped_now
+
+
+def _install_one(
+    class_name: str,
+    spec: Mapping[str, Any],
+    node_class_mappings: Mapping[str, type],
+    config: Mapping[str, Any],
+    budget_bytes: int | None,
+) -> bool:
+    """Wrap one class. True when it was wrapped, False when it was refused (the reason is logged once)."""
+    cls = node_class_mappings.get(class_name)
+    if cls is None:
+        _refuse_class(class_name, "class not found")
+        return False
+    if getattr(cls, "OUTPUT_NODE", False):
+        _refuse_class(class_name, "OUTPUT_NODE")
+        return False
+    if getattr(cls, "INPUT_IS_LIST", False):
+        _refuse_class(class_name, "INPUT_IS_LIST")
+        return False
+    frames_spec = spec.get("frames", ["image"])
+    if not isinstance(frames_spec, (list, tuple)) or not frames_spec:
+        _refuse_class(class_name, "invalid frames spec")
+        return False
+    wf = float(spec.get("work_factor", DEFAULT_WORK_FACTOR))
+    node_max_frames = _max_frames_from_config(config, spec)
+    strict = _is_strict_class(class_name, config)
+    if _is_v3_node(cls):
+        orig_cm = inspect.getattr_static(cls, "execute", None)
+        if orig_cm is None or not isinstance(orig_cm, classmethod):
+            _refuse_class(class_name, "execute missing")
+            return False
+        orig_func = orig_cm.__func__
+        if inspect.iscoroutinefunction(orig_func):
+            _refuse_class(class_name, "async execute")
+            return False
+        if strict:
+            wrapper = _make_v3_wrapper(
+                orig_cm, class_name, frames_spec, wf, node_max_frames, budget_bytes,
+            )
+        else:
+            wrapper = _make_universal_v3_wrapper(
+                orig_cm, class_name, frames_spec, wf, node_max_frames, budget_bytes, spec,
+            )
+        _DEFINED_HERE[class_name] = "execute" in cls.__dict__
+        cls.execute = wrapper
+        setattr(cls, _ORIG_ATTR, orig_cm)
+        _WRAPPED[class_name] = (cls, orig_cm, "execute")
+        _WRAP_STRICT[class_name] = strict
+        return True
+    fn_name = getattr(cls, "FUNCTION", None)
+    if not fn_name or not isinstance(fn_name, str):
+        _refuse_class(class_name, "FUNCTION missing")
+        return False
+    orig = getattr(cls, fn_name, None)
+    if orig is None or not callable(orig):
+        _refuse_class(class_name, "FUNCTION missing")
+        return False
+    if strict:
+        wrapper = _make_wrapper(
+            orig, class_name, frames_spec, wf, node_max_frames, budget_bytes,
+        )
+    else:
+        wrapper = _make_universal_wrapper(
+            orig, class_name, frames_spec, wf, node_max_frames, budget_bytes, spec,
+        )
+    _DEFINED_HERE[class_name] = fn_name in cls.__dict__
+    setattr(cls, fn_name, wrapper)
+    setattr(cls, _ORIG_ATTR, orig)
+    _WRAPPED[class_name] = (cls, orig, fn_name)
+    _WRAP_STRICT[class_name] = strict
+    return True
 
 
 def uninstall_wrappers() -> None:
