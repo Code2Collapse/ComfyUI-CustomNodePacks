@@ -1,4 +1,9 @@
+# PORTED FROM: HallettVisual/ComfyUI-Smart-Image-Crop-and-Stitch smart_image_crop.py, smart_image_stitcher.py (Apache-2.0)
 """Smart Image Crop / Stitch — mask-driven crop for detail work.
+
+Since L7.65 P08 these two are modes of Inpaint Crop Pro (crop_mode "smart aspect") and Inpaint Stitch Pro
+(stitch_mode "smart"): the classes below are their engines and are not registered as nodes. ``plan_crop`` is the
+crop's geometry without the pixels, for the live crop preview.
 
 Ported from ComfyUI-Smart-Image-Crop-and-Stitch, which is itself a rework of
 lquesada's Inpaint-CropAndStitch. This pack already carries that lineage as
@@ -402,6 +407,69 @@ def _stitcher(bypass: bool, size: tuple[int, int], *, full_resize: bool = False,
     return base
 
 
+def plan_crop(mask, shape_bhw, *, resolution_mode, max_resolution, min_resolution, manual_width, manual_height,
+              mask_grow_pixels, patch_mask_holes, no_mask_mode, force_divisibility):
+    """The crop SmartImageCropMEC.crop runs for an image of ``shape_bhw`` (B, H, W), without touching pixels.
+
+    Returns ``(geometry, msk)``: ``geometry`` is the stitcher dict crop() returns (same keys, same values, the same
+    arithmetic step by step) and ``msk`` the prepared mask it measures. The live crop preview uses it; a test checks
+    it against crop() itself. ``mask`` None counts as an empty mask."""
+    if min_resolution > max_resolution:
+        raise SmartCropError(
+            f"min_resolution ({min_resolution}) is above max_resolution "
+            f"({max_resolution}). Nothing can satisfy both.")
+    B, H, W = (int(v) for v in shape_bhw)
+    if mask is None:
+        mask = torch.zeros((B, H, W), dtype=torch.float32)
+    msk, _backend = prepare_mask(mask, patch_holes=patch_mask_holes, grow_pixels=mask_grow_pixels)
+    divisor = int(force_divisibility)
+
+    if not any(mask_has_pixels(msk[b % msk.shape[0]]) for b in range(B)):
+        if no_mask_mode == "Resize Full Image":                          # as _no_mask
+            if W >= H:
+                tw = snap_down(max_resolution, divisor)
+                th = snap_up(tw * H / W, divisor)
+            else:
+                th = snap_down(max_resolution, divisor)
+                tw = snap_up(th * W / H, divisor)
+            return _stitcher(False, (W, H), full_resize=True,
+                             x=[0] * B, y=[0] * B, w=[W] * B, h=[H] * B,
+                             padL=[0] * B, padT=[0] * B,
+                             target_w=[tw] * B, target_h=[th] * B), msk
+        if no_mask_mode == "Crop Full Image":
+            return _stitcher(False, (W, H),
+                             x=[0] * B, y=[0] * B, w=[W] * B, h=[H] * B,
+                             padL=[0] * B, padT=[0] * B,
+                             target_w=[W] * B, target_h=[H] * B), msk
+        return _stitcher(True, (W, H)), msk
+
+    boxes = [bbox_from_mask(msk[b % msk.shape[0]]) for b in range(B)]
+    sized = [bb for bb in boxes if bb is not None]
+    ref_w = max(bb[2] for bb in sized)
+    ref_h = max(bb[3] for bb in sized)
+    tw, th = target_size(ref_w, ref_h, mode=resolution_mode,
+                         min_res=min_resolution, max_res=max_resolution,
+                         manual_w=manual_width, manual_h=manual_height,
+                         divisor=divisor)
+    sx, sy, sw, sh, spl, spt, stw, sth = [], [], [], [], [], [], [], []
+    for b in range(B):
+        bbox = boxes[b]
+        if bbox is None:
+            bbox = [0, 0, W, H]
+        x, y, w, h = bbox
+        cx, cy = x + w / 2.0, y + h / 2.0
+        new_w, new_h = widen_to_aspect(w, h, tw, th)
+        crop_x, crop_y = int(cx - new_w / 2), int(cy - new_h / 2)
+        crop_w, crop_h = max(1, int(new_w)), max(1, int(new_h))
+        sx.append(crop_x); sy.append(crop_y)
+        sw.append(crop_w); sh.append(crop_h)
+        spl.append(max(0, -crop_x)); spt.append(max(0, -crop_y))         # what edge_pad returns
+        stw.append(tw); sth.append(th)
+    return _stitcher(False, (W, H), x=sx, y=sy, w=sw, h=sh,
+                     padL=spl, padT=spt, target_w=stw, target_h=sth), msk
+
+
+# L7.65 P08: engine of Inpaint Crop Pro in crop_mode "smart aspect" (not registered as a node)
 class SmartImageCropMEC:
     """Mask-driven crop for stills: find the subject, crop at the right shape,
     resample to a size the VAE is happy with."""
@@ -628,6 +696,7 @@ class SmartImageCropMEC:
                            "untouched and the stitcher will do nothing."] + notes))
 
 
+# L7.65 P08: engine of Inpaint Stitch Pro in stitch_mode "smart" (not registered as a node)
 class SmartImageStitcherMEC:
     """Put the processed crop back where it came from."""
 
@@ -778,12 +847,8 @@ class SmartImageStitcherMEC:
         return (base, "\n".join(info))
 
 
-NODE_CLASS_MAPPINGS = {
-    "SmartImageCropMEC": SmartImageCropMEC,
-    "SmartImageStitcherMEC": SmartImageStitcherMEC,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "SmartImageCropMEC": "Smart Image Crop",
-    "SmartImageStitcherMEC": "Smart Image Stitch",
-}
+# L7.65 P08: Smart Image Crop / Smart Image Stitch are modes of Inpaint Crop Pro (crop_mode "smart aspect") and Inpaint
+# Stitch Pro (stitch_mode "smart"); saved workflows migrate (nodes/_legacy_replacements.json). The classes above are
+# their engines, so this module registers no node.
+NODE_CLASS_MAPPINGS: dict = {}
+NODE_DISPLAY_NAME_MAPPINGS: dict = {}

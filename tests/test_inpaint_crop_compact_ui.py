@@ -20,6 +20,16 @@ GATED = {"preresize_mode", "preresize_min_width", "preresize_min_height", "prere
          "extend_up_factor", "extend_down_factor", "extend_left_factor", "extend_right_factor", "output_target_width",
          "output_target_height", "video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma"}
 SOCKETS = {"image", "mask", "optional_context_mask"}
+# L7.65 P08: the former Smart Image Crop / Inpaint Mask Prepare controls, appended after preview_frame; each group is
+# shown by its crop_mode (js/c2c_mode_widgets.js), so it counts as switch-gated here
+SMART = ["smart_resolution_mode", "smart_max_resolution", "smart_min_resolution", "smart_manual_width",
+         "smart_manual_height", "smart_mask_grow_pixels", "smart_patch_mask_holes", "smart_no_mask_mode",
+         "smart_force_divisibility"]
+PREPARE = ["prepare_fill_holes", "prepare_remove_small_regions", "prepare_min_region_area", "prepare_grow_pixels",
+           "prepare_inpaint_edge_mode", "prepare_stitch_edge_mode", "prepare_stitch_feather_radius",
+           "prepare_temporal_smooth", "prepare_temporal_sigma"]
+APPENDED = ["crop_mode", *SMART, *PREPARE]
+GATED = GATED | set(SMART) | set(PREPARE)
 
 
 @pytest.fixture(scope="module")
@@ -34,7 +44,13 @@ def _opts(spec):
 
 
 def test_order_and_names_unchanged(spec):
-    assert [n for g in ("required", "optional") for n in spec[g]] == ORDER
+    # L7.65 P08: "image" moved from required to the first optional input and the mode inputs were appended. What saved
+    # workflows depend on is unchanged: the widgets in ORDER's order (positional widgets_values) with the new ones
+    # after them, and the sockets in the same order (the front end adds sockets first, so they keep their slots).
+    names = [n for g in ("required", "optional") for n in spec[g]]
+    assert [n for n in names if n not in SOCKETS] == [n for n in ORDER if n not in SOCKETS] + APPENDED
+    assert [n for n in names if n in SOCKETS] == [n for n in ORDER if n in SOCKETS] == ["image", "mask",
+                                                                                         "optional_context_mask"]
 
 
 def test_at_most_ten_controls_by_default(spec):

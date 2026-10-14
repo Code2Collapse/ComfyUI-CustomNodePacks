@@ -5,6 +5,10 @@ squashed, offset by a few pixels, or taken from the whole frame when a mask
 was there all along - and every one of those still renders something.
 
 CPU-only, torch only, no ComfyUI.
+
+L7.65 P08: Smart Image Crop / Smart Image Stitch are modes of Inpaint Crop Pro ("smart aspect") and Inpaint Stitch
+Pro ("smart"). The node tests below run a migrated node: the old call goes through its row in
+nodes/_legacy_replacements.json into the survivor, and the outputs come back in the old order.
 """
 
 from __future__ import annotations
@@ -22,8 +26,6 @@ if str(PACK) not in sys.path:
 from nodes.smart_crop import (  # noqa: E402
     MASK_EPS,
     SmartCropError,
-    SmartImageCropMEC,
-    SmartImageStitcherMEC,
     bbox_from_mask,
     box_feather_mask,
     color_match,
@@ -37,6 +39,14 @@ from nodes.smart_crop import (  # noqa: E402
     target_size,
     widen_to_aspect,
 )
+from tests.test_consolidation_inpaint import through_successor  # noqa: E402
+
+
+class MigratedSmartStitch:
+    """A migrated Smart Image Stitch (Inpaint Stitch Pro, stitch_mode "smart"), called the way the old node was."""
+
+    def stitch(self, **kw):
+        return through_successor("SmartImageStitcherMEC", **kw)
 
 
 def image(h=256, w=512, b=1):
@@ -315,7 +325,7 @@ def run_crop(**kw):
                 mask_grow_pixels=32, patch_mask_holes=True,
                 no_mask_mode="Bypass", force_divisibility=128)
     args.update(kw)
-    return SmartImageCropMEC().crop(**args)
+    return through_successor("SmartImageCropMEC", **args)              # a migrated Smart Image Crop
 
 
 def test_the_crop_is_divisible_and_around_the_mask():
@@ -419,7 +429,7 @@ def test_a_round_trip_puts_the_crop_back_where_it_came_from():
     crop, _, st, _, _ = run_crop(image=img)
     red = torch.zeros_like(crop)
     red[..., 0] = 1.0
-    out, info = SmartImageStitcherMEC().stitch(
+    out, info = MigratedSmartStitch().stitch(
         original_image=img, processed_image=red, stitcher=st,
         feather_pixels=0, blend_mode="Hard Paste")
     assert out.shape == img.shape
@@ -432,7 +442,7 @@ def test_a_round_trip_puts_the_crop_back_where_it_came_from():
 def test_a_bypassed_stitcher_returns_the_original_untouched():
     img = image()
     _, _, st, _, _ = run_crop(image=img, mask=torch.zeros(1, 256, 512))
-    out, info = SmartImageStitcherMEC().stitch(
+    out, info = MigratedSmartStitch().stitch(
         original_image=img, processed_image=image(64, 64), stitcher=st,
         feather_pixels=8)
     assert torch.equal(out, img)
@@ -443,7 +453,7 @@ def test_mask_feather_without_a_mask_says_so_instead_of_doing_nothing():
     """A silent fallback here looks exactly like the feather being broken."""
     img = image()
     crop, _, st, _, _ = run_crop(image=img)
-    out, info = SmartImageStitcherMEC().stitch(
+    out, info = MigratedSmartStitch().stitch(
         original_image=img, processed_image=torch.zeros_like(crop), stitcher=st,
         feather_pixels=16, blend_mode="Mask Feather", mask=None)
     assert "no mask is connected" in info
@@ -452,14 +462,14 @@ def test_mask_feather_without_a_mask_says_so_instead_of_doing_nothing():
 
 def test_the_wrong_thing_wired_into_the_stitcher_is_named():
     with pytest.raises(SmartCropError, match="not a stitcher"):
-        SmartImageStitcherMEC().stitch(
+        MigratedSmartStitch().stitch(
             original_image=image(), processed_image=image(), stitcher="nope",
             feather_pixels=0)
 
 
 def test_a_stitcher_missing_its_geometry_is_named():
     with pytest.raises(SmartCropError, match="did not come from"):
-        SmartImageStitcherMEC().stitch(
+        MigratedSmartStitch().stitch(
             original_image=image(), processed_image=image(),
             stitcher={"bypass": False, "x": [0]}, feather_pixels=0)
 
@@ -470,7 +480,7 @@ def test_the_original_image_is_not_modified_in_place():
     img = image()
     before = img.clone()
     crop, _, st, _, _ = run_crop(image=img)
-    SmartImageStitcherMEC().stitch(
+    MigratedSmartStitch().stitch(
         original_image=img, processed_image=torch.zeros_like(crop), stitcher=st,
         feather_pixels=0, blend_mode="Hard Paste")
     assert torch.equal(img, before), "the input image was written to"
@@ -479,7 +489,7 @@ def test_the_original_image_is_not_modified_in_place():
 def test_colour_matching_runs_without_changing_the_frame_shape():
     img = image()
     crop, _, st, _, _ = run_crop(image=img)
-    out, info = SmartImageStitcherMEC().stitch(
+    out, info = MigratedSmartStitch().stitch(
         original_image=img, processed_image=torch.full_like(crop, 0.9),
         stitcher=st, feather_pixels=8, enable_color_match=True,
         color_match_amount=1.0)

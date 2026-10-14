@@ -1,6 +1,10 @@
 """
 Tests for InpaintCropProMEC, InpaintStitchProMEC, InpaintMaskPrepareMEC.
 
+L7.65 P08: Inpaint Mask Prepare is Inpaint Crop Pro in crop_mode "mask prepare"; its tests below run a migrated node
+(the old call goes through its row in nodes/_legacy_replacements.json, outputs come back in the old order). The crop
+gained a 6th output (preview); the crop tests read the first five, as before.
+
 Covers:
 - Batch correctness: IMAGE=(B,H,W,C), MASK=(B,H,W)
 - Each blend mode produces different output
@@ -20,10 +24,11 @@ def crop_node():
     from nodes.inpaint_suite import InpaintCropProMEC
 
     class _Result(InpaintCropProMEC):
-        """L7.99: the node returns ComfyUI's {"ui": preview, "result": outputs}; these tests check the outputs."""
+        """L7.99: the node returns ComfyUI's {"ui": preview, "result": outputs}; these tests check the outputs (the
+        first five - the 6th, preview, is L7.65 P08's and tested in test_consolidation_inpaint.py)."""
         def inpaint_crop(self, *a, **k):
             out = super().inpaint_crop(*a, **k)
-            return out["result"] if isinstance(out, dict) else out
+            return (out["result"] if isinstance(out, dict) else out)[:5]
     return _Result()
 
 
@@ -35,8 +40,16 @@ def stitch_node():
 
 @pytest.fixture
 def prepare_node():
-    from nodes.inpaint_suite import InpaintMaskPrepareMEC
-    return InpaintMaskPrepareMEC()
+    """A migrated Inpaint Mask Prepare: the old positional call, through its row into Inpaint Crop Pro."""
+    from tests.test_consolidation_inpaint import through_successor
+
+    names = ("mask", "fill_holes", "remove_small_regions", "min_region_area", "grow_pixels", "inpaint_edge_mode",
+             "stitch_edge_mode", "stitch_feather_radius", "temporal_smooth", "temporal_sigma", "reference_image")
+
+    class _Migrated:
+        def prepare_mask(self, *args, **kwargs):
+            return through_successor("InpaintMaskPrepareMEC", **dict(zip(names, args)), **kwargs)
+    return _Migrated()
 
 
 @pytest.fixture
