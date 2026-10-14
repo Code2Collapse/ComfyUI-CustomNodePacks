@@ -844,7 +844,11 @@ try:
 except Exception:
     pass
 
+# Front-end kill switch (L2.49): C2C_NO_FRONTEND=1 registers no web directory, so none of this pack's JS loads in
+# the browser while its nodes keep working. One restart tells whether a front-end problem comes from this pack.
 WEB_DIRECTORY = "./js"
+if __import__("os").environ.get("C2C_NO_FRONTEND", "").strip() == "1":
+    WEB_DIRECTORY = None
 
 # ── One menu root for every Code2Collapse pack ─────────────────────────────
 # Every node lands under "🐺 C2C/<pack>/<family>" in the Add Node menu and the
