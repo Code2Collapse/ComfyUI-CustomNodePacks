@@ -2,6 +2,34 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-14 (C2C Vault and copy / paste work inside subgraphs; the vault can be filled from the node)
+
+Evidence: `docs/evidence/L2.45/vault_subgraph_repro.before.json` / `.after.json` (workspace, live on the owner stack);
+tests/test_vault_flatten.py, tests/test_c2c_runtime.py.
+
+### Fixed
+
+- **C2C Vault inside subgraphs.** A vault locked inside a subgraph lost the wire to the subgraph's output (its IO
+  nodes are not found by `getNodeById`), so the run never started. Boundary wires to a subgraph's own inputs and
+  outputs are now kept and reconnected. Measured: locked inside a subgraph, run → success.
+- **C2C Vault with a subgraph node in the selection.** The payload named the subgraph's definition UUID as a class
+  the server cannot run. Subgraph nodes, nested ones included, are now flattened into the vault with their wiring
+  and the values typed on them. Reroute / Primitive helpers are resolved, not stored. Boundary names are unique (two
+  `image` inputs used to overwrite each other).
+- **Copy / paste with metadata inside subgraphs.** Explicit paste (Ctrl+Alt+V) landed on the root graph and copy read
+  the root graph's wires. Both now use the graph you are looking at. Measured: pasted into the subgraph, wires kept.
+- **C2C features switched off by core errors.** A core error while drawing a node that had just left its graph
+  (subgraph conversion, vault lock) was counted against the C2C draw patches. After five, hints, colourspace badges,
+  isolate and graph health were removed for the session, and core's method ran a second time. Core's own errors now
+  pass through unchanged and are not counted.
+
+### Added
+
+- **Finding the vault.** "C2C Vault → Lock / Seal selected nodes" in the node right-click menu and as selection
+  toolbox buttons (it was only in the empty-canvas menu). An empty vault node gets a **capture** input with
+  **Lock what's connected** and **Lock selected nodes** buttons, so you can wire what to protect straight into it.
+- README: "C2C Vault: lock or seal part of a workflow".
+
 ## Unreleased – 2026-10-13 (Inpaint Crop Pro shows the crop that runs; Stitch Pro round trip)
 
 Evidence: `docs/evidence/L7.99/` (workspace); tests/test_inpaint_crop_geometry.py.

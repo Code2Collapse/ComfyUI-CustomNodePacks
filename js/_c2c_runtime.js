@@ -355,7 +355,15 @@ function _createRuntime() {
         const calls = [];
         const origTracked = function (...a) {
             const rec = calls[calls.length - 1];
-            const r = orig.apply(this, a);
+            let r;
+            try {
+                r = orig.apply(this, a);
+            } catch (e) {
+                // core's own failure (e.g. NullGraphError drawing a node that just left its graph - a subgraph
+                // conversion, a vault lock): not ours to count, not ours to retry (L2.47)
+                if (rec) rec.coreError = e;
+                throw e;
+            }
             if (rec) { rec.called = true; rec.result = r; }
             return r;
         };
@@ -368,6 +376,9 @@ function _createRuntime() {
             try {
                 return wrapped.apply(this, args);
             } catch (err) {
+                // Core threw inside our wrapper: behave exactly as core alone would. Counting it disabled our
+                // hints / badges / isolate / graph-health for the session, and the retry below threw a second time.
+                if (rec.coreError !== undefined && err === rec.coreError) throw err;
                 const now = Date.now();
                 errors.push(now);
                 while (errors.length && errors[0] < now - windowMs) errors.shift();

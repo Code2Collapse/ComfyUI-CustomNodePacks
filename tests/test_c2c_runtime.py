@@ -96,6 +96,22 @@ def test_safepatch_falls_back_when_wrapper_fails_before_core(tmp_path):
     assert out == {"result": 2, "calls": 1}
 
 
+def test_safepatch_does_not_blame_us_for_cores_own_error(tmp_path):
+    # L2.47: core's drawNode throws NullGraphError for a node that just left its graph (subgraph conversion, vault
+    # lock). That error belongs to core: it passes through unchanged, is not counted (the patch survives 8 of them,
+    # above maxErrors) and core is not re-run.
+    out = _run(tmp_path, r"""
+      class NullGraphError extends Error {}
+      const obj = { calls: 0, draw() { this.calls++; throw new NullGraphError("Attempted to access LGraph reference"); } };
+      rt.safePatch(obj, "draw", (orig) => function () { const r = orig.call(this); return r; }, { id: "t5", maxErrors: 3 });
+      let caught = 0, sameType = true;
+      for (let i = 0; i < 8; i++) { try { obj.draw(); } catch (e) { caught++; sameType = sameType && e instanceof NullGraphError; } }
+      out.caught = caught; out.sameType = sameType; out.calls = obj.calls;
+      out.stillPatched = rt.patches().has("t5");
+    """)
+    assert out == {"caught": 8, "sameType": True, "calls": 8, "stillPatched": True}
+
+
 def test_safepatch_removes_itself_after_repeated_errors(tmp_path):
     out = _run(tmp_path, r"""
       const obj = { draw() { return "core"; } };

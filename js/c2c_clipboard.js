@@ -52,7 +52,14 @@ const HEADER_REGEX = /^#\s*MEC\.clipboard\s+\d+\.\d+/m;
 export const MEC_AUTOCOPY_KEY = "mec.clipboard.autoCopy";
 
 
-// Iterate app.graph.links regardless of container type.
+// The graph the user is LOOKING AT: the root, or the subgraph they opened. Copy read the root's links and paste
+// added to the root, so inside a subgraph a paste landed on the root graph with its wires missing (owner
+// 2026-10-14, ledger L2.44, docs/evidence/L2.45/vault_subgraph_repro.before.json part C).
+function _currentGraph() {
+    return app.canvas?.graph || app.graph;
+}
+
+// Iterate the current graph's links regardless of container type.
 // BUG (fixed 2026-07-31): this used `for (const k in links)`. Newer ComfyUI
 // frontends changed graph.links from a plain object to a Map, and `for...in`
 // over a Map enumerates NOTHING — Maps keep their entries off the property
@@ -60,7 +67,7 @@ export const MEC_AUTOCOPY_KEY = "mec.clipboard.autoCopy";
 // still referenced link ids, and pasting restored the nodes with every wire
 // missing. Handle Map, array and plain object.
 function _graphLinks() {
-    const links = app.graph?.links;
+    const links = _currentGraph()?.links;
     if (!links) return [];
     if (typeof links.values === "function") return [...links.values()];
     if (Array.isArray(links)) return links.filter(Boolean);
@@ -289,6 +296,11 @@ function _selectionHasSubgraph(nodes) {
     return Array.isArray(nodes) && nodes.some(_isSubgraphNode);
 }
 
+function _realNodes(items) {
+    return (items || []).filter((n) => n && n.id != null && Number(n.id) >= 0
+        && (Array.isArray(n.inputs) || Array.isArray(n.outputs)) && typeof n.serialize === "function");
+}
+
 function _serializeNode(n, provenance) {
     // Use LiteGraph's own serialize() — the exact same format ComfyUI
     // writes when you Save the workflow. This preserves:
@@ -323,6 +335,7 @@ function _serializeNode(n, provenance) {
 }
 
 async function _gatherSubgraph(nodes) {
+    nodes = _realNodes(nodes);
     const ids = new Set(nodes.map((n) => n.id));
     const out_nodes = [];
     for (const n of nodes) {
@@ -375,6 +388,7 @@ function _provenanceForSync(node) {
 }
 
 function _gatherSubgraphSync(nodes) {
+    nodes = _realNodes(nodes);
     const ids = new Set(nodes.map((n) => n.id));
     const out_nodes = [];
     for (const n of nodes) {
@@ -715,7 +729,7 @@ async function _pasteFromText(text) {
         // run its onNodeCreated hooks (which create widgets, sockets,
         // and any pack-specific scaffolding the configure() step relies
         // on).
-        app.graph.add(node);
+        _currentGraph().add(node);
 
         // Compute paste anchor offset.
         const srcPos = Array.isArray(nd.pos) ? nd.pos : [0, 0];
@@ -773,7 +787,7 @@ async function _pasteFromText(text) {
         app.canvas.deselectAllNodes?.();
         for (const n of Object.values(idMap)) app.canvas.selectNode?.(n, true);
     } catch (__c2cErr) { __c2cReport("c2c_clipboard", __c2cErr); }
-    app.graph.setDirtyCanvas(true, true);
+    _currentGraph().setDirtyCanvas?.(true, true);
     _toast(
         `Pasted ${Object.keys(idMap).length} node(s)` +
         (skipped ? ` (${skipped} skipped \u2014 missing pack)` : ""),

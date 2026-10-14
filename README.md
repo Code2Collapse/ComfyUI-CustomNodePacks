@@ -1316,6 +1316,33 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 
 ---
 
+## C2C Vault: lock or seal part of a workflow
+
+The vault replaces a group of nodes with one node whose contents travel in the workflow as AES-GCM ciphertext.
+**Locked** vaults need your password to run. **Sealed** vaults run without a password but need it to be opened for
+editing. Outside the vault the workflow stays ordinary JSON.
+
+There are three ways to put nodes in a vault, and all of them work on the root graph and **inside subgraphs**:
+
+1. Select the nodes, right-click one of them, and choose **C2C Vault → Lock selected nodes** (or **Seal**). The same
+   two actions appear as lock / box buttons in the selection toolbox and in the empty-canvas right-click menu.
+2. Add a **C2C Vault — Locked / Sealed** node, select the nodes to protect, and press **Lock selected nodes** on the
+   vault.
+3. Add a vault node and wire the output you want to protect into its **capture** input. Then press **Lock what's
+   connected**. The vault takes that node and every upstream node that feeds only it. A loader that is also used
+   elsewhere stays outside and becomes a vault input.
+
+The wires that crossed the selection become the vault's inputs and outputs, including wires to a subgraph's own
+inputs and outputs. A subgraph node inside the selection is locked together with its contents. Reroute and
+Primitive helpers are resolved, not stored. A Locked vault runs right away for the person who locked it. Anyone
+else types the password into the field on the node. **Lock again** forgets the key.
+
+Scope, honestly: the vault stops casual inspection and copying of your graph. Because a vault has to be decrypted
+to run, it cannot stop someone who can run Python inside the same ComfyUI process.
+
+**Copy / paste with metadata** (Ctrl+C / Ctrl+V, or Ctrl+Alt+C / Ctrl+Alt+V) copies and pastes into the graph you
+are looking at, inside subgraphs too. Wires between the copied nodes are kept.
+
 ## VRAM Management
 
 All nodes are designed to work on **low-end GPUs** (4–6 GB VRAM):

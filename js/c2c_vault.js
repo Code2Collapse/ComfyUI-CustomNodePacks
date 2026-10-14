@@ -3,6 +3,7 @@ import { api } from "../../scripts/api.js";
 import { legacyCanvasMenu } from "./_c2c_compat.js";
 import { asOneUndoStep } from "./_c2c_undo_scope.js";
 import { setHidden } from "./_widget_visibility.js";
+import { flattenSelection, isSubgraphNode, isVirtualNode, linkById } from "./_vault_flatten.js";
 
 /**
  * C2C Vault — password-locked subgraph.
@@ -653,83 +654,6 @@ function modalPassword({ title, note, confirmLabel }) {
 }
 
 /** Classify selection links — mirrors nodes/vault_boundary.py */
-function deriveBoundary(sel, graph) {
-  const idOf = (n) => String(n.id);
-  // Frontend 1.52 keeps links in a Map: an index lookup on graph.links returned undefined for every wire, so the vault saw no
-  // internal links and no inputs.
-  const linkOf = (id) => {
-    if (id == null) return null;
-    const L = graph.links;
-    return (L instanceof Map ? L.get(id) : L?.[id]) ?? graph._links?.get?.(id) ?? null;
-  };
-  const ids = new Set(sel.map(idOf));
-  const links = [];
-  const boundary_in = [];
-  const externalSources = [];
-  const inTypes = [];
-
-  for (const n of sel) {
-    (n.inputs || []).forEach((inp, slot) => {
-      const lk = linkOf(inp.link);
-      if (!lk) return;
-      if (ids.has(String(lk.origin_id))) {
-        links.push({
-          from: String(lk.origin_id), from_slot: lk.origin_slot,
-          to: idOf(n), to_slot: slot, to_name: inp.name,
-        });
-      } else {
-        const origin = graph.getNodeById?.(lk.origin_id);
-        const outType = origin?.outputs?.[lk.origin_slot]?.type || "*";
-        boundary_in.push({
-          name: inp.name || `in_${boundary_in.length}`,
-          to: idOf(n), to_slot: slot, to_name: inp.name, type: outType,
-        });
-        externalSources.push({ id: lk.origin_id, slot: lk.origin_slot });
-        inTypes.push(outType);
-      }
-    });
-  }
-
-  const boundary_out = [];
-  const externalTargets = [];
-  const outTypes = [];
-
-  for (const n of sel) {
-    (n.outputs || []).forEach((out, slot) => {
-      (out.links || []).forEach((lid) => {
-        const lk = linkOf(lid);
-        if (!lk || ids.has(String(lk.target_id))) return;
-        boundary_out.push({
-          name: out.name || `out_${boundary_out.length}`,
-          from: idOf(n), from_slot: slot, type: out.type || "*",
-        });
-        externalTargets.push({ id: lk.target_id, slot: lk.target_slot });
-        outTypes.push(out.type || "*");
-      });
-    });
-  }
-
-  if (boundary_out.length === 0) {
-    const consumed = new Set(links.map((l) => `${l.from}:${l.from_slot}`));
-    for (const n of sel) {
-      (n.outputs || []).forEach((out, slot) => {
-        if (consumed.has(`${idOf(n)}:${slot}`)) return;
-        boundary_out.push({
-          name: out.name || `out_${boundary_out.length}`,
-          from: idOf(n), from_slot: slot, type: out.type || "*",
-        });
-        externalTargets.push(null);
-        outTypes.push(out.type || "*");
-      });
-    }
-  }
-
-  return {
-    links, boundary_in, boundary_out,
-    externalSources, externalTargets, inTypes, outTypes,
-  };
-}
-
 // A socket's NAME is the key ComfyUI sends in the prompt (input_0, param_3, ...), so it is never changed: the
 // boundary name the user sees is the slot's LABEL. Renaming `name` sent "destination" instead of "input_0", and
 // the server answered "input 0 ('destination') is not connected" (A9, docs/evidence/L2.24).
@@ -944,6 +868,7 @@ function applyVaultInterface(node, iface, isSealed) {
   const mOut = iface.out?.length || 0;
   const params = iface.params || [];
   syncVaultSockets(node, iface, params);
+  if (isEmptyVault(node)) ensureCaptureSocket(node); else removeCaptureSocket(node);
 
   reconcilePromotedWidgets(node, params, isSealed);
 
@@ -1127,25 +1052,43 @@ async function openOnDoubleClick(node, isSealed) {
   return handleUnlockOrOpen(node, isSealed, isSealed);
 }
 
+/** The real nodes of the current selection (groups, IO nodes and anything without an id are not lockable). */
+function selectedLockableNodes() {
+  const c = app.canvas;
+  const out = new Map();
+  const push = (n) => {
+    if (n && n.id != null && Number(n.id) >= 0 && typeof n.serialize === "function") out.set(String(n.id), n);
+  };
+  try { c?.selectedItems?.forEach?.(push); } catch (_) { /* older frontends */ }
+  Object.values(c?.selected_nodes || {}).forEach(push);
+  return [...out.values()];
+}
+
 async function lockSelection(sealed) {
+  return lockNodes(selectedLockableNodes().filter((n) => !NODES.includes(n.type)), sealed, null);
+}
+
+/** Lock / seal `sel` into a vault: a new node at the selection, or `into` (an EMPTY vault already on the canvas).
+ *  Works on the root graph and inside subgraphs, and flattens subgraph nodes in the selection (L2.45 / L2.46). */
+async function lockNodes(sel, sealed, into) {
   if (headless()) return;
-  const sel = Object.values(app.canvas.selected_nodes || {});
   if (sel.length < 1) {
-    await modalAlert("Nothing selected", "Select the nodes to lock first.");
+    await modalAlert("Nothing to lock", into
+      ? "Select the nodes to protect, or connect the output you want to protect to this vault's 'capture' input, first."
+      : "Select the nodes to lock first.");
     return;
   }
-
-  const pw = await modalPasswordStep({
-    title: `${sealed ? "Seal" : "Lock"} ${sel.length} node(s) into a vault`,
-    note: sealed
-      ? "Sealed: recipient runs with no password but cannot read the graph. Your password is still required to edit — store it safely; there is no recovery."
-      : "Locked: recipient needs this password to run at all. Store it safely — there is no recovery, by design.",
-    sealed,
-  });
-  if (pw === null) return;
-
-  const graph = app.canvas?.graph || app.graph;
-  const derived = deriveBoundary(sel, graph);
+  // the graph the selection lives in: the subgraph the user is looking at, not the root
+  const graph = sel[0].graph || app.canvas?.graph || app.graph;
+  const derived = flattenSelection(sel, graph);
+  if (derived.problems.length) {
+    await modalAlert("Cannot lock this selection", derived.problems.join("\n"));
+    return;
+  }
+  if (!derived.nodes.length) {
+    await modalAlert("Nothing to lock", "The selection holds only front-end helpers (Reroute / Primitive).");
+    return;
+  }
   if (!derived.boundary_out.length) {
     await modalAlert("No outputs", "These nodes produce no output. Include the node whose result you want.");
     return;
@@ -1159,37 +1102,31 @@ async function lockSelection(sealed) {
     return;
   }
 
-  const confirmed = await modalBoundaryStep({
-    boundary: derived, nodeCount: sel.length, sealed,
+  const count = derived.nodes.length;
+  const pw = await modalPasswordStep({
+    title: `${sealed ? "Seal" : "Lock"} ${count} node(s) into a vault`,
+    note: (sealed
+      ? "Sealed: recipient runs with no password but cannot read the graph. Your password is still required to edit — store it safely; there is no recovery."
+      : "Locked: recipient needs this password to run at all. Store it safely — there is no recovery, by design.")
+      + (derived.flattenedSubgraphs
+        ? ` ${derived.flattenedSubgraphs} subgraph(s) in the selection are locked with their contents.` : ""),
+    sealed,
   });
+  if (pw === null) return;
+
+  const confirmed = await modalBoundaryStep({ boundary: derived, nodeCount: count, sealed });
   if (!confirmed) return;
 
-  const promotion = await modalPromoteStep({ selection: sel });
+  // promotion addresses a node by its id in the payload: only plain nodes (a subgraph node is flattened away)
+  const promotion = await modalPromoteStep({ selection: sel.filter((n) => !isSubgraphNode(n) && !isVirtualNode(n)) });
   if (promotion === null) return;
 
-  const idOf = (n) => String(n.id);
-  const nodes = sel.map((n) => ({
-    id: idOf(n),
-    class_type: n.comfyClass || n.type,
-    // real inputs only: display widgets ("$$canvas-image-preview", buttons, serialize:false) are not node inputs
-    widgets: Object.fromEntries((n.widgets || [])
-      .filter((w) => w?.name && !String(w.name).startsWith("$$") && w.type !== "button"
-        && w.serialize !== false && w.options?.serialize !== false)
-      .map((w) => [w.name, w.value])),
-  }));
-
-  const boundary_in = derived.boundary_in.map((b) => ({
-    name: b.name, to: b.to, to_slot: b.to_slot, to_name: b.to_name,
-  }));
-  const boundary_out = derived.boundary_out.map((b) => ({
-    name: b.name, from: b.from, from_slot: b.from_slot,
-  }));
-
+  const { boundary_in, boundary_out } = derived;
   const vault_id = `vault-${Math.random().toString(36).slice(2, 10)}`;
   const { ok, data } = await post("/c2c_vault/lock", {
     vault_id, password: pw, mode: sealed ? "sealed" : "locked",
     subgraph: {
-      nodes, links: derived.links, boundary_in, boundary_out,
+      nodes: derived.nodes, links: derived.links, boundary_in, boundary_out,
       promoted: promotion.promoted || [],
     },
   });
@@ -1200,18 +1137,19 @@ async function lockSelection(sealed) {
   if (!sealed && data.session_open) unlockedSessions.add(vault_id);
 
   const iface = buildInterfaceManifest(
-    sealed ? "sealed" : "locked", sel.length,
+    sealed ? "sealed" : "locked", count,
     { boundary_in, boundary_out },
     derived.inTypes, derived.outTypes,
     promotion.params || [],
   );
 
-  const [cx, cy] = selectionCentroid(sel);
-  const vault = LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
-  vault.pos = [cx, cy];
+  const vault = into || LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
+  if (!into) vault.pos = selectionCentroid(sel);
+  const lost = [];
   // one undo step: the vault node, its wiring and the removal of the originals
   asOneUndoStep(app.canvas, () => {
-    graph.add(vault);
+    if (!into) graph.add(vault);
+    removeCaptureSocket(vault);
     widget(vault, "vault_id").value = vault_id;
     widget(vault, "vault_payload").value = data.payload;
     const ifaceW = widget(vault, "vault_interface");
@@ -1223,24 +1161,115 @@ async function lockSelection(sealed) {
     applyVaultInterface(vault, iface, sealed);
 
     derived.externalSources.forEach((src, i) => {
-      const srcNode = graph.getNodeById(src.id);
       const slot = (vault.inputs || []).findIndex((inp) => inp.name === `input_${i}`);
-      if (srcNode && slot >= 0) srcNode.connect(src.slot, vault, slot);
+      if (slot < 0 || !connectSourceToVault(graph, src, vault, slot)) lost.push(`input ${boundary_in[i]?.name}`);
     });
-    derived.externalTargets.forEach((tgt, i) => {
-      if (!tgt) return;
-      const tgtNode = graph.getNodeById(tgt.id);
-      if (tgtNode) vault.connect(i, tgtNode, tgt.slot);
+    derived.externalTargets.forEach((targets, i) => {
+      for (const tgt of targets || []) {
+        if (!connectVaultToTarget(graph, tgt, vault, i)) lost.push(`output ${boundary_out[i]?.name}`);
+      }
     });
 
     for (const n of sel) graph.remove(n);
   });
   vault._vaultAccess?.refresh();      // the field now shows "Unlocked" (the creator's session) or "Sealed"
-  graph.setDirtyCanvas(true, true);
+  graph.setDirtyCanvas?.(true, true);
   await modalAlert(
     sealed ? "Sealed" : "Locked",
-    `${sealed ? "Sealed" : "Locked"} ${sel.length} node(s) into a vault. Original nodes removed.`,
+    `${sealed ? "Sealed" : "Locked"} ${count} node(s) into a vault. Original nodes removed.`
+      + (lost.length ? ` Could not reconnect: ${lost.join(", ")} - connect them by hand.` : ""),
   );
+}
+
+/** A boundary source -> the vault's input: an outside node, or the subgraph's own input (IO node "-10"). */
+function connectSourceToVault(graph, src, vault, slot) {
+  if (src?.kind === "io") {
+    const io = graph.inputNode?.slots?.[src.slot];
+    if (!io?.connect) return false;
+    io.connect(vault.inputs[slot], vault);
+    return true;
+  }
+  const n = graph.getNodeById?.(src?.id);
+  if (!n) return false;
+  n.connect(src.slot, vault, slot);
+  return true;
+}
+
+/** The vault's output -> a boundary target: an outside node, or the subgraph's own output (IO node "-20"). */
+function connectVaultToTarget(graph, tgt, vault, outIndex) {
+  if (tgt?.kind === "io") {
+    const io = graph.outputNode?.slots?.[tgt.slot];
+    if (!io?.connect || !vault.outputs?.[outIndex]) return false;
+    io.connect(vault.outputs[outIndex], vault);
+    return true;
+  }
+  const n = graph.getNodeById?.(tgt?.id);
+  if (!n) return false;
+  vault.connect(outIndex, n, tgt.slot);
+  return true;
+}
+
+// ── the empty vault's own way in: a "capture" port (owner 2026-10-14: "how tf can i connect and lock/seal any node?")
+const CAPTURE = "capture";
+
+function isEmptyVault(node) {
+  return NODES.includes(node?.type) && !(widget(node, "vault_payload")?.value || "").trim();
+}
+
+function ensureCaptureSocket(node) {
+  if ((node.inputs || []).some((i) => i.name === CAPTURE)) return;
+  node.addInput(CAPTURE, "*");
+  const s = (node.inputs || []).find((i) => i.name === CAPTURE);
+  if (s) s.label = "capture: connect the output to protect";
+}
+
+function removeCaptureSocket(node) {
+  const i = (node.inputs || []).findIndex((x) => x.name === CAPTURE);
+  if (i < 0) return;
+  if (node.inputs[i].link != null) node.disconnectInput(i);
+  node.removeInput(i);
+}
+
+/** What "capture" protects: the node wired to it plus every upstream node that feeds ONLY that set (a loader also
+ *  used elsewhere stays outside and becomes a vault input). */
+function captureSet(vault) {
+  const graph = vault.graph;
+  const slot = (vault.inputs || []).find((i) => i.name === CAPTURE);
+  const lk = slot?.link != null ? linkById(graph, slot.link) : null;
+  const start = lk ? graph.getNodeById(lk.origin_id) : null;
+  if (!start || NODES.includes(start.type)) return [];
+  const set = new Map([[String(start.id), start]]);
+  const capId = lk.id;
+  const feedsOnlySet = (u) => (u.outputs || []).every((o) => (o.links || []).every((id) => {
+    if (id === capId) return true;
+    const l = linkById(graph, id);
+    return !l || set.has(String(l.target_id));
+  }));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const x of [...set.values()]) {
+      for (const inp of x.inputs || []) {
+        const l = linkById(graph, inp.link);
+        if (!l) continue;
+        const u = graph.getNodeById(l.origin_id);
+        if (!u || set.has(String(u.id)) || Number(u.id) < 0 || NODES.includes(u.type)) continue;
+        if (feedsOnlySet(u)) { set.set(String(u.id), u); changed = true; }
+      }
+    }
+  }
+  return [...set.values()];
+}
+
+async function lockCaptured(vault, sealed) {
+  const sel = captureSet(vault);
+  if (!sel.length) {
+    await modalAlert("Nothing connected", "Connect the output you want to protect to this vault's 'capture' input first.");
+    return;
+  }
+  // the capture wire is only a pointer: drop it so the vault does not wire its own output back into itself
+  const i = (vault.inputs || []).findIndex((x) => x.name === CAPTURE);
+  if (i >= 0 && vault.inputs[i].link != null) vault.disconnectInput(i);
+  return lockNodes(sel, sealed, vault);
 }
 
 function vaultScope() {
@@ -1682,8 +1711,25 @@ function buildAccessWidget(node, isSealed) {
   const err = document.createElement("div");
   css(err, { color: "var(--c2c-dangerStrong)", minHeight: "0", whiteSpace: "normal" });
   row.append(pw, go, relock);
-  for (const el of [status, row, err]) el.style.flexShrink = "0";
-  host.append(status, row, err);
+  // an EMPTY vault: two ways in, both on the node (owner 2026-10-14: "how tf can i connect and lock/seal any node?")
+  const emptyRow = document.createElement("div");
+  css(emptyRow, { display: "flex", gap: "4px", alignItems: "center" });
+  const verb = isSealed ? "Seal" : "Lock";
+  const lockSel = document.createElement("button");
+  lockSel.type = "button";
+  lockSel.textContent = `${verb} selected nodes`;
+  lockSel.title = "Select the nodes to protect on the canvas, then press this: they move into this vault.";
+  const lockCap = document.createElement("button");
+  lockCap.type = "button";
+  lockCap.textContent = `${verb} what's connected`;
+  lockCap.title = "Wire the output you want to protect into 'capture': that node and everything upstream that feeds only it move into this vault.";
+  for (const b of [lockSel, lockCap]) css(b, { flex: "1", padding: "3px 6px", cursor: "pointer", font: "inherit", whiteSpace: "nowrap" });
+  emptyRow.append(lockSel, lockCap);
+  lockSel.addEventListener("click", () => lockNodes(
+    selectedLockableNodes().filter((n) => n !== node && !NODES.includes(n.type)), isSealed, node));
+  lockCap.addEventListener("click", () => lockCaptured(node, isSealed));
+  for (const el of [status, row, emptyRow, err]) el.style.flexShrink = "0";
+  host.append(status, row, emptyRow, err);
 
   const vaultId = () => widget(node, "vault_id")?.value || "";
   const hasPayload = () => !!(widget(node, "vault_payload")?.value || "").trim();
@@ -1705,10 +1751,12 @@ function buildAccessWidget(node, isSealed) {
     if (hadError) fit();
     retitle();
     if (!hasPayload()) {
-      status.textContent = "Empty vault: select nodes, right-click the canvas, C2C Vault → Lock or Seal selection.";
+      status.textContent = "Empty vault: wire what to protect into 'capture', or select nodes, then:";
       pw.style.display = go.style.display = relock.style.display = "none";
+      emptyRow.style.display = "";
       return;
     }
+    emptyRow.style.display = "none";
     if (isSealed) {
       status.textContent = "Sealed · runs without a password";
       relock.style.display = "none";
@@ -1779,6 +1827,10 @@ app.registerExtension({
 
   // Declarative: frontend 1.52 has no extensionManager.registerCommand (the call was silently skipped).
   commands: [
+    { id: "c2c.vault.lockSelection", label: "C2C Vault: Lock selected nodes (password to run)", icon: "pi pi-lock",
+      function: () => lockSelection(false) },
+    { id: "c2c.vault.sealSelection", label: "C2C Vault: Seal selected nodes (runs without password)", icon: "pi pi-box",
+      function: () => lockSelection(true) },
     { id: "c2c.vault.saveWorkflowEncrypted", label: "C2C Vault: Save workflow encrypted", function: () => saveWorkflowEncrypted() },
     { id: "c2c.vault.sealWholeWorkflow", label: "C2C Vault: Seal whole workflow", function: () => sealWholeWorkflow() },
   ],
@@ -1878,6 +1930,33 @@ app.registerExtension({
 
   getCanvasMenuItems() {
     return _vaultCanvasMenuItems();
+  },
+
+  // right-clicking a node is where people look (the canvas menu alone hid the vault, L2.45)
+  getNodeMenuItems(node) {
+    if (NODES.includes(node?.type)) {
+      if (!isEmptyVault(node)) return [];
+      const sealed = node.type === "C2C_VaultSealed";
+      const verb = sealed ? "Seal" : "Lock";
+      return [
+        { content: `C2C Vault → ${verb} selected nodes into this vault`,
+          callback: () => lockNodes(selectedLockableNodes().filter((n) => n !== node && !NODES.includes(n.type)), sealed, node) },
+        { content: `C2C Vault → ${verb} what is connected to 'capture'`, callback: () => lockCaptured(node, sealed) },
+      ];
+    }
+    const nodesFor = () => {
+      const sel = selectedLockableNodes().filter((n) => !NODES.includes(n.type));
+      return sel.some((n) => n === node) ? sel : [node];
+    };
+    return [
+      { content: "C2C Vault → Lock selected nodes (password to run)", callback: () => lockNodes(nodesFor(), false, null) },
+      { content: "C2C Vault → Seal selected nodes (runs without password)", callback: () => lockNodes(nodesFor(), true, null) },
+    ];
+  },
+
+  getSelectionToolboxCommands(item) {
+    if (!item || typeof item.serialize !== "function" || NODES.includes(item.type) || Number(item.id) < 0) return [];
+    return ["c2c.vault.lockSelection", "c2c.vault.sealSelection"];
   },
 
   setup() {
