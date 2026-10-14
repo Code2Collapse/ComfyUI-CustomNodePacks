@@ -2,6 +2,56 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-14 (speed fixes; a real player in Load Video)
+
+Evidence: `docs/evidence/L2.51/` and `docs/evidence/L2.50/` (workspace), measured on the owner-equivalent testbed
+(core 0.39.0, frontend 1.53.10, the owner's third-party packs).
+
+### Fixed: slow runs
+
+- **Convert Mask to Image (and other nodes) were slow because of this pack.** The tensor inspector computed exact
+  statistics over every output of every node on every run. On the expanded view that Mask to Image returns, it walked
+  every element in Python. Measured:
+  - one 16-frame 720p output: more than 60 s before, 0.0000 s now;
+  - a normal 97-frame 720p image output: 0.42 s per node before, 0.0001 s now;
+  - a real graph (97 × 720p: Empty Image → Image to Mask → Mask to Image → one frame → Preview): more than 14.5 min,
+    unfinished, before; 0.42–1.13 s now.
+
+  The inspector now records only shape, type and device while a workflow runs. It computes the statistics when you
+  open its panel, for that node only. It never keeps an output in memory. `C2C_TENSOR_INSPECTOR=0` switches it off
+  entirely.
+- **Image batching stopped installing on many setups.** Packs such as Inspire, Impact and KJNodes use a wildcard
+  socket type that cannot be hashed (`AlwaysEqualProxy`, `AnyType`). The first such node made the whole install fail
+  ("install failed: unhashable type"), so no node was batched. The type test is now safe. A node that cannot be
+  analysed is skipped on its own, without stopping the others. *Internal* mode no longer analyses other authors' nodes
+  at all.
+- **Canny on the CPU** is no longer split into 1-frame chunks. That rule protects GPU memory. On the CPU it only cost
+  time: 2.64 s against 2.10 s for 8 frames. On a GPU the measured 1-frame chunks stay.
+
+### Added: a real player in Load Video (C2C)
+
+- Play / pause, previous / next frame, first / last frame, and a frame number with timecode.
+- A scrubber over the whole clip. Drag to seek.
+- In / out handles on the scrubber choose the frames to load. They set `skip_first_frames` and `frame_load_cap`; "61
+  will load" is the exact number the run loads. *Loop the selection* plays only the chosen range.
+- Keys while the player has focus: Space, Left / Right, Home / End, I / O.
+- Also in Load Video Path (C2C) and Load Images Path (C2C).
+- Checked live in the classic renderer and Nodes 2.0, after save and reload, and inside a subgraph. The frames each
+  run loaded matched the count the player showed (61, and 97 inside the subgraph).
+
+### Fixed: subgraphs in Nodes 2.0
+
+- **A C2C node moved into a new subgraph showed a dead copy of its panel.** Convert to Subgraph creates a new node
+  with the same id. Nodes 2.0 kept showing the old node's panel, wired to a node that no longer runs. C2C now puts the
+  node's own panel back after every graph switch (`js/_vue_dom_rebind.js`). The Load Video loaders use it first.
+- **Nodes 2.0 showed "Image failed to load" under Load Video.** Frontend 1.53 previews the source file in a panel that
+  the old hide rule did not cover.
+
+### Added: front-end off switch
+
+- `C2C_NO_FRONTEND=1` makes ComfyUI serve none of this pack's browser code. The nodes keep working. One restart tells
+  whether a browser problem comes from this pack.
+
 ## Unreleased – 2026-10-14 (every C2C canvas tool works inside subgraphs)
 
 Evidence: `docs/evidence/L2.47/sites.md` (every site and its rule) and `subgraph_sweep_live.json` (workspace);

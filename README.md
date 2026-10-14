@@ -762,6 +762,20 @@ Interactive before/after comparison widget with 3 modes: drag-slider split, over
 
 ### Batch & Video
 
+#### Load Video (C2C): player and frame selection
+
+The node plays its video in the node body. Pro formats (ProRes, DNxHR, HEVC 10-bit, FFV1) are transcoded for the
+preview on the server.
+
+- **Transport:** play / pause, previous / next frame, first / last frame of the selection, frame number and timecode.
+- **Scrubber:** shows the whole clip. Click or drag to seek.
+- **Choosing frames:** drag the two handles on the scrubber. They set `skip_first_frames` and `frame_load_cap`, and
+  the label under the bar says how many frames the run will load (`select_every_nth` included). Typing in the
+  widgets moves the handles.
+- **Loop the selection:** plays only the chosen range.
+- **Keys** (click the player first): Space, Left / Right, Home / End, I / O to set in / out.
+- Works the same in Load Video Path (C2C) and Load Images Path (C2C), in both renderers, and inside subgraphs.
+
 #### Mask Batch Manager (MEC)
 
 Manipulate mask batches for video workflows.
@@ -1389,6 +1403,8 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 | Result says `approximate` / `model-free` | The model is missing; the node used its model-free method. Its `model_status` says why |
 | CUDA out of memory | Enable `offload_to_cpu` in SAM Model Loader, use `float16` dtype, reduce image resolution |
 | Nodes not showing in menu | Check console for `[MEC] Loaded 44` message. If missing, check for import errors in the console output |
+| The browser hangs on the loading screen or the canvas stops responding | Start ComfyUI with `C2C_NO_FRONTEND=1`. This pack then serves no browser code, and its nodes still run. If the problem goes away, it comes from this pack's front end: please send the browser console (F12) output. |
+| Runs feel slow on big image batches | Image batching (Settings > C2C > Image batching) only splits a batch when it would not fit in memory. The tensor inspector computes nothing during a run. `C2C_TENSOR_INSPECTOR=0` turns it off completely. |
 | ViTMatte download fails | Download manually from [HuggingFace](https://huggingface.co/hustvl/vitmatte-small-composition-1k) → place in `ComfyUI/models/vitmatte/vitmatte-small-composition-1k/` |
 | My mask looks bad | Connect your image + mask to **Mask Failure Explainer** — it will diagnose the issue and suggest the right method |
 
