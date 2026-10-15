@@ -275,6 +275,30 @@ def _wan_tiles_via_disk(vae, fsm, zb: torch.Tensor, fam: str, tile_px: int, tmp_
                 pass
 
 
+def stream_decode_images(vae, latent: dict) -> tuple[FrameStream, StreamInfo]:
+    """An IMAGE latent ([B, C, H, W]: one picture per item) decoded a batch at a time, straight into the encoder, so a
+    long clip of 4K frames never sits in VRAM or RAM whole (L2.53, as the 4K pack's Save Video 4K does it)."""
+    z = latent["samples"] if isinstance(latent, dict) else latent
+    if not torch.is_tensor(z) or z.ndim != 4:
+        raise StreamDecodeError("Expected an image latent (batch, channels, height, width).")
+    sf = vae.spacial_compression_decode() if hasattr(vae, "spacial_compression_decode") else 8
+    n, h, w = int(z.shape[0]), int(z.shape[2]) * sf, int(z.shape[3]) * sf
+    # PORTED FROM: HallettVisual/ComfyUI-4K-Video-Save-Load@7ae9ab9 video4k/nodes.py decode_latents (MIT)
+    per_batch = max(1, (1920 * 1080 * 16) // (z.shape[-1] * z.shape[-2] * 64))
+
+    def chunks() -> Iterator[torch.Tensor]:
+        for i in range(0, n, per_batch):
+            px = vae.decode(z[i:i + per_batch])
+            # Some VAEs hand back 5D video batches; flatten to a plain frame list.
+            if px.dim() == 5:
+                px = px.reshape(-1, *px.shape[-3:])
+            yield px.to(device="cpu", dtype=torch.float32)
+    # END PORTED
+    info = StreamInfo(method=f"image latent, decoded {per_batch} at a time and streamed in order", exact=True,
+                      bounded=True, frames=n, height=h, width=w)
+    return FrameStream(chunks(), n, h, w, 3), info
+
+
 def stream_decode(vae, latent: dict, tile_px: int = 0) -> tuple[FrameStream, StreamInfo]:
     """FrameStream of [k, H, W, 3] float32 chunks in 0..1 (core's process_output applied), and how it was made."""
     z = latent["samples"] if isinstance(latent, dict) else latent

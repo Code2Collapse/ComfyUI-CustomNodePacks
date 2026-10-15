@@ -59,11 +59,12 @@ def effective_naming(naming: str, naming_resolved: str) -> str:
     return read_comfy_setting("c2c.saveVideo.naming", "ComfyUI counter")
 
 
-def pad_edge_replicate(images: torch.Tensor) -> tuple[torch.Tensor, str | None]:
-    """Pad odd W/H by one pixel (edge replicate) for 4:2:0 codecs."""
+def pad_edge_replicate(images: torch.Tensor, width: bool = True, height: bool = True,
+                       ) -> tuple[torch.Tensor, str | None]:
+    """Pad odd W/H by one pixel (edge replicate): both for 4:2:0 codecs, the width for 4:2:2 (L2.53)."""
     _, h, w, _ = images.shape
-    pad_w = w % 2
-    pad_h = h % 2
+    pad_w = w % 2 if width else 0
+    pad_h = h % 2 if height else 0
     if not pad_w and not pad_h:
         return images, None
     nw, nh = w + pad_w, h + pad_h
@@ -115,6 +116,75 @@ def _rgb_to_av_frame(rgb: np.ndarray, pix_fmt: str, bit_depth: int):
         return frame.reformat(format=pix_fmt, dst_colorspace=_BT709, dst_color_range=_RANGE_TV,
                               interpolation=_SWS_FLAGS)
     return frame.reformat(format=pix_fmt, interpolation=_SWS_FLAGS)
+
+
+def quantize_fast(rgb: np.ndarray, bits: int) -> np.ndarray:
+    """quantize_rgb(rgb, 8 or 16) with torch's threads: the same float32 clip, scale and round-half-to-even, so the
+    same integers (tests/test_save_video_4k.py checks it)."""
+    t = torch.from_numpy(np.ascontiguousarray(rgb, dtype=np.float32))
+    q = t.clamp(0.0, 1.0).mul_(255.0 if bits <= 8 else 65535.0).round_()
+    if bits <= 8:
+        return q.to(torch.uint8).numpy()
+    return q.to(torch.int32).numpy().astype(np.uint16)
+
+
+def encoder_options(spec: FormatSpec, quality: int) -> dict[str, str]:
+    """Codec options for ``spec`` at ``quality`` (0-100): the same for the PyAV and the ffmpeg path."""
+    opts: dict[str, str] = {}
+    if spec.profile:
+        opts["profile"] = spec.profile
+    if spec.quality_param == "crf" and spec.codec in ("libx264", "libx265"):
+        opts["crf"] = quality_to_crf(quality)
+        if spec.codec == "libx264":
+            opts["preset"] = "medium"
+    elif spec.quality_param == "crf" and spec.codec == "libvpx-vp9":
+        opts["crf"] = quality_to_vp9_crf(quality)
+    elif spec.quality_param == "qscale" and spec.codec == "libwebp":
+        opts["qscale"] = str(max(0, min(100, 100 - quality)))
+    elif spec.quality_param == "cq":
+        # NVENC constant quality, as the 4K pack sets it (cq on the crf scale; p5 = its slower, better preset)
+        opts.update({"rc": "vbr", "cq": quality_to_crf(quality), "b": "0", "preset": "p5"})
+    return opts
+
+
+def colour_tags(spec: FormatSpec, has_alpha: bool, colorspace_out: str) -> dict[str, str] | None:
+    """What a YUV file says about its colour (L2.53). The frames are always converted with the BT.709 matrix to
+    limited range, so those two are always stated. Primaries and transfer only when the output space is one we can
+    name: sRGB (as ComfyUI's own Save Video tags it) or a Rec.709 / Rec.1886 display."""
+    pix = spec.pix_fmt_for(has_alpha)
+    if not pix.startswith(("yuv", "nv12", "p010")):
+        return None
+    tags = {"colorspace": "bt709", "color_range": "tv"}
+    name = (colorspace_out or "").lower()
+    if any(k in name for k in ("linear", "acescg", "aces2065", "log", "pq", "hlg", "2020", "p3")):
+        return tags
+    if "srgb" in name:
+        tags.update(color_primaries="bt709", color_trc="iec61966-2-1")
+    elif "1886" in name or "rec.709" in name or "bt.709" in name:
+        tags.update(color_primaries="bt709", color_trc="bt709")
+    return tags
+
+
+# PyAV takes the enum numbers (libavutil/pixfmt.h)
+_TAG_NUM = {"bt709": 1, "iec61966-2-1": 13, "tv": 1}
+
+
+def output_metadata(prompt: Any = None, extra_pnginfo: Any = None) -> dict[str, Any] | None:
+    """The workflow and prompt as ComfyUI's own Save Video stores them (keys "workflow", "prompt", JSON values), so a
+    saved file dragged into ComfyUI rebuilds its graph. None when there is nothing to store or ComfyUI was started
+    with --disable-metadata."""
+    try:
+        from comfy.cli_args import args as _args
+        if getattr(_args, "disable_metadata", False):
+            return None
+    except Exception:  # noqa: BLE001 - not inside ComfyUI
+        pass
+    meta: dict[str, Any] = {}
+    if isinstance(extra_pnginfo, dict):
+        meta.update(extra_pnginfo)
+    if prompt is not None:
+        meta["prompt"] = prompt
+    return meta or None
 
 
 def quality_to_crf(quality: int) -> str:
@@ -281,8 +351,11 @@ def _encode_av_stream(
     colorspace_out: str,
     audio: dict | None,
     has_alpha: bool,
+    metadata: dict[str, Any] | None = None,
 ) -> list[str]:
     import av
+
+    from .save_ffmpeg import encode_with_ffmpeg, exact_rate, ffmpeg_for
 
     ProgressBar, interrupt = _progress_and_interrupt()
     n, h, w, c = images.shape
@@ -291,30 +364,54 @@ def _encode_av_stream(
     # By bytes too: each chunk is copied twice on its way to the encoder, so a whole-batch chunk cost 2x the batch
     # (L7.59: Save alone peaked at 2.5x). The encoder sees the same frames in the same order.
     chunk = max(1, min(64, frames_that_fit(w, h, channels, np.float32) or 1, _CHUNK_BYTES // max(1, bpf)))
+    tags = colour_tags(spec, has_alpha, colorspace_out)
+
+    def chunks():
+        for start in range(0, n, chunk):
+            arr = images[start:start + chunk].cpu().numpy().astype(np.float32)
+            if colorspace_out and colorspace_out != "same as input":
+                arr = transform_chunk(arr, colorspace_in, colorspace_out)
+            elif colorspace_in:
+                arr = transform_chunk(arr, colorspace_in, colorspace_in)
+            yield arr if has_alpha else arr[..., :3]
+
+    exe = ffmpeg_for(spec)
+    if exe is not None:                     # L2.53: ffmpeg converts and encodes in its own process (3-4x faster)
+        pbar = ProgressBar(n) if ProgressBar else None
+        pcm = prepare_audio(audio, n, fps) if spec.audio_codec and spec.audio_codec != "wav_sidecar" else None
+        return encode_with_ffmpeg(
+            exe, images, spec, path, fps=fps, has_alpha=has_alpha, encoder_opts=encoder_options(spec, quality),
+            tags=tags, metadata=metadata, pcm=pcm, chunks=chunks(), quantize=quantize_fast, interrupt=interrupt,
+            progress=(lambda done, total: pbar.update_absolute(done, total)) if pbar else (lambda d, t: None))
 
     pix_fmt = spec.pix_fmt_for(has_alpha)
     # PyAV's muxer names differ from the file extension (mkv -> matroska), and muxer options must be given at open
     # time: Container.options is read-only in this PyAV build.
     av_format = {"mkv": "matroska"}.get(spec.container, spec.container)
-    mux_opts = {"movflags": "+faststart"} if spec.container in ("mp4", "mov") else {}
+    mux_opts = {}
+    if spec.container in ("mp4", "mov"):
+        # use_metadata_tags: the workflow / prompt keys go where ComfyUI's front end reads them (as core does)
+        mux_opts = {"movflags": "+faststart" + ("+use_metadata_tags" if metadata else "")}
     container = av.open(path, mode="w", format=av_format if spec.container != "dir" else None, options=mux_opts)
     created = True
     try:
-        stream = container.add_stream(spec.codec, rate=Fraction(fps).limit_denominator(1_000_000))
+        for key, value in (metadata or {}).items():
+            container.metadata[key] = value if isinstance(value, str) else json.dumps(value)
+        stream = container.add_stream(spec.codec, rate=exact_rate(fps))
         stream.width = w
         stream.height = h
         stream.pix_fmt = pix_fmt
-        opts: dict[str, str] = {}
-        if spec.profile:
-            opts["profile"] = spec.profile
-        if spec.quality_param == "crf" and spec.codec in ("libx264", "libx265"):
-            opts["crf"] = quality_to_crf(quality)
-            if spec.codec == "libx264":
-                opts["preset"] = "medium"
-        elif spec.quality_param == "crf" and spec.codec == "libvpx-vp9":
-            opts["crf"] = quality_to_vp9_crf(quality)
-        elif spec.quality_param == "qscale" and spec.codec == "libwebp":
-            opts["qscale"] = str(max(0, min(100, 100 - quality)))
+        if spec.codec_tag:
+            stream.codec_tag = spec.codec_tag
+        if tags:
+            cc = stream.codec_context
+            cc.colorspace = _TAG_NUM["bt709"]
+            cc.color_range = _TAG_NUM["tv"]
+            if tags.get("color_primaries"):
+                cc.color_primaries = _TAG_NUM[tags["color_primaries"]]
+            if tags.get("color_trc"):
+                cc.color_trc = _TAG_NUM[tags["color_trc"]]
+        opts = encoder_options(spec, quality)
         if opts:
             stream.options = opts
 
@@ -328,17 +425,10 @@ def _encode_av_stream(
 
         pbar = ProgressBar(n) if ProgressBar else None
         written = 0
-        for start in range(0, n, chunk):
+        for arr in chunks():
             interrupt()
-            batch = images[start:start + chunk]
-            arr = batch.cpu().numpy().astype(np.float32)
-            if colorspace_out and colorspace_out != "same as input":
-                arr = transform_chunk(arr, colorspace_in, colorspace_out)
-            elif colorspace_in:
-                arr = transform_chunk(arr, colorspace_in, colorspace_in)
             for i in range(arr.shape[0]):
-                row = arr[i] if has_alpha else arr[i][..., :3]
-                vf = _rgb_to_av_frame(row, pix_fmt, spec.bit_depth)
+                vf = _rgb_to_av_frame(arr[i], pix_fmt, spec.bit_depth)
                 vf.pts = written
                 for packet in stream.encode(vf):
                     container.mux(packet)
@@ -543,6 +633,7 @@ def encode_video(
     colorspace_out: str,
     audio: dict | None,
     pad_note: str | None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if images.ndim == 3:
         images = images.unsqueeze(0)
@@ -577,7 +668,7 @@ def encode_video(
     else:
         paths = _encode_av_stream(
             images, spec, full_path, fps, quality,
-            colorspace_in, out_cs, audio, alpha_out,
+            colorspace_in, out_cs, audio, alpha_out, metadata,
         )
 
     if pad_note:

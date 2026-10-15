@@ -82,7 +82,13 @@ class SaveVideoC2C:
                                "so the clip never sits in RAM. off: no tiles. manual: tile_size."}),
                 "tile_size": ("INT", {"default": 512, "min": 64, "max": 2048, "step": 64,
                                       "tooltip": "Tile size in pixels when tile_mode is manual."}),
+                # L2.53 (owner A14) - appended, so saved workflows keep their widget order
+                "save_metadata": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Store the workflow and prompt in the video file (MP4 / MOV / MKV / WebM), as ComfyUI's "
+                               "own Save Video does, so the file can be dragged back into ComfyUI to rebuild the graph."}),
             },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
     @classmethod
@@ -125,6 +131,9 @@ class SaveVideoC2C:
         vae=None,
         tile_mode="auto",
         tile_size=512,
+        save_metadata=True,
+        prompt=None,
+        extra_pnginfo=None,
     ):
         stream_info = None
         if latent is not None or vae is not None:
@@ -132,8 +141,11 @@ class SaveVideoC2C:
                 raise SaveVideoError("Wire images, OR latent + vae - not both.")
             if latent is None or vae is None:
                 raise SaveVideoError("Stream save needs both latent and vae wired.")
-            from .c2c_video.stream_decode import stream_decode
+            from .c2c_video.stream_decode import stream_decode, stream_decode_images
+            z = latent.get("samples") if isinstance(latent, dict) else latent
             tile_px = 0
+            if torch.is_tensor(z) and z.ndim == 4:      # L2.53: image latents, decoded in batches into the file
+                tile_mode = "off"
             if tile_mode == "manual":
                 tile_px = int(tile_size)
             elif tile_mode != "off":
@@ -141,7 +153,10 @@ class SaveVideoC2C:
                 z = latent.get("samples") if isinstance(latent, dict) else None
                 if torch.is_tensor(z):
                     tile_px = C2CVAEQualityDecode._auto_tile_px(vae, z, False)
-            images, stream_info = stream_decode(vae, latent, tile_px=tile_px)
+            if torch.is_tensor(z) and z.ndim == 4:
+                images, stream_info = stream_decode_images(vae, latent)
+            else:
+                images, stream_info = stream_decode(vae, latent, tile_px=tile_px)
             src = latent.get("c2c_source_frames") if isinstance(latent, dict) else None
             if isinstance(src, int) and 0 < src < images.shape[0]:
                 images.shape = (src,) + tuple(images.shape[1:])        # the frames the clip really had
@@ -163,14 +178,16 @@ class SaveVideoC2C:
             cs_out = default_colorspace_out_exr()
 
         pad_note = None
-        if spec.yuv420 and stream_info is not None:
+        even_w, even_h = spec.chroma_even                             # 4:2:0 both, 4:2:2 width: pad, never refuse
+        if (even_w or even_h) and stream_info is not None:
             n0, h0, w0, c0 = images.shape
-            if h0 % 2 or w0 % 2:                                      # pad each chunk as it arrives
-                images._transform = lambda chunk: pad_edge_replicate(chunk)[0]
-                images.shape = (n0, h0 + h0 % 2, w0 + w0 % 2, c0)
-                pad_note = f"{w0}x{h0} -> {w0 + w0 % 2}x{h0 + h0 % 2}"
-        elif spec.yuv420:
-            images, pad_note = pad_edge_replicate(images)
+            pw, ph = (w0 % 2 if even_w else 0), (h0 % 2 if even_h else 0)
+            if pw or ph:                                              # pad each chunk as it arrives
+                images._transform = lambda chunk: pad_edge_replicate(chunk, even_w, even_h)[0]
+                images.shape = (n0, h0 + ph, w0 + pw, c0)
+                pad_note = f"{w0}x{h0} -> {w0 + pw}x{h0 + ph}"
+        elif even_w or even_h:
+            images, pad_note = pad_edge_replicate(images, even_w, even_h)
 
         _, h, w, _ = images.shape
         naming_eff = effective_naming(str(naming), str(naming_resolved or ""))
@@ -184,6 +201,10 @@ class SaveVideoC2C:
             height=int(h),
         )
 
+        metadata = None
+        if save_metadata and spec.container in ("mp4", "mov", "mkv", "webm"):
+            from .c2c_video.save_encode import output_metadata
+            metadata = output_metadata(prompt, extra_pnginfo)
         result = encode_video(
             images,
             spec,
@@ -194,6 +215,7 @@ class SaveVideoC2C:
             colorspace_out=cs_out,
             audio=audio,
             pad_note=pad_note,
+            metadata=metadata,
         )
 
         if stream_info is not None:

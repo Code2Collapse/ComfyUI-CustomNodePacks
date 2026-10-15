@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-QualityParam = Literal["crf", "qscale", "prores_profile", "gif_quality", None]
+QualityParam = Literal["crf", "cq", "qscale", "prores_profile", "gif_quality", None]
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,19 @@ class FormatSpec:
     quality_param: QualityParam
     ext: str
     file_ext: str | None = None  # sequence frame ext override
+    hw: str | None = None        # "nvenc": needs an NVIDIA GPU (L2.53)
+    codec_tag: str | None = None  # e.g. "hvc1": HEVC in MP4 that Apple players open (L2.53, as the 4K pack tags it)
+
+    @property
+    def chroma_even(self) -> tuple[bool, bool]:
+        """(width, height) must be even for this pixel format: 4:2:0 both, 4:2:2 width only (L2.53: odd sizes are
+        padded, never refused)."""
+        p = self.pix_fmt
+        if self.yuv420 or "420" in p or p in ("nv12", "p010le"):
+            return True, True
+        if "422" in p:
+            return True, False
+        return False, False
 
     def pix_fmt_for(self, has_alpha: bool) -> str:
         if self.codec == "ffv1" and has_alpha:
@@ -290,7 +303,28 @@ def _base_formats() -> dict[str, FormatSpec]:
     }
 
 
-FORMATS: dict[str, FormatSpec] = _base_formats()
+def _fast_formats() -> dict[str, FormatSpec]:
+    """L2.53 (owner A14): the 4K pack's encoders we lacked. Appended after the old labels (saved workflows store the
+    label). NVENC = NVIDIA's hardware encoder: listed as unavailable without an NVIDIA GPU."""
+    def mp4(label, codec, pix_fmt, bits, *, playable, quality="crf", hw=None, tag=None, profile=None):
+        return FormatSpec(label=label, container="mp4", codec=codec, pix_fmt=pix_fmt, profile=profile, bit_depth=bits,
+                          supports_alpha=False, audio_codec="aac", sequence=False, yuv420=True,
+                          browser_playable=playable, quality_param=quality, ext="mp4", hw=hw, codec_tag=tag)
+
+    return {
+        "MP4 H.265": mp4("MP4 H.265", "libx265", "yuv420p", 8, playable=False, tag="hvc1"),
+        "MP4 H.264 (NVENC)": mp4("MP4 H.264 (NVENC)", "h264_nvenc", "yuv420p", 8, playable=True, quality="cq",
+                                 hw="nvenc"),
+        "MP4 H.265 (NVENC)": mp4("MP4 H.265 (NVENC)", "hevc_nvenc", "yuv420p", 8, playable=False, quality="cq",
+                                 hw="nvenc", tag="hvc1"),
+        "MP4 H.265 10-bit (NVENC)": mp4("MP4 H.265 10-bit (NVENC)", "hevc_nvenc", "p010le", 10, playable=False,
+                                        quality="cq", hw="nvenc", tag="hvc1", profile="main10"),
+        "MP4 AV1 (NVENC)": mp4("MP4 AV1 (NVENC)", "av1_nvenc", "yuv420p", 8, playable=True, quality="cq",
+                               hw="nvenc"),
+    }
+
+
+FORMATS: dict[str, FormatSpec] = {**_base_formats(), **_fast_formats()}
 
 _OIIO_OK: bool | None = None
 
@@ -330,7 +364,25 @@ def _audio_writable(name: str | None) -> bool:
     return _codec_writable(name)
 
 
+_NVIDIA: bool | None = None
+
+
+def _nvidia_gpu() -> bool:
+    """An NVIDIA GPU torch can use (NVENC needs one). Never raises, never fails an import."""
+    global _NVIDIA
+    if _NVIDIA is None:
+        try:
+            import torch
+
+            _NVIDIA = bool(torch.cuda.is_available()) and torch.version.cuda is not None
+        except Exception:  # noqa: BLE001
+            _NVIDIA = False
+    return _NVIDIA
+
+
 def _unavailable_reason(spec: FormatSpec) -> str | None:
+    if spec.hw == "nvenc" and not _nvidia_gpu():
+        return "NVENC needs an NVIDIA GPU with its driver; pick MP4 H.264 or MP4 H.265 (CPU)"
     if not _codec_writable(spec.codec):
         if spec.codec in _OIIO_FORMATS:
             return "pip install OpenImageIO"
