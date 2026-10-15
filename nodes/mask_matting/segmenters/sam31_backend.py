@@ -241,6 +241,33 @@ class SAM31Segmenter(BaseSegmenter):
         score = float(scores.max().item()) if scores is not None and len(scores) else 0.0
         return m_np, score
 
+    def detect_objects(self, frame_hwc: np.ndarray, text: str = "", pos=None, neg=None, boxes=None):
+        """Every object SAM 3.1 keeps on one frame, separately (L7.114, the viewer's Find / click): the same prompts
+        as _seg_one, without the union. Returns [{"mask": HxW float, "box": [x0, y0, x1, y1] px, "score": float}]."""
+        self.load()
+        H, W = frame_hwc.shape[:2]
+        proc = self._processor
+        proc.set_confidence_threshold(self.DEFAULT_CONF)
+        state = proc.set_image(self._to_pil(frame_hwc))
+        if text and text.strip():
+            state = proc.set_text_prompt(text.strip(), state)
+        if boxes:
+            state = proc.add_multiple_box_prompts([self._xyxy_to_cxcywh_norm(b, W, H) for b in boxes],
+                                                  [True] * len(boxes), state)
+        pos_pts = self._norm_points(pos or [], W, H)
+        neg_pts = self._norm_points(neg or [], W, H)
+        if pos_pts or neg_pts:
+            state = proc.add_point_prompt(pos_pts + neg_pts, [1] * len(pos_pts) + [0] * len(neg_pts), state)
+        masks, scores, bxs = state.get("masks"), state.get("scores"), state.get("boxes")
+        out = []
+        if masks is None or len(masks) == 0:
+            return out
+        for i in range(len(masks)):
+            m = masks[i].to(torch.float32).reshape(-1, H, W)[0].cpu().numpy()
+            box = [float(v) for v in bxs[i].tolist()] if bxs is not None and len(bxs) > i else None
+            out.append({"mask": m, "box": box, "score": float(scores[i]) if scores is not None else 0.0})
+        return out
+
     # ── public ──────────────────────────────────────────────────────────
     def segment(self, image_bhwc, *, mode="auto",
                 positive_points=None, negative_points=None,
