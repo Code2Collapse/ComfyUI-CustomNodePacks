@@ -19,6 +19,7 @@ import { c2cConfirm } from "./_c2c_dialog.js";
 // then never installed. See _c2c_lite.js.
 import { LITE } from "./_c2c_lite.js";
 import { getRuntime } from "./_c2c_runtime.js";
+import { renderBatchingTable } from "./c2c_batching_badges.js";
 
 const STYLE_TAG_ID = "mec-diagnostics-style";
 
@@ -1625,6 +1626,7 @@ const TABS = [
     { id: "intg",  label: "Integrity",   render: _renderIntegrity  },
     { id: "set",   label: "Settings",    render: _renderSettings   },
     { id: "pat",   label: "Patterns",    render: _renderPatterns   },
+    { id: "batch", label: "Batching",    render: renderBatchingTable },   // L2.54: Image batching per node
 ];
 
 function _buildHeader(root) {

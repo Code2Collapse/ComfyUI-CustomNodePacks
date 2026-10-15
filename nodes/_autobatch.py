@@ -1102,6 +1102,9 @@ def _record_chunked_call(
         "chunk_size": int(chunk_size),
         "budget": int(budget) if budget is not None else None,
     })
+    if int(chunk_count) > 1:          # image batching changed how this node ran: badge + sidebar (L2.54)
+        _adapters.emit_decision({"label": label, "strategy": "chunked", "frames": int(batch_size),
+                                 "chunks": int(chunk_count), "chunk_size": int(chunk_size)})
 
 
 def _run_frame_probe(

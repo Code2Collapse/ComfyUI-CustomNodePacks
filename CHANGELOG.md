@@ -15,6 +15,10 @@ Evidence: `docs/evidence/L2.54/` (workspace): design, `growmask_adapter_probe.js
   Measured, whole graph, 97 x 1280x720, CPU: expand 8 square 9.2 s -> 3.2 s, expand 8 tapered 5.1 s -> 2.6 s,
   expand -3 2.2 s -> 1.3 s. Off and Internal are unchanged. `C2C_AUTOBATCH_ADAPTERS=0` turns replacements off.
   Not measured on a GPU (the testbed is CPU-only).
+- **See what Image batching did.** A node gets a small badge when Image batching changed how it ran (a faster
+  version was used, or the batch was split into chunks): the classic title bar and the Nodes 2.0 header both show
+  it, and the next run clears it. The C2C Diagnostics sidebar has a **Batching** tab listing those nodes for the
+  last run (click a row to select the node). Nothing polls: the server sends one message per changed node.
 
 ## Unreleased – 2026-10-15 (one Matte node, L7.65 P05)
 

@@ -229,7 +229,24 @@ def validate(adapter: Adapter, original: Callable[..., Any]) -> tuple[bool, str]
     return ok, reason
 
 
+def emit_decision(entry: dict[str, Any]) -> None:
+    """Tag a decision with the node that is running (core sets server.last_node_id before each node) and send it to
+    the browser as ``c2c.autobatch.decision`` for the node badge + the sidebar table. Never raises."""
+    try:
+        from server import PromptServer  # noqa: WPS433
+
+        srv = getattr(PromptServer, "instance", None)
+        if srv is None:
+            return
+        entry.setdefault("node", getattr(srv, "last_node_id", None))
+        if getattr(srv, "client_id", None) is not None and entry.get("node") is not None:
+            srv.send_sync("c2c.autobatch.decision", dict(entry), srv.client_id)
+    except Exception:  # noqa: BLE001 - diagnostics must never break a run
+        pass
+
+
 def _record(entry: dict[str, Any]) -> None:
+    emit_decision(entry)
     DECISIONS.append(entry)
     del DECISIONS[:-50]
 
