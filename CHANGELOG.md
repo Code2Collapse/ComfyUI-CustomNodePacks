@@ -2,6 +2,20 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-15 (Image batching Universal: proven faster operations)
+
+Evidence: `docs/evidence/L2.54/` (workspace): design, `growmask_adapter_probe.json`, `growmask_live.json`.
+
+- **Universal now replaces slow operations with proven faster versions, where it is measurably faster.** First one:
+  core Grow Mask, which loops over every frame and every expand step through scipy. C2C's version does each step once
+  over the whole batch with the same 3x3 maximum / minimum. Before first use it is checked against the original
+  node on small masks covering the borders and both corner styles; the results must be identical to the bit, or it
+  stays off (reason in `/c2c/autobatch/status`). The first call per frame size times both on at most four frames and
+  keeps the faster; tiny masks keep the original. A changed core Grow Mask is never replaced until checked again.
+  Measured, whole graph, 97 x 1280x720, CPU: expand 8 square 9.2 s -> 3.2 s, expand 8 tapered 5.1 s -> 2.6 s,
+  expand -3 2.2 s -> 1.3 s. Off and Internal are unchanged. `C2C_AUTOBATCH_ADAPTERS=0` turns replacements off.
+  Not measured on a GPU (the testbed is CPU-only).
+
 ## Unreleased – 2026-10-15 (one Matte node, L7.65 P05)
 
 Design: `docs/design/matte_unified.md`. Tests: `tests/test_consolidation_p05_matte.py`.

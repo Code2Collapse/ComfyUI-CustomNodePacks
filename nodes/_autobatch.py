@@ -61,6 +61,8 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 
 import torch
 
+from . import _autobatch_adapters as _adapters
+
 log = logging.getLogger("C2C.autobatch")
 
 RAM_FRACTION = 0.35
@@ -254,6 +256,14 @@ def _format_bytes(n: int) -> str:
 
 def _autobatch_enabled() -> bool:
     return os.environ.get("C2C_AUTOBATCH", "").strip() != "0"
+
+
+def _universal_adapters_on() -> bool:
+    """Operation adapters (L2.54) run only in Universal mode."""
+    try:
+        return _autobatch_enabled() and _resolve_mode(_CONFIG_CACHE or load_config()) == "universal"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _is_ui_dict(out: Any) -> bool:
@@ -1200,6 +1210,7 @@ def status() -> dict[str, Any]:
         "unsafe": dict(_UNSAFE),
         "history": list(_CALL_HISTORY),
         "profiles": {k: dict(v) for k, v in _PROFILES.items()},   # measured setup_s / frame_s / gpu_bpf (L7.82)
+        "adapters": _adapters.status(),                             # L2.54 operation adapters (Universal only)
     }
 
 
@@ -1956,6 +1967,11 @@ def _make_universal_wrapper(
         if bound is None:
             return orig(self, *args, **kwargs)
 
+        if _universal_adapters_on():
+            used, res = _adapters.try_adapter(class_name, lambda **kw: orig(self, **kw), bound)
+            if used:
+                return res
+
         frame_inputs, static, batch_size = _frame_inputs_from_bound(bound, names)
         if not frame_inputs or batch_size <= 1:
             return orig(self, *args, **kwargs)
@@ -2012,6 +2028,11 @@ def _make_universal_v3_wrapper(
         bound = _bind_node_kwargs(orig_func, cls, *args, **kwargs)
         if bound is None:
             return orig_func(cls, *args, **kwargs)
+
+        if _universal_adapters_on():
+            used, res = _adapters.try_adapter(class_name, lambda **kw: orig_func(cls, **kw), bound)
+            if used:
+                return res
 
         frame_inputs, static, batch_size = _frame_inputs_from_bound(bound, names)
         if not frame_inputs or batch_size <= 1:
