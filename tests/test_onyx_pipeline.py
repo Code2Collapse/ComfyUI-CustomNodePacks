@@ -426,8 +426,10 @@ def test_object_alphas_shape():
 
 
 def test_maskops_return_types():
-    assert len(MaskOpsMEC.RETURN_TYPES) == 18
-    assert MaskOpsMEC.RETURN_NAMES[-1] == "object_alphas"
+    # L7.65 P05 appended `foreground` (19th); object_alphas stays the 18th output
+    assert len(MaskOpsMEC.RETURN_TYPES) == 19
+    assert MaskOpsMEC.RETURN_NAMES[17] == "object_alphas"
+    assert MaskOpsMEC.RETURN_NAMES[-1] == "foreground"
 
 
 def test_execute_default_pipeline_legacy():

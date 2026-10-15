@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from .._is_changed_util import hash_args_and_kwargs
+from . import _engines
 from .matters import all_matters, get_matter_cls
 from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
@@ -397,7 +398,10 @@ class MaskOpsMEC:
         "face, neg on neck) it picks the SAM candidate that excludes "
         "the neg points, so you get the face only, not the whole "
         "person. For manual 11-stage refinement (hole-fill, joint "
-        "bilateral, DenseCRF, etc.) chain MaskRefineMEC downstream."
+        "bilateral, DenseCRF, etc.) chain MaskRefineMEC downstream. "
+        "The `backend` input also runs SAM + ViTMatte, SeC + MatAnyone2 "
+        "or background removal (RMBG-2.0 / BiRefNet) - the former "
+        "separate nodes - through the same outputs."
     )
     FUNCTION = "execute"
     RETURN_TYPES = (
@@ -406,12 +410,15 @@ class MaskOpsMEC:
         # NEW outputs (refine + diagnose + luma-key debug)
         "MASK", "MASK", "FLOAT", "STRING",
         "MASK",
+        # L7.65 P05: appended, the first 18 never move
+        "IMAGE",
     )
     RETURN_NAMES = (
         "mask", "alpha", "preview", "trimap", "bbox", "bbox_json", "score", "info",
         "despilled", "lightwrap_rgba", "edge_mask", "inside_mask", "outside_mask",
         "luma_key_mask", "problem_regions", "severity", "suggested_method",
         "object_alphas",
+        "foreground",
     )
     OUTPUT_TOOLTIPS = (
         "Coarse mask from the segmenter (B,H,W).",
@@ -432,6 +439,7 @@ class MaskOpsMEC:
         "Severity score [0,1] from the failure explainer.",
         "Suggested next masking method (string) from the failure explainer.",
         "Per-object alpha mattes stacked object-major as (O*B,H,W).",
+        "The image times the final alpha (premultiplied), despilled when despill is on.",
     )
 
     @classmethod
@@ -643,6 +651,9 @@ class MaskOpsMEC:
                     "advanced": True,
                     "tooltip": "How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors. On the CPU tiles always run one at a time (faster there, and a third of the memory).",
                 }),
+                # L7.65 P05: the backend choice and the inputs of the three former matte nodes, APPENDED so saved
+                # MaskOps workflows keep their widget order (nodes/mask_matting/_engines.py)
+                **_engines.appended_inputs(),
             },
         })
 
@@ -728,7 +739,19 @@ class MaskOpsMEC:
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
                 band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
-                matte_overlap=64, matte_tile_batch=4):
+                matte_overlap=64, matte_tile_batch=4,
+                # L7.65 P05: the backend choice + the former matte nodes' inputs (_engines.appended_inputs)
+                backend=_engines.NATIVE, sam_model=None,
+                points_json="[]", bbox_json="",
+                sam_iterations=2, sam_refine_method="auto", sam_edge_radius=12,
+                sam_detail_preservation=0.85, sam_edge_contrast=1.0,
+                sam_multimask_output=True, sam_mask_index=0, sam_score_threshold=0.0,
+                sam_trimap_dilate=0, sam_trimap_erode=0, sam_batch_mode=False,
+                sec_model=None, sec_text_prompt="", sec_matting_backend="auto",
+                sec_edge_radius=15, sec_n_warmup=5, sec_edge_refine_method="none",
+                bg_model=None, bg_threshold=0.5, bg_invert=False, bg_mask_blur=0,
+                fill_holes_enabled=True, min_region_size=64,
+                keep_model_loaded=True, split_masks=True):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskOpsMEC expects IMAGE tensor [B,H,W,C]")
         for _label, _m in (
@@ -743,6 +766,38 @@ class MaskOpsMEC:
                 raise ValueError(
                     f"MaskOpsMEC {_label} expects MASK tensor [H,W] or [B,H,W]"
                 )
+
+        # L7.65 P05: SAM + ViTMatte, SeC + MatAnyone2 and background removal run the former nodes' own code
+        # (_engines.run_engine), then the finishing stage every backend shares. segment + matte is below, unchanged.
+        if _engines.is_engine(backend):
+            return self._execute_engine(backend, image, {
+                "subject_preset": subject_preset, "precision": precision, "auto_download": auto_download,
+                "edge_mode": edge_mode, "edge_threshold": edge_threshold, "edge_feather": edge_feather,
+                "despill": despill, "despill_strength": despill_strength, "preserve_skin": preserve_skin,
+                "lightwrap_strength": lightwrap_strength, "lightwrap_radius": lightwrap_radius,
+                "edge_band_radius": edge_band_radius, "premultiply": premultiply,
+                "enable_diagnose": enable_diagnose, "diag_ring_width": diag_ring_width,
+                "diag_blur_threshold": diag_blur_threshold, "diag_brightness_threshold": diag_brightness_threshold,
+                "positive_coords": positive_coords, "negative_coords": negative_coords,
+                "pos_bbox": pos_bbox, "normal_bbox": normal_bbox, "text_prompt": text_prompt,
+                "external_mask": external_mask, "external_trimap": external_trimap,
+                "holdout_mask": holdout_mask, "core_mask": core_mask,
+                "sam_model": sam_model, "points_json": points_json, "bbox_json": bbox_json,
+                "sam_iterations": sam_iterations, "sam_refine_method": sam_refine_method,
+                "sam_edge_radius": sam_edge_radius, "sam_detail_preservation": sam_detail_preservation,
+                "sam_edge_contrast": sam_edge_contrast, "sam_multimask_output": sam_multimask_output,
+                "sam_mask_index": sam_mask_index, "sam_score_threshold": sam_score_threshold,
+                "sam_trimap_dilate": sam_trimap_dilate, "sam_trimap_erode": sam_trimap_erode,
+                "sam_batch_mode": sam_batch_mode,
+                "sec_model": sec_model if sec_model else _engines.sec_model_choices()[0],
+                "sec_text_prompt": sec_text_prompt, "sec_matting_backend": sec_matting_backend,
+                "sec_edge_radius": sec_edge_radius, "sec_n_warmup": sec_n_warmup,
+                "sec_edge_refine_method": sec_edge_refine_method,
+                "bg_model": bg_model if bg_model else _engines.bg_model_choices()[0],
+                "bg_threshold": bg_threshold, "bg_invert": bg_invert, "bg_mask_blur": bg_mask_blur,
+                "fill_holes_enabled": fill_holes_enabled, "min_region_size": min_region_size,
+                "keep_model_loaded": keep_model_loaded, "split_masks": split_masks,
+            })
 
         with torch.no_grad():
             return self._execute_impl(
@@ -778,7 +833,17 @@ class MaskOpsMEC:
                 external_trimap, holdout_mask, core_mask,
                 pipeline, scene_prompts, band_scale, matte_tile,
                 temporal_stabilise, matte_overlap, matte_tile_batch,
+                split_masks=bool(split_masks),
             )
+
+    def _execute_engine(self, backend, image, kw):
+        """One of the three former matte nodes as a backend (L7.65 P05): its own code with its own arguments
+        (`_engines.run_engine`), then the shared finishing stage. No free_vram() here - each engine cleans up as it
+        always did (keep_model_loaded is theirs). auto_download is this node's Allow Download for all of them."""
+        from .._download_policy import allow_downloads
+        with torch.no_grad(), allow_downloads(bool(kw.get("auto_download"))):
+            res = _engines.run_engine(backend, image, kw)
+            return _engines.finish(res, image, backend, kw)
 
     def _execute_impl(self, image, segmenter, matter, model, matter_model,
                 precision, attention, offload, subject_preset,
@@ -812,7 +877,7 @@ class MaskOpsMEC:
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
                 band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
-                matte_overlap=64, matte_tile_batch=4):
+                matte_overlap=64, matte_tile_batch=4, split_masks=True):
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
         pos_points = positive_coords or pos_points or ""
@@ -1661,9 +1726,13 @@ class MaskOpsMEC:
                 lightwrap = torch.zeros((*alpha_t.shape, 4),
                                          dtype=img_bhwc.dtype)
             # 5. Edge / inside / outside masks.
-            edge_m, inside_m, outside_m = _vfx.edge_inside_outside(
-                alpha_t, edge_radius=int(edge_band_radius))
-            edge_m, inside_m, outside_m = edge_m.cpu(), inside_m.cpu(), outside_m.cpu()
+            if bool(split_masks):
+                edge_m, inside_m, outside_m = _vfx.edge_inside_outside(
+                    alpha_t, edge_radius=int(edge_band_radius))
+                edge_m, inside_m, outside_m = edge_m.cpu(), inside_m.cpu(), outside_m.cpu()
+            else:
+                # L7.65 P05: split_masks off - three empty outputs that take no memory
+                edge_m = inside_m = outside_m = _engines._empty(tuple(alpha_t.shape))
 
             # Preview = image * alpha (premultiplied) or straight alpha.
             alpha_cpu = alpha_t.cpu()
@@ -1671,6 +1740,8 @@ class MaskOpsMEC:
                 preview = (despilled * alpha_cpu.unsqueeze(-1)).clamp(0, 1)
             else:
                 preview = despilled.clamp(0, 1)
+            # L7.65 P05: the premultiplied foreground; with premultiply on it IS the preview (no second copy)
+            foreground = preview if bool(premultiply) else (despilled * alpha_cpu.unsqueeze(-1)).clamp(0, 1)
 
             # Bbox from alpha (first frame)
             x0, y0, x1, y1 = bbox_from_mask(alpha_cpu[0].numpy())
@@ -1759,6 +1830,9 @@ class MaskOpsMEC:
                 info_obj["model_free"] = _model_free
             elif seg_key == "classic" or mat_key == "guided_filter":
                 info_obj["approximate"] = True             # picked directly: still a model-free approximation
+            # L7.65 P05: which backend ran (the others report it too), and whether the split masks were made
+            info_obj["backend"] = _engines.NATIVE
+            info_obj["split_masks"] = bool(split_masks)
             # Output luma-key mask (zeros if not run).
             if luma_mask_t is None:
                 luma_out = torch.zeros_like(alpha_cpu)
@@ -1787,6 +1861,7 @@ class MaskOpsMEC:
                 float(severity_val),
                 suggested,
                 object_alphas_out.cpu().float().clamp(0, 1),
+                foreground,
             )
         finally:
             _dl.__exit__(None, None, None)

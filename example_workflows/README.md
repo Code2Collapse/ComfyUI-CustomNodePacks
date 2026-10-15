@@ -10,7 +10,7 @@ either one you have installed, or one of its `[download]` entries.
 | File | What it shows | Nodes |
 |---|---|---|
 | `basic_sam_segmentation.json` | Click points on an image, SAM turns them into a mask, preview it as an overlay | SAM Model Loader, Mask Edit (points_bbox), SAM Mask Generator, Mask Preview Overlay |
-| `sam_vitmatte_pipeline.json` | Points and boxes into SAM + ViTMatte for a soft alpha on hair and fur | SAM Model Loader, Mask Edit (points_bbox), SAM + ViTMatte Pipeline |
+| `sam_vitmatte_pipeline.json` | Points and boxes into SAM + ViTMatte for a soft alpha on hair and fur | SAM Model Loader, Mask Edit (points_bbox), Mask + Matting (backend SAM + ViTMatte) |
 | `mask_matting_sam3_vitmatte.json` | One click into Mask + Matting (cascade pipeline: SAM 3.1 then ViTMatte, hair preset), alpha preview | Mask Edit (points_bbox), Mask + Matting, Convert Mask to Image |
 | `mask_editing_toolkit.json` | Draw a circle and a rectangle, expand and blur one, union them, adjust gamma, preview each stage | Mask Edit (draw_advanced, transform), Mask Composite Advanced, Mask Math, Mask Preview Overlay |
 | `draw_shape_multi.json` | Two parametric shapes (rectangle, ellipse) combined into one mask | Mask Edit (draw_shape), Mask Composite Advanced, Mask Preview Overlay |

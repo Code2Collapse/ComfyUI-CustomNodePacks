@@ -46,6 +46,8 @@ ALWAYS = (
     "robust_propagation", "auto_download", "seed",
     # which pipeline runs decides what everything else means
     "pipeline",
+    # L7.65 P05: which backend makes the matte (segment + matte or one of the former matte nodes)
+    "backend",
 )
 
 #: Pipeline-level widgets: they belong to the NODE, not to a backend, so no
@@ -82,6 +84,8 @@ FEATURE = (
     "scene_prompts", "band_scale", "matte_tile", "temporal_stabilise",
     # ViTMatte cascade tiling (gated on matter + pipeline in tiling_visible)
     "matte_overlap", "matte_tile_batch",
+    # L7.65 P05: whether the edge / inside / outside masks are made (every backend)
+    "split_masks",
 )
 
 #: pipeline="onyx" is ONE fixed pipeline - a SAM 3.1 video session, a trimap
@@ -127,6 +131,7 @@ _CASCADE_VITMATTE_TILE = frozenset({"matte_overlap", "matte_tile_batch"})
 SOCKETS = (
     "image", "external_mask", "external_trimap", "holdout_mask", "core_mask",
     "pos_bbox", "neg_bbox", "normal_bbox",
+    "sam_model",
 )
 
 #: widget -> the switch that has to be on for it to matter.
@@ -234,6 +239,40 @@ NOT_EXPOSED = frozenset({
 })
 
 
+# ── L7.65 P05: the three former matte nodes as backends ─────────────────────
+# What each backend reads. With backend = segment + matte everything above
+# applies. With one of the other three, the segmenter / matter machinery reads
+# nothing: the engine reads its own controls (ENGINE_READS) and the finishing
+# stage every backend shares (FINISHING). Controls only an engine reads
+# (BACKEND_ONLY) never show for segment + matte. The spec serves these tables
+# and js/mask_visibility.js applies them as they are (no sections, no new UI):
+# the node's next UI is a separate, viewer-first design (owner 2026-10-15).
+from ._engines import NATIVE, REMOVE_BG, SAM_VITMATTE, SEC_MATANYONE, is_engine  # noqa: E402
+
+FINISHING = (
+    "backend", "edge_mode", "edge_threshold", "edge_feather", "despill", "despill_strength",
+    "preserve_skin", "lightwrap_strength", "lightwrap_radius", "edge_band_radius", "split_masks",
+    "enable_diagnose", "diag_ring_width", "diag_blur_threshold", "diag_brightness_threshold",
+    "auto_download",
+)
+ENGINE_READS: Dict[str, tuple] = {
+    SAM_VITMATTE: ("subject_preset", "points_json", "bbox_json", "sam_iterations", "sam_refine_method",
+                   "sam_edge_radius", "sam_detail_preservation", "sam_edge_contrast", "sam_multimask_output",
+                   "sam_mask_index", "sam_score_threshold", "sam_trimap_dilate", "sam_trimap_erode",
+                   "sam_batch_mode", "fill_holes_enabled", "min_region_size"),
+    SEC_MATANYONE: ("sec_model", "sec_text_prompt", "points_json", "bbox_json", "sec_matting_backend",
+                    "sec_edge_radius", "sec_n_warmup", "sec_edge_refine_method", "precision",
+                    "fill_holes_enabled", "min_region_size", "keep_model_loaded"),
+    REMOVE_BG: ("bg_model", "bg_threshold", "bg_invert", "bg_mask_blur", "keep_model_loaded", "premultiply"),
+}
+BACKEND_ONLY = frozenset(n for reads in ENGINE_READS.values() for n in reads) - set(ALWAYS) - set(FEATURE)
+
+
+def _engine_visible(backend: str, values: Dict[str, Any]) -> List[str]:
+    cand = set(SOCKETS) | set(FINISHING) | set(ENGINE_READS.get(backend, ()))
+    return sorted(n for n in cand if n in SOCKETS or toggle_allows(n, values))
+
+
 def _widgets_of(params) -> set:
     """Translate a backend's PARAMS into MaskOps widget names."""
     out = set()
@@ -331,6 +370,8 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
     two rules from the served spec; this is the reference they are tested
     against.
     """
+    if is_engine(values.get("backend")):
+        return _engine_visible(str(values.get("backend")), values)
     if str(values.get("pipeline", "")) == "onyx":
         # One fixed pipeline: the segmenter picker does not decide anything,
         # so the candidates are the core + ONYX's reads + the matter's own.
@@ -339,6 +380,7 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
         if mat is not None:
             cand |= _widgets_of(getattr(mat, "PARAMS", ()) or ())
         cand -= set(ONYX_IGNORES)
+        cand -= BACKEND_ONLY
         return sorted(
             n for n in cand
             if n in SOCKETS
@@ -349,9 +391,11 @@ def visible(segmenter: str, matter: str, values: Dict[str, Any]) -> List[str]:
         return cand
     return sorted(
         n for n in cand
-        if n in SOCKETS
-        or (toggle_allows(n, values) and tiling_visible(n, matter, values))
+        if n not in BACKEND_ONLY
+        and (n in SOCKETS
+             or (toggle_allows(n, values) and tiling_visible(n, matter, values)))
     )
+
 
 
 def build_spec() -> Dict[str, Any]:
@@ -396,6 +440,12 @@ def build_spec() -> Dict[str, Any]:
             "widgets": sorted(_VITMATTE_TILE_WIDGETS),
             "cascade_only": sorted(_CASCADE_VITMATTE_TILE),
         },
+        # L7.65 P05: what each of the three other backends reads, the shared finishing stage, and the controls
+        # segment + matte never shows
+        "native": NATIVE,
+        "backends": {k: list(v) for k, v in ENGINE_READS.items()},
+        "finishing": list(FINISHING),
+        "backend_only": sorted(BACKEND_ONLY),
     }
 
 

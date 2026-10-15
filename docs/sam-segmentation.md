@@ -216,6 +216,8 @@ Semantic face/clothes parsing using SegFormer. Select classes by name to build a
 
 ### 6. Background Remover (MEC)
 
+> **Merged (L7.65 P05):** this is now Mask + Matting (`MaskOpsMEC`) with `backend` = `remove background`. Saved workflows migrate on load with the same results; the inputs are renamed as listed in [MIGRATION.md](MIGRATION.md) and the outputs map to Mask + Matting's `foreground, alpha, info`. The table below lists the former names.
+
 One-click background removal using RMBG-2.0 or BiRefNet. No prompts needed.
 
 **File:** [`nodes/background_remover.py`](../nodes/background_remover.py)  
@@ -244,6 +246,8 @@ One-click background removal using RMBG-2.0 or BiRefNet. No prompts needed.
 ---
 
 ### 7. SAM + ViTMatte Pipeline (MEC)
+
+> **Merged (L7.65 P05):** this is now Mask + Matting (`MaskOpsMEC`) with `backend` = `SAM + ViTMatte`. Saved workflows migrate on load with the same results; the inputs are renamed as listed in [MIGRATION.md](MIGRATION.md) and the outputs map to Mask + Matting's `alpha, mask, edge_mask, preview, bbox, score, info`. The table below lists the former names.
 
 End-to-end pipeline: iterative SAM refinement → edge-aware matting → multi-scale fusion → cleanup. Produces compositing-grade alpha mattes.
 
@@ -297,6 +301,8 @@ End-to-end pipeline: iterative SAM refinement → edge-aware matting → multi-s
 ---
 
 ### 8. SeC + MatAnyone Pipeline (MEC)
+
+> **Merged (L7.65 P05):** this is now Mask + Matting (`MaskOpsMEC`) with `backend` = `SeC + MatAnyone2`. Saved workflows migrate on load with the same results; the inputs are renamed as listed in [MIGRATION.md](MIGRATION.md) and the outputs map to Mask + Matting's `foreground, alpha, mask, preview, info`. The table below lists the former names.
 
 End-to-end video pipeline: SeC/SAM segmentation → MatAnyone2 temporal alpha matting → optional edge refinement → cleanup. Best for video with occlusions, re-appearances, and complex motion.
 

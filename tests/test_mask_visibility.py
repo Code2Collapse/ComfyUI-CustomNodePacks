@@ -297,6 +297,10 @@ def test_every_widget_named_in_the_spec_exists_on_the_node():
         set(vis.VIDEO_WINDOW) | set(vis.FEATURE)
     for names in vis.BY_MODE.values():
         named |= set(names)
+    # L7.65 P05: the three other backends' reads and the shared finishing stage are rules too
+    named |= set(vis.FINISHING)
+    for names in vis.ENGINE_READS.values():
+        named |= set(names)
     for rule in vis.TOGGLES.values():
         named.add(rule[0] if isinstance(rule, tuple) else rule)
 
@@ -317,6 +321,9 @@ def test_no_widget_on_the_node_is_unreachable():
     named = set(vis.ALWAYS) | set(vis.SOCKETS) | set(vis.FEATURE) | \
         set(vis.TOGGLES) | set(vis.VIDEO_WINDOW)
     for names in vis.BY_MODE.values():
+        named |= set(names)
+    # L7.65 P05: a control of the SAM + ViTMatte / SeC / remove-background backends is reachable in its backend
+    for names in vis.ENGINE_READS.values():
         named |= set(names)
     orphans = sorted(real - named)
     assert not orphans, (

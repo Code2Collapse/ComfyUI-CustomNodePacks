@@ -3,6 +3,14 @@
 Status: design, written before the code (owner order A7). Owner spec: `docs/evidence/L7.65/P05_owner_spec_2026-10-10.md`
 in the workspace, section 1.
 
+**Scope change (owner, 2026-10-15).** The node's user interface will be rebuilt as a viewer-first node (plate ->
+subject -> render, click to pick, wipe preview, QC badges) in a separate design. This task therefore delivers only the
+backend merge: sections 1, 2, 3.1-3.3 and 4-10. Section 3.4 (controls on screen per backend, sections) is NOT built;
+it stays here as input for the viewer design. What the front end does now: `js/mask_visibility.js` applies the
+served rule table as it is - with one of the three new backends chosen it shows that backend's controls, the shared
+finishing controls and the sockets; on `segment + matte` the new controls stay folded. No section membership changed,
+no new UI element.
+
 ## 1. Goal and fixed decisions
 
 One user-facing node for segmentation and matting. `MaskOpsMEC` ("Mask + Matting") keeps its id and is the survivor.
@@ -21,7 +29,7 @@ migrate into it when a workflow loads (D0.14). Fixed by the owner and the consol
 
 ### 2.1 MaskOpsMEC (`nodes/mask_matting/node.py`)
 
-- 78 inputs: `image` + 54 required widgets + 23 optional inputs (sockets `positive_coords`, `negative_coords`,
+- 78 inputs: 61 required (`image` + 60 widgets) and 17 optional (sockets `positive_coords`, `negative_coords`,
   `pos_bbox`, `neg_bbox`, `normal_bbox`, `text_prompt`, `external_mask`, `external_trimap`, `holdout_mask`,
   `core_mask`; widgets `pipeline`, `scene_prompts`, `band_scale`, `matte_tile`, `temporal_stabilise`,
   `matte_overlap`, `matte_tile_batch`).
@@ -163,7 +171,7 @@ SAM + ViTMatte's and SeC's side-by-side preview, SAM + ViTMatte's edge mask. Uni
 The finishing stage that every backend shares: holdout / core masks, `edge_mode` (hard / feather), despill, light
 wrap, split masks, diagnostics, foreground. At the defaults none of them changes the alpha.
 
-### 3.4 Controls on screen (target, defaults, widgets only)
+### 3.4 Controls on screen (target, defaults, widgets only) - NOT BUILT (scope change above)
 
 | Backend | On screen | Sections ("More" bar on the classic canvas; core's advanced inputs in Nodes 2.0) |
 |---|---|---|
@@ -180,8 +188,9 @@ changes no name, order or value.
 
 The visibility rules stay server-driven (`_visibility.py` -> `/c2c/mask/visibility` -> `js/mask_visibility.js`):
 the spec gains `backends` (what each engine backend reads) and `backend_only` (engine controls that `segment + matte`
-never reads). The click editor (`js/points_bbox_editor.js`) binds to MaskOps and shows only while the backend reads
-`points_json` (SAM + ViTMatte, SeC). The status strip gets the backend choice next to ONYX / Cascade.
+never reads) - built in this task as data. Not built (viewer design): the per-backend folding, the sections, the click
+editor (`js/points_bbox_editor.js`) bound to MaskOps for the backends that read `points_json`, and the backend choice
+in the status strip.
 
 ## 4. Migration rows (nodes/_legacy_replacements.json)
 
@@ -304,8 +313,8 @@ every run today) is backlog: it needs a measured cache-eviction policy.
   monkeypatched to deterministic fakes that record their arguments (both nodes must make the same calls); the
   model-free paths run for real.
 - Spec parity: every appended input equals the old input's spec; the engine files' SHA-256; outputs 0-17 unchanged.
-- Visibility: at most 10 widgets on screen per backend at the defaults; every engine control is reachable in its
-  backend and hidden in the others; sockets never hidden.
+- Visibility rule tables: every engine control is reachable in its backend and never shown for `segment + matte`;
+  sockets never hidden. (The "at most 10 on screen" check belongs to the viewer design.)
 - Memory: output storage per frame against section 5.
 - Migration table tests (`tests/test_legacy_replacements.py`), fixtures, docs generator, example workflow.
 

@@ -50,7 +50,7 @@ from .nodes.mask_edit_mec import MaskEditMEC
 from .nodes.spline_mask_mec import SplineMaskMEC
 from .nodes.mask_tracker_mec import MaskTrackerMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
-from .nodes.sec_matanyone_pipeline import SeCMatAnyonePipelineMEC
+# SAM + ViTMatte, SeC + MatAnyone2 and Background Remover are backends of MaskOps (nodes/mask_matting, L7.65 P05).
 from .nodes.inpaint_suite import (
     InpaintCropProMEC,
     InpaintStitchProMEC,
@@ -235,20 +235,7 @@ except Exception as _exc:  # pragma: no cover
     )
     _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY = {}, {}
 
-# SAM + ViTMatte combined pipeline (highest-quality mask in one node)
-try:
-    from .nodes.sam_vitmatte_pipeline import SAMViTMattePipelineMEC
-    _SAMVIT_MAPPINGS = {"SAMViTMattePipelineMEC": SAMViTMattePipelineMEC}
-    _SAMVIT_DISPLAY = {
-        "SAMViTMattePipelineMEC": "SAM + ViTMatte Pipeline \u2014 Full Quality",
-    }
-except Exception as _exc:  # pragma: no cover
-    _c2c_rec_fail(
-        "SAMViTMattePipeline", _exc,
-        hint="Requires sam2 package + transformers for ViTMatte refinement.",
-        group="nodes",
-    )
-    _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY = {}, {}
+# SAM + ViTMatte is a backend of MaskOps (nodes/mask_matting, L7.65 P05).
 
 # Mask toolkit (LayerMask port — torch-native, batch-correct)
 try:
@@ -416,20 +403,18 @@ except Exception as _sc_exc:  # pragma: no cover
         )
 # Luminance Keyer, Shuffle and Mask Batch Combine are modes of Mask Tools (nodes/mask_toolkit, L7.65 P03).
 
-# Background Remover (RMBG-2.0 / BiRefNet one-click bg removal)
+# Background Remover is MaskOps' "remove background" backend (nodes/mask_matting, L7.65 P05).
+# C2C_LEGACY_MATTE_NODES=1 registers the three former matte nodes again (kill switch, design matte_unified.md 7).
 try:
-    from .nodes.background_remover import BackgroundRemoverMEC
-    _BGREMOVE_MAPPINGS = {"BackgroundRemoverMEC": BackgroundRemoverMEC}
-    _BGREMOVE_DISPLAY = {
-        "BackgroundRemoverMEC": "Background Remover \u2014 RMBG / BiRefNet",
-    }
+    from .nodes.mask_matting._engines import legacy_matte_mappings as _legacy_matte
+    _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY = _legacy_matte()
 except Exception as _exc:  # pragma: no cover
     _c2c_rec_fail(
-        "BackgroundRemover", _exc,
-        hint="Requires transformers + model weights for RMBG or BiRefNet.",
+        "LegacyMatteNodes", _exc,
+        hint="C2C_LEGACY_MATTE_NODES=1 could not bring back the former matte nodes.",
         group="nodes",
     )
-    _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY = {}, {}
+    _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY = {}, {}
 
 # Semantic Segment (SegFormer face / clothes parsing)
 try:
@@ -621,7 +606,6 @@ _MEC_MAPPINGS = {
     "SplineMaskMEC": SplineMaskMEC,
     "MaskTrackerMEC": MaskTrackerMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
-    "SeCMatAnyonePipelineMEC": SeCMatAnyonePipelineMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
     "InpaintPasteBackMEC": InpaintPasteBackMEC,
@@ -645,7 +629,6 @@ _MEC_DISPLAY = {
     "SplineMaskMEC": "Spline Mask \u2014 Edit/Track/Flow-Path",
     "MaskTrackerMEC": "Mask Track \u2014 Motion/Propagate/Anchor/Consistency/Stabilize",
     "ParameterHistoryMEC": "Parameter History",
-    "SeCMatAnyonePipelineMEC": "SeC + MatAnyone2 Pipeline",
     "InpaintCropProMEC": "Inpaint Crop Pro",
     "InpaintStitchProMEC": "Inpaint Stitch Pro",
     "InpaintPasteBackMEC": "Inpaint Paste Back",
@@ -799,8 +782,7 @@ _C2C_FAMILIES = [
     ("SAM Multi-Mask Picker", _SAMPICKER_MAPPINGS, _SAMPICKER_DISPLAY),
     ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
     ("Mask Placement", _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY),
-    ("SAM + ViTMatte", _SAMVIT_MAPPINGS, _SAMVIT_DISPLAY),
-    ("Background Remover", _BGREMOVE_MAPPINGS, _BGREMOVE_DISPLAY),
+    ("Matte (legacy)", _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY),
     ("Semantic Segment", _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY),
     ("NukeNodeMax", _NUKEMAX_MAPPINGS, _NUKEMAX_DISPLAY),
     ("Video Stabilizer", _STABILIZER_MAPPINGS, _STABILIZER_DISPLAY),

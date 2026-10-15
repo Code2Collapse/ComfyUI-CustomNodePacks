@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **112** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **109** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -10,7 +10,7 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 15 |
+| MaskEditControl | 14 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
 | MEC Paint Suite | 2 |
@@ -28,8 +28,6 @@
 | SAM Multi-Mask Picker | 1 |
 | SAM Loader/Generator | 2 |
 | Mask Placement | 1 |
-| SAM + ViTMatte | 1 |
-| Background Remover | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
@@ -46,7 +44,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 112 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 109 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -80,18 +78,14 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Inpaint Paste Back](#inpaintpastebackmec)
   - [Inpaint Stitch Pro](#inpaintstitchpromec)
   - [ProPainter — Temporal / Remove / Stitch / Refine / Flow](#propaintermec)
-- **C2C/Matting** (1)
-  - [Background Remover — RMBG / BiRefNet](#backgroundremovermec)
 - **C2C/ModelAnalysis** (1)
   - [VAE Inspect](#vaeblockinspectormec)
 - **C2C/Paint** (3)
   - [Advanced Paint Canvas](#mecadvancedpaintcanvas)
   - [Context Inpainter / Fixer](#meccontextinpainter)
   - [Face Fixer](#mecfacefixer)
-- **C2C/Pipeline** (3)
+- **C2C/Pipeline** (1)
   - [Mask Refiner](#maskrefinemec)
-  - [SAM + ViTMatte Pipeline — Full Quality](#samvitmattepipelinemec)
-  - [SeC + MatAnyone2 Pipeline](#secmatanyonepipelinemec)
 - **C2C/Preview** (2)
   - [Video Comparer — Player + Wipe/Diff/Scopes](#videocomparerc2c)
   - [Video Frame Player](#videoframeplayermec)
@@ -826,45 +820,6 @@ Unified ProPainter node. Absorbs ProPainterTemporal / Remove / Stitch / StitchRe
 
 ---
 
-## C2C/Matting
-
-
-### BackgroundRemoverMEC
-
-**Shown in the menu as:** Background Remover — RMBG / BiRefNet
-
-One-click background removal using RMBG-2.0 or BiRefNet.
-Outputs foreground (premultiplied RGB) and high-quality alpha mask.
-Ideal for portraits, product photos, and compositing workflows.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | Input image(s) to remove background from. |
-| `model_name` | choice: `birefnet_general`, `birefnet_portrait`, `rmbg_2.0` | default `"birefnet_general"` | Background removal model: rmbg_2.0: General-purpose, fast. birefnet_general: High-detail edges. birefnet_portrait: Optimized for human portraits. |
-| `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Alpha threshold for hard mask (0=soft, 0.5=balanced, 1=hard). |
-| `invert` | `BOOLEAN` | default `False` | Invert the alpha mask (keep background instead). |
-| `mask_blur` | `INT` | default `0`, range 0…50, step 1 | Gaussian blur applied to final mask edges. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `keep_model_loaded` | `BOOLEAN` | default `True` | Keep model in VRAM between runs. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `foreground` | `IMAGE` | Foreground RGB image with background removed (premultiplied by alpha). |
-| 1 | `mask` | `MASK` | High-quality alpha mask for the foreground subject. |
-| 2 | `info` | `STRING` | JSON summary of the parameters used for this run. |
-
-
----
-
 ## C2C/ModelAnalysis
 
 
@@ -1090,107 +1045,6 @@ Unified, training-free mask refinement. Toggle each stage on or off and chain th
 | 1 | `alpha` | `MASK` | Soft alpha (same as mask before threshold). |
 | 2 | `preview` | `IMAGE` | RGB×alpha preview for quick visual diff. |
 | 3 | `info` | `STRING` | JSON describing which stages ran / were skipped. |
-
-
-### SAMViTMattePipelineMEC
-
-**Shown in the menu as:** SAM + ViTMatte Pipeline — Full Quality
-
-SAM + ViTMatte combined pipeline for compositing-grade alpha mattes. Iterative SAM refinement → edge-aware matting → multi-scale fusion → cleanup.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `sam_model` | `SAM_MODEL` |  | Loaded SAM model from SAM Model Loader |
-| `image` | `IMAGE` |  | Input image / batch to segment + matte |
-| `subject_type` | choice: `custom`, `hair`, `fur`, `cloth`, `skin_face`, `hard_edge`, `soft_glow` | default `"custom"` | Auto-tune trimap & matting params based on subject boundary character.   custom    : honor manual widgets verbatim (default).   hair      : SAM → ViTMatte, wide trimap, high detail (portraits).   fur       : SAM → ViTMatte, very wide trimap (animals).   cloth     : tighter trimap, structural edges preserved.   skin_face : multi-scale guided, soft skin boundary.   hard_edge : minimal trimap, binary feel (vehicles, props).   soft_glow : laplacian blend, very wide soft band. |
-| `points_json` | `STRING` | default `"[]"`, multiline | JSON array: [{"x":100,"y":200,"label":1}, ...] |
-| `bbox_json` | `STRING` | default `""` | Bounding box: [x1,y1,x2,y2]. Leave empty for points-only. |
-| `sam_iterations` | `INT` | default `2`, range 1…5, step 1 | Number of SAM refinement iterations.  Each pass uses the previous mask to generate better prompts.  2-3 is ideal. |
-| `refine_method` | choice: `auto`, `vitmatte`, `guided_filter`, `multi_scale_guided`, `color_aware`, `laplacian_blend` | default `"auto"` | Edge refinement backend. auto: best available (vitmatte → multi_scale_guided → guided_filter) vitmatte: HuggingFace ViTMatte neural matting guided_filter: fast image-guided alpha multi_scale_guided: guided filter at 3 scales (best non-neural) color_aware: LAB-space color-sensitive edge refinement laplacian_blend: Laplacian pyramid frequency blending |
-| `edge_radius` | `INT` | default `12`, range 1…200, step 1 | Pixels around edges to refine (larger = softer transitions) |
-| `detail_preservation` | `FLOAT` | default `0.85`, range 0.0…1.0, step 0.05 | How much fine detail (hair, fur, lace) to preserve. 0=smooth, 1=maximum detail. |
-| `edge_contrast` | `FLOAT` | default `1.0`, range 0.0…3.0, step 0.1 | Boost edge contrast for challenging lighting. >1 sharpens boundaries. |
-| `fill_holes_enabled` | `BOOLEAN` | default `True` | Fill interior holes in the mask |
-| `min_region_size` | `INT` | default `64`, range 0…10000, step 1 | Remove isolated mask regions smaller than N pixels (0=disabled) |
-| `multimask_output` | `BOOLEAN` | default `True` | Return 3 candidate masks from SAM (vs single best) |
-| `mask_index` | `INT` | default `0`, range 0…2 | Which SAM candidate mask to keep when multimask_output is True |
-| `score_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Discard SAM masks below this confidence score |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `bbox` | `BBOX` |  | Bounding box from BBox node (overrides bbox_json) |
-| `existing_mask` | `MASK` |  | Use as initial mask instead of SAM first pass |
-| `trimap` | `MASK` |  | Custom trimap for ViTMatte (overrides auto-generated) |
-| `trimap_dilate` | `INT` | default `0`, range 0…200, step 1 | Outer trimap radius (0 = use edge_radius * 1.5). |
-| `trimap_erode` | `INT` | default `0`, range 0…200, step 1 | Inner trimap erosion radius (0 = use edge_radius * 1.0). |
-| `batch_mode` | `BOOLEAN` | default `False` | Process every frame in the input batch (off = first frame only). |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `refined_mask` | `MASK` | Final compositing-grade alpha matte after SAM + matting refinement. |
-| 1 | `coarse_mask` | `MASK` | SAM coarse mask before edge refinement and cleanup. |
-| 2 | `edge_mask` | `MASK` | Edge-band mask highlighting where matting changed the boundary. |
-| 3 | `preview` | `IMAGE` | Side-by-side preview of input image and refined mask overlay. |
-| 4 | `detected_bbox` | `BBOX` | Bounding box derived from the refined mask. |
-| 5 | `score` | `FLOAT` | Best SAM confidence score from iterative refinement. |
-| 6 | `info` | `STRING` | JSON summary of stages, parameters, and timings. |
-
-
-### SeCMatAnyonePipelineMEC
-
-**Shown in the menu as:** SeC + MatAnyone2 Pipeline
-
-SeC + MatAnyone2 end-to-end pipeline:
-1. SeC/SAM segmentation → coarse masks
-2. MatAnyone2 temporal alpha matting → compositing-grade alpha
-3. Optional edge refinement
-4. Post-processing (hole fill, region cleanup)
-
-Best for video scenes with occlusions, re-appearances, and complex motion.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | Single image or video frames (B>1 for video). |
-| `segmentation_model` | choice: `sam2.1_hiera_base_plus`, `sam2.1_hiera_large`, `sam2.1_hiera_small`, `sam2.1_hiera_tiny`, `sam2_hiera_base_plus`, `sam2_hiera_large`, `sam2_hiera_small`, `sam2_hiera_tiny`, … (+2) | default `"sam2.1_hiera_base_plus"` | Segmentation model for coarse masks. SeC: best for video with text prompts. SAM2/3: best for point/bbox prompts. |
-| `text_prompt` | `STRING` | default `""` | Text description of target object (e.g. 'cat', 'person in red'). Used by SeC for semantic tracking. Leave empty for point/bbox prompts. |
-| `points_json` | `STRING` | default `"[]"`, multiline | Point prompts: [{"x":100,"y":200,"label":1}, ...] |
-| `bbox_json` | `STRING` | default `""` | Bounding box: [x1,y1,x2,y2] |
-| `matting_backend` | choice: `matanyone2`, `vitmatte_small`, `vitmatte_base`, `auto` | default `"auto"` | Alpha matting backend. auto: MatAnyone2 for video (B>1), ViTMatte for single images. matanyone2: Video matting with temporal consistency. vitmatte_small/base: Neural matting (best edge quality per frame). |
-| `edge_radius` | `INT` | default `15`, range 1…200, step 1 | Edge refinement radius in pixels. |
-| `n_warmup` | `INT` | default `5`, range 1…30, step 1 | MatAnyone2 warmup frames (more = better temporal init). |
-| `precision` | choice: `fp16`, `bf16`, `fp32` | default `"fp16"` | Segmentation model precision. |
-| `fill_holes_enabled` | `BOOLEAN` | default `True` | Fill interior holes in the final alpha. |
-| `min_region_size` | `INT` | default `64`, range 0…10000, step 1 | Remove isolated regions smaller than N pixels. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `positive_coords` | `STRING` | **connection-only** | Positive points from Points Mask Editor. |
-| `negative_coords` | `STRING` | **connection-only** | Negative points from Points Mask Editor. |
-| `bbox` | `BBOX` |  | Positive bbox from upstream node. |
-| `edge_refine_method` | choice: `none`, `vitmatte`, `guided_filter`, `multi_scale_guided` | default `"none"` | Optional post-matting edge refinement. none: use raw MatAnyone2 output. vitmatte/guided_filter: refine edges after matting. |
-| `keep_model_loaded` | `BOOLEAN` | default `True` | Keep models in VRAM between runs. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `rgb` | `IMAGE` | Original RGB frames passed through for downstream nodes. |
-| 1 | `alpha_mask` | `MASK` | Compositing-grade alpha mask after MatAnyone2 + optional refinement. |
-| 2 | `coarse_mask` | `MASK` | Coarse segmentation mask before alpha matting. |
-| 3 | `preview` | `IMAGE` | Side-by-side preview of input frames and final alpha overlay. |
-| 4 | `info` | `STRING` | JSON summary of stages, models, and per-stage timings. |
 
 
 ---
@@ -3060,7 +2914,9 @@ Read a shot.json descriptor; missing fields return empty defaults.
 
 **Shown in the menu as:** Mask + Matting
 
-Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node. Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / RMBG-2.0 / InSPyReNet + ViTMatte / RVM / MatAnyone). Optional Nuke-style luma-key pre-stage, edge-aware trimap, and AUTO-QUALITY pipeline that detects motion blur, low light, low contrast, speckle noise and similar bg/fg, then applies just-enough pre-processing before the segmenter and a light guided-filter polish on the alpha — no knobs to tune. When you supply pos+neg points (e.g. pos on face, neg on neck) it picks the SAM candidate that excludes the neg points, so you get the face only, not the whole person. For manual 11-stage refinement (hole-fill, joint bilateral, DenseCRF, etc.) chain MaskRefineMEC downstream.
+Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node. Multi-backend (SAM 2.1 / SAM 3 / SAM 3.1 / BiRefNet / RMBG-2.0 / InSPyReNet + ViTMatte / RVM / MatAnyone). Optional Nuke-style luma-key pre-stage, edge-aware trimap, and AUTO-QUALITY pipeline that detects motion blur, low light, low contrast, speckle noise and similar bg/fg, then applies just-enough pre-processing before the segmenter and a light guided-filter polish on the alpha — no knobs to tune. When you supply pos+neg points (e.g. pos on face, neg on neck) it picks the SAM candidate that excludes the neg points, so you get the face only, not the whole person. For manual 11-stage refinement (hole-fill, joint bilateral, DenseCRF, etc.) chain MaskRefineMEC downstream. The `backend` input also runs SAM + ViTMatte, SeC + MatAnyone2 or background removal (RMBG-2.0 / BiRefNet) - the former separate nodes - through the same outputs.
+
+**Backends (L7.65 P05).** `backend` = `segment + matte` (default: this node's pipeline / segmenter / matter, unchanged), `SAM + ViTMatte` (needs `sam_model` from a SAM Model Loader; reads `points_json`, `bbox_json`, `subject_preset`, the `sam_*` controls, `fill_holes_enabled`, `min_region_size`, `pos_bbox`, `external_mask`, `external_trimap`), `SeC + MatAnyone2` (reads `sec_*`, `points_json`, `bbox_json`, `precision`, `fill_holes_enabled`, `min_region_size`, `keep_model_loaded`, `pos_bbox`; a wired `text_prompt` wins over `sec_text_prompt`) and `remove background` (reads `bg_*`, `keep_model_loaded`). `auto_download` is the Allow Download of every backend. In the three added backends `preview`, `score`, `edge_mask` and (SAM + ViTMatte) `bbox` keep the former node's definition so migrated workflows give the same results; `split_masks` off leaves the edge / inside / outside masks empty. Design: `docs/design/matte_unified.md`.
 
 
 **Required inputs**
@@ -3068,10 +2924,10 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `image` | `IMAGE` |  | Source image or video frames (B,H,W,C). |
-| `segmenter` | choice: `auto_best`, `auto`, `sam2.1  [missing-deps]`, `sam3  [missing-deps]`, `sam3.1`, `birefnet`, `rmbg`, `inspyrenet`, … (+8) | default `"auto_best"` | Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. |
-| `matter` | choice: `none`, `auto`, `vitmatte`, `rvm`, `bgmattingv2`, `matanyone  [missing-deps]`, `birefnet`, `rmbg` | default `"vitmatte"` | Optional alpha refinement. 'none' returns the segmenter mask as alpha. |
-| `model` | choice: `(auto)`, `[preset:sam2] sam2.1_hiera_tiny.safetensors`, `[preset:sam2] sam2.1_hiera_small.safetensors`, `[preset:sam2] sam2.1_hiera_base_plus.safetensors`, `[preset:sam2] sam2.1_hiera_large.safetensors`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, … (+12) | default `"(auto)"` | Specific weight file to use. Tag prefix selects the backend folder; '(auto)' lets each backend pick. |
-| `matter_model` | choice: `(auto)`, `[preset:sam2] sam2.1_hiera_tiny.safetensors`, `[preset:sam2] sam2.1_hiera_small.safetensors`, `[preset:sam2] sam2.1_hiera_base_plus.safetensors`, `[preset:sam2] sam2.1_hiera_large.safetensors`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, … (+12) | default `"(auto)"` | Weight file for the matter backend. |
+| `segmenter` | choice: `auto_best`, `auto`, `sam3  [missing-deps]`, `sam3.1  [missing-deps]`, `birefnet`, `rmbg`, `inspyrenet`, `dis`, `person-mask`, `grounding-dino`, `cutie  [missing-deps]`, `xmem  [missing-deps]`, … | default `"auto_best"` | Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. |
+| `matter` | choice: `none`, `auto`, `vitmatte`, `rvm`, `bgmattingv2`, `matanyone  [missing-deps]`, `birefnet`, `rmbg`, `guided_filter` | default `"vitmatte"` | Optional alpha refinement. 'none' returns the segmenter mask as alpha. |
+| `model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, `[preset:grounding-dino] groundingdino_swint_ogc.pth`, `[preset:sec] SeC-4B.safetensors`, `[preset:vitmatte] vitmatte-small-composition-1k.safetensors`, `[preset:vitmatte] vitmatte-base-composition-1k.safetensors`, … | default `"(auto)"` | Specific weight file to use. Tag prefix selects the backend folder; '(auto)' lets each backend pick. |
+| `matter_model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, `[preset:grounding-dino] groundingdino_swint_ogc.pth`, `[preset:sec] SeC-4B.safetensors`, `[preset:vitmatte] vitmatte-small-composition-1k.safetensors`, `[preset:vitmatte] vitmatte-base-composition-1k.safetensors`, … | default `"(auto)"` | Weight file for the matter backend. |
 | `precision` | choice: `fp16`, `bf16`, `fp32` | default `"fp16"` | — |
 | `attention` | choice: `auto`, `sdpa`, `flash`, `sage`, `xformers`, `eager` | default `"auto"` | — |
 | `offload` | choice: `none`, `cpu`, `sequential` | default `"none"` | — |
@@ -3079,6 +2935,9 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `trimap_dilate` | `INT` | default `8`, range 0…128, step 1 | — |
 | `trimap_erode` | `INT` | default `8`, range 0…128, step 1 | — |
 | `edge_radius` | `INT` | default `4`, range 0…64, step 1 | — |
+| `edge_mode` | choice: `soft`, `feather`, `hard`, `hard+feather` | default `"soft"` | Final alpha edge. 'soft' = as the matter produced it. 'feather' = blur the existing edge. 'hard' = binary cut at edge_threshold, no partial alpha (what a holdout or garbage matte wants). 'hard+feather' = cut hard then feather — the edge width becomes yours rather than the model's, which is how you match edges across shots keyed by different backends. |
+| `edge_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Cut point for the hard modes. Lower keeps more of the soft fringe as solid; higher eats into it. |
+| `edge_feather` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | Feather radius in pixels, read as ~2 sigma of a true Gaussian. 0 with a feather mode selected does nothing. |
 | `individual_objects` | `BOOLEAN` | default `False` | If supported by the backend, return one mask per detected object. |
 | `tracking_direction` | choice: `forward`, `backward`, `bidirectional` | default `"forward"` | — |
 | `frame_annotation` | `INT` | default `0`, range 0…100000 | Frame index (in clip) where prompts are anchored. |
@@ -3087,14 +2946,14 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `memory_size` | `INT` | default `8`, range 1…256 | — |
 | `start_frame` | `INT` | default `0`, range 0…100000 | — |
 | `end_frame` | `INT` | default `-1`, range -1…100000 | -1 = last frame. |
-| `auto_download` | `BOOLEAN` | default `False` | Allow lazy auto-download from HF/torch.hub when a weight is missing. |
+| `auto_download` | `BOOLEAN` | default `False` | Allow Download: fetch a missing weight from Hugging Face / torch.hub into its models/ subfolder. Off: installed copies are used wherever they are (this pack, other packs, the HF cache); without one the model-free method runs and the info output says so. |
 | `seed` | `INT` | default `0`, range 0…18446744073709551615 | — |
 | `tta_flip` | `BOOLEAN` | default `False` | Test-time augmentation: run segmenter on the H-flipped image and average. Slower but cleaner. |
 | `multiscale` | `BOOLEAN` | default `False` | Run the segmenter at 0.75x / 1.0x / 1.25x and fuse. Helps small / thin subjects. |
 | `post_refine` | choice: `none`, `guided`, `crf`, `crf+guided` | default `"none"` | Final alpha refinement. 'guided' = guided filter (fast, torch-only). 'crf' = DenseCRF (requires pydensecrf, sharpest edges). |
 | `refine_radius` | `INT` | default `8`, range 1…64 | Spatial radius for guided / CRF refinement. |
 | `refine_iterations` | `INT` | default `5`, range 1…30 | CRF inference iterations. |
-| `despill` | choice: `off`, `green`, `blue`, `red`, `magenta`, `cyan`, `yellow`, `white`, … (+2) | default `"off"` | Colour decontamination on the named backing. 'auto' estimates the colour from image corners. |
+| `despill` | choice: `off`, `green`, `blue`, `red`, `magenta`, `cyan`, `yellow`, `white`, `black`, `auto` | default `"off"` | Colour decontamination on the named backing. 'auto' estimates the colour from image corners. |
 | `despill_strength` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | How aggressively to subtract the spill (0 = off). |
 | `preserve_skin` | `BOOLEAN` | default `True` | Keep warm pixels (R>G>B) untouched during despill. |
 | `lightwrap_strength` | `FLOAT` | default `0.0`, range 0.0…2.0, step 0.05 | Light-wrap intensity. 0 = off; ~0.3-0.6 = natural blend over the new BG. |
@@ -3140,6 +2999,42 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `external_trimap` | `MASK` |  | Optional pre-computed trimap that bypasses internal trimap generation. |
 | `holdout_mask` | `MASK` |  | Garbage / holdout matte. Pixels where this is >0 are FORCED to alpha=0 (used to chop out boom mics, rigs, etc). |
 | `core_mask` | `MASK` |  | Core / inside matte. Pixels where this is >0 are FORCED to alpha=1 (used to lock down opaque interiors). |
+| `pipeline` | choice: `onyx`, `cascade (legacy)` | default `"onyx"` | onyx = SAM3.1 video session + tiled ViTMatte. cascade (legacy) = previous multi-backend auto_best path. |
+| `scene_prompts` | `STRING` | default `""`, multiline | Optional ONYX scene JSON (version 1). When empty, legacy prompt sockets map to object 1. |
+| `band_scale` | `FLOAT` | default `1.0`, range 0.1…5.0, step 0.05 | Resolution-aware trimap band scale (ONYX path). |
+| `matte_tile` | `INT` | default `1024`, range 256…4096, step 64 | ViTMatte tile size in pixels for both the ONYX and cascade pipelines. |
+| `temporal_stabilise` | `BOOLEAN` | default `True` | 3-tap temporal median on alpha inside the unknown trimap band (ONYX path). |
+| `matte_overlap` | `INT` | default `64`, range 16…256, step 1 | Overlap between ViTMatte tiles in pixels. Larger overlaps reduce seams but run more tiles. |
+| `matte_tile_batch` | `INT` | default `4`, range 1…16, step 1 | How many tiles to run per GPU forward pass. Lower this if you hit out-of-memory errors. On the CPU tiles always run one at a time (faster there, and a third of the memory). |
+| `backend` | choice: `segment + matte`, `SAM + ViTMatte`, `SeC + MatAnyone2`, `remove background` | default `"segment + matte"` | Which pipeline makes the matte. 'segment + matte' = this node's segmenter and matter (pipeline, segmenter, matter). 'SAM + ViTMatte' = a SAM model from a SAM Model Loader, then ViTMatte or a guided filter on the edges. 'SeC + MatAnyone2' = SeC / SAM segmentation, then MatAnyone2 (video) or ViTMatte. 'remove background' = RMBG-2.0 or BiRefNet, no prompt. Each control's tooltip names the backend that reads it. |
+| `sam_model` | `SAM_MODEL` |  | SAM + ViTMatte: the model from a SAM Model Loader. |
+| `points_json` | `STRING` | default `"[]"`, multiline | SAM + ViTMatte and SeC + MatAnyone2: point prompts: [{"x":100,"y":200,"label":1}, ...] (label 1 = keep, 0 = remove). The click editor writes this. |
+| `bbox_json` | `STRING` | default `""` | SAM + ViTMatte and SeC + MatAnyone2: box prompt [x1,y1,x2,y2]. Empty = points only. A wired pos_bbox wins. |
+| `sam_iterations` | `INT` | default `2`, range 1…5, step 1 | SAM + ViTMatte: SAM passes; each pass uses the previous mask to place better prompts. 2-3 is ideal. |
+| `sam_refine_method` | choice: `auto`, `vitmatte`, `guided_filter`, `multi_scale_guided`, `color_aware`, `laplacian_blend` | default `"auto"` | SAM + ViTMatte: edge refinement. auto = ViTMatte, else multi-scale guided filter, else guided filter. vitmatte = neural matting. guided_filter = fast. multi_scale_guided = three scales (best without a model). color_aware = LAB colour edges. laplacian_blend = frequency blend. |
+| `sam_edge_radius` | `INT` | default `12`, range 1…200, step 1 | SAM + ViTMatte: pixels around the edge that are refined (larger = softer transitions). |
+| `sam_detail_preservation` | `FLOAT` | default `0.85`, range 0.0…1.0, step 0.05 | SAM + ViTMatte: fine detail (hair, fur, lace) to keep. 0 = smooth, 1 = all. |
+| `sam_edge_contrast` | `FLOAT` | default `1.0`, range 0.0…3.0, step 0.1 | SAM + ViTMatte: edge contrast for hard lighting. Above 1 sharpens the boundary. |
+| `sam_multimask_output` | `BOOLEAN` | default `True` | SAM + ViTMatte: SAM returns three candidate masks (off = its single best). |
+| `sam_mask_index` | `INT` | default `0`, range 0…2 | SAM + ViTMatte: which of SAM's three candidates to keep (with multimask output on). |
+| `sam_score_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | SAM + ViTMatte: skip SAM candidates below this confidence (0 = use mask_index). |
+| `sam_trimap_dilate` | `INT` | default `0`, range 0…200, step 1 | SAM + ViTMatte: outer trimap radius (0 = edge radius x 1.5). |
+| `sam_trimap_erode` | `INT` | default `0`, range 0…200, step 1 | SAM + ViTMatte: inner trimap radius (0 = edge radius x 1.0). |
+| `sam_batch_mode` | `BOOLEAN` | default `False` | SAM + ViTMatte: process every frame of the batch. Off = the first frame only (every output then has one frame). |
+| `sec_model` | choice: `sam2.1_hiera_base_plus`, `sam2.1_hiera_large`, `sam2.1_hiera_small`, `sam2.1_hiera_tiny`, `sam2_hiera_base_plus`, `sam2_hiera_large`, `sam2_hiera_small`, `sam2_hiera_tiny`, `sam3`, `sec_4b` | default `"sam2.1_hiera_base_plus"` | SeC + MatAnyone2: segmentation model. SeC = video with text prompts; SAM 2 / 3 = point or box prompts. |
+| `sec_text_prompt` | `STRING` | default `""` | SeC + MatAnyone2: what to track, e.g. 'cat' or 'person in red'. A wired text_prompt wins. Empty = point / box prompts. |
+| `sec_matting_backend` | choice: `matanyone2`, `vitmatte_small`, `vitmatte_base`, `auto` | default `"auto"` | SeC + MatAnyone2: alpha matting. auto = MatAnyone2 for video (more than one frame), ViTMatte small for an image. MatAnyone2 keeps the matte steady over time; ViTMatte has the best edge per frame. |
+| `sec_edge_radius` | `INT` | default `15`, range 1…200, step 1 | SeC + MatAnyone2: edge refinement radius in pixels. |
+| `sec_n_warmup` | `INT` | default `5`, range 1…30, step 1 | SeC + MatAnyone2: MatAnyone2 warm-up passes on the first frame (more = steadier start). |
+| `sec_edge_refine_method` | choice: `none`, `vitmatte`, `guided_filter`, `multi_scale_guided` | default `"none"` | SeC + MatAnyone2: optional edge refinement after matting. none = the matting output as it is. |
+| `bg_model` | choice: `birefnet_general`, `birefnet_portrait`, `rmbg_2.0` | default `"birefnet_general"` | remove background: rmbg_2.0 = general purpose, fast. birefnet_general = detailed edges. birefnet_portrait = people. |
+| `bg_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | remove background: above 0 the mask is cut hard at this value (0 = keep the soft mask). |
+| `bg_invert` | `BOOLEAN` | default `False` | remove background: invert the mask (keep the background instead). |
+| `bg_mask_blur` | `INT` | default `0`, range 0…50, step 1 | remove background: Gaussian blur on the mask edge, in pixels (0 = none). |
+| `fill_holes_enabled` | `BOOLEAN` | default `True` | SAM + ViTMatte and SeC + MatAnyone2: fill holes inside the mask. |
+| `min_region_size` | `INT` | default `64`, range 0…10000, step 1 | SAM + ViTMatte and SeC + MatAnyone2: remove separate regions smaller than this many pixels (0 = keep all). |
+| `keep_model_loaded` | `BOOLEAN` | default `True` | SeC + MatAnyone2 and remove background: keep the models in memory between runs (off = free them after each run). |
+| `split_masks` | `BOOLEAN` | default `True` | Make the edge / inside / outside masks (and, for the three other backends, a trimap from the final alpha). Off leaves those outputs empty, which saves three to four full-size masks per frame on long clips. |
 
 **Outputs**
 
@@ -3162,6 +3057,8 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | 14 | `problem_regions` | `MASK` | Diagnostic problem-region heatmap from the failure explainer. |
 | 15 | `severity` | `FLOAT` | Severity score [0,1] from the failure explainer. |
 | 16 | `suggested_method` | `STRING` | Suggested next masking method (string) from the failure explainer. |
+| 17 | `object_alphas` | `MASK` | Per-object alpha mattes stacked object-major as (O*B,H,W). |
+| 18 | `foreground` | `IMAGE` | The image times the final alpha (premultiplied), despilled when despill is on. |
 
 
 ---

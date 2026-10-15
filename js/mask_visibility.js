@@ -80,6 +80,15 @@ function relevant(node, spec) {
     const segInfo = spec.segmenters?.[stripBadge(seg)];
     const matInfo = spec.matters?.[stripBadge(mat)];
 
+    // L7.65 P05: SAM + ViTMatte, SeC + MatAnyone2 and remove background read their own controls (served as
+    // spec.backends, _visibility.ENGINE_READS) plus the finishing stage every backend shares; the segmenter / matter
+    // rules below would fold them away. Minimal on purpose: the node's next UI is a separate, viewer-first design
+    // (owner 2026-10-15).
+    const backend = String(valueOf(node, "backend") ?? "");
+    if (spec.backends && Object.prototype.hasOwnProperty.call(spec.backends, backend)) {
+        return new Set([...(spec.sockets || []), ...(spec.finishing || []), ...(spec.backends[backend] || [])]);
+    }
+
     // pipeline="onyx" is one fixed pipeline (SAM 3.1 video + tiled ViTMatte):
     // the segmenter picker decides nothing there, so it cannot be the key.
     // Core + ONYX's own reads + the matter's params, minus what the cascade
@@ -124,6 +133,10 @@ function apply(node) {
 
     const keep = relevant(node, spec);
     const sockets = new Set(spec.sockets || []);
+    // L7.65 P05: segment + matte never reads the other backends' controls - fold them even where it shows all
+    const nativeBackend = !(spec.backends
+        && Object.prototype.hasOwnProperty.call(spec.backends, String(valueOf(node, "backend") ?? "")));
+    const engineOnly = new Set(nativeBackend ? (spec.backend_only || []) : []);
     let hidden = 0;
     const shown = [];                                    // what the rules want, before sections close some of it
     let prevWanted = null;                               // a seed's control_after_generate follows its seed
@@ -141,8 +154,8 @@ function apply(node) {
         if (w.options?.serialize === false || w.serialize === false) continue;
         const isSocket = sockets.has(w.name);
         const ruled = isSocket
-            || keep === null                       // undeclared: show all
-            || (keep.has(w.name) && toggleAllows(node, w.name, spec)
+            || (keep === null && !engineOnly.has(w.name))   // undeclared: show all
+            || (keep !== null && keep.has(w.name) && toggleAllows(node, w.name, spec)
                 && tilingAllows(node, w.name, spec));
         if (ruled && !isSocket) shown.push(w.name);
         // a closed section folds its members too (L7.81); sockets never sit in a section
@@ -195,7 +208,7 @@ app.registerExtension({
             // callback rather than polling: a timer here would fight the
             // canvas redraw on a graph with many of these.
             const watched = new Set([
-                "segmenter", "matter", "pipeline",
+                "segmenter", "matter", "pipeline", "backend",
                 ...Object.values(SPEC?.toggles || {}).flatMap(
                     (r) => (Array.isArray(r) ? [r[0]] : [r])),
                 "enable_luma_key", "enable_advanced_trimap", "enable_diagnose",

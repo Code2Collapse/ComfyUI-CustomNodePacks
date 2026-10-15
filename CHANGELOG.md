@@ -2,6 +2,42 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-15 (one Matte node, L7.65 P05)
+
+Design: `docs/design/matte_unified.md`. Tests: `tests/test_consolidation_p05_matte.py`.
+
+### Changed: three matte nodes are now backends of Mask + Matting
+
+- **Mask + Matting** (`MaskOpsMEC`) has a new `backend` input: `segment + matte` (the default - the node as it was),
+  `SAM + ViTMatte`, `SeC + MatAnyone2` and `remove background`. The three added backends run the former nodes' own
+  code with the same arguments; their files are unchanged (a test pins them byte for byte).
+- **SAM + ViTMatte Pipeline, SeC + MatAnyone2 Pipeline and Background Remover** are no longer in the node list. Saved
+  workflows migrate into Mask + Matting when they load: links and values move, nothing is dropped (three rows in
+  `nodes/_legacy_replacements.json`, listed in `docs/MIGRATION.md`). Measured: 35 cases feed the old node's inputs
+  through its row and compare every mapped output with the old node's own - all tensors and numbers bit-equal; `info`
+  compared as JSON (two keys added, SAM + ViTMatte's `elapsed_sec` is wall-clock time). 23 cases use deterministic
+  stand-ins for the models that record every call (the migrated node makes the same calls with the same arguments);
+  12 run the model-free paths for real. Breaking any one mapped input in the table (41 tried) fails at least one case.
+- **New output `foreground`** (the 19th; the first 18 keep their names and order): the image times the final alpha,
+  premultiplied. With `premultiply` on it is the same tensor as `preview`, so it costs no memory there.
+- **New input `split_masks`** (default on). Off leaves `edge_mask` / `inside_mask` / `outside_mask` empty without
+  using memory. Measured on this CPU: that split takes 3.6 s per 1080p frame.
+- **Migrated nodes cost what they cost before:** diagnostics and the split masks are off on them, because the old
+  nodes never made them. Measured: a migrated SeC + MatAnyone2 or Background Remover returns no extra full-size
+  tensor; a migrated SAM + ViTMatte adds only the new foreground. Outputs a backend does not make are empty views that
+  take no memory, and the image is passed through, not copied, when despill is off.
+- In the three added backends, `preview`, `score`, `edge_mask` and (SAM + ViTMatte) `bbox` keep the former node's
+  definition, so migrated workflows give the same results; SAM + ViTMatte's `bbox` is still `[x, y, w, h]`.
+- With one of the three added backends chosen, the node shows that backend's controls, the shared finishing controls
+  and the sockets; on `segment + matte` the new controls stay folded. A new interface for this node is planned
+  separately.
+- Kill switch: `C2C_LEGACY_MATTE_NODES=1` registers the three former nodes again; old workflows then load them as
+  they were.
+- Example `sam_vitmatte_pipeline.json` is migrated with the same row (its thumbnail still shows the old node).
+
+Not verified yet: runs with the real models (SAM, SeC, MatAnyone2, ViTMatte, RMBG-2.0, BiRefNet), and the live
+browser check in both renderers and inside a subgraph.
+
 ## Unreleased – 2026-10-15 (Load Video player and crop; GPU sync per node removed; speed measured)
 
 Evidence: `docs/evidence/L2.51/speed_summary.md`, `docs/evidence/L2.53/`, `docs/evidence/L2.52/` (workspace), on the

@@ -33,8 +33,8 @@
 
 > ⚠️ **Non-Commercial Model Notice**: The **RMBG-2.0** model weights
 > (`briaai/RMBG-2.0`) are subject to the **BRIA AI RMBG License**, which
-> restricts commercial use. If you use the Background Remover node with the
-> `rmbg_2.0` backend for commercial purposes you **must obtain a commercial
+> restricts commercial use. If you use Mask + Matting's `remove background` backend with
+> `bg_model` = `rmbg_2.0` for commercial purposes you **must obtain a commercial
 > licence from Bria AI** at <https://bria.ai>. All other models used in this
 > pack (SAM, SAM2, BiRefNet, ViTMatte, SeC, etc.) are Apache-2.0 or MIT
 > licensed and may be used commercially. See [NOTICE.md](NOTICE.md) for
@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **112** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **109** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -54,7 +54,7 @@
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 15 |
+| MaskEditControl | 14 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
 | MEC Paint Suite | 2 |
@@ -72,8 +72,6 @@
 | SAM Multi-Mask Picker | 1 |
 | SAM Loader/Generator | 2 |
 | Mask Placement | 1 |
-| SAM + ViTMatte | 1 |
-| Background Remover | 1 |
 | Semantic Segment | 1 |
 | NukeNodeMax | 1 |
 | Video Stabilizer | 4 |
@@ -90,7 +88,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 112 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 15, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, SAM + ViTMatte 1, Background Remover 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 109 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -184,10 +182,10 @@ saves into it.
 
 | Node | Switch (default off) | Without the model |
 |------|----------------------|-------------------|
-| Background Remover | `allow_download` | model-free cut-out from the frame border, labelled approximate |
+| Mask + Matting, backend `remove background` (was Background Remover) | `auto_download` | model-free cut-out from the frame border, labelled approximate |
 | Semantic Segment | `allow_download` | `skin` by colour, labelled approximate; other classes need the model |
 | SAM Model Loader, SAM Mask Generator, SAM Multi-Mask Picker, Mask Placement | `allow_download` | GrabCut stand-in, labelled approximate |
-| SeC + MatAnyone | `allow_download` | GrabCut + optical-flow tracking and a guided-filter matte, labelled approximate |
+| Mask + Matting, backend `SeC + MatAnyone2` (was SeC + MatAnyone) | `auto_download` | GrabCut + optical-flow tracking and a guided-filter matte, labelled approximate |
 | LocateAnything | `allow_download` | none (reading a text prompt needs the model): the node names the folder |
 | MaskOps | `auto_download` | its labelled model-free segmenter / matter |
 
@@ -227,7 +225,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold |
 | [**VAE precision**](docs/vae-precision.md) ★ new | 2 | Where VAE round trips lose precision (measured) and the options that restrict it: fp32 and unclamped decode, tiled video decode, round-trip meter, original-pixel write-back |
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
-| [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, Background Remover, both pipelines |
+| [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, and Mask + Matting's SAM + ViTMatte / SeC + MatAnyone2 / remove-background backends |
 | [Matting & Refinement](docs/matting-refinement.md) | 4 | Matting Node (7 backends), ViTMatte Refiner (7 methods), Trimap Generator, Mask Tools (luma key) |
 | [Video, Temporal & BBox](docs/video-temporal-bbox.md) | 10 | Batch Range (C2C) single-frame modes, Mask Propagate (5 modes), Temporal Anchor (SDF), Motion Mask Tracker (4 methods), 6 BBox nodes |
 | [Utility & Interactive](docs/utility-nodes.md) | 8 | Points Mask Editor, Image Comparer, Mask Failure Explainer, Parameter History, Universal Reroute, 3 Folder Incrementer nodes |
@@ -269,7 +267,7 @@ Loads SAM 2.1 / SAM 3 checkpoints with optional VRAM offload.
 | `dtype` | `float16` | `float16` / `bfloat16` / `float32` |
 | `allow_download` | `false` | Download a missing `[download] ...` checkpoint into `models/sam2/`. Off: an installed copy anywhere ComfyUI knows is used; none gives the labelled model-free stand-in |
 
-**Output:** `SAM_MODEL` — connect to SAM Mask Generator, SAM Multi-Mask Picker, or SAM + ViTMatte Pipeline. It
+**Output:** `SAM_MODEL` — connect to SAM Mask Generator, SAM Multi-Mask Picker, or Mask + Matting (`sam_model`, backend SAM + ViTMatte). It
 carries `model_status`.
 
 ---
@@ -334,21 +332,25 @@ One-node dispatcher for **SAM 2.1, SAM 3, SeC, VideoMaMa** with automatic image 
 
 ---
 
-#### SAM + ViTMatte Pipeline (MEC)
+#### SAM + ViTMatte (a backend of Mask + Matting)
 
-End-to-end pipeline: **SAM coarse segmentation → iterative refinement → neural alpha matting** in a single node. Best possible masking quality for single images.
+End-to-end pipeline: **SAM coarse segmentation → iterative refinement → neural alpha matting**. Since L7.65 P05 this is
+Mask + Matting (`MaskOpsMEC`) with `backend` = `SAM + ViTMatte`; saved SAM + ViTMatte Pipeline nodes migrate into it
+when a workflow loads, with the same results. Connect a SAM Model Loader to `sam_model`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `sam_iterations` | `2` | Iterative SAM passes |
-| `refine_method` | `auto` | `auto` / `vitmatte` / `multi_scale_guided` / `color_aware` / `laplacian_blend` |
-| `edge_radius` | `12` | Pixels around edges to refine |
-| `detail_preservation` | `0.85` | Fine detail retention (hair, fur, lace) |
-| `edge_contrast` | `1.0` | Edge sharpness boost (>1 = sharper) |
-| `fill_holes` | `true` | Fill holes inside mask |
-| `remove_small_regions` | `64` | Remove noise < N pixels |
+| `sam_refine_method` | `auto` | `auto` / `vitmatte` / `guided_filter` / `multi_scale_guided` / `color_aware` / `laplacian_blend` |
+| `sam_edge_radius` | `12` | Pixels around edges to refine |
+| `sam_detail_preservation` | `0.85` | Fine detail retention (hair, fur, lace) |
+| `sam_edge_contrast` | `1.0` | Edge sharpness boost (>1 = sharper) |
+| `fill_holes_enabled` | `true` | Fill holes inside mask |
+| `min_region_size` | `64` | Remove noise < N pixels |
 
-**Outputs:** `refined_mask`, `coarse_mask`, `edge_mask`, `preview`, `detected_bbox`, `score`, `info`
+**Outputs (Mask + Matting):** `alpha` (was refined_mask), `mask` (coarse_mask), `edge_mask`, `preview`, `bbox`
+(detected_bbox, still `[x, y, w, h]` in this backend), `score` (best SAM score), `info`, plus `foreground` and the other
+Mask + Matting outputs.
 
 **Pipeline stages:**
 1. SAM coarse mask from point/bbox prompts
@@ -359,23 +361,26 @@ End-to-end pipeline: **SAM coarse segmentation → iterative refinement → neur
 
 ---
 
-#### SeC + MatAnyone2 Pipeline (MEC)
+#### SeC + MatAnyone2 (a backend of Mask + Matting)
 
-End-to-end pipeline: **SeC MLLM segmentation → MatAnyone2 temporal alpha matting** in a single node. Best for video masking with temporal consistency.
+End-to-end pipeline: **SeC MLLM segmentation → MatAnyone2 temporal alpha matting**. Since L7.65 P05 this is Mask +
+Matting (`MaskOpsMEC`) with `backend` = `SeC + MatAnyone2`; saved SeC + MatAnyone2 Pipeline nodes migrate into it
+when a workflow loads, with the same results.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `segmentation_model` | — | SeC / SAM2 / SAM3 model selector |
-| `text_prompt` | `""` | Text description of target object (e.g. "cat", "person in red") |
-| `matting_backend` | `auto` | `auto` / `matanyone2` / `vitmatte_small` / `vitmatte_base` |
-| `edge_radius` | `15` | Edge refinement radius in pixels |
-| `n_warmup` | `5` | MatAnyone2 warmup frames (more = better temporal init) |
-| `edge_refine_method` | `none` | Optional post-matting refinement: `vitmatte` / `guided_filter` / `multi_scale_guided` |
+| `sec_model` | — | SeC / SAM2 / SAM3 model selector |
+| `sec_text_prompt` | `""` | Text description of target object (e.g. "cat", "person in red"); a wired `text_prompt` wins |
+| `sec_matting_backend` | `auto` | `auto` / `matanyone2` / `vitmatte_small` / `vitmatte_base` |
+| `sec_edge_radius` | `15` | Edge refinement radius in pixels |
+| `sec_n_warmup` | `5` | MatAnyone2 warmup frames (more = better temporal init) |
+| `sec_edge_refine_method` | `none` | Optional post-matting refinement: `vitmatte` / `guided_filter` / `multi_scale_guided` |
 | `fill_holes_enabled` | `true` | Fill interior holes in alpha |
 | `min_region_size` | `64` | Remove isolated regions < N pixels |
-| `allow_download` | `false` | Download the segmentation / matting models if they are not installed |
+| `auto_download` | `false` | Download the segmentation / matting models if they are not installed |
 
-**Outputs:** `rgb` (premultiplied), `alpha_mask`, `coarse_mask`, `preview`, `info` (`model_status` per model)
+**Outputs (Mask + Matting):** `foreground` (was rgb, premultiplied), `alpha` (alpha_mask), `mask` (coarse_mask),
+`preview`, `info` (`model_status` per model), plus the other Mask + Matting outputs.
 
 **Pipeline stages:**
 1. SeC/SAM coarse segmentation (text or point/bbox prompts)
@@ -414,9 +419,11 @@ Face / body / clothes semantic parsing using SegFormer. Select classes by name t
 
 ### Alpha Matting
 
-#### Background Remover (MEC)
+#### Remove background (a backend of Mask + Matting)
 
-One-click background removal using RMBG-2.0 or BiRefNet. Outputs a clean foreground and alpha mask.
+One-click background removal using RMBG-2.0 or BiRefNet. Since L7.65 P05 this is Mask + Matting (`MaskOpsMEC`) with
+`backend` = `remove background`; saved Background Remover nodes migrate into it when a workflow loads, with the same
+results.
 
 | Model | Quality | Best for |
 |-------|---------|----------|
@@ -426,13 +433,14 @@ One-click background removal using RMBG-2.0 or BiRefNet. Outputs a clean foregro
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `model_name` | — | Background removal model selector |
-| `threshold` | `0.5` | Alpha threshold (0 = soft, 1 = hard) |
-| `invert` | `false` | Keep background instead |
-| `mask_blur` | `0` | Gaussian blur on mask edges |
-| `allow_download` | `false` | Download the model if it is not installed; off without it: a labelled model-free cut-out |
+| `bg_model` | — | Background removal model selector |
+| `bg_threshold` | `0.5` | Alpha threshold (0 = soft, 1 = hard) |
+| `bg_invert` | `false` | Keep background instead |
+| `bg_mask_blur` | `0` | Gaussian blur on mask edges |
+| `auto_download` | `false` | Download the model if it is not installed; off without it: a labelled model-free cut-out |
 
-**Outputs:** `foreground` (premultiplied RGB), `mask`, `info` (with `model_status`)
+**Outputs (Mask + Matting):** `foreground` (premultiplied), `alpha` (was mask), `info` (with `model_status`), plus the
+other Mask + Matting outputs.
 
 > **Who is it for?** E-commerce product photography, quick compositing, batch background removal.
 
@@ -1125,10 +1133,10 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 2 | SAM Mask Generator | SAM | 2 | SAM inference with point + bbox prompts |
 | 3 | SAM Multi-Mask Picker | SAM | 2 | View all 3 SAM candidates, pick interactively |
 | 4 | Unified Segmentation | SAM | 2 | One-node dispatcher for all segmentation backends |
-| 5 | SAM + ViTMatte Pipeline | SAM / Matting | 2 | SAM → refinement → ViTMatte end-to-end |
-| 6 | SeC + MatAnyone2 Pipeline | SAM / Matting | 3 | SeC → MatAnyone2 temporal video pipeline |
+| 5 | Mask + Matting, backend SAM + ViTMatte | SAM / Matting | 2 | SAM → refinement → ViTMatte end-to-end |
+| 6 | Mask + Matting, backend SeC + MatAnyone2 | SAM / Matting | 3 | SeC → MatAnyone2 temporal video pipeline |
 | 7 | Semantic Segment | Segmentation | 2 | SegFormer face/body/clothes parsing |
-| 8 | Background Remover | Matting | 2 | One-click RMBG / BiRefNet removal |
+| 8 | Mask + Matting, backend remove background | Matting | 2 | One-click RMBG / BiRefNet removal |
 | 9 | Matting Node | Matting | 2 | Unified 7-backend alpha matting |
 | 10 | ViTMatte Edge Refiner | Matting | 2 | Standalone edge refinement (7 methods) |
 | 11 | Trimap Generator | Matting | 1 | Generate trimap for ViTMatte input |
@@ -1203,13 +1211,14 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
   offload_to_cpu: true         ↓
   dtype: float16          [Points Mask Editor]
         ↓                    ↓ points_json, bbox_json
-[SAM + ViTMatte Pipeline] ←─┘
+[Mask + Matting] ←──────────┘  (sam_model ← SAM Model Loader)
+  backend: SAM + ViTMatte
   sam_iterations: 2–3
-  refine_method: auto
-  detail_preservation: 0.85
-  edge_contrast: 1.2
+  sam_refine_method: auto
+  sam_detail_preservation: 0.85
+  sam_edge_contrast: 1.2
         ↓
-  refined_mask → compositing
+  alpha → compositing
 ```
 
 ### Fast Iteration
@@ -1443,12 +1452,12 @@ ComfyUI-CustomNodePacks/
 │   ├── sam_model_loader.py         # SAM 2.1 / SAM 3 model loader
 │   ├── sam_mask_generator.py       # SAM inference engine
 │   ├── sam_multi_mask_picker.py    # Multi-mask picker + JS widget
-│   ├── sam_vitmatte_pipeline.py    # SAM → ViTMatte end-to-end pipeline
-│   ├── sec_matanyone_pipeline.py   # SeC → MatAnyone2 video pipeline
+│   ├── sam_vitmatte_pipeline.py    # SAM → ViTMatte: Mask + Matting's "SAM + ViTMatte" backend
+│   ├── sec_matanyone_pipeline.py   # SeC → MatAnyone2: Mask + Matting's "SeC + MatAnyone2" backend
 │   ├── unified_segmentation_node.py# Unified segmentation dispatcher
 │   ├── unified_segmentation.py     # Segmentation backends (deprecated)
 │   ├── semantic_segment.py         # SegFormer face/clothes parsing
-│   ├── background_remover.py       # RMBG / BiRefNet background removal
+│   ├── background_remover.py       # RMBG / BiRefNet: Mask + Matting's "remove background" backend
 │   ├── matting_node.py             # 7-backend alpha matting
 │   ├── vitmatte_refiner.py         # Standalone edge refiner
 │   ├── trimap_generator.py         # Trimap generation
@@ -1536,11 +1545,11 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 
 | Model family | Recommended bridges |
 |---|---|
-| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `SAMViTMattePipelineMEC` and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
+| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte) and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
 | **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskTransformXY` and `MaskPropagateVideo` are useful when reusing a single Qwen-Image generated mask across a small sequence. `ImageComparerMEC` for A/B sweeps over guidance / sampler choices. |
-| **Wan 2.x (video)** | `MotionMaskTrackerMEC`, `MaskPropagateVideo`, `TemporalAnchorMEC`, `SeCMatAnyonePipelineMEC` and `TemporalConsistencyCheckerMEC` are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
+| **Wan 2.x (video)** | `MotionMaskTrackerMEC`, `MaskPropagateVideo`, `TemporalAnchorMEC`, `MaskOpsMEC` (backend SeC + MatAnyone2) and `TemporalConsistencyCheckerMEC` are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
 | **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |
-| **GLM-Image** | The IMAGE outputs feed cleanly into the GLM-Image I2I path (via the sampler's optional `image` input + `denoise_strength`). `BackgroundRemoverMEC` + `SAMMaskGeneratorMEC` provide the alpha pre-stage. |
+| **GLM-Image** | The IMAGE outputs feed cleanly into the GLM-Image I2I path (via the sampler's optional `image` input + `denoise_strength`). `MaskOpsMEC` (backend remove background) + `SAMMaskGeneratorMEC` provide the alpha pre-stage. |
 | **ERNIE-VL** | Not applicable for sampling (ERNIE-VL is a multimodal LLM). The `ModelMetadataExtractorMEC` and `ParameterHistoryMEC` nodes can still be useful for cataloguing assets that ERNIE-VL has captioned. |
 
 Two general patterns recur across all sampler families:

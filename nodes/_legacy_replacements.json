@@ -3774,5 +3774,352 @@
   ],
   "dropped": [],
   "note": "L7.65 P07 (owner-approved merge): Mask Track in mode stabilize - the same Mask Temporal code; integrity_json -> info_json, warning -> warning."
+ },
+ {
+  "old_node_id": "SAMViTMattePipelineMEC",
+  "new_node_id": "MaskOpsMEC",
+  "old_widget_ids": [
+   "subject_type",
+   "points_json",
+   "bbox_json",
+   "sam_iterations",
+   "refine_method",
+   "edge_radius",
+   "detail_preservation",
+   "edge_contrast",
+   "fill_holes_enabled",
+   "min_region_size",
+   "multimask_output",
+   "mask_index",
+   "score_threshold",
+   "trimap_dilate",
+   "trimap_erode",
+   "batch_mode"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "sam_model",
+    "old_id": "sam_model"
+   },
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "subject_preset",
+    "old_id": "subject_type"
+   },
+   {
+    "new_id": "points_json",
+    "old_id": "points_json"
+   },
+   {
+    "new_id": "bbox_json",
+    "old_id": "bbox_json"
+   },
+   {
+    "new_id": "sam_iterations",
+    "old_id": "sam_iterations"
+   },
+   {
+    "new_id": "sam_refine_method",
+    "old_id": "refine_method"
+   },
+   {
+    "new_id": "sam_edge_radius",
+    "old_id": "edge_radius"
+   },
+   {
+    "new_id": "sam_detail_preservation",
+    "old_id": "detail_preservation"
+   },
+   {
+    "new_id": "sam_edge_contrast",
+    "old_id": "edge_contrast"
+   },
+   {
+    "new_id": "fill_holes_enabled",
+    "old_id": "fill_holes_enabled"
+   },
+   {
+    "new_id": "min_region_size",
+    "old_id": "min_region_size"
+   },
+   {
+    "new_id": "sam_multimask_output",
+    "old_id": "multimask_output"
+   },
+   {
+    "new_id": "sam_mask_index",
+    "old_id": "mask_index"
+   },
+   {
+    "new_id": "sam_score_threshold",
+    "old_id": "score_threshold"
+   },
+   {
+    "new_id": "pos_bbox",
+    "old_id": "bbox"
+   },
+   {
+    "new_id": "external_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "external_trimap",
+    "old_id": "trimap"
+   },
+   {
+    "new_id": "sam_trimap_dilate",
+    "old_id": "trimap_dilate"
+   },
+   {
+    "new_id": "sam_trimap_erode",
+    "old_id": "trimap_erode"
+   },
+   {
+    "new_id": "sam_batch_mode",
+    "old_id": "batch_mode"
+   },
+   {
+    "new_id": "backend",
+    "set_value": "SAM + ViTMatte"
+   },
+   {
+    "new_id": "enable_diagnose",
+    "set_value": false
+   },
+   {
+    "new_id": "split_masks",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   },
+   {
+    "old_idx": 5,
+    "new_idx": 6
+   },
+   {
+    "old_idx": 6,
+    "new_idx": 7
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P05 (owner-approved merge): Mask + Matting with backend 'SAM + ViTMatte' - the former node's own code with the same arguments, the same results. Diagnostics and the split masks are off, as the old node never made them; switch them on in the node to use them. bbox keeps the old [x, y, w, h] form in this backend."
+ },
+ {
+  "old_node_id": "SeCMatAnyonePipelineMEC",
+  "new_node_id": "MaskOpsMEC",
+  "old_widget_ids": [
+   "segmentation_model",
+   "text_prompt",
+   "points_json",
+   "bbox_json",
+   "matting_backend",
+   "edge_radius",
+   "n_warmup",
+   "precision",
+   "fill_holes_enabled",
+   "min_region_size",
+   "edge_refine_method",
+   "keep_model_loaded",
+   "allow_download"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "sec_model",
+    "old_id": "segmentation_model"
+   },
+   {
+    "new_id": "sec_text_prompt",
+    "old_id": "text_prompt"
+   },
+   {
+    "new_id": "points_json",
+    "old_id": "points_json"
+   },
+   {
+    "new_id": "bbox_json",
+    "old_id": "bbox_json"
+   },
+   {
+    "new_id": "sec_matting_backend",
+    "old_id": "matting_backend"
+   },
+   {
+    "new_id": "sec_edge_radius",
+    "old_id": "edge_radius"
+   },
+   {
+    "new_id": "sec_n_warmup",
+    "old_id": "n_warmup"
+   },
+   {
+    "new_id": "precision",
+    "old_id": "precision"
+   },
+   {
+    "new_id": "fill_holes_enabled",
+    "old_id": "fill_holes_enabled"
+   },
+   {
+    "new_id": "min_region_size",
+    "old_id": "min_region_size"
+   },
+   {
+    "new_id": "positive_coords",
+    "old_id": "positive_coords"
+   },
+   {
+    "new_id": "negative_coords",
+    "old_id": "negative_coords"
+   },
+   {
+    "new_id": "pos_bbox",
+    "old_id": "bbox"
+   },
+   {
+    "new_id": "sec_edge_refine_method",
+    "old_id": "edge_refine_method"
+   },
+   {
+    "new_id": "keep_model_loaded",
+    "old_id": "keep_model_loaded"
+   },
+   {
+    "new_id": "auto_download",
+    "old_id": "allow_download"
+   },
+   {
+    "new_id": "backend",
+    "set_value": "SeC + MatAnyone2"
+   },
+   {
+    "new_id": "enable_diagnose",
+    "set_value": false
+   },
+   {
+    "new_id": "split_masks",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 18
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 7
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P05 (owner-approved merge): Mask + Matting with backend 'SeC + MatAnyone2' - the former node's own code with the same arguments, the same results. Diagnostics and the split masks are off, as the old node never made them; switch them on in the node to use them. rgb is the foreground output."
+ },
+ {
+  "old_node_id": "BackgroundRemoverMEC",
+  "new_node_id": "MaskOpsMEC",
+  "old_widget_ids": [
+   "model_name",
+   "threshold",
+   "invert",
+   "mask_blur",
+   "keep_model_loaded",
+   "allow_download"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "bg_model",
+    "old_id": "model_name"
+   },
+   {
+    "new_id": "bg_threshold",
+    "old_id": "threshold"
+   },
+   {
+    "new_id": "bg_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "bg_mask_blur",
+    "old_id": "mask_blur"
+   },
+   {
+    "new_id": "keep_model_loaded",
+    "old_id": "keep_model_loaded"
+   },
+   {
+    "new_id": "auto_download",
+    "old_id": "allow_download"
+   },
+   {
+    "new_id": "backend",
+    "set_value": "remove background"
+   },
+   {
+    "new_id": "enable_diagnose",
+    "set_value": false
+   },
+   {
+    "new_id": "split_masks",
+    "set_value": false
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 18
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 7
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P05 (owner-approved merge): Mask + Matting with backend 'remove background' - the former node's own code with the same arguments, the same results. Diagnostics and the split masks are off, as the old node never made them; switch them on in the node to use them. mask is the alpha output."
  }
 ]
