@@ -113,6 +113,9 @@ class SAM31Segmenter(BaseSegmenter):
                 f"{_vendor_root()}. Reinstall ComfyUI-CustomNodePacks."
             )
         ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None
+        if (ckpt is None or not os.path.isfile(ckpt)) and self.model_name and os.path.isabs(self.model_name) \
+                and os.path.isfile(self.model_name):
+            ckpt = self.model_name      # L7.114: a checkpoint the viewer found in models/sam3/ or another SAM folder
         if ckpt is None or not os.path.isfile(ckpt):
             # L7.97: absolute folder + file. "(auto)" with nothing installed arrives here with no name: name the
             # first preset as the file to get.

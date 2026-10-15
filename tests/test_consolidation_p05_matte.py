@@ -153,7 +153,8 @@ def test_maskops_keeps_its_78_inputs_in_order(maskops):
     assert list(spec["required"]) == INPUT_ORDER["required"]
     assert list(spec["optional"])[:len(INPUT_ORDER["optional"])] == INPUT_ORDER["optional"]
     from nodes.mask_matting import _engines
-    assert list(spec["optional"])[len(INPUT_ORDER["optional"]):] == list(_engines.appended_inputs())
+    # L7.114 appended the viewer's `picks` after the P05 inputs (still appended: every earlier position is unchanged)
+    assert list(spec["optional"])[len(INPUT_ORDER["optional"]):] == list(_engines.appended_inputs()) + ["picks"]
 
 
 @pytest.mark.parametrize("old_id, module, cls_name", [

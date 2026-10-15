@@ -814,6 +814,8 @@ def run_onyx_pipeline(
     video_model=None,
     seg_one_fn=None,
     matter_instance=None,
+    stage_cache=None,
+    plate_fp: Optional[str] = None,
 ) -> OnyxResult:
     B, H, W, _ = img_bhwc.shape
     legacy_prompts = legacy
@@ -825,6 +827,47 @@ def run_onyx_pipeline(
         raise ValueError("No enabled objects in scene.")
 
     pipeline_info: Dict[str, Any] = {"pipeline": "onyx", "version": 1}
+
+    # L7.114: with a stage cache (viewer-driven runs only) the tracking result is kept per plate + scene + SAM
+    # settings, and the edge stage per that + matter settings (_stage_cache.py). Without one: unchanged.
+    track_key = edge_key = None
+    if stage_cache is not None:
+        from . import _stage_cache as _sc
+        track_key = _sc.make_key(
+            "onyx.track", plate_fp or _sc.fingerprint(img_bhwc), _scene_key(scene),
+            _sc.fingerprint(external_mask) if any(kf.mask_source for o in enabled for kf in o.keyframes) else "",
+            str(sam31_model_name or ""), _sc.installed("sam3.1"), str(device), str(precision), str(attention),
+            str(offload), f"injected:{id(video_model)}" if video_model is not None else "",
+            f"seg_one:{id(seg_one_fn)}" if seg_one_fn is not None else "")
+        mat_tag = (matter_key or "none").split("  [")[0].strip()
+        edge_key = _sc.make_key(
+            "onyx.edge", track_key, mat_tag, str(matter_model or ""),
+            _sc.installed(getattr(matter_cls, "MODELS_KEY", "") or ""), float(band_scale), int(matte_tile),
+            bool(temporal_stabilise), str(post_refine), _sc.fingerprint(external_trimap),
+            f"injected:{id(matter_instance)}" if matter_instance is not None else "")
+        cached_edge = stage_cache.get(edge_key)
+        if cached_edge is not None:
+            pipeline_info.update(cached_edge["info"])
+            pipeline_info["stage_cache"] = {"track": "reused", "edge": "reused"}
+            return _onyx_finish(img_bhwc, scene, cached_edge["coarse"], cached_edge["obj_scores"],
+                                cached_edge["trimaps"], cached_edge["alpha_o"], band_scale, external_trimap,
+                                pipeline_info)
+        cached_track = stage_cache.get(track_key)
+        if cached_track is not None:
+            pipeline_info.update(cached_track["info"])
+            pipeline_info["stage_cache"] = {"track": "reused", "edge": "ran"}
+            alpha_o, trimaps, edge_info = _onyx_edge(
+                img_bhwc, cached_track["coarse"], B=B, matter_key=matter_key, matter_model=matter_model,
+                matter_cls=matter_cls, device=device, precision=precision, attention=attention, offload=offload,
+                auto_download=auto_download, band_scale=band_scale, matte_tile=matte_tile,
+                temporal_stabilise=temporal_stabilise, post_refine=post_refine, matter_instance=matter_instance)
+            pipeline_info.update(edge_info)
+            stage_cache.put(edge_key, {"coarse": cached_track["coarse"], "obj_scores": cached_track["obj_scores"],
+                                       "trimaps": trimaps, "alpha_o": alpha_o,
+                                       "info": {**cached_track["info"], **edge_info}})
+            return _onyx_finish(img_bhwc, scene, cached_track["coarse"], cached_track["obj_scores"], trimaps,
+                                alpha_o, band_scale, external_trimap, pipeline_info)
+
     seg_inst = None
     model = video_model
     if model is None:
@@ -885,17 +928,39 @@ def run_onyx_pipeline(
         except Exception as exc:
             logger.warning("[ONYX] reset_state failed: %s", exc)
         free_vram()
+    track_info = {k: pipeline_info[k] for k in ("approximate", "tracker", "fallback_from", "seed_calls")
+                  if k in pipeline_info}
 
+    alpha_o, trimaps, edge_info = _onyx_edge(
+        img_bhwc, coarse, B=B, matter_key=matter_key, matter_model=matter_model, matter_cls=matter_cls,
+        device=device, precision=precision, attention=attention, offload=offload, auto_download=auto_download,
+        band_scale=band_scale, matte_tile=matte_tile, temporal_stabilise=temporal_stabilise,
+        post_refine=post_refine, matter_instance=matter_instance)
+    pipeline_info.update(edge_info)
+    if stage_cache is not None:
+        pipeline_info["stage_cache"] = {"track": "ran", "edge": "ran"}
+        stage_cache.put(track_key, {"coarse": coarse, "obj_scores": dict(obj_scores), "info": track_info})
+        stage_cache.put(edge_key, {"coarse": coarse, "obj_scores": dict(obj_scores), "trimaps": trimaps,
+                                   "alpha_o": alpha_o, "info": {**track_info, **edge_info}})
+    return _onyx_finish(img_bhwc, scene, coarse, obj_scores, trimaps, alpha_o, band_scale, external_trimap,
+                        pipeline_info)
+
+
+def _scene_key(scene: SceneSpec) -> List[Any]:
+    """Everything of a scene the tracker reads, as plain data (a stage-cache key part)."""
+    return [
+        [o.id, o.enabled, o.opacity, [[kf.frame, kf.points_pos, kf.points_neg, kf.box, kf.text, kf.mask_source]
+                                      for kf in o.keyframes]]
+        for o in scene.objects
+    ] + [[scene.tracking.direction, scene.tracking.start_frame, scene.tracking.max_frames]]
+
+
+def _onyx_edge(img_bhwc, coarse, *, B, matter_key, matter_model, matter_cls, device, precision, attention, offload,
+               auto_download, band_scale, matte_tile, temporal_stabilise, post_refine, matter_instance):
+    """The edge stage: per-object trimaps, the matter (tiled), temporal stabilising. Returns (alpha_o, trimaps,
+    info); info carries the model-free matter note when the chosen matter is not installed."""
+    info: Dict[str, Any] = {}
     trimaps = trimap_resaware(coarse, band_scale)
-    mask_combined = combined_coarse_mask(coarse, scene.objects)
-    if external_trimap is not None:
-        trimap_combined = to_mask(external_trimap).float().clamp(0, 1)
-        if trimap_combined.shape[0] == 1 and B > 1:
-            trimap_combined = trimap_combined.expand(B, -1, -1)
-    else:
-        trimap_combined = trimap_resaware(
-            mask_combined.unsqueeze(0), band_scale,
-        )[0]
 
     mat_key = (matter_key or "none").split("  [")[0].strip()
     if matter_instance is not None:
@@ -920,11 +985,11 @@ def run_onyx_pipeline(
                 raise
             from .matters.guided_filter_backend import GuidedFilterMatter
             matter = GuidedFilterMatter()
-            pipeline_info["approximate"] = True
-            pipeline_info["matter_fallback"] = {**_classic.describe_fallback(mat_key, exc),
-                                                "used": _classic.LABEL_MATTE}
+            info["approximate"] = True
+            info["matter_fallback"] = {**_classic.describe_fallback(mat_key, exc),
+                                       "used": _classic.LABEL_MATTE}
             logger.warning("[ONYX] matter '%s' unavailable (%s) - using the model-free guided filter.", mat_key,
-                           pipeline_info["matter_fallback"]["why"][:160])
+                           info["matter_fallback"]["why"][:160])
     else:
         matter = None
 
@@ -943,6 +1008,23 @@ def run_onyx_pipeline(
                     alpha_o[o, b] = _vfx.guided_refine(img_b, a, radius=8, epsilon=1e-4)[0]
 
     alpha_o = stabilise_alpha_unknown(alpha_o, trimaps, enabled=bool(temporal_stabilise))
+    return alpha_o, trimaps, info
+
+
+def _onyx_finish(img_bhwc, scene, coarse, obj_scores, trimaps, alpha_o, band_scale, external_trimap,
+                 pipeline_info) -> OnyxResult:
+    """The objects combined into the node's outputs (cheap; runs on every call, cached or not)."""
+    B, H, W, _ = img_bhwc.shape
+    mask_combined = combined_coarse_mask(coarse, scene.objects)
+    if external_trimap is not None:
+        trimap_combined = to_mask(external_trimap).float().clamp(0, 1)
+        if trimap_combined.shape[0] == 1 and B > 1:
+            trimap_combined = trimap_combined.expand(B, -1, -1)
+    else:
+        trimap_combined = trimap_resaware(
+            mask_combined.unsqueeze(0), band_scale,
+        )[0]
+
     alpha_combined = combine_alphas(alpha_o, scene.objects)
     object_alphas = pack_object_alphas(alpha_o, scene.objects)
     mean_score = float(sum(obj_scores.values()) / max(len(obj_scores), 1))

@@ -301,6 +301,7 @@ def test_every_widget_named_in_the_spec_exists_on_the_node():
     named |= set(vis.FINISHING)
     for names in vis.ENGINE_READS.values():
         named |= set(names)
+    named |= set(vis.VIEWER)      # L7.114: the viewer's selection must be a real input too
     for rule in vis.TOGGLES.values():
         named.add(rule[0] if isinstance(rule, tuple) else rule)
 
@@ -325,6 +326,8 @@ def test_no_widget_on_the_node_is_unreachable():
     # L7.65 P05: a control of the SAM + ViTMatte / SeC / remove-background backends is reachable in its backend
     for names in vis.ENGINE_READS.values():
         named |= set(names)
+    # L7.114: the viewer's selection is reachable through the viewer (and as a text box with C2C_VIEWER=0)
+    named |= set(vis.VIEWER)
     orphans = sorted(real - named)
     assert not orphans, (
         "These widgets exist on MaskOpsMEC but appear in no visibility list, "

@@ -267,6 +267,10 @@ ENGINE_READS: Dict[str, tuple] = {
 }
 BACKEND_ONLY = frozenset(n for reads in ENGINE_READS.values() for n in reads) - set(ALWAYS) - set(FEATURE)
 
+#: L7.114: written by the viewer on the node (js/c2c_viewer/), never shown as a row while the viewer is on; with
+#: C2C_VIEWER=0 the front end shows it as a plain text box (reachable either way).
+VIEWER = ("picks",)
+
 
 def _engine_visible(backend: str, values: Dict[str, Any]) -> List[str]:
     cand = set(SOCKETS) | set(FINISHING) | set(ENGINE_READS.get(backend, ()))
@@ -446,6 +450,7 @@ def build_spec() -> Dict[str, Any]:
         "backends": {k: list(v) for k, v in ENGINE_READS.items()},
         "finishing": list(FINISHING),
         "backend_only": sorted(BACKEND_ONLY),
+        "viewer": list(VIEWER),
     }
 
 
