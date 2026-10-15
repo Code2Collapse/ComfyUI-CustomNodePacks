@@ -14,9 +14,10 @@ from tests.test_c2c_video_nodes import (  # noqa: F401 - fixtures used by name
 
 def test_crop_inputs_are_appended_after_the_old_ones(nl):
     v = nl.LoadVideoC2C.INPUT_TYPES()
-    assert list(v["optional"]) == ["vae", "format", "crop_x", "crop_y", "crop_w", "crop_h"]
+    # the crop inputs come right after the old ones; L2.53's inputs are appended after them (test_c2c_video_4k.py)
+    assert list(v["optional"])[:6] == ["vae", "format", "crop_x", "crop_y", "crop_w", "crop_h"]
     p = nl.LoadVideoPathC2C.INPUT_TYPES()
-    assert list(p["optional"]) == ["vae", "format", "sequence_fps", "crop_x", "crop_y", "crop_w", "crop_h"]
+    assert list(p["optional"])[:7] == ["vae", "format", "sequence_fps", "crop_x", "crop_y", "crop_w", "crop_h"]
     for t in (v, p):
         defaults = [t["optional"][k][1]["default"] for k in ("crop_x", "crop_y", "crop_w", "crop_h")]
         assert defaults == [0.0, 0.0, 1.0, 1.0]
@@ -24,7 +25,7 @@ def test_crop_inputs_are_appended_after_the_old_ones(nl):
 
 def test_crop_equals_a_slice_of_the_full_frames(nl, cfr_clip):
     full = _run_path(nl, cfr_clip, frame_load_cap=4)[0]
-    crop, count, _a, info, handle, _m = _run_path(nl, cfr_clip, frame_load_cap=4,
+    crop, count, _a, info, handle, _m, _s = _run_path(nl, cfr_clip, frame_load_cap=4,
                                                   crop_x=0.25, crop_y=0.125, crop_w=0.5, crop_h=0.5)
     assert count == 4 and crop.shape == (4, 128, 128, 3)
     assert torch.equal(crop, full[:, 32:160, 64:192])

@@ -169,6 +169,10 @@ def _build_handles(node_type: str, widgets: dict[str, Any]) -> tuple[C2CVideo, C
         vae=None,
         crop=(_float_widget(widgets, "crop_x", 0.0), _float_widget(widgets, "crop_y", 0.0),
               _float_widget(widgets, "crop_w", 1.0), _float_widget(widgets, "crop_h", 1.0)),
+        # L2.53 inputs; absent (older front ends) = the defaults, which change nothing
+        seconds_cap=_float_widget(widgets, "seconds_cap", 0.0),
+        resolution=str(widgets.get("resolution") or "custom"),
+        divisible_by=max(1, _int_widget(widgets, "divisible_by", 1)),
     )
     if len(loaded) == 0:
         retime_note = " after retiming" if force_rate > 0 else ""

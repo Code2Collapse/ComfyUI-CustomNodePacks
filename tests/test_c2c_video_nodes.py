@@ -167,7 +167,7 @@ def test_input_types_order_and_defaults(nl):
 
 
 def test_defaults_shape_and_indices(nl, cfr_clip):
-    image, count, _audio, info, handle, mask = _run_path(nl, cfr_clip)
+    image, count, _audio, info, handle, mask, _summary = _run_path(nl, cfr_clip)   # L2.53: info appended
     assert count == 60
     assert image.shape == (60, 256, 256, 3)
     assert image.dtype == torch.float32
@@ -188,7 +188,7 @@ def test_skip_nth_cap_selection(nl, cfr_clip):
 
 
 def test_force_rate_12(nl, cfr_clip):
-    image, count, _a, info, handle, _m = _run_path(nl, cfr_clip, force_rate=12)
+    image, count, _a, info, handle, _m, _s = _run_path(nl, cfr_clip, force_rate=12)
     assert info["loaded_fps"] == 12
     cv = _load_c2c_video()
     got = [cv.decode_index(image[i].cpu().numpy()) for i in range(count)]
@@ -221,7 +221,7 @@ def test_budget_raises(nl, cfr_clip, monkeypatch):
 
 
 def test_mask_only_linked_decodes(nl, cfr_clip):
-    image, count, _audio, _info, _handle, mask = nl.LoadVideoPathC2C().load_video(
+    image, count, _audio, _info, _handle, mask, _summary = nl.LoadVideoPathC2C().load_video(
         video=cfr_clip,
         force_rate=0,
         custom_width=0,
@@ -242,7 +242,7 @@ def test_unlinked_image_skips_decode(nl, cfr_clip, monkeypatch):
         raise AssertionError("decode should not run")
 
     monkeypatch.setattr(nl, "iter_chunks", _boom)
-    image, count, audio, info, handle, mask = nl.LoadVideoPathC2C().load_video(
+    image, count, audio, info, handle, mask, _summary = nl.LoadVideoPathC2C().load_video(
         video=cfr_clip,
         force_rate=0,
         custom_width=0,

@@ -15,8 +15,10 @@ from .handle import C2CVideo, FileSource, SequenceSource
 from .nodes_load import (
     SEQUENCE_IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
+    audio_output_mode,
     build_images_handle,
     build_loaded_handle,
+    load_summary,
     resolve_probe,
     source_times_for_handle,
     strip_path,
@@ -104,6 +106,17 @@ def parse_request_params(raw: Mapping[str, str]) -> dict[str, Any]:
         params["frame_load_cap"] = _int_param(raw, "frame_load_cap", 0)
         params["format"] = raw.get("format") or "None"
         params["sequence_fps"] = _float_param(raw, "sequence_fps", 24.0)
+        # L2.53: the rest of the node's settings, so the probe reports exactly what a run loads (all optional; the
+        # defaults are the node's, so an older front end gets the old answer)
+        params["seconds_cap"] = _float_param(raw, "seconds_cap", 0.0)
+        params["custom_width"] = _int_param(raw, "custom_width", 0)
+        params["custom_height"] = _int_param(raw, "custom_height", 0)
+        params["resolution"] = raw.get("resolution") or "custom"
+        params["divisible_by"] = max(1, _int_param(raw, "divisible_by", 1))
+        params["decoder"] = raw.get("decoder") or "auto"
+        params["audio_when_missing"] = raw.get("audio_when_missing") or "silence"
+        params["crop"] = tuple(_float_param(raw, k, d) for k, d in
+                               (("crop_x", 0.0), ("crop_y", 0.0), ("crop_w", 1.0), ("crop_h", 1.0)))
     params["max_frames"] = min(_MAX_FRAMES_CAP, max(1, _int_param(raw, "max_frames", _DEFAULT_MAX_FRAMES)))
     return params
 
@@ -197,6 +210,7 @@ def build_handle_from_params(params: dict[str, Any]) -> tuple[C2CVideo, C2CVideo
         custom_width=0,
         custom_height=0,
         vae=None,
+        seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
     )
     if len(loaded) == 0:
         retime_note = " after retiming" if force_rate > 0 else ""
@@ -235,11 +249,48 @@ def _colour_dict(raw: C2CVideo) -> dict[str, str | None]:
     }
 
 
+def _load_report(raw: C2CVideo, params: dict[str, Any]) -> dict[str, Any] | None:
+    """What a run with these settings loads - size after crop / resolution / divisible_by, the part of the clip in
+    seconds, the reader auto would use, the audio - for the node's grey hints and details line (L2.53)."""
+    if params.get("mode") == "images":
+        return None
+    from .fast_decode import device_is_cuda, plan_decoder
+
+    _, load = build_loaded_handle(
+        raw,
+        force_rate=float(params.get("force_rate", 0)),
+        skip_first_frames=int(params.get("skip_first_frames", 0)),
+        select_every_nth=int(params.get("select_every_nth", 1)),
+        frame_load_cap=int(params.get("frame_load_cap", 0)),
+        format_name=str(params.get("format") or "None"),
+        custom_width=int(params.get("custom_width", 0)),
+        custom_height=int(params.get("custom_height", 0)),
+        vae=None,
+        crop=params.get("crop"),
+        seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
+        resolution=str(params.get("resolution") or "custom"),
+        divisible_by=int(params.get("divisible_by", 1) or 1),
+    )
+    if not len(load):
+        return None
+    plan = plan_decoder(load, str(params.get("decoder") or "auto"), cuda=device_is_cuda())
+    summary = load_summary(raw, load, format_name=str(params.get("format") or "None"), plan=plan,
+                           audio_mode=audio_output_mode(load, str(params.get("audio_when_missing") or "silence")))
+    return {**summary["loaded"], "decoder": summary.get("decoder"), "audio": summary["audio"]}
+
+
 def probe_payload(params: dict[str, Any]) -> dict[str, Any]:
     raw, loaded = build_handle_from_params(params)
     sel = list(loaded.selected_indices())
     src_fps = float(raw.fps)
+    try:
+        load = _load_report(raw, params)
+    except Exception as exc:  # noqa: BLE001 - the probe still answers; the hints just stay empty
+        log.debug("load report failed: %s", exc)
+        load = None
     return {
+        "file": os.path.basename(raw.source.path) if raw.source.kind == "file" else raw.source.pattern,
+        "load": load,
         "kind": raw.source.kind,
         "width": int(raw.width),
         "height": int(raw.height),

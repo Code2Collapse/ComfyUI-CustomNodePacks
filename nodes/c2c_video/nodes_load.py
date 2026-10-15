@@ -10,6 +10,15 @@ from fractions import Fraction
 from typing import Any
 
 from .audio import LazyAudio, lazy_audio_for_handle
+from .fast_decode import (
+    DECODER_CHOICES,
+    DECODER_TIP,
+    DecoderPlan,
+    FastDecodeError,
+    device_is_cuda,
+    iter_chunks_for,
+    plan_decoder,
+)
 from .handle import C2CVideo, FileSource, stat_key_for
 from .probe import get_index_table, probe_file, probe_sequence, resolve_sequence
 from .reader import iter_chunks
@@ -46,8 +55,30 @@ FORMAT_PRESETS: dict[str, dict[str, Any]] = {
     "Hunyuan": {"rate": 24, "dim_multiple": 16, "frames": (4, 1)},
     "Cosmos": {"rate": 24, "dim_multiple": 16, "frames": (8, 1)},
     "Wan": {"rate": 16, "dim_multiple": 8, "frames": (4, 1)},
+    # L2.53 (owner A14): MiniMax H3 = 24 fps, 17n+5 frames (5, 22, 39, 56 ...), sizes in multiples of 32 - the same
+    # grid as ComfyUI-MiniMaxSuite/mmx_utils/h3_constants.py (FPS, CANVAS_MULTIPLE, align_frame_count) and the 4K pack.
+    "MiniMax H3": {"rate": 24, "dim_multiple": 32, "frames": (17, 5)},
 }
 FORMAT_CHOICES: list[str] = list(FORMAT_PRESETS.keys())
+
+# L2.53: output size by its LONGEST side, keeping the aspect (a portrait clip gets the same class of size as a
+# landscape one). "custom" = custom_width / custom_height as before (0 = keep the source size or follow the aspect),
+# so it is the default and old workflows load exactly as they did. Values as in the 4K pack (README "resolution").
+RESOLUTION_PRESETS: dict[str, int | None] = {
+    "source": None,
+    "2160p (4K)": 3840,
+    "1440p": 2560,
+    "1080p": 1920,
+    "720p": 1280,
+    "480p": 854,
+    "2048 wide": 2048,
+    "1920 wide": 1920,
+    "1024 wide": 1024,
+    "custom": None,
+}
+RESOLUTION_CHOICES: list[str] = list(RESOLUTION_PRESETS.keys())
+DIVISIBLE_CHOICES: list[int] = [1, 2, 8, 16, 32, 64]
+AUDIO_MISSING_CHOICES: list[str] = ["silence", "none"]
 
 
 def _import_folder_paths():
@@ -181,6 +212,40 @@ def compute_target_size(
     return w, h
 
 
+def _round_to(value: float, multiple: int) -> int:
+    # PORTED FROM: HallettVisual/ComfyUI-4K-Video-Save-Load@7ae9ab9 video4k/nodes.py round_to (MIT)
+    # Halves round up, as Math.round does in the node's preview of this size.
+    return max(multiple, int(value / multiple + 0.5) * multiple)
+
+
+def resolution_target_size(
+    src_w: int,
+    src_h: int,
+    resolution: str,
+    custom_w: int,
+    custom_h: int,
+    dim_multiple: int,
+) -> tuple[int, int]:
+    """The loaded size for a ``resolution`` choice. "custom" (and anything unknown) is compute_target_size, unchanged;
+    "source" ignores custom_width / custom_height; the presets set the longest side and keep the aspect."""
+    m = max(1, int(dim_multiple))
+    if resolution not in RESOLUTION_PRESETS or resolution == "custom":
+        return compute_target_size(src_w, src_h, custom_w, custom_h, m)
+    longest = RESOLUTION_PRESETS[resolution]
+    if longest is None:                                   # "source"
+        return compute_target_size(src_w, src_h, 0, 0, m)
+    # PORTED FROM: HallettVisual/ComfyUI-4K-Video-Save-Load@7ae9ab9 video4k/nodes.py target_size (MIT)
+    scale = longest / max(int(src_w), int(src_h))
+    return _round_to(src_w * scale, m), _round_to(src_h * scale, m)
+
+
+def seconds_to_frames(seconds: float, fps: float) -> int:
+    """Frames that ``seconds`` of footage at ``fps`` hold (the 4K pack's int(seconds * rate + 1e-6))."""
+    if float(seconds) <= 0 or float(fps) <= 0:
+        return 0
+    return int(float(seconds) * float(fps) + 1e-6)
+
+
 def make_video_info(source: C2CVideo, loaded: C2CVideo) -> dict[str, float | int]:
     src_fps = float(source.fps)
     src_count = int(source.frame_count)
@@ -210,14 +275,22 @@ def build_loaded_handle(
     custom_height: int,
     vae: Any | None,
     crop: tuple[float, float, float, float] | None = None,
+    seconds_cap: float = 0.0,
+    resolution: str = "custom",
+    divisible_by: int = 1,
 ) -> tuple[C2CVideo, C2CVideo]:
-    """Fixed decision #1: probe → retime → trim → every → cap → format → crop → size → scale.
-    ``crop`` = (x, y, w, h) as fractions of the frame (L2.53); None or (0, 0, 1, 1) keeps the whole frame."""
+    """Fixed decision #1: probe → retime → trim → seconds → every → cap → format → crop → size → scale.
+    ``crop`` = (x, y, w, h) as fractions of the frame (L2.53); None or (0, 0, 1, 1) keeps the whole frame.
+    ``seconds_cap`` limits the footage after the skip to that many seconds at the (retimed) rate, before every-nth -
+    as the 4K pack does it. ``resolution`` / ``divisible_by``: see resolution_target_size; the defaults change
+    nothing."""
     preset = FORMAT_PRESETS.get(format_name or "None", {})
     h = raw
     if float(force_rate) > 0:
         h = h.retimed(float(force_rate), source_times_for_handle(raw))
     h = h.trimmed(int(skip_first_frames))
+    if float(seconds_cap or 0) > 0:
+        h = h.trimmed(0, seconds_to_frames(float(seconds_cap), float(h.fps)))
     h = h.every(int(select_every_nth))
     h = h.capped(int(frame_load_cap))
     h = apply_format_frames(h, preset, format_name or "None")
@@ -227,7 +300,9 @@ def build_loaded_handle(
         dim_multiple = vae_dim_multiple(vae)
     else:
         dim_multiple = int(preset.get("dim_multiple", 1) or 1)
-    tw, th = compute_target_size(h.width, h.height, custom_width, custom_height, dim_multiple)
+    dim_multiple = max(dim_multiple, int(divisible_by or 1))     # the preset (or VAE) may raise divisible_by
+    tw, th = resolution_target_size(h.width, h.height, resolution or "custom", custom_width, custom_height,
+                                    dim_multiple)
     h = h.scaled(tw, th)
     return raw, h
 
@@ -310,12 +385,43 @@ def is_output_linked(prompt: dict | None, unique_id: str | None, slot: int = 0) 
     return False
 
 
-def decode_to_image_and_mask(h: C2CVideo) -> tuple[Any, Any]:
+_EXACT = DecoderPlan("exact", "exact")
+
+
+def _with_fallback(h: C2CVideo, plan: DecoderPlan | None, work):
+    """Run ``work(chunks)`` on the plan's reader; when the fast path cannot deliver exactly the selected frames, run it
+    again on the exact reader. Returns (result, plan actually used)."""
+    plan = plan or _EXACT
+    if plan.mode == "exact":
+        return work(lambda size: iter_chunks(h, size, fmt="float32")), plan
+    try:
+        return work(lambda size: iter_chunks_for(h, size, plan)), plan
+    except FastDecodeError as exc:
+        import logging
+
+        logging.getLogger("c2c_video").warning("[c2c_video] fast decode of %s fell back to the exact reader: %s",
+                                               os.path.basename(getattr(h.source, "path", "") or "?"), exc)
+        used = DecoderPlan(plan.asked, "exact", f"fast path stopped ({exc}); read with the exact reader")
+        return work(lambda size: iter_chunks(h, size, fmt="float32")), used
+
+
+def decode_to_image_and_mask(h: C2CVideo, plan: DecoderPlan | None = None) -> tuple[Any, Any]:
     # Fixed decision #6
+    image, mask, _used = decode_with_plan(h, plan)
+    return image, mask
+
+
+def decode_with_plan(h: C2CVideo, plan: DecoderPlan | None = None) -> tuple[Any, Any, DecoderPlan]:
+    """IMAGE + MASK of the selection, through ``plan``'s reader (falls back to the exact reader); and the plan used."""
+    if len(h) == 0:
+        raise RuntimeError("No frames to decode.")
+    (image, mask), used = _with_fallback(h, plan, lambda chunks: _decode_chunks(h, chunks(_image_chunk_frames(h))))
+    return image, mask, used
+
+
+def _decode_chunks(h: C2CVideo, chunks) -> tuple[Any, Any]:
     torch = _import_torch()
     n = len(h)
-    if n == 0:
-        raise RuntimeError("No frames to decode.")
     ProgressBar, interrupt = _progress_and_interrupt()
     pbar = ProgressBar(n) if ProgressBar is not None else None
     image = torch.empty((n, h.height, h.width, 3), dtype=torch.float32)
@@ -324,7 +430,7 @@ def decode_to_image_and_mask(h: C2CVideo) -> tuple[Any, Any]:
     else:
         mask = torch.zeros((n, 64, 64), dtype=torch.float32)
     offset = 0
-    for chunk in iter_chunks(h, _image_chunk_frames(h), fmt="float32"):
+    for chunk in chunks:
         interrupt()
         bn = chunk.shape[0]
         if h.has_alpha and chunk.shape[-1] >= 4:
@@ -339,15 +445,24 @@ def decode_to_image_and_mask(h: C2CVideo) -> tuple[Any, Any]:
     return image, mask
 
 
-def encode_via_vae(h: C2CVideo, vae: Any) -> dict[str, Any]:
+def encode_via_vae(h: C2CVideo, vae: Any, plan: DecoderPlan | None = None) -> dict[str, Any]:
     # Fixed decision #7
+    result, _used = encode_with_plan(h, vae, plan)
+    return result
+
+
+def encode_with_plan(h: C2CVideo, vae: Any, plan: DecoderPlan | None = None) -> tuple[dict[str, Any], DecoderPlan]:
+    return _with_fallback(h, plan, lambda chunks: _encode_chunks(h, vae, chunks(_CHUNK)))
+
+
+def _encode_chunks(h: C2CVideo, vae: Any, chunks) -> dict[str, Any]:
     torch = _import_torch()
     latents: list[Any] = []
     ProgressBar, interrupt = _progress_and_interrupt()
     n = len(h)
     pbar = ProgressBar(n) if ProgressBar is not None else None
     done = 0
-    for chunk in iter_chunks(h, _CHUNK, fmt="float32"):
+    for chunk in chunks:
         interrupt()
         bn = chunk.shape[0]
         rgb = chunk[..., :3] if chunk.shape[-1] > 3 else chunk
@@ -463,7 +578,16 @@ def execute_video_load(
     prompt: dict | None = None,
     unique_id: str | None = None,
     crop: tuple[float, float, float, float] | None = None,
-) -> tuple[Any, int, LazyAudio, dict, C2CVideo, Any | None]:
+    decoder: str = "auto",
+    seconds_cap: float = 0.0,
+    resolution: str = "custom",
+    divisible_by: int = 1,
+    audio_when_missing: str = "silence",
+) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str]:
+    """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info). The defaults of every input added after
+    the first release reproduce the old behaviour (decoder "auto" only switches readers where the frames are identical)."""
+    import json
+
     raw = resolve_probe(path, sequence_fps=sequence_fps)
     h = raw
     if float(force_rate) > 0:
@@ -480,6 +604,9 @@ def execute_video_load(
         custom_height=custom_height,
         vae=vae,
         crop=crop,
+        seconds_cap=seconds_cap,
+        resolution=resolution,
+        divisible_by=divisible_by,
     )
     if len(loaded) == 0:
         _raise_if_empty_selection(
@@ -489,21 +616,83 @@ def execute_video_load(
             force_rate=force_rate,
         )
     video_info = make_video_info(raw, loaded)
-    audio = lazy_audio_for_handle(loaded)
+    audio_mode = audio_output_mode(loaded, audio_when_missing)
+    audio = lazy_audio_for_handle(loaded) if audio_mode != "none" else None
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 5)
+    plan = plan_decoder(loaded, decoder, cuda=device_is_cuda()) if (needs_image or needs_mask) else None
+
+    def info(used: DecoderPlan | None) -> str:
+        return json.dumps(load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode),
+                          indent=2)
+
     if not (needs_image or needs_mask):
-        return None, count, audio, video_info, loaded, None
+        return None, count, audio, video_info, loaded, None, info(None)
     if vae is not None and needs_image:
-        return encode_via_vae(loaded, vae), count, audio, video_info, loaded, None
+        latent, used = encode_with_plan(loaded, vae, plan)
+        return latent, count, audio, video_info, loaded, None, info(used)
     check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
-    image, mask = decode_to_image_and_mask(loaded)
+    image, mask, used = decode_with_plan(loaded, plan)
     if not needs_image:
         image = None
     if not needs_mask:
         mask = None
-    return image, count, audio, video_info, loaded, mask
+    return image, count, audio, video_info, loaded, mask, info(used)
+
+
+def audio_output_mode(h: C2CVideo, audio_when_missing: str = "silence") -> str:
+    """"file" when the clip has an audio stream, else "silence" (a silent track of the clip's length - what the loader
+    always did) or "none" (no AUDIO output)."""
+    if h.source.kind == "file" and h.audio is not None:
+        return "file"
+    return "none" if str(audio_when_missing or "silence") == "none" else "silence"
+
+
+def selection_seconds(raw: C2CVideo, loaded: C2CVideo) -> tuple[float, float]:
+    """(start, end) of the loaded part in the clip's own seconds, from its first frame: start = the first selected
+    frame's timestamp, end = start + frames / loaded fps."""
+    sel = loaded.selected_indices()
+    if not len(sel):
+        return 0.0, 0.0
+    first = int(sel[0])
+    if raw.source.kind == "file":
+        tbl = get_index_table(raw.source.stat_key, stream_index=raw.stream_index)
+        start = float((tbl.pts_of(first) - tbl.start_pts) * tbl.time_base)
+    else:
+        start = first / float(raw.fps) if float(raw.fps) > 0 else 0.0
+    fps = float(loaded.fps)
+    return start, start + (len(loaded) / fps if fps > 0 else 0.0)
+
+
+def load_summary(raw: C2CVideo, loaded: C2CVideo, *, format_name: str = "None", plan: DecoderPlan | None = None,
+                 audio_mode: str = "silence") -> dict[str, Any]:
+    """The ``info`` output (JSON) and the probe route's numbers: what the file is and exactly what loads."""
+    sel = loaded.selected_indices()
+    src_fps = float(raw.fps)
+    start, end = selection_seconds(raw, loaded)
+    name = raw.source.path if raw.source.kind == "file" else raw.source.pattern
+    out: dict[str, Any] = {
+        "file": os.path.basename(str(name).rstrip("/\\")) or str(name),
+        "source": {
+            "width": int(raw.width), "height": int(raw.height), "fps": round(src_fps, 6),
+            "frames": int(raw.frame_count),
+            "duration": round(int(raw.frame_count) / src_fps, 6) if src_fps > 0 else 0.0,
+            "pix_fmt": raw.pix_fmt, "bit_depth": int(raw.bit_depth), "has_alpha": bool(raw.has_alpha),
+            "rotation": int(raw.rotation), "has_audio": raw.audio is not None,
+        },
+        "loaded": {
+            "width": int(loaded.width), "height": int(loaded.height), "fps": round(float(loaded.fps), 6),
+            "frames": len(loaded), "first_frame": int(sel[0]) if len(sel) else 0,
+            "last_frame": int(sel[-1]) if len(sel) else 0,
+            "start_seconds": round(start, 6), "end_seconds": round(end, 6), "duration": round(end - start, 6),
+        },
+        "format": format_name or "None",
+        "audio": audio_mode,
+    }
+    if plan is not None:
+        out["decoder"] = {"asked": plan.asked, "used": plan.label, "note": plan.note}
+    return out
 
 
 def execute_images_load(
@@ -541,6 +730,13 @@ def execute_images_load(
     return image, mask, count, loaded
 
 
+SECONDS_TIP = ("Load at most this many seconds after skip_first_frames (0 = no limit), at the force_rate rate when "
+               "set. Works with frame_load_cap: the smaller one wins, and a format preset then snaps the count.")
+RESOLUTION_TIP = ("Output size by its LONGEST side, keeping the aspect: 2160p is 3840, 1080p is 1920. custom uses "
+                  "custom_width / custom_height (0 = keep the source size or follow the aspect). source ignores them.")
+DIVISIBLE_TIP = "Round both output dimensions to a multiple of this. A format preset or a VAE may raise it."
+AUDIO_MISSING_TIP = ("When the file has no audio: silence outputs a silent track as long as the loaded frames (what the "
+                     "loader always did, so downstream nodes keep working); none outputs nothing.")
 CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop "
             "tool in the player; custom_width / custom_height then resize the cropped frame.")
 
@@ -572,12 +768,18 @@ class LoadVideoC2C:
                 "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
                 "crop_w": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
                 "crop_h": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
+                # L2.53 (owner A14, from the 4K pack) - appended, so saved workflows keep their widget order
+                "decoder": (DECODER_CHOICES, _widget(DECODER_TIP, default="auto")),
+                "seconds_cap": ("FLOAT", _widget(SECONDS_TIP, default=0.0, min=0.0, max=86400.0, step=0.1)),
+                "resolution": (RESOLUTION_CHOICES, _widget(RESOLUTION_TIP, default="custom")),
+                "divisible_by": (DIVISIBLE_CHOICES, _widget(DIVISIBLE_TIP, default=1)),
+                "audio_when_missing": (AUDIO_MISSING_CHOICES, _widget(AUDIO_MISSING_TIP, default="silence")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask")
+    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info")
     FUNCTION = "load_video"
     CATEGORY = CATEGORY
 
@@ -596,6 +798,11 @@ class LoadVideoC2C:
         crop_y=0.0,
         crop_w=1.0,
         crop_h=1.0,
+        decoder="auto",
+        seconds_cap=0.0,
+        resolution="custom",
+        divisible_by=1,
+        audio_when_missing="silence",
         prompt=None,
         unique_id=None,
     ):
@@ -615,6 +822,11 @@ class LoadVideoC2C:
             prompt=prompt,
             unique_id=unique_id,
             crop=(crop_x, crop_y, crop_w, crop_h),
+            decoder=decoder,
+            seconds_cap=seconds_cap,
+            resolution=resolution,
+            divisible_by=divisible_by,
+            audio_when_missing=audio_when_missing,
         )
 
     @classmethod
@@ -658,12 +870,18 @@ class LoadVideoPathC2C:
                 "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
                 "crop_w": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
                 "crop_h": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
+                # L2.53 (owner A14, from the 4K pack) - appended, so saved workflows keep their widget order
+                "decoder": (DECODER_CHOICES, _widget(DECODER_TIP, default="auto")),
+                "seconds_cap": ("FLOAT", _widget(SECONDS_TIP, default=0.0, min=0.0, max=86400.0, step=0.1)),
+                "resolution": (RESOLUTION_CHOICES, _widget(RESOLUTION_TIP, default="custom")),
+                "divisible_by": (DIVISIBLE_CHOICES, _widget(DIVISIBLE_TIP, default=1)),
+                "audio_when_missing": (AUDIO_MISSING_CHOICES, _widget(AUDIO_MISSING_TIP, default="silence")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask")
+    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info")
     FUNCTION = "load_video"
     CATEGORY = CATEGORY
 
@@ -683,6 +901,11 @@ class LoadVideoPathC2C:
         crop_y=0.0,
         crop_w=1.0,
         crop_h=1.0,
+        decoder="auto",
+        seconds_cap=0.0,
+        resolution="custom",
+        divisible_by=1,
+        audio_when_missing="silence",
         prompt=None,
         unique_id=None,
     ):
@@ -701,6 +924,11 @@ class LoadVideoPathC2C:
             prompt=prompt,
             unique_id=unique_id,
             crop=(crop_x, crop_y, crop_w, crop_h),
+            decoder=decoder,
+            seconds_cap=seconds_cap,
+            resolution=resolution,
+            divisible_by=divisible_by,
+            audio_when_missing=audio_when_missing,
         )
 
     @classmethod
