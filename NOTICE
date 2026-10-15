@@ -135,6 +135,13 @@ Vendored third-party packages (under third_party/):
                 THIRD_PARTY_LICENSES/PromptRelay-NOTICE.txt.
 
 
+  * ComfyUI-Smart-Image-Crop-and-Stitch (smart crop / stitch port)
+      Author:   HallettVisual
+      Source:   https://github.com/HallettVisual/ComfyUI-Smart-Image-Crop-and-Stitch
+      License:  Apache-2.0 (declared in the upstream pyproject.toml and README)
+      Usage:    nodes/smart_crop.py - Inpaint Crop Pro crop_mode "smart aspect" and
+                Inpaint Stitch Pro stitch_mode "smart" (L7.65 P08).
+
   * Wan spatial-tiled VAE decode helper (nodes/_vae_tiled.py)
       Author:   Code2Collapse (same author as this pack)
       Source:   ComfyUI-WanNodeExperiments, nodes/wan_director/features/_local_vae_hdr.py

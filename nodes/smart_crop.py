@@ -1,4 +1,5 @@
 # PORTED FROM: HallettVisual/ComfyUI-Smart-Image-Crop-and-Stitch smart_image_crop.py, smart_image_stitcher.py (Apache-2.0)
+# https://github.com/HallettVisual/ComfyUI-Smart-Image-Crop-and-Stitch
 """Smart Image Crop / Stitch — mask-driven crop for detail work.
 
 Since L7.65 P08 these two are modes of Inpaint Crop Pro (crop_mode "smart aspect") and Inpaint Stitch Pro

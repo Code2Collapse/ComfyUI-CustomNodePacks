@@ -50,6 +50,15 @@ The 30-mode blend table in `nodes/layer_effects/_blend.py`. Credited here
 because ComfyUI_LayerStyle's own `py/imagefunc.py:2506` credits it — the debt
 is owed one step further upstream than our direct source.
 
+### ComfyUI-Smart-Image-Crop-and-Stitch — HallettVisual
+<https://github.com/HallettVisual/ComfyUI-Smart-Image-Crop-and-Stitch> · **Apache-2.0** (declared in `pyproject.toml`
+and README; the clone ships no `LICENSE` file)
+
+`nodes/smart_crop.py`: the stills crop and stitch - faint-mask detection, hole closing, crop at the output's aspect,
+size snapping between a minimum and a maximum side, the three no-mask modes, Box / Mask Feather and Hard Paste, colour
+match. Since L7.65 P08 it is Inpaint Crop Pro's `smart aspect` mode and Inpaint Stitch Pro's `smart` mode. Upstream
+says it was inspired by lquesada's ComfyUI-Inpaint-CropAndStitch (GPL-3.0); nothing was taken from that code here.
+
 ### comfyui-mcp — artokun
 <https://github.com/artokun/comfyui-mcp>
 

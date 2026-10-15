@@ -2,6 +2,30 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-15 (one Inpaint Crop and one Inpaint Stitch node, L7.65 P08)
+
+Owner card P08: seven crop / stitch nodes become two. Saved workflows load migrated (links and values kept); the
+pack registers 107 nodes instead of 112. Design: `docs/design/inpaint_crop_stitch_unified.md`.
+
+- **Inpaint Crop Pro** gains `crop_mode`: `pro` (the crop as before, the default), `smart aspect` (the former **Smart
+  Image Crop**) and `mask prepare` (the former **Inpaint Mask Prepare**: no crop; with an image it also gives a
+  whole-frame stitcher). The new controls are shown only in their mode. A 6th output, `preview`: the preview picture
+  in `pro`, Smart's overlay in `smart aspect`, the R / G mask picture in `mask prepare`.
+- **Inpaint Stitch Pro** gains `stitch_mode`: `blend` (as before, the default), `paste back` (the former **Inpaint
+  Paste Back**), `smart` (the former **Smart Image Stitch**) and `context blend` (the former **Context Inpainter /
+  Fixer**: colour correction and lightness rescue, no stitcher; frame 0 only, as before). A stitcher from the other
+  kind of crop is refused with a message that names the mode to pick.
+- Each mode runs the former node's own code. Checked: 37 cases through the migration rows give the old nodes'
+  outputs bit for bit, against the code as shipped at d97cc13 (`tests/test_consolidation_inpaint.py`).
+- The crop preview is drawn from what ran in every mode, and the live preview follows `crop_mode` and the new
+  controls (checked against real runs from each starting mode). It now also follows a `roto_quality` change; before,
+  it kept the last run's 1 px erosion setting.
+- `image` on Inpaint Crop Pro and `stitcher` / `inpainted_image` on Inpaint Stitch Pro are optional inputs now (a
+  migrated Mask Prepare has no image, Context Inpainter no stitcher). Their socket slots and the widget order are
+  unchanged, so older saves of the two nodes load as before; a mode that needs the input says so.
+- Dropped in migration: Context Inpainter's `face_positive_prompt` / `face_negative_prompt` (they were only written
+  to the log).
+
 ## Unreleased – 2026-10-14 (speed fixes; a real player in Load Video)
 
 Evidence: `docs/evidence/L2.51/` and `docs/evidence/L2.50/` (workspace), measured on the owner-equivalent testbed
