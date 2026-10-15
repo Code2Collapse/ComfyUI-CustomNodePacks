@@ -105,6 +105,9 @@ def install() -> bool:
     global _INSTALLED
     if _INSTALLED:
         return True
+    if os.environ.get("C2C_INSIGHT", "").strip() == "0":
+        log.info("[insight] off (C2C_INSIGHT=0): the per-node executor hook is not installed")
+        return False
 
     try:
         import execution as _exec  # ComfyUI top-level execution module
@@ -155,9 +158,18 @@ def install() -> bool:
             return args[3]
         return None
 
+    # L2.51 (owner 2026-10-15: "every process has to be very fast"): this ran torch.cuda.synchronize() before AND
+    # after every node on a GPU, so the CPU waited for the GPU at each node and no node's work could overlap the
+    # next one's. The allocator counters below are host-side bookkeeping, exact without a sync. Only the elapsed time
+    # changes meaning: without a sync it is the time the node took on the CPU side (launching GPU work included).
+    # C2C_INSIGHT_SYNC=1 restores the per-node sync for exact GPU timings while profiling.
+    sync_gpu = os.environ.get("C2C_INSIGHT_SYNC", "").strip() == "1"
+    cuda_ok = bool(torch.cuda.is_available())
+
     def _snapshot_mem():
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        if cuda_ok:
+            if sync_gpu:
+                torch.cuda.synchronize()
             return (torch.cuda.memory_allocated(),
                     torch.cuda.max_memory_allocated())
         return (0, 0)
