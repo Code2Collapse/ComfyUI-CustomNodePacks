@@ -762,19 +762,31 @@ Interactive before/after comparison widget with 3 modes: drag-slider split, over
 
 ### Batch & Video
 
-#### Load Video (C2C): player and frame selection
+#### Load Video (C2C): player, frame selection and crop
 
 The node plays its video in the node body. Pro formats (ProRes, DNxHR, HEVC 10-bit, FFV1) are transcoded for the
-preview on the server.
+preview on the server. The preview has a keyframe every 12 frames, so seeking and scrubbing stay quick.
 
-- **Transport:** play / pause, previous / next frame, first / last frame of the selection, frame number and timecode.
-- **Scrubber:** shows the whole clip. Click or drag to seek.
-- **Choosing frames:** drag the two handles on the scrubber. They set `skip_first_frames` and `frame_load_cap`, and
-  the label under the bar says how many frames the run will load (`select_every_nth` included). Typing in the
-  widgets moves the handles.
-- **Loop the selection:** plays only the chosen range.
-- **Keys** (click the player first): Space, Left / Right, Home / End, I / O to set in / out.
-- Works the same in Load Video Path (C2C) and Load Images Path (C2C), in both renderers, and inside subgraphs.
+- **Transport:** play / pause, play backwards, previous / next frame, first / last frame of the selection.
+- **Speed:** 0.25x, 0.5x, 1x, 2x, 4x (click the speed button; Shift+click or right-click to slow down).
+- **Loop mode:** loop the selection, loop the whole clip, play once, or ping-pong inside the selection.
+- **Scrubber and ruler:** the bar shows the whole clip with a ruler in frames or in time (the *frames / time*
+  button). Click or drag to seek. Hover to see that frame in a small thumbnail without moving the playhead.
+- **Go to a frame:** click the frame number, type a frame or a timecode (`hh:mm:ss:ff`), press Enter.
+- **Choosing frames:** drag the two handles on the scrubber, or press I / O at the playhead. They set
+  `skip_first_frames` and `frame_load_cap`. The label under the bar says how many frames the run will load and how
+  long they last (`select_every_nth` included). Typing in the widgets moves the handles. *all* selects the whole clip.
+- **Crop:** click *crop*, then drag the box or its handles on the preview. Pick a shape (Free, Original, 1:1, 4:5,
+  5:4, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 2:1, 1:2). Click *crop* again to finish; *no crop* removes it. The label shows
+  the crop in pixels. The run decodes each frame, cuts the box out, then applies `custom_width` / `custom_height`.
+  The preview keeps showing the whole frame with the outside shaded. The crop is stored in four hidden widgets
+  (`crop_x`, `crop_y`, `crop_w`, `crop_h`, fractions of the frame), so it is saved with the workflow.
+- **Full screen:** the ⛶ button or F.
+- **Keys** (click the player first): Space play / pause, Left / Right step (Shift: 10 frames), J / K / L
+  backwards / stop / forwards (press J or L again for 2x, 4x), Up / Down speed, Home / End, I / O set in / out,
+  F full screen.
+- The player works the same in Load Video Path (C2C) (crop included) and Load Images Path (C2C) (no crop), in both
+  renderers, and inside subgraphs.
 
 #### Mask Batch Manager (MEC)
 
@@ -1404,7 +1416,7 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 | CUDA out of memory | Enable `offload_to_cpu` in SAM Model Loader, use `float16` dtype, reduce image resolution |
 | Nodes not showing in menu | Check console for `[MEC] Loaded 44` message. If missing, check for import errors in the console output |
 | The browser hangs on the loading screen or the canvas stops responding | Start ComfyUI with `C2C_NO_FRONTEND=1`. This pack then serves no browser code, and its nodes still run. If the problem goes away, it comes from this pack's front end: please send the browser console (F12) output. |
-| Runs feel slow on big image batches | Image batching (Settings > C2C > Image batching) only splits a batch when it would not fit in memory. The tensor inspector computes nothing during a run. `C2C_TENSOR_INSPECTOR=0` turns it off completely. |
+| Runs feel slow on big image batches | Image batching (Settings > C2C > Image batching) only splits a batch when it would not fit in memory. The tensor inspector computes nothing during a run. `C2C_TENSOR_INSPECTOR=0` turns it off completely. The Insight node timer no longer waits for the GPU after each node; `C2C_INSIGHT=0` turns that hook off, `C2C_INSIGHT_SYNC=1` brings back exact per-node GPU times for profiling. |
 | ViTMatte download fails | Download manually from [HuggingFace](https://huggingface.co/hustvl/vitmatte-small-composition-1k) → place in `ComfyUI/models/vitmatte/vitmatte-small-composition-1k/` |
 | My mask looks bad | Connect your image + mask to **Mask Failure Explainer** — it will diagnose the issue and suggest the right method |
 

@@ -2,6 +2,57 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-15 (Load Video player and crop; GPU sync per node removed; speed measured)
+
+Evidence: `docs/evidence/L2.51/speed_summary.md`, `docs/evidence/L2.53/`, `docs/evidence/L2.52/` (workspace), on the
+owner-equivalent testbed (core 0.39.0, frontend 1.53.10, the owner's third-party packs, CPU).
+
+### Fixed: a GPU wait after every node
+
+- **Insight waited for the GPU twice per node.** Its timer around every node called `torch.cuda.synchronize()` before
+  and after the node whenever CUDA was available, so the next node could not start its CPU work while the GPU was
+  still busy. It no longer syncs. Its VRAM numbers are unchanged (they never needed the sync); its node time is now
+  the time the node took to run on the CPU side, GPU launches included. `C2C_INSIGHT_SYNC=1` brings back exact GPU
+  times for profiling; `C2C_INSIGHT=0` turns the hook off. Not measured on a GPU yet (the testbed is CPU-only).
+
+### Measured: image nodes are as fast with this pack as without it
+
+- 12 common nodes (Mask to Image, Image to Mask, Invert, Upscale By, Blur, Sharpen, Grow Mask, Threshold Mask, core
+  Canny, KJ Grow Mask With Blur, KJ Resize Image v2, controlnet_aux Canny), 97 frames of 1280 x 720, timed
+  interleaved on two servers: this pack removed, and loaded with image batching Off, Internal and Universal. No
+  difference rose above the machine's noise. Table: `docs/evidence/L2.51/speed_summary.md`.
+- If a log still says `[C2C autobatch] install failed: unhashable type`, that ComfyUI runs code older than d97cc13.
+
+### Added: Load Video (C2C) player
+
+- Play backwards, speed 0.25x-4x, loop mode (selection, whole clip, once, ping-pong), J / K / L shuttle keys,
+  Shift+Left / Right for 10 frames, Up / Down for speed.
+- A ruler under the scrubber, in frames or in time. Hovering the scrubber shows that frame in a thumbnail.
+- Click the frame number to type a frame or a timecode.
+- The label under the bar also says how long the selected frames last. *all* selects the whole clip.
+- Full screen (⛶ or F).
+- The preview now has a keyframe every 12 frames (it had x264's default of 250), so seeking, hovering and playing
+  backwards decode at most 12 frames. Older cached previews are rebuilt once.
+
+### Added: crop in Load Video (C2C) and Load Video Path (C2C)
+
+- A crop box over the preview with eight handles and shapes Free, Original, 1:1, 4:5, 5:4, 16:9, 9:16, 4:3, 3:4, 3:2,
+  2:3, 2:1, 1:2 (behaviour modelled on WhatDreamsCost's Load Video UI; no code taken). The label shows the crop in
+  pixels; *no crop* removes it.
+- The run decodes each frame, cuts the box out, then applies `custom_width` / `custom_height`. The cropped frames are
+  exactly a slice of the uncropped ones (tested on video and image sequences).
+- Stored in four new inputs, `crop_x`, `crop_y`, `crop_w`, `crop_h` (fractions of the frame), appended after the old
+  ones and hidden (the crop tool sets them). Old workflows load with no crop.
+
+### Fixed: every C2C panel inside a new subgraph in Nodes 2.0
+
+- Convert to Subgraph creates a new node with the same id; Nodes 2.0 kept showing the old node's panel, wired to a
+  node that no longer runs. Measured over every node type of the C2C packs (660 types, 361 with panels): classic
+  362 of 362 fine; Nodes 2.0 313 showed the dead copy before, 1 after (Folder Incrementer, whose status strip is added
+  later; fixed by tagging a panel the moment a C2C node adds it, re-checked). The remaining "not attached" entries are
+  core's multiline text boxes, which Nodes 2.0 draws itself. `js/_vue_dom_rebind.js` tags the panels of every C2C
+  node and puts the live one back after each graph switch.
+
 ## Unreleased – 2026-10-14 (speed fixes; a real player in Load Video)
 
 Evidence: `docs/evidence/L2.51/` and `docs/evidence/L2.50/` (workspace), measured on the owner-equivalent testbed
