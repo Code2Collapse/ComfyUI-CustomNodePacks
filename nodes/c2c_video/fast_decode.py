@@ -2,19 +2,23 @@
 
 Owner, 2026-10-15: take the 4K pack's fast path, with "Auto, with a choice": a ``decoder`` input
   * ``exact`` - today's reader (reader.py): PyAV, frame identity from the index table, everything it supports.
-  * ``auto``  - the fast path only where it gives the SAME frames as the exact reader, else the exact reader.
+  * ``auto``  - the fast path only where it is FASTER and gives the SAME colour, else the exact reader.
   * ``fast``  - the fast path wherever it can run (8-bit 4:2:0 files), even where its colour is not identical.
 
-How the fast path works (measured on this box, docs/evidence/L2.53):
-  * ffmpeg decodes, selects, scales and converts; Python only normalises. On a CPU device ffmpeg converts YUV -> 16-bit
-    RGB with the SAME swscale call the exact reader makes (same matrix, range, flags, chroma siting), slice-threaded.
-    Measured: bit-identical to the exact reader (max difference 0) on 1080p and 4K test clips, scaled and unscaled,
-    odd sizes included. ``auto`` uses only this conversion, and only after a self-check on this machine's ffmpeg
-    proved it identical (the check runs once per process, a few hundred ms).
+What was measured (docs/evidence/L2.53/video4k_bench.json, CPU, 32 threads):
+  * ffmpeg decodes, selects, scales and converts; Python only normalises. With ffmpeg converting YUV -> 16-bit RGB
+    with the SAME swscale call the exact reader makes (matrix, range, flags, chroma siting pinned) the frames are
+    bit-identical to the exact reader (max difference 0, 1080p and 4K, scaled, odd sizes, every selection kind).
+    But on this CPU it is NOT faster: 4K 39.9-41.1 vs 32.3-36.0 ms/frame, 1080p 9.5-9.7 vs 9.5-9.6 (interleaved
+    runs) - PyAV's reader already threads its decode and conversion.
   * On a CUDA device ``fast`` ships nv12 (a quarter of the bytes) and converts on the GPU, as the 4K pack does, with a
-    bicubic, correctly sited chroma upsample instead of its nearest-neighbour one. Measured against the exact reader
-    on the CPU (same arithmetic): max 10.9/255, mean 0.47/255 (nearest-neighbour: max 255/255). Not identical, so
-    ``auto`` never picks it. ``C2C_VIDEO_FAST=rgb48`` makes ``fast`` use the identical conversion on CUDA too.
+    bicubic, correctly sited chroma upsample instead of its nearest-neighbour one. Against the exact reader (same
+    arithmetic, run on the CPU): mean 0.47/255, max 25.7/255 at saturated colour edges (nearest-neighbour: max
+    255/255). Speed on a GPU: not measured here (the owner's numbers).
+  * So ``auto`` is the exact reader today: neither fast variant met both conditions on the measured box.
+    ``C2C_VIDEO_AUTO=fast`` lets auto take the identical ffmpeg path (after its self-check), ``C2C_VIDEO_AUTO=gpu``
+    also the GPU path on CUDA - for a machine where those measure faster. ``C2C_VIDEO_FAST=rgb48`` makes ``fast`` use
+    the identical conversion on CUDA too; ``C2C_VIDEO_FAST=0`` turns the fast path off.
   * Frame identity: every frame ffmpeg delivers carries its presentation timestamp (``-copyts`` + ``showinfo``), and
     is looked up in the same index table the exact reader uses. A frame the selection did not expect, a missing frame,
     a size change or an ffmpeg error stops the fast path; the caller then reads with the exact reader instead, so the
@@ -47,10 +51,10 @@ from .handle import C2CVideo
 log = logging.getLogger("c2c_video.fast_decode")
 
 DECODER_CHOICES = ["auto", "fast", "exact"]
-DECODER_TIP = ("auto: ffmpeg's fast path where it gives exactly the frames and colours of the exact reader (8-bit "
-               "4:2:0 video, checked on this machine), else the exact reader. fast: the fast path wherever it can run "
-               "(on an NVIDIA GPU the colour conversion runs there and may differ by a few levels). exact: always the "
-               "frame-accurate PyAV reader (10-bit, HDR, alpha, ProRes, image sequences use it in every mode).")
+DECODER_TIP = ("auto: the fast path only where it is faster with the same colour - measured, that is the exact reader "
+               "on the tested machine. fast: ffmpeg decodes 8-bit 4:2:0 video (the same frames; on an NVIDIA GPU the "
+               "colour conversion runs there, mean 0.5/255 from the exact reader). exact: the frame-accurate PyAV "
+               "reader (10-bit, HDR, alpha, ProRes and image sequences always use it).")
 
 # 8-bit 4:2:0 sources (the owner's scope for the fast path). nv12 is a chroma relayout of these, not a resample.
 FAST_PIX_FMTS = frozenset({"yuv420p", "yuvj420p", "nv12", "nv21"})
@@ -69,7 +73,8 @@ _FLAGS_RESIZE = "lanczos+accurate_rnd+full_chroma_int+full_chroma_inp"
 # takes the stream's own, which differed (measured: max 150/255 at colour edges until this was pinned).
 _CHROMA_POS = "in_h_chr_pos=0:in_v_chr_pos=128"
 
-# auto: below this many output pixels (frames x width x height) ffmpeg's start-up (~0.1 s) outweighs the gain.
+# auto (when allowed by C2C_VIDEO_AUTO): below this many output pixels (frames x width x height) ffmpeg's start-up
+# (~0.05-0.1 s measured) outweighs any gain.
 AUTO_MIN_PIXELS = int(os.environ.get("C2C_VIDEO_FAST_MIN_PIXELS", str(1280 * 720 * 12)))
 # auto: the self-check must agree to within this (float, per channel). Measured: 0.
 SELFTEST_MAX_DIFF = 2.0 / 65535.0
@@ -183,20 +188,28 @@ def plan_decoder(h: C2CVideo, decoder: str, *, cuda: bool = False) -> DecoderPla
     if why:
         return DecoderPlan(asked, "exact", why)
     if asked == "fast":
-        want_nv12 = (cuda and os.environ.get("C2C_VIDEO_FAST", "").strip().lower() != "rgb48"
-                     and h.crop is None and (h.pix_fmt in _NV12_OK) and (h.colour.range or "tv") == "tv"
-                     and h.width % 2 == 0 and h.height % 2 == 0)
+        want_nv12 = cuda and os.environ.get("C2C_VIDEO_FAST", "").strip().lower() != "rgb48" and _nv12_ok(h)
         return DecoderPlan(asked, "nv12" if want_nv12 else "rgb48")
-    # auto
+    # auto (see the module notes: measured, the exact reader is as fast on the CPU; the GPU path is not identical)
+    allow = os.environ.get("C2C_VIDEO_AUTO", "").strip().lower()
+    if allow not in ("fast", "gpu"):
+        return DecoderPlan(asked, "exact", "auto: the exact reader measured as fast as ffmpeg here")
     if len(h) * int(h.width) * int(h.height) < AUTO_MIN_PIXELS:
-        return DecoderPlan(asked, "exact", "small load: the exact reader is as fast")
+        return DecoderPlan(asked, "exact", "small load: ffmpeg's start-up outweighs any gain")
+    if allow == "gpu" and cuda and _nv12_ok(h):
+        return DecoderPlan(asked, "nv12", "C2C_VIDEO_AUTO=gpu")
     ok, diff = selftest()
     if not ok:
         return DecoderPlan(asked, "exact", f"this ffmpeg's conversion differs from the exact reader ({diff})")
-    return DecoderPlan(asked, "rgb48")
+    return DecoderPlan(asked, "rgb48", "C2C_VIDEO_AUTO=fast")
 
 
-# ── the self-check behind auto ───────────────────────────────────────────────────────────────────────────────────
+def _nv12_ok(h: C2CVideo) -> bool:
+    return (h.crop is None and h.pix_fmt in _NV12_OK and (h.colour.range or "tv") == "tv"
+            and h.width % 2 == 0 and h.height % 2 == 0)
+
+
+# ── the self-check behind auto (C2C_VIDEO_AUTO=fast) ───────────────────────────────────────────────────────────────────────────────────
 def selftest() -> tuple[bool, str]:
     """Decode a small colourful clip with both readers (unscaled and scaled to an odd size) and compare. Cached per
     ffmpeg binary for the life of the process."""

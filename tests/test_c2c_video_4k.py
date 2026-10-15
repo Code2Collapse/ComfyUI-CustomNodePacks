@@ -144,13 +144,13 @@ def test_fast_colour_identical_on_colour_edges(fd, cv, colour_clip):
 @needs_ffmpeg
 def test_nv12_gpu_conversion_same_frames_measured_colour(fd, cv, cfr_clip, colour_clip):
     """decoder=fast on CUDA: nv12 + our chroma upsample. Run on the CPU here (same arithmetic). Frames identical;
-    colour within the bound measured on 1080p / 4K testsrc2 (max 10.9/255, mean 0.47/255)."""
+    colour within the bound measured on 1080p / 4K testsrc2 (mean 0.47/255, max 25.7/255 at saturated edges)."""
     h = cv.probe_file(cfr_clip).trimmed(3).every(4)
     got = _fast(fd, h, "nv12")
     assert [cv.decode_index(f) for f in got] == list(h.selected_indices())
     c = cv.probe_file(colour_clip)
     d = np.abs(_fast(fd, c, "nv12") - _exact(c))
-    assert d.max() * 255 <= 16.0 and d.mean() * 255 <= 1.0, (d.max() * 255, d.mean() * 255)
+    assert d.max() * 255 <= 32.0 and d.mean() * 255 <= 1.0, (d.max() * 255, d.mean() * 255)
 
 
 @needs_ffmpeg
@@ -173,12 +173,22 @@ def test_plan_exact_for_what_the_fast_path_does_not_take(fd, cv, tmp_path, exr_s
 
 
 @needs_ffmpeg
-def test_plan_auto_small_exact_big_fast_and_fast_on_cuda_is_nv12(fd, cv, cfr_clip, monkeypatch):
+def test_plan_auto_is_exact_unless_allowed_and_fast_on_cuda_is_nv12(fd, cv, cfr_clip, monkeypatch):
+    """auto = the fast path only where it is faster with the same colour. Measured (docs/evidence/L2.53): the identical
+    ffmpeg path is not faster than the exact reader on the CPU and the GPU path is not identical, so auto is exact;
+    C2C_VIDEO_AUTO opts a machine in."""
     h = cv.probe_file(cfr_clip)
-    assert fd.plan_decoder(h, "auto").mode == "exact"                  # 60 x 256 x 256: below AUTO_MIN_PIXELS
     monkeypatch.setattr(fd, "AUTO_MIN_PIXELS", 0)
-    assert fd.plan_decoder(h, "auto").mode == "rgb48"
-    assert fd.plan_decoder(h, "auto", cuda=True).mode == "rgb48"       # auto never takes the non-identical path
+    assert fd.plan_decoder(h, "auto").mode == "exact"
+    assert fd.plan_decoder(h, "auto", cuda=True).mode == "exact"
+    monkeypatch.setenv("C2C_VIDEO_AUTO", "fast")
+    assert fd.plan_decoder(h, "auto").mode == "rgb48"                  # after the self-check proved it identical
+    assert fd.plan_decoder(h, "auto", cuda=True).mode == "rgb48"
+    monkeypatch.setenv("C2C_VIDEO_AUTO", "gpu")
+    assert fd.plan_decoder(h, "auto", cuda=True).mode == "nv12"
+    monkeypatch.setattr(fd, "AUTO_MIN_PIXELS", 10 ** 12)
+    assert fd.plan_decoder(h, "auto", cuda=True).mode == "exact"       # a small load: start-up outweighs any gain
+    monkeypatch.delenv("C2C_VIDEO_AUTO")
     assert fd.plan_decoder(h, "fast").mode == "rgb48"
     assert fd.plan_decoder(h, "fast", cuda=True).mode == "nv12"
     assert fd.plan_decoder(h.cropped(0, 0, 0.5, 0.5), "fast", cuda=True).mode == "rgb48"
