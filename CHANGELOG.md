@@ -2,6 +2,23 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-16 (AV Handles: the model preset and custom formula now apply in add mode)
+
+Evidence: `docs/evidence/L2.55/` (workspace): `handles_before.json` / `handles_after.json`, `handles_live_after.json`
+(26 cases, classic + Nodes 2.0, owner-stack testbed), `handles_add_custom.*.png`.
+
+- **Fixed: in add mode the `model` preset and the custom step / plus did nothing.** Add only ever rounded onto the
+  fixed `padding_mode` table, whose default is `disabled`, so with any preset or custom formula the frame count came
+  out unchanged (reported for every preset). `padding_mode` has a new first choice, **model preset**: the total is
+  rounded up onto the grid of the `model` dropdown, or onto `custom_step * n + custom_plus`. It is the default for new
+  nodes. Saved workflows keep the `padding_mode` they stored (`disabled`, `WAN`, `LTX2`, `H3`), so their frame
+  counts do not change; the report says how to switch. The front end now shows `model` (and step / plus for custom)
+  in add mode when `padding_mode` is model preset.
+- The run report survives saving and reopening the workflow: ComfyUI does not re-send the report of a cached node.
+- Tests: every preset x clip lengths x handle counts x head / tail / both, custom formulas, fit to a target, already
+  compatible counts, and the old padding tables - each checks the real output frame count, that the original frames
+  keep their order and content, and that the trim returns the original exactly.
+
 ## Unreleased – 2026-10-15 (Image batching Universal: proven faster operations)
 
 Evidence: `docs/evidence/L2.54/` (workspace): design, `growmask_adapter_probe.json`, `growmask_live.json`.

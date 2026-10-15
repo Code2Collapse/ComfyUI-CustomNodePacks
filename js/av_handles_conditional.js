@@ -2,13 +2,15 @@
 // and show the run report on the node (A9: "not calculating frames, not adding or trimming at all, no control").
 //
 //   fit  — target_frames, model (+ custom_step / custom_plus for the custom grid), side, manual_fps, memo_key
-//   add  — handle_frames, padding_mode, side, manual_fps, memo_key
+//   add  — handle_frames, padding_mode (+ model, and custom_step / custom_plus for the custom grid, when
+//          padding_mode is "model preset" - L2.55), side, manual_fps, memo_key
 //   trim — trim_amount (+ handle_frames when manual), side, manual_fps, memo_key
 import { app } from "../../scripts/app.js";
 import { setHidden, vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 const NODE = "AVHandlesMEC";
 const CUSTOM = "custom (step / plus)";
+const USE_MODEL = "model preset";
 const ALWAYS = new Set(["mode", "side", "manual_fps", "memo_key"]);
 
 // Saved before 2026-09-22 (commit 4aad79d added target_frames, model, custom_step, custom_plus in the middle):
@@ -24,7 +26,12 @@ function shown(node, name) {
         if (name === "custom_step" || name === "custom_plus") return get("model") === CUSTOM;
         return false;
     }
-    if (mode === "add") return name === "handle_frames" || name === "padding_mode";
+    if (mode === "add") {
+        if (name === "handle_frames" || name === "padding_mode") return true;
+        if (get("padding_mode") !== USE_MODEL) return false;
+        if (name === "model") return true;
+        return (name === "custom_step" || name === "custom_plus") && get("model") === CUSTOM;
+    }
     if (mode === "trim") return name === "trim_amount" || (name === "handle_frames" && get("trim_amount") === "manual");
     return true;
 }
@@ -72,12 +79,20 @@ function repairLegacyValues(node, info) {
     return true;
 }
 
+function paintReport(el) {
+    const warn = /NOTHING WAS TRIMMED|is NOT on the/.test(el.textContent);
+    el.style.color = warn ? "var(--c2c-warning, #f5c26b)" : "var(--c2c-fg, #ccc)";
+}
+
 function ensureReport(node) {
     if (node.__avhReport) return node.__avhReport;
     const el = document.createElement("div");
     el.style.cssText = "font:11px/1.35 ui-monospace,monospace;white-space:pre-wrap;overflow:auto;max-height:96px;"
         + "padding:4px 6px;border-radius:4px;background:var(--c2c-bg3, rgba(0,0,0,.25));color:var(--c2c-fg, #ccc);";
-    el.textContent = "Run once to see what was added or trimmed.";
+    // the last report rides in node.properties: ComfyUI does not re-send a cached node's report (only output
+    // nodes get emit_cached_output), so a reopened workflow would otherwise show nothing until the node re-runs
+    el.textContent = node.properties?.avh_report || "Run once to see what was added or trimmed.";
+    paintReport(el);
     node.addDOMWidget("avh_report", "report", el, { serialize: false, hideOnZoom: false, getHeight: () => 84 });
     node.__avhReport = el;
     return el;
@@ -90,7 +105,7 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
-            for (const name of ["mode", "model", "trim_amount"]) hook(this, name);
+            for (const name of ["mode", "model", "trim_amount", "padding_mode"]) hook(this, name);
             ensureReport(this);
             setTimeout(() => applyVisibility(this), 0);
             return r;
@@ -103,6 +118,10 @@ app.registerExtension({
             // the saved values are applied by position after this hook returns: repair on the next tick
             setTimeout(() => {
                 repairLegacyValues(this, { widgets_values: saved });
+                if (this.__avhReport && this.properties?.avh_report) {
+                    this.__avhReport.textContent = this.properties.avh_report;
+                    paintReport(this.__avhReport);
+                }
                 applyVisibility(this);
             }, 0);
             return r;
@@ -114,8 +133,8 @@ app.registerExtension({
             const el = ensureReport(this);
             if (el) {
                 el.textContent = Array.isArray(text) ? text.join("\n") : String(text ?? "");
-                const warn = /NOTHING WAS TRIMMED|is NOT on the/.test(el.textContent);
-                el.style.color = warn ? "var(--c2c-warning, #f5c26b)" : "var(--c2c-fg, #ccc)";
+                paintReport(el);
+                if (this.properties) this.properties.avh_report = el.textContent;
             }
             return r;
         };

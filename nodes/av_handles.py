@@ -49,13 +49,13 @@ import torch
 
 try:
     from ._frame_grid import (
-        CUSTOM, GRID_NAMES, FrameGridError, describe_fit, plan_fit, resolve,
-        trim_to,
+        CUSTOM, GRID_NAMES, FrameGridError, Grid, describe_fit, plan_fit,
+        resolve, trim_to,
     )
 except ImportError:  # loaded as a top-level module rather than a package
     from _frame_grid import (  # type: ignore
-        CUSTOM, GRID_NAMES, FrameGridError, describe_fit, plan_fit, resolve,
-        trim_to,
+        CUSTOM, GRID_NAMES, FrameGridError, Grid, describe_fit, plan_fit,
+        resolve, trim_to,
     )
 
 # Kept for the legacy padding_mode widget. The real table now lives in
@@ -67,6 +67,10 @@ GRIDS = {
     "LTX2 (8n+1)": (8, 1),
     "H3 (17n+5)": (17, 5),
 }
+#: padding_mode choice that pads `add` onto the `model` dropdown's grid (or the custom step / plus). The default
+#: for NEW nodes; a saved workflow keeps the padding_mode it stored, so its frame count does not change (L2.55).
+USE_MODEL = "model preset"
+PADDING_CHOICES = ("disabled", USE_MODEL) + tuple(k for k in GRIDS if k != "disabled")
 MODES = ("add", "trim", "fit")
 SIDES = ("head", "tail", "both")
 TRIM_SOURCES = ("auto", "manual")
@@ -210,6 +214,26 @@ def next_on_grid(n: int, grid: str) -> int:
     return off + k * step
 
 
+def add_grid(padding_mode: str, model: str, custom_step: int = 4,
+             custom_plus: int = 1) -> tuple[Grid | None, str]:
+    """The grid an `add` lands on, and where it came from (L2.55).
+
+    `add` used to read only padding_mode's fixed table: the `model` preset and
+    the custom step / plus did nothing in add mode, and with the widget-hiding
+    front-end not loaded (owner's Linux box) every preset and custom formula
+    looked broken. padding_mode = USE_MODEL now pads onto the model grid; the
+    other padding_mode values keep their old result."""
+    if GRIDS.get(padding_mode):
+        return None, f"{padding_mode} (padding_mode)"
+    if padding_mode != USE_MODEL:
+        return None, (f"none - padding_mode is {padding_mode!r}; choose {USE_MODEL!r} "
+                      "to land on the model / custom grid")
+    g = resolve(model, int(custom_step), int(custom_plus))
+    if g.step <= 1:
+        return None, f"none ({model})"
+    return g, (g.note if model == CUSTOM else model) + " (model)"
+
+
 def plan_add(source: int, want: int, grid: str) -> int:
     """How many frames actually go on.
 
@@ -337,7 +361,8 @@ def _where(side: str, head: int, tail: int) -> str:
 
 def describe(mode: str, used: int, src: int, out: int, side: str, grid: str,
              fps: float, fps_from: str, origin: str, has_audio: bool,
-             head: int | None = None, tail: int | None = None) -> str:
+             head: int | None = None, tail: int | None = None,
+             model_grid: Grid | None = None, grid_label: str = "") -> str:
     lines = []
     if head is None or tail is None:
         head, tail = split_ends(used, side)
@@ -356,11 +381,17 @@ def describe(mode: str, used: int, src: int, out: int, side: str, grid: str,
                 "side first, wire its `handles` output to this node, or set "
                 "trim_amount to 'manual' and type the count in.")
 
+    if mode == "add" and grid_label:
+        lines.append(f"Grid: {grid_label}.")
+    ok, name = None, ""
     if GRIDS.get(grid):
+        ok, name = on_grid(out, grid), grid
+    elif model_grid is not None:
+        ok, name = model_grid.accepts(out), grid_label.replace(" (model)", "")
+    if ok is not None:
         lines.append(
-            f"{out} frames {'is' if on_grid(out, grid) else 'is NOT'} on the "
-            f"{grid} grid." +
-            ("" if on_grid(out, grid) else
+            f"{out} frames {'is' if ok else 'is NOT'} on the {name} grid." +
+            ("" if ok else
              " A model expecting that grid will reinterpret the clip rather "
              "than refuse it, so the result comes out at the wrong speed."))
     if has_audio:
@@ -446,7 +477,8 @@ class AVHandlesMEC:
                     "accepts and trims straight back."}),
                 "model": (list(GRID_NAMES), {
                     "default": "MiniMax H3 (17n+5)", "tooltip":
-                    "Which model's frame grid to fit. Every video model wants "
+                    "FIT, and ADD with padding_mode 'model preset': which "
+                    "model's frame grid to land on. Every video model wants "
                     "step*n + plus frames and they disagree only on the "
                     "numbers: H3 is 17n+5, Wan is 4n+1, LTX is 8n+1.\n\n"
                     "Hand a model a count it does not accept and it does not "
@@ -464,11 +496,15 @@ class AVHandlesMEC:
                     "TRIM takes a wired or remembered count off exactly the "
                     "ends it went on; this setting only matters for a manual "
                     "count."}),
-                "padding_mode": (list(GRIDS), {"default": "disabled", "tooltip":
-                    "Round the total onto a model's frame grid. A model that "
-                    "wants 4n+1 and is handed 4n does not complain — it "
+                "padding_mode": (list(PADDING_CHOICES), {"default": USE_MODEL, "tooltip":
+                    "ADD: round the total onto a model's frame grid. A model "
+                    "that wants 4n+1 and is handed 4n does not complain — it "
                     "reinterprets the clip, and the result comes out at the "
-                    "wrong speed."}),
+                    "wrong speed.\n\n"
+                    "model preset: the grid of the `model` dropdown (or the "
+                    "custom step / plus). disabled: exactly handle_frames, no "
+                    "rounding. The fixed WAN / LTX2 / H3 entries are kept for "
+                    "workflows saved with them."}),
                 "manual_fps": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 240.0, "step": 0.001,
                     "tooltip":
@@ -489,9 +525,11 @@ class AVHandlesMEC:
 
     @classmethod
     def IS_CHANGED(cls, **kw):
-        # Add RECORDS state, so it must not be skipped by a cache hit: a
-        # second run that reuses the cached output never refreshes the memory,
-        # and the trim then works from a stale count.
+        # Core passes only widget constants here (linked images / audio never
+        # arrive), so this keys the cache on the settings and the mode. A cached
+        # add does not re-record: the record from its last real run stays in the
+        # memory, which is right unless another add with the same memo_key ran
+        # in between - wire `handles` (or give each clip a memo_key) for that.
         import hashlib
         h = hashlib.md5()
         for k in sorted(kw):
@@ -567,16 +605,27 @@ class AVHandlesMEC:
                      "head": head, "tail": tail},
                     info)
 
+        model_grid, grid_label = None, ""
         if mode == "add":
             want = max(0, int(handle_frames))
+            model_grid, grid_label = add_grid(padding_mode, model, custom_step, custom_plus)
+
+            def planned(n_want: int) -> int:
+                if images is None:
+                    return n_want
+                if GRIDS.get(padding_mode):                       # legacy table, unchanged result
+                    return plan_add(src_frames, n_want, padding_mode)
+                if model_grid is None:
+                    return n_want
+                return model_grid.next_at_or_above(src_frames + n_want) - src_frames
+
             if side == "both":
                 # handle_frames on EACH end; a grid's rounding frames go on the tail, so the head (the run the
                 # model settles on) is exactly what was asked for
-                needed = plan_add(src_frames, 2 * want, padding_mode) if images is not None else 2 * want
+                needed = planned(2 * want)
                 head, tail = want, needed - want
             else:
-                used0 = plan_add(src_frames, want, padding_mode) if images is not None else want
-                head, tail = split_ends(used0, side)
+                head, tail = split_ends(planned(want), side)
             used = head + tail
             fps, fps_from = resolve_fps(images, audio, manual_fps, src_frames)
             out_img = pad_ends(images, head, tail) if images is not None else None
@@ -633,7 +682,8 @@ class AVHandlesMEC:
                     "node, or set trim_amount to 'manual'.", origin)
 
         info = describe(mode, used, src_frames, total, side, padding_mode,
-                        fps, fps_from, origin, audio is not None, head, tail)
+                        fps, fps_from, origin, audio is not None, head, tail,
+                        model_grid=model_grid, grid_label=grid_label)
         _rem = recall(key)
         return (out_img, out_aud, total,
                 {"frames": used, "side": side, "fps": fps,

@@ -442,3 +442,126 @@ def test_the_report_is_shown_on_the_node():
     res = AVHandlesMEC().execute(mode="add", handle_frames=2, images=clip(4))
     assert res["result"][2] == 6
     assert res["ui"]["text"] and "Added 2 frame(s)" in res["ui"]["text"][0]
+
+
+# ── L2.55: every preset, custom formulas, add / trim / fit - real output counts and frame order ─────────────
+# Owner (A14): "None of the available options appears to add frames, trim frames, or fit the frame count
+# correctly." Root cause found: `add` read only padding_mode's fixed table, so the `model` preset and the custom
+# step / plus did nothing in add mode (the front-end hid them; on a box where that front-end does not load they
+# were visible and inert). The expectations below are computed here, independently of _frame_grid.
+
+from nodes._frame_grid import CUSTOM, GRIDS as MODEL_GRIDS  # noqa: E402
+from nodes.av_handles import USE_MODEL  # noqa: E402
+
+PRESETS = [m for m in MODEL_GRIDS if m != CUSTOM]
+CUSTOMS = [(5, 2), (3, 0), (16, 1), (1, 0)]
+
+
+def _expect(n: int, step: int, plus: int, floor: int) -> int:
+    """Smallest count >= n (and >= floor) of the form step*k + plus - by brute force, not the module's maths."""
+    m = max(n, floor)
+    while not (step <= 1 or (m >= plus and (m - plus) % step == 0)):
+        m += 1
+    return m
+
+
+def _grid_of(model, step=4, plus=1):
+    if model == CUSTOM:
+        return step, plus, 1
+    g = MODEL_GRIDS[model]
+    return g.step, g.plus, g.min_frames
+
+
+def _assert_order(out, src, head, tail):
+    """The original frames sit untouched at [head, head+len); handles repeat the edge frames."""
+    n = src.shape[0]
+    assert out.shape[0] == n + head + tail
+    assert torch.equal(out[head:head + n], src), "the original frames must keep their order and content"
+    if head:
+        assert torch.equal(out[:head], src[0:1].repeat(head, 1, 1, 1))
+    if tail:
+        assert torch.equal(out[head + n:], src[-1:].repeat(tail, 1, 1, 1))
+
+
+@pytest.mark.parametrize("model", PRESETS)
+@pytest.mark.parametrize("src_n", [1, 17, 24, 81, 121, 124])
+@pytest.mark.parametrize("want", [0, 8, 16])
+@pytest.mark.parametrize("side", ["head", "tail", "both"])
+def test_add_lands_on_every_preset_grid_and_trims_back(model, src_n, want, side):
+    src = clip(src_n, 2, 2)
+    step, plus, floor = _grid_of(model)
+    out, _, total, sig, _ = run(mode="add", handle_frames=want, images=src, side=side,
+                                padding_mode=USE_MODEL, model=model)
+    asked = 2 * want if side == "both" else want
+    assert total == _expect(src_n + asked, step, plus, floor), f"{model}: {src_n}+{asked} -> {total}"
+    assert sig["head"] + sig["tail"] == total - src_n
+    if side == "both":
+        assert sig["head"] == want, "both: the head gets exactly handle_frames, rounding goes on the tail"
+    _assert_order(out, src, sig["head"], sig["tail"])
+    back, _, n_back, _, _ = run(mode="trim", images=out)
+    assert n_back == src_n and torch.equal(back, src)
+
+
+@pytest.mark.parametrize("step,plus", CUSTOMS)
+@pytest.mark.parametrize("src_n", [1, 10, 33])
+@pytest.mark.parametrize("want", [0, 7])
+def test_add_with_a_custom_formula(step, plus, src_n, want):
+    src = clip(src_n, 2, 2)
+    out, _, total, sig, info = run(mode="add", handle_frames=want, images=src, padding_mode=USE_MODEL,
+                                   model=CUSTOM, custom_step=step, custom_plus=plus)
+    assert total == _expect(src_n + want, step, plus, 1)
+    _assert_order(out, src, sig["head"], sig["tail"])
+    if step > 1:
+        assert f"custom {step}n+{plus}" in info and "is NOT on" not in info
+    back, _, _, _, _ = run(mode="trim", images=out)
+    assert torch.equal(back, src)
+
+
+@pytest.mark.parametrize("model", PRESETS + [CUSTOM])
+@pytest.mark.parametrize("src_n,target", [(24, 0), (81, 0), (121, 0), (124, 0), (30, 64), (50, 50), (1, 0)])
+@pytest.mark.parametrize("side", ["head", "tail", "both"])
+def test_fit_pads_to_the_grid_and_trims_to_the_target(model, src_n, target, side):
+    src = clip(src_n, 2, 2)
+    step, plus, floor = _grid_of(model, 5, 2)
+    want = target or src_n
+    if want < src_n:
+        return
+    out, _, total, sig, _ = run(mode="fit", images=src, target_frames=target, model=model, side=side,
+                                custom_step=5, custom_plus=2)
+    assert total == _expect(want, step, plus, floor), f"{model}: want {want} -> {total}"
+    assert sig["target"] == want
+    _assert_order(out, src, sig["head"], sig["tail"])
+    back, _, n_back, _, _ = run(mode="trim", images=out)
+    assert n_back == want
+    if want == src_n:
+        assert torch.equal(back, src)
+    else:                                       # target longer than the clip: the clip survives whole, in order
+        assert any(torch.equal(back[k:k + src_n], src) for k in range(want - src_n + 1))
+
+
+def test_an_already_compatible_count_is_left_alone_in_add_and_fit():
+    src = clip(81, 2, 2)                                          # 81 = 4*20 + 1
+    out, _, n, _, _ = run(mode="add", handle_frames=0, images=src, padding_mode=USE_MODEL, model="Wan 2.x (4n+1)")
+    assert n == 81 and torch.equal(out, src)
+    out, _, n, _, _ = run(mode="fit", images=src, model="Wan 2.x (4n+1)")
+    assert n == 81 and torch.equal(out, src)
+
+
+def test_the_old_padding_tables_keep_their_results():
+    """Saved workflows store padding_mode: 'disabled' and the fixed WAN / LTX2 / H3 entries must not change."""
+    for pm, src_n, want, expect in [("disabled", 24, 8, 32), ("WAN (4n+1)", 118, 0, 121),
+                                    ("LTX2 (8n+1)", 24, 8, 33), ("H3 (17n+5)", 24, 8, 39)]:
+        _, _, n, _, _ = run(mode="add", handle_frames=want, images=clip(src_n, 2, 2), padding_mode=pm,
+                            model="Wan 2.x (4n+1)")               # the model dropdown must not leak in
+        assert n == expect, pm
+
+
+def test_disabled_says_how_to_use_the_model_grid():
+    _, _, n, _, info = run(mode="add", handle_frames=3, images=clip(10, 2, 2), padding_mode="disabled")
+    assert n == 13
+    assert "model preset" in info
+
+
+def test_new_nodes_default_to_the_model_grid():
+    spec = AVHandlesMEC.INPUT_TYPES()["optional"]["padding_mode"]
+    assert spec[1]["default"] == USE_MODEL and USE_MODEL in spec[0]
