@@ -15,9 +15,11 @@ class and checked against the live node definitions; ``tests/test_legacy_replace
 honest. A workflow saved with an OLDER version of a legacy node whose widget list later changed can
 still land values in the wrong widgets - one ``old_widget_ids`` per replacement is all core supports.
 
-Known core limitation (0.36.0): ``apply_replacements`` indexes ``node_struct["inputs"][old_id]``
-directly, so an API prompt that omits an optional input of a legacy node raises KeyError (HTTP 500)
-instead of the 400 "node not found" it would get without a replacement - it failed either way.
+Core limitation (0.36.0 - 0.39.x, measured 2026-10-15): ``apply_replacements`` indexes
+``node_struct["inputs"][old_id]`` directly, so an API prompt that omits an optional input of a legacy node raised
+KeyError and the whole POST /prompt answered HTTP 500. Fixed here: an on_prompt handler (core runs those BEFORE
+apply_replacements) migrates C2C's own legacy ids itself with the same semantics, skipping a mapped input the prompt
+does not carry (the new node's default applies), so core finds nothing left to replace.
 """
 from __future__ import annotations
 
@@ -46,6 +48,123 @@ def load_removed() -> list[dict[str, Any]]:
         return []
 
 
+_ROWS_BY_OLD: dict[str, dict[str, Any]] | None = None
+
+
+def _rows_by_old() -> dict[str, dict[str, Any]]:
+    global _ROWS_BY_OLD
+    if _ROWS_BY_OLD is None:
+        _ROWS_BY_OLD = {r["old_node_id"]: r for r in load_table()}
+    return _ROWS_BY_OLD
+
+
+def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
+    """Replace C2C legacy ids in an API prompt in place, as core's NodeReplaceManager.apply_replacements does
+    (class_type, input_mapping old_id / set_value, output_mapping on every link that reads the node), except that a
+    mapped input the prompt omits is skipped instead of raising KeyError. ``registered``: the live node ids; a row
+    whose new id is not registered is left alone (core does the same). Returns how many nodes were replaced."""
+    if not isinstance(prompt, dict):
+        return 0
+    rows = _rows_by_old()
+    targets = {}
+    for nid, node in prompt.items():
+        if isinstance(node, dict) and node.get("class_type") in rows:
+            row = rows[node["class_type"]]
+            if registered is not None and row["new_node_id"] not in registered:
+                continue
+            targets[str(nid)] = row
+    if not targets:
+        return 0
+    for nid, row in targets.items():
+        old = prompt[nid]
+        old_inputs = old.get("inputs") or {}
+        new = {k: v for k, v in old.items() if k != "inputs"}
+        new["class_type"] = row["new_node_id"]
+        new["inputs"] = {}
+        for m in row.get("input_mapping") or []:
+            if "set_value" in m:
+                new["inputs"][m["new_id"]] = m["set_value"]
+            elif "old_id" in m and m["old_id"] in old_inputs:
+                new["inputs"][m["new_id"]] = old_inputs[m["old_id"]]
+        prompt[nid] = new
+    out_maps = {nid: {int(o["old_idx"]): int(o["new_idx"]) for o in row.get("output_mapping") or []}
+                for nid, row in targets.items()}
+    for node in prompt.values():
+        if not isinstance(node, dict):
+            continue
+        for name, value in list((node.get("inputs") or {}).items()):
+            if (isinstance(value, list) and len(value) == 2 and str(value[0]) in out_maps
+                    and isinstance(value[1], int) and value[1] in out_maps[str(value[0])]):
+                node["inputs"][name] = [value[0], out_maps[str(value[0])][value[1]]]
+    return len(targets)
+
+
+_WIDGET_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}
+
+
+def _widget_default(spec: Any) -> tuple[bool, Any]:
+    """(True, default) for a widget input spec, (False, None) for a socket."""
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return False, None
+    kind = spec[0]
+    opts = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    if opts.get("forceInput"):
+        return False, None
+    if isinstance(kind, (list, tuple)):                       # a combo given as its option list
+        return True, opts.get("default", kind[0] if kind else "")
+    if kind == "COMBO":
+        options = opts.get("options") or []
+        return True, opts.get("default", options[0] if options else "")
+    if kind in _WIDGET_TYPES:
+        if "default" in opts:
+            return True, opts["default"]
+        return True, {"INT": 0, "FLOAT": 0.0, "STRING": "", "BOOLEAN": False}.get(kind)
+    return False, None
+
+
+def fill_required_defaults(node: dict[str, Any], cls: Any) -> list[str]:
+    """A migrated API node gets the successor's REQUIRED widget inputs it lacks, at their defaults (the old node had
+    none of them; the front end gets them from the widgets, an API prompt does not). Sockets are never invented."""
+    try:
+        required = (cls.INPUT_TYPES() or {}).get("required") or {}
+    except Exception:
+        return []
+    filled = []
+    inputs = node.setdefault("inputs", {})
+    for name, spec in required.items():
+        if name in inputs:
+            continue
+        ok, value = _widget_default(spec)
+        if ok:
+            inputs[name] = value
+            filled.append(name)
+    return filled
+
+
+def _on_prompt(json_data: Any) -> Any:
+    """PromptServer on_prompt hook: runs before core's apply_replacements (server.post_prompt)."""
+    try:
+        prompt = json_data.get("prompt") if isinstance(json_data, dict) else None
+        if isinstance(prompt, dict):
+            try:
+                import nodes as _core_nodes  # noqa: WPS433 - the merged mappings of the running server
+                mappings = getattr(_core_nodes, "NODE_CLASS_MAPPINGS", None) or None
+            except Exception:
+                mappings = None
+            registered = set(mappings) if mappings else None        # unknown -> do not filter
+            before = {k: v.get("class_type") for k, v in prompt.items() if isinstance(v, dict)}
+            n = migrate_api_prompt(prompt, registered)
+            if n and mappings:
+                for k, v in prompt.items():
+                    if isinstance(v, dict) and before.get(k) != v.get("class_type") and v.get("class_type") in mappings:
+                        fill_required_defaults(v, mappings[v["class_type"]])
+            if n:
+                _log.info("[C2C] migrated %d legacy node(s) in an API prompt", n)
+    except Exception as exc:  # a migration problem must never block a prompt
+        _log.warning("[C2C] API prompt migration skipped: %s", exc)
+    return json_data
+
+
 def migration_rows() -> list[dict[str, Any]]:
     """What the front end migrates: every replacement row, then every removal marked ``c2c_remove``."""
     return load_table() + [{**row, "c2c_remove": True} for row in load_removed()]
@@ -61,6 +180,7 @@ def register(server: Any = None) -> int:
         except Exception:
             server = None
     _register_route(server)          # the front end's automatic migration works even where core cannot replace
+    _register_on_prompt(server)      # API prompts: migrate before core's replacement can raise KeyError
     try:
         from comfy_api.latest import io as _io  # NodeReplace lives in comfy_api.latest._io
         node_replace = getattr(_io, "NodeReplace")
@@ -89,6 +209,15 @@ def register(server: Any = None) -> int:
 
 
 _ROUTE = False
+_ON_PROMPT = False
+
+
+def _register_on_prompt(server: Any) -> None:
+    global _ON_PROMPT
+    if _ON_PROMPT or server is None or not hasattr(server, "add_on_prompt_handler"):
+        return
+    server.add_on_prompt_handler(_on_prompt)
+    _ON_PROMPT = True
 
 
 def _register_route(server: Any) -> None:
