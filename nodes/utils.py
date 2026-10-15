@@ -75,11 +75,15 @@ def get_vitmatte_model():
         logger.debug(f"[MEC] Local ViTMatte not found: {e}")
 
     if model is None:
-        logger.info("[MEC] Downloading ViTMatte from HuggingFace...")
-        model = VitMatteForImageMatting.from_pretrained(
-            "hustvl/vitmatte-small-distinctions-646"
-        )
-        logger.info("[MEC] ViTMatte downloaded and cached.")
+        # L7.97 (found in L7.65 P05): this loaded straight from the Hugging Face repo, so SAM + ViTMatte downloaded
+        # ViTMatte without asking. Now: another pack's copy or the HF cache first; a download (into
+        # models/vitmatte/<repo name>) only with the node's Allow Download (Mask + Matting's auto_download); else
+        # ModelNotDownloaded, which refine_with_vitmatte turns into its guided-filter fallback.
+        from .model_manager import resolve_transformers_repo
+        src = resolve_transformers_repo("hustvl/vitmatte-small-distinctions-646", "vitmatte",
+                                        widget="auto_download")
+        model = VitMatteForImageMatting.from_pretrained(src)
+        logger.info("[MEC] ViTMatte loaded from %s", src)
 
     processor = VitMatteImageProcessor()
     model.eval()

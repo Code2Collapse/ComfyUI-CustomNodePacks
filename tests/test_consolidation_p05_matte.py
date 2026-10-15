@@ -341,6 +341,34 @@ def test_sam_vitmatte_model_free_for_real(maskops, model_free_sam, monkeypatch, 
     assert info["approximate"] is True and info["backend"] == "SAM + ViTMatte"
 
 
+def test_sam_vitmatte_vitmatte_download_needs_permission(monkeypatch):
+    """L7.97 for the SAM + ViTMatte backend: its ViTMatte loader used to call from_pretrained on the Hugging Face repo
+    (a download without asking). It now goes through the resolver - installed copies first, a download only with
+    auto_download - and without a model the refinement falls back as it always did."""
+    pytest.importorskip("transformers")
+    utils = pytest.importorskip("nodes.utils")
+    mm = pytest.importorskip("nodes.model_manager")
+    from nodes._download_policy import ModelNotDownloaded
+    asked = []
+
+    def resolve(repo, model_dir, widget="allow_download"):
+        asked.append((repo, model_dir, widget))
+        raise ModelNotDownloaded(repo, target="models/vitmatte/x", widget=widget)
+    monkeypatch.setattr(mm, "resolve_transformers_repo", resolve)
+    # a bare folder_paths: the loader must not look at any real model folder in a unit test
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "folder_paths", types.ModuleType("folder_paths"))
+    monkeypatch.setattr(utils, "_vitmatte_model", None)
+    monkeypatch.setattr(utils, "_vitmatte_processor", None)
+    with pytest.raises(ModelNotDownloaded):
+        utils.get_vitmatte_model()
+    assert asked == [("hustvl/vitmatte-small-distinctions-646", "vitmatte", "auto_download")]
+    mask = torch.zeros(H, W)
+    mask[20:50, 30:70] = 1.0
+    assert utils.refine_with_vitmatte(scene()[0], mask, 6) is None       # -> the guided-filter fallback
+
+
 def test_sam_vitmatte_without_a_sam_model_says_so(maskops):
     with pytest.raises(ValueError, match="connect a SAM Model Loader"):
         run_maskops(maskops, image=scene(), backend="SAM + ViTMatte")
