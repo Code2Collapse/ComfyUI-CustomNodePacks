@@ -21,8 +21,17 @@ import {
 import { attachPlayer, playerButton, selectionFromWidgets, widgetsFromSelection } from "./c2c_video_player.js";
 import { attachCrop } from "./c2c_video_crop.js";
 import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
+import {
+    RESETTABLE, SETTINGS, capEdit, capStep, describe, hints, rateNote, sizeEdit, snapCap, FORMAT_GRID,
+} from "./_c2c_loader_hints.js";
 
 const DEBOUNCE_MS = 350;
+// L2.53 inputs (owner A14). They change what loads, so they refresh the probe; the preview (the whole clip) ignores
+// them - kept out of its URL so moving the crop or a size never reloads the preview.
+const LOAD_ONLY_WIDGETS = [
+    "custom_width", "custom_height", "seconds_cap", "resolution", "divisible_by", "decoder", "audio_when_missing",
+    "crop_x", "crop_y", "crop_w", "crop_h",
+];
 
 const LOADERS = {
     LoadVideoC2C: {
@@ -32,6 +41,7 @@ const LOADERS = {
         hasPreview: true,
         hideCorePreview: true,
         mode: "upload",
+        settingsUx: true,          // L2.53: grey real values, reset arrows, reset all, details (our nodes only)
         emptyTitle: "Load Video (C2C)",
         emptyHint: "Choose a video from the input folder.",
     },
@@ -48,6 +58,7 @@ const LOADERS = {
     LoadVideoPathC2C: {
         hasPreview: true,
         mode: "video",
+        settingsUx: true,
         emptyTitle: "Load Video Path (C2C)",
         emptyHint: "Paste a video path, a folder of images, or shot.####.exr",
     },
@@ -88,6 +99,7 @@ function domainParams(params, cfg, k = 1, maxFrames = null) {
     d.set(n.skip, "0");
     d.set(n.cap, "0");
     d.set(n.nth, String(Math.max(1, k)));
+    for (const name of LOAD_ONLY_WIDGETS) d.delete(name);       // the whole clip: no seconds cap, size or crop
     if (maxFrames) d.set("max_frames", String(maxFrames));
     return d;
 }
@@ -137,6 +149,13 @@ function collectParams(node, cfg) {
         p.set("frame_load_cap", String(widgetValue(node, "frame_load_cap") ?? 0));
         p.set("format", String(widgetValue(node, "format") ?? "None"));
     }
+    if (cfg.mode !== "images") {
+        // L2.53: everything else a run uses, so the probe answers with exactly what will load
+        for (const name of LOAD_ONLY_WIDGETS) {
+            const v = widgetValue(node, name);
+            if (v !== undefined && v !== null) p.set(name, String(v));
+        }
+    }
     return p;
 }
 
@@ -148,6 +167,7 @@ function mountLoaderWidget(node, cfg) {
     let cleanupVideo = () => {};
     let domain = { frames: 1, fps: 24 };
     let previewSrc = "";
+    let ux = null;
 
     // The player replaces the static selection bar: it shows the whole clip, the playhead and the selection, and its
     // handles write the selection widgets (skip / cap), which then refresh the probe through their callbacks.
@@ -161,6 +181,9 @@ function mountLoaderWidget(node, cfg) {
                 const n = selectionNames(cfg);
                 const nth = Number(widgetValue(node, n.nth) ?? 1) || 1;
                 const { skip, cap } = widgetsFromSelection(inF, outF, nth, domain.frames);
+                // the handles set frames: a seconds cap would cut them short, so it goes back to "follow"
+                const sec = node.widgets?.find((x) => x.name === "seconds_cap");
+                if (sec && Number(sec.value) > 0) { sec.value = 0; scheduleRefresh(); }
                 setWidget(node, n.skip, skip);
                 setWidget(node, n.cap, cap);
                 node.setDirtyCanvas?.(true, true);
@@ -222,6 +245,7 @@ function mountLoaderWidget(node, cfg) {
 
             renderTimeline(ui, probeJson);
             renderChips(ui.info, probeJson);
+            ux?.update(probeJson);
             if (crop) {
                 crop.setFrameSize(probeJson.width || 0, probeJson.height || 0);
                 crop.setRect(readCrop(node));
@@ -285,6 +309,7 @@ function mountLoaderWidget(node, cfg) {
             fitNode();
         } catch (err) {
             if (err.name === "AbortError") return;
+            ux?.update(null);
             setLoading(ui, false, aspect);
             if (cfg.hasPreview && !ui.video?.src) setEmpty(ui, cfg);
             ui.status.setText(err.message || "Something went wrong.", "danger");
@@ -326,9 +351,11 @@ function mountLoaderWidget(node, cfg) {
         };
     };
 
-    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS]) {
+    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS]) {
         hookWidget(name);
     }
+    // L2.53 settings UX: grey real values, reset arrows, reset all, details line, frame-grid stepping
+    ux = cfg.settingsUx ? installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) : null;
 
     if (cfg.hasPreview && ui.video) {
         cleanupVideo = attachPauseObservers(node, ui.video);
@@ -373,6 +400,233 @@ function mountLoaderWidget(node, cfg) {
     scheduleRefresh();
 
     return widgetRef;
+}
+
+// ── L2.53 settings UX (owner A14, from ComfyUI-4K-Video-Save-Load, MIT): grey real values, reset arrows, reset all,
+// the details line, frame-grid stepping, a new clip resets the settings. Numbers come from the probe (the server
+// builds the same handle a run builds), so the hints, the player's "N will load" and the run agree. Classic renderer:
+// the grey value and the arrow sit beside the widget. Nodes 2.0 draws widgets itself, so there they sit in the panel.
+const RESET_GLYPH = "↺";
+const BUTTON_X = 54;         // a number widget steps on clicks within ~40 px of its edges: the arrow sits clear of that
+const BUTTON_ROOM = 20;
+
+function widgetValues(node) {
+    const out = {};
+    for (const w of node.widgets || []) if (w?.name) out[w.name] = w.value;
+    return out;
+}
+
+function vueMode() {
+    return !!globalThis.LiteGraph?.vueNodesMode;
+}
+
+function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
+    let probe = null;
+    let hintMap = {};
+    const W = (name) => node.widgets?.find((x) => x.name === name);
+
+    // a quiet write: our own follow-up changes must not fire the user-edit side effects below
+    const quiet = (name, value) => {
+        const w = W(name);
+        if (!w || w.value === value) return false;
+        w.value = value;
+        return true;
+    };
+
+    // ── the panel block: details lines, (Nodes 2.0) hint chips, reset all ──
+    const box = document.createElement("div");
+    box.className = "c2c-vloader__summary";
+    const lines = document.createElement("div");
+    lines.className = "c2c-vloader__summary-lines";
+    const chips = document.createElement("div");
+    chips.className = "c2c-vloader__summary-chips";
+    const resetAll = document.createElement("button");
+    resetAll.type = "button";
+    resetAll.className = "c2c-vplayer__btn c2c-vloader__reset-all";
+    resetAll.textContent = "reset all to defaults";
+    resetAll.title = "Every setting back to its default; the clip stays";
+    resetAll.addEventListener("click", (e) => { e.stopPropagation(); doResetAll(); });
+    chips.appendChild(resetAll);
+    box.append(lines, chips);
+    ui.root.insertBefore(box, ui.status?.el ?? null);
+    ui.summary = box;
+
+    function reset(name) {
+        if (name === "custom_width" || name === "custom_height") {
+            node._c2cApplying = true;
+            try {
+                setWidget(node, "resolution", "custom");
+                setWidget(node, "custom_width", 0);
+                setWidget(node, "custom_height", 0);
+            } finally { node._c2cApplying = false; }
+        } else if (name in RESETTABLE) {
+            node._c2cApplying = true;
+            try { setWidget(node, name, RESETTABLE[name]); } finally { node._c2cApplying = false; }
+        }
+        scheduleRefresh();
+        node.setDirtyCanvas?.(true, true);
+    }
+
+    function doResetAll() {
+        const defaults = cfg.defaults || {};
+        node._c2cApplying = true;
+        try {
+            for (const name of SETTINGS) {
+                if (name in defaults && W(name)) setWidget(node, name, defaults[name]);
+            }
+        } finally { node._c2cApplying = false; }
+        applyGrid();
+        scheduleRefresh();
+        node.setDirtyCanvas?.(true, true);
+    }
+
+    function renderBox() {
+        const values = widgetValues(node);
+        const text = describe(probe);
+        const note = probe?.load ? rateNote(values.format, probe.load, values.select_every_nth) : "";
+        if (note) text.push(note);
+        lines.replaceChildren(...text.map((t) => {
+            const d = document.createElement("div");
+            d.textContent = t;
+            return d;
+        }));
+        // Nodes 2.0: a chip per widget whose own value is not what loads, with its reset arrow
+        for (const el of [...chips.querySelectorAll(".c2c-vloader__hint")]) el.remove();
+        if (vueMode()) {
+            for (const [name, h] of Object.entries(hintMap)) {
+                if (!h.differs && !h.canReset) continue;
+                const chip = document.createElement("span");
+                chip.className = "c2c-vloader__chip c2c-vloader__hint";
+                const v = values[name];
+                chip.textContent = h.differs ? `${name} ${h.shown} ← ${v}` : `${name} ${v}`;
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "c2c-vloader__hint-reset";
+                b.textContent = RESET_GLYPH;
+                b.disabled = !h.canReset;
+                b.title = h.canReset ? `Reset ${name}` : "Nothing to reset";
+                b.addEventListener("click", (e) => { e.stopPropagation(); reset(name); });
+                chip.appendChild(b);
+                chips.insertBefore(chip, resetAll);
+            }
+        }
+        fitNode();
+    }
+
+    // ── classic renderer: the grey value and the arrow beside the widget (the 4K pack's way) ──
+    function decorate(w) {
+        if (!w || w.__c2cDecorated || typeof w.drawTruncatingText !== "function") return;
+        w.__c2cDecorated = true;
+        const drawText = w.drawTruncatingText;
+        w.drawTruncatingText = function (options) {
+            const rightPadding = (options.rightPadding ?? 20) + BUTTON_ROOM;
+            drawText.call(this, { ...options, rightPadding });
+            if (!this.computedDisabled) drawExtras(options.ctx, this, options.width, rightPadding);
+        };
+        const prevDown = w.onPointerDown;
+        w.onPointerDown = function (pointer, n, canvas) {
+            const x = canvas.graph_mouse[0] - node.pos[0];
+            if (Math.abs(x - ((this.width || node.size[0]) - BUTTON_X)) <= 10) {
+                if (hintMap[this.name]?.canReset) pointer.onClick = () => reset(this.name);
+                return true;
+            }
+            return prevDown ? prevDown.call(this, pointer, n, canvas) : false;
+        };
+    }
+
+    function drawExtras(ctx, w, width, rightPadding) {
+        const h = hintMap[w.name];
+        if (!h) return;
+        const y = w.y + w.height * 0.7;
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.fillStyle = h.canReset ? "#aaa" : "#555";            // literal colours: var() paints black in a canvas
+        ctx.fillText(RESET_GLYPH, width - BUTTON_X, y);
+        if (h.differs) {
+            const text = `${h.shown}←`;
+            const margin = 15;
+            const right = width - 2 * margin - rightPadding - ctx.measureText(w._displayValue ?? String(w.value)).width - 6;
+            const labelEnd = 2 * margin + 10 + ctx.measureText(w.label || w.name).width;
+            if (right - ctx.measureText(text).width > labelEnd) {
+                ctx.textAlign = "right";
+                ctx.fillStyle = "#8a8a8a";
+                ctx.fillText(text, right, y);
+            }
+        }
+        ctx.restore();
+    }
+
+    for (const name of Object.keys(RESETTABLE)) decorate(W(name));
+
+    // ── side effects of the user's own edits (never of ours: node._c2cApplying) ──
+    const after = (name, fn) => {
+        const w = W(name);
+        if (!w) return;
+        const orig = w.callback;
+        let prev = w.value;
+        w.callback = function (...args) {
+            const before = prev;
+            prev = w.value;
+            const r = orig?.apply(this, args);
+            if (!node._c2cApplying && !app.configuringGraph) {
+                try { fn(w, before); } catch (_e) { /* a hint never breaks the widget */ }
+            }
+            prev = w.value;
+            return r;
+        };
+        // a loaded workflow sets values without callbacks: re-read the starting point then
+        const origConfigure = node.onConfigure;
+        node.onConfigure = function (...a) { const r = origConfigure?.apply(this, a); prev = w.value; return r; };
+    };
+
+    function applyGrid() {
+        const w = W("frame_load_cap");
+        if (!w) return;
+        const fmt = widgetValue(node, "format") ?? "None";
+        w.options = w.options || {};
+        w.options.step2 = capStep(fmt);
+        const grid = FORMAT_GRID[fmt];
+        if (grid && Number(w.value) > 0) w.value = snapCap(w.value, -1, grid);   // nearest legal count
+    }
+
+    after("frame_load_cap", (w, before) => {
+        const grid = FORMAT_GRID[widgetValue(node, "format") ?? "None"];
+        if (grid) w.value = snapCap(w.value, before, grid);
+        const other = capEdit("frame_load_cap", w.value);
+        if (other) quiet("seconds_cap", other.seconds_cap);
+    });
+    after("seconds_cap", (w) => {
+        const other = capEdit("seconds_cap", w.value);
+        if (other) quiet("frame_load_cap", other.frame_load_cap);
+    });
+    for (const name of ["custom_width", "custom_height"]) {
+        after(name, () => {
+            const change = sizeEdit(name, widgetValues(node));
+            if (change) for (const [k, v] of Object.entries(change)) quiet(k, v);
+        });
+    }
+    after("format", () => applyGrid());
+    if (cfg.mode === "upload") {
+        // picking, uploading or dropping a new clip loads it with default settings; opening a workflow does not
+        after("video", (w, before) => { if (before !== undefined && before !== w.value) doResetAll(); });
+    }
+    applyGrid();
+
+    return {
+        update(p) {
+            probe = p;
+            const values = widgetValues(node);
+            hintMap = hints(values, p?.load ?? null);
+            // outside "custom" the size fields show the size the clip loads at (written quietly: no switch to custom)
+            if (p?.load && (values.resolution ?? "custom") !== "custom") {
+                quiet("custom_width", p.load.width);
+                quiet("custom_height", p.load.height);
+                hintMap = hints(widgetValues(node), p.load);
+            }
+            renderBox();
+            node.setDirtyCanvas?.(true, true);
+        },
+    };
 }
 
 /** Hide core's upload preview (a <video> of the original file) so the node shows one preview, ours. Core adds it
@@ -429,6 +683,15 @@ if (!globalThis.__c2cVideoLoadersExt) {
         async beforeRegisterNodeDef(nodeType, nodeData, _app) {
             const cfg = LOADERS[nodeData.name];
             if (!cfg) return;
+            // the node's own defaults, for "reset all to defaults" (combo without a default: its first choice)
+            cfg.defaults = {};
+            for (const group of [nodeData.input?.required, nodeData.input?.optional]) {
+                for (const [name, spec] of Object.entries(group || {})) {
+                    const opts = Array.isArray(spec) ? spec[1] : null;
+                    if (opts && "default" in opts) cfg.defaults[name] = opts.default;
+                    else if (Array.isArray(spec?.[0]) && spec[0].length) cfg.defaults[name] = spec[0][0];
+                }
+            }
             const onCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function (...args) {
                 const r = onCreated?.apply(this, args);

@@ -5,7 +5,7 @@
 
 import { ensureStyles, emptyState, statusLine } from "./c2c_ui/index.js";
 
-export const STYLE_ID = "c2c-vloader-v1";
+export const STYLE_ID = "c2c-vloader-v2";
 export const MARGIN = 2;
 export const TIMELINE_H = 28;
 export const INFO_H = 26;
@@ -16,6 +16,7 @@ export const DEFAULT_ASPECT = 16 / 9;
 export function ensureVloaderStyles() {
     ensureStyles();
     if (document.getElementById(STYLE_ID)) return;
+    document.getElementById("c2c-vloader-v1")?.remove();
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
@@ -37,6 +38,15 @@ export function ensureVloaderStyles() {
 .c2c-vloader__info { display: flex; flex-wrap: wrap; gap: 4px; }
 .c2c-vloader__chip { font-size: 10px; line-height: 1.3; padding: 2px 6px; border-radius: 4px;
   background: var(--cu-raised); border: 1px solid var(--cu-edge-strong); color: var(--cu-ink-soft); white-space: nowrap; }
+.c2c-vloader__summary { display: flex; flex-direction: column; gap: 4px; }
+.c2c-vloader__summary-lines { font-size: 10px; line-height: 13px; color: var(--cu-ink-soft);
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.c2c-vloader__summary-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.c2c-vloader__hint { display: inline-flex; align-items: center; gap: 4px; }
+.c2c-vloader__hint-reset { border: 0; background: none; color: var(--cu-ink); cursor: pointer; padding: 0 2px;
+  font-size: 11px; line-height: 1; }
+.c2c-vloader__hint-reset:disabled { color: var(--cu-ink-soft); opacity: 0.45; cursor: default; }
+.c2c-vloader__reset-all { margin-left: auto; }
 `;
     document.head.appendChild(style);
 }
@@ -53,7 +63,7 @@ export function previewHeight(width, aspect, hasPreview) {
 export function restHeight(ui) {
     let h = 0;
     let n = 0;
-    for (const el of [ui.timeline, ui.info, ui.status?.el]) {
+    for (const el of [ui.timeline, ui.info, ui.summary, ui.status?.el]) {
         if (!el || el.offsetParent === null) continue;
         h += el.offsetHeight;
         n += 1;
