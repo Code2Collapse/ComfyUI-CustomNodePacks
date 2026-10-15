@@ -21,8 +21,11 @@ pack registers 107 nodes instead of 112. Design: `docs/design/inpaint_crop_stitc
   controls (checked against real runs from each starting mode). It now also follows a `roto_quality` change; before,
   it kept the last run's 1 px erosion setting.
 - `image` on Inpaint Crop Pro and `stitcher` / `inpainted_image` on Inpaint Stitch Pro are optional inputs now (a
-  migrated Mask Prepare has no image, Context Inpainter no stitcher). Their socket slots and the widget order are
-  unchanged, so older saves of the two nodes load as before; a mode that needs the input says so.
+  migrated Mask Prepare has no image, Context Inpainter no stitcher); a mode that needs the input says so. Older
+  saves keep every link on its input: on Inpaint Crop Pro every input keeps its slot; on Inpaint Stitch Pro the new
+  `original_image` / `mask` sockets move the widget slots by two, and a link into one of them is moved with its
+  input when the workflow loads (frontend 1.53.10 does not move it by itself; checked on a save with a link on every
+  input, also inside a subgraph).
 - Dropped in migration: Context Inpainter's `face_positive_prompt` / `face_negative_prompt` (they were only written
   to the log).
 

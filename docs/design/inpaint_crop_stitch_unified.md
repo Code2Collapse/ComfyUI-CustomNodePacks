@@ -66,6 +66,8 @@ Mode outputs:
 * `stitch_mode`: `blend` (default, unchanged) / `paste back` / `smart` / `context blend`.
 * `stitcher` and `inpainted_image` move from required to the first two optional inputs, in the same order (sockets
   stay at slots 0 and 1): a migrated Context Inpainter has no stitcher. A mode that needs one raises a plain error.
+  The new `original_image` / `mask` sockets come before every widget slot (the front end adds sockets first), so the
+  five old widget slots move from 2-6 to 4-8; see section 8.
 * Appended sockets `original_image`, `mask` (used by `smart` and `context blend`).
 * `paste_*` (3), `smart_*` (5), `context_*` (8): the old nodes' widgets, same specs and defaults.
 * No new outputs: image -> 0, the old info -> 2, Context Inpainter's debug_mask -> 1 (blend_mask_used).
@@ -143,9 +145,29 @@ show with their mode, not behind "advanced". Works the same in both renderers (`
 | smart without original_image, context blend without original_image or mask | plain error naming the input |
 | context blend with a batch | only frame 0 is blended, as the old node did; info says how many frames were given |
 | an old Inpaint Crop Pro / Stitch Pro save | unchanged: defaults pro / blend, widget order kept, sockets on the same slots |
-| frontends that list inputs differently | sockets are re-matched by name on load (1.53.10 `configure`), so a slot shift would not lose a link there; older frontends unverified |
+| an old Stitch Pro save with a link into a widget slot (a Primitive on blend_mode_override) | re-slotted by name before configure (section 8) |
+| frontends other than 1.53.10 | the slot layout was read from the 1.53.10 bundle only; unverified elsewhere |
 
 Budgets: no work is added to a `pro` / `blend` run (the preview picture is the one already drawn; the mode check is a
 string compare). `mask prepare` with an image keeps references to the frames (no copy).
 Kill switch: none needed for the backend (the default modes are the old code paths); the live preview keeps its
 setting (C2C > Canvas > Inpaint crop > Live crop preview).
+
+## 8. Saved links (measured after the first draft, 2026-10-15)
+
+Read from the frontend 1.53.10 bundle: `getOrderedInputSpecs` lists inputs by `input_order` (required, then
+optional); `addInputs` adds every socket first, then one slot per widget; `ComfyNode.configure` re-orders a saved
+node's inputs into that layout by name and keeps each link's `target_slot` as saved (the only writers of
+`target_slot` are the API-prompt compression and subgraph conversion). So:
+
+* Inpaint Crop Pro: every old input keeps its slot (image / mask / optional_context_mask 0-2, widgets 3-41); the new
+  inputs come after. Nothing to do.
+* Inpaint Stitch Pro: stitcher / inpainted_image keep 0 / 1; the five widget slots move by two. A link into one of
+  them (only possible when a widget was converted to an input) would point at the wrong slot after load.
+  `js/_c2c_migrate_core.js` `keepLinkSlots`, run by `js/c2c_auto_migrate.js` before configure (with the migration
+  setting off too), rewrites such a node's inputs into the layout configure produces and gives each link the slot of
+  its input. It also fixes compressed saves (PNG / API workflows keep only sockets and linked widget slots).
+
+Tested in `tests/test_consolidation_inpaint.py` against the pinned d97cc13 layouts (checked with `git show`): a save
+with a link on every input of both nodes, at the root and inside a subgraph. The same hazard applies to any node
+that gains a socket while it has widgets; only these two types are re-slotted (backlog: widen the set).
