@@ -79,6 +79,8 @@ def _load_reference(tmp: Path):
         InpaintMaskPrepareMEC=mods["inpaint_suite"].InpaintMaskPrepareMEC,
         InpaintPasteBackMEC=mods["inpaint_suite"].InpaintPasteBackMEC,
         MECContextInpainter=mods["mec_paint_suite"].MECContextInpainter,
+        CropPro=mods["inpaint_suite"].InpaintCropProMEC,                # the survivors as they were (git only)
+        StitchPro=mods["inpaint_suite"].InpaintStitchProMEC,
     )
 
 
@@ -570,8 +572,8 @@ const shape = {json.dumps(shape)};
 const r = migrateWorkflow(wf, {json.dumps([row])}, (t) => t !== {json.dumps(old_id)}, () => shape);
 console.log(JSON.stringify({{ wf, r }}));
 """
-    p = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True,
-                       encoding="utf-8", timeout=60)
+    p = subprocess.run([NODE, "--input-type=module"], input=script, capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)                    # stdin: the script outgrows a command line
     assert p.returncode == 0, p.stderr
     res = json.loads(p.stdout)
     assert not res["r"]["problems"], res["r"]["problems"]
@@ -656,3 +658,265 @@ def test_live_mask_prepare_without_an_image_stays_stale(live):
     from nodes.inpaint_suite import InpaintCropProMEC
     InpaintCropProMEC().inpaint_crop(mask=_noisy_mask(B=1), crop_mode="mask prepare", unique_id="9")
     assert live.render("9", {})["stale"] is True
+
+
+# ── saved Inpaint Crop Pro / Stitch Pro from d97cc13 keep every link on its input (coordinator 2026-10-15) ─────────
+#
+# The layout below is frontend 1.53.10's, read from its bundle: getOrderedInputSpecs lists the inputs by input_order
+# (required, then optional - core's object_info), addInputs adds every SOCKET first, in that order, then one slot per
+# widget; ComfyNode.configure re-orders a saved node's inputs into that layout by NAME and keeps each link's
+# target_slot as saved (no front-end code rewrites target_slot on load). So a saved link stays right exactly when its
+# input keeps its index - or when js/c2c_auto_migrate.js re-slots it before configure (keepLinkSlots).
+
+_WIDGET_TYPES = ("INT", "FLOAT", "STRING", "BOOLEAN")
+
+
+def frontend_layout(cls):
+    """[(name, is_widget)] in slot order, as frontend 1.53.10 builds the node."""
+    spec = cls.INPUT_TYPES()
+    ordered = [(n, s) for g in ("required", "optional") for n, s in (spec.get(g) or {}).items()]
+
+    def widget(s):
+        opts = s[1] if len(s) > 1 and isinstance(s[1], dict) else {}
+        return (isinstance(s[0], (list, tuple)) or s[0] in _WIDGET_TYPES) and not opts.get("forceInput")
+    return [(n, False) for n, s in ordered if not widget(s)] + [(n, True) for n, s in ordered if widget(s)]
+
+
+# frontend_layout() of the two survivors as shipped at d97cc13 (pinned; checked against `git show` where it exists)
+_CROP_OLD = ["image", "mask", "optional_context_mask", "downscale_algorithm", "upscale_algorithm", "preresize",
+             "preresize_mode", "preresize_min_width", "preresize_min_height", "preresize_max_width",
+             "preresize_max_height", "mask_fill_holes", "mask_expand_pixels", "mask_invert", "mask_blend_pixels",
+             "mask_hipass_filter", "extend_for_outpainting", "extend_up_factor", "extend_down_factor",
+             "extend_left_factor", "extend_right_factor", "context_from_mask_extend_factor", "auto_context_factor",
+             "aspect_preset", "output_resize_to_target_size", "output_target_width", "output_target_height",
+             "output_padding", "device_mode", "wan_align_multiple", "wan_temporal_smooth_frames", "wan_stable_crop",
+             "wan_mask_polarity", "inpaint_mask_mode", "stitch_blend_mode", "blend_radius",
+             "video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma", "fill_masked_area",
+             "roto_quality", "preview_frame"]
+_STITCH_OLD = ["stitcher", "inpainted_image", "blend_mode_override", "color_match", "stitch_temporal_sigma",
+               "stitch_dilate_px", "roto_quality_override"]
+OLD_LAYOUTS = {"InpaintCropProMEC": [(n, k >= 3) for k, n in enumerate(_CROP_OLD)],
+               "InpaintStitchProMEC": [(n, k >= 2) for k, n in enumerate(_STITCH_OLD)]}
+
+
+def test_pinned_old_layouts_are_d97cc13s(ref):
+    if ref.source.startswith("git"):
+        assert frontend_layout(ref.CropPro) == OLD_LAYOUTS["InpaintCropProMEC"]
+        assert frontend_layout(ref.StitchPro) == OLD_LAYOUTS["InpaintStitchProMEC"]
+    assert [n for n, w in OLD_LAYOUTS["InpaintCropProMEC"] if w] == [
+        n for n in __import__("tests.test_inpaint_crop_compact_ui", fromlist=["ORDER"]).ORDER
+        if n not in ("image", "mask", "optional_context_mask")]
+
+
+def _configure(saved_inputs, layout_names):
+    """ComfyNode.configure's re-order (1.53.10): current layout by name, saved inputs not in it appended."""
+    by_name = {i["name"]: i for i in saved_inputs}
+    return ([by_name.get(n, {"name": n, "link": None}) for n in layout_names]
+            + [i for i in saved_inputs if i["name"] not in layout_names])
+
+
+def test_saved_crop_pro_keeps_every_slot():
+    """Inpaint Crop Pro: image moved from required to optional, inputs were appended - and every input of a d97cc13
+    save keeps its slot number, so every link (on a socket or on a widget slot) is still right."""
+    from nodes.inpaint_suite import InpaintCropProMEC
+    old = [n for n, _w in OLD_LAYOUTS["InpaintCropProMEC"]]
+    new = [n for n, _w in frontend_layout(InpaintCropProMEC)]
+    assert old[:3] == ["image", "mask", "optional_context_mask"]
+    assert new[:len(old)] == old                                        # same slot for every old input
+    assert all(n not in old for n in new[len(old):])                     # the new ones only after them
+
+
+def test_saved_stitch_pro_sockets_keep_their_slots_and_widget_slots_move_by_two():
+    from nodes.inpaint_suite import InpaintStitchProMEC
+    old = [n for n, _w in OLD_LAYOUTS["InpaintStitchProMEC"]]
+    new = [n for n, _w in frontend_layout(InpaintStitchProMEC)]
+    assert old == ["stitcher", "inpainted_image", "blend_mode_override", "color_match", "stitch_temporal_sigma",
+                   "stitch_dilate_px", "roto_quality_override"]
+    assert new[:4] == ["stitcher", "inpainted_image", "original_image", "mask"]
+    assert {n: new.index(n) - old.index(n) for n in old} == {"stitcher": 0, "inpainted_image": 0,
+                                                             "blend_mode_override": 2, "color_match": 2,
+                                                             "stitch_temporal_sigma": 2, "stitch_dilate_px": 2,
+                                                             "roto_quality_override": 2}
+
+
+def _saved_node(node_id, layout, first_link):
+    """A node as the front end saves it, with a link on EVERY input in ``layout`` (sockets and widget slots)."""
+    inputs, links = [], []
+    for k, (name, is_widget) in enumerate(layout):
+        inputs.append({"name": name, "type": "*", "link": first_link + k,
+                       **({"widget": {"name": name}} if is_widget else {})})
+    for slot, inp in enumerate(inputs):
+        links.append([inp["link"], 900 + slot, 0, node_id, slot, "*"])
+    return {"id": node_id, "type": "?", "inputs": inputs}, links
+
+
+def _run_keep_slots(wf, shapes, types):
+    script = f"""
+import {{ keepWorkflowLinkSlots }} from {json.dumps((PACK / "js" / "_c2c_migrate_core.js").as_uri())};
+const wf = {json.dumps(wf)};
+const shapes = {json.dumps(shapes)};
+const moved = keepWorkflowLinkSlots(wf, new Set({json.dumps(types)}), (t) => shapes[t] ?? null);
+console.log(JSON.stringify({{ wf, moved }}));
+"""
+    p = subprocess.run([NODE, "--input-type=module"], input=script, capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)                    # stdin: the script outgrows a command line
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def _shape(layout):
+    return {"inputs": [{"name": n, "type": "*", **({"widget": {"name": n}} if w else {})} for n, w in layout]}
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+@pytest.mark.parametrize("in_subgraph", [False, True])
+def test_d97cc13_saves_load_with_every_link_on_its_input(in_subgraph):
+    """Both survivors saved by d97cc13 with a link on every input (sockets and widget slots), through the load path:
+    keepLinkSlots (js/c2c_auto_migrate.js, before configure), then configure's re-order by name. Every link ends on
+    the input it was saved on, at the slot that input has after load. Without keepLinkSlots the Stitch Pro widget
+    links would point two slots too early (checked first)."""
+    from nodes.inpaint_suite import InpaintCropProMEC, InpaintStitchProMEC
+    shapes, nodes, links, expect = {}, [], [], {}
+    for k, (name, new_cls) in enumerate((("InpaintCropProMEC", InpaintCropProMEC),
+                                         ("InpaintStitchProMEC", InpaintStitchProMEC))):
+        shapes[name] = _shape(frontend_layout(new_cls))
+        node, lks = _saved_node(10 + k, OLD_LAYOUTS[name], 100 * (k + 1))
+        node["type"] = name
+        nodes.append(node)
+        links += lks
+        expect[name] = {i["link"]: i["name"] for i in node["inputs"]}
+    names = {t: [i["name"] for i in s["inputs"]] for t, s in shapes.items()}
+
+    # the hazard, without the fix: configure alone leaves the Stitch Pro widget links on the wrong slots
+    for node in nodes:
+        after = _configure(node["inputs"], names[node["type"]])
+        stale = [lk for lk in links if lk[3] == node["id"] and after[lk[4]]["link"] != lk[0]]
+        assert bool(stale) == (node["type"] == "InpaintStitchProMEC"), node["type"]
+
+    graph = {"nodes": nodes, "links": links}
+    wf = ({"nodes": [], "links": [], "definitions": {"subgraphs": [graph]}} if in_subgraph else graph)
+    res = _run_keep_slots(wf, shapes, sorted(shapes))
+    g = res["wf"]["definitions"]["subgraphs"][0] if in_subgraph else res["wf"]
+    assert len(res["moved"]) == 5 and all(m.startswith("InpaintStitchProMEC") for m in res["moved"])
+    for node in g["nodes"]:
+        after = _configure(node["inputs"], names[node["type"]])
+        assert [i["name"] for i in after] == names[node["type"]]          # configure changes nothing more
+        for lk in g["links"]:
+            if lk[3] != node["id"]:
+                continue
+            assert after[lk[4]]["link"] == lk[0]                            # the link's slot holds the link
+            assert after[lk[4]]["name"] == expect[node["type"]][lk[0]]       # ... on the input it was saved on
+    again = _run_keep_slots(res["wf"], shapes, sorted(shapes))              # idempotent
+    assert again["moved"] == [] and again["wf"] == res["wf"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_compressed_saves_are_reslotted_too():
+    """A PNG / API workflow keeps only sockets + linked widget slots (compressWidgetInputSlots); configure expands it
+    to the full layout, so those links need the same fix."""
+    from nodes.inpaint_suite import InpaintCropProMEC
+    layout = frontend_layout(InpaintCropProMEC)
+    keep = [(n, w) for n, w in layout if not w or n in ("context_from_mask_extend_factor", "crop_mode")]
+    node, links = _saved_node(5, keep, 300)
+    node["type"] = "InpaintCropProMEC"
+    res = _run_keep_slots({"nodes": [node], "links": links}, {"InpaintCropProMEC": _shape(layout)},
+                          ["InpaintCropProMEC"])
+    names = [n for n, _w in layout]
+    after = _configure(res["wf"]["nodes"][0]["inputs"], names)
+    for lk in res["wf"]["links"]:
+        assert after[lk[4]]["link"] == lk[0]
+    assert sorted(lk[4] for lk in res["wf"]["links"]) == sorted(names.index(n) for n, _w in keep)
+
+
+# ── the front end shows only the chosen mode's controls (js/c2c_mode_widgets.js, evaluated under Node) ───────────
+
+def _visible(node_type, values, names=None):
+    """rule.visible() of js/c2c_mode_widgets.js (browser imports stubbed), with both survivors' definitions
+    registered the way core hands them to the front end (nodeData.input)."""
+    from nodes.inpaint_suite import InpaintCropProMEC, InpaintStitchProMEC
+    src = (PACK / "js" / "c2c_mode_widgets.js").read_text(encoding="utf-8")
+    body = "\n".join(line for line in src.splitlines() if not line.startswith("import "))
+    defs = {}
+    for cls in (InpaintCropProMEC, InpaintStitchProMEC):
+        spec = cls.INPUT_TYPES()
+        defs[cls.__name__] = {"nodeData": {"input": {"required": spec.get("required", {}),
+                                                     "optional": spec.get("optional", {})}}}
+    names = names or _widgets(InpaintCropProMEC if node_type == "InpaintCropProMEC" else InpaintStitchProMEC)
+    script = f"""
+globalThis.LiteGraph = {{ registered_node_types: {json.dumps(defs, default=list)} }};
+const app = {{ registerExtension() {{}} }};
+const setWidgetVisible = () => {{}}, vueFitNodeHeight = () => {{}}, vueSyncNodeWidgets = () => {{}};
+const __c2cReport = () => {{}}, sectionOf = () => null, sectionOpen = () => true, updateSectionBar = () => {{}};
+const RULES_OUT = (() => {{
+{body}
+return RULES; }})();
+const rule = RULES_OUT[{json.dumps(node_type)}];
+const spec = globalThis.LiteGraph.registered_node_types[{json.dumps(node_type)}].nodeData.input;
+const names = {json.dumps(names)};                       // the node's widgets (apply() only ever sees widgets)
+const managed = names.filter(rule.managed);
+console.log(JSON.stringify({{ managed, watch: rule.watch, shown: rule.visible({json.dumps(values)}, managed) }}));
+"""
+    p = subprocess.run([NODE, "--input-type=module"], input=script, capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)                    # stdin: the script outgrows a command line
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def _widgets(cls):
+    return [n for n, w in frontend_layout(cls) if w]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_crop_shows_only_the_chosen_modes_controls():
+    from nodes import inpaint_suite as S
+    widgets = _widgets(S.InpaintCropProMEC)
+    pro = [n for n in widgets if not n.startswith(("smart_", "prepare_")) and n not in ("crop_mode", "preview_frame")]
+    gated = {"preresize_mode", "preresize_min_width", "preresize_min_height", "preresize_max_width",
+             "preresize_max_height", "extend_up_factor", "extend_down_factor", "extend_left_factor",
+             "extend_right_factor", "video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma"}
+    r = _visible("InpaintCropProMEC", {"crop_mode": "pro", "output_resize_to_target_size": True})
+    assert set(r["managed"]) == set(widgets) - {"crop_mode", "preview_frame"}   # sockets / the switch never managed
+    assert set(r["shown"]) == set(pro) - gated                                  # L7.99's pro rules, unchanged
+    r = _visible("InpaintCropProMEC", {"crop_mode": "pro", "preresize": True, "extend_for_outpainting": True,
+                                       "output_resize_to_target_size": False, "stitch_blend_mode": "video_stable"})
+    assert set(r["shown"]) == set(pro) - {"output_target_width", "output_target_height"}
+    smart = set(S._SMART_CROP_KEYS)
+    r = _visible("InpaintCropProMEC", {"crop_mode": "smart aspect", "smart_resolution_mode": "Automatic"})
+    assert set(r["shown"]) == smart - {"smart_manual_width", "smart_manual_height"}
+    r = _visible("InpaintCropProMEC", {"crop_mode": "smart aspect", "smart_resolution_mode": "Manual",
+                                       "smart_no_mask_mode": "Bypass"})
+    assert set(r["shown"]) == smart - {"smart_min_resolution", "smart_max_resolution"}
+    r = _visible("InpaintCropProMEC", {"crop_mode": "smart aspect", "smart_resolution_mode": "Manual",
+                                       "smart_no_mask_mode": "Resize Full Image"})
+    assert set(r["shown"]) == smart - {"smart_min_resolution"}
+    prep = set(S._PREPARE_KEYS)
+    r = _visible("InpaintCropProMEC", {"crop_mode": "mask prepare", "prepare_remove_small_regions": True,
+                                       "prepare_temporal_smooth": False})
+    assert set(r["shown"]) == prep - {"prepare_temporal_sigma"}
+    r = _visible("InpaintCropProMEC", {"crop_mode": "mask prepare", "prepare_remove_small_regions": False,
+                                       "prepare_temporal_smooth": True})
+    assert set(r["shown"]) == prep - {"prepare_min_region_area"}
+    assert {"crop_mode", "smart_resolution_mode", "smart_no_mask_mode", "prepare_remove_small_regions",
+            "prepare_temporal_smooth"} <= set(r["watch"])
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_stitch_shows_only_the_chosen_modes_controls():
+    from nodes import inpaint_suite as S
+    widgets = _widgets(S.InpaintStitchProMEC)
+    blend = ["blend_mode_override", "color_match", "stitch_temporal_sigma", "stitch_dilate_px", "roto_quality_override"]
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "blend"})
+    assert set(r["managed"]) == set(widgets) - {"stitch_mode"}
+    assert r["shown"] == blend
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "paste back", "paste_feather_edges": False})
+    assert r["shown"] == ["paste_upscale_method", "paste_feather_edges"]
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "paste back", "paste_feather_edges": True})
+    assert r["shown"] == list(S._PASTE_KEYS)
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "smart", "smart_blend_mode": "Box Feather",
+                                         "smart_enable_color_match": True})
+    assert r["shown"] == list(S._SMART_STITCH_KEYS)
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "smart", "smart_blend_mode": "Hard Paste",
+                                         "smart_enable_color_match": False})
+    assert r["shown"] == ["smart_blend_mode", "smart_resize_full_image_output", "smart_enable_color_match"]
+    r = _visible("InpaintStitchProMEC", {"stitch_mode": "context blend"})
+    assert r["shown"] == list(S._CONTEXT_KEYS)

@@ -7,6 +7,9 @@
  * store (the path core takes when a node finishes). If the server cannot answer exactly (no run yet, another preview
  * frame, a clip too big to keep), the last run's picture stays. Root-graph nodes only.
  *
+ * L7.65 P08: crop_mode and the smart_* / prepare_* controls are crop settings too - every widget value is sent and
+ * the server keeps the ones it knows, so the preview follows a mode change with the mode's own geometry.
+ *
  * Setting: C2C › Canvas › Inpaint crop › Live crop preview (off = the preview changes only when the node runs).
  */
 import { app } from "../../scripts/app.js";

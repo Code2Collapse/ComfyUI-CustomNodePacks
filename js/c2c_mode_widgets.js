@@ -1,6 +1,6 @@
 /**
  * Show only the controls the current mode uses, on the nodes the L7.65 consolidation merged (Batch Range, Size,
- * VAE Inspect, VAE Decode). A merged node carries every control of the nodes it replaced; a migrated "Extract First
+ * VAE Inspect, VAE Decode, Mask Tools, Inpaint Crop Pro, Inpaint Stitch Pro, ...). A merged node carries every control of the nodes it replaced; a migrated "Extract First
  * Frame" should not show a range, a split point and a frame index it does not use.
  *
  * Widgets only - sockets and links are never touched. A hidden widget keeps its value and still saves and still goes
@@ -35,6 +35,19 @@ const ICP_PRERESIZE = ["preresize_mode", "preresize_min_width", "preresize_min_h
                        "preresize_max_height"];
 const ICP_EXTEND = ["extend_up_factor", "extend_down_factor", "extend_left_factor", "extend_right_factor"];
 const ICP_VSTABLE = ["video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma"];
+const ICP_GATED = [...ICP_PRERESIZE, ...ICP_EXTEND, "output_target_width", "output_target_height", ...ICP_VSTABLE];
+// L7.65 P08: crop_mode / stitch_mode pick one group. A control belongs to the mode its prefix names; every other
+// input of the node belongs to the default mode (pro / blend). Only the node's own inputs are managed (read from its
+// definition), never a widget another extension adds; the mode switch itself (and preview_frame) always shows.
+const defInputs = (type) => {
+    const i = globalThis.LiteGraph?.registered_node_types?.[type]?.nodeData?.input ?? {};
+    return new Set([...Object.keys(i.required ?? {}), ...Object.keys(i.optional ?? {})]);
+};
+const icpModeOf = (name) => (name.startsWith("smart_") ? "smart aspect"
+    : name.startsWith("prepare_") ? "mask prepare" : "pro");
+const ICP_ALWAYS = ["crop_mode", "preview_frame"];
+const ispModeOf = (name) => (name.startsWith("paste_") ? "paste back" : name.startsWith("smart_") ? "smart"
+    : name.startsWith("context_") ? "context blend" : "blend");
 
 // node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides (a list, or a test on the
 // name), visible(values, names) -> the managed widgets to show }
@@ -86,15 +99,40 @@ const RULES = {
     },
     InpaintCropProMEC: {
         // L7.99: a switch shows the controls it enables (this file is the node's one visibility owner since the
-        // separate inpaint_crop_pro.js was retired); the rarely used switches themselves sit in sections
-        watch: ["preresize", "extend_for_outpainting", "output_resize_to_target_size", "stitch_blend_mode"],
-        managed: [...ICP_PRERESIZE, ...ICP_EXTEND, "output_target_width", "output_target_height", ...ICP_VSTABLE],
-        visible: (v) => [
-            ...(v.preresize ? ICP_PRERESIZE : []),
-            ...(v.extend_for_outpainting ? ICP_EXTEND : []),
-            ...(v.output_resize_to_target_size !== false ? ["output_target_width", "output_target_height"] : []),
-            ...(v.stitch_blend_mode === "video_stable" ? ICP_VSTABLE : []),
-        ],
+        // separate inpaint_crop_pro.js was retired); the rarely used switches themselves sit in sections.
+        // L7.65 P08: crop_mode shows its own group; in smart aspect / mask prepare every pro control (and with them
+        // the section bar) hides.
+        watch: ["crop_mode", "preresize", "extend_for_outpainting", "output_resize_to_target_size", "stitch_blend_mode",
+                "smart_resolution_mode", "smart_no_mask_mode", "prepare_remove_small_regions",
+                "prepare_temporal_smooth"],
+        managed: (name) => !ICP_ALWAYS.includes(name) && defInputs("InpaintCropProMEC").has(name),
+        visible: (v, names) => {
+            const mode = v.crop_mode ?? "pro";
+            const auto = (v.smart_resolution_mode ?? "Automatic") !== "Manual";
+            const hide = new Set(mode === "pro" ? ICP_GATED.filter((n) => !(
+                (v.preresize && ICP_PRERESIZE.includes(n))
+                || (v.extend_for_outpainting && ICP_EXTEND.includes(n))
+                || (v.output_resize_to_target_size !== false && n.startsWith("output_target_"))
+                || (v.stitch_blend_mode === "video_stable" && ICP_VSTABLE.includes(n))))
+                : mode === "smart aspect" ? [
+                    ...(auto ? ["smart_manual_width", "smart_manual_height"] : ["smart_min_resolution"]),
+                    // the maximum also sizes "Resize Full Image" when the mask is empty
+                    ...(!auto && v.smart_no_mask_mode !== "Resize Full Image" ? ["smart_max_resolution"] : []),
+                ] : [
+                    ...(v.prepare_remove_small_regions === false ? ["prepare_min_region_area"] : []),
+                    ...(v.prepare_temporal_smooth ? [] : ["prepare_temporal_sigma"]),
+                ]);
+            return names.filter((n) => icpModeOf(n) === mode && !hide.has(n));
+        },
+    },
+    InpaintStitchProMEC: {
+        // L7.65 P08: stitch_mode shows its own group (blend = the controls the node always had)
+        watch: ["stitch_mode", "paste_feather_edges", "smart_blend_mode", "smart_enable_color_match"],
+        managed: (name) => name !== "stitch_mode" && defInputs("InpaintStitchProMEC").has(name),
+        visible: (v, names) => names.filter((n) => ispModeOf(n) === (v.stitch_mode ?? "blend")
+            && !(n === "paste_feather_radius" && !v.paste_feather_edges)
+            && !(n === "smart_feather_pixels" && v.smart_blend_mode === "Hard Paste")
+            && !(n === "smart_color_match_amount" && !v.smart_enable_color_match)),
     },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],

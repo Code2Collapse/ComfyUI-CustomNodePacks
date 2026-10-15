@@ -9,9 +9,13 @@
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { migrateWorkflow } from "./_c2c_migrate_core.js";
+import { keepWorkflowLinkSlots, migrateWorkflow } from "./_c2c_migrate_core.js";
 
 const SETTING = "c2c.migrate.auto";
+// L7.65 P08: survivors whose saved inputs can sit on other slots than the current definition's (Inpaint Stitch Pro
+// gained the original_image / mask sockets, which the front end puts before every widget slot): links into them are
+// re-slotted by input name before configure (keepLinkSlots in _c2c_migrate_core.js)
+const KEEP_SLOTS = new Set(["InpaintCropProMEC", "InpaintStitchProMEC"]);
 let _enabled = true;
 let _table = null;
 
@@ -91,13 +95,22 @@ app.registerExtension({
         loadTable();
     },
     async beforeConfigureGraph(graphData) {
-        if (!_enabled || !graphData) return;
+        if (!graphData) return;
+        if (_enabled) {
+            try {
+                const table = await loadTable();
+                if (table?.length) tell(migrateWorkflow(graphData, table, isRegistered, describe));
+            } catch (err) {
+                console.warn("[C2C] migration skipped:", err);
+            }
+        }
+        // not a migration: keeps saved links on their inputs, so it runs with the setting off too
         try {
-            const table = await loadTable();
-            if (!table?.length) return;
-            tell(migrateWorkflow(graphData, table, isRegistered, describe));
+            const types = new Set([...KEEP_SLOTS].filter(isRegistered));
+            const moved = keepWorkflowLinkSlots(graphData, types, describe);
+            if (moved.length) console.info(`[C2C] links kept on their inputs: ${moved.join("; ")}`);
         } catch (err) {
-            console.warn("[C2C] migration skipped:", err);
+            console.warn("[C2C] link slot check skipped:", err);
         }
     },
 });
