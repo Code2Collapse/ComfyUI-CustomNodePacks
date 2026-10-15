@@ -254,10 +254,14 @@ tensor storages the node returns (test `test_p05_*_memory`):
 
 | Backend | Old node | Merged node, migrated (split off, diagnostics off) | Merged node, fresh defaults |
 |---|---|---|---|
-| SAM + ViTMatte | refined + coarse + edge + preview 3P = 6P | 6P + foreground 3P = 9P | + inside/outside/trimap 3P = 12P |
-| SeC + MatAnyone2 | rgb 3P + alpha + coarse = 5P (+ one preview frame) | 5P | + edge/inside/outside/trimap 4P + problem map P = 10P |
-| remove background | foreground 3P + mask = 4P | 4P | + 4P + P = 9P |
+| SAM + ViTMatte | refined + coarse + edge + preview 3P = 6P | 6P + foreground 3P = 9P | 13P |
+| SeC + MatAnyone2 | rgb 3P + alpha + coarse + one preview frame = 6P (3-frame clip) | 6P | 11P |
+| remove background | foreground 3P + mask = 4P | 4P | 9P |
 | segment + matte | about 20P (unchanged) | - | unchanged |
+
+Measured 2026-10-15 with the recording stand-ins of tests/test_consolidation_p05_matte.py (3-frame 96 x 72 clip,
+SAM + ViTMatte with batch_mode on): unique tensor storage the node returns, not counting the input image, divided by
+P x frames. "Fresh defaults" = the migrated inputs with diagnostics and split masks back at their defaults (on).
 
 Rules that keep it there: no copy of the input image (despilled is the image itself when despill is off); outputs that
 a backend does not produce (luma key, an off light wrap, an off problem map) are zero-stride views, which take no
