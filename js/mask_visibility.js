@@ -28,20 +28,26 @@ const NODE_ID = "MaskOpsMEC";
 const ROUTE = "/c2c/mask/visibility";
 
 let SPEC = null;
-let SPEC_TRIED = false;
+let SPEC_PROMISE = null;
 
-async function getSpec() {
-    if (SPEC || SPEC_TRIED) return SPEC;
-    SPEC_TRIED = true;
-    try {
-        const r = await fetch(ROUTE);
-        if (r.ok) SPEC = await r.json();
-    } catch (_e) {
-        // Unreachable route: leave SPEC null so every widget stays visible.
-        // Hiding a control because a fetch failed would be the worst outcome.
-        SPEC = null;
+/** The visibility spec, fetched once. Every caller waits for the SAME request: a caller that arrived while the
+ *  fetch was in flight used to get null and skip its rules - a workflow migrated on load (the migrator builds a
+ *  throw-away node first, which starts the fetch) then opened with all 97 controls shown (L7.65 P05 live check). */
+function getSpec() {
+    if (!SPEC_PROMISE) {
+        SPEC_PROMISE = (async () => {
+            try {
+                const r = await fetch(ROUTE);
+                if (r.ok) SPEC = await r.json();
+            } catch (_e) {
+                // Unreachable route: leave SPEC null so every widget stays visible.
+                // Hiding a control because a fetch failed would be the worst outcome.
+                SPEC = null;
+            }
+            return SPEC;
+        })();
     }
-    return SPEC;
+    return SPEC_PROMISE;
 }
 
 /** The value of another widget, for the toggle rules. */
