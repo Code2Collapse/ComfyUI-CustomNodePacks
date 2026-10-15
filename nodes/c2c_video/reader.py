@@ -291,6 +291,9 @@ def _convert_into(frame, handle: C2CVideo, fmt: OutputFmt, out: np.ndarray) -> N
     matrix, in_range = handle.colour.matrix, handle.colour.range
     _stamp(frame, matrix, in_range)
     alpha = handle.has_alpha
+    if handle.crop is not None:
+        _convert_cropped_into(frame, handle, fmt, out)
+        return
     # a stream that changes size mid-file is scaled back to the probed size
     w0, h0 = (handle.height, handle.width) if handle.rotation in (90, 270) else (handle.width, handle.height)
     size = (None, None) if (frame.width, frame.height) == (w0, h0) else (w0, h0)
@@ -301,6 +304,32 @@ def _convert_into(frame, handle: C2CVideo, fmt: OutputFmt, out: np.ndarray) -> N
     raw = _to_rgb(frame, pix, *size).to_ndarray()
     level = _white_level(frame.format.name, matrix, in_range, pix)
     _write(raw, level, fmt, out, _ROT_K.get(handle.rotation, 0))
+
+
+def _crop_and_fit(full: np.ndarray, handle: C2CVideo) -> np.ndarray:
+    """The handle's crop rectangle of an upright full frame, resized to the handle's size when they differ."""
+    x, y, w, h = handle.crop
+    region = full[y:y + h, x:x + w]
+    if region.shape[:2] != (handle.height, handle.width):
+        region = _resize_image(np.ascontiguousarray(region), handle.width, handle.height)
+    return region
+
+
+def _convert_cropped_into(frame, handle: C2CVideo, fmt: OutputFmt, out: np.ndarray) -> None:
+    """Cropped handle: the frame is converted at its full upright size exactly as an uncropped one, then the
+    rectangle is cut out and resized into ``out``. Only cropped loads pay for the full-size frame."""
+    sw, sh = handle.crop_source
+    w0, h0 = (sh, sw) if handle.rotation in (90, 270) else (sw, sh)
+    size = (None, None) if (frame.width, frame.height) == (w0, h0) else (w0, h0)
+    if fmt == "uint8" and handle.bit_depth <= 8:
+        pix = "rgba" if handle.has_alpha else "rgb24"
+    else:
+        pix = "rgba64le" if handle.has_alpha else "rgb48le"
+    raw = _to_rgb(frame, pix, *size).to_ndarray()
+    level = _white_level(frame.format.name, handle.colour.matrix, handle.colour.range, pix)
+    full = np.empty((sh, sw, out.shape[-1]), dtype=out.dtype)
+    _write(raw, level, fmt, full, _ROT_K.get(handle.rotation, 0))
+    out[...] = _crop_and_fit(full, handle)
 
 
 def _frame_to_ndarray(frame, handle: C2CVideo, fmt: OutputFmt) -> np.ndarray:
@@ -610,7 +639,12 @@ def read(handle: C2CVideo, indices: Sequence[int], *, fmt: OutputFmt = "float32"
         for src, rows in rows_by_src.items():
             path = handle.source.files[src]
             arr = read_image(path, fmt, handle.has_alpha)
-            if arr.shape[:2] != (handle.height, handle.width):
+            if handle.crop is not None:
+                sw, sh = handle.crop_source
+                if arr.shape[:2] != (sh, sw):           # a folder of mixed sizes: fit to the first, then crop
+                    arr = _resize_image(arr, sw, sh)
+                arr = _crop_and_fit(arr, handle)
+            elif arr.shape[:2] != (handle.height, handle.width):
                 # a scaled handle, or a folder of mixed sizes (VHS fits them to the first)
                 arr = _resize_image(arr, handle.width, handle.height)
             _place(out, rows, arr, path)

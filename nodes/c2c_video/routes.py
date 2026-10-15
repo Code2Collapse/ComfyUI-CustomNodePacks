@@ -288,8 +288,15 @@ def _cache_dir() -> str:
     return path
 
 
+# Bumped when the preview encoding changes, so older cached previews are not served (2: short GOP, L2.53).
+_PREVIEW_VERSION = 2
+# A keyframe every 12 frames: the player seeks, scrubs, shows hover thumbnails and plays backwards by seeking, and
+# each seek decodes from the previous keyframe (x264's default of 250 made a seek decode up to 250 frames).
+_PREVIEW_GOP = 12
+
+
 def _cache_key(loaded: C2CVideo, max_frames: int, out_w: int, out_h: int, ext: str) -> str:
-    blob = f"{loaded.fingerprint()}|{max_frames}|{out_w}x{out_h}|{ext}"
+    blob = f"v{_PREVIEW_VERSION}|{loaded.fingerprint()}|{max_frames}|{out_w}x{out_h}|{ext}"
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
@@ -350,8 +357,9 @@ def _encode_preview(loaded: C2CVideo, raw: C2CVideo, out_path: str, max_frames: 
         stream.width = pw
         stream.height = ph
         stream.pix_fmt = "yuv420p"
+        stream.codec_context.gop_size = _PREVIEW_GOP
         if codec_name == "libx264":
-            stream.options = {"crf": "23", "preset": "veryfast"}
+            stream.options = {"crf": "23", "preset": "veryfast", "g": str(_PREVIEW_GOP)}
         written = 0
         for chunk in iter_chunks(capped, _PREVIEW_CHUNK, fmt=fmt):
             rgb_batch = _chunk_to_rgb_uint8(chunk, linear)

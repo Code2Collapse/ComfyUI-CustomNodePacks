@@ -209,8 +209,10 @@ def build_loaded_handle(
     custom_width: int,
     custom_height: int,
     vae: Any | None,
+    crop: tuple[float, float, float, float] | None = None,
 ) -> tuple[C2CVideo, C2CVideo]:
-    """Fixed decision #1: probe → retime → trim → every → cap → format → size → scale."""
+    """Fixed decision #1: probe → retime → trim → every → cap → format → crop → size → scale.
+    ``crop`` = (x, y, w, h) as fractions of the frame (L2.53); None or (0, 0, 1, 1) keeps the whole frame."""
     preset = FORMAT_PRESETS.get(format_name or "None", {})
     h = raw
     if float(force_rate) > 0:
@@ -219,6 +221,8 @@ def build_loaded_handle(
     h = h.every(int(select_every_nth))
     h = h.capped(int(frame_load_cap))
     h = apply_format_frames(h, preset, format_name or "None")
+    if crop is not None:
+        h = h.cropped(*crop)
     if vae is not None:
         dim_multiple = vae_dim_multiple(vae)
     else:
@@ -458,6 +462,7 @@ def execute_video_load(
     sequence_fps: float = 24,
     prompt: dict | None = None,
     unique_id: str | None = None,
+    crop: tuple[float, float, float, float] | None = None,
 ) -> tuple[Any, int, LazyAudio, dict, C2CVideo, Any | None]:
     raw = resolve_probe(path, sequence_fps=sequence_fps)
     h = raw
@@ -474,6 +479,7 @@ def execute_video_load(
         custom_width=custom_width,
         custom_height=custom_height,
         vae=vae,
+        crop=crop,
     )
     if len(loaded) == 0:
         _raise_if_empty_selection(
@@ -535,6 +541,10 @@ def execute_images_load(
     return image, mask, count, loaded
 
 
+CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop "
+            "tool in the player; custom_width / custom_height then resize the cropped frame.")
+
+
 def _widget(tooltip: str, **extra: Any) -> dict[str, Any]:
     return {"tooltip": tooltip, **extra}
 
@@ -558,6 +568,10 @@ class LoadVideoC2C:
             "optional": {
                 "vae": ("VAE", _widget("Encode to LATENT instead of IMAGE.")),
                 "format": (FORMAT_CHOICES, _widget("Model preset (frame grid / dim multiple).", default="None")),
+                "crop_x": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
+                "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
+                "crop_w": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
+                "crop_h": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -578,6 +592,10 @@ class LoadVideoC2C:
         select_every_nth,
         vae=None,
         format="None",
+        crop_x=0.0,
+        crop_y=0.0,
+        crop_w=1.0,
+        crop_h=1.0,
         prompt=None,
         unique_id=None,
     ):
@@ -596,6 +614,7 @@ class LoadVideoC2C:
             vae=vae,
             prompt=prompt,
             unique_id=unique_id,
+            crop=(crop_x, crop_y, crop_w, crop_h),
         )
 
     @classmethod
@@ -635,6 +654,10 @@ class LoadVideoPathC2C:
                 "vae": ("VAE", _widget("Encode to LATENT instead of IMAGE.")),
                 "format": (FORMAT_CHOICES, _widget("Model preset (frame grid / dim multiple).", default="None")),
                 "sequence_fps": ("FLOAT", _widget("FPS for image sequences only.", default=24, min=1, max=240)),
+                "crop_x": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
+                "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
+                "crop_w": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
+                "crop_h": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -656,6 +679,10 @@ class LoadVideoPathC2C:
         vae=None,
         format="None",
         sequence_fps=24,
+        crop_x=0.0,
+        crop_y=0.0,
+        crop_w=1.0,
+        crop_h=1.0,
         prompt=None,
         unique_id=None,
     ):
@@ -673,6 +700,7 @@ class LoadVideoPathC2C:
             sequence_fps=sequence_fps,
             prompt=prompt,
             unique_id=unique_id,
+            crop=(crop_x, crop_y, crop_w, crop_h),
         )
 
     @classmethod

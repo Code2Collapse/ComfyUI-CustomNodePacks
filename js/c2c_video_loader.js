@@ -18,7 +18,8 @@ import {
     attachPauseObservers,
     reservedHeight,
 } from "./c2c_video_player_ui.js";
-import { attachPlayer, selectionFromWidgets, widgetsFromSelection } from "./c2c_video_player.js";
+import { attachPlayer, playerButton, selectionFromWidgets, widgetsFromSelection } from "./c2c_video_player.js";
+import { attachCrop } from "./c2c_video_crop.js";
 import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
 
 const DEBOUNCE_MS = 350;
@@ -65,6 +66,13 @@ const VIDEO_WIDGETS = [
 const IMAGE_WIDGETS = ["image_load_cap", "skip_first_images", "select_every_nth"];
 const PATH_WIDGETS = ["video", "directory"];
 const PREVIEW_FRAME_LIMIT = 2000;   // the preview route's cap; longer clips preview every k-th frame
+const CROP_WIDGETS = ["crop_x", "crop_y", "crop_w", "crop_h"];   // fractions of the frame, set by the crop tool
+
+function readCrop(node) {
+    const [x, y, w, h] = CROP_WIDGETS.map((n) => Number(widgetValue(node, n)));
+    return { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0,
+             w: Number.isFinite(w) ? w : 1, h: Number.isFinite(h) ? h : 1 };
+}
 
 /** The selection widgets of a loader: image folders use their own names. */
 function selectionNames(cfg) {
@@ -148,6 +156,7 @@ function mountLoaderWidget(node, cfg) {
         ui.track.hidden = true;
         ui.labelLeft.parentElement.hidden = true;
         player = attachPlayer(ui.timeline, ui.video, {
+            fullscreenTarget: ui.root,
             onSelect: (inF, outF) => {
                 const n = selectionNames(cfg);
                 const nth = Number(widgetValue(node, n.nth) ?? 1) || 1;
@@ -155,6 +164,28 @@ function mountLoaderWidget(node, cfg) {
                 setWidget(node, n.skip, skip);
                 setWidget(node, n.cap, cap);
                 node.setDirtyCanvas?.(true, true);
+            },
+        });
+    }
+
+    // Crop tool (Load Video / Load Video Path): drawn over the preview, writes the four crop widgets, which it hides.
+    let crop = null;
+    if (player && ui.viewport && node.widgets?.some((w) => w.name === "crop_x")) {
+        for (const name of CROP_WIDGETS) {
+            const w = node.widgets.find((x) => x.name === name);
+            if (w) setHidden(w, true);
+        }
+        crop = attachCrop(ui.viewport, ui.timeline, {
+            makeButton: playerButton,
+            onCommit: (r) => {
+                const round = (v) => Math.round(v * 10000) / 10000;
+                setWidget(node, "crop_x", round(r.x));
+                setWidget(node, "crop_y", round(r.y));
+                setWidget(node, "crop_w", round(r.w));
+                setWidget(node, "crop_h", round(r.h));
+                crop?.setRect(readCrop(node));          // show exactly what is stored
+                node.setDirtyCanvas?.(true, true);
+                fitNode();
             },
         });
     }
@@ -187,9 +218,14 @@ function mountLoaderWidget(node, cfg) {
                 ? probeJson.width / probeJson.height
                 : DEFAULT_ASPECT;
             if (ui.viewport) ui.viewport.style.aspectRatio = String(aspect);
+            ui.root.style.setProperty("--c2c-aspect", String(aspect));      // the full-screen view keeps it
 
             renderTimeline(ui, probeJson);
             renderChips(ui.info, probeJson);
+            if (crop) {
+                crop.setFrameSize(probeJson.width || 0, probeJson.height || 0);
+                crop.setRect(readCrop(node));
+            }
             ui.status.setText("", "default");
 
             if (cfg.hasPreview && ui.video && player) {
@@ -316,6 +352,7 @@ function mountLoaderWidget(node, cfg) {
             tornDown = true;
             cleanupVideo();
             player?.destroy();
+            crop?.destroy();
             uninstallFloor();
         }, 2000);
         return origRemoved?.apply(this, args);

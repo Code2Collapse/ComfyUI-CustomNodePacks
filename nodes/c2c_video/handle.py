@@ -83,6 +83,10 @@ class C2CVideo:
     # retime to another frame rate repeats or skips frames). Overrides
     # ``selection``.
     index_map: tuple[int, ...] | None = None
+    # A crop of the upright source frame: (x, y, w, h) in pixels of ``crop_source`` (the upright size the rectangle
+    # refers to). Frames are decoded at full size, cropped, then resized to width x height (L2.53).
+    crop: tuple[int, int, int, int] | None = None
+    crop_source: tuple[int, int] | None = None
 
     # Every selection operation SLICES the current selection, so they compose
     # in any order: every(2) then trimmed(0, 10) is ten frames, not five.
@@ -155,6 +159,31 @@ class C2CVideo:
             return self
         return replace(self, width=width, height=height,
                        transforms=self.transforms + (TransformOp("scale", (width, height)),))
+
+    def cropped(self, x: float, y: float, w: float, h: float) -> C2CVideo:
+        """Keep the rectangle (x, y, w, h), given as FRACTIONS of the upright frame (0..1, as the node's crop widgets
+        hold them). The full frame (0, 0, 1, 1) returns the handle unchanged. Must come before ``scaled``."""
+        if self.is_scaled:
+            raise ValueError("crop before scaling: the rectangle refers to the source frame")
+        fx, fy = min(max(float(x), 0.0), 1.0), min(max(float(y), 0.0), 1.0)
+        fw, fh = min(max(float(w), 0.0), 1.0 - fx), min(max(float(h), 0.0), 1.0 - fy)
+        W, H = int(self.width), int(self.height)
+        px, py = int(round(fx * W)), int(round(fy * H))
+        pw = max(1, min(W - px, int(round(fw * W))))
+        ph = max(1, min(H - py, int(round(fh * H))))
+        if (px, py, pw, ph) == (0, 0, W, H) or fw <= 0 or fh <= 0:
+            return self
+        if self.crop is not None:     # a crop of a crop: compose into the original frame
+            ox, oy, _ow, _oh = self.crop
+            rect, src = (ox + px, oy + py, pw, ph), self.crop_source
+        else:
+            rect, src = (px, py, pw, ph), (W, H)
+        return replace(self, width=pw, height=ph, crop=rect, crop_source=src,
+                       transforms=self.transforms + (TransformOp("crop", rect),))
+
+    @property
+    def is_cropped(self) -> bool:
+        return self.crop is not None
 
     @property
     def is_scaled(self) -> bool:

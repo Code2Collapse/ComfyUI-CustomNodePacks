@@ -167,6 +167,8 @@ def _build_handles(node_type: str, widgets: dict[str, Any]) -> tuple[C2CVideo, C
         custom_width=_int_widget(widgets, "custom_width", 0),
         custom_height=_int_widget(widgets, "custom_height", 0),
         vae=None,
+        crop=(_float_widget(widgets, "crop_x", 0.0), _float_widget(widgets, "crop_y", 0.0),
+              _float_widget(widgets, "crop_w", 1.0), _float_widget(widgets, "crop_h", 1.0)),
     )
     if len(loaded) == 0:
         retime_note = " after retiming" if force_rate > 0 else ""
