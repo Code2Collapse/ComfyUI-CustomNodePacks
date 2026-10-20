@@ -2,6 +2,42 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-21 (4K video path in Load / Save Video (C2C), L2.53 + L2.56)
+
+Ported in part from HallettVisual/ComfyUI-4K-Video-Save-Load (MIT, see CREDITS.md). Evidence is in
+`docs/evidence/L2.53/` (workspace):
+- `v4k_live.json`: owner-stack testbed, classic, Nodes 2.0 and a subgraph.
+- `v4k_save_live.json`: the NTSC rate, the workflow stored in the file, and drag-back.
+- `video4k_bench.json`: speed.
+- `HANDOFF.md`: the measurements and the open owner questions.
+
+- **Load Video (C2C) / Load Video Path (C2C), new inputs.** They are appended, so saved workflows load unchanged:
+  - `decoder` (auto / exact / fast). `auto` uses the exact reader: on this CPU the ffmpeg path was not reliably faster.
+  - `seconds_cap`.
+  - `resolution` (by the longest side) and `divisible_by`.
+  - `audio_when_missing`.
+  - an `info` output (JSON).
+  - the **MiniMax H3** format preset (24 fps, 17n+5 frames, sizes in multiples of 32).
+- **Settings you can read.**
+  - Grey real values beside each widget (in classic), or chips in the panel (in Nodes 2.0), with reset arrows and
+    *reset all to defaults*.
+  - A details line that agrees with the player's "N will load" and with the run (checked live).
+  - A new clip resets the settings; reopening a workflow does not.
+- **Fixed: a typed `frame_load_cap` under a frame grid.** It snapped to the wrong count: 60 became 73 under H3.
+  The frontend rounds INT values to multiples of `step2` before the node sees them. The arrows now step through the
+  legal counts (H3: 0 → 5 → 22 → 39), and a typed count snaps to the nearest legal one (60 → 56).
+- **Fixed: a frame editor fed by Load Video (C2C)** now sees `seconds_cap` / `resolution` / `divisible_by`.
+  Before, it planned the uncapped selection.
+- **Save Video (C2C).**
+  - An ffmpeg encode pipe. Measured on CPU against the PyAV path: H.264 / H.265 / ProRes / FFV1 are 2-4x faster
+    (1080p H.264 66 → 26 ms/frame on a quiet machine); DNxHR and VP9 are about 1.2x.
+  - New formats: H.265 8-bit (CPU), and H.264 / H.265 / H.265 10-bit / AV1 on NVENC (NVENC is not measured on a
+    GPU yet).
+  - Exact NTSC rates (23.976 is stored as 24000/1001).
+  - `save_metadata`: the workflow and prompt are stored in MP4 / MOV / MKV / WebM the way core does, so dropping the
+    file back into ComfyUI rebuilds the graph. Like core, nothing is stored when ComfyUI runs with
+    `--disable-metadata`.
+
 ## Unreleased – 2026-10-16 (AV Handles: the model preset and custom formula now apply in add mode)
 
 Evidence: `docs/evidence/L2.55/` (workspace): `handles_before.json` / `handles_after.json`, `handles_live_after.json`

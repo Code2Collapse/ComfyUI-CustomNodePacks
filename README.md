@@ -796,6 +796,43 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
 - The player works the same in Load Video Path (C2C) (crop included) and Load Images Path (C2C) (no crop), in both
   renderers, and inside subgraphs.
 
+#### Load Video (C2C): 4K path, presets and readable settings
+
+- **Formats** (`format`) set the frame grid and the size multiple a model needs:
+  - AnimateDiff, Mochi, LTXV, Hunyuan, Cosmos and Wan.
+  - **MiniMax H3**: 24 fps, 17n+5 frames (5, 22, 39, 56 ...), sizes in multiples of 32.
+
+  Under a grid, the `frame_load_cap` arrows step through the legal counts, and a typed count snaps to the nearest
+  legal one. A preset never forces the frame rate. When the clip's rate differs, the node says which `force_rate` to
+  set.
+- **What loads:** `seconds_cap` caps by time; `frame_load_cap` and `seconds_cap` clear each other. `resolution` sizes
+  by the longest side (or `custom` = `custom_width` / `custom_height` as before), rounded to `divisible_by`.
+  `audio_when_missing` gives a silent track (or none) when the clip has no audio.
+- **Reading the settings:**
+  - Beside each widget, a grey value shows what will actually load, with a ↺ arrow that resets the widget. In Nodes
+    2.0 these are chips in the panel.
+  - *reset all to defaults* keeps the clip.
+  - A details line reads, for example, "loads 0.0s to 0.9s (0.9s, 22 frames) at 2048x1088". It is the server's own
+    plan, so it always agrees with the player's "N will load" and with the run.
+  - Picking a new clip resets the settings; reopening a workflow keeps them.
+- **`decoder`:** `exact` is the PyAV reader. `fast` is an ffmpeg pipe that is bit-identical in `rgb48`, or nv12 on
+  CUDA (mean 0.47/255 from exact). `auto` uses `exact`: on the test CPU the ffmpeg path was not reliably faster.
+  `C2C_VIDEO_AUTO=fast` or `C2C_VIDEO_AUTO=gpu` lets auto take the fast path.
+- **`info`** output: a JSON summary of what loaded (frames, seconds, size, fps, decoder).
+
+#### Save Video (C2C): ffmpeg encode, NVENC, workflow in the file
+
+- Encodes through an ffmpeg pipe. On CPU, H.264 / H.265 / ProRes / FFV1 are 2-4x faster than before; DNxHR and VP9
+  are about 1.2x.
+- Formats include H.264, H.265 8 / 10-bit, AV1 (NVENC on NVIDIA GPUs), ProRes 422 / HQ / 4444 / XQ, DNxHR, FFV1,
+  VP9, GIF, WebP, and PNG / EXR sequences. A format your ffmpeg cannot write is marked `[unavailable]`.
+- NTSC rates are exact (23.976 → 24000/1001).
+- `save_metadata` (on by default) stores the workflow and prompt in MP4 / MOV / MKV / WebM. Dropping the saved file
+  onto ComfyUI rebuilds the graph. Like core, nothing is stored when ComfyUI runs with `--disable-metadata`.
+
+Ported in part from [ComfyUI-4K-Video-Save-Load](https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) (MIT);
+see CREDITS.md.
+
 #### Mask Batch Manager (MEC)
 
 Manipulate mask batches for video workflows.

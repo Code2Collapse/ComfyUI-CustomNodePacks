@@ -69,7 +69,18 @@ def test_snap_cap_minimax_h3(value, prev, expect):
 @needs_node
 def test_snap_cap_without_a_grid_and_ltxv():
     assert _js("[H.snapCap(23, 0, null), H.snapCap(10, 0, [8, 1]), H.snapCap(8, 0, [8, 1]), H.capStep('LTXV'), "
-               "H.capStep('None')]") == [23, 9, 9, 8, 1]
+               "H.capStep('None')]") == [23, 9, 9, 1, 1]
+
+
+@needs_node
+def test_typed_and_arrow_counts_survive_the_frontends_int_rounding():
+    # frontend 1.53.10 onValueChange rounds to a multiple of step2 BEFORE the node's callback (measured live,
+    # docs/evidence/L2.53/v4k_live.json C2: step2 = 17 turned a typed 60 into 73)
+    got = _js("(() => { const t = H.capStep('MiniMax H3'); const g = [17, 5];"
+              " const fe = (v) => t === 1 ? Math.round(v) : Math.round(v / t) * t;"
+              " return [H.snapCap(fe(60), 39, g), H.snapCap(fe(47), 39, g), H.snapCap(fe(0 + t), 0, g),"
+              " H.snapCap(fe(5 + t), 5, g), H.snapCap(fe(22 + t), 22, g), H.snapCap(fe(39 - t), 39, g)]; })()")
+    assert got == [56, 39, 5, 22, 39, 22]
 
 
 @needs_node

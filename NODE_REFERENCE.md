@@ -1680,6 +1680,30 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 
 ---
 
+### LoadVideoC2C / LoadVideoPathC2C: inputs added in L2.53
+
+**Shown in the menu as:** Load Video (C2C) / Load Video Path (C2C). This reference predates these nodes; the table
+lists only what L2.53 appended. The full guide is in README.md, "Load Video (C2C)", and every widget has a tooltip.
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `format` | choice | `None` | Adds the **MiniMax H3** preset (24 fps, 17n+5 frames, size multiple 32) to the earlier presets. |
+| `decoder` | choice: `auto`, `fast`, `exact` | `auto` | `exact` = PyAV reader. `fast` = ffmpeg pipe (bit-identical rgb48, or nv12 on CUDA). `auto` = exact unless `C2C_VIDEO_AUTO` opts in. |
+| `seconds_cap` | `FLOAT` | `0.0` | Cap the load by time (0 = no cap). Clears `frame_load_cap`, and the other way round. |
+| `resolution` | choice | `custom` | Size by the longest side, keeping the aspect. `custom` = `custom_width` / `custom_height` as before. |
+| `divisible_by` | choice: `1`, `2`, `8`, `16`, `32`, `64` | `1` | Round the output size to this multiple. |
+| `audio_when_missing` | choice: `silence`, `none` | `silence` | When the clip has no audio: a silent track as long as the frames, or nothing. |
+| **output** `info` | `STRING` | | JSON: source and loaded frames, seconds, size, fps, and the decoder used. |
+
+### SaveVideoC2C: inputs added in L2.53
+
+**Shown in the menu as:** Save Video (C2C). New formats: H.265 8-bit (CPU), and H.264 / H.265 / H.265 10-bit / AV1
+on NVENC. NTSC rates are stored exactly.
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `save_metadata` | `BOOLEAN` | `True` | Store the workflow and prompt in MP4 / MOV / MKV / WebM so the file rebuilds the graph when dropped onto ComfyUI. Nothing is stored under `--disable-metadata`. |
+
 ## C2C/VideoMask
 
 

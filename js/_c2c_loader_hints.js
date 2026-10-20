@@ -75,10 +75,14 @@ export function snapCap(value, prev, grid) {
     return (v - lo) <= (hi - v) ? lo : hi;
 }
 
-/** Arrow step for frame_load_cap under a format (its grid step, else 1). */
-export function capStep(format) {
-    const g = FORMAT_GRID[format];
-    return g ? g[0] : 1;
+/**
+ * Arrow step (widget option step2) for frame_load_cap: always 1. The frontend's INT handler rounds EVERY value, typed
+ * ones too, to a multiple of step2 before our callback runs (frontend 1.53.10 onValueChange), so a grid step of 17
+ * turned a typed 60 into 68 and then 73. With 1, snapCap sees a one-frame arrow step and moves to the next legal
+ * count (H3: 0 -> 5 -> 22 -> 39), and a typed value snaps to the nearest legal count.
+ */
+export function capStep(_format) {
+    return 1;
 }
 
 function sameNumber(a, b, tol = 1e-6) {

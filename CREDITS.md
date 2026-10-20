@@ -34,6 +34,18 @@ installed in this ComfyUI, so a straight copy would have failed at import. The
 blend table is checked against a numpy transcription of upstream's own formulas
 in `tests/test_layer_effects.py`.
 
+### ComfyUI-4K-Video-Save-Load — HallettVisual (Matthew Hallett)
+<https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load> · **MIT**, Copyright (c) 2026 Matthew Hallett · rev
+7ae9ab9 (2026-10-14) · licence text: `THIRD_PARTY_LICENSES/ComfyUI-4K-Video-Save-Load-LICENSE.txt`
+
+- **`nodes/c2c_video/fast_decode.py`**: the ffmpeg decode pipe with in-ffmpeg scaling, the ffmpeg lookup, and the
+  nv12 → RGB conversion on the GPU.
+- **`nodes/c2c_video/save_ffmpeg.py`**: the ffmpeg encode pipe, the exact NTSC rate rule, and FFMETADATA escaping.
+- **`nodes/c2c_video/nodes_load.py`**: `round_to` and `target_size` (the `resolution` / `divisible_by` sizing).
+- **`nodes/c2c_video/stream_decode.py`**: decoding latents in batches.
+- **Behaviour only, re-implemented here:** the loader UI ideas (grey real values, reset arrows, reset all, the
+  details line) and the model presets with H3 17n+5. Each ported block carries a `# PORTED FROM:` header.
+
 ### ComfyUI-NKD-Basic-Tools — Nekodificador
 <https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools> · **MIT** (declared in
 `pyproject.toml`)
