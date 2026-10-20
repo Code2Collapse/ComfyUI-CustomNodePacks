@@ -71,6 +71,27 @@ def grow_mask_batched(mask: torch.Tensor, expand: int, tapered_corners: bool) ->
     return x.reshape((-1, h, w))
 
 
+def feather_mask_strips(mask: torch.Tensor, left: int, top: int, right: int, bottom: int) -> torch.Tensor:
+    """Core Feather Mask with one multiply per border strip instead of one per column / row. Core multiplies each
+    pixel of the strip by the Python float (i+1)/n, which torch rounds to the tensor's dtype; here the same ramp is a
+    tensor of that dtype, applied in core's order (left, right, top, bottom), so every product is the same IEEE
+    operation (bit-identical, tested, overlapping strips included). Measured 1.2-26x faster on CPU
+    (docs/evidence/L2.54/feather_adapter_probe.json)."""
+    out = mask.reshape((-1, mask.shape[-2], mask.shape[-1])).clone()
+    h, w = int(out.shape[-2]), int(out.shape[-1])
+    left, right, top, bottom = min(left, w), min(right, w), min(top, h), min(bottom, h)
+    kw = {"dtype": out.dtype, "device": out.device}
+    if left:
+        out[:, :, :left] *= torch.tensor([(x + 1.0) / left for x in range(left)], **kw)
+    if right:
+        out[:, :, w - right:] *= torch.tensor([(x + 1) / right for x in range(right)][::-1], **kw)
+    if top:
+        out[:, :top, :] *= torch.tensor([(y + 1) / top for y in range(top)], **kw)[:, None]
+    if bottom:
+        out[:, h - bottom:, :] *= torch.tensor([(y + 1) / bottom for y in range(bottom)][::-1], **kw)[:, None]
+    return out
+
+
 def _node_output(value: Any) -> Any:
     """A V3 NodeOutput, as the original V3 node returns (a plain tuple outside ComfyUI, for the tests)."""
     try:
@@ -123,11 +144,39 @@ def _grow_supports(args: Mapping[str, Any]) -> bool:
             and m.device.type == "cpu")   # core's own path is CPU-only (m.numpy()); a GPU mask runs the original
 
 
+_SIDES = ("left", "top", "right", "bottom")
+
+
+def _feather_cases() -> list[dict[str, Any]]:
+    g = torch.Generator().manual_seed(11)
+    cases = []
+    for (n, h, w) in ((3, 9, 11), (2, 1, 5), (2, 6, 1)):
+        m = torch.rand(n, h, w, generator=g)
+        for dt in (torch.float32, torch.float64):
+            for sides in ((0, 0, 0, 0), (1, 1, 1, 1), (3, 0, 5, 2), (8, 8, 8, 8), (40, 2, 40, 2)):
+                cases.append({"mask": m.to(dt), **dict(zip(_SIDES, sides))})
+    return cases
+
+
+def _feather_supports(args: Mapping[str, Any]) -> bool:
+    m = args.get("mask")
+    return (torch.is_tensor(m) and m.dtype in (torch.float32, torch.float64) and m.ndim in (2, 3)
+            and all(isinstance(args.get(k), int) and not isinstance(args.get(k), bool) and args[k] >= 0 for k in _SIDES)
+            # half precision: core multiplies in float and rounds once, a half ramp would round twice. GPU: not yet
+            # validated on a GPU (design slice 3), so a CUDA mask runs the original.
+            and m.device.type == "cpu")
+
+
 ADAPTERS: dict[str, Adapter] = {
     "GrowMask": Adapter(
         class_id="GrowMask", version=1, supports=_grow_supports,
         run=lambda a: grow_mask_batched(a["mask"], a["expand"], a["tapered_corners"]),
         wrap=_node_output, selftest_cases=_grow_cases, frame_input="mask",
+    ),
+    "FeatherMask": Adapter(
+        class_id="FeatherMask", version=1, supports=_feather_supports,
+        run=lambda a: feather_mask_strips(a["mask"], a["left"], a["top"], a["right"], a["bottom"]),
+        wrap=_node_output, selftest_cases=_feather_cases, frame_input="mask",
     ),
 }
 

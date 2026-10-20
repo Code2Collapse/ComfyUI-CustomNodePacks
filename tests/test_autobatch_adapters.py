@@ -41,9 +41,11 @@ def _fresh(tmp_path, monkeypatch):
     monkeypatch.delenv("C2C_AUTOBATCH_ADAPTERS", raising=False)
     monkeypatch.setattr(AD, "_PROFILES", None)
     AD.DECISIONS.clear()
-    AD.ADAPTERS["GrowMask"].state.clear()
+    for a in AD.ADAPTERS.values():
+        a.state.clear()
     yield
-    AD.ADAPTERS["GrowMask"].state.clear()
+    for a in AD.ADAPTERS.values():
+        a.state.clear()
 
 
 def _mask(n=6, h=40, w=56, seed=0):
@@ -149,3 +151,60 @@ def test_a_changed_original_is_revalidated():
 
     AD.validate(a, core_grow_v2)
     assert a.state["fp"] != fp1 and a.state["ok"] is True
+
+
+# ── Feather Mask (slice 3) ─────────────────────────────────────────────────────────────────────────────────────────
+
+def core_feather(mask, left, top, right, bottom):
+    """Core Feather Mask's algorithm (comfy_extras/nodes_mask.py FeatherMask.execute, core v0.39), line for line."""
+    output = mask.reshape((-1, mask.shape[-2], mask.shape[-1])).clone()
+    left = min(left, output.shape[-1])
+    right = min(right, output.shape[-1])
+    top = min(top, output.shape[-2])
+    bottom = min(bottom, output.shape[-2])
+    for x in range(left):
+        output[:, :, x] *= (x + 1.0) / left
+    for x in range(right):
+        output[:, :, -(x + 1)] *= (x + 1) / right
+    for y in range(top):
+        output[:, y, :] *= (y + 1) / top
+    for y in range(bottom):
+        output[:, -(y + 1), :] *= (y + 1) / bottom
+    return _Out(output)
+
+
+@pytest.mark.parametrize("sides", [(0, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 1), (3, 7, 5, 2), (30, 30, 30, 30),
+                                   (56, 40, 56, 40), (9999, 9999, 9999, 9999), (20, 0, 50, 0)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_strip_feather_is_bit_identical_to_core(sides, dtype):
+    m = torch.rand(5, 40, 56, generator=torch.Generator().manual_seed(4)).to(dtype)
+    ref = core_feather(m, *sides).result[0]
+    got = AD.feather_mask_strips(m, *sides)
+    assert got.dtype == ref.dtype and torch.equal(got, ref)
+
+
+def test_strip_feather_2d_mask_and_no_mutation():
+    m = torch.rand(33, 47)
+    keep = m.clone()
+    assert torch.equal(AD.feather_mask_strips(m, 4, 5, 6, 7), core_feather(m, 4, 5, 6, 7).result[0])
+    assert torch.equal(m, keep)
+
+
+def test_feather_adapter_validates_and_refuses_what_it_cannot_reproduce():
+    a = AD.ADAPTERS["FeatherMask"]
+    assert AD.validate(a, core_feather) == (True, "self-test passed")
+    base = {"mask": torch.rand(4, 8, 8), "left": 2, "top": 2, "right": 2, "bottom": 2}
+    assert a.supports(base)
+    assert not a.supports({**base, "mask": base["mask"].half()})          # core rounds once in float, a half ramp twice
+    assert not a.supports({**base, "left": 2.0})
+    assert not a.supports({**base, "left": True})
+    assert not a.supports({**base, "top": -1})
+
+
+def test_feather_through_try_adapter_gives_core_s_result():
+    args = {"mask": torch.rand(12, 64, 96), "left": 16, "top": 8, "right": 16, "bottom": 8}
+    used, res = AD.try_adapter("FeatherMask", core_feather, args)
+    prof = next(iter(AD.status()["profiles"].values()))
+    assert prof["measured_frames"] == 4 and prof["choice"] in ("adapter", "original")
+    if used:
+        assert torch.equal(res[0], core_feather(**args).result[0])

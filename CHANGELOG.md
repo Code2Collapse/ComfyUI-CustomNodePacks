@@ -2,6 +2,19 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-21 (Image batching Universal: Feather Mask adapter, L2.54 slice 3)
+
+Evidence (workspace): `docs/evidence/L2.54/feather_adapter_probe.json` (48 bit-identity cases, timings),
+`feather_live.json` (owner-stack testbed, Off vs Universal interleaved).
+
+- **Universal now also speeds up core Feather Mask.** Core multiplies one column or row at a time in a Python loop.
+  The adapter does one multiply per border strip, in core's order and with the same per-pixel arithmetic, so the
+  result is identical to the bit (float32 and float64; half-precision and GPU masks run core's own code).
+  - Operation alone, CPU: 1.2-26x faster.
+  - Whole graph, 97 x 720p: 1.29x at a 64 px feather, 2.64x at 256 px. At 16 px there is no measurable change.
+  - Like Grow Mask, it is checked against the original before first use and timed once per frame size.
+    `C2C_AUTOBATCH_ADAPTERS=0` turns it off.
+
 ## Unreleased – 2026-10-21 (4K video path in Load / Save Video (C2C), L2.53 + L2.56)
 
 Ported in part from HallettVisual/ComfyUI-4K-Video-Save-Load (MIT, see CREDITS.md). Evidence is in
