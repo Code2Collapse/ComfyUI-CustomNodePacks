@@ -111,7 +111,10 @@ def _try_keyring():
         try:
             kr_backend = keyring.get_keyring()
             name = type(kr_backend).__name__
-            if "Fail" in name or "Null" in name:
+            module = type(kr_backend).__module__ or ""
+            # keyring's null and fail backends are both classes named plain "Keyring" (keyring.backends.null /
+            # .fail): the name alone let the null backend through, which silently DISCARDS every secret
+            if "Fail" in name or "Null" in name or module.endswith((".null", ".fail")):
                 log.info("keyring present but backend is %s; skipping", name)
                 return None
         except Exception:

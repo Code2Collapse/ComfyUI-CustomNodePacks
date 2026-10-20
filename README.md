@@ -45,11 +45,11 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **109** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **111** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
-| Vault | 2 |
+| Vault | 4 |
 | Folder Incrementer | 5 |
 | Render farm | 3 |
 | Fluid Shots/Audio | 3 |
@@ -88,7 +88,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 109 nodes loaded (Vault 2, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 111 nodes loaded (Vault 4, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -1353,9 +1353,20 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 
 ## C2C Vault: lock or seal part of a workflow
 
-The vault replaces a group of nodes with one node whose contents travel in the workflow as AES-GCM ciphertext.
-**Locked** vaults need your password to run. **Sealed** vaults run without a password but need it to be opened for
-editing. Outside the vault the workflow stays ordinary JSON.
+The vault replaces a group of nodes with one node whose contents travel in the workflow as AES-256-GCM ciphertext
+(format v2; the password is stretched with Argon2id). Outside the vault the workflow stays ordinary JSON.
+
+- **Locked** vaults need the password to run.
+- **Sealed** vaults run without a password. By default they run only on your install and on the installs whose
+  public keys you paste when sealing; a recipient sends theirs from **C2C Vault → This install's key…**. A
+  **portable** seal runs on any install with this pack, and so is obfuscation only. Seals made before v2 still run,
+  marked "Legacy seal"; open and lock them again to upgrade.
+- **Editing** any vault needs the password **and** a code from your authenticator app. You set the app up once per
+  install and get 8 recovery codes. The real nodes open in a separate **Vault edit** tab, which is never saved,
+  exported, queued or written to browser storage. **Lock & close** re-encrypts with fresh keys.
+
+Step-by-step guide: [docs/vault_howto.md](docs/vault_howto.md). Design and threat model:
+[docs/VAULT_DESIGN_A17.md](docs/VAULT_DESIGN_A17.md).
 
 There are three ways to put nodes in a vault, and all of them work on the root graph and **inside subgraphs**:
 
@@ -1372,8 +1383,10 @@ inputs and outputs. A subgraph node inside the selection is locked together with
 Primitive helpers are resolved, not stored. A Locked vault runs right away for the person who locked it. Anyone
 else types the password into the field on the node. **Lock again** forgets the key.
 
-Scope, honestly: the vault stops casual inspection and copying of your graph. Because a vault has to be decrypted
-to run, it cannot stop someone who can run Python inside the same ComfyUI process.
+Scope, honestly: the vault keeps your nodes out of the workflow file, browser storage and history. Because a vault
+has to be decrypted to run, anyone who can run it (with the password, or as an install it is sealed for) can in
+principle extract it, and so can anyone who can run Python inside that ComfyUI process. The authenticator code
+guards editing through the UI on that install; it is not extra encryption.
 
 **Copy / paste with metadata** (Ctrl+C / Ctrl+V, or Ctrl+Alt+C / Ctrl+Alt+V) copies and pastes into the graph you
 are looking at, inside subgraphs too. Wires between the copied nodes are kept.

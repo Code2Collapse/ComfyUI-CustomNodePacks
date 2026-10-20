@@ -39,6 +39,8 @@ from .vault_crypto import (
     unseal_for_run,
     unseal_with_password,
 )
+from . import vault_2fa, vault_keys
+from . import vault_crypto_v2 as v2
 from .vault_exec import VaultExecError, execute_subgraph
 from .vault_promote import (
     MAX_VAULT_PARAMS,
@@ -197,6 +199,7 @@ class C2C_VaultLocked:
                                "it here would describe the contents."}),
             },
             "optional": _vault_input_types(),
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
     # A Locked vault needs an open session to run; a Sealed one does not.
@@ -213,7 +216,7 @@ class C2C_VaultLocked:
         state = "open" if SESSIONS.get(str(kwargs.get("vault_id") or "")) is not None else "locked"
         return f"{digest}:{state}"
 
-    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", **inputs):
+    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", unique_id=None, **inputs):
         if not (vault_payload or "").strip():
             raise RuntimeError("C2C Vault: no payload. Lock a selection first.")
 
@@ -226,14 +229,20 @@ class C2C_VaultLocked:
                 "(or click Unlock), then queue again. The unlock lasts for this ComfyUI session."
             )
 
+        interface = _parse_interface(vault_interface)
         try:
-            subgraph = _unlock_with_key(vault_payload, key, vault_id)
+            if v2.is_v2(vault_payload):
+                plain = v2.open_with_kek(vault_payload, key, vault_id=vault_id)
+                v2.check_interface(v2.parse(vault_payload), interface)
+                subgraph = plain["exec"]
+            else:
+                subgraph = _unlock_with_key(vault_payload, key, vault_id)
         except VaultError as exc:
             raise RuntimeError(f"C2C Vault: {exc}") from exc
 
-        return self._run(subgraph, inputs, "C2C Vault", _parse_interface(vault_interface))
+        return self._run(subgraph, inputs, "C2C Vault", interface, unique_id)
 
-    def _run(self, subgraph, inputs, label, interface=None):
+    def _run(self, subgraph, inputs, label, interface=None, unique_id=None):
         """Shared boundary wiring + execution, used by both vault modes."""
         # Promoted parameters first: a mistake here should be reported before
         # anything runs, not halfway through the graph.
@@ -255,7 +264,7 @@ class C2C_VaultLocked:
             supplied[name] = val
 
         try:
-            out = execute_subgraph(subgraph, supplied, overrides)
+            out = execute_subgraph(subgraph, supplied, overrides, hidden={"UNIQUE_ID": unique_id})
         except VaultExecError as exc:
             # Safe to be specific: we are past the access check.
             raise RuntimeError(f"{label}: {exc}") from exc
@@ -274,6 +283,18 @@ class C2C_VaultLocked:
         for i, spec in enumerate(outs):
             result[i] = out[spec["name"]]
         return tuple(result)
+
+
+def _notify(unique_id, text: str) -> None:
+    log.warning("[C2C Vault] %s", text)
+    if unique_id is None:
+        return
+    try:
+        from server import PromptServer
+
+        PromptServer.instance.send_progress_text(text, unique_id)
+    except Exception:  # noqa: BLE001 - outside ComfyUI
+        pass
 
 
 def _parse_interface(raw: str) -> dict[str, Any]:
@@ -328,9 +349,168 @@ def _open_session(vault_id: str, payload: str, password: str) -> None:
 
     from .vault_crypto import _unpack_header, derive_key
 
+    if v2.is_v2(payload):
+        _plain, kek, _p = v2.open_with_password(payload, password, vault_id=vault_id)
+        SESSIONS.put(vault_id, kek)
+        return
     blob = base64.b64decode(payload.encode("ascii"), validate=True)
     hdr = _unpack_header(blob)   # 7 fields; Unlock failed with ValueError while it unpacked 6 (L2.24)
     SESSIONS.put(vault_id, derive_key(password, hdr[2], hdr[3]))
+
+def vault_store_name() -> str:
+    from . import vault_store
+
+    try:
+        return vault_store.backend_name()
+    except Exception:  # noqa: BLE001
+        return "none"
+
+
+_MODE_NAMES = {"locked": v2.MODE_LOCKED, "sealed": v2.MODE_SEALED_INSTALLS,
+               "sealed_installs": v2.MODE_SEALED_INSTALLS, "sealed_portable": v2.MODE_SEALED_PORTABLE}
+
+
+def _recipients(extra) -> list:
+    """This install's own key first, then any recipient install keys the author pasted (deduplicated)."""
+    keys = [vault_keys.install_public_key()]
+    for text in extra or []:
+        raw = vault_keys.parse_public_text(str(text))
+        if raw not in keys:
+            keys.append(raw)
+    return keys
+
+
+def lock_v2(body: dict) -> tuple:
+    """POST /c2c_vault/lock -> (payload, kek, mode). The plaintext is {exec, layout}; the interface is authenticated."""
+    mode_name = str(body.get("mode") or "locked").lower()
+    if mode_name not in _MODE_NAMES:
+        raise VaultError(f"Unknown vault mode {mode_name!r}.")
+    mode = _MODE_NAMES[mode_name]
+    ex = body.get("subgraph") or {}
+    validate_lockable(ex)
+    plain = {"exec": ex, "layout": body.get("layout")}
+    recipients = _recipients(body.get("recipients")) if mode == v2.MODE_SEALED_INSTALLS else None
+    payload, kek = v2.lock(plain, str(body.get("password") or ""), vault_id=str(body.get("vault_id") or ""),
+                           mode=mode, iface=body.get("interface") or {}, recipients=recipients)
+    return payload, kek, mode
+
+
+def validate_lockable(ex: dict) -> None:
+    """Refuse, at lock time, inner nodes the vault executor cannot run faithfully (A17 s2.9)."""
+    from .vault_exec import _node_registry
+
+    registry = _node_registry()
+    problems = []
+    for n in ex.get("nodes") or []:
+        cls = registry.get(str(n.get("class_type")))
+        if cls is None:
+            continue                                       # reported by the executor with the install hint
+        name = str(n.get("class_type"))
+        if getattr(cls, "INPUT_IS_LIST", False) or any(getattr(cls, "OUTPUT_IS_LIST", ()) or ()):
+            problems.append(f"{name}: list inputs / outputs")
+        try:
+            it = cls.INPUT_TYPES() or {}
+        except Exception:  # noqa: BLE001
+            it = {}
+        for section in ("required", "optional"):
+            for key, spec in (it.get(section) or {}).items():
+                opts = spec[1] if isinstance(spec, (tuple, list)) and len(spec) > 1 and isinstance(spec[1], dict) else {}
+                if opts.get("lazy"):
+                    problems.append(f"{name}: lazy input {key!r}")
+        hidden = set((it.get("hidden") or {}).values())
+        unsupported = hidden - {"UNIQUE_ID", "PROMPT", "EXTRA_PNGINFO", "DYNPROMPT"}
+        if unsupported:
+            problems.append(f"{name}: hidden inputs {sorted(unsupported)}")
+    if problems:
+        raise VaultError("These nodes cannot run inside a vault (the vault runs its nodes itself, without ComfyUI's "
+                         "scheduler): " + "; ".join(sorted(set(problems))) + ". Keep them outside the selection.")
+
+
+class _EditSessions:
+    """Password checked -> pending (2 min, plaintext kept server-side) -> code checked -> active (30 min idle)."""
+
+    PENDING_SECONDS = 120
+    IDLE_SECONDS = 30 * 60
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[str, dict] = {}
+        self._active: dict[str, dict] = {}
+
+    def _sweep(self) -> None:
+        now = time.monotonic()
+        for store, ttl in ((self._pending, self.PENDING_SECONDS), (self._active, self.IDLE_SECONDS)):
+            for k in [k for k, v in store.items() if now - v["at"] > ttl]:
+                store.pop(k, None)
+
+    def begin(self, vault_id: str, payload: str, password: str) -> str:
+        if v2.is_v2(payload):
+            plain, kek, p = v2.open_with_password(payload, password, vault_id=vault_id)
+            session = {"vault_id": vault_id, "payload": payload, "plain": plain, "mode": p["mode"],
+                       "k": {"kek": kek, "salt": p["salt"], "kdf": p["kdf"]}, "legacy": False}
+        else:                                              # v1: upgraded to v2 on commit
+            sealed = payload_mode(payload) == MODE_SEALED
+            sub = (unseal_with_password if sealed else unlock_subgraph)(payload, password, vault_id=vault_id)
+            session = {"vault_id": vault_id, "payload": payload, "plain": {"exec": sub, "layout": None},
+                       "mode": v2.MODE_SEALED_INSTALLS if sealed else v2.MODE_LOCKED, "k": v2.new_kek(password),
+                       "legacy": True}
+        edit_id = secrets.token_urlsafe(24)
+        with self._lock:
+            self._sweep()
+            session["at"] = time.monotonic()
+            self._pending[edit_id] = session
+        return edit_id
+
+    def verify(self, edit_id: str, code: str) -> dict:
+        with self._lock:
+            self._sweep()
+            session = self._pending.get(edit_id)
+        if session is None:
+            raise PermissionError("The password step expired. Open the vault again.")
+        if not vault_2fa.verify(code):
+            raise PermissionError("That code is not right (or was already used).")
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._pending.pop(edit_id, None)
+            session["at"] = time.monotonic()
+            self._active[token] = session
+        plain = session["plain"]
+        recips = v2.recipients_of(plain) if session["mode"] == v2.MODE_SEALED_INSTALLS else []
+        return {"edit_token": token, "exec": plain["exec"], "layout": plain.get("layout"), "mode": session["mode"],
+                "legacy": session["legacy"], "recipients": [vault_keys.public_text(k) for k in recips]}
+
+    def commit(self, token: str, ex: dict, layout, iface: dict, recipients, new_password=None) -> str:
+        with self._lock:
+            self._sweep()
+            session = self._active.get(token)
+        if session is None:
+            raise PermissionError("The edit session expired. Open the vault again (your last locked version is "
+                                  "unchanged).")
+        validate_lockable(ex)
+        plain = {"exec": ex, "layout": layout}
+        mode = session["mode"]
+        recips = None
+        if mode == v2.MODE_SEALED_INSTALLS:
+            recips = _recipients(recipients if recipients is not None else
+                                 [vault_keys.public_text(k) for k in v2.recipients_of(session["plain"])])
+        # a password change is a re-lock under a new KEK (fresh salt); otherwise the session's KEK is kept
+        k = v2.new_kek(new_password) if new_password else session["k"]
+        payload = v2.lock_with(plain, k, vault_id=session["vault_id"], mode=mode, iface=iface, recipients=recips)
+        check = v2.open_with_kek(payload, k["kek"], vault_id=session["vault_id"])
+        if check["exec"] != json.loads(json.dumps(ex)):
+            raise VaultError("The re-encrypted vault did not read back identically; nothing was replaced.")
+        with self._lock:
+            self._active.pop(token, None)
+        if mode == v2.MODE_LOCKED:
+            SESSIONS.put(session["vault_id"], k["kek"])                # the editor may run it right away
+        return payload
+
+    def cancel(self, token: str) -> None:
+        with self._lock:
+            self._active.pop(token, None)
+
+
+EDITS = _EditSessions()
 
 _WORKFLOW_NOTE = (
     "C2C Vault encrypted workflow: open it in ComfyUI with "
@@ -405,41 +585,139 @@ def register_routes(server) -> None:
                 status=429,
             )
         try:
-            unlock_subgraph(payload, password, vault_id=vault_id)
+            if v2.is_v2(payload):
+                _open_session(vault_id, payload, password)        # derives, decrypts, stores the KEK
+            else:
+                unlock_subgraph(payload, password, vault_id=vault_id)
+                _open_session(vault_id, payload, password)
         except VaultError as exc:
             SESSIONS.note_failure(vault_id)
             return web.json_response({"ok": False, "error": str(exc)}, status=403)
-
-        _open_session(vault_id, payload, password)
         return web.json_response({"ok": True, "ttl_seconds": SESSION_TTL_SECONDS})
 
     @routes.post("/c2c_vault/lock")
     async def _lock(request):
         body = await request.json()
-        mode = str(body.get("mode") or "locked").lower()
-        fn = seal_subgraph if mode == "sealed" else lock_subgraph
         try:
-            payload = fn(
-                body.get("subgraph") or {},
-                str(body.get("password") or ""),
-                vault_id=str(body.get("vault_id") or ""),
-            )
+            payload, kek, mode = lock_v2(body)
         except VaultError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
-        # The creator has just typed the password: open their session as Unlock would, so the vault runs at once
-        # instead of answering "Vault locked" to the person who locked it (A9). TTL and "Lock session" still apply.
+        # The creator has just typed the password: their session opens as Unlock would (A9). TTL / Lock session apply.
         session_open = False
-        if mode != "sealed":
-            try:
-                _open_session(str(body.get("vault_id") or ""), payload, str(body.get("password") or ""))
-                session_open = True
-            except Exception as exc:  # the lock itself succeeded; the user can still Unlock
-                log.warning("[C2C Vault] could not open the creator's session: %s", exc)
-        return web.json_response({"ok": True, "payload": payload, "session_open": session_open})
+        if mode == v2.MODE_LOCKED:
+            SESSIONS.put(str(body.get("vault_id") or ""), kek)
+            session_open = True
+        return web.json_response({"ok": True, "payload": payload, "session_open": session_open, "format": 2})
+
+    @routes.post("/c2c_vault/info")
+    async def _info(request):
+        """What a payload is, readable without any key: format, mode, and whether THIS install may run it."""
+        body = await request.json()
+        payload = str(body.get("payload") or "")
+        try:
+            if not v2.is_v2(payload):
+                return web.json_response({"ok": True, "format": 1, "mode": "sealed" if payload_mode(payload) ==
+                                          MODE_SEALED else "locked", "legacy": True})
+            i = v2.info(payload)
+            mine = vault_keys.install_private_key(create=False)
+            here = mine is not None and v2.key_id(vault_keys._raw_public(mine)).hex() in i["installs"]
+            names = {v2.MODE_LOCKED: "locked", v2.MODE_SEALED_INSTALLS: "sealed", v2.MODE_SEALED_PORTABLE: "portable"}
+            return web.json_response({"ok": True, "format": 2, "mode": names[i["mode"]], "legacy": False,
+                                      "installs": len(i["installs"]), "runs_here": here})
+        except VaultError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+
+    @routes.get("/c2c_vault/keys/public")
+    async def _public_key(request):
+        pub = vault_keys.install_public_key()
+        return web.json_response({"ok": True, "public_key": vault_keys.public_text(pub),
+                                  "key_id": v2.key_id(pub).hex(), "store": vault_store_name()})
+
+    @routes.get("/c2c_vault/2fa/status")
+    async def _tfa_status(request):
+        return web.json_response({"ok": True, "enrolled": vault_2fa.enrolled(),
+                                  "locked_out_seconds": int(vault_2fa.locked_out()),
+                                  "recovery_codes_left": vault_2fa.recovery_codes_left()})
+
+    @routes.post("/c2c_vault/2fa/enrol/begin")
+    async def _tfa_begin(request):
+        try:
+            return web.json_response({"ok": True, **vault_2fa.begin_enrolment()})
+        except PermissionError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=409)
+
+    @routes.post("/c2c_vault/2fa/enrol/confirm")
+    async def _tfa_confirm(request):
+        body = await request.json()
+        try:
+            ok = vault_2fa.confirm_enrolment(str(body.get("code") or ""))
+        except PermissionError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=409)
+        return web.json_response({"ok": ok, "error": None if ok else "That code is not right. Check the app's time."},
+                                 status=200 if ok else 403)
+
+    @routes.post("/c2c_vault/2fa/reset")
+    async def _tfa_reset(request):
+        body = await request.json()
+        try:
+            ok = vault_2fa.reset(str(body.get("code") or ""))
+        except PermissionError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=403)
+        return web.json_response({"ok": ok}, status=200 if ok else 403)
+
+    @routes.post("/c2c_vault/edit/begin")
+    async def _edit_begin(request):
+        body = await request.json()
+        vault_id = str(body.get("vault_id") or "")
+        wait = SESSIONS.locked_out(vault_id)
+        if wait > 0:
+            return web.json_response({"ok": False, "error": f"Too many failed attempts. Try again in "
+                                                            f"{int(wait // 60) + 1} minute(s)."}, status=429)
+        if not vault_2fa.enrolled():
+            return web.json_response({"ok": False, "needs_enrolment": True,
+                                      "error": "Opening a vault for editing needs a second factor. Set up an "
+                                               "authenticator app first (C2C Vault menu)."}, status=403)
+        try:
+            edit_id = EDITS.begin(vault_id, str(body.get("payload") or ""), str(body.get("password") or ""))
+        except VaultError as exc:
+            SESSIONS.note_failure(vault_id)
+            return web.json_response({"ok": False, "error": str(exc)}, status=403)
+        return web.json_response({"ok": True, "edit_id": edit_id, "second_factor": "totp"})
+
+    @routes.post("/c2c_vault/edit/verify")
+    async def _edit_verify(request):
+        body = await request.json()
+        try:
+            result = EDITS.verify(str(body.get("edit_id") or ""), str(body.get("code") or ""))
+        except PermissionError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=403)
+        return web.json_response({"ok": True, **result})
+
+    @routes.post("/c2c_vault/edit/commit")
+    async def _edit_commit(request):
+        body = await request.json()
+        try:
+            payload = EDITS.commit(str(body.get("edit_token") or ""), body.get("exec") or {}, body.get("layout"),
+                                   body.get("interface") or {}, body.get("recipients"),
+                                   new_password=body.get("new_password") or None)
+        except (VaultError, PermissionError) as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        return web.json_response({"ok": True, "payload": payload})
+
+    @routes.post("/c2c_vault/edit/cancel")
+    async def _edit_cancel(request):
+        body = await request.json()
+        EDITS.cancel(str(body.get("edit_token") or ""))
+        return web.json_response({"ok": True})
 
     @routes.post("/c2c_vault/open")
     async def _open(request):
-        """Return the decrypted subgraph for EDITING - unlocked sessions only."""
+        """Superseded (A17): opening for editing needs the password AND the second factor (/c2c_vault/edit/*). A run
+        session is never enough - it used to be, which made "can run" the same as "can read"."""
+        return web.json_response({"ok": False, "error": "Opening a vault for editing needs your password and your "
+                                  "second factor: use C2C Vault -> Open for editing."}, status=410)
+
+    async def _open_superseded(request):
         body = await request.json()
         vault_id = str(body.get("vault_id") or "")
         payload = str(body.get("payload") or "")
@@ -581,29 +859,94 @@ class C2C_VaultSealed(C2C_VaultLocked):
         "Sealed subgraph - RUNS WITHOUT A PASSWORD, so you can hand a workflow "
         "to someone and they just use it. The password is only needed to OPEN "
         "the vault for editing.\n\n"
-        "HONEST SCOPE: because it runs unattended, the unwrapping secret ships "
-        "with the pack. Sealing deters copying - it stops someone reading your "
-        "graph out of the .json or pasting your nodes into their workflow. It "
-        "does NOT stop a determined extractor, and nothing that must run "
-        "unattended can. Use C2C_VaultLocked when the recipient should need "
-        "your password to run it at all."
+        "Sealed for installs (the default): it runs without a password only on "
+        "this install and on the installs whose public keys you pasted when you "
+        "sealed it; each install keeps its own private key in the OS credential "
+        "store. Portable seal: runs on any install with this pack, so it is "
+        "obfuscation only. A legacy (v1) seal still runs and is marked; open it "
+        "and lock it again to upgrade.\n\n"
+        "HONEST SCOPE: a recipient install can always decrypt what it runs, so "
+        "sealing stops reading and copying your graph out of the .json, not a "
+        "determined extractor on a recipient machine. Use C2C_VaultLocked when "
+        "the recipient should need your password to run it at all."
     )
 
-    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", **inputs):
+    def execute(self, vault_id: str, vault_payload: str, vault_interface: str = "{}", unique_id=None, **inputs):
         if not (vault_payload or "").strip():
             raise RuntimeError("C2C Vault (sealed): no payload. Seal a selection first.")
+        interface = _parse_interface(vault_interface)
         try:
-            subgraph = unseal_for_run(vault_payload, vault_id=vault_id)
+            if v2.is_v2(vault_payload):
+                mode = v2.parse(vault_payload)["mode"]
+                if mode == v2.MODE_SEALED_INSTALLS:
+                    private = vault_keys.install_private_key(create=False)
+                    if private is None:
+                        raise VaultError("This install has no vault key yet, so a vault sealed for installs cannot "
+                                         "run here. Ask the author to seal it for this install's public key (C2C "
+                                         "Vault menu), or open it with the password.")
+                    plain = v2.open_with_install_key(vault_payload, private, vault_id=vault_id)
+                elif mode == v2.MODE_SEALED_PORTABLE:
+                    plain = v2.open_portable(vault_payload, vault_id=vault_id)
+                else:
+                    raise VaultError("This is a Locked vault's payload: it needs a C2C Vault Locked node and the "
+                                     "password.")
+                v2.check_interface(v2.parse(vault_payload), interface)
+                subgraph = plain["exec"]
+            else:
+                subgraph = unseal_for_run(vault_payload, vault_id=vault_id)
+                _notify(unique_id, "legacy seal - obfuscation only: open it with the password + your code and lock "
+                                   "it to upgrade")
         except VaultError as exc:
             raise RuntimeError(f"C2C Vault (sealed): {exc}") from exc
-        return self._run(subgraph, inputs, "C2C Vault (sealed)", _parse_interface(vault_interface))
+        return self._run(subgraph, inputs, "C2C Vault (sealed)", interface, unique_id)
+
+
+class C2C_VaultEditInput:
+    """A vault input, as shown in the vault's edit view (A17). Only exists inside that view, which never runs."""
+
+    CATEGORY = "C2C/Vault"
+    FUNCTION = "execute"
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("value",)
+    DEPRECATED = True              # hidden from the node search: created by the vault editor only
+    DESCRIPTION = "A vault input in the vault's edit view. Created by the vault editor; it never runs."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"index": ("INT", {"default": 0, "min": 0, "max": MAX_VAULT_INPUTS - 1})}}
+
+    def execute(self, index):
+        raise RuntimeError("This is a vault editor placeholder: lock the vault to use it.")
+
+
+class C2C_VaultEditOutput:
+    """A vault output, as shown in the vault's edit view (A17). Only exists inside that view, which never runs."""
+
+    CATEGORY = "C2C/Vault"
+    FUNCTION = "execute"
+    RETURN_TYPES = ()
+    OUTPUT_NODE = False
+    DEPRECATED = True
+    DESCRIPTION = "A vault output in the vault's edit view. Created by the vault editor; it never runs."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"value": ("*", {}),
+                             "index": ("INT", {"default": 0, "min": 0, "max": MAX_VAULT_OUTPUTS - 1})}}
+
+    def execute(self, value, index):
+        raise RuntimeError("This is a vault editor placeholder: lock the vault to use it.")
 
 
 NODE_CLASS_MAPPINGS = {
     "C2C_VaultLocked": C2C_VaultLocked,
     "C2C_VaultSealed": C2C_VaultSealed,
+    "C2C_VaultEditInput": C2C_VaultEditInput,
+    "C2C_VaultEditOutput": C2C_VaultEditOutput,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "C2C_VaultLocked": "C2C Vault — Locked (password to run)",
     "C2C_VaultSealed": "C2C Vault — Sealed (runs without password)",
+    "C2C_VaultEditInput": "Vault input (edit view)",
+    "C2C_VaultEditOutput": "Vault output (edit view)",
 }

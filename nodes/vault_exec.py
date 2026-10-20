@@ -90,7 +90,8 @@ def _declared_only(cls, fn_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     ImageInvert raise "unexpected keyword argument" inside the vault (A9, L2.24)."""
     try:
         it = cls.INPUT_TYPES() or {}
-        declared = set((it.get("required") or {}).keys()) | set((it.get("optional") or {}).keys())
+        declared = (set((it.get("required") or {}).keys()) | set((it.get("optional") or {}).keys())
+                    | set((it.get("hidden") or {}).keys()))
     except Exception:
         return kwargs
     try:
@@ -155,10 +156,17 @@ def _topo_order(nodes: list[dict], links: list[dict]) -> list[str]:
     return order
 
 
+# What a node inside a vault receives for its hidden inputs: the VAULT's own id (its progress shows on the vault
+# node, never naming an inner node), and no prompt / workflow - so a Save Image inside a vault cannot embed the
+# plaintext graph in a PNG's metadata.
+HIDDEN_DEFAULTS = {"UNIQUE_ID": None, "PROMPT": None, "EXTRA_PNGINFO": None, "DYNPROMPT": None}
+
+
 def execute_subgraph(
     subgraph: dict[str, Any],
     boundary_inputs: dict[str, Any],
     extra_widget_overrides: dict[str, dict[str, Any]] | None = None,
+    hidden: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the subgraph. Returns {boundary_out name: value}.
 
@@ -243,6 +251,13 @@ def execute_subgraph(
 
         kwargs = dict(spec.get("widgets") or {})
         kwargs.update(widget_overrides.get(node_id, {}))
+        try:
+            hidden_spec = (cls.INPUT_TYPES() or {}).get("hidden") or {}
+        except Exception:
+            hidden_spec = {}
+        values = dict(HIDDEN_DEFAULTS, **(hidden or {}))
+        for param, kind in hidden_spec.items():
+            kwargs[param] = values.get(str(kind))
         # Positional sockets are addressed by index; map them onto the class's
         # declared required-input order.
         try:

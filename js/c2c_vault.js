@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { legacyCanvasMenu } from "./_c2c_compat.js";
+import { getRuntime } from "./_c2c_runtime.js";
 import { asOneUndoStep } from "./_c2c_undo_scope.js";
 import { setHidden } from "./_widget_visibility.js";
 import { flattenSelection, isSubgraphNode, isVirtualNode, linkById } from "./_vault_flatten.js";
@@ -29,6 +30,8 @@ const SCOPE_WHOLE = "Whole workflow";
 const WORKFLOW_VAULT_NOTE =
   "C2C Vault encrypted workflow: open it in ComfyUI with ComfyUI-CustomNodePacks and the password.";
 const EXPORT_CMD_IDS = ["Comfy.ExportWorkflow", "Comfy.ExportWorkflowAPI"];
+const EDIT_GUARD_CMD_IDS = [...EXPORT_CMD_IDS, "Comfy.SaveWorkflow", "Comfy.SaveWorkflowAs", "Comfy.DuplicateWorkflow",
+  "Comfy.QueuePrompt", "Comfy.QueuePromptFront"];
 
 /** @type {Map<string, { subgraph: object, panel: HTMLElement, dispose: () => void }>} */
 const vaultEditSessions = new Map();
@@ -112,7 +115,7 @@ function shakeEl(el) {
   ], { duration: 380, easing: "ease-in-out" });
 }
 
-function modalPasswordStep({ title, note, sealed }) {
+function modalPasswordStep({ title, note, sealed, confirmLabel }) {
   if (headless()) return Promise.resolve(null);
   return new Promise((resolve) => {
     const back = document.createElement("div");
@@ -204,7 +207,7 @@ function modalPasswordStep({ title, note, sealed }) {
     const cancel = document.createElement("button");
     cancel.textContent = "Cancel";
     const next = document.createElement("button");
-    next.textContent = "Next →";
+    next.textContent = confirmLabel || "Next →";
     for (const b of [cancel, next]) {
       css(b, {
         padding: "6px 14px", borderRadius: "4px", cursor: "pointer",
@@ -921,59 +924,539 @@ function selectionCentroid(sel) {
   return [x / sel.length, y / sel.length];
 }
 
-function openVaultOverlay(node, subgraph, isSealed) {
+// ─────────────────────────── editing a vault (A17: password + second factor -> the REAL graph) ───────────────────
+//
+// Open for editing = password (server decrypts, keeps the plaintext) -> authenticator code (only now the graph comes
+// back) -> the inner nodes in their own workflow tab, the vault's inputs / outputs as placeholder nodes. Nothing of
+// that tab is ever persisted: drafts and the node clipboard are kept out of browser storage, Save / Export / Queue are
+// refused there. Lock & close rebuilds the vault from the tab, the server re-encrypts with fresh keys material and
+// reads it back before the vault node's payload is replaced. A reload or crash loses only the unlocked edits; the
+// workflow keeps its last locked payload.
+
+const EDIT_MARK = "c2c_vault_edit";
+const EDIT_IN = "C2C_VaultEditInput";
+const EDIT_OUT = "C2C_VaultEditOutput";
+let editClipboard = null;            // node copies made inside an edit tab: memory only
+
+function activeEditSession() {
+  const root = app.rootGraph || app.graph;
+  const mark = root?.extra?.[EDIT_MARK];
+  return mark ? vaultEditSessions.get(mark.vault_id) || null : null;
+}
+
+function modalText({ title, note, placeholder, confirmLabel, mono }) {
+  if (headless()) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    back.setAttribute("aria-modal", "true");
+    css(back, { position: "fixed", inset: "0", zIndex: "10000", background: "rgba(0,0,0,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center" });
+    const box = document.createElement("div");
+    css(box, { background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
+      borderRadius: "6px", padding: "18px 20px", minWidth: "340px", maxWidth: "560px", font: "13px sans-serif" });
+    const input = document.createElement("input");
+    input.type = "text";
+    input.autocomplete = "one-time-code";
+    input.inputMode = mono ? "numeric" : "text";
+    input.placeholder = placeholder || "";
+    css(input, { width: "100%", boxSizing: "border-box", margin: "10px 0", padding: "7px 9px", borderRadius: "4px",
+      background: "var(--c2c-surface0)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
+      fontFamily: mono ? "ui-monospace, monospace" : "inherit", letterSpacing: mono ? "0.2em" : "normal" });
+    const row = document.createElement("div");
+    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end" });
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    const ok = document.createElement("button");
+    ok.textContent = confirmLabel || "OK";
+    for (const b of [cancel, ok]) css(b, { padding: "6px 14px", cursor: "pointer" });
+    const done = (v) => { back.remove(); resolve(v); };
+    cancel.onclick = () => done(null);
+    ok.onclick = () => done(input.value.trim());
+    input.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") ok.onclick(); });
+    box.append(
+      Object.assign(document.createElement("div"), { textContent: title, style: { fontWeight: "600" } }),
+      Object.assign(document.createElement("div"), { textContent: note, style: { opacity: "0.8", fontSize: "12px",
+        marginTop: "6px", lineHeight: "1.45", whiteSpace: "pre-wrap" } }),
+      input, row,
+    );
+    row.append(cancel, ok);
+    back.append(box);
+    document.body.append(back);
+    input.focus();
+  });
+}
+
+function modalSecretSheet({ title, lines, confirmLabel }) {
+  if (headless()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    css(back, { position: "fixed", inset: "0", zIndex: "10000", background: "rgba(0,0,0,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center" });
+    const box = document.createElement("div");
+    css(box, { background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
+      borderRadius: "6px", padding: "18px 20px", width: "min(560px, 92vw)", font: "13px sans-serif" });
+    box.append(Object.assign(document.createElement("div"), { textContent: title,
+      style: { fontWeight: "600", marginBottom: "8px" } }));
+    for (const [label, value, copyable] of lines) {
+      const l = document.createElement("div");
+      l.textContent = label;
+      css(l, { opacity: "0.8", fontSize: "12px", marginTop: "8px" });
+      const v = document.createElement("div");
+      v.textContent = value;
+      css(v, { fontFamily: "ui-monospace, monospace", fontSize: "12px", wordBreak: "break-all", whiteSpace: "pre-wrap",
+        background: "var(--c2c-surface0)", padding: "6px 8px", borderRadius: "4px", marginTop: "4px" });
+      box.append(l, v);
+      if (copyable) {
+        const c = document.createElement("button");
+        c.textContent = "Copy";
+        css(c, { marginTop: "4px", padding: "3px 10px", cursor: "pointer" });
+        c.onclick = async () => { try { await navigator.clipboard.writeText(value); c.textContent = "Copied"; } catch (_) {} };
+        box.append(c);
+      }
+    }
+    const ok = document.createElement("button");
+    ok.textContent = confirmLabel || "Done";
+    css(ok, { marginTop: "14px", padding: "6px 14px", cursor: "pointer", float: "right" });
+    ok.onclick = () => { back.remove(); resolve(); };
+    box.append(ok);
+    back.append(box);
+    document.body.append(back);
+  });
+}
+
+/** First use: set up the authenticator for THIS install (per person, per install - owner D0.25). */
+async function ensureSecondFactor() {
+  const s = await api.fetchApi("/c2c_vault/2fa/status").then((r) => r.json()).catch(() => ({}));
+  if (s.enrolled) return true;
+  const { ok, data } = await post("/c2c_vault/2fa/enrol/begin", {});
+  if (!ok) { await modalAlert("Second factor", data.error || "Could not start the setup."); return false; }
+  await modalSecretSheet({
+    title: "Set up your authenticator for vault editing (this install only)",
+    lines: [
+      ["Add this key to an authenticator app (manual entry, time-based, 6 digits):", data.secret_base32, true],
+      ["Or this setup link:", data.otpauth_uri, true],
+      ["Recovery codes - each works once instead of a code. Keep them somewhere safe; they are not shown again:",
+        data.recovery_codes.join("\n"), true],
+    ],
+    confirmLabel: "I have saved them",
+  });
+  for (;;) {
+    const code = await modalText({ title: "Confirm the setup", note: "Type the 6-digit code your app shows now.",
+      placeholder: "123456", confirmLabel: "Confirm", mono: true });
+    if (code === null) return false;
+    const r = await post("/c2c_vault/2fa/enrol/confirm", { code });
+    if (r.ok) return true;
+    await modalAlert("Not confirmed", r.data.error || "That code is not right.");
+  }
+}
+
+/** Password -> code -> the real graph in an edit tab. */
+async function beginEdit(node, isSealed, typedPassword = null) {
   if (headless()) return;
   const vaultId = widget(node, "vault_id")?.value || "";
   if (vaultEditSessions.has(vaultId)) {
-    vaultEditSessions.get(vaultId).panel?.focus?.();
+    await modalAlert("Already open", "This vault is already open in an edit tab.");
     return;
   }
-
-  const panel = document.createElement("div");
-  panel.className = "c2c-win";
-  css(panel, {
-    position: "fixed", top: "80px", left: "80px", zIndex: "8500",
-    width: "520px", maxHeight: "70vh", overflow: "auto",
-    background: "var(--c2c-bg2)",
-    color: "var(--c2c-fg)",
-    border: "1px solid var(--c2c-border)",
-    borderRadius: "8px", padding: "12px",
-    boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-  });
-
-  const hdr = document.createElement("div");
-  hdr.textContent = `Vault editor — ${vaultId}`;
-  css(hdr, { fontWeight: "600", marginBottom: "8px" });
-
-  const warn = document.createElement("div");
-  warn.textContent = "Read-only preview of decrypted contents. Edits here are NOT saved to the workflow — close before Ctrl+S. Native subgraph was rejected because it would serialise plaintext.";
-  css(warn, { fontSize: "11px", opacity: "0.75", marginBottom: "10px", lineHeight: "1.4" });
-
-  const list = document.createElement("div");
-  for (const n of (subgraph.nodes || [])) {
-    const line = document.createElement("div");
-    line.textContent = `• ${n.class_type} (id ${n.id})`;
-    css(line, { fontFamily: "ui-monospace, monospace", fontSize: "12px", marginBottom: "2px" });
-    list.append(line);
+  const payload = widget(node, "vault_payload")?.value || "";
+  const password = typedPassword || await modalPassword({ title: "Open the vault for editing",
+    note: "Step 1 of 2: the vault's password. Step 2: the code from your authenticator.", confirmLabel: "Next" });
+  if (!password) return;
+  let begin = await post("/c2c_vault/edit/begin", { vault_id: vaultId, payload, password });
+  if (!begin.ok && begin.data.needs_enrolment) {
+    if (!(await ensureSecondFactor())) return;
+    begin = await post("/c2c_vault/edit/begin", { vault_id: vaultId, payload, password });
   }
+  if (!begin.ok) {
+    await modalAlert("Could not open the vault", begin.data.error || "Wrong password, or the vault data was changed.");
+    return;
+  }
+  for (;;) {
+    const code = await modalText({ title: "Open the vault for editing",
+      note: "Step 2 of 2: the 6-digit code from your authenticator (or a recovery code).",
+      placeholder: "123456", confirmLabel: "Open", mono: true });
+    if (code === null) return;
+    const v = await post("/c2c_vault/edit/verify", { edit_id: begin.data.edit_id, code });
+    if (v.ok) { await openEditTab(node, v.data); return; }
+    await modalAlert("Not opened", v.data.error || "That code is not right.");
+    if (/expired/i.test(v.data.error || "")) return;
+  }
+}
 
-  const closeBtn = document.createElement("button");
-  closeBtn.textContent = "Close editor";
-  css(closeBtn, { marginTop: "12px", padding: "6px 14px", cursor: "pointer" });
+function graphPathOf(node) {
+  const g = node.graph;
+  const root = app.rootGraph || app.graph;
+  return { graphId: g && g !== root ? g.id : null, nodeId: node.id };
+}
 
-  const dispose = () => {
-    vaultEditSessions.delete(vaultId);
-    panel.remove();
+function findVaultNode(path) {
+  const root = app.rootGraph || app.graph;
+  let g = root;
+  if (path.graphId) g = root.subgraphs?.get?.(path.graphId) || null;
+  return g?.getNodeById?.(path.nodeId) || null;
+}
+
+/** The edit tab's graph: the layout the vault was locked with (or one laid out from the graph), no outside links. */
+function editGraphData(result, vaultId) {
+  const lay = result.layout;
+  const data = { last_node_id: 0, last_link_id: 0, nodes: [], links: [], groups: [], config: {},
+    extra: { [EDIT_MARK]: { vault_id: vaultId } }, version: 0.4 };
+  if (!lay || !Array.isArray(lay.nodes)) return data;
+  const known = new Set((lay.links || []).map((l) => l[0]));
+  data.nodes = lay.nodes.map((n) => {
+    const c = JSON.parse(JSON.stringify(n));
+    for (const inp of c.inputs || []) if (inp.link != null && !known.has(inp.link)) inp.link = null;
+    for (const out of c.outputs || []) out.links = (out.links || []).filter((id) => known.has(id));
+    return c;
+  });
+  data.links = JSON.parse(JSON.stringify(lay.links || []));
+  data.last_node_id = Math.max(0, ...data.nodes.map((n) => Number(n.id) || 0));
+  data.last_link_id = Math.max(0, ...data.links.map((l) => Number(l[0]) || 0));
+  return data;
+}
+
+/** No layout (an old vault, or one made from subgraphs): the nodes are created from the graph and laid out in
+ *  columns by dependency. Returns {execId -> node}. */
+function buildFromExec(graph, ex) {
+  const byExec = new Map();
+  const depth = new Map();
+  const incoming = new Map();
+  for (const l of ex.links || []) incoming.set(String(l.to), [...(incoming.get(String(l.to)) || []), String(l.from)]);
+  const d = (id, seen = new Set()) => {
+    if (depth.has(id)) return depth.get(id);
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const v = Math.max(-1, ...(incoming.get(id) || []).map((s) => d(s, seen))) + 1;
+    depth.set(id, v);
+    return v;
   };
-  closeBtn.onclick = dispose;
+  const rows = new Map();
+  for (const spec of ex.nodes || []) {
+    const n = LiteGraph.createNode(spec.class_type);
+    if (!n) throw new Error(`This vault needs a node type that is not installed: ${spec.class_type}`);
+    const col = d(String(spec.id));
+    const row = rows.get(col) || 0;
+    rows.set(col, row + 1);
+    n.pos = [80 + col * 380, 80 + row * 260];
+    graph.add(n);
+    for (const [k, val] of Object.entries(spec.widgets || {})) {
+      const w = (n.widgets || []).find((x) => x.name === k);
+      if (w) w.value = val;
+    }
+    byExec.set(String(spec.id), n);
+  }
+  for (const l of ex.links || []) {
+    const a = byExec.get(String(l.from));
+    const b = byExec.get(String(l.to));
+    if (!a || !b) continue;
+    const slot = l.to_name ? (b.inputs || []).findIndex((i) => i.name === l.to_name) : Number(l.to_slot);
+    if (slot >= 0) a.connect(Number(l.from_slot), b, slot);
+  }
+  return byExec;
+}
 
-  panel.append(hdr, warn, list, closeBtn);
-  document.body.append(panel);
-  vaultEditSessions.set(vaultId, { subgraph, panel, dispose });
+async function openEditTab(node, result) {
+  const ws = app.extensionManager?.workflow;
+  if (!ws?.createTemporary) {
+    await modalAlert("Cannot open", "This ComfyUI front end has no workflow tabs API (needs frontend 1.53+).");
+    await post("/c2c_vault/edit/cancel", { edit_token: result.edit_token });
+    return;
+  }
+  const vaultId = widget(node, "vault_id")?.value || "";
+  const iface = parseInterface(widget(node, "vault_interface")?.value);
+  const outer = ws.activeWorkflow || null;
+  const session = { vaultId, token: result.edit_token, result, iface, isSealed: node.type === "C2C_VaultSealed",
+    path: graphPathOf(node), outer, tmp: null, idMap: null, bar: null, timer: null };
+  vaultEditSessions.set(vaultId, session);
+  const label = String(vaultId || "vault").replace(/[^\w.-]/g, "").slice(0, 40);   // the id, not the status badge
+  const data = editGraphData(result, vaultId);
+  session.tmp = ws.createTemporary(`Vault edit - ${label}.json`, data);
+  await app.loadGraphData(data, true, true, session.tmp);
+  const graph = app.rootGraph || app.graph;
+  const ex = result.exec;
+  let byExec;
+  if (!result.layout || !Array.isArray(result.layout.nodes)) {
+    byExec = buildFromExec(graph, ex);
+    session.idMap = new Map([...byExec.entries()].map(([k, n]) => [k, String(n.id)]));
+  } else {
+    byExec = new Map((graph._nodes || []).map((n) => [String(n.id), n]));
+  }
+  // the vault's inputs / outputs as placeholders, wired exactly as the vault wires them
+  const xs = [...byExec.values()].map((n) => n.pos[0]);
+  const minX = Math.min(80, ...xs) - 320;
+  const maxX = Math.max(80, ...xs.map((x, i) => x + ([...byExec.values()][i].size?.[0] || 200))) + 80;
+  (ex.boundary_in || []).forEach((b, i) => {
+    const target = byExec.get(String(b.to));
+    const p = LiteGraph.createNode(EDIT_IN);
+    p.title = `Vault input ${i}: ${iface.in?.[i]?.name || b.name}`;
+    p.pos = [minX, 80 + i * 110];
+    graph.add(p);
+    const w = (p.widgets || []).find((x) => x.name === "index");
+    if (w) w.value = i;
+    if (p.outputs?.[0]) { p.outputs[0].label = iface.in?.[i]?.name || b.name; }
+    if (target) {
+      const slot = b.to_name ? (target.inputs || []).findIndex((x) => x.name === b.to_name) : Number(b.to_slot);
+      if (slot >= 0) p.connect(0, target, slot);
+    }
+  });
+  (ex.boundary_out || []).forEach((b, j) => {
+    const source = byExec.get(String(b.from));
+    const p = LiteGraph.createNode(EDIT_OUT);
+    p.title = `Vault output ${j}: ${iface.out?.[j]?.name || b.name}`;
+    p.pos = [maxX, 80 + j * 110];
+    graph.add(p);
+    const w = (p.widgets || []).find((x) => x.name === "index");
+    if (w) w.value = j;
+    if (source) source.connect(Number(b.from_slot), p, 0);
+  });
+  graph.setDirtyCanvas?.(true, true);
+  showEditBar(session);
+}
+
+function isEditTabActive(session) {
+  // the workflow store hands out reactive proxies: compare paths, never objects
+  const active = app.extensionManager?.workflow?.activeWorkflow;
+  return !!(active && session.tmp && active.path === session.tmp.path);
+}
+
+function showEditBar(session) {
+  const bar = document.createElement("div");
+  bar.setAttribute("role", "toolbar");
+  css(bar, { position: "fixed", top: "118px", left: "50%", transform: "translateX(-50%)", zIndex: "9000",
+    display: "flex", gap: "8px", alignItems: "center", padding: "6px 10px", borderRadius: "6px",
+    background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
+    font: "12px sans-serif", boxShadow: "0 6px 20px rgba(0,0,0,0.45)" });
+  const text = document.createElement("span");
+  text.textContent = "🔓 Vault edit view - nothing here is saved until you lock it";
+  const lockBtn = document.createElement("button");
+  lockBtn.textContent = "Lock & close";
+  const discard = document.createElement("button");
+  discard.textContent = "Discard edits";
+  const pwBtn = document.createElement("button");
+  pwBtn.textContent = "Change password…";
+  pwBtn.title = "Lock & close then encrypts the vault under a new password; the old one stops opening it.";
+  for (const b of [lockBtn, discard, pwBtn]) css(b, { padding: "4px 10px", cursor: "pointer" });
+  bar.append(text, lockBtn, discard, pwBtn);
+  pwBtn.onclick = async () => {
+    const np = await modalPasswordStep({ title: "New vault password", confirmLabel: "Use this password",
+      note: "It applies when you press Lock & close; until then nothing changes. The old password then stops "
+        + "opening this vault. There is no password recovery." });
+    if (np === null) return;
+    session.newPassword = np;                    // in memory only, sent once with Lock & close
+    text.textContent = "🔓 Vault edit view - the new password applies when you lock it";
+  };
+  document.body.append(bar);
+  session.bar = bar;
+  lockBtn.onclick = async () => { lockBtn.disabled = true; try { await commitEdit(session); } finally { lockBtn.disabled = false; } };
+  discard.onclick = () => discardEdit(session);
+  // only visible while the edit tab is the active one (not ambient: it must stay right while a queue runs)
+  session.timer = getRuntime().every(`vault.editbar.${session.vaultId}`, 400, () => {
+    bar.style.display = isEditTabActive(session) ? "flex" : "none";
+  }, { ambient: false });
+}
+
+function closeEditSession(session) {
+  session.timer?.cancel();
+  session.newPassword = null;
+  session.bar?.remove();
+  vaultEditSessions.delete(session.vaultId);
+  if (!vaultEditSessions.size) editClipboard = null;
+}
+
+/** The edit tab -> the vault's graph again. The interface stays fixed: every input placeholder feeds exactly the
+ *  one node input it fed, every output placeholder is fed by one output. */
+function execFromEditGraph(session) {
+  const graph = app.rootGraph || app.graph;
+  const all = graph._nodes || [];
+  const ph = (n) => n.type === EDIT_IN || n.type === EDIT_OUT;
+  const inner = all.filter((n) => !ph(n));
+  const idx = (n) => Number((n.widgets || []).find((w) => w.name === "index")?.value);
+  const placeholders = new Map(all.filter(ph).map((n) => [String(n.id), n]));
+  const derived = flattenSelection(inner, graph);
+  if (derived.problems.length) throw new Error(derived.problems.join("\n"));
+  const orig = session.result.exec;
+  const nIn = (orig.boundary_in || []).length;
+  const nOut = (orig.boundary_out || []).length;
+  const bIn = new Array(nIn).fill(null);
+  derived.boundary_in.forEach((b, k) => {
+    const src = derived.externalSources[k];
+    const p = src && placeholders.get(String(src.id));
+    if (!p || p.type !== EDIT_IN) throw new Error(`An input inside the vault (${b.to_name}) is wired from outside the `
+      + "vault's inputs. Connect it to a node inside, or to a Vault input placeholder.");
+    const i = idx(p);
+    if (bIn[i]) throw new Error(`Vault input ${i} feeds more than one node input. A vault input feeds exactly one: `
+      + "the vault's interface cannot change while it is edited.");
+    bIn[i] = { name: orig.boundary_in[i].name, to: b.to, to_slot: b.to_slot, to_name: b.to_name };
+  });
+  const missingIn = bIn.findIndex((b) => !b);
+  if (missingIn >= 0) throw new Error(`Vault input ${missingIn} (${session.iface.in?.[missingIn]?.name || ""}) is not `
+    + "connected to anything inside. Connect it: the vault's interface cannot change while it is edited.");
+  const bOut = new Array(nOut).fill(null);
+  derived.boundary_out.forEach((b, k) => {
+    for (const t of derived.externalTargets[k] || []) {
+      const p = t && placeholders.get(String(t.id));
+      if (!p || p.type !== EDIT_OUT) continue;
+      const j = idx(p);
+      if (bOut[j]) throw new Error(`Vault output ${j} is fed twice.`);
+      bOut[j] = { name: orig.boundary_out[j].name, from: b.from, from_slot: b.from_slot };
+    }
+  });
+  const missingOut = bOut.findIndex((b) => !b);
+  if (missingOut >= 0) throw new Error(`Vault output ${missingOut} (${session.iface.out?.[missingOut]?.name || ""}) `
+    + "is not fed by any node. Connect it: the vault's interface cannot change while it is edited.");
+  let promoted = JSON.parse(JSON.stringify(orig.promoted || []));
+  if (session.idMap) {
+    promoted = promoted.map((p) => (p && p.node != null && session.idMap.has(String(p.node))
+      ? { ...p, node: session.idMap.get(String(p.node)) } : p));
+  }
+  const ids = new Set(derived.nodes.map((n) => String(n.id)));
+  for (const p of promoted) {
+    if (p && p.node != null && !ids.has(String(p.node))) {
+      throw new Error("A promoted parameter's node was deleted. Put it back, or lock the vault again from scratch "
+        + "to change its parameters.");
+    }
+  }
+  return {
+    exec: { nodes: derived.nodes, links: derived.links, boundary_in: bIn, boundary_out: bOut, promoted },
+    layout: selectionLayout(inner, graph),
+  };
+}
+
+async function backToOuter(session) {
+  const ws = app.extensionManager?.workflow;
+  if (session.outer && ws) await app.loadGraphData(session.outer.activeState, true, true, session.outer);
+  try { if (ws && session.tmp) await ws.closeWorkflow(session.tmp); } catch (_) { /* already closed */ }
+}
+
+async function commitEdit(session) {
+  if (!isEditTabActive(session)) {
+    await modalAlert("Switch to the edit tab", "Lock the vault from its edit tab.");
+    return;
+  }
+  let built;
+  try { built = execFromEditGraph(session); } catch (e) { await modalAlert("Cannot lock yet", String(e.message || e)); return; }
+  const { ok, data } = await post("/c2c_vault/edit/commit", { edit_token: session.token, exec: built.exec,
+    layout: built.layout, interface: session.iface, new_password: session.newPassword || undefined });
+  if (!ok) { await modalAlert("Not locked", (data.error || "The vault could not be locked.") + " The edit tab stays open; the vault keeps its last locked version."); return; }
+  await backToOuter(session);
+  const vault = findVaultNode(session.path);
+  if (!vault) {
+    await modalAlert("Locked, but the vault node is gone", "The new encrypted payload could not be put back: the "
+      + "vault node was deleted from the workflow while it was being edited.");
+    closeEditSession(session);
+    return;
+  }
+  const w = widget(vault, "vault_payload");
+  if (w) w.value = data.payload;
+  vault.graph?.setDirtyCanvas?.(true, true);
+  try { app.extensionManager?.workflow?.activeWorkflow?.changeTracker?.checkState?.(); } catch (_) {}
+  if (!session.isSealed) unlockedSessions.add(session.vaultId);
+  vault._vaultAccess?.refresh();
+  closeEditSession(session);
+  await modalAlert("Locked", "The vault's new contents are encrypted with fresh keys and were read back before "
+    + "the old payload was replaced. Save the workflow to keep them.");
+}
+
+async function discardEdit(session) {
+  await post("/c2c_vault/edit/cancel", { edit_token: session.token });
+  await backToOuter(session);
+  closeEditSession(session);
+}
+
+/** C2C Vault menu: this install's public key, for authors who seal vaults for it. */
+async function showInstallKey() {
+  const r = await api.fetchApi("/c2c_vault/keys/public").then((x) => x.json()).catch(() => ({}));
+  if (!r.ok) { await modalAlert("Install key", r.error || "Could not read this install's key."); return; }
+  await modalSecretSheet({ title: "This install's vault key (public - safe to share)", lines: [
+    ["Send this to a vault's author: they seal the vault for this install, and it then runs here without a password.",
+      r.public_key, true],
+    ["Key id", r.key_id, false],
+  ] });
+}
+
+async function manageSecondFactor() {
+  const s = await api.fetchApi("/c2c_vault/2fa/status").then((r) => r.json()).catch(() => ({}));
+  if (!s.enrolled) { if (await ensureSecondFactor()) await modalAlert("Second factor", "Set up on this install."); return; }
+  const code = await modalText({ title: "Reset the second factor",
+    note: `Set up on this install (${s.recovery_codes_left} recovery codes left). To set it up again, type a current `
+      + "code or a recovery code.", placeholder: "123456", confirmLabel: "Reset", mono: true });
+  if (code === null) return;
+  const r = await post("/c2c_vault/2fa/reset", { code });
+  await modalAlert("Second factor", r.ok ? "Removed. Set it up again the next time you open a vault for editing."
+    : (r.data.error || "That code is not right."));
+}
+
+/** Seal: who may run it without the password. */
+function modalSealTarget() {
+  if (headless()) return Promise.resolve({ mode: "sealed", recipients: [] });
+  return new Promise((resolve) => {
+    const back = document.createElement("div");
+    back.setAttribute("role", "dialog");
+    css(back, { position: "fixed", inset: "0", zIndex: "10000", background: "rgba(0,0,0,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center" });
+    const box = document.createElement("div");
+    css(box, { background: "var(--c2c-bg2)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)",
+      borderRadius: "6px", padding: "18px 20px", width: "min(560px, 92vw)", font: "13px sans-serif" });
+    const mk = (value, label, note, checked) => {
+      const l = document.createElement("label");
+      css(l, { display: "block", margin: "8px 0", cursor: "pointer" });
+      const r = Object.assign(document.createElement("input"), { type: "radio", name: "c2c-seal", value, checked });
+      l.append(r, ` ${label}`);
+      const n = document.createElement("div");
+      n.textContent = note;
+      css(n, { opacity: "0.75", fontSize: "12px", marginLeft: "20px", lineHeight: "1.4" });
+      l.append(n);
+      return l;
+    };
+    const keys = document.createElement("textarea");
+    keys.placeholder = "Recipient install keys (c2cvk1:...), one per line - optional";
+    keys.rows = 3;
+    css(keys, { width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace", fontSize: "11px",
+      background: "var(--c2c-surface0)", color: "var(--c2c-fg)", border: "1px solid var(--c2c-border)" });
+    keys.addEventListener("keydown", (e) => e.stopPropagation());
+    const row = document.createElement("div");
+    css(row, { display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "12px" });
+    const cancel = Object.assign(document.createElement("button"), { textContent: "Cancel" });
+    const ok = Object.assign(document.createElement("button"), { textContent: "Seal" });
+    for (const b of [cancel, ok]) css(b, { padding: "6px 14px", cursor: "pointer" });
+    cancel.onclick = () => { back.remove(); resolve(null); };
+    ok.onclick = () => {
+      const mode = box.querySelector("input[name=c2c-seal]:checked")?.value || "sealed";
+      const recipients = keys.value.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      back.remove();
+      resolve({ mode, recipients: mode === "sealed" ? recipients : [] });
+    };
+    box.append(
+      Object.assign(document.createElement("div"), { textContent: "Who may run it without the password?",
+        style: { fontWeight: "600" } }),
+      mk("sealed", "This install, and the installs whose keys I paste", "Each install has its own key pair. The "
+        + "vault runs passwordless only there; elsewhere it needs the password. A recipient sends you their key "
+        + "from C2C Vault -> This install's key.", true),
+      keys,
+      mk("sealed_portable", "Anywhere (portable - obfuscation only)", "Runs on any ComfyUI with this pack, like the "
+        + "old sealed vaults. NOT secure: anyone with the pack can read it. It only keeps the graph out of the "
+        + "workflow file.", false),
+      row,
+    );
+    row.append(cancel, ok);
+    back.append(box);
+    document.body.append(back);
+  });
+}
+
+let guardOpen = false;
+/** One refusal dialog at a time: a keybinding and the command wrapper can both catch the same Ctrl+S. */
+async function guardAlert() {
+  if (guardOpen) return;
+  guardOpen = true;
+  try { await modalAlert("Not in the edit view", vaultSaveGuardMessage()); } finally { guardOpen = false; }
 }
 
 function vaultSaveGuardMessage() {
-  return "A vault editor is open. Close it before saving — decrypted contents live only in memory and must never be written to workflow JSON. (Native subgraph was rejected for this reason.)";
+  return "This is a vault's edit view: it is never saved, exported or queued. Press 'Lock & close' (the vault's new "
+    + "contents are encrypted into the vault node), then save or queue the workflow that holds the vault.";
 }
 
 function installSaveGuard() {
@@ -986,22 +1469,25 @@ function installSaveGuard() {
   const origGTP = app.graphToPrompt?.bind(app);
   if (origGTP) {
     app.graphToPrompt = async function (...args) {
-      if (vaultEditSessions.size > 0) {
-        await modalAlert("Save blocked", vaultSaveGuardMessage());
-        throw new Error("C2C Vault: save blocked while editor open");
+      if (activeEditSession()) {
+        await guardAlert();
+        throw new Error("C2C Vault: the edit view is never queued or saved");
       }
       return origGTP(...args);
     };
   }
 
   document.addEventListener("keydown", (e) => {
-    if (vaultEditSessions.size === 0) return;
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+    if (!activeEditSession()) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
       e.preventDefault();
       e.stopPropagation();
-      modalAlert("Save blocked", vaultSaveGuardMessage());
+      guardAlert();
     }
   }, true);
+  window.addEventListener("beforeunload", (e) => {
+    if (vaultEditSessions.size) { e.preventDefault(); e.returnValue = ""; }      // a reminder, not a safeguard
+  });
 }
 
 async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
@@ -1009,16 +1495,15 @@ async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
   const payload = widget(node, "vault_payload")?.value || "";
   if (!payload) { await modalAlert("No payload", "This vault has no payload yet. Lock a selection first."); return; }
 
+  if (forEdit || isSealed) { await beginEdit(node, isSealed); return; }
   const pw = await modalPassword({
-    title: forEdit || isSealed ? "Open vault for editing" : "Unlock vault",
-    note: isSealed
-      ? "Sealed vaults run without a password. The password only unlocks the ciphertext for editing."
-      : "Password is sent once to the server and never stored in the workflow.",
-    confirmLabel: forEdit || isSealed ? "Open" : "Unlock",
+    title: "Unlock vault",
+    note: "Password is sent once to the server and never stored in the workflow.",
+    confirmLabel: "Unlock",
   });
   if (pw === null) return;
 
-  const route = (forEdit || isSealed) ? "/c2c_vault/open" : "/c2c_vault/unlock";
+  const route = "/c2c_vault/unlock";
   const { ok, data } = await post(route, { vault_id: id, password: pw, payload });
 
   if (!ok) {
@@ -1028,11 +1513,7 @@ async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
 
   if (!isSealed && route === "/c2c_vault/unlock") unlockedSessions.add(id);
 
-  if (forEdit || isSealed) {
-    openVaultOverlay(node, data.subgraph, isSealed);
-  } else {
-    await modalAlert("Vault unlocked", "Session unlocked for this ComfyUI process. Queue the workflow to run.");
-  }
+  await modalAlert("Vault unlocked", "Session unlocked for this ComfyUI process. Queue the workflow to run.");
 
   const iface = parseInterface(widget(node, "vault_interface")?.value);
   applyVaultInterface(node, iface, isSealed);
@@ -1043,13 +1524,9 @@ async function handleUnlockOrOpen(node, isSealed, forEdit = false) {
  *  otherwise the password is asked first. */
 async function openOnDoubleClick(node, isSealed) {
   const id = widget(node, "vault_id")?.value || "";
-  if (!isSealed && unlockedSessions.has(id)) {
-    const { ok, data } = await post("/c2c_vault/open", { vault_id: id, payload: widget(node, "vault_payload")?.value || "" });
-    if (ok) { openVaultOverlay(node, data.subgraph, false); return; }
-    unlockedSessions.delete(id);       // expired on the server: fall through to the password
-    node._vaultAccess?.refresh();
-  }
-  return handleUnlockOrOpen(node, isSealed, isSealed);
+  // a run session is never enough to read a vault (A17): editing always asks for the password and the code
+  if (isSealed || unlockedSessions.has(id)) return beginEdit(node, isSealed);
+  return handleUnlockOrOpen(node, isSealed, false);
 }
 
 /** The real nodes of the current selection (groups, IO nodes and anything without an id are not lockable). */
@@ -1123,25 +1600,33 @@ async function lockNodes(sel, sealed, into) {
 
   const { boundary_in, boundary_out } = derived;
   const vault_id = `vault-${Math.random().toString(36).slice(2, 10)}`;
-  const { ok, data } = await post("/c2c_vault/lock", {
-    vault_id, password: pw, mode: sealed ? "sealed" : "locked",
-    subgraph: {
-      nodes: derived.nodes, links: derived.links, boundary_in, boundary_out,
-      promoted: promotion.promoted || [],
-    },
-  });
-  if (!ok) {
-    await modalAlert("Lock failed", data.error || "Could not lock the selection.");
-    return;
-  }
-  if (!sealed && data.session_open) unlockedSessions.add(vault_id);
-
+  // the public interface is built BEFORE locking: its structure (socket names / types, promoted ids / names /
+  // types) is authenticated inside the ciphertext header, so the node can tell if it is changed later (A17)
   const iface = buildInterfaceManifest(
     sealed ? "sealed" : "locked", count,
     { boundary_in, boundary_out },
     derived.inTypes, derived.outTypes,
     promotion.params || [],
   );
+  let sealTarget = { mode: sealed ? "sealed" : "locked", recipients: [] };
+  if (sealed) {
+    sealTarget = await modalSealTarget();
+    if (sealTarget === null) return;
+  }
+  const { ok, data } = await post("/c2c_vault/lock", {
+    vault_id, password: pw, mode: sealTarget.mode, recipients: sealTarget.recipients,
+    subgraph: {
+      nodes: derived.nodes, links: derived.links, boundary_in, boundary_out,
+      promoted: promotion.promoted || [],
+    },
+    interface: iface,
+    layout: selectionLayout(sel, graph),
+  });
+  if (!ok) {
+    await modalAlert("Lock failed", data.error || "Could not lock the selection.");
+    return;
+  }
+  if (!sealed && data.session_open) unlockedSessions.add(vault_id);
 
   const vault = into || LiteGraph.createNode(sealed ? "C2C_VaultSealed" : "C2C_VaultLocked");
   if (!into) vault.pos = selectionCentroid(sel);
@@ -1179,6 +1664,26 @@ async function lockNodes(sel, sealed, into) {
     `${sealed ? "Sealed" : "Locked"} ${count} node(s) into a vault. Original nodes removed.`
       + (lost.length ? ` Could not reconnect: ${lost.join(", ")} - connect them by hand.` : ""),
   );
+}
+
+/** The selected nodes as ComfyUI serializes them (positions, sizes, titles, colours, widget values) and the links
+ *  between them: what the vault editor shows again (A17). Encrypted with the graph, never in the clear. A selection
+ *  with subgraph nodes is flattened for execution and carries no layout (the editor lays it out from the graph). */
+function selectionLayout(sel, graph) {
+  if (sel.some((n) => isSubgraphNode(n))) return null;
+  const ids = new Set(sel.map((n) => n.id));
+  const nodes = sel.map((n) => JSON.parse(JSON.stringify(n.serialize())));
+  const links = [];
+  for (const n of sel) {
+    for (const inp of n.inputs || []) {
+      if (inp.link == null) continue;
+      const l = linkById(graph, inp.link);
+      if (l && ids.has(l.origin_id) && ids.has(l.target_id)) {
+        links.push([l.id, l.origin_id, l.origin_slot, l.target_id, l.target_slot, l.type]);
+      }
+    }
+  }
+  return { nodes, links };
 }
 
 /** A boundary source -> the vault's input: an outside node, or the subgraph's own input (IO node "-10"). */
@@ -1548,6 +2053,10 @@ function installStoreUserDataHook() {
   if (!orig) return;
   api._c2cVaultStoreHooked = true;
   api.storeUserData = async function (path, data, opts) {
+    if (typeof data === "string" ? data.includes(EDIT_MARK) : JSON.stringify(data || {}).includes(EDIT_MARK)) {
+      await modalAlert("Not saved", vaultSaveGuardMessage());
+      throw new Error("C2C Vault: the edit view is never saved");
+    }
     if (!isWorkflowSavePath(path)) return orig(path, data, opts);
 
     const parsed = parseStoredWorkflowData(data);
@@ -1597,7 +2106,16 @@ function installStoragePersistenceHook() {
   if (Storage.prototype._c2cVaultSetItemHooked) return;
   Storage.prototype._c2cVaultSetItemHooked = true;
   const orig = Storage.prototype.setItem;
+  const origGet = Storage.prototype.getItem;
+  Storage.prototype.getItem = function (key) {
+    if (key === "litegrapheditor_clipboard" && activeEditSession() && editClipboard !== null) return editClipboard;
+    return origGet.call(this, key);
+  };
   Storage.prototype.setItem = function (key, value) {
+    // A vault's edit view (A17): its drafts are never stored, and a node copy made inside it stays in memory (a paste
+    // outside the edit view gets the ordinary clipboard, so plaintext nodes cannot leak into a saved workflow).
+    if (activeEditSession() && key === "litegrapheditor_clipboard") { editClipboard = String(value); return; }
+    if (typeof value === "string" && value.includes(EDIT_MARK)) return;
     // Tab restore and drafts keep the open workflow in browser storage: an encrypted workflow is kept there as its
     // ciphertext wrapper, so a reload asks for the password instead of restoring plaintext.
     if (typeof value === "string" && value.includes("c2c_vault_workflow")) {
@@ -1623,7 +2141,11 @@ function installExportGuard() {
   const wrapOne = (cmd) => {
     if (!cmd || cmd._c2cVaultExportWrapped || typeof cmd.function !== "function") return;
     const orig = cmd.function;
-    cmd.function = async (...args) => (getWorkflowVaultMarker() ? refuse() : orig.apply(cmd, args));
+    cmd.function = async (...args) => {
+      if (activeEditSession()) return guardAlert();
+      if (EXPORT_CMD_IDS.includes(cmd.id) && getWorkflowVaultMarker()) return refuse();
+      return orig.apply(cmd, args);
+    };
     cmd._c2cVaultExportWrapped = true;
   };
 
@@ -1639,6 +2161,7 @@ function installExportGuard() {
     if (typeof mgr.execute === "function" && !mgr._c2cVaultExecWrapped) {
       const origExec = mgr.execute;
       mgr.execute = function (id, ...rest) {
+        if (EDIT_GUARD_CMD_IDS.includes(id) && activeEditSession()) return guardAlert();
         if (EXPORT_CMD_IDS.includes(id) && getWorkflowVaultMarker()) return refuse();
         return origExec.call(this, id, ...rest);
       };
@@ -1646,7 +2169,8 @@ function installExportGuard() {
     }
     const list = mgr.commands;
     const all = Array.isArray(list) ? list : (list instanceof Map ? [...list.values()] : Object.values(list || {}));
-    for (const cmd of all) if (EXPORT_CMD_IDS.includes(cmd?.id)) wrapOne(cmd);   // a caller that runs .function()
+    // a keybinding or the menu may run .function() directly: wrap every guarded command, not only Export
+    for (const cmd of all) if (EDIT_GUARD_CMD_IDS.includes(cmd?.id)) wrapOne(cmd);
   };
   tick();
 }
@@ -1672,6 +2196,14 @@ function _vaultCanvasMenuItems() {
     {
       content: "C2C Vault → Seal selection (runs without password)",
       callback: () => lockSelection(true),
+    },
+    {
+      content: "C2C Vault → This install's key…",
+      callback: () => showInstallKey(),
+    },
+    {
+      content: "C2C Vault → Second factor (authenticator)…",
+      callback: () => manageSecondFactor(),
     },
   ];
 }
@@ -1707,10 +2239,15 @@ function buildAccessWidget(node, isSealed) {
   relock.type = "button";
   relock.textContent = "Lock again";
   relock.title = "Forget this vault's key now; the password is needed again to run it.";
-  for (const b of [go, relock]) css(b, { padding: "3px 8px", cursor: "pointer", font: "inherit", whiteSpace: "nowrap" });
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.textContent = "Edit…";
+  edit.title = "Open the vault's real graph for editing: needs the password and your authenticator code.";
+  edit.addEventListener("click", () => beginEdit(node, false));
+  for (const b of [go, relock, edit]) css(b, { padding: "3px 8px", cursor: "pointer", font: "inherit", whiteSpace: "nowrap" });
   const err = document.createElement("div");
   css(err, { color: "var(--c2c-dangerStrong)", minHeight: "0", whiteSpace: "normal" });
-  row.append(pw, go, relock);
+  row.append(pw, go, relock, edit);
   // an EMPTY vault: two ways in, both on the node (owner 2026-10-14: "how tf can i connect and lock/seal any node?")
   const emptyRow = document.createElement("div");
   css(emptyRow, { display: "flex", gap: "4px", alignItems: "center" });
@@ -1734,6 +2271,7 @@ function buildAccessWidget(node, isSealed) {
   const vaultId = () => widget(node, "vault_id")?.value || "";
   const hasPayload = () => !!(widget(node, "vault_payload")?.value || "").trim();
   let open = false;
+  let sealStatus = "";
   const fit = () => {           // the error line adds a row: grow the node instead of spilling out of it
     const sz = node.computeSize?.();
     if (sz) node.setSize([Math.max(node.size?.[0] || 0, sz[0]), sz[1]]);
@@ -1758,16 +2296,23 @@ function buildAccessWidget(node, isSealed) {
     }
     emptyRow.style.display = "none";
     if (isSealed) {
-      status.textContent = "Sealed · runs without a password";
-      relock.style.display = "none";
+      status.textContent = sealStatus || "Sealed";
+      relock.style.display = edit.style.display = "none";
       pw.style.display = go.style.display = "";
       return;
     }
     status.textContent = open ? "Unlocked for this ComfyUI session" : "Locked · type the password to run it";
     pw.style.display = go.style.display = open ? "none" : "";
-    relock.style.display = open ? "" : "none";
+    relock.style.display = edit.style.display = open ? "" : "none";
   };
   const refresh = async () => {
+    if (isSealed && hasPayload()) {
+      const { ok, data } = await post("/c2c_vault/info", { payload: widget(node, "vault_payload")?.value || "" });
+      sealStatus = !ok ? "Sealed" : data.legacy ? "Legacy seal · obfuscation only (open and lock it to upgrade)"
+        : data.mode === "portable" ? "Portable seal · runs anywhere · obfuscation only"
+        : data.runs_here ? `Sealed for ${data.installs} install(s) · runs here without a password`
+        : "Sealed for other installs · needs the password here";
+    }
     if (!isSealed && hasPayload()) {
       const { ok, data } = await post("/c2c_vault/status", { vault_id: vaultId() });
       open = !!(ok && data.open);
@@ -1780,7 +2325,8 @@ function buildAccessWidget(node, isSealed) {
     if (!password) { showError("Type the password first."); shakeEl(host); pw.focus(); return; }
     go.disabled = true;
     try {
-      const route = isSealed ? "/c2c_vault/open" : "/c2c_vault/unlock";
+      if (isSealed) { pw.value = ""; await beginEdit(node, true, password); return; }
+      const route = "/c2c_vault/unlock";
       const { ok, data, status } = await post(route, { vault_id: vaultId(), password,
         payload: widget(node, "vault_payload")?.value || "" });
       if (!ok) {
@@ -1790,8 +2336,8 @@ function buildAccessWidget(node, isSealed) {
         shakeEl(host); pw.select(); return;
       }
       pw.value = "";
-      if (isSealed) openVaultOverlay(node, data.subgraph, true);
-      else { open = true; unlockedSessions.add(vaultId()); }
+      open = true;
+      unlockedSessions.add(vaultId());
       applyVaultInterface(node, parseInterface(widget(node, "vault_interface")?.value), isSealed);
       render();
     } finally {
@@ -1920,10 +2466,9 @@ app.registerExtension({
 
     const removed = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function (...args) {
-      const id = widget(this, "vault_id")?.value || "";
-      const sess = vaultEditSessions.get(id);
-      if (sess) sess.dispose();
-      unlockedSessions.delete(id);
+      // onRemoved also fires when a graph switch clears the canvas (opening a vault's edit tab does exactly that):
+      // the edit session and the run session belong to the vault, not to this canvas node. Lock & close reports a
+      // vault node that was really deleted.
       return removed?.apply(this, arguments);
     };
   },
