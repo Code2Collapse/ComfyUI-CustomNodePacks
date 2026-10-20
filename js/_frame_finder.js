@@ -61,6 +61,11 @@ function _collectLoaderWidgets(node, nodeType) {
     widgets.format = _widgetValue(node, "format") ?? "None";
     widgets.custom_width = _widgetValue(node, "custom_width") ?? 0;
     widgets.custom_height = _widgetValue(node, "custom_height") ?? 0;
+    // the C2C loaders' extra selection (L2.53); VHS loaders have none of these, so they are sent only when present
+    for (const k of ["seconds_cap", "resolution", "divisible_by"]) {
+        const v = _widgetValue(node, k);
+        if (v != null) widgets[k] = v;
+    }
     if (nodeType === "LoadVideoPathC2C" || nodeType === "VHS_LoadVideoPath") {
         const sf = _widgetValue(node, "sequence_fps");
         if (sf != null) widgets.sequence_fps = sf;
