@@ -156,21 +156,22 @@ def test_a_changed_original_is_revalidated():
 # ── Feather Mask (slice 3) ─────────────────────────────────────────────────────────────────────────────────────────
 
 def core_feather(mask, left, top, right, bottom):
-    """Core Feather Mask's algorithm (comfy_extras/nodes_mask.py FeatherMask.execute, core v0.39), line for line."""
-    output = mask.reshape((-1, mask.shape[-2], mask.shape[-1])).clone()
-    left = min(left, output.shape[-1])
-    right = min(right, output.shape[-1])
-    top = min(top, output.shape[-2])
-    bottom = min(bottom, output.shape[-2])
-    for x in range(left):
-        output[:, :, x] *= (x + 1.0) / left
-    for x in range(right):
-        output[:, :, -(x + 1)] *= (x + 1) / right
-    for y in range(top):
-        output[:, y, :] *= (y + 1) / top
-    for y in range(bottom):
-        output[:, -(y + 1), :] *= (y + 1) / bottom
-    return _Out(output)
+    """Test oracle for Feather Mask, written independently from its documented behaviour (NumPy, one loop over the
+    four bands): each of the n pixels of an edge band is scaled by the ramp (i + 1) / n, i counted from the edge,
+    as separate multiplications in the order left, right, top, bottom. The real core function is the reference in
+    the live self-test (docs/evidence/L2.54/feather_live.json)."""
+    a = mask.reshape(-1, mask.shape[-2], mask.shape[-1]).numpy().copy()
+    hh, ww = a.shape[-2], a.shape[-1]
+    bands = (("col", min(left, ww), lambda i: i), ("col", min(right, ww), lambda i: ww - 1 - i),
+             ("row", min(top, hh), lambda i: i), ("row", min(bottom, hh), lambda i: hh - 1 - i))
+    for axis, n, where in bands:
+        for i in range(n):
+            f = a.dtype.type((i + 1) / n)
+            if axis == "col":
+                a[:, :, where(i)] *= f
+            else:
+                a[:, where(i), :] *= f
+    return _Out(torch.from_numpy(a))
 
 
 @pytest.mark.parametrize("sides", [(0, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 1), (3, 7, 5, 2), (30, 30, 30, 30),
@@ -208,3 +209,58 @@ def test_feather_through_try_adapter_gives_core_s_result():
     assert prof["measured_frames"] == 4 and prof["choice"] in ("adapter", "original")
     if used:
         assert torch.equal(res[0], core_feather(**args).result[0])
+
+
+# ── Quantize Image (slice 3): the ORIGINAL per frame, frames in a thread pool ─────────────────────────────────────
+
+def fake_quantize(image, colors, dither):
+    """A stand-in original with the same contract (per-frame, deterministic, alpha appended): PIL palette quantize.
+    The adapter never re-implements the node; it calls whatever original it is given, frame by frame."""
+    from PIL import Image
+    rgb = image[..., :3]
+    out = []
+    for f in rgb:
+        im = Image.fromarray((f * 255).to(torch.uint8).numpy(), mode="RGB")
+        q = im.quantize(colors=colors, dither=Image.Dither.FLOYDSTEINBERG if dither != "none" else Image.Dither.NONE)
+        out.append(torch.from_numpy(np.array(q.convert("RGB"))).float() / 255)
+    res = torch.stack(out)
+    if image.shape[-1] == 4:
+        res = torch.cat((res, image[..., 3:]), dim=-1)
+    return _Out(res)
+
+
+@pytest.mark.parametrize("channels", [3, 4])
+def test_quantize_pool_equals_the_original_frame_by_frame(channels):
+    img = torch.rand(9, 24, 31, channels, generator=torch.Generator().manual_seed(8))
+    keep = img.clone()
+    args = {"image": img, "colors": 16, "dither": "floyd-steinberg"}
+    got = AD.quantize_frames_parallel(args, fake_quantize)
+    assert torch.equal(got, fake_quantize(**args).result[0]) and torch.equal(img, keep)
+
+
+def test_quantize_adapter_self_test_and_supports():
+    a = AD.ADAPTERS["ImageQuantize"]
+    assert a.needs_original
+    assert AD.validate(a, fake_quantize) == (True, "self-test passed")
+    base = {"image": torch.rand(3, 8, 8, 3), "colors": 8, "dither": "none"}
+    assert a.supports(base)
+    assert not a.supports({**base, "image": torch.rand(1, 8, 8, 3)})        # one frame: nothing to parallelise
+    assert not a.supports({**base, "image": base["image"].double()})
+    assert not a.supports({**base, "colors": 0}) and not a.supports({**base, "colors": True})
+    assert not a.supports({**base, "dither": "atkinson"})
+
+
+def test_quantize_through_try_adapter_is_the_original_result():
+    args = {"image": torch.rand(10, 48, 64, 3), "colors": 32, "dither": "none"}
+    used, res = AD.try_adapter("ImageQuantize", fake_quantize, args)
+    prof = next(iter(AD.status()["profiles"].values()))
+    assert prof["measured_frames"] == 4
+    if used:
+        assert torch.equal(res[0], fake_quantize(**args).result[0])
+
+
+def test_an_error_in_the_original_is_not_swallowed_into_a_wrong_result():
+    def broken(image, colors, dither):
+        raise ValueError("bad frame")
+    with pytest.raises(ValueError):
+        AD.quantize_frames_parallel({"image": torch.rand(3, 4, 4, 3), "colors": 4, "dither": "none"}, broken)

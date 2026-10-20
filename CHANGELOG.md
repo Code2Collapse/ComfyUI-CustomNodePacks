@@ -2,6 +2,18 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-21 (Image batching Universal: Quantize Image runs frames in parallel, L2.54 slice 3)
+
+Evidence (workspace): `docs/evidence/L2.54/quantize_adapter_probe.json` (identical in every case, 2.5-7.6x for the
+operation), `quantize_live.json` (owner-stack testbed, 24 real 2048x1080 frames, Off vs Universal interleaved).
+
+- **Universal runs core Quantize Image on several frames at once.** It calls the node's own code, one frame per call,
+  on up to 8 threads. PIL releases the GIL while it quantizes, the frames do not depend on each other, and the result
+  is the same to the bit. No core code is copied.
+  - Whole graph: 3.6x (no dither), 4.4x (Floyd-Steinberg), 3.0x (Bayer 4).
+  - The first run per frame size also times the original once.
+- Test oracles are written independently of core's source, because this pack is Apache-2.0 and core is GPL-3.0.
+
 ## Unreleased – 2026-10-21 (Image batching Universal: Feather Mask adapter, L2.54 slice 3)
 
 Evidence (workspace): `docs/evidence/L2.54/feather_adapter_probe.json` (48 bit-identity cases, timings),

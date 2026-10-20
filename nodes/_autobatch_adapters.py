@@ -92,6 +92,32 @@ def feather_mask_strips(mask: torch.Tensor, left: int, top: int, right: int, bot
     return out
 
 
+QUANTIZE_DITHERS = ("none", "floyd-steinberg", "bayer-2", "bayer-4", "bayer-8", "bayer-16")
+
+
+def quantize_frames_parallel(args: Mapping[str, Any], original: Callable[..., Any]) -> torch.Tensor:
+    """Core Quantize Image converts and quantizes each frame on its own with PIL, one after the other. Here the SAME
+    function (the original node, one frame per call) runs frame by frame in a thread pool: PIL releases the GIL while
+    it quantizes, the frames do not depend on each other and PIL is deterministic, so the result is the original's
+    (bit-identical, tested) - measured 5.8-7.6x faster at 720p / 1080p on 8 threads
+    (docs/evidence/L2.54/quantize_adapter_probe.json). The output keeps the frame order (and the alpha channel the
+    original appends)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    image = args["image"]
+    frames = list(torch.split(image, 1, dim=0))
+    workers = max(1, min(len(frames), 8, os.cpu_count() or 1))
+
+    def one(frame: torch.Tensor) -> torch.Tensor:
+        out = _first_tensor(original(**{**args, "image": frame}))
+        if out is None:
+            raise RuntimeError("the original returned no image")
+        return out
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="c2c-quantize") as ex:
+        return torch.cat(list(ex.map(one, frames)), dim=0)
+
+
 def _node_output(value: Any) -> Any:
     """A V3 NodeOutput, as the original V3 node returns (a plain tuple outside ComfyUI, for the tests)."""
     try:
@@ -122,7 +148,13 @@ class Adapter:
     selftest_cases: Callable[[], list[dict[str, Any]]]
     frame_input: str
     exact: bool = True
+    # True: run(args, original) - the adapter calls the node's own function (e.g. per frame in parallel) instead of
+    # re-implementing it, so no code of the original is copied and the result is the original's by construction
+    needs_original: bool = False
     state: dict[str, Any] = field(default_factory=dict)
+
+    def call(self, args: Mapping[str, Any], original: Callable[..., Any]) -> torch.Tensor:
+        return self.run(args, original) if self.needs_original else self.run(args)
 
 
 def _grow_cases() -> list[dict[str, Any]]:
@@ -167,6 +199,25 @@ def _feather_supports(args: Mapping[str, Any]) -> bool:
             and m.device.type == "cpu")
 
 
+def _quantize_cases() -> list[dict[str, Any]]:
+    g = torch.Generator().manual_seed(13)
+    cases = []
+    for (n, h, w, c) in ((3, 12, 17, 3), (2, 5, 4, 4), (2, 1, 9, 3)):
+        img = torch.rand(n, h, w, c, generator=g)
+        for colors, dither in ((256, "none"), (4, "floyd-steinberg"), (16, "bayer-4"), (8, "bayer-2"), (2, "none")):
+            cases.append({"image": img.clone(), "colors": colors, "dither": dither})
+    return cases
+
+
+def _quantize_supports(args: Mapping[str, Any]) -> bool:
+    img = args.get("image")
+    colors = args.get("colors")
+    return (torch.is_tensor(img) and img.ndim == 4 and int(img.shape[0]) >= 2 and int(img.shape[-1]) in (3, 4)
+            and img.dtype == torch.float32 and img.device.type == "cpu"     # the original converts with .numpy()
+            and isinstance(colors, int) and not isinstance(colors, bool) and 1 <= colors <= 256
+            and args.get("dither") in QUANTIZE_DITHERS)
+
+
 ADAPTERS: dict[str, Adapter] = {
     "GrowMask": Adapter(
         class_id="GrowMask", version=1, supports=_grow_supports,
@@ -177,6 +228,10 @@ ADAPTERS: dict[str, Adapter] = {
         class_id="FeatherMask", version=1, supports=_feather_supports,
         run=lambda a: feather_mask_strips(a["mask"], a["left"], a["top"], a["right"], a["bottom"]),
         wrap=_node_output, selftest_cases=_feather_cases, frame_input="mask",
+    ),
+    "ImageQuantize": Adapter(
+        class_id="ImageQuantize", version=1, supports=_quantize_supports, run=quantize_frames_parallel,
+        wrap=_node_output, selftest_cases=_quantize_cases, frame_input="image", needs_original=True,
     ),
 }
 
@@ -263,7 +318,7 @@ def validate(adapter: Adapter, original: Callable[..., Any]) -> tuple[bool, str]
         for case in adapter.selftest_cases():
             before = {k: (v.clone() if torch.is_tensor(v) else v) for k, v in case.items()}
             ref = _first_tensor(original(**case))
-            got = adapter.run(case)
+            got = adapter.call(case, original)
             if ref is None or not _same(ref, got):
                 ok, reason = False, f"differs from the original for {{{', '.join(f'{k}={v}' for k, v in case.items() if not torch.is_tensor(v))}}}"
                 break
@@ -324,7 +379,7 @@ def try_adapter(class_id: str, original: Callable[..., Any], args: Mapping[str, 
         t0 = time.perf_counter()
         ref = _first_tensor(original(**sl))
         t1 = time.perf_counter()
-        got = adapter.run(sl)
+        got = adapter.call(sl, original)
         t2 = time.perf_counter()
         if ref is None or not _same(ref, got):
             adapter.state.update(ok=False, reason="differed from the original on a real input")
@@ -343,7 +398,7 @@ def try_adapter(class_id: str, original: Callable[..., Any], args: Mapping[str, 
         return False, None
     t0 = time.perf_counter()
     try:
-        out = adapter.run(args)
+        out = adapter.call(args, original)
     except Exception as exc:  # noqa: BLE001 - no side effects happened: the original runs instead
         _record({"label": class_id, "strategy": "original", "reason": f"adapter error, fell back: {exc}"})
         return False, None
