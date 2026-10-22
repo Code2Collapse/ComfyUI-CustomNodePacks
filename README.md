@@ -819,6 +819,11 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
   CUDA (mean 0.47/255 from exact). `auto` uses `exact`: on the test CPU the ffmpeg path was not reliably faster.
   `C2C_VIDEO_AUTO=fast` or `C2C_VIDEO_AUTO=gpu` lets auto take the fast path.
 - **`info`** output: a JSON summary of what loaded (frames, seconds, size, fps, decoder).
+- **8K:** UHD 7680x4320 and DCI 8192x4320 are tested.
+  - The fast path gives the exact reader's pixels.
+  - A selection that does not fit in RAM is refused before decoding, with how many frames would fit.
+  - Save Video writes 8K as H.265, ProRes 422 HQ, FFV1 and H.264.
+  - The tests are opt-in: `C2C_TEST_8K=1 pytest tests/test_c2c_video_8k.py`.
 
 #### Save Video (C2C): ffmpeg encode, NVENC, workflow in the file
 
