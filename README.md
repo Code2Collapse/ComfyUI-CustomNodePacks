@@ -796,6 +796,13 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
 - The player works the same in Load Video Path (C2C) (crop included) and Load Images Path (C2C) (no crop), in both
   renderers, and inside subgraphs.
 
+#### Load Video (C2C): outputs are decoded only when something reads them
+
+Load Video / Load Video Path / Load Images Path (C2C) decode IMAGE and MASK only if a node reads them; otherwise
+those outputs are empty and the run only probes the clip. Linking IMAGE later, without changing a widget, now runs the
+loader again. Until 2026-10-23 ComfyUI reused the empty output it had cached, and the next node failed on `None`
+(for example AV Handles Add switched to audio-only and the resize after it crashed).
+
 #### Load Video (C2C): 4K path, presets and readable settings
 
 - **Formats** (`format`) set the frame grid and the size multiple a model needs:
@@ -837,6 +844,37 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
 
 Ported in part from [ComfyUI-4K-Video-Save-Load](https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) (MIT);
 see CREDITS.md.
+
+#### Video Mask Editor (MEC)
+
+Paint masks on the frames of a video. Run the workflow once so the editor has frames, then click *Open Video Mask
+Editor* on the node.
+
+- **Frame by frame.** A frame you paint becomes a keyframe, and its mask is used on that frame only. Unpainted frames
+  follow two choices, made in the editor (or on the node):
+  - *Between two painted frames:* morph the shape, blend, hold the previous one, or none (frame by frame).
+  - *Before the first / after the last:* empty (default) or hold the nearest painted frame.
+  - With `input_mask` connected (for example a tracked mask), every frame these rules leave empty keeps its own frame
+    of the input mask.
+- **What you see is what the node outputs.** Every frame shows its real mask, with a label: painted, interpolated
+  (frames 2-6), held, input mask, or no mask. Painting on an unpainted frame starts from the mask shown and turns that
+  frame into a keyframe. The timeline marks keyframes and shades the interpolated and held spans.
+- **Full resolution.** Frames are shown at the clip's own size (the *frame size* setting caps it, 4096 px by default),
+  and the mask is painted at the clip's resolution.
+- **Tools:** brush, eraser, fill, lasso, rectangle, ellipse, polygon, star, line, roto spline; add / subtract (X, or
+  Alt while painting); undo / redo; copy the nearest keyframe; clear, fill, invert the frame.
+- **Views:** overlay (5 colours, opacity), mask (white on black), matte (the frame cut out by the mask). Onion skin
+  shows the neighbouring keyframes.
+- **Saved as you go.** Keyframes are written to `input/c2c_video_masks/<session>/`, so they survive a restart of
+  ComfyUI. *Revert* undoes every change made since the editor opened; *Done* closes it.
+- **Keys:** B E G L R C P T N Y tools, [ ] size, Left / Right frame, Shift+Left / Right previous / next keyframe,
+  Home / End, / play, K make keyframe, Delete clear, I invert, V view, O onion skin, Shift+F fit, Ctrl+Z /
+  Ctrl+Shift+Z undo / redo, wheel zoom, Space or middle-drag pan.
+- Works in both renderers and inside subgraphs.
+
+Until 2026-10-23 the first / last painted frame was held over the whole clip, so one painted frame masked every
+frame, and a connected `input_mask` was reduced to its first frame. Saved workflows now get *empty* outside the
+painted frames; choose *hold* on `outside_keys` for the old result.
 
 #### Mask Batch Manager (MEC)
 

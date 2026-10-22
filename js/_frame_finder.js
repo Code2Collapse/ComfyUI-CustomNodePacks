@@ -150,7 +150,7 @@ function _sourceFromUrls(urls, kind, sampled, note) {
     };
 }
 
-async function _planFromDirectLoader(node, nodeType) {
+async function _planFromDirectLoader(node, nodeType, maxPx = 384, fmt = "jpeg") {
     const widgets = _collectLoaderWidgets(node, nodeType);
     const resp = await fetch("/c2c/frames/plan", {
         method: "POST",
@@ -171,6 +171,10 @@ async function _planFromDirectLoader(node, nodeType) {
         width,
         height,
         url(i) {
+            return `/c2c/frames/thumb?token=${encodeURIComponent(token)}&i=${i | 0}&max=${maxPx | 0}&fmt=${fmt}`;
+        },
+        // small frames for strips and timelines, whatever size the main view asked for
+        thumbUrl(i) {
             return `/c2c/frames/thumb?token=${encodeURIComponent(token)}&i=${i | 0}&max=384&fmt=jpeg`;
         },
         sampled: false,
@@ -201,7 +205,9 @@ export async function findUpstreamFrameSource(node, opts = {}) {
     const directType = _nodeType(directNode);
     if (directNode && PLAN_LOADER_TYPES.has(directType)) {
         try {
-            return await _planFromDirectLoader(directNode, directType);
+            // opts.planMaxPx: long side of the frames the caller draws (0 = the clip's own size). The video mask
+            // editor asks for full size; 384 px stretched over a 4K frame was its blurry plate (L9.36).
+            return await _planFromDirectLoader(directNode, directType, opts.planMaxPx ?? 384, opts.planFmt ?? "jpeg");
         } catch (e) {
             __c2cReport("_frame_finder.plan", e);
         }

@@ -12,6 +12,12 @@ import pytest
 from nodes import video_mask_editor as vme
 
 
+@pytest.fixture(autouse=True)
+def _private_store(tmp_path, monkeypatch):
+    # keyframes are persisted since L9.16 / L9.35: keep the tests out of ComfyUI's real input folder
+    monkeypatch.setenv("C2C_VME_DIR", str(tmp_path / "vme"))
+
+
 @pytest.fixture
 def sid():
     s = f"test-{uuid.uuid4()}"

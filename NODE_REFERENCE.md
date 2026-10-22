@@ -1711,13 +1711,38 @@ on NVENC. NTSC rates are stored exactly.
 
 **Shown in the menu as:** Video Mask Editor
 
-Open the in-browser video mask editor (brush / erase / fill / lasso / onion-skin) to pin per-frame keyframes, then tweens non-keyframed frames using distance-transform interpolation.
+Paint masks on the frames of a video in the editor (Open Video Mask Editor on the node). A painted frame is a keyframe
+and its mask is used on that frame; tween_mode and outside_keys decide the unpainted frames, and input_mask fills the
+frames they leave empty. The editor shows the output mask of every frame. Keyframes are saved to
+input/c2c_video_masks/<session>/ as you paint.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
+| `image` | `IMAGE` |  | Input video batch (B,H,W,3). Drives B/H/W. |
+| `session_id` | `STRING` | default `""` | Set by the editor; hidden on the node. |
+| `tween_mode` | choice: `distance_transform`, `linear`, `hold`, `none` | default `"distance_transform"` | Frames BETWEEN two painted frames: distance_transform morphs the shape, linear blends, hold keeps the previous painted mask, none leaves them unpainted (frame by frame). |
+| `feather` | `FLOAT` | default `0.0`, range 0.0…32.0, step 0.1 | Gaussian feather radius (px). 0 = none. |
+| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Binarize after tween. 0 = keep soft mask. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `input_mask` | `MASK` |  | Per-frame base mask (e.g. a tracked mask): every frame your keyframes do not fill keeps its own frame of this mask. |
+| `outside_keys` | choice: `empty`, `hold` | default `"empty"` | Frames before the first / after the last painted frame: empty (the mask stays on the frames you painted) or hold the nearest painted mask. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `mask` | `MASK` | One mask per frame. |
+| 1 | `info` | `STRING` | JSON: painted frames, modes, and how many frames were painted / interpolated / held / input mask / empty. |
+
+
+---|---|---|---|
 | `image` | `IMAGE` |  | Input video batch (B,H,W,3). Drives B/H/W. |
 | `session_id` | `STRING` | default `""` | Auto-set by the editor UI. Don't edit by hand. |
 | `tween_mode` | choice: `distance_transform`, `linear`, `hold` | default `"distance_transform"` | How to interpolate non-keyframed frames. |

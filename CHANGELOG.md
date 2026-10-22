@@ -2,6 +2,26 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-23 (Video Mask Editor rebuilt; Load Video cached-None fix, L9.34-L9.36 + L9.16/L9.17)
+
+Owner report 2026-10-23: "video mask editor looks poor and mask is not working as expected; the mask is sticking
+throughout rather than frame-by-frame; issue with load video c2c". Evidence (workspace): `docs/evidence/L9.34/`,
+`docs/evidence/L9.36/` (owner-stack testbed, 4K clip, both renderers, subgraph, server restart).
+
+- **Video Mask Editor: masks stay on the frames you paint.** The node used to hold the first / last painted frame over
+  the whole clip, so one painted frame masked all 8 frames of the test clip; now only that frame is masked. The new
+  `outside_keys` (empty / hold) and the existing `tween_mode` (+ `none`) decide unpainted frames; `input_mask` is a
+  per-frame base (it was reduced to its first frame).
+- **The editor shows the mask the node outputs on every frame** (painted, interpolated, held, input mask, none), and
+  painting on an unpainted frame starts from it.
+- **Rebuilt editor:** full-resolution frames (it drew 384 px JPEG thumbnails stretched over a 4K frame), a mask canvas
+  updated only where a stroke touched (a 40-move stroke at 4K: 3.2 s before, 0.69 s now, software rendering), tool
+  rail, timeline with keyframes and interpolated spans, overlay / mask / matte views, onion skin, playback.
+- **Keyframes are saved as you go, to disk** (`input/c2c_video_masks/<session>/`): a server restart no longer loses
+  them (L9.16). *Revert* undoes the session's changes. The session id widget is hidden (L9.17).
+- **Load Video (C2C): linking IMAGE later no longer hands a cached `None` downstream.** The loaders decode only the
+  outputs something reads; IS_CHANGED now includes which ones are linked (L9.34).
+
 ## Unreleased – 2026-10-21 (Image batching Universal: Quantize Image runs frames in parallel, L2.54 slice 3)
 
 Evidence (workspace): `docs/evidence/L2.54/quantize_adapter_probe.json` (identical in every case, 2.5-7.6x for the

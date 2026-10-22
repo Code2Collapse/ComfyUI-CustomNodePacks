@@ -8,11 +8,17 @@ This node:
   1. Hosts a server-side per-session store of pinned-keyframe masks
      (each pinned keyframe is a single grayscale PNG kept in RAM).
   2. At execute() time, reconstructs the per-frame mask batch:
-       - frames that the user pinned use the pinned mask directly,
-       - non-pinned frames are tweened from the surrounding pinned
-         keyframes using one of: distance-transform interpolation
-         (shape-coherent), linear alpha blend, or hold-nearest.
+       - a painted (pinned) frame uses its own mask,
+       - a frame BETWEEN two painted frames follows tween_mode: distance-transform
+         shape interpolation, linear blend, hold the previous one, or none,
+       - a frame before the first / after the last painted frame follows
+         outside_keys: empty (default) or hold the nearest painted frame,
+       - every frame no rule fills takes input_mask's own frame (if connected).
+     Before 2026-10-23 the first / last keyframe was always held over the whole
+     clip, so one painted frame masked every frame (owner report, ledger L9.35).
   3. Optionally feathers + thresholds the final masks.
+  4. Keyframes are written to input/c2c_video_masks/<session>/ as they are
+     pinned, so a server restart no longer loses them (L9.16).
 
 INPUTS (required):
   image          IMAGE   (B,H,W,3) — the video batch; needed to know B/H/W
@@ -20,14 +26,14 @@ INPUTS (required):
                           node is first created. Used to key the server-
                           side session dict so multiple instances don't
                           collide.
-  tween_mode     COMBO   {"distance_transform","linear","hold"}
+  tween_mode     COMBO   {"distance_transform","linear","hold","none"} (between painted frames)
   feather        FLOAT   gaussian sigma in px applied to the final masks
   threshold      FLOAT   binarize after tween (0 = no binarize)
 
 INPUTS (optional):
-  input_mask     MASK    fallback mask (used for any frame that has no
-                          pinned/tween value because the user hasn't
-                          set any keyframes). Shape (B|1,H,W).
+  outside_keys   COMBO   {"empty","hold"} before the first / after the last painted frame
+  input_mask     MASK    per-frame base mask, used on every frame the painted keyframes
+                          do not fill. Shape (B|1,H,W); a shorter batch repeats its last frame.
 
 OUTPUTS:
   mask           MASK    (B,H,W) float32 in [0,1]
@@ -41,7 +47,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import re
 import threading
+from pathlib import Path
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -90,13 +99,85 @@ def _gc_sessions() -> None:
                 _SESSIONS.pop(sid, None)
 
 
+# ─── Disk persistence (L9.16) ────────────────────────────────────────
+# One grayscale PNG per painted frame in input/c2c_video_masks/<session>/ (C2C_VME_DIR overrides the root, the tests
+# use it). Written when a keyframe is pinned, read back the first time a session is used after a restart.
+_SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$")
+
+
+def _disk_root() -> Optional[Path]:
+    env = os.environ.get("C2C_VME_DIR", "").strip()
+    if env:
+        return Path(env)
+    try:
+        import folder_paths
+        return Path(folder_paths.get_input_directory()) / "c2c_video_masks"
+    except Exception:  # noqa: BLE001 - no ComfyUI: RAM only
+        return None
+
+
+def _disk_dir(session_id: str) -> Optional[Path]:
+    root = _disk_root()
+    if root is None or not _SESSION_RE.match(session_id or ""):
+        return None
+    return root / session_id
+
+
+def _disk_put(session_id: str, frame: int, arr: np.ndarray) -> None:
+    d = _disk_dir(session_id)
+    if d is None:
+        return
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f"kf_{int(frame):06d}.png.tmp"
+        tmp.write_bytes(_mask_to_png(arr))
+        os.replace(tmp, d / f"kf_{int(frame):06d}.png")
+    except OSError as exc:
+        print(f"[MEC.VideoMaskEditor] could not save keyframe {frame} of {session_id[:8]}: {exc}")
+
+
+def _disk_delete(session_id: str, frame: Optional[int] = None) -> None:
+    d = _disk_dir(session_id)
+    if d is None or not d.is_dir():
+        return
+    for f in ([d / f"kf_{int(frame):06d}.png"] if frame is not None else list(d.glob("kf_*.png"))):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+
+def _disk_load(session_id: str) -> Dict[int, np.ndarray]:
+    d = _disk_dir(session_id)
+    out: Dict[int, np.ndarray] = {}
+    if d is None or not d.is_dir():
+        return out
+    for f in sorted(d.glob("kf_*.png")):
+        m = re.match(r"kf_(\d+)\.png$", f.name)
+        if not m:
+            continue
+        try:
+            out[int(m.group(1))] = _png_to_mask(f.read_bytes())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[MEC.VideoMaskEditor] skipped unreadable keyframe {f}: {exc}")
+    return out
+
+
 def _get_session(session_id: str, create: bool = False) -> Optional[dict]:
     with _SESSIONS_LOCK:
         s = _SESSIONS.get(session_id)
+        if s is None and not create:
+            saved = _disk_load(session_id)
+            if saved:
+                create = True
+        else:
+            saved = None
         if s is None and create:
+            if saved is None:
+                saved = _disk_load(session_id)
             s = {
-                "keyframes": {},
-                "shape": None,
+                "keyframes": dict(saved),
+                "shape": next(iter(saved.values())).shape if saved else None,
                 "ts": time.time(),
                 "lock": threading.Lock(),
             }
@@ -290,12 +371,11 @@ def register_routes(server) -> None:
             return web.json_response({"error": "invalid shape"}, status=400)
         s = _get_session(sid, create=True)
         with s["lock"]:
-            if s["shape"] != (h, w):
-                # Shape change: drop any existing keyframes.
-                s["keyframes"].clear()
-                s["shape"] = (h, w)
+            # A new frame size keeps the painted keyframes: they are resized to the batch at execute time. (They used
+            # to be dropped here, silently, whenever the preview size differed.)
+            s["shape"] = (h, w)
         _gc_sessions()
-        return web.json_response({"ok": True, "shape": [h, w]})
+        return web.json_response({"ok": True, "shape": [h, w], "keyframes": sorted(s["keyframes"].keys())})
 
     @routes.post("/mec/video_mask_editor/keyframe")
     async def set_keyframe(request):
@@ -320,6 +400,7 @@ def register_routes(server) -> None:
             elif s["shape"] != arr.shape:
                 arr = _resize_to(arr, s["shape"])
             s["keyframes"][frame] = arr
+        _disk_put(sid, frame, arr)
         return web.json_response({
             "ok": True, "frame": frame, "n_keyframes": len(s["keyframes"]),
         })
@@ -336,6 +417,7 @@ def register_routes(server) -> None:
         with s["lock"]:
             s["keyframes"].pop(int(frame_s), None)
             n = len(s["keyframes"])
+        _disk_delete(sid, int(frame_s))
         return web.json_response({"ok": True, "n_keyframes": n})
 
     @routes.get("/mec/video_mask_editor/state")
@@ -377,66 +459,123 @@ def register_routes(server) -> None:
         if s is not None:
             with s["lock"]:
                 s["keyframes"].clear()
+        _disk_delete(sid)
         return web.json_response({"ok": True})
+
+    @routes.get("/mec/video_mask_editor/effective")
+    async def get_effective(request):
+        """The mask the node will output for one frame (painted, interpolated, held, input mask or empty), as an
+        8-bit PNG at most `max` px on the long side, plus how it was made in the X-C2C-Source header."""
+        q = request.rel_url.query
+        sid = q.get("session", "").strip()
+        try:
+            frame = int(q.get("frame", "-1"))
+            n = int(q.get("n", "0"))
+            max_px = int(q.get("max", "0"))
+        except ValueError:
+            return web.json_response({"error": "frame, n and max must be integers"}, status=400)
+        tween = q.get("tween", "distance_transform")
+        outside = q.get("outside", "empty")
+        if not sid or frame < 0 or n <= frame:
+            return web.json_response({"error": "session, frame and n (> frame) required"}, status=400)
+        s = _get_session(sid)
+        kfs: Dict[int, np.ndarray] = {}
+        base = None
+        shape = None
+        if s is not None:
+            with s["lock"]:
+                kfs = dict(s["keyframes"])
+                base = s.get("input_mask")
+                shape = s.get("shape")
+        if shape is None:
+            shape = next(iter(kfs.values())).shape if kfs else None
+        if shape is None:
+            return web.Response(status=204)
+        arr, src = _frame_mask(frame, tuple(shape), kfs, sorted(kfs), tween, outside, _base_getter(base, tuple(shape)))
+        if arr is None:
+            return web.Response(status=204, headers={"X-C2C-Source": src})
+        if max_px > 0 and max(arr.shape) > max_px:
+            k = max_px / float(max(arr.shape))
+            arr = _resize_to(arr, (max(1, round(arr.shape[0] * k)), max(1, round(arr.shape[1] * k))))
+        return web.Response(body=_mask_to_png(arr), content_type="image/png", headers={"X-C2C-Source": src})
 
     print("[MEC.VideoMaskEditor] routes registered (/mec/video_mask_editor/*)")
 
 
 # ─── Mask reconstruction (used by execute) ───────────────────────────
+TWEEN_MODES = ["distance_transform", "linear", "hold", "none"]
+OUTSIDE_MODES = ["empty", "hold"]
+
+
+def _base_getter(input_mask, target_hw: Tuple[int, int]):
+    """frame -> uint8 (H, W) of input_mask's own frame (a shorter batch repeats its last frame), or None."""
+    if input_mask is None:
+        return lambda i: None
+    m = input_mask
+    if m.ndim == 2:
+        m = m[None]
+    n = int(m.shape[0])
+
+    def get(i):
+        fm = m[min(int(i), n - 1)].detach().float().cpu().clamp(0, 1).numpy()
+        return _resize_to((fm * 255.0 + 0.5).astype(np.uint8), target_hw)
+    return get
+
+
+def _frame_mask(i: int, target_hw, kfs: Dict[int, np.ndarray], sorted_f: List[int], tween_mode: str,
+                outside: str, base) -> Tuple[Optional[np.ndarray], str]:
+    """(uint8 mask or None, how it was made) for frame i: painted / interpolated / held / input / empty."""
+    if i in kfs:
+        return _resize_to(kfs[i], target_hw), "painted"
+    if sorted_f:
+        first_f, last_f = sorted_f[0], sorted_f[-1]
+        if first_f < i < last_f:
+            lo = max(f for f in sorted_f if f < i)
+            hi = min(f for f in sorted_f if f > i)
+            if tween_mode == "hold":
+                return _resize_to(kfs[lo], target_hw), f"held from {lo}"
+            if tween_mode != "none":
+                tween = _TWEEN_FUNCS.get(tween_mode, _tween_dt)
+                t = (i - lo) / float(hi - lo)
+                return tween(_resize_to(kfs[lo], target_hw), _resize_to(kfs[hi], target_hw), float(t)), \
+                    f"interpolated {lo}-{hi}"
+        elif outside == "hold":
+            near = first_f if i < first_f else last_f
+            return _resize_to(kfs[near], target_hw), f"held from {near}"
+    b = base(i)
+    if b is not None:
+        return b, "input mask"
+    return None, "empty"
+
+
 def _reconstruct_batch(
     n_frames: int,
     target_hw: Tuple[int, int],
     keyframes: Dict[int, np.ndarray],
     tween_mode: str,
-    fallback: Optional[np.ndarray],
+    fallback=None,
+    outside: str = "empty",
 ) -> Tuple[np.ndarray, str]:
-    """Build (n_frames,H,W) uint8 mask batch.
-    Returns (batch, source_tag).
-    """
+    """Build the (n_frames, H, W) uint8 mask batch frame by frame. `fallback` is the input MASK tensor (per-frame
+    base), a single uint8 array (old callers: one frame for all) or None. Returns (batch, source summary)."""
     H, W = target_hw
     out = np.zeros((n_frames, H, W), dtype=np.uint8)
-    tween = _TWEEN_FUNCS.get(tween_mode, _tween_dt)
-
-    if not keyframes:
-        if fallback is not None:
-            fb = _resize_to(fallback, target_hw)
-            for i in range(n_frames):
-                out[i] = fb
-            return out, "fallback_only"
-        return out, "empty"
-
-    # Ensure all keyframes match target shape.
-    kfs: Dict[int, np.ndarray] = {}
-    for f, m in keyframes.items():
-        kfs[int(f)] = _resize_to(m, target_hw)
-    sorted_f = sorted(kfs.keys())
-    first_f, last_f = sorted_f[0], sorted_f[-1]
-
+    if isinstance(fallback, np.ndarray):
+        fb = _resize_to(fallback, target_hw)
+        base = lambda i: fb  # noqa: E731
+    else:
+        base = _base_getter(fallback, target_hw)
+    kfs = {int(f): m for f, m in keyframes.items()}
+    sorted_f = sorted(kfs)
+    counts: Dict[str, int] = {}
     for i in range(n_frames):
-        if i in kfs:
-            out[i] = kfs[i]
-            continue
-        if i < first_f:
-            out[i] = kfs[first_f]
-            continue
-        if i > last_f:
-            out[i] = kfs[last_f]
-            continue
-        # Find surrounding keyframes.
-        lo = first_f
-        hi = last_f
-        for f in sorted_f:
-            if f <= i:
-                lo = f
-            if f >= i:
-                hi = f
-                break
-        if lo == hi:
-            out[i] = kfs[lo]
-            continue
-        t = (i - lo) / float(hi - lo)
-        out[i] = tween(kfs[lo], kfs[hi], float(t))
-    return out, f"keyframes={len(keyframes)},tween={tween_mode}"
+        arr, src = _frame_mask(i, target_hw, kfs, sorted_f, tween_mode, outside, base)
+        kind = src.split(" ")[0]
+        counts[kind] = counts.get(kind, 0) + 1
+        if arr is not None:
+            out[i] = arr
+    summary = ",".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    return out, f"keyframes={len(kfs)},tween={tween_mode},outside={outside}:{summary}"
 
 
 def _gaussian_feather(mask: np.ndarray, sigma: float) -> np.ndarray:
@@ -481,9 +620,11 @@ class VideoMaskEditorMEC:
                     "tooltip": "Auto-set by the editor UI. Don't edit by hand.",
                 }),
                 "tween_mode": (
-                    ["distance_transform", "linear", "hold"],
+                    TWEEN_MODES,
                     {"default": "distance_transform",
-                     "tooltip": "How to interpolate non-keyframed frames."},
+                     "tooltip": "Frames BETWEEN two painted frames: distance_transform morphs the shape, linear "
+                                "blends, hold keeps the previous painted mask, none leaves them unpainted (frame "
+                                "by frame)."},
                 ),
                 "feather": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 32.0, "step": 0.1,
@@ -496,7 +637,13 @@ class VideoMaskEditorMEC:
             },
             "optional": {
                 "input_mask": ("MASK", {
-                    "tooltip": "Fallback mask used if no keyframes are set.",
+                    "tooltip": "Per-frame base mask (e.g. a tracked mask): every frame your keyframes do not "
+                               "fill keeps its own frame of this mask.",
+                }),
+                "outside_keys": (OUTSIDE_MODES, {
+                    "default": "empty",
+                    "tooltip": "Frames before the first / after the last painted frame: empty (the mask stays on "
+                               "the frames you painted) or hold the nearest painted mask.",
                 }),
             },
         }
@@ -507,9 +654,9 @@ class VideoMaskEditorMEC:
 
     @classmethod
     def IS_CHANGED(cls, image, session_id, tween_mode, feather, threshold,
-                   input_mask=None, **kwargs):
+                   input_mask=None, outside_keys="empty", **kwargs):
         return hash_args_and_kwargs(
-            image, session_id, tween_mode, feather, threshold, input_mask,
+            image, session_id, tween_mode, feather, threshold, input_mask, outside_keys,
             session_digest((session_id or "").strip()),   # keyframe edits (#11.4)
             **kwargs,
         )
@@ -522,6 +669,7 @@ class VideoMaskEditorMEC:
         feather: float,
         threshold: float,
         input_mask: Optional[torch.Tensor] = None,
+        outside_keys: str = "empty",
     ):
         if image is None or not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("VideoMaskEditorMEC: image must be IMAGE tensor [B,H,W,C]")
@@ -534,7 +682,7 @@ class VideoMaskEditorMEC:
             )
         with torch.no_grad():
             return self._execute_impl(
-                image, session_id, tween_mode, feather, threshold, input_mask,
+                image, session_id, tween_mode, feather, threshold, input_mask, outside_keys,
             )
 
     def _execute_impl(
@@ -545,6 +693,7 @@ class VideoMaskEditorMEC:
         feather: float,
         threshold: float,
         input_mask: Optional[torch.Tensor] = None,
+        outside_keys: str = "empty",
     ):
         B, H, W, _C = image.shape
         sid = (session_id or "").strip()
@@ -554,32 +703,27 @@ class VideoMaskEditorMEC:
                 "in-browser editor at least once so it can assign a UUID."
             )
 
-        # Pull keyframes from the session store.
-        s = _get_session(sid)
-        kfs: Dict[int, np.ndarray] = {}
-        if s is not None:
-            with s["lock"]:
-                kfs = dict(s["keyframes"])
+        # Pull keyframes from the session store (RAM, else the saved PNGs).
+        s = _get_session(sid, create=True)
+        with s["lock"]:
+            kfs = dict(s["keyframes"])
+            if s["shape"] is None:
+                s["shape"] = (H, W)
+            # the editor's effective-mask preview shows input_mask frames on unpainted frames
+            s["input_mask"] = input_mask if input_mask is not None and input_mask.numel() > 0 else None
 
-        # Fallback mask: take first slice of input_mask, if any.
-        fallback: Optional[np.ndarray] = None
-        if input_mask is not None and input_mask.numel() > 0:
-            fm = input_mask
-            if fm.ndim == 3:
-                fm0 = fm[0]
-            elif fm.ndim == 2:
-                fm0 = fm
-            else:
-                fm0 = fm.reshape(-1, fm.shape[-2], fm.shape[-1])[0]
-            fb = (fm0.detach().cpu().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
-            fallback = fb
+        # input_mask is a per-frame base (it used to be collapsed to its frame 0 for every frame).
+        base = input_mask if input_mask is not None and input_mask.numel() > 0 else None
+        if base is not None and base.ndim > 3:
+            base = base.reshape(-1, base.shape[-2], base.shape[-1])
 
         batch_u8, src_tag = _reconstruct_batch(
             n_frames=B,
             target_hw=(H, W),
             keyframes=kfs,
             tween_mode=tween_mode,
-            fallback=fallback,
+            fallback=base,
+            outside=outside_keys if outside_keys in OUTSIDE_MODES else "empty",
         )
 
         # Feather + threshold + cast to float.
@@ -594,6 +738,8 @@ class VideoMaskEditorMEC:
             "frames": B,
             "shape": [H, W],
             "tween_mode": tween_mode,
+            "outside_keys": outside_keys,
+            "painted_frames": sorted(kfs),
             "feather": float(feather),
             "threshold": float(threshold),
             "source": src_tag,
