@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
 import re
 from dataclasses import replace
@@ -385,6 +386,48 @@ def is_output_linked(prompt: dict | None, unique_id: str | None, slot: int = 0) 
     return False
 
 
+# L9.34: a run decodes only the outputs something reads, and returns None for the others. ComfyUI's cache signature
+# holds a node's own inputs, not who reads its outputs, so that None was cached and handed out after IMAGE / MASK got
+# linked with unchanged widgets (owner 2026-10-23: AVHandlesAdd received images=None, the next resize crashed).
+# IS_CHANGED therefore folds in which decode outputs are linked in the prompt being run; if it cannot see that prompt,
+# a run that skipped decoding is never reused.
+_SKIPPED: dict[str, tuple[int, ...]] = {}
+_RERUN = itertools.count()
+
+
+def _running_prompt(unique_id: str) -> dict | None:
+    try:
+        import server  # ComfyUI's PromptServer; absent in unit tests
+        queue = server.PromptServer.instance.prompt_queue
+        with queue.mutex:
+            items = list(getattr(queue, "currently_running", {}).values())
+    except Exception:  # noqa: BLE001
+        return None
+    for item in items:
+        p = item[2] if isinstance(item, (list, tuple)) and len(item) > 2 else None
+        if isinstance(p, dict) and unique_id in p:
+            return p
+    return None
+
+
+def decode_links_token(unique_id: str | None, slots: tuple[int, ...]) -> str:
+    """Part of IS_CHANGED: which of `slots` (the outputs that need decoding) the running prompt links."""
+    if unique_id is None:
+        return "links:unknown"
+    uid = str(unique_id)
+    p = _running_prompt(uid)
+    if p is not None:
+        return "links:" + ",".join(str(s) for s in slots if is_output_linked(p, uid, s))
+    if _SKIPPED.get(uid):
+        return f"links:unseen-after-skip:{next(_RERUN)}"
+    return "links:unseen"
+
+
+def note_skipped(unique_id: str | None, skipped: tuple[int, ...]) -> None:
+    if unique_id is not None:
+        _SKIPPED[str(unique_id)] = tuple(skipped)
+
+
 _EXACT = DecoderPlan("exact", "exact")
 
 
@@ -627,6 +670,7 @@ def execute_video_load(
         return json.dumps(load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode),
                           indent=2)
 
+    note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask)) if not needed))
     if not (needs_image or needs_mask):
         return None, count, audio, video_info, loaded, None, info(None)
     if vae is not None and needs_image:
@@ -723,6 +767,7 @@ def execute_images_load(
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 1)
+    note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (1, needs_mask)) if not needed))
     if not (needs_image or needs_mask):
         return None, None, count, loaded
     check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
@@ -833,7 +878,7 @@ class LoadVideoC2C:
     def IS_CHANGED(cls, video, **kwargs):
         fp = _import_folder_paths()
         path = fp.get_annotated_filepath(video)
-        return is_changed_path(path)
+        return is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video):
@@ -933,7 +978,7 @@ class LoadVideoPathC2C:
 
     @classmethod
     def IS_CHANGED(cls, video, **kwargs):
-        return is_changed_path(strip_path(video))
+        return is_changed_path(strip_path(video)) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video):
@@ -984,7 +1029,7 @@ class LoadImagesPathC2C:
 
     @classmethod
     def IS_CHANGED(cls, directory, **kwargs):
-        return is_changed_sequence(strip_path(directory))
+        return is_changed_sequence(strip_path(directory)) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 1))
 
     @classmethod
     def VALIDATE_INPUTS(cls, directory):

@@ -404,6 +404,46 @@ def test_is_output_linked_string_uid(nl):
     assert nl.is_output_linked(None, "1", 0)
 
 
+def test_links_are_part_of_is_changed(nl, cfr_clip, monkeypatch):
+    # L9.34: a run with IMAGE unlinked returns None; linking IMAGE later must change IS_CHANGED, or ComfyUI hands
+    # the cached None downstream (owner 2026-10-23, AVHandlesAdd -> resize crash).
+    unlinked = {"9": {"inputs": {"x": ["7", 1]}}}
+    linked = {"9": {"inputs": {"x": ["7", 1]}}, "10": {"inputs": {"images": ["7", 0]}}}
+    monkeypatch.setattr(nl, "_running_prompt", lambda uid: unlinked)
+    a = nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="7")
+    assert a == nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="7")          # same links: cache kept
+    monkeypatch.setattr(nl, "_running_prompt", lambda uid: linked)
+    b = nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="7")
+    assert a != b and b.endswith("links:0")
+    mask_linked = {"10": {"inputs": {"m": ["7", 5]}}}
+    monkeypatch.setattr(nl, "_running_prompt", lambda uid: mask_linked)
+    assert nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="7").endswith("links:5")
+
+
+def test_skipped_run_is_never_reused_when_links_are_unseen(nl, cfr_clip, monkeypatch):
+    monkeypatch.setattr(nl, "_running_prompt", lambda uid: None)
+    nl.note_skipped("8", (0, 5))
+    a = nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="8")
+    assert a != nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="8")          # re-run: no None reaches a reader
+    nl.note_skipped("8", ())
+    full = nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="8")
+    assert full == nl.LoadVideoPathC2C.IS_CHANGED(cfr_clip, unique_id="8")       # a full decode stays cached
+
+
+def test_running_prompt_reads_the_queue(nl, monkeypatch):
+    import sys
+    import threading
+    import types
+
+    q = types.SimpleNamespace(mutex=threading.RLock(),
+                              currently_running={3: (0, "pid", {"7": {"inputs": {}}, "8": {"inputs": {}}}, {}, [])})
+    fake = types.ModuleType("server")
+    fake.PromptServer = types.SimpleNamespace(instance=types.SimpleNamespace(prompt_queue=q))
+    monkeypatch.setitem(sys.modules, "server", fake)
+    assert "7" in nl._running_prompt("7")
+    assert nl._running_prompt("99") is None
+
+
 def test_decode_chunk_by_bytes_is_bit_identical(nl, cfr_clip, monkeypatch):
     # L7.59: the loader stages by bytes (64 MB) instead of 16 frames; one frame at a time must give the same batch
     h = nl.probe_file(cfr_clip)            # the loader's own package (a second copy's handle fails isinstance)
