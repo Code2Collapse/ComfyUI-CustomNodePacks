@@ -1704,6 +1704,46 @@ on NVENC. NTSC rates are stored exactly.
 |---|---|---|---|
 | `save_metadata` | `BOOLEAN` | `True` | Store the workflow and prompt in MP4 / MOV / MKV / WebM so the file rebuilds the graph when dropped onto ComfyUI. Nothing is stored under `--disable-metadata`. |
 
+### SaveVideoC2C: inputs added in L9.40 (2026-10-23)
+
+`format` gains *custom (container / codec)* (the default for new nodes); the old labels still encode as before.
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `container` | choice | `MP4` | MP4, MOV, MKV, WebM, GIF, WebP, Image sequence. Used when format is custom. |
+| `codec` | choice | `H.264` | The codecs the container takes (the list follows the container). |
+| `profile` | choice | `High` | The codec's profile: ProRes 422 Proxy ... 4444 XQ, DNxHR LB ... 444, H.265 Main ... Main 4:4:4 12, VP9 0-3, EXR / TIFF compression ... |
+| `bit_depth` | choice | `8` | What the profile allows; EXR 16 = half, 32 = float. |
+| `chroma` | choice | `4:2:0` | 4:2:0, 4:2:2, 4:4:4 or RGB, as the profile allows. |
+| `color_primaries` / `color_transfer` / `color_range` | choice | `auto` | Tags written into the file; for YUV codecs the matrix and range of the conversion follow them. |
+| `handles_trim` | choice | `auto` | auto: trim the handles Load Video (C2C) added (from video_info); manual: `trim_frames` on `trim_side`; off. |
+| `trim_frames` / `trim_side` | INT / choice | `8` / `head` | Manual trim. |
+| `range_in` / `range_out` | INT | `0` / `0` | Export range (inclusive, of the trimmed clip), set with the player's In / Out. 0 / 0 = all. |
+| `write_mode` | choice | `write` | preview first: a run previews and writes nothing; the player's Write file writes it. |
+| `write_token` | STRING | `""` | Set by the Write file button (hidden). |
+
+`naming` gains *Folder Version Incrementer* (the old *Folder Version* is the same); it fills the version path from
+the incrementer node in the graph, or from its defaults.
+
+### LoadVideoC2C / LoadVideoPathC2C: inputs added in L9.40 (2026-10-23)
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `handles` | choice | `off` | fit: pad up to the grid; add: put `handle_frames` on. The count goes into video_info for Save Video (C2C). |
+| `handle_frames` | INT | `8` | add: frames to put on (side both: each end). |
+| `handle_target` | INT | `0` | fit: frames wanted out; 0 = the clip's length. |
+| `handle_side` | choice | `head` | head, tail or both. |
+| `handle_grid` | choice | `from format` | The frame grid: from the format preset, or one of AV Handles' grids. |
+| `handle_custom_step` / `handle_custom_plus` | INT | `4` / `1` | The custom grid. |
+
+### VideoComparerC2C: inputs added in L9.40 (2026-10-23)
+
+| Parameter | Type | Default | What it does |
+|---|---|---|---|
+| `image_c` / `image_d`, `file_c` / `file_d`, `label_c` / `label_d` | IMAGE / file / STRING | | The 2 x 2 grid's C and D. |
+| `b_offset` | INT | `0` | B starts this many frames after A; the player and the metrics use it. |
+| `metrics` | BOOLEAN | `True` | Per-frame PSNR / SSIM / CIEDE2000 of A against B, drawn under the scrubber. |
+
 ## C2C/VideoMask
 
 

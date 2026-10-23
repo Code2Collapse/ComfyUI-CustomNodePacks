@@ -492,8 +492,21 @@ class VideoComparerC2C:
                 "file_b": (files, {"default": files[0] if files else ""}),
                 "preview_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.001, "tooltip":
                     "Playback rate of the browser preview made from image_a / image_b batches after a run (the "
-                    "tensors carry no frame rate). The preview is downscaled to 1280 px and capped at 600 frames; "
+                    "tensors carry no frame rate). The preview is downscaled to 1280 px and keeps every frame; "
                     "the server-side modes always use the full-precision frames."}),
+                # L9.40 (owner 2026-10-23: "give more power to video comparer") - appended
+                "image_c": ("IMAGE",),
+                "image_d": ("IMAGE",),
+                "file_c": (files, {"default": files[0] if files else ""}),
+                "file_d": (files, {"default": files[0] if files else ""}),
+                "label_c": ("STRING", {"default": "C"}),
+                "label_d": ("STRING", {"default": "D"}),
+                "b_offset": ("INT", {"default": 0, "min": -100000, "max": 100000, "tooltip":
+                    "B starts this many frames after A (negative: before). The player and the metrics both use it, "
+                    "so frame i of A is compared with frame i - b_offset of B."}),
+                "metrics": ("BOOLEAN", {"default": True, "tooltip":
+                    "Per-frame PSNR, SSIM (luma) and colour difference (CIEDE2000) of A against B, drawn under the "
+                    "player's scrubber; click the worst frame to go there. Computed when the node runs."}),
             },
         }
 
@@ -532,7 +545,8 @@ class VideoComparerC2C:
                 diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
                 label_a, label_b,
                 image_a=None, image_b=None, audio_a=None, audio_b=None,
-                file_a="", file_b="", preview_fps=24.0):
+                file_a="", file_b="", preview_fps=24.0, image_c=None, image_d=None, file_c="", file_d="",
+                label_c="C", label_d="D", b_offset=0, metrics=True):
         result = self._compute(mode, bit_depth, wipe_position, onion_alpha, diff_gain, diff_gamma,
                                diff_threshold, diff_mode, false_color_lut, scope_intensity, frame_index,
                                label_a, label_b, image_a, image_b, audio_a, audio_b, file_a, file_b)
@@ -541,11 +555,16 @@ class VideoComparerC2C:
         # after a Queue (A9, L2.26). Hand it previews of the wired tensors and the server-rendered panel.
         ui = {}
         try:
-            from ._video_comparer_io import save_preview_media, save_preview_png
-            a = save_preview_media(image_a, "A", preview_fps)
-            b = save_preview_media(image_b, "B", preview_fps)
-            if a or b:
-                ui["c2c_ab"] = [{"a": a, "b": b, "label_a": label_a, "label_b": label_b}]
+            from ._video_comparer_io import save_preview_png
+            prev = {k: _preview(img, k.upper(), preview_fps)
+                    for k, img in (("a", image_a), ("b", image_b), ("c", image_c), ("d", image_d))}
+            if any(prev.values()):
+                ui["c2c_ab"] = [{**prev, "label_a": label_a, "label_b": label_b, "label_c": label_c,
+                                 "label_d": label_d, "b_offset": int(b_offset), "fps": float(preview_fps)}]
+            if metrics:
+                m = _metrics(image_a, image_b, file_a, file_b, int(b_offset))
+                if m:
+                    ui["c2c_metrics"] = [m]
             panel = save_preview_png(result[0][0].cpu().numpy(), "panel")
             if panel:
                 ui["c2c_preview"] = [{**panel, "mode": mode}]
@@ -668,6 +687,61 @@ class VideoComparerC2C:
         mask_t = torch.from_numpy(np.clip(mask.astype(np.float32), 0, 1))[None, ...]
         scope_t = torch.from_numpy(np.clip(scope.astype(np.float32), 0, 1))[None, ...]
         return (preview_t, mask_t, scope_t, info)
+
+
+def _preview(images, tag: str, fps: float):
+    """A browser preview of an IMAGE batch: one frame -> PNG; a batch -> a full-length H.264 proxy (<= 1280 px) so
+    the player and the metrics strip cover the same frames (L9.40; the old 600-frame cap cut long clips short)."""
+    from ._video_comparer_io import save_preview_media
+    if images is None or not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[0] == 0:
+        return None
+    if images.shape[0] == 1:
+        return save_preview_media(images, tag, fps)
+    from .c2c_video.save_encode import write_proxy
+    out = write_proxy(images, fps, f"compare_{tag}")
+    if out is None:                        # longer than the proxy limit: the capped preview, said so
+        out = save_preview_media(images, tag, fps)
+        if out:
+            out["capped"] = True
+    else:
+        out = dict(out, kind="video", fps=float(fps))
+    return out
+
+
+def _frames_of(image, file_name):
+    if isinstance(image, torch.Tensor) and image.ndim == 4 and image.shape[0] > 0:
+        return image[..., :3]
+    if file_name:
+        try:
+            from ._video_comparer_io import decode_media
+            meta = decode_media(file_name)
+            fr = meta.get("frames")
+            return fr[..., :3] if isinstance(fr, torch.Tensor) and fr.ndim == 4 else None
+        except Exception:  # noqa: BLE001 - metrics are extra; a file that does not decode just has none
+            return None
+    return None
+
+
+def _metrics(image_a, image_b, file_a, file_b, offset: int) -> dict | None:
+    """Per-frame metrics of A against B with B shifted by `offset` frames: A frame i <-> B frame i - offset. Lists are
+    indexed by A's frame; frames with no B partner hold None."""
+    from ._compare_metrics import frame_metrics
+    a, b = _frames_of(image_a, file_a), _frames_of(image_b, file_b)
+    if a is None or b is None:
+        return None
+    na, nb = int(a.shape[0]), int(b.shape[0])
+    lo, hi = max(0, offset), min(na, nb + offset)
+    if hi <= lo:
+        return {"frames": na, "pairs": 0, "offset": offset, "note": "A and B do not overlap at this offset"}
+    m = frame_metrics(a[lo:hi], b[lo - offset:hi - offset])
+    def full(vals):
+        out = [None] * na
+        for k, v in enumerate(vals):
+            out[lo + k] = round(float(v), 4)
+        return out
+    return {"frames": na, "pairs": hi - lo, "offset": offset, "first": lo,
+            "psnr": full(m["psnr"]), "ssim": full(m["ssim"]), "delta_e": full(m["delta_e"]),
+            "worst": {k: lo + v for k, v in m["worst"].items()}, "summary": m["summary"]}
 
 
 # Back-compat alias: old saved workflows reference "VideoComparerMEC"; map

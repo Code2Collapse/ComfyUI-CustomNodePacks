@@ -13,10 +13,12 @@ from .c2c_video.save_encode import (
     pad_edge_replicate,
     resolve_output_path,
 )
+from .c2c_video import save_matrix as SM
+from .c2c_video import handles_io as HIO
+from .c2c_video import save_naming as SN
 from .c2c_video.save_formats import (
     SaveVideoError,
     available_formats,
-    resolve_format,
 )
 from .c2c_video.save_ocio import (
     colorspace_choices,
@@ -46,7 +48,12 @@ class SaveVideoC2C:
         default_in = default_colorspace_in()
         return {
             "required": {
-                "format": (available_formats(),),
+                # L9.40: "custom" = the five controls below (container / codec / profile / bit depth / chroma);
+                # a saved workflow keeps its old single-list label and encodes exactly as before
+                "format": (([] if SM.disabled() else [SM.CUSTOM]) + available_formats(), {
+                    "default": SM.CUSTOM if not SM.disabled() else available_formats()[0],
+                    "tooltip": "custom: choose container, codec, profile, bit depth and chroma below. The other "
+                               "entries are the old single list, kept so saved workflows encode as before."}),
                 "fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 240.0, "step": 0.001,
                     "tooltip": "Frame rate for the written file. When video_info is "
@@ -67,7 +74,12 @@ class SaveVideoC2C:
                 "video_info": ("VHS_VIDEOINFO",),
                 "colorspace_in": (spaces, {"default": default_in}),
                 "colorspace_out": (["same as input"] + list(spaces), {"default": "same as input"}),
-                "naming": (["default", "ComfyUI counter", "Folder Version"], {"default": "default"}),
+                # "Folder Version" (saved workflows) is the same as Folder Version Incrementer (L9.40)
+                "naming": (SN.NAMING_CHOICES + ["Folder Version"], {"default": "default", "tooltip":
+                    "Folder Version Incrementer: the version folder and name come from the Folder Version "
+                    "Incrementer node in this graph (no wire needed), or from the incrementer's defaults when there "
+                    "is none; a wired subfolder still wins. ComfyUI counter: prefix_00001 like Save Image. default: "
+                    "the C2C setting (Folder Version Incrementer unless you changed it)."}),
                 "naming_resolved": ("STRING", {"default": "", "tooltip": "Set by the UI from c2c.saveVideo.naming."}),
                 "subfolder": ("STRING", {"default": ""}),
                 "save_output": ("BOOLEAN", {"default": True}),
@@ -87,8 +99,44 @@ class SaveVideoC2C:
                     "default": True,
                     "tooltip": "Store the workflow and prompt in the video file (MP4 / MOV / MKV / WebM), as ComfyUI's "
                                "own Save Video does, so the file can be dragged back into ComfyUI to rebuild the graph."}),
+                # L9.40 (owner 2026-10-23) - appended, so saved workflows keep their widget order
+                "container": (list(SM.CONTAINERS), {"default": SM.DEFAULT_CHOICE.container,
+                              "tooltip": "The file type. Used when format is custom."}),
+                "codec": (list(SM.CODECS), {"default": SM.DEFAULT_CHOICE.codec,
+                          "tooltip": "The video codec; the list follows the container."}),
+                "profile": (SM.all_profiles(), {"default": SM.DEFAULT_CHOICE.profile,
+                            "tooltip": "The codec's profile (ProRes 422 HQ, DNxHR HQX, H.265 Main 10, EXR ZIP ...)."}),
+                "bit_depth": (list(SM.BIT_DEPTHS), {"default": SM.DEFAULT_CHOICE.bit_depth,
+                              "tooltip": "Bits per channel the profile allows. EXR: 16 = half float, 32 = float."}),
+                "chroma": (list(SM.CHROMAS), {"default": SM.DEFAULT_CHOICE.chroma,
+                           "tooltip": "Chroma subsampling: 4:2:0 (delivery), 4:2:2 (edit), 4:4:4 / RGB (full)."}),
+                "color_primaries": (list(SM.PRIMARIES), {"default": "auto", "tooltip":
+                    "Colour primaries written into the file. auto: from colorspace_out (sRGB / Rec.709 named, "
+                    "others untagged). For YUV codecs the conversion matrix follows (BT.2020 -> BT.2020 NCL)."}),
+                "color_transfer": (list(SM.TRANSFERS), {"default": "auto", "tooltip":
+                    "Transfer function written into the file (it labels; the pixels come from colorspace_out)."}),
+                "color_range": (list(SM.RANGES), {"default": "auto", "tooltip":
+                    "YUV codecs: limited (16-235, broadcast, the default) or full (0-255). Changes the conversion "
+                    "and the tag together. RGB codecs are always full range."}),
+                # L9.40: handles, export range, preview first - appended
+                "handles_trim": (list(HIO.TRIM_MODES), {"default": "auto", "tooltip":
+                    "auto: trim exactly the handles Load Video (C2C) added (read from video_info; fit's target "
+                    "length wins). manual: trim_frames on trim_side. off: write every frame that arrives."}),
+                "trim_frames": ("INT", {"default": 8, "min": 0, "max": 100000,
+                                        "tooltip": "manual trim: frames to cut (side both: on each end)."}),
+                "trim_side": (list(HIO.SIDES), {"default": "head", "tooltip": "manual trim: which end."}),
+                "range_in": ("INT", {"default": 0, "min": 0, "max": 10_000_000, "tooltip":
+                    "Export range, first frame (of the trimmed clip). Set it with the player's In handle. 0 / 0 = "
+                    "the whole clip."}),
+                "range_out": ("INT", {"default": 0, "min": 0, "max": 10_000_000, "tooltip":
+                    "Export range, last frame (inclusive). 0 = to the end."}),
+                "write_mode": (["write", "preview first"], {"default": "write", "tooltip":
+                    "preview first: a run shows a quick preview of exactly what would be written (handles trimmed, "
+                    "range applied) and writes nothing; the player's Write file button then writes it - only the "
+                    "encode runs again, the graph above is cached."}),
+                "write_token": ("STRING", {"default": "", "tooltip": "Set by the player's Write file button."}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
 
     @classmethod
@@ -96,13 +144,15 @@ class SaveVideoC2C:
                    audio=None, video_info=None, colorspace_in=None, colorspace_out=None,
                    naming="default", naming_resolved="", subfolder="", save_output=True, **kw):
         h = hashlib.md5()
-        for k, v in sorted({
+        settings = {
             "format": format, "fps": fps, "filename_prefix": filename_prefix,
             "quality": quality, "colorspace_in": colorspace_in,
             "colorspace_out": colorspace_out, "naming": naming,
             "naming_resolved": naming_resolved, "subfolder": subfolder,
             "save_output": save_output,
-        }.items()):
+        }
+        settings.update({k: v for k, v in kw.items() if isinstance(v, (str, int, float, bool))})   # L9.40 widgets
+        for k, v in sorted(settings.items()):
             h.update(f"{k}={v}".encode())
         if torch.is_tensor(images):
             h.update(images.cpu().numpy().tobytes())
@@ -132,9 +182,28 @@ class SaveVideoC2C:
         tile_mode="auto",
         tile_size=512,
         save_metadata=True,
+        container=None,
+        codec=None,
+        profile=None,
+        bit_depth=None,
+        chroma=None,
+        color_primaries="auto",
+        color_transfer="auto",
+        color_range="auto",
+        handles_trim="auto",
+        trim_frames=8,
+        trim_side="head",
+        range_in=0,
+        range_out=0,
+        write_mode="write",
+        write_token="",
         prompt=None,
         extra_pnginfo=None,
+        unique_id=None,
     ):
+        settings = {k: v for k, v in locals().items()
+                    if k not in ("self", "images", "audio", "latent", "vae", "prompt", "extra_pnginfo", "unique_id",
+                                 "write_token", "write_mode", "video_info", "range_in", "range_out")}
         stream_info = None
         if latent is not None or vae is not None:
             if images is not None:
@@ -167,7 +236,12 @@ class SaveVideoC2C:
         if images.shape[0] == 0:
             raise SaveVideoError("IMAGE batch is empty — nothing to save.")
 
-        spec = resolve_format(str(format))
+        d = SM.DEFAULT_CHOICE
+        choice = SM.Choice(container or d.container, codec or d.codec, profile or d.profile,
+                           str(bit_depth or d.bit_depth), chroma or d.chroma)
+        colour = SM.Colour(color_primaries or "auto", color_transfer or "auto", color_range or "auto")
+        SM.check_colour(colour)
+        spec, format_how = SM.resolve(str(format), choice, alpha=images.shape[-1] >= 4)
         eff_fps = float(fps)
         if video_info and abs(eff_fps - 24.0) < 1e-6:
             eff_fps = float(video_info.get("loaded_fps", eff_fps))
@@ -189,16 +263,60 @@ class SaveVideoC2C:
         elif even_w or even_h:
             images, pad_note = pad_edge_replicate(images, even_w, even_h)
 
+        # L9.40: handles off, then the export range (in the trimmed clip's frames), then preview-or-write
+        images, audio, trim_rep = HIO.trim_on_save(images, audio, video_info, mode=str(handles_trim),
+                                                   frames=int(trim_frames), side=str(trim_side), fps=eff_fps)
+        n_full = int(images.shape[0])                 # the trimmed clip: the player's timeline, In / Out live on it
+        fingerprint = _fingerprint(settings, images if stream_info is None else None, latent)
+        common = {"handles": trim_rep, "fingerprint": fingerprint, "write_mode": write_mode, "frames_total": n_full}
+        if str(write_mode) == "preview first" and str(write_token or "") != fingerprint:
+            from .c2c_video.save_encode import write_proxy
+            proxy = write_proxy(images, eff_fps, "save_preview_first")
+            last = images[-1:] if torch.is_tensor(images) else (images.last_frame if images.last_frame is not None
+                                                                 else torch.zeros(1, 64, 64, 3))
+            if stream_info is not None:
+                images.close()
+            n_out, ph, pw = int(images.shape[0]), int(images.shape[1]), int(images.shape[2])
+            ui_prev = dict(common, mode="preview", preview=proxy, source=proxy, frames=n_out, fps=eff_fps,
+                           range=None, range_in=int(range_in), range_out=int(range_out),
+                           width=pw, height=ph, format=spec.label, format_from=format_how, codec=spec.codec,
+                           warnings=[] if proxy else ["The clip is too long for a preview proxy."],
+                           message="Preview only - nothing written. Press Write file in the player to write it.")
+            return {"ui": {"c2c_save_video": [ui_prev]}, "result": ("", last)}
+        source_proxy = None
+        if stream_info is None and not _proxy_off():         # a streamed save's frames are read once: no proxy
+            from .c2c_video.save_encode import write_proxy
+            source_proxy = write_proxy(images, eff_fps, "save_source")
+        images, audio, range_note, (r_in, r_out) = HIO.export_range(images, audio, int(range_in), int(range_out),
+                                                                     eff_fps)
+        common.update(range=range_note, range_in=r_in, range_out=r_out)
+
         _, h, w, _ = images.shape
         naming_eff = effective_naming(str(naming), str(naming_resolved or ""))
+        version = None
+        prefix_eff, sub_eff, base_dir = filename_prefix, subfolder, None
+        if naming_eff == SN.FOLDER and not str(subfolder or "").strip() and bool(save_output):
+            version = SN.resolve_version(prompt, unique_id)
+            from .c2c_video.save_encode import _import_folder_paths
+            out_root = _import_folder_paths().get_output_directory()
+            prefix_eff = version["filename_prefix"]
+            if SN.outside_output(version["base_path"], out_root):
+                base_dir, sub_eff = version["base_path"], version["subfolder_path"]
+            else:
+                import os as _os
+                sub_eff = _os.path.relpath(version["version_path"], out_root).replace("\\", "/")
+        naming_path = naming_eff
+        if naming_eff == SN.FOLDER and not bool(save_output) and not str(subfolder or "").strip():
+            naming_path = "ComfyUI counter"          # a temp (preview) file takes no version
         path_info = resolve_output_path(
             spec=spec,
-            naming=naming_eff,
-            filename_prefix=filename_prefix,
-            subfolder=subfolder,
+            naming=naming_path,
+            filename_prefix=prefix_eff,
+            subfolder=sub_eff,
             save_output=bool(save_output),
             width=int(w),
             height=int(h),
+            base_dir=base_dir,
         )
 
         metadata = None
@@ -216,6 +334,7 @@ class SaveVideoC2C:
             audio=audio,
             pad_note=pad_note,
             metadata=metadata,
+            colour=colour,
         )
 
         if stream_info is not None:
@@ -238,13 +357,45 @@ class SaveVideoC2C:
             "preview": result["preview"],
             "warnings": result.get("warnings") or [],
             "codec": spec.codec,
+            "format_from": format_how,
+            "naming": naming_eff,
+            "version": None if version is None else {k: version[k] for k in ("version_string", "origin",
+                                                                              "version_path", "node")},
+            "pix_fmt": spec.pix_fmt_for(bool(result["alpha"])),
+            "profile": spec.profile,
+            "colour_tags": {"primaries": colour.primaries, "transfer": colour.transfer, "range": colour.range},
             "stream": None if stream_info is None else {"method": stream_info.method, "exact": stream_info.exact,
                                                         "bounded": stream_info.bounded},
+            "mode": "written",
+            "source": source_proxy,
+            **common,
         }
         return {
             "ui": {"c2c_save_video": [ui_entry]},
             "result": (filenames, images),
         }
+
+
+def _proxy_off() -> bool:
+    from .c2c_video.save_encode import proxy_disabled
+    return proxy_disabled()
+
+
+def _fingerprint(settings: dict, images, latent) -> str:
+    """What a preview showed: the settings plus a sample of the frames (or the latent). The Write button sends it
+    back; a write whose frames or settings differ is previewed again instead (L9.40)."""
+    h = hashlib.md5()
+    for k in sorted(settings):
+        h.update(f"{k}={settings[k]!r};".encode())
+    src = images if torch.is_tensor(images) else None
+    if src is None and isinstance(latent, dict) and torch.is_tensor(latent.get("samples")):
+        src = latent["samples"]
+    if src is not None:
+        flat = src.detach().reshape(-1)
+        step = max(1, flat.numel() // 65536)
+        h.update(str(tuple(src.shape)).encode())
+        h.update(flat[::step].float().cpu().numpy().tobytes())
+    return h.hexdigest()[:16]
 
 
 NODE_CLASS_MAPPINGS = {"SaveVideoC2C": SaveVideoC2C}

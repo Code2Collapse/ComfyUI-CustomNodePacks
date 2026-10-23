@@ -570,6 +570,57 @@ def register_routes() -> bool:
                 status=500,
             )
 
+    async def _handle_save_matrix(request):
+        """L9.40: what Save Video (C2C) can write here - container -> codec -> profile -> bit depth / chroma, with the
+        reason for every choice this machine cannot write. Probed once (ffmpeg CLI + PyAV), then cached."""
+        import asyncio
+
+        from .save_matrix import cached_matrix
+
+        try:
+            data = await asyncio.get_running_loop().run_in_executor(_pools()[2], cached_matrix)
+            return web.json_response(data)
+        except Exception as exc:
+            log.exception("save matrix failed")
+            return web.json_response({"error": f"Could not list the formats: {exc}"}, status=500)
+
+    async def _handle_save_next_path(request):
+        """L9.40: the path Save Video (C2C) will write next (dry run). Body: {prompt, unique_id, naming, format,
+        container, codec, profile, bit_depth, chroma, filename_prefix, subfolder, save_output}."""
+        import asyncio
+
+        from .save_matrix import Choice, DEFAULT_CHOICE, resolve
+        from .save_naming import predict_path
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Request body must be JSON."}, status=400)
+
+        def work():
+            d = DEFAULT_CHOICE
+            ch = Choice(body.get("container") or d.container, body.get("codec") or d.codec,
+                        body.get("profile") or d.profile, str(body.get("bit_depth") or d.bit_depth),
+                        body.get("chroma") or d.chroma)
+            try:
+                spec, _how = resolve(str(body.get("format") or ""), ch)
+                ext, seq = spec.ext, spec.sequence
+            except Exception:  # noqa: BLE001 - an unfinished choice still gets a path; the encode reports it
+                ext, seq = "mp4", False
+            return predict_path(prompt=body.get("prompt") or {}, unique_id=body.get("unique_id"),
+                                naming=str(body.get("naming") or "default"), ext=ext, sequence=seq,
+                                filename_prefix=str(body.get("filename_prefix") or ""),
+                                subfolder=str(body.get("subfolder") or ""),
+                                save_output=bool(body.get("save_output", True)))
+
+        try:
+            return web.json_response(await asyncio.get_running_loop().run_in_executor(_pools()[2], work))
+        except Exception as exc:
+            log.exception("save next path failed")
+            return web.json_response({"error": f"Could not work out the next path: {exc}"}, status=500)
+
+    routes.get("/c2c/save_video/matrix")(_handle_save_matrix)
+    routes.post("/c2c/save_video/next_path")(_handle_save_next_path)
     routes.get("/c2c/video/probe")(_handle_probe)
     routes.get("/c2c/video/preview")(_handle_preview)
     routes.post("/c2c/frames/plan")(_handle_frames_plan)

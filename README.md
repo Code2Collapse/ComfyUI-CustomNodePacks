@@ -845,6 +845,57 @@ loader again. Until 2026-10-23 ComfyUI reused the empty output it had cached, an
 Ported in part from [ComfyUI-4K-Video-Save-Load](https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) (MIT);
 see CREDITS.md.
 
+#### Save Video (C2C): format controls, naming, player, built-in handles (2026-10-23)
+
+- **Format in five controls.** With `format` = *custom* (the default for new nodes) you choose **container ->
+  codec -> profile -> bit depth -> chroma**, and each list shows only what the choices before it allow: MOV offers
+  ProRes, DNxHR, CineForm, H.264 / H.265, PNG, QuickTime Animation and uncompressed 10-bit; ProRes 4444 offers 10-bit
+  4:4:4. The lists come from what this machine can actually write (ffmpeg and PyAV are checked once); a combination
+  it cannot write says why. New: AV1 (SVT), CineForm, UT Video, QuickTime Animation, PNG in MOV, uncompressed 10-bit,
+  ProRes in MKV, H.264 / H.265 in MOV and MKV, H.264 4:2:2 / 4:4:4, H.265 Main 12 / 4:2:2 / 4:4:4, VP9 profiles 1-3,
+  and TIFF / DPX / JPEG sequences next to PNG / EXR (EXR and TIFF with a choice of compression).
+- **Colour tags:** `color_primaries` (BT.709, BT.2020, Display P3, BT.601), `color_transfer` (BT.709, sRGB, linear,
+  PQ, HLG, gamma 2.2) and `color_range` (limited / full). For YUV codecs the conversion follows the choice (BT.2020
+  primaries convert with the BT.2020 matrix, full range converts to full range), so the file says what was done to
+  it. *auto* keeps the earlier behaviour.
+- **Saved workflows** keep encoding exactly as before. A workflow saved with the old single list (for example
+  "MOV ProRes 422 HQ") opens converted to the same five choices, and the node says so.
+- **Naming:** *Folder Version Incrementer* (and *default*, unless you change the C2C setting) takes the version
+  folder and name from the Folder Version Incrementer node in the graph. No wire is needed, and its settings are
+  used. Without one, the incrementer's defaults are used. A wired `subfolder` still wins. The node shows the path the
+  next write will use, and a version is used only when a file is written.
+- **Player:** Load Video's player on the whole clip (play, backwards, J / K / L, step, loop, timecode, full screen).
+  Its In / Out handles set the **export range** (`range_in` / `range_out`): the next run writes only those frames.
+- **A/B:** compare the saved file with the frames that came in. Wipe (vertical, horizontal, diagonal), difference
+  with gain, onion, flicker, zoom (mouse wheel), pan, 1:1, and a loupe showing pixel values.
+- **Preview first:** with `write_mode` = *preview first*, a run shows exactly what would be written and writes
+  nothing. *Write file* in the player then writes it. Only the encode runs again; the graph above is cached.
+- **Handles:** `handles_trim` = *auto* trims exactly the handles Load Video (C2C) added, read from `video_info`. If
+  Load used *fit*, it trims back to fit's target length. *manual* trims `trim_frames` on `trim_side`; *off* trims
+  nothing. *auto* never uses a count remembered from another run.
+
+#### Load Video (C2C): built-in handles (2026-10-23)
+
+`handles` = *fit* or *add* puts handle frames on the clip as it loads (repeated edge frames, never black; the audio
+moves with them). This works for IMAGE, mask and the VAE (LATENT) path alike, without decoding the clip first.
+*fit* pads the clip up to the model's frame grid; `target frames` 0 means this clip's length. *add* adds
+`handle frames`, rounded onto the grid. `grid` = *from format* uses the format preset above it (MiniMax H3 17n+5,
+Wan 4n+1, LTXV 8n+1, ...), so there is one grid, not two. The count travels in `video_info`, and Save Video (C2C)
+trims exactly that. The counts come from AV Handles' own planner, and AV Handles stays available as a separate
+node.
+
+#### Video Comparer (C2C): player, metrics, A/B/C/D (2026-10-23)
+
+- In `synced_player` mode (the default), Load Video's transport drives A. B follows it frame by frame, shifted by
+  `b_offset` frames.
+- **Views:** A, B, wipe (vertical / horizontal / diagonal), difference with gain, onion, flicker, side by side, and
+  a 2 x 2 grid of A / B / C / D (`image_c` / `image_d`, `file_c` / `file_d`, with labels). Zoom, pan, 1:1 and a
+  loupe with pixel values.
+- **Metrics:** after a run, per-frame PSNR, SSIM (on luma) and colour difference (CIEDE2000, checked against Sharma
+  et al. 2005) appear as a strip under the scrubber. Hover to read a frame's values, click to go to it; the worst
+  frame of each is marked. `metrics` turns it off.
+- Previews of image batches keep every frame (the old preview stopped at 600).
+
 #### Video Mask Editor (MEC)
 
 Paint masks on the frames of a video. Run the workflow once so the editor has frames, then click *Open Video Mask
@@ -1489,7 +1540,10 @@ All nodes are designed to work on **low-end GPUs** (4–6 GB VRAM):
 
 ## Running Tests
 
-The test suite covers all pure-tensor nodes (no GPU models required):
+The test suite stays on the developer's machine and is not in this repository (owner rule 2026-10-23). CI boots
+ComfyUI with this pack and fails on an import failure, no registered node, or a traceback from the pack
+(`.github/c2c_boot_check.py`). Where the suite exists locally, it covers all pure-tensor nodes (no GPU models
+required):
 
 ```bash
 # Run all tests:

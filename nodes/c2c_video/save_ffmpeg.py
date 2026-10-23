@@ -31,7 +31,8 @@ import numpy as np
 from .fast_decode import _NO_WINDOW, _big_pipe, ffmpeg_version, find_ffmpeg
 
 _CLI_CODECS = frozenset({"libx264", "libx265", "prores_ks", "dnxhd", "ffv1", "libvpx-vp9",
-                         "h264_nvenc", "hevc_nvenc", "av1_nvenc"})
+                         "h264_nvenc", "hevc_nvenc", "av1_nvenc",
+                         "libsvtav1", "cfhd", "utvideo", "png", "qtrle", "v210"})   # L9.40 matrix
 _FLAGS = "bicubic+accurate_rnd+full_chroma_int+full_chroma_inp"
 _ENCODERS: dict[str, frozenset[str]] = {}
 
@@ -78,8 +79,9 @@ def _encoders(exe: str) -> frozenset[str]:
     return _ENCODERS[exe]
 
 
-def ffmpeg_for(spec) -> str | None:
-    """The ffmpeg to encode ``spec`` with, or None for the PyAV path."""
+def ffmpeg_for(spec, pix: str | None = None) -> str | None:
+    """The ffmpeg to encode ``spec`` with, or None for the PyAV path. A matrix spec (L9.40) also needs this ffmpeg's
+    encoder to take the pixel format ``pix``; otherwise PyAV, which may (save_matrix.backend_for)."""
     if os.environ.get("C2C_SAVE_FFMPEG", "").strip() == "0":
         return None
     if spec.sequence or spec.codec not in _CLI_CODECS:
@@ -93,6 +95,10 @@ def ffmpeg_for(spec) -> str | None:
     enc = _encoders(exe)
     if spec.codec not in enc or (spec.audio_codec and spec.audio_codec not in enc):
         return None
+    if getattr(spec, "matrix", False):
+        from .save_matrix import backend_for
+        if backend_for(spec.codec, pix or spec.pix_fmt) != "ffmpeg":
+            return None
     return exe
 
 
@@ -139,6 +145,8 @@ def encode_with_ffmpeg(
     quantize,
     interrupt,
     progress,
+    matrix: str = "bt709",
+    out_range: str = "tv",
 ) -> list[str]:
     """Write ``images`` to ``path``. ``chunks`` yields float32 [k, H, W, C] numpy chunks (OCIO applied);
     ``quantize(chunk, bits)`` makes them integers exactly as the PyAV path does."""
@@ -148,14 +156,17 @@ def encode_with_ffmpeg(
     deep = spec.bit_depth > 8
     src_pix = ("rgba64le" if has_alpha else "rgb48le") if deep else ("rgba" if has_alpha else "rgb24")
     pix = spec.pix_fmt_for(has_alpha)
-    yuv = pix.startswith(("yuv", "nv12", "p010"))
-    vf = (f"scale=out_color_matrix=bt709:out_range=tv:flags={_FLAGS},format={pix}" if yuv
+    yuv = pix.startswith(("yuv", "nv12", "p010", "p016"))
+    vf = (f"scale=out_color_matrix={matrix}:out_range={out_range}:flags={_FLAGS},format={pix}" if yuv
           else f"scale=flags={_FLAGS},format={pix}")
     if tags:
         # the frames leaving the filter carry the tags (the -color_* options alone were overridden by the filter
         # output's unspecified primaries / transfer - measured); setparams only labels, it changes no pixel
-        vf += ",setparams=" + ":".join(f"{k}={tags[k]}" for k in ("color_primaries", "color_trc", "colorspace")
-                                       if tags.get(k)) + ":range=tv"
+        params = [f"{k}={tags[k]}" for k in ("color_primaries", "color_trc", "colorspace") if tags.get(k)]
+        if yuv:
+            params.append(f"range={out_range}")
+        if params:
+            vf += ",setparams=" + ":".join(params)
     rate = exact_rate(fps)
     tmp = tempfile.mkdtemp(prefix="c2c_save_")
     args = [exe, "-hide_banner", "-nostdin", "-v", "error", "-y",

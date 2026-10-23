@@ -10,6 +10,7 @@ from dataclasses import replace
 from fractions import Fraction
 from typing import Any
 
+from . import handles_io as HIO
 from .audio import LazyAudio, lazy_audio_for_handle
 from .fast_decode import (
     DECODER_CHOICES,
@@ -279,6 +280,7 @@ def build_loaded_handle(
     seconds_cap: float = 0.0,
     resolution: str = "custom",
     divisible_by: int = 1,
+    snap_frames: bool = True,
 ) -> tuple[C2CVideo, C2CVideo]:
     """Fixed decision #1: probe → retime → trim → seconds → every → cap → format → crop → size → scale.
     ``crop`` = (x, y, w, h) as fractions of the frame (L2.53); None or (0, 0, 1, 1) keeps the whole frame.
@@ -294,7 +296,8 @@ def build_loaded_handle(
         h = h.trimmed(0, seconds_to_frames(float(seconds_cap), float(h.fps)))
     h = h.every(int(select_every_nth))
     h = h.capped(int(frame_load_cap))
-    h = apply_format_frames(h, preset, format_name or "None")
+    if snap_frames:
+        h = apply_format_frames(h, preset, format_name or "None")
     if crop is not None:
         h = h.cropped(*crop)
     if vae is not None:
@@ -626,12 +629,17 @@ def execute_video_load(
     resolution: str = "custom",
     divisible_by: int = 1,
     audio_when_missing: str = "silence",
+    handles: dict | None = None,
 ) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str]:
     """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info). The defaults of every input added after
     the first release reproduce the old behaviour (decoder "auto" only switches readers where the frames are identical)."""
     import json
 
     raw = resolve_probe(path, sequence_fps=sequence_fps)
+    hopt = dict(handles or {})
+    hmode = str(hopt.get("mode") or "off")
+    if HIO.disabled():
+        hmode = "off"
     h = raw
     if float(force_rate) > 0:
         h = h.retimed(float(force_rate), source_times_for_handle(raw))
@@ -650,6 +658,7 @@ def execute_video_load(
         seconds_cap=seconds_cap,
         resolution=resolution,
         divisible_by=divisible_by,
+        snap_frames=hmode != "fit",              # fit pads UP to the grid; the format's own snap would cut first
     )
     if len(loaded) == 0:
         _raise_if_empty_selection(
@@ -658,17 +667,33 @@ def execute_video_load(
             skip=int(skip_first_frames),
             force_rate=force_rate,
         )
-    video_info = make_video_info(raw, loaded)
     audio_mode = audio_output_mode(loaded, audio_when_missing)
     audio = lazy_audio_for_handle(loaded) if audio_mode != "none" else None
+    handles_rec, handles_report = None, None
+    if hmode in ("fit", "add"):
+        preset = FORMAT_PRESETS.get(format or "None", {})
+        model, step, plus, glabel = HIO.grid_for(str(hopt.get("grid") or HIO.FROM_FORMAT), preset, format or "None",
+                                                 int(hopt.get("step") or 4), int(hopt.get("plus") or 0))
+        loaded, audio, handles_rec, handles_report = HIO.add_on_load(
+            loaded, audio, mode=hmode, frames=int(hopt.get("frames") or 0), target=int(hopt.get("target") or 0),
+            side=str(hopt.get("side") or "head"), model=model, step=step, plus=plus, fps=float(loaded.fps),
+            memo_key=f"load_video_c2c:{unique_id}")
+        handles_rec = dict(handles_rec, grid=glabel, mode=hmode)
+    video_info = make_video_info(raw, loaded)
+    if handles_rec is not None:
+        video_info[HIO.INFO_KEY] = handles_rec
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 5)
     plan = plan_decoder(loaded, decoder, cuda=device_is_cuda()) if (needs_image or needs_mask) else None
 
     def info(used: DecoderPlan | None) -> str:
-        return json.dumps(load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode),
-                          indent=2)
+        summary = load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode)
+        if handles_rec is not None:
+            summary["handles"] = {"head": handles_rec["head"], "tail": handles_rec["tail"],
+                                  "target": handles_rec.get("target", 0), "grid": handles_rec["grid"],
+                                  "report": handles_report}
+        return json.dumps(summary, indent=2)
 
     note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask)) if not needed))
     if not (needs_image or needs_mask):
@@ -782,6 +807,15 @@ RESOLUTION_TIP = ("Output size by its LONGEST side, keeping the aspect: 2160p is
 DIVISIBLE_TIP = "Round both output dimensions to a multiple of this. A format preset or a VAE may raise it."
 AUDIO_MISSING_TIP = ("When the file has no audio: silence outputs a silent track as long as the loaded frames (what the "
                      "loader always did, so downstream nodes keep working); none outputs nothing.")
+HANDLES_TIP = ("Handles = extra frames for a video model to settle on, added here and trimmed off again by Save Video "
+               "(C2C) (it reads them from video_info). fit: pad the clip UP to the model's frame grid (handle_target "
+               "= frames you want out, 0 = this clip's length). add: put handle_frames on, rounded onto the grid. "
+               "Repeated edge frames, never black; the audio moves with them.")
+HANDLE_FRAMES_TIP = "add: frames to put on (side both: on EACH end). With a grid, 0 = just enough to land on it."
+HANDLE_TARGET_TIP = "fit: how many frames you want out after the trim. 0 = this clip's own length."
+HANDLE_SIDE_TIP = "Which end gets the handles. head is where a video model settles; both splits them."
+HANDLE_GRID_TIP = ("The model's frame grid: 'from format' uses the format preset above (MiniMax H3 17n+5, Wan 4n+1, "
+                   "LTXV 8n+1 ...), so there is one grid, not two; or pick one here.")
 CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop "
             "tool in the player; custom_width / custom_height then resize the cropped frame.")
 
@@ -819,6 +853,16 @@ class LoadVideoC2C:
                 "resolution": (RESOLUTION_CHOICES, _widget(RESOLUTION_TIP, default="custom")),
                 "divisible_by": (DIVISIBLE_CHOICES, _widget(DIVISIBLE_TIP, default=1)),
                 "audio_when_missing": (AUDIO_MISSING_CHOICES, _widget(AUDIO_MISSING_TIP, default="silence")),
+                # L9.40 (owner 2026-10-23: "need the av handles add/trim built in") - appended, saved workflows keep
+                # their widget order. Save Video (C2C) trims exactly these when video_info is wired.
+                "handles": (list(HIO.HANDLE_MODES), _widget(HANDLES_TIP, default="off")),
+                "handle_frames": ("INT", _widget(HANDLE_FRAMES_TIP, default=8, min=0, max=400)),
+                "handle_target": ("INT", _widget(HANDLE_TARGET_TIP, default=0, min=0, max=BIGMAX)),
+                "handle_side": (list(HIO.SIDES), _widget(HANDLE_SIDE_TIP, default="head")),
+                "handle_grid": (list(HIO.GRID_CHOICES), _widget(HANDLE_GRID_TIP, default=HIO.FROM_FORMAT)),
+                "handle_custom_step": ("INT", _widget("custom grid: step (frames = step * n + plus).", default=4,
+                                                      min=1, max=1000)),
+                "handle_custom_plus": ("INT", _widget("custom grid: plus.", default=1, min=0, max=1000)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -848,6 +892,13 @@ class LoadVideoC2C:
         resolution="custom",
         divisible_by=1,
         audio_when_missing="silence",
+        handles="off",
+        handle_frames=8,
+        handle_target=0,
+        handle_side="head",
+        handle_grid=HIO.FROM_FORMAT,
+        handle_custom_step=4,
+        handle_custom_plus=1,
         prompt=None,
         unique_id=None,
     ):
@@ -872,6 +923,8 @@ class LoadVideoC2C:
             resolution=resolution,
             divisible_by=divisible_by,
             audio_when_missing=audio_when_missing,
+            handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
+                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
         )
 
     @classmethod
@@ -921,6 +974,16 @@ class LoadVideoPathC2C:
                 "resolution": (RESOLUTION_CHOICES, _widget(RESOLUTION_TIP, default="custom")),
                 "divisible_by": (DIVISIBLE_CHOICES, _widget(DIVISIBLE_TIP, default=1)),
                 "audio_when_missing": (AUDIO_MISSING_CHOICES, _widget(AUDIO_MISSING_TIP, default="silence")),
+                # L9.40 (owner 2026-10-23: "need the av handles add/trim built in") - appended, saved workflows keep
+                # their widget order. Save Video (C2C) trims exactly these when video_info is wired.
+                "handles": (list(HIO.HANDLE_MODES), _widget(HANDLES_TIP, default="off")),
+                "handle_frames": ("INT", _widget(HANDLE_FRAMES_TIP, default=8, min=0, max=400)),
+                "handle_target": ("INT", _widget(HANDLE_TARGET_TIP, default=0, min=0, max=BIGMAX)),
+                "handle_side": (list(HIO.SIDES), _widget(HANDLE_SIDE_TIP, default="head")),
+                "handle_grid": (list(HIO.GRID_CHOICES), _widget(HANDLE_GRID_TIP, default=HIO.FROM_FORMAT)),
+                "handle_custom_step": ("INT", _widget("custom grid: step (frames = step * n + plus).", default=4,
+                                                      min=1, max=1000)),
+                "handle_custom_plus": ("INT", _widget("custom grid: plus.", default=1, min=0, max=1000)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -951,6 +1014,13 @@ class LoadVideoPathC2C:
         resolution="custom",
         divisible_by=1,
         audio_when_missing="silence",
+        handles="off",
+        handle_frames=8,
+        handle_target=0,
+        handle_side="head",
+        handle_grid=HIO.FROM_FORMAT,
+        handle_custom_step=4,
+        handle_custom_plus=1,
         prompt=None,
         unique_id=None,
     ):
@@ -974,6 +1044,8 @@ class LoadVideoPathC2C:
             resolution=resolution,
             divisible_by=divisible_by,
             audio_when_missing=audio_when_missing,
+            handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
+                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
         )
 
     @classmethod

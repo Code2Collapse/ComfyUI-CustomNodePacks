@@ -21,6 +21,7 @@ import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
 import { wdEnsureProxy } from './_wan_director_ui.js';
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
+import { createComparePlayer } from "./_c2c_compare_player.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -294,7 +295,9 @@ app.registerExtension({
             S.releaseAll = () => {
                 S.srcA = swapSource(S.srcA, null);
                 S.srcB = swapSource(S.srcB, null);
-                releaseMedia(vidA); releaseMedia(vidB);
+                S.srcC = swapSource(S.srcC, null);
+                S.srcD = swapSource(S.srcD, null);
+                S.cmp?.pause();
             };
 
             // ── Build DOM widget ─────────────────────────────
@@ -333,259 +336,35 @@ app.registerExtension({
             // every wipe and video frame composite in software.
             const ctx = cvs.getContext("2d");
 
-            // ── Synced dual-video player (mode = "synced_player") ──
-            // Two side-by-side <video> elements sharing a single transport.
-            // Hidden by default; activated by the render() switch.
-            const playerHost = document.createElement("div");
-            playerHost.style.cssText = "display:none;flex-direction:column;width:100%;background:var(--c2c-scrimDark2);";
-            const playerRow = document.createElement("div");
-            playerRow.style.cssText = "display:flex;width:100%;gap:2px;background:var(--c2c-scrimDark2);";
-            const vidA = document.createElement("video");
-            const vidB = document.createElement("video");
-            for (const v of [vidA, vidB]) {
-                // NOTE: parent wrapA/wrapB already provide the 50/50 split via
-                // `flex:1 1 50%`. The <video> itself must fill its wrapper
-                // (width:100%) — using width:50% here caused each video to
-                // render at 25% of total width (50% of 50%), making the
-                // player look "broken" / "can't see it play". (P1.2 regression fix)
-                v.style.cssText = "width:100%;height:auto;display:block;background:var(--c2c-black);";
-                v.playsInline = true;
-                v.preload = "auto";
-                v.muted = true;          // dual-audio would echo; user can unmute the master
-                v.controls = false;
-            }
-            vidA.title = "A";
-            vidB.title = "B";
-            const vidALabel = document.createElement("div");
-            vidALabel.textContent = "A";
-            vidALabel.style.cssText = "position:absolute;top:6px;left:6px;background:rgba(0,0,0,0.6);color:var(--c2c-okSoft);padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
-            const vidBLabel = document.createElement("div");
-            vidBLabel.textContent = "B";
-            vidBLabel.style.cssText = "position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:var(--c2c-pink);padding:1px 6px;border-radius:8px;font:11px system-ui;font-weight:600;pointer-events:none;";
-            const wrapA = document.createElement("div");
-            wrapA.style.cssText = "position:relative;flex:1 1 50%;min-width:0;";
-            wrapA.appendChild(vidA);
-            wrapA.appendChild(vidALabel);
-            const wrapB = document.createElement("div");
-            wrapB.style.cssText = "position:relative;flex:1 1 50%;min-width:0;";
-            wrapB.appendChild(vidB);
-            wrapB.appendChild(vidBLabel);
-            playerRow.appendChild(wrapA);
-            playerRow.appendChild(wrapB);
-            playerHost.appendChild(playerRow);
-
-            // Shared transport: play/pause button + seekbar + time readout.
-            const transport = document.createElement("div");
-            transport.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--c2c-bg3);border-top:1px solid var(--c2c-border);color:var(--c2c-fg);font:11px system-ui;";
-            const playBtn = document.createElement("button");
-            playBtn.type = "button";
-            playBtn.textContent = "▶";
-            playBtn.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 10px;cursor:pointer;font-size:13px;line-height:1;";
-            const seek = document.createElement("input");
-            seek.type = "range";
-            seek.min = "0";
-            seek.max = "10000";
-            seek.value = "0";
-            seek.step = "1";
-            seek.style.cssText = "flex:1 1 auto;accent-color:var(--c2c-blue);";
-            const tReadout = document.createElement("span");
-            tReadout.textContent = "0.00 / 0.00";
-            tReadout.style.cssText = "font-family:ui-monospace,monospace;font-size:10.5px;color:var(--c2c-sub);min-width:84px;text-align:right;";
-            const muteBtn = document.createElement("button");
-            muteBtn.type = "button";
-            muteBtn.textContent = "🔇 A";
-            muteBtn.title = "Toggle audio (unmute A — B stays muted to avoid echo)";
-            muteBtn.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10.5px;";
-            // Frame-step buttons for real per-frame A/B comparison.
-            const mkStep = (label, title) => {
-                const b = document.createElement("button");
-                b.type = "button"; b.textContent = label; b.title = title;
-                b.style.cssText = "background:var(--c2c-bg);border:1px solid var(--c2c-surface0);color:var(--c2c-fg);border-radius:4px;padding:2px 8px;cursor:pointer;font-family:ui-monospace,monospace;font-size:11px;line-height:1;";
-                return b;
-            };
-            const btnFirst = mkStep("⏮", "Jump to first frame");
-            const btnStepB = mkStep("◀ 1f", "Step back 1 frame (key: ,)");
-            const btnStepF = mkStep("1f ▶", "Step forward 1 frame (key: .)");
-            const btnLast  = mkStep("⏭", "Jump to last frame");
-            transport.appendChild(playBtn);
-            transport.appendChild(btnFirst);
-            transport.appendChild(btnStepB);
-            transport.appendChild(btnStepF);
-            transport.appendChild(btnLast);
-            transport.appendChild(seek);
-            transport.appendChild(tReadout);
-            transport.appendChild(muteBtn);
-            playerHost.appendChild(transport);
+            // ── Synced player v2 (mode = "synced_player", L9.40): Load Video's transport, the A/B view (wipe,
+            //    difference, onion, flicker, zoom, loupe), side by side, a 2 x 2 grid and per-frame metrics -
+            //    js/_c2c_compare_player.js ──
+            const cmp = createComparePlayer({
+                onOffset: (n) => { const w = getW(node, "b_offset"); if (w && w.value !== n) w.value = n; },
+            });
+            S.cmp = cmp;
+            const playerHost = cmp.root;
+            playerHost.style.display = "none";
             wrap.appendChild(playerHost);
-
-            // Synced-player state — _sp.master is whichever <video> drives time;
-            // we always seek both to master.currentTime per RAF tick. Master is
-            // picked as whichever has the longer duration (so the shorter one
-            // pauses at its end naturally).
-            const _sp = { active: false, raf: 0, master: vidA, slave: vidB, fps: 30, rvfcA: 0, rvfcB: 0 };
-
-            const _spDetectFps = () => {
-                // A preview written by a run knows its rate (preview_fps); otherwise best effort (rVFC, else 30).
-                const known = Number(S.srcA?.fps || S.srcB?.fps);
-                return known > 0 ? known : _sp.fps;
-            };
-
-            const _spPickMaster = () => {
-                const dA = isFinite(vidA.duration) ? vidA.duration : 0;
-                const dB = isFinite(vidB.duration) ? vidB.duration : 0;
-                if (dB > dA) { _sp.master = vidB; _sp.slave = vidA; }
-                else         { _sp.master = vidA; _sp.slave = vidB; }
-            };
-
+            const _sp = { active: false, key: "" };
+            const srcUrl = (src) => (src && src.kind === "video" ? (src.el?.currentSrc || src.el?.src || "") : "");
             const _spLoadSources = () => {
                 const a = S.srcA, b = S.srcB;
-                if (a && a.kind === "video" && vidA.src !== a.el.currentSrc && a.el.currentSrc) {
-                    vidA.src = a.el.currentSrc;
-                }
-                if (b && b.kind === "video" && vidB.src !== b.el.currentSrc && b.el.currentSrc) {
-                    vidB.src = b.el.currentSrc;
-                }
+                const fps = Number(a?.fps || b?.fps) || Number(getVal(node, "preview_fps", 24)) || 24;
+                const sources = { a: srcUrl(a), b: srcUrl(b), c: srcUrl(S.srcC), d: srcUrl(S.srcD) };
+                const offset = getVal(node, "b_offset", 0) | 0;
+                const labels = { a: getVal(node, "label_a", "A"), b: getVal(node, "label_b", "B"),
+                                 c: getVal(node, "label_c", "C"), d: getVal(node, "label_d", "D") };
+                const key = JSON.stringify([sources, fps, offset, labels]);
+                if (key === _sp.key) return;
+                _sp.key = key;
+                cmp.setSources({
+                    sources, fps, offset, labels,
+                    frames: Math.max(1, Math.round((a?.dur || b?.dur || 0) * fps)),
+                    aspect: a?.w && a?.h ? a.w / a.h : (b?.w && b?.h ? b.w / b.h : undefined),
+                });
+                cmp.setMetrics(S.metrics || null);
             };
-
-            const _spSync = () => {
-                // Push master.currentTime onto slave (with rate-matched tolerance)
-                if (!_sp.master.duration || !_sp.slave.duration) return;
-                const t = _sp.master.currentTime;
-                if (Math.abs(_sp.slave.currentTime - t) > 0.05) {
-                    try { _sp.slave.currentTime = Math.min(_sp.slave.duration, t); } catch {}
-                }
-                if (_sp.master.paused !== _sp.slave.paused) {
-                    if (_sp.master.paused) _sp.slave.pause();
-                    else _sp.slave.play().catch(() => {});
-                }
-                // Update transport UI
-                const dur = _sp.master.duration || 0;
-                const fps = _spDetectFps();
-                const f = Math.round(t * fps);
-                const fEnd = Math.round(dur * fps);
-                tReadout.textContent = `f ${f}/${fEnd} · ${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
-                seek.value = String(Math.round((dur > 0 ? t / dur : 0) * 10000));
-                playBtn.textContent = _sp.master.paused ? "▶" : "❚❚";
-            };
-
-            // Frame-step API — exposed for keyboard + button handlers.
-            const _spStepFrames = (n) => {
-                _spPickMaster();
-                if (!_sp.master.duration) return;
-                if (!_sp.master.paused) _sp.master.pause();
-                if (!_sp.slave.paused)  _sp.slave.pause();
-                const fps = _spDetectFps();
-                const dt = n / Math.max(1, fps);
-                const t = Math.max(0, Math.min((_sp.master.duration || 0) - 1e-3,
-                                                _sp.master.currentTime + dt));
-                try {
-                    _sp.master.currentTime = t;
-                    _sp.slave.currentTime  = Math.min(_sp.slave.duration || t, t);
-                } catch {}
-                _spSync();
-            };
-            const _spJump = (where) => {
-                _spPickMaster();
-                if (!_sp.master.duration) return;
-                if (!_sp.master.paused) _sp.master.pause();
-                if (!_sp.slave.paused)  _sp.slave.pause();
-                const t = (where === "end")
-                    ? Math.max(0, (_sp.master.duration || 0) - (1 / Math.max(1, _spDetectFps())))
-                    : 0;
-                try {
-                    _sp.master.currentTime = t;
-                    _sp.slave.currentTime  = Math.min(_sp.slave.duration || t, t);
-                } catch {}
-                _spSync();
-            };
-
-            // Per-decoded-frame sync via requestVideoFrameCallback (Chromium, Safari 16+).
-            const _spInstallRVFC = () => {
-                const setup = (vid, key) => {
-                    if (!vid.requestVideoFrameCallback) return;
-                    const cb = (now, meta) => {
-                        if (!_sp.active) return;
-                        // Derive an fps estimate from successive expectedDisplayTimes.
-                        if (meta && meta.expectedDisplayTime && vid._lastEDT) {
-                            const dt = (meta.expectedDisplayTime - vid._lastEDT) / 1000;
-                            if (dt > 1e-4 && dt < 1) {
-                                const inst = 1 / dt;
-                                _sp.fps = _sp.fps ? (_sp.fps * 0.8 + inst * 0.2) : inst;
-                            }
-                        }
-                        if (meta) vid._lastEDT = meta.expectedDisplayTime;
-                        if (vid === _sp.master) _spSync();
-                        try { vid[key] = vid.requestVideoFrameCallback(cb); } catch {}
-                    };
-                    try { vid[key] = vid.requestVideoFrameCallback(cb); } catch {}
-                };
-                setup(vidA, "rvfcA");
-                setup(vidB, "rvfcB");
-            };
-            const _spUninstallRVFC = () => {
-                if (vidA.cancelVideoFrameCallback && vidA.rvfcA) {
-                    try { vidA.cancelVideoFrameCallback(vidA.rvfcA); } catch {}
-                }
-                if (vidB.cancelVideoFrameCallback && vidB.rvfcB) {
-                    try { vidB.cancelVideoFrameCallback(vidB.rvfcB); } catch {}
-                }
-                vidA.rvfcA = 0; vidB.rvfcB = 0;
-            };
-
-            const _spRaf = () => {
-                _sp.raf = 0;
-                if (!_sp.active) return;
-                _spSync();
-                if (!_sp.master.paused) _sp.raf = requestAnimationFrame(_spRaf);
-            };
-            const _spKick = () => { if (!_sp.raf) _sp.raf = requestAnimationFrame(_spRaf); };
-
-            playBtn.addEventListener("click", () => {
-                _spPickMaster();
-                if (_sp.master.paused) {
-                    _sp.master.play().catch(() => {});
-                    _sp.slave.play().catch(() => {});
-                    _spKick();
-                } else {
-                    _sp.master.pause();
-                    _sp.slave.pause();
-                    _spSync();
-                }
-            });
-            seek.addEventListener("input", () => {
-                _spPickMaster();
-                const dur = _sp.master.duration || 0;
-                const t = (parseInt(seek.value, 10) / 10000) * dur;
-                try { _sp.master.currentTime = t; _sp.slave.currentTime = Math.min(_sp.slave.duration || t, t); } catch {}
-                _spSync();
-            });
-            muteBtn.addEventListener("click", () => {
-                vidA.muted = !vidA.muted;
-                muteBtn.textContent = vidA.muted ? "🔇 A" : "🔊 A";
-            });
-            btnFirst.addEventListener("click", () => _spJump("start"));
-            btnLast .addEventListener("click", () => _spJump("end"));
-            btnStepB.addEventListener("click", () => _spStepFrames(-1));
-            btnStepF.addEventListener("click", () => _spStepFrames(+1));
-            // Make the player div focusable so it can capture keyboard events.
-            playerHost.tabIndex = 0;
-            playerHost.style.outline = "none";
-            playerHost.addEventListener("keydown", (e) => {
-                if (!_sp.active) return;
-                if (e.key === "," || e.key === "ArrowLeft")  { _spStepFrames(-1); e.preventDefault(); }
-                else if (e.key === "." || e.key === "ArrowRight") { _spStepFrames(+1); e.preventDefault(); }
-                else if (e.key === "Home") { _spJump("start"); e.preventDefault(); }
-                else if (e.key === "End")  { _spJump("end");   e.preventDefault(); }
-                else if (e.code === "Space") {
-                    playBtn.click();
-                    e.preventDefault();
-                }
-            });
-            // Keep the loop running while master is playing.
-            vidA.addEventListener("play",  () => _spKick());
-            vidB.addEventListener("play",  () => _spKick());
-            vidA.addEventListener("pause", () => _spSync());
-            vidB.addEventListener("pause", () => _spSync());
 
 
             // ── Frame scrubbing for videos ───────────────────
@@ -632,32 +411,15 @@ app.registerExtension({
                     overlay.style.display = "none";
                     hint.style.display = "none";
                     playerHost.style.display = "flex";
-                    const wasActive = _sp.active;
                     _sp.active = true;
                     _spLoadSources();
-                    _spPickMaster();
-                    if (!wasActive) _spInstallRVFC();
-                    // If neither A nor B is a video, show a placeholder.
-                    const aIsVid = S.srcA && S.srcA.kind === "video";
-                    const bIsVid = S.srcB && S.srcB.kind === "video";
-                    if (!aIsVid && !bIsVid) {
-                        tReadout.textContent = "(no videos)";
-                        seek.disabled = true;
-                        playBtn.disabled = true;
-                        for (const b of [btnFirst, btnLast, btnStepB, btnStepF]) b.disabled = true;
-                    } else {
-                        seek.disabled = false;
-                        playBtn.disabled = false;
-                        for (const b of [btnFirst, btnLast, btnStepB, btnStepF]) b.disabled = false;
-                    }
+                    requestAnimationFrame(() => node._VC_grow?.());
                     modeBadge.textContent = mode;
                     return;
                 } else if (_sp.active) {
                     // Coming back from synced_player → restore canvas view.
                     _sp.active = false;
-                    if (_sp.raf) { cancelAnimationFrame(_sp.raf); _sp.raf = 0; }
-                    _spUninstallRVFC();
-                    try { vidA.pause(); vidB.pause(); } catch {}
+                    cmp.pause();
                     playerHost.style.display = "none";
                     cvs.style.display = "block";
                     overlay.style.display = "flex";
@@ -900,10 +662,24 @@ app.registerExtension({
             // declared: the mode filter resizes the node to computeSize(), and
             // without it the 600px node collapsed to 244 with the view cut to a
             // 40px strip.
+            // L9.40: in synced_player the v2 player (video, transport, metrics strip, tools) sets the floor, so
+            // the node grows to show all of it instead of clipping it to the canvas modes' 240 px.
+            const playerNeed = () => Math.max(252, Math.ceil(playerHost.scrollHeight) + 14);
             node.addDOMWidget("comparer_view", "COMPARER", wrap, {
                 serialize: false,
-                getMinHeight: () => 252,
+                getMinHeight: () => (_sp.active ? playerNeed() : 252),
             });
+            const growToPlayer = () => {
+                if (!_sp.active) return;
+                const need = node.computeSize?.()?.[1];
+                if (need && node.size[1] < need - 1) { node.setSize([node.size[0], need]); node.setDirtyCanvas?.(true, true); }
+            };
+            node._VC_grow = growToPlayer;
+            if (typeof ResizeObserver === "function") {
+                const pro = new ResizeObserver(() => requestAnimationFrame(growToPlayer));
+                pro.observe(playerHost);
+                node._VC_pro = pro;
+            }
             // Default size: wide enough so each video gets ~360px in the
             // dual-player view (was 480 → each video ~224px, felt cramped).
             // User can still resize via the corner handle.
@@ -925,7 +701,7 @@ app.registerExtension({
                 "mode", "wipe_position", "onion_alpha",
                 "diff_gain", "diff_gamma", "diff_threshold", "diff_mode",
                 "false_color_lut", "bit_depth", "frame_index",
-                "file_a", "file_b",
+                "file_a", "file_b", "file_c", "file_d", "b_offset", "label_a", "label_b", "label_c", "label_d",
             ];
             const installCallback = (w) => {
                 if (!w) return;
@@ -934,6 +710,8 @@ app.registerExtension({
                     orig?.call(w, v);
                     if (w.name === "file_a") S.srcA = swapSource(S.srcA, await loadSource(v));
                     if (w.name === "file_b") S.srcB = swapSource(S.srcB, await loadSource(v));
+                    if (w.name === "file_c") S.srcC = swapSource(S.srcC, await loadSource(v));
+                    if (w.name === "file_d") S.srcD = swapSource(S.srcD, await loadSource(v));
                     if (w.name === "wipe_position") S.wipePos = +v;
                     if (w.name === "onion_alpha")   S.onionAlpha = +v;
                     if (w.name === "frame_index")   applyFrameToVideos();
@@ -951,6 +729,10 @@ app.registerExtension({
                 const fb = getVal(node, "file_b", "");
                 if (fa) S.srcA = swapSource(S.srcA, await loadSource(fa));
                 if (fb) S.srcB = swapSource(S.srcB, await loadSource(fb));
+                const fc = getVal(node, "file_c", "");
+                const fd = getVal(node, "file_d", "");
+                if (fc) S.srcC = swapSource(S.srcC, await loadSource(fc));
+                if (fd) S.srcD = swapSource(S.srcD, await loadSource(fd));
                 applyFrameToVideos();
                 render();
             });
@@ -975,6 +757,10 @@ app.registerExtension({
             (async () => {
                 if (ab?.a) S.srcA = swapSource(S.srcA, await loadServerMedia(ab.a));
                 if (ab?.b) S.srcB = swapSource(S.srcB, await loadServerMedia(ab.b));
+                if (ab?.c) S.srcC = swapSource(S.srcC, await loadServerMedia(ab.c));
+                if (ab?.d) S.srcD = swapSource(S.srcD, await loadServerMedia(ab.d));
+                S.metrics = msg?.c2c_metrics?.[0] || null;
+                S.cmp?.setMetrics(S.metrics);
                 if (panel) {
                     const p = await loadServerMedia({ ...panel, kind: "image" });
                     if (p) S.serverPreview = p;
@@ -988,8 +774,10 @@ app.registerExtension({
         nodeType.prototype.onRemoved = function () {
             _removed?.apply(this, arguments);
             try { this._VC_ro?.disconnect?.(); } catch {}
+            try { this._VC_pro?.disconnect?.(); } catch {}
             if (this._VC?.rafToken) cancelAnimationFrame(this._VC.rafToken);
             try { this._VC?.releaseAll?.(); } catch {}
+            try { this._VC?.cmp?.destroy(); } catch {}
         };
     },
 });

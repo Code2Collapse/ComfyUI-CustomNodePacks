@@ -26,6 +26,8 @@ class FormatSpec:
     file_ext: str | None = None  # sequence frame ext override
     hw: str | None = None        # "nvenc": needs an NVIDIA GPU (L2.53)
     codec_tag: str | None = None  # e.g. "hvc1": HEVC in MP4 that Apple players open (L2.53, as the 4K pack tags it)
+    alpha_pix_fmt: str | None = None  # L9.40 matrix: the pixel format when the frames carry alpha
+    matrix: bool = False              # L9.40: built from the five controls (save_matrix.build_spec)
 
     @property
     def chroma_even(self) -> tuple[bool, bool]:
@@ -39,6 +41,10 @@ class FormatSpec:
         return False, False
 
     def pix_fmt_for(self, has_alpha: bool) -> str:
+        if has_alpha and self.alpha_pix_fmt:
+            return self.alpha_pix_fmt
+        if self.matrix:
+            return self.pix_fmt                     # a matrix spec without an alpha format: alpha is not kept
         if self.codec == "ffv1" and has_alpha:
             return "gbrap16le"
         if self.codec == "libvpx-vp9" and has_alpha:

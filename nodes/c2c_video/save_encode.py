@@ -18,6 +18,7 @@ from .save_ocio import transform_chunk
 _BT709 = 1
 _RANGE_TV = 1
 _SWS_FLAGS = 0x4 | 0x40000 | 0x2000 | 0x4000
+_PYAV_MATRICES = frozenset({1, 4, 5, 7})      # swscale matrices PyAV's reformat applies (L9.40, measured)
 
 
 def _progress_and_interrupt():
@@ -52,11 +53,14 @@ def read_comfy_setting(key: str, default: str) -> str:
 
 
 def effective_naming(naming: str, naming_resolved: str) -> str:
+    """default = the C2C setting c2c.saveVideo.naming; its default is the Folder Version Incrementer (L9.40, owner
+    2026-10-23: "when we select folder-version-incrementer or default it automatically fills the information")."""
+    from .save_naming import DEFAULT_SETTING, canonical
     if naming and naming != "default":
-        return naming
+        return canonical(naming)
     if naming_resolved and naming_resolved.strip():
-        return naming_resolved.strip()
-    return read_comfy_setting("c2c.saveVideo.naming", "ComfyUI counter")
+        return canonical(naming_resolved.strip())
+    return canonical(read_comfy_setting("c2c.saveVideo.naming", DEFAULT_SETTING))
 
 
 def pad_edge_replicate(images: torch.Tensor, width: bool = True, height: bool = True,
@@ -91,7 +95,8 @@ def quantize_rgb(rgb: np.ndarray, bit_depth: int, clamp_hdr: bool = True) -> np.
 _CHUNK_BYTES = 64 * 1024 * 1024
 
 
-def _rgb_to_av_frame(rgb: np.ndarray, pix_fmt: str, bit_depth: int):
+def _rgb_to_av_frame(rgb: np.ndarray, pix_fmt: str, bit_depth: int, colorspace: int = _BT709,
+                     color_range: int = _RANGE_TV):
     """float32 RGB(A) 0-1 -> an av.VideoFrame in `pix_fmt`.
 
     8-bit targets start from rgb24 / rgba. Deeper targets start from 16-bit FULL-scale rgb48le / rgba64le and
@@ -113,7 +118,7 @@ def _rgb_to_av_frame(rgb: np.ndarray, pix_fmt: str, bit_depth: int):
     if pix_fmt == src_fmt:
         return frame
     if pix_fmt.startswith(("yuv", "yuva")):
-        return frame.reformat(format=pix_fmt, dst_colorspace=_BT709, dst_color_range=_RANGE_TV,
+        return frame.reformat(format=pix_fmt, dst_colorspace=colorspace, dst_color_range=color_range,
                               interpolation=_SWS_FLAGS)
     return frame.reformat(format=pix_fmt, interpolation=_SWS_FLAGS)
 
@@ -144,6 +149,13 @@ def encoder_options(spec: FormatSpec, quality: int) -> dict[str, str]:
     elif spec.quality_param == "cq":
         # NVENC constant quality, as the 4K pack sets it (cq on the crf scale; p5 = its slower, better preset)
         opts.update({"rc": "vbr", "cq": quality_to_crf(quality), "b": "0", "preset": "p5"})
+    elif spec.quality_param == "vp9":                        # L9.40 matrix: VP9 by name
+        opts["crf"] = quality_to_vp9_crf(quality)
+        opts["b"] = "0"                                      # constant quality: crf alone is capped by a bitrate
+    elif spec.quality_param == "svt":                        # SVT-AV1: crf 0-63, preset 8 (speed / quality middle)
+        opts.update({"crf": quality_to_vp9_crf(quality), "preset": "8"})
+    elif spec.quality_param == "cfhd":                       # CineForm: 12 = low ... 0 = film3+
+        opts["quality"] = str(max(0, min(12, int(round((100 - max(0, min(100, int(quality)))) * 12 / 100)))))
     return opts
 
 
@@ -247,10 +259,15 @@ def resolve_output_path(
     save_output: bool,
     width: int,
     height: int,
+    base_dir: str | None = None,
 ) -> tuple[str, str, str, str]:
-    """Return (full_path, filename, subfolder_rel, folder_type)."""
+    """Return (full_path, filename, subfolder_rel, folder_type). base_dir: an absolute folder outside ComfyUI's output
+    (a Folder Version Incrementer base_path) - the file goes there and folder_type is "external"."""
     fp = _import_folder_paths()
-    if save_output:
+    if save_output and base_dir:
+        out_dir = base_dir
+        folder_type = "external"
+    elif save_output:
         out_dir = fp.get_output_directory()
         folder_type = "output"
     else:
@@ -261,7 +278,7 @@ def resolve_output_path(
     prefix = (filename_prefix or "C2C/video").strip().replace("\\", "/")
     sub = (subfolder or "").strip().replace("\\", "/")
 
-    if naming == "Folder Version":
+    if naming in ("Folder Version", "Folder Version Incrementer"):
         if not sub:
             raise SaveVideoError(
                 "Folder Version naming needs the subfolder input wired from "
@@ -305,6 +322,58 @@ def resolve_output_path(
     return full, fname, rel, folder_type
 
 
+PROXY_MAX_FRAMES = 20000
+PROXY_MAX_LONG = 1280
+
+
+def proxy_disabled() -> bool:
+    return os.environ.get("C2C_SAVE_SOURCE_PROXY", "").strip().lower() in ("0", "off", "false", "no")
+
+
+def write_proxy(images, fps: float, tag: str) -> dict | None:
+    """A browser-playable H.264 proxy (long edge <= 1280 px, every frame, in chunks) of the frames as they arrive -
+    the preview run and the A/B source of Save Video (L9.40). Reads a FrameStream front to back (it consumes it).
+    None when there is nothing to show or the clip is longer than PROXY_MAX_FRAMES."""
+    import uuid
+    from fractions import Fraction
+
+    import av
+
+    n = int(images.shape[0])
+    if n == 0 or n > PROXY_MAX_FRAMES:
+        return None
+    fp = _import_folder_paths()
+    sub = "c2c_save_video"
+    out_dir = os.path.join(fp.get_temp_directory(), sub)
+    os.makedirs(out_dir, exist_ok=True)
+    name = f"{tag}_{uuid.uuid4().hex[:12]}.mp4"
+    _, h, w, _ = images.shape
+    scale = min(1.0, PROXY_MAX_LONG / float(max(h, w)))
+    nw, nh = max(2, int(round(w * scale / 2)) * 2), max(2, int(round(h * scale / 2)) * 2)
+    container = av.open(os.path.join(out_dir, name), mode="w", format="mp4", options={"movflags": "+faststart"})
+    try:
+        stream = container.add_stream("libx264", rate=Fraction(float(fps or 24.0)).limit_denominator(1_000_000))
+        stream.width, stream.height, stream.pix_fmt = nw, nh, "yuv420p"
+        stream.options = {"crf": "20", "preset": "veryfast"}
+        k = 0
+        for a in range(0, n, 32):
+            x = images[a:min(n, a + 32)][..., :3].detach().float().cpu().clamp(0, 1)
+            if (nh, nw) != tuple(x.shape[1:3]):
+                x = torch.nn.functional.interpolate(x.permute(0, 3, 1, 2), size=(nh, nw), mode="area"
+                                                    ).permute(0, 2, 3, 1)
+            for row in (x * 255.0 + 0.5).to(torch.uint8).numpy():
+                vf = av.VideoFrame.from_ndarray(row, format="rgb24")
+                vf.pts = k
+                k += 1
+                for packet in stream.encode(vf):
+                    container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+    finally:
+        container.close()
+    return {"filename": name, "subfolder": sub, "type": "temp", "frames": n, "width": nw, "height": nh}
+
+
 def build_preview_from_saved(paths: list[str], spec: FormatSpec) -> dict:
     """An H.264 preview read back from the file just written, in chunks - for a streamed save, whose frames are gone
     by the time the file is closed."""
@@ -324,7 +393,7 @@ def build_preview_from_saved(paths: list[str], spec: FormatSpec) -> dict:
 
 
 def build_preview(images: torch.Tensor, fps: float, spec: FormatSpec, saved: dict) -> dict:
-    if spec.browser_playable:
+    if spec.browser_playable and saved.get("type") != "external":
         return {
             "filename": saved["filename"],
             "subfolder": saved["subfolder"],
@@ -352,6 +421,7 @@ def _encode_av_stream(
     audio: dict | None,
     has_alpha: bool,
     metadata: dict[str, Any] | None = None,
+    colour=None,
 ) -> list[str]:
     import av
 
@@ -364,7 +434,11 @@ def _encode_av_stream(
     # By bytes too: each chunk is copied twice on its way to the encoder, so a whole-batch chunk cost 2x the batch
     # (L7.59: Save alone peaked at 2.5x). The encoder sees the same frames in the same order.
     chunk = max(1, min(64, frames_that_fit(w, h, channels, np.float32) or 1, _CHUNK_BYTES // max(1, bpf)))
-    tags = colour_tags(spec, has_alpha, colorspace_out)
+    from .save_matrix import apply_colour, conversion
+    pix_fmt = spec.pix_fmt_for(has_alpha)
+    yuv = pix_fmt.startswith(("yuv", "nv12", "p010", "p016"))
+    tags = apply_colour(colour_tags(spec, has_alpha, colorspace_out), colour, yuv)
+    conv = conversion(colour)
 
     def chunks():
         for start in range(0, n, chunk):
@@ -375,16 +449,23 @@ def _encode_av_stream(
                 arr = transform_chunk(arr, colorspace_in, colorspace_in)
             yield arr if has_alpha else arr[..., :3]
 
-    exe = ffmpeg_for(spec)
+    exe = ffmpeg_for(spec, pix=pix_fmt)
     if exe is not None:                     # L2.53: ffmpeg converts and encodes in its own process (3-4x faster)
         pbar = ProgressBar(n) if ProgressBar else None
         pcm = prepare_audio(audio, n, fps) if spec.audio_codec and spec.audio_codec != "wav_sidecar" else None
         return encode_with_ffmpeg(
             exe, images, spec, path, fps=fps, has_alpha=has_alpha, encoder_opts=encoder_options(spec, quality),
             tags=tags, metadata=metadata, pcm=pcm, chunks=chunks(), quantize=quantize_fast, interrupt=interrupt,
-            progress=(lambda done, total: pbar.update_absolute(done, total)) if pbar else (lambda d, t: None))
+            progress=(lambda done, total: pbar.update_absolute(done, total)) if pbar else (lambda d, t: None),
+            matrix=conv[0], out_range=conv[2])
 
-    pix_fmt = spec.pix_fmt_for(has_alpha)
+    if yuv and conv[1] not in _PYAV_MATRICES:
+        # measured (PyAV 17): reformat knows BT.709 / FCC / BT.601 / SMPTE-240M only and converts anything else
+        # with BT.601 while the file would say BT.2020 - refuse instead of writing wrong colours
+        raise SaveVideoError(
+            f"{spec.codec} {pix_fmt} is written through PyAV here, and PyAV's converter has no BT.2020 matrix. "
+            "Install ffmpeg 5.1 or newer (on PATH) for BT.2020, or choose BT.709 / BT.601 primaries.")
+
     # PyAV's muxer names differ from the file extension (mkv -> matroska), and muxer options must be given at open
     # time: Container.options is read-only in this PyAV build.
     av_format = {"mkv": "matroska"}.get(spec.container, spec.container)
@@ -404,13 +485,16 @@ def _encode_av_stream(
         if spec.codec_tag:
             stream.codec_tag = spec.codec_tag
         if tags:
+            from .save_matrix import TAG_NUM
             cc = stream.codec_context
-            cc.colorspace = _TAG_NUM["bt709"]
-            cc.color_range = _TAG_NUM["tv"]
+            if tags.get("colorspace"):
+                cc.colorspace = TAG_NUM[tags["colorspace"]]
+            if tags.get("color_range"):
+                cc.color_range = TAG_NUM[tags["color_range"]]
             if tags.get("color_primaries"):
-                cc.color_primaries = _TAG_NUM[tags["color_primaries"]]
+                cc.color_primaries = TAG_NUM[tags["color_primaries"]]
             if tags.get("color_trc"):
-                cc.color_trc = _TAG_NUM[tags["color_trc"]]
+                cc.color_trc = TAG_NUM[tags["color_trc"]]
         opts = encoder_options(spec, quality)
         if opts:
             stream.options = opts
@@ -428,7 +512,7 @@ def _encode_av_stream(
         for arr in chunks():
             interrupt()
             for i in range(arr.shape[0]):
-                vf = _rgb_to_av_frame(arr[i], pix_fmt, spec.bit_depth)
+                vf = _rgb_to_av_frame(arr[i], pix_fmt, spec.bit_depth, conv[1], conv[3])
                 vf.pts = written
                 for packet in stream.encode(vf):
                     container.mux(packet)
@@ -530,6 +614,54 @@ def _encode_webp(images: torch.Tensor, path: str, fps: float, quality: int,
 _DNXHR_MIN = (256, 120)
 
 
+_MATRIX_SEQ = frozenset({"oiio_png", "oiio_tiff", "oiio_dpx", "oiio_jpeg", "oiio_exr"})
+
+
+def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has_alpha: bool, quality: int) -> None:
+    """One frame of a matrix image sequence (L9.40). Integer formats are clipped to 0-1 and rounded like the PNG16
+    path; DPX stores 10 / 12 bits in 16-bit words (OIIO's BitsPerSample); EXR stores premultiplied colour (Nuke's
+    Read assumes it) and TIFF / PNG straight alpha, as each format defines."""
+    h, w = row.shape[:2]
+    alpha = has_alpha and spec.supports_alpha and row.shape[-1] >= 4
+    names = ["R", "G", "B"] + (["A"] if alpha else [])
+    data = row[..., :len(names)].astype(np.float32)
+    bits = spec.bit_depth
+    if spec.codec == "oiio_exr":
+        if alpha:
+            data = np.concatenate([data[..., :3] * data[..., 3:4], data[..., 3:4]], axis=-1)
+        fmt, arr = (oiio.HALF if bits == 16 else oiio.FLOAT), data
+    elif spec.codec == "oiio_tiff" and bits == 32:
+        fmt, arr = oiio.FLOAT, data
+    elif bits <= 8:
+        fmt, arr = oiio.UINT8, np.rint(np.clip(data, 0, 1) * 255.0).astype(np.uint8)
+    else:
+        top = float((1 << bits) - 1) if spec.codec == "oiio_dpx" else 65535.0
+        fmt, arr = oiio.UINT16, np.rint(np.clip(data, 0, 1) * top).astype(np.uint16)
+    ospec = oiio.ImageSpec(w, h, len(names), fmt)
+    ospec.channelnames = tuple(names)
+    if alpha:
+        ospec.alpha_channel = len(names) - 1
+        if spec.codec in ("oiio_png", "oiio_tiff"):
+            ospec.attribute("oiio:UnassociatedAlpha", 1)       # straight alpha, as ComfyUI's IMAGE + mask is
+    if spec.codec == "oiio_dpx":
+        ospec.attribute("oiio:BitsPerSample", int(bits))
+    elif spec.codec in ("oiio_tiff", "oiio_exr") and spec.profile:
+        ospec.attribute("compression", str(spec.profile))
+    elif spec.codec == "oiio_jpeg":
+        ospec.attribute("Compression", f"jpeg:{max(1, min(100, int(quality)))}")
+        ospec.attribute("jpeg:subsampling", str(spec.profile or "4:2:0"))
+    out = oiio.ImageOutput.create(fpath)
+    if out is None:
+        raise SaveVideoError(f"OpenImageIO cannot write {fpath}: {oiio.geterror()}")
+    try:
+        if not out.open(fpath, ospec):
+            raise SaveVideoError(out.geterror())
+        if not out.write_image(np.ascontiguousarray(arr)):
+            raise SaveVideoError(out.geterror())
+    finally:
+        out.close()
+
+
 def _encode_sequence_oiio(
     images: torch.Tensor,
     spec: FormatSpec,
@@ -541,6 +673,7 @@ def _encode_sequence_oiio(
     audio: dict | None,
     has_alpha: bool,
     clamp_hdr: bool,
+    quality: int = 90,
 ) -> list[str]:
     import OpenImageIO as oiio  # type: ignore[import-not-found]
 
@@ -557,7 +690,9 @@ def _encode_sequence_oiio(
         fname = f"{stem}.{i + 1:04d}.{ext}"
         fpath = os.path.join(out_dir, fname)
         h, w = row.shape[:2]
-        if spec.codec == "oiio_png16":
+        if spec.codec in _MATRIX_SEQ:
+            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality)
+        elif spec.codec == "oiio_png16":
             names = ["R", "G", "B"]
             planes = [np.clip(row[..., k], 0, 1) for k in range(3)]
             if has_alpha and row.shape[-1] >= 4:
@@ -634,6 +769,7 @@ def encode_video(
     audio: dict | None,
     pad_note: str | None,
     metadata: dict[str, Any] | None = None,
+    colour=None,
 ) -> dict[str, Any]:
     if images.ndim == 3:
         images = images.unsqueeze(0)
@@ -659,7 +795,9 @@ def encode_video(
         paths = _encode_sequence_oiio(
             images, spec, full_path, filename, fps,
             colorspace_in, out_cs, audio, alpha_out,
-            clamp_hdr=spec.codec == "oiio_png16",
+            clamp_hdr=spec.codec in ("oiio_png16", "oiio_png", "oiio_dpx", "oiio_jpeg")
+            or (spec.codec == "oiio_tiff" and spec.bit_depth < 32),
+            quality=quality,
         )
     elif spec.codec == "pil_gif":
         paths = _encode_gif(images, full_path, fps, quality, colorspace_in, out_cs)
@@ -668,7 +806,7 @@ def encode_video(
     else:
         paths = _encode_av_stream(
             images, spec, full_path, fps, quality,
-            colorspace_in, out_cs, audio, alpha_out, metadata,
+            colorspace_in, out_cs, audio, alpha_out, metadata, colour,
         )
 
     if pad_note:
@@ -690,7 +828,8 @@ def encode_video(
         "subfolder": ui_subfolder,
         "type": folder_type,
     }
-    if getattr(images, "delivered", None) is not None and not spec.browser_playable:
+    external = folder_type == "external"          # outside output/: /view cannot serve it, preview from temp
+    if getattr(images, "delivered", None) is not None and (not spec.browser_playable or external):
         preview = build_preview_from_saved(paths, spec)          # streamed: the frames are already gone
     else:
         preview = build_preview(images, fps, spec, saved_meta)

@@ -2,6 +2,29 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-23 (Save Video v2, built-in handles, Video Comparer v2; tests stay local, L9.40 + L9.37)
+
+Owner request 2026-10-23 (answers: workspace `docs/evidence/L9.40/owner_answers_2026-10-23.md`). Evidence
+(workspace): `docs/evidence/L9.40/` - owner-stack testbed, both renderers, a subgraph, every format combination
+encoded and probed. Design: `docs/save-video-v2.md`.
+
+- **Save Video: format in five controls** (container, codec, profile, bit depth, chroma), each filtered by the ones
+  before it, from what this machine can write. Many new codecs and profiles, TIFF / DPX / JPEG sequences, and colour
+  tags (primaries, transfer, range) that also drive the conversion. Old workflows encode exactly as before and open
+  converted.
+- **Save Video: naming fills itself** from the Folder Version Incrementer in the graph, or its defaults. The next
+  path is shown on the node, and a version is used only by a real write.
+- **Save Video: Load Video's player**, an export range from its In / Out, A/B against the incoming frames (wipe,
+  difference, onion, flicker, zoom, loupe), and *preview first, then Write file*.
+- **Handles built into Load Video and Save Video:** Load adds them (fit / add, model grid, audio in step), and Save
+  trims exactly what Load added.
+- **Video Comparer: real player**, B offset, side by side and a 2 x 2 grid (C / D inputs), zoom / pan / loupe, and
+  per-frame PSNR / SSIM / CIEDE2000 under the scrubber. Previews keep every frame.
+- Measured: PyAV 17's converter has no BT.2020 matrix (it uses BT.601 silently). BT.2020 through PyAV is therefore
+  refused with a message; the ffmpeg path converts it correctly.
+- **Tests stay local** (owner rule 2026-10-23): `tests/` and `renderfarm/tests/` are no longer in the repository, and
+  CI boots the pack instead (`.github/c2c_boot_check.py`).
+
 ## Unreleased – 2026-10-23 (Video Mask Editor rebuilt; Load Video cached-None fix, L9.34-L9.36 + L9.16/L9.17)
 
 Owner report 2026-10-23: "video mask editor looks poor and mask is not working as expected; the mask is sticking

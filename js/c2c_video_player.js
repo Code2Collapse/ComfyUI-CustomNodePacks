@@ -129,6 +129,8 @@ function writeUnit(u) {
  */
 export function attachPlayer(host, video, opts = {}) {
     ensureStyles();
+    // opts.verb: what the selection does - "load" (the loaders) or "write" (Save Video's export range, L9.40)
+    const verb = opts.verb || "load";
     const root = document.createElement("div");
     root.className = "c2c-vplayer";
     root.tabIndex = 0;
@@ -156,8 +158,8 @@ export function attachPlayer(host, video, opts = {}) {
     const bLoop = btn(LOOP_LABELS.selection, "Loop mode: loop the selection, loop the whole clip, play once, ping-pong",
         () => { state.loop = nextLoopMode(state.loop); renderButtons(); });
     const bAll = btn("all", "Select the whole clip", () => { state.in = 0; state.out = state.frames - 1; commit(); });
-    const bIn = btn("[ in", "Set the first frame to load here (I)", () => setIn(state.frame));
-    const bOut = btn("out ]", "Set the last frame to load here (O)", () => setOut(state.frame));
+    const bIn = btn("[ in", `Set the first frame to ${verb} here (I)`, () => setIn(state.frame));
+    const bOut = btn("out ]", `Set the last frame to ${verb} here (O)`, () => setOut(state.frame));
     const bUnit = btn("frames", "Show frames or time on the ruler and labels", () => {
         state.unit = state.unit === "time" ? "frames" : "time";
         writeUnit(state.unit);
@@ -175,15 +177,15 @@ export function attachPlayer(host, video, opts = {}) {
     ruler.className = "c2c-vplayer__ruler";
     const track = document.createElement("div");
     track.className = "c2c-vplayer__track";
-    track.title = "Drag to scrub; drag the handles to choose the frames to load; hover to preview a frame";
+    track.title = `Drag to scrub; drag the handles to choose the frames to ${verb}; hover to preview a frame`;
     const sel = document.createElement("div");
     sel.className = "c2c-vplayer__sel";
     const hIn = document.createElement("div");
     hIn.className = "c2c-vplayer__handle";
-    hIn.title = "First frame to load (skip_first_frames)";
+    hIn.title = opts.inTitle || "First frame to load (skip_first_frames)";
     const hOut = document.createElement("div");
     hOut.className = "c2c-vplayer__handle";
-    hOut.title = "Last frame to load (sets frame_load_cap)";
+    hOut.title = opts.outTitle || "Last frame to load (sets frame_load_cap)";
     const head = document.createElement("div");
     head.className = "c2c-vplayer__head";
     const hoverLine = document.createElement("div");
@@ -232,7 +234,7 @@ export function attachPlayer(host, video, opts = {}) {
         }
         const every = state.nth > 1 ? ` (every ${state.nth}${state.nth === 2 ? "nd" : state.nth === 3 ? "rd" : "th"})` : "";
         const span = formatSeconds((state.out - state.in + 1) / state.fps);
-        lCount.textContent = `${fmtNum(state.count)} will load${every} · ${span}`;
+        lCount.textContent = `${fmtNum(state.count)} will ${verb}${every} · ${span}`;
     }
 
     function renderFrame() {
@@ -634,6 +636,8 @@ export function attachPlayer(host, video, opts = {}) {
             renderFrame();
         },
         pause() { stop(); },
+        /** Go to a frame (stops playback), e.g. from the comparer's metrics strip (L9.40). */
+        seekFrame(f) { stop(); seek(f); },
         get state() { return { ...state }; },
         destroy() {
             stop();
