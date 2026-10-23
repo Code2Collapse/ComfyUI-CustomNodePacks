@@ -31,10 +31,11 @@ share/python-wheels/
 MANIFEST
 third_party/
 tasks/
-# NOTE: 'tests/' was ignored here, which meant this pack's ENTIRE test
-# suite lived only on one developer's machine - never in the repo, never
-# on CI, never on the Linux deploy. Every other pack in this workspace
-# tracks its tests. '_tests/' below is the scratch dir and stays ignored.
+# Tests stay local (owner rule 2026-10-23: "never git push test folders at all. keep them in local only"):
+# the suite lives on the developer's machine; CI runs .github/c2c_boot_check.py. '_tests/' is the scratch dir.
+tests/
+renderfarm/tests/
+/conftest.py
 _tests/
 autoresearch-nodepacks/
 autoresearch-nexus/
@@ -241,8 +242,7 @@ renderfarm/config/audit.db
 renderfarm/config/audit.db-wal
 renderfarm/config/audit.db-shm
 
-# but the C2C Farm render-farm test suite IS part of the source tree
-!renderfarm/tests/
+# (the C2C Farm test suite stays local too: renderfarm/tests/ above)
 
 # test scratch dirs (tests point folder_paths at the OS temp area now)
 _test_temp/
