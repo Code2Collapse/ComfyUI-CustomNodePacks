@@ -87,6 +87,7 @@ No ComfyUI model code is copied (ComfyUI is GPL-3.0, this pack Apache-2.0): only
 | Batch split: Wan sampler with CFG 4 on 2 ranks (cond / uncond apart) and 4 ranks (batch 2 x Ulysses 2) | latents differ by <= 1.12e-5 | same |
 | Batch split on the GPU, bf16 / fp16, batch 2 on 2 and 4 ranks | error vs fp32 equal to the unsplit batched call (bf16 0.686 % vs 0.687 %, fp16 0.085 % both) | `usp_gpu_check.json` |
 | Guard: are those comparisons meaningful? Halving every attention output | changes the latents by > 1e-2 (Wan and H3), so a broken split could not pass | same |
+| `TorchComm` over real torch.distributed, separate processes (WSL Arch Linux, torch 2.9.0+cpu, gloo), 2 and 4 ranks: all_gather, uneven all_to_all, ring step, sub-groups, broadcast; Ulysses / Ring / USP attention vs one process, float64 | all pass; attention <= 1.3e-15. Found and fixed: gloo has no list all_to_all (now all_to_all_single), and send / recv / broadcast / ring took group ranks where torch wants global ranks | workspace `docs/evidence/L9.38/torchcomm_gloo_check.json` |
 | Speed-up on real GPUs | **not measured** - needs >= 2 GPUs | owner / cloud run |
 | MiniMax H3 image-to-video / reference layouts | segment re-mapping unit-tested; not sampled end to end | - |
 

@@ -33,6 +33,9 @@ All notable changes to ComfyUI-CustomNodePacks are documented here.
   exchange; sequence parallelism runs inside each group (e.g. 8 GPUs with CFG = 2 groups x Ulysses 4). Measured equal
   to the unsplit call (sampler end to end <= 1.12e-5; GPU bf16 error vs fp32 0.686 % vs 0.687 % unsplit).
 - For other models ComfyUI core's **MultiGPU CFG Split** (0.39+) does the cond / uncond split; it is not rebuilt.
+- `TorchComm` (the torch.distributed path for NCCL boxes) checked over real separate processes (gloo on Linux, 2 and
+  4 ranks): all_to_all now uses `all_to_all_single` (gloo has no list form), and point-to-point calls and broadcast
+  map group ranks to global ranks (sub-groups were broken). Attention over processes <= 1.3e-15 from one process.
 
 ## Unreleased – 2026-10-24 (Scheduled Queue, Watch Folder, Webhooks; Video Stabilizer RAFT; Control AOV inputs, L9.39)
 

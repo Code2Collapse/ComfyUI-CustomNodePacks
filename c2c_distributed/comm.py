@@ -227,10 +227,17 @@ class TorchComm(Comm):
         return out
 
     def all_to_all(self, chunks):
+        # all_to_all_single over the flattened chunks: gloo has no list all_to_all (measured 2026-10-24, torch 2.9
+        # CPU: "Backend gloo does not support alltoall"); NCCL and MPI take this form too, uneven sizes included.
         shapes = self._shapes_of(chunks)
-        outs = [torch.empty(shapes[src], dtype=chunks[0].dtype, device=chunks[0].device) for src in range(self.world)]
-        self.dist.all_to_all(outs, [c.contiguous() for c in chunks], group=self.group)
-        return outs
+        dev, dtype = chunks[0].device, chunks[0].dtype
+        send = torch.cat([c.reshape(-1) for c in chunks])
+        in_splits = [c.numel() for c in chunks]
+        out_splits = [int(torch.Size(s).numel()) for s in shapes]
+        recv = torch.empty(sum(out_splits), dtype=dtype, device=dev)
+        self.dist.all_to_all_single(recv, send, output_split_sizes=out_splits, input_split_sizes=in_splits,
+                                    group=self.group)
+        return [part.view(shape) for part, shape in zip(torch.split(recv, out_splits), shapes)]
 
     def _shapes_of(self, chunks):
         """Every rank's chunk shape for this rank (uneven splits): exchanged once as a small tensor."""
@@ -238,28 +245,35 @@ class TorchComm(Comm):
         allshapes = self.all_gather(mine)                      # [world] x [world, ndim]
         return [tuple(int(v) for v in allshapes[src][self.rank]) for src in range(self.world)]
 
+    def _glob(self, r: int) -> int:
+        """torch.distributed's send / recv / broadcast / P2POp take GLOBAL ranks; this comm speaks group ranks
+        (measured 2026-10-24 on gloo: a sub-group ring step failed 'Global rank 0 is not part of group')."""
+        return int(r) if self.group is None else self.dist.get_global_rank(self.group, int(r))
+
     def send(self, t, dst):
-        self.dist.send(t.contiguous(), dst, group=self.group)
+        self.dist.send(t.contiguous(), self._glob(dst), group=self.group)
 
     def recv(self, like, src):
         out = torch.empty_like(like)
-        self.dist.recv(out, src, group=self.group)
+        self.dist.recv(out, self._glob(src), group=self.group)
         return out
 
     def sendrecv_ring(self, t):
         if self.world == 1:
             return t
+        if str(self.dist.get_backend(self.group)).lower() != "nccl":
+            return super().sendrecv_ring(t)     # ordered blocking pairs: gloo's batched p2p failed (2026-10-24)
         nxt, prv = (self.rank + 1) % self.world, (self.rank - 1) % self.world
         out = torch.empty_like(t)
-        ops = [self.dist.P2POp(self.dist.isend, t.contiguous(), nxt, self.group),
-               self.dist.P2POp(self.dist.irecv, out, prv, self.group)]
+        ops = [self.dist.P2POp(self.dist.isend, t.contiguous(), self._glob(nxt), self.group),
+               self.dist.P2POp(self.dist.irecv, out, self._glob(prv), self.group)]
         for req in self.dist.batch_isend_irecv(ops):
             req.wait()
         return out
 
     def broadcast(self, t, src=0):
         t = t.contiguous().clone()
-        self.dist.broadcast(t, src, group=self.group)
+        self.dist.broadcast(t, self._glob(src), group=self.group)
         return t
 
     def barrier(self):
