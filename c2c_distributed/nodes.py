@@ -47,7 +47,7 @@ class C2CGPUInventory:
 
 
 class C2CSequenceParallel:
-    """Split every model call of a long video over several GPUs (Ulysses / Ring / USP)."""
+    """Split every model call over several GPUs: batch items for any model, tokens for Wan / MiniMax H3."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -69,13 +69,12 @@ class C2CSequenceParallel:
     RETURN_NAMES = ("model", "plan")
     FUNCTION = "run"
     CATEGORY = CATEGORY
-    DESCRIPTION = ("Splits every model call of Wan 2.1 / 2.2 and MiniMax H3 over the GPUs of this machine. The "
-                   "call's batch items (cond and uncond, or several images) go to different GPUs first, with no "
-                   "exchange at all. The remaining GPUs split the tokens inside the transformer, and attention is "
-                   "exchanged exactly (Ulysses all-to-all / Ring). One model copy per GPU, made by ComfyUI's own "
-                   "multi-GPU clones. Works on Windows and Linux; with one GPU the model passes through unchanged. Put "
-                   "it last in the model chain (after LoRA / attention nodes). Not with ControlNet yet. It replaces "
-                   "core's 'MultiGPU CFG Split' for this model.")
+    DESCRIPTION = ("Splits every model call over the GPUs of this machine. Any model: the call's batch items (cond "
+                   "and uncond, an image batch, Tile Split's tiles) go to different GPUs, with no exchange at all. "
+                   "Wan 2.1 / 2.2 and MiniMax H3 also split the tokens of one item (Ulysses all-to-all / Ring, exact). "
+                   "One model copy per GPU, made by ComfyUI's own multi-GPU clones. Works on Windows and Linux; with "
+                   "one GPU the model passes through unchanged. Put it last in the model chain (after LoRA / attention "
+                   "nodes). Replaces core's 'MultiGPU CFG Split' for this model.")
 
     def run(self, model, gpus, strategy, min_tokens_per_gpu, fast_link_gpus=0):
         _refuse_if_off()
@@ -92,5 +91,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "C2CGPUInventory": "C2C GPU Inventory",
-    "C2CSequenceParallel": "C2C Sequence Parallel (multi-GPU)",
+    "C2CSequenceParallel": "C2C Multi-GPU Split",
 }

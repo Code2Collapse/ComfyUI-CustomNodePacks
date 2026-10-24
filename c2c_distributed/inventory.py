@@ -248,11 +248,12 @@ def modes(gpu_list: List[dict], nccl: dict, comfy: dict, p2p: List[List[bool]]) 
         {"mode": "data parallel (whole jobs per GPU / per machine)", "can_run": True,
          "how": "C2C Farm backends (renderfarm/) or one ComfyUI per GPU; any OS"},
         {"mode": "CFG / batch split (one box)", "can_run": multi and comfy.get("core_multigpu", False),
-         "how": "core node 'MultiGPU CFG Split' (advanced/multigpu) after the model loader"
-         if comfy.get("core_multigpu") else "needs ComfyUI core with comfy/multigpu.py",
+         "how": "C2C Multi-GPU Split node, any model: cond / uncond, image batches and tiles over all GPUs "
+                "(core's 'MultiGPU CFG Split' uses at most one GPU per cond)"
+         if comfy.get("core_multigpu") else "needs ComfyUI core with comfy/multigpu.py (0.39+)",
          "why_not": None if multi else "one GPU"},
         {"mode": "sequence parallel, one box (Ulysses / Ring / USP)", "can_run": multi,
-         "how": "C2C Sequence Parallel node (this package): threads, one model copy per GPU, tensors exchanged "
+         "how": "C2C Multi-GPU Split node, Wan / MiniMax H3: threads, one model copy per GPU, tensors exchanged "
                 "GPU-to-GPU" + ("" if any_p2p or not multi else " - NOTE: no P2P between these GPUs, exchanges go "
                                                                     "through host memory (slower)"),
          "why_not": None if multi else "one GPU"},

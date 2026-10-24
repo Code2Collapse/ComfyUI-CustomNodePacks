@@ -1,7 +1,7 @@
 # C2C Distributed: multi-GPU for ComfyUI (design, L9.38)
 
 Status 2026-10-24: slices 0, 1 and 2a built and tested (GPU Inventory node; exact Ulysses / Ring / USP attention;
-C2C Sequence Parallel node for Wan 2.1 / 2.2 and MiniMax H3 on one box). Speed-up is **not measured yet**: that needs a machine with
+C2C Multi-GPU Split node for Wan 2.1 / 2.2 and MiniMax H3 on one box). Speed-up is **not measured yet**: that needs a machine with
 two or more GPUs (see "What is measured"). This file is the A7 design record: what the subsystem does, what it refuses
 to do, how it fails, what it costs, and how to turn it off.
 
@@ -11,8 +11,8 @@ One ComfyUI, several GPUs, used together:
 
 | Mode | What runs where | Speeds up | Where it comes from |
 |---|---|---|---|
-| **CFG / batch split** | cond and uncond (and batch chunks) of each step on different GPUs | one generation, up to ~2x with CFG > 1 | **ComfyUI core** (`MultiGPU CFG Split`, 0.39+) for any model; inside **C2C Sequence Parallel** the batch split of each call comes first and is combined with sequence parallelism (e.g. 2 x 4 on 8 GPUs) |
-| **Sequence parallel (Ulysses / Ring / USP)** | every attention layer splits the token sequence over the GPUs | one long video, attention-bound models | **C2C Sequence Parallel** (this package), one box, any OS |
+| **CFG / batch split** | cond and uncond (and batch chunks) of each step on different GPUs | one generation, up to ~2x with CFG > 1 | **ComfyUI core** (`MultiGPU CFG Split`, 0.39+) for any model; inside **C2C Multi-GPU Split** the batch split of each call comes first and is combined with sequence parallelism (e.g. 2 x 4 on 8 GPUs) |
+| **Sequence parallel (Ulysses / Ring / USP)** | every attention layer splits the token sequence over the GPUs | one long video, attention-bound models | **C2C Multi-GPU Split** (this package), one box, any OS |
 | **Data parallel** | each GPU or machine renders whole jobs: seeds, shots, batches | throughput | C2C Farm (`renderfarm/`); fan-out node = slice 3 |
 | **FSDP (weight sharding)** | each GPU holds 1/N of the weights | a model that does not fit one GPU | slice 2b, Linux + NCCL |
 | **Tile work-stealing** | upscale / refine tiles pulled by whichever GPU is free | big frames | slice 4 |
@@ -34,7 +34,7 @@ It lives in `c2c_distributed/` (a sub-package of this pack).
 
 Sources and the survey of raylight / ComfyUI-Distributed: workspace `docs/evidence/L9.38/research.md`.
 
-## How C2C Sequence Parallel runs a model call
+## How C2C Multi-GPU Split runs a model call
 
 ```
 sampler thread (rank 0, GPU 0)                 core's per-device threads (ranks 1..N-1)
@@ -73,7 +73,7 @@ No ComfyUI model code is copied (ComfyUI is GPL-3.0, this pack Apache-2.0): only
 | Node | Does |
 |---|---|
 | **C2C GPU Inventory** | the report above, on the node and as JSON |
-| **C2C Sequence Parallel (multi-GPU)** | MODEL -> MODEL; `gpus` (0 = all), `strategy` auto / ulysses / ring, `min_tokens_per_gpu`, `fast_link_gpus`. Put it last in the model chain. With one GPU the model passes through unchanged. |
+| **C2C Multi-GPU Split** (id `C2CSequenceParallel`) | MODEL -> MODEL; `gpus` (0 = all), `strategy` auto / ulysses / ring, `min_tokens_per_gpu`, `fast_link_gpus`. Any model: batch items to GPU groups. Wan / MiniMax H3: tokens split inside each group too. Put it last in the model chain. With one GPU the model passes through unchanged. |
 
 ## What is measured (2026-10-24, owner's PC: one RTX 4060 Laptop, CPU testbed)
 
@@ -86,6 +86,8 @@ No ComfyUI model code is copied (ComfyUI is GPL-3.0, this pack Apache-2.0): only
 | Same for MiniMax H3 (tiny H3, joint video + audio latent, text-to-video layout), 2 / 3 ranks | video and audio latents differ by <= 3.8e-6 (magnitude 5.3-5.5) | same |
 | Batch split: Wan sampler with CFG 4 on 2 ranks (cond / uncond apart) and 4 ranks (batch 2 x Ulysses 2) | latents differ by <= 1.12e-5 | same |
 | Batch split on the GPU, bf16 / fp16, batch 2 on 2 and 4 ranks | error vs fp32 equal to the unsplit batched call (bf16 0.686 % vs 0.687 %, fp16 0.085 % both) | `usp_gpu_check.json` |
+| Batch split for a model with no adapter: tiny Flux (core detection, pooled `y`, `guidance`) through core's KSampler, 2 latents x CFG = 4 items on 2 and 4 ranks | latents differ by <= 2.8e-5 (magnitude 26.3) | `tests/test_c2c_distributed.py` |
+| Same path with a stand-in model: tensor and tuple outputs, ControlNet residuals and pooled inputs cut with the batch, batches that do not divide | exact | same |
 | Guard: are those comparisons meaningful? Halving every attention output | changes the latents by > 1e-2 (Wan and H3), so a broken split could not pass | same |
 | `TorchComm` over real torch.distributed, separate processes (WSL Arch Linux, torch 2.9.0+cpu, gloo), 2 and 4 ranks: all_gather, uneven all_to_all, ring step, sub-groups, broadcast; Ulysses / Ring / USP attention vs one process, float64 | all pass; attention <= 1.3e-15. Found and fixed: gloo has no list all_to_all (now all_to_all_single), and send / recv / broadcast / ring took group ranks where torch wants global ranks | workspace `docs/evidence/L9.38/torchcomm_gloo_check.json` |
 | Speed-up on real GPUs | **not measured** - needs >= 2 GPUs | owner / cloud run |
@@ -99,8 +101,8 @@ model memory; never use it for speed.
 
 | Failure | Behaviour |
 |---|---|
-| Model class without an adapter (VACE, Wan Animate, S2V, Flux, ...) | refused at the node with the list of supported models |
-| Another node patches the transformer blocks or sets an attention override after this one | refused at run time, naming the patch ("put C2C Sequence Parallel last") - never a silently wrong picture |
+| Model class without a sequence adapter (VACE, Wan Animate, S2V, Flux, SDXL, ...) | batch split only (cond / uncond, image batches, tiles); the node's report says so. ControlNet residuals are cut with the batch |
+| Another node patches the transformer blocks or sets an attention override after this one | refused at run time, naming the patch ("put C2C Multi-GPU Split last") - never a silently wrong picture |
 | ControlNet / control conditioning | refused at run time (not supported yet) |
 | A user attention override set BEFORE the node (e.g. Sage attention) | kept: it computes the local attention on every rank |
 | Heads not divisible by the Ulysses degree | planner picks Ulysses x Ring that divides, or Ring only, and says so |
@@ -133,7 +135,7 @@ model memory; never use it for speed.
 |---|---|---|
 | 0 | C2C GPU Inventory | done |
 | 1 | Comm, exact Ulysses / Ring / USP attention, planner | done |
-| 2a | C2C Sequence Parallel, one box, Wan + MiniMax H3 | done; speed to measure on >= 2 GPUs |
+| 2a | C2C Multi-GPU Split, one box, Wan + MiniMax H3 | done; speed to measure on >= 2 GPUs |
 | 2b | Multi-process / multi-node over NCCL (`TorchComm`), FSDP2 weight sharding | Linux + NCCL box needed |
 | 2c | Batch (CFG) split x sequence parallel | done (Wan) |
 | 2d | ControlNet; more adapters (VACE, Animate, Flux, LTX); H3 cond / uncond on separate GPU groups (H3 calls run batch 1) | to do |

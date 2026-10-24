@@ -64,6 +64,7 @@ class Adapter:
     img_dim = 1                         # token dim of the block stream ("img")
     self_attention_first_only = True    # True: only the first attention call per block is self-attention
     batch_split = False                 # True: a call's batch items (cond / uncond, images) may go to different GPUs
+    sequence = True                     # False: never split tokens (batch split only)
 
     def heads(self, dm) -> Optional[int]:
         return None
@@ -141,7 +142,22 @@ class MiniMaxH3Adapter(Adapter):
         return out
 
 
+class BatchOnlyAdapter(Adapter):
+    """Any other model: no token split (that needs a per-family adapter), but the call's batch items - cond /
+    uncond, image batches, Tile Split's tiles - still go to different GPUs, which needs no model knowledge."""
+
+    name = "batch split only"
+    classes = ()
+    batch_split = True
+    sequence = False
+
+    def batch(self, args, kwargs):
+        x = args[0] if args else kwargs.get("x")
+        return int(x.shape[0]) if isinstance(x, torch.Tensor) and x.dim() > 0 else 1
+
+
 ADAPTERS: Tuple[Adapter, ...] = (WanAdapter(), MiniMaxH3Adapter())
+BATCH_ONLY = BatchOnlyAdapter()
 
 
 def adapter_for(dm) -> Optional[Adapter]:
@@ -230,7 +246,7 @@ def attention_override(func, q, k, v, heads, mask=None, skip_reshape=False, skip
         return _local(func, prev, q, k, v, heads, mask=mask, skip_reshape=skip_reshape,
                       skip_output_reshape=skip_output_reshape, **kw)
     if mask is not None:
-        raise RuntimeError("C2C Sequence Parallel: this model passed an attention mask to self-attention, which the "
+        raise RuntimeError("C2C Multi-GPU Split: this model passed an attention mask to self-attention, which the "
                            "sequence-parallel path does not support yet - remove the node for this model.")
     qb, kb, vb = (A.to_bhld(t, heads, skip_reshape) for t in (q, k, v))
 
@@ -300,7 +316,7 @@ def foreign_patches(to: dict) -> List[str]:
         if (to.get("patches") or {}).get(kind):
             bad.append(f"patch '{kind}'")
     if to.get("optimized_attention_override") is not attention_override:
-        bad.append("another attention override was set after C2C Sequence Parallel")
+        bad.append("another attention override was set after C2C Multi-GPU Split")
     return bad
 
 
@@ -338,6 +354,8 @@ def _layout(world: int, batch: int, tokens, adapter: Adapter, min_tokens: int) -
     bdeg = 1
     if adapter.batch_split and batch > 1:
         bdeg = max(d for d in range(1, world + 1) if world % d == 0 and batch % d == 0)
+    if not adapter.sequence:
+        return bdeg, 1
     seq = world // bdeg
     if tokens is not None and seq > 1 and not worth_splitting(tokens, seq, min_tokens):
         seq = max([d for d in range(1, seq + 1) if (world // bdeg) % d == 0 and (d == 1 or tokens // d >= min_tokens)])
@@ -351,23 +369,21 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
     if not to or state is None or not ranks or len(ranks) < 2 or not state.enabled():
         return executor(*args, **kwargs)
     dm = executor.class_obj
-    ad = adapter_for(dm)
-    if ad is None:
-        raise RuntimeError(f"C2C Sequence Parallel does not support {type(dm).__name__} yet "
-                           f"(supported: {'; '.join(supported_models())}).")
-    bad = foreign_patches(to)
+    ad = adapter_for(dm) or BATCH_ONLY
+    bad = foreign_patches(to) if ad.sequence else []
     if bad:
-        raise RuntimeError("C2C Sequence Parallel cannot run with: " + "; ".join(bad)
-                           + ". Put C2C Sequence Parallel last in the model chain, or remove the conflicting node.")
+        raise RuntimeError("C2C Multi-GPU Split cannot run with: " + "; ".join(bad)
+                           + ". Put C2C Multi-GPU Split last in the model chain, or remove the conflicting node.")
     world = len(ranks)
     tokens = ad.tokens_estimate(dm, args, kwargs)
     batch = ad.batch(args, kwargs) if ad.batch_split else 1
     bdeg, seq = _layout(world, batch, tokens, ad, state.min_tokens_per_gpu)
     if bdeg * seq < 2:
-        state.note(f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU")
+        state.note(f"batch {batch}: does not split over {world} GPUs, ran on one GPU" if not ad.sequence else
+                   f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU")
         return executor(*args, **kwargs)
     used = bdeg * seq
-    plan = plan_sequence_parallel(seq, heads=ad.heads(dm), tokens=tokens, prefer=state.prefer,
+    plan = plan_sequence_parallel(seq, heads=ad.heads(dm) if ad.sequence else None, tokens=tokens, prefer=state.prefer,
                                   fast_domain=state.fast_domain or None, min_tokens_per_rank=0)
     what = []
     if bdeg > 1:
@@ -402,7 +418,7 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
         else:
             a[pos] = own
         sub = comm.split([[gg * seq + i for i in range(seq)] for gg in range(bdeg)]) if bdeg > 1 else comm
-        if seq > 1:
+        if seq > 1 and ad.sequence:
             _tls.ctx = RankCtx(comm=sub, mesh=A.Mesh.build(sub, plan.ulysses, plan.ring), adapter=ad,
                                n_blocks=len(dm.blocks), prev_override=state.prev_override)
         try:
@@ -418,11 +434,13 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
         if bdeg == 1:
             return out
         # batch groups: each group's first rank hands its slice to rank 0, which puts the batch back together
+        leaves = _tensor_leaves(out)
         if r == 0:
-            parts = [out] + [comm.recv(out, gg * seq) for gg in range(1, bdeg)]
-            return torch.cat(parts, dim=0)
+            got = [leaves] + [[comm.recv(t, gg * seq) for t in leaves] for gg in range(1, bdeg)]
+            return _rebuild(out, [torch.cat([g[i] for g in got], dim=0) for i in range(len(leaves))])
         if r % seq == 0:
-            comm.send(out, 0)
+            for t in leaves:
+                comm.send(t, 0)
         return None
 
     use_pool = pool is not None and len(set(devices)) == used and all(d in pool.devices for d in devices[1:])
@@ -434,6 +452,21 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
             for r in range(1, used):
                 pool.get_result(devices[r])     # drain the pool's (None, None) acknowledgements
     return results[0]
+
+
+def _tensor_leaves(out) -> List[torch.Tensor]:
+    if isinstance(out, torch.Tensor):
+        return [out]
+    if isinstance(out, (list, tuple)) and out and all(isinstance(t, torch.Tensor) for t in out):
+        return list(out)
+    raise RuntimeError(f"C2C Multi-GPU Split: cannot reassemble a batch-split model output of type "
+                       f"{type(out).__name__}")
+
+
+def _rebuild(out, leaves):
+    if isinstance(out, torch.Tensor):
+        return leaves[0]
+    return type(out)(leaves) if isinstance(out, tuple) else list(leaves)
 
 
 def calc_cond_batch_wrapper(executor, model, conds, x_in, timestep, model_options):
@@ -449,11 +482,11 @@ def calc_cond_batch_wrapper(executor, model, conds, x_in, timestep, model_option
         ranks = [(x_in.device, None)] + [(c.load_device, c) for c in state.sim]
     else:
         return executor(model, conds, x_in, timestep, model_options)
-    for cond in conds:
+    for cond in conds if not state.batch_only else []:      # batch split cuts ControlNet residuals with the batch
         for c in cond or []:
             if isinstance(c, dict) and c.get("control") is not None:
-                raise RuntimeError("C2C Sequence Parallel: ControlNet / control conditioning is not supported "
-                                   "with sequence parallelism yet - remove C2C Sequence Parallel for this run.")
+                raise RuntimeError("C2C Multi-GPU Split: ControlNet / control conditioning is not supported "
+                                   "with sequence parallelism yet - remove C2C Multi-GPU Split for this run.")
     mo = dict(model_options)
     mo.pop("multigpu_clones", None)
     to = dict(to)
@@ -477,11 +510,13 @@ class UspState:
         self.timeout = float(timeout)
         self.last: List[str] = []
         self.sim: list = []                 # simulated rank copies (ModelPatchers on the main device)
+        self.batch_only = False             # model without a sequence adapter: batch split only
 
     def __deepcopy__(self, memo):
         n = UspState(self.prefer, self.min_tokens_per_gpu, self.fast_domain, self.prev_override, self.timeout)
         n.last = self.last                  # shared log, so the node can read what the runs did
         n.sim = self.sim
+        n.batch_only = self.batch_only
         return n
 
     @staticmethod
@@ -493,7 +528,7 @@ class UspState:
         if not self.last or self.last[-1] != msg:
             self.last.append(msg)
             del self.last[:-20]
-            log.info("C2C Sequence Parallel: %s", msg)
+            log.info("C2C Multi-GPU Split: %s", msg)
 
 
 def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 1024, fast_domain: int = 0,
@@ -502,9 +537,12 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
     dm = model.model.diffusion_model
     ad = adapter_for(dm)
     if ad is None:
-        raise ValueError(f"C2C Sequence Parallel does not support {type(dm).__name__} yet. "
-                         f"Supported: {'; '.join(supported_models())}.")
-    report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}"]
+        ad = BATCH_ONLY
+        report = [f"model: {type(dm).__name__} - batch split only (cond / uncond, image batches, tiles to "
+                  f"different GPUs). Splitting the tokens of one item needs an adapter: "
+                  f"{'; '.join(supported_models())}."]
+    else:
+        report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}"]
     m = model.clone()
     if make_clones:
         import comfy.model_management as mm
@@ -515,7 +553,7 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
             try:
                 m = comfy.multigpu.create_multigpu_deepclones(m, want, reuse_loaded=True)
             except RuntimeError as exc:     # loader without a reload factory (core's own requirement)
-                raise ValueError(f"C2C Sequence Parallel needs one model copy per GPU and this loader cannot make "
+                raise ValueError(f"C2C Multi-GPU Split needs one model copy per GPU and this loader cannot make "
                                  f"them: {exc}") from exc
         n = 1 + len(m.get_additional_models_with_key("multigpu"))
         sim = simulate_ranks()
@@ -533,8 +571,12 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
             report.append(f"GPUs: 1 of {available} visible - nothing to split, the model runs as before")
         if n >= 2 and not sim_copies:
             report.append(f"GPUs: {n} of {available} visible")
-        p = plan_sequence_parallel(n, heads=ad.heads(dm), prefer=prefer, fast_domain=fast_domain or None)
-        report.append(f"plan: {p.mode} (Ulysses {p.ulysses} x Ring {p.ring})" + "".join(f"; {x}" for x in p.notes))
+        if ad.sequence:
+            p = plan_sequence_parallel(n, heads=ad.heads(dm), prefer=prefer, fast_domain=fast_domain or None)
+            report.append(f"plan (one item per call): {p.mode} (Ulysses {p.ulysses} x Ring {p.ring})"
+                          + "".join(f"; {x}" for x in p.notes) + "; with CFG or a batch, items go to GPU groups first")
+        elif n >= 2:
+            report.append(f"plan: batch items over up to {n} GPUs (the largest divisor of {n} that divides the batch)")
     to = m.model_options.setdefault("transformer_options", {})
     prev = to.get("optimized_attention_override")
     if prev is attention_override:
@@ -542,10 +584,12 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
     state = UspState(prefer, min_tokens_per_gpu, fast_domain, prev)
     if make_clones:
         state.sim = sim_copies
+    state.batch_only = not ad.sequence
     to[STATE_KEY] = state
-    to["optimized_attention_override"] = attention_override
-    for i in range(len(dm.blocks)):
-        m.set_model_patch_replace(block_patch, "dit", "double_block", i)
+    if ad.sequence:
+        to["optimized_attention_override"] = attention_override
+        for i in range(len(dm.blocks)):
+            m.set_model_patch_replace(block_patch, "dit", "double_block", i)
     m.remove_wrappers_with_key("diffusion_model", WRAPPER_KEY)
     m.remove_wrappers_with_key("calc_cond_batch", WRAPPER_KEY)
     m.add_wrapper_with_key("diffusion_model", WRAPPER_KEY, diffusion_model_wrapper)

@@ -1568,14 +1568,15 @@ Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measureme
   It shows the P2P and NVLink links between the GPUs and spots Grace / aarch64 hosts. It also checks whether NCCL and
   gloo really work here: it creates a process group in a subprocess rather than trusting the OS name. Last, it lists
   which multi-GPU modes this machine can run.
-- **C2C Sequence Parallel (multi-GPU)** splits each model call of a long video over the GPUs of one machine. Every
-  attention layer exchanges tokens between the GPUs (Ulysses all-to-all for the heads, Ring for the rest, or both).
-  The result is the same as on one GPU: measured bit-identical for Ulysses at 2 and 4 GPUs, and within the
-  precision's own rounding otherwise. It works on Windows and Linux and needs no NCCL. Each GPU holds a full copy of
-  the model, made by ComfyUI's own multi-GPU loader. Supported: Wan 2.1 / 2.2 and MiniMax H3 (text-to-video verified; image-to-video and reference layouts not
-  sampled yet). Put it
-  last in the model chain. With one GPU the model passes through unchanged. **Speed-up has not been measured yet**
-  (that needs a machine with two or more GPUs).
+- **C2C Multi-GPU Split** splits each model call over the GPUs of one machine, on Windows and Linux (no NCCL
+  needed). Each GPU holds a full copy of the model, made by ComfyUI's own multi-GPU loader. Put it last in the model
+  chain. With one GPU the model passes through unchanged.
+  - **Any model:** the call's batch items go to different GPUs: cond and uncond with CFG, an image batch, the tiles
+    from Tile Split. Measured with Flux: same result as one GPU (float32 rounding).
+  - **Wan 2.1 / 2.2 and MiniMax H3 (text-to-video verified):** the tokens of one item are split too, and attention is
+    exchanged between the GPUs (Ulysses all-to-all, Ring, or both). The result is the same as on one GPU:
+    bit-identical for Ulysses at 2 and 4 GPUs, and within the precision's own rounding otherwise.
+  - **Speed-up has not been measured yet** (that needs a machine with two or more GPUs).
 
 When a call carries several items (cond and uncond with CFG, or an image batch), the node first sends them to
 different GPUs, which needs no exchange; the other GPUs split the tokens. On 8 GPUs with CFG that is cond and uncond

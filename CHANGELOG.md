@@ -2,6 +2,14 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-24 (C2C Multi-GPU Split: batch split for any model, L9.38)
+
+- **C2C Sequence Parallel is now displayed as C2C Multi-GPU Split** (same node id; saved workflows unchanged).
+- **Any model** (Flux, SDXL, Qwen, ... - anything without a token-split adapter) gets the batch split: cond / uncond,
+  image batches and Tile Split's tiles go to different GPUs. Before, such models were refused. ControlNet residuals
+  and pooled inputs are cut with the batch. Measured on a tiny Flux through core's KSampler: equal to one GPU
+  (<= 2.8e-5 at latent magnitude 26). Core's own CFG split uses at most two GPUs (one per cond).
+
 ## Unreleased – 2026-10-24 (fix: Load Video (C2C) workflows saved before the handle inputs)
 
 - **Owner log: `LoadVideoC2C ... handle_frames, , invalid literal for int()`, and every output after it ignored.**
