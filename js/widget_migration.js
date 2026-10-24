@@ -1,4 +1,4 @@
-﻿// Generic widget-migration safety net for ALL CustomNodePacks (MEC) nodes.
+// Generic widget-migration safety net for ALL CustomNodePacks (MEC) nodes.
 //
 // Problem: ComfyUI serializes node widget values positionally as
 // `widgets_values: [v0, v1, …]`. When a node author appends a new widget
@@ -105,6 +105,87 @@ function expectedWidgetDefaults(nodeData) {
     return out;
 }
 
+function specOf(nodeData, name) {
+    const inp = nodeData?.input || {};
+    return inp.required?.[name] ?? inp.optional?.[name];
+}
+
+// Does a saved value fit the Python widget it would land on?
+function fits(spec, v) {
+    if (!Array.isArray(spec)) return true;
+    const t = spec[0];
+    if (Array.isArray(t)) return t.includes(v);
+    const u = String(t).toUpperCase();
+    if (u === "INT" || u === "FLOAT") return typeof v === "number" && Number.isFinite(v);
+    if (u === "BOOLEAN") return typeof v === "boolean";
+    if (u === "STRING") return typeof v === "string";
+    return true;
+}
+
+// Widgets in the order LiteGraph writes widgets_values (every widget whose `serialize` is not false).
+function serializedWidgets(node) {
+    return (node.widgets || []).filter((w) => w && w.serialize !== false);
+}
+
+// Front-end widgets saved AFTER the Python ones (an upload button, a hidden preview state, ...).
+function trailingExtras(node, pyNames) {
+    const sw = serializedWidgets(node);
+    let last = -1;
+    sw.forEach((w, i) => { if (pyNames.has(w.name)) last = i; });
+    return sw.slice(last + 1);
+}
+
+// L9.38 (owner log 2026-10-24: LoadVideoC2C "handle_frames, , invalid literal for int()"): a save made before new
+// Python widgets were appended ends with the front-end widgets' values (Load Video: upload "image", preview "").
+// Loaded by position, those land on the new Python widgets. Insert the new widgets' defaults BEFORE that tail.
+function insertBeforeExtras(node, nodeData, expected, wv) {
+    const pyNames = new Set(expected.map((e) => e.name));
+    const extras = trailingExtras(node, pyNames);
+    const E = extras.length;
+    if (!E || wv.length < E) return null;
+    const pySaved = wv.length - E;
+    if (pySaved >= expected.length) return null;
+    const tailLooksLikeExtras = extras.every((w, k) => {
+        const v = wv[pySaved + k];
+        return v === null || v === undefined || typeof v === typeof w.value;
+    });
+    if (!tailLooksLikeExtras) return null;
+    if (fits(specOf(nodeData, expected[pySaved].name), wv[pySaved])) return null;   // the old tail is not misplaced
+    const missing = expected.slice(pySaved);
+    return { values: wv.slice(0, pySaved).concat(missing.map((e) => e.def), wv.slice(pySaved)), missing };
+}
+
+// A workflow already re-saved after the shift carries the misplaced values at full length. Reset only values the
+// widget can never accept: a non-number in INT / FLOAT, a non-boolean in BOOLEAN, or a combo holding a trailing
+// front-end widget's value (e.g. "image" from the upload button). Anything else is left alone.
+function sanitize(node, nodeData, expected) {
+    const pyNames = new Set(expected.map((e) => e.name));
+    const extraValues = new Set(trailingExtras(node, pyNames).map((w) => w.value)
+        .filter((v) => typeof v === "string" && v !== ""));
+    const fixed = [];
+    for (const e of expected) {
+        const w = node.widgets?.find((x) => x.name === e.name);
+        if (!w) continue;
+        const spec = specOf(nodeData, e.name);
+        const t = Array.isArray(spec) ? spec[0] : null;
+        const v = w.value;
+        let bad = false;
+        if (Array.isArray(t)) bad = !t.includes(v) && extraValues.has(v);
+        else if (t === "INT" || t === "FLOAT") {
+            if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) { w.value = Number(v); continue; }
+            bad = !(typeof v === "number" && Number.isFinite(v));
+        } else if (t === "BOOLEAN") bad = typeof v !== "boolean";
+        if (bad && e.def !== null && e.def !== undefined) {
+            fixed.push(`${e.name}=${JSON.stringify(v)}`);
+            w.value = e.def;
+        }
+    }
+    if (fixed.length) {
+        console.warn(`[MEC migration] ${nodeData.name} #${node.id}: reset misplaced value(s) to the default: `
+            + fixed.join(", ") + " (saved before new inputs were added; save the workflow again to keep the fix)");
+    }
+}
+
 app.registerExtension({
     name: "MEC.GenericWidgetMigration",
     async beforeRegisterNodeDef(nodeType, nodeData) {
@@ -116,19 +197,33 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             try {
                 const wv = info?.widgets_values;
-                if (Array.isArray(wv) && wv.length < expected.length) {
-                    const need = expected.length - wv.length;
-                    const tail = expected.slice(wv.length).map(e => e.def);
-                    info.widgets_values = wv.concat(tail);
+                if (Array.isArray(wv) && wv.length < serializedWidgets(this).length) {
+                    const ins = insertBeforeExtras(this, nodeData, expected, wv);
+                    if (ins) {
+                        info.widgets_values = ins.values;
+                        console.log(`[MEC migration] ${nodeData.name}: inserted ${ins.missing.length} new widget(s) `
+                            + `before the front-end widgets (${ins.missing.map((e) => e.name).join(", ")})`);
+                    }
+                }
+                const wv2 = info?.widgets_values;
+                if (Array.isArray(wv2) && wv2.length < expected.length) {
+                    const need = expected.length - wv2.length;
+                    const tail = expected.slice(wv2.length).map(e => e.def);
+                    info.widgets_values = wv2.concat(tail);
                     console.log(
                         `[MEC migration] ${nodeData.name}: padded ${need} missing widget(s) ` +
-                        `(${expected.slice(wv.length).map(e => e.name).join(", ")})`
+                        `(${expected.slice(wv2.length).map(e => e.name).join(", ")})`
                     );
                 }
             } catch (e) {
                 console.warn(`[MEC migration] ${nodeData?.name || "?"}: pad failed:`, e);
             }
-            return onConfigure?.apply(this, arguments);
+            const r = onConfigure?.apply(this, arguments);
+            // the front end writes the saved values into the widgets after this hook: check them on the next tick
+            setTimeout(() => {
+                try { sanitize(this, nodeData, expected); } catch (e) { /* node may be gone */ }
+            }, 0);
+            return r;
         };
     },
 });
