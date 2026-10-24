@@ -743,6 +743,21 @@ except Exception as _farm_exc:  # pragma: no cover
         group="nodes",
     )
 
+# ── C2C Distributed: multi-GPU (GPU inventory, sequence parallel) ──────
+# Sub-package c2c_distributed/ (design: docs/c2c-distributed.md). Kill switch C2C_DISTRIBUTED=off.
+_DIST_MAPPINGS, _DIST_DISPLAY = {}, {}
+try:
+    from .c2c_distributed import nodes as _dist
+    _DIST_MAPPINGS.update(_dist.NODE_CLASS_MAPPINGS)
+    _DIST_DISPLAY.update(_dist.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _dist_exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "c2c_distributed", _dist_exc,
+        hint="C2C Distributed (GPU Inventory / Sequence Parallel); needs torch. "
+             "Set C2C_DISTRIBUTED=off to switch the nodes off.",
+        group="nodes",
+    )
+
 # ── Legacy nodes (deprecated — kept so old workflows load) ────────────
 try:
     from .nodes.legacy_compat import (
@@ -761,6 +776,7 @@ _C2C_FAMILIES = [
     ("Vault", _VAULT_MAPPINGS, _VAULT_DISPLAY),
     ("Folder Incrementer", _FOLDER_MAPPINGS, _FOLDER_DISPLAY),
     ("Render farm", _FARM_MAPPINGS, _FARM_DISPLAY),
+    ("C2C Distributed", _DIST_MAPPINGS, _DIST_DISPLAY),
     ("Fluid Shots/Audio", _FLUID_MAPPINGS, _FLUID_DISPLAY),
     ("C2C video", _C2CVIDEO_MAPPINGS, _C2CVIDEO_DISPLAY),
     ("MaskEditControl", _MEC_MAPPINGS, _MEC_DISPLAY),

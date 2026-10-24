@@ -2,6 +2,35 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-24 (fix: Load Video (C2C) workflows saved before the handle inputs)
+
+- **Owner log: `LoadVideoC2C ... handle_frames, , invalid literal for int()`, and every output after it ignored.**
+  A save made before the built-in handle inputs were added (L9.40) ends with the values of two front-end widgets:
+  the upload button (`"image"`) and the hidden preview state (`""`). On load those landed by position on `handles` and
+  `handle_frames`. The pack's generic migration only padded missing values at the end, so it missed this.
+  Reproduced in both renderers on the owner-stack testbed. Evidence (workspace):
+  `docs/evidence/L9.38/loadvideo_handles_probe.before_fix.json` and `loadvideo_handles_probe.json`.
+- The generic migration (`js/widget_migration.js`, all pack nodes) now inserts new inputs' defaults **before** the
+  trailing front-end widgets when an old save ends with them.
+- A workflow that was already re-saved with the shifted values is repaired on load. A non-number in an INT / FLOAT
+  widget, a non-boolean in a BOOLEAN, and a combo holding a front-end widget's value (such as `"image"`) go back to
+  the default. The console names each one; save the workflow once to keep the fix. Nothing else is touched.
+
+## Unreleased – 2026-10-24 (C2C Distributed: GPU Inventory, Sequence Parallel, L9.38)
+
+- **New sub-package `c2c_distributed/`** (design: `docs/c2c-distributed.md`). The kill switch is
+  `C2C_DISTRIBUTED=off`.
+- **C2C GPU Inventory**: GPUs, architecture (Turing to Blackwell, incl. B200 / GB200 / B300 / GB10), BF16 / FP8 /
+  FP4, kernels in this torch build, P2P / NVLink, Grace hosts, and NCCL / gloo usability measured in a subprocess.
+  It ends with which multi-GPU modes this machine can run.
+- **C2C Sequence Parallel (multi-GPU)**: exact Ulysses / Ring / USP sequence parallelism for Wan 2.1 / 2.2 and MiniMax
+  H3 on one machine, on any OS. It uses ComfyUI core's multi-GPU model copies and thread pool, and
+  core's block and attention hooks; no model code is copied. Measured equal to the single-GPU result: CPU float64
+  attention <= 2e-15; GPU bf16 / fp16 bit-identical for Ulysses 2 / 4; sampler end to end <= 1.05e-5 (Wan) and <= 3.8e-6 (H3 video + audio). Speed-up on
+  two or more GPUs is not measured yet. ControlNet, other block patches and attention overrides set after the node
+  are refused with the reason instead of producing a wrong picture.
+- CFG split is not rebuilt: ComfyUI core ships **MultiGPU CFG Split** since 0.39.
+
 ## Unreleased – 2026-10-24 (Scheduled Queue, Watch Folder, Webhooks; Video Stabilizer RAFT; Control AOV inputs, L9.39)
 
 The OmniBar's Schedule and Watch panels had shipped, but their server side was never loaded, so every action failed

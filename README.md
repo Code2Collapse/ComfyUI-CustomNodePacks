@@ -45,13 +45,14 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **111** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **113** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
 | Vault | 4 |
 | Folder Incrementer | 5 |
 | Render farm | 3 |
+| C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
 | MaskEditControl | 14 |
@@ -88,7 +89,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 111 nodes loaded (Vault 4, Folder Incrementer 5, Render farm 3, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 113 nodes loaded (Vault 4, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -1557,6 +1558,28 @@ it is refused with that explanation. Runs are queued on this ComfyUI's own addre
 Schedules, watchers and webhooks are kept across restarts in `user/default/c2c/automation.json`. Secrets are never
 written there: they go to the C2C secrets store, or stay in memory if no secrets backend is installed (the panel
 says so).
+
+## Multi-GPU: C2C Distributed
+
+Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measurements: `docs/c2c-distributed.md`):
+
+- **C2C GPU Inventory** lists every GPU with its architecture (Turing, Ampere, Ada, Hopper, Blackwell incl. B200 /
+  GB200 / B300 / RTX 50 / GB10), memory, BF16 / FP8 / FP4 support, and whether this torch build has kernels for it.
+  It shows the P2P and NVLink links between the GPUs and spots Grace / aarch64 hosts. It also checks whether NCCL and
+  gloo really work here: it creates a process group in a subprocess rather than trusting the OS name. Last, it lists
+  which multi-GPU modes this machine can run.
+- **C2C Sequence Parallel (multi-GPU)** splits each model call of a long video over the GPUs of one machine. Every
+  attention layer exchanges tokens between the GPUs (Ulysses all-to-all for the heads, Ring for the rest, or both).
+  The result is the same as on one GPU: measured bit-identical for Ulysses at 2 and 4 GPUs, and within the
+  precision's own rounding otherwise. It works on Windows and Linux and needs no NCCL. Each GPU holds a full copy of
+  the model, made by ComfyUI's own multi-GPU loader. Supported: Wan 2.1 / 2.2 and MiniMax H3 (text-to-video verified; image-to-video and reference layouts not
+  sampled yet). Put it
+  last in the model chain. With one GPU the model passes through unchanged. **Speed-up has not been measured yet**
+  (that needs a machine with two or more GPUs).
+
+For CFG split (cond and uncond on two GPUs) use ComfyUI's own **MultiGPU CFG Split** node; this pack does not
+duplicate it. `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one
+GPU (or CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 
 ## VRAM Management
 
