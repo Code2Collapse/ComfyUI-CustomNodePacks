@@ -67,7 +67,9 @@ Interactive canvas widget for placing point prompts and drawing bounding boxes. 
 
 ---
 
-### 2. Image Comparer (MEC)
+### 2. Image Comparer (MEC) - removed, use Video Comparer (C2C)
+
+> `ImageComparerMEC` is no longer registered: `VideoComparerC2C` compares images, video, EXR / HDR and audio (slider, overlay, difference). The section below describes the old node.
 
 Interactive before/after comparison widget with 3 modes. Drag the slider to compare, toggle to overlay blend, or view a difference heatmap.
 
@@ -170,7 +172,9 @@ Query the parameter history database to see what changed between runs. Useful fo
 
 ## Utility Nodes
 
-### 5. Universal Reroute (MEC)
+### 5. Universal Reroute (MEC) - removed
+
+> `UniversalRerouteMEC` is no longer registered: use ComfyUI's own reroutes. The section below describes the old node.
 
 Drop onto any connection to reroute it. Auto-adapts to any type (IMAGE, MASK, LATENT, STRING, etc.). Renders as a compact dot. Right-click → "Remove Reroute (reconnect)" to dissolve.
 

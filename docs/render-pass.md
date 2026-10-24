@@ -1,5 +1,8 @@
 # Render-Pass Nodes (MEC)
 
+> **These nodes now ship in [ComfyUI-NukeMaxNodes](https://github.com/Code2Collapse/ComfyUI-NukeNodePack)** under the same node ids, so saved workflows load them from there. This page is kept for reference; the current parameters are in NukeMax's `NODE_REFERENCE.md`.
+
+
 Two nodes for working with multi-pass renderer output (V-Ray, Arnold,
 Redshift, Cycles, Octane, etc.).
 

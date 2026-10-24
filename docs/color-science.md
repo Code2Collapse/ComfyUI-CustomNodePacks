@@ -1,5 +1,8 @@
 # Color Science Nodes (MEC)
 
+> **These nodes now ship in [ComfyUI-NukeMaxNodes](https://github.com/Code2Collapse/ComfyUI-NukeNodePack)** under the same node ids, so saved workflows load them from there. This page is kept for reference; the current parameters are in NukeMax's `NODE_REFERENCE.md`.
+
+
 Three nodes for VFX/grading workflows, all under `MaskEditControl/Color`.
 None of these nodes pull in extra dependencies — math is done in pure
 torch using built-in matrices and OETFs.

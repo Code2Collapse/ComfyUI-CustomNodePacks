@@ -49,7 +49,7 @@
 |---|---|---|
 | [`sam-segmentation.md`](sam-segmentation.md) | SAM Model Loader, SAM Mask Generator, **SAM Multi-Mask Picker**, Unified Segmentation, Semantic Segment, and the SAM+ViTMatte / SeC+MatAnyone / remove-background backends of Mask + Matting | Loading SAM 2.1 / SAM 3, prompting (points / boxes / text), iterative refinement, multi-candidate visual picking, end-to-end pipelines |
 | [`matting-refinement.md`](matting-refinement.md) | Matting Node, ViTMatte Refiner, Trimap Generator, Mask Tools (luma key) | 7 matting backends, 7 refinement methods, trimap construction, BT.709 luminance keying |
-| [**`mask-matting-pipeline.md`**](mask-matting-pipeline.md) ★ new | **MaskMattingMEC** (combined) | Single-node pipeline: pick segmenter + matter + weights, point/box/text/video auto-mode, slot-based positive/negative coords, subject presets |
+| [**`mask-matting-pipeline.md`**](mask-matting-pipeline.md) ★ new | **MaskOpsMEC** (combined) | Single-node pipeline: pick segmenter + matter + weights, point/box/text/video auto-mode, slot-based positive/negative coords, subject presets |
 
 ### 🖌️ Mask Editing, Drawing & Painting
 | Doc | Key nodes | What it covers |
@@ -108,7 +108,7 @@ modes automatically:
 
 | Stage | Image-gen node | Video-gen equivalent |
 |---|---|---|
-| Segment subject | SAM Mask Generator / SAM+ViTMatte | **MaskMattingMEC** with SAM2.1 video / SeC + MatAnyone2 |
+| Segment subject | SAM Mask Generator / SAM+ViTMatte | **MaskOpsMEC** with SAM2.1 video / SeC + MatAnyone2 |
 | Refine alpha edges | ViTMatte Refiner | Same node — works per-frame |
 | Inpaint a region | Inpaint Crop Pro → KSampler → Inpaint Composite | Inpaint Crop Pro → **ProPainter Temporal** → Inpaint Composite |
 | Remove an object | Crop → SD inpaint → Composite | **ProPainter Remove** (no SD model needed) |

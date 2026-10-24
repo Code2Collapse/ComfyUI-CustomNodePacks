@@ -55,6 +55,15 @@ code on 2026-07-29 and have **no generator in this repo yet**, so they can drift
 mirror; treat the live node schema as authoritative until they are regenerated.
 
 
+<!-- C2C:MOVED-NODES:BEGIN -->
+
+**Documented in other packs** (these ids used to live here and moved; saved workflows load them from the pack that registers them now):
+
+- ComfyUI-NukeMaxNodes (NODE_REFERENCE.md of ComfyUI-NukeMaxNodes): `CleanPlateExtractorMEC`, `ColorSpaceConvertMEC`, `DepthOfFieldMaskMEC`, `DepthWarpMEC`, `DifferenceMatteMEC`, `EXRMetadataReaderMEC`, `ExposureGradeMEC`, `FrameRangeRouterMEC`, `GrainMatchMEC`, `LUTApplyMEC`, `MergeRenderPassesMEC`, `MetadataWriterMEC`, `NormalToCurvatureMEC`, `PlateStabilizerMEC`, `PositionPassSplitterMEC`, `ShotMetadataNodeMEC`
+- ComfyUI-WanNodeExperiments (NODE_REFERENCE.md of ComfyUI-WanNodeExperiments): `WanDirectorC2C`
+
+<!-- C2C:MOVED-NODES:END -->
+
 ## Contents
 
 - **C2C/AI Image** (1)
@@ -64,6 +73,13 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **C2C/Diagnostics** (2)
   - [Mask Failure Explainer — Diagnostics](#maskfailureexplainermec)
   - [Model Metadata Extractor](#modelmetadataextractormec)
+- **C2C/Distributed** (2)
+  - [C2C GPU Inventory](#c2cgpuinventory)
+  - [C2C Multi-GPU Split](#c2csequenceparallel)
+- **C2C/Frequency** (3)
+  - [Film Grain (MEC)](#filmgrainmec)
+  - [Frequency Combine (MEC)](#frequencycombinemec)
+  - [Frequency Separate (MEC)](#frequencyseparatemec)
 - **C2C/Helpers** (8)
   - [Size (C2C)](#aspectpresetmec)
   - [Conditional Switch](#conditionalswitchmec)
@@ -73,12 +89,40 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Number Lerp (C2C)](#numberlerpmec)
   - [Seed List Generator (C2C)](#seedlistmec)
   - [Text Template (C2C)](#texttemplatemec)
-- **C2C/Inpaint** (5)
+- **C2C/Inpaint** (7)
   - [Inpaint Crop Pro](#inpaintcroppromec)
   - [Inpaint Mask Prepare](#inpaintmaskpreparemec)
   - [Inpaint Paste Back](#inpaintpastebackmec)
   - [Inpaint Stitch Pro](#inpaintstitchpromec)
   - [ProPainter — Temporal / Remove / Stitch / Refine / Flow](#propaintermec)
+  - [Smart Image Crop](#smartimagecropmec)
+  - [Smart Image Stitch](#smartimagestitchermec)
+- **C2C/Legacy** (7)
+  - [BBox Crop (MEC) (legacy)](#bboxcrop)
+  - [BBox From Mask (MEC) (legacy)](#bboxfrommask)
+  - [BBox Pad (MEC) (legacy)](#bboxpad)
+  - [BBox To Mask (MEC) (legacy)](#bboxtomask)
+  - [Mask Composite Advanced (MEC) (legacy)](#maskcompositeadvanced)
+  - [Mask Math (MEC) (legacy)](#maskmath)
+  - [Mask Preview Overlay (MEC) (legacy)](#maskpreviewoverlay)
+- **C2C/Magnific** (15)
+  - [OmniScale Creation Picker](#magnificcreationpicker)
+  - [OmniScale Generate Image](#magnificgenerateimage)
+  - [OmniScale Generate Music](#magnificgeneratemusic)
+  - [OmniScale Generate Video](#magnificgeneratevideo)
+  - [OmniScale Library Reference](#magnificlibraryreference)
+  - [OmniScale Metadata (unpack)](#magnificmetadata)
+  - [OmniScale Remove Background](#magnificremovebackground)
+  - [OmniScale Retouch (inpaint)](#magnificretouch)
+  - [OmniScale Save To (project/folder)](#magnificsaveto)
+  - [OmniScale Skin Enhancer](#magnificskinenhancer)
+  - [OmniScale Stock Picker](#magnificstockpicker)
+  - [OmniScale Stock Search](#magnificstocksearch)
+  - [OmniScale Upscale Image](#magnificupscaleimage)
+  - [OmniScale Upscale Video](#magnificupscalevideo)
+  - [OmniScale Voiceover (TTS)](#magnificvoiceover)
+- **C2C/Mask** (1)
+  - [Image Mask Editor (C2C)](#imagemaskeditorc2c)
 - **C2C/ModelAnalysis** (1)
   - [VAE Inspect](#vaeblockinspectormec)
 - **C2C/Paint** (3)
@@ -103,16 +147,32 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Video Stabilizer — Classic (deprecated)](#videostabilizerclassicmec)
   - [Video Stabilizer — RAFT Flow (deprecated)](#videostabilizerflowmec)
   - [Video Stabilizer](#videostabilizermec)
-- **C2C/Utils** (1)
+- **C2C/Tiling** (4)
+  - [Identity Lock — refine without moving](#identitylockmec)
+  - [Tile Merge](#tilemergemec)
+  - [Tile Plan](#tileplanmec)
+  - [Tile Split](#tilesplitmec)
+- **C2C/Utils** (3)
   - [Parameter History](#parameterhistorymec)
+  - [Folder Version Control (check / set)](#folderversioncontrol)
+  - [Folder Version Variant (per output)](#folderversionvariant)
 - **C2C/VAE** (1)
   - [VAE Merge](#vaemergemec)
-- **C2C/Video** (1)
+- **C2C/Vault** (4)
+  - [Vault input (edit view)](#c2c_vaulteditinput)
+  - [Vault output (edit view)](#c2c_vaulteditoutput)
+  - [C2C Vault — Locked (password to run)](#c2c_vaultlocked)
+  - [C2C Vault — Sealed (runs without password)](#c2c_vaultsealed)
+- **C2C/Video** (7)
   - [Mask Track — Motion/Propagate/Anchor/Consistency/Stabilize](#masktrackermec)
+  - [AV Handles — Add / Trim](#avhandlesmec)
+  - [Load Images Path (C2C)](#loadimagespathc2c)
+  - [Load Video (C2C)](#loadvideoc2c)
+  - [Load Video Path (C2C)](#loadvideopathc2c)
+  - [Save Video (C2C)](#savevideoc2c)
+  - [Video Info (C2C)](#videoinfoc2c)
 - **C2C/VideoMask** (1)
   - [Video Mask Editor](#videomaskeditormec)
-- **C2C/Wan_Director** (1)
-  - [Wan Director](#wandirectorc2c)
 - **Code2Collapse/Sampling** (1)
   - [AsymFlow Sampler Patch (Lakonik signal-shift)](#asymflowsamplerpatch)
 - **ComfyUI-CustomNodePacks/PromptRelay** (3)
@@ -142,36 +202,15 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **MaskEditControl/Clipboard** (2)
   - [TCL Parse (MEC)](#tclparsemec)
   - [TCL Serialize (MEC)](#tclserializemec)
-- **MaskEditControl/Color** (3)
-  - [Color Space Convert (MEC)](#colorspaceconvertmec)
-  - [Exposure Grade (MEC)](#exposuregrademec)
-  - [LUT Apply (.cube) (MEC)](#lutapplymec)
 - **MaskEditControl/Edit** (1)
   - [Mask Edit — Transform/Draw/Points/BBox](#maskeditmec)
-- **MaskEditControl/Geometry** (3)
-  - [Depth Warp (MEC)](#depthwarpmec)
-  - [Normal → Curvature (MEC)](#normaltocurvaturemec)
-  - [Position Pass Splitter (MEC)](#positionpasssplittermec)
-- **MaskEditControl/IO** (3)
-  - [EXR Metadata Reader (MEC)](#exrmetadatareadermec)
+- **MaskEditControl/IO** (2)
   - [Load EXR (MEC)](#loadexrmec)
   - [Save EXR (MEC)](#saveexrmec)
-- **MaskEditControl/Metadata** (3)
-  - [Frame Range Router (MEC)](#framerangeroutermec)
-  - [Metadata Writer (MEC)](#metadatawritermec)
-  - [Shot Metadata Reader (MEC)](#shotmetadatanodemec)
 - **MaskEditControl/Pipeline** (1)
   - [Mask + Matting](#maskopsmec)
-- **MaskEditControl/PlateTools** (4)
-  - [Clean Plate Extractor (MEC)](#cleanplateextractormec)
-  - [Difference Matte (MEC)](#differencemattemec)
-  - [Grain Match (MEC)](#grainmatchmec)
-  - [Plate Stabilizer (MEC)](#platestabilizermec)
 - **MaskEditControl/Pose** (1)
   - [Face/Pose Delta Editor (C2C)](#faceposedeltacoremec)
-- **MaskEditControl/Render** (2)
-  - [Depth-of-Field Mask (MEC)](#depthoffieldmaskmec)
-  - [Merge Render Passes (MEC)](#mergerenderpassesmec)
 - **MaskEditControl/Roto** (1)
   - [Vector Roto — Bezier (MEC)](#vectorrotomec)
 - **MaskEditControl/VFX** (1)
@@ -367,6 +406,167 @@ Inspect model file metadata WITHOUT unpickling or loading weights. Safe to run o
 | 2 | `total_params` | `INT` | Total parameter count summed across all tensors. |
 | 3 | `fingerprint` | `STRING` | SHA256 fingerprint over (size, first 1 MB, last 1 MB) when enabled. |
 | 4 | `lineage_json` | `STRING` | License + lineage information as JSON when present in metadata. |
+
+
+---
+
+## C2C/Distributed
+
+
+### C2CGPUInventory
+
+**Shown in the menu as:** C2C GPU Inventory
+
+Lists the GPUs (architecture Turing to Blackwell, memory, BF16 / FP8 / FP4 support, whether this torch build has kernels for them), how they are linked (P2P, NVLink), Grace / aarch64 hosts, whether NCCL / gloo really work here, and which multi-GPU modes this box can run.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `probe_backends` | `BOOLEAN` | default `True` | Really create a NCCL / gloo process group in a subprocess to see whether it works (a few seconds, cached until ComfyUI restarts). Off: report only what the hardware says. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `summary` | `STRING` | — |
+| 1 | `report_json` | `STRING` | — |
+
+
+### C2CSequenceParallel
+
+**Shown in the menu as:** C2C Multi-GPU Split
+
+Splits every model call over the GPUs of this machine. Any model: the call's batch items (cond and uncond, an image batch, Tile Split's tiles) go to different GPUs, with no exchange at all. Wan 2.1 / 2.2 and MiniMax H3 also split the tokens of one item (Ulysses all-to-all / Ring, exact). One model copy per GPU, made by ComfyUI's own multi-GPU clones. Works on Windows and Linux; with one GPU the model passes through unchanged. Put it last in the model chain (after LoRA / attention nodes). Replaces core's 'MultiGPU CFG Split' for this model.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `model` | `MODEL` |  | — |
+| `gpus` | `INT` | default `0`, range 0…64 | How many GPUs to use; 0 = all that ComfyUI sees. Each GPU holds a full copy of the model. |
+| `strategy` | choice: `auto`, `ulysses`, `ring` | default `"auto"` | auto: Ulysses as far as the head count and fast links allow, Ring for the rest (USP). ulysses: prefer head-parallel all-to-all (best on NVLink). ring: K/V blocks passed around (best across slow links). |
+| `min_tokens_per_gpu` | `INT` | default `1024`, range 1…1048576 | Calls with fewer tokens per GPU run on one GPU: below this the exchange costs more than it saves. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `fast_link_gpus` | `INT` | default `0`, range 0…64 | How many GPUs share fast links (NVLink domain). 0 = all of them. Ulysses stays inside this many GPUs. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `model` | `MODEL` | — |
+| 1 | `plan` | `STRING` | — |
+
+
+---
+
+## C2C/Frequency
+
+
+### FilmGrainMEC
+
+**Shown in the menu as:** Film Grain (MEC)
+
+Lightroom-style film grain with per-frame animation for video batches.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | Lightroom / Camera Raw-style film grain: Amount, Size, Roughness. Monochrome by default; raise Color for dye-cloud colour grain. |
+| `amount` | `FLOAT` | default `25.0`, range 0.0…100.0, step 0.5 | How much grain shows through (Lightroom Amount). |
+| `size` | `FLOAT` | default `25.0`, range 0.0…100.0, step 0.5 | Grain size — bigger = coarser; noise is generated at reduced resolution then upscaled. |
+| `roughness` | `FLOAT` | default `50.0`, range 0.0…100.0, step 0.5 | Irregularity of the grain: blends a fine and a coarse field, like Lightroom. |
+| `color` | `FLOAT` | default `0.0`, range 0.0…100.0, step 1.0 | 0 = clean monochrome grain. Raise for coloured dye-cloud grain. |
+| `animate` | `BOOLEAN` | default `True` | Fresh grain on every frame of the batch — real film shimmer. Off = the same static grain on all frames. |
+| `seed` | `INT` | default `0`, range 0…18446744073709551615 | Same seed, same grain. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | Optional — confine the grain to the mask, feathered by its values (soft edges blend in). |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `report` | `STRING` | — |
+
+
+### FrequencyCombineMEC
+
+**Shown in the menu as:** Frequency Combine (MEC)
+
+Merge a high-frequency detail layer onto a low-frequency base. Output is clamped to 0..1 on the IMAGE socket — values above 1.0 are clipped; this is an 8-bit-range IMAGE, not a scene-linear plate.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `high_frequency` | `IMAGE` |  | Detail layer from Frequency Separate (mode/linear must match). |
+| `low_frequency` | `IMAGE` |  | Base image the detail lands on (e.g. the relit result). Leaves Separate in display space when linear=True; Combine re-linearises it. |
+| `mode` | choice: `Divide`, `Subtract` | default `"Divide"` | Must match the Separate that made the HF. |
+| `linear` | `BOOLEAN` | default `True` | Process in linear light (correct). Turn off to work in gamma like classic Photoshop. Must match between Separate and Combine. |
+| `detail_strength` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.01 | Attenuate (<1) or boost (>1) the transferred detail. 0.0 restores the base only. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | Optional — apply the detail only inside the mask (feathered by its values). |
+| `mask_feather` | `FLOAT` | default `0.0`, range 0.0…64.0, step 1.0 | Soften the mask edge before applying detail. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `report` | `STRING` | — |
+
+
+### FrequencySeparateMEC
+
+**Shown in the menu as:** Frequency Separate (MEC)
+
+Split an image into low-frequency base and high-frequency detail. HF leaves in working space; LF leaves in display space when linear=True.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | Split into a soft base (low frequency) and a fine detail layer (high frequency). Pair with Frequency Combine to transfer texture. |
+| `method` | choice: `Gaussian`, `Guided`, `Rolling Guidance`, `Median` | default `"Guided"` | How the base is smoothed. Guided keeps edges clean without the halo Gaussian leaves; Rolling Guidance erases texture by size while keeping shapes; Median is for spot blemishes (radius capped internally). |
+| `radius` | `INT` | default `8`, range 1…128, step 1 | Detail scale. Larger = coarser base, more goes into the detail layer. Median mode caps the effective radius at 7 — see the report for what ran. |
+| `edge_threshold` | `FLOAT` | default `0.1`, range 0.0…1.0, step 0.01 | How strongly edges are protected (Guided / Rolling Guidance). Lower = sharper edges kept. |
+| `mode` | choice: `Divide`, `Subtract` | default `"Divide"` | How detail is encoded. Divide (ratio) is lighting-invariant — best for transferring detail between differently-lit images. Negative ratios are discarded on Combine before recombine. |
+| `detail` | choice: `Luminance`, `RGB` | default `"Luminance"` | Luminance keeps detail achromatic so a Divide recombine never touches color. RGB carries chromatic detail too. |
+| `linear` | `BOOLEAN` | default `True` | Process in linear light (correct). Turn off to work in gamma like classic Photoshop. Must match between Separate and Combine. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | Optional — attenuate the detail layer outside the mask on high_frequency_masked. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `high_frequency` | `IMAGE` | — |
+| 1 | `low_frequency` | `IMAGE` | — |
+| 2 | `high_frequency_masked` | `IMAGE` | — |
+| 3 | `report` | `STRING` | — |
 
 
 ---
@@ -817,6 +1017,809 @@ Unified ProPainter node. Absorbs ProPainterTemporal / Remove / Stitch / StitchRe
 | 2 | `aux_image` | `IMAGE` | Auxiliary IMAGE (flow_field_rgb in 'flow' mode, zeros otherwise). |
 | 3 | `aux_mask` | `MASK` | Auxiliary MASK (reserved, zeros for now). |
 | 4 | `info` | `STRING` | Info string with timings, coverage, mode-specific stats. |
+
+
+### SmartImageCropMEC
+
+**Shown in the menu as:** Smart Image Crop
+
+Crop what the mask points at, at the aspect it will be generated in, scaled to a size the VAE accepts.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `mask` | `MASK` |  | — |
+| `resolution_mode` | choice: `Automatic`, `Manual` | default `"Automatic"` | — |
+| `max_resolution` | `INT` | default `2048`, range 256…16384, step 64 | Upper limit on the longest side. A crop larger than this is scaled DOWN to fit. |
+| `min_resolution` | `INT` | default `768`, range 64…2048, step 64 | Lower limit on the shortest side. A crop smaller than this is scaled UP, which is the whole point of cropping - a 200px face gets the model's full attention. |
+| `manual_width` | `INT` | default `1024`, range 64…8192, step 8 | — |
+| `manual_height` | `INT` | default `1024`, range 64…8192, step 8 | — |
+| `mask_grow_pixels` | `INT` | default `32`, range -1024…1024, step 8 | Grow (or shrink) the mask before measuring the crop, so the model sees context around the region rather than a tight cut-out. |
+| `patch_mask_holes` | `BOOLEAN` | default `True` | Close gaps and fill enclosed holes. A subject mask with holes regenerates those holes as background - the hole-in-the-face result. |
+| `no_mask_mode` | choice: `Bypass`, `Resize Full Image`, `Crop Full Image` | default `"Bypass"` | What to do when the mask is empty. Bypass passes the image through untouched, which is the safe default for a batch where only some frames have a mask. |
+| `force_divisibility` | choice: `8`, `16`, `32`, `64`, `112`, `128`, `256` | default `128` | Snap output dimensions to this multiple. A VAE silently pads anything else, which shifts the crop by a few pixels and breaks the stitch. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `crop_image` | `IMAGE` | — |
+| 1 | `crop_mask` | `MASK` | — |
+| 2 | `stitcher` | `STITCHER` | — |
+| 3 | `preview_overlay` | `IMAGE` | — |
+| 4 | `info` | `STRING` | — |
+
+
+### SmartImageStitcherMEC
+
+**Shown in the menu as:** Smart Image Stitch
+
+Blend the processed crop back into the original frame.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `original_image` | `IMAGE` |  | — |
+| `processed_image` | `IMAGE` |  | — |
+| `stitcher` | `STITCHER` |  | — |
+| `feather_pixels` | `INT` | default `32`, range 0…256, step 1 | — |
+| `blend_mode` | choice: `Box Feather`, `Mask Feather`, `Hard Paste` | default `"Box Feather"` | Box Feather softens the crop's rectangular edge. Mask Feather blends along the mask itself, which keeps untouched detail outside the subject. Hard Paste shows the seam and is for checking alignment. |
+| `resize_full_image_output` | choice: `Restore Original Size`, `Keep Resized Image` | default `"Restore Original Size"` | Only applies when the crop node ran in 'Resize Full Image' mode. |
+| `enable_color_match` | `BOOLEAN` | default `False` | Pull the crop's exposure and cast toward the plate before blending. A feathered seam turns a small mismatch into a visible halo instead of hiding it. |
+| `color_match_amount` | `FLOAT` | default `0.35`, range 0.0…1.0, step 0.01 | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `info` | `STRING` | — |
+
+
+---
+
+## C2C/Legacy
+
+
+### BBoxCrop
+
+**Shown in the menu as:** BBox Crop (MEC) (legacy)
+
+Deprecated — kept so old workflows load. Closest current node: SmartImageCropMEC.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `bbox` | `BBOX` |  | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `cropped_image` | `IMAGE` | — |
+| 1 | `cropped_mask` | `MASK` | — |
+| 2 | `bbox` | `BBOX` | — |
+
+
+### BBoxFromMask
+
+**Shown in the menu as:** BBox From Mask (MEC) (legacy)
+
+Deprecated — kept so old workflows load. No unified successor.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | — |
+| `padding` | `INT` | default `0`, range 0…512, step 1 | Uniform padding around the detected bbox |
+| `padding_x` | `INT` | default `0`, range 0…512, step 1 | Extra horizontal padding (added to both sides) |
+| `padding_y` | `INT` | default `0`, range 0…512, step 1 | Extra vertical padding (added to both sides) |
+| `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `bbox` | `BBOX` | — |
+| 1 | `x` | `INT` | — |
+| 2 | `y` | `INT` | — |
+| 3 | `width` | `INT` | — |
+| 4 | `height` | `INT` | — |
+| 5 | `bbox_str` | `STRING` | — |
+
+
+### BBoxPad
+
+**Shown in the menu as:** BBox Pad (MEC) (legacy)
+
+Deprecated — kept so old workflows load. No unified successor.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `bbox` | `BBOX` |  | — |
+| `pad_left` | `INT` | default `0`, range -4096…4096 | — |
+| `pad_right` | `INT` | default `0`, range -4096…4096 | — |
+| `pad_top` | `INT` | default `0`, range -4096…4096 | — |
+| `pad_bottom` | `INT` | default `0`, range -4096…4096 | — |
+| `image_width` | `INT` | default `512`, range 1…16384 | — |
+| `image_height` | `INT` | default `512`, range 1…16384 | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `bbox` | `BBOX` | — |
+| 1 | `bbox_str` | `STRING` | — |
+
+
+### BBoxToMask
+
+**Shown in the menu as:** BBox To Mask (MEC) (legacy)
+
+Deprecated — kept so old workflows load. No unified successor.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `bbox` | `BBOX` |  | — |
+| `image_width` | `INT` | default `512`, range 1…16384 | — |
+| `image_height` | `INT` | default `512`, range 1…16384 | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `reference_image` | `IMAGE` |  | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `MASK` | `MASK` | — |
+
+
+### MaskCompositeAdvanced
+
+**Shown in the menu as:** Mask Composite Advanced (MEC) (legacy)
+
+Deprecated — kept so old workflows load. Closest current node: core MaskComposite (fewer operations).
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask_a` | `MASK` |  | — |
+| `mask_b` | `MASK` |  | — |
+| `operation` | choice: `union`, `intersect`, `subtract`, `xor`, `blend`, `min`, `max`, `difference` | default `"union"` | — |
+| `blend_factor` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Blend ratio (only for 'blend' mode). 0=all A, 1=all B |
+| `invert_a` | `BOOLEAN` | default `False` | — |
+| `invert_b` | `BOOLEAN` | default `False` | — |
+| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Binarize output (0 = keep soft) |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `MASK` | `MASK` | — |
+
+
+### MaskMath
+
+**Shown in the menu as:** Mask Math (MEC) (legacy)
+
+Deprecated — kept so old workflows load. No unified successor.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mask` | `MASK` |  | — |
+| `operation` | choice: `add_scalar`, `multiply_scalar`, `power`, `invert`, `clamp`, `remap_range`, `quantize`, `threshold_hysteresis`, `gamma`, `contrast`, `abs_diff_from_value` | default `"invert"` | — |
+| `value_a` | `FLOAT` | default `0.0`, range -100.0…100.0, step 0.01 | Primary parameter (meaning depends on operation) |
+| `value_b` | `FLOAT` | default `1.0`, range -100.0…100.0, step 0.01 | Secondary parameter (meaning depends on operation) |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `MASK` | `MASK` | — |
+
+
+### MaskPreviewOverlay
+
+**Shown in the menu as:** Mask Preview Overlay (MEC) (legacy)
+
+Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC preview output.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `mask` | `MASK` |  | — |
+| `display_mode` | choice: `overlay`, `mask_only`, `side_by_side`, `checkerboard`, `edge_highlight` | default `"overlay"` | — |
+| `overlay_color_r` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | — |
+| `overlay_color_g` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
+| `overlay_color_b` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
+| `opacity` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.01 | — |
+| `edge_width` | `INT` | default `2`, range 0…20, step 1 | Edge contour width in pixels |
+| `show_bbox` | `BOOLEAN` | default `False` | Draw bounding box of mask region |
+| `bbox_color_r` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
+| `bbox_color_g` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | — |
+| `bbox_color_b` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `bbox` | `BBOX` |  | External bbox to draw (overrides auto-detect) |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `preview` | `IMAGE` | — |
+
+
+---
+
+## C2C/Magnific
+
+
+### MagnificCreationPicker
+
+**Shown in the menu as:** OmniScale Creation Picker
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
+| `folder` | choice: `(project root)` | default `"(project root)"` | Folder inside the selected project; the list narrows to that project. |
+| `content_type` | choice: `image`, `video`, `audio` | default `"image"` | Media type to browse; only the matching output is populated. |
+| `selected` | `STRING` | default `""` | Set by clicking a thumbnail in the grid. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `video` | `VIDEO` | — |
+| 2 | `audio` | `AUDIO` | — |
+| 3 | `creation_identifier` | `STRING` | — |
+| 4 | `metadata` | `STRING` | — |
+
+
+### MagnificGenerateImage
+
+**Shown in the menu as:** OmniScale Generate Image
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `prompt` | `STRING` | default `""` | — |
+| `model` | choice: `auto` | default `"auto"` | — |
+| `aspect_ratio` | choice: `auto`, `1:1`, `16:9`, `9:16`, `2:3`, `3:4`, `4:5`, `5:4`, `3:2`, `4:3`, `21:9`, `2:1`, … | default `"auto"` | — |
+| `count` | `INT` | default `1`, range 1…8 | — |
+| `seed` | `INT` | default `0`, range 0…4294967295 | Sent to Magnific. Same seed and settings reproduce the result on models that honor it; a batch uses seed, seed+1, … per image. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+| `reference_image` | `IMAGE` |  | Optional reference picture. A batch counts one reference per image. Use the other reference_image sockets for pictures of different sizes; reference_type applies to all of them. |
+| `reference_image_2` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
+| `reference_image_3` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
+| `reference_image_4` | `IMAGE` |  | Another reference picture (or batch), same reference_type as the first. |
+| `reference_type` | choice: `image`, `style` | default `"image"` | — |
+| `resolution` | choice: `auto` | default `"auto"` | auto = model default; narrows to the selected model. |
+| `library_references` | `MAGNIFIC_LIBRARY_REFS` |  | Optional — from a Magnific Library Reference node. Attaches Library characters, styles, elements or locations; their @name tokens are added to the prompt when missing. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `images` | `IMAGE` | — |
+| 1 | `creation_identifiers` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificGenerateMusic
+
+**Shown in the menu as:** OmniScale Generate Music
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `prompt` | `STRING` | default `""` | — |
+| `model` | choice: `Google Lyria`, `Lyria 3 Short`, `Lyria 3 Long`, `ElevenLabs Music`, `ElevenLabs Music v2`, `google-lyria`, `google-lyria-3`, `google-lyria-3-pro`, `elevenlabs-music-generation`, `elevenlabs-music-generation-v2` | default `"Google Lyria"` | — |
+| `duration_seconds` | `INT` | default `30`, range 10…300 | Only Lyria 3 Long and ElevenLabs honor it; the rest are fixed at 30s. |
+| `instrumental` | `BOOLEAN` | default `False` | — |
+| `seed` | `INT` | default `0`, range 0…4294967295 | Music generation takes no seed: changing it only forces a new run. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `audio` | `AUDIO` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificGenerateVideo
+
+**Shown in the menu as:** OmniScale Generate Video
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `prompt` | `STRING` | default `""` | — |
+| `model` | choice: `auto` | default `"auto"` | — |
+| `duration` | choice: `5`, `10` | default `"5"` | Seconds; narrows to the selected model. |
+| `resolution` | choice: `auto` | default `"auto"` | auto = model default; narrows to the selected model. |
+| `aspect_ratio` | choice: `auto`, `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9` | default `"auto"` | — |
+| `sound_effects` | `BOOLEAN` | default `False` | Only models with native audio honor it. |
+| `seed` | `INT` | default `0`, range 0…4294967295 | Sent to Magnific. Same seed and settings reproduce the result on models that honor it (e.g. Seedance). |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+| `start_frame` | `IMAGE` |  | Image-to-video start keyframe. |
+| `end_frame` | `IMAGE` |  | End keyframe (models that support it). |
+| `reference_image` | `IMAGE` |  | — |
+| `reference_video` | `VIDEO` |  | Video reference (models that support it, e.g. Seedance 2.0). Not combinable with a start/end frame. |
+| `library_references` | `MAGNIFIC_LIBRARY_REFS` |  | Optional — from a Magnific Library Reference node. Attaches Library characters, styles, elements or locations; their @name tokens are added to the prompt when missing. Video takes characters, elements and styles (no locations). |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `video` | `VIDEO` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificLibraryReference
+
+**Shown in the menu as:** OmniScale Library Reference
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `catalog` | choice: `My Library`, `Magnific` | default `"My Library"` | My Library: your own and shared assets. Magnific: the public catalog. |
+| `type` | choice: `All`, `Characters`, `Styles`, `Elements`, `Locations` | default `"All"` | Narrows the asset list to one kind. |
+| `asset` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | @name (Type · Origin), grouped by type. Only ready assets are listed; press Refresh library or R. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `chain` | `MAGNIFIC_LIBRARY_REFS` |  | Another Library Reference node, to attach several assets to one generation. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `library_references` | `MAGNIFIC_LIBRARY_REFS` | — |
+
+
+### MagnificMetadata
+
+**Shown in the menu as:** OmniScale Metadata (unpack)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `metadata` | `STRING` |  | The metadata output of a Magnific generation or edit node. |
+| `index` | `INT` | default `0`, range 0…63 | Which result of a batch to read; clamped to the last one. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `model` | `STRING` | — |
+| 1 | `prompt` | `STRING` | — |
+| 2 | `seed` | `INT` | — |
+| 3 | `creation_identifier` | `STRING` | — |
+| 4 | `tool` | `STRING` | — |
+| 5 | `url` | `STRING` | — |
+| 6 | `json` | `STRING` | — |
+
+
+### MagnificRemoveBackground
+
+**Shown in the menu as:** OmniScale Remove Background
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `mask` | `MASK` | — |
+| 2 | `creation_identifier` | `STRING` | — |
+| 3 | `metadata` | `STRING` | — |
+
+
+### MagnificRetouch
+
+**Shown in the menu as:** OmniScale Retouch (inpaint)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `mask` | `MASK` |  | 1.0/white = area to change. Must be the same pixel size as the image. |
+| `mode` | choice: `replace`, `erase` | default `"replace"` | — |
+| `prompt` | `STRING` | default `""` | Replace mode only: what the masked area should become. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificSaveTo
+
+**Shown in the menu as:** OmniScale Save To (project/folder)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `project` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
+| `folder` | choice: `(project root)` | default `"(project root)"` | Folder inside the selected project; the list narrows to that project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `folder` | `MAGNIFIC_FOLDER` | — |
+
+
+### MagnificSkinEnhancer
+
+**Shown in the menu as:** OmniScale Skin Enhancer
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `version` | choice: `faithful`, `creative`, `flexible` | default `"faithful"` | — |
+| `sharpen` | `INT` | default `0`, range 0…100 | — |
+| `smart_grain` | `INT` | default `0`, range 0…100 | — |
+| `skin_detail` | `INT` | default `0`, range 0…100 | Faithful version only. |
+| `optimized_for` | choice: `default`, `enhance_skin`, `enhance_everything`, `improve_lighting`, `transform_to_real`, `no_make_up` | default `"default"` | Flexible version only. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificStockPicker
+
+**Shown in the menu as:** OmniScale Stock Picker
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `query` | `STRING` | default `""` | — |
+| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | — |
+| `license` | choice: `any`, `free`, `premium` | default `"any"` | — |
+| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | — |
+| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | — |
+| `selected` | `STRING` | default `""` | Set by clicking a thumbnail in the results grid. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional: also save the stock item to this Magnific project/folder. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `info` | `STRING` | — |
+
+
+### MagnificStockSearch
+
+**Shown in the menu as:** OmniScale Stock Search
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `query` | `STRING` | default `""` | — |
+| `content_type` | choice: `any`, `photo`, `vector`, `illustration`, `psd`, `design` | default `"photo"` | — |
+| `license` | choice: `any`, `free`, `premium` | default `"any"` | — |
+| `orientation` | choice: `any`, `portrait`, `landscape`, `square`, `panoramic` | default `"any"` | — |
+| `ai_generated` | choice: `any`, `only`, `excluded` | default `"any"` | — |
+| `selection` | choice: `index`, `random` | default `"index"` | index = take result_index; random = pick between range_from and range_to. |
+| `result_index` | `INT` | default `0`, range 0…999 | Used when selection = index. |
+| `range_from` | `INT` | default `0`, range 0…999 | Random range start (0 = first result). |
+| `range_to` | `INT` | default `9`, range 0…999 | Random range end, inclusive — first 10 results by default. |
+| `seed` | `INT` | default `0`, range 0…4294967295 | Drives the random pick: randomize for a different item per run, fix it to reproduce one. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional: also save the stock item to this Magnific project/folder. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `info` | `STRING` | — |
+
+
+### MagnificUpscaleImage
+
+**Shown in the menu as:** OmniScale Upscale Image
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `scale` | choice: `2x`, `4x`, `8x`, `16x` | default `"2x"` | — |
+| `precision` | choice: `creative`, `precision` | default `"creative"` | — |
+| `presets` | choice: `subtle`, `vivid`, `wild` | default `"subtle"` | — |
+| `engine` | choice: `Automatic`, `Illusio`, `Sharpy`, `Sparkle`, `automatic`, `magnific_illusio`, `magnific_sharpy`, `magnific_sparkle` | default `"Automatic"` | — |
+| `mode` | choice: `Automatic`, `Magnific v1 (high HDR)`, `Magnific v2 (sublime)`, `Magnific v2 (photo)`, `Magnific v2 (photo denoiser)`, `default`, `ultra`, `ultra-sublime`, `ultra-photo`, `ultra-denoiser` | default `"Automatic"` | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+| `prompt` | `STRING` | default `""` | — |
+| `creativity` | `INT` | default `0`, range -10…10 | — |
+| `hdr` | `INT` | default `0`, range -10…10 | — |
+| `resemblance` | `INT` | default `0`, range -10…10 | — |
+| `fractality` | `INT` | default `0`, range -10…10 | — |
+| `sharpness` | `INT` | default `0`, range 0…100 | — |
+| `grain` | `INT` | default `0`, range 0…100 | — |
+| `ultra_detail` | `INT` | default `0`, range 0…100 | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificUpscaleVideo
+
+**Shown in the menu as:** OmniScale Upscale Video
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `video` | `VIDEO` |  | — |
+| `mode` | choice: `magnific`, `magnific_precision`, `topaz` | default `"magnific"` | — |
+| `target_resolution` | choice: `1280`, `1920`, `2560`, `3840` | default `"1920"` | Output width (Magnific/Precision modes). |
+| `upscale_factor` | choice: `2`, `4` | default `"2"` | Scale multiplier (Topaz mode). |
+| `preset` | choice: `realistic`, `animationAnd3D`, `artistic`, `custom` | default `"realistic"` | Creative bundle for the magnific mode; custom uses the sliders below. |
+| `fps_boost` | `BOOLEAN` | default `False` | — |
+| `preview` | `BOOLEAN` | default `False` | 12-frame preview run instead of the full clip. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+| `creativity` | `INT` | default `0`, range 0…100 | — |
+| `sharpen` | `INT` | default `0`, range 0…100 | — |
+| `smart_grain` | `INT` | default `0`, range 0…100 | — |
+| `flavor` | choice: `natural`, `vivid` | default `"natural"` | — |
+| `premium_quality` | `BOOLEAN` | default `True` | — |
+| `turbo` | `BOOLEAN` | default `False` | — |
+| `strength` | `INT` | default `50`, range 0…100 | Precision mode only. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `video` | `VIDEO` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+### MagnificVoiceover
+
+**Shown in the menu as:** OmniScale Voiceover (TTS)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `text` | `STRING` | default `""` | — |
+| `voice` | choice: `— sign in (Magnific menu) and press R to refresh —` |  | — |
+| `speed` | `FLOAT` | default `1.0`, range 0.7…1.2, step 0.05 | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `folder` | `MAGNIFIC_FOLDER` |  | Optional — from a Magnific Save To node. Not connected → your Personal project. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `audio` | `AUDIO` | — |
+| 1 | `creation_identifier` | `STRING` | — |
+| 2 | `metadata` | `STRING` | — |
+
+
+---
+
+## C2C/Mask
+
+
+### ImageMaskEditorC2C
+
+**Shown in the menu as:** Image Mask Editor (C2C)
+
+Paint a mask over the image that actually reaches this node. Open the editor to draw; grow, feather, threshold and invert are non-destructive node parameters. Docs: docs/image-mask-editor.md in this pack.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | Input batch (B,H,W,3). Drives B/H/W. |
+| `editor_id` | `STRING` | default `""` | Auto-set by the editor UI. Don't edit by hand. |
+| `frame_mode` | choice: `per_frame`, `shared` | default `"per_frame"` | per_frame: each batch index uses stored frame i; shared: stored frame 0 applies to all. |
+| `grow` | `INT` | default `0`, range -256…256, step 1 | Grow (positive) or shrink (negative) the mask by this many pixels. Any non-zero value makes the edge hard first (every partly covered pixel counts); feather softens it again afterwards. |
+| `feather` | `FLOAT` | default `0.0`, range 0.0…256.0, step 1.0 | Soften the mask edge, in whole pixels (0 = off). Gaussian with sigma = 0.33 x this value, the same feather the Smart Crop/Stitch nodes use. |
+| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Binarize after feather. 0 = keep soft mask. |
+| `invert` | `BOOLEAN` | default `False` | Invert mask after threshold. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `input_mask` | `MASK` |  | Optional mask to combine with the painted mask. |
+| `combine` | choice: `replace`, `add`, `subtract`, `intersect` | default `"replace"` | How painted mask combines with input_mask. Without input_mask only replace applies. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `mask` | `MASK` | The final mask [B,H,W] in 0-1: painted frames, combined with input_mask, then grow, feather, threshold and invert. |
+| 1 | `preview` | `IMAGE` | The input image with the mask tinted over it. |
+| 2 | `info` | `STRING` | Frame count, stored masks, mode and notes (resized frames, frame recording skipped). |
 
 
 ---
@@ -1517,6 +2520,123 @@ Unified video stabilizer (auto / classic / raft_flow). Wraps the vendored MIT Co
 
 ---
 
+## C2C/Tiling
+
+
+### IdentityLockMEC
+
+**Shown in the menu as:** Identity Lock — refine without moving
+
+Refine every pixel without letting anything move. Keeps the plate's low frequencies - where composition and face geometry live - and takes only the model's high frequencies. The face cannot move, because the only thing taken from the model is the band that does not encode where anything is.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `original` | `IMAGE` |  | The plate, at the SAME size as the refined image. If the refinement upscaled, upscale this to match first. |
+| `refined` | `IMAGE` |  | What came back from the model. |
+| `radius` | `FLOAT` | default `8.0`, range 0.0…128.0, step 0.5 | The split frequency. SMALLER locks harder and lets less refinement through; LARGER passes more detail and more movement with it. If a face is still moving, go SMALLER. |
+| `strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | 0 = the raw refinement, 1 = fully locked. Set it to 0 WITH a protect mask to lock only the face and leave the background completely free. |
+| `corrections` | `INT` | default `2`, range 0…8 | Extra passes that push the result's structure back onto the plate's. A Gaussian is not a brick-wall filter, so one pass alone holds only about 70% of a face shift; two hold about 94%, at a 2% cost in detail. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `protect` | `MASK` |  | Where the lock is at FULL strength regardless of the strength above - a face. Everywhere else gets whatever strength says. |
+| `want_drift_map` | `BOOLEAN` | default `False` | Also output a map of where structure moved. Bright means it moved. Use it to find what the drift number is telling you about. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `drift_map` | `MASK` | — |
+| 2 | `drift` | `FLOAT` | — |
+| 3 | `info` | `STRING` | — |
+
+
+### TileMergeMEC
+
+**Shown in the menu as:** Tile Merge
+
+Blend the tiles back into one clip, in float32, with no seam.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `tiles` | `IMAGE` |  | — |
+| `tile_plan` | `TILE_PLAN` |  | — |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `scale` | `FLOAT` | default `0.0`, range 0.0…8.0, step 0.05 | How much the refiner enlarged each tile. 0 means work it out from the tiles themselves, which is right when every tile scaled by the same clean factor. Set it explicitly if the ratio is not a round number. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `image` | `IMAGE` | — |
+| 1 | `info` | `STRING` | — |
+
+
+### TilePlanMEC
+
+**Shown in the menu as:** Tile Plan
+
+Decide the tiles once for a whole clip. Reusing one plan for every frame is what stops seams crawling.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | Any frame at the size you will be tiling. Only its dimensions are read. |
+| `mode` | choice: `tile size`, `tile count` | default `"tile size"` | — |
+| `tile_size` | `INT` | default `1024`, range 128…8192, step 64 | A MAXIMUM, not a target. Tiles are equal-sized and must cover the frame exactly, so the size chosen is the largest at or below this that does. The report says what it picked. |
+| `rows` | `INT` | default `2`, range 1…16 | — |
+| `cols` | `INT` | default `2`, range 1…16 | — |
+| `overlap` | `INT` | default `96`, range 0…512, step 8 | How far neighbouring tiles share pixels. The blend has to hide any difference between two tiles inside this band, so too narrow shows a seam. 64-128px is usual. |
+| `blend` | choice: `cosine`, `linear`, `none` | default `"cosine"` | cosine is the right answer: the fade-in and fade-out sum to exactly 1 across the overlap, so there is no seam and no brightness dip. 'none' is for checking where the tiles are. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `tile_plan` | `TILE_PLAN` | — |
+| 1 | `info` | `STRING` | — |
+
+
+### TileSplitMEC
+
+**Shown in the menu as:** Tile Split
+
+Split a clip into overlapping tiles, emitted as a batch so any refiner can process them. Wire the result through whatever you like, then Tile Merge.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | — |
+| `tile_plan` | `TILE_PLAN` |  | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `tiles` | `IMAGE` | — |
+| 1 | `tile_count` | `INT` | — |
+| 2 | `info` | `STRING` | — |
+
+
+---
+
 ## C2C/Utils
 
 
@@ -1547,6 +2667,73 @@ Query the parameter history database. Shows what parameters were changed, when, 
 | # | Name | Type | What it is |
 |---|---|---|---|
 | 0 | `history_report` | `STRING` | Human-readable parameter history report for the chosen mode. |
+
+
+### FolderVersionControl
+
+**Shown in the menu as:** Folder Version Control (check / set)
+
+Check or set the version counter for a label/date folder. 'check' reports how many vNNN folders exist and what the next one will be; 'set' creates placeholders up to a number so the next run continues after it. To truly reset a label, delete its date folder from disk.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `action` | choice: `check`, `set` | default `"check"` | check -> report how many versions exist and what comes next. Reads only; touches nothing.  set   -> create empty placeholder directories up to `value`, so the next run produces value+1. Use it to skip ahead or to reserve a range. |
+| `label` | `STRING` | default `"default"` | Folder name to inspect, under the output directory. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `value` | `INT` | default `1`, range 1…999999 | 'set' only: create placeholders up to this version number. Ignored when checking. |
+| `trigger` | `*` |  | Optional any-type trigger. Wire any upstream output here to control when this runs. |
+| `prefix` | `STRING` | default `"v"` | Version prefix. Must match the incrementer's. |
+| `padding` | `INT` | default `3`, range 1…10 | Zero-pad width. Must match the incrementer's. |
+| `base_path` | `STRING` | default `""` | Override base directory. Empty -> ComfyUI output dir. |
+| `date_format` | choice: `MM-DD-YYYY`, `DD-MM-YYYY`, `YYYY-MM-DD` | default `"MM-DD-YYYY"` | Must match the incrementer's. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `status` | `STRING` | Human-readable description of what was found or done. |
+| 1 | `current_version` | `INT` | Highest version that exists (0 when there are none yet). |
+| 2 | `next_version` | `INT` | What the next incrementer run will produce. |
+
+
+### FolderVersionVariant
+
+**Shown in the menu as:** Folder Version Variant (per output)
+
+Give one output its own prefix or suffix while keeping the version the Folder Version Incrementer decided. Put one of these between the incrementer and each save node when a single render writes several outputs - a mov, an exr sequence, a png sequence, a masked mov - so they all file under one version with different names.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `filename_prefix` | `STRING` | default `""` | Connect the Folder Version Incrementer's `filename_prefix` output. Every variant fed from the same incrementer lands under the same version. |
+| `suffix` | `STRING` | default `""` | Tag for THIS output, e.g. '_masked', '_exr', '_png'. Leave empty for the one output that needs no tag. |
+| `mode` | choice: `filename`, `subfolder`, `folder` | default `"subfolder"` | Where the tag goes.  filename  -> shot_a/v004/shot_a_masked.mov              everything in one folder, told apart by name  subfolder -> shot_a/v004/masked/shot_a.mov              one folder per output INSIDE the version. Use this for exr sequences - thousands of files should not share a directory with anything else.  folder    -> shot_a_masked/v004/shot_a.mov              a separate top-level tree, still on the same version. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `prefix` | `STRING` | default `""` | Tag placed BEFORE the name instead of after. Offered because a prefix faked with a suffix sorts in the wrong order, which is the whole reason to use one. |
+| `version_string` | `STRING` | default `""` | Optional. Connect the incrementer's `version_string` so a subfolder tag is placed immediately after the version directory rather than at the end of the path. |
+| `extension` | `STRING` | default `""` | Optional extension for the `output_filename` output, e.g. '.mov'. Most save nodes take `filename_prefix` and add their own. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `filename_prefix` | `STRING` | Re-tagged prefix. Wire to the save node's filename_prefix. |
+| 1 | `subfolder_path` | `STRING` | Directory part only. |
+| 2 | `output_filename` | `STRING` | Full name including the extension, when one was given. |
+| 3 | `report` | `STRING` | What was tagged and where, and what stayed shared. |
 
 
 ---
@@ -1601,6 +2788,155 @@ Merge 2 or 3 VAEs with 13 strategies (weighted_sum, sigmoid, geometric, slerp, d
 | 1 | `info` | `STRING` | Human-readable info string summarising mode, alpha, blocks, and timing. |
 | 2 | `recipe_json` | `STRING` | Reproducible recipe JSON; feed back into recipe_in to repeat the exact merge. |
 | 3 | `probe_report` | `STRING` | Probe report with MSE/PSNR per VAE when reference_image is connected. |
+
+
+---
+
+## C2C/Vault
+
+
+### C2C_VaultEditInput
+
+**Shown in the menu as:** Vault input (edit view)
+
+A vault input in the vault's edit view. Created by the vault editor; it never runs.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `index` | `INT` | default `0`, range 0…9 | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `value` | `*` | — |
+
+
+### C2C_VaultEditOutput
+
+**Shown in the menu as:** Vault output (edit view)
+
+A vault output in the vault's edit view. Created by the vault editor; it never runs.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `value` | `*` |  | — |
+| `index` | `INT` | default `0`, range 0…7 | — |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+
+
+### C2C_VaultLocked
+
+**Shown in the menu as:** C2C Vault — Locked (password to run)
+
+Run a password-locked subgraph. The wiring inside travels with the workflow as AES-GCM ciphertext, so a recipient sees an opaque blob instead of your node graph. Lock a canvas selection via right-click → C2C Vault. To run it, type the password in the field on this node and press Enter; the unlock lasts for the ComfyUI session and the password never enters the workflow JSON. SCOPE, honestly: this stops casual inspection and copying. It cannot stop someone who can run Python in this process - the subgraph must be decrypted to execute, so the plaintext exists in memory while it runs. A lock on a door, not a safe.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `vault_id` | `STRING` | default `""` | Public vault handle — authenticated in the ciphertext header, never secret. Lets the UI match an unlock session to the right blob without revealing what is inside. |
+| `vault_payload` | `STRING` | default `""` | AES-GCM ciphertext of the internal graph. This is what travels in the .json — opaque to anyone without the password. Do not hand-edit. |
+| `vault_interface` | `STRING` | default `"{}"` | Clear-text manifest: socket names, types, node count, and any promoted parameters. This is the public API of the vault and it travels in the .json, so it carries a promoted parameter's LABEL and value only - which internal widget it drives is inside the ciphertext, because naming it here would describe the contents. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `input_0` | `*` |  | Positional boundary input 0 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[0] inside the ciphertext. |
+| `input_1` | `*` |  | Positional boundary input 1 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[1] inside the ciphertext. |
+| `input_2` | `*` |  | Positional boundary input 2 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[2] inside the ciphertext. |
+| `input_3` | `*` |  | Positional boundary input 3 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[3] inside the ciphertext. |
+| `input_4` | `*` |  | Positional boundary input 4 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[4] inside the ciphertext. |
+| `input_5` | `*` |  | Positional boundary input 5 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[5] inside the ciphertext. |
+| `input_6` | `*` |  | Positional boundary input 6 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[6] inside the ciphertext. |
+| `input_7` | `*` |  | Positional boundary input 7 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[7] inside the ciphertext. |
+| `input_8` | `*` |  | Positional boundary input 8 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[8] inside the ciphertext. |
+| `input_9` | `*` |  | Positional boundary input 9 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[9] inside the ciphertext. |
+| `param_0` | `*` |  | Promoted parameter 0 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_1` | `*` |  | Promoted parameter 1 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_2` | `*` |  | Promoted parameter 2 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_3` | `*` |  | Promoted parameter 3 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_4` | `*` |  | Promoted parameter 4 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_5` | `*` |  | Promoted parameter 5 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_6` | `*` |  | Promoted parameter 6 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_7` | `*` |  | Promoted parameter 7 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `output_0` | `*` | — |
+| 1 | `output_1` | `*` | — |
+| 2 | `output_2` | `*` | — |
+| 3 | `output_3` | `*` | — |
+| 4 | `output_4` | `*` | — |
+| 5 | `output_5` | `*` | — |
+| 6 | `output_6` | `*` | — |
+| 7 | `output_7` | `*` | — |
+
+
+### C2C_VaultSealed
+
+**Shown in the menu as:** C2C Vault — Sealed (runs without password)
+
+Sealed subgraph - RUNS WITHOUT A PASSWORD, so you can hand a workflow to someone and they just use it. The password is only needed to OPEN the vault for editing. Sealed for installs (the default): it runs without a password only on this install and on the installs whose public keys you pasted when you sealed it; each install keeps its own private key in the OS credential store. Portable seal: runs on any install with this pack, so it is obfuscation only. A legacy (v1) seal still runs and is marked; open it and lock it again to upgrade. HONEST SCOPE: a recipient install can always decrypt what it runs, so sealing stops reading and copying your graph out of the .json, not a determined extractor on a recipient machine. Use C2C_VaultLocked when the recipient should need your password to run it at all.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `vault_id` | `STRING` | default `""` | Public vault handle — authenticated in the ciphertext header, never secret. Lets the UI match an unlock session to the right blob without revealing what is inside. |
+| `vault_payload` | `STRING` | default `""` | AES-GCM ciphertext of the internal graph. This is what travels in the .json — opaque to anyone without the password. Do not hand-edit. |
+| `vault_interface` | `STRING` | default `"{}"` | Clear-text manifest: socket names, types, node count, and any promoted parameters. This is the public API of the vault and it travels in the .json, so it carries a promoted parameter's LABEL and value only - which internal widget it drives is inside the ciphertext, because naming it here would describe the contents. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `input_0` | `*` |  | Positional boundary input 0 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[0] inside the ciphertext. |
+| `input_1` | `*` |  | Positional boundary input 1 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[1] inside the ciphertext. |
+| `input_2` | `*` |  | Positional boundary input 2 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[2] inside the ciphertext. |
+| `input_3` | `*` |  | Positional boundary input 3 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[3] inside the ciphertext. |
+| `input_4` | `*` |  | Positional boundary input 4 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[4] inside the ciphertext. |
+| `input_5` | `*` |  | Positional boundary input 5 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[5] inside the ciphertext. |
+| `input_6` | `*` |  | Positional boundary input 6 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[6] inside the ciphertext. |
+| `input_7` | `*` |  | Positional boundary input 7 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[7] inside the ciphertext. |
+| `input_8` | `*` |  | Positional boundary input 8 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[8] inside the ciphertext. |
+| `input_9` | `*` |  | Positional boundary input 9 — the label you see is applied by the vault interface manifest, not by this socket name. Index must match boundary_in[9] inside the ciphertext. |
+| `param_0` | `*` |  | Promoted parameter 0 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_1` | `*` |  | Promoted parameter 1 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_2` | `*` |  | Promoted parameter 2 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_3` | `*` |  | Promoted parameter 3 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_4` | `*` |  | Promoted parameter 4 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_5` | `*` |  | Promoted parameter 5 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_6` | `*` |  | Promoted parameter 6 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+| `param_7` | `*` |  | Promoted parameter 7 — connect this only when a promoted parameter has been converted to an input. The vault decides which internal widget it drives; that mapping lives inside the ciphertext and is never in the workflow JSON. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `output_0` | `*` | — |
+| 1 | `output_1` | `*` | — |
+| 2 | `output_2` | `*` | — |
+| 3 | `output_3` | `*` | — |
+| 4 | `output_4` | `*` | — |
+| 5 | `output_5` | `*` | — |
+| 6 | `output_6` | `*` | — |
+| 7 | `output_7` | `*` | — |
 
 
 ---
@@ -1677,6 +3013,277 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | 3 | `info_json` | `STRING` | Mode-specific JSON diagnostic payload. |
 | 4 | `metric` | `STRING` | Mode/metric label string. |
 | 5 | `warning` | `STRING` | [stabilize] frames whose mask dropped or jumped, in words; empty when none (and in the other modes). |
+
+
+### AVHandlesMEC
+
+**Shown in the menu as:** AV Handles — Add / Trim
+
+Add repeated frames at the head (or tail) to stabilise a video model, then trim exactly those back off afterwards — without retyping the number. In trim mode it uses the count the add recorded, so the two ends cannot drift apart. Audio is moved by the matching duration.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `mode` | choice: `add`, `trim`, `fit` | default `"fit"` | fit  — say how many frames you want OUT. The node works out what the model will accept, pads up to it, and remembers the target so the trim lands exactly there. This is the one to use.  add  — put a specific number of frames on, and remember how many.  trim — take them back off, using the remembered target or count. |
+| `handle_frames` | `INT` | default `8`, range 0…400, step 1 | ADD: how many frames to put on. With a grid selected, 0 means 'just enough to land on the grid'.  TRIM: ignored unless trim_amount is 'manual'. |
+| `trim_amount` | choice: `auto`, `manual` | default `"auto"` | TRIM mode only.  auto   — use the count the add side recorded (or the one wired into `handles`). This is the point of the node: the two ends cannot drift apart.  manual — use handle_frames instead. Only for undoing handles this node did not add.  It is a separate control because 'left at the default' and 'deliberately typed 8' cannot be told apart in one number, and guessing wrong silently trims the wrong amount. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `images` | `IMAGE` |  | — |
+| `audio` | `AUDIO` |  | — |
+| `target_frames` | `INT` | default `0`, range 0…100000, step 1 | FIT mode: how many frames you want OUT. The model's own grid is an implementation detail — ask for 64 and you get 64, whatever the model needs to render to make them.  0 in fit mode means 'use the clip's current length as the target', which pads it to something the model accepts and trims straight back. |
+| `model` | choice: `none (any frame count)`, `MiniMax H3 (17n+5)`, `Wan 2.x (4n+1)`, `LTX / LTX-2 (8n+1)`, `Hunyuan Video (4n+1)`, `CogVideoX (8n+1)`, `Mochi (6n+1)`, `custom (step / plus)` | default `"MiniMax H3 (17n+5)"` | FIT, and ADD with padding_mode 'model preset': which model's frame grid to land on. Every video model wants step*n + plus frames and they disagree only on the numbers: H3 is 17n+5, Wan is 4n+1, LTX is 8n+1.  Hand a model a count it does not accept and it does not complain — it reinterprets the clip, and the result comes out at the wrong speed. |
+| `custom_step` | `INT` | default `4`, range 1…1000 | Only used when model is 'custom'. |
+| `custom_plus` | `INT` | default `1`, range 0…1000 | Only used when model is 'custom'. |
+| `side` | choice: `head`, `tail`, `both` | default `"head"` | Which end. Handles go on the head because that is the run a video model uses to settle.  both: handle_frames on the head AND the tail (fit splits its padding across the two ends).  TRIM takes a wired or remembered count off exactly the ends it went on; this setting only matters for a manual count. |
+| `padding_mode` | choice: `disabled`, `model preset`, `WAN (4n+1)`, `LTX2 (8n+1)`, `H3 (17n+5)` | default `"model preset"` | ADD: round the total onto a model's frame grid. A model that wants 4n+1 and is handed 4n does not complain — it reinterprets the clip, and the result comes out at the wrong speed.  model preset: the grid of the `model` dropdown (or the custom step / plus). disabled: exactly handle_frames, no rounding. The fixed WAN / LTX2 / H3 entries are kept for workflows saved with them. |
+| `manual_fps` | `FLOAT` | default `0.0`, range 0.0…240.0, step 0.001 | 0 measures it from the clip's own audio. Set it when there is no audio to measure against — a guessed 30 on 24fps material puts the silence 25% out. |
+| `handles` | `HANDLES` |  | Wire the add node's `handles` output here for an exact, explicit count. Takes priority over the remembered one, and works across separate workflows where the memory cannot. |
+| `memo_key` | `STRING` | default `""` | Only needed when two independent clips are being handled in one workflow — give each its own name so their counts do not overwrite each other. Empty is right for one clip. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `images` | `IMAGE` | Frames, with handles added or removed. |
+| 1 | `audio` | `AUDIO` | Audio moved by the same duration, so it stays in step. |
+| 2 | `total_frames` | `INT` | How many frames came out. |
+| 3 | `handles` | `HANDLES` | The handle count, to wire into the trim node. Exact, and it does not depend on the memory — use it when the add and the trim are in different workflows. |
+| 4 | `info` | `STRING` | What happened, including WHERE the trim count came from. |
+
+
+### LoadImagesPathC2C
+
+**Shown in the menu as:** Load Images Path (C2C)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `directory` | `STRING` |  | Directory of sequential images. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image_load_cap` | `INT` | default `0`, range 0…1000000 | Max images; 0 = no cap. |
+| `skip_first_images` | `INT` | default `0`, range 0…1000000 | Skip this many images first. |
+| `select_every_nth` | `INT` | default `1`, range 1…100000 | Keep every Nth image. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `IMAGE` | `IMAGE` | — |
+| 1 | `MASK` | `MASK` | — |
+| 2 | `frame_count` | `INT` | — |
+| 3 | `video` | `C2C_VIDEO` | — |
+
+
+### LoadVideoC2C
+
+**Shown in the menu as:** Load Video (C2C)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `video` | choice: `4098429-uhd_4096_2160_25fps.mp4`, `C1799.MP4 Comp 1.mp4`, `Jibaro  Love, Death and Robots - Gamerstrix (1080p, h264).mp4`, `Wanimate_00002_p81-audio_hfclk_1783619197.mp4`, `bedroom.mp4`, `probe.mp4`, `wd_test_prores.mov` |  | Video file from the ComfyUI input folder. |
+| `force_rate` | `FLOAT` | default `0`, range 0…240, step 1 | Output FPS; 0 keeps source. |
+| `custom_width` | `INT` | default `0`, range 0…16384 | Output width; 0 keeps source or derives from height. |
+| `custom_height` | `INT` | default `0`, range 0…16384 | Output height; 0 keeps source or derives from width. |
+| `frame_load_cap` | `INT` | default `0`, range 0…1000000 | Max frames; 0 = no cap. |
+| `skip_first_frames` | `INT` | default `0`, range 0…1000000 | Skip this many frames first. |
+| `select_every_nth` | `INT` | default `1`, range 1…100000 | Keep every Nth frame. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `vae` | `VAE` |  | Encode to LATENT instead of IMAGE. |
+| `format` | choice: `None`, `AnimateDiff`, `Mochi`, `LTXV`, `Hunyuan`, `Cosmos`, `Wan`, `MiniMax H3` | default `"None"` | Model preset (frame grid / dim multiple). |
+| `crop_x` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_y` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_w` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_h` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `decoder` | choice: `auto`, `fast`, `exact` | default `"auto"` | auto: the fast path only where it is faster with the same colour - measured, that is the exact reader on the tested machine. fast: ffmpeg decodes 8-bit 4:2:0 video (the same frames; on an NVIDIA GPU the colour conversion runs there, mean 0.5/255 from the exact reader). exact: the frame-accurate PyAV reader (10-bit, HDR, alpha, ProRes and image sequences always use it). |
+| `seconds_cap` | `FLOAT` | default `0.0`, range 0.0…86400.0, step 0.1 | Load at most this many seconds after skip_first_frames (0 = no limit), at the force_rate rate when set. Works with frame_load_cap: the smaller one wins, and a format preset then snaps the count. |
+| `resolution` | choice: `source`, `2160p (4K)`, `1440p`, `1080p`, `720p`, `480p`, `2048 wide`, `1920 wide`, `1024 wide`, `custom` | default `"custom"` | Output size by its LONGEST side, keeping the aspect: 2160p is 3840, 1080p is 1920. custom uses custom_width / custom_height (0 = keep the source size or follow the aspect). source ignores them. |
+| `divisible_by` | choice: `1`, `2`, `8`, `16`, `32`, `64` | default `1` | Round both output dimensions to a multiple of this. A format preset or a VAE may raise it. |
+| `audio_when_missing` | choice: `silence`, `none` | default `"silence"` | When the file has no audio: silence outputs a silent track as long as the loaded frames (what the loader always did, so downstream nodes keep working); none outputs nothing. |
+| `handles` | choice: `off`, `fit`, `add` | default `"off"` | Handles = extra frames for a video model to settle on, added here and trimmed off again by Save Video (C2C) (it reads them from video_info). fit: pad the clip UP to the model's frame grid (handle_target = frames you want out, 0 = this clip's length). add: put handle_frames on, rounded onto the grid. Repeated edge frames, never black; the audio moves with them. |
+| `handle_frames` | `INT` | default `8`, range 0…400 | add: frames to put on (side both: on EACH end). With a grid, 0 = just enough to land on it. |
+| `handle_target` | `INT` | default `0`, range 0…1000000 | fit: how many frames you want out after the trim. 0 = this clip's own length. |
+| `handle_side` | choice: `head`, `tail`, `both` | default `"head"` | Which end gets the handles. head is where a video model settles; both splits them. |
+| `handle_grid` | choice: `from format`, `none (any frame count)`, `MiniMax H3 (17n+5)`, `Wan 2.x (4n+1)`, `LTX / LTX-2 (8n+1)`, `Hunyuan Video (4n+1)`, `CogVideoX (8n+1)`, `Mochi (6n+1)`, `custom (step / plus)` | default `"from format"` | The model's frame grid: 'from format' uses the format preset above (MiniMax H3 17n+5, Wan 4n+1, LTXV 8n+1 ...), so there is one grid, not two; or pick one here. |
+| `handle_custom_step` | `INT` | default `4`, range 1…1000 | custom grid: step (frames = step * n + plus). |
+| `handle_custom_plus` | `INT` | default `1`, range 0…1000 | custom grid: plus. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `IMAGE` | `IMAGE,LATENT` | — |
+| 1 | `frame_count` | `INT` | — |
+| 2 | `audio` | `AUDIO` | — |
+| 3 | `video_info` | `VHS_VIDEOINFO` | — |
+| 4 | `video` | `C2C_VIDEO` | — |
+| 5 | `mask` | `MASK` | — |
+| 6 | `info` | `STRING` | — |
+
+
+### LoadVideoPathC2C
+
+**Shown in the menu as:** Load Video Path (C2C)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `video` | `STRING` |  | Path to a video file or image sequence. |
+| `force_rate` | `FLOAT` | default `0`, range 0…240, step 1 | Output FPS; 0 keeps source. |
+| `custom_width` | `INT` | default `0`, range 0…16384 | Output width; 0 keeps source or derives from height. |
+| `custom_height` | `INT` | default `0`, range 0…16384 | Output height; 0 keeps source or derives from width. |
+| `frame_load_cap` | `INT` | default `0`, range 0…1000000 | Max frames; 0 = no cap. |
+| `skip_first_frames` | `INT` | default `0`, range 0…1000000 | Skip this many frames first. |
+| `select_every_nth` | `INT` | default `1`, range 1…100000 | Keep every Nth frame. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `vae` | `VAE` |  | Encode to LATENT instead of IMAGE. |
+| `format` | choice: `None`, `AnimateDiff`, `Mochi`, `LTXV`, `Hunyuan`, `Cosmos`, `Wan`, `MiniMax H3` | default `"None"` | Model preset (frame grid / dim multiple). |
+| `sequence_fps` | `FLOAT` | default `24`, range 1…240 | FPS for image sequences only. |
+| `crop_x` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_y` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_w` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `crop_h` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.001 | Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop tool in the player; custom_width / custom_height then resize the cropped frame. |
+| `decoder` | choice: `auto`, `fast`, `exact` | default `"auto"` | auto: the fast path only where it is faster with the same colour - measured, that is the exact reader on the tested machine. fast: ffmpeg decodes 8-bit 4:2:0 video (the same frames; on an NVIDIA GPU the colour conversion runs there, mean 0.5/255 from the exact reader). exact: the frame-accurate PyAV reader (10-bit, HDR, alpha, ProRes and image sequences always use it). |
+| `seconds_cap` | `FLOAT` | default `0.0`, range 0.0…86400.0, step 0.1 | Load at most this many seconds after skip_first_frames (0 = no limit), at the force_rate rate when set. Works with frame_load_cap: the smaller one wins, and a format preset then snaps the count. |
+| `resolution` | choice: `source`, `2160p (4K)`, `1440p`, `1080p`, `720p`, `480p`, `2048 wide`, `1920 wide`, `1024 wide`, `custom` | default `"custom"` | Output size by its LONGEST side, keeping the aspect: 2160p is 3840, 1080p is 1920. custom uses custom_width / custom_height (0 = keep the source size or follow the aspect). source ignores them. |
+| `divisible_by` | choice: `1`, `2`, `8`, `16`, `32`, `64` | default `1` | Round both output dimensions to a multiple of this. A format preset or a VAE may raise it. |
+| `audio_when_missing` | choice: `silence`, `none` | default `"silence"` | When the file has no audio: silence outputs a silent track as long as the loaded frames (what the loader always did, so downstream nodes keep working); none outputs nothing. |
+| `handles` | choice: `off`, `fit`, `add` | default `"off"` | Handles = extra frames for a video model to settle on, added here and trimmed off again by Save Video (C2C) (it reads them from video_info). fit: pad the clip UP to the model's frame grid (handle_target = frames you want out, 0 = this clip's length). add: put handle_frames on, rounded onto the grid. Repeated edge frames, never black; the audio moves with them. |
+| `handle_frames` | `INT` | default `8`, range 0…400 | add: frames to put on (side both: on EACH end). With a grid, 0 = just enough to land on it. |
+| `handle_target` | `INT` | default `0`, range 0…1000000 | fit: how many frames you want out after the trim. 0 = this clip's own length. |
+| `handle_side` | choice: `head`, `tail`, `both` | default `"head"` | Which end gets the handles. head is where a video model settles; both splits them. |
+| `handle_grid` | choice: `from format`, `none (any frame count)`, `MiniMax H3 (17n+5)`, `Wan 2.x (4n+1)`, `LTX / LTX-2 (8n+1)`, `Hunyuan Video (4n+1)`, `CogVideoX (8n+1)`, `Mochi (6n+1)`, `custom (step / plus)` | default `"from format"` | The model's frame grid: 'from format' uses the format preset above (MiniMax H3 17n+5, Wan 4n+1, LTXV 8n+1 ...), so there is one grid, not two; or pick one here. |
+| `handle_custom_step` | `INT` | default `4`, range 1…1000 | custom grid: step (frames = step * n + plus). |
+| `handle_custom_plus` | `INT` | default `1`, range 0…1000 | custom grid: plus. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `IMAGE` | `IMAGE,LATENT` | — |
+| 1 | `frame_count` | `INT` | — |
+| 2 | `audio` | `AUDIO` | — |
+| 3 | `video_info` | `VHS_VIDEOINFO` | — |
+| 4 | `video` | `C2C_VIDEO` | — |
+| 5 | `mask` | `MASK` | — |
+| 6 | `info` | `STRING` | — |
+
+
+### SaveVideoC2C
+
+**Shown in the menu as:** Save Video (C2C)
+
+Save an IMAGE batch as H.264/H.265/ProRes/DNxHR/FFV1/WebM/GIF/WebP or 16-bit PNG / EXR sequences. Streams chunk-by-chunk within the RAM budget, muxes audio, applies OCIO colour transforms, and shows a browser preview with timeline scrub after each run.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `format` | choice: `custom (container / codec)`, `MP4 H.264`, `MP4 H.265 10-bit`, `MOV ProRes 422`, `MOV ProRes 422 HQ`, `MOV ProRes 4444`, `MOV ProRes 4444 XQ`, `MOV DNxHR HQ`, `MOV DNxHR HQX`, `MOV DNxHR 444`, `MKV FFV1 (lossless)`, `WebM VP9`, … | default `"custom (container / codec)"` | custom: choose container, codec, profile, bit depth and chroma below. The other entries are the old single list, kept so saved workflows encode as before. |
+| `fps` | `FLOAT` | default `24.0`, range 0.001…240.0, step 0.001 | Frame rate for the written file. When video_info is wired and fps is left at 24, loaded_fps from the loader is used. |
+| `filename_prefix` | `STRING` | default `"C2C/video"` | — |
+| `quality` | `INT` | default `80`, range 0…100, step 1 | Encoder quality where the format supports it (CRF / qscale / ProRes profile). Hidden for lossless formats. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `images` | `IMAGE` |  | The frames to save. Or wire latent + vae instead to decode and save as one stream. |
+| `audio` | `AUDIO` |  | — |
+| `video_info` | `VHS_VIDEOINFO` |  | — |
+| `colorspace_in` | choice: `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, `ARRI LogC3 (EI800)`, `ARRI LogC4`, `Apple Log`, `BMDFilm WideGamut Gen5`, `Camera Rec.709`, `CanonLog2 CinemaGamut D55`, … | default `"sRGB - Display"` | — |
+| `colorspace_out` | choice: `same as input`, `ACES2065-1`, `ACEScc`, `ACEScct`, `ACEScg`, `ADX10`, `ADX16`, `ARRI LogC3 (EI800)`, `ARRI LogC4`, `Apple Log`, `BMDFilm WideGamut Gen5`, `Camera Rec.709`, … | default `"same as input"` | — |
+| `naming` | choice: `default`, `ComfyUI counter`, `Folder Version Incrementer`, `Folder Version` | default `"default"` | Folder Version Incrementer: the version folder and name come from the Folder Version Incrementer node in this graph (no wire needed), or from the incrementer's defaults when there is none; a wired subfolder still wins. ComfyUI counter: prefix_00001 like Save Image. default: the C2C setting (Folder Version Incrementer unless you changed it). |
+| `naming_resolved` | `STRING` | default `""` | Set by the UI from c2c.saveVideo.naming. |
+| `subfolder` | `STRING` | default `""` | — |
+| `save_output` | `BOOLEAN` | default `True` | — |
+| `latent` | `LATENT` |  | Stream save: a video latent decoded straight into the file, in order, keeping the VAE's causal state - the full frame batch is never held in RAM. Wire this and vae instead of images. |
+| `vae` | `VAE` |  | The VAE for latent (stream save). |
+| `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | Stream save, Wan VAEs: auto tiles only when the frame would not fit the GPU (2K on 8 GB -> 512 px). Each tile is decoded over the whole clip in one causal pass and blended on disk, so the clip never sits in RAM. off: no tiles. manual: tile_size. |
+| `tile_size` | `INT` | default `512`, range 64…2048, step 64 | Tile size in pixels when tile_mode is manual. |
+| `save_metadata` | `BOOLEAN` | default `True` | Store the workflow and prompt in the video file (MP4 / MOV / MKV / WebM), as ComfyUI's own Save Video does, so the file can be dragged back into ComfyUI to rebuild the graph. |
+| `container` | choice: `MP4`, `MOV`, `MKV`, `WebM`, `GIF`, `WebP`, `Image sequence` | default `"MP4"` | The file type. Used when format is custom. |
+| `codec` | choice: `H.264`, `H.265`, `AV1 (SVT)`, `H.264 (NVENC)`, `H.265 (NVENC)`, `AV1 (NVENC)`, `ProRes`, `DNxHR`, `CineForm`, `FFV1 (lossless)`, `UT Video (lossless)`, `VP9`, … | default `"H.264"` | The video codec; the list follows the container. |
+| `profile` | choice: `High`, `Main`, `Baseline`, `High 10`, `High 4:2:2`, `High 4:4:4`, `Main 10`, `Main 12`, `Main 4:2:2 10`, `Main 4:2:2 12`, `Main 4:4:4`, `Main 4:4:4 10`, … | default `"High"` | The codec's profile (ProRes 422 HQ, DNxHR HQX, H.265 Main 10, EXR ZIP ...). |
+| `bit_depth` | choice: `8`, `10`, `12`, `16`, `32 (float)` | default `"8"` | Bits per channel the profile allows. EXR: 16 = half float, 32 = float. |
+| `chroma` | choice: `4:2:0`, `4:2:2`, `4:4:4`, `RGB` | default `"4:2:0"` | Chroma subsampling: 4:2:0 (delivery), 4:2:2 (edit), 4:4:4 / RGB (full). |
+| `color_primaries` | choice: `auto`, `BT.709`, `BT.2020`, `Display P3`, `BT.601` | default `"auto"` | Colour primaries written into the file. auto: from colorspace_out (sRGB / Rec.709 named, others untagged). For YUV codecs the conversion matrix follows (BT.2020 -> BT.2020 NCL). |
+| `color_transfer` | choice: `auto`, `BT.709`, `sRGB`, `linear`, `PQ (ST 2084)`, `HLG`, `gamma 2.2` | default `"auto"` | Transfer function written into the file (it labels; the pixels come from colorspace_out). |
+| `color_range` | choice: `auto`, `limited`, `full` | default `"auto"` | YUV codecs: limited (16-235, broadcast, the default) or full (0-255). Changes the conversion and the tag together. RGB codecs are always full range. |
+| `handles_trim` | choice: `auto`, `manual`, `off` | default `"auto"` | auto: trim exactly the handles Load Video (C2C) added (read from video_info; fit's target length wins). manual: trim_frames on trim_side. off: write every frame that arrives. |
+| `trim_frames` | `INT` | default `8`, range 0…100000 | manual trim: frames to cut (side both: on each end). |
+| `trim_side` | choice: `head`, `tail`, `both` | default `"head"` | manual trim: which end. |
+| `range_in` | `INT` | default `0`, range 0…10000000 | Export range, first frame (of the trimmed clip). Set it with the player's In handle. 0 / 0 = the whole clip. |
+| `range_out` | `INT` | default `0`, range 0…10000000 | Export range, last frame (inclusive). 0 = to the end. |
+| `write_mode` | choice: `write`, `preview first` | default `"write"` | preview first: a run shows a quick preview of exactly what would be written (handles trimmed, range applied) and writes nothing; the player's Write file button then writes it - only the encode runs again, the graph above is cached. |
+| `write_token` | `STRING` | default `""` | Set by the player's Write file button. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `filenames` | `STRING` | — |
+| 1 | `preview` | `IMAGE` | — |
+
+
+### VideoInfoC2C
+
+**Shown in the menu as:** Video Info (C2C)
+
+
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `video_info` | `VHS_VIDEOINFO` |  | Metadata from a C2C or VHS loader. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `source_fps` | `FLOAT` | — |
+| 1 | `source_frame_count` | `INT` | — |
+| 2 | `source_duration` | `FLOAT` | — |
+| 3 | `source_width` | `INT` | — |
+| 4 | `source_height` | `INT` | — |
+| 5 | `loaded_fps` | `FLOAT` | — |
+| 6 | `loaded_frame_count` | `INT` | — |
+| 7 | `loaded_duration` | `FLOAT` | — |
+| 8 | `loaded_width` | `INT` | — |
+| 9 | `loaded_height` | `INT` | — |
 
 
 ---
@@ -1802,107 +3409,6 @@ input/c2c_video_masks/<session>/ as you paint.
 |---|---|---|---|
 | 0 | `mask` | `MASK` | — |
 | 1 | `info` | `STRING` | — |
-
-
----
-
-## C2C/Wan_Director
-
-
-### WanDirectorC2C
-
-**Shown in the menu as:** Wan Director
-
-Visual timeline director for Wan 2.1 / 2.2 / Fun / Animate. Drag image, text and audio clips onto the timeline, choose a model_variant, and the node emits the matching CONDITIONING, LATENT, FPS and AUDIO bundle. Inspired by WhatDreamsCost / LTX Director (MIT), redesigned for the Wan VAE shape (16ch, /8 spatial, /4 temporal) and Wan-specific options (dual-CFG for 2.2, reference image for Animate, control track for Fun).
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `backend` | choice: `native`, `kijai` | default `"native"` | Which video-model stack to drive.    native — ComfyUI's built-in Wan implementation. Connect `model` + `clip`.   kijai  — Kijai's ComfyUI-WanVideoWrapper. Connect `wan_model` + `wan_t5` (optional sockets).  PromptRelay (if enabled) is applied to whichever backbone is active and falls back to the generic-introspection patcher for any third-party model. |
-| `model_variant` | choice: `wan2.1_t2v`, `wan2.1_i2v`, `wan2.2_t2v`, `wan2.2_i2v`, `wan_fun_inp`, `wan_fun_control`, `wan_animate`, `wan2.2_animate_everanimate` | default `"wan2.1_i2v"` | Which Wan family / mode this timeline targets. Changes which optional sliders are visible and how the latent + conditioning are assembled. |
-| `duration_frames` | `INT` | default `81`, range 1…10000, step 1 | Total timeline length in pixel-space frames. Wan 2.x defaults to 81 frames (≈ 5 s @ 16 fps). |
-| `duration_seconds` | `FLOAT` | default `5.0`, range 0.1…1000.0, step 0.01 | Total timeline duration in seconds (synced from frames by the UI). |
-| `frame_rate` | `FLOAT` | default `16.0`, range 1.0…240.0, step 1.0 | FPS. Wan 2.x is trained at 16 fps; raise for slow-motion-like output. |
-| `global_prompt` | `STRING` | default `""`, multiline | Persistent context prepended to every per-clip prompt (characters, lighting, style anchors). |
-| `timeline_data` | `STRING` | default `""`, multiline | — |
-| `local_prompts` | `STRING` | default `""`, multiline | — |
-| `negative_prompts` | `STRING` | default `""`, multiline | — |
-| `segment_lengths` | `STRING` | default `""` | — |
-| `guide_strength` | `STRING` | default `""` | — |
-| `display_mode` | choice: `seconds`, `frames` | default `"seconds"` | — |
-| `custom_width` | `INT` | default `832`, range 0…8192, step 8 | Target width. 0 = inherit from first image clip. |
-| `custom_height` | `INT` | default `480`, range 0…8192, step 8 | Target height. 0 = inherit from first image clip. |
-| `resize_method` | choice: `maintain aspect ratio`, `stretch to fit`, `pad`, `crop` | default `"maintain aspect ratio"` | — |
-| `cfg_high_noise` | `FLOAT` | default `3.5`, range 0.0…20.0, step 0.1 | Wan 2.2 high-noise expert CFG. Ignored for non-2.2 variants. |
-| `cfg_low_noise` | `FLOAT` | default `3.5`, range 0.0…20.0, step 0.1 | Wan 2.2 low-noise expert CFG. Ignored for non-2.2 variants. |
-| `ref_strength` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | Wan Animate reference-image influence. Ignored for other variants. |
-| `everanimate_stage` | choice: `stage1_480p`, `stage2_480p`, `stage3_720p_beta` | default `"stage2_480p"` | Which EverAnimate LoRA checkpoint to apply on top of Wan2.2-Animate-14B:   stage1_480p     — base motion fidelity (480p training).   stage2_480p     — Restorative Flow Matching, sharper temporal coherence (recommended).   stage3_720p_beta — 720p beta with higher detail; needs more VRAM. Ignored for non-EverAnimate variants. |
-| `everanimate_num_chunks` | `INT` | default `1`, range 1…50, step 1 | Long-horizon chunk count. 1 = single ~5 s clip (standard Wan2.2-Animate). ≥2 enables EverAnimate's Persistent Latent Propagation across anchor frames for minute-scale animation. Ignored for non-EverAnimate variants. |
-| `everanimate_overlap_frames` | `INT` | default `4`, range 0…16, step 1 | Frames of latent overlap between consecutive chunks (anchor padding). Higher = smoother seams but slower. Ignored if num_chunks=1 or non-EverAnimate variant. |
-| `everanimate_lora_strength` | `FLOAT` | default `1.0`, range 0.0…2.0, step 0.05 | EverAnimate rank-32 LoRA strength. 1.0 = paper default. Ignored for non-EverAnimate variants. |
-| `everanimate_anchor_strategy` | choice: `auto`, `first_only`, `first_plus_random_3` | default `"auto"` | Anchor-frame selection for chunks 2+:   auto                 — first chunk uses first frame only, later chunks use first + 3 random.   first_only           — always 1 anchor (faster, slight quality loss).   first_plus_random_3  — always 4 anchors (paper-default; best quality). Ignored for non-EverAnimate variants. |
-| `audio_target` | choice: `music_44k_stereo`, `speech_16k_mono` | default `"music_44k_stereo"` | Output AUDIO format. Use `speech_16k_mono` if you intend to feed Wan-S2V or any speech-driven pipeline downstream. |
-| `enable_prompt_relay` | `BOOLEAN` | default `True` | Internal PromptRelay: bias each backbone cross-attention block so the timeline's per-clip prompts only steer their own frame span. On by default — the whole point of the timeline. Works on native ComfyUI MODEL, Kijai WANVIDEOMODEL, and arbitrary video-diffusion models (auto-falls back to generic introspection). With 2+ text/image clips the per-clip prompts become the local prompts and `global_prompt` is the anchor; with 0 or 1 clip it is a no-op. Turn off to encode one flat prompt for the whole clip. |
-| `prompt_relay_epsilon` | `FLOAT` | default `0.001`, range 1e-06…0.99, step 0.0001 | PromptRelay penalty decay. <0.1 = sharp boundaries; ≥0.5 softer. |
-| `enable_dynamic_cfg` | `BOOLEAN` | default `False` | Cosine-ramped dynamic CFG across denoising steps. Early steps get 1.2× CFG (stronger structure), late steps get 0.7× (softer detail). Prevents oversaturation and improves quality. |
-| `guidance_rescale_phi` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.05 | Guidance rescale (phi). Rescales guided output to match conditional std-deviation, preventing color oversaturation at high CFG. 0=off, 0.7=recommended for Wan 2.2. Requires enable_dynamic_cfg=True. |
-| `pag_scale` | `FLOAT` | default `0.0`, range 0.0…5.0, step 0.1 | Perturbed Attention Guidance scale. Improves prompt adherence by guiding away from identity-attention outputs. 0=off, 1.0–3.0 typical. |
-| `enable_phase_shift` | `BOOLEAN` | default `False` | Phase-shift sampling: Euler for early steps (structure), DPM++ 2M for late steps (detail). Uses smooth sigma crossfade. |
-| `phase_shift_pct` | `FLOAT` | default `0.7`, range 0.3…0.95, step 0.05 | Step fraction where phase-shift transitions from Euler to DPM++. |
-| `vae_fp32_decode` | `BOOLEAN` | default `True` | Force VAE decode in fp32 for maximum quality. Wan VAE produces significantly better results in fp32 (recommended by HuggingFace). Uses more VRAM during decode only. |
-| `enable_multi_clip` | `BOOLEAN` | default `False` | Multi-slot CLIP conditioning. Split prompts into structure (early) and detail (late) phases for finer control over generation. |
-| `structure_prompt` | `STRING` | default `""`, multiline | Structure prompt (active during early denoising, 0–35%). Focus on composition, layout, camera angles, scene description. Only used when enable_multi_clip=True. |
-| `detail_prompt` | `STRING` | default `""`, multiline | Detail prompt (active during late denoising, 55–100%). Focus on textures, materials, lighting, color grading. Only used when enable_multi_clip=True. |
-| `enable_nag` | `BOOLEAN` | default `False` | Normalized Attention Guidance: boosts prompt adherence via attention-space CFG. |
-| `nag_scale` | `FLOAT` | default `11.0`, range 0.0…30.0, step 0.5 | NAG guidance scale. Higher = stronger guidance. |
-| `enable_asymflow` | `BOOLEAN` | default `False` | AsymFlow time-shift for improved temporal consistency. |
-| `asymflow_shift` | `FLOAT` | default `3.0`, range 0.1…20.0, step 0.1 | AsymFlow shift parameter. |
-| `cache_type` | choice: `none`, `teacache`, `magcache`, `easycache` | default `"none"` | Inference caching strategy. Speeds up generation by skipping redundant transformer passes. |
-| `cache_threshold` | `FLOAT` | default `0.1`, range 0.0…1.0, step 0.01 | Cache skip threshold. Lower = more aggressive caching (faster but less accurate). |
-| `enable_slg` | `BOOLEAN` | default `False` | Skip-Layer Guidance: run a second pass with layers removed for quality boost. |
-| `slg_layers` | `STRING` | default `""` | Comma-separated layer indices to skip (e.g. '7,8,9'). Empty = auto-select. |
-| `slg_scale` | `FLOAT` | default `0.7`, range 0.0…2.0, step 0.05 | SLG guidance scale. |
-| `enable_feta` | `BOOLEAN` | default `False` | Frequency-Enhanced Temporal Attention for better frame coherence. |
-| `feta_scale` | `FLOAT` | default `0.5`, range 0.0…2.0, step 0.05 | FETA scale. 0 = off. |
-| `enable_riflex` | `BOOLEAN` | default `False` | RIFLEx RoPE rescaling for length extrapolation beyond training length. |
-| `riflex_k` | `INT` | default `2`, range 1…8, step 1 | Number of lowest RoPE frequencies to rescale. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `model` | `MODEL` |  | Native Wan MODEL (2.1 / 2.2 / Fun / Animate). Required when backend='native'. |
-| `clip` | `CLIP` |  | Text encoder paired with the Wan model (UMT5 for 2.x). Required when backend='native'. |
-| `vae` | `VAE` |  | Wan VAE. If connected, the Director encodes reference images for i2v and forces fp32 when vae_fp32_decode=True. |
-| `clip_vision` | `CLIP_VISION` |  | CLIP Vision model for image embeddings (Kijai i2v/Animate). If not connected, image_embeds output is None. |
-| `optional_latent` | `LATENT` |  | Override the auto-built empty latent. |
-| `control_video` | `IMAGE` |  | For Wan Fun / Animate: control sequence (depth/pose/canny). Passed through to control_video output. |
-| `control_mask` | `MASK` |  | For Wan Fun Inpaint: per-frame mask track. Passed through to control_mask output. |
-| `wan_model` | `WANVIDEOMODEL` |  | Kijai WanVideoWrapper model patcher (required when backend='kijai'). |
-| `wan_t5` | `WANTEXTENCODER` |  | Kijai T5 text encoder (required when backend='kijai'). |
-| `t5gemma` | `T5GEMMA_ENCODER` |  | R&D: connect a 'T5Gemma Encoder Loader (WNE)' to encode the Director's composed prompt through T5Gemma instead of CLIP (backend='native'). NOTE: T5Gemma hidden states are a different space/width from Wan's UMT5-XXL — this only works on a Wan model finetuned/adapted for T5Gemma; a stock Wan checkpoint will error or produce garbage. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `model` | `MODEL` | Native MODEL (patched with PromptRelay + NAG + PAG + Dynamic CFG + AsymFlow as enabled). When backend='kijai', passthrough of input `model` if connected. |
-| 1 | `positive` | `CONDITIONING` | Positive CONDITIONING (native branch) with guide_strength embedded. Empty list when backend='kijai'. |
-| 2 | `negative` | `CONDITIONING` | Negative CONDITIONING (native branch). Empty list when backend='kijai'. |
-| 3 | `video_latent` | `LATENT` | Wan latent: VAE-encoded reference for i2v (if VAE connected) or empty latent. Channels=16, /8 spatial, /4 temporal. |
-| 4 | `frame_rate` | `FLOAT` | Frame rate echoed for downstream sampler/saver nodes. |
-| 5 | `combined_audio` | `AUDIO` | Audio waveform mixed from the timeline's audio segments. |
-| 6 | `reference_image` | `IMAGE` | Reference image (first image clip) — used by Wan I2V/Animate as the start/reference frame. Black image if none. |
-| 7 | `info` | `STRING` | JSON: resolved backend, variant, latent shape, segment count, audio sample rate, prompt-relay status, quality stack status, warnings. |
-| 8 | `wan_model` | `WANVIDEOMODEL` | Kijai WANVIDEOMODEL (only populated when backend='kijai'; PromptRelay-patched in place if enabled). |
-| 9 | `wan_text_embeds` | `WANVIDEOTEXTEMBEDS` | Kijai WANVIDEOTEXTEMBEDS dict (only populated when backend='kijai'). Feed directly into WanVideoSampler. |
-| 10 | `tracks_program` | `STRING` | JSON: timeline schema_version + normalised lora/camera/seed/pose tracks for downstream applier nodes. |
-| 11 | `control_video` | `IMAGE` | Control video passthrough (IMAGE) for Wan Fun/Animate. None if not connected. |
-| 12 | `control_mask` | `MASK` | Control mask passthrough (MASK) for Wan Fun Inpaint. None if not connected. |
-| 13 | `guide_data` | `STRING` | JSON: per-segment guide_strength values for downstream guide applier nodes. |
-| 14 | `quality_recipe` | `STRING` | JSON: quality recipe config (SLG, FETA, RIFLEx, cache, FreeInit, phase-shift) for downstream sampler. |
 
 
 ---
@@ -2559,92 +4065,6 @@ Serialize a subgraph JSON description into Nuke-style TCL.
 
 ---
 
-## MaskEditControl/Color
-
-
-### ColorSpaceConvertMEC
-
-**Shown in the menu as:** Color Space Convert (MEC)
-
-Convert IMAGE between sRGB, linear, Rec.709, and ACEScg.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `src_space` | choice: `srgb`, `linear`, `rec709`, `acescg` | default `"srgb"` | — |
-| `dst_space` | choice: `srgb`, `linear`, `rec709`, `acescg` | default `"linear"` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-
-
-### ExposureGradeMEC
-
-**Shown in the menu as:** Exposure Grade (MEC)
-
-Exposure (stops), WB (temp/tint), and contrast around a pivot.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `exposure_stops` | `FLOAT` | default `0.0`, range -10.0…10.0, step 0.05 | Exposure adjustment in stops (linear multiply by 2**stops). |
-| `temperature` | `FLOAT` | default `0.0`, range -100.0…100.0, step 1.0 | — |
-| `tint` | `FLOAT` | default `0.0`, range -100.0…100.0, step 1.0 | — |
-| `contrast` | `FLOAT` | default `1.0`, range 0.0…4.0, step 0.05 | Contrast multiplier around the mid-grey pivot. |
-| `pivot` | `FLOAT` | default `0.18`, range 0.001…0.999, step 0.001 | Mid-grey pivot for contrast (0.18 = scene-linear grey). |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `operate_in_linear` | `BOOLEAN` | default `True` | If True (recommended), input is treated as sRGB-encoded, linearized for the math, then re-encoded. If False, the math is done directly on the encoded values (legacy / display-referred). |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-
-
-### LUTApplyMEC
-
-**Shown in the menu as:** LUT Apply (.cube) (MEC)
-
-Apply a .cube LUT (Adobe format, 1D or 3D) with optional strength blend.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `lut_path` | `STRING` | default `""` | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info_json` | `STRING` | — |
-
-
----
-
 ## MaskEditControl/Edit
 
 
@@ -2731,129 +4151,7 @@ Unified mask edit dispatcher. Pure-CPU. Modes: transform, draw_shape, draw_advan
 
 ---
 
-## MaskEditControl/Geometry
-
-
-### DepthWarpMEC
-
-**Shown in the menu as:** Depth Warp (MEC)
-
-Horizontal parallax warp driven by a depth pass.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `depth` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `max_shift_pixels` | `FLOAT` | default `16.0`, range -512.0…512.0, step 0.5 | — |
-| `pivot` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-
-
-### NormalToCurvatureMEC
-
-**Shown in the menu as:** Normal → Curvature (MEC)
-
-Compute curvature mask from a tangent-space normal pass.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `normal` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `scale` | `FLOAT` | default `1.0`, range 0.1…32.0, step 0.1 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `curvature` | `MASK` | — |
-
-
-### PositionPassSplitterMEC
-
-**Shown in the menu as:** Position Pass Splitter (MEC)
-
-Split position pass into X/Y/Z masks (auto- or manually-ranged).
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `position` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `auto_normalize` | `BOOLEAN` | default `True` | — |
-| `x_min` | `FLOAT` | default `0.0`, range -1000000.0…1000000.0 | — |
-| `x_max` | `FLOAT` | default `1.0`, range -1000000.0…1000000.0 | — |
-| `y_min` | `FLOAT` | default `0.0`, range -1000000.0…1000000.0 | — |
-| `y_max` | `FLOAT` | default `1.0`, range -1000000.0…1000000.0 | — |
-| `z_min` | `FLOAT` | default `0.0`, range -1000000.0…1000000.0 | — |
-| `z_max` | `FLOAT` | default `1.0`, range -1000000.0…1000000.0 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `x_mask` | `MASK` | — |
-| 1 | `y_mask` | `MASK` | — |
-| 2 | `z_mask` | `MASK` | — |
-
-
----
-
 ## MaskEditControl/IO
-
-
-### EXRMetadataReaderMEC
-
-**Shown in the menu as:** EXR Metadata Reader (MEC)
-
-Read OpenEXR header (compression, channels, custom attributes) without decoding pixels. Uses OpenEXR if installed, otherwise pure-Python parser.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `file_path` | `STRING` | default `""` | Absolute path to a .exr file. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `force_pure_python` | `BOOLEAN` | default `False` | Skip OpenEXR even if installed; useful for benchmarking. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `metadata_json` | `STRING` | — |
-| 1 | `width` | `INT` | — |
-| 2 | `height` | `INT` | — |
-| 3 | `channels_csv` | `STRING` | — |
 
 
 ### LoadEXRMEC
@@ -2902,97 +4200,6 @@ Save IMAGE batch as EXR(s).
 | # | Name | Type | What it is |
 |---|---|---|---|
 | 0 | `info_json` | `STRING` | — |
-
-
----
-
-## MaskEditControl/Metadata
-
-
-### FrameRangeRouterMEC
-
-**Shown in the menu as:** Frame Range Router (MEC)
-
-Slice a video batch by [start:end:step].
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `images` | `IMAGE` |  | — |
-| `start` | `INT` | default `0`, range -100000…100000 | — |
-| `end` | `INT` | default `-1`, range -100000…100000 | — |
-| `step` | `INT` | default `1`, range 1…1000 | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mask` | `MASK` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `mask` | `MASK` | — |
-| 2 | `frame_count` | `INT` | — |
-
-
-### MetadataWriterMEC
-
-**Shown in the menu as:** Metadata Writer (MEC)
-
-Write a JSON sidecar; pass the image through.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `sidecar_path` | `STRING` | default `""` | — |
-| `metadata_json` | `STRING` | default `"{}"`, multiline | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `merge_existing` | `BOOLEAN` | default `False` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `written_path` | `STRING` | — |
-
-
-### ShotMetadataNodeMEC
-
-**Shown in the menu as:** Shot Metadata Reader (MEC)
-
-Read a shot.json descriptor; missing fields return empty defaults.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `shot_json_path` | `STRING` | default `""` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `show` | `STRING` | — |
-| 1 | `shot` | `STRING` | — |
-| 2 | `task` | `STRING` | — |
-| 3 | `frame_in` | `INT` | — |
-| 4 | `frame_out` | `INT` | — |
-| 5 | `fps` | `FLOAT` | — |
-| 6 | `raw_json` | `STRING` | — |
 
 
 ---
@@ -3153,123 +4360,6 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 
 ---
 
-## MaskEditControl/PlateTools
-
-
-### CleanPlateExtractorMEC
-
-**Shown in the menu as:** Clean Plate Extractor (MEC)
-
-Median across a batch (with optional mask exclusion) → clean plate.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `images` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `exclude_mask` | `MASK` |  | Pixels where mask>=0.5 are excluded from the median. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `clean_plate` | `IMAGE` | — |
-
-
-### DifferenceMatteMEC
-
-**Shown in the menu as:** Difference Matte (MEC)
-
-Difference matte: |a-b| → MASK with threshold + softness.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image_a` | `IMAGE` |  | — |
-| `image_b` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `metric` | choice: `l2`, `l1` | default `"l2"` | — |
-| `threshold` | `FLOAT` | default `0.05`, range 0.0…1.0, step 0.001 | — |
-| `softness` | `FLOAT` | default `0.05`, range 0.0…1.0, step 0.001 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-
-
-### GrainMatchMEC
-
-**Shown in the menu as:** Grain Match (MEC)
-
-Extract grain from a reference plate and re-apply it to target.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `reference` | `IMAGE` |  | — |
-| `target` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `intensity` | `FLOAT` | default `1.0`, range 0.0…4.0, step 0.05 | — |
-| `denoise_kernel` | `INT` | default `5`, range 3…15, step 2 | — |
-| `seed` | `INT` | default `0`, range 0…2147483647 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info_json` | `STRING` | — |
-
-
-### PlateStabilizerMEC
-
-**Shown in the menu as:** Plate Stabilizer (MEC)
-
-Stabilize a video batch to frame 0 via ORB+affine (cv2) or FFT translation.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `images` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `max_features` | `INT` | default `500`, range 50…5000, step 50 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `images` | `IMAGE` | — |
-| 1 | `info_json` | `STRING` | — |
-
-
----
-
 ## MaskEditControl/Pose
 
 
@@ -3302,74 +4392,6 @@ Apply user-edited landmark deltas to a per-frame face/pose landmark stream in an
 |---|---|---|---|
 | 0 | `landmarks_modified` | `LANDMARKS` | Modified landmarks (T, N, 2) — same shape and ordering as input. |
 | 1 | `info_json` | `STRING` | JSON: per-frame anchor stats, keyframes used, deltas applied, weights at head/tail frames. Useful for debugging the blend. |
-
-
----
-
-## MaskEditControl/Render
-
-
-### DepthOfFieldMaskMEC
-
-**Shown in the menu as:** Depth-of-Field Mask (MEC)
-
-Convert depth pass → CoC mask (defocus alpha) and in-focus mask.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `depth` | `IMAGE` |  | — |
-| `focus_distance` | `FLOAT` | default `0.5`, range 0.0…100.0, step 0.001 | — |
-| `aperture` | `FLOAT` | default `0.1`, range 0.001…100.0, step 0.001 | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `invert` | `BOOLEAN` | default `False` | Invert the focus mask (1 = in focus, 0 = defocus). |
-| `depth_channel` | choice: `R`, `G`, `B`, `luma` | default `"R"` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `coc_mask` | `MASK` | — |
-| 1 | `in_focus_mask` | `MASK` | — |
-
-
-### MergeRenderPassesMEC
-
-**Shown in the menu as:** Merge Render Passes (MEC)
-
-Composite beauty + auxiliary render passes.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `beauty` | `IMAGE` |  | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `diffuse` | `IMAGE` |  | — |
-| `specular` | `IMAGE` |  | — |
-| `emission` | `IMAGE` |  | — |
-| `ao` | `IMAGE` |  | — |
-| `diffuse_gain` | `FLOAT` | default `0.0`, range -2.0…4.0, step 0.05 | — |
-| `specular_gain` | `FLOAT` | default `0.0`, range -2.0…4.0, step 0.05 | — |
-| `emission_gain` | `FLOAT` | default `1.0`, range 0.0…4.0, step 0.05 | — |
-| `ao_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
 
 
 ---

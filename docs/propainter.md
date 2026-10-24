@@ -1,5 +1,8 @@
 # ProPainter Suite (MEC)
 
+> **One node now: `ProPainterMEC`.** The five nodes this page was written for are its `mode` values (temporal, remove, stitch, stitch_refine, flow); saved workflows with the old nodes are migrated on load. The outputs are the same five slots in every mode: image_out, mask_out, aux_image (QC: difference x4; flow: the flow field), aux_mask (QC: changed pixels; flow: unreliable flow), info. `InpaintCompositeMEC` was removed: use `InpaintStitchProMEC` or `InpaintPasteBackMEC`.
+
+
 > **Temporal video inpainting + object/wire/plate removal with ProPainter.**
 > Wraps ProPainter (RAFT + Recurrent Flow Completion + InpaintGenerator) with a
 > ComfyUI-native API and chunked VRAM-safe execution.
@@ -37,20 +40,20 @@ All ProPainter nodes live under `MaskEditControl/Inpaint` (except
 ## When to use which node
 
 ```
-                         ┌─ ProPainterTemporalMEC      (full temporal repaint)
+                         ┌─ ProPainterMEC mode=temporal       (full temporal repaint)
 Generative video         │
-inpaint pipeline ────────┼─ ProPainterStitchMEC        (replaces InpaintStitchProMEC)
+inpaint pipeline ────────┼─ ProPainterMEC mode=stitch         (replaces InpaintStitchProMEC)
                          │
-                         └─ ProPainterStitchRefineMEC  (only seam ring repainted)
+                         └─ ProPainterMEC mode=stitch_refine  (only seam ring repainted)
 
-Removal pipeline ───────── ProPainterRemoveMEC          (no diffusion model required)
+Removal pipeline ───────── ProPainterMEC mode=remove          (no diffusion model required)
 
-Flow analysis only ────── FlowRefineMEC                 (debug / control wiring)
+Flow analysis only ────── ProPainterMEC mode=flow            (debug / control wiring)
 ```
 
 ---
 
-## ProPainterTemporalMEC
+## mode = temporal (was ProPainterTemporalMEC)
 
 **Pipeline**: bidirectional RAFT flow → consistency check → RFC flow
 completion → sliding-window InpaintGenerator → per-frame Reinhard / LAB
@@ -99,7 +102,7 @@ restart ComfyUI.
 
 ---
 
-## ProPainterStitchMEC
+## mode = stitch (was ProPainterStitchMEC)
 
 Drop-in replacement for `InpaintStitchProMEC`. Honours the same
 `STITCH_DATA` (v2/v3) but blends the seam with ProPainter instead of
@@ -134,7 +137,7 @@ frames and produces a flow-consistent seam.
 
 ---
 
-## ProPainterStitchRefineMEC
+## mode = stitch_refine (was ProPainterStitchRefineMEC)
 
 Repaints **only a thin ring along the original mask boundary**.
 Cheapest of the three. Inpaint content (centre) and the surroundings
@@ -155,7 +158,7 @@ that was actually touched.
 
 ---
 
-## ProPainterRemoveMEC
+## mode = remove (was ProPainterRemoveMEC)
 
 **No diffusion model required.** Just `(IMAGE, MASK) → IMAGE`. Best when
 the masked object moves and the background is visible at *some* other
@@ -193,7 +196,7 @@ frame.
 
 ---
 
-## FlowRefineMEC
+## mode = flow (was FlowRefineMEC)
 
 Standalone two-frame RAFT — useful as a debug / control node for
 flow-driven workflows.

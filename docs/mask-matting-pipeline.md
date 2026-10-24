@@ -5,7 +5,7 @@
 > node that auto-selects the right pipeline from the prompts you wire.
 
 **Display name:** `Mask + Matting (MEC)`
-**Class:** `MaskMattingMEC`
+**Class:** `MaskOpsMEC`
 **Category:** `MaskEditControl/Pipeline`
 
 ---
@@ -133,7 +133,7 @@ no parsing required.
 ### Image generation — clean cutout for inpaint reference
 
 ```
-Load Image ──▶ MaskMattingMEC (segmenter=sam2.1, matter=vitmatte)
+Load Image ──▶ MaskOpsMEC (segmenter=sam2.1, matter=vitmatte)
                           ├▶ alpha ──▶ Save Image (PNG with alpha)
                           └▶ preview ──▶ Save Image (premultiplied)
 ```
@@ -144,9 +144,9 @@ mask to ControlNet / IP-Adapter conditioning.
 ### Video generation — temporally consistent character mask
 
 ```
-Load Video ─▶ MaskMattingMEC (segmenter=sam2.1, matter=matanyone2,
+Load Video ─▶ MaskOpsMEC (segmenter=sam2.1, matter=matanyone2,
                               tracking_direction=bidirectional)
-                          └▶ alpha (B,H,W) ──▶ ProPainterTemporalMEC OR
+                          └▶ alpha (B,H,W) ──▶ ProPainterMEC (mode temporal) OR
                                               Wan2.2 Animate replace
 ```
 
@@ -156,7 +156,7 @@ keeps alpha stable across occlusions.
 ### Inpainting — drive InpaintCropProMEC with a clean mask
 
 ```
-Load Image ─▶ PointsBBoxMaskEditor ─▶ MaskMattingMEC ─▶ InpaintCropProMEC
+Load Image ─▶ PointsBBoxMaskEditor ─▶ MaskOpsMEC ─▶ InpaintCropProMEC
                   positive_coords ─┘     alpha ─────┘
                   negative_coords ─┘
 ```

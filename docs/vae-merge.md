@@ -1,5 +1,8 @@
 # VAE Tools (MEC)
 
+> Node ids on this page were updated 2026-10-24: the latent inspector is now part of `ImageStatsProbeMEC` (Probe, wire a latent) and the similarity analyser part of `VAEBlockInspectorMEC` (compare mode); saved workflows are migrated on load.
+
+
 Four VAE-focused nodes covering merging, latent diagnostics, and model
 introspection.
 
@@ -40,7 +43,7 @@ source dtype before being installed into the wrapper.
 Wire a **LATENT** into **Probe (C2C)** (`ImageStatsProbeMEC` under C2C/Helpers).
 Read `info_json`, `verdict`, `nan_count`, and `inf_count` (outputs 10–13); the
 latent passes through on output `latent`. Use `fail_on_corrupt=True` to stop
-the run when NaN or Inf are present. **VAELatentInspectorMEC** was merged into
+the run when NaN or Inf are present. **ImageStatsProbeMEC** was merged into
 this node; saved workflows migrate on load (see `docs/MIGRATION.md`).
 
 ## VAE Inspect — compare mode
@@ -48,7 +51,7 @@ this node; saved workflows migrate on load (see `docs/MIGRATION.md`).
 Wire two VAEs into **VAE Inspect** (`VAEBlockInspectorMEC`): `vae` (first) and
 `vae_b` (second), set `mode` to **compare**, and optionally
 `include_per_tensor` for verbose JSON. Read `report_json`, `global_cosine`, and
-`most_divergent_blocks`. **VAESimilarityAnalyserMEC** was merged into this
+`most_divergent_blocks`. **VAEBlockInspectorMEC** was merged into this
 node; saved workflows migrate on load (see `docs/MIGRATION.md`).
 
 ## VAE Inspect — inspect mode

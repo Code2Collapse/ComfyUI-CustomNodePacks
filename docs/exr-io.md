@@ -1,5 +1,8 @@
 # EXR I/O Nodes (MEC)
 
+> **These nodes now ship in [ComfyUI-NukeMaxNodes](https://github.com/Code2Collapse/ComfyUI-NukeNodePack)** under the same node ids, so saved workflows load them from there. This page is kept for reference; the current parameters are in NukeMax's `NODE_REFERENCE.md`.
+
+
 Two nodes for reading and writing OpenEXR images, under
 `MaskEditControl/IO`. Both ship with a fallback chain so they work
 without extra dependencies — the EXR libraries are only loaded when

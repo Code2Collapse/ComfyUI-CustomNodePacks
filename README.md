@@ -221,7 +221,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**ProPainter Suite**](docs/propainter.md) ★ new | 5 | Temporal video inpaint, stitch (drop-in for legacy), seam-only refine, model-free remove, RAFT flow refine |
 | [**Face Fixer**](docs/face-fixer.md) ★ new | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
 | [**Paint Suite**](docs/paint-suite.md) ★ new | 2 | Interactive paint canvas (hardness/expansion/blur stages) + smart context inpainter (color match, lightness rescue, differential diffusion) |
-| [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskMattingMEC` — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
+| [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskOpsMEC` (Mask + Matting) — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
 | [**Video Stabilizer**](docs/video-stabilizer.md) | 1 | Feature tracking, OpenCV dense flow or RAFT optical flow (experimental), 4 presets, measured accuracy table; padding-mask output wires into Inpaint Crop Pro |
 | [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold |
 | [**VAE precision**](docs/vae-precision.md) ★ new | 2 | Where VAE round trips lose precision (measured) and the options that restrict it: fp32 and unclamped decode, tiled video decode, round-trip meter, original-pixel write-back |
@@ -1578,10 +1578,11 @@ Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measureme
     bit-identical for Ulysses at 2 and 4 GPUs, and within the precision's own rounding otherwise.
   - **Speed-up has not been measured yet** (that needs a machine with two or more GPUs).
 
-When a call carries several items (cond and uncond with CFG, or an image batch), the node first sends them to
-different GPUs, which needs no exchange; the other GPUs split the tokens. On 8 GPUs with CFG that is cond and uncond
-on 4 GPUs each. For other models, ComfyUI's own **MultiGPU CFG Split** does the cond / uncond part. `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one
-GPU (or CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
+With Wan or MiniMax H3, the batch items go to GPU groups first (no exchange needed) and each group splits the
+tokens: on 8 GPUs with CFG that is cond and uncond on 4 GPUs each. You do not need ComfyUI's own **MultiGPU CFG
+Split** with this node: it splits the batch itself, over all GPUs instead of one GPU per cond.
+`C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one GPU (or
+CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 
 ## VRAM Management
 
@@ -1644,75 +1645,32 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 
 ```
 ComfyUI-CustomNodePacks/
-├── __init__.py                     # Node registration
-├── folder_incrementer.py           # FolderIncrementer nodes (3)
-├── conftest.py                     # Pytest root configuration
-├── pyproject.toml                  # Package metadata
-├── requirements.txt                # Dependencies
-├── js/
-│   ├── folder_incrementer.js       # Frontend: FolderIncrementer
-│   ├── image_comparer.js           # Frontend: before/after comparison widget
-│   ├── points_bbox_editor.js       # Frontend: interactive canvas editor
-│   ├── parameter_memory.js         # Frontend: parameter history UI
-│   ├── sam_multi_mask_picker.js    # Frontend: 3-mask thumbnail picker
-│   ├── spline_mask_editor.js       # Frontend: spline drawing canvas (normalized coords)
-│   └── universal_reroute.js        # Frontend: Nuke-style dot
-├── nodes/
-│   ├── sam_model_loader.py         # SAM 2.1 / SAM 3 model loader
-│   ├── sam_mask_generator.py       # SAM inference engine
-│   ├── sam_multi_mask_picker.py    # Multi-mask picker + JS widget
-│   ├── sam_vitmatte_pipeline.py    # SAM → ViTMatte: Mask + Matting's "SAM + ViTMatte" backend
-│   ├── sec_matanyone_pipeline.py   # SeC → MatAnyone2: Mask + Matting's "SeC + MatAnyone2" backend
-│   ├── unified_segmentation_node.py# Unified segmentation dispatcher
-│   ├── unified_segmentation.py     # Segmentation backends (deprecated)
-│   ├── semantic_segment.py         # SegFormer face/clothes parsing
-│   ├── background_remover.py       # RMBG / BiRefNet: Mask + Matting's "remove background" backend
-│   ├── matting_node.py             # 7-backend alpha matting
-│   ├── vitmatte_refiner.py         # Standalone edge refiner
-│   ├── trimap_generator.py         # Trimap generation
-│   ├── luminance_keyer.py          # BT.709 luminance keyer
-│   ├── mask_transform_xy.py        # Per-axis mask transform
-│   ├── mask_draw_frame.py          # Shape drawing (12 shapes + DrawShapeMEC unified node)
-│   ├── mask_composite.py           # Mask compositing ops
-│   ├── mask_math.py                # Mathematical mask ops
-│   ├── mask_batch_manager.py       # Batch manipulation
-│   ├── mask_propagate_video.py     # Video mask propagation
-│   ├── mask_preview.py             # Mask visualization
-│   ├── mask_failure_explainer.py   # Mask diagnostics engine
-│   ├── temporal_anchor.py          # SDF interpolation system
-│   ├── inpaint_suite.py            # Crop/stitch/paste-back/prepare (4 nodes)
-│   ├── bbox_nodes.py               # BBox tools (6 nodes incl. BBoxSmooth)
-│   ├── points_mask_editor.py       # Interactive point/bbox editor
-│   ├── spline_mask_editor.py       # Interactive spline mask drawing
-│   ├── motion_mask_tracker.py      # Per-frame motion detection (4 methods)
-│   ├── stabilization_utils.py      # Camera stabilization helpers
-│   ├── video_frame_extractor.py    # Frame extraction
-│   ├── image_comparer.py           # Before/after image comparison
-│   ├── universal_reroute.py        # Nuke-style reroute dot
-│   ├── parameter_memory.py         # Parameter history + SQLite
-│   ├── model_manager.py            # Shared model cache & download
-│   └── utils.py                    # Shared utilities
-├── docs/
-│   ├── inpaint-suite.md            # Inpaint Crop/Stitch/Paste Back/Prepare
-│   ├── mask-editing.md             # Transform, Draw, Composite, Math, Batch, Preview
-│   ├── sam-segmentation.md         # SAM, Unified Segmentation, Pipelines
-│   ├── matting-refinement.md       # Matting, ViTMatte, Trimap, Keyer
-│   ├── video-temporal-bbox.md      # Video, Temporal Anchor, BBox tools
-│   └── utility-nodes.md            # Editor, Comparer, Diagnostics, Utils
-├── tests/
-│   ├── test_luminance_keyer.py     # 38 tests
-│   ├── test_inpaint_suite.py       # Inpaint suite tests
-│   ├── test_mask_failure_explainer.py # Diagnostics tests
-│   ├── test_temporal_anchor.py     # Temporal anchor tests
-│   └── test_sam_multi_mask_picker.py  # Multi-mask picker tests
-├── example_workflows/
-│   ├── basic_sam_segmentation.json
-│   ├── sam_vitmatte_pipeline.json
-│   ├── mask_editing_toolkit.json
-│   ├── bbox_pipeline.json
-│   └── video_mask_propagation.json
-└── third_party/                    # Reference implementations
+├── __init__.py              # registers every node family (guarded: one failing family never hides the rest)
+├── _c2c_menu.py             # one Add Node menu root: 🐺 C2C / 🧰 Core / <family>
+├── folder_incrementer.py    # Folder Version Incrementer / Control / Variant
+├── nodes/                   # node implementations
+│   ├── mask_matting/        # Mask + Matting (MaskOpsMEC): segmenters, matters, temporal
+│   ├── c2c_video/           # Load / Save Video (C2C), Video Info, Load Images Path, handles
+│   ├── magnific/            # OmniScale (Magnific API) nodes
+│   ├── video_stabilizer/    # Video Stabilizer engine (classic, RAFT, dense flow)
+│   ├── tiling/              # Tile Plan / Split / Merge, Identity Lock
+│   ├── image_mask_editor/   # Image Mask Editor (C2C)
+│   ├── prompt_relay/        # Prompt Relay
+│   ├── frequency_grain/     # Frequency Separate / Combine, Film Grain
+│   ├── layer_effects/, mask_toolkit/, helpers/, depthcrafter/, normalcrafter/
+│   ├── legacy_compat.py, _legacy_replacements.json   # old saved workflows -> current nodes
+│   └── *.py                 # the other nodes (inpaint suite, SAM, ProPainter, comparer, ...)
+├── c2c_distributed/         # multi-GPU: GPU Inventory, Multi-GPU Split (docs/c2c-distributed.md)
+├── c2c_ai/                  # C2C AI spine: model router, backends, keychain, prompt library
+├── renderfarm/              # C2C Farm: spooler, backends, courier
+├── js/                      # front-end extensions (classic canvas and Nodes 2.0)
+├── docs/                    # per-feature documentation
+├── example_workflows/       # example graphs (.json + preview)
+├── NODE_REFERENCE.md        # every registered node: inputs, outputs, menu name
+└── THIRD_PARTY_LICENSES/, NOTICE, CREDITS.md
 ```
+
+Tests are kept out of the published repository; the maintainers run them locally.
 
 ---
 
@@ -1754,9 +1712,9 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 
 | Model family | Recommended bridges |
 |---|---|
-| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte) and `TrimapGeneratorMEC` produce the high-quality alpha that Flux-driven matte refinement needs. `BatchVersionManagerMEC` (combined with `FolderIncrementer`) keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
-| **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskTransformXY` and `MaskPropagateVideo` are useful when reusing a single Qwen-Image generated mask across a small sequence. `ImageComparerMEC` for A/B sweeps over guidance / sampler choices. |
-| **Wan 2.x (video)** | `MotionMaskTrackerMEC`, `MaskPropagateVideo`, `TemporalAnchorMEC`, `MaskOpsMEC` (backend SeC + MatAnyone2) and `TemporalConsistencyCheckerMEC` are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
+| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte, with its own trimap settings) produces the high-quality alpha that Flux-driven matte refinement needs. `FolderIncrementer` keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
+| **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskEditMEC` (shift / grow / feather) and `MaskTrackerMEC` (propagate one mask over a sequence) are useful when reusing a single Qwen-Image generated mask across a small sequence. `VideoComparerC2C` for A/B sweeps over guidance / sampler choices (images too). |
+| **Wan 2.x (video)** | `MaskTrackerMEC` (motion tracking, propagation, key-frame anchors and a temporal-consistency check in one node) and `MaskOpsMEC` (backend SeC + MatAnyone2) are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
 | **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |
 | **GLM-Image** | The IMAGE outputs feed cleanly into the GLM-Image I2I path (via the sampler's optional `image` input + `denoise_strength`). `MaskOpsMEC` (backend remove background) + `SAMMaskGeneratorMEC` provide the alpha pre-stage. |
 | **ERNIE-VL** | Not applicable for sampling (ERNIE-VL is a multimodal LLM). The `ModelMetadataExtractorMEC` and `ParameterHistoryMEC` nodes can still be useful for cataloguing assets that ERNIE-VL has captioned. |
@@ -1766,7 +1724,7 @@ Two general patterns recur across all sampler families:
 1. **Inpaint trio** — `InpaintCropProMEC` → diffusion sampler (any family) → `InpaintPasteBackMEC` (or `InpaintStitchProMEC` for soft seams). Allows full-resolution refinement at a fraction of the VRAM, regardless of which model is loaded.
 2. **Versioned saves** — wire the Folder Version Incrementer's `version_string` (layout show / shot / task / version for a pipeline tree) into the sampler's `Save Image.filename_prefix` so every queued prompt produces a clean, ordered file series.
 
-The `UniversalRerouteMEC`-equivalent typed reroutes (and the SAM / ViT-Matte loaders) keep the graph readable as it scales from a single Flux T2I bench into a multi-model Wan + Qwen-refine + Flux-detail composite.
+ComfyUI's own reroutes (and the SAM / ViT-Matte loaders) keep the graph readable as it scales from a single Flux T2I bench into a multi-model Wan + Qwen-refine + Flux-detail composite.
 
 ---
 
