@@ -6,7 +6,8 @@ How a model call runs (docs/c2c-distributed.md):
    reloaded from the loader, LoRA and patches re-applied by core every run).
 2. A CALC_COND_BATCH wrapper takes the clones away from core's own cond splitter for this model (the two would fight
    over the GPUs) and hands them to:
-3. a DIFFUSION_MODEL wrapper, which runs the SAME call on every GPU at once: rank 0 in the sampler's thread, the
+3. a DIFFUSION_MODEL wrapper. The call's batch items (cond / uncond, images) go to GPU groups first - that needs no
+   exchange at all. Inside a group the SAME call runs on every GPU at once: rank 0 in the sampler's thread, the
    others on core's per-device worker threads, each with the inputs moved to its GPU.
 4. Inside the model, a block-replace patch on every transformer block cuts the token sequence into one shard per GPU
    at the first block and gathers it back after the last one, so everything outside the blocks (patch embedding,
@@ -62,6 +63,7 @@ class Adapter:
     classes: Tuple[str, ...] = ()
     img_dim = 1                         # token dim of the block stream ("img")
     self_attention_first_only = True    # True: only the first attention call per block is self-attention
+    batch_split = False                 # True: a call's batch items (cond / uncond, images) may go to different GPUs
 
     def heads(self, dm) -> Optional[int]:
         return None
@@ -86,6 +88,11 @@ class WanAdapter(Adapter):
     name = "Wan 2.1 / 2.2"
     classes = ("WanModel",)
     img_dim = 1
+    batch_split = True
+
+    def batch(self, args, kwargs):
+        x = args[0] if args else kwargs.get("x")
+        return int(x.shape[0]) if isinstance(x, torch.Tensor) else 1
 
     def heads(self, dm):
         return int(getattr(dm, "num_heads", 0)) or None
@@ -297,6 +304,46 @@ def foreign_patches(to: dict) -> List[str]:
     return bad
 
 
+_PER_CHUNK_KEYS = ("cond_or_uncond", "uuids")          # transformer_options lists with one entry per cond chunk
+
+
+def _slice_batch(obj, total: int, lo: int, hi: int):
+    """Copy containers, cutting every tensor whose first dim is the call's batch to items [lo, hi)."""
+    if isinstance(obj, torch.Tensor):
+        return obj[lo:hi] if obj.dim() > 0 and obj.shape[0] == total else obj
+    if isinstance(obj, dict):
+        return {k: _slice_batch(v, total, lo, hi) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_slice_batch(v, total, lo, hi) for v in obj]
+    if isinstance(obj, tuple) and not hasattr(obj, "_fields"):
+        return tuple(_slice_batch(v, total, lo, hi) for v in obj)
+    return obj
+
+
+def _slice_options(to: dict, total: int, lo: int, hi: int) -> dict:
+    out = dict(to)
+    sig = to.get("sigmas")
+    if isinstance(sig, torch.Tensor) and sig.dim() > 0 and sig.shape[0] == total:
+        out["sigmas"] = sig[lo:hi]
+    for key in _PER_CHUNK_KEYS:
+        v = to.get(key)
+        if isinstance(v, list) and v and total % len(v) == 0:
+            chunk = total // len(v)
+            out[key] = [v[c] for c in range(lo // chunk, -(-hi // chunk))]
+    return out
+
+
+def _layout(world: int, batch: int, tokens, adapter: Adapter, min_tokens: int) -> Tuple[int, int]:
+    """(batch degree, sequence degree): batch items first (no exchange at all), tokens for the rest."""
+    bdeg = 1
+    if adapter.batch_split and batch > 1:
+        bdeg = max(d for d in range(1, world + 1) if world % d == 0 and batch % d == 0)
+    seq = world // bdeg
+    if tokens is not None and seq > 1 and not worth_splitting(tokens, seq, min_tokens):
+        seq = max([d for d in range(1, seq + 1) if (world // bdeg) % d == 0 and (d == 1 or tokens // d >= min_tokens)])
+    return bdeg, seq
+
+
 def diffusion_model_wrapper(executor, *args, **kwargs):
     to, pos = _find_options(args, kwargs)
     ranks = (to or {}).get(RANKS_KEY)
@@ -314,48 +361,77 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
                            + ". Put C2C Sequence Parallel last in the model chain, or remove the conflicting node.")
     world = len(ranks)
     tokens = ad.tokens_estimate(dm, args, kwargs)
-    if tokens is not None and not worth_splitting(tokens, world, state.min_tokens_per_gpu):
+    batch = ad.batch(args, kwargs) if ad.batch_split else 1
+    bdeg, seq = _layout(world, batch, tokens, ad, state.min_tokens_per_gpu)
+    if bdeg * seq < 2:
         state.note(f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU")
         return executor(*args, **kwargs)
-    plan = plan_sequence_parallel(world, heads=ad.heads(dm), tokens=tokens, prefer=state.prefer,
+    used = bdeg * seq
+    plan = plan_sequence_parallel(seq, heads=ad.heads(dm), tokens=tokens, prefer=state.prefer,
                                   fast_domain=state.fast_domain or None, min_tokens_per_rank=0)
-    state.note(f"{plan.mode}: Ulysses {plan.ulysses} x Ring {plan.ring} over {world} GPUs"
-               + (f", {tokens} tokens" if tokens else ""))
-    devices = [torch.device(d) for d, _ in ranks]
+    what = []
+    if bdeg > 1:
+        what.append(f"batch {bdeg} ({batch // bdeg} of {batch} items per group)")
+    if seq > 1:
+        what.append(f"{plan.mode}: Ulysses {plan.ulysses} x Ring {plan.ring}")
+    state.note(" x ".join(what) + f" over {used} GPUs" + (f", {tokens} tokens" if tokens else "")
+               + (f" ({world - used} idle)" if used < world else ""))
+    devices = [torch.device(d) for d, _ in ranks[:used]]
     pool = to.get(POOL_KEY)
     original_name = getattr(executor.original, "__name__", "_forward")
+    per = batch // bdeg
 
     def rank_fn(comm: Comm):
         r = comm.rank
+        g = r // seq
         dev = devices[r]
         a = list(args)
         kw = dict(kwargs)
+        own_to = to
+        if bdeg > 1:
+            lo, hi = g * per, (g + 1) * per
+            a = [x if i == pos else _slice_batch(x, batch, lo, hi) for i, x in enumerate(a)]
+            kw = {k: (v if k == "transformer_options" else _slice_batch(v, batch, lo, hi)) for k, v in kw.items()}
+            own_to = _slice_options(to, batch, lo, hi)
         if r > 0:
-            a, kw = _move(a, dev), _move(kw, dev)
-        own = _move_options(to, dev)
+            a = [x if i == pos else _move(x, dev) for i, x in enumerate(a)]
+            kw = {k: (v if k == "transformer_options" else _move(v, dev)) for k, v in kw.items()}
+        own = _move_options(own_to, dev)
         if pos is None:
             kw["transformer_options"] = own
         else:
             a[pos] = own
-        _tls.ctx = RankCtx(comm=comm, mesh=A.Mesh.build(comm, plan.ulysses, plan.ring), adapter=ad,
-                           n_blocks=len(dm.blocks), prev_override=state.prev_override)
+        sub = comm.split([[gg * seq + i for i in range(seq)] for gg in range(bdeg)]) if bdeg > 1 else comm
+        if seq > 1:
+            _tls.ctx = RankCtx(comm=sub, mesh=A.Mesh.build(sub, plan.ulysses, plan.ring), adapter=ad,
+                               n_blocks=len(dm.blocks), prev_override=state.prev_override)
         try:
             if r == 0:
-                return executor(*a, **kw)
-            dm_r = ranks[r][1].model.diffusion_model
-            fn = getattr(dm_r, original_name)
-            cls = type(executor)
-            return cls.new_class_executor(fn, dm_r, executor.wrappers, executor.idx + 1).execute(*a, **kw)
+                out = executor(*a, **kw)
+            else:
+                dm_r = ranks[r][1].model.diffusion_model
+                fn = getattr(dm_r, original_name)
+                cls = type(executor)
+                out = cls.new_class_executor(fn, dm_r, executor.wrappers, executor.idx + 1).execute(*a, **kw)
         finally:
             _tls.ctx = None
+        if bdeg == 1:
+            return out
+        # batch groups: each group's first rank hands its slice to rank 0, which puts the batch back together
+        if r == 0:
+            parts = [out] + [comm.recv(out, gg * seq) for gg in range(1, bdeg)]
+            return torch.cat(parts, dim=0)
+        if r % seq == 0:
+            comm.send(out, 0)
+        return None
 
-    use_pool = pool is not None and len(set(devices)) == world and all(d in pool.devices for d in devices[1:])
+    use_pool = pool is not None and len(set(devices)) == used and all(d in pool.devices for d in devices[1:])
     submit = (lambda r, job: pool.submit(devices[r], job)) if use_pool else None
     try:
-        results = run_ranks(world, rank_fn, devices=devices, submit=submit, timeout=state.timeout)
+        results = run_ranks(used, rank_fn, devices=devices, submit=submit, timeout=state.timeout)
     finally:
         if use_pool:
-            for r in range(1, world):
+            for r in range(1, used):
                 pool.get_result(devices[r])     # drain the pool's (None, None) acknowledgements
     return results[0]
 

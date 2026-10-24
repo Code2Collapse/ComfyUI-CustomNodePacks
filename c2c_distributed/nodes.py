@@ -69,11 +69,13 @@ class C2CSequenceParallel:
     RETURN_NAMES = ("model", "plan")
     FUNCTION = "run"
     CATEGORY = CATEGORY
-    DESCRIPTION = ("Sequence parallelism for Wan 2.1 / 2.2 and MiniMax H3 in this ComfyUI: one model copy per GPU "
-                   "(ComfyUI's own multi-GPU clones), tokens split over the GPUs inside the transformer, attention "
-                   "exchanged exactly (Ulysses all-to-all / Ring). Works on Windows and Linux; with one GPU the model "
-                   "passes through unchanged. Put it last in the model chain (after LoRA / attention nodes). Not with "
-                   "ControlNet yet. Core's 'MultiGPU CFG Split' is replaced for this model.")
+    DESCRIPTION = ("Splits every model call of Wan 2.1 / 2.2 and MiniMax H3 over the GPUs of this machine. The "
+                   "call's batch items (cond and uncond, or several images) go to different GPUs first, with no "
+                   "exchange at all. The remaining GPUs split the tokens inside the transformer, and attention is "
+                   "exchanged exactly (Ulysses all-to-all / Ring). One model copy per GPU, made by ComfyUI's own "
+                   "multi-GPU clones. Works on Windows and Linux; with one GPU the model passes through unchanged. Put "
+                   "it last in the model chain (after LoRA / attention nodes). Not with ControlNet yet. It replaces "
+                   "core's 'MultiGPU CFG Split' for this model.")
 
     def run(self, model, gpus, strategy, min_tokens_per_gpu, fast_link_gpus=0):
         _refuse_if_off()

@@ -29,7 +29,10 @@ All notable changes to ComfyUI-CustomNodePacks are documented here.
   attention <= 2e-15; GPU bf16 / fp16 bit-identical for Ulysses 2 / 4; sampler end to end <= 1.05e-5 (Wan) and <= 3.8e-6 (H3 video + audio). Speed-up on
   two or more GPUs is not measured yet. ControlNet, other block patches and attention overrides set after the node
   are refused with the reason instead of producing a wrong picture.
-- CFG split is not rebuilt: ComfyUI core ships **MultiGPU CFG Split** since 0.39.
+- **Batch split first**: a call's batch items (cond / uncond, image batches) go to separate GPU groups with no
+  exchange; sequence parallelism runs inside each group (e.g. 8 GPUs with CFG = 2 groups x Ulysses 4). Measured equal
+  to the unsplit call (sampler end to end <= 1.12e-5; GPU bf16 error vs fp32 0.686 % vs 0.687 % unsplit).
+- For other models ComfyUI core's **MultiGPU CFG Split** (0.39+) does the cond / uncond split; it is not rebuilt.
 
 ## Unreleased – 2026-10-24 (Scheduled Queue, Watch Folder, Webhooks; Video Stabilizer RAFT; Control AOV inputs, L9.39)
 

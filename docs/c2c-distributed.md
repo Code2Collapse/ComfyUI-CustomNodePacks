@@ -11,7 +11,7 @@ One ComfyUI, several GPUs, used together:
 
 | Mode | What runs where | Speeds up | Where it comes from |
 |---|---|---|---|
-| **CFG / batch split** | cond and uncond (and batch chunks) of each step on different GPUs | one generation, up to ~2x with CFG > 1 | **ComfyUI core** (`MultiGPU CFG Split`, 0.39+). Not rebuilt here. |
+| **CFG / batch split** | cond and uncond (and batch chunks) of each step on different GPUs | one generation, up to ~2x with CFG > 1 | **ComfyUI core** (`MultiGPU CFG Split`, 0.39+) for any model; inside **C2C Sequence Parallel** the batch split of each call comes first and is combined with sequence parallelism (e.g. 2 x 4 on 8 GPUs) |
 | **Sequence parallel (Ulysses / Ring / USP)** | every attention layer splits the token sequence over the GPUs | one long video, attention-bound models | **C2C Sequence Parallel** (this package), one box, any OS |
 | **Data parallel** | each GPU or machine renders whole jobs: seeds, shots, batches | throughput | C2C Farm (`renderfarm/`); fan-out node = slice 3 |
 | **FSDP (weight sharding)** | each GPU holds 1/N of the weights | a model that does not fit one GPU | slice 2b, Linux + NCCL |
@@ -39,7 +39,8 @@ Sources and the survey of raylight / ComfyUI-Distributed: workspace `docs/eviden
 ```
 sampler thread (rank 0, GPU 0)                 core's per-device threads (ranks 1..N-1)
   CALC_COND_BATCH wrapper: takes core's MultiGPU clones away from core's cond splitter for this model
-  DIFFUSION_MODEL wrapper: runs the SAME call on every GPU, inputs moved to each GPU's clone
+  DIFFUSION_MODEL wrapper: batch items (cond / uncond) to GPU groups first - no exchange - then the SAME call
+                           on every GPU of a group, inputs moved to each GPU's clone
      Wan / H3 forward (unchanged core code)        same, on the clone
        block 0 patch: cut tokens + RoPE rows       cut its own shard
        self-attention -> override:  Ulysses all-to-all (heads) / Ring K/V passes, exact
@@ -59,7 +60,9 @@ sampler thread (rank 0, GPU 0)                 core's per-device threads (ranks 
 * `c2c_distributed/usp.py`: the wrappers and patches above, model adapters (`WanModel`; `MiniMaxH3Model` with its
   packed stream and modulation segments re-mapped per shard), refusals.
 * `c2c_distributed/planner.py`: Ulysses as large as heads and the fast-link domain allow, Ring for the rest;
-  calls with too few tokens per GPU run on one GPU.
+  calls with too few tokens per GPU use fewer GPUs. The batch degree (`usp._layout`) is the largest divisor of the
+  GPU count that divides the call's batch (Wan; H3 runs batch 1): a batch split needs no exchange, so it goes first.
+  E.g. 8 GPUs, CFG on: cond and uncond on 4 GPUs each, Ulysses 4 inside each group.
 * `c2c_distributed/inventory.py`: GPUs, architecture, kernels in this torch build, P2P and NVLink matrix, Grace /
   aarch64 host, NCCL / gloo usability measured in a subprocess, which modes can run.
 
@@ -81,6 +84,8 @@ No ComfyUI model code is copied (ComfyUI is GPL-3.0, this pack Apache-2.0): only
 | Same on the GPU, real CUDA kernels, bf16 and fp16, 1920 tokens, 2-4 ranks sharing cuda:0 | Ulysses 2 / 4: **bit-identical** to the unsplit model; Ulysses 3 and Ring: error vs an fp32 reference equal to the unsplit model's own (bf16 0.68-0.69 % both, fp16 0.085 % both) | workspace `docs/evidence/L9.38/usp_gpu_check.json` |
 | End to end: core loader (`load_diffusion_model`, model detection) + core KSampler (euler, CFG 4, 3 steps) on a tiny Wan, with vs without the node, 2 / 3 simulated ranks | latents differ by <= 1.05e-5 (latent magnitude 12.6) | `tests/test_c2c_distributed.py` |
 | Same for MiniMax H3 (tiny H3, joint video + audio latent, text-to-video layout), 2 / 3 ranks | video and audio latents differ by <= 3.8e-6 (magnitude 5.3-5.5) | same |
+| Batch split: Wan sampler with CFG 4 on 2 ranks (cond / uncond apart) and 4 ranks (batch 2 x Ulysses 2) | latents differ by <= 1.12e-5 | same |
+| Batch split on the GPU, bf16 / fp16, batch 2 on 2 and 4 ranks | error vs fp32 equal to the unsplit batched call (bf16 0.686 % vs 0.687 %, fp16 0.085 % both) | `usp_gpu_check.json` |
 | Guard: are those comparisons meaningful? Halving every attention output | changes the latents by > 1e-2 (Wan and H3), so a broken split could not pass | same |
 | Speed-up on real GPUs | **not measured** - needs >= 2 GPUs | owner / cloud run |
 | MiniMax H3 image-to-video / reference layouts | segment re-mapping unit-tested; not sampled end to end | - |
@@ -102,7 +107,8 @@ model memory; never use it for speed.
 | A rank raises (OOM, interrupt) | every other rank is released from its collective; the run fails with that rank's error; rank 0's own exception keeps its type (ComfyUI's interrupt still works) |
 | A rank stalls | the collective times out after 600 s and names the rank |
 | Loader without a reload factory (some custom loaders, GGUF) | refused: core's multi-GPU clones need it ("use a core loader") |
-| Core's `MultiGPU CFG Split` also in the chain | this node takes the clones for sequence parallelism; CFG split is not combined with it (yet) |
+| Core's `MultiGPU CFG Split` also in the chain | this node takes the clones; its own batch split does the cond / uncond part per call |
+| Batch does not divide the GPU count (3 items, 2 GPUs) | tokens are split instead |
 
 ## Budgets
 
@@ -128,6 +134,7 @@ model memory; never use it for speed.
 | 1 | Comm, exact Ulysses / Ring / USP attention, planner | done |
 | 2a | C2C Sequence Parallel, one box, Wan + MiniMax H3 | done; speed to measure on >= 2 GPUs |
 | 2b | Multi-process / multi-node over NCCL (`TorchComm`), FSDP2 weight sharding | Linux + NCCL box needed |
-| 2c | CFG split x sequence parallel (e.g. 2 x 4 on 8 GPUs); ControlNet; more adapters (VACE, Animate, Flux, LTX) | to do |
+| 2c | Batch (CFG) split x sequence parallel | done (Wan) |
+| 2d | ControlNet; more adapters (VACE, Animate, Flux, LTX); H3 cond / uncond on separate GPU groups (H3 calls run batch 1) | to do |
 | 3 | Data-parallel fan-out to Farm backends, collector | to do |
 | 4 | Tile work-stealing upscale / refine | to do |

@@ -1577,8 +1577,9 @@ Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measureme
   last in the model chain. With one GPU the model passes through unchanged. **Speed-up has not been measured yet**
   (that needs a machine with two or more GPUs).
 
-For CFG split (cond and uncond on two GPUs) use ComfyUI's own **MultiGPU CFG Split** node; this pack does not
-duplicate it. `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one
+When a call carries several items (cond and uncond with CFG, or an image batch), the node first sends them to
+different GPUs, which needs no exchange; the other GPUs split the tokens. On 8 GPUs with CFG that is cond and uncond
+on 4 GPUs each. For other models, ComfyUI's own **MultiGPU CFG Split** does the cond / uncond part. `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one
 GPU (or CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 
 ## VRAM Management
