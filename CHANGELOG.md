@@ -2,6 +2,59 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-24 (Scheduled Queue, Watch Folder, Webhooks; Video Stabilizer RAFT; Control AOV inputs, L9.39)
+
+The OmniBar's Schedule and Watch panels had shipped, but their server side was never loaded, so every action failed
+(404). Evidence (workspace): `docs/evidence/L9.39/automation_live.json` - owner-stack testbed, both renderers, a
+subgraph.
+
+- **Registered and rebuilt.** Runs are queued on this server's own address and port. They used to go to a fixed
+  `127.0.0.1:8188`, which is wrong on any other port.
+- **Scheduler:** weekday was off by one day (cron's Sunday = 0 was read as Monday). The two day fields now follow
+  standard cron. Runs are counted by minute, and minutes missed while the server was busy are caught up. A live
+  preview shows the next runs. **New seed each run** (default on) makes repeated runs render instead of hitting
+  ComfyUI's cache. The loop runs only while an enabled job exists.
+- **Watch Folder:** scans no longer block the server: they run on a worker thread, top folder only unless asked,
+  capped at 20 000 files. Half-written files wait until they stop growing. *Run a workflow* puts the file into the
+  first Load Image / Load Video. Before, it built a prompt that could never pass the check. *Copy to input* offers
+  **Add Load Image**, which works inside subgraphs. Watching ComfyUI's own output folder with *Run a workflow* is
+  refused, because it would feed itself.
+- **Webhooks:** they now have a UI (Schedule panel › Webhooks). The completion event listened to
+  `execution_complete`, which ComfyUI never sends, so it never fired; it now uses `execution_success`. Execution
+  events are hooked only once an outbound URL exists. Secrets go to the C2C secrets store, never to the saved
+  settings. Inbound calls can change literal inputs per run.
+- Everything survives a restart (`user/default/c2c/automation.json`). Both panels have command-palette entries, so
+  they open in Lite mode too. They keep refreshing while a prompt runs.
+- **Video Stabilizer: `raft_flow` is real RAFT now** (torchvision, BSD-3). It used to run OpenCV DIS, and its
+  `raft_iters` / `use_half` did nothing. The old behaviour is `dense_flow`, and `auto` and the deprecated nodes
+  render as before. RAFT is **experimental**: on measured synthetic shake, feature tracking (`classic`) was the most
+  accurate, and RAFT did worst on near-featureless plates. Numbers in `docs/video-stabilizer.md`. RAFT weights are
+  used when installed, and downloaded only with `allow_download`. The node shows the manual and RAFT settings only
+  when they apply.
+- **Video Stabilizer: put the camera motion back.** A new `motion_meta` output holds the exact per-frame warps.
+  Wire it into a second Video Stabilizer's `motion_meta` input and the edited steady plate gets its original shake
+  back (the engine's exact inverse; round trip under 0.01 mean error on a smooth plate).
+- **MaskOps: BackgroundMattingV2 takes a real clean plate** (`background_plate`). It always synthesised one from a
+  blurred, masked copy before. When several detected objects are matted as one, `info` now says why.
+- **Face Fixer: per-face prompts work.** Connect `clip` and each face's prompt is encoded and sampled. Before, the
+  prompts only replaced a metadata key that sampling never reads. Without `clip`, `info` says they were not applied.
+- **Context Inpainter: every frame of a batch** (it returned frame 0 only). New `color_reference = around mask` for
+  object removal: colour match uses the surroundings within `crop_padding`, which finally has a use, instead of the
+  removed object.
+- **Spline Mask: cut shapes.** A shape can subtract from the ones before it (toolbar ＋/－ or `X`; drawn dashed and
+  red), like a Roto stack. Old data is a union as before.
+- **ProPainter: QC outputs.** `aux_image` is |output − input| ×4 and `aux_mask` is the changed pixels (flow mode: the
+  unreliable region), and `info` reports how much changed outside the mask. They were zeros. Temporal's `mask_out`
+  is now the region it inpainted.
+- **Frequency Separate: preview on the node again.** After a run it shows the input, base and detail (or both
+  side by side) from the node's own result. Drag `radius` or switch `mode` / `detail` and it follows live with a
+  Gaussian approximation, labelled as such, until the next run.
+- **Render farm:** a URL-mapped loader keeps its other inputs (it was left with the URL only), and cancelling a
+  running job interrupts only that prompt (it was a global interrupt).
+- **Control AOV: wire your own depth / canny / pose / normal / ID maps again.** The sockets had been dropped while
+  the node still used them. A wired pass wins over its model selector, and its weight / invert controls appear when
+  it is wired.
+
 ## Unreleased – 2026-10-23 (Save Video v2, built-in handles, Video Comparer v2; tests stay local, L9.40 + L9.37)
 
 Owner request 2026-10-23 (answers: workspace `docs/evidence/L9.40/owner_answers_2026-10-23.md`). Evidence

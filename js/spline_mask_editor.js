@@ -271,6 +271,7 @@ class Editor {
             points: sh.points.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
             type: sh.type || this.splineType,
             closed: !!sh.closed,
+            ...(sh.op === "subtract" ? { op: "subtract" } : {}),
             ...(sh.handles ? { handles: sh.handles } : {}),
         }));
         w.value = JSON.stringify(data);
@@ -287,6 +288,7 @@ class Editor {
                     points: (sh.points || []).map(p => ({ x: +p.x, y: +p.y })),
                     type: sh.type || this.splineType,
                     closed: !!sh.closed,
+                    ...(sh.op === "subtract" ? { op: "subtract" } : {}),
                     ...(sh.handles ? { handles: sh.handles } : {}),
                 }));
                 this.active = this.shapes.length ? 0 : -1;
@@ -641,13 +643,15 @@ function draw(ed, ctx, vw, vh) {
         // cannot parse (strokeStyle/fillStyle silently keep their previous
         // value). C.* resolves to real hex from the active theme.
         const PATHC = [C.green, C.blue, C.yellow, C.peach, C.pink, C.teal];
-        const c = PATHC[s % PATHC.length];
+        const cut = sh.op === "subtract";        // L9.39: a cut shape is drawn dashed, red-tinted
+        const c = cut ? C.red : PATHC[s % PATHC.length];
         const isActive = s === ed.active;
 
         if (sh.points.length >= 2) {
             const sampled = sampleShape(sh, ed.samplesPerSegment, ed.centripetalAlpha);
             ctx.strokeStyle = c;
             ctx.lineWidth = (isActive ? 2.0 : 1.5) / z;
+            ctx.setLineDash(cut ? [6 / z, 4 / z] : []);
             ctx.beginPath();
             ctx.moveTo(sampled[0].x, sampled[0].y);
             for (let i = 1; i < sampled.length; i++) ctx.lineTo(sampled[i].x, sampled[i].y);
@@ -659,11 +663,12 @@ function draw(ed, ctx, vw, vh) {
                 // backdrop — filling the whole shape opaque black over the
                 // image (the reported bug). Nuke-style: image stays visible.
                 ctx.fillStyle = c;
-                ctx.globalAlpha = 0.14;
+                ctx.globalAlpha = cut ? 0.22 : 0.14;
                 ctx.fill();
                 ctx.globalAlpha = 1.0;
             }
             ctx.stroke();
+            ctx.setLineDash([]);
         }
 
         for (let i = 0; i < sh.points.length; i++) {
@@ -907,6 +912,18 @@ function installEditor(node) {
         ed.save();
     });
     tb.appendChild(closedBtn);
+    // L9.39: per-shape add / cut, applied in drawing order (the backend combines them the same way)
+    const toggleOp = () => {
+        if (ed.active < 0) return;
+        ed.pushUndo();
+        const sh = ed.shapes[ed.active];
+        sh.op = sh.op === "subtract" ? undefined : "subtract";
+        ed.save();
+    };
+    const opBtn = mkIcon("＋", "Active shape ADDS to the mask - click to cut it out instead (X)", () => {
+        toggleOp(); render();
+    });
+    tb.appendChild(opBtn);
     tb.appendChild(mkIcon("↶", "Undo (Ctrl+Z)", () => { if (ed.undo()) ed.save(); }));
     tb.appendChild(mkIcon("↷", "Redo (Ctrl+Y)", () => { if (ed.redo()) ed.save(); }));
     tb.appendChild(mkIcon("\u2796", "Zoom out (-)", () => {
@@ -1167,6 +1184,10 @@ function installEditor(node) {
         closedBtn.textContent = isClosed ? "◉" : "◯";
         closedBtn.title = isClosed ? "Active path is CLOSED — click to open (C)"
                                    : "Active path is OPEN — click to close (C)";
+        const cut = sh?.op === "subtract";
+        opBtn.textContent = cut ? "－" : "＋";
+        opBtn.title = cut ? "Active shape CUTS OUT of the shapes before it - click to add instead (X)"
+                          : "Active shape ADDS to the mask - click to cut it out instead (X)";
     }
 
     let raf = 0;
@@ -1178,7 +1199,8 @@ function installEditor(node) {
             draw(ed, ctx, lastW, lastH);
             const totalPts = ed.shapes.reduce((a, s) => a + s.points.length, 0);
             const activePts = ed.active >= 0 ? ed.shapes[ed.active].points.length : 0;
-            const closed = ed.active >= 0 ? (ed.shapes[ed.active].closed ? "closed" : "open") : "—";
+            const closed = ed.active >= 0 ? (ed.shapes[ed.active].closed ? "closed" : "open")
+                + (ed.shapes[ed.active].op === "subtract" ? " · cut" : "") : "—";
             counter.textContent = `paths ${ed.shapes.length} · active ${ed.active >= 0 ? ed.active + 1 : "—"}/${ed.shapes.length} · pts ${activePts}/${totalPts} · ${closed}`;
             status.textContent = `${ed.canvasW}×${ed.canvasH} · zoom ${(ed.zoom * 100).toFixed(0)}% · ${ed.splineType}`;
             updateClosedBtn();
@@ -1358,6 +1380,9 @@ function installEditor(node) {
         } else if (e.key.toLowerCase() === "n" && !(e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             ed.pushUndo(); ed.newPath(); ed.save(); render();
+        } else if (e.key.toLowerCase() === "x" && !(e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            toggleOp(); render();
         } else if (e.key.toLowerCase() === "c" && !(e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             if (ed.active >= 0) {

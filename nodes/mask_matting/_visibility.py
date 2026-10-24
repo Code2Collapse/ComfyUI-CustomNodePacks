@@ -132,6 +132,7 @@ SOCKETS = (
     "image", "external_mask", "external_trimap", "holdout_mask", "core_mask",
     "pos_bbox", "neg_bbox", "normal_bbox",
     "sam_model",
+    "background_plate",      # L9.39: BackgroundMattingV2's clean plate (read only by that matter)
 )
 
 #: widget -> the switch that has to be on for it to matter.

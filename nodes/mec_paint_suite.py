@@ -435,8 +435,9 @@ class MECContextInpainter:
 
     CATEGORY = "C2C/Paint"
     DESCRIPTION = (
-        "Smart-blend an inpainted region back over the original image with crop padding, "
-        "feathered blend mask, optional color correction, lightness rescue, and differential diffusion."
+        "Blend an inpainted image back over the original (it does not sample): feathered blend mask, colour "
+        "match and lightness rescue against the subject inside the mask or the surroundings within crop_padding, "
+        "and differential blending. Works on every frame of a batch."
     )
     RETURN_TYPES = ("IMAGE", "MASK")
     RETURN_NAMES = ("blended_image", "debug_mask")
@@ -467,7 +468,7 @@ class MECContextInpainter:
                 "original_image":   ("IMAGE", {"tooltip": "Original (un-inpainted) image used as the blend base."}),
                 "mask":             ("MASK", {"tooltip": "Mask defining the inpainted region."}),
                 "inpainted_image":  ("IMAGE", {"tooltip": "Inpainted image to blend back over the original."}),
-                "crop_padding":     ("FLOAT",  {"default": 1.2, "min": 1.0, "max": 2.0, "step": 0.01, "tooltip": "Multiplier extending the masked bbox so the inpaint sees more context."}),
+                "crop_padding":     ("FLOAT",  {"default": 1.2, "min": 1.0, "max": 2.0, "step": 0.01, "tooltip": "How far around the mask's box (x its size) colour match and lightness rescue look for reference colours when color_reference = around mask."}),
                 "blend_softness":   ("FLOAT",  {"default": 8.0, "min": 0.0, "max": 200.0, "step": 0.5, "tooltip": "Gaussian feather radius applied to the blend mask in pixels."}),
                 "mask_expansion_blend": ("INT",  {"default": 0, "min": -100, "max": 100, "step": 1, "tooltip": "Per-blend dilate (positive) / erode (negative) of the blend mask in pixels."}),
                 "enable_color_correction":     ("BOOLEAN", {"default": True, "tooltip": "Reinhard mean/std color match between original and inpainted regions."}),
@@ -496,19 +497,31 @@ class MECContextInpainter:
                     "multiline": True, "default": "",
                     "tooltip": "Same as face_positive_prompt but for negatives.",
                 }),
+                # L9.39: appended (saved workflows keep their widget order). "inside mask" is what the node always
+                # did; for object removal the pixels inside the mask are the REMOVED object, so the reference must
+                # be the surroundings.
+                "color_reference": (["inside mask (same subject)", "around mask (object removal)"], {
+                    "default": "inside mask (same subject)",
+                    "tooltip": "Where colour match / lightness rescue take their target colours. inside mask = the "
+                               "original pixels under the mask (re-rendering the same face or subject). around "
+                               "mask = the ring between the mask and its box grown by crop_padding (removing an "
+                               "object: match the background, not the thing removed)."}),
             },
         }
 
     # ---- core math ------------------------------------------------
     @staticmethod
-    def _color_match(orig: np.ndarray, fake: np.ndarray, m: np.ndarray) -> np.ndarray:
-        """Per-channel mean/std match (Reinhard) constrained to mask region."""
+    def _color_match(orig: np.ndarray, fake: np.ndarray, m: np.ndarray, ref: Optional[np.ndarray] = None
+                     ) -> np.ndarray:
+        """Per-channel mean/std match (Reinhard): the inpaint's stats inside the mask moved to the original's stats
+        in `ref` (default: the mask itself)."""
         out = fake.copy()
         sel = m > 0.05
-        if not sel.any():
+        rsel = sel if ref is None else ref > 0.05
+        if not sel.any() or not rsel.any():
             return out
         for c in range(3):
-            o = orig[..., c][sel]
+            o = orig[..., c][rsel]
             f = fake[..., c][sel]
             mo, so = float(o.mean()), float(o.std() + 1e-6)
             mf, sf = float(f.mean()), float(f.std() + 1e-6)
@@ -516,27 +529,29 @@ class MECContextInpainter:
         return out
 
     @staticmethod
-    def _lightness_rescue(orig: np.ndarray, fake: np.ndarray, m: np.ndarray) -> np.ndarray:
-        """Lift L channel of ``fake`` toward ``orig`` if it is >5% darker."""
+    def _lightness_rescue(orig: np.ndarray, fake: np.ndarray, m: np.ndarray, ref: Optional[np.ndarray] = None
+                          ) -> np.ndarray:
+        """Lift L channel of ``fake`` toward ``orig`` (measured in `ref`, default the mask) if it is >5% darker."""
+        rsel = (m > 0.05) if ref is None else ref > 0.05
         if not _HAS_CV2:
             # luminance-only fallback (BT.709)
             lo = (orig * np.array([0.2126, 0.7152, 0.0722])).sum(-1)
             lf = (fake * np.array([0.2126, 0.7152, 0.0722])).sum(-1)
             sel = m > 0.05
-            if not sel.any():
+            if not sel.any() or not rsel.any():
                 return fake
-            d = float(lo[sel].mean() - lf[sel].mean())
+            d = float(lo[rsel].mean() - lf[sel].mean())
             if d <= 0.05:
                 return fake
             return np.clip(fake + d * m[..., None], 0.0, 1.0)
         lab_o = cv2.cvtColor((orig * 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
         lab_f = cv2.cvtColor((fake * 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
         sel = m > 0.05
-        if not sel.any():
+        if not sel.any() or not rsel.any():
             return fake
         # L is in 0..255 in OpenCV's 8-bit LAB; 5 % is ~12.75
         lo, lf = lab_o[..., 0], lab_f[..., 0]
-        d = float(lo[sel].mean() - lf[sel].mean())
+        d = float(lo[rsel].mean() - lf[sel].mean())
         if d <= 12.75:
             return fake
         lab_f[..., 0] = np.clip(lab_f[..., 0] + d * m, 0.0, 255.0)
@@ -559,7 +574,7 @@ class MECContextInpainter:
                 enable_color_correction, enable_lightness_rescue,
                 enable_differential_diffusion,
                 sampling_mask_blur_size, sampling_mask_blur_strength,
-                face_positive_prompt="", face_negative_prompt=""):
+                face_positive_prompt="", face_negative_prompt="", color_reference="inside mask (same subject)"):
         for name, t, kind in (
             ("original_image", original_image, "IMAGE"),
             ("inpainted_image", inpainted_image, "IMAGE"),
@@ -582,7 +597,7 @@ class MECContextInpainter:
                 enable_color_correction, enable_lightness_rescue,
                 enable_differential_diffusion,
                 sampling_mask_blur_size, sampling_mask_blur_strength,
-                face_positive_prompt, face_negative_prompt,
+                face_positive_prompt, face_negative_prompt, color_reference,
             )
 
     def _execute_impl(self, original_image, mask, inpainted_image,
@@ -590,7 +605,31 @@ class MECContextInpainter:
                       enable_color_correction, enable_lightness_rescue,
                       enable_differential_diffusion,
                       sampling_mask_blur_size, sampling_mask_blur_strength,
-                      face_positive_prompt="", face_negative_prompt=""):
+                      face_positive_prompt="", face_negative_prompt="",
+                      color_reference="inside mask (same subject)"):
+        """Every frame of the batch (L9.39: it blended frame 0 only and dropped the rest); a single image / mask
+        is used for every frame."""
+        oi, ii, mm = _to_bhwc(original_image), _to_bhwc(inpainted_image), _to_mask(mask)
+        B = max(oi.shape[0], ii.shape[0], mm.shape[0])
+        pick = lambda t, i: t[i % t.shape[0]:i % t.shape[0] + 1]  # noqa: E731
+        outs, dbgs = [], []
+        for i in range(B):
+            o, d = self._blend_frame(pick(oi, i), pick(mm, i), pick(ii, i), crop_padding, blend_softness,
+                                     mask_expansion_blend, enable_color_correction, enable_lightness_rescue,
+                                     enable_differential_diffusion, sampling_mask_blur_size,
+                                     sampling_mask_blur_strength, face_positive_prompt, face_negative_prompt,
+                                     color_reference, log_regions=(i == 0))
+            outs.append(o)
+            dbgs.append(d)
+        return (torch.cat(outs, 0), torch.cat(dbgs, 0))
+
+    def _blend_frame(self, original_image, mask, inpainted_image,
+                     crop_padding, blend_softness, mask_expansion_blend,
+                     enable_color_correction, enable_lightness_rescue,
+                     enable_differential_diffusion,
+                     sampling_mask_blur_size, sampling_mask_blur_strength,
+                     face_positive_prompt="", face_negative_prompt="",
+                     color_reference="inside mask (same subject)", log_regions=True):
         # MANUAL bug-fix (Apr 2026): hard-clamp crop_padding into the
         # documented [1.0, 2.0] range so a stray IPU/widget can't blow
         # up the bbox math. min/max widget bounds are advisory; a JSON
@@ -614,8 +653,8 @@ class MECContextInpainter:
             f_t = F.interpolate(f_t, size=(H, W), mode="bilinear", align_corners=False)
             fake = f_t.squeeze(0).permute(1, 2, 0).numpy()
 
-        # ---- crop window with padding (purely informative — used for the
-        # debug mask and for region detection) -----------------------------
+        # ---- crop window with padding: the "around mask" colour reference is the ring between the mask
+        # and this window (L9.39 - it was computed and never used) -----------------------------
         ys, xs = np.where(m > 0.05)
         if ys.size > 0 and xs.size > 0:
             y0, y1 = int(ys.min()), int(ys.max())
@@ -644,7 +683,7 @@ class MECContextInpainter:
         neg_prompts = _parse_wildcard_prompt(face_negative_prompt, max(n_reg, 1), region_sizes or None)
         # We don't actually run a sampler here; we expose the parsed prompts
         # via the node's print output (deterministic, observable in console).
-        if n_reg > 0:
+        if n_reg > 0 and log_regions:
             # MANUAL bug-fix (Apr 2026): use logger instead of print so
             # output is consistent with the rest of the suite and can
             # be filtered by users.
@@ -657,10 +696,17 @@ class MECContextInpainter:
 
         # ---- colour correction & lightness rescue ------------------------
         out = fake
+        ref_m = m                                   # where the TARGET colours come from
+        if str(color_reference).startswith("around"):
+            ring = np.zeros_like(m)
+            ring[y0:y1 + 1, x0:x1 + 1] = 1.0
+            ring = ring * (m <= 0.05)
+            if ring.sum() >= 16:                    # a mask filling its window has no ring: keep inside
+                ref_m = ring
         if enable_color_correction:
-            out = self._color_match(orig, out, m)
+            out = self._color_match(orig, out, m, ref=ref_m)
         if enable_lightness_rescue:
-            out = self._lightness_rescue(orig, out, m)
+            out = self._lightness_rescue(orig, out, m, ref=ref_m)
 
         # ---- differential diffusion --------------------------------------
         if enable_differential_diffusion:

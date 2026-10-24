@@ -157,7 +157,10 @@ class ComfyUINativeAdapter(BackendAdapter):
         try:
             st = self.get_status(job_id)
             if st["status"] == "running":
-                self._request("POST", "/interrupt", timeout=(5, 20))
+                # L9.39: targeted - core interrupts only if THIS prompt is the one running, so a job that
+                # finished in between never takes the next user's render down with it (cores before targeted
+                # interrupts ignore the body; the status check above still guards those).
+                self._request("POST", "/interrupt", json={"prompt_id": job_id}, timeout=(5, 20))
                 ok = True
         except Exception:  # noqa: BLE001
             ok = False

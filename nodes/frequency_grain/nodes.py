@@ -67,6 +67,47 @@ _STRENGTH_TOOLTIP = (
 )
 
 
+PREVIEW_MAX_SIDE = 640
+
+
+def _preview_ui(image, hf, lf, mode, method, radius, detail, linear):
+    """L9.39 (row 15: the live preview was dropped): the first frame's input, base and detail as small temp PNGs
+    plus the settings that made them. The node's preview widget shows these, and recomputes a Gaussian
+    approximation live while radius / mode change; a failure here never fails the run."""
+    try:
+        import os
+        import uuid
+
+        import folder_paths  # type: ignore
+        import numpy as np
+        from PIL import Image
+        H, W = int(image.shape[1]), int(image.shape[2])
+        k = min(1.0, PREVIEW_MAX_SIDE / max(H, W))
+        size = (max(1, round(H * k)), max(1, round(W * k)))
+
+        def small(t):
+            x = t[:1, ..., :3].permute(0, 3, 1, 2).float()
+            if k < 1.0:
+                x = torch.nn.functional.interpolate(x, size=size, mode="area")
+            return x[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+
+        hf_vis = hf * 0.5 if mode == "Divide" else hf + 0.5     # ratio ~1 / difference ~0 -> mid grey
+        out_dir = folder_paths.get_temp_directory()
+        os.makedirs(out_dir, exist_ok=True)
+        tag = uuid.uuid4().hex[:10]
+        files = []
+        for kind, t in (("input", image), ("base", lf), ("detail", hf_vis)):
+            name = f"c2c_freq_{tag}_{kind}.png"
+            Image.fromarray((small(t) * 255.0 + 0.5).astype(np.uint8)).save(os.path.join(out_dir, name),
+                                                                           compress_level=1)
+            files.append({"filename": name, "subfolder": "", "type": "temp", "kind": kind})
+        return {"c2c_freq": files, "c2c_freq_settings": [{
+            "method": method, "radius": radius, "mode": mode, "detail": detail, "linear": linear,
+            "source_width": W, "preview_width": size[1]}]}
+    except Exception:  # noqa: BLE001 - a preview never breaks the node
+        return {}
+
+
 class FrequencySeparateMEC:
     @classmethod
     def INPUT_TYPES(cls):
@@ -138,7 +179,8 @@ class FrequencySeparateMEC:
                 mode, detail, bool(linear), mask=mask,
             )
             rep = build_report("Frequency Separate (MEC)", image.shape[0], notes)
-            return hf.clone(), lf.clone(), hf_masked.clone(), rep
+            ui = _preview_ui(image, hf, lf, mode, method, int(radius), detail, bool(linear))
+            return {"ui": ui, "result": (hf.clone(), lf.clone(), hf_masked.clone(), rep)}
 
 
 class FrequencyCombineMEC:

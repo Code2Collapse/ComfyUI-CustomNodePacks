@@ -221,7 +221,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**Face Fixer**](docs/face-fixer.md) ★ new | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
 | [**Paint Suite**](docs/paint-suite.md) ★ new | 2 | Interactive paint canvas (hardness/expansion/blur stages) + smart context inpainter (color match, lightness rescue, differential diffusion) |
 | [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskMattingMEC` — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
-| [**Video Stabilizer**](docs/video-stabilizer.md) ★ new | 3 | Classic GFTT+LK / RAFT dense flow / auto-router with 4 presets; padding-mask output wires into Inpaint Crop Pro |
+| [**Video Stabilizer**](docs/video-stabilizer.md) | 1 | Feature tracking, OpenCV dense flow or RAFT optical flow (experimental), 4 presets, measured accuracy table; padding-mask output wires into Inpaint Crop Pro |
 | [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold |
 | [**VAE precision**](docs/vae-precision.md) ★ new | 2 | Where VAE round trips lose precision (measured) and the options that restrict it: fp32 and unclamped decode, tiled video decode, round-trip meter, original-pixel write-back |
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
@@ -1523,6 +1523,40 @@ guards editing through the UI on that install; it is not extra encryption.
 are looking at, inside subgraphs too. Wires between the copied nodes are kept.
 
 The other C2C canvas tools work inside subgraphs too: sticky notes and wire labels belong to the graph they were made on, and align, find, Doctor, bookmarks, graph health and the undo history act on, or open, the graph that holds the node.
+
+## Automation: schedules, watch folders, webhooks
+
+Two panels run workflows without you pressing Run. Open them from the OmniBar (**⏰ Schedule**, **👁 Watch**) or from
+the command palette: **C2C: Scheduled Queue & Webhooks** and **C2C: Watch Folder**. The palette commands also work in
+Lite mode, which has no OmniBar.
+
+Every panel takes either **Current workflow** (the graph on screen, including its subgraphs) or an **API workflow
+file** (Workflow › Export (API)). A normal saved workflow (nodes and links) cannot be queued without the browser, so
+it is refused with that explanation. Runs are queued on this ComfyUI's own address and port, through its normal
+`/prompt` check, so a broken workflow shows the same error you would get from Run.
+
+- **Schedules** take a 5-field cron (`minute hour day month weekday`, with lists, ranges, steps, `mon`/`jan` names
+  and `@daily` / `@hourly`). The panel shows the next three runs as you type. Weekday 0 and 7 are Sunday. If both
+  day fields are set, either one matches, as in standard cron. **New seed each run** is on by default: ComfyUI skips
+  a prompt it has already run, so without new seeds every run after the first does nothing. A run missed because
+  the server was busy is caught up for up to 10 minutes. The scheduler runs only while an enabled job exists.
+- **Watch Folder** reacts to new image and video files. A file counts only once it has stopped growing (same size
+  on two checks 2 s apart), so half-written renders are not picked up. Files already in the folder are not events.
+  **Log it** records the file. **Copy to input + offer a Load node** copies it into `input/c2c_watch/` and shows a
+  notice with **Add Load Image** (or **Add Load Video**), which adds the node to the graph you are looking at, inside
+  a subgraph too. **Run a workflow on it** puts the file into the workflow's first Load Image (images) or Load Video
+  (videos) and queues it. Scans run off the server thread and look at the top folder unless you tick **Include
+  subfolders**. Watching ComfyUI's own output or temp folder with *Run a workflow* is refused, because every file
+  the workflow writes would start it again.
+- **Webhooks** (second tab of the Schedule panel). *Inbound*: register a workflow and get a URL. A `POST` to that
+  URL queues the workflow. A JSON body `{"inputs": {"<node id>": {"<input>": value}}}` changes literal inputs for
+  that run (wires are never changed). With a secret, sign the raw body: `X-Hub-Signature-256: sha256=<HMAC-SHA256>`.
+  *Outbound*: a URL gets a `POST` with `{"event", "data", "ts", "history_url"}` when a run finishes, fails or is
+  interrupted (other events are optional). With a secret it carries `X-C2C-Signature`. **Send test** checks the URL.
+
+Schedules, watchers and webhooks are kept across restarts in `user/default/c2c/automation.json`. Secrets are never
+written there: they go to the C2C secrets store, or stay in memory if no secrets backend is installed (the panel
+says so).
 
 ## VRAM Management
 

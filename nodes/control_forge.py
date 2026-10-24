@@ -438,6 +438,18 @@ class ControlAOVC2C:
                                 "tooltip": "Resample filter. lanczos = sharpest; nearest = hard pixels."}),
                 "pad_color": ("STRING", {"default": "#000000",
                                 "tooltip": "Pad colour (hex), used only when fit=pad."}),
+                # ── External passes (L9.39: restored - forge() always used them, but 0c3d348 dropped the
+                #    sockets, so a depth / pose / normal / matte from another node could not get in). A wired
+                #    pass wins over the backend selector for that pass. Appended last: saved links keep their
+                #    slots. ──
+                "depth": ("IMAGE", {"tooltip": "Your own depth map (Depth Anything, DepthCrafter, ZoeDepth...). "
+                                               "Wins over depth_model; depth_invert and depth_weight still apply."}),
+                "canny": ("IMAGE", {"tooltip": "Your own edge map. Wins over edge_model."}),
+                "pose": ("IMAGE", {"tooltip": "Your own pose render (DWPose / OpenPose / ViTPose). Wins over "
+                                              "pose_model."}),
+                "normal": ("IMAGE", {"tooltip": "Your own normal map (NormalCrafter...). Wins over normal_model."}),
+                "id_matte": ("IMAGE", {"tooltip": "Your own ID / segmentation matte (SAM, cryptomatte). Wins over "
+                                                  "id_matte_model."}),
             },
         }
 

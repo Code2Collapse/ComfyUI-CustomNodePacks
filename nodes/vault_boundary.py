@@ -1,7 +1,8 @@
 """C2C Vault — pure boundary derivation (Python mirror of js/c2c_vault.js).
 
-Used for CPU tests and optional server-side validation. The live UI runs the
-same classification in the browser before POST /c2c_vault/lock.
+A reference implementation for the CPU tests, which pin the browser's classification (js/c2c_vault.js) to it.
+The live UI runs the classification in the browser before POST /c2c_vault/lock; the server does not call this
+module (L9.39: the docstring promised server-side validation that never existed).
 """
 
 from __future__ import annotations

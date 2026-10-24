@@ -369,6 +369,19 @@ def _with_sections(spec):
     return spec
 
 
+def _plate_like(plate, img_bhwc):
+    """A clean plate as [B,H,W,3] like the image: first frame broadcast if it has one, resized if the size differs."""
+    bg = plate if plate.ndim == 4 else plate.unsqueeze(0)
+    bg = bg[..., :3].to(device=img_bhwc.device, dtype=img_bhwc.dtype)
+    B, H, W = img_bhwc.shape[:3]
+    if tuple(bg.shape[1:3]) != (H, W):
+        bg = torch.nn.functional.interpolate(bg.permute(0, 3, 1, 2), size=(H, W), mode="bilinear",
+                                             align_corners=False).permute(0, 2, 3, 1)
+    if bg.shape[0] != B:
+        bg = bg[:1].expand(B, -1, -1, -1) if bg.shape[0] == 1 or bg.shape[0] < B else bg[:B]
+    return bg.contiguous()
+
+
 class MaskOpsMEC:
     """Unified segmenter + matter + refine + diagnose node.
 
@@ -654,6 +667,13 @@ class MaskOpsMEC:
                 # L7.65 P05: the backend choice and the inputs of the three former matte nodes, APPENDED so saved
                 # MaskOps workflows keep their widget order (nodes/mask_matting/_engines.py)
                 **_engines.appended_inputs(),
+                # L9.39: the clean plate BackgroundMattingV2 is built for (it synthesised one from a blurred,
+                # masked copy of the shot otherwise). A socket, appended last: saved links keep their slots.
+                "background_plate": ("IMAGE", {"tooltip":
+                    "matter = bgmattingv2 only: the same shot WITHOUT the subject (a clean plate). One frame serves "
+                    "every frame; a plate batch as long as the clip is used frame by frame; a different size is "
+                    "resized to the image. Not connected: a plate is synthesised from the coarse mask, which is "
+                    "much less accurate."}),
             },
         })
 
@@ -751,7 +771,7 @@ class MaskOpsMEC:
                 sec_edge_radius=15, sec_n_warmup=5, sec_edge_refine_method="none",
                 bg_model=None, bg_threshold=0.5, bg_invert=False, bg_mask_blur=0,
                 fill_holes_enabled=True, min_region_size=64,
-                keep_model_loaded=True, split_masks=True):
+                keep_model_loaded=True, split_masks=True, background_plate=None):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskOpsMEC expects IMAGE tensor [B,H,W,C]")
         for _label, _m in (
@@ -833,7 +853,7 @@ class MaskOpsMEC:
                 external_trimap, holdout_mask, core_mask,
                 pipeline, scene_prompts, band_scale, matte_tile,
                 temporal_stabilise, matte_overlap, matte_tile_batch,
-                split_masks=bool(split_masks),
+                split_masks=bool(split_masks), background_plate=background_plate,
             )
 
     def _execute_engine(self, backend, image, kw):
@@ -877,7 +897,8 @@ class MaskOpsMEC:
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
                 band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
-                matte_overlap=64, matte_tile_batch=4, split_masks=True):
+                matte_overlap=64, matte_tile_batch=4, split_masks=True, background_plate=None):
+        _plate_note = _multi_note = ""          # L9.39: what info says about the plate / per-object matting
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
         pos_points = positive_coords or pos_points or ""
@@ -1592,6 +1613,19 @@ class MaskOpsMEC:
                     _vit_kw: Dict[str, Any] = {}
                     if mat_key == "vitmatte":
                         _vit_kw = _vitmatte_tile_kwargs(matte_tile, matte_overlap, matte_tile_batch, device)
+                    if mat_key == "bgmattingv2" and background_plate is not None:
+                        _vit_kw["background"] = _plate_like(background_plate, img_bhwc)
+                        _plate_note = "user plate"
+                    elif mat_key == "bgmattingv2":
+                        _plate_note = "synthesised from the coarse mask (connect background_plate for a real one)"
+                    # L9.39: per-object matting needs one frame and a backend with matte_multi; otherwise the
+                    # objects are matted together - said in info instead of silently.
+                    _n_obj = int(obj_masks_raw.shape[0]) if isinstance(obj_masks_raw, torch.Tensor) and \
+                        obj_masks_raw.ndim >= 3 else 0
+                    if _n_obj > 1 and not use_multi:
+                        _why = ("a video (per-object matting runs on single images)" if B > 1 else
+                                f"the {mat_key} matter has no per-object mode")
+                        _multi_note = f"{_n_obj} objects matted as one: {_why}"
                     if use_multi:
                         n_obj = min(int(obj_masks_raw.shape[0]), len(obj_boxes_raw))
                         om_list = [
@@ -1825,6 +1859,10 @@ class MaskOpsMEC:
             if _use_onyx:
                 info_obj["onyx"] = onyx_pipeline_info
                 info_obj["objects"] = onyx_objects_meta
+            if _plate_note:
+                info_obj["background_plate"] = _plate_note
+            if _multi_note:
+                info_obj["multi_object"] = _multi_note
             if _model_free:
                 info_obj["approximate"] = True
                 info_obj["model_free"] = _model_free

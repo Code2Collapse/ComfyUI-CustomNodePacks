@@ -1130,6 +1130,18 @@ try:
         print("[C2C] depcheck routes registered (/c2c/depcheck/*).")
     except Exception as _dc:
         print(f"[C2C] depcheck routes deferred: {_dc}")
+    # ── Automation panels (L9.39): Scheduled Queue, Watch Folder, Webhooks. The OmniBar panels shipped long
+    # ago but these modules were never imported, so every panel call 404'd. Each loop starts only when a job,
+    # watcher or outbound endpoint exists.
+    for _c2c_auto_mod, _c2c_auto_label in (("scheduled_queue_routes", "scheduled queue (/c2c/schedule/*)"),
+                                            ("watch_folder_routes", "watch folder (/c2c/watchfolder/*)"),
+                                            ("webhook_routes", "webhooks (/c2c/webhook/*)")):
+        try:
+            _c2c_auto = __import__("importlib").import_module(f".nodes.{_c2c_auto_mod}", __name__)
+            _c2c_auto.register_routes(_ps)
+            print(f"[C2C] {_c2c_auto_label} routes registered.")
+        except Exception as _au:
+            print(f"[C2C] {_c2c_auto_label} deferred: {_au}")
     try:
         from .nodes._legacy_replacements import register as _register_legacy_replacements
         _n_legacy = _register_legacy_replacements(_ps)

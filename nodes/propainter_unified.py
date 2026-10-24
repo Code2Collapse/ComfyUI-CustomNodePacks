@@ -20,11 +20,17 @@ Outputs are a fixed superset so downstream wires never break across modes:
 
 For each mode the slots carry:
 
-    temporal      : (inpainted, zeros,         zeros,                   zeros,        info)
-    remove        : (filled,    fill_mask,     zeros,                   zeros,        info)
-    stitch        : (stitched,  repaint_mask,  zeros,                   zeros,        info)
-    stitch_refine : (refined,   ring_mask,     zeros,                   zeros,        info)
-    flow          : (warped,    consistency,   flow_field_rgb,          zeros,        info)
+    temporal      : (inpainted, inpaint_mask,  difference x4,           changed,      info)
+    remove        : (filled,    fill_mask,     difference x4,           changed,      info)
+    stitch        : (stitched,  repaint_mask,  difference x4,           changed,      info)
+    stitch_refine : (refined,   ring_mask,     difference x4,           changed,      info)
+    flow          : (warped,    consistency,   flow_field_rgb,          unreliable,   info)
+
+L9.39: aux_image / aux_mask were zeros (aux_mask "reserved") and temporal's mask_out was zeros. Now they are QC:
+"difference x4" = |output - input| amplified 4x, "changed" = pixels the node altered (more than 1.5/255 in any
+channel), measured against the mode's input (images / the stitch canvas / stitched_image); "unreliable" = 1 -
+consistency. The info line says how much changed and how much of that lies OUTSIDE mask_out (spill / seams). When
+the output and its input differ in size, both stay zeros and info says why.
 """
 from __future__ import annotations
 
@@ -85,8 +91,8 @@ class ProPainterMEC:
     OUTPUT_TOOLTIPS = (
         "Primary image output (inpainted / filled / stitched / warped per mode).",
         "Primary mask output (fill mask / repaint mask / consistency per mode).",
-        "Auxiliary IMAGE (flow_field_rgb in 'flow' mode, zeros otherwise).",
-        "Auxiliary MASK (reserved, zeros for now).",
+        "QC image: |output - input| x4 (flow mode: the flow field as colour).",
+        "QC mask: pixels this node changed (flow mode: where the flow is unreliable, 1 - consistency).",
         "Info string with timings, coverage, mode-specific stats.",
     )
 
@@ -208,6 +214,39 @@ class ProPainterMEC:
             return torch.zeros_like(t)
         return torch.zeros(1, 8, 8, dtype=torch.float32)
 
+    @staticmethod
+    def _qc(out: torch.Tensor, ref: Optional[torch.Tensor], region: torch.Tensor):
+        """(difference x4 image, changed mask, info text) of `out` against `ref`; zeros when sizes differ."""
+        if not (isinstance(ref, torch.Tensor) and ref.dim() == 4 and out.dim() == 4
+                and tuple(ref.shape[1:3]) == tuple(out.shape[1:3])):
+            why = "no input to compare" if ref is None else \
+                f"input {tuple(ref.shape[1:3])} vs output {tuple(out.shape[1:3])}"
+            return ProPainterMEC._zero_image_like(out), ProPainterMEC._zero_mask_like(out), f"qc: off ({why})"
+        r = ref[..., :3].to(out.device, out.dtype)
+        if r.shape[0] != out.shape[0]:
+            r = r[torch.arange(out.shape[0]) % r.shape[0]]
+        diff = (out[..., :3] - r).abs()
+        changed = (diff.amax(-1) > 1.5 / 255.0).to(out.dtype)
+        txt = f"qc: changed {100.0 * float(changed.mean()):.2f}% of pixels"
+        if isinstance(region, torch.Tensor) and region.dim() == 3 and tuple(region.shape) == tuple(changed.shape):
+            outside = changed * (region.to(changed.device, changed.dtype) <= 0.5)
+            txt += f", {100.0 * float(outside.mean()):.2f}% outside mask_out"
+        return (diff * 4.0).clamp(0, 1).contiguous(), changed.contiguous(), txt
+
+    @staticmethod
+    def _mask_like(masks: Optional[torch.Tensor], out: torch.Tensor) -> torch.Tensor:
+        """The input mask at the output's size and frame count (zeros when there is none)."""
+        if not isinstance(masks, torch.Tensor):
+            return ProPainterMEC._zero_mask_like(out)
+        m = masks if masks.dim() == 3 else masks.reshape(-1, *masks.shape[-2:])
+        m = m.to(out.device, torch.float32)
+        if tuple(m.shape[1:]) != tuple(out.shape[1:3]):
+            m = torch.nn.functional.interpolate(m.unsqueeze(1), size=tuple(out.shape[1:3]), mode="bilinear",
+                                                align_corners=False).squeeze(1)
+        if m.shape[0] != out.shape[0]:
+            m = m[torch.arange(out.shape[0]) % m.shape[0]]
+        return m.clamp(0, 1).contiguous()
+
     # ────────────────────────────────────────────────────────────────
     def execute(self, mode: str,
                 use_half: bool, color_match_mode: str,
@@ -252,9 +291,9 @@ class ProPainterMEC:
                 color_match_mode=cm_t,
                 raft_chunk=int(raft_chunk),
             )
-            return (out_img, self._zero_mask_like(out_img),
-                    self._zero_image_like(out_img), self._zero_mask_like(out_img),
-                    f"mode=temporal | {info}")
+            region = self._mask_like(masks, out_img)
+            diff, changed, qc = self._qc(out_img, images, region)
+            return (out_img, region, diff, changed, f"mode=temporal | {info} | {qc}")
 
         if mode == "remove":
             if images is None or masks is None:
@@ -267,9 +306,8 @@ class ProPainterMEC:
                 dilate_mask_pixels=int(remove_dilate_pixels),
                 color_match_mode=cm,
             )
-            return (out_img, used_mask,
-                    self._zero_image_like(out_img), self._zero_mask_like(out_img),
-                    f"mode=remove | {info}")
+            diff, changed, qc = self._qc(out_img, images, used_mask)
+            return (out_img, used_mask, diff, changed, f"mode=remove | {info} | {qc}")
 
         if mode == "stitch":
             if stitch_data is None or inpainted_image is None:
@@ -288,9 +326,9 @@ class ProPainterMEC:
                 color_match_mode=cm,
                 upscale_method=upscale_method,
             )
-            return (out_img, used_mask,
-                    self._zero_image_like(out_img), self._zero_mask_like(out_img),
-                    f"mode=stitch | {info}")
+            canvas = stitch_data.get("canvas_image") if isinstance(stitch_data, dict) else None
+            diff, changed, qc = self._qc(out_img, canvas, used_mask)
+            return (out_img, used_mask, diff, changed, f"mode=stitch | {info} | {qc}")
 
         if mode == "stitch_refine":
             if stitched_image is None:
@@ -308,9 +346,8 @@ class ProPainterMEC:
                 color_match_mode=cm,
                 mask_override=mask_override,
             )
-            return (out_img, used_mask,
-                    self._zero_image_like(out_img), self._zero_mask_like(out_img),
-                    f"mode=stitch_refine | {info}")
+            diff, changed, qc = self._qc(out_img, stitched_image, used_mask)
+            return (out_img, used_mask, diff, changed, f"mode=stitch_refine | {info} | {qc}")
 
         if mode == "flow":
             if frame_a is None or frame_b is None:
@@ -322,8 +359,10 @@ class ProPainterMEC:
                 consistency_thr=float(flow_consistency_thr),
                 mask=flow_mask,
             )
+            unreliable = (1.0 - consistency.float()).clamp(0, 1) if isinstance(consistency, torch.Tensor) \
+                else self._zero_mask_like(warped)
             return (warped, consistency,
-                    flow_rgb, self._zero_mask_like(consistency),
+                    flow_rgb, unreliable,
                     f"mode=flow | iters={int(raft_iter)} consistency_thr={float(flow_consistency_thr):.3f}")
 
         raise ValueError(f"[ProPainterMEC] unknown mode {mode!r}; expected one of {_MODES}.")

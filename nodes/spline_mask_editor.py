@@ -312,7 +312,8 @@ def _rasterize_splines(spline_data_json: str, H: int, W: int,
     1. Parse spline_data_json (list of shape dicts)
     2. For each shape: sample curve points using appropriate algorithm
     3. Rasterize filled polygon (cv2 or scanline fallback)
-    4. Union all shapes: max across shapes
+    4. Combine in drawing order: "op": "add" (default) = union, "op": "subtract" = cut the shape out of
+       everything before it (L9.39 - union only before; a Roto-style stack)
     5. Apply feather if > 0: Gaussian blur on mask
     6. Optionally invert
 
@@ -392,7 +393,10 @@ def _rasterize_splines(spline_data_json: str, H: int, W: int,
                     if 0 <= iy < H and 0 <= ix < W:
                         poly_mask[iy, ix] = 1.0
 
-        combined = np.maximum(combined, poly_mask)
+        if str(shape.get("op", "add")).lower() in ("subtract", "cut", "sub"):
+            combined = combined * (1.0 - poly_mask)
+        else:
+            combined = np.maximum(combined, poly_mask)
 
     mask = torch.from_numpy(combined).to(device=device, dtype=torch.float32)
 

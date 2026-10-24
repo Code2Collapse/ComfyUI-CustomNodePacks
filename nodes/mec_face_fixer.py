@@ -14,10 +14,13 @@ Impact Pack's FaceDetailer, rebuilt around MEC primitives:
             [DSC-SIZE]/[SKIP])
 
 The detection model is the user's responsibility -- we do NOT bundle weights
-and we accept any Ultralytics-compatible YOLO model file located under
-``ComfyUI/models/ultralytics/bbox/``. If neither ``ultralytics`` nor
-``onnxruntime`` is installed, the node falls back to using the ``mask`` input
-unchanged so workflows do not hard-fail.
+and we accept any Ultralytics-compatible YOLO model file (.pt, or an .onnx export, which ultralytics runs itself)
+located under ``ComfyUI/models/ultralytics/bbox/``. Without ``ultralytics`` (or with face_model = none, or when
+nothing is detected) the node uses the ``mask`` input's box, so workflows do not hard-fail.
+
+Per-face prompts (L9.39): with the optional ``clip`` input, each face's prompt is encoded and sampled with (one
+encode per distinct text). Before, they only replaced a ``text`` metadata key that sampling never reads, so they
+had no effect; without ``clip`` that is still the case, and the info output says so.
 
 This implementation is original code; no AGPL-licensed material from
 Forbidden Vision is used. Behavioural inspiration only.
@@ -84,7 +87,7 @@ def _detect_faces_yolo(
 ) -> List[Tuple[int, int, int, int, float]]:
     """Run face detection. Returns [(x0,y0,x1,y1,score), ...] in pixel coords.
 
-    Caches the detector by model_name. Tries ultralytics first, then onnxruntime.
+    Caches the detector by model_name. ultralytics loads .pt and .onnx files alike.
     """
     if model_name == "none":
         return []
@@ -216,12 +219,16 @@ class MECFaceFixer:
                 "upscale_model": ("UPSCALE_MODEL", {"tooltip": "Optional UPSCALE_MODEL applied to faces below crop_resolution before sampling."}),
                 "face_positive_prompt": ("STRING", {
                     "multiline": True, "default": "",
-                    "tooltip": "Per-face positive prompt with wildcards: [SEP] separates faces; [ASC]/[DSC]/[ASC-SIZE]/[DSC-SIZE] order; [SKIP] leaves a face untouched.",
+                    "tooltip": "Per-face positive prompt with wildcards: [SEP] separates faces; [ASC]/[DSC]/[ASC-SIZE]/[DSC-SIZE] order; [SKIP] leaves a face untouched. Needs the clip input to change the sampling.",
                 }),
                 "face_negative_prompt": ("STRING", {
                     "multiline": True, "default": "",
                     "tooltip": "Same syntax as face_positive_prompt for negatives.",
                 }),
+                # L9.39: appended last (a socket; saved links keep their slots)
+                "clip": ("CLIP", {"tooltip": "Text encoder for face_positive_prompt / face_negative_prompt. Wire "
+                                             "the same CLIP as your prompt: each face's prompt is then encoded and "
+                                             "sampled. Not connected: every face uses positive / negative."}),
             },
         }
 
@@ -283,7 +290,7 @@ class MECFaceFixer:
                 blend_softness, mask_dilate, color_match, lightness_rescue,
                 differential_diffusion,
                 mask=None, upscale_model=None,
-                face_positive_prompt: str = "", face_negative_prompt: str = ""):
+                face_positive_prompt: str = "", face_negative_prompt: str = "", clip=None):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MECFaceFixer expects IMAGE tensor [B,H,W,C]")
         if mask is not None and (
@@ -299,7 +306,7 @@ class MECFaceFixer:
                 blend_softness, mask_dilate, color_match, lightness_rescue,
                 differential_diffusion,
                 mask, upscale_model,
-                face_positive_prompt, face_negative_prompt,
+                face_positive_prompt, face_negative_prompt, clip,
             )
 
     def _execute_impl(self, image, model, positive, negative, vae,
@@ -308,7 +315,7 @@ class MECFaceFixer:
                 blend_softness, mask_dilate, color_match, lightness_rescue,
                 differential_diffusion,
                 mask=None, upscale_model=None,
-                face_positive_prompt: str = "", face_negative_prompt: str = ""):
+                face_positive_prompt: str = "", face_negative_prompt: str = "", clip=None):
         import comfy.model_management as mm
         import gc
         import json
@@ -339,6 +346,22 @@ class MECFaceFixer:
             out_b = img_b.clone()
             face_mask_acc = torch.zeros(B, H, W, dtype=torch.float32)
             info: dict = {"frames": []}
+            has_face_prompts = bool((face_positive_prompt or "").strip() or (face_negative_prompt or "").strip())
+            if has_face_prompts and clip is None:
+                info["face_prompts"] = ("not applied: connect the clip input - without it every face is sampled "
+                                        "with positive / negative")
+            elif has_face_prompts:
+                info["face_prompts"] = "encoded per face with the clip input"
+            encoded: dict = {}
+
+            def _cond_for(text, base):
+                """The face's own conditioning (cached per text); the base one without clip / text."""
+                text = (text or "").strip()
+                if not text or clip is None:
+                    return base
+                if text not in encoded:
+                    encoded[text] = _encode_text(clip, text)
+                return encoded[text]
             mask_np_full = None
             if mask is not None:
                 mask_np_full = _to_mask(mask).cpu().numpy()  # (B,H,W) or (1,H,W)
@@ -391,9 +414,9 @@ class MECFaceFixer:
                         u = F.interpolate(u, size=(th, tw), mode="bicubic", align_corners=False)
                         crop_t = u.permute(0, 2, 3, 1).clamp(0, 1)
 
-                    # Build per-face conditioning by replacing the text in copies of base cond.
-                    pos_face = _override_conditioning_text(positive, pp) if pp else positive
-                    neg_face = _override_conditioning_text(negative, np_) if np_ else negative
+                    # Per-face conditioning: the face's prompt encoded with clip (L9.39); the base one otherwise.
+                    pos_face = _cond_for(pp, positive)
+                    neg_face = _cond_for(np_, negative)
 
                     sampled = self._sample_face(
                         model, pos_face, neg_face, vae, crop_t,
@@ -439,6 +462,7 @@ class MECFaceFixer:
                         "score": float(score),
                         "pos_prompt": pp,
                         "neg_prompt": np_,
+                        "prompt_used": bool(clip is not None and ((pp or "").strip() or (np_ or "").strip())),
                         "denoise": float(denoise),
                     })
 
@@ -466,25 +490,13 @@ def _ellipse_mask(h: int, w: int) -> np.ndarray:
     return m.astype(np.float32)
 
 
-def _override_conditioning_text(cond, new_text: str):
-    """Best-effort: if cond carries a 'text' key in its metadata dict, swap it.
-
-    Otherwise returns the original cond unchanged. Per-face conditioning
-    requires upstream re-encoding for full effect; this is a conservative
-    fallback so the node never breaks when the base text is good enough.
-    """
-    if not new_text:
-        return cond
-    try:
-        new_cond = []
-        for entry in cond:
-            tensor, meta = entry[0], dict(entry[1]) if len(entry) > 1 else {}
-            if "text" in meta:
-                meta["text"] = new_text
-            new_cond.append([tensor, meta])
-        return new_cond
-    except Exception:
-        return cond
+def _encode_text(clip, text: str):
+    """CONDITIONING for `text`, the way core's CLIPTextEncode builds it (scheduled encode where available)."""
+    tokens = clip.tokenize(text)
+    if hasattr(clip, "encode_from_tokens_scheduled"):
+        return clip.encode_from_tokens_scheduled(tokens)
+    cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
+    return [[cond, {"pooled_output": pooled}]]
 
 
 NODE_CLASS_MAPPINGS = {

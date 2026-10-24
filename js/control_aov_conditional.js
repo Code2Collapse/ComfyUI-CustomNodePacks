@@ -47,6 +47,8 @@ function applyVisibility(node) {
     const rz = String(get("resize")?.value ?? "off");
     const rzOn = rz !== "off";
     const fitv = String(get("fit")?.value ?? "crop");
+    // A wired external pass (depth / canny / pose / normal sockets) is produced too: its weight / invert apply.
+    const wired = (n) => node.inputs?.some((i) => i.name === n && i.link != null) ?? false;
 
     const visible = {
         depth_size:        DEPTH_SIZE_MODELS.includes(dm),
@@ -57,11 +59,11 @@ function applyVisibility(node) {
         canny_low:         internalCanny || em === "canny",
         canny_high:        internalCanny || em === "canny",
         // a per-AOV weight / modifier only matters when that AOV is actually produced
-        depth_weight:      dm !== "off",
-        depth_invert:      dm !== "off",
-        normal_weight:     nm !== "off",
-        pose_weight:       pm !== "off",
-        canny_weight:      em !== "off",
+        depth_weight:      dm !== "off" || wired("depth"),
+        depth_invert:      dm !== "off" || wired("depth"),
+        normal_weight:     nm !== "off" || wired("normal"),
+        pose_weight:       pm !== "off" || wired("pose"),
+        canny_weight:      em !== "off" || wired("canny"),
         // in-node resize — one dropdown drives width/height vs scale fields
         width:             rz === "width/height",
         height:            rz === "width/height",
@@ -101,6 +103,12 @@ app.registerExtension({
             const r = onNodeCreated?.apply(this, arguments);
             for (const n of ["depth_model", "normal_model", "pose_model", "edge_model",
                              "resize", "fit"]) hookWidget(this, n);
+            setTimeout(() => applyVisibility(this), 0);
+            return r;
+        };
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function () {
+            const r = onConnectionsChange?.apply(this, arguments);
             setTimeout(() => applyVisibility(this), 0);
             return r;
         };

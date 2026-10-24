@@ -113,8 +113,12 @@ def prepare_prompt(prompt: dict, backend_cfg: dict, storage=None,
             # mount can see it. Only the reference changes.
             node["inputs"][ref["input_key"]] = os.path.basename(path)
         elif mapping:
+            # L9.39: keep the loader's other inputs (frame caps, skips, ...): core passes a node only the inputs
+            # its class declares, so names the URL loader does not have are dropped there, and the ones it
+            # shares carry over. Only the local media input is replaced. Optional "extra" = fixed inputs to add.
+            keep = {k: v for k, v in (node.get("inputs") or {}).items() if k != ref["input_key"]}
             node["class_type"] = mapping["class_type"]
-            node["inputs"] = {mapping["input"]: url}
+            node["inputs"] = {**keep, **(mapping.get("extra") or {}), mapping["input"]: url}
         else:
             node["inputs"][ref["input_key"]] = url
     return new_prompt, uploads
