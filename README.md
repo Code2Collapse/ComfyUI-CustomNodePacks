@@ -843,7 +843,8 @@ loader again. Until 2026-10-23 ComfyUI reused the empty output it had cached, an
 - `save_metadata` (on by default) writes `<name>.png` next to the saved file: its first written frame, with the
   workflow and prompt inside, as Save Image stores them. Drop the PNG onto ComfyUI to rebuild the graph. For an
   image sequence, the PNG sits beside the frame folder. The video itself never carries the workflow (owner,
-  2026-10-25). Nothing is written when ComfyUI runs with `--disable-metadata`.
+  2026-10-25). The encoder drops `workflow` / `prompt` whoever calls it; tests scan the raw MP4 / MOV / MKV bytes.
+  Nothing is written when ComfyUI runs with `--disable-metadata`.
 
 Ported in part from [ComfyUI-4K-Video-Save-Load](https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) (MIT);
 see CREDITS.md.
@@ -909,6 +910,12 @@ node.
   et al. 2005) appear as a strip under the scrubber. Hover to read a frame's values, click to go to it; the worst
   frame of each is marked. `metrics` turns it off.
 - Previews of image batches keep every frame (the old preview stopped at 600).
+- **Mistyped wires are repaired** (2026-10-25). A saved workflow can hold a wire whose type its socket cannot take.
+  The owner's had Load Video's IMAGE on `bit_depth`, and the server refused the whole prompt with "Return type
+  mismatch ... bit_depth". When a workflow loads, every such wire into a Code2Collapse node moves to the node's first
+  free socket that takes it, or is removed when none does. A toast says what moved where. Other packs' nodes are not
+  touched. Setting: *C2C › Graph › Repair mistyped wires* (on by default). Checked on frontends 1.53.10 and 1.57.0, in
+  both renderers.
 
 #### Video Mask Editor (MEC)
 
@@ -1509,6 +1516,10 @@ The vault replaces a group of nodes with one node whose contents travel in the w
 - **Editing** any vault needs the password **and** a code from your authenticator app. You set the app up once per
   install and get 8 recovery codes. The real nodes open in a separate **Vault edit** tab, which is never saved,
   exported, queued or written to browser storage. **Lock & close** re-encrypts with fresh keys.
+- **Where the install key and the authenticator live.** They go in the OS credential store (Windows Credential
+  Manager, macOS Keychain, libsecret), or in an encrypted file in ComfyUI's `user/c2c/` when there is none. The OS
+  store is shared by every ComfyUI install of the same OS user. Set `C2C_SECRETS_BACKEND=file` to give one install
+  (a test copy, a second ComfyUI) its own key and its own authenticator. The C2C testbed sets it.
 
 Step-by-step guide: [docs/vault_howto.md](docs/vault_howto.md). Design and threat model:
 [docs/VAULT_DESIGN_A17.md](docs/VAULT_DESIGN_A17.md).

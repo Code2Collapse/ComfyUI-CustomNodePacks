@@ -124,7 +124,11 @@ def _try_keyring():
         return None
 
 
-_KR = _try_keyring()
+# C2C_SECRETS_BACKEND=file keeps every secret in THIS ComfyUI's user directory (encrypted file) instead of the OS
+# credential store. The OS store is one per OS user, shared by every ComfyUI install of that user: a test install
+# (the C2C testbed sets this) must never read or write the production install's vault key or second factor.
+_FORCED = os.environ.get("C2C_SECRETS_BACKEND", "").strip().lower()
+_KR = None if _FORCED == "file" else _try_keyring()
 
 
 def _kr_service(scope: str) -> str:

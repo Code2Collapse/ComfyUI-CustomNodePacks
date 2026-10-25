@@ -811,6 +811,10 @@ def encode_video(
         has_alpha = False
 
     full_path, filename, rel_sub, folder_type = path_info
+    # L9.52 (owner 2026-10-25: "make sure that .mov has no metadata in it"): the workflow / prompt never reach a video
+    # container, whoever calls this - they go into '<name>.png' (write_workflow_png)
+    metadata = {k: v for k, v in (metadata or {}).items()
+                if str(k).lower() not in ("workflow", "prompt")} or None
     out_cs = colorspace_out
     if out_cs in ("same as input", "same", ""):
         out_cs = colorspace_in
