@@ -45,7 +45,8 @@ const LABELS = { handle_frames: "handle frames", handle_target: "target frames",
 function label(node) {
     for (const [n, text] of Object.entries(LABELS)) {
         const w = node.widgets?.find((x) => x.name === n);
-        if (w && !w.label) w.label = text;
+        // the frontend pre-fills label = name: "!w.label" alone never applied the short labels (L9.52, measured)
+        if (w && (!w.label || w.label === w.name)) w.label = text;
     }
 }
 

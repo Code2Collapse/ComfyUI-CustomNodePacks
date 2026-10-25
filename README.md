@@ -833,15 +833,17 @@ loader again. Until 2026-10-23 ComfyUI reused the empty output it had cached, an
   - Save Video writes 8K as H.265, ProRes 422 HQ, FFV1 and H.264.
   - The tests are opt-in: `C2C_TEST_8K=1 pytest tests/test_c2c_video_8k.py`.
 
-#### Save Video (C2C): ffmpeg encode, NVENC, workflow in the file
+#### Save Video (C2C): ffmpeg encode, NVENC, workflow PNG
 
 - Encodes through an ffmpeg pipe. On CPU, H.264 / H.265 / ProRes / FFV1 are 2-4x faster than before; DNxHR and VP9
   are about 1.2x.
 - Formats include H.264, H.265 8 / 10-bit, AV1 (NVENC on NVIDIA GPUs), ProRes 422 / HQ / 4444 / XQ, DNxHR, FFV1,
   VP9, GIF, WebP, and PNG / EXR sequences. A format your ffmpeg cannot write is marked `[unavailable]`.
 - NTSC rates are exact (23.976 → 24000/1001).
-- `save_metadata` (on by default) stores the workflow and prompt in MP4 / MOV / MKV / WebM. Dropping the saved file
-  onto ComfyUI rebuilds the graph. Like core, nothing is stored when ComfyUI runs with `--disable-metadata`.
+- `save_metadata` (on by default) writes `<name>.png` next to the saved file: its first written frame, with the
+  workflow and prompt inside, as Save Image stores them. Drop the PNG onto ComfyUI to rebuild the graph. For an
+  image sequence, the PNG sits beside the frame folder. The video itself never carries the workflow (owner,
+  2026-10-25). Nothing is written when ComfyUI runs with `--disable-metadata`.
 
 Ported in part from [ComfyUI-4K-Video-Save-Load](https://github.com/HallettVisual/ComfyUI-4K-Video-Save-Load) (MIT);
 see CREDITS.md.
@@ -861,12 +863,17 @@ see CREDITS.md.
   it. *auto* keeps the earlier behaviour.
 - **Saved workflows** keep encoding exactly as before. A workflow saved with the old single list (for example
   "MOV ProRes 422 HQ") opens converted to the same five choices, and the node says so.
+- **Named formats are presets.** Picking one in `format` (for example "EXR sequence (half)") fills the five controls
+  and keeps them on screen. Until 2026-10-25 a named format hid every option. Colour tags show only where the codec
+  takes them, so EXR / PNG / DPX sequences hide them.
 - **Naming:** *Folder Version Incrementer* (and *default*, unless you change the C2C setting) takes the version
   folder and name from the Folder Version Incrementer node in the graph. No wire is needed, and its settings are
   used. Without one, the incrementer's defaults are used. A wired `subfolder` still wins. The node shows the path the
   next write will use, and a version is used only when a file is written.
 - **Player:** Load Video's player on the whole clip (play, backwards, J / K / L, step, loop, timecode, full screen).
   Its In / Out handles set the **export range** (`range_in` / `range_out`): the next run writes only those frames.
+  The transport is one row of buttons in every player; the node never gets narrower than that row needs. Before
+  the first run the node shows one line instead of an empty player.
 - **A/B:** compare the saved file with the frames that came in. Wipe (vertical, horizontal, diagonal), difference
   with gain, onion, flicker, zoom (mouse wheel), pan, 1:1, and a loupe showing pixel values.
 - **Preview first:** with `write_mode` = *preview first*, a run shows exactly what would be written and writes
@@ -874,13 +881,19 @@ see CREDITS.md.
 - **Handles:** `handles_trim` = *auto* trims exactly the handles Load Video (C2C) added, read from `video_info`. If
   Load used *fit*, it trims back to fit's target length. *manual* trims `trim_frames` on `trim_side`; *off* trims
   nothing. *auto* never uses a count remembered from another run.
+- **No `video_info` wire needed** (2026-10-25). Save follows its `images` (or `latent`) input back through each
+  node's first image input, subgraphs included, to the Load Video it came from. It then uses that Load's
+  `video_info`: the handles to trim and its frame rate. It uses it only if that Load ran with its current settings.
+  Otherwise the node says why nothing was trimmed. A wired `video_info` always wins. Measured: Load (+8 handles) ->
+  Save with no wire, in a subgraph, wrote the 48 source frames 0-47 with the audio exactly in place.
 
 #### Load Video (C2C): built-in handles (2026-10-23)
 
 `handles` = *fit* or *add* puts handle frames on the clip as it loads (repeated edge frames, never black; the audio
 moves with them). This works for IMAGE, mask and the VAE (LATENT) path alike, without decoding the clip first.
 *fit* pads the clip up to the model's frame grid; `target frames` 0 means this clip's length. *add* adds
-`handle frames`, rounded onto the grid. `grid` = *from format* uses the format preset above it (MiniMax H3 17n+5,
+`handle frames`, rounded onto the grid. The details line says what a run will add **before** it runs, for example
+"adds 9 head + 0 tail -> 57 frames (8 asked, +1 to land on Wan 2.x (4n+1))". It uses the same planner as the run. `grid` = *from format* uses the format preset above it (MiniMax H3 17n+5,
 Wan 4n+1, LTXV 8n+1, ...), so there is one grid, not two. The count travels in `video_info`, and Save Video (C2C)
 trims exactly that. The counts come from AV Handles' own planner, and AV Handles stays available as a separate
 node.

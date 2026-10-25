@@ -25,32 +25,32 @@ import {
 
 export { timecode, selectionFromWidgets, widgetsFromSelection };
 
-const STYLE_ID = "c2c-vplayer-v2";
+const STYLE_ID = "c2c-vplayer-v3";
 const UNIT_KEY = "c2c.vplayer.unit";
 const THUMB_RELEASE_MS = 8000;
 
 function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
-    document.getElementById("c2c-vplayer-v1")?.remove();
+    for (const old of ["c2c-vplayer-v1", "c2c-vplayer-v2"]) document.getElementById(old)?.remove();
     const s = document.createElement("style");
     s.id = STYLE_ID;
     s.textContent = `
 .c2c-vplayer { display: flex; flex-direction: column; gap: 3px; outline: none; position: relative; }
 .c2c-vplayer:focus-visible { box-shadow: 0 0 0 1px var(--cu-accent); border-radius: 6px; }
-.c2c-vplayer__bar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
-.c2c-vplayer__group { display: flex; align-items: center; gap: 2px; }
-.c2c-vplayer__sep { width: 1px; height: 16px; margin: 0 3px; background: var(--cu-edge-strong); }
-.c2c-vplayer__btn { min-width: 24px; height: 22px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--cu-edge-strong);
-  background: var(--cu-raised); color: var(--cu-ink); font-size: 11px; line-height: 20px; cursor: pointer;
+.c2c-vplayer__bar { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; overflow: hidden; }
+.c2c-vplayer__group { display: flex; align-items: center; gap: 1px; flex: none; }
+.c2c-vplayer__sep { width: 1px; height: 14px; margin: 0 2px; background: var(--cu-edge-strong); flex: none; }
+.c2c-vplayer__btn { min-width: 20px; height: 20px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--cu-edge-strong);
+  background: var(--cu-raised); color: var(--cu-ink); font-size: 10.5px; line-height: 18px; cursor: pointer;
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .c2c-vplayer__btn:hover { border-color: var(--cu-accent); }
 .c2c-vplayer__btn:focus-visible { outline: 1px solid var(--cu-accent); outline-offset: 1px; }
 .c2c-vplayer__btn[aria-pressed="true"] { background: var(--cu-accent); color: var(--cu-ground); border-color: var(--cu-accent); }
 .c2c-vplayer__btn:disabled { opacity: 0.4; cursor: default; }
-.c2c-vplayer__frame { margin-left: auto; font-size: 10px; color: var(--cu-ink-soft); font-variant-numeric: tabular-nums;
-  white-space: nowrap; cursor: text; border-radius: 3px; padding: 1px 3px; }
+.c2c-vplayer__frame { font-size: 10px; color: var(--cu-ink-soft); font-variant-numeric: tabular-nums;
+  white-space: nowrap; cursor: text; border-radius: 3px; padding: 0 3px; }
 .c2c-vplayer__frame:hover { background: var(--cu-raised); color: var(--cu-ink); }
-.c2c-vplayer__frame-input { margin-left: auto; width: 96px; height: 18px; font-size: 11px; padding: 0 4px;
+.c2c-vplayer__frame-input { width: 96px; height: 18px; font-size: 11px; padding: 0 4px;
   border-radius: 3px; border: 1px solid var(--cu-accent); background: var(--cu-ground); color: var(--cu-ink);
   font-variant-numeric: tabular-nums; }
 .c2c-vplayer__track { position: relative; height: 18px; border-radius: 4px; background: var(--cu-edge); cursor: pointer;
@@ -68,8 +68,8 @@ function ensureStyles() {
 .c2c-vplayer__tick--minor { height: 3px; opacity: 0.7; }
 .c2c-vplayer__tick-label { position: absolute; top: 4px; font-size: 9px; line-height: 9px; color: var(--cu-ink-soft);
   transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.c2c-vplayer__labels { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--cu-ink-soft);
-  font-variant-numeric: tabular-nums; }
+.c2c-vplayer__labels { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; column-gap: 8px;
+  row-gap: 1px; font-size: 10px; color: var(--cu-ink-soft); font-variant-numeric: tabular-nums; }
 .c2c-vplayer__thumb { position: absolute; bottom: 100%; margin-bottom: 4px; width: 132px; padding: 3px; border-radius: 5px;
   background: var(--cu-ground); border: 1px solid var(--cu-edge-strong); box-shadow: 0 4px 12px rgba(0,0,0,0.35);
   pointer-events: none; display: none; z-index: 5; transform: translateX(-50%); }
@@ -82,6 +82,53 @@ function ensureStyles() {
   width: min(100%, calc((100vh - 190px) * var(--c2c-aspect, 1.7778))); margin: 0 auto; }
 `;
     document.head.appendChild(s);
+}
+
+const BAR_FALLBACK = 340;     // what the bar measured at the default font (used until it can be measured)
+const BAR_SLACK = 16;         // speed "0.25×", loop "ping-pong", unit "time": labels that change after measuring
+let barCache = 0;
+
+/** The bar's natural one-line width: a hidden copy laid out at max-content (works while the player is hidden). */
+function barWidth(bar) {
+    if (barCache) return barCache;
+    try {
+        const probe = bar.cloneNode(true);
+        probe.style.cssText = "position:absolute;left:-10000px;top:0;visibility:hidden;width:max-content;";
+        probe.style.fontFamily = getComputedStyle(bar).fontFamily;      // the node's font, not the page's
+        document.body.appendChild(probe);
+        const w = probe.offsetWidth;
+        probe.remove();
+        if (w > 0) barCache = w + BAR_SLACK;
+    } catch (_e) { /* measured next time */ }
+    return barCache || BAR_FALLBACK;
+}
+
+/**
+ * Keep a node that hosts the player at least as wide as the bar needs on one line (L9.52). LiteGraph takes only the
+ * HEIGHT from a DOM widget's computeSize, so the floor goes on the node's own computeSize (dragging narrower stops
+ * there); a node narrower than that (new, or from an old workflow) is widened once. `chrome` = the node's padding
+ * around the widget (classic: 2 x margin; Nodes 2.0 pads its body, measured ~24 px).
+ */
+export function holdPlayerWidth(node, player, chrome = 32) {
+    if (!node || !player || node.__c2cPlayerWidth) return;
+    node.__c2cPlayerWidth = true;
+    const need = () => Math.ceil(player.minWidth() + chrome);
+    node.__c2cPlayerNeed = need;
+    const orig = node.computeSize;
+    node.computeSize = function (...a) {
+        const out = orig ? orig.apply(this, a) : [this.size[0], this.size[1]];
+        if (Array.isArray(out) || out?.length >= 2) out[0] = Math.max(out[0], need());
+        return out;
+    };
+    const widen = () => {
+        const w = need();
+        if (node.size?.[0] < w && node.setSize) {
+            node.setSize([w, node.size[1]]);
+            node.setDirtyCanvas?.(true, true);
+        }
+    };
+    requestAnimationFrame(widen);
+    setTimeout(widen, 300);         // after the frontend's own first sizing of a new node
 }
 
 /** A button in the player's style (the crop tool uses it too). */
@@ -169,8 +216,9 @@ export function attachPlayer(host, video, opts = {}) {
     const frameLabel = document.createElement("span");
     frameLabel.className = "c2c-vplayer__frame";
     frameLabel.title = "Click to type a frame number or a timecode (hh:mm:ss:ff)";
+    // one line (L9.52): the frame box sits under the track, between the selection and the count
     bar.append(group(bFirst, bPrev, bBack, bPlay, bNext, bLast), sep(), group(bSpeed, bLoop), sep(),
-               group(bIn, bOut, bAll), sep(), group(bUnit, bFull), frameLabel);
+               group(bIn, bOut, bAll), sep(), group(bUnit, bFull));
 
     // ── scrubber ──
     const ruler = document.createElement("div");
@@ -201,7 +249,7 @@ export function attachPlayer(host, video, opts = {}) {
     labels.className = "c2c-vplayer__labels";
     const lSel = document.createElement("span");
     const lCount = document.createElement("span");
-    labels.append(lSel, lCount);
+    labels.append(lSel, frameLabel, lCount);
 
     root.append(bar, track, ruler, labels, thumb);
     host.appendChild(root);
@@ -612,6 +660,8 @@ export function attachPlayer(host, video, opts = {}) {
 
     return {
         root,
+        /** The width the transport bar needs on ONE line (layout px, the widest labels allowed for). */
+        minWidth: () => barWidth(bar),
         /** Whole-clip domain (frames after force_rate) and how the preview samples it. */
         setDomain({ frames, fps, step = 1, previewFrames, previewFps }) {
             state.frames = Math.max(1, frames | 0);

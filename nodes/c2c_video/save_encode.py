@@ -199,6 +199,35 @@ def output_metadata(prompt: Any = None, extra_pnginfo: Any = None) -> dict[str, 
     return meta or None
 
 
+def workflow_png_path(output_path: str) -> str:
+    """'<name>.png' next to a written file, or next to a sequence's folder ('<folder>.png' - never inside it, so it
+    cannot collide with a frame)."""
+    p = os.path.normpath(output_path)
+    if os.path.isdir(p):
+        return p + ".png"
+    return os.path.splitext(p)[0] + ".png"
+
+
+def write_workflow_png(frame: Any, output_path: str, prompt: Any = None, extra_pnginfo: Any = None) -> str | None:
+    """L9.52 (owner 2026-10-25): the workflow and prompt go into a PNG next to the saved file - its first written frame,
+    8-bit RGB, text chunks exactly as ComfyUI's SaveImage writes them - never into the video. None (nothing written)
+    with --disable-metadata, nothing to store, or no frame. -> the PNG's file name."""
+    meta = output_metadata(prompt, extra_pnginfo)
+    if not meta or frame is None or not output_path:
+        return None
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    t = frame[0] if getattr(frame, "ndim", 0) == 4 else frame
+    arr = np.clip(t[..., :3].detach().float().cpu().numpy() * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    info = PngInfo()
+    for key, value in meta.items():
+        info.add_text(str(key), json.dumps(value))
+    path = workflow_png_path(output_path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    Image.fromarray(arr).save(path, pnginfo=info, compress_level=4)
+    return os.path.basename(path)
+
+
 def quality_to_crf(quality: int) -> str:
     q = max(0, min(100, int(quality)))
     return str(int(round(51 - q * 0.45)))

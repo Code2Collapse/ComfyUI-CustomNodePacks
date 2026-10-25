@@ -243,6 +243,7 @@ export function createComparePlayer(opts = {}) {
     setMode("wipe");
     return {
         root,
+        player,             // the transport (its one-line width keeps the node wide enough, L9.52)
         /** sources: {a, b, c, d} urls (video or still), labels, fps, frames (of A), offset. */
         setSources({ sources = {}, labels = {}, fps = 24, frames = 0, offset: off = 0, aspect }) {
             st.sources = sources;

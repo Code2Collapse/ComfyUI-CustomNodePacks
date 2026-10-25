@@ -22,6 +22,7 @@ import { C } from './_c2c_theme.js';
 import { wdEnsureProxy } from './_wan_director_ui.js';
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
 import { createComparePlayer } from "./_c2c_compare_player.js";
+import { holdPlayerWidth } from "./c2c_video_player.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -343,6 +344,7 @@ app.registerExtension({
                 onOffset: (n) => { const w = getW(node, "b_offset"); if (w && w.value !== n) w.value = n; },
             });
             S.cmp = cmp;
+            holdPlayerWidth(node, cmp.player);      // the transport on one line (L9.52)
             const playerHost = cmp.root;
             playerHost.style.display = "none";
             wrap.appendChild(playerHost);

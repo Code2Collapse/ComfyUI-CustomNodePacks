@@ -682,6 +682,7 @@ def execute_video_load(
     video_info = make_video_info(raw, loaded)
     if handles_rec is not None:
         video_info[HIO.INFO_KEY] = handles_rec
+    HIO.remember_load(unique_id, prompt, video_info)      # Save Video finds it without a video_info wire (L9.52)
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 5)

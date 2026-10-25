@@ -117,6 +117,14 @@ def parse_request_params(raw: Mapping[str, str]) -> dict[str, Any]:
         params["audio_when_missing"] = raw.get("audio_when_missing") or "silence"
         params["crop"] = tuple(_float_param(raw, k, d) for k, d in
                                (("crop_x", 0.0), ("crop_y", 0.0), ("crop_w", 1.0), ("crop_h", 1.0)))
+        # L9.52: the handle settings, so the node shows what a run will add BEFORE it runs
+        params["handles"] = raw.get("handles") or "off"
+        params["handle_frames"] = max(0, _int_param(raw, "handle_frames", 8))
+        params["handle_target"] = max(0, _int_param(raw, "handle_target", 0))
+        params["handle_side"] = raw.get("handle_side") or "head"
+        params["handle_grid"] = raw.get("handle_grid") or "from format"
+        params["handle_custom_step"] = max(1, _int_param(raw, "handle_custom_step", 4))
+        params["handle_custom_plus"] = max(0, _int_param(raw, "handle_custom_plus", 1))
     params["max_frames"] = min(_MAX_FRAMES_CAP, max(1, _int_param(raw, "max_frames", _DEFAULT_MAX_FRAMES)))
     return params
 
@@ -270,13 +278,37 @@ def _load_report(raw: C2CVideo, params: dict[str, Any]) -> dict[str, Any] | None
         seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
         resolution=str(params.get("resolution") or "custom"),
         divisible_by=int(params.get("divisible_by", 1) or 1),
+        snap_frames=str(params.get("handles") or "off") != "fit",   # as a run: fit pads up, the preset does not cut
     )
     if not len(load):
         return None
     plan = plan_decoder(load, str(params.get("decoder") or "auto"), cuda=device_is_cuda())
     summary = load_summary(raw, load, format_name=str(params.get("format") or "None"), plan=plan,
                            audio_mode=audio_output_mode(load, str(params.get("audio_when_missing") or "silence")))
-    return {**summary["loaded"], "decoder": summary.get("decoder"), "audio": summary["audio"]}
+    return {**summary["loaded"], "decoder": summary.get("decoder"), "audio": summary["audio"],
+            "handles": _handles_plan(len(load), params)}
+
+
+def _handles_plan(n: int, params: dict[str, Any]) -> dict[str, Any] | None:
+    """What the run's handles will add to these n frames (None when handles are off) - the same planner the run uses."""
+    from . import handles_io as HIO
+    from .nodes_load import FORMAT_PRESETS
+
+    mode = str(params.get("handles") or "off")
+    if mode not in ("fit", "add") or HIO.disabled():
+        return None
+    fmt = str(params.get("format") or "None")
+    try:
+        model, step, plus, label = HIO.grid_for(str(params.get("handle_grid") or HIO.FROM_FORMAT),
+                                                FORMAT_PRESETS.get(fmt, {}), fmt,
+                                                int(params.get("handle_custom_step") or 4),
+                                                int(params.get("handle_custom_plus") or 0))
+        out = HIO.plan_handles(n, mode=mode, frames=int(params.get("handle_frames") or 0),
+                               target=int(params.get("handle_target") or 0),
+                               side=str(params.get("handle_side") or "head"), model=model, step=step, plus=plus)
+    except Exception as exc:  # noqa: BLE001 - shown in the node, the run reports the same error
+        return {"error": True, "note": str(exc)}
+    return dict(out, grid=label, frames_in=int(n))
 
 
 def probe_payload(params: dict[str, Any]) -> dict[str, Any]:

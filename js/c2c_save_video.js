@@ -30,7 +30,7 @@ import {
     attachPauseObservers,
     reservedHeight,
 } from "./c2c_video_player_ui.js";
-import { attachPlayer, playerButton } from "./c2c_video_player.js";
+import { attachPlayer, holdPlayerWidth, playerButton } from "./c2c_video_player.js";
 import { attachABView, WIPE_SHAPES } from "./_c2c_ab_view.js";
 
 const NODE = "SaveVideoC2C";
@@ -178,6 +178,7 @@ function mountSaveWidget(node) {
     let aspect = DEFAULT_ASPECT;
     let last = null;
     let ab = null;
+    let shown = false;          // L9.52: before a run there is nothing to show - no stage, no player, no A/B tools
 
     // the extra rows live in ui.summary, which reservedHeight() counts
     const summary = document.createElement("div");
@@ -196,7 +197,7 @@ function mountSaveWidget(node) {
     ui.summary = summary;
 
     const nodeWidth = () => node.size?.[0] || 360;
-    const getReserved = (w) => reservedHeight(w || nodeWidth(), true, aspect, ui);
+    const getReserved = (w) => reservedHeight(w || nodeWidth(), shown, aspect, ui);
     const fitNode = () => requestAnimationFrame(() => {
         const need = node.computeSize?.();
         if (!need || !node.setSize) return;
@@ -233,6 +234,7 @@ function mountSaveWidget(node) {
         },
     });
     ab = attachABView(ui.viewport, ui.video, { labels: ["source", "saved"] });
+    holdPlayerWidth(node, player);                      // the transport on ONE line (L9.52)
 
     // A/B + view tools
     const modeBtns = {};
@@ -276,6 +278,15 @@ function mountSaveWidget(node) {
         bLoupe, bWrite,
     );
     setMode("A");
+
+    const setShown = (on) => {
+        shown = on;
+        if (ui.previewWrap) ui.previewWrap.hidden = !on;
+        ui.timeline.hidden = !on;
+        tools.hidden = !on;
+    };
+    setShown(false);
+    ui.status.setText("Run the graph to preview what will be written.", "default");
 
     async function writeNow() {
         const fp = last?.fingerprint;
@@ -325,8 +336,10 @@ function mountSaveWidget(node) {
         const { notes, info } = cascade(node);
         applyVisibility(node, info);
         const migrated = node._c2cSaveMigrated;
+        const preset = node._c2cSavePreset;
         const lines = [];
         if (migrated) lines.push(`Converted from the old format "${migrated}" (same file).`);
+        if (preset) lines.push(`Preset "${preset}": ${FIVE.map((n) => val(node, n)).join(" / ")}.`);
         lines.push(...notes);
         formatLine.textContent = lines.join(" · ");
         formatLine.hidden = !lines.length;
@@ -337,6 +350,7 @@ function mountSaveWidget(node) {
     const showResult = (data) => {
         if (!data) return;
         last = data;
+        setShown(true);
         aspect = (data.width && data.height) ? data.width / data.height : DEFAULT_ASPECT;
         if (ui.viewport) ui.viewport.style.aspectRatio = String(aspect);
         renderChips(ui.info, data);
@@ -433,7 +447,16 @@ if (!globalThis.__c2cSaveVideoExt) {
                 const node = this;
                 const api_ = mountSaveWidget(node);
                 node._c2cSave = api_;
-                for (const n of ["format", ...FIVE, "handles_trim", "tile_mode"]) hook(node, n, () => api_.refreshFormat());
+                // L9.52: a named format is a PRESET - picking one fills the five controls (format -> custom), so its
+                // options always show (they used to vanish: owner "controls didn't appear")
+                hook(node, "format", () => {
+                    const from = migrateLegacy(node);
+                    if (from) { node._c2cSavePreset = from; node._c2cSaveMigrated = null; }
+                    api_.refreshFormat();
+                });
+                for (const n of [...FIVE, "handles_trim", "tile_mode"]) {
+                    hook(node, n, () => { if (FIVE.includes(n)) node._c2cSavePreset = null; api_.refreshFormat(); });
+                }
                 // a node made now (not loaded from a workflow) starts 420 px wide; the frontend sizes it to
                 // computeSize() after onNodeCreated, so this waits a tick
                 const fresh = !app.configuringGraph;

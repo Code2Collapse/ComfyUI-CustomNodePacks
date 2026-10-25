@@ -48,6 +48,7 @@ class FrameStream:
         self._at = 0
         self._transform = transform
         self.last_frame: torch.Tensor | None = None
+        self.first_frame: torch.Tensor | None = None   # the first frame handed on (Save Video's workflow PNG)
         self.delivered = 0
 
     def _fill(self, upto: int) -> None:
@@ -72,6 +73,8 @@ class FrameStream:
         self._buf = self._buf[hi:]                  # drop everything up to `stop`
         self._at = stop
         if out.shape[0]:
+            if self.first_frame is None:
+                self.first_frame = out[:1].clone()
             self.last_frame = out[-1:].clone()
             self.delivered = stop
         return out

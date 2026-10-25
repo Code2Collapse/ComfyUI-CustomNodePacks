@@ -18,7 +18,9 @@ import {
     attachPauseObservers,
     reservedHeight,
 } from "./c2c_video_player_ui.js";
-import { attachPlayer, playerButton, selectionFromWidgets, widgetsFromSelection } from "./c2c_video_player.js";
+import {
+    attachPlayer, holdPlayerWidth, playerButton, selectionFromWidgets, widgetsFromSelection,
+} from "./c2c_video_player.js";
 import { attachCrop } from "./c2c_video_crop.js";
 import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
 import {
@@ -31,6 +33,11 @@ const DEBOUNCE_MS = 350;
 const LOAD_ONLY_WIDGETS = [
     "custom_width", "custom_height", "seconds_cap", "resolution", "divisible_by", "decoder", "audio_when_missing",
     "crop_x", "crop_y", "crop_w", "crop_h",
+];
+// L9.52: the handle settings go with the probe, so the node says what a run will add BEFORE it runs
+const HANDLE_WIDGETS = [
+    "handles", "handle_frames", "handle_target", "handle_side", "handle_grid", "handle_custom_step",
+    "handle_custom_plus",
 ];
 
 const LOADERS = {
@@ -99,7 +106,7 @@ function domainParams(params, cfg, k = 1, maxFrames = null) {
     d.set(n.skip, "0");
     d.set(n.cap, "0");
     d.set(n.nth, String(Math.max(1, k)));
-    for (const name of LOAD_ONLY_WIDGETS) d.delete(name);       // the whole clip: no seconds cap, size or crop
+    for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) d.delete(name);   // the whole clip: no cap, size, crop, handles
     if (maxFrames) d.set("max_frames", String(maxFrames));
     return d;
 }
@@ -151,7 +158,7 @@ function collectParams(node, cfg) {
     }
     if (cfg.mode !== "images") {
         // L2.53: everything else a run uses, so the probe answers with exactly what will load
-        for (const name of LOAD_ONLY_WIDGETS) {
+        for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) {
             const v = widgetValue(node, name);
             if (v !== undefined && v !== null) p.set(name, String(v));
         }
@@ -336,6 +343,8 @@ function mountLoaderWidget(node, cfg) {
         getMinHeight: () => getReserved(nodeWidth()),
     });
     widgetRef.computeSize = (w) => [w, getReserved(w)];
+    if (player) holdPlayerWidth(node, player);          // the transport on ONE line (L9.52)
+    if (cfg.hideCorePreview) muteCorePreviewSize(node);
     tagDomWidget(widgetRef);       // Nodes 2.0 inside a new subgraph shows a stale copy; _vue_dom_rebind swaps ours in
 
     const uninstallFloor = installResizeFloor(ui.root, measureRootContent);
@@ -351,7 +360,7 @@ function mountLoaderWidget(node, cfg) {
         };
     };
 
-    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS]) {
+    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) {
         hookWidget(name);
     }
     // L2.53 settings UX: grey real values, reset arrows, reset all, details line, frame-grid stepping
@@ -485,6 +494,8 @@ function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
         const text = describe(probe);
         const note = probe?.load ? rateNote(values.format, probe.load, values.select_every_nth) : "";
         if (note) text.push(note);
+        const hp = probe?.load?.handles;                 // L9.52: what the run's handles add, before it runs
+        if (hp?.note) text.push(`Handles: ${hp.note}${hp.error ? "" : " - Save Video (C2C) trims them"}`);
         lines.replaceChildren(...text.map((t) => {
             const d = document.createElement("div");
             d.textContent = t;
@@ -631,6 +642,31 @@ function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
 
 /** Hide core's upload preview (a <video> of the original file) so the node shows one preview, ours. Core adds it
  *  with the upload widget, possibly after onNodeCreated, so this runs again a few times and on every refresh. */
+/**
+ * Core's video upload adds its own "video-preview" DOM widget (useNodeVideo) whose computeLayoutSize min width is fitted
+ * from the clip's aspect AND the node's current width - while it exists, a wider node asks for a wider minimum, and the
+ * frontend resized new loaders to that (measured L9.52: 399 -> 503 px in Nodes 2.0). We hide that preview anyway, so its
+ * size never counts: core assigns computeLayoutSize right after addDOMWidget returns, hence an accessor that keeps ours.
+ */
+function muteCorePreviewSize(node) {
+    if (node.__c2cMutedCorePreview) return;
+    node.__c2cMutedCorePreview = true;
+    const zero = () => ({ minHeight: 0, maxHeight: 0, minWidth: 0 });
+    const mute = (w) => {
+        try {
+            Object.defineProperty(w, "computeLayoutSize", { configurable: true, get: () => zero, set: () => {} });
+        } catch (_e) { /* a sealed widget keeps core's size */ }
+    };
+    for (const w of node.widgets || []) if (w?.name === "video-preview") mute(w);
+    const add = node.addDOMWidget;
+    if (typeof add !== "function") return;
+    node.addDOMWidget = function (name, ...rest) {
+        const w = add.call(this, name, ...rest);
+        if (name === "video-preview" && w) mute(w);
+        return w;
+    };
+}
+
 function hideCorePreview(node) {
     // Nodes 2.0 draws core's player from the node-output store, not from a widget: scope a CSS rule to this
     // node's root (Vue leaves attributes it does not render alone, and every refresh re-applies it).

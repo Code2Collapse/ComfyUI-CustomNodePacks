@@ -97,8 +97,9 @@ class SaveVideoC2C:
                 # L2.53 (owner A14) - appended, so saved workflows keep their widget order
                 "save_metadata": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Store the workflow and prompt in the video file (MP4 / MOV / MKV / WebM), as ComfyUI's "
-                               "own Save Video does, so the file can be dragged back into ComfyUI to rebuild the graph."}),
+                    "tooltip": "Write '<name>.png' next to the saved file: its first frame with the workflow and prompt "
+                               "inside - drag it into ComfyUI to rebuild the graph. The video itself never carries the "
+                               "workflow."}),
                 # L9.40 (owner 2026-10-23) - appended, so saved workflows keep their widget order
                 "container": (list(SM.CONTAINERS), {"default": SM.DEFAULT_CHOICE.container,
                               "tooltip": "The file type. Used when format is custom."}),
@@ -242,6 +243,13 @@ class SaveVideoC2C:
         colour = SM.Colour(color_primaries or "auto", color_transfer or "auto", color_range or "auto")
         SM.check_colour(colour)
         spec, format_how = SM.resolve(str(format), choice, alpha=images.shape[-1] >= 4)
+        # L9.52 (owner 2026-10-25): no video_info wire -> follow images (or latent) back to the Load Video it came from
+        # and use the video_info that Load produced (handles, fps). A wired video_info always wins.
+        traced_note = None
+        if video_info is None and isinstance(prompt, dict) and unique_id is not None:
+            mine = (prompt.get(str(unique_id)) or {}).get("inputs") or {}
+            which = ("images", "IMAGE") if HIO._is_link(mine.get("images")) else ("latent", "LATENT")
+            video_info, traced_note = HIO.traced_video_info(prompt, unique_id, *which)
         eff_fps = float(fps)
         if video_info and abs(eff_fps - 24.0) < 1e-6:
             eff_fps = float(video_info.get("loaded_fps", eff_fps))
@@ -266,6 +274,9 @@ class SaveVideoC2C:
         # L9.40: handles off, then the export range (in the trimmed clip's frames), then preview-or-write
         images, audio, trim_rep = HIO.trim_on_save(images, audio, video_info, mode=str(handles_trim),
                                                    frames=int(trim_frames), side=str(trim_side), fps=eff_fps)
+        if traced_note and str(handles_trim) == "auto":
+            trim_rep["from"] = (trim_rep["from"].replace(" added by Load Video", "") + " - " + traced_note
+                                if video_info else trim_rep["from"] + " (" + traced_note + ")")
         n_full = int(images.shape[0])                 # the trimmed clip: the player's timeline, In / Out live on it
         fingerprint = _fingerprint(settings, images if stream_info is None else None, latent)
         common = {"handles": trim_rep, "fingerprint": fingerprint, "write_mode": write_mode, "frames_total": n_full}
@@ -319,10 +330,9 @@ class SaveVideoC2C:
             base_dir=base_dir,
         )
 
-        metadata = None
-        if save_metadata and spec.container in ("mp4", "mov", "mkv", "webm"):
-            from .c2c_video.save_encode import output_metadata
-            metadata = output_metadata(prompt, extra_pnginfo)
+        # L9.52 (owner 2026-10-25: "dont write workflow metadata into video"): the workflow goes into '<name>.png' next
+        # to the file (its first written frame), never into the video container
+        first = images[:1] if torch.is_tensor(images) else None
         result = encode_video(
             images,
             spec,
@@ -333,9 +343,14 @@ class SaveVideoC2C:
             colorspace_out=cs_out,
             audio=audio,
             pad_note=pad_note,
-            metadata=metadata,
             colour=colour,
         )
+        workflow_png = None
+        if save_metadata:
+            from .c2c_video.save_encode import write_workflow_png
+            if first is None:
+                first = getattr(images, "first_frame", None)
+            workflow_png = write_workflow_png(first, path_info[0], prompt, extra_pnginfo)
 
         if stream_info is not None:
             result["warnings"] = list(result.get("warnings") or []) + list(stream_info.warnings)
@@ -367,6 +382,7 @@ class SaveVideoC2C:
             "stream": None if stream_info is None else {"method": stream_info.method, "exact": stream_info.exact,
                                                         "bounded": stream_info.bounded},
             "mode": "written",
+            "workflow_png": workflow_png,
             "source": source_proxy,
             **common,
         }
