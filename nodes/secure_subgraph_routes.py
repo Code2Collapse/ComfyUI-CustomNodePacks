@@ -11,6 +11,8 @@
   POST /c2c_vault/sg/access/open   L9.48: the same checks as open -> the access lists only (never the graph)
   POST /c2c_vault/sg/access/apply  re-encrypt with new recipients / editors / labels / password (atomic)
   POST /c2c_vault/sg/access/cancel drop the access session
+  POST /c2c_vault/sg/missing          L9.50: what this install lacks to run it (counts + hosts, never names)
+  POST /c2c_vault/sg/install_missing  clone those packs at their pinned commits - only with consent
 
 The password travels only over these routes; it is never a widget, never in a prompt or a workflow, never stored. The
 server keeps derived keys in memory only.
@@ -24,6 +26,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from . import vault_packs
 from .vault_crypto import VaultError
 
 PROFILES = {"locked": 0, "sealed_installs": 1, "sealed_portable": 2}
@@ -102,7 +105,8 @@ def protect(body: dict) -> dict:
         recipients = _codes_to_keys([me] + list(body.get("recipients") or []))       # this install first
     vault_id = "v" + secrets.token_hex(8)
     plain = {"exec": boundary_exec(interface), "api": api, "ui": body.get("ui"), "interface": interface,
-             "editors": editors, "profile": profile, "packs": body.get("packs") or [], "created": int(time.time())}
+             "editors": editors, "profile": profile, "packs": vault_packs.record_safely(api),          # L9.50
+             "created": int(time.time())}
     payload, kek = v2.lock(plain, password, vault_id=vault_id, mode=PROFILES[profile], iface=_iface(interface),
                            recipients=recipients)
     if profile == "locked" and body.get("client_id"):
@@ -323,6 +327,42 @@ def access_apply(body: dict) -> dict:
             "password_changed": bool(new_password), "editors": len(editors), "recipients": len(recipients)}
 
 
+def _open_like_a_run(body: dict) -> tuple:
+    """The vault opened with exactly what a run on this install / tab may use - installing needs no more rights."""
+    from . import secure_subgraph as SS
+    vault_id = str(body.get("vault_id") or "")
+    plain = SS.open_for_run(str(body.get("payload") or ""), vault_id, client_id=str(body.get("client_id") or ""))
+    return plain, vault_id
+
+
+def missing(body: dict) -> dict:
+    """L9.50: what this install lacks to run the vault - counts and hosts only, never names (owner)."""
+    from . import secure_subgraph as SS
+    plain, vault_id = _open_like_a_run(body)
+    classes = SS.missing_classes(SS.api_of(plain))
+    return {"ok": True, "missing": bool(classes), **SS._note_missing(vault_id, classes, plain.get("packs") or [])}
+
+
+def install_missing(body: dict) -> dict:
+    """L9.50: clone the packs the vault needs at their pinned commits - only after the user's click (consent)."""
+    from pathlib import Path
+
+    from . import secure_subgraph as SS
+    if body.get("consent") is not True:
+        raise VaultError("Installing needs your consent (the Install button).")
+    if vault_packs.disabled():
+        raise VaultError(f"Installing custom nodes from a vault is switched off ({vault_packs.KILL_SWITCH}=off). "
+                         "Install them manually.")
+    plain, _vault_id = _open_like_a_run(body)
+    classes = SS.missing_classes(SS.api_of(plain))
+    want, unknown = vault_packs.needed(classes, plain.get("packs") or [])
+    if not want:
+        return {"ok": True, "installed": 0, "nothing": not classes, "unknown_classes": unknown}
+    import folder_paths
+    out = vault_packs.install(want, Path(folder_paths.get_folder_paths("custom_nodes")[0]))
+    return {"ok": True, **out, "unknown_classes": unknown}
+
+
 def access_cancel(body: dict) -> dict:
     with _lock:
         s = _EDITS.get(str(body.get("access_token") or ""))
@@ -354,7 +394,8 @@ def commit(body: dict) -> dict:
     api = body.get("api") or {}
     _validate_api(api, interface)
     plain = {"exec": boundary_exec(interface), "api": api, "ui": body.get("ui"), "interface": interface,
-             "editors": s["editors"], "profile": s["profile"], "packs": body.get("packs") or s["packs"],
+             "editors": s["editors"], "profile": s["profile"],
+             "packs": vault_packs.record_safely(api, s["packs"]),                                    # L9.50
              "updated": int(time.time())}
     recipients = None
     if s["profile"] == "sealed_installs":
@@ -418,6 +459,20 @@ def register_routes(server) -> None:
     routes.post("/c2c_vault/sg/snapshot")(wrap(snapshot, 409))
     routes.post("/c2c_vault/sg/cancel")(wrap(cancel))
     routes.post("/c2c_vault/sg/info")(wrap(info, 400))
+    async def install_handler(request):                       # git clone can take a minute: off the event loop
+        import asyncio
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        try:
+            out = await asyncio.get_running_loop().run_in_executor(None, install_missing, body)
+            return web.json_response(out)
+        except VaultError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=403)
+
+    routes.post("/c2c_vault/sg/missing")(wrap(missing))
+    routes.post("/c2c_vault/sg/install_missing")(install_handler)
     routes.post("/c2c_vault/sg/access/open")(wrap(access_open))
     routes.post("/c2c_vault/sg/access/apply")(wrap(access_apply, 409))
     routes.post("/c2c_vault/sg/access/cancel")(wrap(access_cancel))

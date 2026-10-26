@@ -1711,6 +1711,14 @@ This works on the root graph and inside subgraphs.
   - Save the workflow afterwards.
   - Honest limit: removing an installation protects new copies only. A copy that installation already has still
     runs there, and a copy saved before a password change still opens with the old password.
+- **Missing custom nodes** (2026-10-26):
+  - A vault records, inside its encryption, which packs its nodes come from (git URL + exact commit).
+  - On a machine without them, every run attempt stops and offers **Install missing custom nodes**. The offer says
+    how many packs are needed and from where, never their names. It is also on the vault's right-click menu.
+  - One click clones exactly those commits; restart ComfyUI, then run again.
+  - Only https on github.com / gitlab.com / codeberg.org / bitbucket.org, and an existing folder is never touched.
+    Installing runs the packs' code at the next start, so install only workflows you trust.
+  - `C2C_VAULT_INSTALL=off` switches the install off.
 - **Old vaults** (C2C Vault - Locked / Sealed nodes) upgrade automatically when a workflow opens. They keep the same
   payload and run on the native scheduler.
 - **Where the install key and the authenticator live.** They go in the OS credential store (Windows Credential

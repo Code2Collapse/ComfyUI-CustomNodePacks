@@ -266,9 +266,7 @@ class C2C_SecureSubgraph:
         api = api_of(plain)
         missing = missing_classes(api)
         if missing:
-            _note_missing(vault_id, missing)
-            raise RuntimeError("This workflow needs custom nodes that are not installed, so it cannot run. Use "
-                               "'Install' on the vault node (it asks before installing anything).")
+            raise RuntimeError(missing_message(_note_missing(vault_id, missing, plain.get("packs") or [])))
         me = dynprompt.get_node(unique_id) if dynprompt is not None else {}
         my_inputs = dict((me or {}).get("inputs") or {})
         params = {k[len(PARAM_PREFIX):]: v for k, v in kw.items() if k.startswith(PARAM_PREFIX)}
@@ -287,11 +285,29 @@ class C2C_SecureSubgraphOutput(C2C_SecureSubgraph):
     OUTPUT_NODE = True
 
 
-_MISSING: dict[str, list] = {}         # vault id -> missing classes on this install (for the consent install route)
+_MISSING: dict[str, dict] = {}         # vault id -> what this install lacks (for the consent install route)
+MISSING_PREFIX = "This workflow needs custom nodes that are not installed"
 
 
-def _note_missing(vault_id: str, classes: list) -> None:
-    _MISSING[str(vault_id)] = list(classes)
+def _note_missing(vault_id: str, classes: list, packs: list) -> dict:
+    """L9.50: which recorded packs provide the missing classes. Only counts and hosts ever leave the server."""
+    from . import vault_packs
+    want, unknown = vault_packs.needed(list(classes), packs)
+    _MISSING[str(vault_id)] = {"classes": list(classes), "packs": want, "unknown": unknown}
+    return vault_packs.summary(want, unknown)
+
+
+def missing_message(s: dict) -> str:
+    """The run error for missing inner classes - never a name (owner A18)."""
+    if s["installable"]:
+        hosts = ", ".join(s["hosts"])
+        msg = (f"{MISSING_PREFIX} ({s['packs']} pack{'s' if s['packs'] != 1 else ''} from {hosts}), so it cannot run. "
+               "Right-click the vault: Install missing custom nodes (it asks first).")
+    else:
+        msg = f"{MISSING_PREFIX}, so it cannot run."
+    if s["unknown_classes"] or s["installable"] < s["packs"]:
+        msg += " Some of them cannot be installed from here - ask the vault's author which ones to install."
+    return msg
 
 
 # ── leak control on the server's messages ───────────────────────────────────────────────────────────────────

@@ -1190,6 +1190,82 @@ function accessDialog(v, res, focus, apply) {
   }, { width: 620 });
 }
 
+// ── missing custom nodes (L9.50): one click, names never shown (owner A18) ─────────────────────────────────
+let INSTALL_OFFER_OPEN = false;
+const MISSING_PREFIX = "This workflow needs custom nodes that are not installed";
+
+/** Offer to install what this vault needs here. `auto`: from a failed run (asked on every run attempt, owner). */
+async function installMissing(v, { auto = false } = {}) {
+  if (INSTALL_OFFER_OPEN) return;
+  INSTALL_OFFER_OPEN = true;
+  try {
+    const W = (name) => v.widgets.find((w) => w.name === name);
+    const body = { payload: W("vault_payload")?.value, vault_id: W("vault_id")?.value, client_id: api.clientId };
+    const m = await post("/c2c_vault/sg/missing", body);
+    if (!m.ok) { toast(m.data.error || "Could not check this vault.", true); return; }
+    const s = m.data;
+    if (!s.missing) {
+      if (!auto) toast("Nothing is missing: this vault's custom nodes are all installed here.");
+      return;
+    }
+    const n = s.packs, many = n !== 1;
+    const go = await modal("Custom nodes needed", (box, close) => {
+      const say = (t, dim) => el("div", { textContent: t, style: { marginBottom: "8px", color: dim ? T.dim : T.fg } });
+      if (s.installable) {
+        box.append(say(`This workflow needs ${n} custom node pack${many ? "s" : ""} that ${many ? "are" : "is"} not ` +
+          `installed here (from ${s.hosts.join(", ")}). Without ${many ? "them" : "it"} the workflow will not run.`));
+        if (s.installable < n || s.unknown_classes) {
+          box.append(say("Some of them cannot be installed from here - ask the vault's author for those."));
+        }
+        box.append(say(`Installing downloads ${many ? "them" : "it"} and runs ${many ? "their" : "its"} code when ` +
+          "ComfyUI restarts. Install only if you trust where this workflow comes from.", true));
+      } else {
+        box.append(say("This workflow needs custom nodes that are not installed here, and the vault does not say " +
+          "where to get them. Ask the vault's author which ones to install."));
+      }
+      box.append(el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "6px" } },
+        s.installable ? [button("Cancel", false, () => close(false)), button("Install", true, () => close(true))]
+          : [button("Close", true, () => close(false))]));
+    }, { width: 480 });
+    if (!go) return;
+    toast("Installing the custom nodes this workflow needs…");
+    const r = await post("/c2c_vault/sg/install_missing", { ...body, consent: true });
+    const d = r.data || {};
+    await modal("Custom nodes", (box, close) => {
+      const lines = [];
+      if (!r.ok) lines.push(d.error || `Installing failed (${r.status}).`);
+      if (d.installed) lines.push(`Installed ${d.installed} pack${d.installed !== 1 ? "s" : ""}. Restart ComfyUI to load ` +
+        `${d.installed !== 1 ? "them" : "it"}, then run the workflow again.`);
+      if (d.skipped) lines.push(`${d.skipped} folder${d.skipped !== 1 ? "s" : ""} already existed and ${d.skipped !== 1 ?
+        "were" : "was"} left as ${d.skipped !== 1 ? "they were" : "it was"}.`);
+      for (const f of d.failed || []) lines.push(`Not installed: ${f}.`);
+      if (d.requirements?.note) lines.push(`Their Python requirements: ${d.requirements.note}.`);
+      if (!lines.length) lines.push("Nothing was installed.");
+      box.append(...lines.map((t) => el("div", { textContent: t, style: { marginBottom: "6px" } })),
+        el("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "6px" } },
+          [button("OK", true, () => close())]));
+    }, { width: 480 });
+  } finally { INSTALL_OFFER_OPEN = false; }
+}
+
+/** The node an execution id names ("5", or "12:5" inside a subgraph). */
+function nodeByExecId(id) {
+  let g = app.rootGraph ?? app.graph, n = null;
+  for (const part of String(id).split(":")) {
+    n = g?.getNodeById?.(Number(part)) ?? g?.getNodeById?.(part) ?? null;
+    if (!n) return null;
+    g = n.subgraph;
+  }
+  return n;
+}
+
+function onExecutionError(e) {
+  const d = e?.detail || {};
+  if (!VAULT_TYPES.has(d.node_type) || !String(d.exception_message || "").startsWith(MISSING_PREFIX)) return;
+  const v = nodeByExecId(d.node_id);
+  if (v) setTimeout(() => installMissing(v, { auto: true }), 0);
+}
+
 async function manageAccess(v, focus) {
   const st = await (await api.fetchApi("/c2c_vault/2fa/status")).json().catch(() => ({}));
   if (!st.enrolled) {
@@ -1230,6 +1306,7 @@ app.registerExtension({
   setup() {
     installGuards();
     app.canvas?.canvas?.addEventListener("litegraph:set-graph", onSetGraph);
+    api.addEventListener("execution_error", onExecutionError);      // L9.50: offer the install on every attempt
   },
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (VAULT_TYPES.has(nodeData.name)) {
@@ -1282,6 +1359,7 @@ app.registerExtension({
         { content: "🔓 Open / edit vault…", callback: () => openVault(node) },
         { content: "👥 Manage installations & editors…", callback: () => manageAccess(node, "access") },
         { content: "🔐 Change password…", callback: () => manageAccess(node, "password") },
+        { content: "📦 Install missing custom nodes…", callback: () => installMissing(node) },
         { content: "🔑 My installation code", callback: showInstallCode },
         { content: "📱 Two-factor setup…", callback: () => twoFactorSetup() }];
     }

@@ -3,6 +3,46 @@
   "_doc": "Each pattern is matched in order. First match wins. Schema fields: id (unique), exc_types (list, [] = any), regex (Python re, IGNORECASE|DOTALL), category, priority (lower=more specific, evaluated first), confidence (0..1), cause, fixes (list).",
   "patterns": [
     {
+      "id": "vault_missing_custom_nodes",
+      "category": "vault",
+      "priority": 5,
+      "confidence": 0.99,
+      "exc_types": [],
+      "regex": "This workflow needs custom nodes that are not installed",
+      "cause": "This C2C Vault uses custom nodes that this ComfyUI does not have.",
+      "fixes": [
+        "Right-click the vault: Install missing custom nodes. It shows how many packs are needed and asks before installing.",
+        "After installing, restart ComfyUI and run the workflow again.",
+        "If it says some cannot be installed from here, ask the vault's author which packs to install."
+      ]
+    },
+    {
+      "id": "vault_not_authorized",
+      "category": "vault",
+      "priority": 5,
+      "confidence": 0.99,
+      "exc_types": [],
+      "regex": "not authorized on this ComfyUI installation",
+      "cause": "This sealed C2C Vault only runs on the installations its author added, and this one is not among them.",
+      "fixes": [
+        "Right-click the vault: My installation code. Send the code (or Save key file) to the vault's author.",
+        "The author adds it with Manage installations & editors and sends you the updated workflow."
+      ]
+    },
+    {
+      "id": "vault_needs_password",
+      "category": "vault",
+      "priority": 5,
+      "confidence": 0.99,
+      "exc_types": [],
+      "regex": "needs its password to run",
+      "cause": "This C2C Vault is Locked: it runs only after its password was entered in this browser tab.",
+      "fixes": [
+        "Run again: the vault asks for its password once per tab.",
+        "Ask the vault's author for the password if you do not have it."
+      ]
+    },
+    {
       "id": "cuda_oom",
       "category": "memory",
       "priority": 10,

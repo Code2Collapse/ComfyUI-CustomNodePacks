@@ -180,3 +180,72 @@ appear in the file, the workflow or the logs.
 - The vault still ran natively, opened for editing with the new password, and re-locked on leaving.
 - 6 unit tests in `tests/test_secure_subgraph.py`: single-use, scoped, conflict-checked sessions; the other edit
   sessions end; run keys dropped on a password change.
+
+## Missing custom nodes: consent install (L9.50, A18 P5.6)
+
+**Owner** (round 3, verbatim): "1 click install, ask user but dont mention the custom nodes names. just say, without
+them workflow wont run. it should trigger every time they try to run it. if CustomNodePacks isn't in system, first
+ask them to git clone it. you only make sure of it".
+
+**Recording, at lock and at every re-lock (server side)**: for each inner class, the pack it came from. Core sets
+`RELATIVE_PYTHON_MODULE = custom_nodes.<module>` on each class, and `nodes.LOADED_MODULE_DIRS[<module>]` gives the
+folder. From that folder's `.git`, read directly with no subprocess, come the `origin` URL and the HEAD commit. The
+vault stores `packs: [{url, commit, classes}]` INSIDE the encryption:
+
+- core classes record nothing;
+- a pack that is not a git clone, or has no origin, is recorded without a URL ("ask the author").
+
+**Run on a machine missing classes**:
+
+- The run stops before anything executes, as now.
+- The vault notes which packs cover the missing classes; nothing reaches the client but counts and hosts.
+- The vault node shows **Install missing custom nodes...**, and the run error tells the user to use it.
+- Asked on every run attempt until installed.
+
+**The dialog** (names never shown, owner): "This workflow needs 2 custom node packs that are not installed (from
+github.com). Without them it will not run. Install them? ComfyUI restarts to load them." Buttons: Install / Cancel.
+
+**Install** (`POST /c2c_vault/sg/install_missing`, consent required in the body):
+
+1. Re-open the vault exactly as a run does (authorization unchanged); recompute what is missing.
+2. Guardrails for each pack:
+   - `https://` only, on github.com / gitlab.com / codeberg.org / bitbucket.org (else refused: "ask the vault's
+     author");
+   - a 40-hex commit;
+   - the folder name comes from the URL; an existing folder is never touched;
+   - at most 16 packs.
+3. `git clone` into `custom_nodes/<name>`, then `git checkout --detach <commit>`. A failure removes only the folder it
+   just created.
+4. Requirements: `requirements.txt` lines go through the existing auto-heal installer (`integrity_guard.install_missing`:
+   critical packages refused, conflicts rolled back). Anything it refuses is reported as "finish in ComfyUI-Manager"
+   rather than forced.
+5. Answer: installed count + "restart ComfyUI". The client shows the restart prompt.
+
+**CustomNodePacks itself missing**: the vault node carries `aux_id` = Code2Collapse/ComfyUI-CustomNodePacks, so
+ComfyUI's own missing-node dialog (and ComfyUI-Manager) offers to install it. Nothing in the workflow names any inner
+pack.
+
+**Honest risk**: installing custom nodes runs their code at the next start. The recipient consents without seeing the
+names, as the owner chose. The guardrails limit where code can come from (pinned commit, known hosts) and that it
+comes only from a vault this install could already open. They cannot vet what the code does.
+
+**Kill switch**: `C2C_VAULT_INSTALL=off` refuses the install route; the run error then says to install manually.
+
+**Tests**: recording (core vs pack vs non-git), the missing-pack computation, every guardrail refusal, a clone from a
+local file:// fixture with file:// allowed only under a test flag, rollback on a failed checkout, the
+names-never-in-the-answer check.
+
+**As built (measured 2026-10-26, owner stack core 0.39.0-43, frontend 1.53.10; `docs/evidence/L9.50/`)**: a fixture
+pack in a local git repo (file:// allowed only under the test flag) was used inside a sealed vault. The run:
+
+- The vault recorded `{url, commit, classes}` inside the encryption; no name was in the workflow JSON.
+- With the pack moved out of `custom_nodes`, the run stopped with the counts-only message, and the offer opened by
+  itself.
+- *Install* cloned the pinned commit back.
+- After a restart the same vault ran.
+
+The Error Assistant explains the vault's run errors (patterns `vault_missing_custom_nodes`, `vault_not_authorized`,
+`vault_needs_password`). 19 unit tests in `tests/test_vault_packs.py`, including:
+
+- every guardrail refusal, including `..` as a folder name;
+- removal of a half-cloned folder despite git's read-only object files on Windows.
