@@ -1021,6 +1021,24 @@ see CREDITS.md.
   the CPU (OCIO 2.5.2 and 2.6.0 alike, 16 threads). That is several times the decode of a light H.264, so a 24-frame
   1080p LogC3 clip loads in 4.3 s instead of 0.7 s. Every transform is OCIO's exact processor; a faster baked LUT was
   tried and rejected (up to 18 % off on saturated colours).
+- **GPU (2026-10-26):** the same OCIO transform can run on the GPU, using OCIO's own GPU shader and tables; nothing is
+  approximated. Settings: C2C > Video > Colour Management > Processing.
+  - *Auto* (default) uses the GPU for a transform only if all three hold on your machine:
+    - it matched the exact CPU within a strict tolerance over about 1.9 million test colours;
+    - it also matched on the clip's first frame;
+    - it was measured faster on that frame.
+  - *Exact CPU* never uses the GPU.
+  - *OCIO GPU* skips the speed check.
+  - Pixels outside the tested range are computed on the CPU: very bright, saturated colours, display peak white, NaN.
+  - Anything that fails falls back to the CPU: no `moderngl`, no OpenGL 4.0, or an error mid-clip. Load Video's
+    `info` colour record says which processor ran and why; Save Video's status line says *OCIO GPU* or *exact CPU*.
+  - Measured on an RTX 4060 Laptop GPU, LogC3 to the ACES 2.0 sRGB view:
+    - 1080p: 30 ms per frame vs 100 ms on 16 CPU threads (3.3x);
+    - 4K: 109 vs 366 ms (3.35x);
+    - largest difference from the CPU: 8e-6.
+  - Results are close to the CPU, not bit-identical.
+  - `C2C_VIDEO_CM_GPU=off` switches the GPU off.
+  - Evidence and design: `docs/LOAD_SAVE_VIDEO_CM_DESIGN.md` section 10.
 
 #### Load Video (C2C): extra handles in model steps (2026-10-26)
 

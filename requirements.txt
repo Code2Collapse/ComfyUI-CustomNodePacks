@@ -56,4 +56,7 @@ cryptography>=41.0
 # the built-in ACES 1.3 / 2.x studio + cg configs (nothing to download) and the colour interop IDs the nodes read and
 # write. 2.5 still works (the nodes say so); without OpenColorIO Save Video converts sRGB <-> linear only.
 opencolorio>=2.6.0
+# L9.63: the same OCIO transforms on the GPU (OCIO's own GPU processor through a headless OpenGL 4.0 context), used
+# only after this machine's GPU matched the exact CPU and was measured faster. Without it the exact CPU path runs.
+moderngl>=5.10
 # Image sequences (EXR / DPX / PNG / TIFF read + write) use OpenImageIO: pip install OpenImageIO

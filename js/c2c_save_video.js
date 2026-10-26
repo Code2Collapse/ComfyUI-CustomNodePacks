@@ -645,8 +645,10 @@ function mountSaveWidget(node) {
         }
         if (data.colour) {                                        // L9.53: what Save did with the colour
             const c = data.colour;
-            parts.push(c.transform_text ? `Colour: ${c.reverses_load ? "reversed Load Video - " : ""}${c.transform_text}.`
-                : `Colour: ${c.out} (not converted).`);
+            const who = !c.processing ? "" : c.processing.startsWith("OCIO GPU") ? " (OCIO GPU, validated)"
+                : " (exact CPU)";                                 // L9.63: which processor ran
+            parts.push(c.transform_text ? `Colour: ${c.reverses_load ? "reversed Load Video - " : ""}${c.transform_text}`
+                + `${who}.` : `Colour: ${c.out} (not converted).`);
         }
         if (data.version?.origin) parts.push(`Version ${data.version.version_string} from the ${data.version.origin}.`);
         if (!preview && !data.source) parts.push("A/B: this run kept no source copy (streamed save) - the saved file only.");

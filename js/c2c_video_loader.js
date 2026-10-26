@@ -778,6 +778,15 @@ if (!globalThis.__c2cVideoLoadersExt) {
               options: ["studio (latest)", "cg (latest)", "studio ACES 1.3", "cg ACES 1.3"], defaultValue: "studio (latest)",
               category: ["c2c", "Video", "Colour Management", "builtin"], onChange: reloadColour("c2c.video.cm.builtinConfig"),
               tooltip: "The config OpenColorIO ships (nothing to download), used without $OCIO or a config file." },
+            { id: "c2c.video.cm.processing", name: "Processing", type: "combo",
+              options: ["Auto", "Exact CPU", "OCIO GPU"], defaultValue: "Auto",
+              category: ["c2c", "Video", "Colour Management", "processing"],
+              onChange: reloadColour("c2c.video.cm.processing"),
+              tooltip: "Auto: OpenColorIO's own GPU processor when this machine's GPU matched the exact CPU result "
+                + "within a strict tolerance (test colours + the clip's first frame) AND was measured faster; "
+                + "otherwise the exact CPU processor. Exact CPU: never the GPU. OCIO GPU: the GPU whenever it passed "
+                + "the accuracy checks. Load Video's info / video_info colour record and Save Video's status line "
+                + "say which ran." },
             { id: "c2c.video.cm.view", name: "Display view (empty = the config's default)", type: "text",
               defaultValue: "", category: ["c2c", "Video", "Colour Management", "view"], onChange: reloadColour("c2c.video.cm.view"),
               tooltip: "The view Load Video uses to bring scene-referred footage to sRGB display (and Save reverses), "

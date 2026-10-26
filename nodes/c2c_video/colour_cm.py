@@ -377,6 +377,7 @@ class Transform:
 # 2026-10-26, docs/evidence/L9.53). A baked 3D LUT was 3-5x faster but missed the exact result by up to 18 % on
 # saturated colours (ACES 2.0's gamut compressor), so it is not used. Rec.709 / sRGB sources cost nothing.
 _PROCS: dict = {}
+_METHODS: dict = {}                                   # transform key -> who ran it last (L9.63)
 _POOL = None
 
 
@@ -398,11 +399,19 @@ def _run(proc, rgb: np.ndarray) -> None:
     list(_pool().map(lambda i: proc.applyRGB(rows[i:i + step]), range(0, rows.shape[0], step)))
 
 
-def processor(cfg, t: Transform, inverse: bool = False):
-    """OCIO's exact CPU processor for the transform (cached)."""
-    key = (id(cfg), t, inverse)
-    proc = _PROCS.get(key)
-    if proc is None:
+def _key(cfg, t: Transform, inverse: bool):
+    try:
+        cid = cfg.getCacheID()                           # content-based: stable across reloads of the same config
+    except Exception:  # noqa: BLE001
+        cid = id(cfg)
+    return (cid, t, bool(inverse))
+
+
+def processor_obj(cfg, t: Transform, inverse: bool = False):
+    """OCIO's Processor for the transform (cached) - the CPU and the GPU paths are made from the same one."""
+    key = ("proc",) + _key(cfg, t, inverse)
+    p = _PROCS.get(key)
+    if p is None:
         import PyOpenColorIO as ocio  # type: ignore[import-not-found]
         if t.kind == "view":
             direction = ocio.TRANSFORM_DIR_INVERSE if inverse else ocio.TRANSFORM_DIR_FORWARD
@@ -410,8 +419,77 @@ def processor(cfg, t: Transform, inverse: bool = False):
                                                            direction=direction))
         else:
             p = cfg.getProcessor(t.dst, t.src) if inverse else cfg.getProcessor(t.src, t.dst)
-        proc = _PROCS[key] = p.getDefaultCPUProcessor()
+        _PROCS[key] = p
+    return p
+
+
+def processor(cfg, t: Transform, inverse: bool = False):
+    """OCIO's exact CPU processor for the transform (cached)."""
+    key = ("cpu",) + _key(cfg, t, inverse)
+    proc = _PROCS.get(key)
+    if proc is None:
+        proc = _PROCS[key] = processor_obj(cfg, t, inverse).getDefaultCPUProcessor()
     return proc
+
+
+def processing_mode() -> str:
+    """L9.63 setting: Auto (default) / Exact CPU / OCIO GPU."""
+    from . import colour_gpu as G
+    m = SO._setting(SO.SETTING_PROCESSING, "Auto")
+    return m if m in G.MODES else "Auto"
+
+
+def _encodings(cfg, t: Transform, inverse: bool) -> tuple[str, str, bool]:
+    """(input encoding, output encoding, output is display-referred) of the transform in this direction."""
+    def enc(name):
+        cs = cfg.getColorSpace(name) if name else None
+        return (cs.getEncoding() or "") if cs is not None else ""
+    a, b = (t.dst, t.src) if inverse else (t.src, t.dst)
+    if t.kind == "view":
+        disp_out = not inverse
+        return (enc(a) or ("sdr-video" if inverse else "")), (enc(b) or ("sdr-video" if not inverse else "")), disp_out
+    return enc(a), enc(b), is_display_referred(cfg, b)
+
+
+def gpu_domain(cfg, t: Transform, inverse: bool) -> tuple:
+    """The input values the GPU path is validated for (L9.63): a log space gets the code values of the same
+    scene-linear range as linear inputs, through the config's scene_linear role. Cached."""
+    from . import colour_gpu as G
+    key = ("domain",) + _key(cfg, t, inverse)
+    dom = _PROCS.get(key)
+    if dom is None:
+        in_enc = _encodings(cfg, t, inverse)[0]
+        name = t.dst if inverse else t.src
+        to_input = None
+        if in_enc not in ("scene-linear", "sdr-video", "hdr-video") and name and cfg.getColorSpace(name) is not None:
+            try:
+                role = cfg.getRoleColorSpace("scene_linear")
+                if role:
+                    to_input = cfg.getProcessor(role, name).getDefaultCPUProcessor()
+            except Exception:  # noqa: BLE001 - the generic code range
+                to_input = None
+        dom = _PROCS[key] = G.input_domain(in_enc, to_input)
+    return dom
+
+
+def gpu_decision(cfg, t: Transform, inverse: bool, sample: np.ndarray | None = None) -> dict:
+    """Whether this transform runs on the GPU here (L9.63) - decided once per frame size, from a measured accuracy
+    gate (validation set + the first frame) and, in Auto, a measured end-to-end speed-up."""
+    from . import colour_gpu as G
+    cpu = processor(cfg, t, inverse)
+    _, out_enc, disp = _encodings(cfg, t, inverse)
+    return G.decide(_key(cfg, t, inverse), processor_obj(cfg, t, inverse), lambda a: _run(cpu, a),
+                    mode=processing_mode(), domain=gpu_domain(cfg, t, inverse), out_encoding=out_enc,
+                    display_out=disp, sample=sample)
+
+
+def method_text(d: dict) -> str:
+    """The colour record's "method": the GPU line, or the exact CPU and why the GPU did not run."""
+    return d["method"] if d["use"] else f"exact OCIO CPU processor ({_pool()._max_workers} threads) - {d['method']}"
+
+
+def last_method(cfg, t: Transform, inverse: bool) -> str | None:
+    return _METHODS.get(_key(cfg, t, inverse))
 
 
 def apply(chunk: np.ndarray, t: Transform, inverse: bool = False, cfg=None) -> np.ndarray:
@@ -419,6 +497,14 @@ def apply(chunk: np.ndarray, t: Transform, inverse: bool = False, cfg=None) -> n
     cfg = cfg if cfg is not None else config()
     proc = processor(cfg, t, inverse)
     out = chunk if (chunk.dtype == np.float32 and chunk.flags.writeable) else chunk.astype(np.float32)
+    if out.shape[0]:
+        d = gpu_decision(cfg, t, inverse, sample=out[0])
+        _METHODS[_key(cfg, t, inverse)] = method_text(d)
+        if d["use"]:                                     # L9.63: OCIO's own GPU processor, validated here
+            from . import colour_gpu as G
+            G.apply_chunk(_key(cfg, t, inverse), processor_obj(cfg, t, inverse), out, lambda a: _run(proc, a),
+                          gpu_domain(cfg, t, inverse))
+            return out
     if out.shape[-1] == 3 and out.flags.c_contiguous:
         _run(proc, out)
         return out
@@ -456,7 +542,17 @@ class Colour:
                 first = False
                 self._check_pixels(chunk)
                 if self.transform is not None:
-                    self.record["method"] = f"exact OCIO processor ({_pool()._max_workers} threads)"
+                    d = gpu_decision(self.cfg, self.transform, False, sample=np.asarray(chunk[0], np.float32))
+                    self.record["method"] = method_text(d)
+                    if d.get("gate"):
+                        g = {k: d["gate"][k] for k in ("samples", "max_abs", "max_abs_in_range", "max_rel", "ok",
+                                                       "tolerance")}
+                        if d.get("frame_gate"):
+                            g["first_frame"] = {k: d["frame_gate"][k] for k in ("max_abs", "ok", "routed_to_cpu")}
+                        if d.get("speed"):
+                            g["speed"] = d["speed"]
+                        g["domain"] = d.get("domain")
+                        self.record["gpu_gate"] = g
             yield apply(chunk, self.transform, cfg=self.cfg) if self.transform is not None else chunk
 
     def _check_pixels(self, chunk: np.ndarray) -> None:
@@ -569,6 +665,7 @@ class SavePlan:
         return {"in": self.cs_in, "out": self.cs_out, "reverses_load": self.reverses_load,
                 "transform": None if t is None else dict(t.to_dict(), inverse=self.cm[1]),
                 "transform_text": None if t is None else ("inverse of " if self.cm[1] else "") + t.describe(),
+                "processing": None if t is None else last_method(config(), t, self.cm[1]),
                 "notes": list(self.notes)}
 
 

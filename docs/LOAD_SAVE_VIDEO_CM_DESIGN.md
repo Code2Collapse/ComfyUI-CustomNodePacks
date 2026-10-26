@@ -159,3 +159,83 @@ LUT on torch) comes first. Detection runs once per file: probe metadata plus at 
   `getColorSpaceFromFilepath`, heuristics) before building section 2. Vendor keys come from documented sources, not
   from guesses.
 - **Configs / version:** no nuke-default, no legacy LUT config; the latest OCIO (2.6.0) - section 9.
+
+## 10. GPU acceleration (L9.63) - owner 2026-10-26: "Exact OCIO GPU Acceleration + Automatic CPU Fallback"
+
+Verbatim requirements: `docs/evidence/L9.63/owner_answer_2026-10-26_gpu.md` (workspace). Evidence, measured on the
+owner's RTX 4060 Laptop GPU (OpenGL 4.0, NVIDIA 596.21) with OpenColorIO 2.6.0 + moderngl 5.13, ACES 2.0 studio config
+v5.0.0, running the shipped `nodes/c2c_video/colour_gpu.py`: `docs/evidence/L9.63/gpu_harness.py` ->
+`gpu_harness_2.6.0.json` (workspace).
+
+**What runs on the GPU**: OpenColorIO's own GPU processor for the SAME transform (its generated GLSL 4.0 + its LUT
+textures, 1D tables as 2D), compiled once per transform in a headless OpenGL context (moderngl) that one worker thread
+owns, and applied per frame: texture upload straight from the array's buffer, one full-screen pass per strip of at most
+8.4 MP (~235 MB of float textures; larger frames go in strips), float readback into a new array. No hand-written
+transform, no approximate LUT.
+
+**Modes** (setting C2C > Video > Colour Management > Processing; env `C2C_VIDEO_CM_GPU=off` = kill switch):
+
+- *Auto* (default): the GPU only when (1) the GPU path is available, (2) this transform passed the validation gate on
+  this machine, (3) the clip's first frame passed the frame gate, (4) that frame was measured faster end to end (median
+  of 5 GPU runs vs median of 3 CPU runs, >= 1.2x; upload + shader + readback + domain check + CPU pixels). No frame,
+  no GPU.
+- *Exact CPU*: never the GPU.
+- *OCIO GPU*: the GPU whenever the gates pass (speed not required); otherwise CPU, with the reason.
+
+**Validated input domains** (the gate validates them, the runtime routes by them):
+
+| input | domain | why |
+|---|---|---|
+| scene-linear | -0.025 .. 100 | above ~160, very saturated colours (min/max < 0.04) go through ACES 2.0 differently: CPU 0 vs GPU 1 |
+| log (any curve) | the code values of scene-linear -0.025 .. 100 in that space (config's scene_linear role) | the same scene range for every curve (LogC3 -0.041..1.064, S-Log3 -0.073..1.106, ACEScct -0.191..0.934) |
+| display / video | -0.05 .. 0.99 | at peak white the inverse tone scale is ill-conditioned: 3.6e-3 code-value error at 0.9999 |
+| unnamed encoding | -0.05 .. 1.05 | conservative |
+
+Pixels outside (and NaN / inf) are recomputed on the exact CPU processor. The domain check is one min/max pass when
+nothing is outside (2.3 ms at 1080p), a flat scan otherwise (11-20 ms), and it overlaps the GPU pass.
+
+**Gates** (worst case, not averages):
+
+- *validation gate* (once per transform per session, ~0.3 s): about 1.9 million samples inside the domain - a 41^3 grid
+  (saturated, out of gamut), 2^20 random samples (fixed seed), the cube's faces and near-faces (where inverse tone
+  scales are steepest), a neutral ramp, value-uniform samples (bright, arbitrary channel ratios) and log-magnitude
+  samples (tiny values of either sign);
+- *frame gate* (once per clip and frame size): the clip's first frame, its in-domain pixels.
+
+Pass = display results: max |GPU - CPU| <= 1e-4 in 0-1 and relative <= 1e-3 above 1; log / video code values: max
+|d| <= 1e-3; scene-linear: max relative <= 1e-3 of the pixel's largest channel (absolute 1e-5 below 0.01) - float32
+rounding scales with the largest channel, so a near-zero channel beside a 591-bright one is not judged on its own; no
+non-finite mismatch. The numbers go into the colour record.
+
+**Measured** (12 transforms; each also passed an INDEPENDENT check of 4M random in-domain samples with another seed):
+
+| transform | worst GPU vs CPU (gate / independent) | Auto at 1080p |
+|---|---|---|
+| ACES 2.0 sRGB view from LogC3 / S-Log3 / ACEScct / ACEScg / Lin Rec.709 | 2.2e-5 .. 8.4e-5 abs | GPU when measured faster (22-94 vs ~101 ms) |
+| the same views inverted (display in) | 3.7e-5 .. 4.8e-4 code / <= 4.8e-4 rel | mostly CPU: a frame with a clipped sky routes 15 % of pixels to the CPU |
+| LogC3 <-> ACEScg colour space | rel <= 6.2e-6 | CPU (10-12 ms: the CPU is faster) |
+
+Pipelined chunk throughput, LogC3 -> ACES 2.0 sRGB, frames with NaN / inf / out-of-domain pixels: **1080p 30 vs 100 ms
+per frame (3.3x), 4K UHD 109 vs 366 ms (3.35x)**, three runs each (1080p GPU 25.9 / 30.2 / 58.6 ms: laptop GPU clocks
+spike, which is why Auto takes medians; a borderline transform may land on either path between sessions - both are
+validated). Full frames vs CPU: max 8e-6, non-finite results identical. A 5K frame (two strips): max 7.2e-6. Four
+caller threads at once: no errors.
+
+For context: OCIO's own default (optimised) CPU processor and its unoptimised one differ by 5.4e-5 on the forward
+LogC3 view (the GPU: 7.0e-5) and by up to 12.4 on the inverse views at display peak white - the "exact" reference is
+only unique inside a well-conditioned domain, which is why the domains above exist.
+
+**Pipelining**: frame i+1's GPU pass is submitted before frame i's CPU work (domain check, routed pixels); at most two
+frames in flight per caller, so memory stays bounded.
+
+**Failure modes**: no moderngl / no GL 4.0 / no context (headless Linux: EGL tried) / shader compile error / dynamic
+OCIO uniforms (not supported) / a frame wider than the GPU's texture limit -> exact CPU for that transform, the reason
+in the record, never a failed node. A GPU error mid-clip: that frame and the rest of the chunk on the CPU, the transform
+revoked for the session, a warning in the log. The worker thread owns the context (OpenGL is thread-bound); callers
+wait on it, so ComfyUI's own threads never touch GL. A config or setting change (`/c2c/video/cm/reload`) forgets the
+gates and decisions and frees the compiled programs.
+
+**Compatibility**: saved workflows unchanged (a processing choice, not an input); bit depth (float32 throughout),
+alpha (untouched), metadata, the no-op path for Rec.709 / sRGB and every colour decision are the CPU path's - only who
+computes the same OCIO transform changes. Results are NOT bit-identical to the CPU (measured above) and are never
+claimed to be. moderngl is optional (`pip install moderngl`); without it the CPU path runs, unchanged.

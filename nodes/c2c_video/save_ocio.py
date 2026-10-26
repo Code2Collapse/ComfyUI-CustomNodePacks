@@ -38,6 +38,7 @@ _PROCS: dict = {}
 SETTING_CONFIG = "c2c.video.cm.ocioConfig"
 SETTING_BUILTIN = "c2c.video.cm.builtinConfig"
 SETTING_VIEW = "c2c.video.cm.view"
+SETTING_PROCESSING = "c2c.video.cm.processing"      # L9.63: Auto / Exact CPU / OCIO GPU
 BUILTIN_CHOICES = {"studio (latest)": "ocio://studio-config-latest", "cg (latest)": "ocio://cg-config-latest",
                    "studio ACES 1.3": "ocio://studio-config-v2.2.0_aces-v1.3_ocio-v2.4",
                    "cg ACES 1.3": "ocio://cg-config-v2.2.0_aces-v1.3_ocio-v2.4"}
@@ -61,7 +62,7 @@ def reload_config(live: dict | None = None) -> None:
     value as the front end sent it - used at once, the settings file catches up for the next start."""
     global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN, _CFG_SOURCE
     for k, v in (live or {}).items():
-        if k in (SETTING_CONFIG, SETTING_BUILTIN, SETTING_VIEW):
+        if k in (SETTING_CONFIG, SETTING_BUILTIN, SETTING_VIEW, SETTING_PROCESSING):
             _LIVE[k] = str(v if v is not None else "")
     _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN, _CFG_SOURCE = None, None, None, None, None, ""
     _PROCS.clear()

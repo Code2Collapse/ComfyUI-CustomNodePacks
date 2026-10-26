@@ -679,6 +679,8 @@ def register_routes() -> bool:
         live = {str(body["id"]): body.get("value")} if isinstance(body, dict) and body.get("id") else None
         SO.reload_config(live)
         CM._PROCS.clear()
+        from . import colour_gpu as G
+        G.reset()
         cfg = CM.config()
         return web.json_response({"config": cfg.getName() if cfg is not None else None,
                                   "source": CM.config_source(), "warning": SO._CFG_WARN})
