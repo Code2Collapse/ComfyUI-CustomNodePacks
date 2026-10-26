@@ -125,6 +125,7 @@ def parse_request_params(raw: Mapping[str, str]) -> dict[str, Any]:
         params["handle_grid"] = raw.get("handle_grid") or "from format"
         params["handle_custom_step"] = max(1, _int_param(raw, "handle_custom_step", 4))
         params["handle_custom_plus"] = max(0, _int_param(raw, "handle_custom_plus", 1))
+        params["extra_handles"] = max(0, _int_param(raw, "extra_handles", 0))          # L9.56
     params["max_frames"] = min(_MAX_FRAMES_CAP, max(1, _int_param(raw, "max_frames", _DEFAULT_MAX_FRAMES)))
     return params
 
@@ -312,6 +313,14 @@ def _handles_plan(n: int, params: dict[str, Any]) -> dict[str, Any] | None:
     return dict(out, grid=label, frames_in=int(n))
 
 
+def _colour_plan(raw: C2CVideo, params: dict[str, Any]) -> dict[str, Any] | None:
+    """L9.62: what Load Video's colour management will do with these settings - before a run (no decode: the pixel
+    check runs with the frames)."""
+    from . import colour_cm as CM
+    c = CM.plan(raw, str(params.get("colorspace_in") or CM.CS_OFF), str(params.get("working_space") or CM.WORK_DEFAULT))
+    return None if c is None else c.record
+
+
 def probe_payload(params: dict[str, Any]) -> dict[str, Any]:
     raw, loaded = build_handle_from_params(params)
     sel = list(loaded.selected_indices())
@@ -321,9 +330,14 @@ def probe_payload(params: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the probe still answers; the hints just stay empty
         log.debug("load report failed: %s", exc)
         load = None
+    try:
+        cm = _colour_plan(raw, params)
+    except Exception as exc:  # noqa: BLE001 - shown in the node; the run reports the same
+        cm = {"error": str(exc)}
     return {
         "file": os.path.basename(raw.source.path) if raw.source.kind == "file" else raw.source.pattern,
         "load": load,
+        "cm": cm,
         "kind": raw.source.kind,
         "width": int(raw.width),
         "height": int(raw.height),
@@ -653,6 +667,23 @@ def register_routes() -> bool:
             log.exception("save next path failed")
             return web.json_response({"error": f"Could not work out the next path: {exc}"}, status=500)
 
+    async def _handle_cm_reload(request):
+        """L9.62: a colour-management setting changed - forget the loaded OCIO config. Body {id, value}: the new
+        value, used at once (the front end persists it itself, possibly after this request)."""
+        from . import save_ocio as SO
+        from . import colour_cm as CM
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - an empty body just reloads
+            body = {}
+        live = {str(body["id"]): body.get("value")} if isinstance(body, dict) and body.get("id") else None
+        SO.reload_config(live)
+        CM._PROCS.clear()
+        cfg = CM.config()
+        return web.json_response({"config": cfg.getName() if cfg is not None else None,
+                                  "source": CM.config_source(), "warning": SO._CFG_WARN})
+
+    routes.post("/c2c/video/cm/reload")(_handle_cm_reload)
     routes.get("/c2c/save_video/matrix")(_handle_save_matrix)
     routes.post("/c2c/save_video/next_path")(_handle_save_next_path)
     routes.get("/c2c/video/probe")(_handle_probe)

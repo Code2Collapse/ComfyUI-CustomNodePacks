@@ -1007,7 +1007,15 @@ see CREDITS.md.
   and cg configs mean nothing is downloaded. 2.5 keeps working, and the node says once that 2.6 is the target.
   Checked: every colour space, interop ID and call the nodes use is the same on 2.6.0 (ACES 2.1 studio config
   v5.0.0) as on 2.5.2, and the Load -> Save round trip matches exactly.
-- **Config:** `$OCIO` (your own config) or the built-in ACES studio config. A broken `$OCIO` falls back to the
+- **Settings** (C2C > Video > Colour Management):
+  - an OCIO config file, used when `$OCIO` is not set;
+  - the built-in config (studio or cg, latest or ACES 1.3);
+  - the display view (empty = the config's default, e.g. ACES 2.0 SDR; or 'Un-tone-mapped').
+  A change takes effect on the next load; the colour-space lists follow after a page reload.
+- **Before a run** Load Video shows what will happen, for example "Colour: ACEScg (EXR colorInteropID, high) ->
+  sRGB - Display (view ACES 2.0 - SDR 100 nits) · config built-in (studio-config-v4.0.0)". Save Video shows what
+  it will reverse.
+- **Config:** `$OCIO` (your own config), else the setting's file, else the built-in config. A broken `$OCIO` falls back to the
   built-in config and the nodes say so. `C2C_VIDEO_CM=off` switches colour management off.
 - **Cost (measured):** Rec.709 / sRGB sources cost nothing. The ACES 2.0 view costs about 54-72 ms per megapixel on
   the CPU (OCIO 2.5.2 and 2.6.0 alike, 16 threads). That is several times the decode of a light H.264, so a 24-frame

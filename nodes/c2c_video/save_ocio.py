@@ -30,7 +30,41 @@ def _piecewise_linear_to_srgb(x: np.ndarray) -> np.ndarray:
 
 _CFG = None
 _CFG_WARN: str | None = None      # $OCIO set but unusable: the built-in config is used, and the nodes say so
+_CFG_SOURCE: str = ""             # L9.62: "$OCIO (path)" | "setting (path)" | "built-in (name)"
 _PROCS: dict = {}
+
+# L9.62 (owner 2026-10-25: "$OCIO, else setting, else the built-in ACES studio config"): C2C > Video > Colour
+# Management. The built-in configs ship inside OpenColorIO (no download): the latest studio / cg config, or ACES 1.3.
+SETTING_CONFIG = "c2c.video.cm.ocioConfig"
+SETTING_BUILTIN = "c2c.video.cm.builtinConfig"
+SETTING_VIEW = "c2c.video.cm.view"
+BUILTIN_CHOICES = {"studio (latest)": "ocio://studio-config-latest", "cg (latest)": "ocio://cg-config-latest",
+                   "studio ACES 1.3": "ocio://studio-config-v2.2.0_aces-v1.3_ocio-v2.4",
+                   "cg ACES 1.3": "ocio://cg-config-v2.2.0_aces-v1.3_ocio-v2.4"}
+
+
+_LIVE: dict[str, str] = {}        # values the front end just sent (it persists them itself, maybe a moment later)
+
+
+def _setting(key: str, default: str = "") -> str:
+    if key in _LIVE:
+        return _LIVE[key] or default
+    try:
+        from .save_encode import read_comfy_setting
+        return str(read_comfy_setting(key, default) or default).strip()
+    except Exception:  # noqa: BLE001 - outside ComfyUI
+        return default
+
+
+def reload_config(live: dict | None = None) -> None:
+    """Forget the loaded config (a setting changed); the next use loads it again. `live` = the changed setting's new
+    value as the front end sent it - used at once, the settings file catches up for the next start."""
+    global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN, _CFG_SOURCE
+    for k, v in (live or {}).items():
+        if k in (SETTING_CONFIG, SETTING_BUILTIN, SETTING_VIEW):
+            _LIVE[k] = str(v if v is not None else "")
+    _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN, _CFG_SOURCE = None, None, None, None, None, ""
+    _PROCS.clear()
 
 
 def _space_names(cfg) -> list:
@@ -42,23 +76,26 @@ def _space_names(cfg) -> list:
 
 
 def _load_ocio():
-    global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN
+    global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN, _CFG_SOURCE
     if _OCIO is not None or _OCIO_ERR is not None:
         return _OCIO
     try:
         import PyOpenColorIO as ocio  # type: ignore[import-not-found]
-        path = os.environ.get("OCIO", "").strip()
+        builtin_label = _setting(SETTING_BUILTIN, "studio (latest)")
+        builtin = BUILTIN_CHOICES.get(builtin_label, BUILTIN_CHOICES["studio (latest)"])
+        path, where = os.environ.get("OCIO", "").strip(), "$OCIO"
+        if not path:
+            path, where = _setting(SETTING_CONFIG, ""), "setting"
+        cfg = None
         if path:
             try:
                 cfg = ocio.Config.CreateFromFile(path)
+                _CFG_SOURCE = f"{where} ({path})"
             except Exception as exc:  # noqa: BLE001 - L9.53: never silently a different config, never no config
-                _CFG_WARN = f"the OCIO config in $OCIO could not be loaded ({path}: {exc}); using the built-in one"
-                cfg = ocio.Config.CreateFromFile("ocio://studio-config-latest")
-        else:
-            # Without $OCIO, CreateFromEnv gives the one-space "raw" config: use the built-in ACES studio config.
-            cfg = ocio.Config.CreateFromEnv()
-            if len(_space_names(cfg)) <= 1:
-                cfg = ocio.Config.CreateFromFile("ocio://studio-config-latest")
+                _CFG_WARN = f"the OCIO config from {where} could not be loaded ({path}: {exc}); using the built-in one"
+        if cfg is None:
+            cfg = ocio.Config.CreateFromFile(builtin)
+            _CFG_SOURCE = f"built-in ({cfg.getName()})"
         _CFG = cfg
         _OCIO = ocio
         _OCIO_SPACES = sorted(set(_space_names(cfg)))

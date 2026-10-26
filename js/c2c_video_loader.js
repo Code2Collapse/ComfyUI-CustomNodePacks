@@ -39,6 +39,8 @@ const HANDLE_WIDGETS = [
     "handles", "handle_frames", "handle_target", "handle_side", "handle_grid", "handle_custom_step",
     "handle_custom_plus", "extra_handles",          // L9.56: whole model steps on top, shown in the details line
 ];
+// L9.62: the colour settings go with the probe, so the node says what colour management will do BEFORE a run
+const COLOUR_WIDGETS = ["colorspace_in", "working_space"];
 
 const LOADERS = {
     LoadVideoC2C: {
@@ -106,7 +108,7 @@ function domainParams(params, cfg, k = 1, maxFrames = null) {
     d.set(n.skip, "0");
     d.set(n.cap, "0");
     d.set(n.nth, String(Math.max(1, k)));
-    for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) d.delete(name);   // the whole clip: no cap, size, crop, handles
+    for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS, ...COLOUR_WIDGETS]) d.delete(name);   // the whole clip
     if (maxFrames) d.set("max_frames", String(maxFrames));
     return d;
 }
@@ -158,7 +160,7 @@ function collectParams(node, cfg) {
     }
     if (cfg.mode !== "images") {
         // L2.53: everything else a run uses, so the probe answers with exactly what will load
-        for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) {
+        for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS, ...COLOUR_WIDGETS]) {
             const v = widgetValue(node, name);
             if (v !== undefined && v !== null) p.set(name, String(v));
         }
@@ -360,7 +362,8 @@ function mountLoaderWidget(node, cfg) {
         };
     };
 
-    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS]) {
+    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS,
+                        ...COLOUR_WIDGETS]) {
         hookWidget(name);
     }
     // L2.53 settings UX: grey real values, reset arrows, reset all, details line, frame-grid stepping
@@ -496,6 +499,8 @@ function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
         if (note) text.push(note);
         const hp = probe?.load?.handles;                 // L9.52: what the run's handles add, before it runs
         if (hp?.note) text.push(`Handles: ${hp.note}${hp.error ? "" : " - Save Video (C2C) trims them"}`);
+        const cm = probe?.cm;                            // L9.62: what colour management will do, before a run
+        if (cm) text.push(colourLine(cm));
         lines.replaceChildren(...text.map((t) => {
             const d = document.createElement("div");
             d.textContent = t;
@@ -626,6 +631,10 @@ function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
     return {
         update(p) {
             probe = p;
+            node._c2cColourPlan = p?.cm ?? null;         // L9.62: Save Video (C2C) reads it to say what it reverses
+            for (const g of new Set([node.graph, app.rootGraph ?? app.graph])) {
+                for (const s of g?.nodes || []) if (s.type === "SaveVideoC2C") s._c2cSave?.refreshLink?.();
+            }
             const values = widgetValues(node);
             hintMap = hints(values, p?.load ?? null);
             // outside "custom" the size fields show the size the clip loads at (written quietly: no switch to custom)
@@ -712,6 +721,17 @@ function setupLoaderNode(node, cfg) {
     }
 }
 
+/** L9.62: one line for the details box - the space, what said so, and what happens to it. */
+function colourLine(cm) {
+    if (cm.error) return `Colour: ${cm.error}`;
+    if (!cm.source) return `Colour: unknown - ${(cm.notes || []).slice(-1)[0] || "pick colorspace_in"}`;
+    const from = cm.mode === "manual" ? "set by hand" : `${cm.detected_from}${cm.confidence ? ", " + cm.confidence : ""}`;
+    const what = cm.transform ? `-> ${cm.working} (${cm.transform.kind === "view" ? "view " + cm.transform.view : "conversion"})`
+        : "- not converted";
+    const note = (cm.notes || []).find((n) => !/^OpenColorIO .* works/.test(n));
+    return `Colour: ${cm.source} (${from}) ${what}${note ? " · " + note : ""} · config ${cm.config_source || cm.config}`;
+}
+
 // L9.53 colour management (owner 2026-10-25 / 26). The Python default is "off (as before)", so saved workflows and
 // API prompts keep their pixels; a node made now starts on auto. working_space only matters when colour is on.
 const CS_OFF = "off (as before)";
@@ -741,8 +761,29 @@ function setupColour(node, fresh) {
 
 if (!globalThis.__c2cVideoLoadersExt) {
     globalThis.__c2cVideoLoadersExt = true;
+    // L9.62 (owner 2026-10-25: "$OCIO, else setting, else the built-in ACES studio config"): changing one makes the
+    // server load the config again; the colour-space lists follow after a page reload (R)
+    // the new value travels with the request: the settings file may be written a moment after onChange
+    const reloadColour = (id) => (value) => {
+        api.fetchApi("/c2c/video/cm/reload", { method: "POST", body: JSON.stringify({ id, value }) }).catch(() => {});
+    };
     app.registerExtension({
         name: "C2C.VideoLoaders",
+        settings: [
+            { id: "c2c.video.cm.ocioConfig", name: "OCIO config file (used when $OCIO is not set)", type: "text",
+              defaultValue: "", category: ["c2c", "Video", "Colour Management", "config"], onChange: reloadColour("c2c.video.cm.ocioConfig"),
+              tooltip: "Path to your own .ocio config (e.g. the studio's Nuke config). $OCIO wins when it is set; "
+                + "empty = the built-in config below. Reload the page (R) so the colour-space lists follow." },
+            { id: "c2c.video.cm.builtinConfig", name: "Built-in OCIO config", type: "combo",
+              options: ["studio (latest)", "cg (latest)", "studio ACES 1.3", "cg ACES 1.3"], defaultValue: "studio (latest)",
+              category: ["c2c", "Video", "Colour Management", "builtin"], onChange: reloadColour("c2c.video.cm.builtinConfig"),
+              tooltip: "The config OpenColorIO ships (nothing to download), used without $OCIO or a config file." },
+            { id: "c2c.video.cm.view", name: "Display view (empty = the config's default)", type: "text",
+              defaultValue: "", category: ["c2c", "Video", "Colour Management", "view"], onChange: reloadColour("c2c.video.cm.view"),
+              tooltip: "The view Load Video uses to bring scene-referred footage to sRGB display (and Save reverses), "
+                + "e.g. 'ACES 2.0 - SDR 100 nits (Rec.709)' or 'Un-tone-mapped'. A name the config lacks falls back "
+                + "to its default, and the node says so." },
+        ],
         async beforeRegisterNodeDef(nodeType, nodeData, _app) {
             const cfg = LOADERS[nodeData.name];
             if (!cfg) return;

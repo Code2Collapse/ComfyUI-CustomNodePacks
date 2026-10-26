@@ -544,6 +544,12 @@ function mountSaveWidget(node) {
         else if (trace.candidates.length > 1) parts.push("Several Load Videos upstream - pick one (Load ▾).");
         else if (trace.why) parts.push(`No Load Video: ${trace.why}.`);
         if (f.stale) parts.push(`follow_load names #${fw.value}, which is no longer upstream - following auto.`);
+        const cm = f.load?.node?._c2cColourPlan;          // L9.62: what auto (from Load) colour will do
+        const autoColour = [val(node, "colorspace_in", ""), val(node, "colorspace_out", "")].includes(FROM_LOAD);
+        if (cm && autoColour) {
+            parts.push(cm.transform ? `Colour: reverses ${cm.source} -> ${cm.working}${cm.transform.view ? " (view " + cm.transform.view + ")" : ""}.`
+                : cm.source ? `Colour: ${cm.source} (not converted).` : "Colour: the Load's space is unknown.");
+        }
         if (trace.ambiguous && !f.chosen) {
             const others = trace.candidates.filter((c) => c.id !== f.load?.id).map((c) => "#" + c.id);
             if (f.load && others.length) parts.push(`Also upstream: ${others.join(", ")} - pick one to confirm.`);

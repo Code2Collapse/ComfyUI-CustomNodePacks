@@ -73,10 +73,22 @@ def config():
 
 
 def config_source() -> str:
-    path = os.environ.get("OCIO", "").strip()
-    if path and not SO._CFG_WARN:
-        return f"$OCIO ({path})"
-    return "built-in (ocio://studio-config-latest)"
+    SO._load_ocio()
+    return SO._CFG_SOURCE or "built-in"
+
+
+def display_view(cfg, display: str) -> tuple[str, str | None]:
+    """(view, note) for a display: the C2C setting's view when this config has it there, else the config's default."""
+    want = SO._setting(SO.SETTING_VIEW, "")
+    try:
+        views = list(cfg.getViews(display))
+    except Exception:  # noqa: BLE001
+        views = []
+    if want and want in views:
+        return want, None
+    default = cfg.getDefaultView(display)
+    return default, (f"the view {want!r} (C2C setting) is not in this config for {display}: using {default!r}"
+                     if want else None)
 
 
 TARGET_OCIO = (2, 6)
@@ -481,8 +493,8 @@ def _working(cfg, src: str, working_space: str) -> tuple[str, Transform | None, 
     if target == src:
         return src, None, None
     if not is_display_referred(cfg, src) and target in list(cfg.getDisplays()):
-        view = cfg.getDefaultView(target)
-        return target, Transform("view", src, target, view), None           # owner: the tone-mapped view
+        view, vnote = display_view(cfg, target)
+        return target, Transform("view", src, target, view), vnote          # owner: the tone-mapped view
     return target, Transform("colorspace", src, target), None
 
 
@@ -538,9 +550,9 @@ def between(cfg, a: str, b: str) -> tuple[Transform, bool]:
     displays = list(cfg.getDisplays())
     a_disp, b_disp = is_display_referred(cfg, a), is_display_referred(cfg, b)
     if a_disp and not b_disp and a in displays:
-        return Transform("view", b, a, cfg.getDefaultView(a)), True
+        return Transform("view", b, a, display_view(cfg, a)[0]), True
     if b_disp and not a_disp and b in displays:
-        return Transform("view", a, b, cfg.getDefaultView(b)), False
+        return Transform("view", a, b, display_view(cfg, b)[0]), False
     return Transform("colorspace", a, b), False
 
 
