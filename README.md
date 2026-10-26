@@ -989,6 +989,10 @@ see CREDITS.md.
   - The fix that makes this true also repairs the older "new inputs shifted" case on frontend 1.53.10. That
     frontend restores widget values before extensions can correct them, so the corrected values are now applied by
     name.
+- **OpenColorIO 2.6** is now in `requirements.txt` (owner: "we need latest OCIO"). Its built-in ACES 1.3 / 2.x studio
+  and cg configs mean nothing is downloaded. 2.5 keeps working, and the node says once that 2.6 is the target.
+  Checked: every colour space, interop ID and call the nodes use is the same on 2.6.0 (ACES 2.1 studio config
+  v5.0.0) as on 2.5.2, and the Load -> Save round trip matches exactly.
 - **Config:** `$OCIO` (your own config) or the built-in ACES studio config. A broken `$OCIO` falls back to the
   built-in config and the nodes say so. `C2C_VIDEO_CM=off` switches colour management off.
 - **Cost (measured):** Rec.709 / sRGB sources cost nothing. The ACES 2.0 view costs about 54-72 ms per megapixel on

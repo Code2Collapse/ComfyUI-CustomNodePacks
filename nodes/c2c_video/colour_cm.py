@@ -79,6 +79,22 @@ def config_source() -> str:
     return "built-in (ocio://studio-config-latest)"
 
 
+TARGET_OCIO = (2, 6)
+
+
+def ocio_version_note() -> str | None:
+    """L9.58: a one-line note on an OpenColorIO older than the version C2C targets (2.6) - it keeps working."""
+    try:
+        import PyOpenColorIO as ocio  # type: ignore[import-not-found]
+        v = tuple(int(x) for x in str(ocio.__version__).split(".")[:2])
+    except Exception:  # noqa: BLE001
+        return None
+    if v >= TARGET_OCIO:
+        return None
+    return (f"OpenColorIO {ocio.__version__} works; C2C targets 2.6 (built-in ACES 2.1 config) - "
+            "pip install -U opencolorio")
+
+
 def colorspace_in_choices() -> list[str]:
     return [CS_OFF, CS_AUTO] + SO.colorspace_choices()
 
@@ -485,6 +501,9 @@ def plan(raw, colorspace_in: str | None, working_space: str | None) -> Colour | 
     record["config"], record["config_source"] = cfg.getName(), config_source()
     if SO._CFG_WARN:
         record["notes"].append(SO._CFG_WARN)
+    note = ocio_version_note()
+    if note:
+        record["notes"].append(note)
     if cs == CS_AUTO:
         det = detect(raw, cfg)
     else:
