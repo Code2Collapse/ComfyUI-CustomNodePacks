@@ -1,83 +1,68 @@
-# C2C Vault — quickstart
+# C2C Vault - quickstart
 
-A vault replaces a group of nodes with one node. The nodes inside travel in the workflow as AES-256-GCM ciphertext
-(vault format v2, `C2CVLT2`); anyone who opens the workflow sees the vault's inputs and outputs, not your nodes.
-The design, threat model and limits are in [VAULT_DESIGN_A17.md](VAULT_DESIGN_A17.md).
+A vault is a subgraph whose inside is encrypted. It runs with ComfyUI's own scheduler, like any subgraph. Opening it
+needs the vault password and a code from your authenticator app.
 
 ## Which vault do I want?
 
-| Kind | Who can run it | Who can read or edit it |
-|---|---|---|
-| **Locked** | whoever has the password | password + the editor's authenticator code |
-| **Sealed for installs** (default seal) | this install, plus the installs whose keys you pasted, with no password | password + authenticator code |
-| **Sealed, portable** | any ComfyUI with this pack | same, but see below: obfuscation only |
-| **Legacy seal** (made before v2) | any ComfyUI with this pack; the node is marked "Legacy seal" | open it and lock it again to upgrade |
+| You want | Choose |
+|---|---|
+| To share a workflow that runs on your machine and on machines you approve, without telling anyone a password | **Seal: authorized installations** (default) |
+| Anyone who knows the password to run it | **Lock: password to run** |
+| It to run anywhere, and you accept that a knowledgeable person can extract it | **Legacy portable** (obfuscation only) |
 
-A portable seal and a legacy seal keep the graph out of the workflow file, but anyone with the pack can decrypt them.
-Use them only when that is enough.
+In every profile, only someone with the password **and** your authenticator can open the inside.
 
-## 1. Lock or seal a selection
+## 1. Protect some nodes
 
-Select the nodes. Right-click a node → **C2C Vault → Lock selected nodes** (or **Seal**); the empty-canvas menu has
-the same two as **Lock selection** / **Seal selection**. You can
-also add a vault node and press **Lock selected nodes** / **Lock what's connected** on it. This works on the root
-graph and inside subgraphs.
+1. Select the nodes.
+2. Right-click an empty spot of the canvas and choose **🔒 Seal as C2C Vault** (or **🔒 Lock as C2C Vault**). To
+   protect an existing subgraph, right-click its node and choose **Protect this subgraph as C2C Vault**.
+3. The dialog explains each profile. Type the vault password twice and press **Lock**.
 
-1. Type a password twice, or use **Generate strong password** and **Copy** it. There is no password recovery.
-2. Review the wires that enter and leave the selection. These become the vault's inputs and outputs; rename them here.
-3. Sealing only: choose who may run it without the password. **This install, and the installs whose keys I paste** is
-   the default. **Anywhere (portable)** is obfuscation only.
+The selection becomes one vault node. Its sockets are the wires that crossed the selection, and its controls are
+the subgraph's promoted widgets. This works on the root graph and inside subgraphs. Nodes with lazy inputs
+(LazySwitchKJ), hidden inputs (NKD Mask Ops) and lists run inside like anywhere else.
 
-The password is stretched with Argon2id (128 MiB, 3 passes) on the server. It is never stored in the workflow, in
-browser storage or in the history.
+The command palette has the same actions: **C2C Vault: Lock / Seal selected nodes**, and **Seal whole workflow**.
 
 ## 2. Run it
 
-- **Locked:** a Locked vault runs right away for the person who locked it. Anyone else types the password into the
-  field on the node. **Lock again** forgets the key; so does restarting ComfyUI.
-- **Sealed:** queue as usual. The node says where it runs: "Sealed for 1 install(s) · runs here without a password",
-  "Portable seal · runs anywhere · obfuscation only" or "Legacy seal".
+- **Sealed:** it simply runs, on your install and on the installs you authorized.
+- **Locked:** the first run in a browser tab asks for the password. After that, the tab runs it without asking. A new
+  tab, or a ComfyUI restart, asks again.
 
-## 3. Seal a vault for someone else's install
+What the inside makes still shows: previews, progress, and saved files. Errors name the inner node's type and the
+message, never its values.
 
-The recipient opens the canvas menu → **C2C Vault → This install's key…** and sends you the `c2cvk1:…` line. That
-line is a public key and is safe to share. Paste it into the seal dialog, one key per line. The vault then runs
-without a password on your install and on theirs, and on no other.
+## 3. Open and edit it
 
-## 4. Edit it
+1. Double-click the vault, or right-click it and choose **Open / edit vault…**.
+2. Type the password and the 6-digit code your authenticator app shows. A code works once; if you just used it, wait
+   for the next one (the dialog says so).
+3. The real nodes open as a normal subgraph. Edit them, including subgraphs nested inside.
+4. **Leave the subgraph** (breadcrumb, or navigate back) and it is encrypted again at once.
 
-Press **Edit…** on a Locked vault, or **Open for editing** on a Sealed one. Editing needs the password and then a
-six-digit code from your authenticator app.
+While it is open, saving, autosave, export and queueing still write the vault locked, and copying the open vault is
+refused.
 
-- **First time on an install:** the vault shows a setup key and 8 recovery codes. Add the key to an authenticator app
-  (Google Authenticator, 1Password, Aegis…), save the recovery codes, then type a code to confirm. The second factor
-  belongs to you on this install. It is stored in the OS credential store, not in the workflow.
-- The vault's real nodes open in a separate **Vault edit** tab. A bar there says nothing is saved until you lock it.
-  In that tab Save, Save As, Export, Duplicate and Queue are refused. Drafts are not written to browser storage, and
-  a node you copy stays in memory, so it cannot be pasted into a saved workflow.
-- **Lock & close** encrypts the new contents with fresh keys and checks them before it replaces the vault's payload.
-  Then save the workflow that holds the vault. **Discard edits** leaves the vault as it was.
-- **Change password…** (on the same bar) sets a new password. It applies at **Lock & close**, when the old password
-  stops opening the vault. Until then, nothing changes.
-- After 5 wrong codes, editing pauses for 5 minutes. An edit session closes after 30 minutes without activity.
+First time on an install: opening asks you to set up the authenticator. Scan the QR code (or type the setup key),
+save the 8 recovery codes, and type the first code. If a setup key was ever pasted anywhere else, set the
+authenticator up again: right-click a vault → **Two-factor setup…**. It first asks for a current code or a recovery
+code, then shows a new QR code. The old key stops working.
 
-**Lost your authenticator?** Canvas menu → **C2C Vault → Second factor (authenticator)…** → type a recovery code to
-reset it. You set it up again the next time you edit a vault.
+## 4. Let another install run a Sealed vault
 
-## 5. Sharing and portability
+The other person right-clicks any vault → **My installation code** and sends you the code (it is a public key, safe
+to share). Paste it into the Seal dialog's box, one code per line. Your own install is always included.
 
-- A workflow with a vault opens on a ComfyUI without this pack as an ordinary missing node. Saving it again keeps the
-  vault's payload, inputs and outputs unchanged.
-- A Locked vault runs anywhere the pack is installed, given the password.
-- A vault sealed for installs runs only on the installs it was sealed for. Elsewhere it stops with a message saying
-  so, and the node reads "Sealed for other installs · needs the password here". To add that install, the author can
-  seal it again with the new key. Or someone with the password opens it there for editing and presses
-  **Lock & close**: every vault sealed for installs also includes the install that locks it.
+## 5. Old vaults
 
----
+Workflows with the old **C2C Vault - Locked / Sealed** nodes open as before and are upgraded automatically to the new
+vault, with the same payload, sockets and controls. A promoted parameter that had been turned into a `param_N` socket
+keeps its stored value but loses that wire. Reconnect it after the upgrade.
 
-**Honest scope.** A vault has to be decrypted to run. Whoever can run it, whether by password or as a sealed-for
-install, can in principle extract it from memory, and so can anyone who can run Python inside that ComfyUI. The
-authenticator code protects *editing* through the UI; it is a policy gate on this install, not extra encryption.
-What the vault guarantees is that the nodes inside are not readable from the workflow file, the browser's storage or
-the history without the right key.
+## Not yet in the new vault
+
+Changing the password and managing who may edit (L9.48), owner-hosted runs (L9.49), and installing missing custom
+nodes from inside a vault (L9.50) are planned.

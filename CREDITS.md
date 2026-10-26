@@ -153,3 +153,8 @@ VideoMaMa) explain how to install it when it is missing (ledger L7.90).
 
 If your work is here and the attribution is wrong, thin, or you would rather it
 were removed, open an issue — it will be fixed.
+
+### QR Code generator — Project Nayuki
+
+`nodes/_vendor/qrcodegen.py` (unchanged copy of `python/qrcodegen.py`, MIT; licence:
+`THIRD_PARTY_LICENSES/qrcodegen-Nayuki-MIT.txt`) draws the QR code of the C2C Vault two-factor setup.

@@ -158,6 +158,10 @@ class C2C_VaultLocked:
 
     CATEGORY = "C2C/Vault"
     FUNCTION = "execute"
+    # A18 (owner 2026-10-25): new vaults are protected native subgraphs (right-click Lock / Seal as C2C Vault,
+    # nodes/secure_subgraph.py). This node stays registered so old workflows load; the front end upgrades it to the
+    # new vault on load (same payload). Hidden from the node search, so nobody builds a new custom-executor vault.
+    DEPRECATED = True
     RETURN_TYPES = tuple(["*"] * MAX_VAULT_OUTPUTS)
     RETURN_NAMES = tuple(f"output_{i}" for i in range(MAX_VAULT_OUTPUTS))
     DESCRIPTION = (
@@ -653,7 +657,8 @@ def register_routes(server) -> None:
             ok = vault_2fa.confirm_enrolment(str(body.get("code") or ""))
         except PermissionError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=409)
-        return web.json_response({"ok": ok, "error": None if ok else "That code is not right. Check the app's time."},
+        return web.json_response({"ok": ok, "error": None if ok else (vault_2fa.last_enrolment_error() or
+                                                                      "That code is not right.")},
                                  status=200 if ok else 403)
 
     @routes.post("/c2c_vault/2fa/reset")

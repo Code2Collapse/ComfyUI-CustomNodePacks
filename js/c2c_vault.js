@@ -2011,12 +2011,26 @@ function selectNodesForWholeSeal() {
   const canvas = app.canvas;
   const graph = canvas?.graph || app.graph;
   if (!canvas || !graph) return 0;
-  canvas.selected_nodes = {};
   let count = 0;
+  if (typeof canvas.select === "function") {               // frontend 1.5x: selectedItems is the selection
+    canvas.deselectAll?.();
+    for (const n of graph._nodes || []) {
+      if (n && !isOutputNode(n) && !NODES.includes(n.type)) { canvas.select(n); count++; }
+    }
+    return count;
+  }
+  canvas.selected_nodes = {};
   for (const n of graph._nodes || []) {
     if (n && !isOutputNode(n) && !NODES.includes(n.type)) { canvas.selected_nodes[n.id] = n; count++; }
   }
   return count;
+}
+
+/** A18: selections are protected as native subgraph vaults (js/c2c_secure_subgraph.js) when that front end loaded. */
+function lockSelectionNative(sealed) {
+  const native = globalThis.__c2cVaultNative;
+  if (native?.lockSelection) return native.lockSelection(sealed ? "sealed_installs" : "locked");
+  return lockSelection(sealed);
 }
 
 async function sealWholeWorkflow() {
@@ -2024,7 +2038,7 @@ async function sealWholeWorkflow() {
     await modalAlert("Nothing to seal", "The workflow has no nodes other than its outputs.");
     return;
   }
-  await lockSelection(true);
+  await lockSelectionNative(true);
 }
 
 function installLoadGraphDataHook() {
@@ -2188,15 +2202,10 @@ function _vaultCanvasMenuItems() {
       },
     ];
   }
+  // A18 (owner 2026-10-25): a selection is protected as a native subgraph by js/c2c_secure_subgraph.js ("Lock as C2C
+  // Vault" / "Seal as C2C Vault"). The old "Lock / Seal selection" entries built the custom-executor vault that refused
+  // lazy and hidden-input nodes, and showing both made two competing lock menus.
   return [
-    {
-      content: "C2C Vault → Lock selection (password to run)",
-      callback: () => lockSelection(false),
-    },
-    {
-      content: "C2C Vault → Seal selection (runs without password)",
-      callback: () => lockSelection(true),
-    },
     {
       content: "C2C Vault → This install's key…",
       callback: () => showInstallKey(),
@@ -2374,9 +2383,9 @@ app.registerExtension({
   // Declarative: frontend 1.52 has no extensionManager.registerCommand (the call was silently skipped).
   commands: [
     { id: "c2c.vault.lockSelection", label: "C2C Vault: Lock selected nodes (password to run)", icon: "pi pi-lock",
-      function: () => lockSelection(false) },
+      function: () => lockSelectionNative(false) },
     { id: "c2c.vault.sealSelection", label: "C2C Vault: Seal selected nodes (runs without password)", icon: "pi pi-box",
-      function: () => lockSelection(true) },
+      function: () => lockSelectionNative(true) },
     { id: "c2c.vault.saveWorkflowEncrypted", label: "C2C Vault: Save workflow encrypted", function: () => saveWorkflowEncrypted() },
     { id: "c2c.vault.sealWholeWorkflow", label: "C2C Vault: Seal whole workflow", function: () => sealWholeWorkflow() },
   ],

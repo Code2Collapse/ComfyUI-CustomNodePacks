@@ -472,6 +472,19 @@ except Exception as _exc:
     )
     _VAULT_MAPPINGS, _VAULT_DISPLAY, _register_vault_routes = {}, {}, None
 
+# C2C Vault as a protected native subgraph (A18): ComfyUI's scheduler runs the inside (docs/VAULT_DESIGN_A18.md).
+try:
+    from .nodes import secure_subgraph as _secure_subgraph
+    _VAULT_MAPPINGS = dict(_VAULT_MAPPINGS, **_secure_subgraph.NODE_CLASS_MAPPINGS)
+    _VAULT_DISPLAY = dict(_VAULT_DISPLAY, **_secure_subgraph.NODE_DISPLAY_NAME_MAPPINGS)
+except Exception as _exc:
+    _secure_subgraph = None
+    _c2c_rec_fail(
+        "C2CSecureSubgraph", _exc,
+        hint="C2C Vault protected subgraph (needs `cryptography`).",
+        group="nodes",
+    )
+
 # C2C helpers (12 tiny utilities)
 try:
     from .nodes.helpers import (
@@ -908,6 +921,14 @@ try:
     if _register_vault_routes is not None:
         import server as _comfy_server_vault
         _register_vault_routes(_comfy_server_vault.PromptServer.instance)
+except Exception:
+    pass  # Server not available
+try:
+    if _secure_subgraph is not None:
+        import server as _comfy_server_ss
+        _secure_subgraph.install_message_filter(_comfy_server_ss.PromptServer.instance)
+        from .nodes import secure_subgraph_routes as _ss_routes
+        _ss_routes.register_routes(_comfy_server_ss.PromptServer.instance)
 except Exception:
     pass  # Server not available
 

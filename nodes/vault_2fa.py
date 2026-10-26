@@ -59,13 +59,41 @@ def begin_enrolment(account: str = "ComfyUI vault") -> dict:
         if enrolled():
             raise PermissionError("A second factor is already set up on this install. Reset it first (needs a code "
                                   "or a recovery code).")
-        secret = os.urandom(20)
-        codes = [_recovery_code() for _ in range(8)]
-        _pending.clear()
-        _pending.update({"secret": secret, "codes": codes, "at": time.time()})
+        if _pending and time.time() - _pending.get("at", 0) <= 15 * 60:
+            secret, codes = _pending["secret"], _pending["codes"]   # same setup while it is pending (QR <-> key)
+        else:
+            secret = os.urandom(20)
+            codes = [_recovery_code() for _ in range(8)]
+            _pending.clear()
+            _pending.update({"secret": secret, "codes": codes, "at": time.time()})
     uri = _totp(secret).get_provisioning_uri(account, "C2C Vault")
-    return {"secret_base32": base64.b32encode(secret).decode("ascii").rstrip("="), "otpauth_uri": uri,
-            "recovery_codes": codes}
+    b32 = base64.b32encode(secret).decode("ascii").rstrip("=")
+    return {"secret_base32": b32, "secret_grouped": " ".join(b32[i:i + 4] for i in range(0, len(b32), 4)),
+            "otpauth_uri": uri, "qr_svg": qr_svg(uri), "recovery_codes": codes, "issuer": "C2C Vault",
+            "account": account, "algorithm": "SHA1", "digits": DIGITS, "period": STEP}
+
+
+def qr_svg(text: str, border: int = 4) -> str:
+    """The QR code of `text` as a small standalone SVG (vendored Nayuki qrcodegen, MIT). '' if it cannot."""
+    try:
+        from ._vendor.qrcodegen import QrCode
+    except Exception:  # noqa: BLE001
+        return ""
+    qr = QrCode.encode_text(text, QrCode.Ecc.MEDIUM)
+    n = qr.get_size()
+    parts = [f"M{x + border},{y + border}h1v1h-1z" for y in range(n) for x in range(n) if qr.get_module(x, y)]
+    size = n + 2 * border
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" shape-rendering="crispEdges">'
+            f'<rect width="100%" height="100%" fill="#ffffff"/><path d="{" ".join(parts)}" fill="#000000"/></svg>')
+
+
+def cancel_enrolment() -> None:
+    with _lock:
+        _pending.clear()
+
+
+def last_enrolment_error() -> str:
+    return str(_pending.get("last_error") or "")
 
 
 def confirm_enrolment(code: str, now: Optional[float] = None) -> bool:
@@ -75,6 +103,12 @@ def confirm_enrolment(code: str, now: Optional[float] = None) -> bool:
             raise PermissionError("No enrolment is waiting (or it expired). Start the setup again.")
         step = _match(_pending["secret"], code, now)
         if step is None:
+            skew = _probe_clock(_pending["secret"], code, now)
+            _pending["last_error"] = (
+                f"That code matches a time {abs(skew)} s away: this computer's clock and your phone's disagree. Turn "
+                "on automatic time sync on both, then enter a fresh code." if skew is not None else
+                "That code is not right. Enter the current code of the new 'C2C Vault' entry (scan the QR code or "
+                "type the setup key again if the app shows no entry).")
             return False
         vault_store.put(_SECRET, base64.b64encode(_pending["secret"]).decode("ascii"))
         vault_store.put(_RECOVERY, json.dumps([_hash(c) for c in _pending["codes"]]))
@@ -119,23 +153,54 @@ def _fail(now: Optional[float]) -> None:
     vault_store.put(_FAILS, json.dumps(state))
 
 
-def verify(code: str, now: Optional[float] = None) -> bool:
-    """A current authenticator code (once) or an unused recovery code (consumed). Never raises on a wrong code."""
+CLOCK_PROBE_STEPS = 20                 # how far (x 30 s) to look for a code from a drifted clock - never accepted
+
+
+def _probe_clock(secret: bytes, code: str, now: Optional[float]) -> Optional[int]:
+    """Seconds the server clock is AHEAD (+) or BEHIND (-) the app's, when the code belongs to a nearby time step
+    outside the accepted window. Diagnosis only: such a code is never accepted."""
+    from cryptography.hazmat.primitives.twofactor import InvalidToken
+
+    code = (code or "").strip().replace(" ", "")
+    if len(code) != DIGITS or not code.isdigit():
+        return None
+    t = time.time() if now is None else now
+    for k in range(WINDOW + 1, CLOCK_PROBE_STEPS + 1):
+        for offset in (k, -k):
+            try:
+                _totp(secret).verify(code.encode("ascii"), int(t + offset * STEP))
+                return -offset * STEP
+            except InvalidToken:
+                continue
+    return None
+
+
+def verify_detail(code: str, now: Optional[float] = None) -> dict:
+    """{"ok": bool, "reason": "ok" | "recovery" | "reused" | "clock" | "wrong", "message": str, ...}.
+
+    "reused": the code was right but already used (a code works ONCE - replay protection); the next one is due in
+    `next_in` seconds. Not counted as a failed attempt: it is not a guess.
+    "clock": the code belongs to a time step `skew_seconds` away from this server's clock - the clocks disagree.
+    Never accepted, not counted. "wrong": counted (5 failures lock the factor for 5 minutes)."""
     with _lock:
         stored = vault_store.get(_SECRET)
         if not stored:
             raise PermissionError("No second factor is set up on this install yet. Set it up in the C2C Vault menu.")
         if locked_out(now) > 0:
             raise PermissionError("Too many wrong codes. Try again in a few minutes.")
-        step = _match(base64.b64decode(stored), code, now)
+        secret = base64.b64decode(stored)
+        t = time.time() if now is None else now
+        step = _match(secret, code, now)
         if step is not None:
             last = int(vault_store.get(_LAST) or "-1")
             if step <= last:
-                _fail(now)
-                return False                                    # a code is good once
+                nxt = int(STEP - (t % STEP)) + 1
+                return {"ok": False, "reason": "reused", "next_in": nxt,
+                        "message": f"That code was already used (each code works once). Wait for the next code in "
+                                   f"your app - about {nxt} s - and enter that one."}
             vault_store.put(_LAST, str(step))
             vault_store.delete(_FAILS)
-            return True
+            return {"ok": True, "reason": "ok", "message": "Verified."}
         hashes = json.loads(vault_store.get(_RECOVERY) or "[]")
         h = _hash(code or "")
         for k, known in enumerate(hashes):
@@ -143,9 +208,23 @@ def verify(code: str, now: Optional[float] = None) -> bool:
                 hashes.pop(k)
                 vault_store.put(_RECOVERY, json.dumps(hashes))
                 vault_store.delete(_FAILS)
-                return True
+                return {"ok": True, "reason": "recovery", "message": f"Recovery code used ({len(hashes)} left)."}
+        skew = _probe_clock(secret, code, now)
+        if skew is not None:
+            side = "ahead of" if skew > 0 else "behind"
+            return {"ok": False, "reason": "clock", "skew_seconds": skew,
+                    "message": f"That code matches a time {abs(skew)} s away: this computer's clock is about "
+                               f"{abs(skew)} s {side} your phone's. Codes depend on the clock (not the time zone): "
+                               "turn on automatic time sync on both, then try a fresh code."}
         _fail(now)
-        return False
+        return {"ok": False, "reason": "wrong",
+                "message": "That code is not right. Use the current 6-digit code of the 'C2C Vault' entry in your "
+                           "authenticator app."}
+
+
+def verify(code: str, now: Optional[float] = None) -> bool:
+    """A current authenticator code (once) or an unused recovery code (consumed). Never raises on a wrong code."""
+    return bool(verify_detail(code, now)["ok"])
 
 
 def reset(code: str, now: Optional[float] = None) -> bool:
