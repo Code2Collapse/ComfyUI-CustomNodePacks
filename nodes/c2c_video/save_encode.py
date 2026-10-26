@@ -507,6 +507,7 @@ def _encode_av_stream(
     colour=None,
     extras: "Extras | None" = None,
     cm=None,
+    carry: dict | None = None,
 ) -> list[str]:
     import av
 
@@ -539,7 +540,7 @@ def _encode_av_stream(
             exe, images, spec, path, fps=fps, has_alpha=has_alpha, encoder_opts=encoder_options(spec, quality, extras),
             tags=tags, metadata=metadata, pcm=pcm, chunks=chunks(), quantize=quantize_fast, interrupt=interrupt,
             progress=(lambda done, total: pbar.update_absolute(done, total)) if pbar else (lambda d, t: None),
-            matrix=conv[0], out_range=conv[2])
+            matrix=conv[0], out_range=conv[2], carry=carry)
 
     if yuv and conv[1] not in _PYAV_MATRICES:
         # measured (PyAV 17): reformat knows BT.709 / FCC / BT.601 / SMPTE-240M only and converts anything else
@@ -580,6 +581,15 @@ def _encode_av_stream(
         opts = encoder_options(spec, quality, extras)
         if opts:
             stream.options = opts
+        if carry:                                       # L9.55: timecode track, pixel aspect, reel (mov / mp4 / mkv)
+            if carry.get("timecode") and spec.container in ("mov", "mp4", "mkv"):
+                container.metadata["timecode"] = str(carry["timecode"])
+            if carry.get("pixel_aspect"):
+                from fractions import Fraction as _F
+                stream.codec_context.sample_aspect_ratio = _F(int(carry["pixel_aspect"][0]),
+                                                              int(carry["pixel_aspect"][1]))
+            if carry.get("reel"):
+                stream.metadata["reel_name"] = str(carry["reel"])
 
         audio_stream = None
         pcm_info = prepare_audio(audio, n, fps) if spec.audio_codec and spec.audio_codec != "wav_sidecar" else None
@@ -698,7 +708,8 @@ _MATRIX_SEQ = frozenset({"oiio_png", "oiio_tiff", "oiio_dpx", "oiio_jpeg", "oiio
 
 
 def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has_alpha: bool, quality: int,
-                        extras: "Extras | None" = None, interop_id: str | None = None) -> None:
+                        extras: "Extras | None" = None, interop_id: str | None = None,
+                        attrs: dict | None = None) -> None:
     """One frame of a matrix image sequence (L9.40). Integer formats are clipped to 0-1 and rounded like the PNG16
     path; DPX stores 10 / 12 bits in 16-bit words (OIIO's BitsPerSample); EXR stores premultiplied colour (Nuke's
     Read assumes it) and TIFF / PNG straight alpha, as each format defines."""
@@ -735,6 +746,7 @@ def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has
         ospec.attribute("jpeg:subsampling", str(spec.profile or "4:2:0"))
     if spec.codec == "oiio_png" and extras is not None and int(extras.png_compression) >= 0:
         ospec.attribute("png:compressionLevel", max(0, min(9, int(extras.png_compression))))
+    _source_attrs(oiio, ospec, spec, attrs)
     out = oiio.ImageOutput.create(fpath)
     if out is None:
         raise SaveVideoError(f"OpenImageIO cannot write {fpath}: {oiio.geterror()}")
@@ -745,6 +757,20 @@ def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has
             raise SaveVideoError(out.geterror())
     finally:
         out.close()
+
+
+def _source_attrs(oiio, ospec, spec: FormatSpec, attrs: dict | None) -> None:
+    """L9.55: the source's timecode (this frame's), pixel aspect and reel, where the format stores them."""
+    if not attrs:
+        return
+    tc = attrs.get("timecode_packed")
+    if tc is not None and spec.codec in ("oiio_exr", "oiio_dpx", "oiio_exr_half", "oiio_exr_float"):
+        ospec.attribute("smpte:TimeCode", oiio.TypeTimeCode, (int(tc), 0))
+    par = attrs.get("pixel_aspect")
+    if par and spec.codec in ("oiio_exr", "oiio_dpx", "oiio_tiff", "oiio_exr_half", "oiio_exr_float"):
+        ospec.attribute("PixelAspectRatio", float(par[0]) / float(par[1]))
+    if attrs.get("reel") and spec.codec in ("oiio_exr", "oiio_exr_half", "oiio_exr_float"):
+        ospec.attribute("reelName", str(attrs["reel"]))
 
 
 def _encode_sequence_oiio(
@@ -762,8 +788,10 @@ def _encode_sequence_oiio(
     extras: "Extras | None" = None,
     cm=None,
     interop_id: str | None = None,
+    carry: dict | None = None,
 ) -> list[str]:
     import OpenImageIO as oiio  # type: ignore[import-not-found]
+    from .source_meta import pack_tc, tc_add
 
     ProgressBar, interrupt = _progress_and_interrupt()
     n = int(images.shape[0])
@@ -774,11 +802,20 @@ def _encode_sequence_oiio(
         interrupt()
         row = images[i].cpu().numpy().astype(np.float32)
         row = _convert(row[None, ...], colorspace_in, colorspace_out, cm)[0]
-        fname = f"{stem}.{i + 1:04d}.{ext}"
+        nums = (carry or {}).get("numbers")
+        num = int(nums[i]) if nums and i < len(nums) else i + 1          # L9.55: the source's frame numbers
+        pad = max(4, len(str(int(nums[-1]) if nums else n)))
+        fname = f"{stem}.{num:0{pad}d}.{ext}"
+        attrs = None
+        if carry:
+            tc0 = carry.get("timecode")
+            tci = tc_add(tc0, i * int(carry.get("step") or 1), float(carry.get("fps") or fps)) if tc0 else None
+            attrs = {"timecode_packed": pack_tc(tci) if tci else None, "pixel_aspect": carry.get("pixel_aspect"),
+                     "reel": carry.get("reel")}
         fpath = os.path.join(out_dir, fname)
         h, w = row.shape[:2]
         if spec.codec in _MATRIX_SEQ:
-            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality, extras, interop_id)
+            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality, extras, interop_id, attrs)
         elif spec.codec == "oiio_png16":
             names = ["R", "G", "B"]
             planes = [np.clip(row[..., k], 0, 1) for k in range(3)]
@@ -823,6 +860,7 @@ def _encode_sequence_oiio(
             ospec.attribute("compression", "zip")
             if interop_id:
                 ospec.attribute("colorInteropID", str(interop_id))
+            _source_attrs(oiio, ospec, spec, attrs)
             out = oiio.ImageOutput.create(fpath)
             if out is None:
                 raise SaveVideoError(f"OpenImageIO cannot write {fpath}: {oiio.geterror()}")
@@ -862,6 +900,7 @@ def encode_video(
     extras: "Extras | None" = None,
     cm=None,
     interop_id: str | None = None,
+    carry: dict | None = None,
 ) -> dict[str, Any]:
     if images.ndim == 3:
         images = images.unsqueeze(0)
@@ -906,6 +945,7 @@ def encode_video(
             extras=x,
             cm=cm,
             interop_id=interop_id,
+            carry=carry,
         )
     elif spec.codec == "pil_gif":
         paths = _encode_gif(images, full_path, fps, quality, colorspace_in, out_cs, cm)
@@ -914,7 +954,7 @@ def encode_video(
     else:
         paths = _encode_av_stream(
             images, spec, full_path, fps, quality,
-            colorspace_in, out_cs, audio, alpha_out, metadata, colour, extras=x, cm=cm,
+            colorspace_in, out_cs, audio, alpha_out, metadata, colour, extras=x, cm=cm, carry=carry,
         )
 
     if pad_note:

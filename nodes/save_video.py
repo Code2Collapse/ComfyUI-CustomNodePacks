@@ -14,6 +14,7 @@ from .c2c_video.save_encode import (
     resolve_output_path,
 )
 from .c2c_video import colour_cm as CM
+from .c2c_video import source_meta as SMETA
 from .c2c_video import save_matrix as SM
 from .c2c_video import handles_io as HIO
 from .c2c_video import save_naming as SN
@@ -354,6 +355,14 @@ class SaveVideoC2C:
         images, audio, range_note, (r_in, r_out) = HIO.export_range(images, audio, int(range_in), int(range_out),
                                                                      eff_fps)
         common.update(range=range_note, range_in=r_in, range_out=r_out)
+        # L9.55: the delivered frames back to the source - its frame numbers, timecode, pixel aspect, reel
+        carry = None
+        src_rec = video_info.get(SMETA.INFO_KEY) if isinstance(video_info, dict) else None
+        if isinstance(src_rec, dict):
+            hrec = video_info.get(HIO.INFO_KEY) if isinstance(video_info.get(HIO.INFO_KEY), dict) else {}
+            trim_exact = (int(trim_rep.get("head", 0)), int(trim_rep.get("tail", 0))) == \
+                (int(hrec.get("head", 0)), int(hrec.get("tail", 0)))
+            carry = SMETA.delivered(src_rec, int(r_in), int(images.shape[0]), trim_exact)
 
         _, h, w, _ = images.shape
         naming_eff = effective_naming(str(naming), str(naming_resolved or ""))
@@ -411,6 +420,7 @@ class SaveVideoC2C:
             extras=extras,
             cm=cm_plan.cm if cm_plan is not None else None,
             interop_id=exr_id,
+            carry=carry,
         )
         workflow_png = None
         if save_metadata:
@@ -440,6 +450,10 @@ class SaveVideoC2C:
             "warnings": link_warn + list(result.get("warnings") or []),
             "link": link_report,
             "name_from": name_note,
+            "carry": None if carry is None else {
+                "first_number": (carry["numbers"] or [None])[0], "last_number": (carry["numbers"] or [None])[-1],
+                "timecode": carry["timecode"], "pixel_aspect": carry["pixel_aspect"], "reel": carry["reel"],
+                "note": carry["note"]},
             "codec": spec.codec,
             "format_from": format_how,
             "naming": naming_eff,

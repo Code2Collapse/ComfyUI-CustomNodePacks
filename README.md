@@ -924,6 +924,24 @@ see CREDITS.md.
 - Checked live on frontend 1.53.10 in both renderers: a single chain, two Loads, the Loads inside a subgraph (ids
   `5:1` / `5:3` - the server followed exactly `5:3`), and Save inside a subgraph.
 
+#### Save Video (C2C): source frame numbers, timecode, pixel aspect, reel (2026-10-26)
+
+- **A sequence keeps its source frame numbers.** Load `shot.1001-1100.exr` with handles, and Save writes
+  `.1001`-`.1100` again: the handles are trimmed and In / Out keeps its offset. With skip or every-Nth, the frames keep
+  their own source numbers.
+- **Timecode.** The first written frame's source timecode goes into the file: a timecode track in MOV / MP4 / MKV,
+  `smpte:TimeCode` per frame in EXR / DPX. Drop-frame (29.97 / 59.94) is counted per SMPTE.
+- **Pixel aspect** goes in as the video SAR and the EXR / DPX / TIFF pixel aspect. The **reel name** goes into MOV
+  metadata and the EXR `reelName` (DPX has no field for it).
+- **Where the mapping is not exact**, Save numbers from 1 with no timecode and says why: a retimed or unevenly skipped
+  load, a sequence with gaps, handles not trimmed as Load added them, or more frames than the source selection.
+  Camera vendor metadata is not carried yet: it needs real camera files.
+- Checked by tests (EXR sequence with skip, handles and In; a ProRes MOV with timecode, 2:1 pixel aspect and reel,
+  through both encode paths and MP4), and live on frontend 1.53.10 in both renderers: files `.1003`-`.1010`, timecode
+  `01:00:00:02`.
+- **Old workflows:** a Load Video saved before its name fields existed now opens with them empty. The generic
+  migration had let the upload button's value land on a new text input.
+
 #### Save Video (C2C): the file named after the Load Video (2026-10-26)
 
 - New Save nodes start with `filename_prefix` = *auto (from Load)*. The file is named after the Load Video they

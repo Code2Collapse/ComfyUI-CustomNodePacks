@@ -619,6 +619,15 @@ function mountSaveWidget(node) {
         if (data.handles?.head || data.handles?.tail) parts.push(`Handles trimmed: ${data.handles.from}.`);
         else if (data.handles?.from && !/^trim off|nothing trimmed/.test(data.handles.from)) parts.push(data.handles.from);
         if (data.range) parts.push(`Wrote ${data.range}.`);
+        if (data.carry) {                                         // L9.55: what came over from the source
+            const c = data.carry, bits = [];
+            if (c.first_number != null) bits.push(`source frames ${c.first_number}-${c.last_number}`);
+            if (c.timecode) bits.push(`TC ${c.timecode}`);
+            if (c.pixel_aspect) bits.push(`pixel aspect ${c.pixel_aspect[0]}:${c.pixel_aspect[1]}`);
+            if (c.reel) bits.push(`reel ${c.reel}`);
+            if (bits.length) parts.push(`From the source: ${bits.join(", ")}.`);
+            if (c.note) parts.push(`Source numbering: ${c.note}.`);
+        }
         if (data.colour) {                                        // L9.53: what Save did with the colour
             const c = data.colour;
             parts.push(c.transform_text ? `Colour: ${c.reverses_load ? "reversed Load Video - " : ""}${c.transform_text}.`

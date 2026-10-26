@@ -150,7 +150,11 @@ function insertBeforeExtras(node, nodeData, expected, wv) {
         return v === null || v === undefined || typeof v === typeof w.value;
     });
     if (!tailLooksLikeExtras) return null;
-    if (fits(specOf(nodeData, expected[pySaved].name), wv[pySaved])) return null;   // the old tail is not misplaced
+    // L9.55: a STRING input accepts any string, so "fits" cannot tell a shifted tail from a real value there (an old
+    // Load Video's upload label "image" landed on the new name_prefix). On this short-array path, a tail that EQUALS
+    // the front-end widgets' own values is the shift.
+    const tailIsExtras = extras.every((w, k) => wv[pySaved + k] === w.value);
+    if (!tailIsExtras && fits(specOf(nodeData, expected[pySaved].name), wv[pySaved])) return null;   // not misplaced
     const missing = expected.slice(pySaved);
     return { values: wv.slice(0, pySaved).concat(missing.map((e) => e.def), wv.slice(pySaved)), missing };
 }

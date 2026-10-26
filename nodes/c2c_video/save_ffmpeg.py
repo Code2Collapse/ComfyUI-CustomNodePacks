@@ -147,6 +147,7 @@ def encode_with_ffmpeg(
     progress,
     matrix: str = "bt709",
     out_range: str = "tv",
+    carry: dict | None = None,
 ) -> list[str]:
     """Write ``images`` to ``path``. ``chunks`` yields float32 [k, H, W, C] numpy chunks (OCIO applied);
     ``quantize(chunk, bits)`` makes them integers exactly as the PyAV path does."""
@@ -167,6 +168,9 @@ def encode_with_ffmpeg(
             params.append(f"range={out_range}")
         if params:
             vf += ",setparams=" + ":".join(params)
+    par = (carry or {}).get("pixel_aspect")
+    if par:                                             # L9.55: the source's pixel aspect
+        vf += f",setsar={int(par[0])}/{int(par[1])}"
     rate = exact_rate(fps)
     tmp = tempfile.mkdtemp(prefix="c2c_save_")
     args = [exe, "-hide_banner", "-nostdin", "-v", "error", "-y",
@@ -207,6 +211,10 @@ def encode_with_ffmpeg(
             args += ["-b:a", "192k"]
     if spec.container in ("mp4", "mov"):
         args += ["-movflags", "+faststart" + ("+use_metadata_tags" if metadata else "")]
+    if (carry or {}).get("timecode") and spec.container in ("mov", "mp4", "mkv"):
+        args += ["-timecode", str(carry["timecode"])]              # L9.55: the first frame's source timecode
+    if (carry or {}).get("reel"):
+        args += ["-metadata:s:v:0", f"reel_name={carry['reel']}"]
     args += [path]
 
     rfd, wfd = _big_pipe()

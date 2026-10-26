@@ -12,6 +12,7 @@ from typing import Any
 
 from . import colour_cm as CM
 from . import handles_io as HIO
+from . import source_meta as SMETA
 from .audio import LazyAudio, lazy_audio_for_handle
 from .fast_decode import (
     DECODER_CHOICES,
@@ -695,6 +696,7 @@ def execute_video_load(
     audio_mode = audio_output_mode(loaded, audio_when_missing)
     audio = lazy_audio_for_handle(loaded) if audio_mode != "none" else None
     handles_rec, handles_report = None, None
+    selected = loaded                                   # L9.55: the source frames, before any handle is added
     if hmode in ("fit", "add"):
         preset = FORMAT_PRESETS.get(format or "None", {})
         model, step, plus, glabel = HIO.grid_for(str(hopt.get("grid") or HIO.FROM_FORMAT), preset, format or "None",
@@ -707,6 +709,10 @@ def execute_video_load(
     video_info = make_video_info(raw, loaded)
     if handles_rec is not None:
         video_info[HIO.INFO_KEY] = handles_rec
+    try:
+        video_info[SMETA.INFO_KEY] = SMETA.record(raw, selected)     # numbers, timecode, pixel aspect, reel (L9.55)
+    except Exception:  # noqa: BLE001 - source metadata is a bonus, never a reason not to load
+        pass
     colour = CM.plan(raw, colorspace_in, working_space)
     if colour is not None:
         video_info[CM.INFO_KEY] = colour.record          # Save Video (C2C) reverses exactly this (L9.53)
