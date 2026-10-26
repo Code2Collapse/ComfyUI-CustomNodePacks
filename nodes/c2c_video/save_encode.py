@@ -437,7 +437,9 @@ def write_proxy(images, fps: float, tag: str) -> dict | None:
     try:
         stream = container.add_stream("libx264", rate=Fraction(float(fps or 24.0)).limit_denominator(1_000_000))
         stream.width, stream.height, stream.pix_fmt = nw, nh, "yuv420p"
-        stream.options = {"crf": "20", "preset": "veryfast"}
+        from .testmedia import _rgb_to_yuv, _tag_bt709
+        _tag_bt709(stream)                              # L9.67: BT.709 limited, said in the file (was BT.601,
+        stream.options = {"crf": "20", "preset": "veryfast"}   # untagged: the A/B view showed a false colour shift)
         k = 0
         for a in range(0, n, 32):
             x = images[a:min(n, a + 32)][..., :3].detach().float().cpu().clamp(0, 1)
@@ -445,7 +447,7 @@ def write_proxy(images, fps: float, tag: str) -> dict | None:
                 x = torch.nn.functional.interpolate(x.permute(0, 3, 1, 2), size=(nh, nw), mode="area"
                                                     ).permute(0, 2, 3, 1)
             for row in (x * 255.0 + 0.5).to(torch.uint8).numpy():
-                vf = av.VideoFrame.from_ndarray(row, format="rgb24")
+                vf = _rgb_to_yuv(np.ascontiguousarray(row), "yuv420p")
                 vf.pts = k
                 k += 1
                 for packet in stream.encode(vf):

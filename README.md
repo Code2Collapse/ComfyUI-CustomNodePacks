@@ -1038,6 +1038,11 @@ see CREDITS.md.
     - largest difference from the CPU: 8e-6.
   - Results are close to the CPU, not bit-identical.
   - `C2C_VIDEO_CM_GPU=off` switches the GPU off.
+- **Previews show true colours (2026-10-26):** Load Video's preview, Save Video's A/B source and the video comparer's
+  preview are browser H.264 files.
+  - Before, they used PyAV's default BT.601 conversion and were untagged. Players show that as BT.709, so pure green
+    was 40/255 off, and the A/B difference view showed colour that was not in the saved file.
+  - Now they convert with BT.709 in limited range and the files say so: within 2 steps (measured).
   - Evidence and design: `docs/LOAD_SAVE_VIDEO_CM_DESIGN.md` section 10.
 
 #### Load Video (C2C): extra handles in model steps (2026-10-26)

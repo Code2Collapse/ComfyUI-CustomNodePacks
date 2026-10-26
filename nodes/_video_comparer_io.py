@@ -357,10 +357,12 @@ def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24
                 stream = container.add_stream(codec, rate=Fraction(meta["fps"]).limit_denominator(1_000_000))
                 stream.height, stream.width = int(frames.shape[1]), int(frames.shape[2])
                 stream.pix_fmt = "yuv420p"
+                from .c2c_video.testmedia import _rgb_to_yuv, _tag_bt709
+                _tag_bt709(stream)                      # L9.67: BT.709 limited, said in the file
                 if codec == "libx264":
                     stream.options = {"crf": "18", "preset": "veryfast"}
                 for i, row in enumerate(frames):
-                    vf = av.VideoFrame.from_ndarray(row, format="rgb24")
+                    vf = _rgb_to_yuv(np.ascontiguousarray(row), "yuv420p")
                     vf.pts = i
                     for packet in stream.encode(vf):
                         container.mux(packet)

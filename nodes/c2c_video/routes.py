@@ -455,6 +455,8 @@ def _encode_preview(loaded: C2CVideo, raw: C2CVideo, out_path: str, max_frames: 
         stream.width = pw
         stream.height = ph
         stream.pix_fmt = "yuv420p"
+        from .testmedia import _rgb_to_yuv, _tag_bt709
+        _tag_bt709(stream)                              # L9.67: BT.709 limited, said in the file
         stream.codec_context.gop_size = _PREVIEW_GOP
         if codec_name == "libx264":
             stream.options = {"crf": "23", "preset": "veryfast", "g": str(_PREVIEW_GOP)}
@@ -464,7 +466,7 @@ def _encode_preview(loaded: C2CVideo, raw: C2CVideo, out_path: str, max_frames: 
             for row in rgb_batch:
                 if written >= n:
                     break
-                frame = av.VideoFrame.from_ndarray(row, format="rgb24")
+                frame = _rgb_to_yuv(row, "yuv420p")
                 frame.pts = written
                 for packet in stream.encode(frame):
                     container.mux(packet)
