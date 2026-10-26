@@ -149,7 +149,9 @@ CODECS: dict[str, Codec] = {c.name: c for c in (
     Codec("EXR", "oiio_exr", ("Image sequence",), {
         "ZIP": Profile("zip", _m((16, 32), _RGB)),
         "PIZ": Profile("piz", _m((16, 32), _RGB)),
+        "ZIPS": Profile("zips", _m((16, 32), _RGB)),
         "DWAA": Profile("dwaa", _m((16, 32), _RGB)),
+        "DWAB": Profile("dwab", _m((16, 32), _RGB)),
         "None": Profile("none", _m((16, 32), _RGB)),
     }, "seq", alpha=True, note="16 = half float, 32 = float"),
     Codec("JPEG", "oiio_jpeg", ("Image sequence",), {
@@ -290,14 +292,22 @@ def matrix() -> dict:
             modes = []
             for bits, chroma in p.modes:
                 modes.append({"bits": str(bits) if bits < 32 else "32 (float)", "chroma": chroma,
-                              "reason": mode_reason(c, bits, chroma)})
+                              "reason": mode_reason(c, bits, chroma), "alpha": alpha_ok(c, bits, chroma)})
             profs[pname] = modes
-        out["codecs"][c.name] = {"profiles": profs, "quality": c.quality is not None, "alpha": c.alpha,
+        out["codecs"][c.name] = {"profiles": profs, "quality": c.quality is not None, "alpha": c.alpha, "enc": c.enc,
                                  "colour": "none" if c.family in ("pil", "seq") else ("rgb" if c.family == "rgb"
                                                                                        else "yuv"),
                                  "reason": _writer_ok(c), "note": c.note}
     # the old single-list labels and the five controls they mean (the front-end converts saved workflows)
     out["legacy"] = {label: [ch.container, ch.codec, ch.profile, ch.bit_depth, ch.chroma] for label, ch in LEGACY.items()}
+    out["families"] = list(FAMILIES)
+    out["from_controls"] = FROM_CONTROLS
+    out["subformats"] = {lab: {"family": d["family"], "five": [d["choice"].container, d["choice"].codec,
+                                                               d["choice"].profile, d["choice"].bit_depth,
+                                                               d["choice"].chroma],
+                               "options": list(d["options"]), "labels": OPTION_LABELS.get(lab, {}),
+                               "reason": _writer_ok(CODECS[d["choice"].codec])}
+                         for lab, d in SUBFORMATS.items()}
     return out
 
 
@@ -349,6 +359,17 @@ def check_choice(ch: Choice, alpha: bool = False) -> tuple[Codec, Profile, int]:
     if reason:
         raise SaveVideoError(f"{ch.codec} {ch.profile} {ch.bit_depth}-bit {ch.chroma} is not available here: {reason}.")
     return codec, prof, bits
+
+
+def alpha_ok(codec: Codec, bits: int, chroma: str) -> bool:
+    """Whether this mode writes an alpha channel - the same rule as FormatSpec.supports_alpha (the UI shows the
+    channels option only then: ProRes 4444 yes, ProRes 422 no)."""
+    if not codec.alpha:
+        return False
+    if codec.family in ("pil", "seq"):
+        return True
+    apix = pix_fmt(codec, bits, chroma, True)
+    return apix is not None and apix != pix_fmt(codec, bits, chroma, False)
 
 
 def build_spec(ch: Choice, alpha: bool = False) -> FormatSpec:
@@ -413,6 +434,71 @@ def legacy_choice(label: str) -> Choice | None:
 
 
 DEFAULT_CHOICE = LEGACY["MP4 H.264"]
+
+
+# ---- Format -> Subformat -> options (L9.54, owner 2026-10-25) -----------------------------------------------------------
+# A subformat fixes the container and the codec, starts from a sensible profile / depth / chroma, and names the option
+# widgets that are relevant to it (the front end shows only those). The five controls stay the encode's truth, so a
+# subformat never encodes differently from the same five values chosen by hand. "Custom" = the five-control cascade.
+FROM_CONTROLS = "from the controls"
+FAMILIES = ("Video", "Image Sequence", "Custom")
+_VIDEO_OPTS = ("quality", "encoder_preset", "profile", "bit_depth", "chroma", "gop", "bitrate_kbps")
+_SUB = (
+    ("Video", "H.264 / MP4", Choice("MP4", "H.264", "High", "8", "4:2:0"), _VIDEO_OPTS),
+    ("Video", "H.265 / HEVC / MP4", Choice("MP4", "H.265", "Main", "8", "4:2:0"), _VIDEO_OPTS),
+    ("Video", "ProRes 422 Proxy", Choice("MOV", "ProRes", "422 Proxy", "10", "4:2:2"), ("profile", "channels")),
+    ("Video", "ProRes 422 LT", Choice("MOV", "ProRes", "422 LT", "10", "4:2:2"), ("profile", "channels")),
+    ("Video", "ProRes 422", Choice("MOV", "ProRes", "422", "10", "4:2:2"), ("profile", "channels")),
+    ("Video", "ProRes 422 HQ", Choice("MOV", "ProRes", "422 HQ", "10", "4:2:2"), ("profile", "channels")),
+    ("Video", "ProRes 4444", Choice("MOV", "ProRes", "4444", "10", "4:4:4"), ("profile", "channels")),
+    ("Video", "ProRes 4444 XQ", Choice("MOV", "ProRes", "4444 XQ", "10", "4:4:4"), ("profile", "channels")),
+    ("Video", "DNxHR LB / SQ / HQ / HQX / 444", Choice("MOV", "DNxHR", "HQ", "8", "4:2:2"), ("profile",)),
+    ("Video", "FFV1 / MKV", Choice("MKV", "FFV1 (lossless)", "Lossless", "10", "4:4:4"),
+     ("bit_depth", "chroma", "channels")),
+    ("Image Sequence", "OpenEXR", Choice("Image sequence", "EXR", "ZIP", "16", "RGB"),
+     ("profile", "bit_depth", "channels")),
+    ("Image Sequence", "DPX", Choice("Image sequence", "DPX", "RGB", "10", "RGB"), ("bit_depth",)),
+    ("Image Sequence", "PNG", Choice("Image sequence", "PNG", "RGB", "16", "RGB"),
+     ("bit_depth", "channels", "png_compression")),
+    ("Image Sequence", "TIFF", Choice("Image sequence", "TIFF", "ZIP", "16", "RGB"),
+     ("profile", "bit_depth", "channels")),
+    ("Image Sequence", "JPEG", Choice("Image sequence", "JPEG", "4:2:0", "8", "4:2:0"), ("quality", "profile")),
+)
+SUBFORMATS: dict[str, dict] = {label: {"family": fam, "choice": ch, "options": opts} for fam, label, ch, opts in _SUB}
+# what the option widgets are called in each subformat (the controls keep their names; only the label changes)
+OPTION_LABELS = {"OpenEXR": {"profile": "compression", "bit_depth": "precision (16 = half, 32 = float)"},
+                 "TIFF": {"profile": "compression"}, "JPEG": {"profile": "chroma subsampling"},
+                 "DPX": {"bit_depth": "bit depth"}, "PNG": {"bit_depth": "bit depth"}}
+
+
+def subformat_of(ch: Choice) -> str | None:
+    """The subformat a five-control choice belongs to (old workflows open on the right subformat), or None (Custom)."""
+    exact = [lab for lab, d in SUBFORMATS.items() if d["choice"] == ch]
+    if exact:
+        return exact[0]
+    same = [lab for lab, d in SUBFORMATS.items() if (d["choice"].container, d["choice"].codec) == (ch.container, ch.codec)]
+    return same[0] if same else None
+
+
+def choice_for_subformat(subformat: str, ch: Choice | None) -> Choice:
+    """A subformat fixes container + codec; profile / depth / chroma come from the controls when the codec takes them
+    (the UI writes them), else the subformat's own. FROM_CONTROLS (old workflows, API prompts without it) = `ch`."""
+    if not subformat or subformat == FROM_CONTROLS or subformat not in SUBFORMATS:
+        return ch or DEFAULT_CHOICE
+    base = SUBFORMATS[subformat]["choice"]
+    if ch is None:
+        return base
+    codec = CODECS[base.codec]
+    prof = ch.profile if ch.profile in codec.profiles else base.profile
+    modes = codec.profiles[prof].modes
+    bits = bits_of(ch.bit_depth)
+    bit_depth, chroma = ch.bit_depth, ch.chroma
+    if (bits, chroma) not in modes:
+        bit_depth, chroma = base.bit_depth, base.chroma
+        if (bits_of(bit_depth), chroma) not in modes:
+            b0, c0 = modes[0]
+            bit_depth, chroma = (str(b0) if b0 < 32 else "32 (float)"), c0
+    return Choice(base.container, base.codec, prof, bit_depth, chroma)
 
 
 # ---- colour tags ------------------------------------------------------------------------------------------------------

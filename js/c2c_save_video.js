@@ -37,9 +37,17 @@ const NODE = "SaveVideoC2C";
 const SETTING_NAMING = "c2c.saveVideo.naming";
 const CUSTOM = "custom (container / codec)";
 const FIVE = ["container", "codec", "profile", "bit_depth", "chroma"];
+// L9.54 (owner 2026-10-25): Format -> Subformat -> only that subformat's options; less-used ones under Advanced
+const SUB_OPTS = ["quality", "encoder_preset", "profile", "bit_depth", "chroma", "gop", "bitrate_kbps", "channels",
+                  "png_compression"];
+// what a subformat lists shows (owner's per-format lists: EXR channels, H.264 preset ...); keyframes, bitrate and the
+// colour tags are the "advanced" ones (owner: Advanced = timecode, range, colour metadata, encoder-specific)
+const ADVANCED = new Set(["gop", "bitrate_kbps", "color_primaries", "color_transfer", "color_range"]);
+const ENCODER_EXTRAS = new Set(["libx264", "libx265", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "libsvtav1",
+                                "libvpx-vp9"]);
 const COLOUR = ["color_primaries", "color_transfer", "color_range"];
 const ALWAYS_HIDDEN = ["naming_resolved", "write_token", "range_in", "range_out"];
-const NAMING_INPUTS = new Set(["naming", "filename_prefix", "subfolder", "save_output", "format", ...FIVE]);
+const NAMING_INPUTS = new Set(["naming", "filename_prefix", "subfolder", "save_output", "format", "subformat", ...FIVE]);
 const FOLDER_NAMES = new Set(["Folder Version Incrementer", "Folder Version"]);
 
 // the old single list: formats without a quality setting (legacy labels only; the matrix says it for custom)
@@ -120,6 +128,7 @@ function cascade(node) {
     snap(kW, codecs, notes, "codec");
     const info = MATRIX.codecs[kW.value];
     if (!info) return { notes, info: null };
+
     const profiles = Object.keys(info.profiles);
     setOptions(pW, profiles);
     snap(pW, profiles, notes, "profile");
@@ -148,15 +157,151 @@ function migrateLegacy(node) {
     return label;
 }
 
+// ── L9.54 subformats ──────────────────────────────────────────────────────────────────────────────────────────
+const hasSubformats = () => !!(MATRIX?.subformats && MATRIX.families);
+
+function subformatsOf(family) {
+    return Object.entries(MATRIX?.subformats || {}).filter(([, d]) => d.family === family).map(([k]) => k);
+}
+
+/** The subformat the five controls belong to (exact match, else same container + codec), or null (= Custom). */
+function deriveSubformat(node) {
+    const five = FIVE.map((n) => String(val(node, n)));
+    const subs = Object.entries(MATRIX?.subformats || {});
+    const exact = subs.find(([, d]) => d.five.every((v, i) => String(v) === five[i]));
+    if (exact) return exact[0];
+    const same = subs.find(([, d]) => d.five[0] === five[0] && d.five[1] === five[1]);
+    return same ? same[0] : null;
+}
+
+function memory(node) {
+    node.properties = node.properties || {};
+    node.properties.c2c_subformat_memory = node.properties.c2c_subformat_memory || {};
+    return node.properties.c2c_subformat_memory;
+}
+
+/** Remember this subformat's current values (owner: "remember the last valid settings for each subformat"). */
+function rememberSubformat(node) {
+    const sub = val(node, "subformat");
+    if (!sub || !MATRIX?.subformats?.[sub]) return;
+    const m = {};
+    for (const n of [...FIVE, ...SUB_OPTS]) if (W(node, n)) m[n] = W(node, n).value;
+    memory(node)[sub] = m;
+}
+
+/** Switch to a subformat: its remembered values, else its defaults, written straight into the controls. */
+function applySubformat(node, sub) {
+    const d = MATRIX?.subformats?.[sub];
+    if (!d) return;
+    const mem = memory(node)[sub];
+    FIVE.forEach((n, i) => { const w = W(node, n); if (w) w.value = d.five[i]; });
+    if (mem) {
+        for (const [n, v] of Object.entries(mem)) {
+            if (n === "container" || n === "codec") continue;   // fixed by the subformat
+            const w = W(node, n);
+            if (w) w.value = v;
+        }
+    }
+}
+
+/** Keep family -> subformat lists consistent; returns the active subformat label or null (Custom). */
+function syncFamily(node) {
+    const fW = W(node, "format_family"), sW = W(node, "subformat");
+    if (!fW || !sW || !hasSubformats()) return null;
+    if (fW.value === "Custom") {
+        setOptions(sW, [MATRIX.from_controls]);
+        sW.value = MATRIX.from_controls;
+        return null;
+    }
+    const subs = subformatsOf(fW.value);
+    setOptions(sW, subs.length ? subs : [MATRIX.from_controls]);
+    if (!subs.includes(sW.value)) {
+        sW.value = subs[0];
+        applySubformat(node, subs[0]);
+    }
+    return sW.value;
+}
+
+/** A saved workflow (no subformat yet): show it on the subformat its five controls belong to - same encode. */
+function adoptSubformat(node) {
+    const fW = W(node, "format_family"), sW = W(node, "subformat");
+    if (!fW || !sW || !hasSubformats() || sW.value !== MATRIX.from_controls || val(node, "format") !== CUSTOM) return;
+    const sub = deriveSubformat(node);
+    if (sub) {
+        fW.value = MATRIX.subformats[sub].family;
+        setOptions(sW, subformatsOf(fW.value));
+        sW.value = sub;
+    } else {
+        fW.value = "Custom";
+    }
+}
+
+/** Can the current profile / depth / chroma carry alpha? (ProRes: only 4444 / XQ - the matrix says per mode.) */
+function modeAlpha(node, info) {
+    const mode = (info?.profiles?.[val(node, "profile")] || [])
+        .find((m) => m.bits === String(val(node, "bit_depth")) && m.chroma === val(node, "chroma"));
+    return mode?.alpha ?? !!info?.alpha;
+}
+
+/** ProRes: every profile is its own subformat, so a profile picked inside one moves to that subformat.
+ *  Returns true when the subformat changed. */
+function followProfile(node) {
+    const sW = W(node, "subformat"), cur = MATRIX?.subformats?.[sW?.value];
+    const p = String(val(node, "profile"));
+    if (!cur || String(cur.five[2]) === p) return false;
+    const other = subformatsOf(cur.family).find((k) => {
+        const d = MATRIX.subformats[k];
+        return d.five[0] === cur.five[0] && d.five[1] === cur.five[1] && String(d.five[2]) === p;
+    });
+    if (!other) return false;
+    sW.value = other;
+    return true;
+}
+
+function setLabel(w, text) {
+    if (!w) return;
+    if (w.__c2cBaseLabel === undefined) w.__c2cBaseLabel = (w.label && w.label !== w.name) ? w.label : null;
+    w.label = text ?? w.__c2cBaseLabel ?? w.name;
+}
+
 function applyVisibility(node, info) {
     const custom = val(node, "format") === CUSTOM;
-    for (const n of FIVE) setHidden(W(node, n), !custom);
-    const quality = custom ? !!info?.quality : !NO_QUALITY_FORMATS.has(baseLabel(val(node, "format")));
-    setHidden(W(node, "quality"), !quality);
-    const colour = custom ? (info?.colour ?? "yuv") : "yuv";
-    setHidden(W(node, "color_primaries"), colour === "none");
-    setHidden(W(node, "color_transfer"), colour === "none");
-    setHidden(W(node, "color_range"), colour !== "yuv");
+    const subMode = custom && hasSubformats() && !!W(node, "subformat");
+    const adv = !!node.properties?.c2c_save_advanced;
+    const sub = subMode ? val(node, "subformat") : null;
+    const sd = sub ? MATRIX.subformats?.[sub] : null;
+    const enc = info?.enc;
+    if (subMode) {
+        setHidden(W(node, "format"), true);                  // the old single list: its entries are the subformats now
+        setHidden(W(node, "format_family"), false);
+        setLabel(W(node, "format_family"), "format");        // the owner's "Format -> Subformat"
+        setHidden(W(node, "subformat"), !sd);
+        for (const n of ["container", "codec"]) setHidden(W(node, n), !!sd);
+        const shown = (n) => {
+            if (n === "channels") return (!sd || sd.options.includes(n)) && modeAlpha(node, info);
+            if (sd) return sd.options.includes(n);
+            if (FIVE.includes(n)) return true;               // Custom: the cascade
+            if (n === "quality") return !!info?.quality;
+            if (n === "png_compression") return enc === "png" || enc === "oiio_png";
+            return ENCODER_EXTRAS.has(enc);                  // preset / gop / bitrate
+        };
+        for (const n of SUB_OPTS) setHidden(W(node, n), !shown(n) || (ADVANCED.has(n) && !adv));
+        for (const n of SUB_OPTS) setLabel(W(node, n), sd ? MATRIX.subformats[sub].labels?.[n] : null);
+        const colour = info?.colour ?? "yuv";
+        setHidden(W(node, "color_primaries"), colour === "none" || !adv);
+        setHidden(W(node, "color_transfer"), colour === "none" || !adv);
+        setHidden(W(node, "color_range"), colour !== "yuv" || !adv);
+    } else {
+        for (const n of ["format_family", "subformat", "encoder_preset", "gop", "bitrate_kbps", "channels",
+                         "png_compression"]) setHidden(W(node, n), true);
+        for (const n of FIVE) setHidden(W(node, n), !custom);
+        const quality = custom ? !!info?.quality : !NO_QUALITY_FORMATS.has(baseLabel(val(node, "format")));
+        setHidden(W(node, "quality"), !quality);
+        const colour = custom ? (info?.colour ?? "yuv") : "yuv";
+        setHidden(W(node, "color_primaries"), colour === "none");
+        setHidden(W(node, "color_transfer"), colour === "none");
+        setHidden(W(node, "color_range"), colour !== "yuv");
+    }
     // the stream-save options matter only with a latent wired (images arrive decoded otherwise)
     const streamed = node.inputs?.find((i) => i.name === "latent")?.link != null;
     setHidden(W(node, "tile_mode"), !streamed);
@@ -192,7 +337,17 @@ function mountSaveWidget(node) {
     const tools = document.createElement("div");
     tools.className = "c2c-vloader__summary-chips";
     tools.dataset.c2cSave = "tools";
-    summary.append(tools, pathLine, formatLine);
+    const advRow = document.createElement("div");
+    advRow.className = "c2c-vloader__summary-chips";
+    const bAdv = playerButton("Advanced ▸", "Show the less-used options: encoder preset, keyframes, bitrate, alpha, "
+        + "PNG compression, colour tags", () => {
+        node.properties = node.properties || {};
+        node.properties.c2c_save_advanced = !node.properties.c2c_save_advanced;
+        refreshFormat();
+    });
+    bAdv.dataset.c2cSave = "advanced";
+    advRow.append(bAdv);
+    summary.append(tools, advRow, pathLine, formatLine);
     ui.root.insertBefore(summary, ui.status.el);
     ui.summary = summary;
 
@@ -333,8 +488,13 @@ function mountSaveWidget(node) {
 
     // ── format notes + visibility ──
     function refreshFormat() {
+        if (hasSubformats() && val(node, "format") === CUSTOM) syncFamily(node);
         const { notes, info } = cascade(node);
         applyVisibility(node, info);
+        const adv = !!node.properties?.c2c_save_advanced;
+        bAdv.textContent = adv ? "Advanced ▾" : "Advanced ▸";
+        bAdv.setAttribute("aria-pressed", String(adv));
+        bAdv.hidden = !(hasSubformats() && val(node, "format") === CUSTOM);
         const migrated = node._c2cSaveMigrated;
         const preset = node._c2cSavePreset;
         const lines = [];
@@ -410,6 +570,42 @@ function mountSaveWidget(node) {
     return { refreshFormat, schedulePath };
 }
 
+// L9.54 (owner: "organized like VHS Video Combine"): Format -> Subformat -> its options show FIRST. The new inputs are
+// appended last in Python (saved workflows keep their positions), so only the display order changes: widgets_values
+// is written back in the input order (onSerialize) and restored by name (onConfigure) - frontend 1.53 restores by
+// position and also writes widgets_values_named, so workflows load the same either way.
+const DISPLAY_FIRST = ["format", "format_family", "subformat", "container", "codec", "profile", "bit_depth", "chroma",
+                       "quality", "encoder_preset", "gop", "bitrate_kbps", "channels", "png_compression",
+                       "color_primaries", "color_transfer", "color_range"];
+
+function orderForDisplay(node) {
+    if (!node.widgets?.length || node._c2cCanon) return;
+    node._c2cCanon = node.widgets.filter((w) => w.serialize !== false).map((w) => w.name);
+    node._c2cDefaults = Object.fromEntries(node.widgets.map((w) => [w.name, w.value]));
+    const first = DISPLAY_FIRST.map((n) => W(node, n)).filter(Boolean);
+    const rest = node.widgets.filter((w) => !first.includes(w));
+    node.widgets.splice(0, node.widgets.length, ...first, ...rest);
+}
+
+/** The input order of the serialized widgets (widgets added after creation keep their place at the end). */
+function canonicalWidgets(node) {
+    const ser = node.widgets.filter((w) => w.serialize !== false);
+    const byName = new Map(ser.map((w) => [w.name, w]));
+    const canon = node._c2cCanon.map((n) => byName.get(n)).filter(Boolean);
+    return [...canon, ...ser.filter((w) => !canon.includes(w))];
+}
+
+function restoreByName(node, info) {
+    const vals = info?.widgets_values;
+    if (!node._c2cCanon || !Array.isArray(vals)) return;
+    const named = info.widgets_values_named;
+    canonicalWidgets(node).forEach((w, i) => {
+        if (named && Object.hasOwn(named, w.name)) w.value = named[w.name];
+        else if (i < vals.length) w.value = vals[i];
+        else if (Object.hasOwn(node._c2cDefaults, w.name)) w.value = node._c2cDefaults[w.name];  // older workflow
+    });
+}
+
 function hook(node, name, fn) {
     const w = W(node, name);
     if (!w || w.__c2cSvHooked) return;
@@ -447,6 +643,7 @@ if (!globalThis.__c2cSaveVideoExt) {
                 const node = this;
                 const api_ = mountSaveWidget(node);
                 node._c2cSave = api_;
+                orderForDisplay(node);
                 // L9.52: a named format is a PRESET - picking one fills the five controls (format -> custom), so its
                 // options always show (they used to vanish: owner "controls didn't appear")
                 hook(node, "format", () => {
@@ -455,7 +652,21 @@ if (!globalThis.__c2cSaveVideoExt) {
                     api_.refreshFormat();
                 });
                 for (const n of [...FIVE, "handles_trim", "tile_mode"]) {
-                    hook(node, n, () => { if (FIVE.includes(n)) node._c2cSavePreset = null; api_.refreshFormat(); });
+                    hook(node, n, () => {
+                        if (FIVE.includes(n)) node._c2cSavePreset = null;
+                        api_.refreshFormat();
+                        if (n === "profile" && followProfile(node)) api_.refreshFormat();
+                        rememberSubformat(node);
+                    });
+                }
+                hook(node, "format_family", () => { syncFamily(node); api_.refreshFormat(); rememberSubformat(node); });
+                hook(node, "subformat", () => {
+                    applySubformat(node, val(node, "subformat"));
+                    api_.refreshFormat();
+                    rememberSubformat(node);
+                });
+                for (const n of SUB_OPTS) {
+                    if (!FIVE.includes(n)) hook(node, n, () => rememberSubformat(node));
                 }
                 // a node made now (not loaded from a workflow) starts 420 px wide; the frontend sizes it to
                 // computeSize() after onNodeCreated, so this waits a tick
@@ -471,21 +682,40 @@ if (!globalThis.__c2cSaveVideoExt) {
                     if (fresh && node.size?.[0] < 420) node.setSize([420, node.size[1]]);
                     resolveNaming(node);
                     applyVisibility(node, null);
-                    loadMatrix().then(() => { api_.refreshFormat(); api_.schedulePath(); });
+                    loadMatrix().then(() => {
+                        if (fresh && hasSubformats() && W(node, "subformat")?.value === MATRIX.from_controls) {
+                            W(node, "format_family").value = "Video";
+                            W(node, "subformat").value = "H.264 / MP4";
+                            applySubformat(node, "H.264 / MP4");
+                        }
+                        api_.refreshFormat();
+                        api_.schedulePath();
+                    });
                 }, 0);
                 return r;
             };
             const onConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (...args) {
+                restoreByName(this, args[0]);               // before anything reads the values
                 const r = onConfigure?.apply(this, args);
                 const node = this;
                 loadMatrix().then(() => {
                     const from = migrateLegacy(node);
                     if (from) node._c2cSaveMigrated = from;
+                    adoptSubformat(node);                    // L9.54: shown on its subformat - the same encode
                     node._c2cSave?.refreshFormat();
                     node._c2cSave?.schedulePath();
                 });
                 return r;
+            };
+            const onSerialize = nodeType.prototype.onSerialize;
+            nodeType.prototype.onSerialize = function (o) {
+                onSerialize?.apply(this, arguments);
+                if (!this._c2cCanon || !Array.isArray(o?.widgets_values)) return;
+                o.widgets_values = canonicalWidgets(this).map((w) => {
+                    const v = w.value;
+                    return typeof v === "object" && v ? JSON.parse(JSON.stringify(v)) : v ?? null;
+                });
             };
             const onConn = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (...args) {

@@ -888,6 +888,29 @@ see CREDITS.md.
   Otherwise the node says why nothing was trimmed. A wired `video_info` always wins. Measured: Load (+8 handles) ->
   Save with no wire, in a subgraph, wrote the 48 source frames 0-47 with the audio exactly in place.
 
+#### Save Video (C2C): Format -> Subformat -> options (2026-10-26)
+
+- **Format, then Subformat.** `format` is *Video*, *Image Sequence* or *Custom*. *Video* lists H.264 / MP4,
+  H.265 / HEVC / MP4, the six ProRes profiles (422 Proxy, LT, 422, HQ, 4444, 4444 XQ), DNxHR (LB / SQ / HQ / HQX /
+  444) and FFV1 / MKV. *Image Sequence* lists OpenEXR, DPX, PNG, TIFF and JPEG. These controls and the options for
+  the chosen subformat are the first rows on the node. The less-used options sit under **Advanced**.
+- **Only that subformat's options.**
+  - OpenEXR: compression (ZIP, PIZ, ZIPS, DWAA, DWAB or none), precision (16 = half, 32 = float) and channels.
+  - H.264 / H.265: quality (CRF), encoder preset, profile, bit depth and chroma. Under Advanced: keyframe interval
+    (GOP), bitrate and the colour tags.
+  - ProRes: the profile. Channels appear only for 4444 / 4444 XQ, the profiles that can carry alpha. Picking another
+    profile moves the subformat with it, so "ProRes 422 HQ" never writes 4444.
+  - PNG: bit depth, channels and compression level.
+  - DPX: bit depth.
+- **Channels:** *auto* keeps alpha when the images have it. *RGB* drops it. *RGBA* writes an opaque alpha. On a
+  format with no alpha, the file is written as RGB and the node says so.
+- **Remembers each subformat:** switch from OpenEXR / DWAB to PNG and back, and OpenEXR is on DWAB again.
+- **Custom** is the full container -> codec -> profile -> bit depth -> chroma cascade from 2026-10-23.
+- **Saved workflows:** a workflow with the old single list ("MOV ProRes 422 HQ") opens on its subformat and encodes
+  the same file. Values are saved in input order and restored by name, so the new layout loads in every frontend.
+  Checked live on frontend 1.53.10 in both renderers and inside a subgraph: an OpenEXR / DWAB / float run wrote a
+  DWAB float EXR, and a save -> reload round trip kept every value.
+
 #### Load Video (C2C): built-in handles (2026-10-23)
 
 `handles` = *fit* or *add* puts handle frames on the clip as it loads (repeated edge frames, never black; the audio

@@ -16,6 +16,7 @@ from .c2c_video.save_encode import (
 from .c2c_video import save_matrix as SM
 from .c2c_video import handles_io as HIO
 from .c2c_video import save_naming as SN
+from .c2c_video import save_encode as SE
 from .c2c_video.save_formats import (
     SaveVideoError,
     available_formats,
@@ -136,6 +137,23 @@ class SaveVideoC2C:
                     "range applied) and writes nothing; the player's Write file button then writes it - only the "
                     "encode runs again, the graph above is cached."}),
                 "write_token": ("STRING", {"default": "", "tooltip": "Set by the player's Write file button."}),
+                # L9.54 (owner 2026-10-25: Format -> Subformat -> only that subformat's options) - appended
+                "format_family": (list(SM.FAMILIES), {"default": "Video", "tooltip":
+                    "Video, Image Sequence, or Custom (container -> codec -> profile -> bit depth -> chroma)."}),
+                "subformat": ([SM.FROM_CONTROLS] + list(SM.SUBFORMATS), {"default": SM.FROM_CONTROLS, "tooltip":
+                    "The output format. It fixes the container and codec; only its own options show. 'from the "
+                    "controls' = the five controls exactly (saved workflows)."}),
+                "encoder_preset": (list(SE.X264_PRESETS), {"default": "default", "tooltip":
+                    "H.264 / H.265 speed vs size (NVENC and AV1 get the matching step). default = the encoder's own."}),
+                "gop": ("INT", {"default": 0, "min": 0, "max": 10000, "tooltip":
+                    "Keyframe interval in frames (0 = the encoder's own). 1 = every frame a keyframe (edit-friendly)."}),
+                "bitrate_kbps": ("INT", {"default": 0, "min": 0, "max": 2_000_000, "tooltip":
+                    "Average bitrate in kbit/s instead of constant quality (0 = constant quality from quality)."}),
+                "channels": (["auto", "RGB", "RGBA"], {"default": "auto", "tooltip":
+                    "auto: alpha when the frames have it. RGB: never alpha. RGBA: alpha always (opaque when the "
+                    "frames have none) - where the format can store it."}),
+                "png_compression": ("INT", {"default": -1, "min": -1, "max": 9, "tooltip":
+                    "PNG zlib level 0 (fast, big) - 9 (slow, small); -1 = the writer's default. Lossless either way."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
@@ -198,6 +216,13 @@ class SaveVideoC2C:
         range_out=0,
         write_mode="write",
         write_token="",
+        format_family="Video",
+        subformat=SM.FROM_CONTROLS,
+        encoder_preset="default",
+        gop=0,
+        bitrate_kbps=0,
+        channels="auto",
+        png_compression=-1,
         prompt=None,
         extra_pnginfo=None,
         unique_id=None,
@@ -240,6 +265,11 @@ class SaveVideoC2C:
         d = SM.DEFAULT_CHOICE
         choice = SM.Choice(container or d.container, codec or d.codec, profile or d.profile,
                            str(bit_depth or d.bit_depth), chroma or d.chroma)
+        if str(format) == SM.CUSTOM:                 # L9.54: a subformat fixes container + codec (API prompts too)
+            choice = SM.choice_for_subformat(str(subformat or SM.FROM_CONTROLS), choice)
+        extras = SE.Extras(encoder_preset=str(encoder_preset or "default"), gop=int(gop or 0),
+                           bitrate_kbps=int(bitrate_kbps or 0), channels=str(channels or "auto"),
+                           png_compression=int(-1 if png_compression is None else png_compression))
         colour = SM.Colour(color_primaries or "auto", color_transfer or "auto", color_range or "auto")
         SM.check_colour(colour)
         spec, format_how = SM.resolve(str(format), choice, alpha=images.shape[-1] >= 4)
@@ -344,6 +374,7 @@ class SaveVideoC2C:
             audio=audio,
             pad_note=pad_note,
             colour=colour,
+            extras=extras,
         )
         workflow_png = None
         if save_metadata:

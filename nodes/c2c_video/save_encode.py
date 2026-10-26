@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 import os
 import wave
 from fractions import Fraction
@@ -133,8 +134,50 @@ def quantize_fast(rgb: np.ndarray, bits: int) -> np.ndarray:
     return q.to(torch.int32).numpy().astype(np.uint16)
 
 
-def encoder_options(spec: FormatSpec, quality: int) -> dict[str, str]:
+@dataclass(frozen=True)
+class Extras:
+    """L9.54 subformat options (owner 2026-10-25). Every default = the encoder's behaviour before them."""
+    encoder_preset: str = "default"      # x264 / x265 speed names; NVENC and SVT-AV1 get the matching step
+    gop: int = 0                         # keyframe interval in frames (0 = the encoder's own)
+    bitrate_kbps: int = 0                # > 0: average bitrate instead of constant quality
+    channels: str = "auto"               # auto = alpha when the frames have it; RGB drops it; RGBA adds opaque
+    png_compression: int = -1            # PNG / PNG-in-MOV zlib level 0-9 (-1 = the writer's default)
+
+
+X264_PRESETS = ("default", "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower",
+                "veryslow")
+_NVENC_STEP = {"ultrafast": "p1", "superfast": "p1", "veryfast": "p2", "faster": "p3", "fast": "p4", "medium": "p5",
+               "slow": "p6", "slower": "p7", "veryslow": "p7"}
+_SVT_STEP = {"ultrafast": "12", "superfast": "11", "veryfast": "10", "faster": "9", "fast": "8", "medium": "6",
+             "slow": "4", "slower": "3", "veryslow": "2"}
+
+
+def encoder_options(spec: FormatSpec, quality: int, extras: "Extras | None" = None) -> dict[str, str]:
     """Codec options for ``spec`` at ``quality`` (0-100): the same for the PyAV and the ffmpeg path."""
+    opts = _quality_options(spec, quality)
+    x = extras or Extras()
+    preset = str(x.encoder_preset or "default")
+    if preset != "default":
+        if spec.codec in ("libx264", "libx265"):
+            opts["preset"] = preset
+        elif spec.quality_param == "cq":
+            opts["preset"] = _NVENC_STEP.get(preset, opts.get("preset", "p5"))
+        elif spec.quality_param == "svt":
+            opts["preset"] = _SVT_STEP.get(preset, opts.get("preset", "8"))
+    if int(x.gop or 0) > 0 and spec.codec in ("libx264", "libx265", "libvpx-vp9", "libsvtav1", "h264_nvenc",
+                                               "hevc_nvenc", "av1_nvenc"):
+        opts["g"] = str(int(x.gop))
+    if int(x.bitrate_kbps or 0) > 0 and spec.codec in ("libx264", "libx265", "libvpx-vp9", "h264_nvenc",
+                                                        "hevc_nvenc", "av1_nvenc"):
+        opts.pop("crf", None)
+        opts.pop("cq", None)
+        opts["b"] = f"{int(x.bitrate_kbps)}k"
+    if int(x.png_compression) >= 0 and spec.codec == "png":
+        opts["compression_level"] = str(max(0, min(9, int(x.png_compression))))
+    return opts
+
+
+def _quality_options(spec: FormatSpec, quality: int) -> dict[str, str]:
     opts: dict[str, str] = {}
     if spec.profile:
         opts["profile"] = spec.profile
@@ -451,6 +494,7 @@ def _encode_av_stream(
     has_alpha: bool,
     metadata: dict[str, Any] | None = None,
     colour=None,
+    extras: "Extras | None" = None,
 ) -> list[str]:
     import av
 
@@ -483,7 +527,7 @@ def _encode_av_stream(
         pbar = ProgressBar(n) if ProgressBar else None
         pcm = prepare_audio(audio, n, fps) if spec.audio_codec and spec.audio_codec != "wav_sidecar" else None
         return encode_with_ffmpeg(
-            exe, images, spec, path, fps=fps, has_alpha=has_alpha, encoder_opts=encoder_options(spec, quality),
+            exe, images, spec, path, fps=fps, has_alpha=has_alpha, encoder_opts=encoder_options(spec, quality, extras),
             tags=tags, metadata=metadata, pcm=pcm, chunks=chunks(), quantize=quantize_fast, interrupt=interrupt,
             progress=(lambda done, total: pbar.update_absolute(done, total)) if pbar else (lambda d, t: None),
             matrix=conv[0], out_range=conv[2])
@@ -524,7 +568,7 @@ def _encode_av_stream(
                 cc.color_primaries = TAG_NUM[tags["color_primaries"]]
             if tags.get("color_trc"):
                 cc.color_trc = TAG_NUM[tags["color_trc"]]
-        opts = encoder_options(spec, quality)
+        opts = encoder_options(spec, quality, extras)
         if opts:
             stream.options = opts
 
@@ -646,7 +690,8 @@ _DNXHR_MIN = (256, 120)
 _MATRIX_SEQ = frozenset({"oiio_png", "oiio_tiff", "oiio_dpx", "oiio_jpeg", "oiio_exr"})
 
 
-def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has_alpha: bool, quality: int) -> None:
+def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has_alpha: bool, quality: int,
+                        extras: "Extras | None" = None) -> None:
     """One frame of a matrix image sequence (L9.40). Integer formats are clipped to 0-1 and rounded like the PNG16
     path; DPX stores 10 / 12 bits in 16-bit words (OIIO's BitsPerSample); EXR stores premultiplied colour (Nuke's
     Read assumes it) and TIFF / PNG straight alpha, as each format defines."""
@@ -679,6 +724,8 @@ def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has
     elif spec.codec == "oiio_jpeg":
         ospec.attribute("Compression", f"jpeg:{max(1, min(100, int(quality)))}")
         ospec.attribute("jpeg:subsampling", str(spec.profile or "4:2:0"))
+    if spec.codec == "oiio_png" and extras is not None and int(extras.png_compression) >= 0:
+        ospec.attribute("png:compressionLevel", max(0, min(9, int(extras.png_compression))))
     out = oiio.ImageOutput.create(fpath)
     if out is None:
         raise SaveVideoError(f"OpenImageIO cannot write {fpath}: {oiio.geterror()}")
@@ -703,6 +750,7 @@ def _encode_sequence_oiio(
     has_alpha: bool,
     clamp_hdr: bool,
     quality: int = 90,
+    extras: "Extras | None" = None,
 ) -> list[str]:
     import OpenImageIO as oiio  # type: ignore[import-not-found]
 
@@ -720,7 +768,7 @@ def _encode_sequence_oiio(
         fpath = os.path.join(out_dir, fname)
         h, w = row.shape[:2]
         if spec.codec in _MATRIX_SEQ:
-            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality)
+            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality, extras)
         elif spec.codec == "oiio_png16":
             names = ["R", "G", "B"]
             planes = [np.clip(row[..., k], 0, 1) for k in range(3)]
@@ -799,13 +847,23 @@ def encode_video(
     pad_note: str | None,
     metadata: dict[str, Any] | None = None,
     colour=None,
+    extras: "Extras | None" = None,
 ) -> dict[str, Any]:
     if images.ndim == 3:
         images = images.unsqueeze(0)
-    n, h, w, c = images.shape
-    has_alpha = c >= 4 and images[..., 3].max() > 0.001
-    alpha_out = has_alpha and spec.supports_alpha
+    x = extras or Extras()
     warnings: list[str] = []
+    n, h, w, c = images.shape
+    if x.channels == "RGBA" and c < 4:
+        if not spec.supports_alpha:
+            warnings.append("channels RGBA: this format has no alpha channel - written as RGB.")
+        elif torch.is_tensor(images):                        # an opaque alpha the file can carry
+            images = torch.cat([images[..., :3], torch.ones_like(images[..., :1])], dim=-1)
+            c = 4
+    has_alpha = c >= 4 and (x.channels == "RGBA" or images[..., 3].max() > 0.001)
+    if x.channels == "RGB":
+        has_alpha = False                                    # the alpha the frames have is not written
+    alpha_out = has_alpha and spec.supports_alpha
     if has_alpha and not spec.supports_alpha:
         warnings.append("Alpha channel dropped — this format does not support transparency.")
         has_alpha = False
@@ -831,6 +889,7 @@ def encode_video(
             clamp_hdr=spec.codec in ("oiio_png16", "oiio_png", "oiio_dpx", "oiio_jpeg")
             or (spec.codec == "oiio_tiff" and spec.bit_depth < 32),
             quality=quality,
+            extras=x,
         )
     elif spec.codec == "pil_gif":
         paths = _encode_gif(images, full_path, fps, quality, colorspace_in, out_cs)
@@ -839,7 +898,7 @@ def encode_video(
     else:
         paths = _encode_av_stream(
             images, spec, full_path, fps, quality,
-            colorspace_in, out_cs, audio, alpha_out, metadata, colour,
+            colorspace_in, out_cs, audio, alpha_out, metadata, colour, extras=x,
         )
 
     if pad_note:
