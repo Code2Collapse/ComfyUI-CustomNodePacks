@@ -55,8 +55,37 @@ def grid_for(handle_grid: str, format_preset: dict, format_name: str, step: int,
     return handle_grid, int(step), int(plus), (g.note if handle_grid == CUSTOM else handle_grid)
 
 
+def extra_frames(model: str, step: int, plus: int, steps: int, side: str) -> tuple[int, int, int]:
+    """L9.56 (owner 2026-10-25: "another button to add more handles along with your auto handles ... multiples of 17
+    for MiniMax, 4 for Wan, 8 for LTX"): (head, tail, unit) for `steps` whole model steps. A step is the grid's own
+    step, so a clip on the grid stays on it; `both` splits the steps, the odd one to the head."""
+    unit = max(1, int(AV.resolve(model, int(step), int(plus)).step))
+    k = max(0, int(steps))
+    if side == "both":
+        hk = (k + 1) // 2
+        return hk * unit, (k - hk) * unit, unit
+    return (k * unit, 0, unit) if side == "head" else (0, k * unit, unit)
+
+
+def _with_extra(plan: dict, model: str, step: int, plus: int, steps: int, side: str) -> dict:
+    eh, et, unit = extra_frames(model, step, plus, steps, side)
+    if not (eh or et) or plan.get("error"):
+        return plan
+    total = int(plan["total"]) + eh + et
+    return dict(plan, head=int(plan["head"]) + eh, tail=int(plan["tail"]) + et, total=total,
+                extra={"steps": int(steps), "step": unit, "frames": eh + et, "head": eh, "tail": et},
+                note=f"{plan['note']}; + {int(steps)} x {unit} = {eh + et} extra frames -> {total}")
+
+
 def plan_handles(n: int, *, mode: str, frames: int, target: int, side: str, model: str, step: int,
-                 plus: int) -> dict:
+                 plus: int, extra_steps: int = 0) -> dict:
+    """plan_handles_base + `extra_steps` whole model steps on top (L9.56)."""
+    return _with_extra(plan_handles_base(n, mode=mode, frames=frames, target=target, side=side, model=model,
+                                         step=step, plus=plus), model, step, plus, extra_steps, side)
+
+
+def plan_handles_base(n: int, *, mode: str, frames: int, target: int, side: str, model: str, step: int,
+                      plus: int) -> dict:
     """What add_on_load will put on an n-frame clip, without touching anything (no AV Handles memory, no disk): the
     probe shows it before a run (L9.52 - owner: the count was 'not what I typed' and nothing said why).
     -> {head, tail, total, target, asked, note}. Mirrors AVHandlesMEC.run for fit and add (padding = the model grid)."""
@@ -94,7 +123,7 @@ def plan_handles(n: int, *, mode: str, frames: int, target: int, side: str, mode
 
 
 def add_on_load(loaded, audio, *, mode: str, frames: int, target: int, side: str, model: str, step: int, plus: int,
-                fps: float, memo_key: str = "") -> tuple[Any, Any, dict, str]:
+                fps: float, memo_key: str = "", extra_steps: int = 0) -> tuple[Any, Any, dict, str]:
     """(handle with the handles, audio moved to match, record, report). mode = fit | add."""
     if mode not in ("fit", "add"):
         raise AV.AVHandlesError(f"handles must be off, fit or add; got {mode!r}.")
@@ -105,6 +134,14 @@ def add_on_load(loaded, audio, *, mode: str, frames: int, target: int, side: str
         custom_plus=int(plus), images=proxy, audio=audio, side=side,
         padding_mode=AV.USE_MODEL if mode == "add" else "disabled", manual_fps=float(fps), memo_key=memo_key)
     head, tail = int(rec["head"]), int(rec["tail"])
+    eh, et, unit = extra_frames(model, step, plus, extra_steps, side)        # L9.56: whole model steps on top
+    if eh or et:
+        if out_aud is not None:
+            out_aud = AV.shift_audio_ends(out_aud, eh, et, float(fps), add=True)
+        head, tail, total = head + eh, tail + et, total + eh + et
+        rec = dict(rec, head=head, tail=tail,
+                   extra={"steps": int(extra_steps), "step": unit, "frames": eh + et, "head": eh, "tail": et})
+        info = f"{info}; + {int(extra_steps)} x {unit} = {eh + et} extra frames -> {total}"
     sel = list(loaded.selected_indices())
     if head or tail:
         from .handle import TransformOp

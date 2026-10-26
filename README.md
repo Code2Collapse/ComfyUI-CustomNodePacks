@@ -996,6 +996,17 @@ see CREDITS.md.
   1080p LogC3 clip loads in 4.3 s instead of 0.7 s. Every transform is OCIO's exact processor; a faster baked LUT was
   tried and rejected (up to 18 % off on saturated colours).
 
+#### Load Video (C2C): extra handles in model steps (2026-10-26)
+
+- `extra handles (model steps)` adds k whole steps of the model's frame grid on top of fit / add: MiniMax H3 = 17,
+  Wan = 4, LTX = 8, no grid = 1. One step keeps a clip that is on the grid on the grid, so the count never breaks the
+  model. The widget's +/- moves one step.
+- They go on `handle side`; *both* splits the steps, with the odd one at the head. The details line says what a run
+  will add before it runs, for example "+ 2 x 17 = 34 extra frames -> 56". Save Video (C2C) trims them with the rest.
+- It is shown only while handles are fit or add. Default 0, so saved workflows are unchanged.
+- Checked live on frontend 1.53.10 in both renderers: 10 frames, fit on MiniMax H3 + 2 steps = 56 frames. Save
+  trimmed back exactly to the 10 source frames, numbered 1001-1010.
+
 #### Load Video (C2C): built-in handles (2026-10-23)
 
 `handles` = *fit* or *add* puts handle frames on the clip as it loads (repeated edge frames, never black; the audio

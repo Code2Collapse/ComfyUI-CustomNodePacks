@@ -305,7 +305,8 @@ def _handles_plan(n: int, params: dict[str, Any]) -> dict[str, Any] | None:
                                                 int(params.get("handle_custom_plus") or 0))
         out = HIO.plan_handles(n, mode=mode, frames=int(params.get("handle_frames") or 0),
                                target=int(params.get("handle_target") or 0),
-                               side=str(params.get("handle_side") or "head"), model=model, step=step, plus=plus)
+                               side=str(params.get("handle_side") or "head"), model=model, step=step, plus=plus,
+                               extra_steps=int(params.get("extra_handles") or 0))
     except Exception as exc:  # noqa: BLE001 - shown in the node, the run reports the same error
         return {"error": True, "note": str(exc)}
     return dict(out, grid=label, frames_in=int(n))

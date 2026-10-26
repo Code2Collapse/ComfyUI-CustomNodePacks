@@ -1,6 +1,7 @@
 /**
  * Built-in handles on Load Video (C2C) / Load Video Path (C2C) (L9.40): show only the handle widgets the chosen mode
- * uses - off: none; fit: target, side, grid; add: frames, side, grid; custom step / plus only for the custom grid.
+ * uses - off: none; fit: target, side, grid; add: frames, side, grid; custom step / plus only for the custom grid;
+ * extra handles (L9.56: whole model steps on top) with fit and add.
  * The count the run used is in the node's info output and in video_info, where Save Video (C2C) trims it.
  */
 import { app } from "../../scripts/app.js";
@@ -9,7 +10,7 @@ import { setHidden, vueSyncNodeWidgets } from "./_widget_visibility.js";
 const NODES = new Set(["LoadVideoC2C", "LoadVideoPathC2C"]);
 const CUSTOM = "custom (step / plus)";
 const HANDLE_WIDGETS = ["handle_frames", "handle_target", "handle_side", "handle_grid", "handle_custom_step",
-                        "handle_custom_plus"];
+                        "handle_custom_plus", "extra_handles"];
 
 function apply(node) {
     const W = (n) => node.widgets?.find((w) => w.name === n);
@@ -22,6 +23,7 @@ function apply(node) {
         handle_grid: mode !== "off",
         handle_custom_step: mode !== "off" && grid === CUSTOM,
         handle_custom_plus: mode !== "off" && grid === CUSTOM,
+        extra_handles: mode !== "off",
     };
     let changed = false;
     for (const n of HANDLE_WIDGETS) {
@@ -40,7 +42,8 @@ function apply(node) {
 
 // short labels: the grid names are long ("MiniMax H3 (17n+5)"), and a long value clips its widget's label
 const LABELS = { handle_frames: "handle frames", handle_target: "target frames", handle_side: "handle side",
-                 handle_grid: "grid", handle_custom_step: "grid step", handle_custom_plus: "grid plus" };
+                 handle_grid: "grid", handle_custom_step: "grid step", handle_custom_plus: "grid plus",
+                 extra_handles: "extra handles (model steps)" };
 
 function label(node) {
     for (const [n, text] of Object.entries(LABELS)) {

@@ -704,7 +704,7 @@ def execute_video_load(
         loaded, audio, handles_rec, handles_report = HIO.add_on_load(
             loaded, audio, mode=hmode, frames=int(hopt.get("frames") or 0), target=int(hopt.get("target") or 0),
             side=str(hopt.get("side") or "head"), model=model, step=step, plus=plus, fps=float(loaded.fps),
-            memo_key=f"load_video_c2c:{unique_id}")
+            memo_key=f"load_video_c2c:{unique_id}", extra_steps=int(hopt.get("extra") or 0))
         handles_rec = dict(handles_rec, grid=glabel, mode=hmode)
     video_info = make_video_info(raw, loaded)
     if handles_rec is not None:
@@ -860,6 +860,9 @@ COLORSPACE_IN_TIP = ("The colour space this file was rendered in. auto: read it 
 WORKING_TIP = ("What the frames are converted to for the models. sRGB display: a Rec.709 / sRGB source stays as it is; "
                "anything else goes through the config's view (tone-mapped: ACES 2.0 SDR in the built-in config, what "
                "Nuke's viewer shows). Save Video (C2C) reverses exactly this. preserve source: no conversion.")
+EXTRA_HANDLES_TIP = ("More handles on top of fit / add, in whole steps of the model's frame grid (MiniMax H3 17, Wan "
+                     "4, LTX 8 ...), so the clip stays on the grid; on handle_side (both splits them). The details line "
+                     "shows k x step = frames and the total. Save Video (C2C) trims them with the rest.")
 NAME_TIP = ("Save Video (C2C) on 'auto (from Load)' names its file name_prefix + this clip's name + name_suffix, e.g. "
             "proj_ + shot010 + _comp; with the version folder the name carries the folder's version. Empty = nothing "
             "added. Typing a name on Save wins.")
@@ -918,6 +921,8 @@ class LoadVideoC2C:
                 # (read from the prompt - no effect on the frames). Empty by default: no suffix unless you add one.
                 "name_prefix": ("STRING", _widget(NAME_TIP, default="")),
                 "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
+                # L9.56 (owner 2026-10-25): more handles on top of the automatic ones, in whole model steps
+                "extra_handles": ("INT", _widget(EXTRA_HANDLES_TIP, default=0, min=0, max=100)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -958,6 +963,7 @@ class LoadVideoC2C:
         working_space=CM.WORK_DEFAULT,
         name_prefix="",                     # read by Save Video from the prompt (L9.55)
         name_suffix="",
+        extra_handles=0,
         prompt=None,
         unique_id=None,
     ):
@@ -983,7 +989,7 @@ class LoadVideoC2C:
             divisible_by=divisible_by,
             audio_when_missing=audio_when_missing,
             handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
-                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
+                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus, extra=extra_handles),
             colorspace_in=colorspace_in,
             working_space=working_space,
         )
@@ -1054,6 +1060,8 @@ class LoadVideoPathC2C:
                 # (read from the prompt - no effect on the frames). Empty by default: no suffix unless you add one.
                 "name_prefix": ("STRING", _widget(NAME_TIP, default="")),
                 "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
+                # L9.56 (owner 2026-10-25): more handles on top of the automatic ones, in whole model steps
+                "extra_handles": ("INT", _widget(EXTRA_HANDLES_TIP, default=0, min=0, max=100)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -1095,6 +1103,7 @@ class LoadVideoPathC2C:
         working_space=CM.WORK_DEFAULT,
         name_prefix="",                     # read by Save Video from the prompt (L9.55)
         name_suffix="",
+        extra_handles=0,
         prompt=None,
         unique_id=None,
     ):
@@ -1119,7 +1128,7 @@ class LoadVideoPathC2C:
             divisible_by=divisible_by,
             audio_when_missing=audio_when_missing,
             handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
-                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
+                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus, extra=extra_handles),
             colorspace_in=colorspace_in,
             working_space=working_space,
         )

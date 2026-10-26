@@ -37,7 +37,7 @@ const LOAD_ONLY_WIDGETS = [
 // L9.52: the handle settings go with the probe, so the node says what a run will add BEFORE it runs
 const HANDLE_WIDGETS = [
     "handles", "handle_frames", "handle_target", "handle_side", "handle_grid", "handle_custom_step",
-    "handle_custom_plus",
+    "handle_custom_plus", "extra_handles",          // L9.56: whole model steps on top, shown in the details line
 ];
 
 const LOADERS = {
