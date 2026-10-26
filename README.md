@@ -1698,8 +1698,19 @@ This works on the root graph and inside subgraphs.
 - **Authenticator:** you set it up once per install (QR code or setup key, plus 8 recovery codes). A code works
   once, so the next sign-in needs the next code, and the dialog says so. A wrong device clock is diagnosed, never
   accepted. **Re-enrol** if a setup key was ever pasted anywhere outside your authenticator app.
-- **Authorized installations:** a recipient sends you **My installation code** (right-click a vault). Paste it when
-  sealing. Your own install is always included.
+- **Authorized installations:** a recipient sends you **My installation code** (right-click a vault), as text or as
+  a key file (**Save key file**, a `.c2ckey` holding only the public key). Paste the code, or **Import key file…**,
+  when sealing. Your own install is always included.
+- **Manage installations & editors / Change password** (right-click a vault, 2026-10-26):
+  - After the vault password and a code from your authenticator, add or remove the installations that may run it.
+  - Add or remove the installations that may open it for editing. Each editor needs the password and its own
+    authenticator; your install stays an editor.
+  - Name the entries; the names are stored inside the encryption only.
+  - Set a new password.
+  - **Apply** re-encrypts the vault with fresh keys and swaps it in only when that worked.
+  - Save the workflow afterwards.
+  - Honest limit: removing an installation protects new copies only. A copy that installation already has still
+    runs there, and a copy saved before a password change still opens with the old password.
 - **Old vaults** (C2C Vault - Locked / Sealed nodes) upgrade automatically when a workflow opens. They keep the same
   payload and run on the native scheduler.
 - **Where the install key and the authenticator live.** They go in the OS credential store (Windows Credential

@@ -124,3 +124,59 @@ messages are small) and only ids the vault's expansion really made are rewritten
   isolates an install (the testbed sets it, F2.26).
 - **Old menus**: the old "Lock / Seal selection" entries are gone (they built the custom-executor vault); the
   command palette and "Seal whole workflow" use the native vault.
+
+## Access management (L9.48, A18 P2.1)
+
+**Goal** (owner answers rounds 3-4): add or remove the installations that may run a Sealed vault. Installations come
+by installation code, key file or the owner's server; owner: all three. Manage who may edit (the creator's install
+plus added ones). Change the vault password. All without exposing the inside.
+
+**Flow**:
+
+1. Right-click a vault: *Manage access / password...*.
+2. Authorize: password + second factor + editor check, the same as opening for editing. The server answers with the
+   access lists only - never the graph.
+3. The dialog shows recipients and editors as labelled installation codes (this install marked) and lets you:
+   - add a code by pasting it or importing a key file;
+   - remove one;
+   - set a new password.
+4. *Apply*: the server re-encrypts the SAME plaintext, opened with the session's key, with a fresh data key and
+   nonces. A new password brings a new salt and key. The front end swaps the node's payload only after the server
+   answers, so a failure leaves the old vault intact (atomic).
+
+**Constraints and refusals**:
+
+- This installation cannot remove itself as an editor, so a vault always keeps one editor.
+- A Sealed vault keeps at least one recipient: this install, included automatically.
+- A Locked vault has no recipients; its run password is the vault password, so a password change also replaces this
+  tab's run key.
+- A legacy v1 vault must be opened and locked once (the upgrade) before its access can change.
+- A payload that changed since authorization is refused (hash check, as for commit).
+
+**Revocation is honest**: removing a recipient protects NEW copies of the workflow only. A copy that install already
+holds still opens there, because it carries the old wraps. The dialog says so.
+
+**Key file**: `<label>.c2ckey`, JSON `{"format": "c2c-install-key", "version": 1, "code": "c2cvk1:...", "label",
+"created"}`. It holds a public key, not a secret. *My installation code* offers *Save key file*; the lock dialog and
+the access dialog offer *Import key file...*.
+
+**Labels**: optional names for codes ("Studio B"), stored INSIDE the encrypted plaintext (`access_labels`). They never
+appear in the file, the workflow or the logs.
+
+**Owner's server**: a separate slice; it needs the owner's server URL and how recipients authenticate to it.
+
+**Budgets**: one Argon2id (~0.1 s) to authorize, one more for a new password; one AES-GCM pass of the payload.
+
+**Kill switch**: the existing `C2C_VAULT_NATIVE=off`.
+
+**As built (measured 2026-10-26, owner stack core 0.39.0-43, frontend 1.53.10, both renderers + inside a subgraph;
+`docs/evidence/L9.48/vault_access_live.json`)**:
+
+- A second installation's key file added it as a runner, its pasted code as an editor. Its private key opened the new
+  payload and not the old one.
+- The label never reached the file or the workflow JSON.
+- A password change: the old password no longer opened the new payload, the new one did.
+- Removing the installation: the newest payload refused its key, and an older copy still opened for it, as documented.
+- The vault still ran natively, opened for editing with the new password, and re-locked on leaving.
+- 6 unit tests in `tests/test_secure_subgraph.py`: single-use, scoped, conflict-checked sessions; the other edit
+  sessions end; run keys dropped on a password change.

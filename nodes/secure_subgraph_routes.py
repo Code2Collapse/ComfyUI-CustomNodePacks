@@ -8,6 +8,9 @@
   POST /c2c_vault/sg/cancel      leave without changes
   GET  /c2c_vault/sg/install_code  this installation's code (public key) to send to a vault author
   POST /c2c_vault/sg/info        public facts of a payload (profile, legacy, node count) - never the inside
+  POST /c2c_vault/sg/access/open   L9.48: the same checks as open -> the access lists only (never the graph)
+  POST /c2c_vault/sg/access/apply  re-encrypt with new recipients / editors / labels / password (atomic)
+  POST /c2c_vault/sg/access/cancel drop the access session
 
 The password travels only over these routes; it is never a widget, never in a prompt or a workflow, never stored. The
 server keeps derived keys in memory only.
@@ -26,6 +29,8 @@ from .vault_crypto import VaultError
 PROFILES = {"locked": 0, "sealed_installs": 1, "sealed_portable": 2}
 PROFILE_NAMES = {v: k for k, v in PROFILES.items()}
 EDIT_IDLE_SECONDS = 6 * 3600           # an edit session also ends when the user leaves the subgraph (owner A18)
+ACCESS_IDLE_SECONDS = 15 * 60          # an access session (L9.48) only lives while its dialog is open
+LABEL_MAX = 60
 _lock = threading.Lock()
 _EDITS: dict[str, dict] = {}
 
@@ -140,19 +145,20 @@ def forget_run(body: dict) -> dict:
     return {"ok": True}
 
 
-def open_for_edit(body: dict) -> dict:
-    """Password -> second factor -> editor list. Returns the inner graph for native editing + an edit token."""
-    from . import secure_subgraph as SS
+def _authorize(body: dict) -> tuple:
+    """Password -> second factor -> editor list (A18 3.5) -> (plain, k, second factor, None), or (None, None, None,
+    error answer) for the answers the dialog handles (enrolment, code reasons, not an editor). A wrong password or a
+    tampered payload raises VaultError (one message for both)."""
     from . import vault_2fa, vault_crypto_v2 as v2
 
     payload, vault_id = str(body.get("payload") or ""), str(body.get("vault_id") or "")
     password = str(body.get("password") or "")
     if not vault_2fa.enrolled():
-        return {"ok": False, "needs_enrolment": True,
-                "error": "Opening a vault needs a second factor on this installation. Set up an authenticator app "
-                         "first (C2C menu > Vault > Two-factor setup)."}
-    legacy = not v2.is_v2(payload)
-    if not legacy:
+        return None, None, None, {
+            "ok": False, "needs_enrolment": True,
+            "error": "Opening a vault needs a second factor on this installation. Set up an authenticator app first "
+                     "(C2C menu > Vault > Two-factor setup)."}
+    if v2.is_v2(payload):
         plain, kek, parsed = v2.open_with_password(payload, password, vault_id=vault_id)
         k = {"kek": kek, "salt": parsed["salt"], "kdf": parsed["kdf"]}
     else:
@@ -161,14 +167,28 @@ def open_for_edit(body: dict) -> dict:
         k = v2.new_kek(password)                               # the upgrade re-encrypts in the current envelope
     detail = vault_2fa.verify_detail(str(body.get("code") or ""))
     if not detail["ok"]:
-        return {"ok": False, "reason": detail["reason"], "error": detail["message"],
-                **({"next_in": detail["next_in"]} if "next_in" in detail else {})}
+        return None, None, None, {"ok": False, "reason": detail["reason"], "error": detail["message"],
+                                  **({"next_in": detail["next_in"]} if "next_in" in detail else {})}
+    editors = plain.get("editors")
+    if editors and _this_install_code() not in editors:
+        return None, None, None, {
+            "ok": False, "reason": "not_editor",
+            "error": "This installation is not an editor of this vault. Ask its author to add your installation code "
+                     "(C2C menu > Vault > My installation code)."}
+    return plain, k, detail["reason"], None
+
+
+def open_for_edit(body: dict) -> dict:
+    """Password -> second factor -> editor list. Returns the inner graph for native editing + an edit token."""
+    from . import secure_subgraph as SS
+
+    payload, vault_id = str(body.get("payload") or ""), str(body.get("vault_id") or "")
+    plain, k, factor, refused = _authorize(body)
+    if refused:
+        return refused
+    detail = {"reason": factor}
     editors = plain.get("editors")
     me = _this_install_code()
-    if editors and me not in editors:
-        return {"ok": False, "reason": "not_editor",
-                "error": "This installation is not an editor of this vault. Ask its author to add your installation "
-                         "code (C2C menu > Vault > My installation code)."}
     token = secrets.token_urlsafe(24)
     with _lock:
         _EDITS[token] = {"vault_id": vault_id, "k": k, "payload_hash": _hash(payload),
@@ -193,13 +213,122 @@ def _mode_of(payload: str) -> int:
     return 2 if vault_crypto.payload_mode(payload) else 0
 
 
-def _session(token: str) -> dict:
+def _session(token: str, kind: str = "edit") -> dict:
     with _lock:
         s = _EDITS.get(str(token))
-        if not s or time.time() - s["at"] > EDIT_IDLE_SECONDS:
-            _EDITS.pop(str(token), None)
-            raise VaultError("This edit session has ended (the vault re-locked). Open the vault again.")
+        idle = ACCESS_IDLE_SECONDS if kind == "access" else EDIT_IDLE_SECONDS
+        if not s or s.get("kind", "edit") != kind or time.time() - s["at"] > idle:
+            if s and s.get("kind", "edit") == kind:
+                _EDITS.pop(str(token), None)
+            raise VaultError("This edit session has ended (the vault re-locked). Open the vault again."
+                             if kind == "edit" else
+                             "This access session has ended. Choose Manage access again.")
         return s
+
+
+def _canonical_codes(codes, what: str) -> list:
+    """Installation codes, validated and de-duplicated, in a canonical spelling."""
+    from . import vault_keys
+    out = []
+    for c in codes or []:
+        c = str(c or "").strip()
+        if not c:
+            continue
+        try:
+            canon = vault_keys.public_text(vault_keys.parse_public_text(c))
+        except VaultError as exc:
+            raise VaultError(f"{what}: {exc} ({c[:24]}...)") from None
+        if canon not in out:
+            out.append(canon)
+    return out
+
+
+def access_open(body: dict) -> dict:
+    """L9.48: the access lists of a vault, after the same checks as opening it for editing. The graph never leaves
+    the server here."""
+    from . import vault_crypto_v2 as v2, vault_keys
+
+    payload, vault_id = str(body.get("payload") or ""), str(body.get("vault_id") or "")
+    if not v2.is_v2(payload):
+        raise VaultError("This vault is in the first vault format. Open it (double-click) and leave it once - that "
+                         "upgrades it - then manage its access.")
+    plain, k, factor, refused = _authorize(body)
+    if refused:
+        return refused
+    me = _this_install_code()
+    profile = plain.get("profile") or PROFILE_NAMES.get(_mode_of(payload), "locked")
+    editors = list(plain.get("editors") or [me])
+    recipients = [vault_keys.public_text(r) for r in v2.recipients_of(plain)] if profile == "sealed_installs" else []
+    labels = dict(plain.get("access_labels") or {})
+    token = secrets.token_urlsafe(24)
+    with _lock:
+        _EDITS[token] = {"kind": "access", "vault_id": vault_id, "k": k, "payload_hash": _hash(payload),
+                         "profile": profile, "at": time.time(), "client_id": str(body.get("client_id") or "")}
+
+    def row(c):
+        return {"code": c, "label": labels.get(c, ""), "me": c == me}
+    return {"ok": True, "access_token": token, "profile": profile, "editors": [row(c) for c in editors],
+            "recipients": [row(c) for c in recipients], "second_factor": factor}
+
+
+def access_apply(body: dict) -> dict:
+    """Re-encrypt the SAME inside with new recipients / editors / labels and, optionally, a new password: fresh data
+    key and nonces (a new password: a new salt and key). The new payload is checked to open before anything else
+    changes; the front end swaps the node's payload only on success, so a failure leaves the old vault as it was.
+    Then every other session of this vault ends (A18 3.6); a password change also drops every tab's run key."""
+    from . import secure_subgraph as SS
+    from . import vault_crypto_v2 as v2, vault_keys
+
+    token = str(body.get("access_token") or "")
+    s = _session(token, kind="access")
+    payload = str(body.get("payload") or "")
+    if _hash(payload) != s["payload_hash"]:
+        raise VaultError("This vault was changed since you unlocked its access (another tab, or an edit). Choose "
+                         "Manage access again.")
+    plain = v2.open_with_kek(payload, s["k"]["kek"], vault_id=s["vault_id"])
+    me = _this_install_code()
+    editors = _canonical_codes(body.get("editors"), "Editors")
+    if me not in editors:
+        raise VaultError("This installation must stay an editor - otherwise nobody here could open the vault again.")
+    sealed = s["profile"] == "sealed_installs"
+    recipients = _canonical_codes(body.get("recipients"), "Installations") if sealed else []
+    if sealed and me not in recipients:
+        recipients.insert(0, me)                               # this install always runs its own vaults
+    keep = set(editors) | set(recipients)
+    labels = {str(c): str(v)[:LABEL_MAX].strip() for c, v in (body.get("labels") or {}).items()
+              if str(c) in keep and str(v or "").strip()}
+    new_password = body.get("new_password")
+    if new_password:
+        if len(str(new_password)) < 8:
+            raise VaultError("Choose a new password of at least 8 characters.")
+        k = v2.new_kek(str(new_password))
+    else:
+        k = s["k"]
+    inner = {key: v for key, v in plain.items() if key not in ("recipients", "format")}
+    inner.update(editors=editors, access_labels=labels, updated=int(time.time()))
+    raw = [vault_keys.parse_public_text(c) for c in recipients] if sealed else None
+    new_payload = v2.lock_with(inner, k, vault_id=s["vault_id"], mode=PROFILES[s["profile"]],
+                               iface=_iface(plain.get("interface") or {}), recipients=raw)
+    check = v2.open_with_kek(new_payload, k["kek"], vault_id=s["vault_id"])       # it opens, or nothing changes
+    if check.get("editors") != editors:
+        raise VaultError("The re-encrypted vault did not read back correctly; nothing was changed.")
+    with _lock:
+        for t in [t for t, x in _EDITS.items() if x.get("vault_id") == s["vault_id"]]:
+            _EDITS.pop(t, None)                                # this session too: one apply per authorization
+    if new_password:
+        SS.RUN_SESSIONS.drop_vault(s["vault_id"])
+    if s["profile"] == "locked" and s.get("client_id"):
+        SS.RUN_SESSIONS.put(s["client_id"], s["vault_id"], k["kek"])
+    return {"ok": True, "payload": new_payload, "vault_id": s["vault_id"], "profile": s["profile"],
+            "password_changed": bool(new_password), "editors": len(editors), "recipients": len(recipients)}
+
+
+def access_cancel(body: dict) -> dict:
+    with _lock:
+        s = _EDITS.get(str(body.get("access_token") or ""))
+        if s and s.get("kind") == "access":
+            _EDITS.pop(str(body.get("access_token")), None)
+    return {"ok": True}
 
 
 def snapshot(body: dict) -> dict:
@@ -289,4 +418,7 @@ def register_routes(server) -> None:
     routes.post("/c2c_vault/sg/snapshot")(wrap(snapshot, 409))
     routes.post("/c2c_vault/sg/cancel")(wrap(cancel))
     routes.post("/c2c_vault/sg/info")(wrap(info, 400))
+    routes.post("/c2c_vault/sg/access/open")(wrap(access_open))
+    routes.post("/c2c_vault/sg/access/apply")(wrap(access_apply, 409))
+    routes.post("/c2c_vault/sg/access/cancel")(wrap(access_cancel))
     routes.get("/c2c_vault/sg/install_code")(wrap(lambda b: {"code": _this_install_code()}, 500))

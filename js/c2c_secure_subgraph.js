@@ -486,6 +486,7 @@ function profileDialog({ title, defaultProfile }) {
         b.querySelector("input").checked = on;
       }
       recip.style.display = chosen === "sealed_installs" ? "" : "none";
+      recipTools.style.display = recip.style.display;
     };
     for (const p of PROFILES) {
       const radio = el("input", { type: "radio", name: "c2c-vault-profile", value: p.id, disabled: !!p.disabled });
@@ -506,6 +507,12 @@ function profileDialog({ title, defaultProfile }) {
       "codes (c2cvk1:...), one per line. Yours is included.", rows: 2, style: inputStyle({ marginTop: "6px",
       resize: "vertical" }) });
     const err = errorLine();
+    const recipTools = el("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "4px" } }, [
+      button("Import key file…", false, async () => {                  // L9.48
+        const k = await importKeyFile();
+        if (k?.error) { err.textContent = k.error; return; }
+        if (k && !recip.value.includes(k.code)) recip.value = `${recip.value.trim()}\n${k.code}`.trim();
+      })]);
     const note = el("div", { textContent: "The password is never stored. Without it (and your authenticator) the " +
       "vault cannot be opened - keep it safe.", style: { color: T.dim, marginTop: "6px" } });
     const go = () => {
@@ -515,7 +522,7 @@ function profileDialog({ title, defaultProfile }) {
         recipients: recip.value.split(/\s+/).map((s) => s.trim()).filter(Boolean) });
     };
     pw2.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-    body.append(row, pw, pw2, recip, note, err, el("div", { style: { display: "flex", justifyContent: "flex-end",
+    body.append(row, pw, pw2, recip, recipTools, note, err, el("div", { style: { display: "flex", justifyContent: "flex-end",
       gap: "8px", marginTop: "10px" } }, [button("Cancel", false, () => close(null)), button("Lock", true, go)]));
     render();
   }, { width: 620 });
@@ -1033,13 +1040,189 @@ async function lockSelection(canvas, profileHint) {
 async function showInstallCode() {
   const r = await (await api.fetchApi("/c2c_vault/sg/install_code")).json().catch(() => ({}));
   await modal("My installation code", (body, close) => {
-    body.append(el("div", { textContent: "Send this to a vault author so their Sealed vaults run here. It is a " +
-      "public key - safe to share.", style: { color: T.dim } }),
+    const name = el("input", { placeholder: "A name the author will see, e.g. Studio B (optional)",
+      style: inputStyle({ marginBottom: "8px" }) });
+    body.append(el("div", { textContent: "Send this to a vault author so their Sealed vaults run here - as text, or " +
+      "as a key file. It is a public key - safe to share.", style: { color: T.dim } }),
     el("code", { textContent: r.code || "unavailable", style: { display: "block", margin: "8px 0", userSelect: "all",
-      wordBreak: "break-all" } }),
+      wordBreak: "break-all" } }), name,
     el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px" } }, [
-      button("Copy", false, () => navigator.clipboard?.writeText(r.code || "")), button("Close", true, () => close())]));
+      button("Copy", false, () => navigator.clipboard?.writeText(r.code || "")),
+      button("Save key file", false, () => r.code && saveKeyFile(r.code, name.value.trim())),
+      button("Close", true, () => close())]));
   });
+}
+
+// ── access management (L9.48): installations, editors, password ─────────────────────────────────────────────
+const KEYFILE_FORMAT = "c2c-install-key";
+const CODE_PREFIX = "c2cvk1:";
+
+/** <name>.c2ckey: this installation's PUBLIC key as a file (docs/VAULT_DESIGN_A18.md, Access management). */
+function saveKeyFile(code, label) {
+  const data = { format: KEYFILE_FORMAT, version: 1, code, label: label || "", created: new Date().toISOString() };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+  const a = el("a", { href: url, download: `${(label || "c2c-installation").replace(/[^\w.-]+/g, "_").slice(0, 40)}.c2ckey` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
+/** Pick a key file -> {code, label}, {error} or null (cancelled). A text file holding just a code works too. */
+function importKeyFile() {
+  return new Promise((resolve) => {
+    const inp = el("input", { type: "file", accept: ".c2ckey,.json,.txt", style: { display: "none" } });
+    const done = (v) => { inp.remove(); resolve(v); };
+    inp.addEventListener("cancel", () => done(null));
+    inp.addEventListener("change", async () => {
+      const f = inp.files?.[0];
+      if (!f) return done(null);
+      const text = (await f.text().catch(() => "")).trim();
+      try {
+        const d = JSON.parse(text);
+        if (d?.format === KEYFILE_FORMAT && typeof d.code === "string") {
+          return done({ code: d.code.trim(), label: String(d.label || "") });
+        }
+      } catch (_) { /* not JSON: maybe a bare code */ }
+      if (text.startsWith(CODE_PREFIX)) return done({ code: text.split(/\s+/)[0], label: f.name.replace(/\.[^.]+$/, "") });
+      done({ error: `${f.name} is not a C2C installation key file.` });
+    });
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
+function shortCode(code) {
+  return code.length > 30 ? `${code.slice(0, 18)}…${code.slice(-8)}` : code;
+}
+
+/** The access dialog. `apply(choice)` -> {ok} or {error}; on an error the dialog stays open with the message. */
+function accessDialog(v, res, focus, apply) {
+  return modal(`Access - ${v.title || "vault"}`, (body, close) => {
+    const sealed = res.profile === "sealed_installs";
+    const lists = { editors: res.editors.map((r) => ({ ...r })), recipients: res.recipients.map((r) => ({ ...r })) };
+    const err = errorLine();
+    const setLabel = (code, label) => {
+      for (const r of [...lists.editors, ...lists.recipients]) if (r.code === code) r.label = label;
+    };
+    const section = (key, title, hint) => {
+      const rows = el("div", { style: { display: "flex", flexDirection: "column", gap: "4px", margin: "6px 0" } });
+      const draw = () => rows.replaceChildren(...lists[key].map((r, i) => el("div", {
+        style: { display: "flex", gap: "6px", alignItems: "center" } }, [
+        el("input", { value: r.label, placeholder: r.me ? "This installation" : "Name (optional)",
+          style: inputStyle({ flex: "0 0 150px", width: "150px" }),
+          on: { input: (e) => setLabel(r.code, e.target.value) } }),
+        el("code", { textContent: shortCode(r.code), title: r.code, style: { flex: "1", minWidth: "0", overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.dim } }),
+        r.me ? el("span", { textContent: "this installation", style: { color: T.accent, fontSize: "11px",
+          flex: "0 0 auto" } })
+          : button("Remove", false, () => { lists[key].splice(i, 1); draw(); }),
+      ])));
+      const code = el("input", { placeholder: "Paste an installation code (c2cvk1:...)", style: inputStyle({ flex: "1" }) });
+      const add = (c, label) => {
+        c = String(c || "").trim();
+        if (!c) return;
+        if (!c.startsWith(CODE_PREFIX)) { err.textContent = `An installation code starts with ${CODE_PREFIX}`; return; }
+        if (lists[key].some((r) => r.code === c)) { err.textContent = "That installation is already in the list."; return; }
+        const known = [...lists.editors, ...lists.recipients].find((r) => r.code === c);
+        lists[key].push({ code: c, label: label || known?.label || "", me: false });
+        code.value = "";
+        err.textContent = "";
+        draw();
+      };
+      code.addEventListener("keydown", (e) => { if (e.key === "Enter") add(code.value); });
+      draw();
+      return el("div", { style: { marginBottom: "12px" } }, [
+        el("div", { textContent: title, style: { fontWeight: "600" } }),
+        el("div", { textContent: hint, style: { color: T.dim, fontSize: "11px" } }),
+        rows,
+        el("div", { style: { display: "flex", gap: "6px" } }, [code, button("Add", false, () => add(code.value)),
+          button("Import key file…", false, async () => {
+            const k = await importKeyFile();
+            if (k?.error) err.textContent = k.error;
+            else if (k) add(k.code, k.label);
+          })]),
+      ]);
+    };
+    const parts = [];
+    if (sealed) {
+      parts.push(section("recipients", "Installations that may run it",
+        "Without a password, only on these ComfyUI installations. This one is always included."));
+    } else {
+      parts.push(el("div", { textContent: res.profile === "locked" ? "Locked vault: whoever has the password can run " +
+        "it, so there are no installations to manage." : "Portable vault: it runs anywhere (obfuscation only).",
+        style: { color: T.dim, marginBottom: "10px" } }));
+    }
+    parts.push(section("editors", "Editors", "Installations that may open it for editing - each with the password " +
+      "and its own authenticator. This one stays an editor."));
+    const change = el("input", { type: "checkbox", checked: focus === "password" });
+    const pw = el("input", { type: "password", placeholder: "New vault password (at least 8 characters)",
+      autocomplete: "new-password", style: inputStyle({ marginTop: "6px" }) });
+    const pw2 = el("input", { type: "password", placeholder: "Repeat the new password", autocomplete: "new-password",
+      style: inputStyle({ marginTop: "6px" }) });
+    const pwBox = el("div", {}, [pw, pw2]);
+    const showPw = () => { pwBox.style.display = change.checked ? "" : "none"; };
+    change.addEventListener("change", showPw);
+    parts.push(el("label", { style: { display: "flex", gap: "6px", alignItems: "center", fontWeight: "600" } },
+      [change, "Change the password"]), pwBox);
+    parts.push(el("div", { textContent: (sealed ? "Removing an installation protects new copies only: a copy it already " +
+      "has still runs there. " : "") + "Applying re-encrypts the vault with fresh keys; save the workflow afterwards " +
+      "so the new access goes with it.", style: { color: T.dim, marginTop: "10px", fontSize: "11px" } }));
+    const applyBtn = button("Apply", true, async () => {
+      let newPassword = null;
+      if (change.checked) {
+        if (pw.value.length < 8) { err.textContent = "Use at least 8 characters for the new password."; return; }
+        if (pw.value !== pw2.value) { err.textContent = "The new passwords differ."; return; }
+        newPassword = pw.value;
+      }
+      const labels = {};
+      for (const r of [...lists.editors, ...lists.recipients]) if (r.label.trim()) labels[r.code] = r.label.trim();
+      applyBtn.disabled = true;
+      err.textContent = "";
+      const out = await apply({ editors: lists.editors.map((r) => r.code), recipients: lists.recipients.map((r) => r.code),
+        labels, new_password: newPassword });
+      applyBtn.disabled = false;
+      if (out?.error) { err.textContent = out.error; return; }
+      close(out);
+    });
+    body.append(...parts, err, el("div", { style: { display: "flex", justifyContent: "flex-end", gap: "8px",
+      marginTop: "10px" } }, [button("Cancel", false, () => close(null)), applyBtn]));
+    showPw();
+  }, { width: 620 });
+}
+
+async function manageAccess(v, focus) {
+  const st = await (await api.fetchApi("/c2c_vault/2fa/status")).json().catch(() => ({}));
+  if (!st.enrolled) {
+    toast("Managing a vault's access needs an authenticator app on this installation. Set it up now.");
+    if (!(await enrolDialog())) return;
+  }
+  const W = (name) => v.widgets.find((w) => w.name === name);
+  const payload = W("vault_payload")?.value;
+  const vaultId = W("vault_id")?.value;
+  let res = null;
+  for (;;) {
+    const a = await authDialog(`${focus === "password" ? "Change the password of" : "Manage access of"} ${v.title || "vault"}`);
+    if (!a) return;
+    const r = await post("/c2c_vault/sg/access/open", { payload, vault_id: vaultId, password: a.password, code: a.code,
+      client_id: api.clientId });
+    if (r.ok) { res = r.data; break; }
+    if (r.data.needs_enrolment) { if (!(await enrolDialog())) return; continue; }
+    toast(r.data.error || "Could not unlock the vault's access.", true);
+    if (r.data.reason !== "reused" && r.data.reason !== "clock" && r.status !== 403) return;
+  }
+  const out = await accessDialog(v, res, focus, async (choice) => {
+    const r = await post("/c2c_vault/sg/access/apply", { access_token: res.access_token, payload, ...choice });
+    if (!r.ok) return { error: r.data.error || `Could not apply the change (${r.status}).` };
+    W("vault_payload").value = r.data.payload;                  // swapped only now: a failure left the old vault
+    if (res.profile === "locked") RUN_UNLOCKED.add(vaultId);
+    v.setDirtyCanvas?.(true, true);
+    try { app.extensionManager?.workflow?.activeWorkflow?.changeTracker?.checkState?.(); } catch (_) {}
+    return { ok: true, data: r.data };
+  });
+  if (!out) { post("/c2c_vault/sg/access/cancel", { access_token: res.access_token }); return; }
+  toast(out.data.password_changed
+    ? "Password changed and the vault re-encrypted. Save the workflow - copies saved before still open with the old password."
+    : "Access updated and the vault re-encrypted. Save the workflow so the new access goes with it.");
 }
 
 app.registerExtension({
@@ -1097,6 +1280,8 @@ app.registerExtension({
     if (VAULT_TYPES.has(node?.comfyClass ?? node?.type)) {
       return [null,
         { content: "🔓 Open / edit vault…", callback: () => openVault(node) },
+        { content: "👥 Manage installations & editors…", callback: () => manageAccess(node, "access") },
+        { content: "🔐 Change password…", callback: () => manageAccess(node, "password") },
         { content: "🔑 My installation code", callback: showInstallCode },
         { content: "📱 Two-factor setup…", callback: () => twoFactorSetup() }];
     }

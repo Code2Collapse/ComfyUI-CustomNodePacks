@@ -79,6 +79,12 @@ class RunSessions:
             for k in [k for k in self._keys if k[0] == str(client_id)]:
                 del self._keys[k]
 
+    def drop_vault(self, vault_id: str) -> None:
+        """Every tab's key for this vault (its password changed, L9.48)."""
+        with self._lock:
+            for k in [k for k in self._keys if k[1] == str(vault_id)]:
+                del self._keys[k]
+
 
 RUN_SESSIONS = RunSessions()
 
