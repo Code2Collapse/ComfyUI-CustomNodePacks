@@ -911,6 +911,41 @@ see CREDITS.md.
   Checked live on frontend 1.53.10 in both renderers and inside a subgraph: an OpenEXR / DWAB / float run wrote a
   DWAB float EXR, and a save -> reload round trip kept every value.
 
+#### Load / Save Video (C2C): colour management, Nuke / OCIO style (2026-10-26)
+
+- **Load Video finds the file's colour space** (`colorspace_in` = *auto (detect)*), from the most reliable source first:
+  1. a `<file>.colorspace` or `<file>.c2c.json` sidecar (a sequence also takes `<stem>.colorspace`);
+  2. the EXR `acesImageContainer` or `colorInteropID` (the ASWF Color Interop ID);
+  3. the EXR chromaticities;
+  4. the DPX transfer or the image header;
+  5. the movie's colour tags.
+
+  An EXR with no colour metadata is read as the OCIO config's `scene_linear` role (Nuke's working space). An
+  untagged movie or image is read as display and not converted. Pick a space to override.
+- **Working space** (`working_space`): *sRGB display* by default. A Rec.709 / sRGB source stays exactly as it is.
+  A log, linear or wide-gamut source goes through the config's tone-mapped view (ACES 2.0 SDR in the built-in
+  config, what Nuke's viewer shows), so the frames stay in 0-1 for the models. *preserve source* converts nothing.
+- **A pixel check warns, never changes anything:** for example, a clip tagged BT.709 that looks like camera log
+  (lifted blacks, nothing near white) gets a note naming the log space to pick.
+- **Save Video reverses exactly what Load did.** With `colorspace_in` / `colorspace_out` on *auto (from Load)* (the
+  default for new nodes), Save follows its images back to the Load Video (no wire needed). It applies the exact
+  inverse of the recorded transform and writes the file in the source's own space; an EXR also gets its
+  `colorInteropID`.
+  - Measured live on frontend 1.53.10 (both renderers, also inside a subgraph): an ACEScg plate went Load -> Save
+    and back to ACEScg with p95 error 0.00003.
+  - Colours outside Rec.709 and highlights above SDR white do not come back exactly through a tone-mapped view.
+- **Saved workflows keep their pixels.** A Load node saved before this opens with colour management *off (as
+  before)*, and Save's explicit choices convert exactly as before.
+  - The fix that makes this true also repairs the older "new inputs shifted" case on frontend 1.53.10. That
+    frontend restores widget values before extensions can correct them, so the corrected values are now applied by
+    name.
+- **Config:** `$OCIO` (your own config) or the built-in ACES studio config. A broken `$OCIO` falls back to the
+  built-in config and the nodes say so. `C2C_VIDEO_CM=off` switches colour management off.
+- **Cost (measured):** Rec.709 / sRGB sources cost nothing. The ACES 2.0 view costs about 54-72 ms per megapixel on
+  the CPU (OCIO 2.5.2 and 2.6.0 alike, 16 threads). That is several times the decode of a light H.264, so a 24-frame
+  1080p LogC3 clip loads in 4.3 s instead of 0.7 s. Every transform is OCIO's exact processor; a faster baked LUT was
+  tried and rejected (up to 18 % off on saturated colours).
+
 #### Load Video (C2C): built-in handles (2026-10-23)
 
 `handles` = *fit* or *add* puts handle frames on the clip as it loads (repeated edge frames, never black; the audio

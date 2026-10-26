@@ -549,6 +549,11 @@ function mountSaveWidget(node) {
         if (data.handles?.head || data.handles?.tail) parts.push(`Handles trimmed: ${data.handles.from}.`);
         else if (data.handles?.from && !/^trim off|nothing trimmed/.test(data.handles.from)) parts.push(data.handles.from);
         if (data.range) parts.push(`Wrote ${data.range}.`);
+        if (data.colour) {                                        // L9.53: what Save did with the colour
+            const c = data.colour;
+            parts.push(c.transform_text ? `Colour: ${c.reverses_load ? "reversed Load Video - " : ""}${c.transform_text}.`
+                : `Colour: ${c.out} (not converted).`);
+        }
         if (data.version?.origin) parts.push(`Version ${data.version.version_string} from the ${data.version.origin}.`);
         if (!preview && !data.source) parts.push("A/B: this run kept no source copy (streamed save) - the saved file only.");
         const warns = Array.isArray(data.warnings) ? data.warnings : [];
@@ -574,6 +579,8 @@ function mountSaveWidget(node) {
 // appended last in Python (saved workflows keep their positions), so only the display order changes: widgets_values
 // is written back in the input order (onSerialize) and restored by name (onConfigure) - frontend 1.53 restores by
 // position and also writes widgets_values_named, so workflows load the same either way.
+const FROM_LOAD = "auto (from Load)";                // L9.53, nodes/c2c_video/colour_cm.py FROM_LOAD
+
 const DISPLAY_FIRST = ["format", "format_family", "subformat", "container", "codec", "profile", "bit_depth", "chroma",
                        "quality", "encoder_preset", "gop", "bitrate_kbps", "channels", "png_compression",
                        "color_primaries", "color_transfer", "color_range"];
@@ -680,6 +687,12 @@ if (!globalThis.__c2cSaveVideoExt) {
                 }
                 setTimeout(() => {
                     if (fresh && node.size?.[0] < 420) node.setSize([420, node.size[1]]);
+                    if (fresh) {                       // L9.53: a new node reverses what Load Video did
+                        for (const n of ["colorspace_in", "colorspace_out"]) {
+                            const w = W(node, n);
+                            if (w && w.options?.values?.includes(FROM_LOAD)) w.value = FROM_LOAD;
+                        }
+                    }
                     resolveNaming(node);
                     applyVisibility(node, null);
                     loadMatrix().then(() => {

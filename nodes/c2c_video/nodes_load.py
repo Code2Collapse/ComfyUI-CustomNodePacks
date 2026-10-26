@@ -10,6 +10,7 @@ from dataclasses import replace
 from fractions import Fraction
 from typing import Any
 
+from . import colour_cm as CM
 from . import handles_io as HIO
 from .audio import LazyAudio, lazy_audio_for_handle
 from .fast_decode import (
@@ -457,11 +458,18 @@ def decode_to_image_and_mask(h: C2CVideo, plan: DecoderPlan | None = None) -> tu
     return image, mask
 
 
-def decode_with_plan(h: C2CVideo, plan: DecoderPlan | None = None) -> tuple[Any, Any, DecoderPlan]:
+def _coloured(chunks, colour: CM.Colour | None):
+    """L9.53: the source -> working colour transform on each decoded chunk (none when colour management is off)."""
+    return chunks if colour is None else colour.chunks(chunks)
+
+
+def decode_with_plan(h: C2CVideo, plan: DecoderPlan | None = None,
+                     colour: CM.Colour | None = None) -> tuple[Any, Any, DecoderPlan]:
     """IMAGE + MASK of the selection, through ``plan``'s reader (falls back to the exact reader); and the plan used."""
     if len(h) == 0:
         raise RuntimeError("No frames to decode.")
-    (image, mask), used = _with_fallback(h, plan, lambda chunks: _decode_chunks(h, chunks(_image_chunk_frames(h))))
+    (image, mask), used = _with_fallback(
+        h, plan, lambda chunks: _decode_chunks(h, _coloured(chunks(_image_chunk_frames(h)), colour)))
     return image, mask, used
 
 
@@ -497,8 +505,9 @@ def encode_via_vae(h: C2CVideo, vae: Any, plan: DecoderPlan | None = None) -> di
     return result
 
 
-def encode_with_plan(h: C2CVideo, vae: Any, plan: DecoderPlan | None = None) -> tuple[dict[str, Any], DecoderPlan]:
-    return _with_fallback(h, plan, lambda chunks: _encode_chunks(h, vae, chunks(_CHUNK)))
+def encode_with_plan(h: C2CVideo, vae: Any, plan: DecoderPlan | None = None,
+                     colour: CM.Colour | None = None) -> tuple[dict[str, Any], DecoderPlan]:
+    return _with_fallback(h, plan, lambda chunks: _encode_chunks(h, vae, _coloured(chunks(_CHUNK), colour)))
 
 
 def _encode_chunks(h: C2CVideo, vae: Any, chunks) -> dict[str, Any]:
@@ -570,6 +579,20 @@ def is_changed_path(path: str) -> str:
         return f"missing:{os.path.abspath(path)}"
 
 
+def colour_token(path: str, colorspace_in: str | None) -> str:
+    """Part of IS_CHANGED with colorspace_in auto: a colour sidecar added or edited next to the file re-runs Load."""
+    if str(colorspace_in or "") != CM.CS_AUTO:
+        return ""
+    try:
+        abspath = os.path.abspath(path)
+        if os.path.isfile(abspath):
+            return "|" + CM.sidecar_token(abspath, True)
+        files = resolve_sequence(abspath)
+        return "|" + CM.sidecar_token(files[0], False) if files else ""
+    except (OSError, FileNotFoundError, ValueError):
+        return ""
+
+
 def validate_video_path(video) -> bool | str:
     if video is None:
         return True
@@ -630,6 +653,8 @@ def execute_video_load(
     divisible_by: int = 1,
     audio_when_missing: str = "silence",
     handles: dict | None = None,
+    colorspace_in: str = CM.CS_OFF,
+    working_space: str = CM.WORK_DEFAULT,
 ) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str]:
     """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info). The defaults of every input added after
     the first release reproduce the old behaviour (decoder "auto" only switches readers where the frames are identical)."""
@@ -682,6 +707,9 @@ def execute_video_load(
     video_info = make_video_info(raw, loaded)
     if handles_rec is not None:
         video_info[HIO.INFO_KEY] = handles_rec
+    colour = CM.plan(raw, colorspace_in, working_space)
+    if colour is not None:
+        video_info[CM.INFO_KEY] = colour.record          # Save Video (C2C) reverses exactly this (L9.53)
     HIO.remember_load(unique_id, prompt, video_info)      # Save Video finds it without a video_info wire (L9.52)
     count = len(loaded)
     needs_image = is_output_linked(prompt, unique_id, 0)
@@ -694,16 +722,18 @@ def execute_video_load(
             summary["handles"] = {"head": handles_rec["head"], "tail": handles_rec["tail"],
                                   "target": handles_rec.get("target", 0), "grid": handles_rec["grid"],
                                   "report": handles_report}
+        if colour is not None:
+            summary["colour"] = colour.record
         return json.dumps(summary, indent=2)
 
     note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask)) if not needed))
     if not (needs_image or needs_mask):
         return None, count, audio, video_info, loaded, None, info(None)
     if vae is not None and needs_image:
-        latent, used = encode_with_plan(loaded, vae, plan)
+        latent, used = encode_with_plan(loaded, vae, plan, colour)
         return latent, count, audio, video_info, loaded, None, info(used)
     check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
-    image, mask, used = decode_with_plan(loaded, plan)
+    image, mask, used = decode_with_plan(loaded, plan, colour)
     if not needs_image:
         image = None
     if not needs_mask:
@@ -817,6 +847,13 @@ HANDLE_TARGET_TIP = "fit: how many frames you want out after the trim. 0 = this 
 HANDLE_SIDE_TIP = "Which end gets the handles. head is where a video model settles; both splits them."
 HANDLE_GRID_TIP = ("The model's frame grid: 'from format' uses the format preset above (MiniMax H3 17n+5, Wan 4n+1, "
                    "LTXV 8n+1 ...), so there is one grid, not two; or pick one here.")
+COLORSPACE_IN_TIP = ("The colour space this file was rendered in. auto: read it from the file (a .colorspace / .c2c.json "
+                     "sidecar, the EXR colorInteropID or chromaticities, the DPX or movie colour tags). An EXR with none "
+                     "is the OCIO config's scene_linear role (Nuke's working space); an untagged movie or image is "
+                     "display. Pick a space to override. off: no colour management (what the loader always did).")
+WORKING_TIP = ("What the frames are converted to for the models. sRGB display: a Rec.709 / sRGB source stays as it is; "
+               "anything else goes through the config's view (tone-mapped: ACES 2.0 SDR in the built-in config, what "
+               "Nuke's viewer shows). Save Video (C2C) reverses exactly this. preserve source: no conversion.")
 CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop "
             "tool in the player; custom_width / custom_height then resize the cropped frame.")
 
@@ -864,6 +901,10 @@ class LoadVideoC2C:
                 "handle_custom_step": ("INT", _widget("custom grid: step (frames = step * n + plus).", default=4,
                                                       min=1, max=1000)),
                 "handle_custom_plus": ("INT", _widget("custom grid: plus.", default=1, min=0, max=1000)),
+                # L9.53 (owner 2026-10-25 / 26): colour management, Nuke / OCIO style - appended. "off (as before)" is
+                # the default here, so saved workflows and API prompts keep their pixels; a new node starts on auto.
+                "colorspace_in": (CM.colorspace_in_choices(), _widget(COLORSPACE_IN_TIP, default=CM.CS_OFF)),
+                "working_space": (CM.working_choices(), _widget(WORKING_TIP, default=CM.WORK_DEFAULT)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -900,6 +941,8 @@ class LoadVideoC2C:
         handle_grid=HIO.FROM_FORMAT,
         handle_custom_step=4,
         handle_custom_plus=1,
+        colorspace_in=CM.CS_OFF,
+        working_space=CM.WORK_DEFAULT,
         prompt=None,
         unique_id=None,
     ):
@@ -926,13 +969,16 @@ class LoadVideoC2C:
             audio_when_missing=audio_when_missing,
             handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
                          grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
+            colorspace_in=colorspace_in,
+            working_space=working_space,
         )
 
     @classmethod
     def IS_CHANGED(cls, video, **kwargs):
         fp = _import_folder_paths()
         path = fp.get_annotated_filepath(video)
-        return is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
+        return (is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
+                + colour_token(path, kwargs.get("colorspace_in")))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video):
@@ -985,6 +1031,10 @@ class LoadVideoPathC2C:
                 "handle_custom_step": ("INT", _widget("custom grid: step (frames = step * n + plus).", default=4,
                                                       min=1, max=1000)),
                 "handle_custom_plus": ("INT", _widget("custom grid: plus.", default=1, min=0, max=1000)),
+                # L9.53 (owner 2026-10-25 / 26): colour management, Nuke / OCIO style - appended. "off (as before)" is
+                # the default here, so saved workflows and API prompts keep their pixels; a new node starts on auto.
+                "colorspace_in": (CM.colorspace_in_choices(), _widget(COLORSPACE_IN_TIP, default=CM.CS_OFF)),
+                "working_space": (CM.working_choices(), _widget(WORKING_TIP, default=CM.WORK_DEFAULT)),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -1022,6 +1072,8 @@ class LoadVideoPathC2C:
         handle_grid=HIO.FROM_FORMAT,
         handle_custom_step=4,
         handle_custom_plus=1,
+        colorspace_in=CM.CS_OFF,
+        working_space=CM.WORK_DEFAULT,
         prompt=None,
         unique_id=None,
     ):
@@ -1047,11 +1099,15 @@ class LoadVideoPathC2C:
             audio_when_missing=audio_when_missing,
             handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
                          grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus),
+            colorspace_in=colorspace_in,
+            working_space=working_space,
         )
 
     @classmethod
     def IS_CHANGED(cls, video, **kwargs):
-        return is_changed_path(strip_path(video)) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
+        path = strip_path(video)
+        return (is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
+                + colour_token(path, kwargs.get("colorspace_in")))
 
     @classmethod
     def VALIDATE_INPUTS(cls, video):

@@ -29,6 +29,7 @@ def _piecewise_linear_to_srgb(x: np.ndarray) -> np.ndarray:
 
 
 _CFG = None
+_CFG_WARN: str | None = None      # $OCIO set but unusable: the built-in config is used, and the nodes say so
 _PROCS: dict = {}
 
 
@@ -41,14 +42,18 @@ def _space_names(cfg) -> list:
 
 
 def _load_ocio():
-    global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG
+    global _OCIO, _OCIO_SPACES, _OCIO_ERR, _CFG, _CFG_WARN
     if _OCIO is not None or _OCIO_ERR is not None:
         return _OCIO
     try:
         import PyOpenColorIO as ocio  # type: ignore[import-not-found]
         path = os.environ.get("OCIO", "").strip()
         if path:
-            cfg = ocio.Config.CreateFromFile(path)
+            try:
+                cfg = ocio.Config.CreateFromFile(path)
+            except Exception as exc:  # noqa: BLE001 - L9.53: never silently a different config, never no config
+                _CFG_WARN = f"the OCIO config in $OCIO could not be loaded ({path}: {exc}); using the built-in one"
+                cfg = ocio.Config.CreateFromFile("ocio://studio-config-latest")
         else:
             # Without $OCIO, CreateFromEnv gives the one-space "raw" config: use the built-in ACES studio config.
             cfg = ocio.Config.CreateFromEnv()

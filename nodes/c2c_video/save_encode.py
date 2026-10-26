@@ -202,6 +202,17 @@ def _quality_options(spec: FormatSpec, quality: int) -> dict[str, str]:
     return opts
 
 
+def _convert(arr: np.ndarray, colorspace_in: str, colorspace_out: str, cm=None) -> np.ndarray:
+    """L9.53: with colour on 'auto (from Load)' the plan's transform (cm = (Transform, inverse)) - exactly the inverse
+    of what Load Video did; otherwise the conversion the two widgets name, as before."""
+    if cm is not None:
+        from .colour_cm import apply
+        return apply(np.ascontiguousarray(arr, dtype=np.float32), cm[0], inverse=cm[1])
+    if colorspace_out and colorspace_out != "same as input":
+        return transform_chunk(arr, colorspace_in, colorspace_out)
+    return arr
+
+
 def colour_tags(spec: FormatSpec, has_alpha: bool, colorspace_out: str) -> dict[str, str] | None:
     """What a YUV file says about its colour (L2.53). The frames are always converted with the BT.709 matrix to
     limited range, so those two are always stated. Primaries and transfer only when the output space is one we can
@@ -495,6 +506,7 @@ def _encode_av_stream(
     metadata: dict[str, Any] | None = None,
     colour=None,
     extras: "Extras | None" = None,
+    cm=None,
 ) -> list[str]:
     import av
 
@@ -516,10 +528,7 @@ def _encode_av_stream(
     def chunks():
         for start in range(0, n, chunk):
             arr = images[start:start + chunk].cpu().numpy().astype(np.float32)
-            if colorspace_out and colorspace_out != "same as input":
-                arr = transform_chunk(arr, colorspace_in, colorspace_out)
-            elif colorspace_in:
-                arr = transform_chunk(arr, colorspace_in, colorspace_in)
+            arr = _convert(arr, colorspace_in, colorspace_out, cm)
             yield arr if has_alpha else arr[..., :3]
 
     exe = ffmpeg_for(spec, pix=pix_fmt)
@@ -625,7 +634,7 @@ def _encode_av_stream(
 
 
 def _encode_gif(images: torch.Tensor, path: str, fps: float, quality: int,
-                colorspace_in: str, colorspace_out: str) -> list[str]:
+                colorspace_in: str, colorspace_out: str, cm=None) -> list[str]:
     from PIL import Image
 
     ProgressBar, interrupt = _progress_and_interrupt()
@@ -635,8 +644,7 @@ def _encode_gif(images: torch.Tensor, path: str, fps: float, quality: int,
     for i in range(n):
         interrupt()
         row = images[i].cpu().numpy().astype(np.float32)
-        if colorspace_out and colorspace_out != "same as input":
-            row = transform_chunk(row[None, ...], colorspace_in, colorspace_out)[0]
+        row = _convert(row[None, ...], colorspace_in, colorspace_out, cm)[0]
         u8 = quantize_rgb(row[..., :3], 8)
         frames.append(Image.fromarray(u8, mode="RGB"))
         if pbar:
@@ -657,7 +665,7 @@ def _encode_gif(images: torch.Tensor, path: str, fps: float, quality: int,
 
 
 def _encode_webp(images: torch.Tensor, path: str, fps: float, quality: int,
-                 colorspace_in: str, colorspace_out: str, has_alpha: bool) -> list[str]:
+                 colorspace_in: str, colorspace_out: str, has_alpha: bool, cm=None) -> list[str]:
     from PIL import Image
 
     ProgressBar, interrupt = _progress_and_interrupt()
@@ -667,8 +675,7 @@ def _encode_webp(images: torch.Tensor, path: str, fps: float, quality: int,
     for i in range(n):
         interrupt()
         row = images[i].cpu().numpy().astype(np.float32)
-        if colorspace_out and colorspace_out != "same as input":
-            row = transform_chunk(row[None, ...], colorspace_in, colorspace_out)[0]
+        row = _convert(row[None, ...], colorspace_in, colorspace_out, cm)[0]
         if has_alpha and row.shape[-1] >= 4:
             frames.append(Image.fromarray(quantize_rgb(row[..., :4], 8), mode="RGBA"))
         else:
@@ -691,7 +698,7 @@ _MATRIX_SEQ = frozenset({"oiio_png", "oiio_tiff", "oiio_dpx", "oiio_jpeg", "oiio
 
 
 def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has_alpha: bool, quality: int,
-                        extras: "Extras | None" = None) -> None:
+                        extras: "Extras | None" = None, interop_id: str | None = None) -> None:
     """One frame of a matrix image sequence (L9.40). Integer formats are clipped to 0-1 and rounded like the PNG16
     path; DPX stores 10 / 12 bits in 16-bit words (OIIO's BitsPerSample); EXR stores premultiplied colour (Nuke's
     Read assumes it) and TIFF / PNG straight alpha, as each format defines."""
@@ -721,6 +728,8 @@ def _write_matrix_frame(oiio, spec: FormatSpec, fpath: str, row: np.ndarray, has
         ospec.attribute("oiio:BitsPerSample", int(bits))
     elif spec.codec in ("oiio_tiff", "oiio_exr") and spec.profile:
         ospec.attribute("compression", str(spec.profile))
+    if spec.codec == "oiio_exr" and interop_id:
+        ospec.attribute("colorInteropID", str(interop_id))   # L9.53: what Load Video (and Nuke 16+) read back
     elif spec.codec == "oiio_jpeg":
         ospec.attribute("Compression", f"jpeg:{max(1, min(100, int(quality)))}")
         ospec.attribute("jpeg:subsampling", str(spec.profile or "4:2:0"))
@@ -751,6 +760,8 @@ def _encode_sequence_oiio(
     clamp_hdr: bool,
     quality: int = 90,
     extras: "Extras | None" = None,
+    cm=None,
+    interop_id: str | None = None,
 ) -> list[str]:
     import OpenImageIO as oiio  # type: ignore[import-not-found]
 
@@ -762,13 +773,12 @@ def _encode_sequence_oiio(
     for i in range(n):
         interrupt()
         row = images[i].cpu().numpy().astype(np.float32)
-        if colorspace_out and colorspace_out != "same as input":
-            row = transform_chunk(row[None, ...], colorspace_in, colorspace_out)[0]
+        row = _convert(row[None, ...], colorspace_in, colorspace_out, cm)[0]
         fname = f"{stem}.{i + 1:04d}.{ext}"
         fpath = os.path.join(out_dir, fname)
         h, w = row.shape[:2]
         if spec.codec in _MATRIX_SEQ:
-            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality, extras)
+            _write_matrix_frame(oiio, spec, fpath, row, has_alpha, quality, extras, interop_id)
         elif spec.codec == "oiio_png16":
             names = ["R", "G", "B"]
             planes = [np.clip(row[..., k], 0, 1) for k in range(3)]
@@ -811,6 +821,8 @@ def _encode_sequence_oiio(
             if len(names) == 4:
                 ospec.alpha_channel = 3
             ospec.attribute("compression", "zip")
+            if interop_id:
+                ospec.attribute("colorInteropID", str(interop_id))
             out = oiio.ImageOutput.create(fpath)
             if out is None:
                 raise SaveVideoError(f"OpenImageIO cannot write {fpath}: {oiio.geterror()}")
@@ -848,6 +860,8 @@ def encode_video(
     metadata: dict[str, Any] | None = None,
     colour=None,
     extras: "Extras | None" = None,
+    cm=None,
+    interop_id: str | None = None,
 ) -> dict[str, Any]:
     if images.ndim == 3:
         images = images.unsqueeze(0)
@@ -890,15 +904,17 @@ def encode_video(
             or (spec.codec == "oiio_tiff" and spec.bit_depth < 32),
             quality=quality,
             extras=x,
+            cm=cm,
+            interop_id=interop_id,
         )
     elif spec.codec == "pil_gif":
-        paths = _encode_gif(images, full_path, fps, quality, colorspace_in, out_cs)
+        paths = _encode_gif(images, full_path, fps, quality, colorspace_in, out_cs, cm)
     elif spec.codec == "pil_webp":
-        paths = _encode_webp(images, full_path, fps, quality, colorspace_in, out_cs, alpha_out)
+        paths = _encode_webp(images, full_path, fps, quality, colorspace_in, out_cs, alpha_out, cm)
     else:
         paths = _encode_av_stream(
             images, spec, full_path, fps, quality,
-            colorspace_in, out_cs, audio, alpha_out, metadata, colour, extras=x,
+            colorspace_in, out_cs, audio, alpha_out, metadata, colour, extras=x, cm=cm,
         )
 
     if pad_note:

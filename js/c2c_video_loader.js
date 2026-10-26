@@ -712,6 +712,33 @@ function setupLoaderNode(node, cfg) {
     }
 }
 
+// L9.53 colour management (owner 2026-10-25 / 26). The Python default is "off (as before)", so saved workflows and
+// API prompts keep their pixels; a node made now starts on auto. working_space only matters when colour is on.
+const CS_OFF = "off (as before)";
+const CS_AUTO = "auto (detect)";
+
+function setupColour(node, fresh) {
+    const csW = node.widgets?.find((w) => w.name === "colorspace_in");
+    const wsW = node.widgets?.find((w) => w.name === "working_space");
+    if (!csW) return;
+    const sync = () => {
+        // a value this list does not hold (a shifted older workflow) means what the loader always did
+        if (!csW.options?.values?.includes(csW.value)) csW.value = CS_OFF;
+        if (wsW) setHidden(wsW, csW.value === CS_OFF);
+    };
+    const prev = csW.callback;
+    csW.callback = function (...a) {
+        const r = prev?.apply(this, a);
+        sync();
+        return r;
+    };
+    setTimeout(() => {                                // a loaded / pasted node's values are restored by then
+        // new node only: one configured from saved data (a workflow, a paste) keeps what it had
+        if (fresh && !node._c2cColourConfigured && csW.value === CS_OFF) csW.value = CS_AUTO;
+        sync();
+    }, 0);
+}
+
 if (!globalThis.__c2cVideoLoadersExt) {
     globalThis.__c2cVideoLoadersExt = true;
     app.registerExtension({
@@ -728,11 +755,18 @@ if (!globalThis.__c2cVideoLoadersExt) {
                     else if (Array.isArray(spec?.[0]) && spec[0].length) cfg.defaults[name] = spec[0][0];
                 }
             }
+            if ("colorspace_in" in cfg.defaults) cfg.defaults.colorspace_in = CS_AUTO;   // what a new node starts on
             const onCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function (...args) {
                 const r = onCreated?.apply(this, args);
                 setupLoaderNode(this, cfg);
+                setupColour(this, !app.configuringGraph);
                 return r;
+            };
+            const onConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (...args) {
+                this._c2cColourConfigured = true;              // saved data: no new-node colour default
+                return onConfigure?.apply(this, args);
             };
         },
     });

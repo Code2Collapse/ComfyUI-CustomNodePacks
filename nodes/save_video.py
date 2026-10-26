@@ -13,6 +13,7 @@ from .c2c_video.save_encode import (
     pad_edge_replicate,
     resolve_output_path,
 )
+from .c2c_video import colour_cm as CM
 from .c2c_video import save_matrix as SM
 from .c2c_video import handles_io as HIO
 from .c2c_video import save_naming as SN
@@ -73,8 +74,10 @@ class SaveVideoC2C:
                                                 "as one stream."}),
                 "audio": ("AUDIO",),
                 "video_info": ("VHS_VIDEOINFO",),
-                "colorspace_in": (spaces, {"default": default_in}),
-                "colorspace_out": (["same as input"] + list(spaces), {"default": "same as input"}),
+                # L9.53: "auto (from Load)" = the space Load Video (C2C) converted the frames to / the file's own
+                # space, so Save reverses exactly what Load did (a new node starts on it; saved values stay)
+                "colorspace_in": ([CM.FROM_LOAD] + list(spaces), {"default": default_in}),
+                "colorspace_out": (["same as input", CM.FROM_LOAD] + list(spaces), {"default": "same as input"}),
                 # "Folder Version" (saved workflows) is the same as Folder Version Incrementer (L9.40)
                 "naming": (SN.NAMING_CHOICES + ["Folder Version"], {"default": "default", "tooltip":
                     "Folder Version Incrementer: the version folder and name come from the Folder Version "
@@ -284,10 +287,19 @@ class SaveVideoC2C:
         if video_info and abs(eff_fps - 24.0) < 1e-6:
             eff_fps = float(video_info.get("loaded_fps", eff_fps))
 
-        cs_in = colorspace_in or default_colorspace_in()
-        cs_out = colorspace_out or "same as input"
-        if cs_out == "same as input" and spec.codec.startswith("oiio_exr"):
-            cs_out = default_colorspace_out_exr()
+        cm_plan = None
+        if CM.FROM_LOAD in (str(colorspace_in or ""), str(colorspace_out or "")):
+            rec = video_info.get(CM.INFO_KEY) if isinstance(video_info, dict) else None
+            cm_plan = CM.save_plan(rec, colorspace_in, colorspace_out, default_colorspace_in())
+            cs_in, cs_out = cm_plan.cs_in, cm_plan.cs_out
+        else:
+            cs_in = colorspace_in or default_colorspace_in()
+            cs_out = colorspace_out or "same as input"
+            if cs_out == "same as input" and spec.codec.startswith("oiio_exr"):
+                cs_out = default_colorspace_out_exr()
+        exr_id = None
+        if spec.codec.startswith("oiio_exr") and CM.config() is not None:
+            exr_id = CM.interop_id(CM.config(), cs_in if cs_out in ("same as input", "same", "") else cs_out)
 
         pad_note = None
         even_w, even_h = spec.chroma_even                             # 4:2:0 both, 4:2:2 width: pad, never refuse
@@ -375,6 +387,8 @@ class SaveVideoC2C:
             pad_note=pad_note,
             colour=colour,
             extras=extras,
+            cm=cm_plan.cm if cm_plan is not None else None,
+            interop_id=exr_id,
         )
         workflow_png = None
         if save_metadata:
@@ -414,6 +428,7 @@ class SaveVideoC2C:
                                                         "bounded": stream_info.bounded},
             "mode": "written",
             "workflow_png": workflow_png,
+            "colour": None if cm_plan is None else dict(cm_plan.report(), interop_id=exr_id),
             "source": source_proxy,
             **common,
         }

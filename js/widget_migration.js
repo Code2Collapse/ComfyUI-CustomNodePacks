@@ -155,6 +155,22 @@ function insertBeforeExtras(node, nodeData, expected, wv) {
     return { values: wv.slice(0, pySaved).concat(missing.map((e) => e.def), wv.slice(pySaved)), missing };
 }
 
+// L9.53 (measured on frontend 1.53.10): LGraphNode.configure restores widget values BY POSITION before onConfigure
+// runs, so rewriting info.widgets_values here came too late - an old Load Video's trailing preview value ("") stayed
+// on the newly appended colorspace_in. The corrected array is the Python widgets in input order followed by the
+// front-end ones, so put it into the widgets by NAME as well (right whatever order the frontend restores in).
+function applyByName(node, expected, values) {
+    expected.forEach((e, k) => {
+        const w = node.widgets?.find((x) => x.name === e.name);
+        if (w && k < values.length) w.value = values[k];
+    });
+    const extras = trailingExtras(node, new Set(expected.map((e) => e.name)));
+    extras.forEach((w, j) => {
+        const v = values[expected.length + j];
+        if (v !== undefined) w.value = v;
+    });
+}
+
 // A workflow already re-saved after the shift carries the misplaced values at full length. Reset only values the
 // widget can never accept: a non-number in INT / FLOAT, a non-boolean in BOOLEAN, or a combo holding a trailing
 // front-end widget's value (e.g. "image" from the upload button). Anything else is left alone.
@@ -201,6 +217,7 @@ app.registerExtension({
                     const ins = insertBeforeExtras(this, nodeData, expected, wv);
                     if (ins) {
                         info.widgets_values = ins.values;
+                        applyByName(this, expected, ins.values);
                         console.log(`[MEC migration] ${nodeData.name}: inserted ${ins.missing.length} new widget(s) `
                             + `before the front-end widgets (${ins.missing.map((e) => e.name).join(", ")})`);
                     }
