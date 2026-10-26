@@ -157,6 +157,12 @@ class SaveVideoC2C:
                     "frames have none) - where the format can store it."}),
                 "png_compression": ("INT", {"default": -1, "min": -1, "max": 9, "tooltip":
                     "PNG zlib level 0 (fast, big) - 9 (slow, small); -1 = the writer's default. Lossless either way."}),
+                # L9.55 (owner 2026-10-25): which upstream Load Video this Save follows - auto = through each node's
+                # first image input; a node id pins one (the node's picker writes it). Appended: saved workflows = auto.
+                "follow_load": ("STRING", {"default": HIO.FOLLOW_AUTO, "tooltip":
+                    "Which Load Video this Save takes handles, frame rate, colour and name from. auto: the one reached "
+                    "through each node's first image input; a node id (the picker on the node) pins that one. A wired "
+                    "video_info always wins."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
@@ -226,6 +232,7 @@ class SaveVideoC2C:
         bitrate_kbps=0,
         channels="auto",
         png_compression=-1,
+        follow_load=HIO.FOLLOW_AUTO,
         prompt=None,
         extra_pnginfo=None,
         unique_id=None,
@@ -279,10 +286,13 @@ class SaveVideoC2C:
         # L9.52 (owner 2026-10-25): no video_info wire -> follow images (or latent) back to the Load Video it came from
         # and use the video_info that Load produced (handles, fps). A wired video_info always wins.
         traced_note = None
+        link: dict = {}                                  # L9.55: which Load this Save follows, for the node's report
         if video_info is None and isinstance(prompt, dict) and unique_id is not None:
             mine = (prompt.get(str(unique_id)) or {}).get("inputs") or {}
             which = ("images", "IMAGE") if HIO._is_link(mine.get("images")) else ("latent", "LATENT")
-            video_info, traced_note = HIO.traced_video_info(prompt, unique_id, *which)
+            video_info, traced_note = HIO.traced_video_info(prompt, unique_id, *which, follow=follow_load, link=link)
+        link_report = None if not link else {k: link.get(k) for k in ("load", "candidates", "ambiguous", "chosen")}
+        link_warn = [link["warning"]] if link.get("warning") else []
         eff_fps = float(fps)
         if video_info and abs(eff_fps - 24.0) < 1e-6:
             eff_fps = float(video_info.get("loaded_fps", eff_fps))
@@ -333,7 +343,8 @@ class SaveVideoC2C:
             ui_prev = dict(common, mode="preview", preview=proxy, source=proxy, frames=n_out, fps=eff_fps,
                            range=None, range_in=int(range_in), range_out=int(range_out),
                            width=pw, height=ph, format=spec.label, format_from=format_how, codec=spec.codec,
-                           warnings=[] if proxy else ["The clip is too long for a preview proxy."],
+                           warnings=link_warn + ([] if proxy else ["The clip is too long for a preview proxy."]),
+                           link=link_report,
                            message="Preview only - nothing written. Press Write file in the player to write it.")
             return {"ui": {"c2c_save_video": [ui_prev]}, "result": ("", last)}
         source_proxy = None
@@ -415,7 +426,8 @@ class SaveVideoC2C:
             "colorspace": result["colorspace"],
             "alpha": result["alpha"],
             "preview": result["preview"],
-            "warnings": result.get("warnings") or [],
+            "warnings": link_warn + list(result.get("warnings") or []),
+            "link": link_report,
             "codec": spec.codec,
             "format_from": format_how,
             "naming": naming_eff,

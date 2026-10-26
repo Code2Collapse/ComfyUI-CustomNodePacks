@@ -284,10 +284,84 @@ def trace_loader(prompt: dict, start_id: Any, input_name: str, kind: str = "IMAG
     return None, "the chain to a Load Video is too long"
 
 
+FOLLOW_AUTO = "auto"
+
+
+def upstream_loads(prompt: dict, start_id: Any, input_name: str, kind: str = "IMAGE") -> list[str]:
+    """Every Load Video whose frames reach `start_id`'s `input_name` through any input of `kind` (or a wildcard), in
+    first-input-first order. Bounded by MAX_HOPS nodes."""
+    if not isinstance(prompt, dict):
+        return []
+    first = ((prompt.get(str(start_id)) or {}).get("inputs") or {}).get(input_name)
+    stack, seen, found = [first], set(), []
+    while stack and len(seen) < MAX_HOPS:
+        link = stack.pop()
+        if not _is_link(link):
+            continue
+        src = str(link[0])
+        if src in seen:
+            continue
+        seen.add(src)
+        n = prompt.get(src)
+        if not isinstance(n, dict):
+            continue
+        cls = str(n.get("class_type") or "")
+        if cls in LOADER_CLASSES:
+            if int(link[1]) == 0 and src not in found:
+                found.append(src)
+            continue
+        ins = n.get("inputs") or {}
+        links = [ins[name] for name in _typed_input_names(cls, kind) if _is_link(ins.get(name))]
+        stack.extend(reversed(links))                       # the first input is explored first
+    return found
+
+
+def resolve_follow(prompt: Any, unique_id: Any, input_name: str = "images", kind: str = "IMAGE",
+                   follow: Any = FOLLOW_AUTO) -> dict[str, Any]:
+    """L9.55 (owner 2026-10-25): which Load Video a Save follows. The primary one is reached through each node's FIRST
+    image input (never execution order). Other Loads upstream make it ambiguous: a warning until the user picks one
+    (`follow_load` = its node id); a pick that is no longer upstream falls back to auto, with a warning.
+    -> {load, candidates, ambiguous, chosen, note, warning}."""
+    primary, why = trace_loader(prompt, unique_id, input_name, kind)
+    cands = upstream_loads(prompt, unique_id, input_name, kind)
+    if primary is not None and primary not in cands:
+        cands.insert(0, primary)
+    out: dict[str, Any] = {"load": None, "candidates": cands, "ambiguous": False, "chosen": False, "note": why,
+                           "warning": None}
+    want = str(follow or FOLLOW_AUTO).strip()
+    if want and want != FOLLOW_AUTO:
+        if want in cands:
+            out.update(load=want, chosen=True, note=f"Load Video #{want} (chosen in follow_load)")
+            return out
+        out["warning"] = (f"follow_load names Load Video #{want}, which is not upstream of this Save any more - "
+                          "following the automatic choice")
+    others = [c for c in cands if c != primary]
+    if primary is not None:
+        out.update(load=primary, note="")
+        if others:
+            out["ambiguous"] = True
+            out["warning"] = out["warning"] or (
+                f"Load Video #{primary} is followed (first image input); "
+                + ", ".join(f"#{c}" for c in others) + " also upstream - pick one in follow_load to confirm")
+    elif len(cands) == 1:
+        out.update(load=cands[0], note=f"Load Video #{cands[0]} (the only one upstream)")
+    elif len(cands) > 1:
+        out["ambiguous"] = True
+        out["warning"] = out["warning"] or (
+            "several Load Videos are upstream (" + ", ".join(f"#{c}" for c in cands)
+            + ") and none is on the first-image path - pick one in follow_load")
+    return out
+
+
 def traced_video_info(prompt: Any, unique_id: Any, input_name: str = "images",
-                      kind: str = "IMAGE") -> tuple[dict | None, str]:
-    """(the video_info the upstream Load Video produced, note). None + why when there is no usable record."""
-    src, why = trace_loader(prompt, unique_id, input_name, kind)
+                      kind: str = "IMAGE", follow: Any = FOLLOW_AUTO,
+                      link: dict | None = None) -> tuple[dict | None, str]:
+    """(the video_info the upstream Load Video produced, note). None + why when there is no usable record. `link`, when
+    given, receives resolve_follow's answer (candidates / ambiguity) for the node's report."""
+    res = resolve_follow(prompt, unique_id, input_name, kind, follow)
+    if link is not None:
+        link.update(res)
+    src, why = res["load"], res["note"]
     if src is None:
         return None, why
     got = _LOADS.get(src)
@@ -295,4 +369,4 @@ def traced_video_info(prompt: Any, unique_id: Any, input_name: str = "images",
     if got is None or got[0] != sig:
         return None, (f"Load Video #{src} is upstream, but it has not run with these settings since ComfyUI started "
                       f"- wire its video_info, or trim manually")
-    return dict(got[1]), f"Load Video #{src} (traced - no video_info wire)"
+    return dict(got[1]), (res["note"] if res["chosen"] else f"Load Video #{src} (traced - no video_info wire)")

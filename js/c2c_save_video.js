@@ -32,6 +32,8 @@ import {
 } from "./c2c_video_player_ui.js";
 import { attachPlayer, holdPlayerWidth, playerButton } from "./c2c_video_player.js";
 import { attachABView, WIPE_SHAPES } from "./_c2c_ab_view.js";
+import { followed, traceLoads } from "./_c2c_load_trace.js";
+import { getRuntime } from "./_c2c_runtime.js";
 
 const NODE = "SaveVideoC2C";
 const SETTING_NAMING = "c2c.saveVideo.naming";
@@ -265,6 +267,7 @@ function setLabel(w, text) {
 }
 
 function applyVisibility(node, info) {
+    setHidden(W(node, "follow_load"), true);             // L9.55: the Load ▾ picker writes it
     const custom = val(node, "format") === CUSTOM;
     const subMode = custom && hasSubformats() && !!W(node, "subformat");
     const adv = !!node.properties?.c2c_save_advanced;
@@ -346,8 +349,15 @@ function mountSaveWidget(node) {
         refreshFormat();
     });
     bAdv.dataset.c2cSave = "advanced";
-    advRow.append(bAdv);
-    summary.append(tools, advRow, pathLine, formatLine);
+    // L9.55: which Load Video this Save follows (handles, fps, colour, name) - picked here, written to follow_load
+    const bFollow = playerButton("Load: auto ▾", "Which Load Video this Save takes handles, frame rate, colour and "
+        + "name from. auto = the one reached through each node's first image input.", (ev) => openFollowMenu(ev));
+    bFollow.dataset.c2cSave = "follow";
+    advRow.append(bAdv, bFollow);
+    const linkLine = document.createElement("div");
+    linkLine.className = "c2c-vloader__summary-lines";
+    linkLine.dataset.c2cSave = "link";
+    summary.append(tools, advRow, pathLine, formatLine, linkLine);
     ui.root.insertBefore(summary, ui.status.el);
     ui.summary = summary;
 
@@ -506,6 +516,61 @@ function mountSaveWidget(node) {
         fitNode();
     }
 
+    // ── L9.55: the Load this Save follows, on the live graph (the server applies the same rule at run time) ──
+    let trace = { primary: null, candidates: [], ambiguous: false, why: "" };
+    const framesInput = () => {
+        const lat = node.inputs?.find((x) => x.name === "latent");
+        return lat?.link != null ? "latent" : "images";
+    };
+    const baseName = (v) => String(v || "").split(/[\\/]/).pop();
+    function refreshLink() {
+        try {
+            trace = traceLoads(app, node, framesInput(), framesInput() === "latent" ? "LATENT" : "IMAGE");
+        } catch (_e) {
+            trace = { primary: null, candidates: [], ambiguous: false, why: "" };
+        }
+        const fw = W(node, "follow_load");
+        const f = followed(trace, fw?.value);
+        bFollow.textContent = f.load ? `Load: #${f.load.id}${f.chosen ? "" : " (auto)"} ▾` : "Load: none ▾";
+        const parts = [];
+        if (f.load) parts.push(`Follows ${f.load.title} #${f.load.id}${f.load.video ? " - " + baseName(f.load.video) : ""}.`);
+        else if (trace.candidates.length > 1) parts.push("Several Load Videos upstream - pick one (Load ▾).");
+        else if (trace.why) parts.push(`No Load Video: ${trace.why}.`);
+        if (f.stale) parts.push(`follow_load names #${fw.value}, which is no longer upstream - following auto.`);
+        if (trace.ambiguous && !f.chosen) {
+            const others = trace.candidates.filter((c) => c.id !== f.load?.id).map((c) => "#" + c.id);
+            if (f.load && others.length) parts.push(`Also upstream: ${others.join(", ")} - pick one to confirm.`);
+        }
+        linkLine.textContent = parts.join(" ");
+        const warn = !!(f.stale || (trace.ambiguous && !f.chosen) || (!f.load && trace.candidates.length > 1));
+        linkLine.dataset.warn = String(warn);
+        linkLine.style.color = warn ? "var(--cu-warn, var(--c2c-yellow, #f3d288))" : "";   // the UI kit's warning tone
+        linkLine.hidden = !parts.length;
+    }
+    function openFollowMenu(ev) {
+        const fw = W(node, "follow_load");
+        if (!fw) return;
+        refreshLink();
+        const auto = trace.primary ? `#${trace.primary.id}` : (trace.candidates.length === 1 ? `#${trace.candidates[0].id}` : "none");
+        const items = [{ content: `${fw.value === "auto" ? "✓ " : ""}auto (first image input: ${auto})`, value: "auto" }];
+        for (const c of trace.candidates) {
+            items.push({ content: `${fw.value === c.id ? "✓ " : ""}${c.title} #${c.id}${c.video ? " - " + baseName(c.video) : ""}`,
+                         value: c.id });
+        }
+        const pick = (v) => {
+            fw.value = v;
+            fw.callback?.(v);
+            refreshLink();
+            node.setDirtyCanvas?.(true, true);
+        };
+        try {
+            new LiteGraph.ContextMenu(items, { event: ev, callback: (item) => pick(item.value ?? item) });
+        } catch (_e) {
+            pick("auto");
+        }
+    }
+    const offGraph = getRuntime().onGraphChange?.(() => refreshLink(), { debounceMs: 300 }) || (() => {});
+
     // ── a run's result ──
     const showResult = (data) => {
         if (!data) return;
@@ -570,9 +635,10 @@ function mountSaveWidget(node) {
         ab.destroy();
         cleanupVideo();
         uninstallFloor();
+        offGraph();
         return origRemoved?.apply(this, args);
     };
-    return { refreshFormat, schedulePath };
+    return { refreshFormat, schedulePath, refreshLink };
 }
 
 // L9.54 (owner: "organized like VHS Video Combine"): Format -> Subformat -> its options show FIRST. The new inputs are
@@ -703,6 +769,7 @@ if (!globalThis.__c2cSaveVideoExt) {
                         }
                         api_.refreshFormat();
                         api_.schedulePath();
+                        api_.refreshLink();
                     });
                 }, 0);
                 return r;
@@ -718,6 +785,7 @@ if (!globalThis.__c2cSaveVideoExt) {
                     adoptSubformat(node);                    // L9.54: shown on its subformat - the same encode
                     node._c2cSave?.refreshFormat();
                     node._c2cSave?.schedulePath();
+                    node._c2cSave?.refreshLink?.();
                 });
                 return r;
             };
@@ -733,7 +801,10 @@ if (!globalThis.__c2cSaveVideoExt) {
             const onConn = nodeType.prototype.onConnectionsChange;
             nodeType.prototype.onConnectionsChange = function (...args) {
                 const r = onConn?.apply(this, args);
-                if (this._c2cSave && !app.configuringGraph) this._c2cSave.refreshFormat();
+                if (this._c2cSave && !app.configuringGraph) {
+                    this._c2cSave.refreshFormat();
+                    this._c2cSave.refreshLink?.();
+                }
                 return r;
             };
             const onExecuted = nodeType.prototype.onExecuted;

@@ -911,6 +911,19 @@ see CREDITS.md.
   Checked live on frontend 1.53.10 in both renderers and inside a subgraph: an OpenEXR / DWAB / float run wrote a
   DWAB float EXR, and a save -> reload round trip kept every value.
 
+#### Save Video (C2C): which Load Video it follows (2026-10-26)
+
+- **Load ▾ picker.** Save Video takes handles, frame rate, colour and (next) the name from one Load Video. *auto*
+  follows the Load reached through each node's first image input, never execution order. The node shows which one
+  before a run ("Follows Load Video #12 - shot.mov"), live, through subgraphs in both directions.
+- **More than one Load upstream** (for example a blend of two plates): the first-input Load is used, and a warning
+  names the others until you pick one in the Load ▾ menu. A pick stays until the graph changes. If the picked Load is
+  no longer upstream, Save goes back to auto and says so.
+- The server applies the same rule at run time and reports it in the result, so API runs behave the same. A wired
+  `video_info` still wins. The pick is stored in the new `follow_load` input (appended; saved workflows = auto).
+- Checked live on frontend 1.53.10 in both renderers: a single chain, two Loads, the Loads inside a subgraph (ids
+  `5:1` / `5:3` - the server followed exactly `5:3`), and Save inside a subgraph.
+
 #### Load / Save Video (C2C): colour management, Nuke / OCIO style (2026-10-26)
 
 - **Load Video finds the file's colour space** (`colorspace_in` = *auto (detect)*), from the most reliable source first:
