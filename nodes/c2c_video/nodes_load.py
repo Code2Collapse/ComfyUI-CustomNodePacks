@@ -854,6 +854,9 @@ COLORSPACE_IN_TIP = ("The colour space this file was rendered in. auto: read it 
 WORKING_TIP = ("What the frames are converted to for the models. sRGB display: a Rec.709 / sRGB source stays as it is; "
                "anything else goes through the config's view (tone-mapped: ACES 2.0 SDR in the built-in config, what "
                "Nuke's viewer shows). Save Video (C2C) reverses exactly this. preserve source: no conversion.")
+NAME_TIP = ("Save Video (C2C) on 'auto (from Load)' names its file name_prefix + this clip's name + name_suffix, e.g. "
+            "proj_ + shot010 + _comp; with the version folder the name carries the folder's version. Empty = nothing "
+            "added. Typing a name on Save wins.")
 CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 = no crop). Set it with the Crop "
             "tool in the player; custom_width / custom_height then resize the cropped frame.")
 
@@ -905,6 +908,10 @@ class LoadVideoC2C:
                 # the default here, so saved workflows and API prompts keep their pixels; a new node starts on auto.
                 "colorspace_in": (CM.colorspace_in_choices(), _widget(COLORSPACE_IN_TIP, default=CM.CS_OFF)),
                 "working_space": (CM.working_choices(), _widget(WORKING_TIP, default=CM.WORK_DEFAULT)),
+                # L9.55 (owner 2026-10-25): Save Video names its file name_prefix + this source's name + name_suffix
+                # (read from the prompt - no effect on the frames). Empty by default: no suffix unless you add one.
+                "name_prefix": ("STRING", _widget(NAME_TIP, default="")),
+                "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -943,6 +950,8 @@ class LoadVideoC2C:
         handle_custom_plus=1,
         colorspace_in=CM.CS_OFF,
         working_space=CM.WORK_DEFAULT,
+        name_prefix="",                     # read by Save Video from the prompt (L9.55)
+        name_suffix="",
         prompt=None,
         unique_id=None,
     ):
@@ -1035,6 +1044,10 @@ class LoadVideoPathC2C:
                 # the default here, so saved workflows and API prompts keep their pixels; a new node starts on auto.
                 "colorspace_in": (CM.colorspace_in_choices(), _widget(COLORSPACE_IN_TIP, default=CM.CS_OFF)),
                 "working_space": (CM.working_choices(), _widget(WORKING_TIP, default=CM.WORK_DEFAULT)),
+                # L9.55 (owner 2026-10-25): Save Video names its file name_prefix + this source's name + name_suffix
+                # (read from the prompt - no effect on the frames). Empty by default: no suffix unless you add one.
+                "name_prefix": ("STRING", _widget(NAME_TIP, default="")),
+                "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -1074,6 +1087,8 @@ class LoadVideoPathC2C:
         handle_custom_plus=1,
         colorspace_in=CM.CS_OFF,
         working_space=CM.WORK_DEFAULT,
+        name_prefix="",                     # read by Save Video from the prompt (L9.55)
+        name_suffix="",
         prompt=None,
         unique_id=None,
     ):

@@ -358,12 +358,23 @@ class SaveVideoC2C:
         _, h, w, _ = images.shape
         naming_eff = effective_naming(str(naming), str(naming_resolved or ""))
         version = None
-        prefix_eff, sub_eff, base_dir = filename_prefix, subfolder, None
+        # L9.55: "auto (from Load)" = the followed Load Video's name_prefix + source stem + name_suffix
+        load_name, name_note = None, None
+        if str(filename_prefix or "").strip() == SN.FROM_LOAD:
+            load_name, name_note = SN.name_from_load(prompt, unique_id, follow_load)
+            if load_name is None:
+                name_note = f"{name_note}: written as video"
+        if load_name is not None:
+            prefix_eff = load_name if str(subfolder or "").strip() else f"C2C/{load_name}"
+        else:
+            prefix_eff = "C2C/video" if str(filename_prefix or "").strip() == SN.FROM_LOAD else filename_prefix
+        sub_eff, base_dir = subfolder, None
         if naming_eff == SN.FOLDER and not str(subfolder or "").strip() and bool(save_output):
             version = SN.resolve_version(prompt, unique_id)
             from .c2c_video.save_encode import _import_folder_paths
             out_root = _import_folder_paths().get_output_directory()
-            prefix_eff = version["filename_prefix"]
+            prefix_eff = (SN.with_version(load_name, version["version_string"]) if load_name is not None
+                          else version["filename_prefix"])
             if SN.outside_output(version["base_path"], out_root):
                 base_dir, sub_eff = version["base_path"], version["subfolder_path"]
             else:
@@ -428,6 +439,7 @@ class SaveVideoC2C:
             "preview": result["preview"],
             "warnings": link_warn + list(result.get("warnings") or []),
             "link": link_report,
+            "name_from": name_note,
             "codec": spec.codec,
             "format_from": format_how,
             "naming": naming_eff,

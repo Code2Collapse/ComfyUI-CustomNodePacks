@@ -643,7 +643,8 @@ def register_routes() -> bool:
                                 naming=str(body.get("naming") or "default"), ext=ext, sequence=seq,
                                 filename_prefix=str(body.get("filename_prefix") or ""),
                                 subfolder=str(body.get("subfolder") or ""),
-                                save_output=bool(body.get("save_output", True)))
+                                save_output=bool(body.get("save_output", True)),
+                                follow=str(body.get("follow_load") or "auto"))
 
         try:
             return web.json_response(await asyncio.get_running_loop().run_in_executor(_pools()[2], work))

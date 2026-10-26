@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import re
 from typing import Any
 
 NAMING_CHOICES = ["default", "ComfyUI counter", "Folder Version Incrementer"]
@@ -89,6 +90,69 @@ def resolve_version(prompt: Any, own_id: Any = None, *, reserve: bool = False) -
             "origin": origin, "node": inc_id}
 
 
+# ---- the name from the Load Video (L9.55, owner 2026-10-25) --------------------------------------------------------
+# "Source name + suffix": Load Video's name_prefix + the source's stem + its name_suffix (no suffix unless the user adds
+# one); Save Video's own filename_prefix wins when it is not FROM_LOAD. With the version folder the file carries the
+# folder's version: the stem's own version token is replaced, else _<version> is added. Never the source path.
+FROM_LOAD = "auto (from Load)"
+_SEQ_EXT = {".exr", ".dpx", ".png", ".tif", ".tiff", ".jpg", ".jpeg", ".hdr", ".cin", ".tga", ".bmp", ".webp"}
+_SEQ_TOKEN = re.compile(r"(?:[._-]?(?:#+|%0?\d*d|\[\d+\s*-\s*\d+\])|[._-]\d{2,})$")
+_VERSION_TOKEN = re.compile(r"(?i)(?<![a-z0-9])v\d{1,6}(?![a-z0-9])")
+
+
+def source_stem(video: Any) -> str:
+    """The source's name without folders, extension or sequence frame token: clip.mov -> clip, D:/p/shot010.####.exr /
+    shot010.%04d.exr / shot010.[1001-1100].exr / shot010.1001.exr -> shot010, a sequence folder -> its name."""
+    s = re.sub(r"\s*\[(input|output|temp)\]\s*$", "", str(video or "").strip()).replace("\\", "/").rstrip("/")
+    name = s.rsplit("/", 1)[-1]
+    stem, ext = os.path.splitext(name)
+    if ext.lower() not in _SEQ_EXT and ext and not re.search(r"#|%0?\d*d|\[\d", name):
+        return stem.strip(" ._-") or "video"                  # a movie: its stem as it is (shot_010.mov stays)
+    if not ext and "." not in name and not re.search(r"#|%0?\d*d|\[\d", name):
+        return name.strip(" ._-") or "video"                  # a sequence folder
+    return _SEQ_TOKEN.sub("", stem if ext else name).strip(" ._-") or "video"
+
+
+def with_version(base: str, version_string: str | None) -> str:
+    """The file name carrying the folder's version (owner: "filename has same version number as folder")."""
+    if not version_string:
+        return base
+    found = list(_VERSION_TOKEN.finditer(base))
+    if found:
+        last = found[-1]
+        return base[:last.start()] + str(version_string) + base[last.end():]
+    return f"{base}_{version_string}"
+
+
+def followed_load(prompt: Any, unique_id: Any, follow: Any = "auto") -> str | None:
+    """The Load Video this Save takes its name from: the one its video_info wire comes from, else the one it follows."""
+    from . import handles_io as HIO
+    if not isinstance(prompt, dict) or unique_id is None:
+        return None
+    mine = (prompt.get(str(unique_id)) or {}).get("inputs") or {}
+    vi = mine.get("video_info")
+    if HIO._is_link(vi) and str((prompt.get(str(vi[0])) or {}).get("class_type")) in HIO.LOADER_CLASSES:
+        return str(vi[0])
+    which = ("images", "IMAGE") if HIO._is_link(mine.get("images")) else ("latent", "LATENT")
+    return HIO.resolve_follow(prompt, unique_id, *which, follow=follow)["load"]
+
+
+def name_from_load(prompt: Any, unique_id: Any, follow: Any = "auto") -> tuple[str | None, str]:
+    """(prefix + stem + suffix of the followed Load Video, note) - read from the Load's own inputs in the prompt, so it
+    is known before that Load runs. (None, why) without one."""
+    src = followed_load(prompt, unique_id, follow)
+    if src is None:
+        return None, "no Load Video to take the name from"
+    ins = (prompt.get(src) or {}).get("inputs") or {}
+    stem = source_stem(ins.get("video"))
+    return _clean(ins.get("name_prefix")) + stem + _clean(ins.get("name_suffix")), f"named after Load Video #{src}"
+
+
+def _clean(v: Any) -> str:
+    """A prefix / suffix as file-name text: no folders, no characters Windows refuses."""
+    return re.sub(r'[\\/:*?"<>|]+', "_", v) if isinstance(v, str) else ""
+
+
 def outside_output(base_path: str, output_dir: str) -> bool:
     if not base_path:
         return False
@@ -100,7 +164,7 @@ def outside_output(base_path: str, output_dir: str) -> bool:
 
 
 def predict_path(*, prompt: Any, unique_id: Any, naming: str, ext: str, sequence: bool, filename_prefix: str,
-                 subfolder: str, save_output: bool) -> dict:
+                 subfolder: str, save_output: bool, follow: Any = "auto") -> dict:
     """Where the next write would go - a dry run: no folder is created and no version is taken (outside a run the
     incrementer's lease does not apply, so this is the disk's next free version)."""
     from .save_encode import _import_folder_paths, effective_naming
@@ -110,9 +174,13 @@ def predict_path(*, prompt: Any, unique_id: Any, naming: str, ext: str, sequence
     if not save_output:
         return {"naming": eff, "path": "(temp folder - preview only, no version taken)", "version": None}
     sub = str(subfolder or "").strip().replace("\\", "/")
+    base = None
+    if str(filename_prefix or "").strip() == FROM_LOAD:           # L9.55: the Load Video's name
+        base, _why = name_from_load(prompt, unique_id, follow)
+        filename_prefix = f"C2C/{base}" if base else "C2C/video"
     if eff == FOLDER and not sub:
         v = resolve_version(prompt, unique_id)
-        stem = os.path.basename(v["filename_prefix"]) or "video"
+        stem = (with_version(base, v["version_string"]) if base else os.path.basename(v["filename_prefix"])) or "video"
         if outside_output(v["base_path"], out_root):
             root, rel = v["base_path"], v["subfolder_path"]
         else:

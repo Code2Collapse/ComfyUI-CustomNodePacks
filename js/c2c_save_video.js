@@ -32,7 +32,7 @@ import {
 } from "./c2c_video_player_ui.js";
 import { attachPlayer, holdPlayerWidth, playerButton } from "./c2c_video_player.js";
 import { attachABView, WIPE_SHAPES } from "./_c2c_ab_view.js";
-import { followed, traceLoads } from "./_c2c_load_trace.js";
+import { followed, nodeExecId, traceLoads } from "./_c2c_load_trace.js";
 import { getRuntime } from "./_c2c_runtime.js";
 
 const NODE = "SaveVideoC2C";
@@ -49,7 +49,8 @@ const ENCODER_EXTRAS = new Set(["libx264", "libx265", "h264_nvenc", "hevc_nvenc"
                                 "libvpx-vp9"]);
 const COLOUR = ["color_primaries", "color_transfer", "color_range"];
 const ALWAYS_HIDDEN = ["naming_resolved", "write_token", "range_in", "range_out"];
-const NAMING_INPUTS = new Set(["naming", "filename_prefix", "subfolder", "save_output", "format", "subformat", ...FIVE]);
+const NAMING_INPUTS = new Set(["naming", "filename_prefix", "subfolder", "save_output", "format", "subformat",
+                               "follow_load", ...FIVE]);   // follow_load: L9.55, the name follows the picked Load
 const FOLDER_NAMES = new Set(["Folder Version Incrementer", "Folder Version"]);
 
 // the old single list: formats without a quality setting (legacy labels only; the matrix says it for custom)
@@ -477,10 +478,11 @@ function mountSaveWidget(node) {
             naming: val(node, "naming", "default"),
             format: val(node, "format"), filename_prefix: val(node, "filename_prefix", ""),
             subfolder: val(node, "subfolder", ""), save_output: !!val(node, "save_output", true),
-            unique_id: String(node.id),
+            unique_id: nodeExecId(app, node), follow_load: val(node, "follow_load", "auto"),
         };
         for (const n of FIVE) body[n] = val(node, n);
-        if (FOLDER_NAMES.has(naming) && !String(body.subfolder || "").trim()) {
+        // the version folder and (L9.55) a name taken from the Load Video both need the graph
+        if ((FOLDER_NAMES.has(naming) && !String(body.subfolder || "").trim()) || body.filename_prefix === FROM_LOAD) {
             try { body.prompt = (await app.graphToPrompt())?.output || {}; } catch { body.prompt = {}; }
         }
         try {
@@ -569,7 +571,10 @@ function mountSaveWidget(node) {
             pick("auto");
         }
     }
-    const offGraph = getRuntime().onGraphChange?.(() => refreshLink(), { debounceMs: 300 }) || (() => {});
+    const offGraph = getRuntime().onGraphChange?.(() => {
+        refreshLink();
+        if (val(node, "filename_prefix", "") === FROM_LOAD) schedulePath();    // the Load's name may have changed
+    }, { debounceMs: 300 }) || (() => {});
 
     // ── a run's result ──
     const showResult = (data) => {
@@ -758,6 +763,8 @@ if (!globalThis.__c2cSaveVideoExt) {
                             const w = W(node, n);
                             if (w && w.options?.values?.includes(FROM_LOAD)) w.value = FROM_LOAD;
                         }
+                        const fp = W(node, "filename_prefix");          // L9.55: named after the Load Video
+                        if (fp && fp.value === "C2C/video") fp.value = FROM_LOAD;
                     }
                     resolveNaming(node);
                     applyVisibility(node, null);

@@ -152,3 +152,9 @@ function autoLoad(trace) {
     if (trace.primary) return trace.primary;
     return trace.candidates.length === 1 ? trace.candidates[0] : null;
 }
+
+/** A node's execution id ("12", or "45:12" inside subgraph node 45) - what the server calls it in the prompt. */
+export function nodeExecId(app, node) {
+    const parents = parentsOf(app.rootGraph ?? app.graph);
+    return execId(node.graph ?? app.rootGraph ?? app.graph, node, parents);
+}

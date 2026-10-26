@@ -924,6 +924,25 @@ see CREDITS.md.
 - Checked live on frontend 1.53.10 in both renderers: a single chain, two Loads, the Loads inside a subgraph (ids
   `5:1` / `5:3` - the server followed exactly `5:3`), and Save inside a subgraph.
 
+#### Save Video (C2C): the file named after the Load Video (2026-10-26)
+
+- New Save nodes start with `filename_prefix` = *auto (from Load)*. The file is named after the Load Video they
+  follow: its `name_prefix` + the source's name + its `name_suffix`. Both fields are new on Load Video and empty by
+  default, so nothing is added unless you add it.
+  - The source's name loses its folders, extension and sequence frame token: `D:/plates/shot010.####.exr` ->
+    `shot010`. A movie keeps its digits: `shot_010.mov` -> `shot_010`.
+  - The source path is never written.
+- **With the version folder** (the default), the file carries the folder's version. `shot010_comp_v003.mov`
+  becomes `.../v004/shot010_comp_v004.mp4`, and a name without a version gets `_v004`. The next write takes the next
+  version, in the folder and the name. With *ComfyUI counter* the file is `C2C/<name>_00001`.
+- Typing a name on Save wins. A wired `video_info` names the file after the Load it comes from. Without a Load the
+  file is `video`, and the node says why.
+- The next-path line shows the name before a run and updates when the Load's name fields change. It is right
+  inside subgraphs too.
+- Saved workflows keep their names (their `filename_prefix` is not *auto*).
+- Checked live on frontend 1.53.10 in both renderers: the preview showed `proj_plate_a_comp_v003.mp4`, the run
+  wrote exactly that file in `v003`, and the preview then moved to `v004`.
+
 #### Load / Save Video (C2C): colour management, Nuke / OCIO style (2026-10-26)
 
 - **Load Video finds the file's colour space** (`colorspace_in` = *auto (detect)*), from the most reliable source first:
