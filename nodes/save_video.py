@@ -15,6 +15,7 @@ from .c2c_video.save_encode import (
 )
 from .c2c_video import colour_cm as CM
 from .c2c_video import source_meta as SMETA
+from .c2c_video import save_review as SR
 from .c2c_video import save_matrix as SM
 from .c2c_video import handles_io as HIO
 from .c2c_video import save_naming as SN
@@ -164,6 +165,17 @@ class SaveVideoC2C:
                     "Which Load Video this Save takes handles, frame rate, colour and name from. auto: the one reached "
                     "through each node's first image input; a node id (the picker on the node) pins that one. A wired "
                     "video_info always wins."}),
+                # L9.57 (owner 2026-10-25): a preview-only review copy next to the master, burn-in on the review only
+                "review_copy": ("BOOLEAN", {"default": False, "tooltip":
+                    "Also write '<name>_review.mp4' next to the file: H.264, half size, in the OCIO display "
+                    "(sRGB - Display), with the burn-in below. For review only - the master gets no burn-in."}),
+                "burn_in": (list(SR.BURN_MODES), {"default": "standard", "tooltip":
+                    "standard: name + version (top left), frame + timecode (top right), colour spaces (bottom left), "
+                    "date (bottom right). custom: burn_in_template. off: none."}),
+                "burn_in_template": ("STRING", {"default": SR.STANDARD_TEMPLATE, "tooltip":
+                    "Four corners, top-left | top-right | bottom-left | bottom-right, with {shot} {version} {frame} "
+                    "{tc} {date} {artist} {colour}. The frame and timecode are the source's when Save carried them."}),
+                "burn_in_artist": ("STRING", {"default": "", "tooltip": "What {artist} writes in the custom template."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"},
         }
@@ -234,6 +246,10 @@ class SaveVideoC2C:
         channels="auto",
         png_compression=-1,
         follow_load=HIO.FOLLOW_AUTO,
+        review_copy=False,
+        burn_in="standard",
+        burn_in_template=SR.STANDARD_TEMPLATE,
+        burn_in_artist="",
         prompt=None,
         extra_pnginfo=None,
         unique_id=None,
@@ -422,6 +438,25 @@ class SaveVideoC2C:
             interop_id=exr_id,
             carry=carry,
         )
+        # L9.57: the review copy, from the same frames (the master is already written)
+        review = None
+        if bool(review_copy):
+            if not torch.is_tensor(images):
+                review = {"note": "no review copy: a streamed save (latent + vae) reads its frames once"}
+            else:
+                import os as _os
+                from .c2c_video.save_encode import _import_folder_paths as _fp
+                master = path_info[0]
+                shot = _os.path.basename(master) if spec.sequence else _os.path.splitext(_os.path.basename(master))[0]
+                root = (_fp().get_output_directory() if result.get("type") == "output" else _fp().get_temp_directory())
+                try:
+                    review = SR.write_review(images, master_path=master, out_root=root, folder_type=result["type"],
+                                             fps=eff_fps, audio=audio, cs_in=cs_in, burn_mode=str(burn_in),
+                                             template=str(burn_in_template or ""), carry=carry,
+                                             ctx=SR.standard_ctx(shot=shot, version=(version or {}).get(
+                                                 "version_string"), artist=str(burn_in_artist or "")))
+                except Exception as exc:  # noqa: BLE001 - the master is written; the review only reports
+                    review = {"note": f"the review copy failed: {exc}"}
         workflow_png = None
         if save_metadata:
             from .c2c_video.save_encode import write_workflow_png
@@ -450,6 +485,7 @@ class SaveVideoC2C:
             "warnings": link_warn + list(result.get("warnings") or []),
             "link": link_report,
             "name_from": name_note,
+            "review": review,
             "carry": None if carry is None else {
                 "first_number": (carry["numbers"] or [None])[0], "last_number": (carry["numbers"] or [None])[-1],
                 "timecode": carry["timecode"], "pixel_aspect": carry["pixel_aspect"], "reel": carry["reel"],

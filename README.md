@@ -924,6 +924,20 @@ see CREDITS.md.
 - Checked live on frontend 1.53.10 in both renderers: a single chain, two Loads, the Loads inside a subgraph (ids
   `5:1` / `5:3` - the server followed exactly `5:3`), and Save inside a subgraph.
 
+#### Save Video (C2C): review copy + burn-in (2026-10-26)
+
+- `review_copy` (off by default) also writes `<name>_review.mp4` next to the file, or next to a sequence's folder.
+  It is H.264 at half size, in the OCIO display (sRGB - Display; frames in another space go through the config's
+  view), for review only.
+- **Burn-in, on the review only** (the master stays clean). *standard*: name + version (top left), source frame +
+  timecode (top right), colour space (bottom left), date (bottom right). *custom*: `burn_in_template`, four corners
+  separated by `|`, with `{shot} {version} {frame} {tc} {date} {artist} {colour}`. *off*: none. The frame and
+  timecode are the source's when Save carried them.
+- It is written from the same frames chunk by chunk, so there is no second decode and no full-size copy. A streamed
+  save (latent + vae) gets no review copy, and says so.
+- Checked live on frontend 1.53.10 in both renderers: the burn-in settings show only when needed. A 960x540 plate
+  gave a 480x270 review with a readable burn-in: "1001 01:00:00:00" from the source.
+
 #### Save Video (C2C): source frame numbers, timecode, pixel aspect, reel (2026-10-26)
 
 - **A sequence keeps its source frame numbers.** Load `shot.1001-1100.exr` with handles, and Save writes

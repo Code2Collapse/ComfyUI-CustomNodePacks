@@ -269,6 +269,11 @@ function setLabel(w, text) {
 
 function applyVisibility(node, info) {
     setHidden(W(node, "follow_load"), true);             // L9.55: the Load ▾ picker writes it
+    // L9.57: the burn-in settings only with a review copy; the template and artist only for a custom burn-in
+    const review = !!val(node, "review_copy", false), customBurn = val(node, "burn_in", "standard") === "custom";
+    setHidden(W(node, "burn_in"), !review);
+    setHidden(W(node, "burn_in_template"), !(review && customBurn));
+    setHidden(W(node, "burn_in_artist"), !(review && customBurn));
     const custom = val(node, "format") === CUSTOM;
     const subMode = custom && hasSubformats() && !!W(node, "subformat");
     const adv = !!node.properties?.c2c_save_advanced;
@@ -628,6 +633,10 @@ function mountSaveWidget(node) {
             if (bits.length) parts.push(`From the source: ${bits.join(", ")}.`);
             if (c.note) parts.push(`Source numbering: ${c.note}.`);
         }
+        if (data.review) {                                        // L9.57: the review copy
+            parts.push(data.review.filename ? `Review copy: ${data.review.filename} (${data.review.width}x`
+                + `${data.review.height}, burn-in ${data.review.burn_in}).` : `${data.review.note}.`);
+        }
         if (data.colour) {                                        // L9.53: what Save did with the colour
             const c = data.colour;
             parts.push(c.transform_text ? `Colour: ${c.reverses_load ? "reversed Load Video - " : ""}${c.transform_text}.`
@@ -738,7 +747,7 @@ if (!globalThis.__c2cSaveVideoExt) {
                     if (from) { node._c2cSavePreset = from; node._c2cSaveMigrated = null; }
                     api_.refreshFormat();
                 });
-                for (const n of [...FIVE, "handles_trim", "tile_mode"]) {
+                for (const n of [...FIVE, "handles_trim", "tile_mode", "review_copy", "burn_in"]) {   // + L9.57
                     hook(node, n, () => {
                         if (FIVE.includes(n)) node._c2cSavePreset = null;
                         api_.refreshFormat();
