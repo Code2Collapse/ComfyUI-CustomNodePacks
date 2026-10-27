@@ -14,6 +14,10 @@
  *               map keys are String(old value): booleans are "true" / "false"
  *   c2c_note    what behaves differently on the successor - reported once per type
  *   c2c_remove  the node has no successor: it is taken out of the graph, its links removed, all of it reported
+ *   c2c_by_value {widget, cases: {<String(saved value)>: {...row fields}}} - a removed multi-mode node whose modes
+ *               went to different successors (L7.65 P01): the saved value of that old widget picks the case, whose
+ *               fields replace the row's (new_node_id, input_mapping, output_mapping, c2c_values, c2c_note, ...).
+ *               No matching case (or no saved value) = the row itself, which is also what core gets registered.
  * A seed's control_after_generate travels with the seed; when the old node had none it becomes "fixed", because the
  * old node never changed its seed by itself.
  */
@@ -43,6 +47,22 @@ function translate(v, ov) {
     }
     if (Array.isArray(v.clamp) && typeof nv === "number") nv = Math.min(v.clamp[1], Math.max(v.clamp[0], nv));
     return { ok: true, value: nv };
+}
+
+/**
+ * The row that applies to one saved node: a c2c_by_value case picked by the node's saved value, else the row.
+ * @param {object} row - replacement row
+ * @param {any[]} widgetsValues - the old node's saved widgets_values
+ * @returns {object}
+ */
+export function pickCase(row, widgetsValues) {
+    const by = row?.c2c_by_value;
+    if (!by || !by.cases) return row;
+    const wi = (row.old_widget_ids || []).indexOf(by.widget);
+    const saved = wi >= 0 && Array.isArray(widgetsValues) ? widgetsValues[wi] : undefined;
+    if (saved === undefined || !Object.prototype.hasOwnProperty.call(by.cases, String(saved))) return row;
+    const { c2c_by_value: _drop, ...base } = row;
+    return { ...base, ...by.cases[String(saved)] };
 }
 
 /**
@@ -78,8 +98,9 @@ export function migrateGraph(graph, byOld, isRegistered, describe) {
     const gone = new Set();
 
     for (const node of graph.nodes) {
-        const row = byOld.get(node.type);
-        if (!row || isRegistered(node.type)) continue;          // only types that are really gone
+        const listed = byOld.get(node.type);
+        if (!listed || isRegistered(node.type)) continue;       // only types that are really gone
+        const row = pickCase(listed, node.widgets_values);
 
         if (row.c2c_remove) {
             const label = `${node.type} (#${node.id})`;

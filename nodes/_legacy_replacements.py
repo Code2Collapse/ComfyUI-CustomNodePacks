@@ -58,6 +58,21 @@ def _rows_by_old() -> dict[str, dict[str, Any]]:
     return _ROWS_BY_OLD
 
 
+def pick_case(row: dict[str, Any], inputs: Any) -> dict[str, Any]:
+    """The row that applies to one old node (js/_c2c_migrate_core.js pickCase): a removed multi-mode node can send
+    each mode to a different successor (``c2c_by_value: {widget, cases: {str(value): {...row fields}}}``, L7.65 P01).
+    An API prompt names its inputs, so the value is ``inputs[widget]``; no matching case = the row itself."""
+    by = row.get("c2c_by_value")
+    if not isinstance(by, dict) or not isinstance(inputs, dict) or by.get("widget") not in inputs:
+        return row
+    value = inputs[by["widget"]]
+    key = ("true" if value else "false") if isinstance(value, bool) else str(value)
+    case = (by.get("cases") or {}).get(key)
+    if not isinstance(case, dict):
+        return row
+    return {**{k: v for k, v in row.items() if k != "c2c_by_value"}, **case}
+
+
 def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
     """Replace C2C legacy ids in an API prompt in place, as core's NodeReplaceManager.apply_replacements does
     (class_type, input_mapping old_id / set_value, output_mapping on every link that reads the node), except that a
@@ -69,7 +84,7 @@ def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
     targets = {}
     for nid, node in prompt.items():
         if isinstance(node, dict) and node.get("class_type") in rows:
-            row = rows[node["class_type"]]
+            row = pick_case(rows[node["class_type"]], node.get("inputs"))
             if registered is not None and row["new_node_id"] not in registered:
                 continue
             targets[str(nid)] = row
@@ -192,6 +207,8 @@ def register(server: Any = None) -> int:
         _log.info("[C2C] no node_replace_manager on this server; legacy ids stay unmapped")
         return 0
     count = 0
+    # a c2c_by_value row registers its base row only (core has no per-value cases); C2C's own on_prompt handler and the
+    # front-end migrator apply the cases first, so core sees nothing left to replace for them
     for row in load_table():
         try:
             manager.register(node_replace(
