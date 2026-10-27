@@ -22,6 +22,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
+import { findWidget, IME, imeMode, isIME } from "./_ime_names.js";
 import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { drawEditorEmptyState } from "./_editor_empty_state.js";
@@ -43,7 +44,7 @@ import { claimUndo } from "./_c2c_undo_scope.js";
 // keeps handles as an OFFSET from the point, roto_json as a POSITION on the
 // canvas, and roto_json has a frame dimension). That is an adapter, not a
 // second editor - see js/_roto_format.js.
-const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC", ...ROTO_NODES];
+const NODE_NAMES = ["SplineMaskMEC", "SplineMaskEditorMEC", ...ROTO_NODES, IME];
 const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
@@ -227,17 +228,20 @@ class Editor {
     }
 
     /** Is this node the roto one, which speaks roto_json? */
-    get isRoto() { return ROTO_NODES.includes(this.node?.comfyClass); }
+    get isRoto() {
+        // the Image Mask Editor (L7.65 P01) is the roto editor in its "roto" mode and the spline editor in "spline"
+        return ROTO_NODES.includes(this.node?.comfyClass) || (isIME(this.node) && imeMode(this.node) === "roto");
+    }
 
     /** The frame being edited. Roto is keyframed; everything else is not. */
     get rotoFrame() {
-        const w = this.node?.widgets?.find(w => w.name === "roto_frame");
+        const w = findWidget(this.node, "roto_frame");
         const n = Number(w?.value);
         return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
     }
 
     saveRoto() {
-        const w = this.node.widgets?.find(w => w.name === "roto_json");
+        const w = findWidget(this.node, "roto_json");
         if (!w) return;
         const doc = shapesToRoto(this.shapes, {
             previous: w.value,
@@ -254,7 +258,7 @@ class Editor {
     }
 
     loadRoto() {
-        const w = this.node.widgets?.find(w => w.name === "roto_json");
+        const w = findWidget(this.node, "roto_json");
         if (!w?.value) return;
         const { shapes, canvas } = rotoToShapes(w.value, this.rotoFrame);
         this._rotoCanvas = canvas;
@@ -265,7 +269,7 @@ class Editor {
 
     save() {
         if (this.isRoto) return this.saveRoto();
-        const w = this.node.widgets?.find(w => w.name === "spline_data");
+        const w = findWidget(this.node, "spline_data");
         if (!w) return;
         const data = this.shapes.map(sh => ({
             points: sh.points.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
@@ -279,7 +283,7 @@ class Editor {
     }
     load() {
         if (this.isRoto) return this.loadRoto();
-        const w = this.node.widgets?.find(w => w.name === "spline_data");
+        const w = findWidget(this.node, "spline_data");
         if (!w?.value) return;
         try {
             const o = JSON.parse(w.value);
@@ -312,8 +316,8 @@ class Editor {
             const h = oh || cached.h;
             if (w > 0 && h > 0 && (this.canvasW !== w || this.canvasH !== h)) {
                 this.canvasW = w; this.canvasH = h;
-                const wW = this.node.widgets?.find(x => x.name === "width");
-                const hW = this.node.widgets?.find(x => x.name === "height");
+                const wW = findWidget(this.node, "width");
+                const hW = findWidget(this.node, "height");
                 if (wW && +wW.value !== w) wW.value = w;
                 if (hW && +hW.value !== h) hW.value = h;
                 this._fitted = false; // dims changed — a fresh fit is correct
@@ -331,8 +335,8 @@ class Editor {
             const h = oh || img.naturalHeight;
             if (w > 0 && h > 0) {
                 this.canvasW = w; this.canvasH = h;
-                const wW = this.node.widgets?.find(x => x.name === "width");
-                const hW = this.node.widgets?.find(x => x.name === "height");
+                const wW = findWidget(this.node, "width");
+                const hW = findWidget(this.node, "height");
                 if (wW && +wW.value !== w) wW.value = w;
                 if (hW && +hW.value !== h) hW.value = h;
             }
@@ -782,19 +786,19 @@ function installEditor(node) {
             if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
         }
     };
-    hideWidget(node.widgets?.find(w => w.name === "spline_data"));
+    hideWidget(findWidget(node, "spline_data"));
     // The roto node's raw JSON is authored entirely by this editor. Left
     // visible it is a 40-line textarea nobody should touch, and editing it by
     // hand desynchronises it from the shapes on screen.
-    hideWidget(node.widgets?.find(w => w.name === "roto_json"));
+    hideWidget(findWidget(node, "roto_json"));
 
     const syncFromWidgets = () => {
-        const t = node.widgets?.find(x => x.name === "spline_type");
-        const c = node.widgets?.find(x => x.name === "closed");
-        const sps = node.widgets?.find(x => x.name === "samples_per_segment");
-        const w = node.widgets?.find(x => x.name === "width");
-        const h = node.widgets?.find(x => x.name === "height");
-        const ca = node.widgets?.find(x => x.name === "centripetal_alpha");
+        const t = findWidget(node, "spline_type");
+        const c = findWidget(node, "closed");
+        const sps = findWidget(node, "samples_per_segment");
+        const w = findWidget(node, "width");
+        const h = findWidget(node, "height");
+        const ca = findWidget(node, "centripetal_alpha");
         if (t) ed.splineType = t.value;
         if (c) ed.closedDefault = !!c.value;
         if (sps) ed.samplesPerSegment = +sps.value || 20;
@@ -953,9 +957,9 @@ function installEditor(node) {
             const r = canvasWrap.getBoundingClientRect(); ed.fitView(r.width, r.height);
         } },
         { sep: true },
-        { label: (() => { const w = node.widgets?.find(x => x.name === "invert"); return w?.value ? "✓ Invert mask output" : "Invert mask output"; })(),
+        { label: (() => { const w = findWidget(node, "invert"); return w?.value ? "✓ Invert mask output" : "Invert mask output"; })(),
           run: () => {
-              const w = node.widgets?.find(x => x.name === "invert");
+              const w = findWidget(node, "invert");
               if (w) { w.value = !w.value; if (typeof w.callback === "function") w.callback(w.value); node.setDirtyCanvas(true, true); }
           } },
         { sep: true },
@@ -1064,6 +1068,7 @@ function installEditor(node) {
         // track = keyframe frame-viewer, flow_path = flow editor) — each needs
         // the roomy width or its canvas collapses to ~186px. "track" was missing,
         // which is why track mode snapped back to ~281px / dead space.
+        if (isIME(node)) return mv === "spline" || mv === "roto";      // L7.65 P01
         return mv === "edit" || mv === "flow_path" || mv === "track";
     };
     if (!node._mecSplineCSPatched) {
@@ -1158,8 +1163,8 @@ function installEditor(node) {
         // instead of letterboxing a fixed 512² into a wide, short strip. Frozen
         // the moment a shape exists so the user's points never rescale.
         if (!ed.refImg && ed.shapes.length === 0) {
-            const wW = node.widgets?.find(x => x.name === "width");
-            const hW = node.widgets?.find(x => x.name === "height");
+            const wW = findWidget(node, "width");
+            const hW = findWidget(node, "height");
             if ((!wW || +wW.value <= 0) && (!hW || +hW.value <= 0)) {
                 ed.canvasW = w; ed.canvasH = h;
                 ed.zoom = 1; ed.panX = 0; ed.panY = 0; ed._fitted = true;
@@ -1411,9 +1416,11 @@ function installEditor(node) {
     canvas.addEventListener("keydown", (e) => { if (e.defaultPrevented) e.stopPropagation(); });
 
     // React to widget edits
-    for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height", "centripetal_alpha"]) {
-        const w = node.widgets?.find(x => x.name === wn);
-        if (!w) continue;
+    // (the Image Mask Editor installs this editor once for its spline AND roto modes: hook both modes' widgets)
+    const _variants = (wn) => [...new Set((isIME(node) ? ["spline", "roto"] : [undefined])
+        .map((m) => findWidget(node, wn, m)).filter(Boolean))];
+    for (const wn of ["spline_type", "closed", "samples_per_segment", "width", "height", "centripetal_alpha"])
+    for (const w of _variants(wn)) {
         const orig = w.callback;
         w.callback = function (v) {
             orig?.call(this, v);
@@ -1504,6 +1511,24 @@ app.registerExtension({
                 hostFinder: (n) => n._mecSplineEditHost || null,
                 widgetFinder: (n) => n._mecSplineEditWidget || null,
                 widgetHeight: (n) => (typeof n._mecSplineEditWidgetH === "function" ? n._mecSplineEditWidgetH() : 460),
+            });
+        } else if (node.comfyClass === IME) {
+            // L7.65 P01: one editor for the Image Mask Editor's spline and roto modes; switching between them reloads
+            // it from that mode's data (spline_data / roto_json - see isRoto)
+            installModeGated(node, {
+                activeWhen: ["spline", "roto"],
+                installerKey: "imeSpline",
+                installer: (n) => installEditor(n),
+                hostFinder: (n) => n._mecSplineEditHost || null,
+                widgetFinder: (n) => n._mecSplineEditWidget || null,
+                widgetHeight: (n) => (typeof n._mecSplineEditWidgetH === "function" ? n._mecSplineEditWidgetH() : 460),
+                onActivate: (n) => {
+                    const mode = imeMode(n);
+                    if (n._mecSplineMode === mode) return;
+                    n._mecSplineMode = mode;
+                    n._mecEditor?.load?.();
+                    n._mecRender?.();
+                },
             });
         } else {
             // Legacy direct binding (kept for backward graph loading only).

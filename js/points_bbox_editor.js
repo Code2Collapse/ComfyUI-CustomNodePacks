@@ -24,6 +24,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { installModeGated } from "./_mode_gate.js";
+import { findWidget, IME, imeMode, isIME } from "./_ime_names.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
 import { drawEditorEmptyState } from "./_editor_empty_state.js";
@@ -40,8 +41,10 @@ import { claimUndo } from "./_c2c_undo_scope.js";
 // bbox_json - so they needed binding, not new code.
 const TARGET_NODES = [
     "MaskEditMEC", "PointsMaskEditor", "SAMMaskGeneratorMEC",
-    "SAMViTMattePipelineMEC", "SeCMatAnyonePipelineMEC",
+    "SAMViTMattePipelineMEC", "SeCMatAnyonePipelineMEC", IME,
 ];
+// the Image Mask Editor's mode for this editor (L7.65 P01); its widgets are points_* there (js/_ime_names.js)
+const PTS = "points + box";
 
 const COLOR = {
     bg: "var(--c2c-bg2)",
@@ -242,7 +245,7 @@ class Editor {
     }
 
     save() {
-        const find = (n) => this.node.widgets?.find(w => w.name === n);
+        const find = (n) => findWidget(this.node, n, PTS);
         const data = {
             points: this.points.map(p => ({
                 x: +p.x.toFixed(2), y: +p.y.toFixed(2),
@@ -275,7 +278,7 @@ class Editor {
     }
 
     load() {
-        const find = (n) => this.node.widgets?.find(w => w.name === n);
+        const find = (n) => findWidget(this.node, n, PTS);
         const ed = find("editor_data");
         if (ed?.value) {
             try {
@@ -327,8 +330,8 @@ class Editor {
             const dimsChanged = (w > 0 && h > 0 && (w !== this.canvasW || h !== this.canvasH));
             if (dimsChanged) {
                 this.canvasW = w; this.canvasH = h;
-                const wW = this.node.widgets?.find(x => x.name === "width");
-                const hW = this.node.widgets?.find(x => x.name === "height");
+                const wW = findWidget(this.node, "width", PTS);
+                const hW = findWidget(this.node, "height", PTS);
                 if (wW) wW.value = w;
                 if (hW) hW.value = h;
             }
@@ -487,7 +490,7 @@ function installEditor(node) {
             if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
         }
     };
-    hideWidget(node.widgets?.find(w => w.name === "editor_data"));
+    hideWidget(findWidget(node, "editor_data", PTS));
     // The canvas now authors points_json / bbox_json directly (see save()), so the
     // raw JSON textareas are redundant clutter — collapse them. The input sockets
     // remain, so wiring points/bbox from another node still works.
@@ -500,13 +503,13 @@ function installEditor(node) {
     hideWidget(node.widgets?.find(w => w.name === "spline_json"));
 
     const syncDims = () => {
-        const w = node.widgets?.find(x => x.name === "width");
-        const h = node.widgets?.find(x => x.name === "height");
+        const w = findWidget(node, "width", PTS);
+        const h = findWidget(node, "height", PTS);
         if (w) ed.canvasW = +w.value || ed.canvasW;
         if (h) ed.canvasH = +h.value || ed.canvasH;
     };
     const syncRadius = () => {
-        const r = node.widgets?.find(x => x.name === "default_radius");
+        const r = findWidget(node, "default_radius", PTS);
         if (r) ed.radius = +r.value || ed.radius;
     };
     syncDims(); syncRadius();
@@ -721,6 +724,7 @@ function installEditor(node) {
 
     // Stash host root for mode-gate hide/show on the unified node.
     node._mecPointsHost = root;
+    node._mecPointsWidget = canvasWidget;
 
     // Size the editor to the image aspect (capped), then let node.computeSize()
     // drive the TOTAL node height so it ends exactly at the canvas — no manual
@@ -754,7 +758,7 @@ function installEditor(node) {
     // back and collapses the point/bbox editor canvas (same bug as the spline
     // editor). Only while the points_bbox editing mode is active.
     const _pbEditorActive = () =>
-        (node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "") === "points_bbox";
+        (isIME(node) ? imeMode(node) === PTS : (node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "") === "points_bbox");
     if (!node._mecPointsCSPatched) {
         node._mecPointsCSPatched = true;
         const _origCS = typeof node.computeSize === "function" ? node.computeSize.bind(node) : null;
@@ -1054,12 +1058,12 @@ function installEditor(node) {
     canvas.addEventListener("keydown", (e) => { if (e.defaultPrevented) e.stopPropagation(); });
 
     for (const wn of ["width", "height"]) {
-        const w = node.widgets?.find(x => x.name === wn);
+        const w = findWidget(node, wn, PTS);
         if (!w) continue;
         const orig = w.callback;
         w.callback = function (v) { orig?.call(this, v); syncDims(); ed._fitted = false; render(); };
     }
-    const rW = node.widgets?.find(x => x.name === "default_radius");
+    const rW = findWidget(node, "default_radius", PTS);
     if (rW) {
         const orig = rW.callback;
         rW.callback = function (v) { orig?.call(this, v); ed.radius = +v; render(); };
@@ -1100,8 +1104,8 @@ function installEditor(node) {
     setTimeout(render, 50);
     setTimeout(tryDiscoverRef, 100);
 
-    node._mecEditor = ed;
-    node._mecRender = render;
+    node._mecPointsEditor = ed;          // its own names: the Image Mask Editor can also carry the spline editor
+    node._mecPointsRender = render;
 }
 
 app.registerExtension({
@@ -1111,7 +1115,7 @@ app.registerExtension({
         const orig = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             orig?.apply(this, arguments);
-            if (this._mecEditor) { this._mecEditor.load(); this._mecRender?.(); }
+            if (this._mecPointsEditor) { this._mecPointsEditor.load(); this._mecPointsRender?.(); }
         };
     },
     async nodeCreated(node) {
@@ -1122,6 +1126,15 @@ app.registerExtension({
                 installerKey: "maskEditPoints",
                 installer: (n) => installEditor(n),
                 hostFinder: (n) => n._mecPointsHost || null,
+            });
+        } else if (node.comfyClass === IME) {
+            installModeGated(node, {
+                activeWhen: PTS,
+                installerKey: "imePoints",
+                installer: (n) => installEditor(n),
+                hostFinder: (n) => n._mecPointsHost || null,
+                widgetFinder: (n) => n._mecPointsWidget || null,
+                keepSize: true,
             });
         } else {
             installEditor(node);

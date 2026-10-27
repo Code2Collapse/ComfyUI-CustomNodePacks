@@ -8,6 +8,29 @@ Paint a mask over the image that actually reaches the node, at native resolution
 editor. The node keeps only an editor id in the workflow; the masks live on the server and survive
 restarts.
 
+## Modes
+
+One node for every kind of mask drawing (L7.65 P01). `mode` picks how the mask is drawn; each mode shows only its own
+controls (prefixed with the mode) and its own drawing UI, and runs the code of the node it replaces, so it gives that
+node's result.
+
+| `mode` | Draw with | Controls | Replaces | Outputs it fills |
+|---|---|---|---|---|
+| `paint` (default), `canvas_layer` = `mask` | the full-window editor below (brush, shapes, lasso, fill, colour range, smart select, edge refine) | `frame_mode`, `combine` | - (this node) | `mask`, `preview` |
+| `paint`, `canvas_layer` = `colour` | the paint canvas: colour strokes over the image; their alpha is also mask | `canvas_*` | Paint Canvas (`MECAdvancedPaintCanvas`) | `painted_image`, `mask` |
+| `points + box` | clicks (positive / negative) and boxes on the image | `points_*` | Mask Edit `points_bbox` | `positive_coords`, `negative_coords`, `bboxes`, `neg_bboxes`, `points_json`, `bbox_json`, `primary_bbox` |
+| `shape` | a parametric shape (12 kinds) or, with `shape_input` = `JSON`, shapes from `shape_json` | `shape_*` | Mask Edit `draw_shape` / `draw_advanced` | `mask` |
+| `spline` | the spline canvas; `spline_fill` = `mask` fills or strokes the spline, `flow pattern` draws a procedural pattern along it (ribbon, wave, dust, smoke...), animated over frames | `spline_*` | Spline Mask `edit` / `flow_path` | `mask`, `positive_coords`, `bbox_json`, `primary_bbox`, `spline_data_out` |
+| `roto` | Bezier shapes keyed over frames, on the same spline canvas | `roto_*` | Vector Roto (`VectorRotoMEC`) | `mask` |
+| `video` | painted keyframes, tweened between (Open Video Mask Editor) | `video_*` | Video Mask Editor (`VideoMaskEditorMEC`) | `mask` |
+
+`grow`, `feather`, `threshold` and `invert` apply to every mode, after it. `input_mask` is combined with `combine` in
+`paint`, `spline` and `roto`; `points + box` and `shape` draw onto it, `video` keeps it on the frames your keyframes
+do not fill. `image` is optional: `roto`, `shape`, `spline` and the colour layer draw without one (on the size their
+controls give); `paint` and `video` need it. The non-drawing modes of Mask Edit and Spline Mask moved elsewhere: Mask
+Edit `transform` is Mask Tools `transform`, Mask Edit `bbox_smooth` and Spline Mask `track` are Mask Track
+`bbox_smooth` / `spline_track`.
+
 ## What the editor shows
 
 | Source wired to `image` | Frames shown | Needs a run? |
@@ -57,7 +80,7 @@ keys pressed in it.
 
 | Parameter | Type | Default | Range | Description |
 |---|---|---|---|---|
-| `image` | IMAGE | - | - | The image or batch to mask; it sets the mask size and frame count |
+| `image` | IMAGE | - | optional | The image or batch to mask; it sets the mask size and frame count (paint and video need it) |
 | `editor_id` | STRING | auto | - | Set by the editor; copies of the node get their own id and a copy of the masks |
 | `frame_mode` | combo | `per_frame` | `per_frame` / `shared` | One mask per frame, or frame 0's mask for every frame |
 | `grow` | INT | 0 | -256 - 256 | Grow (positive) or shrink (negative), in pixels |
@@ -67,6 +90,8 @@ keys pressed in it.
 | `input_mask` | MASK | - | optional | A mask to combine with the painted one |
 | `combine` | combo | `replace` | `replace` / `add` / `subtract` / `intersect` | How the painted mask and `input_mask` combine |
 
+| `mode` | combo | `paint` | see Modes | How the mask is drawn; the other modes' controls (`canvas_*`, `points_*`, `shape_*`, `spline_*`, `roto_*`, `video_*`) follow it and are listed in NODE_REFERENCE.md |
+
 All result-stage parameters are applied in Python every run and never baked into the stored pixels.
 
 ## Outputs
@@ -74,8 +99,13 @@ All result-stage parameters are applied in Python every run and never baked into
 | Output | Type | Description |
 |---|---|---|
 | `mask` | MASK | The final mask, [B, H, W] in 0-1 |
-| `preview` | IMAGE | The input with the mask tinted over it |
+| `preview` | IMAGE | The input with the mask tinted over it (the mask as a grey picture without an image) |
 | `info` | STRING | Frame count, stored masks, mode and any notes (resized frames, recording skipped) |
+| `positive_coords` ... `primary_bbox` | STRING / BBOX | `points + box`: the points and boxes for SAM / SeC; `spline`: points along the spline and its box |
+| `spline_data_out` | SPLINE_DATA | `spline`: the spline, for a tracker or another spline node |
+| `painted_image` | IMAGE | `paint`: the colour layer over the image (the image itself without colour strokes) |
+
+The outputs after `info` were appended (L7.65 P01), so links saved before keep their slots.
 
 ## Storage and caching
 

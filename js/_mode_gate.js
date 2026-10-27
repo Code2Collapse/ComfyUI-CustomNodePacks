@@ -17,14 +17,27 @@ import { vueSyncNodeWidgets } from "./_widget_visibility.js";
 //       installer: (n) => myInstallEditor(n),
 //       hostFinder: (n) => n._mecEditor?.host || null,
 //   });
+//
+// L7.65 P01 (Image Mask Editor modes), all optional and backward compatible:
+//   activeWhen   a mode value, a list of them, or a test (node) => boolean
+//   watch        more widgets whose change re-evaluates the gates (default: only `mode`)
+//   onActivate   (node, mode) => void, run whenever the gate is evaluated active (after the install)
+//   widgetFinder may return a list of widgets (every one is collapsed / restored)
+//   keepSize     a restored widget gets back its OWN sizing (computeSize / getHeight ...) instead of a fixed height
 // =====================================================================
-
-const GATE_HOOKED = new WeakSet();
 
 function _modeValue(node) {
     const w = node?.widgets?.find?.((w) => w && w.name === "mode");
     return w ? String(w.value ?? "") : "";
 }
+
+function _isActive(activeWhen, node, mode) {
+    if (typeof activeWhen === "function") return !!activeWhen(node);
+    if (Array.isArray(activeWhen)) return activeWhen.map(String).includes(mode);
+    return mode === String(activeWhen);
+}
+
+const _list = (x) => (Array.isArray(x) ? x : (x ? [x] : []));
 
 // Run every registered gate evaluator for a node, but ALWAYS run the one whose
 // activeWhen matches the current mode LAST. Several editors can legitimately share
@@ -37,7 +50,7 @@ function _runEvaluators(node) {
     const mode = _modeValue(node);
     const evals = node._mecGateEvaluators || [];
     const ordered = [...evals].sort(
-        (a, b) => (a.activeWhen === mode ? 1 : 0) - (b.activeWhen === mode ? 1 : 0));
+        (a, b) => (_isActive(a.activeWhen, node, mode) ? 1 : 0) - (_isActive(b.activeWhen, node, mode) ? 1 : 0));
     for (const e of ordered) {
         try { e.run(); } catch (err) { __c2cReport("_mode_gate", err); }
     }
@@ -71,6 +84,10 @@ function _restoreWidget(w, height) {
     // Only touch type if we collapsed it; a freshly-installed widget keeps
     // the type addDOMWidget gave it (Vue nodes needs it to mount the element).
     if (w.type === "hidden") w.type = w._mecOrigType;
+    // Nodes 2.0: a collapsed widget ends up with `hidden` set (vueSyncNodeWidgets mirrors `hidden` into
+    // options.hidden), so without this an editor shown a SECOND time stayed invisible (measured 2026-10-27, L7.54)
+    w.hidden = false;
+    if (w.options) w.options.hidden = false;
     const h = height || 280;
     w.computeSize = () => [0, h];
     w.computeLayoutSize = undefined;
@@ -85,19 +102,40 @@ function _restoreWidget(w, height) {
     }
 }
 
-function _hideHost(host, widget) {
+const _SIZERS = ["computeSize", "computeLayoutSize", "getMinHeight", "getHeight"];
+
+function _hideHost(host, widget, keepSize) {
     if (host && host.style) host.style.display = "none";
-    _collapseWidget(widget);
+    for (const w of _list(widget)) {
+        // keepSize: the widget sizes itself (e.g. to the image's aspect) - remember its own sizing to put it back
+        if (keepSize && w && !w._mecGateSizers) w._mecGateSizers = Object.fromEntries(_SIZERS.map((k) => [k, w[k]]));
+        _collapseWidget(w);
+    }
 }
 
-function _showHost(host, widget, height) {
+function _showHost(host, widget, height, keepSize) {
     if (host && host.style) host.style.display = "";
-    _restoreWidget(widget, height);
+    for (const w of _list(widget)) {
+        // keepSize: a widget shown for the first time (never collapsed) keeps the sizing it was made with - restoring
+        // a fixed height there gave the video editor's button a 300 px row (measured 2026-10-27, L7.54)
+        if (keepSize && w && !w._mecGateSizers && w.type !== "hidden") {
+            w._mecGateSizers = Object.fromEntries(_SIZERS.map((k) => [k, w[k]]));
+        }
+        _restoreWidget(w, w?._mecGateHeight ?? height);
+        if (keepSize && w?._mecGateSizers) {
+            for (const k of _SIZERS) {
+                if (w._mecGateSizers[k] === undefined) delete w[k]; else w[k] = w._mecGateSizers[k];
+            }
+            delete w._mecGateSizers;
+        }
+    }
 }
 
 export function installModeGated(node, opts) {
     if (!node || !opts || typeof opts.installer !== "function") return;
-    const activeWhen = String(opts.activeWhen);
+    const activeWhen = typeof opts.activeWhen === "function" || Array.isArray(opts.activeWhen)
+        ? opts.activeWhen : String(opts.activeWhen);
+    const onActivate = typeof opts.onActivate === "function" ? opts.onActivate : null;
     const key = String(opts.installerKey || "default");
     const tag = `_mec_modegate_${key}`;
     const installer = opts.installer;
@@ -108,10 +146,11 @@ export function installModeGated(node, opts) {
         ? opts.widgetFinder
         : (() => null);
     const widgetHeight = opts.widgetHeight ?? 460;
+    const keepSize = opts.keepSize === true;
 
     const evaluate = () => {
         const mode = _modeValue(node);
-        const isActive = (mode === activeWhen);
+        const isActive = _isActive(activeWhen, node, mode);
         const wh = typeof widgetHeight === "function" ? widgetHeight(node)
             : (typeof node._mecSplineEditWidgetH === "function" ? node._mecSplineEditWidgetH() : widgetHeight);
         if (isActive) {
@@ -123,9 +162,12 @@ export function installModeGated(node, opts) {
                     console.error(`[MEC._mode_gate:${key}] installer failed:`, err);
                 }
             }
-            _showHost(hostFinder(node), widgetFinder(node), wh);
+            _showHost(hostFinder(node), widgetFinder(node), wh, keepSize);
+            if (onActivate && node[tag]) {
+                try { onActivate(node, mode); } catch (err) { __c2cReport("_mode_gate", err); }
+            }
         } else {
-            _hideHost(hostFinder(node), widgetFinder(node));
+            _hideHost(hostFinder(node), widgetFinder(node), keepSize);
         }
         if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
             try {
@@ -138,19 +180,20 @@ export function installModeGated(node, opts) {
         }
     };
 
-    // Hook mode-widget changes only once per node.
-    if (!GATE_HOOKED.has(node)) {
-        GATE_HOOKED.add(node);
-        const modeW = node.widgets?.find?.((w) => w && w.name === "mode");
-        if (modeW) {
-            const orig = modeW.callback;
-            modeW.callback = (v, ...rest) => {
-                const r = orig?.call(modeW, v, ...rest);
-                // Re-run ALL registered gate evaluators (active-mode one last).
-                _runEvaluators(node);
-                return r;
-            };
-        }
+    // Hook each watched widget only once per node (mode, plus any `watch` names).
+    node._mecGateHooked = node._mecGateHooked || new Set();
+    for (const name of ["mode", ...(Array.isArray(opts.watch) ? opts.watch : [])]) {
+        if (node._mecGateHooked.has(name)) continue;
+        const w = node.widgets?.find?.((x) => x && x.name === name);
+        if (!w) continue;
+        node._mecGateHooked.add(name);
+        const orig = w.callback;
+        w.callback = (v, ...rest) => {
+            const r = orig?.call(w, v, ...rest);
+            // Re-run ALL registered gate evaluators (active-mode one last).
+            _runEvaluators(node);
+            return r;
+        };
     }
     node._mecGateEvaluators = node._mecGateEvaluators || [];
     node._mecGateEvaluators.push({ activeWhen, run: evaluate });

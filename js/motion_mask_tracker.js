@@ -40,8 +40,10 @@ const CONSISTENCY = ["metric", "binarize_threshold"];
 const STABILIZE = ["stabilize_temporal_mode", "stabilize_blend", "stabilize_sigma", "stabilize_device",
     "stabilize_drop_threshold", "stabilize_jump_threshold"];
 // the former Spline Mask "track" and Mask Edit "bbox_smooth" modes (L7.65 P01)
-const SPLINE_TRACK = ["spline_data", "spline_closed", "spline_samples_per_segment", "spline_tracking_weight",
+const SPLINE_TRACK = ["spline_closed", "spline_samples_per_segment", "spline_tracking_weight",
     "spline_klt_window", "spline_feather_radius", "spline_stroke_width"];
+// the keyframes are drawn in the tracker canvas (js/spline_mask_tracker.js) and stored here: never a text box
+const SPLINE_DATA = ["spline_data"];
 const BBOX_SMOOTH = ["bbox_json", "bbox_radius", "bbox_method", "bbox_alpha"];
 
 // `get.node` / `get.shown` (set by applyVisibility): a widget in a closed section (L7.81, classic canvas) folds too,
@@ -92,6 +94,7 @@ function applyVisibility(node) {
     if (node.comfyClass !== "MaskTrackerMEC") return;
 
     const mode = String(get("mode")?.value ?? "motion");
+    _setGroup(get, SPLINE_DATA, false);
     if (mode === "motion") {
         _setGroup(get, MOTION_ALWAYS, true);
         _applyDetection(get);                 // refine detection widgets

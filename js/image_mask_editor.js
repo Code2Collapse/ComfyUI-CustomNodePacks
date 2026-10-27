@@ -7,6 +7,7 @@ import { fetchState } from "./image_mask_editor/api.js";
 import { ensureEditorId, dedupeOnConfigure } from "./image_mask_editor/id.js";
 import { openModal } from "./image_mask_editor/modal.js";
 import { C, hexToRgb } from "./image_mask_editor/palette.js";
+import { setWidgetVisible, vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
 
 const NODE_NAME = "ImageMaskEditorC2C";
 const EXT_NAME = "C2C.ImageMaskEditor";
@@ -132,7 +133,8 @@ class ThumbController {
     }
 
     _updateStatus() {
-        if (!this._statusEl) return;
+        // disposed (its node left the graph, e.g. a workflow reload): a refresh scheduled before that has nothing to do
+        if (!this._statusEl || !this.node) return;
         const n = this.digest ? "…" : "0";
         const eid = ensureEditorId(this.node);
         fetchState(eid).then((st) => {
@@ -209,7 +211,42 @@ function _loadImg(url) {
     });
 }
 
+// the paint mode's mask layer is drawn in the modal editor; every other mode (and paint's colour layer) has its own UI
+function paintUiActive(node) {
+    const v = (n, d) => node.widgets?.find((x) => x.name === n)?.value ?? d;
+    return (v("mode", "paint") || "paint") === "paint" && v("canvas_layer", "mask") !== "colour";
+}
+
+function applyPaintUi(node) {
+    if (!node?._imeUiWidgets) return;
+    const show = paintUiActive(node);
+    if (node._imeUiShown === show) return;
+    node._imeUiShown = show;
+    for (const w of node._imeUiWidgets) if (w) setWidgetVisible(w, show);
+    if (show) node._imeThumb?.refresh();
+    vueSyncNodeWidgets(node);
+    const sz = node.computeSize?.();
+    if (sz) node.setSize?.([Math.max(node.size?.[0] ?? 0, sz[0]), sz[1]]);
+    vueFitNodeHeight(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+// L7.65 P01: the mode controls have long names (canvas_mask_blur_strength); below this width both renderers cut the
+// labels (Nodes 2.0 gives a label less than half the row) and the thumbnail's empty-state line. The points / spline
+// editors raise it further (600) while they are shown.
+const MIN_NODE_W = 420;
+
 function installNodeUI(node) {
+    if (!node._imeMinWidth) {
+        node._imeMinWidth = true;
+        const cs = typeof node.computeSize === "function" ? node.computeSize.bind(node) : null;
+        node.computeSize = function (w) {
+            const sz = cs ? cs(w) : [MIN_NODE_W, THUMB_H];
+            sz[0] = Math.max(sz[0] || 0, MIN_NODE_W);
+            return sz;
+        };
+        if ((node.size?.[0] ?? 0) < MIN_NODE_W) node.setSize?.([MIN_NODE_W, node.size?.[1] ?? THUMB_H]);
+    }
     const thumb = new ThumbController(node);
     node._imeThumb = thumb;
 
@@ -232,6 +269,10 @@ function installNodeUI(node) {
         },
     };
     node.addCustomWidget(widget);
+    // L7.65 P01: this thumbnail / status / button are the paint mode's mask layer; created here in every mode (a save
+    // keeps their values after the Python widgets, which widget_migration.js relies on), shown only in that mode
+    const ui = [widget];
+    node._imeUiWidgets = ui;
 
     if (_vueActive()) {
         widget.options = { canvasOnly: true };
@@ -240,11 +281,11 @@ function installNodeUI(node) {
         host.style.cssText = `width:100%;height:${THUMB_H}px;overflow:hidden;`;
         thumb.installVueCanvas(host);
         try {
-            node.addDOMWidget("ime_preview_vue", "canvas", host, {
+            ui.push(node.addDOMWidget("ime_preview_vue", "canvas", host, {
                 serialize: false,
                 getMinHeight: () => THUMB_H,
                 getHeight: () => THUMB_H,
-            });
+            }));
         } catch (_) { /* classic only */ }
     }
 
@@ -255,23 +296,35 @@ function installNodeUI(node) {
         // One 18 px text line. Frontend 1.52.7 gives a DOM widget without explicit heights a 50 px
         // minimum and no maximum (DOMWidgetImpl.computeLayoutSize: dead space under the status) and a
         // 10 px margin on every side (BaseDOMWidgetImpl.DEFAULT_MARGIN: the text spilled onto the button).
-        node.addDOMWidget("ime_status", "div", status, {
+        ui.push(node.addDOMWidget("ime_status", "div", status, {
             serialize: false, margin: 2, getMinHeight: () => 22, getMaxHeight: () => 22,
-        });
+        }));
     } catch (_) {
         const sw = node.addWidget("text", "status", "", () => {}, { serialize: false });
         sw.disabled = true;
+        ui.push(sw);
         thumb._statusEl = { set textContent(t) { sw.value = t; } };
     }
 
-    node.addWidget("button", "✏️ Edit mask", null, () => {
+    ui.push(node.addWidget("button", "✏️ Edit mask", null, () => {
         if (!node.graph) return;
         const eid = ensureEditorId(node);
         openModal(node, eid, (digest) => {
             thumb.digest = digest || "";
             thumb.refresh();
         });
-    }, { serialize: false });
+    }, { serialize: false }));
+    for (const name of ["mode", "canvas_layer"]) {
+        const w = node.widgets?.find((x) => x.name === name);
+        if (!w) continue;
+        const cb = w.callback;
+        w.callback = function (...a) {
+            const r = cb?.apply(this, a);
+            applyPaintUi(node);
+            return r;
+        };
+    }
+    setTimeout(() => applyPaintUi(node), 0);
 
     const origResize = node.onResize;
     node.onResize = function (...a) {
@@ -307,6 +360,7 @@ if (!(app.extensions || []).some((e) => e?.name === EXT_NAME)) {
                 dedupeOnConfigure(this).then(() => {
                     this._imeThumb?.refresh();
                 }).catch(() => {});
+                setTimeout(() => { this._imeUiShown = undefined; applyPaintUi(this); }, 0);   // the loaded mode
                 return r;
             };
         },

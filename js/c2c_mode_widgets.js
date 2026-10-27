@@ -49,6 +49,57 @@ const ICP_ALWAYS = ["crop_mode", "preview_frame"];
 const ispModeOf = (name) => (name.startsWith("paste_") ? "paste back" : name.startsWith("smart_") ? "smart"
     : name.startsWith("context_") ? "context blend" : "blend");
 
+// L7.65 P01: Image Mask Editor modes. A control belongs to the mode its prefix names (nodes/image_mask_editor/modes.py);
+// the editors' own data (points / spline / roto / session / canvas) is written by their UIs and never shown; grow,
+// feather, threshold and invert apply to every mode and are not managed here.
+const IME_PREFIX = [["canvas_", "paint"], ["points_", "points + box"], ["shape_", "shape"], ["spline_", "spline"],
+                    ["roto_", "roto"], ["video_", "video"]];
+const IME_DATA = new Set(["editor_id", "points_editor_data", "spline_data", "roto_json", "video_session_id",
+                          "canvas_data"]);
+// the Paint Canvas edits these in its own panel (js/mec_advanced_paint.js hides them)
+const IME_CANVAS_PANEL = new Set(["canvas_brush_color", "canvas_brush_opacity", "canvas_brush_hardness",
+                                  "canvas_brush_size"]);
+// Mask Edit's per-shape fields (js/draw_shape.js), here with the shape_ prefix
+const IME_SHAPE_FIELDS = {
+    circle: ["cx", "cy", "radius"], rectangle: ["top_left_x", "top_left_y", "size_w", "size_h"],
+    ellipse: ["cx", "cy", "rx", "ry"], polygon: ["points_json"], line: ["top_left_x", "top_left_y", "x2", "y2", "thickness"],
+    triangle: ["cx", "cy", "radius"], star: ["cx", "cy", "outer_r", "inner_r", "num_points"],
+    diamond: ["cx", "cy", "size_w", "size_h"], cross: ["cx", "cy", "cross_size", "thickness"],
+    rounded_rectangle: ["top_left_x", "top_left_y", "size_w", "size_h", "corner_radius"],
+    heart: ["cx", "cy", "radius"], arrow: ["cx", "cy", "arrow_length", "head_length", "head_width", "size_w"],
+};
+const IME_SHAPE_COMMON = ["shape_input", "shape_width", "shape_height", "shape_kind", "shape_value", "shape_feather",
+                          "shape_rotation", "shape_operation"];
+const IME_SPLINE_EDIT_ONLY = ["spline_smoothing", "spline_centripetal_alpha", "spline_mask_color",
+                              "spline_mask_opacity", "spline_feather_radius"];
+const imeModeOf = (n) => IME_PREFIX.find(([p]) => n.startsWith(p))?.[1] ?? null;
+
+function imeVisible(v, names) {
+    const mode = v.mode || "paint";
+    const keep = [];
+    for (const n of names) {
+        if (IME_DATA.has(n)) continue;                                         // never shown
+        if (n === "frame_mode") { if (mode === "paint" && v.canvas_layer !== "colour") keep.push(n); continue; }
+        if (n === "combine") { if (["paint", "spline", "roto"].includes(mode)) keep.push(n); continue; }
+        if (n === "canvas_layer") { if (mode === "paint") keep.push(n); continue; }
+        if (imeModeOf(n) !== mode) continue;
+        if (mode === "paint") {
+            if (v.canvas_layer === "colour" && !IME_CANVAS_PANEL.has(n)) keep.push(n);
+        } else if (mode === "shape") {
+            const json = v.shape_input === "JSON";
+            const fields = json ? ["shape_json"] : [...(IME_SHAPE_FIELDS[v.shape_kind] ?? []).map((f) => `shape_${f}`),
+                                                   "shape_batch_size"];
+            if (IME_SHAPE_COMMON.includes(n) || fields.includes(n)) keep.push(n);
+        } else if (mode === "spline") {
+            const flow = v.spline_fill === "flow pattern";
+            if (n.startsWith("spline_flow_") ? flow : !(flow && IME_SPLINE_EDIT_ONLY.includes(n))) keep.push(n);
+        } else {
+            keep.push(n);
+        }
+    }
+    return keep;
+}
+
 // node type -> { watch: widgets whose value decides, managed: widgets this file shows / hides (a list, or a test on the
 // name), visible(values, names) -> the managed widgets to show }
 const RULES = {
@@ -133,6 +184,12 @@ const RULES = {
             && !(n === "paste_feather_radius" && !v.paste_feather_edges)
             && !(n === "smart_feather_pixels" && v.smart_blend_mode === "Hard Paste")
             && !(n === "smart_color_match_amount" && !v.smart_enable_color_match)),
+    },
+    ImageMaskEditorC2C: {
+        watch: ["mode", "canvas_layer", "shape_input", "shape_kind", "spline_fill"],
+        managed: (name) => name !== "mode" && !["grow", "feather", "threshold", "invert"].includes(name)
+            && defInputs("ImageMaskEditorC2C").has(name),
+        visible: imeVisible,
     },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],

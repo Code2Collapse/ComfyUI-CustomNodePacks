@@ -2,6 +2,23 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-27 (Image Mask Editor modes: one node for every kind of mask drawing, L7.65 P01)
+
+- **Image Mask Editor** gains `mode`: `paint` (as before, the default; plus a colour layer, `canvas_layer` =
+  `colour`: the Paint Canvas, output `painted_image`), `points + box` (Mask Edit's points editor), `shape` (Mask Edit's
+  12 parametric shapes, or JSON), `spline` (Spline Mask's spline, or a flow pattern along it), `roto` (Vector Roto) and
+  `video` (Video Mask Editor). Each mode runs the former node's code and shows only its own controls and drawing UI
+  (the editors are installed the first time their mode is picked). `image` is now optional (roto, shape, spline and
+  the colour layer draw without it); everything new is appended, so saved Image Mask Editor nodes, their values and
+  their links load unchanged. The node is at least 420 px wide, so no label is cut.
+- Checked: 29 cases give the former nodes' outputs bit for bit (`tests/test_image_mask_editor_modes.py`); live on the
+  owner's stack every mode shows exactly its controls and its editor, switching through all modes twice leaves no stray
+  element, and spline / roto / shape / points / paint run, in classic and Nodes 2.0, at the root and in a subgraph.
+- Fixed on the way: in Nodes 2.0 an editor shown a second time (Mask Edit points, Spline Mask) stayed invisible;
+  keyframes drawn in Spline Mask's track canvas were never saved (it wrote to a widget the node does not have); Mask
+  Track's `spline_track` now has that tracker canvas; a stale editor thumbnail threw after a workflow reload.
+- The former nodes stay registered for now; they are removed (with automatic migration) in the next step.
+
 ## Unreleased – 2026-10-27 (Mask Tools and Mask Track gain the non-drawing modes of Mask Edit and Spline Mask, L7.65 P01)
 
 First step of owner card P01 (one Image Mask Editor for every kind of mask drawing; design

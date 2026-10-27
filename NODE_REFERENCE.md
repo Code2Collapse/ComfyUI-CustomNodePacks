@@ -1697,14 +1697,13 @@ Deprecated — kept so old workflows load. Closest current node: MaskOpsMEC prev
 
 **Shown in the menu as:** Image Mask Editor (C2C)
 
-Paint a mask over the image that actually reaches this node. Open the editor to draw; grow, feather, threshold and invert are non-destructive node parameters. Docs: docs/image-mask-editor.md in this pack.
+Paint a mask over the image that actually reaches this node. Open the editor to draw; grow, feather, threshold and invert are non-destructive node parameters. mode picks how the mask is drawn: paint (with a colour layer), points + box, shape, spline, roto or video; each mode shows only its own controls. Docs: docs/image-mask-editor.md in this pack.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | Input batch (B,H,W,3). Drives B/H/W. |
 | `editor_id` | `STRING` | default `""` | Auto-set by the editor UI. Don't edit by hand. |
 | `frame_mode` | choice: `per_frame`, `shared` | default `"per_frame"` | per_frame: each batch index uses stored frame i; shared: stored frame 0 applies to all. |
 | `grow` | `INT` | default `0`, range -256…256, step 1 | Grow (positive) or shrink (negative) the mask by this many pixels. Any non-zero value makes the edge hard first (every partly covered pixel counts); feather softens it again afterwards. |
@@ -1716,16 +1715,117 @@ Paint a mask over the image that actually reaches this node. Open the editor to 
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `input_mask` | `MASK` |  | Optional mask to combine with the painted mask. |
+| `image` | `IMAGE` |  | The picture to draw on (B,H,W,3); drives B/H/W. paint and video need it; points, shape and spline take their size from it when connected. |
+| `input_mask` | `MASK` |  | Optional mask to combine with the painted mask. points + box and shape draw onto it; video uses it on the frames your keyframes do not fill. |
 | `combine` | choice: `replace`, `add`, `subtract`, `intersect` | default `"replace"` | How painted mask combines with input_mask. Without input_mask only replace applies. |
+| `mode` | choice: `paint`, `points + box`, `shape`, `spline`, `roto`, `video` | default `"paint"` | How the mask is drawn. paint: brush, shapes, lasso, fill and smart select in the editor (and a colour layer); points + box: clicks and boxes for SAM / SeC; shape: a parametric shape; spline: a spline shape or a pattern along it; roto: Bezier shapes keyed over frames; video: painted keyframes, tweened between. Each mode shows only its own controls. |
+| `canvas_layer` | choice: `mask`, `colour` | default `"mask"` | [paint] mask: paint the mask in the editor; colour: paint colour strokes on the canvas (painted_image), their alpha also becomes mask. |
+| `canvas_width` | `INT` | default `512`, range 64…4096, step 8 | [paint: colour] Canvas width in pixels. |
+| `canvas_height` | `INT` | default `512`, range 64…4096, step 8 | [paint: colour] Canvas height in pixels. |
+| `canvas_brush_type` | choice: `paint`, `mask_only` | default `"paint"` | [paint: colour] paint: composite color strokes onto the image. mask_only: build the mask without coloring. |
+| `canvas_brush_color` | `STRING` | default `"#000000"` | [paint: colour] Hex color used by the paint brush (ignored in mask_only mode). |
+| `canvas_brush_opacity` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | [paint: colour] Brush stroke opacity (0 = invisible, 1 = fully opaque). |
+| `canvas_brush_hardness` | `FLOAT` | default `0.8`, range 0.0…1.0, step 0.01 | [paint: colour] Brush profile hardness (0 = soft, 1 = hard edge). |
+| `canvas_brush_size` | `INT` | default `20`, range 1…500, step 1 | [paint: colour] Brush diameter in pixels. |
+| `canvas_mask_hardness` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | [paint: colour] Threshold for the solid inner core: pixels brighter than (1 - hardness) clamp to 1.0. |
+| `canvas_mask_expansion` | `INT` | default `0`, range -100…100, step 1 | [paint: colour] Morphological dilate (positive) / erode (negative) in pixels. |
+| `canvas_mask_blur_radius` | `FLOAT` | default `0.0`, range 0.0…100.0, step 0.1 | [paint: colour] Gaussian blur radius applied to the mask edge in pixels. |
+| `canvas_mask_blur_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | [paint: colour] Blend factor between the hard mask (0) and the fully-blurred mask (1). |
+| `canvas_data` | `STRING` | default `""` | [paint: colour] Internal base64 PNG payload from the JS canvas widget. Do not edit manually. |
+| `points_width` | `INT` | default `512`, range 1…16384 | [points + box] [draw_*/points_bbox] canvas width |
+| `points_height` | `INT` | default `512`, range 1…16384 | [points + box] [draw_*/points_bbox] canvas height |
+| `points_editor_data` | `STRING` | default `"{\"points\":[],\"bboxes\":[]}"` | [points + box] JSON from the interactive canvas |
+| `points_default_radius` | `FLOAT` | default `3.0`, range 0.5…256.0, step 0.5 | [points + box] default brush radius |
+| `points_softness` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | [points + box] gaussian sigma multiplier |
+| `points_normalize` | `BOOLEAN` | default `True` | [points + box] clamp output to [0,1] |
+| `shape_input` | choice: `parameters`, `JSON` | default `"parameters"` | [shape] parameters: the shape from the controls below; JSON: the shapes from shape_json (power mode). |
+| `shape_width` | `INT` | default `512`, range 1…16384 | [shape] [draw_*/points_bbox] canvas width |
+| `shape_height` | `INT` | default `512`, range 1…16384 | [shape] [draw_*/points_bbox] canvas height |
+| `shape_kind` | choice: `circle`, `rectangle`, `ellipse`, `polygon`, `line`, `triangle`, `star`, `diamond`, `cross`, `rounded_rectangle`, `heart`, `arrow` | default `"circle"` | [shape] geometry |
+| `shape_cx` | `FLOAT` | default `256.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_cy` | `FLOAT` | default `256.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_radius` | `FLOAT` | default `50.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_size_w` | `FLOAT` | default `200.0`, range 0.0…16384.0, step 0.5 | [shape] |
+| `shape_size_h` | `FLOAT` | default `100.0`, range 0.0…16384.0, step 0.5 | [shape] |
+| `shape_rx` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_ry` | `FLOAT` | default `50.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_top_left_x` | `FLOAT` | default `100.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_top_left_y` | `FLOAT` | default `100.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_x2` | `FLOAT` | default `400.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_y2` | `FLOAT` | default `400.0`, range -16384.0…16384.0, step 0.5 | [shape] |
+| `shape_thickness` | `FLOAT` | default `5.0`, range 0.0…500.0, step 0.5 | [shape] |
+| `shape_outer_r` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_inner_r` | `FLOAT` | default `40.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_num_points` | `INT` | default `5`, range 3…50 | [shape] |
+| `shape_corner_radius` | `FLOAT` | default `20.0`, range 0.0…4096.0, step 0.5 | [shape] |
+| `shape_cross_size` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_arrow_length` | `FLOAT` | default `200.0`, range 0.0…16384.0, step 0.5 | [shape] |
+| `shape_head_length` | `FLOAT` | default `60.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_head_width` | `FLOAT` | default `80.0`, range 0.0…8192.0, step 0.5 | [shape] |
+| `shape_points_json` | `STRING` | default `"[[100,100],[400,100],[400,400],[100,400]]"` | [shape] polygon vertices when shape=polygon |
+| `shape_value` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | [shape] fill intensity |
+| `shape_rotation` | `FLOAT` | default `0.0`, range -360.0…360.0, step 0.5 | [shape] rotation deg |
+| `shape_operation` | choice: `set`, `add`, `subtract`, `max`, `min` | default `"set"` | [shape] blend op |
+| `shape_batch_size` | `INT` | default `1`, range 1…256 | [shape] number of frames |
+| `shape_json` | `STRING` | default `"{\"cx\": 256, \"cy\": 256, \"radius\": 50}"` | [shape] raw shape_params JSON (see MaskDrawFrame) |
+| `shape_feather` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | [shape] [transform/draw] feather radius |
+| `spline_data` | `STRING` | default `"[]"` | [spline] Spline payload from the JS canvas. edit/flow_path: single shape list. track: keyframes list [{frame:int, points:[[x,y],…]}, …]. |
+| `spline_type` | choice: `catmull_rom`, `bezier`, `polyline`, `b_spline`, `nurbs`, `natural_cubic`, `cardinal` | default `"catmull_rom"` | [spline] interpolation method. catmull_rom/natural_cubic/cardinal pass through the points; b_spline/nurbs are smooth approximating curves; bezier uses tangent handles; polyline = straight. |
+| `spline_closed` | `BOOLEAN` | default `True` | [spline] closed loop vs open path |
+| `spline_samples_per_segment` | `INT` | default `20`, range 2…128, step 1 | [spline] curve resolution per segment |
+| `spline_feather_radius` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | [spline] gaussian edge feather |
+| `spline_invert` | `BOOLEAN` | default `False` | [spline] invert mask |
+| `spline_smoothing` | `BOOLEAN` | default `True` | [spline] enable spline smoothing |
+| `spline_centripetal_alpha` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | [spline] Catmull-Rom alpha (0.5 = centripetal) |
+| `spline_width` | `INT` | default `0`, range 0…16384, step 1 | [spline] output width (0 = inherit image) |
+| `spline_height` | `INT` | default `0`, range 0…16384, step 1 | [spline] output height (0 = inherit image) |
+| `spline_mask_color` | `STRING` | default `"#ff00ff"` | [spline] preview overlay color (hex) |
+| `spline_mask_opacity` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.05 | [spline] preview overlay opacity |
+| `spline_fill` | choice: `mask`, `flow pattern` | default `"mask"` | [spline] mask: fill (closed) or stroke (open) the spline; flow pattern: a procedural pattern along it (ribbon, wave, dust, smoke...), animated over frames. |
+| `spline_flow_pattern` | choice: `ribbon`, `wave`, `flow`, `dust`, `river`, `smoke`, `sawtooth`, `square`, `triangle`, `gaussian_pulse`, `fbm`, `curl_noise`, `lightning` | default `"ribbon"` | [spline: flow pattern] procedural pattern |
+| `spline_flow_thickness` | `FLOAT` | default `12.0`, range 0.0…1024.0, step 0.5 | [spline: flow pattern] base stroke thickness |
+| `spline_flow_amplitude` | `FLOAT` | default `8.0`, range 0.0…1024.0, step 0.5 | [spline: flow pattern] modulation amplitude |
+| `spline_flow_frequency` | `FLOAT` | default `2.0`, range 0.0…64.0, step 0.1 | [spline: flow pattern] modulation frequency |
+| `spline_flow_turbulence` | `FLOAT` | default `0.0`, range 0.0…4.0, step 0.05 | [spline: flow pattern] noise turbulence strength |
+| `spline_flow_turbulence_scale` | `FLOAT` | default `1.0`, range 0.01…32.0, step 0.05 | [spline: flow pattern] noise spatial scale |
+| `spline_flow_edge_softness` | `FLOAT` | default `1.0`, range 0.0…32.0, step 0.1 | [spline: flow pattern] edge softness in pixels |
+| `spline_flow_taper_start` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | [spline: flow pattern] start-end taper amount |
+| `spline_flow_taper_end` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | [spline: flow pattern] tail-end taper amount |
+| `spline_flow_frames` | `INT` | default `1`, range 1…4096, step 1 | [spline: flow pattern] number of animation frames |
+| `spline_flow_animation_speed` | `FLOAT` | default `0.05`, range 0.0…4.0, step 0.005 | [spline: flow pattern] phase advance per frame |
+| `spline_flow_flow_direction` | choice: `forward`, `reverse`, `bidirectional`, `oscillate` | default `"forward"` | [spline: flow pattern] flow direction |
+| `spline_flow_mod_decay` | `FLOAT` | default `0.0`, range 0.0…4.0, step 0.01 | [spline: flow pattern] modulation falloff over time |
+| `spline_flow_seed` | `INT` | default `0`, range 0…4294967295, step 1 | [spline: flow pattern] noise seed |
+| `spline_flow_use_embedded_editor` | `BOOLEAN` | default `True` | [spline: flow pattern] show embedded spline preview |
+| `roto_json` | `STRING` | default `"{\"canvas\": {\"w\": 1024, \"h\": 1024}, \"frames\": [{\"frame\": 0, \"splines\": []}]}"` | [roto] |
+| `roto_frame_count` | `INT` | default `1`, range 1…4096 | [roto] |
+| `roto_width` | `INT` | default `1024`, range 16…8192 | [roto] |
+| `roto_height` | `INT` | default `1024`, range 16…8192 | [roto] |
+| `roto_samples_per_seg` | `INT` | default `24`, range 2…256 | [roto] |
+| `roto_feather_px` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | [roto] |
+| `roto_frame` | `INT` | default `0`, range 0…4096 | [roto] Which keyframe the editor is on. Scrub here, move the shape, and a key is written at this frame. With one key the shape holds for the whole clip; with several the renderer interpolates between them. Does not affect the render on its own. |
+| `video_session_id` | `STRING` | default `""` | [video] Auto-set by the editor UI. Don't edit by hand. |
+| `video_tween_mode` | choice: `distance_transform`, `linear`, `hold`, `none` | default `"distance_transform"` | [video] Frames BETWEEN two painted frames: distance_transform morphs the shape, linear blends, hold keeps the previous painted mask, none leaves them unpainted (frame by frame). |
+| `video_feather` | `FLOAT` | default `0.0`, range 0.0…32.0, step 0.1 | [video] Gaussian feather radius (px). 0 = none. |
+| `video_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | [video] Binarize after tween. 0 = keep soft mask. |
+| `video_outside_keys` | choice: `empty`, `hold` | default `"empty"` | [video] Frames before the first / after the last painted frame: empty (the mask stays on the frames you painted) or hold the nearest painted mask. |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `mask` | `MASK` | The final mask [B,H,W] in 0-1: painted frames, combined with input_mask, then grow, feather, threshold and invert. |
-| 1 | `preview` | `IMAGE` | The input image with the mask tinted over it. |
+| 0 | `mask` | `MASK` | The final mask [B,H,W] in 0-1: the active mode's mask, combined with input_mask, then grow, feather, threshold and invert. |
+| 1 | `preview` | `IMAGE` | The input image with the mask tinted over it (the mask as a grey picture without an image). |
 | 2 | `info` | `STRING` | Frame count, stored masks, mode and notes (resized frames, frame recording skipped). |
+| 3 | `positive_coords` | `STRING` | points + box: positive points for SAM / SeC; spline: points along the spline. '[]' otherwise. |
+| 4 | `negative_coords` | `STRING` | points + box: negative points. '[]' otherwise. |
+| 5 | `bboxes` | `BBOX` | points + box: the positive boxes. Empty otherwise. |
+| 6 | `neg_bboxes` | `BBOX` | points + box: the negative boxes. Empty otherwise. |
+| 7 | `points_json` | `STRING` | points + box: every point as JSON. '[]' otherwise. |
+| 8 | `bbox_json` | `STRING` | points + box: the first positive box [x1,y1,x2,y2]; spline: the spline's box. '[]' otherwise. |
+| 9 | `primary_bbox` | `BBOX` | points + box: the first positive box [x,y,w,h]; spline: the spline's box. [0,0,0,0] otherwise. |
+| 10 | `spline_data_out` | `SPLINE_DATA` | spline: the spline data, for a tracker or another spline node. |
+| 11 | `painted_image` | `IMAGE` | paint: the colour layer composited over the image (the image itself without colour strokes). |
 
 
 ---

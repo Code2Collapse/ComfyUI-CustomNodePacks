@@ -27,6 +27,7 @@
 import { app } from "../../scripts/app.js";
 import { findUpstreamFramesAsync } from "./_frame_finder.js";
 import { installModeGated } from "./_mode_gate.js";
+import { findWidget } from "./_ime_names.js";
 import { C, bg3, border, peach } from "./_c2c_theme.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cConfirm } from "./_c2c_dialog.js";
@@ -35,7 +36,7 @@ import { claimUndo } from "./_c2c_undo_scope.js";
 
 // Targets unified SplineMaskMEC (mode=track) and any legacy
 // SplineMaskTrackerMEC nodes on saved graphs.
-const NODE_NAMES = ["SplineMaskMEC", "SplineMaskTrackerMEC"];
+const NODE_NAMES = ["SplineMaskMEC", "SplineMaskTrackerMEC", "MaskTrackerMEC"];
 const NODE_NAME = "SplineMaskMEC";
 
 const COLOR = {
@@ -236,7 +237,7 @@ class TrackerState {
     }
 
     save() {
-        const w = this.node.widgets?.find(w => w.name === "keyframes_json");
+        const w = findWidget(this.node, "keyframes_json");
         if (!w) return;
         const sorted = [...this.keyframes.entries()].sort((a, b) => a[0] - b[0]);
         const out = sorted.map(([f, pts]) => ({
@@ -247,7 +248,7 @@ class TrackerState {
         if (this.node.graph) this.node.graph.setDirtyCanvas(true, false);
     }
     load() {
-        const w = this.node.widgets?.find(w => w.name === "keyframes_json");
+        const w = findWidget(this.node, "keyframes_json");
         if (!w?.value) return;
         try {
             const o = JSON.parse(w.value);
@@ -449,11 +450,11 @@ function installEditor(node) {
             if (wrap?.classList?.contains("dom-widget")) wrap.style.display = "none";
         }
     };
-    hideWidget(node.widgets?.find(w => w.name === "keyframes_json"));
+    hideWidget(findWidget(node, "keyframes_json"));
 
     const syncFromWidgets = () => {
-        const c = node.widgets?.find(x => x.name === "closed");
-        const sps = node.widgets?.find(x => x.name === "samples_per_segment");
+        const c = findWidget(node, "closed");
+        const sps = findWidget(node, "samples_per_segment");
         if (c) state.closed = !!c.value;
         if (sps) state.samplesPerSegment = +sps.value || 24;
     };
@@ -633,7 +634,7 @@ function installEditor(node) {
     const MIN_EDIT_W = 600;
     const _editorModeActive = () => {
         const mv = node.widgets?.find?.((x) => x && x.name === "mode")?.value ?? "";
-        return mv === "edit" || mv === "flow_path" || mv === "track";
+        return mv === "edit" || mv === "flow_path" || mv === "track" || mv === "spline_track";
     };
     if (!node._mecSplineCSPatched) {
         node._mecSplineCSPatched = true;
@@ -647,7 +648,8 @@ function installEditor(node) {
 
     // ── Frame loading ───────────────────────────────────────────────
     async function loadFrames() {
-        const urls = await findUpstreamFramesAsync(node, { maxVideoFrames: 32 });
+        const urls = await findUpstreamFramesAsync(node, { maxVideoFrames: 32,
+            input: node.comfyClass === "MaskTrackerMEC" ? "video" : "image" });
         if (!urls.length) {
             flashStatus("No frames found upstream. Queue Prompt once, then click ↻ Reload frames.");
             state.frames = [];
@@ -934,7 +936,7 @@ function installEditor(node) {
     // we need to redraw).
     const widgetSync = () => { syncFromWidgets(); render(); };
     for (const wn of ["closed", "samples_per_segment"]) {
-        const w = node.widgets?.find(x => x.name === wn);
+        const w = findWidget(node, wn);
         if (!w) continue;
         const orig = w.callback;
         w.callback = function (v) { orig?.call(this, v); widgetSync(); };
@@ -964,9 +966,10 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             origCreated?.apply(this, arguments);
             const node = this;
-            if (node.comfyClass === "SplineMaskMEC") {
+            if (node.comfyClass === "SplineMaskMEC" || node.comfyClass === "MaskTrackerMEC") {
+                // Mask Track's spline_track mode is the former Spline Mask "track" (L7.65 P01)
                 installModeGated(node, {
-                    activeWhen: "track",
+                    activeWhen: node.comfyClass === "MaskTrackerMEC" ? "spline_track" : "track",
                     installerKey: "splineTrack",
                     installer: (n) => installEditor(n),
                     hostFinder: (n) => n._mecSplineTrackHost || null,

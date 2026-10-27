@@ -222,7 +222,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**Paint Suite**](docs/paint-suite.md) ★ new | 1 | Interactive paint canvas (hardness/expansion/blur stages); the context inpainter (color match, lightness rescue, differential diffusion) is Inpaint Stitch Pro's `context blend` mode |
 | [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskOpsMEC` (Mask + Matting) — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
 | [**Video Stabilizer**](docs/video-stabilizer.md) | 1 | Feature tracking, OpenCV dense flow or RAFT optical flow (experimental), 4 presets, measured accuracy table; padding-mask output wires into Inpaint Crop Pro |
-| [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold |
+| [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold; modes paint (+ colour layer) / points + box / shape / spline / roto / video |
 | [**VAE precision**](docs/vae-precision.md) ★ new | 2 | Where VAE round trips lose precision (measured) and the options that restrict it: fp32 and unclamped decode, tiled video decode, round-trip meter, original-pixel write-back |
 | [Mask Editing](docs/mask-editing.md) | 8 | Transform XY, Draw Frame (12 shapes), Draw Shape (unified dropdown), Composite Advanced (8 ops), Math (11 ops), Batch Manager, Preview Overlay, Spline Mask Editor |
 | [SAM & Segmentation](docs/sam-segmentation.md) | 8 | Model Loader, Mask Generator, Multi-Mask Picker, Unified Segmentation, Semantic Segment, and Mask + Matting's SAM + ViTMatte / SeC + MatAnyone2 / remove-background backends |
@@ -1240,6 +1240,14 @@ Each metric contributes up to 20 points to a severity score (0–100). The node 
 
 Paints a mask over the image that actually reaches the node, at native resolution (`C2C/Masking`).
 Click **✏️ Edit mask** to open the full-window editor.
+
+**Modes** (L7.65 P01; each shows only its own controls and drawing UI, and runs the code of the node it took over):
+`paint` (this editor, plus a colour layer: the former Paint Canvas, output `painted_image`), `points + box` (clicks
+and boxes for SAM / SeC, the former Mask Edit points editor), `shape` (12 parametric shapes or JSON), `spline` (a
+spline shape, or a procedural flow pattern along it), `roto` (Bezier shapes keyed over frames, the former Vector
+Roto) and `video` (painted keyframes, tweened: the former Video Mask Editor). Details:
+[docs/image-mask-editor.md](docs/image-mask-editor.md#modes). The extra outputs (points, boxes, spline, painted
+image) come after `mask` / `preview` / `info`, so saved links keep their slots.
 
 - **What you edit:**
   - a directly wired LoadImage or C2C/VHS loader shows its frames without a run;

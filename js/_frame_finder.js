@@ -183,14 +183,16 @@ async function _planFromDirectLoader(node, nodeType, maxPx = 384, fmt = "jpeg") 
 }
 
 /**
- * Discover the frame source feeding `node`'s `image` input.
+ * Discover the frame source feeding `node`'s `image` input (or `opts.input`).
  * @returns {Promise<{kind:string,count:number,width:number,height:number,url:Function,sampled:boolean,note:string}>}
  */
 export async function findUpstreamFrameSource(node, opts = {}) {
     if (!node.inputs) {
         return { kind: "none", count: 0, width: 0, height: 0, url: () => "", sampled: false, note: "" };
     }
-    const inp = node.inputs.find((i) => i.name === "image" && i.link != null);
+    // opts.input: the frames input's name (Mask Track's is "video", L7.65 P01); default "image"
+    const inName = opts.input || "image";
+    const inp = node.inputs.find((i) => i.name === inName && i.link != null);
     if (!inp) {
         return { kind: "none", count: 0, width: 0, height: 0, url: () => "", sampled: false, note: "" };
     }

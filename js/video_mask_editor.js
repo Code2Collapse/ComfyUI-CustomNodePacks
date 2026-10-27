@@ -19,6 +19,8 @@ import { findUpstreamFrameSource } from "./_frame_finder.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { c2cAlert, c2cConfirm } from "./_c2c_dialog.js";
 import { setHidden } from "./_widget_visibility.js";
+import { installModeGated } from "./_mode_gate.js";
+import { findWidget, IME } from "./_ime_names.js";
 // NOTE: do NOT import { C } from './_c2c_theme.js': this module defines its own `C` (a duplicate declaration once
 // made the browser drop the whole extension).
 
@@ -250,13 +252,13 @@ class VideoMaskEditor {
     }
 
     static sessionOf(node) {
-        const w = node.widgets?.find(x => x.name === "session_id");
+        const w = findWidget(node, "session_id", "video");           // video_session_id on the Image Mask Editor
         if (!w) return "";
         if (!w.value || typeof w.value !== "string" || w.value.length < 8) w.value = uuid();
         return w.value;
     }
 
-    widget(name) { return this.node.widgets?.find(w => w.name === name); }
+    widget(name) { return findWidget(this.node, name, "video"); }
     get tween() { return this.widget("tween_mode")?.value || "distance_transform"; }
     get outside() { return this.widget("outside_keys")?.value || "empty"; }
     setWidget(name, value) {
@@ -1590,6 +1592,26 @@ app.registerExtension({
           attrs: { min: 1, max: 60, step: 1 }, tooltip: "Frames per second when the editor plays the clip." },
     ],
     async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name === IME) {
+            // L7.65 P01: the Image Mask Editor's "video" mode is this editor (its widgets are video_*)
+            const origCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                origCreated?.apply(this, arguments);
+                installModeGated(this, {
+                    activeWhen: "video",
+                    installerKey: "imeVideo",
+                    installer: (n) => {
+                        n._vmeButton = n.addWidget("button", "Open Video Mask Editor", null, () => openEditor(n),
+                                                   { serialize: false });
+                        const w = findWidget(n, "session_id", "video");
+                        if (w && (!w.value || w.value.length < 8)) w.value = uuid();
+                    },
+                    widgetFinder: (n) => n._vmeButton || null,
+                    keepSize: true,
+                });
+            };
+            return;
+        }
         if (nodeData.name !== NODE_NAME) return;
         const origCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {

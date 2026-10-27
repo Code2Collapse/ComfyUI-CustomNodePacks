@@ -78,6 +78,15 @@ hash (editor_id / session_id), so editing an inactive mode's hidden value does n
 
 ## 4. Front end
 
+**As built (2026-10-27):** the pack already had a mode gate for multi-mode editors (`js/_mode_gate.js`: an editor is
+installed the first time its mode is picked, then shown / hidden), proven on Mask Edit and Spline Mask - so it is
+reused instead of a new mount / dispose layer (standing order 12: repo conventions). It gained a test function / list
+for `activeWhen`, extra watched widgets, `onActivate`, widget lists and `keepSize`. The editors find their widgets
+through `js/_ime_names.js` (the prefixed names by mode). Budgets as measured: switching through all modes twice
+leaves the same number of DOM widgets (no orphan); an inactive editor is hidden, not re-created. The paint UI is
+created with the node (not lazily): a saved node keeps its value after the Python widgets, which
+`js/widget_migration.js` uses to repair saves made before the modes existed. The plan below was the alternative.
+
 One controller for the node (`js/image_mask_editor.js` today) owns the mode. Each old editor is refactored from
 "hook node type X in beforeRegisterNodeDef" into a module with `mount(node, api) -> { dispose }`:
 paint = the existing modal editor (unchanged), points = `points_bbox_editor.js`, spline =

@@ -8,6 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────
 import { app } from "../../scripts/app.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
+import { installModeGated } from "./_mode_gate.js";
+import { findWidget, IME } from "./_ime_names.js";
 import {
     mountPanel,
     openEditor,
@@ -31,7 +33,8 @@ const UNDO_BYTE_BUDGET = 256_000_000;
 const CHECKER_A = "#6e6f82";
 const CHECKER_B = "#5b5c6f";
 const BRUSH_WIDGETS_HIDE = ["brush_color", "brush_opacity", "brush_hardness", "brush_size"];
-const MASK_WIDGET_PREFIX = "mask_";
+// the mask stage controls (canvas_mask_* on the Image Mask Editor, L7.65 P01)
+const MASK_WIDGETS = ["mask_hardness", "mask_expansion", "mask_blur_radius", "mask_blur_strength"];
 
 function hexToRgb(hex) {
     if (!hex) return [0, 0, 0];
@@ -44,7 +47,7 @@ function hexToRgb(hex) {
 }
 
 function getWidget(node, name) {
-    return node.widgets ? node.widgets.find((w) => w.name === name) : null;
+    return findWidget(node, name, "paint");          // the Paint Canvas name; canvas_* on the Image Mask Editor
 }
 
 function hideWidget(w) {
@@ -645,11 +648,12 @@ function buildEditorRight(node) {
         }));
     }
 
-    for (const w of (node.widgets || [])) {
-        if (!w?.name?.startsWith(MASK_WIDGET_PREFIX)) continue;
+    for (const name of MASK_WIDGETS) {
+        const w = getWidget(node, name);
+        if (!w) continue;
         const o = readNumOpts(w, { min: 0, max: 1, step: 0.01 });
         const isInt = w.type === "number" && Number.isInteger(o.min) && Number.isInteger(o.max);
-        body.appendChild(sliderRow(w.name.replace(/_/g, " "), {
+        body.appendChild(sliderRow(name.replace(/_/g, " "), {
             min: o.min, max: o.max, step: o.step,
             value: +w.value,
             format: !isInt && o.max <= 1 ? (v) => `${Math.round(v * 100)}%` : undefined,
@@ -937,9 +941,7 @@ function hideBrushWidgets(node) {
 function editorWidgetNames(node) {
     const names = ["brush_type", "brush_color", "brush_opacity", "brush_hardness", "brush_size",
         "canvas_width", "canvas_height"];
-    for (const w of (node.widgets || [])) {
-        if (w?.name?.startsWith(MASK_WIDGET_PREFIX)) names.push(w.name);
-    }
+    for (const n of MASK_WIDGETS) if (getWidget(node, n)) names.push(n);
     return names;
 }
 
@@ -959,41 +961,57 @@ function restoreWidgetValues(node, snap) {
     }
 }
 
+function installPaintCanvas(node) {
+
+    const nodeCtrl = new PaintCanvasController(node, {
+        interactive: false,
+        serialiseOnStroke: false,
+    });
+    node._mecPaint = nodeCtrl;
+
+    const dataW = setupCanvasDataWidget(node);
+    hideBrushWidgets(node);
+
+    const stageApi = buildNodePanel(node, nodeCtrl);
+    wireCanvasSizeSync(node, nodeCtrl, stageApi);
+
+    nodeCtrl.onLoaded = () => refreshNodeStage(stageApi, nodeCtrl, node);
+
+    const restore = () => {
+        const v = dataW.value;
+        if (v && typeof v === "string" && v.startsWith("data:")) {
+            nodeCtrl.loadFromDataURL(v);      // sets _synced on decode
+        } else {
+            nodeCtrl._synced = true;          // nothing saved: the blank canvas IS the truth
+            refreshNodeStage(stageApi, nodeCtrl, node);
+        }
+    };
+    setTimeout(restore, 30);
+
+}
+
 app.registerExtension({
     name: "mec.advanced_paint",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_NAME) return;
+        if (nodeData.name !== NODE_NAME && nodeData.name !== IME) return;
 
         const onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onCreated?.apply(this, arguments);
-
-            const nodeCtrl = new PaintCanvasController(this, {
-                interactive: false,
-                serialiseOnStroke: false,
+            if (nodeData.name === NODE_NAME) {
+                installPaintCanvas(this);
+                return;
+            }
+            // L7.65 P01: the Image Mask Editor's paint mode, colour layer, is this canvas (its widgets are canvas_*)
+            installModeGated(this, {
+                activeWhen: (n) => n.widgets?.find((w) => w.name === "mode")?.value === "paint"
+                    && n.widgets?.find((w) => w.name === "canvas_layer")?.value === "colour",
+                watch: ["canvas_layer"],
+                installerKey: "imeColour",
+                installer: (n) => installPaintCanvas(n),
+                widgetFinder: (n) => n.widgets?.find((w) => w.name === "paint_panel") || null,
+                keepSize: true,
             });
-            this._mecPaint = nodeCtrl;
-
-            const dataW = setupCanvasDataWidget(this);
-            hideBrushWidgets(this);
-
-            const stageApi = buildNodePanel(this, nodeCtrl);
-            wireCanvasSizeSync(this, nodeCtrl, stageApi);
-
-            nodeCtrl.onLoaded = () => refreshNodeStage(stageApi, nodeCtrl, this);
-
-            const restore = () => {
-                const v = dataW.value;
-                if (v && typeof v === "string" && v.startsWith("data:")) {
-                    nodeCtrl.loadFromDataURL(v);      // sets _synced on decode
-                } else {
-                    nodeCtrl._synced = true;          // nothing saved: the blank canvas IS the truth
-                    refreshNodeStage(stageApi, nodeCtrl, this);
-                }
-            };
-            setTimeout(restore, 30);
-
-            // Reference image hook reserved for a future preview endpoint.
         };
 
         const onSerialize = nodeType.prototype.onSerialize;
