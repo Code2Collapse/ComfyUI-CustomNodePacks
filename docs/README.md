@@ -55,12 +55,12 @@
 | Doc | Key nodes | What it covers |
 |---|---|---|
 | [`mask-editing.md`](mask-editing.md) | Mask Transform XY, Draw Frame, **Draw Shape**, Composite Advanced, Mask Math, Spline Mask Editor, Batch Manager, Preview Overlay | Per-axis erode/expand/blur, 12 SDF shapes, 8 composite ops, 11 math ops, Bezier spline editor |
-| [**`paint-suite.md`**](paint-suite.md) ★ new | **MEC Advanced Paint Canvas**, **MEC Context Inpainter** | Interactive brush widget, hardness/expansion/blur stages, color match, lightness rescue, differential diffusion |
+| [**`paint-suite.md`**](paint-suite.md) ★ new | **MEC Advanced Paint Canvas** (the Context Inpainter is now Inpaint Stitch Pro's `context blend`) | Interactive brush widget, hardness/expansion/blur stages, color match, lightness rescue, differential diffusion |
 
 ### 🎬 Inpainting (Image & Video)
 | Doc | Key nodes | What it covers |
 |---|---|---|
-| [`inpaint-suite.md`](inpaint-suite.md) | Inpaint Crop Pro, Inpaint Composite, Stitch Pro (legacy), Paste Back (legacy), Mask Prepare | Crop+stitch pipeline, 4 blend modes (gaussian / edge_aware / Laplacian-pyramid / FFT frequency), color match, video-stable crop, all 11 fill modes |
+| [`inpaint-suite.md`](inpaint-suite.md) | Inpaint Crop Pro (pro / smart aspect / mask prepare), Inpaint Stitch Pro (blend / paste back / smart / context blend) | Crop+stitch pipeline, 4 blend modes (gaussian / edge_aware / Laplacian-pyramid / FFT frequency), color match, video-stable crop, the former Smart crop / stitch, Mask Prepare, Paste Back and Context Inpainter as modes |
 | [**`propainter.md`**](propainter.md) ★ new | **ProPainter Temporal**, **Stitch**, **Stitch Refine**, **Remove**, **Flow Refine** | Temporal video inpaint with bidirectional RAFT flow, RFC flow completion, sliding-window InpaintGenerator, model-free object/wire/plate removal |
 | [**`face-fixer.md`**](face-fixer.md) ★ new | **MEC Face Fixer** | YOLO11 face detection → per-face crop → optional upscale → KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
 
@@ -110,7 +110,7 @@ modes automatically:
 |---|---|---|
 | Segment subject | SAM Mask Generator / SAM+ViTMatte | **MaskOpsMEC** with SAM2.1 video / SeC + MatAnyone2 |
 | Refine alpha edges | ViTMatte Refiner | Same node — works per-frame |
-| Inpaint a region | Inpaint Crop Pro → KSampler → Inpaint Composite | Inpaint Crop Pro → **ProPainter Temporal** → Inpaint Composite |
+| Inpaint a region | Inpaint Crop Pro → KSampler → Inpaint Stitch Pro | Inpaint Crop Pro → **ProPainter Temporal** → Inpaint Stitch Pro |
 | Remove an object | Crop → SD inpaint → Composite | **ProPainter Remove** (no SD model needed) |
 | Stabilise jitter | n/a | **Video Stabilizer Auto / Flow / Classic** |
 | Smooth mask between keyframes | n/a | **Temporal Anchor System** (SDF interpolation) |

@@ -175,10 +175,10 @@
         "KeyError"
       ],
       "regex": "['\"]stitch_data['\"]",
-      "cause": "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
+      "cause": "An Inpaint Stitch Pro node ran without its matching Inpaint Crop Pro upstream.",
       "fixes": [
         "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
-        "If you bypassed the crop node intentionally, use InpaintCompositeMEC instead — it doesn't need stitch_data."
+        "If you bypassed the crop node intentionally, set Inpaint Stitch Pro's stitch_mode to 'context blend' — it needs no stitcher (connect original_image and mask)."
       ]
     },
     {

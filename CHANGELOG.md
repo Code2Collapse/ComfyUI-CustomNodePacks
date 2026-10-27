@@ -2,6 +2,34 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-27 (merged to main: one Inpaint Crop and one Inpaint Stitch node, L7.65 P08)
+
+Owner card P08: seven crop / stitch nodes become two. Saved workflows load migrated (links and values kept); the
+pack registers 110 nodes instead of 115. Design: `docs/design/inpaint_crop_stitch_unified.md`.
+
+- **Inpaint Crop Pro** gains `crop_mode`: `pro` (the crop as before, the default), `smart aspect` (the former **Smart
+  Image Crop**) and `mask prepare` (the former **Inpaint Mask Prepare**: no crop; with an image it also gives a
+  whole-frame stitcher). The new controls are shown only in their mode. A 6th output, `preview`: the preview picture
+  in `pro`, Smart's overlay in `smart aspect`, the R / G mask picture in `mask prepare`.
+- **Inpaint Stitch Pro** gains `stitch_mode`: `blend` (as before, the default), `paste back` (the former **Inpaint
+  Paste Back**), `smart` (the former **Smart Image Stitch**) and `context blend` (the former **Context Inpainter /
+  Fixer**: colour correction and lightness rescue, no stitcher; every frame of a batch and the colour reference
+  inside / around the mask, as the node does since L9.39). A stitcher from the other
+  kind of crop is refused with a message that names the mode to pick.
+- Each mode runs the former node's own code. Checked: 37 cases through the migration rows give the old nodes'
+  outputs bit for bit, against the code as shipped at d97cc13 (`tests/test_consolidation_inpaint.py`).
+- The crop preview is drawn from what ran in every mode, and the live preview follows `crop_mode` and the new
+  controls (checked against real runs from each starting mode). It now also follows a `roto_quality` change; before,
+  it kept the last run's 1 px erosion setting.
+- `image` on Inpaint Crop Pro and `stitcher` / `inpainted_image` on Inpaint Stitch Pro are optional inputs now (a
+  migrated Mask Prepare has no image, Context Inpainter no stitcher); a mode that needs the input says so. Older
+  saves keep every link on its input: on Inpaint Crop Pro every input keeps its slot; on Inpaint Stitch Pro the new
+  `original_image` / `mask` sockets move the widget slots by two, and a link into one of them is moved with its
+  input when the workflow loads (frontend 1.53.10 does not move it by itself; checked on a save with a link on every
+  input, also inside a subgraph).
+- Dropped in migration: Context Inpainter's `face_positive_prompt` / `face_negative_prompt` (they were only written
+  to the log).
+
 ## Unreleased – 2026-10-24 (C2C Multi-GPU Split: batch split for any model, L9.38)
 
 - **C2C Sequence Parallel is now displayed as C2C Multi-GPU Split** (same node id; saved workflows unchanged).

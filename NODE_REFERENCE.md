@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **115** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **110** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -11,17 +11,16 @@
 | C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 14 |
+| MaskEditControl | 12 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
-| MEC Paint Suite | 2 |
+| MEC Paint Suite | 1 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 2 |
 | Layer Effects | 1 |
 | Mask toolkit | 1 |
 | Frequency / Grain | 3 |
-| Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
 | Magnific | 15 |
 | AV Handles | 1 |
@@ -45,7 +44,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 115 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 110 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 12, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -89,14 +88,10 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Number Lerp (C2C)](#numberlerpmec)
   - [Seed List Generator (C2C)](#seedlistmec)
   - [Text Template (C2C)](#texttemplatemec)
-- **C2C/Inpaint** (7)
+- **C2C/Inpaint** (3)
   - [Inpaint Crop Pro](#inpaintcroppromec)
-  - [Inpaint Mask Prepare](#inpaintmaskpreparemec)
-  - [Inpaint Paste Back](#inpaintpastebackmec)
   - [Inpaint Stitch Pro](#inpaintstitchpromec)
   - [ProPainter — Temporal / Remove / Stitch / Refine / Flow](#propaintermec)
-  - [Smart Image Crop](#smartimagecropmec)
-  - [Smart Image Stitch](#smartimagestitchermec)
 - **C2C/Legacy** (7)
   - [BBox Crop (MEC) (legacy)](#bboxcrop)
   - [BBox From Mask (MEC) (legacy)](#bboxfrommask)
@@ -125,9 +120,8 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Image Mask Editor (C2C)](#imagemaskeditorc2c)
 - **C2C/ModelAnalysis** (1)
   - [VAE Inspect](#vaeblockinspectormec)
-- **C2C/Paint** (3)
+- **C2C/Paint** (2)
   - [Advanced Paint Canvas](#mecadvancedpaintcanvas)
-  - [Context Inpainter / Fixer](#meccontextinpainter)
   - [Face Fixer](#mecfacefixer)
 - **C2C/Pipeline** (1)
   - [Mask Refiner](#maskrefinemec)
@@ -805,14 +799,15 @@ Substitute {a}{b}{c}{d} placeholders in a template string. Useful for building p
 
 **Shown in the menu as:** Inpaint Crop Pro
 
-Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). Pair with Inpaint Stitch Pro (C2C).
+Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mode 'smart aspect' is the stills crop sized between a min and a max side; 'mask prepare' cleans the mask without cropping. Pair with Inpaint Stitch Pro (C2C).
+
+L7.65 P08: `crop_mode` `smart aspect` is the former Smart Image Crop (`SmartImageCropMEC`) and `mask prepare` the former Inpaint Mask Prepare (`InpaintMaskPrepareMEC`); saved workflows with those nodes migrate on load. The `smart_*` / `prepare_*` inputs are shown only in their mode. `image` is optional for `mask prepare` only.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `image` | `IMAGE` |  | — |
 | `downscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bilinear"` | — |
 | `upscale_algorithm` | choice: `nearest`, `bilinear`, `bicubic`, `lanczos`, `box`, `hamming`, `area` | default `"bicubic"` | — |
 | `preresize` | `BOOLEAN` | default `False` | Resize input image before processing (lquesada-style). |
@@ -855,9 +850,30 @@ Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). Pair wit
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
+| `image` | `IMAGE` |  | — |
 | `mask` | `MASK` |  | — |
 | `optional_context_mask` | `MASK` |  | — |
 | `roto_quality` | `BOOLEAN` | default `False` | Roto-Sync mode: tightens the inpaint seam for clean alpha edges. Forces laplacian_pyramid blend, halves blend_radius (min 4), and pre-erodes the inpaint mask by 1 px so the stitch falls just inside the subject. Safe to leave OFF for general inpaint; turn ON for compositing / roto / VFX work where boundaries must not bleed. |
+| `preview_frame` | `INT` | default `0`, range 0…100000, step 1 | Which frame the preview under the node shows (0 = the first). Display only: every frame is still cropped exactly as before. |
+| `crop_mode` | choice: `pro`, `smart aspect`, `mask prepare` | default `"pro"` | pro: the crop above (lquesada-style, video aware). smart aspect: the stills crop that sizes the output between a minimum and a maximum side (the former Smart Image Crop). mask prepare: no crop - clean the mask and make the inpaint and stitch masks for the whole frame (the former Inpaint Mask Prepare). |
+| `smart_resolution_mode` | choice: `Automatic`, `Manual` | default `"Automatic"` | [smart aspect] resolution mode |
+| `smart_max_resolution` | `INT` | default `2048`, range 256…16384, step 64 | [smart aspect] Upper limit on the longest side. A crop larger than this is scaled DOWN to fit. |
+| `smart_min_resolution` | `INT` | default `768`, range 64…2048, step 64 | [smart aspect] Lower limit on the shortest side. A crop smaller than this is scaled UP, which is the whole point of cropping - a 200px face gets the model's full attention. |
+| `smart_manual_width` | `INT` | default `1024`, range 64…8192, step 8 | [smart aspect] manual width |
+| `smart_manual_height` | `INT` | default `1024`, range 64…8192, step 8 | [smart aspect] manual height |
+| `smart_mask_grow_pixels` | `INT` | default `32`, range -1024…1024, step 8 | [smart aspect] Grow (or shrink) the mask before measuring the crop, so the model sees context around the region rather than a tight cut-out. |
+| `smart_patch_mask_holes` | `BOOLEAN` | default `True` | [smart aspect] Close gaps and fill enclosed holes. A subject mask with holes regenerates those holes as background - the hole-in-the-face result. |
+| `smart_no_mask_mode` | choice: `Bypass`, `Resize Full Image`, `Crop Full Image` | default `"Bypass"` | [smart aspect] What to do when the mask is empty. Bypass passes the image through untouched, which is the safe default for a batch where only some frames have a mask. |
+| `smart_force_divisibility` | choice: `8`, `16`, `32`, `64`, `112`, `128`, `256` | default `128` | [smart aspect] Snap output dimensions to this multiple. A VAE silently pads anything else, which shifts the crop by a few pixels and breaks the stitch. |
+| `prepare_fill_holes` | `BOOLEAN` | default `True` | [mask prepare] Fill interior holes in the mask |
+| `prepare_remove_small_regions` | `BOOLEAN` | default `True` | [mask prepare] Remove small disconnected blobs |
+| `prepare_min_region_area` | `INT` | default `100`, range 0…100000, step 10 | [mask prepare] Minimum region area in pixels to keep |
+| `prepare_grow_pixels` | `INT` | default `4`, range 0…256, step 1 | [mask prepare] Dilate mask by this many pixels |
+| `prepare_inpaint_edge_mode` | choice: `hard_binary`, `slight_feather` | default `"hard_binary"` | [mask prepare] Edge style for inpaint mask: hard_binary or slight_feather |
+| `prepare_stitch_edge_mode` | choice: `gaussian`, `edge_aware` | default `"gaussian"` | [mask prepare] Edge style for stitch blend mask: gaussian or edge_aware |
+| `prepare_stitch_feather_radius` | `INT` | default `16`, range 1…128, step 1 | [mask prepare] Feather radius for the stitch blend mask |
+| `prepare_temporal_smooth` | `BOOLEAN` | default `False` | [mask prepare] Apply Gaussian temporal smoothing along batch dimension (for video) |
+| `prepare_temporal_sigma` | `FLOAT` | default `1.5`, range 0.1…10.0, step 0.1 | [mask prepare] Temporal Gaussian sigma in frames |
 
 **Outputs**
 
@@ -868,84 +884,22 @@ Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). Pair wit
 | 2 | `inpaint_mask` | `MASK` | — |
 | 3 | `stitch_blend_mask` | `MASK` | — |
 | 4 | `info` | `STRING` | — |
-
-
-### InpaintMaskPrepareMEC
-
-**Shown in the menu as:** Inpaint Mask Prepare
-
-Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mask` | `MASK` |  | Raw input mask (B,H,W) |
-| `fill_holes` | `BOOLEAN` | default `True` | Fill interior holes in the mask |
-| `remove_small_regions` | `BOOLEAN` | default `True` | Remove small disconnected blobs |
-| `min_region_area` | `INT` | default `100`, range 0…100000, step 10 | Minimum region area in pixels to keep |
-| `grow_pixels` | `INT` | default `4`, range 0…256, step 1 | Dilate mask by this many pixels |
-| `inpaint_edge_mode` | choice: `hard_binary`, `slight_feather` | default `"hard_binary"` | Edge style for inpaint mask: hard_binary or slight_feather |
-| `stitch_edge_mode` | choice: `gaussian`, `edge_aware` | default `"gaussian"` | Edge style for stitch blend mask: gaussian or edge_aware |
-| `stitch_feather_radius` | `INT` | default `16`, range 1…128, step 1 | Feather radius for the stitch blend mask |
-| `temporal_smooth` | `BOOLEAN` | default `False` | Apply Gaussian temporal smoothing along batch dimension (for video) |
-| `temporal_sigma` | `FLOAT` | default `1.5`, range 0.1…10.0, step 0.1 | Temporal Gaussian sigma in frames |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `reference_image` | `IMAGE` |  | Reference image for edge-aware stitch blend mask (required for edge_aware mode) |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `inpaint_mask` | `MASK` | — |
-| 1 | `stitch_blend_mask` | `MASK` | — |
-| 2 | `debug_preview` | `IMAGE` | — |
-| 3 | `info` | `STRING` | — |
-
-
-### InpaintPasteBackMEC
-
-**Shown in the menu as:** Inpaint Paste Back
-
-Paste inpainted crop back using STITCHER, with optional feathered rectangle edges.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `stitcher` | `STITCHER` |  | Stitcher dict from InpaintCropProMEC |
-| `inpainted_image` | `IMAGE` |  | Inpainted crop result (B,H,W,C) |
-| `upscale_method` | choice: `lanczos`, `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | Interpolation method for resizing crop back |
-| `feather_edges` | `BOOLEAN` | default `False` | Apply Gaussian feather at crop boundary |
-| `feather_radius` | `INT` | default `16`, range 0…64, step 1 | Feather radius in pixels (only used if feather_edges) |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
+| 5 | `preview` | `IMAGE` | — |
 
 
 ### InpaintStitchProMEC
 
 **Shown in the menu as:** Inpaint Stitch Pro
 
-Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match.
+Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + color match; stitch_mode 'paste back', 'smart' (for a smart aspect crop) or 'context blend' (colour correction and lightness rescue over the original, no stitcher).
+
+L7.65 P08: `stitch_mode` `paste back` is the former Inpaint Paste Back (`InpaintPasteBackMEC`), `smart` the former Smart Image Stitch (`SmartImageStitcherMEC`, needs `original_image`) and `context blend` the former Context Inpainter / Fixer (`MECContextInpainter`, needs `original_image` + `mask`, no stitcher; every frame of a batch, `context_color_reference` = the former `color_reference`); saved workflows with those nodes migrate on load. `stitcher` and `inpainted_image` are optional because `context blend` needs no stitcher.
 
 
 **Required inputs**
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `stitcher` | `STITCHER` |  | — |
-| `inpainted_image` | `IMAGE` |  | — |
 | `blend_mode_override` | choice: `from_crop`, `gaussian`, `edge_aware`, `laplacian_pyramid`, `frequency_blend`, `video_stable` | default `"from_crop"` | Override the blend mode chosen at crop time, or use 'from_crop'. |
 | `color_match` | `BOOLEAN` | default `False` | Apply mean+std color transfer before stitching to reduce color shift. |
 | `stitch_temporal_sigma` | `FLOAT` | default `0.0`, range 0.0…10.0, step 0.5 | Post-hoc temporal Gaussian smoothing applied to the per-frame blend mask before compositing. 0 = off. 2-4 = good for jittery segmentation video (≈3 means a 9-frame window). Works on top of any blend mode (gaussian / edge_aware / video_stable / etc.). |
@@ -955,7 +909,29 @@ Stitch inpainted image back into the original (lquesada-compatible) with blend o
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
+| `stitcher` | `STITCHER` |  | — |
+| `inpainted_image` | `IMAGE` |  | — |
 | `roto_quality_override` | choice: `from_crop`, `force_on`, `force_off` | default `"from_crop"` | Roto-Sync at stitch time. 'from_crop' honors the InpaintCropProMEC flag (recommended). 'force_on' applies tight-seam stitching even if crop didn't set it; 'force_off' disables it. |
+| `stitch_mode` | choice: `blend`, `paste back`, `smart`, `context blend` | default `"blend"` | blend: the crop's blend mask and blend modes (as before). paste back: resize and paste the crop, optional feathered edge (the former Inpaint Paste Back). smart: the stitch for a crop made in 'smart aspect' mode; needs original_image (the former Smart Image Stitch). context blend: no stitcher - blend a full-frame inpainted image over original_image under mask, with colour correction and lightness rescue (the former Context Inpainter). |
+| `original_image` | `IMAGE` |  | [smart / context blend] The original image. |
+| `mask` | `MASK` |  | [smart: Mask Feather / context blend] The mask to blend along. |
+| `paste_upscale_method` | choice: `lanczos`, `bicubic`, `bilinear`, `nearest`, `area` | default `"bicubic"` | [paste back] Interpolation method for resizing crop back |
+| `paste_feather_edges` | `BOOLEAN` | default `False` | [paste back] Apply Gaussian feather at crop boundary |
+| `paste_feather_radius` | `INT` | default `16`, range 0…64, step 1 | [paste back] Feather radius in pixels (only used if feather_edges) |
+| `smart_feather_pixels` | `INT` | default `32`, range 0…256, step 1 | [smart] feather pixels |
+| `smart_blend_mode` | choice: `Box Feather`, `Mask Feather`, `Hard Paste` | default `"Box Feather"` | [smart] Box Feather softens the crop's rectangular edge. Mask Feather blends along the mask itself, which keeps untouched detail outside the subject. Hard Paste shows the seam and is for checking alignment. |
+| `smart_resize_full_image_output` | choice: `Restore Original Size`, `Keep Resized Image` | default `"Restore Original Size"` | [smart] Only applies when the crop node ran in 'Resize Full Image' mode. |
+| `smart_enable_color_match` | `BOOLEAN` | default `False` | [smart] Pull the crop's exposure and cast toward the plate before blending. A feathered seam turns a small mismatch into a visible halo instead of hiding it. |
+| `smart_color_match_amount` | `FLOAT` | default `0.35`, range 0.0…1.0, step 0.01 | [smart] color match amount |
+| `context_crop_padding` | `FLOAT` | default `1.2`, range 1.0…2.0, step 0.01 | [context blend] How far around the mask's box (x its size) colour match and lightness rescue look for reference colours when color_reference = around mask. |
+| `context_blend_softness` | `FLOAT` | default `8.0`, range 0.0…200.0, step 0.5 | [context blend] Gaussian feather radius applied to the blend mask in pixels. |
+| `context_mask_expansion_blend` | `INT` | default `0`, range -100…100, step 1 | [context blend] Per-blend dilate (positive) / erode (negative) of the blend mask in pixels. |
+| `context_enable_color_correction` | `BOOLEAN` | default `True` | [context blend] Reinhard mean/std color match between original and inpainted regions. |
+| `context_enable_lightness_rescue` | `BOOLEAN` | default `True` | [context blend] Lift CIE LAB L-channel of the inpaint when it is more than ~5% darker. |
+| `context_enable_differential_diffusion` | `BOOLEAN` | default `False` | [context blend] Use \|orig - inpaint\| as a soft preservation weight to keep unchanged pixels. |
+| `context_sampling_mask_blur_size` | `INT` | default `21`, range 0…201, step 1 | [context blend] Kernel size (odd) for the additional blur on the output debug mask. |
+| `context_sampling_mask_blur_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | [context blend] Blend factor for the sampling mask blur applied to debug_mask. |
+| `context_color_reference` | choice: `inside mask (same subject)`, `around mask (object removal)` | default `"inside mask (same subject)"` | [context blend] Where colour match / lightness rescue take their target colours. inside mask = the original pixels under the mask (re-rendering the same face or subject). around mask = the ring between the mask and its box grown by crop_padding (removing an object: match the background, not the thing removed). |
 
 **Outputs**
 
@@ -1019,76 +995,6 @@ Unified ProPainter node. Absorbs ProPainterTemporal / Remove / Stitch / StitchRe
 | 4 | `info` | `STRING` | Info string with timings, coverage, mode-specific stats. |
 
 
-### SmartImageCropMEC
-
-**Shown in the menu as:** Smart Image Crop
-
-Crop what the mask points at, at the aspect it will be generated in, scaled to a size the VAE accepts.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `mask` | `MASK` |  | — |
-| `resolution_mode` | choice: `Automatic`, `Manual` | default `"Automatic"` | — |
-| `max_resolution` | `INT` | default `2048`, range 256…16384, step 64 | Upper limit on the longest side. A crop larger than this is scaled DOWN to fit. |
-| `min_resolution` | `INT` | default `768`, range 64…2048, step 64 | Lower limit on the shortest side. A crop smaller than this is scaled UP, which is the whole point of cropping - a 200px face gets the model's full attention. |
-| `manual_width` | `INT` | default `1024`, range 64…8192, step 8 | — |
-| `manual_height` | `INT` | default `1024`, range 64…8192, step 8 | — |
-| `mask_grow_pixels` | `INT` | default `32`, range -1024…1024, step 8 | Grow (or shrink) the mask before measuring the crop, so the model sees context around the region rather than a tight cut-out. |
-| `patch_mask_holes` | `BOOLEAN` | default `True` | Close gaps and fill enclosed holes. A subject mask with holes regenerates those holes as background - the hole-in-the-face result. |
-| `no_mask_mode` | choice: `Bypass`, `Resize Full Image`, `Crop Full Image` | default `"Bypass"` | What to do when the mask is empty. Bypass passes the image through untouched, which is the safe default for a batch where only some frames have a mask. |
-| `force_divisibility` | choice: `8`, `16`, `32`, `64`, `112`, `128`, `256` | default `128` | Snap output dimensions to this multiple. A VAE silently pads anything else, which shifts the crop by a few pixels and breaks the stitch. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `crop_image` | `IMAGE` | — |
-| 1 | `crop_mask` | `MASK` | — |
-| 2 | `stitcher` | `STITCHER` | — |
-| 3 | `preview_overlay` | `IMAGE` | — |
-| 4 | `info` | `STRING` | — |
-
-
-### SmartImageStitcherMEC
-
-**Shown in the menu as:** Smart Image Stitch
-
-Blend the processed crop back into the original frame.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `original_image` | `IMAGE` |  | — |
-| `processed_image` | `IMAGE` |  | — |
-| `stitcher` | `STITCHER` |  | — |
-| `feather_pixels` | `INT` | default `32`, range 0…256, step 1 | — |
-| `blend_mode` | choice: `Box Feather`, `Mask Feather`, `Hard Paste` | default `"Box Feather"` | Box Feather softens the crop's rectangular edge. Mask Feather blends along the mask itself, which keeps untouched detail outside the subject. Hard Paste shows the seam and is for checking alignment. |
-| `resize_full_image_output` | choice: `Restore Original Size`, `Keep Resized Image` | default `"Restore Original Size"` | Only applies when the crop node ran in 'Resize Full Image' mode. |
-| `enable_color_match` | `BOOLEAN` | default `False` | Pull the crop's exposure and cast toward the plate before blending. A feathered seam turns a small mismatch into a visible halo instead of hiding it. |
-| `color_match_amount` | `FLOAT` | default `0.35`, range 0.0…1.0, step 0.01 | — |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mask` | `MASK` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info` | `STRING` | — |
-
-
----
-
 ## C2C/Legacy
 
 
@@ -1096,7 +1002,7 @@ Blend the processed crop back into the original frame.
 
 **Shown in the menu as:** BBox Crop (MEC) (legacy)
 
-Deprecated — kept so old workflows load. Closest current node: SmartImageCropMEC.
+Deprecated — kept so old workflows load. Closest current node: Inpaint Crop Pro (crop_mode 'smart aspect').
 
 
 **Required inputs**
@@ -1901,44 +1807,6 @@ Interactive paint canvas with procedural mask math: hardness, expansion, and blu
 |---|---|---|---|
 | 0 | `painted_image` | `IMAGE` | Painted RGB image (composited over reference_image when supplied). |
 | 1 | `processed_mask` | `MASK` | Processed mask after hardness, expansion, and blur stages. |
-
-
-### MECContextInpainter
-
-**Shown in the menu as:** Context Inpainter / Fixer
-
-Smart-blend an inpainted region back over the original image with crop padding, feathered blend mask, optional color correction, lightness rescue, and differential diffusion.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `original_image` | `IMAGE` |  | Original (un-inpainted) image used as the blend base. |
-| `mask` | `MASK` |  | Mask defining the inpainted region. |
-| `inpainted_image` | `IMAGE` |  | Inpainted image to blend back over the original. |
-| `crop_padding` | `FLOAT` | default `1.2`, range 1.0…2.0, step 0.01 | Multiplier extending the masked bbox so the inpaint sees more context. |
-| `blend_softness` | `FLOAT` | default `8.0`, range 0.0…200.0, step 0.5 | Gaussian feather radius applied to the blend mask in pixels. |
-| `mask_expansion_blend` | `INT` | default `0`, range -100…100, step 1 | Per-blend dilate (positive) / erode (negative) of the blend mask in pixels. |
-| `enable_color_correction` | `BOOLEAN` | default `True` | Reinhard mean/std color match between original and inpainted regions. |
-| `enable_lightness_rescue` | `BOOLEAN` | default `True` | Lift CIE LAB L-channel of the inpaint when it is more than ~5% darker. |
-| `enable_differential_diffusion` | `BOOLEAN` | default `False` | Use \|orig - inpaint\| as a soft preservation weight to keep unchanged pixels. |
-| `sampling_mask_blur_size` | `INT` | default `21`, range 0…201, step 1 | Kernel size (odd) for the additional blur on the output debug mask. |
-| `sampling_mask_blur_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Blend factor for the sampling mask blur applied to debug_mask. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `face_positive_prompt` | `STRING` | default `""`, multiline | Optional region-attached positive prompt; parsed for `{a\|b\|c}` wildcards per detected mask region and logged. Does NOT sample here -- pair with a FaceInpaint/KSampler downstream. |
-| `face_negative_prompt` | `STRING` | default `""`, multiline | Same as face_positive_prompt but for negatives. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `blended_image` | `IMAGE` | Final composited image with the inpainted region blended back into the original. |
-| 1 | `debug_mask` | `MASK` | Debug mask used for the blend (after expansion and blur). |
 
 
 ### MECFaceFixer

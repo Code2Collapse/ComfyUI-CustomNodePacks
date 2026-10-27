@@ -742,12 +742,12 @@ class MECContextInpainter:
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  ComfyUI registration                                                 ║
 # ╚══════════════════════════════════════════════════════════════════════╝
+# L7.65 P08: Context Inpainter is Inpaint Stitch Pro in stitch_mode "context blend" (saved workflows migrate, see
+# nodes/_legacy_replacements.json); the class stays as that mode's engine, and Face Fixer uses its helpers.
 NODE_CLASS_MAPPINGS = {
     "MECAdvancedPaintCanvas": MECAdvancedPaintCanvas,
-    "MECContextInpainter":    MECContextInpainter,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MECAdvancedPaintCanvas": "Advanced Paint Canvas",
-    "MECContextInpainter":    "Context Inpainter / Fixer",
 }

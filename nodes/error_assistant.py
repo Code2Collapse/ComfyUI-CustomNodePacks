@@ -348,10 +348,10 @@ _BOOTSTRAP_PATTERNS: List[Pattern] = [
         "key_stitch_data",
         ("KeyError",),
         _r(r"['\"]stitch_data['\"]"),
-        "An InpaintStitch / InpaintPasteBack node ran without its matching InpaintCropPro upstream.",
+        "An Inpaint Stitch Pro node ran without its matching Inpaint Crop Pro upstream.",
         [
             "Wire the `stitch_data` output of InpaintCropProMEC into this node.",
-            "If you bypassed the crop node intentionally, use InpaintPasteBackMEC instead — it doesn't need stitch_data.",
+            "If you bypassed the crop node intentionally, set Inpaint Stitch Pro's stitch_mode to 'context blend' — it needs no stitcher (connect original_image and mask).",
         ],
     ),
 

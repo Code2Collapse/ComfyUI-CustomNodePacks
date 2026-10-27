@@ -4121,5 +4121,377 @@
   ],
   "dropped": [],
   "note": "L7.65 P05 (owner-approved merge): Mask + Matting with backend 'remove background' - the former node's own code with the same arguments, the same results. Diagnostics and the split masks are off, as the old node never made them; switch them on in the node to use them. mask is the alpha output."
+ },
+ {
+  "old_node_id": "SmartImageCropMEC",
+  "new_node_id": "InpaintCropProMEC",
+  "old_widget_ids": [
+   "resolution_mode",
+   "max_resolution",
+   "min_resolution",
+   "manual_width",
+   "manual_height",
+   "mask_grow_pixels",
+   "patch_mask_holes",
+   "no_mask_mode",
+   "force_divisibility"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "smart_resolution_mode",
+    "old_id": "resolution_mode"
+   },
+   {
+    "new_id": "smart_max_resolution",
+    "old_id": "max_resolution"
+   },
+   {
+    "new_id": "smart_min_resolution",
+    "old_id": "min_resolution"
+   },
+   {
+    "new_id": "smart_manual_width",
+    "old_id": "manual_width"
+   },
+   {
+    "new_id": "smart_manual_height",
+    "old_id": "manual_height"
+   },
+   {
+    "new_id": "smart_mask_grow_pixels",
+    "old_id": "mask_grow_pixels"
+   },
+   {
+    "new_id": "smart_patch_mask_holes",
+    "old_id": "patch_mask_holes"
+   },
+   {
+    "new_id": "smart_no_mask_mode",
+    "old_id": "no_mask_mode"
+   },
+   {
+    "new_id": "smart_force_divisibility",
+    "old_id": "force_divisibility"
+   },
+   {
+    "new_id": "crop_mode",
+    "set_value": "smart aspect"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Crop Pro in crop_mode 'smart aspect' - the same Smart Image Crop code, the same outputs (crop_image -> cropped_image, crop_mask -> inpaint_mask, preview_overlay -> preview)."
+ },
+ {
+  "old_node_id": "InpaintMaskPrepareMEC",
+  "new_node_id": "InpaintCropProMEC",
+  "old_widget_ids": [
+   "fill_holes",
+   "remove_small_regions",
+   "min_region_area",
+   "grow_pixels",
+   "inpaint_edge_mode",
+   "stitch_edge_mode",
+   "stitch_feather_radius",
+   "temporal_smooth",
+   "temporal_sigma"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "image",
+    "old_id": "reference_image"
+   },
+   {
+    "new_id": "prepare_fill_holes",
+    "old_id": "fill_holes"
+   },
+   {
+    "new_id": "prepare_remove_small_regions",
+    "old_id": "remove_small_regions"
+   },
+   {
+    "new_id": "prepare_min_region_area",
+    "old_id": "min_region_area"
+   },
+   {
+    "new_id": "prepare_grow_pixels",
+    "old_id": "grow_pixels"
+   },
+   {
+    "new_id": "prepare_inpaint_edge_mode",
+    "old_id": "inpaint_edge_mode"
+   },
+   {
+    "new_id": "prepare_stitch_edge_mode",
+    "old_id": "stitch_edge_mode"
+   },
+   {
+    "new_id": "prepare_stitch_feather_radius",
+    "old_id": "stitch_feather_radius"
+   },
+   {
+    "new_id": "prepare_temporal_smooth",
+    "old_id": "temporal_smooth"
+   },
+   {
+    "new_id": "prepare_temporal_sigma",
+    "old_id": "temporal_sigma"
+   },
+   {
+    "new_id": "crop_mode",
+    "set_value": "mask prepare"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Crop Pro in crop_mode 'mask prepare' (no crop) - the same Mask Prepare code; reference_image -> image, debug_preview -> preview."
+ },
+ {
+  "old_node_id": "SmartImageStitcherMEC",
+  "new_node_id": "InpaintStitchProMEC",
+  "old_widget_ids": [
+   "feather_pixels",
+   "blend_mode",
+   "resize_full_image_output",
+   "enable_color_match",
+   "color_match_amount"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "original_image",
+    "old_id": "original_image"
+   },
+   {
+    "new_id": "inpainted_image",
+    "old_id": "processed_image"
+   },
+   {
+    "new_id": "stitcher",
+    "old_id": "stitcher"
+   },
+   {
+    "new_id": "smart_feather_pixels",
+    "old_id": "feather_pixels"
+   },
+   {
+    "new_id": "smart_blend_mode",
+    "old_id": "blend_mode"
+   },
+   {
+    "new_id": "smart_resize_full_image_output",
+    "old_id": "resize_full_image_output"
+   },
+   {
+    "new_id": "smart_enable_color_match",
+    "old_id": "enable_color_match"
+   },
+   {
+    "new_id": "smart_color_match_amount",
+    "old_id": "color_match_amount"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "stitch_mode",
+    "set_value": "smart"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Stitch Pro in stitch_mode 'smart' - the same Smart Image Stitch code; processed_image -> inpainted_image."
+ },
+ {
+  "old_node_id": "InpaintPasteBackMEC",
+  "new_node_id": "InpaintStitchProMEC",
+  "old_widget_ids": [
+   "upscale_method",
+   "feather_edges",
+   "feather_radius"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "stitcher",
+    "old_id": "stitcher"
+   },
+   {
+    "new_id": "inpainted_image",
+    "old_id": "inpainted_image"
+   },
+   {
+    "new_id": "paste_upscale_method",
+    "old_id": "upscale_method"
+   },
+   {
+    "new_id": "paste_feather_edges",
+    "old_id": "feather_edges"
+   },
+   {
+    "new_id": "paste_feather_radius",
+    "old_id": "feather_radius"
+   },
+   {
+    "new_id": "stitch_mode",
+    "set_value": "paste back"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Stitch Pro in stitch_mode 'paste back' - the same Paste Back code."
+ },
+ {
+  "old_node_id": "MECContextInpainter",
+  "new_node_id": "InpaintStitchProMEC",
+  "old_widget_ids": [
+   "crop_padding",
+   "blend_softness",
+   "mask_expansion_blend",
+   "enable_color_correction",
+   "enable_lightness_rescue",
+   "enable_differential_diffusion",
+   "sampling_mask_blur_size",
+   "sampling_mask_blur_strength",
+   "face_positive_prompt",
+   "face_negative_prompt",
+   "color_reference"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "original_image",
+    "old_id": "original_image"
+   },
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "inpainted_image",
+    "old_id": "inpainted_image"
+   },
+   {
+    "new_id": "context_crop_padding",
+    "old_id": "crop_padding"
+   },
+   {
+    "new_id": "context_blend_softness",
+    "old_id": "blend_softness"
+   },
+   {
+    "new_id": "context_mask_expansion_blend",
+    "old_id": "mask_expansion_blend"
+   },
+   {
+    "new_id": "context_enable_color_correction",
+    "old_id": "enable_color_correction"
+   },
+   {
+    "new_id": "context_enable_lightness_rescue",
+    "old_id": "enable_lightness_rescue"
+   },
+   {
+    "new_id": "context_enable_differential_diffusion",
+    "old_id": "enable_differential_diffusion"
+   },
+   {
+    "new_id": "context_sampling_mask_blur_size",
+    "old_id": "sampling_mask_blur_size"
+   },
+   {
+    "new_id": "context_sampling_mask_blur_strength",
+    "old_id": "sampling_mask_blur_strength"
+   },
+   {
+    "new_id": "context_color_reference",
+    "old_id": "color_reference"
+   },
+   {
+    "new_id": "stitch_mode",
+    "set_value": "context blend"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   }
+  ],
+  "dropped": [
+   "face_positive_prompt",
+   "face_negative_prompt"
+  ],
+  "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Stitch Pro in stitch_mode 'context blend' - the same Context Inpainter code (every frame of a batch, since L9.39); color_reference -> context_color_reference; debug_mask -> blend_mask_used. face_positive_prompt / face_negative_prompt were only written to the log and are dropped."
  }
 ]

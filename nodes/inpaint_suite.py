@@ -1,10 +1,14 @@
 """
-InpaintSuiteMEC — Inpaint Crop Pro + Stitch Pro + Mask Prepare.
+InpaintSuiteMEC — Inpaint Crop Pro + Inpaint Stitch Pro.
 
-Three nodes for professional inpainting workflows:
-  1. InpaintCropProMEC    — crop around mask with blend mask preparation
-  2. InpaintStitchProMEC  — composite inpainted area back seamlessly
-  3. InpaintMaskPrepareMEC — standalone mask cleanup and dual-mask output
+Two nodes for crop -> inpaint -> put back (L7.65 P08: seven nodes became these two):
+  1. InpaintCropProMEC    — crop_mode "pro" (crop around the mask, video aware), "smart aspect" (the former Smart
+                            Image Crop) or "mask prepare" (the former Inpaint Mask Prepare: no crop, clean masks)
+  2. InpaintStitchProMEC  — stitch_mode "blend" (blend modes + colour match), "paste back" (the former Inpaint Paste
+                            Back), "smart" (the former Smart Image Stitch) or "context blend" (the former Context
+                            Inpainter: colour correction and lightness rescue, no stitcher)
+The former nodes' classes stay below / in smart_crop.py / mec_paint_suite.py as the engines of those modes and are
+not registered. Design: docs/design/inpaint_crop_stitch_unified.md.
 
 Key innovations over InpaintCropAndStitch:
   - Separated inpaint_mask_mode (what model sees) from stitch_blend_mode (how stitch composites)
@@ -27,7 +31,9 @@ from typing import Dict, List, Tuple, Optional, Any
 import torch
 import torch.nn.functional as F
 
-from ._is_changed_util import hash_args_and_kwargs
+from ._is_changed_util import hash_args_and_kwargs, hash_kwargs
+from . import smart_crop as _sc
+from .smart_crop import SmartImageCropMEC, SmartImageStitcherMEC, plan_crop
 
 try:
     import cv2
@@ -897,25 +903,151 @@ def _crop_preview_lines(plan: dict, fr: dict, k: int, B: int) -> list:
             where + (f"; padded {pads}" if pads else "")]
 
 
-def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int) -> dict:
-    """Core's node preview (ui.images, both renderers): one picture of one frame - the window on the original next
-    to the crop. Display only; it never changes what is cropped."""
+def _save_preview(frame_hwc, regen_mask_hw, window, cropped_hwc, lines, plan: dict):
+    """Draw the preview picture and save it for core's node preview. Returns (ui, picture); a picture that could not
+    be drawn gives ({}, None) - a preview must never fail the crop."""
+    try:
+        pic = _draw_crop_preview(frame_hwc, regen_mask_hw, window, cropped_hwc, lines)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[InpaintCropPro] preview not drawn: %s", exc)
+        return {}, None
     try:
         from ._video_comparer_io import save_preview_png
-    except Exception:  # noqa: BLE001
-        return {}
+        saved = save_preview_png(pic, "inpaint_crop_preview")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[InpaintCropPro] preview not saved: %s", exc)
+        saved = None
+    return ({"images": [saved], "c2c_crop_plan": [plan]} if saved else {}), pic
+
+
+def _crop_preview_ui(image, regen_mask, cropped, plan: dict, preview_frame: int):
+    """Core's node preview (ui.images, both renderers): one picture of one frame - the window on the original next
+    to the crop. Display only; it never changes what is cropped. Returns (ui, picture) - the picture is also the
+    node's `preview` output (L7.65 P08)."""
     B = int(image.shape[0])
     k = max(0, min(int(preview_frame), B - 1))
     fr = plan["frames"][k if len(plan["frames"]) > 1 else 0]
     lines = _crop_preview_lines(plan, fr, k, B)
-    try:
-        pic = _draw_crop_preview(image[k], regen_mask[k], fr["window"],
-                                 cropped[min(k, int(cropped.shape[0]) - 1)], lines)
-        saved = save_preview_png(pic, "inpaint_crop_preview")
-    except Exception as exc:  # noqa: BLE001 - a preview must never fail the crop
-        logger.warning("[InpaintCropPro] preview not drawn: %s", exc)
-        return {}
-    return {"images": [saved], "c2c_crop_plan": [plan]} if saved else {}
+    return _save_preview(image[k], regen_mask[k], fr["window"], cropped[min(k, int(cropped.shape[0]) - 1)], lines,
+                         plan)
+
+
+# ── L7.65 P08: the crop modes "smart aspect" and "mask prepare" ────────────────────────────────────────────────────
+
+CROP_MODES = ["pro", "smart aspect", "mask prepare"]
+STITCH_MODES = ["blend", "paste back", "smart", "context blend"]
+# The former nodes' widgets, in their order, under a prefix (INPUT_TYPES builds them from the engines' own specs;
+# tests check the two agree)
+_SMART_CROP_KEYS = ("smart_resolution_mode", "smart_max_resolution", "smart_min_resolution", "smart_manual_width",
+                    "smart_manual_height", "smart_mask_grow_pixels", "smart_patch_mask_holes", "smart_no_mask_mode",
+                    "smart_force_divisibility")
+_PREPARE_KEYS = ("prepare_fill_holes", "prepare_remove_small_regions", "prepare_min_region_area",
+                 "prepare_grow_pixels", "prepare_inpaint_edge_mode", "prepare_stitch_edge_mode",
+                 "prepare_stitch_feather_radius", "prepare_temporal_smooth", "prepare_temporal_sigma")
+_PASTE_KEYS = ("paste_upscale_method", "paste_feather_edges", "paste_feather_radius")
+_SMART_STITCH_KEYS = ("smart_feather_pixels", "smart_blend_mode", "smart_resize_full_image_output",
+                      "smart_enable_color_match", "smart_color_match_amount")
+_CONTEXT_KEYS = ("context_crop_padding", "context_blend_softness", "context_mask_expansion_blend",
+                 "context_enable_color_correction", "context_enable_lightness_rescue",
+                 "context_enable_differential_diffusion", "context_sampling_mask_blur_size",
+                 "context_sampling_mask_blur_strength", "context_color_reference")
+
+
+def _mode_inputs(spec: dict, prefix: str, tag: str, skip=()) -> dict:
+    """A former node's widgets as one mode's inputs: same type, options and default, the name prefixed, the tooltip
+    tagged with the mode. No c2c_section / advanced flag: js/c2c_mode_widgets.js shows them with their mode."""
+    out = {}
+    for name, s in spec.items():
+        if name in skip:
+            continue
+        opts = dict(s[1]) if len(s) > 1 and isinstance(s[1], dict) else {}
+        tip = opts.get("tooltip")
+        opts["tooltip"] = f"[{tag}] " + (tip if tip else name.replace("_", " "))
+        out[prefix + name] = (list(s[0]) if isinstance(s[0], (list, tuple)) else s[0], opts)
+    return out
+
+
+def _unprefix(values: dict, keys, prefix: str) -> dict:
+    """The engine's keyword arguments from one mode's prefixed inputs. A key a save does not carry (an input added
+    later, e.g. context_color_reference) is left out, so the engine's own default applies."""
+    return {k[len(prefix):]: values[k] for k in keys if k in values}
+
+
+_MODE_DEFAULTS: dict = {}
+
+
+def _mode_defaults(node_cls) -> dict:
+    """Defaults of the mode inputs (from INPUT_TYPES, so a call that omits them gets what the UI would send)."""
+    if node_cls.__name__ not in _MODE_DEFAULTS:
+        spec = node_cls.INPUT_TYPES()
+        vals = {}
+        for group in ("required", "optional"):
+            for name, s in (spec.get(group) or {}).items():
+                opts = s[1] if len(s) > 1 and isinstance(s[1], dict) else {}
+                if "default" in opts:
+                    vals[name] = opts["default"]
+                elif isinstance(s[0], (list, tuple)) and s[0]:
+                    vals[name] = s[0][0]
+        _MODE_DEFAULTS[node_cls.__name__] = vals
+    return _MODE_DEFAULTS[node_cls.__name__]
+
+
+def _roto_erode(mask: torch.Tensor) -> torch.Tensor:
+    """Roto-Sync's 1 px pre-erosion of the inpaint mask (shared by the crop and the live preview). Padding with 1
+    treats outside as foreground, so a subject touching the frame edge is not eaten; min-pool = -max_pool(-x)."""
+    _m = mask
+    if _m.dim() == 2:
+        _m = _m.unsqueeze(0)
+    _m4 = _m.unsqueeze(1)
+    _m4_pad = F.pad(_m4, (1, 1, 1, 1), mode="constant", value=1.0)
+    _neg = -_m4_pad
+    _pooled = F.max_pool2d(_neg, kernel_size=3, stride=1, padding=0)
+    return (-_pooled).squeeze(1).clamp(0.0, 1.0)
+
+
+def _window_record(window, W: int, H: int) -> dict:
+    x, y, w, h = (int(v) for v in window)
+    return {"window": [x, y, w, h],
+            "padding": {"left": max(0, -x), "top": max(0, -y), "right": max(0, x + w - W), "bottom": max(0, y + h - H)}}
+
+
+def _smart_plan_record(st: dict, B: int, H: int, W: int) -> dict:
+    """The plan of a crop in "smart aspect" mode, from its stitcher (what ran) or from plan_crop (the same dict)."""
+    if st.get("bypass") or not st.get("x"):
+        frames = [_window_record((0, 0, W, H), W, H) for _ in range(int(B))]
+        out = [int(W), int(H)]
+    else:
+        frames = [_window_record((st["x"][j], st["y"][j], st["w"][j], st["h"][j]), W, H) for j in range(len(st["x"]))]
+        out = [int(st["target_w"][0]), int(st["target_h"][0])]
+    return {"mode": "smart aspect", "image_size": [int(W), int(H)], "output_size": out, "frames_total": int(B),
+            "stable": False, "frames": frames}
+
+
+def _smart_preview_line(st: dict) -> str:
+    if st.get("bypass"):
+        return "smart aspect: mask empty, image passed through (Bypass)"
+    if st.get("full_image_resize"):
+        return "smart aspect: mask empty, whole frame resized"
+    return "smart aspect: one output size for every frame"
+
+
+def _prepare_plan_record(B: int, H: int, W: int) -> dict:
+    """"mask prepare" does not crop: the window is the whole frame."""
+    return {"mode": "mask prepare", "image_size": [int(W), int(H)], "output_size": [int(W), int(H)],
+            "frames_total": int(B), "stable": True, "frames": [_window_record((0, 0, W, H), W, H) for _ in range(int(B))]}
+
+
+def _prepare_preview_lines(plan: dict, k: int, B: int) -> list:
+    W, H = plan["image_size"]
+    return [f"no crop: masks prepared for the whole {W}x{H} frame (right: R inpaint mask, G stitch blend mask)",
+            f"frame {k} of {B} shown" if B > 1 else "single image"]
+
+
+def _fit_mask_hw(m: torch.Tensor, H: int, W: int) -> torch.Tensor:
+    """A (h, w) mask at (H, W), nearest (for the preview tint only)."""
+    if tuple(m.shape[-2:]) == (H, W):
+        return m
+    return F.interpolate(m.float()[None, None], size=(H, W), mode="nearest")[0, 0]
 
 
 # L7.99 slice 3 (ORDERS 11.4: at most 10 visible controls): the rarely used inputs are flagged core's "advanced" (Nodes
@@ -942,7 +1074,10 @@ _GEOMETRY_KEYS = (
     "auto_context_factor", "aspect_preset", "output_target_width", "output_target_height",
     "wan_temporal_smooth_frames", "wan_stable_crop", "wan_mask_polarity",
 )
-_LIVE_KEYS = _GEOMETRY_KEYS + ("output_resize_to_target_size", "output_padding", "wan_align_multiple", "preview_frame")
+_LIVE_KEYS = _GEOMETRY_KEYS + ("output_resize_to_target_size", "output_padding", "wan_align_multiple", "preview_frame",
+                                # L7.65 P08: Roto-Sync's erosion (the cache keeps the mask as it arrived), the mode and
+                                # the two new modes' settings
+                                "roto_quality", "crop_mode") + _SMART_CROP_KEYS + _PREPARE_KEYS
 
 
 def _with_crop_sections(spec):
@@ -1007,7 +1142,8 @@ class InpaintCropProMEC:
     def INPUT_TYPES(cls):
         return _with_crop_sections({
             "required": {
-                "image": ("IMAGE",),
+                # L7.65 P08: "image" is the first OPTIONAL input now (a migrated Mask Prepare has none); the sockets
+                # keep their slots because the front end adds socket inputs first, in definition order
                 "downscale_algorithm": (cls.RESIZE_ALGS, {"default": "bilinear"}),
                 "upscale_algorithm":   (cls.RESIZE_ALGS, {"default": "bicubic"}),
 
@@ -1111,6 +1247,7 @@ class InpaintCropProMEC:
                     "tooltip": "Fill masked region in the cropped image: none, edge_pad (Gaussian smear), neutral_gray, original."}),
             },
             "optional": {
+                "image": ("IMAGE",),
                 "mask": ("MASK",),
                 "optional_context_mask": ("MASK",),
                 "roto_quality": ("BOOLEAN", {
@@ -1125,90 +1262,76 @@ class InpaintCropProMEC:
                     "default": 0, "min": 0, "max": 100000, "step": 1,
                     "tooltip": ("Which frame the preview under the node shows (0 = the first). Display only: "
                                 "every frame is still cropped exactly as before.")}),
+                # L7.65 P08: the former Smart Image Crop and Inpaint Mask Prepare, as modes (appended last)
+                "crop_mode": (CROP_MODES, {
+                    "default": "pro",
+                    "tooltip": ("pro: the crop above (lquesada-style, video aware). smart aspect: the stills crop that "
+                                "sizes the output between a minimum and a maximum side (the former Smart Image Crop). "
+                                "mask prepare: no crop - clean the mask and make the inpaint and stitch masks for the "
+                                "whole frame (the former Inpaint Mask Prepare).")}),
+                **_mode_inputs(SmartImageCropMEC.INPUT_TYPES()["required"], "smart_", "smart aspect",
+                               ("image", "mask")),
+                **_mode_inputs(InpaintMaskPrepareMEC.INPUT_TYPES()["required"], "prepare_", "mask prepare",
+                               ("mask",)),
             },
             # L7.99 slice 2: which node ran, so the live preview finds this run's masks (no widget)
             "hidden": {"unique_id": "UNIQUE_ID"},
         })
 
-    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING")
-    RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info")
+    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING", "IMAGE")
+    RETURN_NAMES = ("stitcher", "cropped_image", "inpaint_mask", "stitch_blend_mask", "info", "preview")
     FUNCTION = "inpaint_crop"
     CATEGORY = "C2C/Inpaint"
-    DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). "
-                   "Pair with Inpaint Stitch Pro (C2C).")
+    DESCRIPTION = ("Crop around mask for inpainting (lquesada API + Wan 2.2 Animate aware). crop_mode 'smart aspect' "
+                   "is the stills crop sized between a min and a max side; 'mask prepare' cleans the mask without "
+                   "cropping. Pair with Inpaint Stitch Pro (C2C).")
 
     @classmethod
-    def IS_CHANGED(cls, image, downscale_algorithm, upscale_algorithm,
-                   preresize, preresize_mode,
-                   preresize_min_width, preresize_min_height,
-                   preresize_max_width, preresize_max_height,
-                   mask_fill_holes, mask_expand_pixels, mask_invert,
-                   mask_blend_pixels, mask_hipass_filter,
-                   extend_for_outpainting,
-                   extend_up_factor, extend_down_factor,
-                   extend_left_factor, extend_right_factor,
-                   context_from_mask_extend_factor,
-                   auto_context_factor,
-                   aspect_preset,
-                   output_resize_to_target_size,
-                   output_target_width, output_target_height, output_padding,
-                   device_mode,
-                   wan_align_multiple, wan_temporal_smooth_frames,
-                   wan_stable_crop, wan_mask_polarity,
-                   inpaint_mask_mode, stitch_blend_mode, blend_radius,
-                   video_stable_temporal_sigma, video_stable_dilate_px,
-                   video_stable_blur_sigma,
-                   fill_masked_area,
-                   mask=None, optional_context_mask=None,
-                   roto_quality=False, **kwargs):
-        return hash_args_and_kwargs(
-            image, downscale_algorithm, upscale_algorithm,
-            preresize, preresize_mode,
-            preresize_min_width, preresize_min_height,
-            preresize_max_width, preresize_max_height,
-            mask_fill_holes, mask_expand_pixels, mask_invert,
-            mask_blend_pixels, mask_hipass_filter,
-            extend_for_outpainting,
-            extend_up_factor, extend_down_factor,
-            extend_left_factor, extend_right_factor,
-            context_from_mask_extend_factor,
-            auto_context_factor,
-            aspect_preset,
-            output_resize_to_target_size,
-            output_target_width, output_target_height, output_padding,
-            device_mode,
-            wan_align_multiple, wan_temporal_smooth_frames,
-            wan_stable_crop, wan_mask_polarity,
-            inpaint_mask_mode, stitch_blend_mode, blend_radius,
-            video_stable_temporal_sigma, video_stable_dilate_px,
-            video_stable_blur_sigma,
-            fill_masked_area,
-            mask, optional_context_mask,
-            roto_quality, **kwargs,
-        )
+    def IS_CHANGED(cls, **kwargs):
+        return hash_kwargs(**kwargs)
 
-    def inpaint_crop(self, image, downscale_algorithm, upscale_algorithm,
-                     preresize, preresize_mode,
-                     preresize_min_width, preresize_min_height,
-                     preresize_max_width, preresize_max_height,
-                     mask_fill_holes, mask_expand_pixels, mask_invert,
-                     mask_blend_pixels, mask_hipass_filter,
-                     extend_for_outpainting,
-                     extend_up_factor, extend_down_factor,
-                     extend_left_factor, extend_right_factor,
-                     context_from_mask_extend_factor,
-                     auto_context_factor,
-                     aspect_preset,
-                     output_resize_to_target_size,
-                     output_target_width, output_target_height, output_padding,
-                     device_mode,
-                     wan_align_multiple, wan_temporal_smooth_frames,
-                     wan_stable_crop, wan_mask_polarity,
-                     inpaint_mask_mode, stitch_blend_mode, blend_radius,
-                     video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
-                     fill_masked_area,
+    def inpaint_crop(self, image=None, downscale_algorithm="bilinear", upscale_algorithm="bicubic",
+                     preresize=False, preresize_mode="ensure minimum resolution",
+                     preresize_min_width=1024, preresize_min_height=1024,
+                     preresize_max_width=16384, preresize_max_height=16384,
+                     mask_fill_holes=True, mask_expand_pixels=0, mask_invert=False,
+                     mask_blend_pixels=32, mask_hipass_filter=0.1,
+                     extend_for_outpainting=False,
+                     extend_up_factor=1.0, extend_down_factor=1.0,
+                     extend_left_factor=1.0, extend_right_factor=1.0,
+                     context_from_mask_extend_factor=1.2,
+                     auto_context_factor=False,
+                     aspect_preset="Custom",
+                     output_resize_to_target_size=True,
+                     output_target_width=512, output_target_height=512, output_padding="32",
+                     device_mode="gpu (much faster)",
+                     wan_align_multiple=16, wan_temporal_smooth_frames=0.0,
+                     wan_stable_crop=True, wan_mask_polarity="regenerate_subject",
+                     inpaint_mask_mode="hard_binary", stitch_blend_mode="gaussian", blend_radius=32,
+                     video_stable_temporal_sigma=3.0, video_stable_dilate_px=-1, video_stable_blur_sigma=-1.0,
+                     fill_masked_area="none",
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None):
+                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None,
+                     crop_mode: str = "pro", **mode_values):
+        args = {k: v for k, v in locals().items() if k not in ("self", "mode_values")}
+        unknown = set(mode_values) - set(_SMART_CROP_KEYS) - set(_PREPARE_KEYS)
+        if unknown:
+            raise TypeError(f"inpaint_crop() got unexpected keyword arguments: {sorted(unknown)}")
+        defaults = _mode_defaults(type(self))
+        mv = {k: mode_values.get(k, defaults[k]) for k in _SMART_CROP_KEYS + _PREPARE_KEYS}
+        live_settings = {k: v for k, v in {**args, **mv}.items() if k in _LIVE_KEYS}
+
+        if crop_mode == "smart aspect":
+            with torch.no_grad():
+                return self._smart_crop(image, mask, mv, preview_frame, unique_id, live_settings)
+        if crop_mode == "mask prepare":
+            with torch.no_grad():
+                return self._prepare_crop(image, mask, mv, downscale_algorithm, upscale_algorithm, preview_frame,
+                                          unique_id, live_settings)
+        if crop_mode != "pro":
+            raise ValueError(f"Inpaint Crop Pro: unknown crop_mode {crop_mode!r} (use one of {CROP_MODES}).")
+        if image is None:
+            raise ValueError("Inpaint Crop Pro: connect an image (crop_mode 'pro').")
 
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("InpaintCropProMEC expects IMAGE tensor [B,H,W,C]")
@@ -1243,8 +1366,80 @@ class InpaintCropProMEC:
                 video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                 fill_masked_area,
                 mask, optional_context_mask,
-                roto_quality, preview_frame, unique_id,
+                roto_quality, preview_frame, unique_id, live_settings,
             )
+
+    # ── L7.65 P08: crop_mode "smart aspect" (the former Smart Image Crop) ─────────────────────────────────────────
+    def _smart_crop(self, image, mask, mv, preview_frame, unique_id, live_settings):
+        if image is None:
+            raise ValueError("Inpaint Crop Pro: connect an image (crop_mode 'smart aspect').")
+        if not isinstance(image, torch.Tensor):
+            raise ValueError("InpaintCropProMEC expects IMAGE tensor [B,H,W,C]")
+        img = _sc.to_bhwc(image)
+        B, H, W = int(img.shape[0]), int(img.shape[1]), int(img.shape[2])
+        if mask is None:                                     # the old node required one; empty = no_mask_mode
+            mask = torch.zeros((B, H, W), dtype=torch.float32, device=img.device)
+        k = max(0, min(int(preview_frame), B - 1))
+        if unique_id is not None:
+            try:
+                from . import _inpaint_preview_live as _live
+                _live.store(str(unique_id), shape_bhw=(B, H, W), mask=mask, opt_mask=None, frame=img[k],
+                            frame_index=k, settings=live_settings)
+            except Exception as _exc:  # noqa: BLE001 - the live preview never fails a run
+                logger.debug("[InpaintCropPro] live preview cache skipped: %s", _exc)
+        sv = _unprefix(mv, _SMART_CROP_KEYS, "smart_")
+        # the engine: the former node's own code, so every output is what Smart Image Crop gave
+        crop_image, crop_mask, st, overlay, info = SmartImageCropMEC().crop(image, mask, **sv)
+        # the preview is drawn from what ran (the engine's stitcher); plan_crop only supplies the measured mask tint
+        _geometry, msk = plan_crop(mask, (B, H, W), **sv)
+        plan = _smart_plan_record(st, B, H, W)
+        fr = plan["frames"][k if len(plan["frames"]) > 1 else 0]
+        lines = _crop_preview_lines(plan, fr, k, B) + [_smart_preview_line(st)]
+        ui, _pic = _save_preview(img[k], _fit_mask_hw(msk[k % int(msk.shape[0])], H, W), fr["window"],
+                                 crop_image[min(k, int(crop_image.shape[0]) - 1)], lines, plan)
+        # stitch_blend_mask = crop_mask: the mask Smart's "Mask Feather" stitch blends along
+        return {"ui": ui, "result": (st, crop_image, crop_mask, crop_mask, info, overlay)}
+
+    # ── L7.65 P08: crop_mode "mask prepare" (the former Inpaint Mask Prepare) ─────────────────────────────────────
+    def _prepare_crop(self, image, mask, mv, downscale_algorithm, upscale_algorithm, preview_frame, unique_id,
+                      live_settings):
+        if mask is None:
+            raise ValueError("Inpaint Crop Pro: connect a mask (crop_mode 'mask prepare').")
+        pv = _unprefix(mv, _PREPARE_KEYS, "prepare_")
+        # the engine: the former node's own code (image = its reference_image, used by stitch_edge_mode edge_aware)
+        inpaint_mask, stitch_blend_mask, debug_preview, info = InpaintMaskPrepareMEC().prepare_mask(
+            mask, reference_image=image, **pv)
+        if image is None:                                    # masks only: nothing to crop, nothing to stitch
+            return {"ui": {}, "result": (None, None, inpaint_mask, stitch_blend_mask, info, debug_preview)}
+        B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
+        Bm = int(stitch_blend_mask.shape[0])
+        k = max(0, min(int(preview_frame), B - 1))
+        if unique_id is not None:
+            try:
+                from . import _inpaint_preview_live as _live
+                _live.store(str(unique_id), shape_bhw=(B, H, W), mask=mask, opt_mask=None, frame=image[k],
+                            frame_index=k, settings=live_settings)
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("[InpaintCropPro] live preview cache skipped: %s", _exc)
+        # a whole-frame Pro stitcher, so Inpaint Stitch Pro (blend) puts a full-frame inpaint back with these masks
+        stitcher = {
+            "downscale_algorithm": downscale_algorithm, "upscale_algorithm": upscale_algorithm, "blend_pixels": 0,
+            "blend_radius": int(pv["stitch_feather_radius"]), "stitch_blend_mode": "gaussian",
+            "wan_mask_polarity": "regenerate_subject",
+            "canvas_to_orig_x": [0] * B, "canvas_to_orig_y": [0] * B,
+            "canvas_to_orig_w": [W] * B, "canvas_to_orig_h": [H] * B,
+            "canvas_image": [image[i].cpu() for i in range(B)],
+            "cropped_to_canvas_x": [0] * B, "cropped_to_canvas_y": [0] * B,
+            "cropped_to_canvas_w": [W] * B, "cropped_to_canvas_h": [H] * B,
+            "cropped_mask_for_blend": [stitch_blend_mask[min(i, Bm - 1)].cpu() for i in range(B)],
+            "device_mode": "cpu (compatible)", "roto_quality": False,
+        }
+        plan = _prepare_plan_record(B, H, W)
+        km = min(k, Bm - 1)
+        tint = _fit_mask_hw(inpaint_mask[min(k, int(inpaint_mask.shape[0]) - 1)], H, W)
+        ui, _pic = _save_preview(image[k], tint, [0, 0, W, H], debug_preview[km], _prepare_preview_lines(plan, k, B),
+                                 plan)
+        return {"ui": ui, "result": (stitcher, image, inpaint_mask, stitch_blend_mask, info, debug_preview)}
 
     def _inpaint_crop_core(self, image, downscale_algorithm, upscale_algorithm,
                      preresize, preresize_mode,
@@ -1267,8 +1462,9 @@ class InpaintCropProMEC:
                      video_stable_temporal_sigma, video_stable_dilate_px, video_stable_blur_sigma,
                      fill_masked_area,
                      mask=None, optional_context_mask=None,
-                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None):
+                     roto_quality: bool = False, preview_frame: int = 0, unique_id=None, live_settings=None):
         image = image.clone()
+        raw_mask = mask                         # L7.65 P08: the live cache keeps the mask as it arrived
         # ── Roto-Sync: tighten seam for clean alpha boundaries ───────────
         # Applied here (single point) so every downstream branch — single
         # crop, video crop, stitch metadata — inherits the change.
@@ -1278,20 +1474,8 @@ class InpaintCropProMEC:
             if mask is not None:
                 # Pre-erode by 1 px so the inpaint sampler regenerates a
                 # hair INSIDE the subject, leaving a clean fringe-free
-                # stitch.  Uses explicit zero-padding + min-pool (erosion)
-                # — no cv2 dep. F.max_pool2d pads with -inf internally,
-                # which would skip border erosion, so we pad with 0 first.
-                _m = mask
-                if _m.dim() == 2:
-                    _m = _m.unsqueeze(0)
-                _m4 = _m.unsqueeze(1)
-                # Pad with 1 (treat outside as foreground) so we don't
-                # over-erode if the subject touches the frame edge —
-                # then min-pool = -max_pool(-x).
-                _m4_pad = F.pad(_m4, (1, 1, 1, 1), mode="constant", value=1.0)
-                _neg = -_m4_pad
-                _pooled = F.max_pool2d(_neg, kernel_size=3, stride=1, padding=0)
-                mask = (-_pooled).squeeze(1).clamp(0.0, 1.0)
+                # stitch (_roto_erode; the live preview applies the same).
+                mask = _roto_erode(mask)
         if mask is not None:
             mask = mask.clone()
         if optional_context_mask is not None:
@@ -1320,9 +1504,10 @@ class InpaintCropProMEC:
         if unique_id is not None:
             try:
                 from . import _inpaint_preview_live as _live
-                _live_settings = {k: v for k, v in locals().items() if k in _LIVE_KEYS}
+                _live_settings = (live_settings if live_settings is not None
+                                  else {k: v for k, v in locals().items() if k in _LIVE_KEYS})
                 _k = max(0, min(int(preview_frame), B - 1))
-                _live.store(str(unique_id), shape_bhw=(B, H, W), mask=mask, opt_mask=optional_context_mask,
+                _live.store(str(unique_id), shape_bhw=(B, H, W), mask=raw_mask, opt_mask=optional_context_mask,
                             frame=image[_k], frame_index=_k, settings=_live_settings)
             except Exception as _exc:  # noqa: BLE001 - the live preview never fails a run
                 logger.debug("[InpaintCropPro] live preview cache skipped: %s", _exc)
@@ -1493,9 +1678,15 @@ class InpaintCropProMEC:
         info += (f"\n  window[0] (processed image {W}x{H}): x={fr0['window'][0]} y={fr0['window'][1]} "
                  f"w={fr0['window'][2]} h={fr0['window'][3]}"
                  + "".join(f" pad_{k}={v}" for k, v in fr0["padding"].items() if v))
-        result = (result_stitcher, out_image, inpaint_mask, stitch_blend_mask, info)
+        ui, pic = _crop_preview_ui(image, bbox_mask, out_image, plan, preview_frame)
+        if pic is not None:                     # L7.65 P08: the `preview` output is the picture the node shows
+            preview = torch.from_numpy(pic).unsqueeze(0)
+        else:
+            preview = out_image
+            info += "\n  preview output: the cropped image (the preview picture was not drawn)"
+        result = (result_stitcher, out_image, inpaint_mask, stitch_blend_mask, info, preview)
         # Always the {"ui", "result"} form ComfyUI accepts, so a caller sees one shape whether or not a preview was drawn
-        return {"ui": _crop_preview_ui(image, bbox_mask, out_image, plan, preview_frame), "result": result}
+        return {"ui": ui, "result": result}
 
     # ── L7.99: geometry shared by the node and the live preview route ──────────────────────────────────────
     @classmethod
@@ -1657,7 +1848,18 @@ class InpaintCropProMEC:
     @classmethod
     def plan_windows(cls, shape_bhw, mask, optional_context_mask, **s) -> dict:
         """The crop windows the node would execute for these inputs and settings (the live preview's numbers), plus
-        the processed masks. Same functions the node runs; no image work."""
+        the processed masks. Same functions the node runs; no image work. ``mask`` is the mask as it arrived (before
+        Roto-Sync's erosion, which is applied here as the node applies it)."""
+        mode = s.get("crop_mode", "pro")
+        if mode == "smart aspect":                           # L7.65 P08
+            B, H, W = (int(v) for v in shape_bhw)
+            geometry, msk = plan_crop(mask, (B, H, W), **_unprefix(s, _SMART_CROP_KEYS, "smart_"))
+            return {"plan": _smart_plan_record(geometry, B, H, W), "geometry": geometry, "msk": msk}
+        if mode == "mask prepare":
+            B, H, W = (int(v) for v in shape_bhw)
+            return {"plan": _prepare_plan_record(B, H, W)}
+        if s.get("roto_quality") and mask is not None:
+            mask = _roto_erode(mask)
         geo = cls._geometry(shape_bhw, mask, optional_context_mask, device=torch.device("cpu"),
                             dtype=torch.float32, geometry_only=True, **{k: s[k] for k in _GEOMETRY_KEYS})
         if s["output_resize_to_target_size"]:
@@ -2009,6 +2211,101 @@ class InpaintCropProMEC:
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  L7.65 P08: stitch helpers for the modes "paste back" and "smart"
+# ══════════════════════════════════════════════════════════════════════
+
+def _stitcher_layout(st) -> str:
+    """Which crop made this stitcher: "smart" (Inpaint Crop Pro in smart aspect mode / the former Smart Image Crop:
+    bypass + x, y, w, h, no pixels), "pro" (the lquesada-style layout with the canvas), or "other"."""
+    if not isinstance(st, dict):
+        return "other"
+    if "bypass" in st and "x" in st:
+        return "smart"
+    if "cropped_to_canvas_x" in st:
+        return "pro"
+    return "other"
+
+
+def _paste_back_alpha(stitcher: dict, B: int, feather_edges, feather_radius) -> torch.Tensor:
+    """The alpha Inpaint Paste Back's engine applied, per output frame, in original-image pixels (the same window,
+    the same feather; blend_mask_used of stitch_mode "paste back")."""
+    n = len(stitcher["cropped_to_canvas_x"])
+    override = (n == 1 and B != 1)
+    feather_active = bool(feather_edges) and int(feather_radius) > 0
+    outs = []
+    for i in range(B):
+        j = 0 if override else i
+        cto_x, cto_y = stitcher["canvas_to_orig_x"][j], stitcher["canvas_to_orig_y"][j]
+        cto_w, cto_h = stitcher["canvas_to_orig_w"][j], stitcher["canvas_to_orig_h"][j]
+        ctc_x, ctc_y = stitcher["cropped_to_canvas_x"][j], stitcher["cropped_to_canvas_y"][j]
+        ctc_w, ctc_h = stitcher["cropped_to_canvas_w"][j], stitcher["cropped_to_canvas_h"][j]
+        dtype = stitcher["canvas_image"][j].dtype
+        if not feather_active:
+            alpha = torch.ones((ctc_h, ctc_w), dtype=dtype)
+        else:
+            r = max(1, int(feather_radius))
+            inner_h = max(1, ctc_h - 2 * r)
+            inner_w = max(1, ctc_w - 2 * r)
+            inner = torch.zeros(1, 1, ctc_h, ctc_w, dtype=dtype)
+            sy, sx = (ctc_h - inner_h) // 2, (ctc_w - inner_w) // 2
+            inner[:, :, sy:sy + inner_h, sx:sx + inner_w] = 1.0
+            alpha = _gaussian_blur_2d(inner, sigma=r * 0.5).clamp(0.0, 1.0)[0, 0]
+        full = torch.zeros((cto_h, cto_w), dtype=torch.float32)
+        paste_x, paste_y = ctc_x - cto_x, ctc_y - cto_y
+        x0, y0 = max(0, paste_x), max(0, paste_y)
+        x1, y1 = min(cto_w, paste_x + ctc_w), min(cto_h, paste_y + ctc_h)
+        if x1 > x0 and y1 > y0:
+            sx0, sy0 = x0 - paste_x, y0 - paste_y
+            full[y0:y1, x0:x1] = alpha[sy0:sy0 + (y1 - y0), sx0:sx0 + (x1 - x0)].float()
+        outs.append(full)
+    return torch.stack(outs, dim=0)
+
+
+def _smart_stitch_alpha(original_image, processed_image, stitcher: dict, feather_pixels, blend_mode,
+                        resize_full_image_output, mask) -> torch.Tensor:
+    """The weight Smart Image Stitch's engine applied, in original-image pixels, following its branches (bypass,
+    keep-resized, Mask Feather / Hard Paste / Box Feather, frames it pasted); blend_mask_used of stitch_mode "smart"."""
+    base = _sc.to_bhwc(original_image)
+    processed = _sc.to_bhwc(processed_image)
+    B_base, H, W = int(base.shape[0]), int(base.shape[1]), int(base.shape[2])
+    out = torch.zeros((B_base, H, W), dtype=torch.float32)
+    if stitcher.get("bypass", False):
+        return out
+    if stitcher.get("full_image_resize", False) and resize_full_image_output == "Keep Resized Image":
+        return torch.ones(tuple(processed.shape[:3]), dtype=torch.float32)
+    mask_input = None
+    if blend_mode == "Mask Feather":
+        if mask is None:
+            blend_mode = "Box Feather"
+        else:
+            mask_input = _sc.mask_to_bhw(mask).contiguous()
+    sx, sy, sw, sh = stitcher["x"], stitcher["y"], stitcher["w"], stitcher["h"]
+    if not sx or processed.shape[0] == 0:
+        return out
+    for b in range(min(B_base, len(sx))):
+        x, y, w, h = sx[b], sy[b], sw[b], sh[b]
+        if w <= 0 or h <= 0:
+            continue
+        if blend_mode == "Mask Feather" and mask_input is not None:
+            mi = b % mask_input.shape[0]
+            m = _sc.resize_mask(mask_input[mi:mi + 1], w, h)
+            if feather_pixels > 0:
+                m = _sc.gaussian_blur(m, blur_px=feather_pixels)
+        elif blend_mode == "Hard Paste":
+            m = torch.ones((1, h, w), dtype=torch.float32, device=base.device)
+        else:
+            m = _sc.box_feather_mask(h, w, feather_pixels, base.device, torch.float32)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        px0, py0 = max(0, -x), max(0, -y)
+        vw, vh = x1 - x0, y1 - y0
+        if vw <= 0 or vh <= 0:
+            continue
+        out[b, y0:y1, x0:x1] = m[0, py0:py0 + vh, px0:px0 + vw].to(processed.dtype).float().cpu()
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  NODE 2: InpaintStitchProMEC — lquesada-compatible 2-input stitcher
 # ══════════════════════════════════════════════════════════════════════
 
@@ -2022,10 +2319,11 @@ class InpaintStitchProMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
+        from .mec_paint_suite import MECContextInpainter
         return {
             "required": {
-                "stitcher": ("STITCHER",),
-                "inpainted_image": ("IMAGE",),
+                # L7.65 P08: "stitcher" and "inpainted_image" are the first two OPTIONAL inputs now (context blend
+                # has no stitcher); same order, so the sockets keep slots 0 and 1
                 "blend_mode_override": (cls.BLEND_OVERRIDES, {
                     "default": "from_crop",
                     "tooltip": "Override the blend mode chosen at crop time, or use 'from_crop'."}),
@@ -2045,11 +2343,34 @@ class InpaintStitchProMEC:
                                 "Use with stitch_temporal_sigma > 0 for jittery video. 0 = off.")}),
             },
             "optional": {
+                "stitcher": ("STITCHER",),
+                "inpainted_image": ("IMAGE",),
                 "roto_quality_override": (["from_crop", "force_on", "force_off"], {
                     "default": "from_crop",
                     "tooltip": ("Roto-Sync at stitch time. 'from_crop' honors the InpaintCropProMEC "
                                 "flag (recommended). 'force_on' applies tight-seam stitching even if "
                                 "crop didn't set it; 'force_off' disables it.")}),
+                # L7.65 P08: the former Inpaint Paste Back, Smart Image Stitch and Context Inpainter, as modes
+                "stitch_mode": (STITCH_MODES, {
+                    "default": "blend",
+                    "tooltip": ("blend: the crop's blend mask and blend modes (as before). paste back: resize and "
+                                "paste the crop, optional feathered edge (the former Inpaint Paste Back). smart: the "
+                                "stitch for a crop made in 'smart aspect' mode; needs original_image (the former "
+                                "Smart Image Stitch). context blend: no stitcher - blend a full-frame inpainted image "
+                                "over original_image under mask, with colour correction and lightness rescue (the "
+                                "former Context Inpainter).")}),
+                "original_image": ("IMAGE", {"tooltip": "[smart / context blend] The original image."}),
+                "mask": ("MASK", {"tooltip": "[smart: Mask Feather / context blend] The mask to blend along."}),
+                **_mode_inputs(InpaintPasteBackMEC.INPUT_TYPES()["required"], "paste_", "paste back",
+                               ("stitcher", "inpainted_image")),
+                **_mode_inputs(SmartImageStitcherMEC.INPUT_TYPES()["required"], "smart_", "smart",
+                               ("original_image", "processed_image", "stitcher")),
+                **_mode_inputs(MECContextInpainter.INPUT_TYPES()["required"], "context_", "context blend",
+                               ("original_image", "mask", "inpainted_image")),
+                # appended last (every earlier slot stays): the Context Inpainter's optional colour reference
+                # (L9.39, added on main after P08 branched - around mask = object removal)
+                **_mode_inputs({"color_reference": MECContextInpainter.INPUT_TYPES()["optional"]["color_reference"]},
+                               "context_", "context blend"),
             },
         }
 
@@ -2057,27 +2378,71 @@ class InpaintStitchProMEC:
     RETURN_NAMES = ("image", "blend_mask_used", "info")
     FUNCTION = "inpaint_stitch"
     CATEGORY = "C2C/Inpaint"
-    DESCRIPTION = "Stitch inpainted image back into the original (lquesada-compatible) with blend overrides + color match."
+    DESCRIPTION = ("Stitch the inpainted crop back into the original (lquesada-compatible) with blend overrides + "
+                   "color match; stitch_mode 'paste back', 'smart' (for a smart aspect crop) or 'context blend' "
+                   "(colour correction and lightness rescue over the original, no stitcher).")
 
     @classmethod
-    def IS_CHANGED(cls, stitcher, inpainted_image,
-                   blend_mode_override="from_crop", color_match=False,
-                   stitch_temporal_sigma=0.0, stitch_dilate_px=0,
-                   roto_quality_override="from_crop", **kwargs):
-        return hash_args_and_kwargs(
-            stitcher, inpainted_image,
-            blend_mode_override, color_match,
-            stitch_temporal_sigma, stitch_dilate_px,
-            roto_quality_override, **kwargs,
-        )
+    def IS_CHANGED(cls, **kwargs):
+        return hash_kwargs(**kwargs)
 
-    def inpaint_stitch(self, stitcher, inpainted_image,
+    def inpaint_stitch(self, stitcher=None, inpainted_image=None,
                        blend_mode_override="from_crop", color_match=False,
                        stitch_temporal_sigma: float = 0.0,
                        stitch_dilate_px: int = 0,
-                       roto_quality_override: str = "from_crop"):
+                       roto_quality_override: str = "from_crop",
+                       stitch_mode: str = "blend", original_image=None, mask=None, **mode_values):
+        unknown = set(mode_values) - set(_PASTE_KEYS) - set(_SMART_STITCH_KEYS) - set(_CONTEXT_KEYS)
+        if unknown:
+            raise TypeError(f"inpaint_stitch() got unexpected keyword arguments: {sorted(unknown)}")
+        defaults = _mode_defaults(type(self))
+        mv = {k: mode_values.get(k, defaults[k]) for k in _PASTE_KEYS + _SMART_STITCH_KEYS + _CONTEXT_KEYS}
+        if stitch_mode not in STITCH_MODES:
+            raise ValueError(f"Inpaint Stitch Pro: unknown stitch_mode {stitch_mode!r} (use one of {STITCH_MODES}).")
+        if stitch_mode == "context blend":
+            with torch.no_grad():
+                return self._context_blend(stitcher, inpainted_image, original_image, mask, mv)
+
+        layout = _stitcher_layout(stitcher)
+        if stitch_mode == "smart":
+            if stitcher is None:
+                raise ValueError("Inpaint Stitch Pro: connect the stitcher output of Inpaint Crop Pro "
+                                 "(crop_mode 'smart aspect').")
+            if layout == "pro":
+                raise ValueError("Inpaint Stitch Pro: this stitcher comes from Inpaint Crop Pro in 'pro' or "
+                                 "'mask prepare' mode - set stitch_mode to 'blend' or 'paste back'.")
+            if original_image is None:
+                raise ValueError("Inpaint Stitch Pro: connect original_image (stitch_mode 'smart').")
+            if inpainted_image is None:
+                raise ValueError("Inpaint Stitch Pro: connect inpainted_image.")
+            sv = _unprefix(mv, _SMART_STITCH_KEYS, "smart_")
+            with torch.no_grad():
+                # the engine: the former Smart Image Stitch's own code
+                image, info = SmartImageStitcherMEC().stitch(original_image, inpainted_image, stitcher, mask=mask,
+                                                             **sv)
+                used = _smart_stitch_alpha(original_image, inpainted_image, stitcher, sv["feather_pixels"],
+                                           sv["blend_mode"], sv["resize_full_image_output"], mask)
+            return (image, used, info)
+
+        # blend / paste back read the Pro layout
+        if stitcher is None:
+            raise ValueError("Inpaint Stitch Pro: connect the stitcher output of Inpaint Crop Pro.")
+        if layout == "smart":
+            raise ValueError("Inpaint Stitch Pro: this stitcher comes from Inpaint Crop Pro in 'smart aspect' mode - "
+                             "set stitch_mode to 'smart' and connect original_image.")
+        if inpainted_image is None:
+            raise ValueError("Inpaint Stitch Pro: connect inpainted_image.")
         if not isinstance(inpainted_image, torch.Tensor) or inpainted_image.ndim != 4:
             raise ValueError("InpaintStitchProMEC expects IMAGE tensor [B,H,W,C]")
+        if stitch_mode == "paste back":
+            pv = _unprefix(mv, _PASTE_KEYS, "paste_")
+            with torch.no_grad():
+                # the engine: the former Inpaint Paste Back's own code
+                out, info = InpaintPasteBackMEC().paste_back(stitcher, inpainted_image, pv["upscale_method"],
+                                                             pv["feather_edges"], pv["feather_radius"])
+                used = _paste_back_alpha(stitcher, int(inpainted_image.shape[0]), pv["feather_edges"],
+                                         pv["feather_radius"])
+            return (out, used, info)
 
         with torch.no_grad():
             return self._inpaint_stitch_core(
@@ -2086,6 +2451,28 @@ class InpaintStitchProMEC:
                 stitch_temporal_sigma, stitch_dilate_px,
                 roto_quality_override,
             )
+
+    def _context_blend(self, stitcher, inpainted_image, original_image, mask, mv):
+        """stitch_mode "context blend": the former Context Inpainter (full frame, no stitcher)."""
+        from .mec_paint_suite import MECContextInpainter
+        for name, val in (("original_image", original_image), ("mask", mask), ("inpainted_image", inpainted_image)):
+            if val is None:
+                raise ValueError(f"Inpaint Stitch Pro: connect {name} (stitch_mode 'context blend').")
+        cv = _unprefix(mv, _CONTEXT_KEYS, "context_")
+        # the engine: the former node's own code (every frame of the batch since L9.39)
+        img, dbg = MECContextInpainter().execute(original_image, mask, inpainted_image, **cv)
+        n = int(original_image.shape[0]) if original_image.ndim == 4 else 1
+        done = int(img.shape[0]) if getattr(img, "ndim", 0) == 4 else 1
+        info = (f"Inpaint Stitch Pro (context blend):\n"
+                f"  frames: {n} given, {done} blended; colour reference: "
+                f"{cv.get('color_reference', 'inside mask (same subject)')}\n"
+                f"  colour correction={bool(cv['enable_color_correction'])} "
+                f"lightness rescue={bool(cv['enable_lightness_rescue'])} "
+                f"differential diffusion={bool(cv['enable_differential_diffusion'])}\n"
+                f"  blend softness={float(cv['blend_softness']):g}px expansion={int(cv['mask_expansion_blend'])}px")
+        if stitcher is not None:
+            info += "\n  the stitcher input is not used in this mode"
+        return (img, dbg, info)
 
     def _inpaint_stitch_core(self, stitcher, inpainted_image,
                        blend_mode_override="from_crop", color_match=False,
@@ -2302,7 +2689,8 @@ class InpaintStitchProMEC:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 3: InpaintMaskPrepareMEC
+#  ENGINE: InpaintMaskPrepareMEC - since L7.65 P08 Inpaint Crop Pro in crop_mode "mask prepare" runs this
+#  class; it is not registered as a node (saved workflows migrate). Its body is kept as shipped (d97cc13).
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintMaskPrepareMEC:
@@ -2483,8 +2871,8 @@ class InpaintMaskPrepareMEC:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  NODE 4: InpaintPasteBackMEC  (clean resize + paste, no blend pipeline)
-#  Reimplemented on top of the gracefully-working oldest engine.
+#  ENGINE: InpaintPasteBackMEC  (clean resize + paste, no blend pipeline) - since L7.65 P08 Inpaint Stitch Pro in
+#  stitch_mode "paste back" runs this class; it is not registered as a node. Its body is kept as shipped (d97cc13).
 # ══════════════════════════════════════════════════════════════════════
 
 class InpaintPasteBackMEC:
@@ -2604,6 +2992,5 @@ class InpaintPasteBackMEC:
         return (out, info)
 
 
-# InpaintCompositeMEC removed 2026-05-18 — use InpaintStitchProMEC or
-# InpaintPasteBackMEC directly. They cover both blend modes cleanly without
-# the extra mode-dispatch indirection.
+# InpaintCompositeMEC removed 2026-05-18 — use InpaintStitchProMEC (stitch_mode
+# "blend" or "paste back", L7.65 P08).

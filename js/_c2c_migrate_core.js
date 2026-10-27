@@ -211,6 +211,53 @@ export function migrateGraph(graph, byOld, isRegistered, describe) {
     return { migrated, removed, problems, notes };
 }
 
+/**
+ * Keep every saved link on its input when a node's input list changed under it (L7.65 P08). The front end builds a
+ * node's slots as every socket first, then one slot per widget, and on load (ComfyNode.configure, 1.53.10) re-orders
+ * the saved inputs into that layout BY NAME - but leaves each link's target_slot as saved. A survivor that gained a
+ * socket (Inpaint Stitch Pro: original_image, mask) therefore moves its widget slots, and a link into one of them
+ * (a Primitive on blend_mode_override, say) would point at the wrong slot. Before configure, this rewrites such a
+ * node's inputs into the layout configure produces and gives each link the slot its input lands on. Idempotent: a
+ * node already in the current layout is left as it is.
+ * @param {object} graph - { nodes, links }
+ * @param {Set<string>} types - node types to check (registered, current types)
+ * @param {(type: string) => ({inputs: object[]} | null)} describe - the type's slots as the front end builds them
+ * @returns {string[]} one line per link that moved
+ */
+export function keepLinkSlots(graph, types, describe) {
+    const moved = [];
+    if (!graph || !Array.isArray(graph.nodes)) return moved;
+    const links = Array.isArray(graph.links) ? graph.links : [];
+    const linkById = new Map(links.map((l) => [L.id(l), l]));
+    for (const node of graph.nodes) {
+        if (!types.has(node.type) || !Array.isArray(node.inputs)) continue;
+        const info = describe(node.type);
+        if (!info) continue;
+        const names = info.inputs.map((i) => i.name);
+        const saved = new Map(node.inputs.map((i) => [i.name, i]));
+        const layout = [...info.inputs.map((i) => saved.get(i.name) ?? { ...i, link: null }),
+                        ...node.inputs.filter((i) => !names.includes(i.name))];          // configure keeps extras last
+        if (layout.length === node.inputs.length && layout.every((inp, k) => inp === node.inputs[k])) continue;
+        layout.forEach((inp, slot) => {
+            if (inp.link == null) return;
+            const l = linkById.get(inp.link);
+            if (l && L.targetSlot(l) !== slot) {
+                moved.push(`${node.type} (#${node.id}) ${inp.name}: slot ${L.targetSlot(l)} -> ${slot}`);
+                L.setTargetSlot(l, slot);
+            }
+        });
+        node.inputs = layout;
+    }
+    return moved;
+}
+
+/** keepLinkSlots on the root graph and every subgraph definition. */
+export function keepWorkflowLinkSlots(data, types, describe) {
+    const moved = [];
+    for (const g of [data, ...((data?.definitions?.subgraphs) || [])]) moved.push(...keepLinkSlots(g, types, describe));
+    return moved;
+}
+
 /** Root graph and every subgraph definition. */
 export function migrateWorkflow(data, table, isRegistered, describe) {
     const byOld = new Map();

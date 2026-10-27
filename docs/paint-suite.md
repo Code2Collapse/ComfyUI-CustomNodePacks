@@ -7,7 +7,7 @@
 | Class | Display name | Purpose |
 |---|---|---|
 | `MECAdvancedPaintCanvas` | MEC Advanced Paint Canvas | Interactive brush widget that produces an image + a multi-stage processed mask |
-| `MECContextInpainter` | MEC Context Inpainter | Smart-blend an inpainted region back over the original with color match / lightness rescue / differential diffusion |
+| `MECContextInpainter` | — (since L7.65 P08: **Inpaint Stitch Pro**, `stitch_mode` = `context blend`) | Smart-blend an inpainted region back over the original with color match / lightness rescue / differential diffusion |
 
 Both live under `MEC/Paint`.
 
@@ -72,6 +72,10 @@ through **four ordered stages**:
 ---
 
 ## MEC Context Inpainter
+
+> Since L7.65 P08 this is **Inpaint Stitch Pro** with `stitch_mode` = `context blend` (the same code; saved workflows
+> migrate on load). Its controls are the ones below with a `context_` prefix; the face prompts were dropped (they
+> were only logged). See [inpaint-suite.md](inpaint-suite.md).
 
 Smart-blend an inpainted region back over the original. The math runs in
 this order:
@@ -146,7 +150,7 @@ Load Image ─▶ MEC Advanced Paint Canvas (paint mode, reference_image=Load Im
 
 ```
 Inpaint pipeline ─▶ inpainted_image ─┐
-Original image ──────────────────────┼─▶ MEC Context Inpainter ─▶ blended_image
+Original image ──────────────────────┼─▶ Inpaint Stitch Pro (context blend) ─▶ image
 Mask ────────────────────────────────┘
 ```
 

@@ -504,7 +504,7 @@ class BBoxCrop:
     FUNCTION = "crop"
     CATEGORY = _LEGACY_CATEGORY
     DESCRIPTION = (
-        "Deprecated — kept so old workflows load. Closest current node: SmartImageCropMEC."
+        "Deprecated — kept so old workflows load. Closest current node: Inpaint Crop Pro (crop_mode 'smart aspect')."
     )
 
     def crop(self, image, bbox, mask=None):

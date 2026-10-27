@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **115** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **110** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -55,17 +55,16 @@
 | C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 14 |
+| MaskEditControl | 12 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
-| MEC Paint Suite | 2 |
+| MEC Paint Suite | 1 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 2 |
 | Layer Effects | 1 |
 | Mask toolkit | 1 |
 | Frequency / Grain | 3 |
-| Smart Crop/Stitch | 2 |
 | Tiled refinement | 4 |
 | Magnific | 15 |
 | AV Handles | 1 |
@@ -89,7 +88,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 115 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 14, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 2, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Smart Crop/Stitch 2, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 110 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 12, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -217,10 +216,10 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | Guide | Nodes | What's inside |
 |-------|------:|---------------|
 | [**Documentation Index**](docs/README.md) | — | Central nav: quick lookup by task, pack-by-pack reference, image-vs-video helpers |
-| [Inpaint Suite](docs/inpaint-suite.md) | 4 | Crop Pro, Stitch Pro, Paste Back, Mask Prepare — full pipeline with fill modes, blend modes, interpolation methods |
+| [Inpaint Suite](docs/inpaint-suite.md) | 2 | Inpaint Crop Pro (modes pro / smart aspect / mask prepare) and Inpaint Stitch Pro (blend / paste back / smart / context blend) |
 | [**ProPainter Suite**](docs/propainter.md) ★ new | 5 | Temporal video inpaint, stitch (drop-in for legacy), seam-only refine, model-free remove, RAFT flow refine |
 | [**Face Fixer**](docs/face-fixer.md) ★ new | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
-| [**Paint Suite**](docs/paint-suite.md) ★ new | 2 | Interactive paint canvas (hardness/expansion/blur stages) + smart context inpainter (color match, lightness rescue, differential diffusion) |
+| [**Paint Suite**](docs/paint-suite.md) ★ new | 1 | Interactive paint canvas (hardness/expansion/blur stages); the context inpainter (color match, lightness rescue, differential diffusion) is Inpaint Stitch Pro's `context blend` mode |
 | [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskOpsMEC` (Mask + Matting) — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts |
 | [**Video Stabilizer**](docs/video-stabilizer.md) | 1 | Feature tracking, OpenCV dense flow or RAFT optical flow (experimental), 4 presets, measured accuracy table; padding-mask output wires into Inpaint Crop Pro |
 | [**Image Mask Editor**](docs/image-mask-editor.md) ★ new | 1 | Native-resolution mask editor over the image that reaches the node: brush/eraser/shapes/polygon/lasso/bucket, colour range (RGB/HSV/LAB), SAM clicks and boxes, ViTMatte edge-refine brush, batch frame strip, masks survive restarts, non-destructive grow/feather/threshold |
@@ -625,12 +624,24 @@ All outputs are clamped to `[0, 1]`.
 
 ### Inpainting
 
+Two nodes: **Inpaint Crop Pro** crops, **Inpaint Stitch Pro** puts the result back. Since L7.65 P08 they also do
+what five other nodes did (Smart Image Crop, Inpaint Mask Prepare, Smart Image Stitch, Inpaint Paste Back, Context
+Inpainter); saved workflows with those nodes load migrated, links and values kept (docs/MIGRATION.md).
+
 #### Inpaint Crop Pro
 
 Crops the image around the mask so the inpaint model works on the region at its own resolution; **Inpaint Stitch
 Pro** puts the result back. Same workflow shape as lquesada's Inpaint Crop and Stitch, with Wan 2.2 Animate extras.
 
-**What it does, in order:** optional pre-resize of the whole image; mask clean-up (fill holes, expand, invert,
+**Modes** (`crop_mode`, the node shows only the chosen mode's controls):
+
+| crop_mode | What it does | Use it with |
+|-----------|--------------|-------------|
+| `pro` (default) | The crop described below (video aware, fixed target size) | Stitch Pro `blend` or `paste back` |
+| `smart aspect` | The former Smart Image Crop, for stills: a faint mask still counts, holes are closed, the window takes the output's aspect, and the output size is picked between `smart_min_resolution` and `smart_max_resolution` (or `smart_manual_width` x `smart_manual_height`), snapped to `smart_force_divisibility`. `smart_no_mask_mode` decides what an empty mask does (Bypass / Resize Full Image / Crop Full Image) | Stitch Pro `smart` (with `original_image`) |
+| `mask prepare` | The former Inpaint Mask Prepare: no crop. Fills holes, removes small regions, grows, and makes the inpaint mask and a stitch blend mask for the whole frame (`prepare_*` controls; `image` is optional and is the reference for `edge_aware`) | Stitch Pro `blend` (a whole-frame stitcher when an image is wired) |
+
+**What `pro` does, in order:** optional pre-resize of the whole image; mask clean-up (fill holes, expand, invert,
 feather, hi-pass); optional outpaint extension; the context box = the mask's bounding box grown by
 `context_from_mask_extend_factor` (plus `optional_context_mask`); fit to the target aspect, rounded to
 `output_padding` and `wan_align_multiple`; resize to the target size.
@@ -641,29 +652,32 @@ got a window padded with smeared edges - 41 % of a 16:9 window - although one fi
 
 **Preview.** After a run the node shows one picture: the original with the discarded area dimmed, the regenerated
 area tinted and the window outlined (an orange side = padded past the image), next to the crop the model gets, with
-the window size, position, output size, scale and padding written under it. It is drawn from the window that ran.
+the window size, position, output size, scale and padding written under it. It is drawn from the window that ran, in
+every mode (`smart aspect`: the Smart window per frame; `mask prepare`: the whole frame, next to the two masks).
 `preview_frame` picks the frame shown (default 0, the first); it changes nothing else.
-After that first run the picture follows the crop settings as you change them, without running the graph (the
-same geometry, from the last run's masks; marked "live"; Settings > C2C > Canvas > Inpaint crop > Live crop
-preview turns it off). The node's outputs change when it runs. Inside a subgraph, or for another preview frame,
-the picture changes on the next run.
+After that first run the picture follows the crop settings as you change them - including `crop_mode` and the
+smart / prepare controls - without running the graph (the same geometry, from the last run's masks; marked "live";
+Settings > C2C > Canvas > Inpaint crop > Live crop preview turns it off). The node's outputs change when it runs.
+Inside a subgraph, or for another preview frame, the picture changes on the next run.
 
 **Batches and video.** `wan_stable_crop` on (default): one window for every frame - the union of all frames'
 masks - so the crop does not jump. Off: each frame gets its own window, and every frame is cropped and stitched with
-its own placement. The preview label says which.
+its own placement. The preview label says which. (`smart aspect` always gives each frame its own window and one
+output size for the batch, from the largest mask.)
 
-**Controls.** Nine are shown: `mask_expand_pixels`, `mask_blend_pixels`, `context_from_mask_extend_factor`,
+**Controls.** Ten are shown in `pro`: `mask_expand_pixels`, `mask_blend_pixels`, `context_from_mask_extend_factor`,
 `aspect_preset`, `output_target_width`, `output_target_height`, `wan_stable_crop`, `stitch_blend_mode`,
-`preview_frame`. The rest sit in sections - Mask, Size, Resize / outpaint, Video, Stitch, Device - opened from the
-node's **More** bar (classic canvas) or core's **Show advanced inputs** (Nodes 2.0). A switch shows its own
-controls when it is on (pre-resize sizes, outpaint factors, the `video_stable` settings).
+`preview_frame`, `crop_mode`. The rest sit in sections - Mask, Size, Resize / outpaint, Video, Stitch, Device - opened
+from the node's **More** bar (classic canvas) or core's **Show advanced inputs** (Nodes 2.0). A switch shows its own
+controls when it is on (pre-resize sizes, outpaint factors, the `video_stable` settings). In `smart aspect` and
+`mask prepare` only `crop_mode`, that mode's controls and `preview_frame` are shown.
 
 **Output size.** The stitched image has the size of the image the crop worked on: the input size, or the
 pre-resized size with `preresize`, or the extended size with `extend_for_outpainting`.
 
 | Parameter | Default | What it does |
 |-----------|---------|--------------|
-| `image`, `mask` | — | Image batch and the area to regenerate (white). `optional_context_mask` widens the context box |
+| `image`, `mask` | — | Image batch and the area to regenerate (white). `optional_context_mask` widens the context box. `image` is optional only for `mask prepare` |
 | `context_from_mask_extend_factor` | `1.2` | Context box size relative to the mask box; below 1 crops tighter than the mask box |
 | `auto_context_factor` | off | Picks the factor so the mask fills about 70 % of the crop |
 | `aspect_preset` | `Custom` | `Custom` = the target width / height as set; `Auto` or a named ratio keeps the shorter side and derives the other |
@@ -682,9 +696,18 @@ pre-resized size with `preresize`, or the extended size with `extend_for_outpain
 | `roto_quality` | off | Tighter seam for roto / compositing (Laplacian blend, half radius, 1 px erosion) |
 | `device_mode`, `downscale_algorithm`, `upscale_algorithm` | gpu, bilinear, bicubic | Where it runs and the resampling filters |
 | `preview_frame` | 0 | Frame shown in the preview (display only) |
+| `crop_mode` | `pro` | See Modes |
+| `smart_resolution_mode`, `smart_min_resolution`, `smart_max_resolution`, `smart_manual_width`, `smart_manual_height` | Automatic, 768, 2048, 1024, 1024 | `smart aspect`: the output size (Automatic = between min and max, aspect kept; Manual = the manual size) |
+| `smart_mask_grow_pixels`, `smart_patch_mask_holes`, `smart_no_mask_mode`, `smart_force_divisibility` | 32, on, Bypass, 128 | `smart aspect`: grow (or shrink, negative) the mask, close holes, what an empty mask does, the size multiple |
+| `prepare_fill_holes`, `prepare_remove_small_regions`, `prepare_min_region_area`, `prepare_grow_pixels` | on, on, 100, 4 | `mask prepare`: clean-up |
+| `prepare_inpaint_edge_mode`, `prepare_stitch_edge_mode`, `prepare_stitch_feather_radius` | hard_binary, gaussian, 16 | `mask prepare`: the two masks' edges |
+| `prepare_temporal_smooth`, `prepare_temporal_sigma` | off, 1.5 | `mask prepare`: smooth the blend mask over time |
 
 **Outputs:** `stitcher` (to Stitch Pro), `cropped_image`, `inpaint_mask` (for the model), `stitch_blend_mask`,
-`info` (settings and frame 0's window).
+`info` (settings and frame 0's window), `preview` (`pro`: the preview picture; `smart aspect`: the image with the mask
+tinted and the window drawn; `mask prepare`: R = inpaint mask, G = stitch blend mask). In `smart aspect`
+`stitch_blend_mask` is the crop mask (what the Smart stitch's Mask Feather blends along); in `mask prepare` without
+an image `stitcher` and `cropped_image` are empty.
 
 ---
 
@@ -693,62 +716,42 @@ pre-resized size with `preresize`, or the extended size with `extend_for_outpain
 Puts the inpainted crop back into the image Inpaint Crop Pro worked on, frame by frame, at the window each frame
 was cropped from.
 
+**Modes** (`stitch_mode`, the node shows only the chosen mode's controls):
+
+| stitch_mode | What it does | Needs |
+|-------------|--------------|-------|
+| `blend` (default) | The crop's blend mask and blend modes, colour match, temporal smoothing (as before) | a stitcher from `pro` or `mask prepare` |
+| `paste back` | The former Inpaint Paste Back: resize the crop and paste it, optionally with a feathered rectangle edge (`paste_upscale_method`, `paste_feather_edges`, `paste_feather_radius`) | a stitcher from `pro` or `mask prepare` |
+| `smart` | The former Smart Image Stitch: Box Feather, Mask Feather (along `mask`) or Hard Paste, optional colour match (`smart_*` controls) | a stitcher from `smart aspect`, and `original_image` |
+| `context blend` | The former Context Inpainter: no stitcher; blends a full-frame inpainted image over `original_image` under `mask`, with colour correction (Reinhard mean / std), lightness rescue (CIE LAB L when the inpaint is more than about 5 % darker) and optional differential diffusion (`context_*` controls). It blends every frame of a batch, and `context_color_reference` picks where colour match and lightness rescue look (inside the mask, or around it for object removal), as the node does since L9.39 | `original_image`, `mask`, `inpainted_image` |
+
+A stitcher from the other kind of crop is refused with a message that names the mode to pick.
+
 | Parameter | Default | What it does |
 |-----------|---------|--------------|
-| `stitcher` | — | From Inpaint Crop Pro |
+| `stitcher` | — | From Inpaint Crop Pro (not used by `context blend`) |
 | `inpainted_image` | — | The sampler's result (RGB; an RGBA plate keeps its own alpha) |
-| `blend_mode_override` | `from_crop` | Use another blend mode than the crop chose |
-| `color_match` | off | Mean + std colour transfer before blending |
-| `stitch_temporal_sigma`, `stitch_dilate_px` | 0, 0 | Smooth / widen the blend mask over time for jittery video masks |
-| `roto_quality_override` | `from_crop` | `force_on` / `force_off` the crop's roto setting |
+| `blend_mode_override` | `from_crop` | Use another blend mode than the crop chose (`blend`) |
+| `color_match` | off | Mean + std colour transfer before blending (`blend`) |
+| `stitch_temporal_sigma`, `stitch_dilate_px` | 0, 0 | Smooth / widen the blend mask over time for jittery video masks (`blend`) |
+| `roto_quality_override` | `from_crop` | `force_on` / `force_off` the crop's roto setting (`blend`) |
+| `stitch_mode` | `blend` | See Modes |
+| `original_image`, `mask` | — | `smart` and `context blend` |
+| `paste_upscale_method`, `paste_feather_edges`, `paste_feather_radius` | bicubic, off, 16 | `paste back` |
+| `smart_feather_pixels`, `smart_blend_mode`, `smart_resize_full_image_output`, `smart_enable_color_match`, `smart_color_match_amount` | 32, Box Feather, Restore Original Size, off, 0.35 | `smart` |
+| `context_crop_padding`, `context_blend_softness`, `context_mask_expansion_blend` | 1.2, 8, 0 | `context blend`: context box, feather radius, grow / shrink of the blend mask |
+| `context_enable_color_correction`, `context_enable_lightness_rescue`, `context_enable_differential_diffusion` | on, on, off | `context blend` |
+| `context_sampling_mask_blur_size`, `context_sampling_mask_blur_strength` | 21, 1.0 | `context blend`: blur of the `blend_mask_used` output |
 
-**Outputs:** `image`, `blend_mask_used` (exactly where the stitch changed pixels: everywhere it is 0 the original is
-untouched, bit for bit), `info`.
+**Outputs:** `image`, `blend_mask_used` (`blend`: exactly where the stitch changed pixels - everywhere it is 0 the
+original is untouched, bit for bit; `paste back` / `smart`: the alpha that was applied; `context blend`: the
+Context Inpainter's debug mask), `info`.
 
 Checked by `tests/test_inpaint_crop_geometry.py`: an empty mask stitches back as an exact identity; nothing outside
 the blend mask changes for every blend mode; without resizing the round trip is exact; the result lands where it
-was cropped; RGBA, odd sizes, `preserve_subject`, per-frame and stable batches.
-
----
-
-#### Inpaint Mask Prepare (MEC)
-
-Standalone mask cleanup and dual-mask preparation for inpainting workflows.
-
-**How it works:** Fills holes, removes small disconnected blobs, dilates the mask, then produces two outputs — a clean inpaint mask (for the model) and a stitch blend mask (for compositing). Optional temporal smoothing for video batch consistency.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `mask` | — | Raw input mask |
-| `fill_holes` | `true` | Fill interior holes |
-| `remove_small_regions` | `true` | Remove disconnected blobs |
-| `min_region_area` | `100` | Minimum region area in pixels |
-| `grow_pixels` | `4` | Dilate mask by N pixels |
-| `inpaint_edge_mode` | `hard_binary` | `hard_binary` / `slight_feather` |
-| `stitch_edge_mode` | `gaussian` | `gaussian` / `edge_aware` |
-| `stitch_feather_radius` | `16` | Feather radius for stitch blend |
-| `temporal_smooth` | `false` | Gaussian smoothing along batch dimension |
-| `temporal_sigma` | `1.5` | Temporal smoothing sigma (frames) |
-| `reference_image` | (optional) | For edge-aware stitch blend |
-
-**Outputs:** `inpaint_mask`, `stitch_blend_mask`, `debug_preview`, `info`
-
----
-
-#### Inpaint Paste Back (MEC)
-
-Simple paste-back node: resize the inpainted crop and composite it onto the original with optional Gaussian-feathered alpha blending.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `stitch_data` | — | From Inpaint Crop Pro |
-| `inpainted_image` | — | Inpainted result from any model |
-| `feather_edges` | `true` | Gaussian-feathered alpha blending at crop boundary |
-| `feather_radius` | `8` | Blur radius for edge feathering (pixels) |
-
-**Outputs:** `image`, `info`
-
-> **Paste Back vs Stitch Pro:** Stitch Pro blends the result back with the crop's blend mask (and its blend modes); Paste Back is a plain resize + paste with an optional feathered edge.
+was cropped; RGBA, odd sizes, `preserve_subject`, per-frame and stable batches. The four modes that replaced other
+nodes give those nodes' results bit for bit (`tests/test_consolidation_inpaint.py`, against the code as shipped at
+d97cc13).
 
 ---
 
@@ -1469,8 +1472,8 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 18 | Spline Mask Editor | Interactive | 1 | Interactive Catmull-Rom / Bezier / polyline spline drawing on canvas |
 | 19 | Inpaint Crop Pro | Inpaint | 1 | Crop around mask for inpainting |
 | 20 | Inpaint Stitch Pro | Inpaint | 1 | Blend the inpainted crop back at the window it came from |
-| 21 | Inpaint Paste Back | Inpaint | 1 | Simple paste-back with feathered alpha |
-| 22 | Inpaint Mask Prepare | Inpaint | 1 | Clean + dual-mask preparation |
+| 21 | Inpaint Paste Back | Inpaint | 1 | Since L7.65 P08: Inpaint Stitch Pro, `stitch_mode` paste back |
+| 22 | Inpaint Mask Prepare | Inpaint | 1 | Since L7.65 P08: Inpaint Crop Pro, `crop_mode` mask prepare |
 | 23 | Image Comparer | Preview | 1 | Interactive before/after comparison (3 modes) |
 | 24 | Mask Batch Manager | Video | 1 | Slice/concat/interleave mask batches |
 | 25 | Mask Propagate Video | Video | 1–2 | Propagate mask across video frames |
@@ -1926,11 +1929,11 @@ MIT
 
 ## Use in image/video generation pipelines (Flux / Qwen-Image / Wan / Z-Image / ERNIE-VL)
 
-This umbrella pack aggregates nodes across four sub-namespaces — Folder Incrementer (`_FOLDER_MAPPINGS`), MEC tools (`_MEC_MAPPINGS` covering masking, SAM/ViT-Matte segmentation, inpaint crop/stitch/paste-back, spline editors, motion mask trackers, draw shapes, VAE merge/inspect, batch version manager, temporal consistency, model metadata, image comparer, parameter history, semantic segment, luminance keyer, mask failure explainer, temporal anchor, SAM multi-mask picker), Paint nodes (`_PAINT_MAPPINGS`), and MA nodes (`_MA_MAPPINGS`). The nodes are model-agnostic — they speak ComfyUI's native `IMAGE`, `MASK`, `LATENT`, `VAE`, and `MODEL` types — so they slot into any sampler graph regardless of which diffusion family produces the pixels.
+This umbrella pack aggregates nodes across four sub-namespaces — Folder Incrementer (`_FOLDER_MAPPINGS`), MEC tools (`_MEC_MAPPINGS` covering masking, SAM/ViT-Matte segmentation, inpaint crop/stitch, spline editors, motion mask trackers, draw shapes, VAE merge/inspect, batch version manager, temporal consistency, model metadata, image comparer, parameter history, semantic segment, luminance keyer, mask failure explainer, temporal anchor, SAM multi-mask picker), Paint nodes (`_PAINT_MAPPINGS`), and MA nodes (`_MA_MAPPINGS`). The nodes are model-agnostic — they speak ComfyUI's native `IMAGE`, `MASK`, `LATENT`, `VAE`, and `MODEL` types — so they slot into any sampler graph regardless of which diffusion family produces the pixels.
 
 | Model family | Recommended bridges |
 |---|---|
-| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` + `InpaintPasteBackMEC` to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte, with its own trimap settings) produces the high-quality alpha that Flux-driven matte refinement needs. `FolderIncrementer` keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
+| **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` (`stitch_mode` blend or paste back) to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte, with its own trimap settings) produces the high-quality alpha that Flux-driven matte refinement needs. `FolderIncrementer` keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
 | **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskEditMEC` (shift / grow / feather) and `MaskTrackerMEC` (propagate one mask over a sequence) are useful when reusing a single Qwen-Image generated mask across a small sequence. `VideoComparerC2C` for A/B sweeps over guidance / sampler choices (images too). |
 | **Wan 2.x (video)** | `MaskTrackerMEC` (motion tracking, propagation, key-frame anchors and a temporal-consistency check in one node) and `MaskOpsMEC` (backend SeC + MatAnyone2) are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
 | **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |
@@ -1939,7 +1942,7 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 
 Two general patterns recur across all sampler families:
 
-1. **Inpaint trio** — `InpaintCropProMEC` → diffusion sampler (any family) → `InpaintPasteBackMEC` (or `InpaintStitchProMEC` for soft seams). Allows full-resolution refinement at a fraction of the VRAM, regardless of which model is loaded.
+1. **Inpaint pair** — `InpaintCropProMEC` → diffusion sampler (any family) → `InpaintStitchProMEC` (`stitch_mode` paste back for a plain paste, blend for soft seams). Allows full-resolution refinement at a fraction of the VRAM, regardless of which model is loaded.
 2. **Versioned saves** — wire the Folder Version Incrementer's `version_string` (layout show / shot / task / version for a pipeline tree) into the sampler's `Save Image.filename_prefix` so every queued prompt produces a clean, ordered file series.
 
 ComfyUI's own reroutes (and the SAM / ViT-Matte loaders) keep the graph readable as it scales from a single Flux T2I bench into a multi-model Wan + Qwen-refine + Flux-detail composite.

@@ -51,11 +51,11 @@ from .nodes.spline_mask_mec import SplineMaskMEC
 from .nodes.mask_tracker_mec import MaskTrackerMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
 # SAM + ViTMatte, SeC + MatAnyone2 and Background Remover are backends of MaskOps (nodes/mask_matting, L7.65 P05).
+# Inpaint Paste Back, Inpaint Mask Prepare, Smart Image Crop / Stitch and Context Inpainter are modes of these two
+# (L7.65 P08); saved workflows migrate on load (nodes/_legacy_replacements.json).
 from .nodes.inpaint_suite import (
     InpaintCropProMEC,
     InpaintStitchProMEC,
-    InpaintPasteBackMEC,
-    InpaintMaskPrepareMEC,
 )
 # VideoComparerC2C (renamed from VideoComparerMEC) replaces the deprecated
 # ImageComparerMEC. The old image_comparer.py is retained on disk as an
@@ -72,7 +72,7 @@ from .nodes.vae_merge import VAEMergeMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
-# ── MEC Paint Suite (Advanced Paint Canvas + Context Inpainter) ───
+# ── MEC Paint Suite (Advanced Paint Canvas; Context Inpainter is Inpaint Stitch Pro's 'context blend', L7.65 P08) ───
 from .nodes.mec_paint_suite import (
     NODE_CLASS_MAPPINGS as _PAINT_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
@@ -381,26 +381,7 @@ except Exception as _mag_exc:  # pragma: no cover
             "[MEC] magnific import failed: %s", _mag_exc,
         )
 # VAE Clean was merged into VAE Decode (C2C), nodes/hdr_color_science.py (L7.65 P15).
-# Smart Image Crop / Stitch (Smart-Image-Crop-and-Stitch port — stills path)
-try:
-    from .nodes.smart_crop import (
-        NODE_CLASS_MAPPINGS as _SMARTCROP_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _SMARTCROP_DISPLAY,
-    )
-except Exception as _sc_exc:  # pragma: no cover
-    _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY = {}, {}
-    try:
-        from .nodes._c2c_registry import record_failure as _c2c_rec_fail_sc
-        _c2c_rec_fail_sc(
-            "smart_crop", _sc_exc,
-            hint="Smart Image Crop / Stitch failed to import. Check nodes/smart_crop.py.",
-            group="nodes",
-        )
-    except Exception:
-        import logging as _lg
-        _lg.getLogger("MEC").warning(
-            "[MEC] smart_crop import failed: %s", _sc_exc,
-        )
+# Smart Image Crop / Stitch are modes of Inpaint Crop Pro / Stitch Pro (nodes/inpaint_suite.py, L7.65 P08).
 # Luminance Keyer, Shuffle and Mask Batch Combine are modes of Mask Tools (nodes/mask_toolkit, L7.65 P03).
 
 # Background Remover is MaskOps' "remove background" backend (nodes/mask_matting, L7.65 P05).
@@ -621,8 +602,6 @@ _MEC_MAPPINGS = {
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
     "InpaintStitchProMEC": InpaintStitchProMEC,
-    "InpaintPasteBackMEC": InpaintPasteBackMEC,
-    "InpaintMaskPrepareMEC": InpaintMaskPrepareMEC,
     "VideoComparerC2C": VideoComparerC2C,
     # NOTE: "VideoComparerMEC" was the legacy class key. To prevent it from
     # showing up as a separate (duplicate) entry in the node search palette,
@@ -644,8 +623,6 @@ _MEC_DISPLAY = {
     "ParameterHistoryMEC": "Parameter History",
     "InpaintCropProMEC": "Inpaint Crop Pro",
     "InpaintStitchProMEC": "Inpaint Stitch Pro",
-    "InpaintPasteBackMEC": "Inpaint Paste Back",
-    "InpaintMaskPrepareMEC": "Inpaint Mask Prepare",
     "VideoComparerC2C": "Video Comparer \u2014 Player + Wipe/Diff/Scopes",
     "VideoFramePlayerMEC": "Video Frame Player",
     "VideoMaskEditorMEC": "Video Mask Editor",
@@ -802,7 +779,6 @@ _C2C_FAMILIES = [
     ("Layer Effects", _LAYERFX_MAPPINGS, _LAYERFX_DISPLAY),
     ("Mask toolkit", _MASKTOOLKIT_MAPPINGS, _MASKTOOLKIT_DISPLAY),
     ("Frequency / Grain", _FREQGRAIN_MAPPINGS, _FREQGRAIN_DISPLAY),
-    ("Smart Crop/Stitch", _SMARTCROP_MAPPINGS, _SMARTCROP_DISPLAY),
     ("Tiled refinement", _TILING_MAPPINGS, _TILING_DISPLAY),
     ("Magnific", _MAGNIFIC_MAPPINGS, _MAGNIFIC_DISPLAY),
     ("AV Handles", _AVH_MAPPINGS, _AVH_DISPLAY),

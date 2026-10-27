@@ -7,6 +7,10 @@ changes, ``POST /c2c/inpaint_crop/plan`` recomputes the windows with the node's 
 request the cache cannot answer exactly (no run yet, another preview frame, an entry too big to keep) returns
 ``{"stale": true, "reason": ...}`` and the picture of the last run stays.
 
+L7.65 P08: the cache keeps the masks as they arrived (Roto-Sync's erosion is redone by the geometry), and the plan
+follows ``crop_mode``: "smart aspect" uses ``smart_crop.plan_crop`` (the Smart engine's geometry), "mask prepare"
+plans the whole frame. "mask prepare" without an image caches nothing (there is no picture to draw).
+
 Memory: one shared budget (128 MB) over all nodes, least recently used out first; an entry larger than the budget
 is not kept. Design: docs/research/l799_inpaint_crop_stitch.md (D4.2).
 """
@@ -126,8 +130,15 @@ def render(node_id: str, values: Dict[str, Any]) -> Dict[str, Any]:
     if k != entry["frame_index"]:
         return {"stale": True, "reason": f"Run the node to see frame {k}."}
     res = InpaintCropProMEC.plan_windows((B, H, W), _unpack(entry["mask"]), _unpack(entry["opt"]), **s)
-    plan, geo = res["plan"], res["geo"]
     frame = torch.from_numpy(entry["frame"]).float().div(255.0).unsqueeze(0)          # [1,H,W,3]
+    mode = s.get("crop_mode", "pro")
+    if mode == "smart aspect":                                                        # L7.65 P08
+        pic = _smart_picture(res, frame, k, B, H, W)
+        return _answer(pic, res["plan"], save_preview_png)
+    if mode == "mask prepare":
+        pic = _prepare_picture(res, _unpack(entry["mask"]), frame, k, B, H, W, s)
+        return _answer(pic, res["plan"], save_preview_png)
+    plan, geo = res["plan"], res["geo"]
     if geo["preresize"] is not None:
         nw, nh, alg = geo["preresize"]
         frame = _resize_image_alg(frame, nh, nw, alg)
@@ -147,6 +158,50 @@ def render(node_id: str, values: Dict[str, Any]) -> Dict[str, Any]:
                              _crop_preview_lines(plan, fr, k, B) + ["(live - follows the settings; run to update the crop)"])
     saved = save_preview_png(pic, "inpaint_crop_preview")
     return {"images": [saved], "plan": plan} if saved else {"stale": True, "reason": "Preview could not be saved."}
+
+
+_LIVE_NOTE = "(live - follows the settings; run to update the crop)"
+
+
+def _answer(pic, plan, save_preview_png) -> Dict[str, Any]:
+    saved = save_preview_png(pic, "inpaint_crop_preview")
+    return {"images": [saved], "plan": plan} if saved else {"stale": True, "reason": "Preview could not be saved."}
+
+
+def _smart_picture(res, frame, k, B, H, W):
+    """crop_mode "smart aspect": the window plan_crop gives (the node's geometry), cut and resized the way the
+    Smart engine cuts it (edge_pad, then bicubic up / area down)."""
+    from .inpaint_suite import _crop_preview_lines, _draw_crop_preview, _fit_mask_hw, _smart_preview_line
+    from .smart_crop import edge_pad, resize_img
+
+    plan, geometry, msk = res["plan"], res["geometry"], res["msk"]
+    fr = plan["frames"][k if len(plan["frames"]) > 1 else 0]
+    tw, th = plan["output_size"]
+    if geometry.get("bypass"):
+        crop = frame
+    elif geometry.get("full_image_resize"):
+        crop = resize_img(frame, tw, th, mode="bicubic" if tw > W else "area")
+    else:
+        x, y, w, h = fr["window"]
+        canvas, _pad = edge_pad(frame, x, y, w, h)
+        crop = resize_img(canvas, tw, th, mode="bicubic" if (tw > w or th > h) else "area")
+    lines = _crop_preview_lines(plan, fr, k, B) + [_smart_preview_line(geometry), _LIVE_NOTE]
+    return _draw_crop_preview(frame[0], _fit_mask_hw(msk[k % int(msk.shape[0])], H, W), fr["window"], crop[0], lines)
+
+
+def _prepare_picture(res, mask, frame, k, B, H, W, s):
+    """crop_mode "mask prepare": the whole frame, its prepared inpaint mask tinted, next to the R / G masks - the
+    Mask Prepare engine run on the cached masks (the cached frame stands in for the image in edge_aware mode)."""
+    from .inpaint_suite import (_PREPARE_KEYS, InpaintMaskPrepareMEC, _draw_crop_preview, _fit_mask_hw,
+                                _prepare_preview_lines, _unprefix)
+
+    plan = res["plan"]
+    inpaint_mask, _blend, debug_preview, _info = InpaintMaskPrepareMEC().prepare_mask(
+        mask, reference_image=frame, **_unprefix(s, _PREPARE_KEYS, "prepare_"))
+    km = min(k, int(debug_preview.shape[0]) - 1)
+    tint = _fit_mask_hw(inpaint_mask[min(k, int(inpaint_mask.shape[0]) - 1)], H, W)
+    lines = _prepare_preview_lines(plan, k, B) + ["(live - follows the settings; run to update)"]
+    return _draw_crop_preview(frame[0], tint, [0, 0, W, H], debug_preview[km], lines)
 
 
 def register_routes(server: Any) -> None:
