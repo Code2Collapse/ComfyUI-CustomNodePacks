@@ -154,6 +154,12 @@ that, and the claim predates this file.
   optical-flow backends) is in `nodes/video_stabilizer/` with its own `LICENSE`, used by the Video Stabilizer nodes.
   <https://github.com/nomadoor/ComfyUI-Video-Stabilizer>
 
+### QR Code generator — Project Nayuki
+<https://github.com/nayuki/QR-Code-generator> · **MIT**, Copyright (c) Project Nayuki
+
+`nodes/_vendor/qrcodegen.py` (unchanged copy of `python/qrcodegen.py`; licence:
+`THIRD_PARTY_LICENSES/qrcodegen-Nayuki-MIT.txt`) draws the QR code of the C2C Vault two-factor setup.
+
 `THIRD_PARTY_LICENSES/` keeps the licences of the other projects these nodes can use. Note: `third_party/` is not
 shipped with this repo (it is ignored by git); nodes whose engine lived only there (ProPainter, SAM 3.1, SeC,
 VideoMaMa) explain how to install it when it is missing (ledger L7.90).
@@ -162,8 +168,3 @@ VideoMaMa) explain how to install it when it is missing (ledger L7.90).
 
 If your work is here and the attribution is wrong, thin, or you would rather it
 were removed, open an issue — it will be fixed.
-
-### QR Code generator — Project Nayuki
-
-`nodes/_vendor/qrcodegen.py` (unchanged copy of `python/qrcodegen.py`, MIT; licence:
-`THIRD_PARTY_LICENSES/qrcodegen-Nayuki-MIT.txt`) draws the QR code of the C2C Vault two-factor setup.
