@@ -65,6 +65,13 @@ it (other modes give an empty value of the right type): `positive_coords`, `nega
 `neg_bboxes`, `points_json`, `bbox_json`, `primary_bbox` (points + box), `coords_json`, `spline_data`,
 `bbox` (spline), `painted_image` (paint canvas, Q4). Owner rule from P24: outputs are kept, not folded.
 
+**Paint mode, two layers** (Q4 answer, A14 "keep their drawing UIs"): `canvas_layer` = `mask` (default: the
+existing modal mask editor, strokes in the mask store) or `colour` (the Paint Canvas UI: colour strokes over the
+image, `canvas_data`). The mask output is the mask layer; with colour strokes present it is the union of both
+layers' masks (only possible on a node that has both), and `painted_image` is the colour layer composited over
+`image` (or a `canvas_width` x `canvas_height` canvas without one, as the Paint Canvas did). A migrated Paint
+Canvas therefore gives exactly its old two outputs.
+
 **Execution**: `execute` dispatches on `mode` to the old engine (imported, not copied), then applies the shared
 result stage and the `input_mask` combine. `IS_CHANGED` hashes only the active mode's inputs plus the store
 hash (editor_id / session_id), so editing an inactive mode's hidden value does not re-run the graph.

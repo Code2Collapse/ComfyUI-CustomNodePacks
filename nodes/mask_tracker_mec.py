@@ -6,16 +6,23 @@ Combines (via composition) the previously-separate video-tracking nodes:
     propagate          → MaskPropagateVideo        (one-frame seed → all frames)
     anchor             → TemporalAnchorMEC         (SDF-based mask interpolation)
     consistency_check  → TemporalConsistencyCheckerMEC (flicker scoring)
+    stabilize          → MaskTemporalMEC           (L7.65 P07)
+    spline_track       → SplineMaskTrackerMEC      (L7.65 P01; the former Spline Mask "track" mode)
+    bbox_smooth        → BBoxSmooth                (L7.65 P01; the former Mask Edit "bbox_smooth" mode)
 
 Single ``mode`` widget selects which engine runs. All modes share the
 ``mask`` + ``video`` (IMAGE) input pair.
 
-Unified RETURN_TYPES (5 ports):
-    0 MASK    masks            (per-frame mask batch)
-    1 IMAGE   preview          (preview overlay or passthrough)
-    2 FLOAT   score            (motion intensity / confidence / flicker score)
-    3 STRING  info_json        (mode-specific diagnostic JSON)
-    4 STRING  metric           (which mode/metric produced the result)
+Unified RETURN_TYPES (9 ports; 5-8 appended, so saved links keep their slots):
+    0 MASK         masks            (per-frame mask batch)
+    1 IMAGE        preview          (preview overlay or passthrough)
+    2 FLOAT        score            (motion intensity / confidence / flicker score)
+    3 STRING       info_json        (mode-specific diagnostic JSON; bbox_smooth: the smoothed boxes)
+    4 STRING       metric           (which mode/metric produced the result)
+    5 STRING       warning          (stabilize)
+    6 BBOX         bboxes           (bbox_smooth)
+    7 BBOX         primary_bbox     (bbox_smooth)
+    8 SPLINE_DATA  spline_data_out  (the spline keyframes, passed through)
 """
 
 from __future__ import annotations
@@ -60,8 +67,10 @@ class MaskTrackerMEC:
     """
 
     # "stabilize" is the former Mask Temporal Stabilizer + Integrity node (L7.65 P07; engine
-    # nodes/mask_matting/temporal_node.py), appended so saved mode values keep their meaning
-    MODES = ["motion", "propagate", "anchor", "consistency_check", "stabilize"]
+    # nodes/mask_matting/temporal_node.py), appended so saved mode values keep their meaning.
+    # "spline_track" (card P07) and "bbox_smooth" (owner 2026-10-27, D7.65c) are the former Spline Mask "track" and
+    # Mask Edit "bbox_smooth" modes (L7.65 P01), by the same engines (spline_mask_tracker.py, bbox_nodes.py)
+    MODES = ["motion", "propagate", "anchor", "consistency_check", "stabilize", "spline_track", "bbox_smooth"]
     # L7.81: the per-method detection parameters (shown by detection_mode) sit in a "Detection" section - classic
     # "More" bar / Nodes 2.0 advanced inputs - so motion mode shows a handful of controls by default
     _DETECTION = ("pixel_diff_enabled", "pixel_diff_threshold", "flow_enabled", "flow_threshold", "flow_algorithm",
@@ -87,7 +96,10 @@ class MaskTrackerMEC:
                         "motion: per-frame motion mask (pixel/flow/bg/hist).\n"
                         "propagate: seed mask on one frame, push to all frames.\n"
                         "anchor: SDF interpolation between anchor masks.\n"
-                        "consistency_check: score flicker between consecutive frames."
+                        "consistency_check: score flicker between consecutive frames.\n"
+                        "stabilize: smooth a mask batch over time and flag frames that drop or jump.\n"
+                        "spline_track: follow spline keyframes through the video (Lucas-Kanade).\n"
+                        "bbox_smooth: smooth a list of boxes over time."
                     ),
                 }),
 
@@ -219,11 +231,39 @@ class MaskTrackerMEC:
                 "stabilize_jump_threshold": ("FLOAT", {
                     "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "[stabilize] centroid jump (normalized) above this flags the frame."}),
+                # [spline_track] / [bbox_smooth] - appended (L7.65 P01), same specs as the Spline Mask / Mask Edit
+                # widgets they replace, so a migrated value lands unchanged
+                "spline_data": ("STRING", {
+                    "default": "[]", "multiline": False,
+                    "tooltip": "[spline_track] keyframes from the spline tracker canvas: "
+                               "[{frame:int, points:[[x,y],…]}, …]."}),
+                "spline_closed": ("BOOLEAN", {"default": True,
+                    "tooltip": "[spline_track] closed loop (a filled shape) vs open path (a stroke)."}),
+                "spline_samples_per_segment": ("INT", {"default": 20, "min": 2, "max": 128, "step": 1,
+                    "tooltip": "[spline_track] curve resolution per segment."}),
+                "spline_tracking_weight": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "[spline_track] blend between the tracker and the keyframe interpolation "
+                               "(1 = pure Lucas-Kanade, 0 = pure interpolation)."}),
+                "spline_klt_window": ("INT", {"default": 21, "min": 5, "max": 51, "step": 2,
+                    "tooltip": "[spline_track] Lucas-Kanade window size."}),
+                "spline_feather_radius": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 64.0, "step": 0.5,
+                    "tooltip": "[spline_track] gaussian edge feather."}),
+                "spline_stroke_width": ("INT", {"default": 3, "min": 1, "max": 64, "step": 1,
+                    "tooltip": "[spline_track] stroke width of an open spline."}),
+                "bbox_json": ("STRING", {"default": "[]", "multiline": True,
+                    "tooltip": "[bbox_smooth] JSON array of [x,y,w,h], one per frame."}),
+                "bbox_radius": ("INT", {"default": 3, "min": 1, "max": 30, "step": 1,
+                    "tooltip": "[bbox_smooth] smoothing window radius in frames."}),
+                "bbox_method": (["median_then_exponential", "moving_average", "exponential", "median"], {
+                    "default": "median_then_exponential", "tooltip": "[bbox_smooth] smoothing strategy."}),
+                "bbox_alpha": ("FLOAT", {"default": 0.3, "min": 0.05, "max": 1.0, "step": 0.05,
+                    "tooltip": "[bbox_smooth] exponential factor."}),
             },
         }
 
-    RETURN_TYPES = ("MASK", "IMAGE", "FLOAT", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("masks", "preview", "score", "info_json", "metric", "warning")
+    RETURN_TYPES = ("MASK", "IMAGE", "FLOAT", "STRING", "STRING", "STRING", "BBOX", "BBOX", "SPLINE_DATA")
+    RETURN_NAMES = ("masks", "preview", "score", "info_json", "metric", "warning", "bboxes", "primary_bbox",
+                    "spline_data_out")
     OUTPUT_TOOLTIPS = (
         "Per-frame mask batch (B,H,W).",
         "Preview overlay (propagate) or video passthrough.",
@@ -231,6 +271,9 @@ class MaskTrackerMEC:
         "Mode-specific JSON diagnostic payload.",
         "Mode/metric label string.",
         "[stabilize] frames whose mask dropped or jumped, in words; empty when none (and in the other modes).",
+        "[bbox_smooth] the smoothed boxes, one [x,y,w,h] per frame; empty in the other modes.",
+        "[bbox_smooth] the first smoothed box; [0,0,0,0] in the other modes.",
+        "The spline keyframes (spline_data), passed through.",
     )
     FUNCTION = "execute"
     CATEGORY = "C2C/Video"
@@ -279,10 +322,14 @@ class MaskTrackerMEC:
                 anchor_frames, total_frames, easing, sdf_iterations,
                 flow_refinement,
                 metric, binarize_threshold,
-                mask=None, video=None, sam_model=None, points_json="", **stabilize):
+                mask=None, video=None, sam_model=None, points_json="", **appended):
 
         if mode == "stabilize":
-            return self._mode_stabilize(video, mask, stabilize)
+            return (*self._mode_stabilize(video, mask, appended), *self._no_boxes(appended))
+        if mode == "spline_track":
+            return self._mode_spline_track(video, appended)
+        if mode == "bbox_smooth":
+            return self._mode_bbox_smooth(appended)
         if video is not None and (
             not isinstance(video, torch.Tensor) or video.ndim != 4
         ):
@@ -303,7 +350,50 @@ class MaskTrackerMEC:
                 fade_end, bidirectional, anchor_frames, total_frames, easing,
                 sdf_iterations, flow_refinement, metric, binarize_threshold,
                 mask, video, sam_model, points_json,
-            ), "")
+            ), "", *self._no_boxes(appended))
+
+    @staticmethod
+    def _no_boxes(a):
+        """The appended outputs of a mode that has no boxes: (bboxes, primary_bbox, spline_data passed through)."""
+        return ([], [0, 0, 0, 0], a.get("spline_data", "[]"))
+
+    @staticmethod
+    def _mode_spline_track(video, a):
+        """The former Spline Mask "track" mode, by its own engine: (masks, preview = the video, 0.0, tracker info,
+        label, "", no boxes, the keyframes)."""
+        if video is None:
+            raise ValueError("Mask Track (spline_track): connect the video (IMAGE).")
+        if not isinstance(video, torch.Tensor) or video.ndim != 4:
+            raise ValueError("Mask Track (spline_track) expects the video as an IMAGE tensor [B,H,W,C].")
+        from .spline_mask_tracker import SplineMaskTrackerMEC
+        keyframes = str(a.get("spline_data", "[]"))
+        with torch.no_grad():
+            mask, info = SplineMaskTrackerMEC().execute(
+                image=video, keyframes_json=keyframes, closed=bool(a.get("spline_closed", True)),
+                samples_per_segment=int(a.get("spline_samples_per_segment", 20)),
+                tracking_weight=float(a.get("spline_tracking_weight", 0.7)),
+                klt_window=int(a.get("spline_klt_window", 21)),
+                feather_radius=float(a.get("spline_feather_radius", 0.0)),
+                stroke_width=int(a.get("spline_stroke_width", 3)))
+        return (mask, video, 0.0, info, "spline_track", "", [], [0, 0, 0, 0], keyframes)
+
+    @staticmethod
+    def _mode_bbox_smooth(a):
+        """The former Mask Edit "bbox_smooth" mode, by its own engine: info_json = the smoothed boxes as JSON (Mask
+        Edit's bbox_json), bboxes = the same as a list, primary_bbox = the first smoothed box."""
+        from .bbox_nodes import BBoxSmooth
+        from .mask_edit_mec import _empty_mask
+        smoothed_json, first_bbox = BBoxSmooth().smooth(
+            bboxes_json=str(a.get("bbox_json", "[]")), smoothing_radius=int(a.get("bbox_radius", 3)),
+            method=str(a.get("bbox_method", "median_then_exponential")), alpha=float(a.get("bbox_alpha", 0.3)))
+        try:
+            boxes = json.loads(smoothed_json)
+        except (ValueError, TypeError):
+            boxes = []
+        if not isinstance(boxes, list):
+            boxes = []
+        return (_empty_mask(), _empty_image_like(None), 0.0, smoothed_json, "bbox_smooth", "", boxes, first_bbox,
+                a.get("spline_data", "[]"))
 
     @staticmethod
     def _mode_stabilize(video, mask, a):

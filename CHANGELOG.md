@@ -2,6 +2,24 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-27 (Mask Tools and Mask Track gain the non-drawing modes of Mask Edit and Spline Mask, L7.65 P01)
+
+First step of owner card P01 (one Image Mask Editor for every kind of mask drawing; design
+`docs/design/image_mask_editor_modes.md`). The owner chose on 2026-10-27 where the modes that are not drawing go;
+they are added now, and Mask Edit / Spline Mask stay registered until the editor's modes ship.
+
+- **Mask Tools** gains `transform`: grow, blur and offset per axis, feather, threshold, invert - Mask Edit's
+  `transform`, the same Mask Transform XY code. Its controls (`transform_*`) are optional inputs after the existing
+  ones, so saved Mask Tools nodes and older API prompts are unchanged.
+- **Mask Track** gains `spline_track` (Spline Mask's `track`, the same Lucas-Kanade spline tracker; card P07) and
+  `bbox_smooth` (Mask Edit's `bbox_smooth`, the same smoothing code), with three appended outputs: `bboxes`,
+  `primary_bbox`, `spline_data_out`. Existing outputs keep their slots.
+- Checked: the new modes give the old modes' results bit for bit for the same values
+  (`tests/test_consolidation_p01.py`, 19 cases); live on the owner's stack (core 0.39, frontend 1.53.10), each mode
+  shows only its own controls and runs, in classic and Nodes 2.0, at the root and inside a subgraph.
+- Migration rows can now pick their successor by a saved value (`c2c_by_value`), in the front-end migrator and for
+  API prompts - needed when Mask Edit and Spline Mask are removed (their modes go to three different nodes).
+
 ## Unreleased – 2026-10-27 (merged to main: one Inpaint Crop and one Inpaint Stitch node, L7.65 P08)
 
 Owner card P08: seven crop / stitch nodes become two. Saved workflows load migrated (links and values kept); the

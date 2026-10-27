@@ -4,8 +4,8 @@
 // and does the resize — no cross-extension stomping, per the spline-editor
 // mode-gate lesson):
 //
-//   1. MODE level (unified MaskTrackerMEC only): the node has 5 modes
-//      (motion / propagate / anchor / consistency_check / stabilize) but 39 widgets. Each
+//   1. MODE level (unified MaskTrackerMEC only): the node has 7 modes
+//      (motion / propagate / anchor / consistency_check / stabilize / spline_track / bbox_smooth) but 50 widgets. Each
 //      non-motion mode uses a tiny param group; show only the active mode's
 //      group and hide the rest. Groups are taken from the backend dispatch in
 //      mask_tracker_mec.py `_execute_impl` (the source of truth) — a hidden
@@ -39,6 +39,10 @@ const CONSISTENCY = ["metric", "binarize_threshold"];
 // the former Mask Temporal Stabilizer + Integrity (L7.65 P07)
 const STABILIZE = ["stabilize_temporal_mode", "stabilize_blend", "stabilize_sigma", "stabilize_device",
     "stabilize_drop_threshold", "stabilize_jump_threshold"];
+// the former Spline Mask "track" and Mask Edit "bbox_smooth" modes (L7.65 P01)
+const SPLINE_TRACK = ["spline_data", "spline_closed", "spline_samples_per_segment", "spline_tracking_weight",
+    "spline_klt_window", "spline_feather_radius", "spline_stroke_width"];
+const BBOX_SMOOTH = ["bbox_json", "bbox_radius", "bbox_method", "bbox_alpha"];
 
 // `get.node` / `get.shown` (set by applyVisibility): a widget in a closed section (L7.81, classic canvas) folds too,
 // and what the mode wants shown in a section feeds the node's "More" bar
@@ -95,6 +99,8 @@ function applyVisibility(node) {
         _setGroup(get, ANCHOR, false);
         _setGroup(get, CONSISTENCY, false);
         _setGroup(get, STABILIZE, false);
+        _setGroup(get, SPLINE_TRACK, false);
+        _setGroup(get, BBOX_SMOOTH, false);
     } else {
         // leaving motion: hide every motion + detection widget
         _setGroup(get, MOTION_ALWAYS, false);
@@ -103,6 +109,8 @@ function applyVisibility(node) {
         _setGroup(get, ANCHOR,      mode === "anchor");
         _setGroup(get, CONSISTENCY, mode === "consistency_check");
         _setGroup(get, STABILIZE,   mode === "stabilize");
+        _setGroup(get, SPLINE_TRACK, mode === "spline_track");
+        _setGroup(get, BBOX_SMOOTH, mode === "bbox_smooth");
     }
     updateSectionBar(node, [...get.shown], () => applyVisibility(node));
     _resize(node);

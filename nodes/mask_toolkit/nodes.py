@@ -415,6 +415,9 @@ def _engine(name):
     if name == "combine":
         from ..helpers.helpers import MaskBatchCombineMEC
         return MaskBatchCombineMEC
+    if name == "transform":
+        from ..mask_transform_xy import MaskTransformXY
+        return MaskTransformXY
     return {"colour_key": MaskFromColorMEC, "gradient": MaskGradientMEC, "grain": MaskGrainMEC,
             "motion_blur": MaskMotionBlurMEC, "edge_spread": EdgeSpreadMEC}[name]
 
@@ -433,7 +436,13 @@ MASK_TOOL_MODES = (
     ("motion blur", "motion_blur", ("angle", "distance", "invert")),
     ("edge spread", "edge_spread", ("spread", "invert_mask")),
     ("shuffle", "shuffle", ("out_R", "out_G", "out_B", "out_A", "premultiply_output")),
+    # L7.65 P01 (owner 2026-10-27, D7.65c): the former Mask Edit "transform" mode (Mask Transform XY's code)
+    ("transform", "transform", ("expand_x", "expand_y", "blur_x", "blur_y", "offset_x", "offset_y", "feather",
+                                "threshold", "invert")),
 )
+# modes added after the node shipped: their controls are OPTIONAL inputs after the sockets, so a saved node keeps
+# every widget value in place (values are restored by position) and an older API prompt without them stays valid
+_APPENDED_MODES = {"transform"}
 _NEW_MODE_PARAMS = {
     "difference_key": {
         "tolerance": ("FLOAT", {"default": 0.08, "min": 0.0, "max": 1.0, "step": 0.005,
@@ -518,7 +527,9 @@ class MaskToolsMEC:
         required = {"mode": ([label for label, _k, _p in MASK_TOOL_MODES], {
             "default": "key: colour",
             "tooltip": "What the node does. Each mode shows only its own controls."})}
+        appended = {}
         for label, key, params in MASK_TOOL_MODES:
+            target = appended if key in _APPENDED_MODES else required
             if params is None:
                 spec = _NEW_MODE_PARAMS[key]
                 names = list(spec)
@@ -536,16 +547,18 @@ class MaskToolsMEC:
                     opts["advanced"] = True
                 tip = opts.get("tooltip", "")
                 opts["tooltip"] = f"{label}: {tip}" if tip else label
-                required[mask_tool_widget(key, p)] = (s[0], opts)
+                target[mask_tool_widget(key, p)] = (s[0], opts)
         return {
             "required": required,
             "optional": {
                 "image": ("IMAGE", {"tooltip": "keys, edge spread and shuffle: the picture to work on."}),
-                "mask": ("MASK", {"tooltip": "grade, grow / shrink, combine (first matte), grain, motion blur; edge "
-                                             "spread's matte; gradient's size when nothing else gives one."}),
+                "mask": ("MASK", {"tooltip": "grade, grow / shrink, combine (first matte), grain, motion blur, "
+                                             "transform; edge spread's matte; gradient's size when nothing else "
+                                             "gives one."}),
                 "mask_b": ("MASK", {"tooltip": "combine: the second matte."}),
                 "plate": ("IMAGE", {"tooltip": "key: difference - the clean plate (same shot, without the subject)."}),
                 "size_as": ("IMAGE", {"tooltip": "gradient: take the size from this image."}),
+                **appended,
             },
         }
 
@@ -561,7 +574,8 @@ class MaskToolsMEC:
     DESCRIPTION = (
         "Keyers and matte operations in one node: colour, luma and difference keys; grade (gain, gamma, clamp, "
         "invert); grow or shrink each side (left / right / up / down) with a feather; combine two mattes; gradient; "
-        "grain; motion blur; edge spread; channel shuffle."
+        "grain; motion blur; edge spread; channel shuffle; transform (grow, blur and offset per axis, feather, "
+        "threshold, invert)."
     )
 
     @classmethod
@@ -581,6 +595,12 @@ class MaskToolsMEC:
         params = dict((k, p) for _l, k, p in MASK_TOOL_MODES)[key]
         names = list(params) if params is not None else list(_NEW_MODE_PARAMS[key])
         args = {p: kw[mask_tool_widget(key, p)] for p in names if mask_tool_widget(key, p) in kw}
+        if key in _APPENDED_MODES and len(args) < len(names):     # an optional control the prompt leaves out
+            optional = self.INPUT_TYPES()["optional"]
+            for p in names:
+                w = mask_tool_widget(key, p)
+                if p not in args and w in optional:
+                    args[p] = optional[w][1].get("default")
         with torch.no_grad():
             out_mask, out_image, report = self._run(key, mode, args, image, mask, mask_b, plate, size_as)
         if out_image is None and out_mask is not None:
@@ -629,6 +649,14 @@ class MaskToolsMEC:
                 m = 1.0 - m
             return clone_output(m), None, build_report("Mask Tools: difference key", img.shape[0], notes,
                                                      coverage=float(m.mean()))
+        if key == "transform":
+            (m,) = _engine(key)().transform(
+                mask=self._need(mask, "a mask", mode), expand_x=int(a["expand_x"]), expand_y=int(a["expand_y"]),
+                blur_x=float(a["blur_x"]), blur_y=float(a["blur_y"]), offset_x=int(a["offset_x"]),
+                offset_y=int(a["offset_y"]), feather=float(a["feather"]), threshold=float(a["threshold"]),
+                invert=bool(a["invert"]))
+            return m, None, build_report("Mask Tools: transform", m.shape[0] if m.dim() == 3 else 1, [],
+                                         coverage=float(m.float().mean()))
         m = ensure_bhw_mask(self._need(mask, "a mask", mode), "Mask Tools")
         if key == "grade":
             g = m * float(a["gain"])

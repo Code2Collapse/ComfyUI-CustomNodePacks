@@ -1327,6 +1327,19 @@ Interactive canvas for drawing spline-based masks directly on your image. Suppor
 
 ---
 
+#### Mask Track: spline keyframes and box smoothing
+
+**Mask Track** has two more modes (L7.65 P01; the controls of each mode are prefixed and shown only in that mode):
+
+| Mode | What it does | Controls | Outputs it fills |
+|---|---|---|---|
+| `spline_track` | Follows spline keyframes (`[{frame, points}]`) through the `video` with Lucas-Kanade, the same tracker as Spline Mask's `track` mode | `spline_data`, `spline_closed`, `spline_samples_per_segment`, `spline_tracking_weight`, `spline_klt_window`, `spline_feather_radius`, `spline_stroke_width` | `masks`, `info_json`, `spline_data_out` |
+| `bbox_smooth` | Smooths a list of boxes over time (median, moving average, exponential or median then exponential), the same code as Mask Edit's `bbox_smooth` mode | `bbox_json`, `bbox_radius`, `bbox_method`, `bbox_alpha` | `bboxes`, `primary_bbox`, `info_json` (the smoothed boxes as JSON) |
+
+The three new outputs (`bboxes`, `primary_bbox`, `spline_data_out`) come after the old ones, so saved links keep their
+slots. Mask Tools gained `transform` the same way: grow, blur and offset per axis, feather, threshold and invert (Mask
+Edit's `transform`, the same Mask Transform XY code).
+
 #### Motion Mask Tracker (MEC) ★ New
 
 Per-frame motion detection with 4 independent methods and camera stabilization. Feed a video batch — get a motion mask highlighting what moved between frames.
@@ -1463,7 +1476,7 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 9 | Matting Node | Matting | 2 | Unified 7-backend alpha matting |
 | 10 | ViTMatte Edge Refiner | Matting | 2 | Standalone edge refinement (7 methods) |
 | 11 | Trimap Generator | Matting | 1 | Generate trimap for ViTMatte input |
-| 12 | Mask Tools (C2C) | Keying / matte ops | 1 | colour, luma (BT.709, smoothstep) and difference keys; grade; directional grow / shrink; combine; gradient; grain; motion blur; edge spread; shuffle |
+| 12 | Mask Tools (C2C) | Keying / matte ops | 1 | colour, luma (BT.709, smoothstep) and difference keys; grade; directional grow / shrink; combine; gradient; grain; motion blur; edge spread; shuffle; transform (per-axis grow, blur, offset) |
 | 13 | Mask Transform XY | Editing | 1 | Per-axis erode/expand/blur/offset |
 | 14 | Mask Draw Frame | Editing | 1 | Draw 12 shapes with rotation and SDF |
 | 15 | Draw Shape | Editing | 1 | Unified 12-shape dropdown with all params — replaces per-shape wrappers |

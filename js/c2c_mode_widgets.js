@@ -21,7 +21,7 @@ const effectOf = (name) => EFFECTS.find((k) => name.startsWith(k + "_")) || null
 const MT_MODES = {
     "key: colour": "colour_key", "key: luma": "luma_key", "key: difference": "difference_key", "grade": "grade",
     "grow / shrink": "grow", "combine": "combine", "gradient": "gradient", "grain": "grain",
-    "motion blur": "motion_blur", "edge spread": "edge_spread", "shuffle": "shuffle",
+    "motion blur": "motion_blur", "edge spread": "edge_spread", "shuffle": "shuffle", "transform": "transform",
 };
 const mtKeyOf = (name) => Object.values(MT_MODES).find((k) => name === k || name.startsWith(k + "_")) || null;
 // Folder Version Incrementer: the pipeline layout's controls, and the source / date layout's

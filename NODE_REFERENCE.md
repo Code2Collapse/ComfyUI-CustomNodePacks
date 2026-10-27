@@ -2823,7 +2823,7 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `mode` | choice: `motion`, `propagate`, `anchor`, `consistency_check`, `stabilize` | default `"motion"` | motion: per-frame motion mask (pixel/flow/bg/hist). propagate: seed mask on one frame, push to all frames. anchor: SDF interpolation between anchor masks. consistency_check: score flicker between consecutive frames. |
+| `mode` | choice: `motion`, `propagate`, `anchor`, `consistency_check`, `stabilize`, `spline_track`, `bbox_smooth` | default `"motion"` | motion: per-frame motion mask (pixel/flow/bg/hist). propagate: seed mask on one frame, push to all frames. anchor: SDF interpolation between anchor masks. consistency_check: score flicker between consecutive frames. stabilize: smooth a mask batch over time and flag frames that drop or jump. spline_track: follow spline keyframes through the video (Lucas-Kanade). bbox_smooth: smooth a list of boxes over time. |
 | `camera_compensation` | `BOOLEAN` | default `True` | [motion] subtract global camera motion |
 | `stabilization_method` | choice: `homography`, `affine`, `translation` | default `"homography"` | [motion] camera-motion model |
 | `detection_mode` | choice: `combined`, `pixel_diff`, `optical_flow`, `background_sub`, `histogram_diff` | default `"combined"` | [motion] active method(s) |
@@ -2870,6 +2870,17 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | `stabilize_device` | choice: `cuda`, `cpu` | default `"cuda"` | [stabilize] where to run. |
 | `stabilize_drop_threshold` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.05 | [stabilize] area ratio / IoU below this flags the frame. |
 | `stabilize_jump_threshold` | `FLOAT` | default `0.15`, range 0.0…1.0, step 0.01 | [stabilize] centroid jump (normalized) above this flags the frame. |
+| `spline_data` | `STRING` | default `"[]"` | [spline_track] keyframes from the spline tracker canvas: [{frame:int, points:[[x,y],…]}, …]. |
+| `spline_closed` | `BOOLEAN` | default `True` | [spline_track] closed loop (a filled shape) vs open path (a stroke). |
+| `spline_samples_per_segment` | `INT` | default `20`, range 2…128, step 1 | [spline_track] curve resolution per segment. |
+| `spline_tracking_weight` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.05 | [spline_track] blend between the tracker and the keyframe interpolation (1 = pure Lucas-Kanade, 0 = pure interpolation). |
+| `spline_klt_window` | `INT` | default `21`, range 5…51, step 2 | [spline_track] Lucas-Kanade window size. |
+| `spline_feather_radius` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | [spline_track] gaussian edge feather. |
+| `spline_stroke_width` | `INT` | default `3`, range 1…64, step 1 | [spline_track] stroke width of an open spline. |
+| `bbox_json` | `STRING` | default `"[]"` | [bbox_smooth] JSON array of [x,y,w,h], one per frame. |
+| `bbox_radius` | `INT` | default `3`, range 1…30, step 1 | [bbox_smooth] smoothing window radius in frames. |
+| `bbox_method` | choice: `median_then_exponential`, `moving_average`, `exponential`, `median` | default `"median_then_exponential"` | [bbox_smooth] smoothing strategy. |
+| `bbox_alpha` | `FLOAT` | default `0.3`, range 0.05…1.0, step 0.05 | [bbox_smooth] exponential factor. |
 
 **Outputs**
 
@@ -2881,6 +2892,9 @@ Unified video-mask tracker. Pick a mode and the corresponding engine runs. All m
 | 3 | `info_json` | `STRING` | Mode-specific JSON diagnostic payload. |
 | 4 | `metric` | `STRING` | Mode/metric label string. |
 | 5 | `warning` | `STRING` | [stabilize] frames whose mask dropped or jumped, in words; empty when none (and in the other modes). |
+| 6 | `bboxes` | `BBOX` | [bbox_smooth] the smoothed boxes, one [x,y,w,h] per frame; empty in the other modes. |
+| 7 | `primary_bbox` | `BBOX` | [bbox_smooth] the first smoothed box; [0,0,0,0] in the other modes. |
+| 8 | `spline_data_out` | `SPLINE_DATA` | The spline keyframes (spline_data), passed through. |
 
 
 ### AVHandlesMEC
@@ -3588,7 +3602,7 @@ Saved workflows with the eight former nodes (Mask From Color, Luminance Keyer, M
 
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
-| `mode` | choice: `key: colour`, `key: luma`, `key: difference`, `grade`, `grow / shrink`, `combine`, `gradient`, `grain`, `motion blur`, `edge spread`, `shuffle` | default `"key: colour"` | What the node does. Each mode shows only its own controls. |
+| `mode` | choice: `key: colour`, `key: luma`, `key: difference`, `grade`, `grow / shrink`, `combine`, `gradient`, `grain`, `motion blur`, `edge spread`, `shuffle`, `transform` | default `"key: colour"` | What the node does. Each mode shows only its own controls. |
 | `colour_key_color` | `STRING` | default `"#FFFFFF"` | key: colour: Target colour as #RRGGBB — the hue you want to keep or remove. |
 | `colour_key_colorspace` | choice: `rgb`, `hsv`, `lab` | default `"rgb"` | key: colour: Distance metric. LAB separates dark navy from dark brown; RGB treats them as similar luminance. |
 | `colour_key_tolerance` | `FLOAT` | default `50.0`, range 0.0…100.0, step 1.0 | key: colour: How far a pixel's colour can drift from the pick and still count as a match. |
@@ -3649,6 +3663,15 @@ Saved workflows with the eight former nodes (Mask From Color, Luminance Keyer, M
 | `mask_b` | `MASK` |  | combine: the second matte. |
 | `plate` | `IMAGE` |  | key: difference - the clean plate (same shot, without the subject). |
 | `size_as` | `IMAGE` |  | gradient: take the size from this image. |
+| `transform_expand_x` | `INT` | default `0`, range -512…512, step 1 | transform: Positive = dilate horizontally, Negative = erode horizontally |
+| `transform_expand_y` | `INT` | default `0`, range -512…512, step 1 | transform: Positive = dilate vertically, Negative = erode vertically |
+| `transform_blur_x` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | transform: Gaussian blur sigma along X axis |
+| `transform_blur_y` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | transform: Gaussian blur sigma along Y axis |
+| `transform_offset_x` | `INT` | default `0`, range -4096…4096, step 1 | transform: Shift mask horizontally (pixels) |
+| `transform_offset_y` | `INT` | default `0`, range -4096…4096, step 1 | transform: Shift mask vertically (pixels) |
+| `transform_feather` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | transform: Feather (smooth edge) radius after transform |
+| `transform_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | transform: Binarize mask after morph ops (0 = keep soft) |
+| `transform_invert` | `BOOLEAN` | default `False` | transform: Invert output mask |
 
 **Outputs**
 
