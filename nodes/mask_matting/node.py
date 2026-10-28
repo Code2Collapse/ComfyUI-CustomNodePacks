@@ -295,6 +295,38 @@ def _picks_model_path(name: str) -> Optional[str]:
     return path if path and os.path.isfile(path) else None
 
 
+# L7.114 (owner answer 2026-10-28, Q3): what the frames before a mid-clip SeC + MatAnyone2 pick hold, by output index.
+# zero = no subject; plate = the input frames (despilled is the plate when nothing is despilled); preview follows
+# premultiply (foreground of nothing, or the plate); outside = all outside when that output is on.
+_LEAD_FILL = {0: "zero", 1: "zero", 2: "preview", 3: "zero", 8: "plate", 9: "zero", 10: "zero", 11: "zero",
+              12: "outside", 13: "zero", 14: "zero", 17: "zero", 18: "zero"}
+
+
+def _pad_front(out, lead_plate: torch.Tensor, premultiply: bool = True):
+    """Prepend the frames before the pick to every per-frame output of a run that started on the pick frame.
+    Outputs that are not per frame (bbox, score, a one-image preview) are left as they are."""
+    lead = int(lead_plate.shape[0])
+    out = list(out)
+    alpha = out[1]
+    if lead <= 0 or not isinstance(alpha, torch.Tensor):
+        return tuple(out)
+    n = int(alpha.shape[0])
+    for i, how in _LEAD_FILL.items():
+        t = out[i] if i < len(out) else None
+        if not isinstance(t, torch.Tensor) or t.ndim < 3 or int(t.shape[0]) != n:
+            continue
+        shape = (lead,) + tuple(t.shape[1:])
+        use_plate = how == "plate" or (how == "preview" and not premultiply)
+        if use_plate and tuple(lead_plate.shape[1:]) == shape[1:]:
+            fill = lead_plate.to(device=t.device, dtype=t.dtype)
+        elif how == "outside" and bool(t.max() > 0):
+            fill = torch.ones(shape, device=t.device, dtype=t.dtype)
+        else:
+            fill = torch.zeros(shape, device=t.device, dtype=t.dtype)
+        out[i] = torch.cat([fill, t], 0)
+    return tuple(out)
+
+
 def _la_sam_text_grounding(
     seg_image: torch.Tensor,
     text_prompt: str,
@@ -966,6 +998,7 @@ class MaskOpsMEC:
             if int(args["end_frame"]) >= 0:
                 args["end_frame"] = max(0, int(args["end_frame"]) - start)
         pr = _picks.prompts(sel, W, H, frame_offset=start)
+        lead_plate = None                     # SeC + MatAnyone2 picked mid-clip: the plate frames before the pick
         backend = str(args.get("backend") or _engines.NATIVE)
         # the prompt inputs each backend reads (the ones a selection replaces)
         reads = {
@@ -998,11 +1031,20 @@ class MaskOpsMEC:
             args.update(points_json=pr.points_json(), bbox_json=pr.bbox_json())
             notes.append("SAM + ViTMatte reads the points on every frame (it does not track)")
         elif backend == _engines.SEC_MATANYONE:
-            if pr.frame != 0:
-                raise ValueError(
-                    f"SeC + MatAnyone2 reads its prompts on the first frame of the clip, but the subject was picked "
-                    f"on frame {sel.frame}. Pick on the first frame, or use the 'segment + matte' backend, which "
-                    "tracks from any frame.")
+            if pr.frame > 0:
+                # owner answer 2026-10-28 (Q3): SeC reads its prompts on the clip's first frame, so the clip starts on
+                # the pick frame; the frames before it come back empty (padded after the run) and the info says so
+                lead = pr.frame
+                rendered = int(args["image"].shape[0])
+                lead_plate = args["image"][:lead]
+                for name in ("image", "external_mask", "external_trimap", "holdout_mask", "core_mask"):
+                    args[name] = _picks.slice_frames(args.get(name), lead, rendered, rendered)
+                args["start_frame"] = max(0, int(args["start_frame"]) - lead)
+                if int(args["end_frame"]) >= 0:
+                    args["end_frame"] = max(0, int(args["end_frame"]) - lead)
+                pr = _picks.prompts(sel, W, H, frame_offset=start + lead)
+                notes.append(f"SeC + MatAnyone2 starts on the pick frame {sel.frame}: frames {start}-{sel.frame - 1} "
+                             "are empty (no subject)")
             args.update(clear)
             args.update(points_json=pr.points_json(), bbox_json=pr.bbox_json(), sec_text_prompt="")
         else:
@@ -1021,7 +1063,11 @@ class MaskOpsMEC:
                 "frame": pr.frame}, "replaced_inputs": ignored, "notes": notes,
                 "cache": cache.stats() if cache is not None else "off"},
         }
-        return self.execute(**args, picks="", _viewer=viewer)
+        if lead_plate is None:
+            return self.execute(**args, picks="", _viewer=viewer)
+        viewer["info"]["empty_frames"] = [start, start + int(lead_plate.shape[0])]
+        out = self.execute(**args, picks="", _viewer=viewer)
+        return _pad_front(out, lead_plate, premultiply=bool(args.get("premultiply", True)))
 
     def _execute_impl(self, image, segmenter, matter, model, matter_model,
                 precision, attention, offload, subject_preset,

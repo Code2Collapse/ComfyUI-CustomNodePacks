@@ -16,7 +16,7 @@ Mask Track in preview + QC mode) are not part of it.
 | `picks` input | `nodes/mask_matting/node.py`, `_picks.py` | Appended optional STRING (last input). Empty: the node runs as before. Set: replaces the chosen backend's prompt inputs (section 2). |
 | Stage cache | `nodes/mask_matting/_stage_cache.py` | Viewer-driven runs keep the TRACK and EDGE stages (section 3). |
 | Plate Proxy | `nodes/c2c_viewer/plate_proxy.py` | Hidden helper: the plate as JPEG proxies (at most 960 px, at most 240 frames; every k-th frame of a longer clip, the last always). |
-| Detect | `nodes/c2c_viewer/detect.py` | Hidden helper: one frame + words / clicks / boxes -> one mask (PNG, alpha channel) per object, box, label, score. |
+| Detect | `nodes/c2c_viewer/detect.py` | Hidden helper: one frame + words / clicks / boxes -> one mask (PNG, alpha channel) per object, box, label, score. Engine: ComfyUI's own SAM 3 / 3.1 (core 0.39+; owner answer 2026-10-28, Q4), called at run time - words through its detector head, clicks and boxes through its SAM decoder; CNP's own SAM backends only on an older core. |
 | Viewer Result | `nodes/c2c_viewer/result.py`, `qc.py` | Hidden helper: the rendered alpha and plate as proxies + the QC numbers. |
 | Viewer | `js/c2c_viewer/` (`core.js` pure logic, `transport.js` helper prompts, `viewer.js` the panel) | The face of the node. |
 
@@ -42,7 +42,7 @@ Schema version 1, coordinates 0..1 on the plate:
 | segment + matte (cascade) | positive_coords = subject + added points, negative_coords = excluded + cut points, pos_bbox = subject box widened over the added parts (+4 %), frame_annotation = pick frame. The wired prompt inputs are replaced (the info output lists which). |
 | segment + matte (ONYX) | The same, as ONYX's single-object legacy prompts. scene_prompts and the external_mask prompt are replaced. |
 | SAM + ViTMatte | points_json (labels 1 / 0) and bbox_json. It reads the points on every frame (it does not track). |
-| SeC + MatAnyone2 | points_json and bbox_json. A pick after the first frame is refused: SeC prompts frame 0. |
+| SeC + MatAnyone2 | points_json and bbox_json. SeC prompts the clip's first frame, so a pick after it starts the clip on the pick frame; the frames before it come back empty (alpha 0, the plate in despilled / un-premultiplied preview) and the info output lists them as `viewer.empty_frames` [first, pick) with a note (owner answer 2026-10-28, Q3). |
 | remove background | No prompts; the selection only chooses the frames. |
 
 A pick after frame 0 with `tracking_direction` = forward tracks both ways (otherwise every frame before the pick

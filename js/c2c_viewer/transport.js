@@ -97,7 +97,7 @@ export function helperPrompt(prompt, matteId, kind, opts = {}) {
         const out = pick(prompt, ids);
         out[String(matteId)].inputs.picks = String(opts.picks || "");
         out[helperId] = { class_type: HELPERS.result, inputs: {
-            image, alpha: [String(matteId), 1], coarse: [String(matteId), 0], start: opts.start | 0,
+            image, alpha: [String(matteId), 1], coarse: [String(matteId), 0], info: [String(matteId), 7], start: opts.start | 0,
             max_side: opts.maxSide ?? 960, max_frames: opts.maxFrames ?? 120 } };
         return { prompt: out, helperId };
     }

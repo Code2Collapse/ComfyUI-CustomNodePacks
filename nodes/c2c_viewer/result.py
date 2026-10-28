@@ -3,11 +3,14 @@
 The viewer's Render posts: the nodes feeding Mask + Matting, Mask + Matting itself (with the selection, and for the
 preview chunk a frame range), and this node wired to its `mask` (coarse) and `alpha` outputs and to the same plate.
 It writes the plate and the alpha of every rendered frame (every k-th on a long render) as proxy files, and measures
-coverage / edge detail / flicker (qc.py) on the full rendered range.
+coverage / edge detail / flicker (qc.py) on the full rendered range. A SeC + MatAnyone2 run picked mid-clip starts
+on the pick frame and leaves the frames before it empty (owner answer 2026-10-28, Q3): the Matte node's info output
+names them (viewer.empty_frames), QC skips them and the payload passes them on so the viewer can say so.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 import torch
@@ -36,12 +39,14 @@ class C2CViewerResult:
             },
             "optional": {
                 "coarse": ("MASK", {"tooltip": "Mask + Matting's mask (the segmenter's coarse selection)."}),
+                "info": ("STRING", {"forceInput": True,
+                                    "tooltip": "Mask + Matting's info output (names the frames a run left empty)."}),
                 "max_side": ("INT", {"default": C.MAX_SIDE, "min": 64, "max": 2048, "step": 16}),
                 "max_frames": ("INT", {"default": 120, "min": 1, "max": 2000}),
             },
         }
 
-    def execute(self, image, alpha, start=0, coarse=None, max_side=C.MAX_SIDE, max_frames=120):
+    def execute(self, image, alpha, start=0, coarse=None, max_side=C.MAX_SIDE, max_frames=120, info=""):
         from ..mask_matting._stage_cache import fingerprint
         a = alpha if alpha.ndim == 3 else alpha.reshape(-1, *alpha.shape[-2:])
         n = int(a.shape[0])
@@ -56,8 +61,12 @@ class C2CViewerResult:
         if coarse is not None:
             c = coarse if coarse.ndim == 3 else coarse.reshape(-1, *coarse.shape[-2:])
             c = c[:n] if c.shape[0] >= n else c[:1]
+        empty = empty_frames(info, s, n)
+        q0 = (empty[1] - s) if empty else 0                  # QC on the rendered frames only
+        if q0 >= n:
+            q0 = 0
         with torch.no_grad():
-            report = qc.measure(plate, a, c)
+            report = qc.measure(plate[q0:], a[q0:], c[q0:] if c is not None and c.shape[0] == n else c)
         report["thresholds"] = qc.THRESHOLDS
         report["qc_side"] = qc.QC_SIDE
 
@@ -75,4 +84,14 @@ class C2CViewerResult:
                 C.save_alpha_png(C.resize_mask(a[i], (pw, ph)), os.path.join(d, an))
             frames.append({"index": s + i, "plate": C.file_ref(tag, pn), "alpha": C.file_ref(tag, an)})
         return C.ui({"kind": "result", "start": s, "count": n, "width": W, "height": H, "proxy": [pw, ph],
-                     "step": step, "frames": frames, "qc": report})
+                     "step": step, "frames": frames, "qc": report, "empty": list(empty) if empty else None})
+
+
+def empty_frames(info, start: int, count: int):
+    """[first, stop) plate frames the Matte run left empty, cut to this render; None when there are none."""
+    try:
+        e = (json.loads(info) if isinstance(info, str) and info.strip() else {}).get("viewer", {}).get("empty_frames")
+        a, b = max(int(e[0]), start), min(int(e[1]), start + count)
+    except Exception:  # noqa: BLE001 - no info, another node's info, or no empty frames
+        return None
+    return (a, b) if b > a else None
