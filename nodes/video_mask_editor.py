@@ -747,5 +747,8 @@ class VideoMaskEditorMEC:
         return (mask_t, info)
 
 
-NODE_CLASS_MAPPINGS = {"VideoMaskEditorMEC": VideoMaskEditorMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {"VideoMaskEditorMEC": "Video Mask Editor"}
+# L7.65 P01: no longer registered - this class is the engine of the Image Mask Editor's 'video' mode (its keyframe store and routes stay) (saved workflows
+# migrate on load, nodes/_legacy_replacements.json); C2C_LEGACY_MASK_EDITORS=1 registers it again
+# (nodes/image_mask_editor/legacy.py).
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

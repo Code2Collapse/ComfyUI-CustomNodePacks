@@ -744,10 +744,8 @@ class MECContextInpainter:
 # ╚══════════════════════════════════════════════════════════════════════╝
 # L7.65 P08: Context Inpainter is Inpaint Stitch Pro in stitch_mode "context blend" (saved workflows migrate, see
 # nodes/_legacy_replacements.json); the class stays as that mode's engine, and Face Fixer uses its helpers.
-NODE_CLASS_MAPPINGS = {
-    "MECAdvancedPaintCanvas": MECAdvancedPaintCanvas,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "MECAdvancedPaintCanvas": "Advanced Paint Canvas",
-}
+# L7.65 P01: no longer registered - this class is the engine of the Image Mask Editor's 'paint' mode, colour layer (saved workflows
+# migrate on load, nodes/_legacy_replacements.json); C2C_LEGACY_MASK_EDITORS=1 registers it again
+# (nodes/image_mask_editor/legacy.py).
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

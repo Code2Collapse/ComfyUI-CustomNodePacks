@@ -367,7 +367,8 @@ class ImageMaskEditorC2C:
             preview = mask.unsqueeze(-1).expand(*mask.shape, 3).clone()
         if outs.get("painted_image") is None:
             outs["painted_image"] = image if image is not None else preview
-        result = (mask, preview, f"mode={mode}; {info}", *(outs[k] for k in _EXTRA_OUTPUTS))
+        # info: the mode's own engine text, unchanged - a migrated node's info output is exactly the old node's
+        result = (mask, preview, info, *(outs[k] for k in _EXTRA_OUTPUTS))
         return {"ui": {"c2c_ime_frames": [], **(ui or {})}, "result": result}
 
     def _execute_impl(

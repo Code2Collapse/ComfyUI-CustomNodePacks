@@ -1,7 +1,7 @@
 [
  {
   "old_node_id": "MaskTransformXY",
-  "new_node_id": "MaskEditMEC",
+  "new_node_id": "MaskToolsMEC",
   "old_widget_ids": [
    "expand_x",
    "expand_y",
@@ -19,39 +19,39 @@
     "old_id": "mask"
    },
    {
-    "new_id": "expand_x",
+    "new_id": "transform_expand_x",
     "old_id": "expand_x"
    },
    {
-    "new_id": "expand_y",
+    "new_id": "transform_expand_y",
     "old_id": "expand_y"
    },
    {
-    "new_id": "blur_x",
+    "new_id": "transform_blur_x",
     "old_id": "blur_x"
    },
    {
-    "new_id": "blur_y",
+    "new_id": "transform_blur_y",
     "old_id": "blur_y"
    },
    {
-    "new_id": "offset_x",
+    "new_id": "transform_offset_x",
     "old_id": "offset_x"
    },
    {
-    "new_id": "offset_y",
+    "new_id": "transform_offset_y",
     "old_id": "offset_y"
    },
    {
-    "new_id": "feather",
+    "new_id": "transform_feather",
     "old_id": "feather"
    },
    {
-    "new_id": "threshold",
+    "new_id": "transform_threshold",
     "old_id": "threshold"
    },
    {
-    "new_id": "invert",
+    "new_id": "transform_invert",
     "old_id": "invert"
    },
    {
@@ -66,11 +66,11 @@
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: MaskEditMEC was removed too - this row goes straight to MaskToolsMEC (Mask Edit 'transform' is Mask Tools 'transform' (the same Mask Transform XY code).)."
  },
  {
   "old_node_id": "MaskDrawFrame",
-  "new_node_id": "MaskEditMEC",
+  "new_node_id": "ImageMaskEditorC2C",
   "old_widget_ids": [
    "width",
    "height",
@@ -83,48 +83,52 @@
   ],
   "input_mapping": [
    {
-    "new_id": "width",
-    "old_id": "width"
-   },
-   {
-    "new_id": "height",
-    "old_id": "height"
-   },
-   {
-    "new_id": "shape",
-    "old_id": "shape"
-   },
-   {
-    "new_id": "shape_params_json",
-    "old_id": "shape_params_json"
-   },
-   {
-    "new_id": "value",
-    "old_id": "value"
-   },
-   {
-    "new_id": "feather",
-    "old_id": "feather"
-   },
-   {
-    "new_id": "rotation",
-    "old_id": "rotation"
-   },
-   {
-    "new_id": "operation",
-    "old_id": "operation"
-   },
-   {
-    "new_id": "existing_mask",
-    "old_id": "existing_mask"
-   },
-   {
-    "new_id": "reference_image",
+    "new_id": "image",
     "old_id": "reference_image"
    },
    {
+    "new_id": "input_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "shape_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "shape_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "shape_kind",
+    "old_id": "shape"
+   },
+   {
+    "new_id": "shape_value",
+    "old_id": "value"
+   },
+   {
+    "new_id": "shape_rotation",
+    "old_id": "rotation"
+   },
+   {
+    "new_id": "shape_operation",
+    "old_id": "operation"
+   },
+   {
+    "new_id": "shape_json",
+    "old_id": "shape_params_json"
+   },
+   {
+    "new_id": "shape_feather",
+    "old_id": "feather"
+   },
+   {
     "new_id": "mode",
-    "set_value": "draw_advanced"
+    "set_value": "shape"
+   },
+   {
+    "new_id": "shape_input",
+    "set_value": "JSON"
    }
   ],
   "output_mapping": [
@@ -134,11 +138,11 @@
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: MaskEditMEC was removed too - this row goes straight to ImageMaskEditorC2C (Mask Edit 'draw_advanced' is the Image Mask Editor's 'shape' mode (shape_input JSON).)."
  },
  {
   "old_node_id": "DrawShapeMEC",
-  "new_node_id": "MaskEditMEC",
+  "new_node_id": "ImageMaskEditorC2C",
   "old_widget_ids": [
    "width",
    "height",
@@ -173,132 +177,136 @@
   ],
   "input_mapping": [
    {
-    "new_id": "width",
-    "old_id": "width"
-   },
-   {
-    "new_id": "height",
-    "old_id": "height"
-   },
-   {
-    "new_id": "shape",
-    "old_id": "shape"
-   },
-   {
-    "new_id": "cx",
-    "old_id": "cx"
-   },
-   {
-    "new_id": "cy",
-    "old_id": "cy"
-   },
-   {
-    "new_id": "radius",
-    "old_id": "radius"
-   },
-   {
-    "new_id": "size_w",
-    "old_id": "size_w"
-   },
-   {
-    "new_id": "size_h",
-    "old_id": "size_h"
-   },
-   {
-    "new_id": "rx",
-    "old_id": "rx"
-   },
-   {
-    "new_id": "ry",
-    "old_id": "ry"
-   },
-   {
-    "new_id": "top_left_x",
-    "old_id": "top_left_x"
-   },
-   {
-    "new_id": "top_left_y",
-    "old_id": "top_left_y"
-   },
-   {
-    "new_id": "x2",
-    "old_id": "x2"
-   },
-   {
-    "new_id": "y2",
-    "old_id": "y2"
-   },
-   {
-    "new_id": "thickness",
-    "old_id": "thickness"
-   },
-   {
-    "new_id": "outer_r",
-    "old_id": "outer_r"
-   },
-   {
-    "new_id": "inner_r",
-    "old_id": "inner_r"
-   },
-   {
-    "new_id": "num_points",
-    "old_id": "num_points"
-   },
-   {
-    "new_id": "corner_radius",
-    "old_id": "corner_radius"
-   },
-   {
-    "new_id": "cross_size",
-    "old_id": "cross_size"
-   },
-   {
-    "new_id": "arrow_length",
-    "old_id": "arrow_length"
-   },
-   {
-    "new_id": "head_length",
-    "old_id": "head_length"
-   },
-   {
-    "new_id": "head_width",
-    "old_id": "head_width"
-   },
-   {
-    "new_id": "points_json_shape",
-    "old_id": "points_json"
-   },
-   {
-    "new_id": "value",
-    "old_id": "value"
-   },
-   {
-    "new_id": "feather",
-    "old_id": "feather"
-   },
-   {
-    "new_id": "rotation",
-    "old_id": "rotation"
-   },
-   {
-    "new_id": "operation",
-    "old_id": "operation"
-   },
-   {
-    "new_id": "batch_size",
-    "old_id": "batch_size"
-   },
-   {
-    "new_id": "existing_mask",
-    "old_id": "existing_mask"
-   },
-   {
-    "new_id": "reference_image",
+    "new_id": "image",
     "old_id": "reference_image"
    },
    {
+    "new_id": "input_mask",
+    "old_id": "existing_mask"
+   },
+   {
+    "new_id": "shape_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "shape_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "shape_kind",
+    "old_id": "shape"
+   },
+   {
+    "new_id": "shape_cx",
+    "old_id": "cx"
+   },
+   {
+    "new_id": "shape_cy",
+    "old_id": "cy"
+   },
+   {
+    "new_id": "shape_radius",
+    "old_id": "radius"
+   },
+   {
+    "new_id": "shape_size_w",
+    "old_id": "size_w"
+   },
+   {
+    "new_id": "shape_size_h",
+    "old_id": "size_h"
+   },
+   {
+    "new_id": "shape_rx",
+    "old_id": "rx"
+   },
+   {
+    "new_id": "shape_ry",
+    "old_id": "ry"
+   },
+   {
+    "new_id": "shape_top_left_x",
+    "old_id": "top_left_x"
+   },
+   {
+    "new_id": "shape_top_left_y",
+    "old_id": "top_left_y"
+   },
+   {
+    "new_id": "shape_x2",
+    "old_id": "x2"
+   },
+   {
+    "new_id": "shape_y2",
+    "old_id": "y2"
+   },
+   {
+    "new_id": "shape_thickness",
+    "old_id": "thickness"
+   },
+   {
+    "new_id": "shape_outer_r",
+    "old_id": "outer_r"
+   },
+   {
+    "new_id": "shape_inner_r",
+    "old_id": "inner_r"
+   },
+   {
+    "new_id": "shape_num_points",
+    "old_id": "num_points"
+   },
+   {
+    "new_id": "shape_corner_radius",
+    "old_id": "corner_radius"
+   },
+   {
+    "new_id": "shape_cross_size",
+    "old_id": "cross_size"
+   },
+   {
+    "new_id": "shape_arrow_length",
+    "old_id": "arrow_length"
+   },
+   {
+    "new_id": "shape_head_length",
+    "old_id": "head_length"
+   },
+   {
+    "new_id": "shape_head_width",
+    "old_id": "head_width"
+   },
+   {
+    "new_id": "shape_points_json",
+    "old_id": "points_json"
+   },
+   {
+    "new_id": "shape_value",
+    "old_id": "value"
+   },
+   {
+    "new_id": "shape_rotation",
+    "old_id": "rotation"
+   },
+   {
+    "new_id": "shape_operation",
+    "old_id": "operation"
+   },
+   {
+    "new_id": "shape_batch_size",
+    "old_id": "batch_size"
+   },
+   {
+    "new_id": "shape_feather",
+    "old_id": "feather"
+   },
+   {
     "new_id": "mode",
-    "set_value": "draw_shape"
+    "set_value": "shape"
+   },
+   {
+    "new_id": "shape_input",
+    "set_value": "parameters"
    }
   ],
   "output_mapping": [
@@ -310,11 +318,11 @@
   "dropped": [
    "coords_json"
   ],
-  "note": "coords_json (per-frame positions from a Points editor) has no MaskEditMEC input; it is dropped"
+  "note": "coords_json (per-frame positions from a Points editor) has no MaskEditMEC input; it is dropped L7.65 P01: MaskEditMEC was removed too - this row goes straight to ImageMaskEditorC2C (Mask Edit 'draw_shape' is the Image Mask Editor's 'shape' mode (shape_input parameters).)."
  },
  {
   "old_node_id": "PointsMaskEditor",
-  "new_node_id": "MaskEditMEC",
+  "new_node_id": "ImageMaskEditorC2C",
   "old_widget_ids": [
    "width",
    "height",
@@ -325,40 +333,40 @@
   ],
   "input_mapping": [
    {
-    "new_id": "width",
-    "old_id": "width"
-   },
-   {
-    "new_id": "height",
-    "old_id": "height"
-   },
-   {
-    "new_id": "editor_data",
-    "old_id": "editor_data"
-   },
-   {
-    "new_id": "default_radius",
-    "old_id": "default_radius"
-   },
-   {
-    "new_id": "softness",
-    "old_id": "softness"
-   },
-   {
-    "new_id": "normalize",
-    "old_id": "normalize"
-   },
-   {
-    "new_id": "reference_image",
+    "new_id": "image",
     "old_id": "reference_image"
    },
    {
-    "new_id": "existing_mask",
+    "new_id": "input_mask",
     "old_id": "existing_mask"
    },
    {
+    "new_id": "points_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "points_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "points_editor_data",
+    "old_id": "editor_data"
+   },
+   {
+    "new_id": "points_default_radius",
+    "old_id": "default_radius"
+   },
+   {
+    "new_id": "points_softness",
+    "old_id": "softness"
+   },
+   {
+    "new_id": "points_normalize",
+    "old_id": "normalize"
+   },
+   {
     "new_id": "mode",
-    "set_value": "points_bbox"
+    "set_value": "points + box"
    }
   ],
   "output_mapping": [
@@ -368,39 +376,39 @@
    },
    {
     "old_idx": 1,
-    "new_idx": 1
-   },
-   {
-    "old_idx": 2,
-    "new_idx": 2
-   },
-   {
-    "old_idx": 3,
     "new_idx": 3
    },
    {
-    "old_idx": 4,
+    "old_idx": 2,
     "new_idx": 4
    },
    {
-    "old_idx": 5,
+    "old_idx": 3,
     "new_idx": 5
    },
    {
-    "old_idx": 6,
+    "old_idx": 4,
     "new_idx": 6
    },
    {
-    "old_idx": 7,
+    "old_idx": 5,
     "new_idx": 7
+   },
+   {
+    "old_idx": 6,
+    "new_idx": 8
+   },
+   {
+    "old_idx": 7,
+    "new_idx": 9
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: MaskEditMEC was removed too - this row goes straight to ImageMaskEditorC2C (Mask Edit 'points_bbox' is the Image Mask Editor's 'points + box' mode.)."
  },
  {
   "old_node_id": "BBoxSmooth",
-  "new_node_id": "MaskEditMEC",
+  "new_node_id": "MaskTrackerMEC",
   "old_widget_ids": [
    "bboxes_json",
    "smoothing_radius",
@@ -409,19 +417,19 @@
   ],
   "input_mapping": [
    {
-    "new_id": "bboxes_json",
+    "new_id": "bbox_json",
     "old_id": "bboxes_json"
    },
    {
-    "new_id": "smoothing_radius",
+    "new_id": "bbox_radius",
     "old_id": "smoothing_radius"
    },
    {
-    "new_id": "smoothing_method",
+    "new_id": "bbox_method",
     "old_id": "method"
    },
    {
-    "new_id": "alpha",
+    "new_id": "bbox_alpha",
     "old_id": "alpha"
    },
    {
@@ -432,7 +440,7 @@
   "output_mapping": [
    {
     "old_idx": 0,
-    "new_idx": 6
+    "new_idx": 3
    },
    {
     "old_idx": 1,
@@ -440,11 +448,11 @@
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: MaskEditMEC was removed too - this row goes straight to MaskTrackerMEC (Mask Edit 'bbox_smooth' is Mask Track 'bbox_smooth'; bbox_json -> info_json.)."
  },
  {
   "old_node_id": "SplineMaskEditorMEC",
-  "new_node_id": "SplineMaskMEC",
+  "new_node_id": "ImageMaskEditorC2C",
   "old_widget_ids": [
    "spline_data",
    "spline_type",
@@ -473,48 +481,52 @@
     "old_id": "spline_type"
    },
    {
-    "new_id": "closed",
+    "new_id": "spline_closed",
     "old_id": "closed"
    },
    {
-    "new_id": "smoothing",
-    "old_id": "smoothing"
-   },
-   {
-    "new_id": "samples_per_segment",
+    "new_id": "spline_samples_per_segment",
     "old_id": "samples_per_segment"
    },
    {
-    "new_id": "centripetal_alpha",
-    "old_id": "centripetal_alpha"
-   },
-   {
-    "new_id": "feather_radius",
+    "new_id": "spline_feather_radius",
     "old_id": "feather_radius"
    },
    {
-    "new_id": "invert",
+    "new_id": "spline_invert",
     "old_id": "invert"
    },
    {
-    "new_id": "width",
+    "new_id": "spline_smoothing",
+    "old_id": "smoothing"
+   },
+   {
+    "new_id": "spline_centripetal_alpha",
+    "old_id": "centripetal_alpha"
+   },
+   {
+    "new_id": "spline_width",
     "old_id": "width"
    },
    {
-    "new_id": "height",
+    "new_id": "spline_height",
     "old_id": "height"
    },
    {
-    "new_id": "mask_color",
+    "new_id": "spline_mask_color",
     "old_id": "mask_color"
    },
    {
-    "new_id": "mask_opacity",
+    "new_id": "spline_mask_opacity",
     "old_id": "mask_opacity"
    },
    {
     "new_id": "mode",
-    "set_value": "edit"
+    "set_value": "spline"
+   },
+   {
+    "new_id": "spline_fill",
+    "set_value": "mask"
    }
   ],
   "output_mapping": [
@@ -524,27 +536,27 @@
    },
    {
     "old_idx": 1,
-    "new_idx": 1
-   },
-   {
-    "old_idx": 2,
-    "new_idx": 2
-   },
-   {
-    "old_idx": 3,
     "new_idx": 3
    },
    {
+    "old_idx": 2,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 8
+   },
+   {
     "old_idx": 4,
-    "new_idx": 4
+    "new_idx": 9
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: SplineMaskMEC was removed too - this row goes straight to ImageMaskEditorC2C (mode edit)."
  },
  {
   "old_node_id": "SplineMaskTrackerMEC",
-  "new_node_id": "SplineMaskMEC",
+  "new_node_id": "MaskTrackerMEC",
   "old_widget_ids": [
    "keyframes_json",
    "closed",
@@ -556,7 +568,7 @@
   ],
   "input_mapping": [
    {
-    "new_id": "image",
+    "new_id": "video",
     "old_id": "image"
    },
    {
@@ -564,32 +576,32 @@
     "old_id": "keyframes_json"
    },
    {
-    "new_id": "closed",
+    "new_id": "spline_closed",
     "old_id": "closed"
    },
    {
-    "new_id": "samples_per_segment",
+    "new_id": "spline_samples_per_segment",
     "old_id": "samples_per_segment"
    },
    {
-    "new_id": "tracking_weight",
+    "new_id": "spline_tracking_weight",
     "old_id": "tracking_weight"
    },
    {
-    "new_id": "klt_window",
+    "new_id": "spline_klt_window",
     "old_id": "klt_window"
    },
    {
-    "new_id": "feather_radius",
+    "new_id": "spline_feather_radius",
     "old_id": "feather_radius"
    },
    {
-    "new_id": "stroke_width",
+    "new_id": "spline_stroke_width",
     "old_id": "stroke_width"
    },
    {
     "new_id": "mode",
-    "set_value": "track"
+    "set_value": "spline_track"
    }
   ],
   "output_mapping": [
@@ -603,11 +615,11 @@
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: SplineMaskMEC was removed too - this row goes straight to MaskTrackerMEC (Spline Mask 'track' is Mask Track 'spline_track' (card P07); its always-empty coords_json and bbox outputs have no place there.)."
  },
  {
   "old_node_id": "SplinePathFlowMaskMEC",
-  "new_node_id": "SplineMaskMEC",
+  "new_node_id": "ImageMaskEditorC2C",
   "old_widget_ids": [
    "spline_data",
    "pattern",
@@ -635,100 +647,104 @@
   ],
   "input_mapping": [
    {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
     "new_id": "spline_data",
     "old_id": "spline_data"
-   },
-   {
-    "new_id": "pattern",
-    "old_id": "pattern"
-   },
-   {
-    "new_id": "flow_direction",
-    "old_id": "flow_direction"
-   },
-   {
-    "new_id": "width",
-    "old_id": "width"
-   },
-   {
-    "new_id": "height",
-    "old_id": "height"
-   },
-   {
-    "new_id": "thickness",
-    "old_id": "thickness"
-   },
-   {
-    "new_id": "amplitude",
-    "old_id": "amplitude"
-   },
-   {
-    "new_id": "frequency",
-    "old_id": "frequency"
-   },
-   {
-    "new_id": "turbulence",
-    "old_id": "turbulence"
-   },
-   {
-    "new_id": "turbulence_scale",
-    "old_id": "turbulence_scale"
-   },
-   {
-    "new_id": "edge_softness",
-    "old_id": "edge_softness"
-   },
-   {
-    "new_id": "taper_start",
-    "old_id": "taper_start"
-   },
-   {
-    "new_id": "taper_end",
-    "old_id": "taper_end"
-   },
-   {
-    "new_id": "frames",
-    "old_id": "frames"
-   },
-   {
-    "new_id": "animation_speed",
-    "old_id": "animation_speed"
    },
    {
     "new_id": "spline_type",
     "old_id": "spline_type"
    },
    {
-    "new_id": "samples_per_segment",
-    "old_id": "samples_per_segment"
-   },
-   {
-    "new_id": "closed",
+    "new_id": "spline_closed",
     "old_id": "closed"
    },
    {
-    "new_id": "invert",
+    "new_id": "spline_samples_per_segment",
+    "old_id": "samples_per_segment"
+   },
+   {
+    "new_id": "spline_invert",
     "old_id": "invert"
    },
    {
-    "new_id": "seed",
-    "old_id": "seed"
+    "new_id": "spline_width",
+    "old_id": "width"
    },
    {
-    "new_id": "mod_decay",
+    "new_id": "spline_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "spline_flow_pattern",
+    "old_id": "pattern"
+   },
+   {
+    "new_id": "spline_flow_thickness",
+    "old_id": "thickness"
+   },
+   {
+    "new_id": "spline_flow_amplitude",
+    "old_id": "amplitude"
+   },
+   {
+    "new_id": "spline_flow_frequency",
+    "old_id": "frequency"
+   },
+   {
+    "new_id": "spline_flow_turbulence",
+    "old_id": "turbulence"
+   },
+   {
+    "new_id": "spline_flow_turbulence_scale",
+    "old_id": "turbulence_scale"
+   },
+   {
+    "new_id": "spline_flow_edge_softness",
+    "old_id": "edge_softness"
+   },
+   {
+    "new_id": "spline_flow_taper_start",
+    "old_id": "taper_start"
+   },
+   {
+    "new_id": "spline_flow_taper_end",
+    "old_id": "taper_end"
+   },
+   {
+    "new_id": "spline_flow_frames",
+    "old_id": "frames"
+   },
+   {
+    "new_id": "spline_flow_animation_speed",
+    "old_id": "animation_speed"
+   },
+   {
+    "new_id": "spline_flow_flow_direction",
+    "old_id": "flow_direction"
+   },
+   {
+    "new_id": "spline_flow_mod_decay",
     "old_id": "mod_decay"
    },
    {
-    "new_id": "use_embedded_editor",
+    "new_id": "spline_flow_seed",
+    "old_id": "seed"
+   },
+   {
+    "new_id": "spline_flow_use_embedded_editor",
     "old_id": "use_embedded_editor"
    },
    {
-    "new_id": "image",
-    "old_id": "image"
+    "new_id": "mode",
+    "set_value": "spline"
    },
    {
-    "new_id": "mode",
-    "set_value": "flow_path"
+    "new_id": "spline_fill",
+    "set_value": "flow pattern"
    }
   ],
   "output_mapping": [
@@ -738,7 +754,7 @@
    }
   ],
   "dropped": [],
-  "note": ""
+  "note": "L7.65 P01: SplineMaskMEC was removed too - this row goes straight to ImageMaskEditorC2C (Spline Mask 'flow_path' is the Image Mask Editor's 'spline' mode with spline_fill 'flow pattern'; the pattern's parameters JSON -> info.)."
  },
  {
   "old_node_id": "MotionMaskTrackerMEC",
@@ -4493,5 +4509,1073 @@
    "face_negative_prompt"
   ],
   "note": "L7.65 P08 (owner-approved merge, card P08): Inpaint Stitch Pro in stitch_mode 'context blend' - the same Context Inpainter code (every frame of a batch, since L9.39); color_reference -> context_color_reference; debug_mask -> blend_mask_used. face_positive_prompt / face_negative_prompt were only written to the log and are dropped."
+ },
+ {
+  "old_node_id": "MECAdvancedPaintCanvas",
+  "new_node_id": "ImageMaskEditorC2C",
+  "old_widget_ids": [
+   "canvas_width",
+   "canvas_height",
+   "brush_type",
+   "brush_color",
+   "brush_opacity",
+   "brush_hardness",
+   "brush_size",
+   "mask_hardness",
+   "mask_expansion",
+   "mask_blur_radius",
+   "mask_blur_strength",
+   "canvas_data"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "reference_image"
+   },
+   {
+    "new_id": "canvas_width",
+    "old_id": "canvas_width"
+   },
+   {
+    "new_id": "canvas_height",
+    "old_id": "canvas_height"
+   },
+   {
+    "new_id": "canvas_brush_type",
+    "old_id": "brush_type"
+   },
+   {
+    "new_id": "canvas_brush_color",
+    "old_id": "brush_color"
+   },
+   {
+    "new_id": "canvas_brush_opacity",
+    "old_id": "brush_opacity"
+   },
+   {
+    "new_id": "canvas_brush_hardness",
+    "old_id": "brush_hardness"
+   },
+   {
+    "new_id": "canvas_brush_size",
+    "old_id": "brush_size"
+   },
+   {
+    "new_id": "canvas_mask_hardness",
+    "old_id": "mask_hardness"
+   },
+   {
+    "new_id": "canvas_mask_expansion",
+    "old_id": "mask_expansion"
+   },
+   {
+    "new_id": "canvas_mask_blur_radius",
+    "old_id": "mask_blur_radius"
+   },
+   {
+    "new_id": "canvas_mask_blur_strength",
+    "old_id": "mask_blur_strength"
+   },
+   {
+    "new_id": "canvas_data",
+    "old_id": "canvas_data"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "paint"
+   },
+   {
+    "new_id": "canvas_layer",
+    "set_value": "colour"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 11
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P01 (owner-approved card, D7.65c): Image Mask Editor in mode 'paint', canvas_layer 'colour' - the same Paint Canvas code; painted_image and processed_mask -> painted_image and mask."
+ },
+ {
+  "old_node_id": "VectorRotoMEC",
+  "new_node_id": "ImageMaskEditorC2C",
+  "old_widget_ids": [
+   "roto_json",
+   "frame_count",
+   "width",
+   "height",
+   "samples_per_seg",
+   "feather_px",
+   "roto_frame"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "roto_json",
+    "old_id": "roto_json"
+   },
+   {
+    "new_id": "roto_frame_count",
+    "old_id": "frame_count"
+   },
+   {
+    "new_id": "roto_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "roto_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "roto_samples_per_seg",
+    "old_id": "samples_per_seg"
+   },
+   {
+    "new_id": "roto_feather_px",
+    "old_id": "feather_px"
+   },
+   {
+    "new_id": "roto_frame",
+    "old_id": "roto_frame"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "roto"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P01 (owner-approved card, D7.65c): Image Mask Editor in mode 'roto' - the same Vector Roto code; info -> info."
+ },
+ {
+  "old_node_id": "VideoMaskEditorMEC",
+  "new_node_id": "ImageMaskEditorC2C",
+  "old_widget_ids": [
+   "session_id",
+   "tween_mode",
+   "feather",
+   "threshold",
+   "outside_keys"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "input_mask",
+    "old_id": "input_mask"
+   },
+   {
+    "new_id": "video_session_id",
+    "old_id": "session_id"
+   },
+   {
+    "new_id": "video_tween_mode",
+    "old_id": "tween_mode"
+   },
+   {
+    "new_id": "video_feather",
+    "old_id": "feather"
+   },
+   {
+    "new_id": "video_threshold",
+    "old_id": "threshold"
+   },
+   {
+    "new_id": "video_outside_keys",
+    "old_id": "outside_keys"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "video"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P01 (owner-approved card, D7.65c): Image Mask Editor in mode 'video' - the same Video Mask Editor code and keyframe store; info -> info."
+ },
+ {
+  "old_node_id": "MaskEditMEC",
+  "old_widget_ids": [
+   "mode",
+   "expand_x",
+   "expand_y",
+   "blur_x",
+   "blur_y",
+   "offset_x",
+   "offset_y",
+   "feather",
+   "threshold",
+   "invert",
+   "width",
+   "height",
+   "shape",
+   "cx",
+   "cy",
+   "radius",
+   "size_w",
+   "size_h",
+   "rx",
+   "ry",
+   "top_left_x",
+   "top_left_y",
+   "x2",
+   "y2",
+   "thickness",
+   "outer_r",
+   "inner_r",
+   "num_points",
+   "corner_radius",
+   "cross_size",
+   "arrow_length",
+   "head_length",
+   "head_width",
+   "points_json_shape",
+   "value",
+   "rotation",
+   "operation",
+   "batch_size",
+   "shape_params_json",
+   "editor_data",
+   "default_radius",
+   "softness",
+   "normalize",
+   "bboxes_json",
+   "smoothing_radius",
+   "smoothing_method",
+   "alpha"
+  ],
+  "new_node_id": "MaskToolsMEC",
+  "input_mapping": [
+   {
+    "new_id": "mask",
+    "old_id": "mask"
+   },
+   {
+    "new_id": "transform_expand_x",
+    "old_id": "expand_x"
+   },
+   {
+    "new_id": "transform_expand_y",
+    "old_id": "expand_y"
+   },
+   {
+    "new_id": "transform_blur_x",
+    "old_id": "blur_x"
+   },
+   {
+    "new_id": "transform_blur_y",
+    "old_id": "blur_y"
+   },
+   {
+    "new_id": "transform_offset_x",
+    "old_id": "offset_x"
+   },
+   {
+    "new_id": "transform_offset_y",
+    "old_id": "offset_y"
+   },
+   {
+    "new_id": "transform_feather",
+    "old_id": "feather"
+   },
+   {
+    "new_id": "transform_threshold",
+    "old_id": "threshold"
+   },
+   {
+    "new_id": "transform_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "transform"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "c2c_note": "Mask Edit 'transform' is Mask Tools 'transform' (the same Mask Transform XY code).",
+  "dropped": [],
+  "note": "L7.65 P01 (owner-approved card, D7.65c): Mask Edit was removed; each saved mode goes where the owner put it: transform -> Mask Tools, draw_shape / draw_advanced -> Image Mask Editor 'shape', points_bbox -> Image Mask Editor 'points + box', bbox_smooth -> Mask Track. Inputs the chosen mode does not read are not carried.",
+  "c2c_by_value": {
+   "widget": "mode",
+   "cases": {
+    "draw_shape": {
+     "new_node_id": "ImageMaskEditorC2C",
+     "input_mapping": [
+      {
+       "new_id": "image",
+       "old_id": "reference_image"
+      },
+      {
+       "new_id": "input_mask",
+       "old_id": "existing_mask"
+      },
+      {
+       "new_id": "shape_width",
+       "old_id": "width"
+      },
+      {
+       "new_id": "shape_height",
+       "old_id": "height"
+      },
+      {
+       "new_id": "shape_kind",
+       "old_id": "shape"
+      },
+      {
+       "new_id": "shape_cx",
+       "old_id": "cx"
+      },
+      {
+       "new_id": "shape_cy",
+       "old_id": "cy"
+      },
+      {
+       "new_id": "shape_radius",
+       "old_id": "radius"
+      },
+      {
+       "new_id": "shape_size_w",
+       "old_id": "size_w"
+      },
+      {
+       "new_id": "shape_size_h",
+       "old_id": "size_h"
+      },
+      {
+       "new_id": "shape_rx",
+       "old_id": "rx"
+      },
+      {
+       "new_id": "shape_ry",
+       "old_id": "ry"
+      },
+      {
+       "new_id": "shape_top_left_x",
+       "old_id": "top_left_x"
+      },
+      {
+       "new_id": "shape_top_left_y",
+       "old_id": "top_left_y"
+      },
+      {
+       "new_id": "shape_x2",
+       "old_id": "x2"
+      },
+      {
+       "new_id": "shape_y2",
+       "old_id": "y2"
+      },
+      {
+       "new_id": "shape_thickness",
+       "old_id": "thickness"
+      },
+      {
+       "new_id": "shape_outer_r",
+       "old_id": "outer_r"
+      },
+      {
+       "new_id": "shape_inner_r",
+       "old_id": "inner_r"
+      },
+      {
+       "new_id": "shape_num_points",
+       "old_id": "num_points"
+      },
+      {
+       "new_id": "shape_corner_radius",
+       "old_id": "corner_radius"
+      },
+      {
+       "new_id": "shape_cross_size",
+       "old_id": "cross_size"
+      },
+      {
+       "new_id": "shape_arrow_length",
+       "old_id": "arrow_length"
+      },
+      {
+       "new_id": "shape_head_length",
+       "old_id": "head_length"
+      },
+      {
+       "new_id": "shape_head_width",
+       "old_id": "head_width"
+      },
+      {
+       "new_id": "shape_points_json",
+       "old_id": "points_json_shape"
+      },
+      {
+       "new_id": "shape_value",
+       "old_id": "value"
+      },
+      {
+       "new_id": "shape_rotation",
+       "old_id": "rotation"
+      },
+      {
+       "new_id": "shape_operation",
+       "old_id": "operation"
+      },
+      {
+       "new_id": "shape_batch_size",
+       "old_id": "batch_size"
+      },
+      {
+       "new_id": "shape_json",
+       "old_id": "shape_params_json"
+      },
+      {
+       "new_id": "shape_feather",
+       "old_id": "feather"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "shape"
+      },
+      {
+       "new_id": "shape_input",
+       "set_value": "parameters"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      }
+     ],
+     "c2c_note": "Mask Edit 'draw_shape' is the Image Mask Editor's 'shape' mode (shape_input parameters).",
+     "dropped": []
+    },
+    "draw_advanced": {
+     "new_node_id": "ImageMaskEditorC2C",
+     "input_mapping": [
+      {
+       "new_id": "image",
+       "old_id": "reference_image"
+      },
+      {
+       "new_id": "input_mask",
+       "old_id": "existing_mask"
+      },
+      {
+       "new_id": "shape_width",
+       "old_id": "width"
+      },
+      {
+       "new_id": "shape_height",
+       "old_id": "height"
+      },
+      {
+       "new_id": "shape_kind",
+       "old_id": "shape"
+      },
+      {
+       "new_id": "shape_cx",
+       "old_id": "cx"
+      },
+      {
+       "new_id": "shape_cy",
+       "old_id": "cy"
+      },
+      {
+       "new_id": "shape_radius",
+       "old_id": "radius"
+      },
+      {
+       "new_id": "shape_size_w",
+       "old_id": "size_w"
+      },
+      {
+       "new_id": "shape_size_h",
+       "old_id": "size_h"
+      },
+      {
+       "new_id": "shape_rx",
+       "old_id": "rx"
+      },
+      {
+       "new_id": "shape_ry",
+       "old_id": "ry"
+      },
+      {
+       "new_id": "shape_top_left_x",
+       "old_id": "top_left_x"
+      },
+      {
+       "new_id": "shape_top_left_y",
+       "old_id": "top_left_y"
+      },
+      {
+       "new_id": "shape_x2",
+       "old_id": "x2"
+      },
+      {
+       "new_id": "shape_y2",
+       "old_id": "y2"
+      },
+      {
+       "new_id": "shape_thickness",
+       "old_id": "thickness"
+      },
+      {
+       "new_id": "shape_outer_r",
+       "old_id": "outer_r"
+      },
+      {
+       "new_id": "shape_inner_r",
+       "old_id": "inner_r"
+      },
+      {
+       "new_id": "shape_num_points",
+       "old_id": "num_points"
+      },
+      {
+       "new_id": "shape_corner_radius",
+       "old_id": "corner_radius"
+      },
+      {
+       "new_id": "shape_cross_size",
+       "old_id": "cross_size"
+      },
+      {
+       "new_id": "shape_arrow_length",
+       "old_id": "arrow_length"
+      },
+      {
+       "new_id": "shape_head_length",
+       "old_id": "head_length"
+      },
+      {
+       "new_id": "shape_head_width",
+       "old_id": "head_width"
+      },
+      {
+       "new_id": "shape_points_json",
+       "old_id": "points_json_shape"
+      },
+      {
+       "new_id": "shape_value",
+       "old_id": "value"
+      },
+      {
+       "new_id": "shape_rotation",
+       "old_id": "rotation"
+      },
+      {
+       "new_id": "shape_operation",
+       "old_id": "operation"
+      },
+      {
+       "new_id": "shape_batch_size",
+       "old_id": "batch_size"
+      },
+      {
+       "new_id": "shape_json",
+       "old_id": "shape_params_json"
+      },
+      {
+       "new_id": "shape_feather",
+       "old_id": "feather"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "shape"
+      },
+      {
+       "new_id": "shape_input",
+       "set_value": "JSON"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      }
+     ],
+     "c2c_note": "Mask Edit 'draw_advanced' is the Image Mask Editor's 'shape' mode (shape_input JSON).",
+     "dropped": []
+    },
+    "points_bbox": {
+     "new_node_id": "ImageMaskEditorC2C",
+     "input_mapping": [
+      {
+       "new_id": "image",
+       "old_id": "reference_image"
+      },
+      {
+       "new_id": "input_mask",
+       "old_id": "existing_mask"
+      },
+      {
+       "new_id": "points_width",
+       "old_id": "width"
+      },
+      {
+       "new_id": "points_height",
+       "old_id": "height"
+      },
+      {
+       "new_id": "points_editor_data",
+       "old_id": "editor_data"
+      },
+      {
+       "new_id": "points_default_radius",
+       "old_id": "default_radius"
+      },
+      {
+       "new_id": "points_softness",
+       "old_id": "softness"
+      },
+      {
+       "new_id": "points_normalize",
+       "old_id": "normalize"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "points + box"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 1,
+       "new_idx": 3
+      },
+      {
+       "old_idx": 2,
+       "new_idx": 4
+      },
+      {
+       "old_idx": 3,
+       "new_idx": 5
+      },
+      {
+       "old_idx": 4,
+       "new_idx": 6
+      },
+      {
+       "old_idx": 5,
+       "new_idx": 7
+      },
+      {
+       "old_idx": 6,
+       "new_idx": 8
+      },
+      {
+       "old_idx": 7,
+       "new_idx": 9
+      },
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      }
+     ],
+     "c2c_note": "Mask Edit 'points_bbox' is the Image Mask Editor's 'points + box' mode.",
+     "dropped": []
+    },
+    "bbox_smooth": {
+     "new_node_id": "MaskTrackerMEC",
+     "input_mapping": [
+      {
+       "new_id": "bbox_json",
+       "old_id": "bboxes_json"
+      },
+      {
+       "new_id": "bbox_radius",
+       "old_id": "smoothing_radius"
+      },
+      {
+       "new_id": "bbox_method",
+       "old_id": "smoothing_method"
+      },
+      {
+       "new_id": "bbox_alpha",
+       "old_id": "alpha"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "bbox_smooth"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      },
+      {
+       "old_idx": 3,
+       "new_idx": 6
+      },
+      {
+       "old_idx": 6,
+       "new_idx": 3
+      },
+      {
+       "old_idx": 7,
+       "new_idx": 7
+      }
+     ],
+     "c2c_note": "Mask Edit 'bbox_smooth' is Mask Track 'bbox_smooth'; bbox_json -> info_json.",
+     "dropped": []
+    }
+   }
+  }
+ },
+ {
+  "old_node_id": "SplineMaskMEC",
+  "old_widget_ids": [
+   "mode",
+   "spline_data",
+   "spline_type",
+   "closed",
+   "samples_per_segment",
+   "feather_radius",
+   "invert",
+   "smoothing",
+   "centripetal_alpha",
+   "width",
+   "height",
+   "mask_color",
+   "mask_opacity",
+   "tracking_weight",
+   "klt_window",
+   "stroke_width",
+   "pattern",
+   "thickness",
+   "amplitude",
+   "frequency",
+   "turbulence",
+   "turbulence_scale",
+   "edge_softness",
+   "taper_start",
+   "taper_end",
+   "frames",
+   "animation_speed",
+   "flow_direction",
+   "mod_decay",
+   "seed",
+   "control_after_generate",
+   "use_embedded_editor"
+  ],
+  "new_node_id": "ImageMaskEditorC2C",
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "spline_data",
+    "old_id": "spline_data"
+   },
+   {
+    "new_id": "spline_type",
+    "old_id": "spline_type"
+   },
+   {
+    "new_id": "spline_closed",
+    "old_id": "closed"
+   },
+   {
+    "new_id": "spline_samples_per_segment",
+    "old_id": "samples_per_segment"
+   },
+   {
+    "new_id": "spline_feather_radius",
+    "old_id": "feather_radius"
+   },
+   {
+    "new_id": "spline_invert",
+    "old_id": "invert"
+   },
+   {
+    "new_id": "spline_smoothing",
+    "old_id": "smoothing"
+   },
+   {
+    "new_id": "spline_centripetal_alpha",
+    "old_id": "centripetal_alpha"
+   },
+   {
+    "new_id": "spline_width",
+    "old_id": "width"
+   },
+   {
+    "new_id": "spline_height",
+    "old_id": "height"
+   },
+   {
+    "new_id": "spline_mask_color",
+    "old_id": "mask_color"
+   },
+   {
+    "new_id": "spline_mask_opacity",
+    "old_id": "mask_opacity"
+   },
+   {
+    "new_id": "mode",
+    "set_value": "spline"
+   },
+   {
+    "new_id": "spline_fill",
+    "set_value": "mask"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 10
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 8
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 9
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P01 (owner-approved card, D7.65c): Spline Mask was removed: edit and flow_path -> Image Mask Editor 'spline' (spline_fill mask / flow pattern), track -> Mask Track 'spline_track'.",
+  "c2c_by_value": {
+   "widget": "mode",
+   "cases": {
+    "flow_path": {
+     "new_node_id": "ImageMaskEditorC2C",
+     "input_mapping": [
+      {
+       "new_id": "image",
+       "old_id": "image"
+      },
+      {
+       "new_id": "spline_data",
+       "old_id": "spline_data"
+      },
+      {
+       "new_id": "spline_type",
+       "old_id": "spline_type"
+      },
+      {
+       "new_id": "spline_closed",
+       "old_id": "closed"
+      },
+      {
+       "new_id": "spline_samples_per_segment",
+       "old_id": "samples_per_segment"
+      },
+      {
+       "new_id": "spline_feather_radius",
+       "old_id": "feather_radius"
+      },
+      {
+       "new_id": "spline_invert",
+       "old_id": "invert"
+      },
+      {
+       "new_id": "spline_smoothing",
+       "old_id": "smoothing"
+      },
+      {
+       "new_id": "spline_centripetal_alpha",
+       "old_id": "centripetal_alpha"
+      },
+      {
+       "new_id": "spline_width",
+       "old_id": "width"
+      },
+      {
+       "new_id": "spline_height",
+       "old_id": "height"
+      },
+      {
+       "new_id": "spline_mask_color",
+       "old_id": "mask_color"
+      },
+      {
+       "new_id": "spline_mask_opacity",
+       "old_id": "mask_opacity"
+      },
+      {
+       "new_id": "spline_flow_pattern",
+       "old_id": "pattern"
+      },
+      {
+       "new_id": "spline_flow_thickness",
+       "old_id": "thickness"
+      },
+      {
+       "new_id": "spline_flow_amplitude",
+       "old_id": "amplitude"
+      },
+      {
+       "new_id": "spline_flow_frequency",
+       "old_id": "frequency"
+      },
+      {
+       "new_id": "spline_flow_turbulence",
+       "old_id": "turbulence"
+      },
+      {
+       "new_id": "spline_flow_turbulence_scale",
+       "old_id": "turbulence_scale"
+      },
+      {
+       "new_id": "spline_flow_edge_softness",
+       "old_id": "edge_softness"
+      },
+      {
+       "new_id": "spline_flow_taper_start",
+       "old_id": "taper_start"
+      },
+      {
+       "new_id": "spline_flow_taper_end",
+       "old_id": "taper_end"
+      },
+      {
+       "new_id": "spline_flow_frames",
+       "old_id": "frames"
+      },
+      {
+       "new_id": "spline_flow_animation_speed",
+       "old_id": "animation_speed"
+      },
+      {
+       "new_id": "spline_flow_flow_direction",
+       "old_id": "flow_direction"
+      },
+      {
+       "new_id": "spline_flow_mod_decay",
+       "old_id": "mod_decay"
+      },
+      {
+       "new_id": "spline_flow_seed",
+       "old_id": "seed"
+      },
+      {
+       "new_id": "spline_flow_use_embedded_editor",
+       "old_id": "use_embedded_editor"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "spline"
+      },
+      {
+       "new_id": "spline_fill",
+       "set_value": "flow pattern"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      },
+      {
+       "old_idx": 2,
+       "new_idx": 10
+      },
+      {
+       "old_idx": 3,
+       "new_idx": 2
+      }
+     ],
+     "c2c_note": "Spline Mask 'flow_path' is the Image Mask Editor's 'spline' mode with spline_fill 'flow pattern'; the pattern's parameters JSON -> info.",
+     "dropped": []
+    },
+    "track": {
+     "new_node_id": "MaskTrackerMEC",
+     "input_mapping": [
+      {
+       "new_id": "video",
+       "old_id": "image"
+      },
+      {
+       "new_id": "spline_data",
+       "old_id": "spline_data"
+      },
+      {
+       "new_id": "spline_closed",
+       "old_id": "closed"
+      },
+      {
+       "new_id": "spline_samples_per_segment",
+       "old_id": "samples_per_segment"
+      },
+      {
+       "new_id": "spline_tracking_weight",
+       "old_id": "tracking_weight"
+      },
+      {
+       "new_id": "spline_klt_window",
+       "old_id": "klt_window"
+      },
+      {
+       "new_id": "spline_feather_radius",
+       "old_id": "feather_radius"
+      },
+      {
+       "new_id": "spline_stroke_width",
+       "old_id": "stroke_width"
+      },
+      {
+       "new_id": "mode",
+       "set_value": "spline_track"
+      }
+     ],
+     "output_mapping": [
+      {
+       "old_idx": 0,
+       "new_idx": 0
+      },
+      {
+       "old_idx": 2,
+       "new_idx": 8
+      },
+      {
+       "old_idx": 3,
+       "new_idx": 3
+      }
+     ],
+     "c2c_note": "Spline Mask 'track' is Mask Track 'spline_track' (card P07); its always-empty coords_json and bbox outputs have no place there.",
+     "dropped": []
+    }
+   }
+  }
  }
 ]

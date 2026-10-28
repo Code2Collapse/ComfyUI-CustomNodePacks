@@ -46,8 +46,8 @@ except Exception:  # never block the pack on a memory hook
 # The original source files remain on disk as internal implementation
 # modules; they are imported by the unified wrappers via composition.
 # No legacy NODE_CLASS_MAPPINGS entries are registered.
-from .nodes.mask_edit_mec import MaskEditMEC
-from .nodes.spline_mask_mec import SplineMaskMEC
+# L7.65 P01: Mask Edit and Spline Mask are not registered either - their drawing modes are Image Mask Editor modes,
+# transform is Mask Tools', bbox_smooth / track are Mask Track's (rows in nodes/_legacy_replacements.json).
 from .nodes.mask_tracker_mec import MaskTrackerMEC
 from .nodes.parameter_memory import ParameterHistoryMEC
 # SAM + ViTMatte, SeC + MatAnyone2 and Background Remover are backends of MaskOps (nodes/mask_matting, L7.65 P05).
@@ -64,19 +64,16 @@ from .nodes.inpaint_suite import (
 # saved workflows still load.
 from .nodes.video_comparer import VideoComparerC2C
 from .nodes.video_frame_player import VideoFramePlayerMEC
+# Video Mask Editor: the Image Mask Editor's "video" mode since L7.65 P01; its keyframe store and routes stay here
 from .nodes.video_mask_editor import (
-    VideoMaskEditorMEC,
     register_routes as _register_vme_routes,
 )
 from .nodes.vae_merge import VAEMergeMEC
 from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
 from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
 
-# ── MEC Paint Suite (Advanced Paint Canvas; Context Inpainter is Inpaint Stitch Pro's 'context blend', L7.65 P08) ───
-from .nodes.mec_paint_suite import (
-    NODE_CLASS_MAPPINGS as _PAINT_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _PAINT_DISPLAY,
-)
+# MEC Paint Suite registers nothing now: Context Inpainter is Inpaint Stitch Pro's 'context blend' (L7.65 P08), the
+# Advanced Paint Canvas is the Image Mask Editor's paint mode, colour layer (L7.65 P01).
 # Face Fixer (auto YOLO11 detection + per-face KSampler + smart blend)
 from .nodes.mec_face_fixer import (
     NODE_CLASS_MAPPINGS as _FACE_FIXER_MAPPINGS,
@@ -397,6 +394,19 @@ except Exception as _exc:  # pragma: no cover
     )
     _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY = {}, {}
 
+# Mask Edit, Spline Mask, Vector Roto, Video Mask Editor and the Paint Canvas are Image Mask Editor modes (L7.65 P01).
+# C2C_LEGACY_MASK_EDITORS=1 registers the five former editors again (kill switch, design image_mask_editor_modes.md 6).
+try:
+    from .nodes.image_mask_editor.legacy import legacy_editor_mappings as _legacy_editors
+    _LEGACY_EDITOR_MAPPINGS, _LEGACY_EDITOR_DISPLAY = _legacy_editors()
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "LegacyMaskEditors", _exc,
+        hint="C2C_LEGACY_MASK_EDITORS=1 could not bring back the former mask editors.",
+        group="nodes",
+    )
+    _LEGACY_EDITOR_MAPPINGS, _LEGACY_EDITOR_DISPLAY = {}, {}
+
 # Semantic Segment (SegFormer face / clothes parsing)
 try:
     from .nodes.semantic_segment import SemanticSegmentMEC
@@ -596,8 +606,6 @@ from .nodes.model_analysis import (
 # ``mask_matting`` package — no separate registration here.
 
 _MEC_MAPPINGS = {
-    "MaskEditMEC": MaskEditMEC,
-    "SplineMaskMEC": SplineMaskMEC,
     "MaskTrackerMEC": MaskTrackerMEC,
     "ParameterHistoryMEC": ParameterHistoryMEC,
     "InpaintCropProMEC": InpaintCropProMEC,
@@ -610,22 +618,18 @@ _MEC_MAPPINGS = {
     # rewrites `type: "VideoComparerMEC"` -> `"VideoComparerC2C"` before
     # LiteGraph instantiates the node.
     "VideoFramePlayerMEC": VideoFramePlayerMEC,
-    "VideoMaskEditorMEC": VideoMaskEditorMEC,
     "VAEMergeMEC": VAEMergeMEC,
     "ModelMetadataExtractorMEC": ModelMetadataExtractorMEC,
     "MaskFailureExplainerMEC": MaskFailureExplainerMEC,
 }
 
 _MEC_DISPLAY = {
-    "MaskEditMEC": "Mask Edit \u2014 Transform/Draw/Points/BBox",
-    "SplineMaskMEC": "Spline Mask \u2014 Edit/Track/Flow-Path",
     "MaskTrackerMEC": "Mask Track \u2014 Motion/Propagate/Anchor/Consistency/Stabilize",
     "ParameterHistoryMEC": "Parameter History",
     "InpaintCropProMEC": "Inpaint Crop Pro",
     "InpaintStitchProMEC": "Inpaint Stitch Pro",
     "VideoComparerC2C": "Video Comparer \u2014 Player + Wipe/Diff/Scopes",
     "VideoFramePlayerMEC": "Video Frame Player",
-    "VideoMaskEditorMEC": "Video Mask Editor",
     "VAEMergeMEC": "VAE Merge",
     "ModelMetadataExtractorMEC": "Model Metadata Extractor",
     "MaskFailureExplainerMEC": "Mask Failure Explainer \u2014 Diagnostics",
@@ -679,8 +683,9 @@ _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
 # exr_io STAYS here: its OpenImageIO backend is the only EXR path that works in
 # this environment, and its SaveEXRMEC is the 6-input superset.
 # video_frame_extractor was merged into Batch Range (nodes/helpers, L7.65 P23).
+# roto (Vector Roto) is the Image Mask Editor's "roto" mode since L7.65 P01 and registers nothing.
 for _rmod in ("exr_io",
-              "optical_flow", "roto", "pixel_aspect"):
+              "optical_flow", "pixel_aspect"):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
         _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})
@@ -772,7 +777,6 @@ _C2C_FAMILIES = [
     ("MaskEditControl", _MEC_MAPPINGS, _MEC_DISPLAY),
     ("Image Mask Editor", _IMEMASK_MAPPINGS, _IMEMASK_DISPLAY),
     ("Model analysis", _MA_MAPPINGS, _MA_DISPLAY),
-    ("MEC Paint Suite", _PAINT_MAPPINGS, _PAINT_DISPLAY),
     ("Face Fixer", _FACE_FIXER_MAPPINGS, _FACE_FIXER_DISPLAY),
     ("Face/Pose Delta", _FPDELTA_MAPPINGS, _FPDELTA_DISPLAY),
     ("Mask + Matting", _MASKMATTE_MAPPINGS, _MASKMATTE_DISPLAY),
@@ -788,6 +792,7 @@ _C2C_FAMILIES = [
     ("SAM Loader/Generator", _SAM_MAPPINGS, _SAM_DISPLAY),
     ("Mask Placement", _MASKPLACE_MAPPINGS, _MASKPLACE_DISPLAY),
     ("Matte (legacy)", _LEGACY_MATTE_MAPPINGS, _LEGACY_MATTE_DISPLAY),
+    ("Mask editors (legacy)", _LEGACY_EDITOR_MAPPINGS, _LEGACY_EDITOR_DISPLAY),
     ("Semantic Segment", _SEMSEG_MAPPINGS, _SEMSEG_DISPLAY),
     ("NukeNodeMax", _NUKEMAX_MAPPINGS, _NUKEMAX_DISPLAY),
     ("Video Stabilizer", _STABILIZER_MAPPINGS, _STABILIZER_DISPLAY),

@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **110** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **105** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -55,10 +55,9 @@
 | C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 12 |
+| MaskEditControl | 9 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
-| MEC Paint Suite | 1 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 2 |
@@ -83,12 +82,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 6 |
+| Restored VFX | 5 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 110 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 12, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 105 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 5, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -1090,6 +1089,9 @@ node.
 
 #### Video Mask Editor (MEC)
 
+Since L7.65 P01 this is the **Image Mask Editor's `video` mode** (its controls are `video_*`; saved workflows migrate on
+load); everything below works there the same way.
+
 Paint masks on the frames of a video. Run the workflow once so the editor has frames, then click *Open Video Mask
 Editor* on the node.
 
@@ -1308,6 +1310,9 @@ Connect a `reference_image` to see it as the editor background for precise place
 
 #### Spline Mask Editor (MEC) ★ New
 
+Since L7.65 P01 this is the **Image Mask Editor's `spline` mode** (controls `spline_*`; `spline_fill` = `flow pattern`
+is the former flow path) and Mask Track's `spline_track` (the former track mode); saved workflows migrate on load.
+
 Interactive canvas for drawing spline-based masks directly on your image. Supports Catmull-Rom (smooth curves through points), Bezier (with tangent handles), and polyline (straight segments) modes.
 
 | Action | Effect |
@@ -1485,12 +1490,12 @@ Nodes at a glance (a selection - NODE_REFERENCE.md lists every node):
 | 10 | ViTMatte Edge Refiner | Matting | 2 | Standalone edge refinement (7 methods) |
 | 11 | Trimap Generator | Matting | 1 | Generate trimap for ViTMatte input |
 | 12 | Mask Tools (C2C) | Keying / matte ops | 1 | colour, luma (BT.709, smoothstep) and difference keys; grade; directional grow / shrink; combine; gradient; grain; motion blur; edge spread; shuffle; transform (per-axis grow, blur, offset) |
-| 13 | Mask Transform XY | Editing | 1 | Per-axis erode/expand/blur/offset |
-| 14 | Mask Draw Frame | Editing | 1 | Draw 12 shapes with rotation and SDF |
-| 15 | Draw Shape | Editing | 1 | Unified 12-shape dropdown with all params — replaces per-shape wrappers |
+| 13 | Mask Transform XY | Editing | 1 | Since L7.65 P01: Mask Tools, `mode` transform (per-axis erode/expand/blur/offset) |
+| 14 | Mask Draw Frame | Editing | 1 | Since L7.65 P01: Image Mask Editor, `mode` shape, `shape_input` JSON |
+| 15 | Draw Shape | Editing | 1 | Since L7.65 P01: Image Mask Editor, `mode` shape (12 shapes) |
 | 16 | Mask Composite Advanced | Editing | 1 | Boolean/blend two masks (8 operations) |
 | 17 | Mask Math | Editing | 1 | Mathematical mask operations (11 ops) |
-| 18 | Spline Mask Editor | Interactive | 1 | Interactive Catmull-Rom / Bezier / polyline spline drawing on canvas |
+| 18 | Spline Mask Editor | Interactive | 1 | Since L7.65 P01: Image Mask Editor, `mode` spline (Catmull-Rom / Bezier / polyline on the canvas) |
 | 19 | Inpaint Crop Pro | Inpaint | 1 | Crop around mask for inpainting |
 | 20 | Inpaint Stitch Pro | Inpaint | 1 | Blend the inpainted crop back at the window it came from |
 | 21 | Inpaint Paste Back | Inpaint | 1 | Since L7.65 P08: Inpaint Stitch Pro, `stitch_mode` paste back |
@@ -1658,10 +1663,10 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 ### Spline Mask Drawing
 
 ```
-[Load Image]  →  [Spline Mask Editor]
+[Load Image]  →  [Image Mask Editor, mode: spline]
                     spline_type: catmull_rom
-                    closed: true
-                    feather_radius: 2.0
+                    spline_closed: true
+                    spline_feather_radius: 2.0
                        ↓
                   mask → any mask input
                   coords_json → SAM Mask Generator
@@ -1955,7 +1960,7 @@ This umbrella pack aggregates nodes across four sub-namespaces — Folder Increm
 | Model family | Recommended bridges |
 |---|---|
 | **Flux** | Use `InpaintCropProMEC` + `InpaintStitchProMEC` (`stitch_mode` blend or paste back) to confine high-resolution Flux refinement to a tracked region. `MaskOpsMEC` (Mask + Matting, backend SAM + ViTMatte, with its own trimap settings) produces the high-quality alpha that Flux-driven matte refinement needs. `FolderIncrementer` keeps versioned outputs across sweeps. `VAEMergeMEC` and **Probe (C2C)** with the latent wired (or **VAE Inspect** in compare mode) are useful when comparing Flux VAE variants. |
-| **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskEditMEC` (shift / grow / feather) and `MaskTrackerMEC` (propagate one mask over a sequence) are useful when reusing a single Qwen-Image generated mask across a small sequence. `VideoComparerC2C` for A/B sweeps over guidance / sampler choices (images too). |
+| **Qwen-Image** | Identical inpaint and matte pattern as Flux. `MaskToolsMEC` in `transform` mode (shift / grow / feather) and `MaskTrackerMEC` (propagate one mask over a sequence) are useful when reusing a single Qwen-Image generated mask across a small sequence. `VideoComparerC2C` for A/B sweeps over guidance / sampler choices (images too). |
 | **Wan 2.x (video)** | `MaskTrackerMEC` (motion tracking, propagation, key-frame anchors and a temporal-consistency check in one node) and `MaskOpsMEC` (backend SeC + MatAnyone2) are designed for the video domain — keep masks coherent across Wan-Animate frames, anchor a key-frame mask, and audit temporal jitter. `MaskFailureExplainerMEC` flags problem frames before re-rendering. Pair with `ComfyUI-WanAnimatePreprocessV2` (human) or `ComfyUI-WanAnimalPreprocess` (animal) for the pose / face conditioning. |
 | **Z-Image** | Same inpaint and refine bridges as Flux/Qwen. The spline-mask, draw-shape, and points-mask editors are useful when authoring a custom region for Z-Image's refinement passes. |
 | **GLM-Image** | The IMAGE outputs feed cleanly into the GLM-Image I2I path (via the sampler's optional `image` input + `denoise_strength`). `MaskOpsMEC` (backend remove background) + `SAMMaskGeneratorMEC` provide the alpha pre-stage. |

@@ -102,6 +102,13 @@ mounts the saved mode once, after configure.
 
 ## 5. Migration
 
+**As built (2026-10-28):** option (a). Five new rows (two with `c2c_by_value` cases: Mask Edit's base row is its
+`transform` -> Mask Tools, Spline Mask's is `edit`); the eight older rows recomposed by composing old -> mid with the
+mid node's case for the mode the old row set. Measured on the way: the frontend gives an INT named `seed` a
+control_after_generate by itself, so the renamed `spline_flow_seed` asks for one (a migrated fixed / randomize choice
+is carried); a saved node whose value is out of range is dropped by validation while the rest of the prompt still
+reports success - the live check therefore counts the previews that produced an image, not only the status.
+
 New rows (old -> `ImageMaskEditorC2C`): `MECAdvancedPaintCanvas`, `VectorRotoMEC`, `VideoMaskEditorMEC`,
 `MaskEditMEC` (mode-dependent target, see below), `SplineMaskMEC` (edit -> editor, track -> Mask Track,
 flow_path -> Q3). Recomposed rows: the eight older ids (section 1).

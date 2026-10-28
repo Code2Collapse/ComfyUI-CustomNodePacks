@@ -140,7 +140,8 @@ class SAMMaskGeneratorMEC:
                 "spline_json": ("STRING", {
                     "default": "", "multiline": True,
                     "tooltip": "Outline the target with a SPLINE and connect/paste its data here "
-                               "(SplineMaskMEC spline_data). Its polygon becomes positive points + a "
+                               "(the Image Mask Editor's spline_data_out, spline mode). Its polygon "
+                               "becomes positive points + a "
                                "bounding box so SAM snaps to what you drew.",
                 }),
                 "existing_mask": ("MASK", {

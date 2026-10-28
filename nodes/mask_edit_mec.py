@@ -451,7 +451,8 @@ class MaskEditMEC:
                 "[]", smoothed_json, first_bbox)
 
 
-NODE_CLASS_MAPPINGS = {"MaskEditMEC": MaskEditMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "MaskEditMEC": "Mask Edit — Transform/Draw/Points/BBox",
-}
+# L7.65 P01: no longer registered - this class is the engine of the Image Mask Editor's 'points + box' / 'shape' modes, of Mask Tools 'transform' and Mask Track 'bbox_smooth' (saved workflows
+# migrate on load, nodes/_legacy_replacements.json); C2C_LEGACY_MASK_EDITORS=1 registers it again
+# (nodes/image_mask_editor/legacy.py).
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}

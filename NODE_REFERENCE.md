@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **110** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **105** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -11,10 +11,9 @@
 | C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
 | C2C video | 4 |
-| MaskEditControl | 12 |
+| MaskEditControl | 9 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
-| MEC Paint Suite | 1 |
 | Face Fixer | 1 |
 | Face/Pose Delta | 1 |
 | Mask + Matting | 2 |
@@ -39,12 +38,12 @@
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Clipboard TCL | 2 |
-| Restored VFX | 6 |
+| Restored VFX | 5 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 110 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 12, Image Mask Editor 1, Model analysis 1, MEC Paint Suite 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 6, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 105 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 2, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 5, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -120,8 +119,7 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Image Mask Editor (C2C)](#imagemaskeditorc2c)
 - **C2C/ModelAnalysis** (1)
   - [VAE Inspect](#vaeblockinspectormec)
-- **C2C/Paint** (2)
-  - [Advanced Paint Canvas](#mecadvancedpaintcanvas)
+- **C2C/Paint** (1)
   - [Face Fixer](#mecfacefixer)
 - **C2C/Pipeline** (1)
   - [Mask Refiner](#maskrefinemec)
@@ -134,8 +132,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [SAM Multi-Mask Picker — 3 candidates + scores](#sammultimaskpickermec)
 - **C2C/Segmentation** (1)
   - [Semantic Segment — Face / Clothes Parsing](#semanticsegmentmec)
-- **C2C/Spline** (1)
-  - [Spline Mask — Edit/Track/Flow-Path](#splinemaskmec)
 - **C2C/Stabilization** (4)
   - [Video Stabilizer — Auto (deprecated)](#videostabilizerautomec)
   - [Video Stabilizer — Classic (deprecated)](#videostabilizerclassicmec)
@@ -165,8 +161,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Load Video Path (C2C)](#loadvideopathc2c)
   - [Save Video (C2C)](#savevideoc2c)
   - [Video Info (C2C)](#videoinfoc2c)
-- **C2C/VideoMask** (1)
-  - [Video Mask Editor](#videomaskeditormec)
 - **Code2Collapse/Sampling** (1)
   - [AsymFlow Sampler Patch (Lakonik signal-shift)](#asymflowsamplerpatch)
 - **ComfyUI-CustomNodePacks/PromptRelay** (3)
@@ -196,8 +190,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **MaskEditControl/Clipboard** (2)
   - [TCL Parse (MEC)](#tclparsemec)
   - [TCL Serialize (MEC)](#tclserializemec)
-- **MaskEditControl/Edit** (1)
-  - [Mask Edit — Transform/Draw/Points/BBox](#maskeditmec)
 - **MaskEditControl/IO** (2)
   - [Load EXR (MEC)](#loadexrmec)
   - [Save EXR (MEC)](#saveexrmec)
@@ -205,8 +197,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Mask + Matting](#maskopsmec)
 - **MaskEditControl/Pose** (1)
   - [Face/Pose Delta Editor (C2C)](#faceposedeltacoremec)
-- **MaskEditControl/Roto** (1)
-  - [Vector Roto — Bezier (MEC)](#vectorrotomec)
 - **MaskEditControl/VFX** (1)
   - [Optical Flow Re-Vector (MEC)](#opticalflowmec)
 - **MaskEnhancedControl/Grounding** (2)
@@ -1871,42 +1861,6 @@ Inspect a VAE's per-block weight statistics and outlier tensors, or compare two 
 ## C2C/Paint
 
 
-### MECAdvancedPaintCanvas
-
-**Shown in the menu as:** Advanced Paint Canvas
-
-Interactive paint canvas with procedural mask math: hardness, expansion, and blur stages are applied in order to the alpha channel of painted strokes.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `canvas_width` | `INT` | default `512`, range 64…4096, step 8 | Canvas width in pixels. |
-| `canvas_height` | `INT` | default `512`, range 64…4096, step 8 | Canvas height in pixels. |
-| `brush_type` | choice: `paint`, `mask_only` | default `"paint"` | paint: composite color strokes onto the image. mask_only: build the mask without coloring. |
-| `brush_color` | `STRING` | default `"#000000"` | Hex color used by the paint brush (ignored in mask_only mode). |
-| `brush_opacity` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Brush stroke opacity (0 = invisible, 1 = fully opaque). |
-| `brush_hardness` | `FLOAT` | default `0.8`, range 0.0…1.0, step 0.01 | Brush profile hardness (0 = soft, 1 = hard edge). |
-| `brush_size` | `INT` | default `20`, range 1…500, step 1 | Brush diameter in pixels. |
-| `mask_hardness` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Threshold for the solid inner core: pixels brighter than (1 - hardness) clamp to 1.0. |
-| `mask_expansion` | `INT` | default `0`, range -100…100, step 1 | Morphological dilate (positive) / erode (negative) in pixels. |
-| `mask_blur_radius` | `FLOAT` | default `0.0`, range 0.0…100.0, step 0.1 | Gaussian blur radius applied to the mask edge in pixels. |
-| `mask_blur_strength` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Blend factor between the hard mask (0) and the fully-blurred mask (1). |
-| `canvas_data` | `STRING` | default `""` | Internal base64 PNG payload from the JS canvas widget. Do not edit manually. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `reference_image` | `IMAGE` |  | Optional background image; painted strokes are composited over it when supplied. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `painted_image` | `IMAGE` | Painted RGB image (composited over reference_image when supplied). |
-| 1 | `processed_mask` | `MASK` | Processed mask after hardness, expansion, and blur stages. |
 
 
 ### MECFaceFixer
@@ -2288,75 +2242,6 @@ Clothes model: upper_clothes, pants, dress, shoes, bag, scarf, etc.
 | 1 | `info` | `STRING` | JSON summary of model, classes used, and per-class pixel counts. |
 
 
----
-
-## C2C/Spline
-
-
-### SplineMaskMEC
-
-**Shown in the menu as:** Spline Mask — Edit/Track/Flow-Path
-
-Unified spline mask node. Same control-point canvas drives three modes: edit (single-frame rasterize), track (LK optical flow across video), flow_path (procedural ribbon/wave/dust). CPU + small VRAM. No models required.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mode` | choice: `edit`, `track`, `flow_path` | default `"edit"` | edit: rasterize a single spline (closed/open) to a mask. track: Lucas-Kanade multi-keyframe tracker across a video. flow_path: procedural pattern along the spline (waves/dust/lightning…). |
-| `spline_data` | `STRING` | default `"[]"` | Spline payload from the JS canvas. edit/flow_path: single shape list. track: keyframes list [{frame:int, points:[[x,y],…]}, …]. |
-| `spline_type` | choice: `catmull_rom`, `bezier`, `polyline`, `b_spline`, `nurbs`, `natural_cubic`, `cardinal` | default `"catmull_rom"` | [edit/flow_path] interpolation method. catmull_rom/natural_cubic/cardinal pass through the points; b_spline/nurbs are smooth approximating curves; bezier uses tangent handles; polyline = straight. |
-| `closed` | `BOOLEAN` | default `True` | [all] closed loop vs open path |
-| `samples_per_segment` | `INT` | default `20`, range 2…128, step 1 | [all] curve resolution per segment |
-| `feather_radius` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | [edit/track] gaussian edge feather |
-| `invert` | `BOOLEAN` | default `False` | [edit/flow_path] invert mask |
-| `smoothing` | `BOOLEAN` | default `True` | [edit] enable spline smoothing |
-| `centripetal_alpha` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.05 | [edit] Catmull-Rom alpha (0.5 = centripetal) |
-| `width` | `INT` | default `0`, range 0…16384, step 1 | [edit/flow_path] output width (0 = inherit image) |
-| `height` | `INT` | default `0`, range 0…16384, step 1 | [edit/flow_path] output height (0 = inherit image) |
-| `mask_color` | `STRING` | default `"#ff00ff"` | [edit] preview overlay color (hex) |
-| `mask_opacity` | `FLOAT` | default `0.4`, range 0.0…1.0, step 0.05 | [edit] preview overlay opacity |
-| `tracking_weight` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.05 | [track] lerp/tracker blend (1=pure LK, 0=pure lerp) |
-| `klt_window` | `INT` | default `21`, range 5…51, step 2 | [track] Lucas-Kanade window size |
-| `stroke_width` | `INT` | default `3`, range 1…64, step 1 | [track] stroke width for open splines |
-| `pattern` | choice: `ribbon`, `wave`, `flow`, `dust`, `river`, `smoke`, `sawtooth`, `square`, … (+5) | default `"ribbon"` | [flow_path] procedural pattern |
-| `thickness` | `FLOAT` | default `12.0`, range 0.0…1024.0, step 0.5 | [flow_path] base stroke thickness |
-| `amplitude` | `FLOAT` | default `8.0`, range 0.0…1024.0, step 0.5 | [flow_path] modulation amplitude |
-| `frequency` | `FLOAT` | default `2.0`, range 0.0…64.0, step 0.1 | [flow_path] modulation frequency |
-| `turbulence` | `FLOAT` | default `0.0`, range 0.0…4.0, step 0.05 | [flow_path] noise turbulence strength |
-| `turbulence_scale` | `FLOAT` | default `1.0`, range 0.01…32.0, step 0.05 | [flow_path] noise spatial scale |
-| `edge_softness` | `FLOAT` | default `1.0`, range 0.0…32.0, step 0.1 | [flow_path] edge softness in pixels |
-| `taper_start` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | [flow_path] start-end taper amount |
-| `taper_end` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | [flow_path] tail-end taper amount |
-| `frames` | `INT` | default `1`, range 1…4096, step 1 | [flow_path] number of animation frames |
-| `animation_speed` | `FLOAT` | default `0.05`, range 0.0…4.0, step 0.005 | [flow_path] phase advance per frame |
-| `flow_direction` | choice: `forward`, `reverse`, `bidirectional`, `oscillate` | default `"forward"` | [flow_path] flow direction |
-| `mod_decay` | `FLOAT` | default `0.0`, range 0.0…4.0, step 0.01 | [flow_path] modulation falloff over time |
-| `seed` | `INT` | default `0`, range 0…4294967295, step 1 | [flow_path] noise seed |
-| `use_embedded_editor` | `BOOLEAN` | default `True` | [flow_path] show embedded spline preview |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | [edit/track/flow_path] reference / source video frames |
-
-**Hidden inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `node_id` | `UNIQUE_ID` |  | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | Rasterized mask (B,H,W). |
-| 1 | `coords_json` | `STRING` | SAM-compatible point coords (edit mode); '[]' otherwise. |
-| 2 | `spline_data_out` | `SPLINE_DATA` | Structured spline data (edit mode); pass-through input otherwise. |
-| 3 | `info_json` | `STRING` | Mode diagnostics: edit→bbox_json, track→info, flow_path→params. |
-| 4 | `bbox` | `BBOX` | AABB of control points as [x,y,w,h]; [0,0,0,0] when N/A. |
 
 
 ---
@@ -3334,63 +3219,7 @@ the incrementer node in the graph, or from its defaults.
 | `b_offset` | INT | `0` | B starts this many frames after A; the player and the metrics use it. |
 | `metrics` | BOOLEAN | `True` | Per-frame PSNR / SSIM / CIEDE2000 of A against B, drawn under the scrubber. |
 
-## C2C/VideoMask
 
-
-### VideoMaskEditorMEC
-
-**Shown in the menu as:** Video Mask Editor
-
-Paint masks on the frames of a video in the editor (Open Video Mask Editor on the node). A painted frame is a keyframe
-and its mask is used on that frame; tween_mode and outside_keys decide the unpainted frames, and input_mask fills the
-frames they leave empty. The editor shows the output mask of every frame. Keyframes are saved to
-input/c2c_video_masks/<session>/ as you paint.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | Input video batch (B,H,W,3). Drives B/H/W. |
-| `session_id` | `STRING` | default `""` | Set by the editor; hidden on the node. |
-| `tween_mode` | choice: `distance_transform`, `linear`, `hold`, `none` | default `"distance_transform"` | Frames BETWEEN two painted frames: distance_transform morphs the shape, linear blends, hold keeps the previous painted mask, none leaves them unpainted (frame by frame). |
-| `feather` | `FLOAT` | default `0.0`, range 0.0…32.0, step 0.1 | Gaussian feather radius (px). 0 = none. |
-| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Binarize after tween. 0 = keep soft mask. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `input_mask` | `MASK` |  | Per-frame base mask (e.g. a tracked mask): every frame your keyframes do not fill keeps its own frame of this mask. |
-| `outside_keys` | choice: `empty`, `hold` | default `"empty"` | Frames before the first / after the last painted frame: empty (the mask stays on the frames you painted) or hold the nearest painted mask. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | One mask per frame. |
-| 1 | `info` | `STRING` | JSON: painted frames, modes, and how many frames were painted / interpolated / held / input mask / empty. |
-
-
----|---|---|---|
-| `image` | `IMAGE` |  | Input video batch (B,H,W,3). Drives B/H/W. |
-| `session_id` | `STRING` | default `""` | Auto-set by the editor UI. Don't edit by hand. |
-| `tween_mode` | choice: `distance_transform`, `linear`, `hold` | default `"distance_transform"` | How to interpolate non-keyframed frames. |
-| `feather` | `FLOAT` | default `0.0`, range 0.0…32.0, step 0.1 | Gaussian feather radius (px). 0 = none. |
-| `threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Binarize after tween. 0 = keep soft mask. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `input_mask` | `MASK` |  | Fallback mask used if no keyframes are set. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-| 1 | `info` | `STRING` | — |
 
 
 ---
@@ -4054,90 +3883,6 @@ Serialize a subgraph JSON description into Nuke-style TCL.
 | 0 | `tcl` | `STRING` | — |
 
 
----
-
-## MaskEditControl/Edit
-
-
-### MaskEditMEC
-
-**Shown in the menu as:** Mask Edit — Transform/Draw/Points/BBox
-
-Unified mask edit dispatcher. Pure-CPU. Modes: transform, draw_shape, draw_advanced, points_bbox, bbox_smooth. Pick a mode and the corresponding widgets drive that engine. All outputs are normalized to the same 8-port schema.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mode` | choice: `transform`, `draw_shape`, `draw_advanced`, `points_bbox`, `bbox_smooth` | default `"transform"` | transform: morph / blur / offset / feather / threshold (needs mask). draw_shape: pick a shape from a dropdown, set its params (12 shapes). draw_advanced: power-mode shape_params_json (raw JSON). points_bbox: interactive points + bbox canvas (SAM/SeC coords). bbox_smooth: temporally smooth a sequence of [x,y,w,h] boxes. |
-| `expand_x` | `INT` | default `0`, range -512…512, step 1 | [transform] dilate/erode along X |
-| `expand_y` | `INT` | default `0`, range -512…512, step 1 | [transform] dilate/erode along Y |
-| `blur_x` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | [transform] Gaussian sigma X |
-| `blur_y` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | [transform] Gaussian sigma Y |
-| `offset_x` | `INT` | default `0`, range -4096…4096, step 1 | [transform] pixel shift X |
-| `offset_y` | `INT` | default `0`, range -4096…4096, step 1 | [transform] pixel shift Y |
-| `feather` | `FLOAT` | default `0.0`, range 0.0…128.0, step 0.5 | [transform/draw] feather radius |
-| `threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | [transform] binarize threshold |
-| `invert` | `BOOLEAN` | default `False` | [transform] invert output |
-| `width` | `INT` | default `512`, range 1…16384 | [draw_*/points_bbox] canvas width |
-| `height` | `INT` | default `512`, range 1…16384 | [draw_*/points_bbox] canvas height |
-| `shape` | choice: `circle`, `rectangle`, `ellipse`, `polygon`, `line`, `triangle`, `star`, `diamond`, … (+4) | default `"circle"` | [draw_shape] geometry |
-| `cx` | `FLOAT` | default `256.0`, range -16384.0…16384.0, step 0.5 | — |
-| `cy` | `FLOAT` | default `256.0`, range -16384.0…16384.0, step 0.5 | — |
-| `radius` | `FLOAT` | default `50.0`, range 0.0…8192.0, step 0.5 | — |
-| `size_w` | `FLOAT` | default `200.0`, range 0.0…16384.0, step 0.5 | — |
-| `size_h` | `FLOAT` | default `100.0`, range 0.0…16384.0, step 0.5 | — |
-| `rx` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | — |
-| `ry` | `FLOAT` | default `50.0`, range 0.0…8192.0, step 0.5 | — |
-| `top_left_x` | `FLOAT` | default `100.0`, range -16384.0…16384.0, step 0.5 | — |
-| `top_left_y` | `FLOAT` | default `100.0`, range -16384.0…16384.0, step 0.5 | — |
-| `x2` | `FLOAT` | default `400.0`, range -16384.0…16384.0, step 0.5 | — |
-| `y2` | `FLOAT` | default `400.0`, range -16384.0…16384.0, step 0.5 | — |
-| `thickness` | `FLOAT` | default `5.0`, range 0.0…500.0, step 0.5 | — |
-| `outer_r` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | — |
-| `inner_r` | `FLOAT` | default `40.0`, range 0.0…8192.0, step 0.5 | — |
-| `num_points` | `INT` | default `5`, range 3…50 | — |
-| `corner_radius` | `FLOAT` | default `20.0`, range 0.0…4096.0, step 0.5 | — |
-| `cross_size` | `FLOAT` | default `100.0`, range 0.0…8192.0, step 0.5 | — |
-| `arrow_length` | `FLOAT` | default `200.0`, range 0.0…16384.0, step 0.5 | — |
-| `head_length` | `FLOAT` | default `60.0`, range 0.0…8192.0, step 0.5 | — |
-| `head_width` | `FLOAT` | default `80.0`, range 0.0…8192.0, step 0.5 | — |
-| `points_json_shape` | `STRING` | default `"[[100,100],[400,100],[400,400],[100,400]]"`, multiline | [draw_shape] polygon vertices when shape=polygon |
-| `value` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | [draw_*] fill intensity |
-| `rotation` | `FLOAT` | default `0.0`, range -360.0…360.0, step 0.5 | [draw_*] rotation deg |
-| `operation` | choice: `set`, `add`, `subtract`, `max`, `min` | default `"set"` | [draw_*] blend op |
-| `batch_size` | `INT` | default `1`, range 1…256 | [draw_shape] number of frames |
-| `shape_params_json` | `STRING` | default `"{"cx": 256, "cy": 256, "radius": 50}"`, multiline | [draw_advanced] raw shape_params JSON (see MaskDrawFrame) |
-| `editor_data` | `STRING` | default `"{"points":[],"bboxes":[]}"`, multiline | [points_bbox] JSON from the interactive canvas |
-| `default_radius` | `FLOAT` | default `3.0`, range 0.5…256.0, step 0.5 | [points_bbox] default brush radius |
-| `softness` | `FLOAT` | default `1.0`, range 0.0…10.0, step 0.1 | [points_bbox] gaussian sigma multiplier |
-| `normalize` | `BOOLEAN` | default `True` | [points_bbox] clamp output to [0,1] |
-| `bboxes_json` | `STRING` | default `"[]"`, multiline | [bbox_smooth] JSON array of [x,y,w,h] per frame |
-| `smoothing_radius` | `INT` | default `3`, range 1…30, step 1 | [bbox_smooth] window radius |
-| `smoothing_method` | choice: `median_then_exponential`, `moving_average`, `exponential`, `median` | default `"median_then_exponential"` | [bbox_smooth] smoothing strategy |
-| `alpha` | `FLOAT` | default `0.3`, range 0.05…1.0, step 0.05 | [bbox_smooth] exponential factor |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `mask` | `MASK` |  | Source mask (transform requires this) |
-| `reference_image` | `IMAGE` |  | Optional reference; canvas size matches it when supplied |
-| `existing_mask` | `MASK` |  | Existing mask to blend onto in draw modes |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | Rendered mask for the active mode (zero-mask in bbox_smooth mode). |
-| 1 | `positive_coords` | `STRING` | Positive points JSON (points_bbox mode); '[]' otherwise. |
-| 2 | `negative_coords` | `STRING` | Negative points JSON (points_bbox mode); '[]' otherwise. |
-| 3 | `bboxes` | `BBOX` | Positive bbox list (points_bbox); single-element list in bbox_smooth. |
-| 4 | `neg_bboxes` | `BBOX` | Negative bbox list (points_bbox mode). |
-| 5 | `points_json` | `STRING` | All points JSON (points_bbox); '[]' otherwise. |
-| 6 | `bbox_json` | `STRING` | All bbox JSON (points_bbox) or smoothed bboxes JSON (bbox_smooth). |
-| 7 | `primary_bbox` | `BBOX` | Primary [x,y,w,h]: first positive bbox or smoothed first bbox. |
 
 
 ---
@@ -4385,35 +4130,6 @@ Apply user-edited landmark deltas to a per-frame face/pose landmark stream in an
 | 1 | `info_json` | `STRING` | JSON: per-frame anchor stats, keyframes used, deltas applied, weights at head/tail frames. Useful for debugging the blend. |
 
 
----
-
-## MaskEditControl/Roto
-
-
-### VectorRotoMEC
-
-**Shown in the menu as:** Vector Roto — Bezier (MEC)
-
-Cubic-Bezier vector roto with Catmull-Rom keyframe tweening. Hands evaluated polylines off to a scanline rasteriser.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `roto_json` | `STRING` | default `"{"canvas": {"w": 1024, "h": 1024}, "frames": [{"frame": 0, "splines": []}]}"`, multiline | — |
-| `frame_count` | `INT` | default `1`, range 1…4096 | — |
-| `width` | `INT` | default `1024`, range 16…8192 | — |
-| `height` | `INT` | default `1024`, range 16…8192 | — |
-| `samples_per_seg` | `INT` | default `24`, range 2…256 | — |
-| `feather_px` | `FLOAT` | default `0.0`, range 0.0…64.0, step 0.5 | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `mask` | `MASK` | — |
-| 1 | `info` | `STRING` | — |
 
 
 ---

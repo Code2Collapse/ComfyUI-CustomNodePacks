@@ -402,7 +402,8 @@ class UnifiedSegmentation:
                     "multiline": True,
                     "tooltip": (
                         "Draw the region with a SPLINE and paste/connect its data here "
-                        "(SplineMaskMEC spline_data: [{\"points\":[{\"x\":..,\"y\":..}], ...}]). "
+                        "(the Image Mask Editor's spline_data_out, spline mode: "
+                        "[{\"points\":[{\"x\":..,\"y\":..}], ...}]). "
                         "The polygon's vertices become positive point prompts + a bounding box, "
                         "so SAM snaps to the object you outlined. Combines with points/bbox."
                     ),

@@ -2,6 +2,37 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-28 (five mask editors removed, saved workflows migrate to the Image Mask Editor, L7.65 P01)
+
+Last step of owner card P01: **Mask Edit**, **Spline Mask**, **Vector Roto**, **Video Mask Editor** and the **Advanced
+Paint Canvas** are no longer registered; the pack registers 105 nodes instead of 110. A saved workflow loads each of
+them as its successor, in the right mode, with its values and links:
+
+| Saved node (mode) | Loads as |
+|---|---|
+| Mask Edit `transform` | Mask Tools `transform` |
+| Mask Edit `draw_shape` / `draw_advanced` | Image Mask Editor `shape` (`shape_input` parameters / JSON) |
+| Mask Edit `points_bbox` | Image Mask Editor `points + box` |
+| Mask Edit `bbox_smooth` | Mask Track `bbox_smooth` |
+| Spline Mask `edit` / `flow_path` | Image Mask Editor `spline` (`spline_fill` mask / flow pattern) |
+| Spline Mask `track` | Mask Track `spline_track` |
+| Vector Roto | Image Mask Editor `roto` |
+| Video Mask Editor | Image Mask Editor `video` (same keyframe store) |
+| Advanced Paint Canvas | Image Mask Editor `paint`, `canvas_layer` colour |
+
+- The saved mode picks the successor (`c2c_by_value` rows) - in the front-end migration and for API prompts. The eight
+  older ids that used to load as Mask Edit / Spline Mask (Mask Transform XY, Mask Draw Frame, Draw Shape, Points Mask
+  Editor, BBox Smooth, the three spline nodes) now go straight to the final node: the migration runs once.
+- Checked: every removed id and every mode through its row gives the old node's outputs bit for bit (21 cases,
+  `tests/test_consolidation_p01_migration.py`). Live on the owner's stack a workflow built with the five editors
+  before the removal (one node per mode, 11 nodes) and a save of three older ids load in classic and Nodes 2.0, at the
+  root and inside a subgraph: right node, mode, values (the flow pattern's seed and its fixed / randomize setting
+  included), links, every preview produces an image, no missing-node dialog.
+- Kill switch: `C2C_LEGACY_MASK_EDITORS=1` registers the five editors again (old workflows then load them unchanged).
+- The eight example workflows that used Mask Edit / Spline Mask were re-saved through the migration; where a successor
+  is bigger than the node it replaced, its neighbours moved to make room and its group grew (no node overlaps another),
+  and the thumbnails are shot with the labels drawn.
+
 ## Unreleased – 2026-10-27 (Image Mask Editor modes: one node for every kind of mask drawing, L7.65 P01)
 
 - **Image Mask Editor** gains `mode`: `paint` (as before, the default; plus a colour layer, `canvas_layer` =

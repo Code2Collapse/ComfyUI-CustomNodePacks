@@ -378,7 +378,8 @@ class SplineMaskMEC:
         return (out_mask, "[]", spline_data, info, _EMPTY_BBOX)
 
 
-NODE_CLASS_MAPPINGS = {"SplineMaskMEC": SplineMaskMEC}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "SplineMaskMEC": "Spline Mask — Edit/Track/Flow-Path",
-}
+# L7.65 P01: no longer registered - this class is the engine of the Image Mask Editor's 'spline' mode and of Mask Track 'spline_track' (saved workflows
+# migrate on load, nodes/_legacy_replacements.json); C2C_LEGACY_MASK_EDITORS=1 registers it again
+# (nodes/image_mask_editor/legacy.py).
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
