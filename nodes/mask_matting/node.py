@@ -22,6 +22,7 @@ import torch
 
 from .._is_changed_util import hash_args_and_kwargs
 from . import _engines
+from . import _picks
 from .matters import all_matters, get_matter_cls
 from .matters import list_keys as list_matter_keys
 from .segmenters import all_segmenters, get_segmenter_cls
@@ -204,6 +205,10 @@ def _resolve_model_choice(choice: str, expected_key: str,
     if not expected_key:
         return ""
 
+    # L7.114: the viewer's detection model, already resolved to a file on disk (any SAM folder)
+    if choice and os.path.isabs(choice) and os.path.isfile(choice):
+        return choice
+
     # Preset entry — bring it down if needed.
     if choice and choice.startswith(_PRESET_PREFIX):
         try:
@@ -249,6 +254,45 @@ def _resolve_model_choice(choice: str, expected_key: str,
         avail = list_backend_files(expected_key)
         return avail[0] if avail else tail
     return choice
+
+
+#: What the shared finishing stage reads (_engines.finish): never part of an engine's stage-cache key.
+_FINISH_ONLY = frozenset({
+    "edge_mode", "edge_threshold", "edge_feather", "despill", "despill_strength", "preserve_skin",
+    "lightwrap_strength", "lightwrap_radius", "edge_band_radius", "premultiply", "enable_diagnose",
+    "diag_ring_width", "diag_blur_threshold", "diag_brightness_threshold", "holdout_mask", "core_mask",
+    "split_masks",
+})
+
+
+def _engine_cache_key(backend: str, plate_fp: Optional[str], kw: Dict[str, Any]):
+    """Stage-cache key of one engine run (L7.114): the plate and every input the engine reads; tensors by content,
+    the SAM model object by identity (the cached entry also holds the object and is reused only for it)."""
+    from . import _stage_cache as sc
+    parts: Dict[str, Any] = {}
+    for k, v in sorted(kw.items()):
+        if k in _FINISH_ONLY:
+            continue
+        if torch.is_tensor(v):
+            parts[k] = sc.fingerprint(v)
+        elif k == "sam_model":
+            parts[k] = f"{type(v).__name__}:{id(v)}" if v is not None else None
+        else:
+            parts[k] = v if isinstance(v, (str, int, float, bool, type(None))) else repr(v)
+    return sc.make_key("engine", str(backend), plate_fp or "", parts)
+
+
+def _picks_model_path(name: str) -> Optional[str]:
+    """The viewer's detection model ("<folder key>/<file>", as the viewer's model slot lists it) -> a file on disk."""
+    if not name or "/" not in name:
+        return None
+    key, _, file_name = str(name).partition("/")
+    try:
+        import folder_paths
+        path = folder_paths.get_full_path(key, file_name)
+    except Exception:  # noqa: BLE001
+        return None
+    return path if path and os.path.isfile(path) else None
 
 
 def _la_sam_text_grounding(
@@ -674,6 +718,15 @@ class MaskOpsMEC:
                     "every frame; a plate batch as long as the clip is used frame by frame; a different size is "
                     "resized to the image. Not connected: a plate is synthesised from the coarse mask, which is "
                     "much less accurate."}),
+                # L7.114: the viewer's selection, APPENDED last (old saves keep their widget order). Empty = the
+                # node runs as it always did. The viewer hides this row; with C2C_VIEWER=0 it is a plain text box.
+                "picks": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "The selection made in the viewer on this node (JSON: frame, subject, excluded "
+                               "objects, added / cut parts). When set it replaces the prompt inputs of the chosen "
+                               "backend. Empty = the prompt inputs as wired.",
+                    "c2c_viewer": _picks.viewer_enabled(),
+                }),
             },
         })
 
@@ -771,9 +824,18 @@ class MaskOpsMEC:
                 sec_edge_radius=15, sec_n_warmup=5, sec_edge_refine_method="none",
                 bg_model=None, bg_threshold=0.5, bg_invert=False, bg_mask_blur=0,
                 fill_holes_enabled=True, min_region_size=64,
-                keep_model_loaded=True, split_masks=True, background_plate=None):
+                keep_model_loaded=True, split_masks=True, background_plate=None,
+                # L7.114: the viewer's selection (appended input); _viewer is private (set by _execute_picks only)
+                picks="", _viewer=None):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError("MaskOpsMEC expects IMAGE tensor [B,H,W,C]")
+        # L7.114: a selection made in the viewer replaces the backend's prompt inputs; empty = everything below
+        # runs exactly as before (tests/test_matte_picks.py)
+        if _viewer is None and str(picks or "").strip():
+            _sel = _picks.parse(picks)
+            if _sel is not None:
+                _args = {k: v for k, v in locals().items() if k not in ("self", "_sel", "picks", "_viewer")}
+                return self._execute_picks(_sel, _args)
         for _label, _m in (
             ("external_mask", external_mask),
             ("external_trimap", external_trimap),
@@ -817,7 +879,7 @@ class MaskOpsMEC:
                 "bg_threshold": bg_threshold, "bg_invert": bg_invert, "bg_mask_blur": bg_mask_blur,
                 "fill_holes_enabled": fill_holes_enabled, "min_region_size": min_region_size,
                 "keep_model_loaded": keep_model_loaded, "split_masks": split_masks,
-            })
+            }, viewer=_viewer)
 
         with torch.no_grad():
             return self._execute_impl(
@@ -854,16 +916,112 @@ class MaskOpsMEC:
                 pipeline, scene_prompts, band_scale, matte_tile,
                 temporal_stabilise, matte_overlap, matte_tile_batch,
                 split_masks=bool(split_masks), background_plate=background_plate,
+                _viewer=_viewer,
             )
 
-    def _execute_engine(self, backend, image, kw):
+    def _execute_engine(self, backend, image, kw, viewer=None):
         """One of the three former matte nodes as a backend (L7.65 P05): its own code with its own arguments
         (`_engines.run_engine`), then the shared finishing stage. No free_vram() here - each engine cleans up as it
-        always did (keep_model_loaded is theirs). auto_download is this node's Allow Download for all of them."""
+        always did (keep_model_loaded is theirs). auto_download is this node's Allow Download for all of them.
+
+        L7.114: on a viewer-driven run the engine's result is kept in the stage cache (the engine is one stage: its
+        code is the shipped file, not split), so a finishing setting reruns only the finishing stage."""
         from .._download_policy import allow_downloads
+        cache = viewer.get("cache") if viewer else None
         with torch.no_grad(), allow_downloads(bool(kw.get("auto_download"))):
-            res = _engines.run_engine(backend, image, kw)
-            return _engines.finish(res, image, backend, kw)
+            res = None
+            key = None
+            if cache is not None:
+                key = _engine_cache_key(backend, viewer.get("plate_fp"), kw)
+                hit = cache.get(key)
+                # a SAM model is an object, not data: reuse only with the very same object
+                if hit is not None and hit.get("sam_model") is kw.get("sam_model"):
+                    res = _engines.EngineResult(**hit["res"])
+                    viewer.setdefault("info", {})["stage_cache"] = {"engine": "reused"}
+            if res is None:
+                res = _engines.run_engine(backend, image, kw)
+                if cache is not None:
+                    cache.put(key, {"res": dict(vars(res)), "sam_model": kw.get("sam_model")})
+                    viewer.setdefault("info", {})["stage_cache"] = {"engine": "ran"}
+            out = _engines.finish(res, image, backend, kw)
+            if viewer is not None:
+                info = json.loads(out[7])
+                info["viewer"] = viewer.get("info", {})
+                out = out[:7] + (json.dumps(info, indent=2),) + out[8:]
+            return out
+
+    # ------------------------------------------------------------------
+    def _execute_picks(self, sel, args):
+        """A run driven by the viewer's selection (L7.114): the selection becomes the chosen backend's prompts, a
+        preview chunk cuts the plate, and the stage cache is switched on. Then the normal path runs."""
+        from . import _stage_cache
+        image = args["image"]
+        B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
+        notes = _picks.check_plate(sel, B, W, H)
+        start, stop = _picks.frame_range(sel, B)
+        if (start, stop) != (0, B):
+            for name in ("image", "external_mask", "external_trimap", "holdout_mask", "core_mask"):
+                args[name] = _picks.slice_frames(args.get(name), start, stop, B)
+            args["start_frame"] = max(0, int(args["start_frame"]) - start)
+            if int(args["end_frame"]) >= 0:
+                args["end_frame"] = max(0, int(args["end_frame"]) - start)
+        pr = _picks.prompts(sel, W, H, frame_offset=start)
+        backend = str(args.get("backend") or _engines.NATIVE)
+        # the prompt inputs each backend reads (the ones a selection replaces)
+        reads = {
+            _engines.NATIVE: ("positive_coords", "negative_coords", "pos_points", "neg_points", "pos_bbox",
+                              "neg_bbox", "normal_bbox", "text_prompt", "scene_prompts"),
+            _engines.SAM_VITMATTE: ("points_json", "bbox_json", "pos_bbox", "normal_bbox"),
+            _engines.SEC_MATANYONE: ("points_json", "bbox_json", "pos_bbox", "normal_bbox", "positive_coords",
+                                     "negative_coords", "text_prompt", "sec_text_prompt"),
+        }.get(backend, ())
+
+        def _set(v):
+            return v is not None and not (isinstance(v, str) and v.strip() in ("", "[]"))
+
+        ignored = [n for n in reads if _set(args.get(n))]
+        clear = {"positive_coords": "", "negative_coords": "", "pos_points": "", "neg_points": "",
+                 "pos_bbox": None, "neg_bbox": None, "normal_bbox": None, "text_prompt": "", "scene_prompts": ""}
+        if backend == _engines.NATIVE:
+            args.update(clear)
+            args.update(positive_coords=pr.positive_json(), negative_coords=pr.negative_json(), pos_bbox=pr.box,
+                        frame_annotation=pr.frame)
+            if str(args.get("pipeline", "")).strip().lower() == "onyx" and args.get("external_mask") is not None:
+                args["external_mask"] = None             # ONYX reads external_mask as a mask PROMPT
+                ignored.append("external_mask")
+            if pr.frame > 0 and str(args.get("tracking_direction")) == "forward":
+                args["tracking_direction"] = "bidirectional"
+                notes.append(f"tracking_direction forward -> bidirectional: the subject was picked on frame "
+                             f"{sel.frame}, so the frames before it are tracked too")
+        elif backend == _engines.SAM_VITMATTE:
+            args.update(clear)
+            args.update(points_json=pr.points_json(), bbox_json=pr.bbox_json())
+            notes.append("SAM + ViTMatte reads the points on every frame (it does not track)")
+        elif backend == _engines.SEC_MATANYONE:
+            if pr.frame != 0:
+                raise ValueError(
+                    f"SeC + MatAnyone2 reads its prompts on the first frame of the clip, but the subject was picked "
+                    f"on frame {sel.frame}. Pick on the first frame, or use the 'segment + matte' backend, which "
+                    "tracks from any frame.")
+            args.update(clear)
+            args.update(points_json=pr.points_json(), bbox_json=pr.bbox_json(), sec_text_prompt="")
+        else:
+            notes.append("remove background takes no prompts: the selection only chooses the frames")
+        model_path = _picks_model_path(sel.model)
+        if sel.model and not model_path:
+            notes.append(f"the viewer's detection model {sel.model} is not on this machine - the node's own "
+                         "model choice is used")
+        cache = _stage_cache.get_cache()
+        viewer = {
+            "cache": cache,
+            "plate_fp": _stage_cache.fingerprint(args["image"]) if cache is not None else None,
+            "model": model_path,
+            "info": {"picks": _picks.summary(sel), "frames": [start, stop], "prompts": {
+                "positive": len(pr.positive), "negative": len(pr.negative), "box": pr.box is not None,
+                "frame": pr.frame}, "replaced_inputs": ignored, "notes": notes,
+                "cache": cache.stats() if cache is not None else "off"},
+        }
+        return self.execute(**args, picks="", _viewer=viewer)
 
     def _execute_impl(self, image, segmenter, matter, model, matter_model,
                 precision, attention, offload, subject_preset,
@@ -897,7 +1055,7 @@ class MaskOpsMEC:
                 external_trimap=None, holdout_mask=None, core_mask=None,
                 pipeline="cascade (legacy)", scene_prompts="",
                 band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
-                matte_overlap=64, matte_tile_batch=4, split_masks=True, background_plate=None):
+                matte_overlap=64, matte_tile_batch=4, split_masks=True, background_plate=None, _viewer=None):
         _plate_note = _multi_note = ""          # L9.39: what info says about the plate / per-object matting
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
@@ -912,6 +1070,10 @@ class MaskOpsMEC:
         seg_key = _strip_badge(segmenter)
         mat_key = _strip_badge(matter)
         _use_onyx = str(pipeline).strip().lower() == "onyx"
+        # L7.114: viewer-driven runs only - the stage cache and the detection model the viewer used
+        _cache = _viewer.get("cache") if _viewer else None
+        _plate_fp = _viewer.get("plate_fp") if _viewer else None
+        _vstage: Dict[str, str] = {}
 
         # ── auto_route: pick best segmenter/matter from image stats ────
         # Triggered when user picks "auto" (added to the choices list)
@@ -1045,6 +1207,8 @@ class MaskOpsMEC:
                     mat_key, "; ".join(_auto_route_reasons),
                 )
 
+        if _viewer and _viewer.get("model") and model == "(auto)" and (_use_onyx or seg_key == "sam3.1"):
+            model = _viewer["model"]
         if _use_onyx:
             seg_key = "sam3.1"
             mat_cls = None
@@ -1110,7 +1274,10 @@ class MaskOpsMEC:
                     post_refine=str(post_refine),
                     external_mask=external_mask,
                     external_trimap=external_trimap,
+                    stage_cache=_cache,
+                    plate_fp=_plate_fp,
                 )
+                _vstage.update(onyx.pipeline_info.get("stage_cache", {}))
                 mask_t = onyx.mask_coarse
                 alpha_t = onyx.alpha_combined
                 trimap_t = onyx.trimap_combined
@@ -1136,164 +1303,145 @@ class MaskOpsMEC:
                 )
 
             if not _use_onyx:
-                # ── Auto-Quality: detect hard-case issues + preprocess ─────
-                # Original `img_bhwc` is preserved for matting + preview;
-                # only the segmenter sees the cleaned copy.
-                auto_q_info: Dict[str, Any] = {"enabled": bool(auto_quality)}
-                seg_image = img_bhwc
-                if bool(auto_quality):
+                # L7.114: TRACK stage behind the stage cache (viewer-driven runs; _cache is None otherwise)
+                _s1 = _s2 = _k1 = _k2 = None
+                _n_reasons, _n_trail = len(_auto_route_reasons), len(_cascade_trail)
+                if _cache is not None:
+                    from . import _stage_cache as _sc
+                    _k1 = _sc.make_key("cascade.track", _plate_fp, seg_key, model, precision, attention, offload,
+                                       _sc.installed(getattr(seg_cls, "MODELS_KEY", "") or ""),
+                                       {k: _sc.value_key(v) for k, v in dict(
+                        input_mode=input_mode, cascade=_cascade_mode, auto_quality=auto_quality,
+                        quality_mode=quality_mode, auto_disambiguate=auto_disambiguate,
+                        enable_luma_key=enable_luma_key, luma_mode=luma_mode, luma_low=luma_low, luma_high=luma_high,
+                        luma_gamma=luma_gamma, luma_falloff=luma_falloff, luma_invert=luma_invert, luma_mix=luma_mix,
+                        pos_points=pos_points, neg_points=neg_points, pos_bbox=pos_bbox, neg_bbox=neg_bbox,
+                        normal_bbox=normal_bbox, text_prompt=text_prompt, frame_annotation=frame_annotation,
+                        object_id=object_id, max_frames_to_track=max_frames_to_track, memory_size=memory_size,
+                        start_frame=start_frame, end_frame=end_frame, individual_objects=individual_objects,
+                        tracking_direction=tracking_direction, seed=seed, tta_flip=tta_flip, multiscale=multiscale,
+                        robust_propagation=robust_propagation, robust_confidence_threshold=robust_confidence_threshold,
+                        robust_reanchor_method=robust_reanchor_method, robust_blend_alpha=robust_blend_alpha,
+                        external_mask=external_mask, auto_download=auto_download).items()})
+                    _s1 = _cache.get(_k1)
+                if _s1 is None:
+                    # ── Auto-Quality: detect hard-case issues + preprocess ─────
+                    # Original `img_bhwc` is preserved for matting + preview;
+                    # only the segmenter sees the cleaned copy.
+                    auto_q_info: Dict[str, Any] = {"enabled": bool(auto_quality)}
+                    seg_image = img_bhwc
+                    if bool(auto_quality):
+                        try:
+                            from ._auto_quality import (
+                                analyze_image as _analyze,
+                                preprocess_for_segmentation as _preproc,
+                            )
+                            issues = _analyze(img_bhwc)
+                            seg_image, pre_steps = _preproc(
+                                img_bhwc, issues, quality_mode=quality_mode,
+                            )
+                            auto_q_info.update({
+                                "issues": issues,
+                                "pre_steps": pre_steps,
+                                "mode": quality_mode,
+                            })
+                        except Exception as _e:
+                            logger.warning("[MaskOps] auto preprocess failed: %s", _e)
+                            seg_image = img_bhwc
+
+                    # ── Luma-key pre-stage ────────────────────────────────────
+                    luma_mask_t: Optional[torch.Tensor] = None
+                    if bool(enable_luma_key):
+                        try:
+                            keyer = _get_luma_keyer()
+                            luma_mask_t, _luma_info = keyer._key_luminance_impl(
+                                img_bhwc, luma_mode,
+                                float(luma_low), float(luma_high),
+                                float(luma_gamma), float(luma_falloff),
+                                bool(luma_invert),
+                            )
+                            # Use as hint when nothing else is wired.
+                            if external_mask is None and luma_mix == "hint_only":
+                                external_mask = luma_mask_t
+                        except Exception as _e:
+                            logger.warning("[MaskOps] luma keyer failed: %s", _e)
+                            luma_mask_t = None
+
+                    pos_pts, _ = parse_points(pos_points)
+                    neg_a, neg_b = parse_points(neg_points)
+                    neg_pts = neg_a + neg_b
+                    bbox_used = (
+                        parse_bbox(pos_bbox)
+                        or parse_bbox(normal_bbox)
+                    )
+                    neg_bbox_used = parse_bbox(neg_bbox)
+
+                    # If a bbox slot is wired but the upstream produced nothing usable,
+                    # bail loudly. Silent fallthrough was masking misconfigured editors
+                    # (e.g. a PointsMaskEditor with no box drawn whose 'primary_bbox'
+                    # output is still connected here).
+                    bbox_wired = (pos_bbox is not None) or (normal_bbox is not None)
+                    if bbox_wired and bbox_used is None:
+                        raise ValueError(
+                            "[MaskMatting] A bbox input is connected but no valid box was "
+                            "received. Draw a bounding box in the upstream editor "
+                            "(or disconnect the bbox link if you only want point/text prompting)."
+                        )
+                    mode = self._resolve_mode(
+                        input_mode, B,
+                        has_pts=bool(pos_pts or neg_pts),
+                        has_bbox=bbox_used is not None,
+                        has_text=bool(text_prompt.strip()),
+                        supports=seg_cls.SUPPORTS_MODES,
+                    )
+
+                    logger.warning(
+                        "[MaskMatting] seg=%s matter=%s mode=%s B=%d  "
+                        "pts(+%d/-%d) bbox=%s neg_bbox=%s text=%r model=%r matter_model=%r ext_mask=%s ext_trimap=%s",
+                        seg_key, mat_key, mode, B,
+                        len(pos_pts), len(neg_pts),
+                        bbox_used, neg_bbox_used, (text_prompt or "")[:32],
+                        model, matter_model,
+                        None if external_mask is None else tuple(external_mask.shape),
+                        None if external_trimap is None else tuple(external_trimap.shape),
+                    )
+
+                    def _model_free_segmenter(exc: BaseException, wanted: str):
+                        """L7.91: the chosen model is not installed (no package / library / weights) -> the model-free
+                        segmenter, labelled. Anything else (a bug, a bad prompt) is raised as it was."""
+                        from . import _classic
+                        if wanted == "classic" or not (_classic.fallback_allowed()
+                                                       and _classic.is_missing_model_error(exc)):
+                            raise exc
+                        _model_free["segmenter"] = {**_classic.describe_fallback(wanted, exc),
+                                                    "used": _classic.LABEL_SEGMENT}
+                        logger.warning("[MaskOps] segmenter '%s' unavailable (%s) - using the model-free segmenter; "
+                                       "the mask is approximate.", wanted, _model_free["segmenter"]["why"][:160])
+                        cls_ = get_segmenter_cls("classic")
+                        mode_ = self._resolve_mode(
+                            input_mode, B, has_pts=bool(pos_pts or neg_pts), has_bbox=bbox_used is not None,
+                            has_text=bool(text_prompt.strip()), supports=cls_.SUPPORTS_MODES)
+                        return "classic", cls_, cls_(device=device), mode_
+
                     try:
-                        from ._auto_quality import (
-                            analyze_image as _analyze,
-                            preprocess_for_segmentation as _preproc,
+                        seg_inst = seg_cls(
+                            model_name=_resolve_model_choice(model, seg_cls.MODELS_KEY,
+                                                             auto_download=bool(auto_download)),
+                            device=device, precision=precision,
+                            attention=attention, offload=offload,
                         )
-                        issues = _analyze(img_bhwc)
-                        seg_image, pre_steps = _preproc(
-                            img_bhwc, issues, quality_mode=quality_mode,
-                        )
-                        auto_q_info.update({
-                            "issues": issues,
-                            "pre_steps": pre_steps,
-                            "mode": quality_mode,
-                        })
-                    except Exception as _e:
-                        logger.warning("[MaskOps] auto preprocess failed: %s", _e)
-                        seg_image = img_bhwc
-
-                # ── Luma-key pre-stage ────────────────────────────────────
-                luma_mask_t: Optional[torch.Tensor] = None
-                if bool(enable_luma_key):
+                    except Exception as _exc:
+                        seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
+                    # Tell the backend whether to use smart pos/neg disambiguation
+                    # when SAM returns multiple candidate masks.
                     try:
-                        keyer = _get_luma_keyer()
-                        luma_mask_t, _luma_info = keyer._key_luminance_impl(
-                            img_bhwc, luma_mode,
-                            float(luma_low), float(luma_high),
-                            float(luma_gamma), float(luma_falloff),
-                            bool(luma_invert),
-                        )
-                        # Use as hint when nothing else is wired.
-                        if external_mask is None and luma_mix == "hint_only":
-                            external_mask = luma_mask_t
-                    except Exception as _e:
-                        logger.warning("[MaskOps] luma keyer failed: %s", _e)
-                        luma_mask_t = None
+                        setattr(seg_inst, "auto_disambiguate", bool(auto_disambiguate))
+                    except Exception:
+                        pass
 
-                pos_pts, _ = parse_points(pos_points)
-                neg_a, neg_b = parse_points(neg_points)
-                neg_pts = neg_a + neg_b
-                bbox_used = (
-                    parse_bbox(pos_bbox)
-                    or parse_bbox(normal_bbox)
-                )
-                neg_bbox_used = parse_bbox(neg_bbox)
-
-                # If a bbox slot is wired but the upstream produced nothing usable,
-                # bail loudly. Silent fallthrough was masking misconfigured editors
-                # (e.g. a PointsMaskEditor with no box drawn whose 'primary_bbox'
-                # output is still connected here).
-                bbox_wired = (pos_bbox is not None) or (normal_bbox is not None)
-                if bbox_wired and bbox_used is None:
-                    raise ValueError(
-                        "[MaskMatting] A bbox input is connected but no valid box was "
-                        "received. Draw a bounding box in the upstream editor "
-                        "(or disconnect the bbox link if you only want point/text prompting)."
-                    )
-                mode = self._resolve_mode(
-                    input_mode, B,
-                    has_pts=bool(pos_pts or neg_pts),
-                    has_bbox=bbox_used is not None,
-                    has_text=bool(text_prompt.strip()),
-                    supports=seg_cls.SUPPORTS_MODES,
-                )
-
-                logger.warning(
-                    "[MaskMatting] seg=%s matter=%s mode=%s B=%d  "
-                    "pts(+%d/-%d) bbox=%s neg_bbox=%s text=%r model=%r matter_model=%r ext_mask=%s ext_trimap=%s",
-                    seg_key, mat_key, mode, B,
-                    len(pos_pts), len(neg_pts),
-                    bbox_used, neg_bbox_used, (text_prompt or "")[:32],
-                    model, matter_model,
-                    None if external_mask is None else tuple(external_mask.shape),
-                    None if external_trimap is None else tuple(external_trimap.shape),
-                )
-
-                def _model_free_segmenter(exc: BaseException, wanted: str):
-                    """L7.91: the chosen model is not installed (no package / library / weights) -> the model-free
-                    segmenter, labelled. Anything else (a bug, a bad prompt) is raised as it was."""
-                    from . import _classic
-                    if wanted == "classic" or not (_classic.fallback_allowed()
-                                                   and _classic.is_missing_model_error(exc)):
-                        raise exc
-                    _model_free["segmenter"] = {**_classic.describe_fallback(wanted, exc),
-                                                "used": _classic.LABEL_SEGMENT}
-                    logger.warning("[MaskOps] segmenter '%s' unavailable (%s) - using the model-free segmenter; "
-                                   "the mask is approximate.", wanted, _model_free["segmenter"]["why"][:160])
-                    cls_ = get_segmenter_cls("classic")
-                    mode_ = self._resolve_mode(
-                        input_mode, B, has_pts=bool(pos_pts or neg_pts), has_bbox=bbox_used is not None,
-                        has_text=bool(text_prompt.strip()), supports=cls_.SUPPORTS_MODES)
-                    return "classic", cls_, cls_(device=device), mode_
-
-                try:
-                    seg_inst = seg_cls(
-                        model_name=_resolve_model_choice(model, seg_cls.MODELS_KEY,
-                                                         auto_download=bool(auto_download)),
-                        device=device, precision=precision,
-                        attention=attention, offload=offload,
-                    )
-                except Exception as _exc:
-                    seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
-                # Tell the backend whether to use smart pos/neg disambiguation
-                # when SAM returns multiple candidate masks.
-                try:
-                    setattr(seg_inst, "auto_disambiguate", bool(auto_disambiguate))
-                except Exception:
-                    pass
-
-                def _segment_once(img_in: torch.Tensor) -> torch.Tensor:
-                    out = seg_inst.segment(
-                        img_in, mode=mode,
-                        positive_points=pos_pts, negative_points=neg_pts,
-                        bbox=bbox_used, neg_bbox=neg_bbox_used,
-                        text_prompt=text_prompt,
-                        frame_annotation=int(frame_annotation), object_id=int(object_id),
-                        max_frames=int(max_frames_to_track), memory_size=int(memory_size),
-                        start_frame=int(start_frame), end_frame=int(end_frame),
-                        individual_objects=bool(individual_objects),
-                        tracking_direction=tracking_direction, seed=int(seed),
-                    )
-                    return out["mask"].float().clamp(0, 1)
-
-                # Text-only / text-primary: LocateAnything → SAM bbox refine
-                # runs first (no training). Beats raw SAM text mode on open-vocab.
-                _la_done = False
-                if (text_prompt and text_prompt.strip()
-                        and B == 1 and not pos_pts and not neg_pts
-                        and bbox_used is None):
-                    _avail_la = set(all_segmenters().keys())
-                    m_la, s_la, tr_la = _la_sam_text_grounding(
-                        seg_image, text_prompt, _avail_la,
-                        device=device, precision=precision,
-                        attention=attention, offload=offload,
-                        auto_download=bool(auto_download), seed=int(seed),
-                    )
-                    if m_la is not None and s_la >= 0.20:
-                        mask_t = m_la
-                        score = s_la
-                        _la_done = True
-                        if tr_la:
-                            _cascade_trail.append(tr_la)
-                            _auto_route_reasons.append(
-                                f"text_grounding:{tr_la.get('backend', 'la')}({s_la:.2f})")
-
-                # First pass — also captures score metadata. seg_out starts empty: when
-                # text grounding already produced the mask the segmenter never runs, and
-                # the multi-object matte gate below still reads it.
-                seg_out: dict = {}
-                if not _la_done:
-                    def _first_pass() -> dict:
-                        return seg_inst.segment(
-                            seg_image, mode=mode,
+                    def _segment_once(img_in: torch.Tensor) -> torch.Tensor:
+                        out = seg_inst.segment(
+                            img_in, mode=mode,
                             positive_points=pos_pts, negative_points=neg_pts,
                             bbox=bbox_used, neg_bbox=neg_bbox_used,
                             text_prompt=text_prompt,
@@ -1303,349 +1451,437 @@ class MaskOpsMEC:
                             individual_objects=bool(individual_objects),
                             tracking_direction=tracking_direction, seed=int(seed),
                         )
-                    try:
-                        seg_out = _first_pass()
-                    except Exception as _exc:
-                        # the backend loads lazily: a missing model shows up here, not at construction
-                        seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
-                        seg_out = _first_pass()
-                    mask_t = seg_out["mask"].float().clamp(0, 1)
-                    score = float(seg_out.get("score", 1.0))
+                        return out["mask"].float().clamp(0, 1)
 
-                # ── auto_best cascade: ensemble + fallback ────────────────
-                # Primary already ran above (SAM3, or SeC on a clip). For
-                # B==1 we also run the other SAM and pick the higher-scoring
-                # mask; if BOTH score below 0.30 we drop to BiRefNet salient.
-                # For B>1 we keep the primary's mask; if its score is below
-                # 0.40 we fall back to SeC, which tracks a CONCEPT rather than
-                # an appearance and so survives the occlusion that usually
-                # caused the low score in the first place.
-                if _cascade_mode:
-                    _avail_c = set(all_segmenters().keys())
-                    def _run_alt(alt_key: str) -> tuple:
-                        alt_cls = get_segmenter_cls(alt_key)
-                        if alt_cls is None or alt_cls.STATUS != "ready":
-                            return None, 0.0
-                        alt_mode = self._resolve_mode(
-                            "auto", B,
-                            has_pts=bool(pos_pts or neg_pts),
-                            has_bbox=bbox_used is not None,
-                            has_text=bool(text_prompt.strip()),
-                            supports=alt_cls.SUPPORTS_MODES,
-                        )
-                        try:
-                            alt_inst = alt_cls(
-                                model_name=_resolve_model_choice(
-                                    "(auto)", alt_cls.MODELS_KEY,
-                                    auto_download=bool(auto_download)),
-                                device=device, precision=precision,
-                                attention=attention, offload=offload,
-                            )
-                            try:
-                                setattr(alt_inst, "auto_disambiguate",
-                                        bool(auto_disambiguate))
-                            except Exception:
-                                pass
-                            alt_out = alt_inst.segment(
-                                seg_image, mode=alt_mode,
-                                positive_points=pos_pts, negative_points=neg_pts,
-                                bbox=bbox_used, neg_bbox=neg_bbox_used,
-                                text_prompt=text_prompt,
-                                frame_annotation=int(frame_annotation),
-                                object_id=int(object_id),
-                                max_frames=int(max_frames_to_track),
-                                memory_size=int(memory_size),
-                                start_frame=int(start_frame),
-                                end_frame=int(end_frame),
-                                individual_objects=bool(individual_objects),
-                                tracking_direction=tracking_direction,
-                                seed=int(seed),
-                            )
-                            return (alt_out["mask"].float().clamp(0, 1),
-                                    float(alt_out.get("score", 0.0)))
-                        except Exception as _exc:
-                            logger.warning("[MaskMatting] auto_best alt '%s' failed: %s",
-                                           alt_key, _exc)
-                            return None, 0.0
-
-                    # LocateAnything → SAM: upgrade mask when text prompt + cascade
-                    # (skipped if text_grounding already ran as primary).
+                    # Text-only / text-primary: LocateAnything → SAM bbox refine
+                    # runs first (no training). Beats raw SAM text mode on open-vocab.
+                    _la_done = False
                     if (text_prompt and text_prompt.strip()
-                            and not _la_done and B == 1):
+                            and B == 1 and not pos_pts and not neg_pts
+                            and bbox_used is None):
+                        _avail_la = set(all_segmenters().keys())
                         m_la, s_la, tr_la = _la_sam_text_grounding(
-                            seg_image, text_prompt, _avail_c,
+                            seg_image, text_prompt, _avail_la,
                             device=device, precision=precision,
                             attention=attention, offload=offload,
                             auto_download=bool(auto_download), seed=int(seed),
                         )
-                        if m_la is not None and s_la > score:
-                            mask_t, score = m_la, s_la
+                        if m_la is not None and s_la >= 0.20:
+                            mask_t = m_la
+                            score = s_la
+                            _la_done = True
                             if tr_la:
                                 _cascade_trail.append(tr_la)
                                 _auto_route_reasons.append(
-                                    f"cascade:{tr_la.get('backend', 'la')}({s_la:.2f})")
+                                    f"text_grounding:{tr_la.get('backend', 'la')}({s_la:.2f})")
 
-                    if B == 1 and "sam3" in _avail_c and seg_key != "sam3":
-                        m2, s2 = _run_alt("sam3")
-                        _cascade_trail.append({"backend": "sam3", "score": s2})
-                        if m2 is not None and m2.shape == mask_t.shape:
-                            if s2 > score and s2 >= 0.30:
-                                prev_score = score
-                                mask_t, score = m2, s2
-                                _auto_route_reasons.append(
-                                    f"cascade:sam3({s2:.2f})>primary({prev_score:.2f})")
-                            elif score >= 0.50 and s2 >= 0.50:
-                                # both confident → union (max) for hair / thin edges.
-                                mask_t = torch.maximum(mask_t, m2.to(mask_t.device))
-                                _auto_route_reasons.append(
-                                    f"cascade:union(primary,sam3)")
+                    # First pass — also captures score metadata. seg_out starts empty: when
+                    # text grounding already produced the mask the segmenter never runs, and
+                    # the multi-object matte gate below still reads it.
+                    seg_out: dict = {}
+                    if not _la_done:
+                        def _first_pass() -> dict:
+                            return seg_inst.segment(
+                                seg_image, mode=mode,
+                                positive_points=pos_pts, negative_points=neg_pts,
+                                bbox=bbox_used, neg_bbox=neg_bbox_used,
+                                text_prompt=text_prompt,
+                                frame_annotation=int(frame_annotation), object_id=int(object_id),
+                                max_frames=int(max_frames_to_track), memory_size=int(memory_size),
+                                start_frame=int(start_frame), end_frame=int(end_frame),
+                                individual_objects=bool(individual_objects),
+                                tracking_direction=tracking_direction, seed=int(seed),
+                            )
+                        try:
+                            seg_out = _first_pass()
+                        except Exception as _exc:
+                            # the backend loads lazily: a missing model shows up here, not at construction
+                            seg_key, seg_cls, seg_inst, mode = _model_free_segmenter(_exc, seg_key)
+                            seg_out = _first_pass()
+                        mask_t = seg_out["mask"].float().clamp(0, 1)
+                        score = float(seg_out.get("score", 1.0))
 
-                    if score < 0.30:
-                        if B > 1 and "sec" in _avail_c:
+                    # ── auto_best cascade: ensemble + fallback ────────────────
+                    # Primary already ran above (SAM3, or SeC on a clip). For
+                    # B==1 we also run the other SAM and pick the higher-scoring
+                    # mask; if BOTH score below 0.30 we drop to BiRefNet salient.
+                    # For B>1 we keep the primary's mask; if its score is below
+                    # 0.40 we fall back to SeC, which tracks a CONCEPT rather than
+                    # an appearance and so survives the occlusion that usually
+                    # caused the low score in the first place.
+                    if _cascade_mode:
+                        _avail_c = set(all_segmenters().keys())
+                        def _run_alt(alt_key: str) -> tuple:
+                            alt_cls = get_segmenter_cls(alt_key)
+                            if alt_cls is None or alt_cls.STATUS != "ready":
+                                return None, 0.0
+                            alt_mode = self._resolve_mode(
+                                "auto", B,
+                                has_pts=bool(pos_pts or neg_pts),
+                                has_bbox=bbox_used is not None,
+                                has_text=bool(text_prompt.strip()),
+                                supports=alt_cls.SUPPORTS_MODES,
+                            )
+                            try:
+                                alt_inst = alt_cls(
+                                    model_name=_resolve_model_choice(
+                                        "(auto)", alt_cls.MODELS_KEY,
+                                        auto_download=bool(auto_download)),
+                                    device=device, precision=precision,
+                                    attention=attention, offload=offload,
+                                )
+                                try:
+                                    setattr(alt_inst, "auto_disambiguate",
+                                            bool(auto_disambiguate))
+                                except Exception:
+                                    pass
+                                alt_out = alt_inst.segment(
+                                    seg_image, mode=alt_mode,
+                                    positive_points=pos_pts, negative_points=neg_pts,
+                                    bbox=bbox_used, neg_bbox=neg_bbox_used,
+                                    text_prompt=text_prompt,
+                                    frame_annotation=int(frame_annotation),
+                                    object_id=int(object_id),
+                                    max_frames=int(max_frames_to_track),
+                                    memory_size=int(memory_size),
+                                    start_frame=int(start_frame),
+                                    end_frame=int(end_frame),
+                                    individual_objects=bool(individual_objects),
+                                    tracking_direction=tracking_direction,
+                                    seed=int(seed),
+                                )
+                                return (alt_out["mask"].float().clamp(0, 1),
+                                        float(alt_out.get("score", 0.0)))
+                            except Exception as _exc:
+                                logger.warning("[MaskMatting] auto_best alt '%s' failed: %s",
+                                               alt_key, _exc)
+                                return None, 0.0
+
+                        # LocateAnything → SAM: upgrade mask when text prompt + cascade
+                        # (skipped if text_grounding already ran as primary).
+                        if (text_prompt and text_prompt.strip()
+                                and not _la_done and B == 1):
+                            m_la, s_la, tr_la = _la_sam_text_grounding(
+                                seg_image, text_prompt, _avail_c,
+                                device=device, precision=precision,
+                                attention=attention, offload=offload,
+                                auto_download=bool(auto_download), seed=int(seed),
+                            )
+                            if m_la is not None and s_la > score:
+                                mask_t, score = m_la, s_la
+                                if tr_la:
+                                    _cascade_trail.append(tr_la)
+                                    _auto_route_reasons.append(
+                                        f"cascade:{tr_la.get('backend', 'la')}({s_la:.2f})")
+
+                        if B == 1 and "sam3" in _avail_c and seg_key != "sam3":
+                            m2, s2 = _run_alt("sam3")
+                            _cascade_trail.append({"backend": "sam3", "score": s2})
+                            if m2 is not None and m2.shape == mask_t.shape:
+                                if s2 > score and s2 >= 0.30:
+                                    prev_score = score
+                                    mask_t, score = m2, s2
+                                    _auto_route_reasons.append(
+                                        f"cascade:sam3({s2:.2f})>primary({prev_score:.2f})")
+                                elif score >= 0.50 and s2 >= 0.50:
+                                    # both confident → union (max) for hair / thin edges.
+                                    mask_t = torch.maximum(mask_t, m2.to(mask_t.device))
+                                    _auto_route_reasons.append(
+                                        f"cascade:union(primary,sam3)")
+
+                        if score < 0.30:
+                            if B > 1 and "sec" in _avail_c:
+                                m3, s3 = _run_alt("sec")
+                                _cascade_trail.append({"backend": "sec", "score": s3})
+                                if m3 is not None and m3.shape == mask_t.shape and s3 > score:
+                                    mask_t, score = m3, s3
+                                    seg_key = "sec"
+                                    _auto_route_reasons.append(
+                                        f"cascade:fallback→sec({s3:.2f})")
+                            elif B == 1 and "birefnet" in _avail_c:
+                                m3, s3 = _run_alt("birefnet")
+                                _cascade_trail.append({"backend": "birefnet", "score": s3})
+                                if m3 is not None and m3.shape == mask_t.shape and s3 > score:
+                                    mask_t, score = m3, s3
+                                    seg_key = "birefnet"
+                                    _auto_route_reasons.append(
+                                        f"cascade:fallback→birefnet({s3:.2f})")
+                        elif B > 1 and score < 0.40 and "sec" in _avail_c:
                             m3, s3 = _run_alt("sec")
                             _cascade_trail.append({"backend": "sec", "score": s3})
                             if m3 is not None and m3.shape == mask_t.shape and s3 > score:
                                 mask_t, score = m3, s3
                                 seg_key = "sec"
                                 _auto_route_reasons.append(
-                                    f"cascade:fallback→sec({s3:.2f})")
-                        elif B == 1 and "birefnet" in _avail_c:
-                            m3, s3 = _run_alt("birefnet")
-                            _cascade_trail.append({"backend": "birefnet", "score": s3})
-                            if m3 is not None and m3.shape == mask_t.shape and s3 > score:
-                                mask_t, score = m3, s3
-                                seg_key = "birefnet"
-                                _auto_route_reasons.append(
-                                    f"cascade:fallback→birefnet({s3:.2f})")
-                    elif B > 1 and score < 0.40 and "sec" in _avail_c:
-                        m3, s3 = _run_alt("sec")
-                        _cascade_trail.append({"backend": "sec", "score": s3})
-                        if m3 is not None and m3.shape == mask_t.shape and s3 > score:
-                            mask_t, score = m3, s3
-                            seg_key = "sec"
-                            _auto_route_reasons.append(
-                                f"cascade:video_fallback→sec({s3:.2f})")
+                                    f"cascade:video_fallback→sec({s3:.2f})")
 
-                # Optional ensembling — fuse first pass with augmented passes.
-                if bool(multiscale) and bool(tta_flip):
-                    fused = _vfx.multiscale_fuse(
-                        seg_image, lambda x: _vfx.tta_flip_fuse(x, _segment_once))
-                    mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
-                elif bool(tta_flip):
-                    fused = _vfx.tta_flip_fuse(seg_image, _segment_once)
-                    mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
-                elif bool(multiscale):
-                    fused = _vfx.multiscale_fuse(seg_image, _segment_once)
-                    mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
-                logger.warning("[MaskMatting] seg done \u2014 mask sum=%.1f score=%.3f shape=%s",
-                               float(mask_t.sum()), score, tuple(mask_t.shape))
+                    # Optional ensembling — fuse first pass with augmented passes.
+                    if bool(multiscale) and bool(tta_flip):
+                        fused = _vfx.multiscale_fuse(
+                            seg_image, lambda x: _vfx.tta_flip_fuse(x, _segment_once))
+                        mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
+                    elif bool(tta_flip):
+                        fused = _vfx.tta_flip_fuse(seg_image, _segment_once)
+                        mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
+                    elif bool(multiscale):
+                        fused = _vfx.multiscale_fuse(seg_image, _segment_once)
+                        mask_t = 0.5 * (mask_t + fused.to(mask_t.device))
+                    logger.warning("[MaskMatting] seg done \u2014 mask sum=%.1f score=%.3f shape=%s",
+                                   float(mask_t.sum()), score, tuple(mask_t.shape))
 
-                # ── Robust propagation: confidence-aware re-anchor ────────
-                # Only meaningful for video (B>1) with a single seed frame.
-                robust_info: Dict[str, Any] = {"enabled": bool(robust_propagation)}
-                if bool(robust_propagation) and mask_t.ndim == 3 and mask_t.shape[0] > 1:
-                    try:
-                        method = str(robust_reanchor_method).lower()
-                        conf_thr = float(robust_confidence_threshold)
-                        blend_w = float(robust_blend_alpha)
-                        src_idx = max(0, min(int(frame_annotation), mask_t.shape[0] - 1))
-                        confidences: List[float] = [1.0] * mask_t.shape[0]
-                        events: List[Dict[str, Any]] = []
-                        last_good = mask_t[src_idx].clone()
-                        last_good_idx = src_idx
-                        dino = None
-                        if method == "dino":
-                            try:
-                                dino = DINORelocator(device=device)
-                                dino.encode_reference(seg_image[src_idx], last_good)
-                            except Exception as _e:
-                                logger.warning("[MaskOps] dino init failed: %s — falling back to flow", _e)
-                                method = "flow"
-                        for t in range(mask_t.shape[0]):
-                            if t == src_idx:
-                                continue
-                            conf = compute_confidence(mask_t[t], last_good)
-                            confidences[t] = conf
-                            if conf >= conf_thr:
-                                last_good = mask_t[t].clone()
-                                last_good_idx = t
-                                continue
-                            # Re-anchor
-                            if method == "none":
-                                events.append({"frame": t, "conf": conf, "action": "skip"})
-                                continue
-                            if method == "flow":
+                    # ── Robust propagation: confidence-aware re-anchor ────────
+                    # Only meaningful for video (B>1) with a single seed frame.
+                    robust_info: Dict[str, Any] = {"enabled": bool(robust_propagation)}
+                    if bool(robust_propagation) and mask_t.ndim == 3 and mask_t.shape[0] > 1:
+                        try:
+                            method = str(robust_reanchor_method).lower()
+                            conf_thr = float(robust_confidence_threshold)
+                            blend_w = float(robust_blend_alpha)
+                            src_idx = max(0, min(int(frame_annotation), mask_t.shape[0] - 1))
+                            confidences: List[float] = [1.0] * mask_t.shape[0]
+                            events: List[Dict[str, Any]] = []
+                            last_good = mask_t[src_idx].clone()
+                            last_good_idx = src_idx
+                            dino = None
+                            if method == "dino":
                                 try:
-                                    flow = compute_farneback_flow(
-                                        seg_image[last_good_idx], seg_image[t])
-                                    warped = flow_warp_reanchor(last_good, flow)
-                                    mask_t[t] = warped.to(mask_t.device).clamp(0, 1)
-                                    events.append({"frame": t, "conf": conf, "action": "flow"})
+                                    dino = DINORelocator(device=device)
+                                    dino.encode_reference(seg_image[src_idx], last_good)
                                 except Exception as _e:
-                                    events.append({"frame": t, "conf": conf, "action": f"flow_err:{_e}"})
-                            elif method == "blend":
+                                    logger.warning("[MaskOps] dino init failed: %s — falling back to flow", _e)
+                                    method = "flow"
+                            for t in range(mask_t.shape[0]):
+                                if t == src_idx:
+                                    continue
+                                conf = compute_confidence(mask_t[t], last_good)
+                                confidences[t] = conf
+                                if conf >= conf_thr:
+                                    last_good = mask_t[t].clone()
+                                    last_good_idx = t
+                                    continue
+                                # Re-anchor
+                                if method == "none":
+                                    events.append({"frame": t, "conf": conf, "action": "skip"})
+                                    continue
+                                if method == "flow":
+                                    try:
+                                        flow = compute_farneback_flow(
+                                            seg_image[last_good_idx], seg_image[t])
+                                        warped = flow_warp_reanchor(last_good, flow)
+                                        mask_t[t] = warped.to(mask_t.device).clamp(0, 1)
+                                        events.append({"frame": t, "conf": conf, "action": "flow"})
+                                    except Exception as _e:
+                                        events.append({"frame": t, "conf": conf, "action": f"flow_err:{_e}"})
+                                elif method == "blend":
+                                    try:
+                                        flow = compute_farneback_flow(
+                                            seg_image[last_good_idx], seg_image[t])
+                                        warped = flow_warp_reanchor(last_good, flow).to(mask_t.device)
+                                        mask_t[t] = blend_masks(mask_t[t], warped, alpha=blend_w).clamp(0, 1)
+                                        events.append({"frame": t, "conf": conf, "action": "blend"})
+                                    except Exception as _e:
+                                        events.append({"frame": t, "conf": conf, "action": f"blend_err:{_e}"})
+                                elif method == "dino" and dino is not None:
+                                    try:
+                                        x0, y0, x1, y1 = dino.find_best_region(seg_image[t])
+                                        # Re-prompt SAM2 single-frame on this region
+                                        alt_out = seg_inst.segment(
+                                            seg_image[t:t+1], mode="bbox",
+                                            positive_points=[], negative_points=[],
+                                            bbox=[x0, y0, x1, y1], neg_bbox=None,
+                                            text_prompt="",
+                                            frame_annotation=0, object_id=int(object_id),
+                                            max_frames=0, memory_size=int(memory_size),
+                                            start_frame=0, end_frame=0,
+                                            individual_objects=False,
+                                            tracking_direction="forward", seed=int(seed),
+                                        )
+                                        alt_m = alt_out["mask"].float().clamp(0, 1).to(mask_t.device)
+                                        if alt_m.ndim == 3 and alt_m.shape[0] >= 1:
+                                            mask_t[t] = alt_m[0]
+                                        events.append({"frame": t, "conf": conf, "action": "dino",
+                                                       "bbox": [x0, y0, x1, y1]})
+                                    except Exception as _e:
+                                        events.append({"frame": t, "conf": conf, "action": f"dino_err:{_e}"})
+                                # Update last_good if re-anchored mask is now consistent.
+                                new_conf = compute_confidence(mask_t[t], last_good)
+                                if new_conf >= conf_thr:
+                                    last_good = mask_t[t].clone()
+                                    last_good_idx = t
+                            mean_conf = float(sum(confidences) / max(len(confidences), 1))
+                            robust_info.update({
+                                "method": method,
+                                "threshold": conf_thr,
+                                "blend_alpha": blend_w,
+                                "mean_confidence": mean_conf,
+                                "events": events[:64],   # cap for JSON size
+                                "n_events": len(events),
+                            })
+                            if method == "dino":
                                 try:
-                                    flow = compute_farneback_flow(
-                                        seg_image[last_good_idx], seg_image[t])
-                                    warped = flow_warp_reanchor(last_good, flow).to(mask_t.device)
-                                    mask_t[t] = blend_masks(mask_t[t], warped, alpha=blend_w).clamp(0, 1)
-                                    events.append({"frame": t, "conf": conf, "action": "blend"})
-                                except Exception as _e:
-                                    events.append({"frame": t, "conf": conf, "action": f"blend_err:{_e}"})
-                            elif method == "dino" and dino is not None:
-                                try:
-                                    x0, y0, x1, y1 = dino.find_best_region(seg_image[t])
-                                    # Re-prompt SAM2 single-frame on this region
-                                    alt_out = seg_inst.segment(
-                                        seg_image[t:t+1], mode="bbox",
-                                        positive_points=[], negative_points=[],
-                                        bbox=[x0, y0, x1, y1], neg_bbox=None,
-                                        text_prompt="",
-                                        frame_annotation=0, object_id=int(object_id),
-                                        max_frames=0, memory_size=int(memory_size),
-                                        start_frame=0, end_frame=0,
-                                        individual_objects=False,
-                                        tracking_direction="forward", seed=int(seed),
-                                    )
-                                    alt_m = alt_out["mask"].float().clamp(0, 1).to(mask_t.device)
-                                    if alt_m.ndim == 3 and alt_m.shape[0] >= 1:
-                                        mask_t[t] = alt_m[0]
-                                    events.append({"frame": t, "conf": conf, "action": "dino",
-                                                   "bbox": [x0, y0, x1, y1]})
-                                except Exception as _e:
-                                    events.append({"frame": t, "conf": conf, "action": f"dino_err:{_e}"})
-                            # Update last_good if re-anchored mask is now consistent.
-                            new_conf = compute_confidence(mask_t[t], last_good)
-                            if new_conf >= conf_thr:
-                                last_good = mask_t[t].clone()
-                                last_good_idx = t
-                        mean_conf = float(sum(confidences) / max(len(confidences), 1))
-                        robust_info.update({
-                            "method": method,
-                            "threshold": conf_thr,
-                            "blend_alpha": blend_w,
-                            "mean_confidence": mean_conf,
-                            "events": events[:64],   # cap for JSON size
-                            "n_events": len(events),
-                        })
-                        if method == "dino":
-                            try:
-                                release_dinov2()
-                            except Exception:
-                                pass
-                    except Exception as _e:
-                        logger.warning("[MaskOps] robust_propagation failed: %s", _e)
-                        robust_info["error"] = str(_e)
+                                    release_dinov2()
+                                except Exception:
+                                    pass
+                        except Exception as _e:
+                            logger.warning("[MaskOps] robust_propagation failed: %s", _e)
+                            robust_info["error"] = str(_e)
 
-                if external_mask is not None:
-                    em = to_mask(external_mask)
-                    if em.shape == mask_t.shape:
-                        # Skip AND-merge if the external mask is effectively empty
-                        # (e.g. an unconfigured SplineMaskEditor with 0 shapes).
-                        em_sum = float(em.sum())
-                        if em_sum < 1.0:
-                            logger.warning(
-                                "[MaskMatting] external_mask is empty (sum=%.1f) \u2014 skipping AND-merge",
-                                em_sum,
+                    if external_mask is not None:
+                        em = to_mask(external_mask)
+                        if em.shape == mask_t.shape:
+                            # Skip AND-merge if the external mask is effectively empty
+                            # (e.g. an unconfigured SplineMaskEditor with 0 shapes).
+                            em_sum = float(em.sum())
+                            if em_sum < 1.0:
+                                logger.warning(
+                                    "[MaskMatting] external_mask is empty (sum=%.1f) \u2014 skipping AND-merge",
+                                    em_sum,
+                                )
+                            else:
+                                # logical AND: refine the user's hint
+                                mask_t = torch.minimum(mask_t, em)
+
+                    if _cache is not None:
+                        _vstage["track"] = "ran"
+                        _cache.put(_k1, {
+                            "mask_t": mask_t, "score": score, "mode": mode, "seg_key": seg_key,
+                            "seg_out": {k: seg_out[k] for k in ("object_masks", "object_boxes") if k in seg_out},
+                            "auto_q_info": auto_q_info, "luma_mask_t": luma_mask_t, "robust_info": robust_info,
+                            "reasons": list(_auto_route_reasons[_n_reasons:]),
+                            "trail": list(_cascade_trail[_n_trail:]),
+                            "model_free": _model_free.get("segmenter")})
+                else:
+                    _vstage["track"] = "reused"
+                    mask_t, score, mode, seg_key = _s1["mask_t"], _s1["score"], _s1["mode"], _s1["seg_key"]
+                    seg_out = dict(_s1["seg_out"])
+                    auto_q_info, luma_mask_t = dict(_s1["auto_q_info"]), _s1["luma_mask_t"]
+                    robust_info = dict(_s1["robust_info"])
+                    _auto_route_reasons.extend(_s1["reasons"])
+                    _cascade_trail.extend(_s1["trail"])
+                    if _s1["model_free"]:
+                        _model_free["segmenter"] = _s1["model_free"]
+
+                # L7.114: EDGE stage (trimap + matter) behind the stage cache
+                if _cache is not None:
+                    _k2 = _sc.make_key("cascade.edge", _k1, mat_key, matter_model,
+                                       _sc.installed(getattr(mat_cls, "MODELS_KEY", "") or ""),
+                                       {k: _sc.value_key(v) for k, v in dict(
+                        subject_preset=subject_preset, trimap_dilate=trimap_dilate, trimap_erode=trimap_erode,
+                        edge_radius=edge_radius, enable_advanced_trimap=enable_advanced_trimap,
+                        trimap_inner_scale=trimap_inner_scale, trimap_outer_scale=trimap_outer_scale,
+                        trimap_smooth=trimap_smooth, trimap_threshold=trimap_threshold,
+                        external_trimap=external_trimap, matte_tile=matte_tile, matte_overlap=matte_overlap,
+                        matte_tile_batch=matte_tile_batch, memory_size=memory_size, auto_download=auto_download,
+                        precision=precision, attention=attention, offload=offload,
+                        background_plate=background_plate).items()})      # L9.39: a new plate re-mattes
+                    _s2 = _cache.get(_k2)
+                if _s2 is None:
+                    # Trimap
+                    d, e, edge = apply_subject_preset(subject_preset, int(trimap_dilate), int(trimap_erode), int(edge_radius))
+                    if external_trimap is not None:
+                        trimap_t = to_mask(external_trimap)
+                    elif bool(enable_advanced_trimap):
+                        # Edge-aware trimap via the absorbed TrimapGeneratorMEC.
+                        try:
+                            tg = _get_trimap_advanced()
+                            trimap_t, _fg_m, _unk_m = tg.generate(
+                                mask_t,
+                                edge_radius=int(edge if edge > 0 else 15),
+                                inner_erosion=float(trimap_inner_scale),
+                                outer_dilation=float(trimap_outer_scale),
+                                smooth=float(trimap_smooth),
+                                threshold=float(trimap_threshold),
+                                image=img_bhwc,
+                            )
+                        except Exception as _e:
+                            logger.warning("[MaskOps] advanced trimap failed (%s) — falling back to simple.", _e)
+                            trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
+                    else:
+                        trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
+
+                    # Matte
+                    if mat_cls is not None:
+                        try:
+                            mat_inst = mat_cls(
+                                model_name=_resolve_model_choice(matter_model, mat_cls.MODELS_KEY,
+                                                                 auto_download=bool(auto_download)),
+                                device=device, precision=precision,
+                                attention=attention, offload=offload,
+                            )
+                            if getattr(mat_inst, "_model", None) is None and hasattr(mat_inst, "load"):
+                                mat_inst.load()        # load now, so a missing model is caught here, not mid-matte
+                        except Exception as _exc:
+                            from . import _classic
+                            if mat_key == "guided_filter" or not (_classic.fallback_allowed()
+                                                                  and _classic.is_missing_model_error(_exc)):
+                                raise
+                            _model_free["matter"] = {**_classic.describe_fallback(mat_key, _exc),
+                                                     "used": _classic.LABEL_MATTE}
+                            logger.warning("[MaskOps] matter '%s' unavailable (%s) - using the model-free guided "
+                                           "filter.", mat_key, _model_free["matter"]["why"][:160])
+                            mat_key = "guided_filter"
+                            mat_cls = get_matter_cls("guided_filter")
+                            mat_inst = mat_cls(device=device)
+                        # Multi-object path: activates when the segmenter returns
+                        # per-object masks/boxes, B==1, and the backend has matte_multi.
+                        # Falls back silently to the single-object path otherwise.
+                        obj_masks_raw = seg_out.get("object_masks")  # [N,H,W] or None
+                        obj_boxes_raw = seg_out.get("object_boxes", [])
+                        use_multi = (
+                            isinstance(obj_masks_raw, torch.Tensor)
+                            and obj_masks_raw.ndim >= 2
+                            and len(obj_boxes_raw) > 0
+                            and B == 1
+                            and hasattr(mat_inst, "matte_multi")
+                        )
+                        _vit_kw: Dict[str, Any] = {}
+                        if mat_key == "vitmatte":
+                            _vit_kw = _vitmatte_tile_kwargs(matte_tile, matte_overlap, matte_tile_batch, device)
+                        if mat_key == "bgmattingv2" and background_plate is not None:
+                            _vit_kw["background"] = _plate_like(background_plate, img_bhwc)
+                            _plate_note = "user plate"
+                        elif mat_key == "bgmattingv2":
+                            _plate_note = "synthesised from the coarse mask (connect background_plate for a real one)"
+                        # L9.39: per-object matting needs one frame and a backend with matte_multi; otherwise the
+                        # objects are matted together - said in info instead of silently.
+                        _n_obj = int(obj_masks_raw.shape[0]) if isinstance(obj_masks_raw, torch.Tensor) and \
+                            obj_masks_raw.ndim >= 3 else 0
+                        if _n_obj > 1 and not use_multi:
+                            _why = ("a video (per-object matting runs on single images)" if B > 1 else
+                                    f"the {mat_key} matter has no per-object mode")
+                            _multi_note = f"{_n_obj} objects matted as one: {_why}"
+                        if use_multi:
+                            n_obj = min(int(obj_masks_raw.shape[0]), len(obj_boxes_raw))
+                            om_list = [
+                                obj_masks_raw[i].unsqueeze(0) for i in range(n_obj)
+                            ]
+                            boxes = obj_boxes_raw[:n_obj]
+                            mat_out = mat_inst.matte_multi(
+                                img_bhwc, om_list, boxes,
+                                edge_radius=edge, memory_size=int(memory_size),
+                                **_vit_kw,
                             )
                         else:
-                            # logical AND: refine the user's hint
-                            mask_t = torch.minimum(mask_t, em)
-
-                # Trimap
-                d, e, edge = apply_subject_preset(subject_preset, int(trimap_dilate), int(trimap_erode), int(edge_radius))
-                if external_trimap is not None:
-                    trimap_t = to_mask(external_trimap)
-                elif bool(enable_advanced_trimap):
-                    # Edge-aware trimap via the absorbed TrimapGeneratorMEC.
-                    try:
-                        tg = _get_trimap_advanced()
-                        trimap_t, _fg_m, _unk_m = tg.generate(
-                            mask_t,
-                            edge_radius=int(edge if edge > 0 else 15),
-                            inner_erosion=float(trimap_inner_scale),
-                            outer_dilation=float(trimap_outer_scale),
-                            smooth=float(trimap_smooth),
-                            threshold=float(trimap_threshold),
-                            image=img_bhwc,
-                        )
-                    except Exception as _e:
-                        logger.warning("[MaskOps] advanced trimap failed (%s) — falling back to simple.", _e)
-                        trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
-                else:
-                    trimap_t = mask_to_trimap(mask_t, dilate=d, erode=e)
-
-                # Matte
-                if mat_cls is not None:
-                    try:
-                        mat_inst = mat_cls(
-                            model_name=_resolve_model_choice(matter_model, mat_cls.MODELS_KEY,
-                                                             auto_download=bool(auto_download)),
-                            device=device, precision=precision,
-                            attention=attention, offload=offload,
-                        )
-                        if getattr(mat_inst, "_model", None) is None and hasattr(mat_inst, "load"):
-                            mat_inst.load()        # load now, so a missing model is caught here, not mid-matte
-                    except Exception as _exc:
-                        from . import _classic
-                        if mat_key == "guided_filter" or not (_classic.fallback_allowed()
-                                                              and _classic.is_missing_model_error(_exc)):
-                            raise
-                        _model_free["matter"] = {**_classic.describe_fallback(mat_key, _exc),
-                                                 "used": _classic.LABEL_MATTE}
-                        logger.warning("[MaskOps] matter '%s' unavailable (%s) - using the model-free guided "
-                                       "filter.", mat_key, _model_free["matter"]["why"][:160])
-                        mat_key = "guided_filter"
-                        mat_cls = get_matter_cls("guided_filter")
-                        mat_inst = mat_cls(device=device)
-                    # Multi-object path: activates when the segmenter returns
-                    # per-object masks/boxes, B==1, and the backend has matte_multi.
-                    # Falls back silently to the single-object path otherwise.
-                    obj_masks_raw = seg_out.get("object_masks")  # [N,H,W] or None
-                    obj_boxes_raw = seg_out.get("object_boxes", [])
-                    use_multi = (
-                        isinstance(obj_masks_raw, torch.Tensor)
-                        and obj_masks_raw.ndim >= 2
-                        and len(obj_boxes_raw) > 0
-                        and B == 1
-                        and hasattr(mat_inst, "matte_multi")
-                    )
-                    _vit_kw: Dict[str, Any] = {}
-                    if mat_key == "vitmatte":
-                        _vit_kw = _vitmatte_tile_kwargs(matte_tile, matte_overlap, matte_tile_batch, device)
-                    if mat_key == "bgmattingv2" and background_plate is not None:
-                        _vit_kw["background"] = _plate_like(background_plate, img_bhwc)
-                        _plate_note = "user plate"
-                    elif mat_key == "bgmattingv2":
-                        _plate_note = "synthesised from the coarse mask (connect background_plate for a real one)"
-                    # L9.39: per-object matting needs one frame and a backend with matte_multi; otherwise the
-                    # objects are matted together - said in info instead of silently.
-                    _n_obj = int(obj_masks_raw.shape[0]) if isinstance(obj_masks_raw, torch.Tensor) and \
-                        obj_masks_raw.ndim >= 3 else 0
-                    if _n_obj > 1 and not use_multi:
-                        _why = ("a video (per-object matting runs on single images)" if B > 1 else
-                                f"the {mat_key} matter has no per-object mode")
-                        _multi_note = f"{_n_obj} objects matted as one: {_why}"
-                    if use_multi:
-                        n_obj = min(int(obj_masks_raw.shape[0]), len(obj_boxes_raw))
-                        om_list = [
-                            obj_masks_raw[i].unsqueeze(0) for i in range(n_obj)
-                        ]
-                        boxes = obj_boxes_raw[:n_obj]
-                        mat_out = mat_inst.matte_multi(
-                            img_bhwc, om_list, boxes,
-                            edge_radius=edge, memory_size=int(memory_size),
-                            **_vit_kw,
-                        )
+                            mat_out = mat_inst.matte(
+                                img_bhwc, mask_t, trimap=trimap_t,
+                                edge_radius=edge, memory_size=int(memory_size),
+                                **_vit_kw,
+                            )
+                        alpha_t = mat_out["alpha"].float().clamp(0, 1)
                     else:
-                        mat_out = mat_inst.matte(
-                            img_bhwc, mask_t, trimap=trimap_t,
-                            edge_radius=edge, memory_size=int(memory_size),
-                            **_vit_kw,
-                        )
-                    alpha_t = mat_out["alpha"].float().clamp(0, 1)
+                        alpha_t = mask_t
+                    if _cache is not None:
+                        _vstage["edge"] = "ran"
+                        _cache.put(_k2, {"trimap_t": trimap_t, "alpha_t": alpha_t, "mat_key": mat_key,
+                                         "dee": [d, e, edge], "model_free": _model_free.get("matter"),
+                                         "notes": [_plate_note, _multi_note]})
                 else:
-                    alpha_t = mask_t
+                    _vstage["edge"] = "reused"
+                    trimap_t, alpha_t, mat_key = _s2["trimap_t"], _s2["alpha_t"], _s2["mat_key"]
+                    d, e, edge = _s2["dee"]
+                    _plate_note, _multi_note = _s2.get("notes") or ["", ""]     # L9.39 info, kept with the stage
+                    if _s2["model_free"]:
+                        _model_free["matter"] = _s2["model_free"]
 
             # ── VFX post-processing pipeline ─────────────────────────
             # 1. Post refinement (CRF / guided filter).
@@ -1871,6 +2107,9 @@ class MaskOpsMEC:
             # L7.65 P05: which backend ran (the others report it too), and whether the split masks were made
             info_obj["backend"] = _engines.NATIVE
             info_obj["split_masks"] = bool(split_masks)
+            # L7.114: what the viewer's selection did (only on viewer-driven runs)
+            if _viewer is not None:
+                info_obj["viewer"] = {**_viewer.get("info", {}), "stage_cache": dict(_vstage)}
             # Output luma-key mask (zeros if not run).
             if luma_mask_t is None:
                 luma_out = torch.zeros_like(alpha_cpu)

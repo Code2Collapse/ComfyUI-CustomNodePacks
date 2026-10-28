@@ -98,11 +98,24 @@ except Exception as _exc:  # pragma: no cover
     MaskRefineMEC = None  # type: ignore
     _MR_MAPPINGS, _MR_DISPLAY = {}, {}
 
+# L7.114: the Matte viewer's three hidden helper nodes (nodes/c2c_viewer, DEV_ONLY) register with Mask + Matting -
+# they exist only for its viewer. Guarded: a helper failure never costs the mask nodes.
+try:
+    from ..c2c_viewer import (
+        NODE_CLASS_MAPPINGS as _VW_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _VW_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    if _c2c_rec is not None:
+        _c2c_rec("C2CViewerHelpers", _exc, hint="The Mask + Matting viewer cannot load plates or find objects.",
+                 group="mask_matting")
+    _VW_MAPPINGS, _VW_DISPLAY = {}, {}
+
 NODE_CLASS_MAPPINGS = {
-    **_MO_MAPPINGS, **_MT_MAPPINGS, **_MR_MAPPINGS,
+    **_MO_MAPPINGS, **_MT_MAPPINGS, **_MR_MAPPINGS, **(_VW_MAPPINGS if _MO_MAPPINGS else {}),
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    **_MO_DISPLAY, **_MT_DISPLAY, **_MR_DISPLAY,
+    **_MO_DISPLAY, **_MT_DISPLAY, **_MR_DISPLAY, **(_VW_DISPLAY if _MO_MAPPINGS else {}),
 }
 
 __all__ = [
