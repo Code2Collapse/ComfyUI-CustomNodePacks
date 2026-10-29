@@ -8,8 +8,11 @@
  * ``__mec_origType``.
  */
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 import { vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
+import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
+import { createViewer } from "./c2c_viewer/viewer.js";
 
 // Maps each widget to a predicate (segmenter,matter,mode,supports,vals) -> bool.
 // ``vals`` is a flat {widgetName: value} snapshot, allowing toggle-gated widgets.
@@ -314,10 +317,90 @@ function refreshVisibility(node) {
     node.setDirtyCanvas(true, true);
 }
 
+/** The node grows to its content height (the viewer's height follows the plate's aspect). */
+function fitHeight(node) {
+    vueSyncNodeWidgets(node);
+    const sz = node.computeSize();
+    node.setSize([Math.max(node.size[0], sz[0]), sz[1]]);
+    vueFitNodeHeight(node);
+    node.setDirtyCanvas(true, true);
+}
+
+const VIEWER_MIN_W = 460;
+
+/**
+ * L7.114 (owner A14): the Matte viewer at the top of the node (js/c2c_viewer/viewer.js). A non-serialised DOM widget,
+ * so saved widgets_values keep their order (frontend 1.53 skips serialize:false widgets on save and restore, as with
+ * the status strip this replaces). The selection lives in the node's own `picks` widget, hidden while the viewer is
+ * on. "All settings" closed folds every regular control (mask_visibility.js asks node.__c2cViewerFold); the widgets
+ * stay real and saved.
+ */
+function mountViewer(node) {
+    const picksW = () => (node.widgets || []).find((w) => w.name === "picks");
+    const v = createViewer(node, {
+        app, api,
+        getPicks: () => String(picksW()?.value ?? ""),
+        setPicks: (json) => {
+            const w = picksW();
+            if (!w || w.value === json) return;
+            w.value = json;
+            w.callback?.(json);
+            node.setDirtyCanvas?.(true, true);
+        },
+        getBackend: () => String((node.widgets || []).find((w) => w.name === "backend")?.value ?? ""),
+        onAdvanced: () => {
+            node.__c2cReapplyVisibility?.();
+            setTimeout(() => refreshVisibility(node), 0);
+        },
+        onLayout: () => requestAnimationFrame(() => fitHeight(node)),
+    });
+    const nodeWidth = () => node.size?.[0] || VIEWER_MIN_W;
+    const widget = node.addDOMWidget("c2c_viewer", "div", v.root, {
+        serialize: false,
+        margin: 4,
+        getMinHeight: () => v.heightFor(nodeWidth()) + 8,
+    });
+    widget.serialize = false;
+    // the node's ACTUAL width: node.computeSize() passes its own minimum width here (measured 255 px on a 460 px
+    // node), which sized the view for a narrow node and clipped the bottom rows (live check 2026-10-29)
+    widget.computeSize = (w) => [w, v.heightFor(Math.max(w || 0, nodeWidth())) + 8];
+    tagDomWidget(widget);              // Nodes 2.0 inside a new subgraph shows a stale copy; _vue_dom_rebind swaps ours in
+    const i = node.widgets.indexOf(widget);
+    if (i > 0) { node.widgets.splice(i, 1); node.widgets.unshift(widget); }
+    node.__c2cViewer = v;
+    node.__c2cViewerFold = (name) => !node.properties?.c2c_viewer_advanced && name !== "picks";
+    if ((node.size?.[0] || 0) < VIEWER_MIN_W) node.setSize([VIEWER_MIN_W, node.size[1]]);
+    const backendW = (node.widgets || []).find((w) => w.name === "backend");
+    if (backendW) {
+        const orig = backendW.callback;
+        backendW.callback = function (...a) { const r = orig?.apply(this, a); v.syncFromWidget(); return r; };
+    }
+    // Removal is not always deletion ("Convert to subgraph" removes the node and adds the SAME node inside): only
+    // release the viewer when the node is still in no graph a moment later.
+    let teardown = null;
+    const origRemoved = node.onRemoved;
+    node.onRemoved = function (...a) {
+        if (teardown) clearTimeout(teardown);
+        teardown = setTimeout(() => { teardown = null; if (!node.graph) v.destroy(); }, 2000);
+        return origRemoved?.apply(this, a);
+    };
+    const origAdded = node.onAdded;
+    node.onAdded = function (...a) {
+        const r = origAdded?.apply(this, a);
+        if (teardown) { clearTimeout(teardown); teardown = null; }
+        afterRender(() => rebindNode(node));
+        return r;
+    };
+    return v;
+}
+
 app.registerExtension({
     name: "MEC.MaskMatting.DynamicWidgets",
     async beforeRegisterNodeDef(nodeType, nodeData, _appRef) {
         if (nodeData?.name !== "MaskOpsMEC") return;
+        // kill switch C2C_VIEWER=0: the server marks the picks option, the node keeps its plain widgets
+        const picksSpec = nodeData?.input?.optional?.picks;
+        const viewerOn = !!picksSpec && picksSpec?.[1]?.c2c_viewer !== false;
 
         const _origIsWidgetVisible = nodeType.prototype.isWidgetVisible;
         nodeType.prototype.isWidgetVisible = function (widget) {
@@ -331,6 +414,9 @@ app.registerExtension({
             const node = this;
             if (!node.properties) node.properties = {};
             node.properties.c2c_pipeline_v = 1;
+            if (viewerOn) {
+                try { mountViewer(node); } catch (e) { console.warn("[C2C] Matte viewer failed to mount:", e); }
+            }
 
             // Compact DOM status header — this node is a flat wall of 30+
             // native widgets (14 segmenter backends x 4 matting backends,
@@ -338,6 +424,12 @@ app.registerExtension({
             // summary + a missing-weights warning gives at-a-glance context
             // that the native combo/slider rows can't.
             ensureC2CKit();
+            if (node.__c2cViewer) {        // the viewer replaces the status strip
+                hookTriggers(node);
+                setTimeout(() => refreshVisibility(node), 0);
+                setTimeout(() => refreshVisibility(node), 400);
+                return r;
+            }
             const statusEl = document.createElement("div");
             statusEl.className = "c2ck";
             statusEl.style.cssText =
@@ -402,6 +494,14 @@ app.registerExtension({
             node._mecStatusPill = statusPill;
             node._mecWarnPill = warnPill;
 
+            hookTriggers(node);
+            // Initial pass after the next tick (widgets fully populated), and
+            // again once the folding spec has arrived from the server.
+            setTimeout(() => refreshVisibility(node), 0);
+            setTimeout(() => refreshVisibility(node), 400);
+            return r;
+        };
+        function hookTriggers(node) {
             // Hook each control widget so any change refreshes visibility.
             const triggers = [
                 "pipeline", "scene_prompts", "auto_download",
@@ -425,12 +525,7 @@ app.registerExtension({
                     return out;
                 };
             }
-            // Initial pass after the next tick (widgets fully populated), and
-            // again once the folding spec has arrived from the server.
-            setTimeout(() => refreshVisibility(node), 0);
-            setTimeout(() => refreshVisibility(node), 400);
-            return r;
-        };
+        }
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             const r = onConfigure?.apply(this, arguments);
@@ -440,6 +535,7 @@ app.registerExtension({
             }
             if (!this.properties) this.properties = {};
             this.properties.c2c_pipeline_v = 1;
+            this.__c2cViewer?.syncFromWidget();          // the saved selection (markers; masks need a new Find)
             setTimeout(() => refreshVisibility(this), 0);
             setTimeout(() => refreshVisibility(this), 400);
             return r;

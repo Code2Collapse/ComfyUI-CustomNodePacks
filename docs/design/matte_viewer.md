@@ -85,3 +85,20 @@ Thresholds chosen between these: coverage green >= 0.97, amber >= 0.90; edge det
 flicker green <= 0.025, amber <= 0.040 (alpha units). Measured with `scratchpad/tmp_viewer/measure_qc.py`,
 2026-10-15, CPU, 16 ms per frame for all three numbers at 320 x 180. The test pins every case to its level. These are
 numbers on synthetic clips, not a claim about real footage; the viewer's tooltip says so.
+
+## 5. The panel (`js/c2c_viewer/viewer.js`, mounted by `js/mask_matting.js`)
+
+- A non-serialised DOM widget at the top of the node; it replaces the status strip. Its height follows the node's
+  width and the plate's aspect (frame view 140-640 px). `node.computeSize()` passes the node's minimum width to a
+  widget, so the panel sizes from the node's actual width.
+- Rows: steps (Plate / Subject / Render, each clickable) + model slot; frame view; scrubber + frame box; ruler (the
+  rendered range, the empty part of a SeC render, the pick frame); Find box; the one prominent next action (+ a
+  secondary one and the preview length); status; Pick / Result + Comp / Alpha / Checker / Overlay; QC badges; All
+  settings.
+- Canvas colours are literal values read from the `--cu` tokens of the panel's root (class `c2c-ui`).
+- `picks` is written on every selection change. A reload restores the markers; the found objects' masks need a new Find.
+- All settings closed folds every regular control. `mask_visibility.js` asks `node.__c2cViewerFold`; the widgets stay
+  real and saved in the same order. `picks` is a row only with `C2C_VIEWER=0`.
+- Subgraphs: the execution id is resolved through the wrapper path (the first wrapper found), and the panel names the
+  wrapper. A removal is not a deletion: the panel is released only when the node is still in no graph 2 s later.
+- Live check, both renderers, subgraph, save + reload, kill switch: `docs/evidence/L7.114/viewer_live.md` (workspace).

@@ -31,11 +31,13 @@ import { C, green } from "./_c2c_theme.js";
 const TARGET = "MaskOpsMEC";
 
 // ── status → visual ────────────────────────────────────────────────────────
+// Palette KEYS, resolved through the theme proxy at draw time: a var() in a canvas fillStyle is not a colour the
+// canvas understands and painted these pills black (found in L7.114, docs/evidence/L7.114/HANDOFF.md).
 const STATUS_STYLE = {
-    "ready":         { bg: "var(--c2c-green)", fg: "var(--c2c-bg3)", label: "ready"   },
-    "experimental":  { bg: "var(--c2c-yellow)", fg: "var(--c2c-bg3)", label: "experim." },
-    "missing-deps":  { bg: "var(--c2c-red)", fg: "var(--c2c-bg3)", label: "missing-deps" },
-    "not-ready":     { bg: "var(--c2c-red)", fg: "var(--c2c-bg3)", label: "not-ready"   },
+    "ready":         { bg: "green", fg: "bg3", label: "ready"   },
+    "experimental":  { bg: "yellow", fg: "bg3", label: "experim." },
+    "missing-deps":  { bg: "red", fg: "bg3", label: "missing-deps" },
+    "not-ready":     { bg: "red", fg: "bg3", label: "not-ready"   },
 };
 const READY_DOT = C.green;
 
@@ -96,7 +98,7 @@ function _drawPill(ctx, x, y, text, status) {
     const w = Math.ceil(ctx.measureText(text).width) + padX * 2;
 
     // Background pill
-    ctx.fillStyle = isReady ? "rgba(166,227,161,0.18)" : style.bg;
+    ctx.fillStyle = isReady ? "rgba(166,227,161,0.18)" : C[style.bg];
     ctx.beginPath();
     const r = 8;
     ctx.moveTo(x + r, y);
@@ -114,7 +116,7 @@ function _drawPill(ctx, x, y, text, status) {
         ctx.stroke();
         ctx.fillStyle = READY_DOT;
     } else {
-        ctx.fillStyle = style.fg;
+        ctx.fillStyle = C[style.fg];
     }
     ctx.textBaseline = "middle";
     ctx.fillText(text, x + padX, y + h / 2 + 0.5);

@@ -2,6 +2,34 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-28 (Mask + Matting viewer, L7.114)
+
+**Mask + Matting** opens with a viewer on the node: Plate → Subject → Render, one next step at a time.
+
+- **Load plate**: the frames feeding `image`, as proxies, with a scrubber and a frame box (arrow keys step).
+- **Find**: type what to find (`person, dog`); every match on the frame is tinted, with its score. Detection runs on
+  ComfyUI's own SAM 3 / 3.1 (core 0.39+), from `models/sam3.1`, `models/sam3` or a `sam3*` file in
+  `models/checkpoints`. With none installed, the model slot names the file, the folder and the link.
+- **Pick**: click the subject (the other objects found are excluded); Shift-click adds a part, Alt-click cuts one,
+  Ctrl-click removes the nearest marker. An added part that would take in another subject is refused, with the reason.
+  A click without Find asks SAM about the point: it gives the part it is surest of (a waistcoat rather than the whole
+  person), so type what it is for the whole object.
+- **Render**: preview N frames from the pick frame (17 by default), then the full shot. While ComfyUI is busy with
+  another job the viewer says so; Cancel stops the job.
+- **Result**: wipe between plate and result, comp / alpha / checker / overlay, scrub, and QC badges for coverage,
+  edge detail and flicker (green / amber / red, thresholds measured on synthetic clips; the tooltip says how).
+- The selection is saved in the node's new last input `picks`; empty = the node runs exactly as before. Every other
+  control stays a real, saved widget behind **All settings**.
+- Viewer runs keep the tracking and edge stages in a cache (`C2C_MATTE_CACHE_MB`, default 1024 MB, 0 = off): a
+  finishing change reruns only the finishing stage.
+- **SeC + MatAnyone2** picked after the first frame starts the clip on the pick frame. The frames before it come back
+  empty, and the viewer and the info output say so. A pick after frame 0 with tracking `forward` tracks both ways.
+- The viewer's jobs are ordinary ComfyUI jobs through `/prompt`, using three hidden helper nodes that stay out of the
+  node search and menu. No new HTTP route.
+- Kill switch: `C2C_VIEWER=0` turns the viewer off. The node shows its plain widgets, with `picks` as a text box, and
+  gives the same results.
+- Fixed: the backend health pills of Mask + Matting painted black (CSS `var()` colours on a canvas).
+
 ## Unreleased – 2026-10-28 (five mask editors removed, saved workflows migrate to the Image Mask Editor, L7.65 P01)
 
 Last step of owner card P01: **Mask Edit**, **Spline Mask**, **Vector Roto**, **Video Mask Editor** and the **Advanced

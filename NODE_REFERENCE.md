@@ -3951,6 +3951,8 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 
 **Backends (L7.65 P05).** `backend` = `segment + matte` (default: this node's pipeline / segmenter / matter, unchanged), `SAM + ViTMatte` (needs `sam_model` from a SAM Model Loader; reads `points_json`, `bbox_json`, `subject_preset`, the `sam_*` controls, `fill_holes_enabled`, `min_region_size`, `pos_bbox`, `external_mask`, `external_trimap`), `SeC + MatAnyone2` (reads `sec_*`, `points_json`, `bbox_json`, `precision`, `fill_holes_enabled`, `min_region_size`, `keep_model_loaded`, `pos_bbox`; a wired `text_prompt` wins over `sec_text_prompt`) and `remove background` (reads `bg_*`, `keep_model_loaded`). `auto_download` is the Allow Download of every backend. In the three added backends `preview`, `score`, `edge_mask` and (SAM + ViTMatte) `bbox` keep the former node's definition so migrated workflows give the same results; `split_masks` off leaves the edge / inside / outside masks empty. Design: `docs/design/matte_unified.md`.
 
+**The viewer (L7.114).** The node opens with a viewer: Load plate (the frames feeding `image`, as proxies), Find (words, e.g. `person, dog`: every match on the frame, found by ComfyUI's own SAM 3 / 3.1 from `models/sam3.1`, `models/sam3` or a `sam3*` file in `models/checkpoints`), click the subject (the other objects found are excluded), Shift-click to add a part, Alt-click to cut one, Ctrl-click to remove a marker, then Preview N frames from the pick frame and Render the full shot. The Result tab wipes between plate and result (comp / alpha / checker / overlay) with QC badges (coverage, edge detail, flicker; thresholds measured on synthetic clips). The selection is saved in `picks`; every other control stays a real, saved widget behind All settings. Viewer runs keep the tracking and edge stages in a cache (`C2C_MATTE_CACHE_MB`, default 1024, 0 = off), so a finishing change reruns only the finishing stage. SeC + MatAnyone2 picked after the first frame starts on the pick frame and leaves the frames before it empty. `C2C_VIEWER=0` turns the viewer off (the node shows its plain widgets; results are the same). Design: `docs/design/matte_viewer.md`.
+
 
 **Required inputs**
 
@@ -4068,6 +4070,8 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | `min_region_size` | `INT` | default `64`, range 0…10000, step 1 | SAM + ViTMatte and SeC + MatAnyone2: remove separate regions smaller than this many pixels (0 = keep all). |
 | `keep_model_loaded` | `BOOLEAN` | default `True` | SeC + MatAnyone2 and remove background: keep the models in memory between runs (off = free them after each run). |
 | `split_masks` | `BOOLEAN` | default `True` | Make the edge / inside / outside masks (and, for the three other backends, a trimap from the final alpha). Off leaves those outputs empty, which saves three to four full-size masks per frame on long clips. |
+| `background_plate` | `IMAGE` |  | matter = bgmattingv2 only: the same shot without the subject (a clean plate). One frame serves every frame; a plate batch as long as the clip is used frame by frame; a different size is resized. Not connected: a plate is synthesised from the coarse mask (much less accurate). |
+| `picks` | `STRING` | default `""` | The selection made in the viewer on this node (JSON: frame, subject, excluded objects, added / cut parts). When set it replaces the prompt inputs of the chosen backend; empty = the prompt inputs as wired. The viewer hides this row; with `C2C_VIEWER=0` it is a plain text box. |
 
 **Outputs**
 

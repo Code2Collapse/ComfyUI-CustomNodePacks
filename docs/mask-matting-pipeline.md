@@ -28,6 +28,17 @@ returns a compositing-grade alpha.
 
 ---
 
+## The viewer (L7.114)
+
+The node opens with a viewer: **Load plate**, **Find** (words → every match, ComfyUI's own SAM 3 / 3.1), click the
+subject, **Shift**-click to add a part, **Alt**-click to cut one, **Ctrl**-click to remove a marker, **Preview** N
+frames from the pick frame, then **Render full shot**. The Result tab wipes between plate and result (comp / alpha /
+checker / overlay) and shows QC badges. The selection lives in the `picks` input (saved with the workflow); every
+other control is behind **All settings**. `C2C_VIEWER=0` turns the viewer off. Design and measurements:
+[docs/design/matte_viewer.md](design/matte_viewer.md).
+
+---
+
 ## Slot order (top to bottom)
 
 ```

@@ -143,6 +143,10 @@ function apply(node) {
     const nativeBackend = !(spec.backends
         && Object.prototype.hasOwnProperty.call(spec.backends, String(valueOf(node, "backend") ?? "")));
     const engineOnly = new Set(nativeBackend ? (spec.backend_only || []) : []);
+    // L7.114: the viewer's own input (picks) is a row only when the viewer is off (C2C_VIEWER=0); with the viewer on,
+    // its "All settings" switch folds every other control while closed (node.__c2cViewerFold, mask_matting.js)
+    const viewerNames = new Set(spec.viewer || []);
+    const viewerFold = typeof node.__c2cViewerFold === "function" ? node.__c2cViewerFold : null;
     let hidden = 0;
     const shown = [];                                    // what the rules want, before sections close some of it
     let prevWanted = null;                               // a seed's control_after_generate follows its seed
@@ -159,10 +163,15 @@ function apply(node) {
         // stayed on screen, so it sat on top of the next parameter row.
         if (w.options?.serialize === false || w.serialize === false) continue;
         const isSocket = sockets.has(w.name);
-        const ruled = isSocket
-            || (keep === null && !engineOnly.has(w.name))   // undeclared: show all
-            || (keep !== null && keep.has(w.name) && toggleAllows(node, w.name, spec)
-                && tilingAllows(node, w.name, spec));
+        let ruled;
+        if (viewerNames.has(w.name)) ruled = !viewerFold;
+        else {
+            ruled = isSocket
+                || (keep === null && !engineOnly.has(w.name))   // undeclared: show all
+                || (keep !== null && keep.has(w.name) && toggleAllows(node, w.name, spec)
+                    && tilingAllows(node, w.name, spec));
+            if (ruled && !isSocket && viewerFold?.(w.name)) ruled = false;
+        }
         if (ruled && !isSocket) shown.push(w.name);
         // a closed section folds its members too (L7.81); sockets never sit in a section
         const wanted = ruled && (isSocket || sectionOpen(node, w.name));
@@ -205,6 +214,9 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = onCreated?.apply(this, arguments);
             const node = this;
+            node.__c2cReapplyVisibility = () => getSpec().then(() => {      // the viewer's "All settings" switch
+                try { apply(node); } catch (_e) { /* never break the node */ }
+            });
 
             getSpec().then(() => {
                 try { apply(node); } catch (_e) { /* never break the node */ }
