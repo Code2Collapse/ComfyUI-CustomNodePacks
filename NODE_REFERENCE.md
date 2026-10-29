@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **108** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **106** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -37,13 +37,12 @@
 | LocateAnything | 2 |
 | Nano Banana | 1 |
 | Control AOV | 1 |
-| Clipboard TCL | 2 |
 | Restored VFX | 5 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 108 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Clipboard TCL 2, Restored VFX 5, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 106 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 5, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -187,9 +186,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **MEC/Temporal** (2)
   - [Fluid Shot Decoder (Restore Timing)](#fluidshotdecodermec)
   - [Fluid Shot Encoder (Temporal Normalizer)](#fluidshotencodermec)
-- **MaskEditControl/Clipboard** (2)
-  - [TCL Parse (MEC)](#tclparsemec)
-  - [TCL Serialize (MEC)](#tclserializemec)
 - **MaskEditControl/IO** (2)
   - [Load EXR (MEC)](#loadexrmec)
   - [Save EXR (MEC)](#saveexrmec)
@@ -3839,54 +3835,6 @@ Analyzes optical-flow speed and inserts in-between frames on fast sections so mo
 
 ---
 
-## MaskEditControl/Clipboard
-
-
-### TclParseMEC
-
-**Shown in the menu as:** TCL Parse (MEC)
-
-Parse Nuke-style TCL into a subgraph JSON description.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `tcl` | `STRING` | default `""`, multiline | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `subgraph_json` | `STRING` | — |
-| 1 | `node_count` | `INT` | — |
-
-
-### TclSerializeMEC
-
-**Shown in the menu as:** TCL Serialize (MEC)
-
-Serialize a subgraph JSON description into Nuke-style TCL.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `subgraph_json` | `STRING` | default `"{"nodes":[],"links":[]}"`, multiline | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `tcl` | `STRING` | — |
-
-
-
-
----
-
 ## MaskEditControl/IO
 
 
@@ -3959,7 +3907,7 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `image` | `IMAGE` |  | Source image or video frames (B,H,W,C). |
-| `segmenter` | choice: `auto_best`, `auto`, `sam3  [missing-deps]`, `sam3.1  [missing-deps]`, `birefnet`, `rmbg`, `inspyrenet`, `dis`, `person-mask`, `grounding-dino`, `cutie  [missing-deps]`, `xmem  [missing-deps]`, … | default `"auto_best"` | Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. |
+| `segmenter` | choice: `auto_best`, `auto`, `sam3`, `sam3.1`, `birefnet`, `rmbg`, `inspyrenet`, `dis`, `person-mask`, `grounding-dino`, `cutie  [missing-deps]`, `xmem  [missing-deps]`, … | default `"auto_best"` | Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. sam3 / sam3.1 run on ComfyUI's own SAM 3 (ComfyUI 0.39+; C2C_SAM_CORE=0 turns that off). |
 | `matter` | choice: `none`, `auto`, `vitmatte`, `rvm`, `bgmattingv2`, `matanyone  [missing-deps]`, `birefnet`, `rmbg`, `guided_filter` | default `"vitmatte"` | Optional alpha refinement. 'none' returns the segmenter mask as alpha. |
 | `model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, `[preset:grounding-dino] groundingdino_swint_ogc.pth`, `[preset:sec] SeC-4B.safetensors`, `[preset:vitmatte] vitmatte-small-composition-1k.safetensors`, `[preset:vitmatte] vitmatte-base-composition-1k.safetensors`, … | default `"(auto)"` | Specific weight file to use. Tag prefix selects the backend folder; '(auto)' lets each backend pick. |
 | `matter_model` | choice: `(auto)`, `[preset:sam3] sam3.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp16.safetensors`, `[preset:sam3.1] sam3.1_multiplex_fp32.safetensors`, `[preset:sam3.1] sam3.pt`, `[preset:birefnet] BiRefNet-general-epoch_244.pth`, `[preset:rmbg] RMBG-2.0.safetensors`, `[preset:inspyrenet] InSPyReNet_SwinB.pth`, `[preset:grounding-dino] groundingdino_swint_ogc.pth`, `[preset:sec] SeC-4B.safetensors`, `[preset:vitmatte] vitmatte-small-composition-1k.safetensors`, `[preset:vitmatte] vitmatte-base-composition-1k.safetensors`, … | default `"(auto)"` | Weight file for the matter backend. |

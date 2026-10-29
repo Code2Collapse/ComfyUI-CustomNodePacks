@@ -2,6 +2,32 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-29 (Mask + Matting's SAM 3 / 3.1 and ONYX run on ComfyUI's own SAM 3, L7.125)
+
+- The `sam3.1` and `sam3` segmenters and the **ONYX** pipeline needed a SAM library this pack does not ship, so they
+  showed `[missing-deps]` and ONYX fell back to its model-free tracker. They now run on ComfyUI's own SAM 3 (ComfyUI
+  0.39+) with the Comfy-Org checkpoint in `models/sam3.1` or `models/sam3`.
+  - The library stays the first choice where it is installed.
+  - The viewer and the matte share one loaded checkpoint.
+- Measured on a 20-frame clip against an independent subject mask (CPU): ONYX on core SAM 3 matches the subject at
+  IoU 0.985 on the last frame; the model-free fallback reached 0.778. The cascade's per-frame segmenters reach 0.983
+  and keep their per-frame behaviour.
+- ONYX's text and mask keyframes seed the tracker with the mask itself (before: points taken from the mask). The info
+  output names the tracker and its runs.
+- Kill switch: `C2C_SAM_CORE=0` keeps Mask + Matting off ComfyUI's SAM 3 (the behaviour before).
+
+## Unreleased – 2026-10-29 (TCL copy / paste moves to NukeMax, L7.65 P32)
+
+- **TCL Parse** and **TCL Serialize** are no longer registered by this pack. ComfyUI-NukeMaxNodes does the same job
+  with **NkScript Parse / Serialize** and its own Ctrl+Shift+C / V. Both packs bound those keys, so with both installed
+  one copy ran twice; this pack's shortcut script is gone.
+- A saved workflow loads the two nodes as the NukeMax ones: same input, same output types. The parsed JSON is
+  NkScript's shape, and NkScript now reads the braced strings this pack's serializer wrote. Without NukeMax the nodes
+  stay as they were, and the load report says so.
+- Found on the way: this pack's TCL parser could not read its own output when a value held a space or a brace (a
+  file path with spaces turned the rest of the block into junk). NukeMax's reads both forms.
+- Kill switch: `C2C_LEGACY_TCL=1` registers the two former nodes and their routes again (not the shortcut).
+
 ## Unreleased – 2026-10-28 (Mask + Matting viewer, L7.114)
 
 **Mask + Matting** opens with a viewer on the node: Plate → Subject → Render, one next step at a time.

@@ -550,7 +550,8 @@ class MaskOpsMEC:
                 "image": ("IMAGE", {"tooltip": "Source image or video frames (B,H,W,C)."}),
                 "segmenter": (_segmenter_choices(), {
                     "default": _segmenter_choices()[0],
-                    "tooltip": "Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate.",
+                    "tooltip": "Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. "
+                               "sam3 / sam3.1 run on ComfyUI's own SAM 3 (ComfyUI 0.39+; C2C_SAM_CORE=0 turns that off).",
                 }),
                 "matter": (_matter_choices(), {
                     "default": "vitmatte" if "vitmatte" in [k for k in list_matter_keys()] else "none",

@@ -650,14 +650,24 @@ except Exception as _cf_exc:  # pragma: no cover
         pass
     _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY = {}, {}
 
-# Clipboard TCL — Nuke-style copy/paste of node graphs (F5). Restored 2026-06-20
-# (was removed in a 2026-05 "deprecated cleanup"; it has no replacement).
+# Clipboard TCL — Nuke-style copy/paste of node graphs (F5). L7.65 P32 (owner-approved move, 2026-10-29): it lives in
+# ComfyUI-NukeMaxNodes as NkScript Parse / Serialize + its Ctrl+Shift+C / V (both packs bound the same keys, so a copy
+# ran twice). Saved TCL Parse / Serialize nodes load as the NukeMax nodes (nodes/_legacy_replacements.json).
+# C2C_LEGACY_TCL=1 registers the two former nodes and their routes again (not the shortcut: NukeMax owns it).
+_TCL_MAPPINGS, _TCL_DISPLAY = {}, {}
+
+
+def _register_tcl_routes(_server):  # noqa: F811 - replaced below when the kill switch brings the module back
+    return None
+
+
 try:
-    from .nodes.clipboard_tcl import (
-        NODE_CLASS_MAPPINGS as _TCL_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _TCL_DISPLAY,
-        register_routes as _register_tcl_routes,
-    )
+    if __import__("os").environ.get("C2C_LEGACY_TCL", "").strip() == "1":
+        from .nodes.clipboard_tcl import (
+            NODE_CLASS_MAPPINGS as _TCL_MAPPINGS,
+            NODE_DISPLAY_NAME_MAPPINGS as _TCL_DISPLAY,
+            register_routes as _register_tcl_routes,
+        )
 except Exception as _exc:  # pragma: no cover
     _c2c_rec_fail(
         "ClipboardTCL", _exc,

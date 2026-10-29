@@ -126,131 +126,21 @@ class _SegmenterDetector:
             pass
 
 
-class _CoreSAM3Detector:
-    """detect(frame, text, pos, neg, boxes) over ComfyUI's own SAM 3 / 3.1.
+# ComfyUI's own SAM 3 (L7.114 owner answer Q4): the shared core path of Mask + Matting (L7.125), one checkpoint in
+# memory for the viewer and the matte. Detect does not read C2C_SAM_CORE (that switch is the matte's).
+from ..mask_matting.segmenters import _core_sam3 as _core  # noqa: E402
 
-    Words: the detector head finds every match above THRESHOLD (strongest first, at most MAX_OBJECTS), each mask
-    refined by core's SAM decoder pass on the object's box (core's SAM3_Detect does the same, refine_iterations=2).
-    Clicks and boxes: the SAM decoder, one object per box (the clicks go with every box), else one object from the
-    clicks; REFINE passes feed the mask back with the same prompts. A decoder mask has no detector score, so its
-    score is the mean probability inside the mask."""
-
-    SIDE = 1008                     # SAM 3's input size (core resizes every frame to it)
-    THRESHOLD = 0.5                 # core SAM3_Detect's default
-    REFINE = 2                      # core SAM3_Detect's default refine_iterations
-
-    def __init__(self, tag: str, path: str):
-        import comfy.sd as comfy_sd
-        import folder_paths
-        try:
-            model, clip, _vae, _cv = comfy_sd.load_checkpoint_guess_config(
-                path, output_vae=False, output_clip=True,
-                embedding_directory=folder_paths.get_folder_paths("embeddings"))
-        except Exception as exc:  # noqa: BLE001 - say which file, and which file works
-            raise RuntimeError(f"ComfyUI could not read {tag} as a SAM 3 checkpoint ({exc}). Use the Comfy-Org file "
-                               f"{RECOMMENDED} ({missing_info()['url']}).") from exc
-        net = getattr(getattr(model, "model", None), "diffusion_model", None)
-        if net is None or not hasattr(net, "forward_segment") or clip is None:
-            raise RuntimeError(f"{tag} is not a SAM 3 checkpoint (ComfyUI read it as another kind of model). Use the "
-                               f"Comfy-Org file {RECOMMENDED} ({missing_info()['url']}).")
-        self.model, self.clip = model, clip
-        self._words: Dict[str, Tuple[torch.Tensor, Optional[torch.Tensor]]] = {}
-
-    # ── helpers ──
-    def _encode(self, text: str):
-        if text not in self._words:
-            out = self.clip.encode_from_tokens(self.clip.tokenize(text), return_dict=True)
-            self._words[text] = (out["cond"], out.get("attention_mask"))
-        return self._words[text]
-
-    def detect(self, frame_hwc: np.ndarray, text: str, pos, neg, boxes) -> List[Dict[str, Any]]:
-        import comfy.model_management as mm
-        import comfy.utils as comfy_utils
-        H, W = int(frame_hwc.shape[0]), int(frame_hwc.shape[1])
-        img = torch.from_numpy(np.ascontiguousarray(frame_hwc[..., :3], dtype=np.float32))[None]   # [1, H, W, 3]
-        words = self._encode(text) if text else None                 # the text encoder first: it is a separate model
-        mm.load_model_gpu(self.model)
-        device, dtype = mm.get_torch_device(), self.model.model.get_dtype()
-        net = self.model.model.diffusion_model
-        frame = comfy_utils.common_upscale(img.movedim(-1, 1), self.SIDE, self.SIDE, "bilinear",
-                                           crop="disabled").to(device=device, dtype=dtype)
-        if words is not None:
-            return self._detect_words(net, frame, img[0], words, H, W, device, dtype)
-        return self._segment_prompts(net, frame, pos, neg, boxes, H, W, device, dtype)
-
-    def _detect_words(self, net, frame, image_hwc, words, H, W, device, dtype) -> List[Dict[str, Any]]:
-        emb, att = words
-        emb = emb.to(device=device, dtype=dtype)
-        att = att.to(device) if att is not None else torch.ones(emb.shape[0], emb.shape[1], dtype=torch.int64,
-                                                                   device=device)
-        res = net(frame, text_embeddings=emb, text_mask=att, boxes=None, threshold=self.THRESHOLD, orig_size=(H, W))
-        probs = res["scores"][0].float().sigmoid()
-        keep = probs > self.THRESHOLD
-        kept_boxes, kept_scores, kept_masks = res["boxes"][0][keep].float().cpu(), probs[keep].cpu(), res["masks"][0][keep]
-        try:
-            from comfy_extras.nodes_sam3 import _refine_mask       # core's own refinement (run time, not copied)
-        except Exception:  # noqa: BLE001 - a core without it: the detector's own mask
-            _refine_mask = None
-        out = []
-        for i in kept_scores.argsort(descending=True)[:MAX_OBJECTS].tolist():
-            coarse = kept_masks[i]
-            if _refine_mask is not None:
-                m = _refine_mask(net, image_hwc, coarse, kept_boxes[i], H, W, device, dtype, self.REFINE)[0]
-            else:
-                m = (coarse > 0).float()
-            box = kept_boxes[i].tolist()
-            out.append({"mask": m.float().cpu().numpy(), "score": float(kept_scores[i]),
-                        "box": [max(0, int(box[0])), max(0, int(box[1])), min(W, int(round(box[2]))),
-                                min(H, int(round(box[3])))]})
-        return out
-
-    def _segment_prompts(self, net, frame, pos, neg, boxes, H, W, device, dtype) -> List[Dict[str, Any]]:
-        import torch.nn.functional as F
-        s = self.SIDE
-        points = None
-        if pos or neg:
-            coords = [[x / W * s, y / H * s] for x, y in list(pos) + list(neg)]
-            points = {"point_coords": torch.tensor([coords], dtype=dtype, device=device),
-                      "point_labels": torch.tensor([[1] * len(pos) + [0] * len(neg)], dtype=torch.int32,
-                                                   device=device)}
-        corners = [torch.tensor([[[x0 / W * s, y0 / H * s], [x1 / W * s, y1 / H * s]]], dtype=dtype, device=device)
-                   for x0, y0, x1, y1 in boxes] or [None]
-        out = []
-        for box in corners:
-            logit = net.forward_segment(frame, point_inputs=points, box_inputs=box)
-            for _ in range(max(0, self.REFINE - 1)):
-                logit = net.forward_segment(frame, point_inputs=points, box_inputs=box, mask_inputs=logit)
-            logit = F.interpolate(logit.float(), size=(H, W), mode="bilinear", align_corners=False)[0, 0]
-            m = (logit > 0).float()
-            if m.max() <= 0:
-                continue
-            out.append({"mask": m.cpu().numpy(), "box": None,
-                        "score": float(torch.sigmoid(logit)[m > 0].mean())})
-        return out
-
-    def unload(self):
-        self.model = self.clip = None                                 # core's model management holds weak refs only
-        self._words.clear()
-        try:
-            import comfy.model_management as mm
-            mm.soft_empty_cache()
-        except Exception:  # noqa: BLE001
-            pass
+_CoreSAM3Detector = _core.CoreSAM3
 
 
 def core_sam3_available() -> bool:
     """ComfyUI ships SAM 3 (core 0.39+: the model, its text encoder and the SAM3_Detect node)."""
-    try:
-        import comfy.ldm.sam3.detector  # noqa: F401
-        import comfy.text_encoders.sam3_clip  # noqa: F401
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    return _core.available(respect_kill=False)
 
 
 def _default_factory(tag: str, path: str):
     if core_sam3_available():
-        return _CoreSAM3Detector(tag, path)
+        return _core.get(tag, path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     precision = "fp16" if device == "cuda" else "fp32"
     from ..mask_matting.segmenters.sam31_backend import SAM31Segmenter, _have_vendor, _vendor_root
@@ -290,7 +180,8 @@ def _release() -> None:
 def get_detector(tag: str, path: str):
     with _lock:
         det = _loaded.get(path)
-        if det is not None:
+        # the core handle is shared with the matte (L7.125): when the matte released it, load it again
+        if det is not None and not (isinstance(det, _core.CoreSAM3) and det.model is None):
             return det
     det = DETECTOR_FACTORY(tag, path)
     with _lock:

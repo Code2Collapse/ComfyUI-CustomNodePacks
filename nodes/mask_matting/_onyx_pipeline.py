@@ -441,6 +441,12 @@ def seed_all_objects(
                     f"Object {obj_id}: '{kf.text}' found nothing on frame {kf.frame} - "
                     f"try other words or add a point/box."
                 )
+            if hasattr(model, "add_mask"):
+                # a tracker that takes a seed mask (core SAM 3, L7.125) gets the mask itself, not points from it
+                model.add_mask(state, frame_idx=int(kf.frame), mask=mask_hw, obj_id=int(obj_id))
+                calls.append({"obj_id": obj_id, "frame": int(kf.frame), "kind": "text→mask", "n_points": 0,
+                              "labels": []})
+                continue
             if kf.points_pos or kf.points_neg or kf.box:
                 pts, lbls = keyframe_to_tracker_prompt(kf, W, H)
                 kind = "text+points/box→tracker"
@@ -449,6 +455,11 @@ def seed_all_objects(
                 kind = "text→mask→tracker"
         elif kf.mask_source == "input":
             mask_hw = _mask_frame(external_mask, kf.frame, B, H, W)
+            if hasattr(model, "add_mask"):
+                model.add_mask(state, frame_idx=int(kf.frame), mask=mask_hw, obj_id=int(obj_id))
+                calls.append({"obj_id": obj_id, "frame": int(kf.frame), "kind": "mask", "n_points": 0,
+                              "labels": []})
+                continue
             pts, lbls = mask_to_tracker_prompt(mask_hw, W, H)
             kind = "mask→tracker"
         else:
@@ -759,18 +770,20 @@ def ensure_sam31_video_model(
     auto_download: bool,
 ):
     from .segmenters.sam31_backend import SAM31Segmenter, _have_vendor
-    from .segmenters import get_segmenter_cls
+    from .segmenters import get_segmenter_cls, _core_sam3
     from .node import _resolve_model_choice
 
-    if not _have_vendor():
-        # Not a broken install: the SAM 3.1 library is not part of this repo (third_party/ is not shipped).
+    use_core = not _have_vendor()
+    if use_core and not _core_sam3.available():
+        # Not a broken install: the SAM 3.1 library is not part of this repo (third_party/ is not shipped), and this
+        # ComfyUI has no SAM 3 of its own (core 0.39+, L7.125) - or C2C_SAM_CORE=0 turned that path off.
         from .segmenters.sam31_backend import _vendor_root
         from .utils import backend_first_root
         raise RuntimeError(
-            "SAM 3.1 is not installed: its library is not part of ComfyUI-CustomNodePacks and was looked for in "
-            f"{_vendor_root()}; its weights go in {os.path.abspath(backend_first_root('sam3.1'))}. SAM 3 is under "
-            "Meta's SAM License. Without it the model-free mode (GrabCut, approximate) works with points, a box or a "
-            "mask."
+            "SAM 3.1 is not installed: its library is not part of ComfyUI-CustomNodePacks (looked for it in "
+            f"{_vendor_root()}) and this ComfyUI has no SAM 3 of its own (ComfyUI 0.39 or newer has it); its weights "
+            f"go in {os.path.abspath(backend_first_root('sam3.1'))}. SAM 3 is under Meta's SAM License. Without it "
+            "the model-free mode (GrabCut, approximate) works with points, a box or a mask."
         )
     cls = get_segmenter_cls("sam3.1")
     if cls is None:
@@ -786,6 +799,9 @@ def ensure_sam31_video_model(
         offload=offload,
     )
     seg.load()
+    if use_core:
+        # L7.125 (owner 2026-10-29): ComfyUI's own SAM 3 tracks (segmenters/_core_sam3.CoreVideoTracker)
+        return seg, _core_sam3.CoreVideoTracker(seg._core)
     if seg._video_predictor is None or seg._video_predictor.model is None:
         raise RuntimeError("SAM 3.1 video model failed to load.")
     return seg, seg._video_predictor.model
@@ -922,13 +938,18 @@ def run_onyx_pipeline(
         coarse, obj_scores = propagate_objects(
             model, state, scene, B=B, H=H, W=W,
         )
+        from .segmenters._core_sam3 import CoreVideoTracker
+        if isinstance(model, CoreVideoTracker):           # L7.125: say which tracker ran, and its runs
+            pipeline_info["tracker"] = "ComfyUI SAM 3 (core)"
+            pipeline_info["core_tracking"] = list(state.get("calls") or [])
     finally:
         try:
             model.reset_state(state)
         except Exception as exc:
             logger.warning("[ONYX] reset_state failed: %s", exc)
         free_vram()
-    track_info = {k: pipeline_info[k] for k in ("approximate", "tracker", "fallback_from", "seed_calls")
+    track_info = {k: pipeline_info[k] for k in ("approximate", "tracker", "fallback_from", "seed_calls",
+                                                "core_tracking")
                   if k in pipeline_info}
 
     alpha_o, trimaps, edge_info = _onyx_edge(

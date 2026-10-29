@@ -5577,5 +5577,51 @@
     }
    }
   }
+ },
+ {
+  "old_node_id": "TclParseMEC",
+  "new_node_id": "NukeMax_NkScriptParse",
+  "old_widget_ids": [
+   "tcl"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "text",
+    "old_id": "tcl"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P32 (owner-approved move to NukeMax): NukeMax's NkScript nodes do the same job. Same input, same output types; the parsed JSON is NkScript's shape ({version, nodes: [{class_type, name, knobs, inputs: [{slot, src}], xpos, ypos, selected}]}) instead of the former {nodes: [{id, ..., widgets}], links}. NkScript also reads the braced strings the former serializer wrote. Without ComfyUI-NukeMaxNodes the node stays as it was."
+ },
+ {
+  "old_node_id": "TclSerializeMEC",
+  "new_node_id": "NukeMax_NkScriptSerialize",
+  "old_widget_ids": [
+   "subgraph_json"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "subgraph_json",
+    "old_id": "subgraph_json"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P32 (owner-approved move to NukeMax): NukeMax's NkScript nodes do the same job. Same input, same output types; the parsed JSON is NkScript's shape ({version, nodes: [{class_type, name, knobs, inputs: [{slot, src}], xpos, ypos, selected}]}) instead of the former {nodes: [{id, ..., widgets}], links}. NkScript also reads the braced strings the former serializer wrote. Without ComfyUI-NukeMaxNodes the node stays as it was."
  }
 ]

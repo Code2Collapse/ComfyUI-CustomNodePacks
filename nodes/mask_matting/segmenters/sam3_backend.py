@@ -20,6 +20,7 @@ from ..utils import (
     resolve_backend_weight,
 )
 from . import BaseSegmenter, register
+from . import _core_sam3
 
 logger = logging.getLogger("MEC.MaskMatting.SAM3")
 
@@ -43,13 +44,26 @@ class SAM3Segmenter(BaseSegmenter):
     PARAMS = (
         "text_prompt", "positive_points", "negative_points", "bbox", "neg_bbox", "frame_annotation", "object_id", "multimask",
     )
-    STATUS = "ready" if _have_sam3() else "missing-deps"
+    # L7.125 (owner 2026-10-29): without the sam3 package, ComfyUI's own SAM 3 (core 0.39+) runs it
+    STATUS = "ready" if (_have_sam3() or _core_sam3.available()) else "missing-deps"
+    _core = None
 
     def load(self) -> None:
         if self._model is not None:
             return
         if not _have_sam3():
-            raise RuntimeError("sam3 package not installed.")
+            if not _core_sam3.available():
+                raise RuntimeError("SAM 3 cannot run here: the sam3 package is not installed and this ComfyUI has no "
+                                   "SAM 3 of its own (it arrived in ComfyUI 0.39; C2C_SAM_CORE=0 also turns that "
+                                   "path off). Update ComfyUI to 0.39 or newer.")
+            ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name)
+            if ckpt is None or not os.path.isfile(ckpt):
+                raise FileNotFoundError(
+                    f"SAM 3 checkpoint '{self.model_name}' is not installed. Expected it in folder: "
+                    f"{os.path.abspath(backend_first_root(self.MODELS_KEY))}.")
+            self._core = _core_sam3.get(f"{self.MODELS_KEY}/{os.path.basename(ckpt)}", ckpt)
+            self._model = self._core
+            return
         from sam3.build_sam3 import build_sam3
         from sam3.sam3_image_predictor import SAM3ImagePredictor
         ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name)
@@ -65,6 +79,9 @@ class SAM3Segmenter(BaseSegmenter):
         self._model = self._predictor
 
     def _seg_one(self, frame_hwc: np.ndarray, pos, neg, bbox, neg_bbox, text):
+        if self._core is not None:
+            with torch.no_grad():
+                return self._core.segment_union(frame_hwc, pos, neg, bbox, neg_bbox, text)
         img_u8 = (frame_hwc * 255).clip(0, 255).astype(np.uint8)
         with torch.no_grad(), torch.autocast(self.device, dtype=self._dtype, enabled=(self.device == "cuda")):
             self._predictor.set_image(img_u8)
@@ -131,3 +148,9 @@ class SAM3Segmenter(BaseSegmenter):
         except Exception:
             free_vram()
             raise
+
+    def unload(self) -> None:
+        if self._core is not None:
+            _core_sam3.release()
+            self._core = None
+        super().unload()

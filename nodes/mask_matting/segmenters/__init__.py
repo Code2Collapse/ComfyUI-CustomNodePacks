@@ -121,8 +121,8 @@ def list_keys(installed_only: bool = False) -> List[str]:
 # missing (instead of nodes silently disappearing — the #1 cause of the
 # "everything is a stub" perception per ideas_summary.md §2.1).
 _HINT_BY_MODULE = {
-    "sam3_backend":         "Install `sam-3` and place SAM 3 weights under models/sam3/.",
-    "sam31_backend":        "SAM 3.1 needs its library in ComfyUI-CustomNodePacks/third_party/sam3_lib and its weights in ComfyUI's models/sam3.1 folder.",
+    "sam3_backend":         "SAM 3 runs on ComfyUI's own SAM 3 (ComfyUI 0.39+) or the `sam3` package; weights in models/sam3/.",
+    "sam31_backend":        "SAM 3.1 runs on ComfyUI's own SAM 3 (ComfyUI 0.39+; the Comfy-Org file sam3.1_multiplex_fp16.safetensors in models/sam3.1) or on its library in ComfyUI-CustomNodePacks/third_party/sam3_lib.",
     "salient_backend":      "Install `transformers` (for BiRefNet/U2-Net) and download salient-object weights to models/saliency/.",
     "experimental_backend": "Experimental backend — enable explicitly via the node widget; safe to ignore otherwise.",
     "video_backend":        "Cutie video propagation is unavailable; install its dependencies, or use SeC, which tracks a concept rather than an appearance and survives occlusion.",

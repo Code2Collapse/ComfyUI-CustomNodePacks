@@ -38,6 +38,7 @@ from ..utils import (
     resolve_backend_weight,
 )
 from . import BaseSegmenter, register
+from . import _core_sam3
 
 logger = logging.getLogger("MEC.MaskMatting.SAM31")
 
@@ -95,7 +96,8 @@ class SAM31Segmenter(BaseSegmenter):
     PARAMS = (
         "text_prompt", "positive_points", "negative_points", "bbox", "neg_bbox", "frame_annotation", "object_id", "multimask",
     )
-    STATUS = "ready" if _have_vendor() else "missing-deps"
+    # L7.125 (owner 2026-10-29): without the vendored library, ComfyUI's own SAM 3 (core 0.39+) runs it
+    STATUS = "ready" if (_have_vendor() or _core_sam3.available()) else "missing-deps"
 
     DEFAULT_CONF = 0.20
 
@@ -103,14 +105,17 @@ class SAM31Segmenter(BaseSegmenter):
         super().__init__(*args, **kwargs)
         self._processor = None
         self._video_predictor = None
+        self._core = None                     # L7.125: ComfyUI's own SAM 3 when the library is not here
 
     def load(self) -> None:
         if self._model is not None:
             return
-        if not _have_vendor():
+        use_core = not _have_vendor()
+        if use_core and not _core_sam3.available():
             raise RuntimeError(
-                "SAM 3.1 vendored library not present. Expected at "
-                f"{_vendor_root()}. Reinstall ComfyUI-CustomNodePacks."
+                "SAM 3.1 cannot run here: its library is not part of ComfyUI-CustomNodePacks (looked for it in "
+                f"{_vendor_root()}) and this ComfyUI has no SAM 3 of its own (it arrived in ComfyUI 0.39; "
+                "C2C_SAM_CORE=0 also turns that path off). Update ComfyUI to 0.39 or newer."
             )
         ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None
         if (ckpt is None or not os.path.isfile(ckpt)) and self.model_name and os.path.isabs(self.model_name) \
@@ -127,6 +132,12 @@ class SAM31Segmenter(BaseSegmenter):
                 f"SAM 3.1 checkpoint is not installed. Expected file '{want}' in folder: {root}. Place it "
                 "there, or pick a [preset:sam3.1] entry and tick auto_download to download it there."
             )
+
+        if use_core:
+            self._core = _core_sam3.get(f"{self.MODELS_KEY}/{os.path.basename(ckpt)}", ckpt)
+            self._model = self._core
+            logger.info("[SAM3.1] running on ComfyUI's own SAM 3 (%s)", ckpt)
+            return
 
         mod, proc_mod = _import_vendor()
         Sam3VideoPredictor = mod.Sam3VideoPredictor  # type: ignore[attr-defined]
@@ -189,6 +200,9 @@ class SAM31Segmenter(BaseSegmenter):
         return [cx, cy, w, h]
 
     def _seg_one(self, frame_hwc: np.ndarray, pos, neg, bbox, neg_bbox, text):
+        if self._core is not None:
+            with torch.no_grad():
+                return self._core.segment_union(frame_hwc, pos, neg, bbox, neg_bbox, text)
         H, W = frame_hwc.shape[:2]
         pil = self._to_pil(frame_hwc)
         proc = self._processor
@@ -245,6 +259,9 @@ class SAM31Segmenter(BaseSegmenter):
         """Every object SAM 3.1 keeps on one frame, separately (L7.114, the viewer's Find / click): the same prompts
         as _seg_one, without the union. Returns [{"mask": HxW float, "box": [x0, y0, x1, y1] px, "score": float}]."""
         self.load()
+        if self._core is not None:
+            with torch.no_grad():
+                return self._core.detect(frame_hwc, text or "", pos or [], neg or [], boxes or [])
         H, W = frame_hwc.shape[:2]
         proc = self._processor
         proc.set_confidence_threshold(self.DEFAULT_CONF)
@@ -302,6 +319,9 @@ class SAM31Segmenter(BaseSegmenter):
             raise
 
     def unload(self) -> None:
+        if self._core is not None:
+            _core_sam3.release()              # the shared checkpoint (the viewer loads it again when needed)
+        self._core = None
         self._processor = None
         self._video_predictor = None
         self._model = None
