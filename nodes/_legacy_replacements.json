@@ -5623,5 +5623,105 @@
   ],
   "dropped": [],
   "note": "L7.65 P32 (owner-approved move to NukeMax): NukeMax's NkScript nodes do the same job. Same input, same output types; the parsed JSON is NkScript's shape ({version, nodes: [{class_type, name, knobs, inputs: [{slot, src}], xpos, ypos, selected}]}) instead of the former {nodes: [{id, ..., widgets}], links}. NkScript also reads the braced strings the former serializer wrote. Without ComfyUI-NukeMaxNodes the node stays as it was."
+ },
+ {
+  "old_node_id": "LoadEXRMEC",
+  "new_node_id": "NukeMax_EXRSequenceLoad",
+  "old_widget_ids": [
+   "file_path"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "path",
+    "old_id": "file_path"
+   },
+   {
+    "new_id": "single_file",
+    "set_value": true
+   },
+   {
+    "new_id": "missing_frames",
+    "set_value": "error"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 4
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P30 (owner answer 2026-10-30: port the extras first): NukeMax's EXR Sequence Read / Write run this pack's former EXR engine unchanged (nukemax/nodes/io/exr_c2c.py) when single_file / file_path is set: the same pixels, info_json and files (only the write time stamp differs) (NukeMax tests/test_exr_c2c_port.py). Without ComfyUI-NukeMaxNodes the node stays as it was."
+ },
+ {
+  "old_node_id": "SaveEXRMEC",
+  "new_node_id": "NukeMax_EXRSequenceSave",
+  "old_widget_ids": [
+   "file_path",
+   "half_float",
+   "compression",
+   "metadata_json"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "image",
+    "old_id": "image"
+   },
+   {
+    "new_id": "file_path",
+    "old_id": "file_path"
+   },
+   {
+    "new_id": "bit_depth",
+    "old_id": "half_float"
+   },
+   {
+    "new_id": "compression",
+    "old_id": "compression"
+   },
+   {
+    "new_id": "metadata_json",
+    "old_id": "metadata_json"
+   },
+   {
+    "new_id": "aov_alpha",
+    "old_id": "aov_alpha"
+   }
+  ],
+  "c2c_values": [
+   {
+    "new_id": "bit_depth",
+    "old_id": "half_float",
+    "map": {
+     "true": "16f (half-float)",
+     "false": "32f (float)"
+    }
+   },
+   {
+    "new_id": "compression",
+    "old_id": "compression",
+    "map": {
+     "zips": "ZIPS (lossless, scanline)",
+     "zip": "ZIP  (lossless, recommended)",
+     "piz": "PIZ  (lossless, wavelet)",
+     "dwaa": "DWAA (lossy, DCT, fast)",
+     "dwab": "DWAB (lossy, DCT, 256 lines)",
+     "rle": "RLE  (lossless, run-length)",
+     "none": "None (uncompressed)"
+    }
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 2
+   }
+  ],
+  "dropped": [],
+  "note": "L7.65 P30 (owner answer 2026-10-30: port the extras first): NukeMax's EXR Sequence Read / Write run this pack's former EXR engine unchanged (nukemax/nodes/io/exr_c2c.py) when single_file / file_path is set: the same pixels, info_json and files (only the write time stamp differs) (NukeMax tests/test_exr_c2c_port.py). Without ComfyUI-NukeMaxNodes the node stays as it was."
  }
 ]

@@ -73,6 +73,39 @@ def pick_case(row: dict[str, Any], inputs: Any) -> dict[str, Any]:
     return {**{k: v for k, v in row.items() if k != "c2c_by_value"}, **case}
 
 
+def _js_str(v: Any) -> str:
+    """A value as JavaScript's String() writes it (the map keys of c2c_values are written that way)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def translate_value(spec: dict[str, Any], value: Any) -> tuple[bool, Any]:
+    """One c2c_values entry applied to a saved value (js/_c2c_migrate_core.js translate): a map by the value's text,
+    then log2, then a clamp. (False, None) when the map has no entry for it."""
+    nv = value
+    if isinstance(spec.get("map"), dict):
+        key = _js_str(value)
+        if key not in spec["map"]:
+            return False, None
+        nv = spec["map"][key]
+    if spec.get("fn") == "log2":
+        import math
+        try:
+            x = float(nv)
+        except (TypeError, ValueError):
+            return False, None
+        if not x > 0:
+            return False, None
+        nv = math.log2(x)
+    clamp = spec.get("clamp")
+    if isinstance(clamp, (list, tuple)) and len(clamp) == 2 and isinstance(nv, (int, float))             and not isinstance(nv, bool):
+        nv = min(clamp[1], max(clamp[0], nv))
+    return True, nv
+
+
 def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
     """Replace C2C legacy ids in an API prompt in place, as core's NodeReplaceManager.apply_replacements does
     (class_type, input_mapping old_id / set_value, output_mapping on every link that reads the node), except that a
@@ -101,6 +134,18 @@ def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
                 new["inputs"][m["new_id"]] = m["set_value"]
             elif "old_id" in m and m["old_id"] in old_inputs:
                 new["inputs"][m["new_id"]] = old_inputs[m["old_id"]]
+        # value translations (c2c_values), as the front end applies them (L7.65 P30: a saved half_float becomes the
+        # successor's bit_depth); a wired input is a link and is left alone
+        for v in row.get("c2c_values") or []:
+            if "set" in v:
+                new["inputs"][v["new_id"]] = v["set"]
+                continue
+            ov = old_inputs.get(v.get("old_id"))
+            if v.get("old_id") not in old_inputs or (isinstance(ov, list) and len(ov) == 2):
+                continue
+            ok, nv = translate_value(v, ov)
+            if ok:
+                new["inputs"][v["new_id"]] = nv
         prompt[nid] = new
     out_maps = {nid: {int(o["old_idx"]): int(o["new_idx"]) for o in row.get("output_mapping") or []}
                 for nid, row in targets.items()}

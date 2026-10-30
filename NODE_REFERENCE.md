@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **106** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **104** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -37,12 +37,12 @@
 | LocateAnything | 2 |
 | Nano Banana | 1 |
 | Control AOV | 1 |
-| Restored VFX | 5 |
+| Restored VFX | 3 |
 | Legacy (deprecated) | 7 |
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 106 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 5, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 104 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -186,9 +186,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **MEC/Temporal** (2)
   - [Fluid Shot Decoder (Restore Timing)](#fluidshotdecodermec)
   - [Fluid Shot Encoder (Temporal Normalizer)](#fluidshotencodermec)
-- **MaskEditControl/IO** (2)
-  - [Load EXR (MEC)](#loadexrmec)
-  - [Save EXR (MEC)](#saveexrmec)
 - **MaskEditControl/Pipeline** (1)
   - [Mask + Matting](#maskopsmec)
 - **MaskEditControl/Pose** (1)
@@ -3831,59 +3828,6 @@ Analyzes optical-flow speed and inserts in-between frames on fast sections so mo
 |---|---|---|---|
 | 0 | `normalized_images` | `IMAGE` | — |
 | 1 | `time_map` | `TIMEMAP` | — |
-
-
----
-
-## MaskEditControl/IO
-
-
-### LoadEXRMEC
-
-**Shown in the menu as:** Load EXR (MEC)
-
-Load EXR as scene-linear IMAGE. Tries OpenEXR → imageio.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `file_path` | `STRING` | default `""` | — |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `image` | `IMAGE` | — |
-| 1 | `info_json` | `STRING` | — |
-
-
-### SaveEXRMEC
-
-**Shown in the menu as:** Save EXR (MEC)
-
-Save IMAGE batch as EXR(s).
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `image` | `IMAGE` |  | — |
-| `file_path` | `STRING` | default `""` | Absolute output path. Batches add _0001, _0002 suffixes. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `half_float` | `BOOLEAN` | default `True` | 16-bit half (smaller, recommended). |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `info_json` | `STRING` | — |
 
 
 ---

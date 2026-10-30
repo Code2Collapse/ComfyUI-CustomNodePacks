@@ -690,12 +690,13 @@ _RESTORED_MAPPINGS, _RESTORED_DISPLAY = {}, {}
 # current pack") only looked inside THIS pack - the replacement was in another
 # one. That restore is what created 18 duplicate node ids, resolved by unsorted
 # os.listdir order (ComfyUI/nodes.py:2295 last-write-wins, :2356 unsorted).
-# exr_io STAYS here: its OpenImageIO backend is the only EXR path that works in
-# this environment, and its SaveEXRMEC is the 6-input superset.
+# exr_io (Load / Save EXR) moved to ComfyUI-NukeMaxNodes in L7.65 P30 (owner answer 2026-10-30): its OpenImageIO
+# engine was ported there unchanged (nukemax/nodes/io/exr_c2c.py) and saved nodes load as EXR Sequence Read
+# (single_file) / Write (file_path); C2C_LEGACY_EXR=1 registers the two former nodes again.
 # video_frame_extractor was merged into Batch Range (nodes/helpers, L7.65 P23).
 # roto (Vector Roto) is the Image Mask Editor's "roto" mode since L7.65 P01 and registers nothing.
-for _rmod in ("exr_io",
-              "optical_flow", "pixel_aspect"):
+for _rmod in ((("exr_io",) if __import__("os").environ.get("C2C_LEGACY_EXR", "").strip() == "1" else ())
+              + ("optical_flow", "pixel_aspect")):
     try:
         _rm = __import__(f"{__name__}.nodes.{_rmod}", fromlist=["NODE_CLASS_MAPPINGS"])
         _RESTORED_MAPPINGS.update(getattr(_rm, "NODE_CLASS_MAPPINGS", {}) or {})

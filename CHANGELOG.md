@@ -2,6 +2,22 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-30 (Load / Save EXR move to NukeMax, L7.65 P30)
+
+- **Load EXR** and **Save EXR** are no longer registered by this pack. ComfyUI-NukeMaxNodes' **EXR Sequence Read /
+  Write** took them over: their engine was ported there unchanged. That is OpenImageIO first, then OpenEXR, then
+  imageio, with named AOV channels, compression, metadata and no clipping.
+  - EXR Sequence Read gains `single_file` and an `info_json` output.
+  - EXR Sequence Write gains `file_path`, `metadata_json`, `aov_alpha`, the DWAB codec and an `info_json` output.
+- A saved workflow loads them as the NukeMax nodes:
+  - with `single_file` on / `file_path` set, `half_float` becomes the bit depth, and the codec names carry over;
+  - the same pixels, info and files (equal pixels, channels and attributes; only OpenImageIO's write time stamp
+    differs; NukeMax `tests/test_exr_c2c_port.py`);
+  - without NukeMax the nodes stay as they were.
+- API prompts now get the same value translations as the front end's migration (`c2c_values`). Before, a value the
+  successor reads differently (`half_float` into a bit-depth list) failed validation.
+- Kill switch: `C2C_LEGACY_EXR=1` registers the two former nodes again.
+
 ## Unreleased – 2026-10-29 (Mask + Matting's SAM 3 / 3.1 and ONYX run on ComfyUI's own SAM 3, L7.125)
 
 - The `sam3.1` and `sam3` segmenters and the **ONYX** pipeline needed a SAM library this pack does not ship, so they
