@@ -2,6 +2,22 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (Face Fixer: sections, [SKIP] fix, how-to, L7.65 P12)
+
+- **Face Fixer** shows seven controls: `face_model`, `denoise`, `steps`, `cfg`, sampler, scheduler and `seed`.
+- The tuning sits in three sections: Detection, Blend and Face prompts.
+  - Classic canvas: open them from the **More:** bar.
+  - Nodes 2.0: open them with **Show advanced inputs**.
+- `confidence` and `max_faces` are hidden while `face_model` is `none`.
+- Saved workflows keep every value: no control moved.
+- **`[SKIP]` works.** A face whose prompt is `[SKIP]` was still sampled, with `positive` / `negative`, because the shared
+  wildcard parser turned the marker into an empty prompt. It is now left untouched, as the tooltip said. Context
+  Inpainter's parsing is unchanged.
+- The `seed` tooltip states the real rule: face i of frame f uses seed + 1000·f + i. It used to say seed + i.
+- `docs/face-fixer.md` is now a how-to. It covers where the node goes, a first run, the sections, per-face prompts
+  (they need `clip`), video and the mask fallback. It also corrects the face order: `[ASC]` / `[DSC]` follow detection
+  order, not left to right.
+
 ## Unreleased – 2026-10-31 (Face/Pose Delta Editor moves to WanAnimatePreprocessV2, L7.65 P21)
 
 - **Face/Pose Delta Editor** now lives in ComfyUI-WanAnimatePreprocessV2, next to Pose and Face Detection (V2), with

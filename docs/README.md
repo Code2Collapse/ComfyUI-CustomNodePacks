@@ -62,7 +62,7 @@
 |---|---|---|
 | [`inpaint-suite.md`](inpaint-suite.md) | Inpaint Crop Pro (pro / smart aspect / mask prepare), Inpaint Stitch Pro (blend / paste back / smart / context blend) | Crop+stitch pipeline, 4 blend modes (gaussian / edge_aware / Laplacian-pyramid / FFT frequency), color match, video-stable crop, the former Smart crop / stitch, Mask Prepare, Paste Back and Context Inpainter as modes |
 | [**`propainter.md`**](propainter.md) ★ new | **ProPainter Temporal**, **Stitch**, **Stitch Refine**, **Remove**, **Flow Refine** | Temporal video inpaint with bidirectional RAFT flow, RFC flow completion, sliding-window InpaintGenerator, model-free object/wire/plate removal |
-| [**`face-fixer.md`**](face-fixer.md) ★ new | **MEC Face Fixer** | YOLO11 face detection → per-face crop → optional upscale → KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
+| [**`face-fixer.md`**](face-fixer.md) | **Face Fixer** | How-to: YOLO11 face detection → per-face crop → optional upscale → KSampler → smart blend; per-face `[SEP]/[ASC]/[DSC]/[SKIP]` prompts (need `clip`); sections; video; mask fallback |
 
 ### 📹 Video, Temporal Stability & BBox
 | Doc | Key nodes | What it covers |

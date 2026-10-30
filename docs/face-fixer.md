@@ -1,154 +1,131 @@
-# Face Fixer (MEC)
+# Face Fixer
 
-> **End-to-end face detail node.** YOLO11 face detection → per-face crop
-> → optional AI upscale → per-face KSampler → smart blend back. Behaves
-> like the legacy "Forbidden Vision Fixer" but with Impact-Pack wildcard
-> syntax and ComfyUI-native sampling.
+Re-renders every face in an image or a video at a higher resolution with your own model, then blends it back. Only
+the area around each face changes; the rest of the frame comes back untouched.
 
-**Display name:** `Face Fixer (MEC)`
-**Class:** `MECFaceFixer`
-**Category:** `MEC/Paint`
+**Menu:** Face Fixer · **Node id:** `MECFaceFixer` · **Category:** `C2C/Paint`
 
----
+## Where it goes
 
-## What it does
+```
+KSampler ──► VAE Decode ──► Face Fixer ──► Save Image
+                              ▲  ▲  ▲  ▲
+          model, positive, negative, vae: the same ones your KSampler uses
+```
 
-Iterates over every detected face in every frame and runs an isolated
-KSampler pass at higher resolution, then blends the result back over the
-original with feather + color match + lightness rescue. Per-face prompts
-are supported via wildcard tokens.
+For each face the node:
+1. finds the face (a YOLO face detector, or your mask);
+2. cuts out the face with some context around it (`crop_padding`);
+3. resizes the cut to `crop_resolution` on its longer side;
+4. samples it image-to-image at `denoise`;
+5. blends the result back through a soft oval.
 
-Works on **single images and video batches** identically — each frame is
-processed independently, but the seed seeds advance per face so the
-output is reproducible.
+## First run
 
----
+1. Put Face Fixer after VAE Decode and connect `model`, `positive`, `negative` and `vae`.
+2. Pick a face detector in `face_model`. The list shows the `.pt` / `.onnx` files in `models/ultralytics/bbox/` and
+   needs the `ultralytics` Python package. No detector? Leave `none` and connect a `mask` that covers the face.
+3. Start at `denoise` 0.3–0.4: higher values reshape the face more.
+4. Run. To see where faces were found and changed, preview `face_mask`. `info_json` lists every face.
 
-## Required parameters
+## The controls
 
-| Parameter | Default | Range / Choices | Description |
-|---|---|---|---|
-| `image` | — | IMAGE (B,H,W,C) | Source frame(s) |
-| `model` | — | MODEL | Diffusion model used for the per-face KSampler |
-| `positive` / `negative` | — | CONDITIONING | Base conditioning. Per-face wildcard prompts override |
-| `vae` | — | VAE | VAE for encode/decode of crops |
-| `face_model` | `none` | YOLO11 `.pt` / `.onnx` from `models/ultralytics/bbox/` | Face detector. Set `none` to use the optional `mask` input |
-| `confidence` | `0.5` | 0.05–0.95 | Detection threshold |
-| `max_faces` | `8` | 0–32 (`0` = all) | Cap per frame |
-| `crop_padding` | `1.4` | 1.0–3.0 | Bbox padding multiplier so the sampler sees context |
-| `crop_resolution` | `768` | 256–2048 (step 64) | Resize each crop's longer side before sampling |
-| `denoise` | `0.4` | 0.0–1.0 | Per-face denoise strength (`0.3` subtle, `0.7` aggressive reshape) |
-| `steps` | `20` | 1–100 | Sampling steps per face |
-| `cfg` | `6.0` | 0–30 | CFG scale |
-| `sampler_name` | `euler` | KSampler list | Sampler algorithm |
-| `scheduler` | `normal` | KSampler list | Sigma schedule |
-| `seed` | `0` | int | Base seed; each face gets `seed + face_index` |
-| `blend_softness` | `6.0` | 0–64 px | Feather radius on per-face blend mask |
-| `mask_dilate` | `4` | -32–32 | Dilate (>0) / erode (<0) of blend mask |
-| `color_match` | `true` | bool | Reinhard mean+std colour match per face |
-| `lightness_rescue` | `true` | bool | Lift CIE LAB L if the sample comes back darker than the original |
-| `differential_diffusion` | `true` | bool | Weight the blend by abs(orig − sampled) so unchanged pixels stay sharp |
+Seven controls are always shown: `face_model`, `denoise`, `steps`, `cfg`, `sampler_name`, `scheduler` and `seed`.
+The tuning sits in three sections:
+- **Classic canvas:** open them from the **More:** bar at the bottom of the node.
+- **Nodes 2.0:** open them with **Show advanced inputs**.
 
-## Optional parameters
+| Section | Controls | Defaults |
+|---|---|---|
+| Detection | `confidence`, `max_faces` (both hidden while `face_model` is `none`), `crop_padding`, `crop_resolution` | 0.5, 8 (0 = all), 1.4, 768 |
+| Blend | `blend_softness` (feather, px), `mask_dilate` (px, negative shrinks), `color_match`, `lightness_rescue`, `differential_diffusion` | 6, 4, on, on, on |
+| Face prompts | `face_positive_prompt`, `face_negative_prompt` | empty |
 
-| Parameter | Description |
-|---|---|
-| `mask` | Manual face mask. Used when `face_model='none'` or detection is empty |
-| `upscale_model` | UPSCALE_MODEL applied to faces below `crop_resolution` before sampling |
-| `face_positive_prompt` | Per-face positive prompt (wildcard syntax below). Empty = use base `positive` |
-| `face_negative_prompt` | Same syntax for negatives |
+What each Blend switch does:
+- `color_match`: matches the new face's colour mean and spread to the old one.
+- `lightness_rescue`: brightens the new face if it came back darker.
+- `differential_diffusion`: blends weaker where the new face barely differs, so those pixels stay as they were.
 
----
+Saved workflows keep every value: the controls did not move, they are only folded.
 
-## Wildcard syntax (face_positive_prompt / face_negative_prompt)
+## A different prompt per face
 
-| Token | Effect |
-|---|---|
-| `[SEP]` | Separates per-face prompts. Order = detection order |
-| `[ASC]` | Order faces left-to-right |
-| `[DSC]` | Order faces right-to-left |
-| `[ASC-SIZE]` | Order faces small-to-large |
-| `[DSC-SIZE]` | Order faces large-to-small |
-| `[SKIP]` | Leave that face untouched (no sampling) |
-
-### Examples
+Connect `clip`, the same text encoder you used for `positive`, then write one prompt per face in
+`face_positive_prompt` (and, if you like, `face_negative_prompt`):
 
 ```text
 red lipstick [SEP] blue eyes [SEP] [SKIP]
 ```
 
-Three faces: face 1 gets "red lipstick", face 2 "blue eyes", face 3
-skipped.
+This gives the first face "red lipstick" and the second "blue eyes", and leaves the third untouched.
+
+| Token | Effect |
+|---|---|
+| `[SEP]` | Separates the faces' prompts |
+| `[ASC]` / `[DSC]` | Faces in detection order (most confident first) / the reverse. `[ASC]` is the default |
+| `[ASC-SIZE]` / `[DSC-SIZE]` | Faces from the smallest box to the largest / the largest to the smallest |
+| `[SKIP]` | That face is not sampled and stays as it was |
+
+- When there are more faces than prompts, the last prompt repeats.
+- A face with an empty prompt uses `positive` / `negative`.
+- Each distinct prompt is encoded once.
+- Without `clip`, the face prompts do nothing and every face uses `positive` / `negative`. `info_json` says so in
+  `face_prompts`.
+
+`[SKIP]` works without `clip` too.
+
+Example: the main character gets their own prompt, everyone else is left alone:
 
 ```text
-[DSC-SIZE] hero glamour shot [SEP] background extra [SEP] background extra
+[DSC-SIZE] sharp eyes, detailed skin [SEP] [SKIP]
 ```
 
-Largest face = "hero glamour shot", smaller faces = "background extra".
+## Video
 
----
+Each frame is detected and sampled on its own. Face `i` of frame `f` uses the seed `seed + 1000·f + i`, so every
+face has its own fixed seed. Neighbouring frames are not linked, so a face can come out a little different from frame to
+frame. A lower `denoise` changes each face less.
+
+## Using a mask instead of a detector
+
+With `face_model` = `none`, or when the detector finds nothing, the node uses the `mask` input. The box around the
+mask's white pixels (above 0.5) counts as one face. A mask batch gives one mask per frame; a single mask is used for
+every frame. With neither a face nor a mask, the image comes back unchanged and `face_mask` is empty.
 
 ## Outputs
 
-| Output | Type | Description |
-|---|---|---|
-| `image` | IMAGE | Frame(s) with detailed faces blended back |
-| `face_mask` | MASK | Combined mask of every processed face |
-| `info_json` | STRING | Per-face metadata (bbox, score, prompt, denoise) |
-
----
-
-## Use cases
-
-### Image generation — auto face hi-fix
-
-```
-KSampler ──▶ VAE Decode ──▶ MECFaceFixer (denoise=0.35, crop_resolution=1024) ──▶ Save
-```
-
-Run a normal txt2img then auto-detail the face at higher resolution
-without touching the rest of the image.
-
-### Video generation — per-frame face polish
-
-```
-Wan2.2 Animate ──▶ MECFaceFixer (face_model=face_yolo11n, denoise=0.3) ──▶ VHS Combine
-```
-
-Each frame is independently detailed. Use a low denoise (`0.25–0.35`) to
-preserve identity and reduce flicker.
-
-### Multi-character scenes
-
-```
-… ──▶ MECFaceFixer
-       face_positive_prompt = "[DSC-SIZE] cinematic glamour [SEP] sharp eyes [SEP] [SKIP]"
-       max_faces = 3
-```
-
-Largest face gets glamour treatment, second face just eye sharpening,
-third face skipped (e.g. background blur).
-
----
-
-## Recipes
-
-| Scenario | Settings |
+| Output | What it is |
 |---|---|
-| Subtle hi-fix | `denoise=0.25`, `steps=20`, `crop_resolution=768`, `differential_diffusion=true` |
-| Aggressive reshape | `denoise=0.65`, `steps=30`, `cfg=7.5`, `crop_padding=1.6` |
-| Tiny faces in wide shot | `crop_padding=1.8`, `upscale_model=4xUltraSharp`, `crop_resolution=1024` |
-| Anti-flicker on video | `denoise≤0.35`, `seed=fixed`, `differential_diffusion=true`, `lightness_rescue=true` |
-| Identity-preserving polish | `color_match=true`, `lightness_rescue=true`, `differential_diffusion=true` |
+| `image` | The frames with the faces re-rendered and blended back |
+| `face_mask` | Where each face was blended in: a soft oval inside each face's padded box |
+| `info_json` | One entry per frame with its faces |
 
----
+Each face entry in `info_json` holds:
+- `bbox`: the detected box, before padding;
+- `score`;
+- `pos_prompt` and `neg_prompt`;
+- `prompt_used`: true when the face's own prompt was encoded;
+- `denoise`.
+
+A skipped face is listed as `{"bbox": [...], "skipped": true}`.
+
+## Starting points
+
+These are settings to try, not measured results:
+
+| Goal | Try |
+|---|---|
+| Light clean-up | `denoise` 0.25–0.35 |
+| Stronger reshape | `denoise` 0.55–0.7, `crop_padding` 1.6 |
+| Small faces in a wide shot | `crop_padding` 1.8, `crop_resolution` 1024, an `upscale_model` |
+| Visible seam around the face | raise `blend_softness`, or lower `mask_dilate` |
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
+| What you see | Why | What to do |
 |---|---|---|
-| `face_model` dropdown empty | No YOLO11 weights installed | Place `.pt` in `models/ultralytics/bbox/` (e.g. `face_yolov8n.pt` works too) |
-| No faces detected | Threshold too high / faces too small | Lower `confidence` to 0.3, raise `crop_padding` to 1.8 |
-| Faces look "washed out" | Color match too aggressive on small faces | Disable `color_match`, keep `lightness_rescue` |
-| Flicker on video | High `denoise` per frame | Drop to 0.25–0.35; enable `differential_diffusion` |
-| Identity drift | Denoise too high or wildcard prompt too strong | Lower `denoise`, simplify wildcard |
+| `face_model` offers only `none` | No detector file found | Put a YOLO face model (`.pt` / `.onnx`) in `models/ultralytics/bbox/` and restart |
+| Nothing changes | No face found and no mask; or `ultralytics` is not installed (the console says so) | Lower `confidence` in Detection, connect a mask, or install `ultralytics` |
+| Face prompts have no effect | `clip` is not connected | Connect the same CLIP as your prompt |
+| Faces look washed out | `color_match` on a small face | Turn `color_match` off in Blend |
+| "required input(s) missing" | `model`, `vae`, `positive` or `negative` is not connected | Connect it |

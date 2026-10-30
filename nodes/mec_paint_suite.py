@@ -350,6 +350,8 @@ def _parse_wildcard_prompt(
     prompt: str,
     n_regions: int,
     region_sizes: Optional[List[int]] = None,
+    *,
+    skip: str = "",
 ) -> List[str]:
     """Parse Impact-Pack-style per-face wildcard markers.
 
@@ -358,7 +360,8 @@ def _parse_wildcard_prompt(
       * ``[ASC]`` / ``[DSC]``    -- ascending / descending region-index order
       * ``[ASC-SIZE]`` / ``[DSC-SIZE]`` -- order regions by area (small→large
         or large→small). Requires ``region_sizes`` to be supplied.
-      * ``[SKIP]``               -- emit an empty prompt for that region
+      * ``[SKIP]``               -- emit ``skip`` for that region (an empty prompt by default; Face Fixer passes
+        "[SKIP]" so it can leave that face untouched)
 
     Missing segments are padded with the last available segment (or the
     entire prompt if no ``[SEP]`` was used).
@@ -394,7 +397,7 @@ def _parse_wildcard_prompt(
     for j, region_idx in enumerate(idx_order):
         seg = parts[j] if j < len(parts) else parts[-1]
         if "[SKIP]" in seg:
-            out[region_idx] = ""
+            out[region_idx] = skip
         else:
             out[region_idx] = seg
     return out

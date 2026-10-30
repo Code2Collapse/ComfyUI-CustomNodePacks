@@ -215,7 +215,7 @@ Every node's parameters, modes, and outputs are documented in depth in the `docs
 | [**Documentation Index**](docs/README.md) | — | Central nav: quick lookup by task, pack-by-pack reference, image-vs-video helpers |
 | [Inpaint Suite](docs/inpaint-suite.md) | 2 | Inpaint Crop Pro (modes pro / smart aspect / mask prepare) and Inpaint Stitch Pro (blend / paste back / smart / context blend) |
 | [**ProPainter Suite**](docs/propainter.md) ★ new | 5 | Temporal video inpaint, stitch (drop-in for legacy), seam-only refine, model-free remove, RAFT flow refine |
-| [**Face Fixer**](docs/face-fixer.md) ★ new | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts |
+| [**Face Fixer**](docs/face-fixer.md) | 1 | YOLO11 face detection → per-face KSampler → smart blend with `[SEP]/[ASC]/[DSC]/[SKIP]` wildcard prompts (connect `clip` for per-face prompts); seven controls shown, the rest in Detection / Blend / Face prompts sections; how-to in the link |
 | [**Paint Suite**](docs/paint-suite.md) ★ new | 1 | Interactive paint canvas (hardness/expansion/blur stages); the context inpainter (color match, lightness rescue, differential diffusion) is Inpaint Stitch Pro's `context blend` mode |
 | [**Mask + Matting Pipeline**](docs/mask-matting-pipeline.md) ★ new | 1 | Combined `MaskOpsMEC` (Mask + Matting) — pick segmenter (SAM2.1/SAM3/SeC/…) + matter (ViTMatte/RVM/MatAnyone2/…) + slot-based prompts; opens with a viewer: Find, click the subject, preview, render, QC |
 | [**Video Stabilizer**](docs/video-stabilizer.md) | 1 | Feature tracking, OpenCV dense flow or RAFT optical flow (experimental), 4 presets, measured accuracy table; padding-mask output wires into Inpaint Crop Pro |

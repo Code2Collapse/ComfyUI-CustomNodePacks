@@ -155,6 +155,27 @@ def _round_to_multiple(n: int, m: int = 8) -> int:
 # ══════════════════════════════════════════════════════════════════════
 #  MECFaceFixer node
 # ══════════════════════════════════════════════════════════════════════
+# L7.65 P12 (ORDERS 11.4: at most 10 visible controls): the tuning inputs are flagged core's "advanced" (Nodes 2.0 folds
+# them behind "Show advanced inputs") and named a "c2c_section" for the classic canvas's "More" bar (js/_c2c_sections.js,
+# owned by js/c2c_mode_widgets.js). Order and defaults are unchanged, so saved workflows load as before.
+_FACE_FIXER_SECTIONS = {
+    **dict.fromkeys(("confidence", "max_faces", "crop_padding", "crop_resolution"), "Detection"),
+    **dict.fromkeys(("blend_softness", "mask_dilate", "color_match", "lightness_rescue", "differential_diffusion"),
+                    "Blend"),
+    **dict.fromkeys(("face_positive_prompt", "face_negative_prompt"), "Face prompts"),
+}
+
+
+def _with_sections(spec):
+    for group in ("required", "optional"):
+        for name, s in (spec.get(group) or {}).items():
+            section = _FACE_FIXER_SECTIONS.get(name)
+            if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
+                s[1]["c2c_section"] = section
+                s[1]["advanced"] = True
+    return spec
+
+
 class MECFaceFixer:
     """End-to-end face-detail node: detect → crop → upscale → sample → blend.
 
@@ -166,7 +187,8 @@ class MECFaceFixer:
     DESCRIPTION = (
         "Auto face detection (YOLO11) + per-face crop + AI pre-upscale + "
         "context-aware sampling + smart blend with wildcard per-face prompts. "
-        "Behavioural clone of Forbidden Vision's Fixer with Impact-Pack wildcard syntax."
+        "Behavioural clone of Forbidden Vision's Fixer with Impact-Pack wildcard syntax. "
+        "How-to: docs/face-fixer.md in ComfyUI-CustomNodePacks."
     )
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "face_mask", "info_json")
@@ -187,7 +209,7 @@ class MECFaceFixer:
             samplers = ["euler", "dpmpp_2m"]
             schedulers = ["normal", "karras"]
 
-        return {
+        return _with_sections({
             "required": {
                 "image":     ("IMAGE", {"tooltip": "Source image (single frame or batch; processed independently per frame)."}),
                 "model":     ("MODEL", {"tooltip": "Diffusion model to sample with."}),
@@ -207,7 +229,7 @@ class MECFaceFixer:
                 "cfg":       ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.1, "tooltip": "CFG scale for face sampling."}),
                 "sampler_name": (samplers, {"default": "euler", "tooltip": "Sampler algorithm."}),
                 "scheduler":    (schedulers, {"default": "normal", "tooltip": "Sigma schedule."}),
-                "seed":      ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Base seed; each face gets seed+i."}),
+                "seed":      ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Base seed. Face i of frame f samples with seed + 1000*f + i."}),
                 "blend_softness":  ("FLOAT", {"default": 6.0, "min": 0.0, "max": 64.0, "step": 0.5, "tooltip": "Feather radius (px) on the per-face blend mask."}),
                 "mask_dilate":     ("INT", {"default": 4, "min": -32, "max": 32, "step": 1, "tooltip": "Dilate (>0) / erode (<0) of the per-face blend mask."}),
                 "color_match":     ("BOOLEAN", {"default": True, "tooltip": "Reinhard mean/std colour match per face."}),
@@ -230,7 +252,7 @@ class MECFaceFixer:
                                              "the same CLIP as your prompt: each face's prompt is then encoded and "
                                              "sampled. Not connected: every face uses positive / negative."}),
             },
-        }
+        })
 
     @classmethod
     def IS_CHANGED(cls, image, model, positive, negative, vae,
@@ -376,7 +398,10 @@ class MECFaceFixer:
                 boxes = self._detect(frame, face_model, float(confidence), int(max_faces), fb_mask)
                 # Region sizes for [ASC-SIZE] / [DSC-SIZE].
                 region_sizes = [(x1 - x0) * (y1 - y0) for (x0, y0, x1, y1, _s) in boxes]
-                pos_prompts = _parse_wildcard_prompt(face_positive_prompt, max(len(boxes), 1), region_sizes or None)
+                # skip="[SKIP]": the parser's default turns a [SKIP] face into an empty prompt, i.e. the base
+                # conditioning, so the face was sampled anyway (L7.65 P12).
+                pos_prompts = _parse_wildcard_prompt(face_positive_prompt, max(len(boxes), 1), region_sizes or None,
+                                                     skip="[SKIP]")
                 neg_prompts = _parse_wildcard_prompt(face_negative_prompt, max(len(boxes), 1), region_sizes or None)
 
                 composite = frame.copy()

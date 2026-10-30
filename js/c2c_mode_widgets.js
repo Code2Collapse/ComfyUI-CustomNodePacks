@@ -191,6 +191,13 @@ const RULES = {
             && defInputs("ImageMaskEditorC2C").has(name),
         visible: imeVisible,
     },
+    MECFaceFixer: {
+        // L7.65 P12: confidence / max_faces only mean something when a face model detects; with face_model "none" the
+        // mask input chooses the face. The tuning inputs sit in the Detection / Blend / Face prompts sections.
+        watch: ["face_model"],
+        managed: ["confidence", "max_faces"],
+        visible: (v) => (String(v.face_model ?? "none") === "none" ? [] : ["confidence", "max_faces"]),
+    },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],
         managed: ["tile_size", "exposure", ...CLEAN],

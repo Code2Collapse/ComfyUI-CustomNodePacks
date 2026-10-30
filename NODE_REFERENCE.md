@@ -1859,6 +1859,8 @@ Inspect a VAE's per-block weight statistics and outlier tensors, or compare two 
 
 Auto face detection (YOLO11) + per-face crop + AI pre-upscale + context-aware sampling + smart blend with wildcard per-face prompts. Behavioural clone of Forbidden Vision's Fixer with Impact-Pack wildcard syntax.
 
+How-to: [docs/face-fixer.md](docs/face-fixer.md). Seven controls are always shown. The rest sit in the sections Detection (`confidence`, `max_faces`, `crop_padding`, `crop_resolution`), Blend (`blend_softness` ... `differential_diffusion`) and Face prompts. Classic canvas: the **More:** bar; Nodes 2.0: **Show advanced inputs**. `confidence` / `max_faces` are hidden while `face_model` is `none`.
+
 
 **Required inputs**
 
@@ -1879,7 +1881,7 @@ Auto face detection (YOLO11) + per-face crop + AI pre-upscale + context-aware sa
 | `cfg` | `FLOAT` | default `6.0`, range 0.0…30.0, step 0.1 | CFG scale for face sampling. |
 | `sampler_name` | choice: `euler`, `dpmpp_2m` | default `"euler"` | Sampler algorithm. |
 | `scheduler` | choice: `normal`, `karras` | default `"normal"` | Sigma schedule. |
-| `seed` | `INT` | default `0`, range 0…18446744073709551615 | Base seed; each face gets seed+i. |
+| `seed` | `INT` | default `0`, range 0…18446744073709551615 | Base seed. Face i of frame f samples with seed + 1000*f + i. |
 | `blend_softness` | `FLOAT` | default `6.0`, range 0.0…64.0, step 0.5 | Feather radius (px) on the per-face blend mask. |
 | `mask_dilate` | `INT` | default `4`, range -32…32, step 1 | Dilate (>0) / erode (<0) of the per-face blend mask. |
 | `color_match` | `BOOLEAN` | default `True` | Reinhard mean/std colour match per face. |
@@ -1892,8 +1894,9 @@ Auto face detection (YOLO11) + per-face crop + AI pre-upscale + context-aware sa
 |---|---|---|---|
 | `mask` | `MASK` |  | Optional manual face mask. Used directly when face_model='none' or detection finds nothing. |
 | `upscale_model` | `UPSCALE_MODEL` |  | Optional UPSCALE_MODEL applied to faces below crop_resolution before sampling. |
-| `face_positive_prompt` | `STRING` | default `""`, multiline | Per-face positive prompt with wildcards: [SEP] separates faces; [ASC]/[DSC]/[ASC-SIZE]/[DSC-SIZE] order; [SKIP] leaves a face untouched. |
+| `face_positive_prompt` | `STRING` | default `""`, multiline | Per-face positive prompt with wildcards: [SEP] separates faces; [ASC]/[DSC]/[ASC-SIZE]/[DSC-SIZE] order; [SKIP] leaves a face untouched. Needs the clip input to change the sampling. |
 | `face_negative_prompt` | `STRING` | default `""`, multiline | Same syntax as face_positive_prompt for negatives. |
+| `clip` | `CLIP` |  | Text encoder for the face prompts: each face's prompt is encoded and sampled. Not connected: every face uses positive / negative. |
 
 **Outputs**
 
