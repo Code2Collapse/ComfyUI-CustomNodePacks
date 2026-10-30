@@ -2,6 +2,18 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (Face/Pose Delta Editor moves to WanAnimatePreprocessV2, L7.65 P21)
+
+- **Face/Pose Delta Editor** now lives in ComfyUI-WanAnimatePreprocessV2, next to Pose and Face Detection (V2), with
+  its editor and a how-to (that pack's `docs/face-pose-delta.md`). It keeps its node id, so saved workflows load it
+  there unchanged.
+- Owner answer 2026-10-31: it now also reads and writes that pack's pose data. It moves the iBUG-68 face points of
+  every frame, so it plugs in before Draw ViT Pose (V2). Before, it only took a LANDMARKS type that no node in that pack
+  produced. The math is unchanged (compared with this pack's file in that pack's tests).
+- A new node no longer applies the example edit: its default changes nothing until an edit is authored.
+- Kill switch: `C2C_LEGACY_FACE_POSE_DELTA=1` registers the node here again (without its editor), for an install without
+  WanAnimatePreprocessV2.
+
 ## Unreleased – 2026-10-30 (Load / Save EXR move to NukeMax, L7.65 P30)
 
 - **Load EXR** and **Save EXR** are no longer registered by this pack. ComfyUI-NukeMaxNodes' **EXR Sequence Read /

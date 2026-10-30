@@ -15,7 +15,9 @@ const SETTING = "c2c.migrate.auto";
 // L7.65 P08: survivors whose saved inputs can sit on other slots than the current definition's (Inpaint Stitch Pro
 // gained the original_image / mask sockets, which the front end puts before every widget slot): links into them are
 // re-slotted by input name before configure (keepLinkSlots in _c2c_migrate_core.js)
-const KEEP_SLOTS = new Set(["InpaintCropProMEC", "InpaintStitchProMEC"]);
+// L7.65 P21: Face/Pose Delta Editor (now in ComfyUI-WanAnimatePreprocessV2) gained a pose_data socket, which moves its
+// widget slots by one
+const KEEP_SLOTS = new Set(["InpaintCropProMEC", "InpaintStitchProMEC", "FacePoseDeltaCoreMEC"]);
 let _enabled = true;
 let _table = null;
 

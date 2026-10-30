@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **104** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **103** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -15,7 +15,6 @@
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
 | Face Fixer | 1 |
-| Face/Pose Delta | 1 |
 | Mask + Matting | 5 |
 | Layer Effects | 1 |
 | Mask toolkit | 1 |
@@ -42,7 +41,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 104 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Face/Pose Delta 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 103 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -188,8 +187,6 @@ mirror; treat the live node schema as authoritative until they are regenerated.
   - [Fluid Shot Encoder (Temporal Normalizer)](#fluidshotencodermec)
 - **MaskEditControl/Pipeline** (1)
   - [Mask + Matting](#maskopsmec)
-- **MaskEditControl/Pose** (1)
-  - [Face/Pose Delta Editor (C2C)](#faceposedeltacoremec)
 - **MaskEditControl/VFX** (1)
   - [Optical Flow Re-Vector (MEC)](#opticalflowmec)
 - **MaskEnhancedControl/Grounding** (2)
@@ -3988,44 +3985,6 @@ Production-grade segmentation + matting + AUTO-QUALITY + diagnostics in one node
 | 16 | `suggested_method` | `STRING` | Suggested next masking method (string) from the failure explainer. |
 | 17 | `object_alphas` | `MASK` | Per-object alpha mattes stacked object-major as (O*B,H,W). |
 | 18 | `foreground` | `IMAGE` | The image times the final alpha (premultiplied), despilled when despill is on. |
-
-
----
-
-## MaskEditControl/Pose
-
-
-### FacePoseDeltaCoreMEC
-
-**Shown in the menu as:** Face/Pose Delta Editor (C2C)
-
-Apply user-edited landmark deltas to a per-frame face/pose landmark stream in anchor-relative space, so the edit follows the face as the head moves. Multi-keyframe with eased blend.
-
-
-**Required inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `landmarks` | `LANDMARKS` |  | Per-frame landmarks (T,N,2) — typically MediaPipe FaceMesh from WanAnimatePreprocessV2's gaze/pose detector. Single frame (N,2) is auto-promoted to T=1. |
-| `keyframe_edits_json` | `STRING` | default `"{   "keyframes": [     {"frame": 0,  "deltas": {"61": [-0.02,  0.01]}},     {"frame": 30, "deltas": {"61": [-0.08,  0.04]}}   ],   "ease": "smooth_step",   "extrapolate": "hold" }"`, multiline | JSON describing one or more keyframe edits in anchor-relative space (1.0 unit = inter-ocular distance). |
-| `anchor_mode` | choice: `intereye`, `centroid` | default `"intereye"` | How to compute the per-frame face anchor. 'intereye' is robust under head turns; 'centroid' is a fallback for non-face landmark sets. |
-| `left_eye_idx` | `INT` | default `33`, range 0…100000 | Landmark index of the outer-left eye corner. MediaPipe FaceMesh = 33. |
-| `right_eye_idx` | `INT` | default `263`, range 0…100000 | Landmark index of the outer-right eye corner. MediaPipe FaceMesh = 263. |
-
-**Optional inputs**
-
-| Parameter | Type | Constraints | What it does |
-|---|---|---|---|
-| `external_anchors_json` | `STRING` | default `""`, multiline | Optional override for per-frame anchors. JSON: {"centers": [[cx,cy], ...], "scales": [s, ...]}. If present, replaces the computed intereye/centroid anchors. |
-
-**Outputs**
-
-| # | Name | Type | What it is |
-|---|---|---|---|
-| 0 | `landmarks_modified` | `LANDMARKS` | Modified landmarks (T, N, 2) — same shape and ordering as input. |
-| 1 | `info_json` | `STRING` | JSON: per-frame anchor stats, keyframes used, deltas applied, weights at head/tail frames. Useful for debugging the blend. |
-
-
 
 
 ---

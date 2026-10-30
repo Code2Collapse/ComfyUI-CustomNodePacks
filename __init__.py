@@ -79,12 +79,16 @@ from .nodes.mec_face_fixer import (
     NODE_CLASS_MAPPINGS as _FACE_FIXER_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _FACE_FIXER_DISPLAY,
 )
-# Face/Pose Delta Editor (anchor-relative landmark deltas, multi-keyframe)
+# Face/Pose Delta Editor: moved to ComfyUI-WanAnimatePreprocessV2 (L7.65 P21, owner 2026-10-31), same node id, now also
+# reading / writing that pack's POSEDATA; its editor script moved with it. C2C_LEGACY_FACE_POSE_DELTA=1 registers it here
+# again for an install without WanAnimatePreprocessV2 (the node, not the editor).
+_FPDELTA_MAPPINGS, _FPDELTA_DISPLAY = {}, {}
 try:
-    from .nodes.face_pose_delta import (
-        NODE_CLASS_MAPPINGS as _FPDELTA_MAPPINGS,
-        NODE_DISPLAY_NAME_MAPPINGS as _FPDELTA_DISPLAY,
-    )
+    if __import__("os").environ.get("C2C_LEGACY_FACE_POSE_DELTA", "").strip() == "1":
+        from .nodes.face_pose_delta import (
+            NODE_CLASS_MAPPINGS as _FPDELTA_MAPPINGS,
+            NODE_DISPLAY_NAME_MAPPINGS as _FPDELTA_DISPLAY,
+        )
 except Exception as _fpd_exc:  # pragma: no cover
     _FPDELTA_MAPPINGS, _FPDELTA_DISPLAY = {}, {}
     try:
