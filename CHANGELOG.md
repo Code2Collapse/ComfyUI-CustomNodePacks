@@ -2,6 +2,24 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (Workflow Issues button: floating, never over the console, L9.71 / owner A20 17.1)
+
+- The **⚠ N workflow issues** button is no longer pinned to one spot. That spot covered the canvas info and the
+  console.
+- You can drag it anywhere: a click still opens the list, and Alt + arrow keys move it.
+- It keeps out of the way of the console (Logs / Terminal), the canvas info, the side toolbar and an open sidebar tab.
+  When one of them opens over it, the button steps aside and returns to your spot once it closes.
+- Its position is kept in your ComfyUI settings, never in the workflow. It snaps to nearby edges and comes back into
+  view after a window resize or on a smaller screen.
+- Right-click it to reset its position or hide it. Settings › C2C › Workflow issues has show / hide and the size, and
+  the command palette has show, hide, reset and open.
+- Dialogs and menus now cover it (it used to sit above them).
+- The issue list is a panel you can move and resize. It keeps its spot and size, and Escape closes it.
+- A loaded workflow is checked at once. In Lite mode, a loaded broken workflow used to show nothing until the first
+  edit.
+- The validator moved from `js/c2c_workflow_wizard.js` to `js/c2c_workflow_issues.js` with unchanged checks.
+  Design: `docs/design/workflow_issues_button.md`.
+
 ## Unreleased – 2026-10-31 (Face Fixer: sections, [SKIP] fix, how-to, L7.65 P12)
 
 - **Face Fixer** shows seven controls: `face_model`, `denoise`, `steps`, `cfg`, sampler, scheduler and `seed`.

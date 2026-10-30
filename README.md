@@ -1770,6 +1770,17 @@ are looking at, inside subgraphs too. Wires between the copied nodes are kept.
 
 The other C2C canvas tools work inside subgraphs too: sticky notes and wire labels belong to the graph they were made on, and align, find, Doctor, bookmarks, graph health and the undo history act on, or open, the graph that holds the node.
 
+**Workflow issues.** While the graph has a model name that no longer exists or a required input that is not
+connected (subgraphs included), a **⚠ N workflow issues** button shows. Click it for the list with one-click fixes.
+- Drag the button anywhere; Alt + arrow keys move it too.
+- It never covers the console (Logs / Terminal), the canvas info or an open sidebar: it steps aside and comes back
+  to your spot when they close.
+- Its position, and the list's position and size, are kept in your ComfyUI settings, not in the workflow.
+- Right-click: Reset position, Hide the button. Bring it back from Settings › C2C › Workflow issues or the command
+  palette (**C2C: Show the Workflow Issues button**).
+
+Design: [docs/design/workflow_issues_button.md](docs/design/workflow_issues_button.md).
+
 ## Automation: schedules, watch folders, webhooks
 
 Two panels run workflows without you pressing Run. Open them from the OmniBar (**⏰ Schedule**, **👁 Watch**) or from
