@@ -28,7 +28,7 @@ class AudioDescriptor:
 
 @dataclass(frozen=True)
 class TransformOp:
-    op: Literal["trim", "step", "cap", "retime", "crop", "scale"]
+    op: Literal["trim", "step", "cap", "retime", "crop", "scale", "timeline", "reverse"]
     args: tuple[object, ...]
 
 
@@ -45,6 +45,13 @@ class SequenceSource:
     pattern: str = ""
     files: tuple[str, ...] = field(default_factory=tuple)
     gaps: tuple[tuple[int, int], ...] = field(default_factory=tuple)
+    # L9.89 (owner A21, Rev 3 Part 3), all optional so older handles stay valid:
+    numbers: tuple[int, ...] = field(default_factory=tuple)    # each file's frame number (() = numbered by position)
+    still: bool = False                                        # one file loaded as one frame, never a sequence
+    part: int = 0                                              # EXR part (subimage) the picture is read from
+    channels: tuple[str, ...] = field(default_factory=tuple)   # picture channels in R, G, B order (() = as before)
+    alpha_channel: str = ""                                    # with ``channels``: the alpha read with them
+    layer: str = ""                                            # the layer key those channels came from
 
 
 def _normpath(path: str) -> str:
@@ -122,6 +129,20 @@ class C2CVideo:
             return self
         return self._selected(self.selected_indices()[:count], TransformOp("cap", (count,)))
 
+    def reversed(self) -> C2CVideo:
+        """The current selection, last frame first (L9.89)."""
+        return self._selected(list(self.selected_indices())[::-1], TransformOp("reverse", ()))
+
+    def with_timeline(self, indices: Sequence[int], fps: Fraction | None = None) -> C2CVideo:
+        """Positions -> source frames from a timeline (c2c_core.video.sequence.build_timeline): -1 = a black frame.
+        Replaces the selection; ``fps`` when the timeline steps over frame numbers (a render on twos)."""
+        h = self._selected([int(i) for i in indices], TransformOp("timeline", (len(indices),)))
+        return replace(h, fps=Fraction(fps)) if fps is not None else h
+
+    @property
+    def has_black(self) -> bool:
+        return self.index_map is not None and any(i < 0 for i in self.index_map)
+
     def retimed(self, fps: Fraction | float, source_times: Sequence[float]) -> C2CVideo:
         """Resample to ``fps``. Output frame j shows the first selected source
         frame whose time is at or after j / fps - VHS's force_rate rule - but
@@ -136,6 +157,9 @@ class C2CVideo:
         sel = self.selected_indices()
         if not len(sel):
             return replace(self, fps=fps)
+        if any(i < 0 for i in sel) or any(b < a for a, b in zip(sel, sel[1:])):
+            raise ValueError("force_rate retimes frames in time order, and this selection has black frames or runs "
+                             "backwards / loops (a frame_range edge or missing-frame policy) - set force_rate to 0")
         times = [source_times[i] for i in sel]
         t0, t_end = times[0], times[-1]
         eps = 1e-6
@@ -199,7 +223,8 @@ class C2CVideo:
         if self.source.kind == "file":
             src_key: object = self.source.stat_key
         else:
-            src_key = self.source.files
+            src_key = [self.source.files, self.source.numbers, self.source.still, self.source.part,
+                       self.source.channels, self.source.alpha_channel]
         payload = {
             "source": src_key,
             "stream_index": self.stream_index,

@@ -88,7 +88,10 @@ const describe = (o, parents) => ({
     id: execId(o.graph, o.node, parents),
     node: o.node,
     title: o.node.title || o.node.type,
-    video: o.node.widgets?.find((w) => w.name === "video")?.value ?? "",
+    // L9.89: in server path mode the source is the typed path (the merged Load Video Path)
+    video: (o.node.widgets?.find((w) => w.name === "location")?.value === "server path"
+        ? o.node.widgets?.find((w) => w.name === "path")?.value
+        : o.node.widgets?.find((w) => w.name === "video")?.value) ?? "",
 });
 
 /**

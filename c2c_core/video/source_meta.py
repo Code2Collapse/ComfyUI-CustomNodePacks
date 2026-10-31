@@ -166,14 +166,20 @@ def record(raw: Any, loaded: Any) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - metadata is a bonus; a file PyAV cannot reopen just carries none
         meta = {"timecode": None, "pixel_aspect": None, "reel": None}
     first_index = sel[0] if sel else 0
+    # L9.89: a black frame (-1, a missing-frame / edge policy) has no source position, so no exact mapping either
     rec: dict[str, Any] = {"first_index": int(first_index), "step": step, "count": len(sel),
-                           "fps": float(raw.fps), "exact": bool(sel) and step is not None and not retimed,
+                           "fps": float(raw.fps),
+                           "exact": bool(sel) and step is not None and not retimed and min(sel) >= 0,
                            "first_number": None, "timecode": None, **{k: meta[k] for k in ("pixel_aspect", "reel")}}
     if raw.source.kind != "file" and rec["exact"]:
-        nums = frame_numbers(raw.source.files)
-        gaps = bool(getattr(raw.source, "gaps", ()))
-        if nums is not None and not gaps and nums == list(range(nums[0], nums[0] + len(nums))):
-            rec["first_number"] = nums[0] + int(first_index)
+        own = tuple(getattr(raw.source, "numbers", ()) or ())
+        if own and len(own) == len(raw.source.files):
+            rec["first_number"] = int(own[int(first_index)])      # the file's own number, gaps or not (L9.89)
+        else:
+            nums = frame_numbers(raw.source.files)
+            gaps = bool(getattr(raw.source, "gaps", ()))
+            if nums is not None and not gaps and nums == list(range(nums[0], nums[0] + len(nums))):
+                rec["first_number"] = nums[0] + int(first_index)
     if meta["timecode"] and rec["exact"]:
         rec["timecode"] = tc_add(meta["timecode"], int(first_index), float(raw.fps))
         rec["source_timecode"] = meta["timecode"]

@@ -23,6 +23,7 @@ export function ensureVloaderStyles() {
 .c2c-vloader { display: flex; flex-direction: column; gap: ${GAP}px; width: 100%; }
 .c2c-vloader__preview .c2c-ui-stage__viewport { position: relative; width: 100%; background: var(--cu-sunken); border-radius: 6px; overflow: hidden; }
 .c2c-vloader__video { width: 100%; height: 100%; display: block; object-fit: contain; background: var(--cu-ground); }
+.c2c-vloader__video:not([src]) { display: none; }   /* empty: the message gets the whole viewport, not a sliver (L9.89) */
 .c2c-vloader__loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   background: var(--cu-sunken); }
 .c2c-vloader__loading::after { content: ""; width: 28px; height: 28px; border-radius: 50%;
@@ -63,7 +64,7 @@ export function previewHeight(width, aspect, hasPreview) {
 export function restHeight(ui) {
     let h = 0;
     let n = 0;
-    for (const el of [ui.timeline, ui.info, ui.summary, ui.status?.el]) {
+    for (const el of [ui.sourceBar, ui.timeline, ui.info, ui.summary, ui.status?.el]) {   // sourceBar: L9.89
         if (!el || el.offsetParent === null) continue;
         h += el.offsetHeight;
         n += 1;

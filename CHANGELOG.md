@@ -2,6 +2,48 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (Load Video (C2C) loads images, EXRs and sequences; Load Video Path merged in, L9.89 / owner A21)
+
+- Load Video (C2C) is the one loader for:
+  - a movie;
+  - one still image;
+  - one EXR (any layer);
+  - a numbered image or EXR sequence.
+
+  It works from the input folder (picked, uploaded, dropped) or from a server path. See the README section
+  "images, EXRs and sequences".
+- Load Video Path (C2C) is merged into it as `location` = *server path*. Saved nodes and API prompts migrate
+  automatically to the same path and the same frames (`docs/MIGRATION.md`).
+- Fixed: a sequence with a missing frame silently loaded one frame fewer, and every later frame played early (audio,
+  timecode and anything frame-indexed drifted).
+  - Missing frames now stop the run by default and name the numbers.
+  - *black* / *hold previous* / *nearest* fill the hole; *skip (as before)* keeps the old behaviour on request.
+  - A sequence keeps its own frame numbers (`frame_map`).
+- Fixed: picking one frame of an unpadded sequence (`u.10.png` in `u.1 … u.100`) loaded only the frames with as many
+  digits. Padding now comes from all the files.
+- Fixed: an EXR without a main RGB (only `diffuse.R` and similar) showed arbitrary channels in IMAGE. The layer is
+  now chosen by name (`exr_layer`).
+- New inputs, appended (defaults reproduce the old load): `location`, `path`, `source_mode`, `sequence_fps`
+  (0 = the file's own rate), `frame_range` (Nuke syntax), `reverse`, `frame_offset`, `missing_frames`,
+  `edge_policy`, `exr_layer`.
+- New outputs, appended: `frame_map` (h3.frame_ledger v1.1), `exr_passes` (C2C_EXR_PASSES, lazy) and `metadata`.
+- The node has its own upload bar instead of core's video-only button:
+  - files, a folder, drag-and-drop, progress, explicit overwrite;
+  - content checked by its first bytes;
+  - a sequence is never renamed frame by frame.
+- New routes:
+  - `POST /c2c/media/upload`;
+  - `GET /c2c/media/scan` (the candidate sequences of a picked frame), `/c2c/media/still` and `/c2c/media/formats`.
+  - The probe / preview / scan routes read server paths only inside ComfyUI's folders plus `C2C_MEDIA_ROOTS` /
+    `c2c_media_roots.txt` (owner decision D0.35).
+- Engine (`c2c_core/video`):
+  - `sequence.py` (grammar, padding classes, timelines);
+  - `exr.py` (parts, layers, channels, header);
+  - `media.py` (`probe_media`, `apply_timeline`);
+  - `passes.py`;
+  - the reader: black frames, named layers, a bounded frame cache, random access for reversed selections.
+- Measured listing cost for 10,000 input files: 70 ms on the first call, then 0.06 ms (cached by the folder's mtime).
+
 ## Unreleased – 2026-10-31 (c2c_core.video.writer: streaming writer + remux concat, L9.74)
 
 - New engine module `c2c_core/video/writer.py`. `StreamWriter` encodes every `write(frames)` call and keeps nothing, so memory is bounded by one call. Codecs: h264 (.mp4), ProRes 422 HQ 10-bit (.mov) and FFV1 lossless (.mkv). Colour follows Save Video's measured conventions (BT.709 matrix, TV range, tagged BT.709).

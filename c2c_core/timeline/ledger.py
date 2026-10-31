@@ -8,7 +8,8 @@ segments).
 Shape::
 
     {"c2c_contract": "h3.frame_ledger", "c2c_contract_version": "1.0",
-     "source": {"path", "fps": "num/den", "time_base": "num/den" | None, "frames": N, "pts": [...] | None},
+     "source": {"path", "fps": "num/den", "time_base": "num/den" | None, "frames": N, "pts": [...] | None,
+                "numbers": [[index_start, number_start, count, step], ...] | None},     # v1.1, see below
      "output": {"fps": "num/den", "frames": M, "offset": first global frame number},
      "map":    [[position_start, source_start, count, step], ...],     # step -1 = reversed run
      "segments": [{"id", "global": [a, b], "pad_head", "pad_tail", "overlap_head", "overlap_tail",
@@ -18,6 +19,10 @@ Shape::
 
 Positions are 0-based output indices; the global frame number is ``position + output.offset``. Padding, overlap,
 context and the accepted range are separate segment fields (the six handle meanings of Part 6.3 never mix).
+
+v1.1 (L9.89, additive - a v1.0 reader is unaffected): ``source.numbers`` gives the frame NUMBER of each source index
+of an image sequence (shot.1001.exr is index 0, number 1001), as runs like ``map``; None = the number is the index.
+A source index of -1 in ``map`` is a black frame (a missing-frame or edge policy "black"), not an error.
 """
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ from bisect import bisect_right
 from fractions import Fraction
 
 CONTRACT = "h3.frame_ledger"
-VERSION = "1.0"
+VERSION = "1.1"
 
 
 def _frac(x) -> Fraction:
@@ -70,14 +75,20 @@ def expand(ledger: dict) -> list[int]:
 
 
 def new(source_frames: list[int] | range, *, fps, path: str | None = None, time_base=None, total_source: int | None = None,
-        pts: list[int] | None = None, offset: int = 0, audio: dict | None = None) -> dict:
-    """A ledger whose output position k shows source frame ``source_frames[k]``."""
+        pts: list[int] | None = None, offset: int = 0, audio: dict | None = None,
+        numbers: list[int] | tuple[int, ...] | None = None) -> dict:
+    """A ledger whose output position k shows source frame ``source_frames[k]`` (-1 = black). ``numbers``: the frame
+    number of every source index (an image sequence's 1001, 1002 ...), stored compressed."""
     src = [int(s) for s in source_frames]
+    nums = [int(n) for n in numbers] if numbers else None
+    if nums is not None and nums == list(range(len(nums))):
+        nums = None                                   # numbers equal to the indices say nothing
     return {
         "c2c_contract": CONTRACT, "c2c_contract_version": VERSION,
         "source": {"path": path, "fps": _fstr(_frac(fps)), "time_base": _fstr(_frac(time_base)) if time_base else None,
                    "frames": int(total_source if total_source is not None else (max(src) + 1 if src else 0)),
-                   "pts": list(pts) if pts is not None else None},
+                   "pts": list(pts) if pts is not None else None,
+                   "numbers": compress(nums) if nums is not None else None},
         "output": {"fps": _fstr(_frac(fps)), "frames": len(src), "offset": int(offset)},
         "map": compress(src),
         "segments": [],
@@ -198,7 +209,7 @@ def validate(ledger: dict) -> list[str]:
     if len(src) != int(ledger["output"]["frames"]):
         problems.append(f"the map covers {len(src)} frames but output.frames says {ledger['output']['frames']}")
     n_src = int(ledger["source"].get("frames") or 0)
-    bad = [s for s in src if s < 0 or (n_src and s >= n_src)]
+    bad = [s for s in src if s < -1 or (n_src and s >= n_src)]          # -1 = a black frame (v1.1)
     if bad:
         problems.append(f"{len(bad)} output frames point outside the source (0..{n_src - 1}), e.g. {bad[:3]}")
     accepted = sorted(tuple(s["accepted"]) for s in ledger.get("segments") or [] if s.get("accepted"))
@@ -241,3 +252,17 @@ def table(ledger: dict, head: int = 5, tail: int = 3) -> str:
 
 __all__ = ["CONTRACT", "VERSION", "add_segments", "audio_span", "compress", "expand", "from_window", "global_of",
            "new", "offset", "retime", "reverse", "source_of", "table", "trim", "validate"]
+
+
+def number_of(ledger: dict, source_index: int) -> int | None:
+    """The frame number of a source index (v1.1 ``source.numbers``; the index itself when absent; None for black)."""
+    i = int(source_index)
+    if i < 0:
+        return None
+    runs = (ledger.get("source") or {}).get("numbers")
+    if not runs:
+        return i
+    for p0, n0, count, step in runs:
+        if p0 <= i < p0 + count:
+            return n0 + (i - p0) * step
+    raise ValueError(f"frame ledger: source index {i} has no frame number")

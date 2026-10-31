@@ -23,6 +23,7 @@ from .handle import (
     SequenceSource,
     stat_key_for,
 )
+from .sequence import FRAME_FILE, detect_from_file, numbers_of
 
 logger = logging.getLogger("c2c_video.probe")
 
@@ -640,10 +641,8 @@ _TOKENS = (
     (re.compile(r"%0?(\d*)d"), lambda m: int(m.group(1) or 0)),
     (re.compile(r"\$F(\d*)"), lambda m: int(m.group(1) or 0)),
 )
-# A frame number is a WHOLE run of digits right before the extension, not directly after "v" / "V": a version tag
-# (shot_v002.exr next to shot_v001.exr) is two versions, not a two-frame sequence (A20 Phase 1, the nuke-nodes 2.0.1
-# fix in spirit). frame0001.png, 0001.png, name.0001.exr and render_v2_0001.exr stay sequences.
-_FRAME_FILE = re.compile(r"^(?P<prefix>.*?)(?<![vV0-9])(?P<num>\d+)(?P<suffix>\.[A-Za-z0-9]+)$")
+# The frame-number rule lives in sequence.py (one grammar for the resolver, the listing and the loader, L9.89).
+_FRAME_FILE = FRAME_FILE
 
 
 def _scan_frames(directory: str, prefix: str, suffix: str, pad: int,
@@ -706,12 +705,11 @@ def resolve_sequence(pattern_or_dir: str) -> tuple[str, ...]:
             return files
 
     if os.path.isfile(path):
-        m = _FRAME_FILE.match(name)
-        if m:
-            files = _scan_frames(directory, m.group("prefix"), m.group("suffix"),
-                                 len(m.group("num")))
-            if len(files) > 1:
-                return files
+        # L9.89: the padding class comes from the siblings, not from the picked frame (an unpadded 1..100 sequence
+        # picked at shot.10.exr used to lose frames 1-9)
+        seq, _related = detect_from_file(path)
+        if seq is not None and seq.count > 1:
+            return seq.files
         return (path,)
     raise FileNotFoundError(f"no sequence files resolved from {pattern_or_dir!r}")
 
@@ -729,10 +727,14 @@ def _detect_gaps(files: tuple[str, ...]) -> tuple[tuple[int, int], ...]:
     return tuple(gaps)
 
 
-def probe_sequence(pattern_or_dir: str) -> C2CVideo:
+def probe_sequence(pattern_or_dir: str, *, files: tuple[str, ...] | None = None, still: bool = False,
+                   layer: str | None = None) -> C2CVideo:
+    """A lazy handle on an image sequence (or one still). ``layer`` None = the reader's old behaviour (the first three
+    channels of the first part, plus alpha); a key or "auto" = that EXR layer by name (exr.pick_layer). The frame
+    numbers of the files are kept (``source.numbers``); the rate is 24 here - the loader sets it."""
     import OpenImageIO as oiio  # type: ignore[import-not-found]
 
-    files = resolve_sequence(pattern_or_dir)
+    files = tuple(files) if files is not None else resolve_sequence(pattern_or_dir)
     if not files:
         raise FileNotFoundError(f"empty sequence: {pattern_or_dir!r}")
     gaps = _detect_gaps(files)
@@ -754,9 +756,27 @@ def probe_sequence(pattern_or_dir: str) -> C2CVideo:
             bit_depth, pix_fmt = 8, "sequence8"
     finally:
         inp.close()
+    part, channels, alpha, layer_key = 0, (), "", ""
+    if layer is not None:
+        from .exr import inspect_image, pick_layer
+
+        info = inspect_image(files[0])
+        lay = pick_layer(info, layer)
+        part, channels, alpha, layer_key = lay.part, lay.channels, lay.alpha, lay.key
+        has_alpha = bool(alpha)
+        pspec = info.parts[lay.part]
+        w, h = int(pspec["width"]), int(pspec["height"])
+        fmts = {f.lower() for f in lay.formats}
+        if fmts & {"half", "float", "double"}:
+            bit_depth = 32 if fmts & {"float", "double"} else 16
+            pix_fmt = "exr_float" if bit_depth == 32 else "exr_half"
+        if lay.is_data:
+            pix_fmt = "data_float" if bit_depth == 32 else "data_half"
 
     return C2CVideo(
-        source=SequenceSource(pattern=pattern_or_dir, files=files, gaps=gaps),
+        source=SequenceSource(pattern=pattern_or_dir, files=files, gaps=gaps, numbers=numbers_of(files),
+                              still=bool(still), part=part, channels=tuple(channels), alpha_channel=alpha,
+                              layer=layer_key),
         stream_index=0,
         width=w,
         height=h,
@@ -769,7 +789,8 @@ def probe_sequence(pattern_or_dir: str) -> C2CVideo:
         # Float images (EXR, HDR) hold scene-linear light; integer ones (PNG,
         # JPEG, TIFF, DPX) are display-encoded, sRGB unless told otherwise.
         # Either way the pixels are RGB: there is no YUV matrix.
-        colour=ColourTags(None, "linear" if pix_fmt.startswith("exr") or fmt in ("HALF", "FLOAT") else "srgb",
+        colour=ColourTags(None, ("data" if pix_fmt.startswith("data") else "linear")
+                          if pix_fmt.startswith(("exr", "data")) or fmt in ("HALF", "FLOAT") else "srgb",
                           "rgb", "pc"),
         input_colorspace=None,
         audio=None,

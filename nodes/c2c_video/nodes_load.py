@@ -6,12 +6,13 @@ import hashlib
 import itertools
 import os
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from typing import Any
 
 from . import colour_cm as CM
 from . import handles_io as HIO
+from . import media_roots as ROOTS
 from . import source_meta as SMETA
 from .audio import LazyAudio, lazy_audio_for_handle
 from .fast_decode import (
@@ -23,9 +24,20 @@ from .fast_decode import (
     iter_chunks_for,
     plan_decoder,
 )
-from .handle import C2CVideo, FileSource, stat_key_for
+from .handle import C2CVideo, stat_key_for
 from .probe import get_index_table, probe_file, probe_sequence, resolve_sequence
 from .reader import iter_chunks
+
+try:                                   # L9.89: the unified media engine (c2c_core, the vendored shared core)
+    from ...c2c_core.timeline import ledger as LEDGER
+    from ...c2c_core.video import media as MEDIA
+    from ...c2c_core.video.passes import ExrPasses
+    from ...c2c_core.video.sequence import EDGE_POLICIES, parse_frame_range, scan_directory
+except (ImportError, ValueError):      # tests: the pack root is on sys.path
+    from c2c_core.timeline import ledger as LEDGER
+    from c2c_core.video import media as MEDIA
+    from c2c_core.video.passes import ExrPasses
+    from c2c_core.video.sequence import EDGE_POLICIES, parse_frame_range, scan_directory
 
 CATEGORY = "C2C/Video"
 DIMMAX = 16384
@@ -41,10 +53,7 @@ def _image_chunk_frames(h: C2CVideo) -> int:
     return max(1, min(_CHUNK, _CHUNK_BYTES // max(1, per_frame)))
 _RAM_FRACTION = 0.5
 
-VIDEO_EXTENSIONS: tuple[str, ...] = (
-    "mp4", "mov", "mkv", "webm", "avi", "m4v", "mxf", "gif", "ts", "mts",
-    "m2ts", "wmv", "flv", "mpg", "mpeg", "3gp", "ogv", "y4m",
-)
+VIDEO_EXTENSIONS: tuple[str, ...] = MEDIA.VIDEO_EXTENSIONS
 SEQUENCE_IMAGE_EXTENSIONS = frozenset({
     ".exr", ".hdr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx",
 })
@@ -130,6 +139,71 @@ def _list_input_videos() -> list[str]:
     return sorted(out)
 
 
+# L9.89 (owner A21, Rev 3 Part 3.4): the combo lists every source the node loads - movies, stills, EXRs and each
+# sequence ONCE, as its pattern (plates/shot.####.exr) - from input/ and one level of subfolders, only in formats an
+# installed backend reads. A folder's listing is cached by its mtime (adding or removing a file changes it).
+# C2C_MEDIA_LIST=videos is the kill switch back to the old movie-only list.
+_LIST_CACHE: dict[str, tuple[int, list[str], list[str]]] = {}
+_LIST_LIMIT = 50_000
+_LIST_SUBDIRS = 200
+_LIST_SKIP = frozenset({"clipspace", "3d", "webcam", "__pycache__"})
+
+
+def _folder_media(folder: str, rel: str) -> tuple[list[str], list[str]]:
+    """(entries, subfolder names) of one folder; entries are prefixed with ``rel`` ("" or "sub/")."""
+    try:
+        key = int(os.stat(folder).st_mtime_ns)
+    except OSError:
+        return [], []
+    hit = _LIST_CACHE.get(folder)
+    if hit is not None and hit[0] == key:
+        return hit[1], hit[2]
+    files: list[str] = []
+    dirs: list[str] = []
+    try:
+        with os.scandir(folder) as it:
+            for i, entry in enumerate(it):
+                if i >= _LIST_LIMIT:
+                    break
+                try:
+                    if entry.is_dir():
+                        dirs.append(entry.name)
+                        continue
+                except OSError:
+                    continue
+                files.append(entry.name)
+    except OSError:
+        return [], []
+    images = MEDIA.image_extensions()
+    out = [rel + n for n in files if os.path.splitext(n)[1].lower().lstrip(".") in VIDEO_EXTENSIONS]
+    seqs, others = scan_directory(folder, exts=images, names=files)
+    for sq in seqs:
+        if sq.count > 1:
+            out.append(rel + sq.pattern)
+        else:
+            out.extend(rel + os.path.basename(f) for f in sq.files)
+    out.extend(rel + n for n in others)
+    _LIST_CACHE[folder] = (key, out, dirs)
+    return out, dirs
+
+
+def _list_input_media() -> list[str]:
+    """INPUT_TYPES calls this on every /object_info: it never raises (an unreadable input folder lists nothing)."""
+    try:
+        if os.environ.get("C2C_MEDIA_LIST", "").strip().lower() == "videos":
+            return _list_input_videos()
+        input_dir = _import_folder_paths().get_input_directory()
+    except Exception:  # noqa: BLE001
+        return []
+    out, dirs = _folder_media(input_dir, "")
+    for d in sorted(dirs)[:_LIST_SUBDIRS]:
+        if d.startswith(".") or d.lower() in _LIST_SKIP:
+            continue
+        sub_out, _ = _folder_media(os.path.join(input_dir, d), d + "/")
+        out = out + sub_out
+    return sorted(out)
+
+
 def is_sequence_path(path: str) -> bool:
     path = strip_path(path)
     if os.path.isdir(path):
@@ -142,20 +216,41 @@ def is_sequence_path(path: str) -> bool:
 
 
 def resolve_probe(path: str, *, sequence_fps: float = 24) -> C2CVideo:
-    path = os.path.abspath(strip_path(path))
-    if is_sequence_path(path):
-        h = probe_sequence(path)
-        fps = Fraction(sequence_fps).limit_denominator(1_000_000)
-        if fps <= 0:
-            fps = Fraction(24, 1)
-        return replace(h, fps=fps, time_base=Fraction(fps.denominator, fps.numerator))
-    return probe_file(path)
+    """The lazy handle of whatever ``path`` is (a movie, a sequence, a pattern, a folder, one still). ``sequence_fps``
+    > 0 sets a sequence's rate (what Load Video Path always did); 0 = the file's own rate, else 24 (L9.89)."""
+    return probe_for_load(path, sequence_fps=sequence_fps)[0]
+
+
+MISSING_CHOICES: list[str] = ["error", "black", "hold previous", "nearest", "skip (as before)"]
+_MISSING_POLICY = {"hold previous": "hold", "skip (as before)": "skip"}
+LOCATION_CHOICES: list[str] = ["input folder", "server path"]
+
+
+def missing_policy(choice: str) -> str:
+    return _MISSING_POLICY.get(str(choice or "error"), str(choice or "error"))
+
+
+def probe_for_load(path: str, *, source_mode: str = "auto", exr_layer: str = "auto", sequence_fps: float = 24,
+                   frame_range: str = ""):
+    """(raw handle, MediaFacts) - c2c_core.video.media.probe_media with the loader's widgets."""
+    path = strip_path(path)
+    hint = None
+    if str(source_mode).startswith("single"):
+        try:
+            hint = parse_frame_range(frame_range).first
+        except ValueError:
+            hint = None
+    return MEDIA.probe_media(path, mode=source_mode or "auto", layer=exr_layer or "auto",
+                             sequence_fps=float(sequence_fps or 0), frame_hint=hint)
 
 
 def source_times_for_handle(h: C2CVideo) -> list[float]:
-    if isinstance(h.source, FileSource):
+    if h.source.kind == "file":                         # by kind: a handle from another pack's vendored core
         tbl = get_index_table(h.source.stat_key, stream_index=h.stream_index)
         return [float(tbl.pts_of(i) * tbl.time_base) for i in range(h.frame_count)]
+    times = MEDIA.source_times(h)                  # L9.89: by frame NUMBER - a gap is time that passed
+    if times is not None and len(times) == int(h.frame_count):
+        return times
     fps = float(h.fps)
     return [i / fps for i in range(h.frame_count)]
 
@@ -311,6 +406,72 @@ def build_loaded_handle(
                                     dim_multiple)
     h = h.scaled(tw, th)
     return raw, h
+
+
+@dataclass(frozen=True)
+class LoadPlan:
+    raw: C2CVideo                 # the source as probed (all its frames)
+    facts: Any                    # c2c_core.video.media.MediaFacts
+    timeline: Any                 # c2c_core.video.sequence.Timeline
+    loaded: C2CVideo              # what loads, before any handle is added
+    n_before_skip: int
+
+
+def load_plan(
+    path: str,
+    *,
+    source_mode: str = "auto",
+    exr_layer: str = "auto",
+    sequence_fps: float = 24,
+    frame_range: str = "",
+    missing_frames: str = "skip (as before)",
+    edge_policy: str = "hold",
+    reverse: bool = False,
+    force_rate: float = 0.0,
+    skip_first_frames: int = 0,
+    select_every_nth: int = 1,
+    frame_load_cap: int = 0,
+    format_name: str = "None",
+    custom_width: int = 0,
+    custom_height: int = 0,
+    vae: Any | None = None,
+    crop: tuple[float, float, float, float] | None = None,
+    seconds_cap: float = 0.0,
+    resolution: str = "custom",
+    divisible_by: int = 1,
+    snap_frames: bool = True,
+) -> LoadPlan:
+    """The whole selection a run makes - probe, timeline (frame range / missing frames / edges), retime, skip,
+    seconds, every-nth, cap, format, crop, size, reverse - in ONE place, so the run, the probe route and the frame
+    planner always agree (L9.89). The defaults reproduce the old loader exactly."""
+    raw, facts = probe_for_load(path, source_mode=source_mode, exr_layer=exr_layer, sequence_fps=sequence_fps,
+                                frame_range=frame_range)
+    single = str(source_mode or "").startswith("single")
+    base, timeline = MEDIA.apply_timeline(raw, frame_range="" if single else frame_range,
+                                          missing=missing_policy(missing_frames), edge=str(edge_policy or "hold"))
+    h = base
+    if float(force_rate) > 0:
+        h = h.retimed(float(force_rate), source_times_for_handle(raw))
+    n_before = len(h)
+    _, loaded = build_loaded_handle(
+        base,
+        force_rate=force_rate,
+        skip_first_frames=skip_first_frames,
+        select_every_nth=select_every_nth,
+        frame_load_cap=frame_load_cap,
+        format_name=format_name or "None",
+        custom_width=custom_width,
+        custom_height=custom_height,
+        vae=vae,
+        crop=crop,
+        seconds_cap=seconds_cap,
+        resolution=resolution,
+        divisible_by=divisible_by,
+        snap_frames=snap_frames,
+    )
+    if reverse and len(loaded):
+        loaded = loaded.reversed()                    # after the selection: the chosen frames, last first
+    return LoadPlan(raw, facts, timeline, loaded, n_before)
 
 
 def build_images_handle(
@@ -594,13 +755,13 @@ def colour_token(path: str, colorspace_in: str | None) -> str:
         return ""
 
 
-def validate_video_path(video) -> bool | str:
+def validate_video_path(video, node_name: str = "Load Video (C2C)") -> bool | str:
     if video is None:
         return True
     path = strip_path(video)
     if not path:
         return (
-            "Load Video Path (C2C): enter a video file, a folder of images, "
+            f"{node_name}: server path mode - enter a video file, an image, a folder of images, "
             "or a sequence pattern like shot.####.exr."
         )
     abspath = os.path.abspath(path)
@@ -612,7 +773,22 @@ def validate_video_path(video) -> bool | str:
                 return True
         except (OSError, FileNotFoundError, ValueError):
             pass
-    return f"Load Video Path (C2C): nothing found at {abspath}."
+    return f"{node_name}: nothing found at {abspath}."
+
+
+def node_path(video, location: str | None = "input folder", path: str | None = "") -> str:
+    """The absolute source path a Load Video (C2C) node reads: its server path, or the input-folder pick."""
+    if str(location or "") == "server path":
+        return os.path.abspath(strip_path(path or ""))
+    fp = _import_folder_paths()
+    return fp.get_annotated_filepath(strip_path(video or ""))
+
+
+def is_changed_source(path: str, source_mode: str | None = "auto") -> str:
+    """A single-frame mode reads one file: only that file's change re-runs the node, not a sibling's."""
+    if str(source_mode or "").startswith("single") and os.path.isfile(path):
+        return is_changed_file(path)
+    return is_changed_path(path)
 
 
 def validate_images_directory(directory) -> bool | str:
@@ -656,22 +832,32 @@ def execute_video_load(
     handles: dict | None = None,
     colorspace_in: str = CM.CS_OFF,
     working_space: str = CM.WORK_DEFAULT,
-) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str]:
-    """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info). The defaults of every input added after
-    the first release reproduce the old behaviour (decoder "auto" only switches readers where the frames are identical)."""
+    source_mode: str = "auto",
+    exr_layer: str = "auto",
+    frame_range: str = "",
+    reverse: bool = False,
+    frame_offset: int = 0,
+    missing_frames: str = "skip (as before)",
+    edge_policy: str = "hold",
+) -> tuple[Any, int, LazyAudio | None, dict, C2CVideo, Any | None, str, str, Any, str]:
+    """(IMAGE or LATENT, frame_count, audio, video_info, video, mask, info, frame_map, exr_passes, metadata). The
+    defaults of every input added after the first release reproduce the old behaviour (decoder "auto" only switches
+    readers where the frames are identical; missing frames "skip" as the old sequence reader did)."""
     import json
 
-    raw = resolve_probe(path, sequence_fps=sequence_fps)
     hopt = dict(handles or {})
     hmode = str(hopt.get("mode") or "off")
     if HIO.disabled():
         hmode = "off"
-    h = raw
-    if float(force_rate) > 0:
-        h = h.retimed(float(force_rate), source_times_for_handle(raw))
-    n_before_skip = len(h)
-    _, loaded = build_loaded_handle(
-        raw,
+    lp = load_plan(
+        path,
+        source_mode=source_mode,
+        exr_layer=exr_layer,
+        sequence_fps=sequence_fps,
+        frame_range=frame_range,
+        missing_frames=missing_frames,
+        edge_policy=edge_policy,
+        reverse=reverse,
         force_rate=force_rate,
         skip_first_frames=skip_first_frames,
         select_every_nth=select_every_nth,
@@ -686,6 +872,7 @@ def execute_video_load(
         divisible_by=divisible_by,
         snap_frames=hmode != "fit",              # fit pads UP to the grid; the format's own snap would cut first
     )
+    raw, facts, timeline, loaded, n_before_skip = lp.raw, lp.facts, lp.timeline, lp.loaded, lp.n_before_skip
     if len(loaded) == 0:
         _raise_if_empty_selection(
             node_name,
@@ -713,7 +900,8 @@ def execute_video_load(
         video_info[SMETA.INFO_KEY] = SMETA.record(raw, selected)     # numbers, timecode, pixel aspect, reel (L9.55)
     except Exception:  # noqa: BLE001 - source metadata is a bonus, never a reason not to load
         pass
-    colour = CM.plan(raw, colorspace_in, working_space)
+    data_layer = facts.layer_kind not in ("", "colour", "alpha")
+    colour = None if data_layer else CM.plan(raw, colorspace_in, working_space)   # depth / normals are values
     if colour is not None:
         video_info[CM.INFO_KEY] = colour.record          # Save Video (C2C) reverses exactly this (L9.53)
     HIO.remember_load(unique_id, prompt, video_info)      # Save Video finds it without a video_info wire (L9.52)
@@ -721,9 +909,18 @@ def execute_video_load(
     needs_image = is_output_linked(prompt, unique_id, 0)
     needs_mask = is_output_linked(prompt, unique_id, 5)
     plan = plan_decoder(loaded, decoder, cuda=device_is_cuda()) if (needs_image or needs_mask) else None
+    numbers = MEDIA.source_numbers(raw)
+    frame_map = LEDGER.new(list(loaded.selected_indices()), fps=Fraction(loaded.fps).limit_denominator(1_000_000),
+                           path=str(getattr(raw.source, "path", "") or getattr(raw.source, "pattern", "")),
+                           total_source=int(raw.frame_count), numbers=numbers, offset=int(frame_offset or 0))
+    frame_map["ops"] = [f"source {facts.kind}"] + list(timeline.notes) + (["reverse"] if reverse else [])
+    passes = (ExrPasses(loaded, getattr(facts.image, "layers", ()), layer_used=facts.layer) if facts.is_exr
+              else ExrPasses.empty())
+    metadata = json.dumps(media_metadata(raw, facts, video_info), indent=2, default=str)
 
     def info(used: DecoderPlan | None) -> str:
         summary = load_summary(raw, loaded, format_name=format or "None", plan=used, audio_mode=audio_mode)
+        summary["media"] = media_summary(raw, loaded, facts, timeline, data_layer=data_layer)
         if handles_rec is not None:
             summary["handles"] = {"head": handles_rec["head"], "tail": handles_rec["tail"],
                                   "target": handles_rec.get("target", 0), "grid": handles_rec["grid"],
@@ -733,18 +930,64 @@ def execute_video_load(
         return json.dumps(summary, indent=2)
 
     note_skipped(unique_id, tuple(s for s, needed in ((0, needs_image), (5, needs_mask)) if not needed))
+    tail = (json.dumps(frame_map), passes, metadata)
     if not (needs_image or needs_mask):
-        return None, count, audio, video_info, loaded, None, info(None)
+        return (None, count, audio, video_info, loaded, None, info(None)) + tail
     if vae is not None and needs_image:
         latent, used = encode_with_plan(loaded, vae, plan, colour)
-        return latent, count, audio, video_info, loaded, None, info(used)
+        return (latent, count, audio, video_info, loaded, None, info(used)) + tail
     check_image_budget(node_name, count, loaded.width, loaded.height, loaded.has_alpha)
     image, mask, used = decode_with_plan(loaded, plan, colour)
     if not needs_image:
         image = None
     if not needs_mask:
         mask = None
-    return image, count, audio, video_info, loaded, mask, info(used)
+    return (image, count, audio, video_info, loaded, mask, info(used)) + tail
+
+
+def media_summary(raw: C2CVideo, loaded: C2CVideo, facts, timeline, *, data_layer: bool = False) -> dict[str, Any]:
+    """MEDIA_INFO (Rev 3 Part 3.11), inside the info output: what the source is and what the timeline did."""
+    out = facts.to_dict()
+    nums = MEDIA.source_numbers(raw)
+    out["numbers"] = {"first": int(nums[0]), "last": int(nums[-1])} if nums else None
+    out["timeline"] = {"first": int(timeline.numbers[0]) if timeline.numbers else None,
+                       "last": int(timeline.numbers[-1]) if timeline.numbers else None,
+                       "step": int(timeline.step), "missing": list(timeline.missing[:200]),
+                       "missing_count": len(timeline.missing), "outside": len(timeline.outside),
+                       "notes": list(timeline.notes)}
+    out["data_layer"] = bool(data_layer)
+    if data_layer:
+        out["warnings"] = list(out.get("warnings") or []) + [
+            f"layer {facts.layer!r} is {facts.layer_kind} data: loaded as raw values, no colour management"]
+    px = int(loaded.width) * int(loaded.height)
+    out["estimate"] = {"image_bytes": image_ram_bytes(len(loaded), int(loaded.width), int(loaded.height),
+                                                      bool(loaded.has_alpha)),
+                       "frame_bytes": px * (4 if loaded.has_alpha else 3) * 4}
+    return out
+
+
+def media_metadata(raw: C2CVideo, facts, video_info: dict) -> dict[str, Any]:
+    """METADATA (Rev 3 Part 3.11): the first frame's header (EXR / DPX / TIFF / PNG attributes) or the movie's
+    container and stream tags, plus the source facts."""
+    meta: dict[str, Any] = {"source": facts.to_dict(), "header": dict(getattr(facts.image, "header", None) or {})}
+    if facts.kind == "video":
+        meta["container"] = _movie_metadata(str(getattr(raw.source, "path", "")))
+    if SMETA.INFO_KEY in video_info:
+        meta["source_meta"] = video_info[SMETA.INFO_KEY]
+    return meta
+
+
+def _movie_metadata(path: str) -> dict[str, Any]:
+    try:
+        import av
+
+        with av.open(path, metadata_errors="ignore") as c:
+            return {"format": c.format.name, "tags": dict(c.metadata or {}),
+                    "streams": [{"index": st.index, "type": st.type,
+                                 "codec": getattr(getattr(st, "codec_context", None), "name", None),
+                                 "tags": dict(st.metadata or {})} for st in c.streams]}
+    except Exception as exc:  # noqa: BLE001 - metadata is a bonus, never a reason not to load
+        return {"error": str(exc)}
 
 
 def audio_output_mode(h: C2CVideo, audio_when_missing: str = "silence") -> str:
@@ -758,10 +1001,10 @@ def audio_output_mode(h: C2CVideo, audio_when_missing: str = "silence") -> str:
 def selection_seconds(raw: C2CVideo, loaded: C2CVideo) -> tuple[float, float]:
     """(start, end) of the loaded part in the clip's own seconds, from its first frame: start = the first selected
     frame's timestamp, end = start + frames / loaded fps."""
-    sel = loaded.selected_indices()
+    sel = [int(i) for i in loaded.selected_indices() if int(i) >= 0]     # black frames have no time of their own
     if not len(sel):
         return 0.0, 0.0
-    first = int(sel[0])
+    first = min(sel)                                                    # a reversed selection starts at its end
     if raw.source.kind == "file":
         tbl = get_index_table(raw.source.stat_key, stream_index=raw.stream_index)
         start = float((tbl.pts_of(first) - tbl.start_pts) * tbl.time_base)
@@ -790,7 +1033,7 @@ def load_summary(raw: C2CVideo, loaded: C2CVideo, *, format_name: str = "None", 
         "loaded": {
             "width": int(loaded.width), "height": int(loaded.height), "fps": round(float(loaded.fps), 6),
             "frames": len(loaded), "first_frame": int(sel[0]) if len(sel) else 0,
-            "last_frame": int(sel[-1]) if len(sel) else 0,
+            "last_frame": int(sel[-1]) if len(sel) else 0,      # -1 = a black frame (L9.89)
             "start_seconds": round(start, 6), "end_seconds": round(end, 6), "duration": round(end - start, 6),
         },
         "format": format_name or "None",
@@ -870,6 +1113,29 @@ CROP_TIP = ("Crop, as a fraction of the frame (x, y, width, height; 0, 0, 1, 1 =
             "tool in the player; custom_width / custom_height then resize the cropped frame.")
 
 
+LOCATION_TIP = ("Where the source is. input folder: pick or upload it in 'video'. server path: type any path in 'path' "
+                "(a clip, an image, a folder or a pattern like shot.####.exr) - what Load Video Path (C2C) did.")
+PATH_TIP = ("server path mode: a clip, an image, an EXR, a folder of images, or a sequence pattern (shot.####.exr, "
+            "shot.%04d.exr, shot.$F4.exr, shot.[1001-1100].exr). One frame of a sequence finds the whole sequence.")
+SOURCE_MODE_TIP = ("auto: a movie is a movie; a numbered image finds its sequence; a lone image is one frame. Force it "
+                   "when that guess is wrong: single image / single EXR loads exactly one file even when it has "
+                   "siblings (frame_range picks which frame of a sequence).")
+SEQUENCE_FPS_TIP = ("Rate of an image sequence or still. 0 = the file's own rate (EXR FramesPerSecond, DPX frame rate), "
+                    "else 24. A still is one frame at this rate - never a longer clip.")
+FRAME_RANGE_TIP = ("Source frame NUMBERS (Nuke style): 1001-1100, 1001-1100x2 (every 2nd), or one frame like 1050. "
+                   "Empty = all. For a movie, frame numbers count from 0.")
+FRAME_OFFSET_TIP = ("Shifts the frame numbers frame_map reports for the output (where frame 0 lands on your timeline). "
+                    "The pixels do not move.")
+MISSING_TIP = ("A frame inside the sequence's range with no file. error (default) stops and names them; black, hold "
+               "previous and nearest fill the gap and say so in info; skip (as before) drops it - every later frame "
+               "then plays early.")
+EDGE_TIP = ("frame_range beyond the first / last frame: hold repeats the edge frame, black adds black frames, loop "
+            "wraps, bounce plays back and forth, error stops.")
+EXR_LAYER_TIP = ("The EXR layer the IMAGE shows: auto (the beauty / rgba), or a layer name from info - diffuse, depth, "
+                 "N, P, crypto00 ... Data layers (depth, normals, position, motion) load as raw values, never "
+                 "colour-converted. exr_passes carries every layer.")
+
+
 def _widget(tooltip: str, **extra: Any) -> dict[str, Any]:
     return {"tooltip": tooltip, **extra}
 
@@ -880,8 +1146,12 @@ class LoadVideoC2C:
         return {
             "required": {
                 "video": (
-                    _list_input_videos(),
-                    _widget("Video file from the ComfyUI input folder.", video_upload=True),
+                    _list_input_media(),
+                    # no video_upload (L9.89): core's button takes webm / mp4 only and EXR has no browser type; the
+                    # node's own upload bar (js/_c2c_loader_source.js, POST /c2c/media/upload) takes every format
+                    _widget("A video, an image, an EXR or an image sequence (shot.####.exr) from the ComfyUI input "
+                            "folder - upload with the node's bar or drop files on it. Server path mode (location) "
+                            "reads any folder instead."),
                 ),
                 "force_rate": ("FLOAT", _widget("Output FPS; 0 keeps source.", default=0, min=0, max=240, step=1)),
                 "custom_width": ("INT", _widget("Output width; 0 keeps source or derives from height.", default=0, min=0, max=DIMMAX)),
@@ -923,12 +1193,35 @@ class LoadVideoC2C:
                 "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
                 # L9.56 (owner 2026-10-25): more handles on top of the automatic ones, in whole model steps
                 "extra_handles": ("INT", _widget(EXTRA_HANDLES_TIP, default=0, min=0, max=100)),
+                # L9.89 (owner A21, Rev 3 Part 3): the unified loader - appended, saved workflows keep their widget
+                # order, and every default loads a saved movie exactly as before
+                "location": (LOCATION_CHOICES, _widget(LOCATION_TIP, default="input folder")),
+                "path": ("STRING", _widget(PATH_TIP, default="",
+                                           placeholder="D:/shots/sh010/plate.####.exr  or  a clip / folder")),
+                "source_mode": (list(MEDIA.SOURCE_MODES), _widget(SOURCE_MODE_TIP, default="auto")),
+                "sequence_fps": ("FLOAT", _widget(SEQUENCE_FPS_TIP, default=0.0, min=0.0, max=240.0, step=0.001)),
+                "frame_range": ("STRING", _widget(FRAME_RANGE_TIP, default="", placeholder="1001-1100  or  1001-1100x2")),
+                "reverse": ("BOOLEAN", _widget("Play the selected frames last to first (the audio too).",
+                                               default=False)),
+                "frame_offset": ("INT", _widget(FRAME_OFFSET_TIP, default=0, min=-10_000_000, max=10_000_000)),
+                "missing_frames": (MISSING_CHOICES, _widget(MISSING_TIP, default="error")),
+                "edge_policy": (list(EDGE_POLICIES), _widget(EDGE_TIP, default="hold")),
+                "exr_layer": ("STRING", _widget(EXR_LAYER_TIP, default="auto")),
             },
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info")
+    # outputs 7-9 appended (L9.89): saved links to 0-6 keep their meaning; the info output is the MEDIA_INFO
+    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING", "STRING",
+                    "C2C_EXR_PASSES", "STRING")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info", "frame_map", "exr_passes",
+                    "metadata")
+    OUTPUT_TOOLTIPS = ("The frames (a LATENT when a VAE is connected).", "Frames loaded.", "The audio of the loaded "
+                       "frames.", "Source and loaded numbers (VHS-compatible).", "The lazy media handle: nothing "
+                       "decoded until a node reads a window.", "1 - alpha, when the source has alpha.", "MEDIA_INFO: "
+                       "what the source is and exactly what loaded (JSON).", "Output frame -> source frame and its "
+                       "frame NUMBER (h3.frame_ledger v1.1 JSON; -1 = a black frame).", "Every EXR layer, lazily "
+                       "(empty for other sources).", "The source's header / container metadata (JSON).")
     FUNCTION = "load_video"
     CATEGORY = CATEGORY
 
@@ -964,14 +1257,30 @@ class LoadVideoC2C:
         name_prefix="",                     # read by Save Video from the prompt (L9.55)
         name_suffix="",
         extra_handles=0,
+        location="input folder",
+        path="",
+        source_mode="auto",
+        sequence_fps=0.0,
+        frame_range="",
+        reverse=False,
+        frame_offset=0,
+        missing_frames="error",
+        edge_policy="hold",
+        exr_layer="auto",
         prompt=None,
         unique_id=None,
     ):
-        fp = _import_folder_paths()
-        path = fp.get_annotated_filepath(strip_path(video))
+        src = node_path(video, location, path)
+        if location == "server path":
+            if not strip_path(path):
+                raise ValueError("Load Video (C2C): server path mode - enter a path in 'path' (a clip, an image, a "
+                                 "folder, or a pattern like shot.####.exr).")
+            blocked = ROOTS.check_run_path(src)
+            if blocked:
+                raise PermissionError(f"Load Video (C2C): {blocked}")
         return execute_video_load(
             node_name="Load Video (C2C)",
-            path=path,
+            path=src,
             force_rate=force_rate,
             custom_width=custom_width,
             custom_height=custom_height,
@@ -992,156 +1301,45 @@ class LoadVideoC2C:
                          grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus, extra=extra_handles),
             colorspace_in=colorspace_in,
             working_space=working_space,
-        )
-
-    @classmethod
-    def IS_CHANGED(cls, video, **kwargs):
-        fp = _import_folder_paths()
-        path = fp.get_annotated_filepath(video)
-        return (is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
-                + colour_token(path, kwargs.get("colorspace_in")))
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, video):
-        fp = _import_folder_paths()
-        if not fp.exists_annotated_filepath(video):
-            return f"Invalid video file: {video}"
-        return True
-
-
-class LoadVideoPathC2C:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": (
-                    "STRING",
-                    _widget(
-                        "Path to a video file or image sequence.",
-                        placeholder="X://path/clip.mov  or  shot.####.exr",
-                    ),
-                ),
-                "force_rate": ("FLOAT", _widget("Output FPS; 0 keeps source.", default=0, min=0, max=240, step=1)),
-                "custom_width": ("INT", _widget("Output width; 0 keeps source or derives from height.", default=0, min=0, max=DIMMAX)),
-                "custom_height": ("INT", _widget("Output height; 0 keeps source or derives from width.", default=0, min=0, max=DIMMAX)),
-                "frame_load_cap": ("INT", _widget("Max frames; 0 = no cap.", default=0, min=0, max=BIGMAX)),
-                "skip_first_frames": ("INT", _widget("Skip this many frames first.", default=0, min=0, max=BIGMAX)),
-                "select_every_nth": ("INT", _widget("Keep every Nth frame.", default=1, min=1, max=100_000)),
-            },
-            "optional": {
-                "vae": ("VAE", _widget("Encode to LATENT instead of IMAGE.")),
-                "format": (FORMAT_CHOICES, _widget("Model preset (frame grid / dim multiple).", default="None")),
-                "sequence_fps": ("FLOAT", _widget("FPS for image sequences only.", default=24, min=1, max=240)),
-                "crop_x": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
-                "crop_y": ("FLOAT", _widget(CROP_TIP, default=0.0, min=0.0, max=1.0, step=0.001)),
-                "crop_w": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
-                "crop_h": ("FLOAT", _widget(CROP_TIP, default=1.0, min=0.0, max=1.0, step=0.001)),
-                # L2.53 (owner A14, from the 4K pack) - appended, so saved workflows keep their widget order
-                "decoder": (DECODER_CHOICES, _widget(DECODER_TIP, default="auto")),
-                "seconds_cap": ("FLOAT", _widget(SECONDS_TIP, default=0.0, min=0.0, max=86400.0, step=0.1)),
-                "resolution": (RESOLUTION_CHOICES, _widget(RESOLUTION_TIP, default="custom")),
-                "divisible_by": (DIVISIBLE_CHOICES, _widget(DIVISIBLE_TIP, default=1)),
-                "audio_when_missing": (AUDIO_MISSING_CHOICES, _widget(AUDIO_MISSING_TIP, default="silence")),
-                # L9.40 (owner 2026-10-23: "need the av handles add/trim built in") - appended, saved workflows keep
-                # their widget order. Save Video (C2C) trims exactly these when video_info is wired.
-                "handles": (list(HIO.HANDLE_MODES), _widget(HANDLES_TIP, default="off")),
-                "handle_frames": ("INT", _widget(HANDLE_FRAMES_TIP, default=8, min=0, max=400)),
-                "handle_target": ("INT", _widget(HANDLE_TARGET_TIP, default=0, min=0, max=BIGMAX)),
-                "handle_side": (list(HIO.SIDES), _widget(HANDLE_SIDE_TIP, default="head")),
-                "handle_grid": (list(HIO.GRID_CHOICES), _widget(HANDLE_GRID_TIP, default=HIO.FROM_FORMAT)),
-                "handle_custom_step": ("INT", _widget("custom grid: step (frames = step * n + plus).", default=4,
-                                                      min=1, max=1000)),
-                "handle_custom_plus": ("INT", _widget("custom grid: plus.", default=1, min=0, max=1000)),
-                # L9.53 (owner 2026-10-25 / 26): colour management, Nuke / OCIO style - appended. "off (as before)" is
-                # the default here, so saved workflows and API prompts keep their pixels; a new node starts on auto.
-                "colorspace_in": (CM.colorspace_in_choices(), _widget(COLORSPACE_IN_TIP, default=CM.CS_OFF)),
-                "working_space": (CM.working_choices(), _widget(WORKING_TIP, default=CM.WORK_DEFAULT)),
-                # L9.55 (owner 2026-10-25): Save Video names its file name_prefix + this source's name + name_suffix
-                # (read from the prompt - no effect on the frames). Empty by default: no suffix unless you add one.
-                "name_prefix": ("STRING", _widget(NAME_TIP, default="")),
-                "name_suffix": ("STRING", _widget(NAME_TIP, default="")),
-                # L9.56 (owner 2026-10-25): more handles on top of the automatic ones, in whole model steps
-                "extra_handles": ("INT", _widget(EXTRA_HANDLES_TIP, default=0, min=0, max=100)),
-            },
-            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
-        }
-
-    RETURN_TYPES = ("IMAGE,LATENT", "INT", "AUDIO", "VHS_VIDEOINFO", "C2C_VIDEO", "MASK", "STRING")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "video", "mask", "info")
-    FUNCTION = "load_video"
-    CATEGORY = CATEGORY
-
-    def load_video(
-        self,
-        video,
-        force_rate,
-        custom_width,
-        custom_height,
-        frame_load_cap,
-        skip_first_frames,
-        select_every_nth,
-        vae=None,
-        format="None",
-        sequence_fps=24,
-        crop_x=0.0,
-        crop_y=0.0,
-        crop_w=1.0,
-        crop_h=1.0,
-        decoder="auto",
-        seconds_cap=0.0,
-        resolution="custom",
-        divisible_by=1,
-        audio_when_missing="silence",
-        handles="off",
-        handle_frames=8,
-        handle_target=0,
-        handle_side="head",
-        handle_grid=HIO.FROM_FORMAT,
-        handle_custom_step=4,
-        handle_custom_plus=1,
-        colorspace_in=CM.CS_OFF,
-        working_space=CM.WORK_DEFAULT,
-        name_prefix="",                     # read by Save Video from the prompt (L9.55)
-        name_suffix="",
-        extra_handles=0,
-        prompt=None,
-        unique_id=None,
-    ):
-        return execute_video_load(
-            node_name="Load Video Path (C2C)",
-            path=strip_path(video),
-            force_rate=force_rate,
-            custom_width=custom_width,
-            custom_height=custom_height,
-            frame_load_cap=frame_load_cap,
-            skip_first_frames=skip_first_frames,
-            select_every_nth=select_every_nth,
-            format=format,
-            vae=vae,
             sequence_fps=sequence_fps,
-            prompt=prompt,
-            unique_id=unique_id,
-            crop=(crop_x, crop_y, crop_w, crop_h),
-            decoder=decoder,
-            seconds_cap=seconds_cap,
-            resolution=resolution,
-            divisible_by=divisible_by,
-            audio_when_missing=audio_when_missing,
-            handles=dict(mode=handles, frames=handle_frames, target=handle_target, side=handle_side,
-                         grid=handle_grid, step=handle_custom_step, plus=handle_custom_plus, extra=extra_handles),
-            colorspace_in=colorspace_in,
-            working_space=working_space,
+            source_mode=source_mode,
+            exr_layer=exr_layer,
+            frame_range=frame_range,
+            reverse=reverse,
+            frame_offset=frame_offset,
+            missing_frames=missing_frames,
+            edge_policy=edge_policy,
         )
 
     @classmethod
     def IS_CHANGED(cls, video, **kwargs):
-        path = strip_path(video)
-        return (is_changed_path(path) + "|" + decode_links_token(kwargs.get("unique_id"), (0, 5))
-                + colour_token(path, kwargs.get("colorspace_in")))
+        path = node_path(video, kwargs.get("location"), kwargs.get("path"))
+        return (is_changed_source(path, kwargs.get("source_mode")) + "|"
+                + decode_links_token(kwargs.get("unique_id"), (0, 5)) + colour_token(path, kwargs.get("colorspace_in")))
 
     @classmethod
-    def VALIDATE_INPUTS(cls, video):
-        return validate_video_path(video)
+    def VALIDATE_INPUTS(cls, video, location="input folder", path="", source_mode="auto"):
+        if str(location or "") == "server path":
+            ok = validate_video_path(path if path is not None else None)
+            if ok is not True:
+                return ok
+            blocked = ROOTS.check_run_path(os.path.abspath(strip_path(path or "")))
+            return f"Load Video (C2C): {blocked}" if blocked else True
+        fp = _import_folder_paths()
+        if fp.exists_annotated_filepath(video):
+            return True
+        full = node_path(video)
+        if is_sequence_path(full):                   # a listed sequence pattern (plates/shot.####.exr)
+            try:
+                if resolve_sequence(full):
+                    return True
+            except (OSError, FileNotFoundError, ValueError):
+                pass
+        return f"Load Video (C2C): {video} is not in the input folder (pick another, or upload it)."
+
+
+# Load Video Path (C2C) was merged into Load Video (C2C) as its server-path mode (owner 2026-10-31, D0.34 / L9.89);
+# saved Path nodes and API prompts migrate automatically (nodes/_legacy_replacements.json).
 
 
 class LoadImagesPathC2C:
@@ -1227,14 +1425,12 @@ class VideoInfoC2C:
 
 NODE_CLASS_MAPPINGS = {
     "LoadVideoC2C": LoadVideoC2C,
-    "LoadVideoPathC2C": LoadVideoPathC2C,
     "LoadImagesPathC2C": LoadImagesPathC2C,
     "VideoInfoC2C": VideoInfoC2C,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadVideoC2C": "Load Video (C2C)",
-    "LoadVideoPathC2C": "Load Video Path (C2C)",
     "LoadImagesPathC2C": "Load Images Path (C2C)",
     "VideoInfoC2C": "Video Info (C2C)",
 }

@@ -154,6 +154,8 @@ def ineligible_reason(h: C2CVideo) -> str | None:
     if not len(h):
         return "nothing selected"
     sel = h.selected_indices()
+    if any(i < 0 for i in sel):
+        return "black frames (a missing-frame or edge policy) use the exact reader"
     if any(b < a for a, b in zip(sel, sel[1:])):
         return "the selection is not in file order"
     exe = find_ffmpeg()

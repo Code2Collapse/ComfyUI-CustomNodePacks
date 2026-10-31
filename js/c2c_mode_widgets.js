@@ -198,6 +198,22 @@ const RULES = {
         managed: ["confidence", "max_faces"],
         visible: (v) => (String(v.face_model ?? "none") === "none" ? [] : ["confidence", "max_faces"]),
     },
+    LoadVideoC2C: {
+        // L9.89 (owner A21): the unified loader. location picks the input-folder combo or the typed server path (the
+        // merged Load Video Path); the image-only controls show for image / EXR sources, the layer for EXR only -
+        // judged from the chosen name, so they never wait for (or vanish with) a probe.
+        watch: ["location", "video", "path"],
+        managed: ["video", "path", "exr_layer", "sequence_fps", "missing_frames"],
+        visible: (v) => {
+            const server = v.location === "server path";
+            const kind = loaderSourceKind(server ? v.path : v.video);
+            return [
+                server ? "path" : "video",
+                ...(kind === "exr" ? ["exr_layer"] : []),
+                ...(kind === "exr" || kind === "image" ? ["sequence_fps", "missing_frames"] : []),
+            ];
+        },
+    },
     C2CVAEQualityDecode: {
         watch: ["tile_mode", "apply_aces", "clean"],
         managed: ["tile_size", "exposure", ...CLEAN],
@@ -208,6 +224,20 @@ const RULES = {
         ],
     },
 };
+
+// the movie containers Load Video (C2C) reads (nodes/c2c_video/nodes_load.py VIDEO_EXTENSIONS)
+const LOADER_VIDEO_EXT = new Set(["mp4", "mov", "mkv", "webm", "avi", "m4v", "mxf", "gif", "ts", "mts", "m2ts", "wmv",
+                                  "flv", "mpg", "mpeg", "3gp", "ogv", "y4m"]);
+
+/** "video" | "exr" | "image" | "" from a source name (a folder or a pattern without a movie extension is images). */
+function loaderSourceKind(value) {
+    const s = String(value || "").trim().replace(/[\\/]+$/, "");
+    if (!s) return "";
+    const ext = (/\.([A-Za-z0-9]+)$/.exec(s)?.[1] || "").toLowerCase();
+    if (!ext) return "image";
+    if (ext === "exr") return "exr";
+    return LOADER_VIDEO_EXT.has(ext) ? "video" : "image";
+}
 
 function apply(node, rule) {
     const widgets = node.widgets || [];

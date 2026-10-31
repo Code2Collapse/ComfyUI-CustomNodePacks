@@ -215,8 +215,10 @@ def inject_file(prompt: dict, path: str, input_dir: str | None = None) -> tuple[
         if not spec:
             continue
         name, how = spec
-        node.setdefault("inputs", {})[name] = (str(Path(path).resolve()) if how == "abs"
-                                               else copy_to_input(path, input_dir))
+        ins = node.setdefault("inputs", {})
+        if node.get("class_type") == "LoadVideoC2C" and str(ins.get("location") or "") == "server path":
+            name, how = "path", "abs"          # L9.89: the merged Load Video Path mode takes the absolute path
+        ins[name] = (str(Path(path).resolve()) if how == "abs" else copy_to_input(path, input_dir))
         return out, f"{nid} {node['class_type']}"
     want = ", ".join(table)
     raise ValueError(f"The workflow has no {kind} loader to put the new file into (one of: {want}).")

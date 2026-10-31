@@ -14,16 +14,15 @@ import numpy as np
 from .handle import C2CVideo
 from .nodes_load import (
     build_images_handle,
-    build_loaded_handle,
     is_changed_sequence,
-    resolve_probe,
-    source_times_for_handle,
+    load_plan,
     strip_path,
 )
 from .probe import probe_file
 from .reader import read
 
 _VIDEO_UPLOAD_TYPES = frozenset({"LoadVideoC2C", "VHS_LoadVideo"})
+# LoadVideoPathC2C was merged into LoadVideoC2C (server path mode, L9.89); kept here for graphs not yet migrated
 _VIDEO_PATH_TYPES = frozenset({"LoadVideoPathC2C", "VHS_LoadVideoPath"})
 _IMAGES_TYPES = frozenset({"LoadImagesPathC2C", "VHS_LoadImagesPath"})
 _LOAD_IMAGE_TYPES = frozenset({"LoadImage"})
@@ -99,6 +98,11 @@ def _resolve_path_for_type(node_type: str, widgets: dict[str, Any]) -> str:
 def _resolve_path_unchecked(node_type: str, widgets: dict[str, Any]) -> str:
     from .routes import resolve_media_path
 
+    if node_type == "LoadVideoC2C" and str(widgets.get("location") or "") == "server path":
+        path = strip_path(str(widgets.get("path") or ""))          # L9.89: the merged Load Video Path mode
+        if not path:
+            raise PlanError(400, "Enter a path (server path mode).")
+        return resolve_media_path({"path": path})
     if node_type in _VIDEO_UPLOAD_TYPES:
         video = strip_path(str(widgets.get("video") or ""))
         if not video:
@@ -149,31 +153,39 @@ def _build_handles(node_type: str, widgets: dict[str, Any]) -> tuple[C2CVideo, C
             )
         return raw, loaded
 
-    sequence_fps = _float_widget(widgets, "sequence_fps", 24.0)
-    raw = resolve_probe(path, sequence_fps=sequence_fps)
     force_rate = _float_widget(widgets, "force_rate", 0.0)
     skip = _int_widget(widgets, "skip_first_frames", 0)
-    h = raw
-    if force_rate > 0:
-        h = h.retimed(force_rate, source_times_for_handle(raw))
-    n_before = len(h)
-    _, loaded = build_loaded_handle(
-        raw,
-        force_rate=force_rate,
-        skip_first_frames=skip,
-        select_every_nth=max(1, _int_widget(widgets, "select_every_nth", 1)),
-        frame_load_cap=_int_widget(widgets, "frame_load_cap", 0),
-        format_name=str(widgets.get("format") or "None"),
-        custom_width=_int_widget(widgets, "custom_width", 0),
-        custom_height=_int_widget(widgets, "custom_height", 0),
-        vae=None,
-        crop=(_float_widget(widgets, "crop_x", 0.0), _float_widget(widgets, "crop_y", 0.0),
-              _float_widget(widgets, "crop_w", 1.0), _float_widget(widgets, "crop_h", 1.0)),
-        # L2.53 inputs; absent (older front ends) = the defaults, which change nothing
-        seconds_cap=_float_widget(widgets, "seconds_cap", 0.0),
-        resolution=str(widgets.get("resolution") or "custom"),
-        divisible_by=max(1, _int_widget(widgets, "divisible_by", 1)),
-    )
+    # L9.89: the run's own chain (load_plan) - sequences by frame number, missing frames, EXR layer, range, reverse -
+    # so the editor's frames are the frames the run loads. Absent widgets = the old answer.
+    unified = node_type == "LoadVideoC2C"
+    try:
+        plan = load_plan(
+            path,
+            source_mode=str(widgets.get("source_mode") or "auto") if unified else "auto",
+            exr_layer=str(widgets.get("exr_layer") or "auto") if unified else "auto",
+            sequence_fps=_float_widget(widgets, "sequence_fps", 24.0),
+            frame_range=str(widgets.get("frame_range") or "") if unified else "",
+            missing_frames=str(widgets.get("missing_frames") or "skip (as before)") if unified else "skip (as before)",
+            edge_policy=str(widgets.get("edge_policy") or "hold") if unified else "hold",
+            reverse=bool(widgets.get("reverse")) if unified else False,
+            force_rate=force_rate,
+            skip_first_frames=skip,
+            select_every_nth=max(1, _int_widget(widgets, "select_every_nth", 1)),
+            frame_load_cap=_int_widget(widgets, "frame_load_cap", 0),
+            format_name=str(widgets.get("format") or "None"),
+            custom_width=_int_widget(widgets, "custom_width", 0),
+            custom_height=_int_widget(widgets, "custom_height", 0),
+            vae=None,
+            crop=(_float_widget(widgets, "crop_x", 0.0), _float_widget(widgets, "crop_y", 0.0),
+                  _float_widget(widgets, "crop_w", 1.0), _float_widget(widgets, "crop_h", 1.0)),
+            # L2.53 inputs; absent (older front ends) = the defaults, which change nothing
+            seconds_cap=_float_widget(widgets, "seconds_cap", 0.0),
+            resolution=str(widgets.get("resolution") or "custom"),
+            divisible_by=max(1, _int_widget(widgets, "divisible_by", 1)),
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise PlanError(400, str(exc)) from exc
+    raw, loaded, n_before = plan.raw, plan.loaded, plan.n_before_skip
     if len(loaded) == 0:
         retime_note = " after retiming" if force_rate > 0 else ""
         raise PlanError(

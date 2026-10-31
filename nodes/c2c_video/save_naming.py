@@ -144,7 +144,8 @@ def name_from_load(prompt: Any, unique_id: Any, follow: Any = "auto") -> tuple[s
     if src is None:
         return None, "no Load Video to take the name from"
     ins = (prompt.get(src) or {}).get("inputs") or {}
-    stem = source_stem(ins.get("video"))
+    # L9.89: Load Video (C2C) in server path mode names its source in 'path' (the merged Load Video Path)
+    stem = source_stem(ins.get("path") if str(ins.get("location") or "") == "server path" else ins.get("video"))
     return _clean(ins.get("name_prefix")) + stem + _clean(ins.get("name_suffix")), f"named after Load Video #{src}"
 
 

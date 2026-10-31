@@ -11,21 +11,26 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .handle import C2CVideo, FileSource, SequenceSource
+from . import media_roots as ROOTS
+from .handle import C2CVideo
 from .nodes_load import (
     SEQUENCE_IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     audio_output_mode,
     build_images_handle,
     build_loaded_handle,
+    is_sequence_path,
+    load_plan,
     load_summary,
+    media_summary,
     resolve_probe,
     source_times_for_handle,
     strip_path,
     validate_images_directory,
     validate_video_path,
 )
-from .reader import iter_chunks
+from .probe import resolve_sequence
+from .reader import iter_chunks, read
 
 log = logging.getLogger("c2c_video.routes")
 
@@ -126,6 +131,15 @@ def parse_request_params(raw: Mapping[str, str]) -> dict[str, Any]:
         params["handle_custom_step"] = max(1, _int_param(raw, "handle_custom_step", 4))
         params["handle_custom_plus"] = max(0, _int_param(raw, "handle_custom_plus", 1))
         params["extra_handles"] = max(0, _int_param(raw, "extra_handles", 0))          # L9.56
+        # L9.89: the unified loader's inputs (absent = the old answer: auto, everything, skip as the Path node did)
+        params["location"] = raw.get("location") or "input folder"
+        params["source_mode"] = raw.get("source_mode") or "auto"
+        params["frame_range"] = raw.get("frame_range") or ""
+        params["reverse"] = str(raw.get("reverse") or "").strip().lower() in ("1", "true", "yes")
+        params["frame_offset"] = _int_param(raw, "frame_offset", 0)
+        params["missing_frames"] = raw.get("missing_frames") or "skip (as before)"
+        params["edge_policy"] = raw.get("edge_policy") or "hold"
+        params["exr_layer"] = raw.get("exr_layer") or "auto"
     params["max_frames"] = min(_MAX_FRAMES_CAP, max(1, _int_param(raw, "max_frames", _DEFAULT_MAX_FRAMES)))
     return params
 
@@ -135,12 +149,20 @@ def _is_media_file(path: str) -> bool:
     return ext.lstrip(".") in VIDEO_EXTENSIONS or ext in SEQUENCE_IMAGE_EXTENSIONS
 
 
+def _roots_or_403(path: str) -> None:
+    """D0.35 (owner 2026-10-31): a browser-facing route reads only inside input / output / temp + the media roots."""
+    blocked = ROOTS.check_route_path(path)
+    if blocked:
+        raise RouteError(403, blocked)
+
+
 def resolve_media_path(params: dict[str, Any]) -> str:
     if params.get("mode") == "images":
         directory = strip_path(str(params.get("directory") or ""))
         valid = validate_images_directory(directory)
         if valid is not True:
             raise RouteError(404, valid if isinstance(valid, str) else f"Nothing found at {directory}.")
+        _roots_or_403(os.path.abspath(directory))
         return os.path.abspath(directory)
 
     if params.get("path"):
@@ -149,6 +171,7 @@ def resolve_media_path(params: dict[str, Any]) -> str:
         if valid is not True:
             raise RouteError(404, valid if isinstance(valid, str) else f"Nothing found at {path}.")
         path = os.path.abspath(path)
+        _roots_or_403(path)
         # This is an HTTP route: it reads nothing but media. Folders and
         # patterns only ever resolve to image-sequence files.
         if os.path.isfile(path) and not _is_media_file(path):
@@ -167,7 +190,15 @@ def resolve_media_path(params: dict[str, Any]) -> str:
     except Exception:
         path = fp.get_annotated_filepath(name)
     if not path or not os.path.exists(path):
-        raise RouteError(404, f"Nothing found at {name}.")
+        # L9.89: a listed sequence pattern (plates/shot.####.exr) is not a file, but resolves inside input/
+        found = False
+        if path and is_sequence_path(path):
+            try:
+                found = bool(resolve_sequence(path))
+            except (OSError, FileNotFoundError, ValueError):
+                found = False
+        if not found:
+            raise RouteError(404, f"Nothing found at {name}.")
     path = os.path.abspath(path)
     # an upload name must stay inside ComfyUI's input folder ("../" escapes it)
     base = os.path.abspath(fp.get_input_directory())
@@ -178,6 +209,42 @@ def resolve_media_path(params: dict[str, Any]) -> str:
     if not inside or not _is_media_file(path):
         raise RouteError(400, f"{name} is not a video in the input folder.")
     return path
+
+
+def plan_from_params(params: dict[str, Any], *, full: bool = False):
+    """The run's own load_plan for a probe / preview request. ``full``: with the node's size and crop (what a run
+    loads); without, the whole frame (what the preview shows). Engine refusals come back as 400s in words."""
+    path = resolve_media_path(params)
+    try:
+        return load_plan(
+            path,
+            source_mode=str(params.get("source_mode") or "auto"),
+            exr_layer=str(params.get("exr_layer") or "auto"),
+            sequence_fps=float(params.get("sequence_fps", 24)),
+            frame_range=str(params.get("frame_range") or ""),
+            missing_frames=str(params.get("missing_frames") or "skip (as before)"),
+            edge_policy=str(params.get("edge_policy") or "hold"),
+            reverse=bool(params.get("reverse")),
+            force_rate=float(params.get("force_rate", 0)),
+            skip_first_frames=int(params.get("skip_first_frames", 0)),
+            select_every_nth=int(params.get("select_every_nth", 1)),
+            frame_load_cap=int(params.get("frame_load_cap", 0)),
+            format_name=str(params.get("format") or "None"),
+            custom_width=int(params.get("custom_width", 0)) if full else 0,
+            custom_height=int(params.get("custom_height", 0)) if full else 0,
+            vae=None,
+            crop=params.get("crop") if full else None,
+            seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
+            resolution=str(params.get("resolution") or "custom") if full else "custom",
+            divisible_by=int(params.get("divisible_by", 1) or 1) if full else 1,
+            snap_frames=str(params.get("handles") or "off") != "fit" if full else True,
+        )
+    except PermissionError as exc:
+        raise RouteError(403, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise RouteError(404, str(exc)) from exc
+    except ValueError as exc:
+        raise RouteError(400, str(exc)) from exc
 
 
 def build_handle_from_params(params: dict[str, Any]) -> tuple[C2CVideo, C2CVideo]:
@@ -201,38 +268,19 @@ def build_handle_from_params(params: dict[str, Any]) -> tuple[C2CVideo, C2CVideo
             )
         return raw, loaded
 
-    path = resolve_media_path(params)
-    raw = resolve_probe(path, sequence_fps=float(params.get("sequence_fps", 24)))
-    force_rate = float(params.get("force_rate", 0))
-    skip = int(params.get("skip_first_frames", 0))
-    h = raw
-    if force_rate > 0:
-        h = h.retimed(force_rate, source_times_for_handle(raw))
-    n_before = len(h)
-    _, loaded = build_loaded_handle(
-        raw,
-        force_rate=force_rate,
-        skip_first_frames=skip,
-        select_every_nth=int(params.get("select_every_nth", 1)),
-        frame_load_cap=int(params.get("frame_load_cap", 0)),
-        format_name=str(params.get("format") or "None"),
-        custom_width=0,
-        custom_height=0,
-        vae=None,
-        seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
-    )
-    if len(loaded) == 0:
-        retime_note = " after retiming" if force_rate > 0 else ""
+    plan = plan_from_params(params)
+    if len(plan.loaded) == 0:
+        retime_note = " after retiming" if float(params.get("force_rate", 0)) > 0 else ""
         raise RouteError(
             400,
-            f"Load Video Path (C2C): no frames selected - the clip has {n_before} frames"
-            f"{retime_note} and skip_first_frames={skip} leaves none.",
+            f"Load Video (C2C): no frames selected - the clip has {plan.n_before_skip} frames"
+            f"{retime_note} and skip_first_frames={int(params.get('skip_first_frames', 0))} leaves none.",
         )
-    return raw, loaded
+    return plan.raw, plan.loaded
 
 
 def _codec_name(raw: C2CVideo) -> str:
-    if isinstance(raw.source, FileSource):
+    if raw.source.kind == "file":                          # by kind, not class (vendored copies)
         import av
 
         try:
@@ -242,7 +290,7 @@ def _codec_name(raw: C2CVideo) -> str:
                 return str(name or "unknown")
         except Exception as exc:
             raise RouteError(500, f"Could not read codec information: {exc}") from exc
-    if isinstance(raw.source, SequenceSource) and raw.source.files:
+    if raw.source.kind == "sequence" and raw.source.files:
         ext = os.path.splitext(raw.source.files[0])[1].lower().lstrip(".")
         return ext or "sequence"
     return "unknown"
@@ -265,22 +313,7 @@ def _load_report(raw: C2CVideo, params: dict[str, Any]) -> dict[str, Any] | None
         return None
     from .fast_decode import device_is_cuda, plan_decoder
 
-    _, load = build_loaded_handle(
-        raw,
-        force_rate=float(params.get("force_rate", 0)),
-        skip_first_frames=int(params.get("skip_first_frames", 0)),
-        select_every_nth=int(params.get("select_every_nth", 1)),
-        frame_load_cap=int(params.get("frame_load_cap", 0)),
-        format_name=str(params.get("format") or "None"),
-        custom_width=int(params.get("custom_width", 0)),
-        custom_height=int(params.get("custom_height", 0)),
-        vae=None,
-        crop=params.get("crop"),
-        seconds_cap=float(params.get("seconds_cap", 0.0) or 0.0),
-        resolution=str(params.get("resolution") or "custom"),
-        divisible_by=int(params.get("divisible_by", 1) or 1),
-        snap_frames=str(params.get("handles") or "off") != "fit",   # as a run: fit pads up, the preset does not cut
-    )
+    load = plan_from_params(params, full=True).loaded          # as a run: size, crop, handles' grid rule (L9.89)
     if not len(load):
         return None
     plan = plan_decoder(load, str(params.get("decoder") or "auto"), cuda=device_is_cuda())
@@ -323,6 +356,16 @@ def _colour_plan(raw: C2CVideo, params: dict[str, Any]) -> dict[str, Any] | None
 
 def probe_payload(params: dict[str, Any]) -> dict[str, Any]:
     raw, loaded = build_handle_from_params(params)
+    media = None
+    if params.get("mode") != "images":
+        try:
+            plan = plan_from_params(params)
+            media = media_summary(plan.raw, plan.loaded, plan.facts, plan.timeline,
+                                  data_layer=plan.facts.layer_kind not in ("", "colour", "alpha"))
+        except RouteError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the probe still answers; the media chips stay empty
+            log.debug("media summary failed: %s", exc)
     sel = list(loaded.selected_indices())
     src_fps = float(raw.fps)
     try:
@@ -336,6 +379,7 @@ def probe_payload(params: dict[str, Any]) -> dict[str, Any]:
         cm = {"error": str(exc)}
     return {
         "file": os.path.basename(raw.source.path) if raw.source.kind == "file" else raw.source.pattern,
+        "media": media,                                   # L9.89: kind, pattern, numbers, missing, layers, warnings
         "load": load,
         "cm": cm,
         "kind": raw.source.kind,
@@ -394,7 +438,8 @@ _PREVIEW_GOP = 12
 
 
 def _cache_key(loaded: C2CVideo, max_frames: int, out_w: int, out_h: int, ext: str) -> str:
-    blob = f"v{_PREVIEW_VERSION}|{loaded.fingerprint()}|{max_frames}|{out_w}x{out_h}|{ext}"
+    # transfer: the same frames shown as data (normalised) or as a picture are two previews
+    blob = f"v{_PREVIEW_VERSION}|{loaded.fingerprint()}|{max_frames}|{out_w}x{out_h}|{ext}|{loaded.colour.transfer}"
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
@@ -409,7 +454,25 @@ def _is_linear(raw: C2CVideo) -> bool:
     return (raw.colour.transfer or "").lower() == "linear"
 
 
-def _chunk_to_rgb_uint8(chunk: np.ndarray, linear: bool) -> np.ndarray:
+def _is_data(raw: C2CVideo) -> bool:
+    return (raw.colour.transfer or "").lower() == "data"
+
+
+def _data_to_rgb_uint8(chunk: np.ndarray) -> np.ndarray:
+    """L9.89: a data layer (depth, normals, position, motion) for the EYE only: each frame stretched between its 1st
+    and 99th percentile. The loaded values are never touched (this is the preview's copy)."""
+    out = np.empty(chunk.shape[:3] + (3,), dtype=np.uint8)
+    for i, f in enumerate(chunk[..., :3].astype(np.float32)):
+        finite = f[np.isfinite(f)]
+        lo, hi = (np.percentile(finite, 1), np.percentile(finite, 99)) if finite.size else (0.0, 1.0)
+        span = hi - lo if hi > lo else 1.0
+        out[i] = (np.clip((np.nan_to_num(f) - lo) / span, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    return out
+
+
+def _chunk_to_rgb_uint8(chunk: np.ndarray, linear: bool, data: bool = False) -> np.ndarray:
+    if data:
+        return _data_to_rgb_uint8(chunk)
     if linear:
         # simple sRGB view — proper OCIO comes later
         rgb = np.clip(chunk[..., :3].astype(np.float32), 0.0, 1.0)
@@ -442,7 +505,8 @@ def _encode_preview(loaded: C2CVideo, raw: C2CVideo, out_path: str, max_frames: 
     n = min(len(scaled), max(1, int(max_frames)))
     capped = scaled.capped(n) if n < len(scaled) else scaled
     linear = _is_linear(raw)
-    fmt = "float32" if linear else "uint8"
+    data = _is_data(raw)
+    fmt = "float32" if (linear or data) else "uint8"
 
     codec_name, _ext = _pick_encoder()
     fps = float(capped.fps) or 24.0
@@ -462,7 +526,7 @@ def _encode_preview(loaded: C2CVideo, raw: C2CVideo, out_path: str, max_frames: 
             stream.options = {"crf": "23", "preset": "veryfast", "g": str(_PREVIEW_GOP)}
         written = 0
         for chunk in iter_chunks(capped, _PREVIEW_CHUNK, fmt=fmt):
-            rgb_batch = _chunk_to_rgb_uint8(chunk, linear)
+            rgb_batch = _chunk_to_rgb_uint8(chunk, linear, data)
             for row in rgb_batch:
                 if written >= n:
                     break
@@ -505,6 +569,30 @@ def ensure_preview(params: dict[str, Any]) -> str:
                 raise
             raise RouteError(500, f"Could not build video preview: {exc}") from exc
     return out_path
+
+
+def still_png(params: dict[str, Any]) -> bytes:
+    """PNG of one loaded position (``i``, default 0) at most ``max`` px on its long side, display-converted for the
+    browser only: sRGB-ish view of scene-linear light, data layers normalised (Rev 3 3.7 / 3.12)."""
+    import io
+
+    from PIL import Image
+
+    plan = plan_from_params(params)
+    loaded = plan.loaded
+    if not len(loaded):
+        raise RouteError(400, "nothing selected to show")
+    i = min(max(0, int(params.get("i", 0) or 0)), len(loaded) - 1)
+    long_side = max(16, min(4096, int(params.get("max", 1024) or 1024)))
+    pw, ph = _preview_scale(loaded.width, loaded.height, long_side)
+    small = loaded.scaled(pw, ph) if max(loaded.width, loaded.height) > long_side else loaded
+    raw = plan.raw
+    linear, data = _is_linear(raw), _is_data(raw)
+    arr = read(small, [i], fmt="float32" if (linear or data) else "uint8")
+    rgb = _chunk_to_rgb_uint8(arr, linear, data)[0]
+    buf = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(rgb)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def register_routes() -> bool:
@@ -687,6 +775,79 @@ def register_routes() -> bool:
         return web.json_response({"config": cfg.getName() if cfg is not None else None,
                                   "source": CM.config_source(), "warning": SO._CFG_WARN})
 
+    async def _handle_still(request):
+        import asyncio
+
+        q = dict(request.query)
+        try:
+            params = parse_request_params(q)
+            params["i"] = _int_param(q, "i", 0)
+            params["max"] = _int_param(q, "max", 1024)
+            data = await asyncio.get_running_loop().run_in_executor(_pools()[0], still_png, params)
+            return web.Response(body=data, content_type="image/png")
+        except RouteError as exc:
+            return web.json_response({"error": exc.message}, status=exc.status)
+        except Exception as exc:
+            log.exception("still failed")
+            return web.json_response({"error": f"Could not show the frame: {exc}"}, status=500)
+
+    async def _handle_scan(request):
+        """L9.89: the candidate sequences of a picked frame or a folder (inside the media roots)."""
+        import asyncio
+
+        from .media_upload import scan_candidates
+
+        q = dict(request.query)
+        try:
+            if q.get("path"):
+                path = os.path.abspath(strip_path(q["path"]))
+                _roots_or_403(path)
+            else:
+                fp = _import_folder_paths()
+                base = os.path.abspath(fp.get_input_directory())
+                sub_ = (q.get("subfolder") or "").strip()
+                name = strip_path(str(q.get("filename") or ""))
+                path = os.path.abspath(os.path.join(base, sub_, name))
+                try:
+                    inside = os.path.commonpath([base, path]) == base
+                except ValueError:
+                    inside = False
+                if not inside:
+                    raise RouteError(400, f"{name} is not in the input folder.")
+            if not os.path.exists(path):
+                raise RouteError(404, f"Nothing found at {path}.")
+            data = await asyncio.get_running_loop().run_in_executor(_pools()[0], scan_candidates, path)
+            return web.json_response(data)
+        except RouteError as exc:
+            return web.json_response({"error": exc.message}, status=exc.status)
+        except Exception as exc:
+            log.exception("scan failed")
+            return web.json_response({"error": f"Could not scan: {exc}"}, status=500)
+
+    async def _handle_upload(request):
+        """L9.89: upload stills, EXRs, sequences and movies into the input folder (media_upload.py has the rules)."""
+        from .media_upload import UploadError, handle_upload
+
+        try:
+            data = await handle_upload(request, _import_folder_paths().get_input_directory())
+            return web.json_response(data)
+        except UploadError as exc:
+            return web.json_response({"error": exc.message}, status=exc.status)
+        except Exception as exc:
+            log.exception("upload failed")
+            return web.json_response({"error": f"Upload failed: {exc}"}, status=500)
+
+    async def _handle_formats(request):
+        """L9.89: what this ComfyUI can actually read (the upload dialog's accept list; Rev 3 3.3)."""
+        from .media_upload import allowed_extensions
+
+        return web.json_response({"extensions": sorted(allowed_extensions()),
+                                  "roots": ROOTS.media_roots(), "local": ROOTS.server_is_local()})
+
+    routes.get("/c2c/media/still")(_handle_still)
+    routes.get("/c2c/media/scan")(_handle_scan)
+    routes.post("/c2c/media/upload")(_handle_upload)
+    routes.get("/c2c/media/formats")(_handle_formats)
     routes.post("/c2c/video/cm/reload")(_handle_cm_reload)
     routes.get("/c2c/save_video/matrix")(_handle_save_matrix)
     routes.post("/c2c/save_video/next_path")(_handle_save_next_path)
@@ -697,6 +858,6 @@ def register_routes() -> bool:
     _ROUTES_REGISTERED = True
     log.info(
         "[c2c_video] registered GET /c2c/video/probe, /c2c/video/preview, "
-        "POST /c2c/frames/plan, GET /c2c/frames/thumb",
+        "POST /c2c/frames/plan, GET /c2c/frames/thumb, /c2c/media/still|scan|formats, POST /c2c/media/upload",
     )
     return True

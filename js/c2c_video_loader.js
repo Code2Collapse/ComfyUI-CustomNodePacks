@@ -22,6 +22,7 @@ import {
     attachPlayer, holdPlayerWidth, playerButton, selectionFromWidgets, widgetsFromSelection,
 } from "./c2c_video_player.js";
 import { attachCrop } from "./c2c_video_crop.js";
+import { buildSourceBar, renderSource } from "./_c2c_loader_source.js";
 import { afterRender, rebindNode, tagDomWidget } from "./_vue_dom_rebind.js";
 import {
     RESETTABLE, SETTINGS, capEdit, capStep, describe, hints, rateNote, sizeEdit, snapCap, FORMAT_GRID,
@@ -41,6 +42,10 @@ const HANDLE_WIDGETS = [
 ];
 // L9.62: the colour settings go with the probe, so the node says what colour management will do BEFORE a run
 const COLOUR_WIDGETS = ["colorspace_in", "working_space"];
+// L9.89 (owner A21): the unified loader - where the source is, what it is, which frames and layer. They change the
+// clip itself, so the preview follows them too (frame_offset only renumbers frame_map: not sent)
+const UNIFIED_WIDGETS = ["location", "path", "source_mode", "sequence_fps", "frame_range", "reverse",
+                         "missing_frames", "edge_policy", "exr_layer"];
 
 const LOADERS = {
     LoadVideoC2C: {
@@ -51,8 +56,9 @@ const LOADERS = {
         hideCorePreview: true,
         mode: "upload",
         settingsUx: true,          // L2.53: grey real values, reset arrows, reset all, details (our nodes only)
+        sourceBar: true,           // L9.89: upload files / a folder / drop, source chips, EXR layers
         emptyTitle: "Load Video (C2C)",
-        emptyHint: "Choose a video from the input folder.",
+        emptyHint: "Choose or upload a video, an image, an EXR or a sequence - or type a server path.",
     },
     // OmniScale's loader (ComfyUI-OmniScale) uses core's upload preview too, with the same blind spot for pro
     // formats (owner A9: "Load Video (C2C) and OmniScale Load Video"). With CustomNodePacks installed it gets our
@@ -64,13 +70,7 @@ const LOADERS = {
         emptyTitle: "OmniScale Load Video",
         emptyHint: "Choose a video from the input folder.",
     },
-    LoadVideoPathC2C: {
-        hasPreview: true,
-        mode: "video",
-        settingsUx: true,
-        emptyTitle: "Load Video Path (C2C)",
-        emptyHint: "Paste a video path, a folder of images, or shot.####.exr",
-    },
+    // Load Video Path (C2C) was merged into Load Video (C2C) as its server path mode (L9.89, D0.34)
     LoadImagesPathC2C: {
         hasPreview: true,
         mode: "images",
@@ -109,6 +109,7 @@ function domainParams(params, cfg, k = 1, maxFrames = null) {
     d.set(n.cap, "0");
     d.set(n.nth, String(Math.max(1, k)));
     for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS, ...COLOUR_WIDGETS]) d.delete(name);   // the whole clip
+    d.delete("reverse");                        // the scrubber shows the clip in its own order
     if (maxFrames) d.set("max_frames", String(maxFrames));
     return d;
 }
@@ -127,7 +128,11 @@ function widgetValue(node, name) {
 
 function collectParams(node, cfg) {
     const p = new URLSearchParams();
-    if (cfg.mode === "upload") {
+    if (cfg.mode === "upload" && widgetValue(node, "location") === "server path") {
+        const path = widgetValue(node, "path");         // L9.89: the merged Load Video Path mode
+        if (!path || !String(path).trim()) return null;
+        p.set("path", String(path).trim());
+    } else if (cfg.mode === "upload") {
         const video = widgetValue(node, "video");
         if (!video) return null;
         p.set("filename", String(video));
@@ -160,9 +165,9 @@ function collectParams(node, cfg) {
     }
     if (cfg.mode !== "images") {
         // L2.53: everything else a run uses, so the probe answers with exactly what will load
-        for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS, ...COLOUR_WIDGETS]) {
+        for (const name of [...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS, ...COLOUR_WIDGETS, ...UNIFIED_WIDGETS]) {
             const v = widgetValue(node, name);
-            if (v !== undefined && v !== null) p.set(name, String(v));
+            if (v !== undefined && v !== null && name !== "path") p.set(name, String(v));
         }
     }
     return p;
@@ -198,6 +203,16 @@ function mountLoaderWidget(node, cfg) {
                 node.setDirtyCanvas?.(true, true);
             },
         });
+    }
+
+    // L9.89: the source bar (upload files / a folder / drop, overwrite, refresh) sits above the preview
+    let sourceCtx = null;
+    if (cfg.sourceBar) {
+        sourceCtx = { node, ui, setWidget, widgetValue, refresh: () => { previewSrc = ""; scheduleRefresh(); },
+                      fit: () => fitNode() };
+        const bar = buildSourceBar(sourceCtx);
+        ui.sourceBar = bar.el;
+        ui.root.insertBefore(bar.el, ui.root.firstChild);
     }
 
     // Crop tool (Load Video / Load Video Path): drawn over the preview, writes the four crop widgets, which it hides.
@@ -260,6 +275,8 @@ function mountLoaderWidget(node, cfg) {
                 crop.setRect(readCrop(node));
             }
             ui.status.setText("", "default");
+            // L9.89: after the reset above, so its warnings and an upload's result stay on the status line
+            if (sourceCtx) renderSource(ui, probeJson.media, sourceCtx);
 
             if (cfg.hasPreview && ui.video && player) {
                 // whole clip (after force_rate) for the scrubber; the exact count of this selection from the probe
@@ -362,8 +379,8 @@ function mountLoaderWidget(node, cfg) {
         };
     };
 
-    for (const name of [...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS, ...HANDLE_WIDGETS,
-                        ...COLOUR_WIDGETS]) {
+    for (const name of new Set([...PATH_WIDGETS, ...VIDEO_WIDGETS, ...IMAGE_WIDGETS, ...LOAD_ONLY_WIDGETS,
+                                ...HANDLE_WIDGETS, ...COLOUR_WIDGETS, ...UNIFIED_WIDGETS])) {
         hookWidget(name);
     }
     // L2.53 settings UX: grey real values, reset arrows, reset all, details line, frame-grid stepping
@@ -623,8 +640,15 @@ function installSettingsUx(node, cfg, ui, scheduleRefresh, fitNode) {
     }
     after("format", () => applyGrid());
     if (cfg.mode === "upload") {
-        // picking, uploading or dropping a new clip loads it with default settings; opening a workflow does not
-        after("video", (w, before) => { if (before !== undefined && before !== w.value) doResetAll(); });
+        // picking, uploading or dropping a new clip loads it with default settings; opening a workflow does not.
+        // L9.89: a frame range, a layer and reverse belong to the source they were set for - a new source starts clean
+        const resetSource = () => {
+            for (const [name, def] of [["frame_range", ""], ["exr_layer", "auto"], ["reverse", false]]) {
+                if (W(name) && W(name).value !== def) setWidget(node, name, def);
+            }
+        };
+        after("video", (w, before) => { if (before !== undefined && before !== w.value) { resetSource(); doResetAll(); } });
+        after("path", (w, before) => { if (before !== undefined && before !== w.value) { resetSource(); doResetAll(); } });
     }
     applyGrid();
 

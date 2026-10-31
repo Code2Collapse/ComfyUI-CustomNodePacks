@@ -45,7 +45,7 @@
 ## Overview
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **103** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **102** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -54,7 +54,7 @@
 | Render farm | 3 |
 | C2C Distributed | 2 |
 | Fluid Shots/Audio | 3 |
-| C2C video | 4 |
+| C2C video | 3 |
 | MaskEditControl | 9 |
 | Image Mask Editor | 1 |
 | Model analysis | 1 |
@@ -85,7 +85,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 103 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 4, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 102 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -771,6 +771,74 @@ Interactive before/after comparison widget with 3 modes: drag-slider split, over
 
 ### Batch & Video
 
+#### Load Video (C2C): images, EXRs and sequences (2026-10-31)
+
+Load Video (C2C) loads every source a shot starts from, without converting it to a movie first:
+
+- a movie: mp4, mov, mkv, webm, avi, mxf and the other containers PyAV reads;
+- one still image: png, jpg, tif / tiff, bmp, tga, hdr, webp, dpx;
+- one EXR (half or float, alpha, any layer);
+- a numbered image or EXR sequence.
+
+The image formats offered are the ones this ComfyUI can actually read: OpenImageIO for EXR / DPX, otherwise OpenCV.
+
+- **Pick or upload.** The `video` list shows movies, stills and each sequence once, as its pattern
+  (`plates/shot.####.exr`), from the input folder and one level of subfolders.
+  - *Upload files…* takes several files at once; a set of frames lands in its own subfolder as one sequence.
+  - *Upload folder…* keeps the folder's name. You can also drop files on the node.
+  - A same-named file with the same bytes is reused. A different one gets a new name. A sequence is never renamed
+    frame by frame: it goes to a new folder `shot (2)/`, unless *overwrite* is ticked.
+  - Every upload is checked by its first bytes as well as its extension. An `.exr` that is really a PNG is refused.
+- **Server path.** `location` = *server path* reads any folder: a clip, an image, a folder, or a pattern (`####`,
+  `%04d`, `$F4`, `@@@@`, `[1001-1100]`). This is what **Load Video Path (C2C)** did. That node is merged into this one,
+  and saved Load Video Path nodes and API prompts are migrated automatically (same path, same frames).
+  - The browser-facing routes (probe, preview, scan) only read inside ComfyUI's input / output / temp folders and the
+    folders you list in the `C2C_MEDIA_ROOTS` environment variable or in `c2c_media_roots.txt` in the ComfyUI folder.
+  - A queued run reads any path, unless ComfyUI listens on a network address (`--listen`). Then runs keep to those
+    folders too.
+- **Source mode.** *auto*:
+  - a movie is a movie;
+  - one frame of a numbered set finds its whole sequence (as a compositor's Read does);
+  - a lone image is one frame.
+
+  *single image* / *single EXR* load exactly one file even when it has siblings (`frame_range` picks which frame).
+  *image sequence* / *EXR sequence* force a sequence. A still is one frame at `sequence_fps` and is never encoded
+  into a movie.
+- **Frame numbers.**
+  - A sequence keeps its own numbers. 1001-1100 loads as 100 frames and `frame_map` still says 1001..1100.
+  - `frame_range` takes Nuke's syntax: `1001-1100`, `1001-1100x2`, or one frame like `1050`.
+  - `reverse` plays the selection last to first, audio too.
+  - `frame_offset` renumbers `frame_map`'s output frames.
+  - A render on twos (1001, 1003, ...) is a step, not missing frames. `1001-1100x1` holds the in-between frames at
+    the full rate.
+- **Missing frames.** A hole inside a sequence stops the run by default and names the missing numbers. *black*,
+  *hold previous* and *nearest* fill it (and say so). *skip (as before)* drops it, which is the old behaviour: every
+  later frame then plays one frame early.
+  - Frames asked for beyond the first / last follow `edge_policy`: *hold*, *black*, *loop*, *bounce* or *error*.
+  - The padding comes from all the files, not from the frame you picked: an unpadded `u.1 … u.100` loads whole from
+    `u.10`.
+  - Files with other padding or another extension under the same name are listed as other candidates. They are
+    never merged.
+- **EXR layers.** `exr_layer` picks what IMAGE shows: *auto* (the beauty / rgba), or any layer the info lists, such as
+  diffuse, depth, N, P or crypto00. The node shows the layers as chips; click one to load it.
+  - Multipart EXRs list each part.
+  - Data layers (depth, normals, position, motion, cryptomatte) load as raw values, are never colour-managed, and
+    their preview is normalised for the eye only.
+  - Floats are never clamped; negatives and alpha are kept.
+- **New outputs, appended:**
+  - `frame_map`: output frame to source frame and its frame number (contract `h3.frame_ledger` v1.1; -1 = a black
+    frame);
+  - `exr_passes`: every EXR layer, lazily, as `C2C_EXR_PASSES`;
+  - `metadata`: the file's header or the movie's tags, as JSON.
+
+  `info` now also says what the source is, its numbers, missing frames and layers, and how much memory the IMAGE
+  takes. The `video` output stays lazy for every source: nothing is decoded until a node reads a window.
+- **Saved workflows.** Every new input is appended and defaults to the old behaviour, so a saved movie workflow loads
+  the same frames.
+  - Kill switches: `C2C_MEDIA_LIST=videos` brings back the movie-only list; `C2C_FRAME_CACHE_MB=0` turns off the
+    decoded-frame cache (512 MB by default) that overlapping window reads share.
+  - `C2C_UPLOAD_MAX_MB` caps one upload (20000 by default).
+
 #### Load Video (C2C): player, frame selection and crop
 
 The node plays its video in the node body. Pro formats (ProRes, DNxHR, HEVC 10-bit, FFV1) are transcoded for the
@@ -794,7 +862,7 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
 - **Keys** (click the player first): Space play / pause, Left / Right step (Shift: 10 frames), J / K / L
   backwards / stop / forwards (press J or L again for 2x, 4x), Up / Down speed, Home / End, I / O set in / out,
   F full screen.
-- The player works the same in Load Video Path (C2C) (crop included) and Load Images Path (C2C) (no crop), in both
+- The player works the same in server path mode (crop included) and in Load Images Path (C2C) (no crop), in both
   renderers, and inside subgraphs.
 
 #### Load Video (C2C): outputs are decoded only when something reads them

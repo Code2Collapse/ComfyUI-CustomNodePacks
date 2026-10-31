@@ -5723,5 +5723,212 @@
   ],
   "dropped": [],
   "note": "L7.65 P30 (owner answer 2026-10-30: port the extras first): NukeMax's EXR Sequence Read / Write run this pack's former EXR engine unchanged (nukemax/nodes/io/exr_c2c.py) when single_file / file_path is set: the same pixels, info_json and files (only the write time stamp differs) (NukeMax tests/test_exr_c2c_port.py). Without ComfyUI-NukeMaxNodes the node stays as it was."
+ },
+ {
+  "old_node_id": "LoadVideoPathC2C",
+  "new_node_id": "LoadVideoC2C",
+  "old_widget_ids": [
+   "video",
+   "force_rate",
+   "custom_width",
+   "custom_height",
+   "frame_load_cap",
+   "skip_first_frames",
+   "select_every_nth",
+   "format",
+   "sequence_fps",
+   "crop_x",
+   "crop_y",
+   "crop_w",
+   "crop_h",
+   "decoder",
+   "seconds_cap",
+   "resolution",
+   "divisible_by",
+   "audio_when_missing",
+   "handles",
+   "handle_frames",
+   "handle_target",
+   "handle_side",
+   "handle_grid",
+   "handle_custom_step",
+   "handle_custom_plus",
+   "colorspace_in",
+   "working_space",
+   "name_prefix",
+   "name_suffix",
+   "extra_handles"
+  ],
+  "input_mapping": [
+   {
+    "new_id": "vae",
+    "old_id": "vae"
+   },
+   {
+    "new_id": "path",
+    "old_id": "video"
+   },
+   {
+    "new_id": "force_rate",
+    "old_id": "force_rate"
+   },
+   {
+    "new_id": "custom_width",
+    "old_id": "custom_width"
+   },
+   {
+    "new_id": "custom_height",
+    "old_id": "custom_height"
+   },
+   {
+    "new_id": "frame_load_cap",
+    "old_id": "frame_load_cap"
+   },
+   {
+    "new_id": "skip_first_frames",
+    "old_id": "skip_first_frames"
+   },
+   {
+    "new_id": "select_every_nth",
+    "old_id": "select_every_nth"
+   },
+   {
+    "new_id": "format",
+    "old_id": "format"
+   },
+   {
+    "new_id": "sequence_fps",
+    "old_id": "sequence_fps"
+   },
+   {
+    "new_id": "crop_x",
+    "old_id": "crop_x"
+   },
+   {
+    "new_id": "crop_y",
+    "old_id": "crop_y"
+   },
+   {
+    "new_id": "crop_w",
+    "old_id": "crop_w"
+   },
+   {
+    "new_id": "crop_h",
+    "old_id": "crop_h"
+   },
+   {
+    "new_id": "decoder",
+    "old_id": "decoder"
+   },
+   {
+    "new_id": "seconds_cap",
+    "old_id": "seconds_cap"
+   },
+   {
+    "new_id": "resolution",
+    "old_id": "resolution"
+   },
+   {
+    "new_id": "divisible_by",
+    "old_id": "divisible_by"
+   },
+   {
+    "new_id": "audio_when_missing",
+    "old_id": "audio_when_missing"
+   },
+   {
+    "new_id": "handles",
+    "old_id": "handles"
+   },
+   {
+    "new_id": "handle_frames",
+    "old_id": "handle_frames"
+   },
+   {
+    "new_id": "handle_target",
+    "old_id": "handle_target"
+   },
+   {
+    "new_id": "handle_side",
+    "old_id": "handle_side"
+   },
+   {
+    "new_id": "handle_grid",
+    "old_id": "handle_grid"
+   },
+   {
+    "new_id": "handle_custom_step",
+    "old_id": "handle_custom_step"
+   },
+   {
+    "new_id": "handle_custom_plus",
+    "old_id": "handle_custom_plus"
+   },
+   {
+    "new_id": "colorspace_in",
+    "old_id": "colorspace_in"
+   },
+   {
+    "new_id": "working_space",
+    "old_id": "working_space"
+   },
+   {
+    "new_id": "name_prefix",
+    "old_id": "name_prefix"
+   },
+   {
+    "new_id": "name_suffix",
+    "old_id": "name_suffix"
+   },
+   {
+    "new_id": "extra_handles",
+    "old_id": "extra_handles"
+   },
+   {
+    "new_id": "location",
+    "set_value": "server path"
+   },
+   {
+    "new_id": "source_mode",
+    "set_value": "auto"
+   },
+   {
+    "new_id": "missing_frames",
+    "set_value": "skip (as before)"
+   }
+  ],
+  "output_mapping": [
+   {
+    "old_idx": 0,
+    "new_idx": 0
+   },
+   {
+    "old_idx": 1,
+    "new_idx": 1
+   },
+   {
+    "old_idx": 2,
+    "new_idx": 2
+   },
+   {
+    "old_idx": 3,
+    "new_idx": 3
+   },
+   {
+    "old_idx": 4,
+    "new_idx": 4
+   },
+   {
+    "old_idx": 5,
+    "new_idx": 5
+   },
+   {
+    "old_idx": 6,
+    "new_idx": 6
+   }
+  ],
+  "dropped": [],
+  "note": "L9.89 (owner A21, 2026-10-31, D0.34): Load Video Path (C2C) merged into Load Video (C2C) as its server path mode - the typed path moves to 'path', location = server path; missing frames keep the old skip behaviour and sequence_fps its saved value, so the frames are the ones it loaded before.",
+  "c2c_note": "Now Load Video (C2C) with location 'server path': the same path, the same frames. It can also pick an EXR layer, a frame range and a missing-frame policy."
  }
 ]

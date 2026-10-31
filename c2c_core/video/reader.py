@@ -20,7 +20,7 @@ from typing import Literal
 
 import numpy as np
 
-from .handle import C2CVideo, FileSource, SequenceSource
+from .handle import C2CVideo
 from .probe import IndexTable, get_index_table, rebuild_exact_index
 
 try:  # always present inside ComfyUI; the numpy path covers tools without it
@@ -442,6 +442,72 @@ def _image_reader():
         return _read_image_cv2
 
 
+# ── decoded sequence frames: a bounded LRU (L9.89) ───────────────────────
+# Overlapping window reads (H3 frame windows, previews, holds) read the same files again; a frame is keyed by its
+# file's size and mtime, so a rewritten file is a miss - never stale pixels. C2C_FRAME_CACHE_MB=0 turns it off.
+
+_FRAME_CACHE: OrderedDict[tuple, np.ndarray] = OrderedDict()
+_FRAME_CACHE_BYTES = 0
+_FRAME_CACHE_LOCK = threading.Lock()
+
+
+def _frame_cache_budget() -> int:
+    try:
+        return max(0, int(float(os.environ.get("C2C_FRAME_CACHE_MB", "512")) * 1024 * 1024))
+    except ValueError:
+        return 512 * 1024 * 1024
+
+
+def frame_cache_clear() -> None:
+    global _FRAME_CACHE_BYTES
+    with _FRAME_CACHE_LOCK:
+        _FRAME_CACHE.clear()
+        _FRAME_CACHE_BYTES = 0
+
+
+def frame_cache_stats() -> dict:
+    with _FRAME_CACHE_LOCK:
+        return {"frames": len(_FRAME_CACHE), "bytes": _FRAME_CACHE_BYTES, "budget": _frame_cache_budget()}
+
+
+def _read_sequence_frame(handle: C2CVideo, path: str, fmt: OutputFmt) -> np.ndarray:
+    global _FRAME_CACHE_BYTES
+    src = handle.source
+    channels = tuple(getattr(src, "channels", ()) or ())
+    budget = _frame_cache_budget()
+    key = None
+    if budget:
+        try:
+            st = os.stat(path)
+            key = (os.path.normcase(os.path.abspath(path)), int(st.st_size),
+                   int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))), int(getattr(src, "part", 0)), channels,
+                   str(getattr(src, "alpha_channel", "")), fmt, bool(handle.has_alpha))
+        except OSError:
+            key = None
+        if key is not None:
+            with _FRAME_CACHE_LOCK:
+                hit = _FRAME_CACHE.get(key)
+                if hit is not None:
+                    _FRAME_CACHE.move_to_end(key)
+                    return hit
+    if channels:
+        from .exr import read_layer
+
+        arr = read_layer(path, int(src.part), channels, str(src.alpha_channel or ""), fmt, bool(handle.has_alpha))
+    else:
+        arr = _image_reader()(path, fmt, handle.has_alpha)
+    if key is not None and arr.nbytes <= budget:
+        arr.setflags(write=False)                  # shared by later reads: nobody may write into it
+        with _FRAME_CACHE_LOCK:
+            if key not in _FRAME_CACHE:
+                _FRAME_CACHE[key] = arr
+                _FRAME_CACHE_BYTES += arr.nbytes
+                while _FRAME_CACHE_BYTES > budget and _FRAME_CACHE:
+                    _k, old = _FRAME_CACHE.popitem(last=False)
+                    _FRAME_CACHE_BYTES -= old.nbytes
+    return arr
+
+
 # ── index-driven decode ──────────────────────────────────────────────────
 
 class _TableWrong(Exception):
@@ -583,7 +649,7 @@ def _fill_missing(out: np.ndarray, rows_by_src: dict[int, list[int]], done: set[
 
 
 def _read_file_into(handle: C2CVideo, rows_by_src: dict[int, list[int]], out: np.ndarray, fmt: OutputFmt) -> None:
-    assert isinstance(handle.source, FileSource)
+    assert handle.source.kind == "file"            # by kind: a handle from a vendored copy has its own class
     wanted = sorted(rows_by_src)
     table = get_index_table(handle.source.stat_key, stream_index=handle.stream_index)
     while True:
@@ -624,21 +690,27 @@ def read(handle: C2CVideo, indices: Sequence[int], *, fmt: OutputFmt = "float32"
     order, repeats allowed; every distinct frame is decoded once."""
     sel = handle.selected_indices()
     rows_by_src: dict[int, list[int]] = {}
+    black: list[int] = []
     positions = list(indices)
     for row, pos in enumerate(positions):
         p = int(pos)
         if p < 0 or p >= len(sel):
             raise IndexError(f"selection index {p} out of range 0..{len(sel) - 1}")
-        rows_by_src.setdefault(sel[p], []).append(row)
+        src = int(sel[p])
+        if src < 0:                                 # a black frame (missing-frame / edge policy "black", L9.89)
+            black.append(row)
+            continue
+        rows_by_src.setdefault(src, []).append(row)
     out = np.empty((len(positions),) + _out_shape(handle), dtype=_NP_OUT[fmt])
+    if black:
+        out[black] = 0
     if not rows_by_src:
         return out
     if handle.source.kind == "sequence":
-        assert isinstance(handle.source, SequenceSource)
-        read_image = _image_reader()
+        assert handle.source.kind == "sequence"
         for src, rows in rows_by_src.items():
             path = handle.source.files[src]
-            arr = read_image(path, fmt, handle.has_alpha)
+            arr = _read_sequence_frame(handle, path, fmt)
             if handle.crop is not None:
                 sw, sh = handle.crop_source
                 if arr.shape[:2] != (sh, sw):           # a folder of mixed sizes: fit to the first, then crop
@@ -662,7 +734,10 @@ def iter_chunks(handle: C2CVideo, chunk_frames: int, *, fmt: OutputFmt = "float3
     n = len(sel)
     if not n:
         return
-    if handle.source.kind == "sequence":
+    in_order = all(i >= 0 for i in sel) and all(b >= a for a, b in zip(sel, sel[1:]))
+    if handle.source.kind == "sequence" or not in_order:
+        # sequences read per file; a movie selection with black frames or one that runs backwards / loops (L9.89)
+        # is read a chunk at a time by random access - each distinct frame of a chunk decoded once
         for s in range(0, n, chunk_frames):
             yield read(handle, range(s, min(n, s + chunk_frames)), fmt=fmt)
         return
@@ -696,7 +771,7 @@ class _ChunkSink:
 
 
 def _iter_file_chunks(handle: C2CVideo, sel, chunk_frames: int, fmt: OutputFmt) -> Iterator[np.ndarray]:
-    assert isinstance(handle.source, FileSource)
+    assert handle.source.kind == "file"            # by kind: a handle from a vendored copy has its own class
     n = len(sel)
     sink = _ChunkSink(n, chunk_frames, _out_shape(handle), _NP_OUT[fmt])
     table = get_index_table(handle.source.stat_key, stream_index=handle.stream_index)

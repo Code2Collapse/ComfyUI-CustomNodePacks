@@ -66,6 +66,15 @@ function _collectLoaderWidgets(node, nodeType) {
         const v = _widgetValue(node, k);
         if (v != null) widgets[k] = v;
     }
+    // L9.89: the unified loader (source mode, server path, frame range, missing frames, EXR layer, reverse) - the
+    // frame planner runs the node's own chain with them, so the editor shows the frames the run loads
+    if (nodeType === "LoadVideoC2C") {
+        for (const k of ["location", "path", "source_mode", "sequence_fps", "frame_range", "reverse",
+                         "missing_frames", "edge_policy", "exr_layer"]) {
+            const v = _widgetValue(node, k);
+            if (v != null) widgets[k] = v;
+        }
+    }
     if (nodeType === "LoadVideoPathC2C" || nodeType === "VHS_LoadVideoPath") {
         const sf = _widgetValue(node, "sequence_fps");
         if (sf != null) widgets.sequence_fps = sf;
