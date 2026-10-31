@@ -640,7 +640,10 @@ _TOKENS = (
     (re.compile(r"%0?(\d*)d"), lambda m: int(m.group(1) or 0)),
     (re.compile(r"\$F(\d*)"), lambda m: int(m.group(1) or 0)),
 )
-_FRAME_FILE = re.compile(r"^(?P<prefix>.*?)(?P<num>\d+)(?P<suffix>\.[A-Za-z0-9]+)$")
+# A frame number is a WHOLE run of digits right before the extension, not directly after "v" / "V": a version tag
+# (shot_v002.exr next to shot_v001.exr) is two versions, not a two-frame sequence (A20 Phase 1, the nuke-nodes 2.0.1
+# fix in spirit). frame0001.png, 0001.png, name.0001.exr and render_v2_0001.exr stay sequences.
+_FRAME_FILE = re.compile(r"^(?P<prefix>.*?)(?<![vV0-9])(?P<num>\d+)(?P<suffix>\.[A-Za-z0-9]+)$")
 
 
 def _scan_frames(directory: str, prefix: str, suffix: str, pad: int,

@@ -2,6 +2,17 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (c2c_core.video.writer: streaming writer + remux concat, L9.74)
+
+- New engine module `c2c_core/video/writer.py`. `StreamWriter` encodes every `write(frames)` call and keeps nothing, so memory is bounded by one call. Codecs: h264 (.mp4), ProRes 422 HQ 10-bit (.mov) and FFV1 lossless (.mkv). Colour follows Save Video's measured conventions (BT.709 matrix, TV range, tagged BT.709).
+- `concat` joins chunk files of the same codec / size / rate by remuxing their packets (no decode, no re-encode), with timestamps offset in exact seconds per chunk.
+- No CNP node uses it yet. The MiniMax H3 Suite's H3 Segment Writer / Sequence Assembler do, through their vendored copy.
+
+## Unreleased – 2026-10-31 (a version tag is not a frame number, L9.74)
+
+- Dropping ONE file of a sequence on a loader resolves the whole sequence. A version tag was read as a frame number, so `shot_v002.exr` next to `shot_v001.exr` loaded as a two-frame sequence of versions.
+- Now a frame number is a whole run of digits that does not directly follow `v` / `V`. `frame0001.png`, `0001.png`, `name.0001.exr`, `render_v2_0001.exr` and `clip_00086400.dpx` still resolve to their sequence; explicit patterns (`####`, `%04d`, `@@@@`, `$F4`) and folders are unchanged.
+
 ## Unreleased – 2026-10-31 (c2c_core.timeline: the frame ledger, L9.74 / owner A20)
 
 - New engine module `c2c_core/timeline/ledger.py` (pure Python, exact fractions): the one map between a source clip's frames and an output timeline, as a JSON-safe dict (contract `h3.frame_ledger` v1).
