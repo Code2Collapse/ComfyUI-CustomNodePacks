@@ -2,6 +2,12 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-11-01 (c2c_core.video.writer: an audio track, L9.74)
+
+- `StreamWriter(..., audio_rate=, audio_channels=)` adds an audio track (AAC in .mp4 / .mov, FLAC in .mkv). `write_audio(samples)` fills it in calls of any size.
+- Without these arguments the file is video only, exactly as before.
+- Used by the MiniMax H3 Suite's H3 Proxy Manager through its vendored copy.
+
 ## Unreleased – 2026-10-31 (Load Video (C2C) loads images, EXRs and sequences; Load Video Path merged in, L9.89 / owner A21)
 
 - Load Video (C2C) is the one loader for:

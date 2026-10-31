@@ -39,7 +39,9 @@ class StreamWriter:
     """Open once, ``write`` frames in any number of calls ([N, H, W, 3] float 0..1, torch or numpy), ``close``."""
 
     def __init__(self, path: str, fps, width: int, height: int, *, codec: str = "h264", quality: int = 85,
-                 ten_bit: bool = False):
+                 ten_bit: bool = False, audio_rate: int = 0, audio_channels: int = 0):
+        """``audio_rate`` / ``audio_channels`` > 0 add an audio track (AAC in mp4 / mov, FLAC in mkv) that
+        ``write_audio`` fills; without them the file is video only, exactly as before (L9.74 slice 7)."""
         import av
 
         if codec not in CODECS:
@@ -65,6 +67,19 @@ class StreamWriter:
             self._stream.options = {"crf": str(round(51 - q * 0.41)), "preset": "medium"}
         elif codec == "prores":
             self._stream.options = {"profile": "3"}                  # 422 HQ
+        self._astream = None
+        self.audio_rate, self.audio_channels, self.audio_samples = int(audio_rate or 0), int(audio_channels or 0), 0
+        if self.audio_rate > 0 and self.audio_channels > 0:
+            self.audio_channels = min(2, self.audio_channels)        # mono / stereo; more channels keep the first two
+            acodec = "flac" if container == "matroska" else "aac"
+            self._alayout = "mono" if self.audio_channels == 1 else "stereo"
+            self._astream = self._out.add_stream(acodec, rate=self.audio_rate)
+            self._astream.layout = self._alayout
+            afmt = getattr(getattr(self._astream.codec_context, "format", None), "name", None) or (
+                "fltp" if acodec == "aac" else "s16")
+            self._resampler = av.AudioResampler(format=afmt, layout=self._alayout, rate=self.audio_rate)
+            self._fifo = av.AudioFifo()
+            self._apts = 0
         self._closed = False
 
     def __enter__(self):
@@ -103,14 +118,58 @@ class StreamWriter:
             self.frames += 1
         return self.frames
 
+    def write_audio(self, samples) -> int:
+        """Encode audio now: [channels, samples] (or [samples]) float32 at ``audio_rate``. Returns samples so far."""
+        if self._astream is None:
+            raise WriterError("this writer was opened without audio (pass audio_rate and audio_channels)")
+        if self._closed:
+            raise WriterError("the writer is closed")
+        arr = samples.detach().cpu().numpy() if hasattr(samples, "detach") else np.asarray(samples)
+        arr = np.asarray(arr, dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr[None]
+        if arr.shape[0] < self.audio_channels:
+            arr = np.repeat(arr[:1], self.audio_channels, axis=0)
+        arr = np.ascontiguousarray(arr[: self.audio_channels])
+        if not arr.shape[1]:
+            return self.audio_samples
+        frame = self._av.AudioFrame.from_ndarray(arr, format="fltp", layout=self._alayout)
+        frame.sample_rate = self.audio_rate
+        frame.pts = self.audio_samples
+        frame.time_base = Fraction(1, self.audio_rate)
+        self.audio_samples += arr.shape[1]
+        for f in self._resampler.resample(frame):
+            f.pts = None                                     # the fifo re-times; frames go out with our own pts
+            self._fifo.write(f)
+        self._drain_audio(final=False)
+        return self.audio_samples
+
+    def _drain_audio(self, final: bool) -> None:
+        size = self._astream.codec_context.frame_size or 1024
+        while self._fifo.samples >= size or (final and self._fifo.samples):
+            f = self._fifo.read(min(size, self._fifo.samples))
+            f.pts, f.time_base = self._apts, Fraction(1, self.audio_rate)
+            self._apts += f.samples
+            for packet in self._astream.encode(f):
+                self._out.mux(packet)
+        if final:
+            for packet in self._astream.encode(None):
+                self._out.mux(packet)
+
     def close(self) -> dict:
         if not self._closed:
             for packet in self._stream.encode():
                 self._out.mux(packet)
+            if self._astream is not None:
+                self._drain_audio(final=True)
             self._out.close()
             self._closed = True
-        return {"path": self.path, "frames": self.frames, "codec": self.codec, "pix_fmt": self.pix_fmt,
-                "fps": f"{self.fps.numerator}/{self.fps.denominator}", "width": self.width, "height": self.height}
+        out = {"path": self.path, "frames": self.frames, "codec": self.codec, "pix_fmt": self.pix_fmt,
+               "fps": f"{self.fps.numerator}/{self.fps.denominator}", "width": self.width, "height": self.height}
+        if self._astream is not None:
+            out["audio"] = {"rate": self.audio_rate, "channels": self.audio_channels, "samples": self.audio_samples,
+                            "codec": self._astream.codec_context.name}
+        return out
 
 
 def _video_stream(container):
