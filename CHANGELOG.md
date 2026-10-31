@@ -2,6 +2,13 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (c2c_core.timeline: the frame ledger, L9.74 / owner A20)
+
+- New engine module `c2c_core/timeline/ledger.py` (pure Python, exact fractions): the one map between a source clip's frames and an output timeline, as a JSON-safe dict (contract `h3.frame_ledger` v1).
+- It handles trim, offset, reverse (the audio flag flips with it), and nearest-frame conversion to a constant frame rate (drops or repeats frames, duration kept). It looks up source <-> global frames both ways and keeps segments with their own padding / overlap / context / accepted range. `validate()` reports overlaps, gaps and out-of-range frames. The audio span of any frame range is computed on the source timeline.
+- 100,000 frames stay a handful of constant-step runs.
+- No node here uses it yet. The MiniMax H3 Suite's H3 Timeline Mapper does, through its vendored copy.
+
 ## Unreleased – 2026-10-31 (c2c_core: the shared engine other packs carry, L9.73 / owner A20)
 
 - The C2C video engine's import-closed modules moved from `nodes/c2c_video/` into a new package, `c2c_core/video/`:
