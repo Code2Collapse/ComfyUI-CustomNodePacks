@@ -2,6 +2,24 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-10-31 (c2c_core: the shared engine other packs carry, L9.73 / owner A20)
+
+- The C2C video engine's import-closed modules moved from `nodes/c2c_video/` into a new package, `c2c_core/video/`:
+  - the lazy handle;
+  - the probe / index table (exact variable-frame-rate timestamps);
+  - the window reader;
+  - the memory budget, audio and source metadata;
+  - the test media.
+- Why: owner directive A20. The MiniMax H3 Suite must run without this pack, so it ships a byte-identical copy of
+  `c2c_core/` instead of a second implementation. `tools/sync_vendored.py` and the pre-push gate keep the copies
+  equal.
+- Nothing changes for users: no node, input or output, and saved workflows load as before. The old module paths stay
+  as aliases of the moved modules, so every import and test still reaches the same code.
+- Rules for `c2c_core/` (its `__init__.py`):
+  - it never imports a pack module and registers no nodes;
+  - process-wide caches go through `shared_state()`;
+  - objects that cross packs are checked by contract, not class.
+
 ## Unreleased – 2026-10-31 (Workflow Issues button: floating, never over the console, L9.71 / owner A20 17.1)
 
 - The **⚠ N workflow issues** button is no longer pinned to one spot. That spot covered the canvas info and the

@@ -1,54 +1,10 @@
-"""RAM budget helpers for chunked video decode."""
+"""Moved to c2c_core/video/budget.py (L9.73, the vendored shared core). This path stays so every existing import,
+monkeypatch and saved reference keeps working: it IS that module (sys.modules alias), not a copy."""
+import sys
 
-from __future__ import annotations
+try:
+    from ...c2c_core.video import budget as _m          # custom_nodes.<pack>.nodes.c2c_video -> <pack>.c2c_core
+except (ImportError, ValueError):
+    from c2c_core.video import budget as _m             # tests: the pack root is on sys.path
 
-import numpy as np
-
-
-class BudgetError(Exception):
-    """Raised when a requested frame batch exceeds available RAM."""
-
-
-def bytes_per_frame(width: int, height: int, channels: int, dtype: np.dtype | str) -> int:
-    dt = np.dtype(dtype)
-    return int(width) * int(height) * int(channels) * int(dt.itemsize)
-
-
-def frames_that_fit(
-    width: int,
-    height: int,
-    channels: int,
-    dtype: np.dtype | str,
-    *,
-    fraction: float = 0.25,
-    available: int | None = None,
-) -> int:
-    if available is None:
-        import psutil
-
-        available = int(psutil.virtual_memory().available)
-    bpf = bytes_per_frame(width, height, channels, dtype)
-    if bpf <= 0:
-        return 0
-    budget = int(available * float(fraction))
-    return max(0, budget // bpf)
-
-
-def budget_error_message(
-    *,
-    asked: int,
-    fits: int,
-    width: int,
-    height: int,
-    channels: int,
-    dtype: str,
-) -> str:
-    bpf = bytes_per_frame(width, height, channels, dtype)
-    need = asked * bpf
-    have = fits * bpf
-    return (
-        f"You asked for {asked} frames ({width}x{height}x{channels} {dtype}, "
-        f"about {need / (1024 ** 2):.1f} MB), but only about {fits} frames "
-        f"({have / (1024 ** 2):.1f} MB) fit in the allowed RAM budget. "
-        f"Lower the frame count or use iter_chunks() to process the clip in smaller batches."
-    )
+sys.modules[__name__] = _m

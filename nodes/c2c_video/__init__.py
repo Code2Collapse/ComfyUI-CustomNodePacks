@@ -1,4 +1,8 @@
-"""C2C video foundation — lazy handles, probe, decode-on-demand reader."""
+"""C2C video foundation - lazy handles, probe, decode-on-demand reader.
+
+The engine moved to c2c_core/video/ (L9.73, the vendored shared core); this package keeps the pack-facing parts
+(loaders, routes, savers, colour) and re-exports the engine API it always had, name by name.
+"""
 
 from __future__ import annotations
 
