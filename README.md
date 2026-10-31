@@ -1916,6 +1916,8 @@ ComfyUI-CustomNodePacks/
 │   ├── layer_effects/, mask_toolkit/, helpers/, depthcrafter/, normalcrafter/
 │   ├── legacy_compat.py, _legacy_replacements.json   # old saved workflows -> current nodes
 │   └── *.py                 # the other nodes (inpaint suite, SAM, ProPainter, comparer, ...)
+├── c2c_core/                # shared engine (video handle, probe, window reader...): no nodes, no pack imports;
+│                            #   other packs ship a byte-identical copy (the MiniMax H3 Suite: mmx_vendor/c2c_core)
 ├── c2c_distributed/         # multi-GPU: GPU Inventory, Multi-GPU Split (docs/c2c-distributed.md)
 ├── c2c_ai/                  # C2C AI spine: model router, backends, keychain, prompt library
 ├── renderfarm/              # C2C Farm: spooler, backends, courier
