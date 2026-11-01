@@ -1863,7 +1863,9 @@ Lite mode, which has no OmniBar.
 Every panel takes either **Current workflow** (the graph on screen, including its subgraphs) or an **API workflow
 file** (Workflow › Export (API)). A normal saved workflow (nodes and links) cannot be queued without the browser, so
 it is refused with that explanation. Runs are queued on this ComfyUI's own address and port, through its normal
-`/prompt` check, so a broken workflow shows the same error you would get from Run.
+`/prompt` check, so a broken workflow shows the same error you would get from Run. A prompt saved from ComfyUI's
+History carries values ComfyUI stored during that run (`is_changed`). They are removed before queueing; otherwise
+ComfyUI would serve the whole run from its cache and do nothing.
 
 - **Schedules** take a 5-field cron (`minute hour day month weekday`, with lists, ranges, steps, `mon`/`jan` names
   and `@daily` / `@hourly`). The panel shows the next three runs as you type. Weekday 0 and 7 are Sunday. If both
