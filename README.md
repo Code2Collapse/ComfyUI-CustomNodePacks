@@ -1967,7 +1967,7 @@ python -m pytest tests/test_sam_multi_mask_picker.py -v
 | Which nodes did Image batching change? | After a run, a node that used a faster version gets a green badge (e.g. `⚡ 1.7×`) and a node whose batch was split gets an amber one (e.g. `▦ 4×24`), in the classic canvas and in Nodes 2.0. The **Batching** tab of the C2C Diagnostics sidebar lists the same nodes for the last run; click a row to select the node. Badges clear when the next run starts. |
 | ViTMatte download fails | Download manually from [HuggingFace](https://huggingface.co/hustvl/vitmatte-small-composition-1k) → place in `ComfyUI/models/vitmatte/vitmatte-small-composition-1k/` |
 | My mask looks bad | Connect your image + mask to **Mask Failure Explainer** — it will diagnose the issue and suggest the right method |
-| After **Convert to Subgraph** a node's inputs are swapped (for example a reference video arrives on an audio input) | A ComfyUI front-end bug with growing input lists (core MiniMax H3 Reference to Video and others). This pack puts every link back on the input it was on (Settings > C2C > Canvas > Subgraphs; on by default). Subgraphs converted without it keep their wrong links: delete the subgraph, undo, and convert again. |
+| After **Convert to Subgraph** a node's inputs are swapped (for example a reference video arrives on an audio input) | A ComfyUI front-end bug with growing input lists (core MiniMax H3 Reference to Video and others). This pack puts every link back on the input it was on (Settings > C2C > Canvas > Subgraphs; on by default). A subgraph converted before this fix keeps its wrong links: undo the conversion and convert again, or re-wire the swapped inputs inside the subgraph. |
 
 ---
 
