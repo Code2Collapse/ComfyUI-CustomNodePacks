@@ -2,6 +2,16 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-11-01 (Convert to Subgraph keeps links on their inputs, L9.96)
+
+- **The fault.** Converting a node with growing input lists into a subgraph used to put its links on the wrong
+  inputs. Affected nodes include core MiniMax H3 Reference to Video, Qwen Image 2.1 / Mage / Ming edit encoders and
+  Bernini Conditioning. Measured with core alone on frontend 1.53.10, 1.55.14 and 1.57.0: a reference video landed
+  on an AUDIO input, and width's link on length. This is a ComfyUI bug, fixed on our side.
+- **The fix.** Each link goes back on the input it was on, and the empty slots the mistake grew are removed.
+- **The setting.** Settings › C2C › Canvas › Subgraphs (Off = ComfyUI's own behaviour). The MiniMax H3 Suite ships
+  the same fix; whichever pack loads first applies it, once.
+
 ## Unreleased – 2026-11-01 (Load Video (C2C): still picture and contact sheet, L9.92)
 
 - A still image or a single EXR is now shown in the node as a picture, from `GET /c2c/media/still`, instead of a one-frame clip.
