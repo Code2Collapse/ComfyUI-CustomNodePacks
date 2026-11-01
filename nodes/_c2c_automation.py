@@ -79,6 +79,17 @@ def _error_text(body: Any) -> str:
     return msg.strip() or "the server refused the prompt"
 
 
+def fresh_prompt(prompt: dict) -> dict:
+    """A copy without core's stored fingerprints. Core's IsChangedCache writes each node's fingerprint INTO the running
+    prompt (node["is_changed"]) and trusts a stored one on the next run; /history keeps them too. A prompt saved from
+    there would replay them, and the run would come back from the cache doing nothing (DECISIONS D0.36, L9.94)."""
+    out = json.loads(json.dumps(prompt))
+    for node in out.values():
+        if isinstance(node, dict):
+            node.pop("is_changed", None)
+    return out
+
+
 async def queue_prompt(prompt: dict, client_id: str = "c2c-automation", server=None) -> dict:
     """Queue an API prompt on this server through its own /prompt route (validation included).
     Returns {"ok": bool, "prompt_id": str|None, "error": str|None}."""
@@ -86,7 +97,7 @@ async def queue_prompt(prompt: dict, client_id: str = "c2c-automation", server=N
     url = own_base_url(server) + "/prompt"
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.post(url, json={"prompt": prompt, "client_id": client_id}, ssl=False,
+            async with sess.post(url, json={"prompt": fresh_prompt(prompt), "client_id": client_id}, ssl=False,
                                  timeout=aiohttp.ClientTimeout(total=30)) as r:
                 try:
                     body = await r.json(content_type=None)
