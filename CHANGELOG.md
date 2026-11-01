@@ -2,6 +2,12 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-11-01 (Load Video (C2C): still picture and contact sheet, L9.92)
+
+- A still image or a single EXR is now shown in the node as a picture, from `GET /c2c/media/still`, instead of a one-frame clip.
+- Sequences get a *contact sheet* chip: 16 frames spread over the selection, labelled with their frame numbers (`/c2c/media/still?sheet=N`). Only those frames are read.
+- Data layers are normalised for the eye in both views; the loaded values are untouched.
+
 ## Unreleased – 2026-11-01 (c2c_core.video.writer: an audio track, L9.74)
 
 - `StreamWriter(..., audio_rate=, audio_channels=)` adds an audio track (AAC in .mp4 / .mov, FLAC in .mkv). `write_audio(samples)` fills it in calls of any size.

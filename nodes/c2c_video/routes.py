@@ -582,17 +582,67 @@ def still_png(params: dict[str, Any]) -> bytes:
     loaded = plan.loaded
     if not len(loaded):
         raise RouteError(400, "nothing selected to show")
-    i = min(max(0, int(params.get("i", 0) or 0)), len(loaded) - 1)
     long_side = max(16, min(4096, int(params.get("max", 1024) or 1024)))
-    pw, ph = _preview_scale(loaded.width, loaded.height, long_side)
-    small = loaded.scaled(pw, ph) if max(loaded.width, loaded.height) > long_side else loaded
     raw = plan.raw
     linear, data = _is_linear(raw), _is_data(raw)
-    arr = read(small, [i], fmt="float32" if (linear or data) else "uint8")
+    fmt = "float32" if (linear or data) else "uint8"
+    cells = max(0, min(64, int(params.get("sheet", 0) or 0)))
+    if cells > 1:
+        return _contact_sheet(plan, cells, long_side, fmt, linear, data)
+    i = min(max(0, int(params.get("i", 0) or 0)), len(loaded) - 1)
+    pw, ph = _preview_scale(loaded.width, loaded.height, long_side)
+    small = loaded.scaled(pw, ph) if max(loaded.width, loaded.height) > long_side else loaded
+    arr = read(small, [i], fmt=fmt)
     rgb = _chunk_to_rgb_uint8(arr, linear, data)[0]
     buf = io.BytesIO()
     Image.fromarray(np.ascontiguousarray(rgb)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _contact_sheet(plan, cells: int, long_side: int, fmt: str, linear: bool, data: bool) -> bytes:
+    """L9.92 (Rev 3 3.12 'a sequence contact sheet'): ``cells`` frames spread evenly over the selection, in a grid at
+    most ``long_side`` px wide, each labelled with its frame number. Reads only those frames."""
+    import io
+    import math
+
+    from PIL import Image, ImageDraw
+
+    loaded = plan.loaded
+    n = len(loaded)
+    k = min(cells, n)
+    picks = sorted({round(j * (n - 1) / max(1, k - 1)) for j in range(k)})
+    cols = max(1, math.ceil(math.sqrt(len(picks) * 16 / 9 * loaded.height / max(1, loaded.width))))
+    cols = min(cols, len(picks))
+    rows = math.ceil(len(picks) / cols)
+    cw = max(16, (long_side - 2 * (cols + 1)) // cols)
+    ch = max(2, round(cw * loaded.height / max(1, loaded.width)))
+    small = loaded.scaled(cw - cw % 2, ch - ch % 2)
+    cw, ch = small.width, small.height
+    tiles = _chunk_to_rgb_uint8(read(small, picks, fmt=fmt), linear, data)
+    nums = _sheet_numbers(plan, picks)
+    sheet = Image.new("RGB", (cols * cw + 2 * (cols + 1), rows * ch + 2 * (rows + 1)), (18, 19, 22))
+    draw = ImageDraw.Draw(sheet)
+    for j, (tile, num) in enumerate(zip(tiles, nums)):
+        x, y = 2 + (j % cols) * (cw + 2), 2 + (j // cols) * (ch + 2)
+        sheet.paste(Image.fromarray(np.ascontiguousarray(tile)), (x, y))
+        label = str(num)
+        box = draw.textbbox((x + 3, y + 2), label)
+        draw.rectangle((box[0] - 2, box[1] - 1, box[2] + 2, box[3] + 1), fill=(0, 0, 0))
+        draw.text((x + 3, y + 2), label, fill=(235, 235, 235))
+    buf = io.BytesIO()
+    sheet.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _sheet_numbers(plan, picks: list[int]) -> list[str]:
+    """The frame number each picked position shows (its source number; 'black' for a black frame)."""
+    try:
+        from .nodes_load import MEDIA
+        nums = MEDIA.source_numbers(plan.raw)
+        sel = list(plan.loaded.selected_indices())
+        return [str(nums[sel[p]]) if sel[p] >= 0 else "black" for p in picks]
+    except Exception:  # noqa: BLE001 - a label is a bonus
+        return [str(p) for p in picks]
 
 
 def register_routes() -> bool:
@@ -783,6 +833,7 @@ def register_routes() -> bool:
             params = parse_request_params(q)
             params["i"] = _int_param(q, "i", 0)
             params["max"] = _int_param(q, "max", 1024)
+            params["sheet"] = _int_param(q, "sheet", 0)                # L9.92: a contact sheet of N frames
             data = await asyncio.get_running_loop().run_in_executor(_pools()[0], still_png, params)
             return web.Response(body=data, content_type="image/png")
         except RouteError as exc:

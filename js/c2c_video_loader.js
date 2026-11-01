@@ -209,7 +209,12 @@ function mountLoaderWidget(node, cfg) {
     let sourceCtx = null;
     if (cfg.sourceBar) {
         sourceCtx = { node, ui, setWidget, widgetValue, refresh: () => { previewSrc = ""; scheduleRefresh(); },
-                      fit: () => fitNode() };
+                      fit: () => fitNode(),
+                      // L9.92: the still / contact-sheet image of exactly what this node loads
+                      stillUrl: (extra) => {
+                          const p = collectParams(node, cfg);
+                          return p ? api.apiURL("/c2c/media/still?" + p.toString() + extra) : "";
+                      } };
         const bar = buildSourceBar(sourceCtx);
         ui.sourceBar = bar.el;
         ui.root.insertBefore(bar.el, ui.root.firstChild);
@@ -336,6 +341,7 @@ function mountLoaderWidget(node, cfg) {
         } catch (err) {
             if (err.name === "AbortError") return;
             ux?.update(null);
+            if (sourceCtx) renderSource(ui, null, sourceCtx);      // no stale still / sheet / chips after an error
             setLoading(ui, false, aspect);
             if (cfg.hasPreview && !ui.video?.src) setEmpty(ui, cfg);
             ui.status.setText(err.message || "Something went wrong.", "danger");

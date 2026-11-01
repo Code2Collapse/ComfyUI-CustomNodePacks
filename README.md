@@ -825,6 +825,11 @@ The image formats offered are the ones this ComfyUI can actually read: OpenImage
   - Data layers (depth, normals, position, motion, cryptomatte) load as raw values, are never colour-managed, and
     their preview is normalised for the eye only.
   - Floats are never clamped; negatives and alpha are kept.
+  - `exr_passes` plugs into NukeMax's **Shuffle Pass**, which gives any layer for every loaded frame.
+- **Preview.**
+  - A still image or a single EXR shows as a picture, not as a one-frame clip.
+  - A sequence has a *contact sheet* chip: 16 frames spread over the selection, each labelled with its frame number.
+    Click the sheet to go back to the player.
 - **New outputs, appended:**
   - `frame_map`: output frame to source frame and its frame number (contract `h3.frame_ledger` v1.1; -1 = a black
     frame);

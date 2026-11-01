@@ -32,6 +32,9 @@ function ensureStyles() {
   font-variant-numeric: tabular-nums; }
 .c2c-vloader__cands button:hover, .c2c-vloader__cands button:focus-visible { background: var(--cu-raised); color: var(--cu-ink); }
 .c2c-vloader--drop { outline: 2px dashed var(--cu-accent, #6aa0ff); outline-offset: -2px; }
+.c2c-vloader__overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  background: var(--cu-ground); z-index: 2; }
+.c2c-vloader__overlay--sheet { cursor: zoom-out; }
 `;
     document.head.appendChild(s);
 }
@@ -204,10 +207,34 @@ function chip(text, cls = "", title = "") {
  * Source chips after the probe's media facts: what it is, its frame numbers, missing frames, layers (a layer chip
  * sets exr_layer), and the other sequences sharing the name (a click loads that one instead - never merged).
  */
+/** An image over the preview (a still, or a contact sheet); null removes it. */
+function setOverlay(ui, url, kind) {
+    let img = ui.viewport?.querySelector(".c2c-vloader__overlay");
+    if (!url) { img?.remove(); return null; }
+    if (!ui.viewport) return null;
+    if (!img) {
+        img = document.createElement("img");
+        img.className = "c2c-vloader__overlay";
+        img.alt = "";
+        ui.viewport.appendChild(img);
+    }
+    img.classList.toggle("c2c-vloader__overlay--sheet", kind === "sheet");
+    img.dataset.kind = kind;
+    img.title = kind === "sheet" ? "Contact sheet of the selection - click to go back to the player" : "";
+    if (img.getAttribute("src") !== url) img.src = url;
+    return img;
+}
+
 export function renderSource(ui, media, ctx) {
     ensureStyles();
     ui.info.querySelectorAll(".c2c-vloader__chip--src, .c2c-vloader__cands").forEach((e) => e.remove());
-    if (!media) return;
+    if (!media) { setOverlay(ui, null); return; }
+    // L9.92 (Rev 3 3.12): a still is a picture, not a one-frame clip; a sequence offers a contact sheet
+    const still = media.kind === "still" || media.kind === "exr_still";
+    const current = ui.viewport?.querySelector(".c2c-vloader__overlay")?.dataset.kind;
+    if (still) setOverlay(ui, ctx.stillUrl?.("&max=1024"), "still");
+    else if (current === "still") setOverlay(ui, null);
+    else if (current === "sheet") setOverlay(ui, ctx.stillUrl?.("&sheet=16&max=1024"), "sheet");
     const add = (c) => { c.classList.add("c2c-vloader__chip--src"); ui.info.appendChild(c); return c; };
     const seq = media.sequence;
     add(chip(KIND[media.kind] || media.kind));
@@ -225,6 +252,17 @@ export function renderSource(ui, media, ctx) {
             `Not in the selected range, or filled by missing_frames: ${(seq.missing || []).join(", ")}`));
     }
     if (media.data_layer) add(chip("raw data values", "", "A data layer: loaded as values, never colour-managed"));
+    if (!still && ctx.stillUrl) {
+        const on = ui.viewport?.querySelector(".c2c-vloader__overlay")?.dataset.kind === "sheet";
+        const c = add(chip("contact sheet", "c2c-vloader__chip--pick" + (on ? " c2c-vloader__chip--on" : ""),
+            on ? "Back to the player" : "16 frames spread over the selection, with their frame numbers"));
+        c.addEventListener("click", () => {
+            const showing = ui.viewport?.querySelector(".c2c-vloader__overlay")?.dataset.kind === "sheet";
+            const img = setOverlay(ui, showing ? null : ctx.stillUrl("&sheet=16&max=1024"), "sheet");
+            if (img) img.onclick = () => { setOverlay(ui, null); c.classList.remove("c2c-vloader__chip--on"); };
+            c.classList.toggle("c2c-vloader__chip--on", !showing);
+        });
+    }
     const layers = media.layers || [];
     if (layers.length > 1 || (layers.length === 1 && layers[0].key !== "rgba")) {
         for (const lay of layers) {
