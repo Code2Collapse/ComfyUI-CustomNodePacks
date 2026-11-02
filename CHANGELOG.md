@@ -2,6 +2,19 @@
 
 All notable changes to ComfyUI-CustomNodePacks are documented here.
 
+## Unreleased – 2026-11-02 (Workflow Issues: no false "not connected" on dropdowns, L9.98)
+
+- **The fault.** On any graph with newer-style (V3) nodes, the **⚠ N workflow issues** button listed every dropdown
+  as "required input is not connected". Affected dropdowns included core Load Video's file, Image To Mask's channel
+  and the H3 nodes' modes. Measured: 8 false issues on a fully wired 19-node graph, in classic, Nodes 2.0 and a
+  subgraph.
+- **Also missed:** a newer-style dropdown set to a file that no longer exists was never reported.
+- **The fix.** An input that a widget supplies is never reported as unconnected. Newer-style dropdowns are checked
+  for missing files like the older ones.
+- **Measured after the fix** (core 0.39.0, frontend 1.53.10):
+  - the same graph shows no button;
+  - a missing file shows 1 issue;
+  - a disconnected image input adds a second.
 ## Unreleased – 2026-11-01 (Convert to Subgraph keeps links on their inputs, L9.96)
 
 - **The fault.** Converting a node with growing input lists into a subgraph used to put its links on the wrong

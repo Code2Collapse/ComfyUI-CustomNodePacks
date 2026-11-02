@@ -83,7 +83,20 @@ async function _defs() {
 function _isLinkType(spec) {
     const t = Array.isArray(spec) ? spec[0] : spec;
     return typeof t === "string" && /^[A-Z][A-Z0-9_]*$/.test(t) &&
-        !["INT", "FLOAT", "STRING", "BOOLEAN"].includes(t);
+        !["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"].includes(t);
+}
+
+// L9.98: V3 nodes publish a combo as ["COMBO", {options}] (V1: [[options], {...}]); both carry their options here.
+function _comboOptions(spec) {
+    if (!Array.isArray(spec)) return null;
+    if (Array.isArray(spec[0])) return spec[0];
+    if (spec[0] === "COMBO" && Array.isArray(spec[1]?.options)) return spec[1].options;
+    return null;
+}
+
+// An input a widget supplies (every V1/V3 widget, a dynamic combo, a custom widget type) is never a missing link.
+function _widgetBacked(n, name, slot) {
+    return !!slot?.widget || (n.widgets || []).some((w) => w.name === name);
 }
 
 async function _scan() {
@@ -97,9 +110,8 @@ async function _scan() {
         const req = (def.input && def.input.required) || {};
         // (a) stale combo values
         for (const w of (n.widgets || [])) {
-            const spec = req[w.name];
-            if (!spec || !Array.isArray(spec) || !Array.isArray(spec[0])) continue;
-            const opts = spec[0];
+            const opts = _comboOptions(req[w.name]);
+            if (!opts) continue;
             if (opts.length && w.value != null && !opts.includes(w.value)) {
                 out.push({
                     kind: "stale_combo", node: n, widget: w, opts,
@@ -113,7 +125,7 @@ async function _scan() {
         for (const [name, spec] of Object.entries(req)) {
             if (!_isLinkType(spec)) continue;
             const slot = (n.inputs || []).find((i) => i.name === name);
-            if (slot && slot.link == null) {
+            if (slot && slot.link == null && !_widgetBacked(n, name, slot)) {
                 out.push({
                     kind: "missing_link", node: n,
                     msg: `${n.title || n.type}: required input "${name}" is not connected`,
