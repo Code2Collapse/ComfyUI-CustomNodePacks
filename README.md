@@ -1845,6 +1845,7 @@ The other C2C canvas tools work inside subgraphs too: sticky notes and wire labe
 
 **Workflow issues.** While the graph has a model name that no longer exists or a required input that is not
 connected (subgraphs included), a **⚠ N workflow issues** button shows. Click it for the list with one-click fixes.
+An input set by a widget (a dropdown, a number, a toggle) never counts as unconnected, on old- and new-style nodes.
 - Drag the button anywhere; Alt + arrow keys move it too.
 - It never covers the console (Logs / Terminal), the canvas info or an open sidebar: it steps aside and comes back
   to your spot when they close.
