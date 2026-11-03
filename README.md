@@ -1529,6 +1529,8 @@ Filesystem-aware auto-versioning for output files.
   basename of `filename_prefix` / `output_filename` becomes `photo_Inpaint`
   (folder + `version_string` are unchanged). No more downstream `Concatenate`
   nodes just to tag a pass.
+- **Names from the nearest loader upstream** — core, VHS, Pixaroma, OCIO and the NukeMax readers (Read, EXR Pass
+  Reader, EXR sequence loaders) all count, so the folder is named after the file that loader reads.
 
 **Outputs:**
 
