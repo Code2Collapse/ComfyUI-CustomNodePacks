@@ -123,7 +123,9 @@ class _Run:
             ec = None
         self.node = str(ec.node_id) if ec is not None else ""
         self.prompt_id = str(ec.prompt_id) if ec is not None else ""
-        self.last_sent = 0.0
+        # -inf, not 0.0: time.monotonic() counts from boot, so with 0.0 the FIRST batch was dropped whenever the
+        # machine had been up for less than LIVE_MIN_INTERVAL_S (measured 2026-11-03: uptime 2926 s, test interval 1 h)
+        self.last_sent = float("-inf")
         self.broken = False
 
     @property

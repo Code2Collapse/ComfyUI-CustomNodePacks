@@ -262,6 +262,8 @@ app.registerExtension({
             "LoadEXRMEC", "SaveEXRMEC",
             "NukeMax_EXRSequenceLoad", "NukeMax_VideoSequenceLoad",
             "NukeMax_EXRChannelRouter", "NukeMax_ReadMultiPass",
+            // NukeMax Read / EXR Pass Reader (L9.80): file or server_path, found by the live-reader check
+            "NukeMax_Read", "NukeMax_EXRPassReader",
             "EXRMetadataReaderMEC", "MiniMaxH3_DCCBridge",
             // Mocha shape imports read a .mocha/.shape file and output a MASK,
             // so they are a source too. Found by the live-reader check rather
