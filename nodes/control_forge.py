@@ -573,6 +573,27 @@ class ControlAOVC2C:
             id_t, nt = _run_aux("SAMPreprocessor", image, res)
             notes.append(nt)
 
+        # A22 L9.135: a pass the user asked for (backend selected, no external map wired) that produced nothing
+        # stops the run with the reason. It used to become an all-black map with the failure only in `info`, and
+        # ControlNet then ran on an empty control image.
+        if image is not None:
+            failed = []
+            if depth is None and depth_model != "off" and depth_t is None:
+                failed.append(f"depth ({depth_model})")
+            if pose is None and pose_model != "off" and pose_t is None:
+                failed.append(f"pose ({pose_model})")
+            if normal is None and normal_model != "off" and normal_t is None:
+                failed.append(f"normal ({normal_model}" + (", needs a depth pass" if normal_model == "sobel_from_depth"
+                                                           and depth_t is None else "") + ")")
+            if id_matte is None and id_matte_model == "sam_auto" and id_t is None:
+                failed.append("id_matte (sam_auto)")
+            if failed:
+                why = " ".join(n for n in notes if n) or ("the in-pack backends did not load (see the console)"
+                                                          if _cb is None else "no detail")
+                raise RuntimeError("Control AOV (C2C): these passes were requested but produced nothing: "
+                                   + ", ".join(failed) + f". Backend report: {why}. Fix the backend, wire the map "
+                                   "into its socket, or set that model to 'off'.")
+
         raw = {"depth": depth_t, "canny": canny_t, "pose": pose_t,
                "normal": normal_t, "motion": _as_bhwc3(motion_t),
                "id_matte": id_t, "image": image}

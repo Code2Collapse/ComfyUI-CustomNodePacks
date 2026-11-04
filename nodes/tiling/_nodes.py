@@ -55,6 +55,25 @@ def _spatial(x: torch.Tensor) -> tuple[int, int]:
     return _spatial_dims(x)
 
 
+def _fingerprint(*tensors, **widgets) -> str:
+    """IS_CHANGED value that works for core's real call: linked inputs arrive as None (core passes constants only,
+    execution.py get_input_data(..., None)); core's own cache key already covers what flows in through links. A
+    tensor passed directly (tests, scripts) is still hashed. A22 L9.135: raising here made the result NaN, so these
+    nodes never cached and the refiner between them re-ran on every queue."""
+    import hashlib
+    h = hashlib.md5()
+    for t in tensors:
+        if isinstance(t, torch.Tensor):
+            h.update(str(tuple(t.shape)).encode())
+            h.update(t.detach().cpu().contiguous().numpy().tobytes())
+        elif isinstance(t, TilePlan):
+            h.update(repr(t.tiles).encode())
+        elif t is not None:
+            h.update(repr(t).encode())
+    h.update(repr(sorted((k, str(v)) for k, v in widgets.items())).encode())
+    return h.hexdigest()
+
+
 class TilePlanMEC:
     """Work out the tiles once, for the whole clip."""
 
@@ -99,9 +118,8 @@ class TilePlanMEC:
                    "for every frame is what stops seams crawling.")
 
     @classmethod
-    def IS_CHANGED(cls, image, **kw):
-        h, w = _spatial(image)
-        return f"{w}x{h}:" + repr(sorted(kw.items()))
+    def IS_CHANGED(cls, image=None, **kw):
+        return _fingerprint(image, **kw)
 
     def plan(self, image, mode, tile_size, rows, cols, overlap, blend):
         h, w = _spatial(image)
@@ -137,13 +155,8 @@ class TileSplitMEC:
                    "whatever you like, then Tile Merge.")
 
     @classmethod
-    def IS_CHANGED(cls, image, tile_plan):
-        import hashlib
-        h = hashlib.md5()
-        h.update(image.detach().cpu().numpy().tobytes())
-        h.update(repr(tile_plan.tiles if isinstance(tile_plan, TilePlan)
-                      else tile_plan).encode())
-        return h.hexdigest()
+    def IS_CHANGED(cls, image=None, tile_plan=None):
+        return _fingerprint(image, tile_plan)
 
     def split(self, image, tile_plan):
         if not isinstance(tile_plan, TilePlan):
@@ -214,13 +227,8 @@ class TileMergeMEC:
     DESCRIPTION = "Blend the tiles back into one clip, in float32, with no seam."
 
     @classmethod
-    def IS_CHANGED(cls, tiles, tile_plan, scale=0.0):
-        import hashlib
-        h = hashlib.md5()
-        h.update(tiles.detach().cpu().numpy().tobytes())
-        h.update(repr(getattr(tile_plan, "tiles", tile_plan)).encode())
-        h.update(repr(scale).encode())
-        return h.hexdigest()
+    def IS_CHANGED(cls, tiles=None, tile_plan=None, scale=0.0):
+        return _fingerprint(tiles, tile_plan, scale=scale)
 
     def merge(self, tiles, tile_plan, scale=0.0):
         if not isinstance(tile_plan, TilePlan):
@@ -325,13 +333,8 @@ class IdentityLockMEC:
                    "where anything is.")
 
     @classmethod
-    def IS_CHANGED(cls, original, refined, **kw):
-        import hashlib
-        h = hashlib.md5()
-        h.update(original.detach().cpu().numpy().tobytes())
-        h.update(refined.detach().cpu().numpy().tobytes())
-        h.update(repr(sorted((k, str(v)) for k, v in kw.items())).encode())
-        return h.hexdigest()
+    def IS_CHANGED(cls, original=None, refined=None, **kw):
+        return _fingerprint(original, refined, **kw)
 
     def lock(self, original, refined, radius, strength, corrections,
              protect=None, want_drift_map=False):

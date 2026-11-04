@@ -405,6 +405,10 @@ def _parse_recipe(recipe_json: str) -> Optional[Dict[str, Any]]:
 # ──────────────────────────── ComfyUI node ─────────────────────────────
 
 
+class VAEMergeError(RuntimeError):
+    """A merge failure explained in plain words (A22 L9.135)."""
+
+
 class VAEMergeMEC:
     """
     (C2C) VAE Merge — combine 2 or 3 VAE checkpoints with TechnoByte-style
@@ -749,28 +753,29 @@ class VAEMergeMEC:
             try:
                 merged_vae = copy.deepcopy(vae_a)
             except Exception as exc:
-                logger.warning("[MEC VAE Merge] deepcopy(vae_a) failed (%s); returning original wrapper.", exc)
-                merged_vae = vae_a
+                # A22 L9.135: never load the merge into vae_a itself - that changes the upstream (cached) VAE for
+                # every other branch of the graph.
+                raise VAEMergeError(
+                    f"VAE Merge (MEC): could not copy vae_a to hold the merged weights ({exc}). The input VAE was "
+                    "left unchanged; free some memory or merge on CPU.") from exc
 
             inner = getattr(merged_vae, "first_stage_model", None)
             target = inner if (inner is not None and hasattr(inner, "load_state_dict")) else merged_vae
+            if not hasattr(target, "load_state_dict"):
+                raise VAEMergeError("VAE Merge (MEC): this VAE object cannot take new weights (no load_state_dict); "
+                                   "nothing was merged.")
             try:
-                if hasattr(target, "load_state_dict"):
-                    incompatible = target.load_state_dict(merged, strict=False)
-                    missing = getattr(incompatible, "missing_keys", []) or []
-                    unexpected = getattr(incompatible, "unexpected_keys", []) or []
-                    if missing or unexpected:
-                        info["load_state_dict"] = {
-                            "missing": missing[:10],
-                            "unexpected": unexpected[:10],
-                        }
-                else:
-                    info.setdefault("warnings", []).append(
-                        "target VAE has no load_state_dict; returning unmodified vae_a clone"
-                    )
+                incompatible = target.load_state_dict(merged, strict=False)
             except Exception as exc:
-                logger.error("[MEC VAE Merge] load_state_dict failed: %s", exc, exc_info=True)
-                info.setdefault("warnings", []).append(f"load_state_dict failed: {exc}")
+                raise VAEMergeError(f"VAE Merge (MEC): loading the merged weights failed ({exc}); nothing was "
+                                   "merged.") from exc
+            missing = list(getattr(incompatible, "missing_keys", []) or [])
+            unexpected = list(getattr(incompatible, "unexpected_keys", []) or [])
+            if missing or unexpected:
+                # the merged dict is built from vae_a's own keys, so any mismatch means a partial (wrong) VAE
+                raise VAEMergeError(
+                    "VAE Merge (MEC): the merged weights do not fit the VAE (missing "
+                    f"{missing[:5]}, unexpected {unexpected[:5]}); nothing usable was produced.")
 
             # ── Post-merge probe ──
             if probe_image_chw is not None:
@@ -784,13 +789,12 @@ class VAEMergeMEC:
             probe_str = json.dumps(probe, indent=2) if probe else empty_probe
             return (merged_vae, json.dumps(info, indent=2), recipe_str, probe_str)
 
-        except ValueError:
+        except (ValueError, VAEMergeError):
             raise
         except Exception as exc:
+            # A22 L9.135: fail loudly - returning vae_a here sent the UNMERGED VAE downstream as if it had worked
             logger.error("[MEC VAE Merge] Unexpected failure: %s", exc, exc_info=True)
-            info["status"] = "error"
-            info["error"] = str(exc)
-            return (vae_a, json.dumps(info, indent=2), "{}", empty_probe)
+            raise VAEMergeError(f"VAE Merge (MEC) failed: {type(exc).__name__}: {exc}") from exc
         finally:
             gc.collect()
             if torch.cuda.is_available():

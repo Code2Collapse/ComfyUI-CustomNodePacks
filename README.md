@@ -1523,6 +1523,16 @@ pasted into it, or found in a workflow saved by an older version, is moved into 
 cleared, so the key is not saved in the workflow or in the image metadata (save the workflow again to remove it from
 an old file). If the key store is unavailable the key stays in the box and a warning says it will be saved.
 
+#### Plain errors instead of silent fallbacks (2026-11-04)
+
+- **VAE Merge (MEC)** stops with the reason when a merge cannot be built (unreadable input, weights that do not fit,
+  not enough memory to copy the VAE). It used to return the unmerged first VAE as if it had worked, and in the
+  out-of-memory case it changed that input VAE in place.
+- **Control AOV (C2C)** stops when a pass you selected (depth, pose, normal, SAM matte) produces nothing, and names
+  the backend's error. It used to hand ControlNet an all-black map. Passes left on `off` still output black.
+- **Tile Plan / Tile Split / Tile Merge / Identity Lock** cache again: an unchanged re-queue no longer re-runs them
+  (and the model between them) or logs an IS_CHANGED warning every time.
+
 ---
 
 ### FolderIncrementer
