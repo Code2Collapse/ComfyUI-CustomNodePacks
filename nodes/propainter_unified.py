@@ -75,6 +75,70 @@ def _get_flow_cls():
 _MODES = ["temporal", "remove", "stitch", "stitch_refine", "flow"]
 
 
+def _uniform(values, what):
+    vals = [int(v) for v in values]
+    if any(v != vals[0] for v in vals):
+        raise ValueError(f"[ProPainterMEC] the STITCHER's {what} changes from frame to frame ({vals[:6]}...); "
+                         "ProPainter stitch needs one crop size for the whole clip. Use a fixed crop size in "
+                         "Inpaint Crop Pro.")
+    return vals[0]
+
+
+def _as_stitch_data(sd):
+    """A22 L9.136: Inpaint Crop Pro outputs a STITCHER (per-frame lists); ProPainter's stitch modes read the
+    STITCH_DATA v2/v3 contract, which nothing produced, so the input could never be wired. A STITCHER is converted
+    here; anything else passes through unchanged.
+
+    STITCHER: canvas_image[j] (H,W,C) = the frame inside its canvas; cropped_to_canvas_* = where the crop sits in the
+    canvas; canvas_to_orig_* = where the original frame sits in the canvas; cropped_mask_for_blend[j] = the blend
+    mask in crop space. STITCH_DATA: stacked canvas, one crop size (v3: per-frame crop offsets), original_mask in
+    original-frame space (cto_w x cto_h), stitch_blend_mask_crop in crop space."""
+    if not (isinstance(sd, dict) and "cropped_to_canvas_x" in sd and "canvas_image" in sd):
+        return sd
+    import torch.nn.functional as F
+    n = len(sd["cropped_to_canvas_x"])
+    if n == 0:
+        raise ValueError("[ProPainterMEC] the STITCHER holds no frames.")
+    ctc_w = _uniform(sd["cropped_to_canvas_w"], "crop size (width)")
+    ctc_h = _uniform(sd["cropped_to_canvas_h"], "crop size (height)")
+    cto = [_uniform(sd[f"canvas_to_orig_{k}"], f"original-frame placement ({k})") for k in ("x", "y", "w", "h")]
+    frames = [c.squeeze(0) if c.dim() == 4 else c for c in sd["canvas_image"]]
+    if any(f.shape != frames[0].shape for f in frames):
+        raise ValueError("[ProPainterMEC] the STITCHER's canvases differ in size from frame to frame; ProPainter "
+                         "stitch needs one canvas size for the whole clip.")
+    canvas = torch.stack([f.float() for f in frames])[..., :3].contiguous()
+    _, Hc, Wc, _ = canvas.shape
+    offsets = [(int(x), int(y)) for x, y in zip(sd["cropped_to_canvas_x"], sd["cropped_to_canvas_y"])]
+    crop_masks = []
+    canvas_mask = torch.zeros(n, Hc, Wc)
+    raw_masks = sd.get("cropped_mask_for_blend") or []
+    for j, (x, y) in enumerate(offsets):
+        if raw_masks:
+            m = raw_masks[min(j, len(raw_masks) - 1)].float()
+            while m.dim() > 2:
+                m = m.squeeze(0) if m.shape[0] == 1 else m[..., 0]
+            if tuple(m.shape) != (ctc_h, ctc_w):
+                m = F.interpolate(m[None, None], size=(ctc_h, ctc_w), mode="bilinear",
+                                  align_corners=False)[0, 0]
+        else:
+            m = torch.ones(ctc_h, ctc_w)
+        crop_masks.append(m.clamp(0, 1))
+        y2, x2 = min(y + ctc_h, Hc), min(x + ctc_w, Wc)
+        canvas_mask[j, y:y2, x:x2] = crop_masks[-1][:y2 - y, :x2 - x]
+    cx, cy, cw, ch = cto
+    same = all(o == offsets[0] for o in offsets)
+    return {
+        "version": 2 if same else 3,
+        "canvas_image": canvas,
+        "ctc_x": offsets[0][0], "ctc_y": offsets[0][1], "ctc_w": ctc_w, "ctc_h": ctc_h,
+        "cto_x": cx, "cto_y": cy, "cto_w": cw, "cto_h": ch,
+        "frame_offsets": None if same else offsets,
+        "original_mask": canvas_mask[:, cy:cy + ch, cx:cx + cw].contiguous(),
+        "stitch_blend_mask_crop": torch.stack(crop_masks),
+        "source": "STITCHER",
+    }
+
+
 class ProPainterMEC:
     """Unified ProPainter dispatcher — one node, five modes."""
 
@@ -152,8 +216,8 @@ class ProPainterMEC:
                     {"tooltip": "[temporal/remove] Source frames."}),
                 "masks":            ("MASK",
                     {"tooltip": "[temporal/remove] Region to inpaint."}),
-                "stitch_data":      ("STITCH_DATA",
-                    {"tooltip": "[temporal/stitch/stitch_refine] STITCH_DATA from InpaintCropProMEC."}),
+                "stitch_data":      ("STITCHER,STITCH_DATA",
+                    {"tooltip": "[temporal/stitch/stitch_refine] The stitcher output of Inpaint Crop Pro."}),
                 "inpainted_image":  ("IMAGE",
                     {"tooltip": "[stitch] Crop-sized generative inpaint output."}),
                 "stitched_image":   ("IMAGE",
@@ -270,6 +334,7 @@ class ProPainterMEC:
                 flow_mask: Optional[torch.Tensor] = None):
 
         cm = self._normalise_cm(color_match_mode)
+        stitch_data = _as_stitch_data(stitch_data)
 
         if mode == "temporal":
             if images is None or masks is None:

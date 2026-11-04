@@ -16,7 +16,8 @@ Impact Pack's FaceDetailer, rebuilt around MEC primitives:
 The detection model is the user's responsibility -- we do NOT bundle weights
 and we accept any Ultralytics-compatible YOLO model file (.pt, or an .onnx export, which ultralytics runs itself)
 located under ``ComfyUI/models/ultralytics/bbox/``. Without ``ultralytics`` (or with face_model = none, or when
-nothing is detected) the node uses the ``mask`` input's box, so workflows do not hard-fail.
+nothing is detected) the node uses the ``mask`` input's box, so workflows do not hard-fail. info_json says why
+detection did not run ("detection") and where each frame's faces came from ("source": detector / mask / none).
 
 Per-face prompts (L9.39): with the optional ``clip`` input, each face's prompt is encoded and sampled with (one
 encode per distinct text). Before, they only replaced a ``text`` metadata key that sampling never reads, so they
@@ -82,6 +83,11 @@ def _list_face_models() -> List[str]:
 _DETECTOR_CACHE: dict = {}
 
 
+class _DetectorUnavailable(RuntimeError):
+    """A22 L9.136: why face detection could not run. The node still falls back to the mask's box (documented), but
+    the reason goes into info_json instead of an empty list nobody hears about."""
+
+
 def _detect_faces_yolo(
     image_np: np.ndarray, model_name: str, conf_threshold: float, max_faces: int,
 ) -> List[Tuple[int, int, int, int, float]]:
@@ -96,28 +102,31 @@ def _detect_faces_yolo(
     if det is None:
         try:
             from ultralytics import YOLO  # type: ignore
-            for key in ("ultralytics_bbox", "ultralytics", "yolo"):
-                try:
-                    abs_path = folder_paths.get_full_path(key, model_name)
-                    if abs_path:
-                        det = YOLO(abs_path)
-                        break
-                except Exception:
-                    continue
-            if det is not None:
-                _DETECTOR_CACHE[cache_key] = det
         except ImportError:
-            logger.warning("[MECFaceFixer] ultralytics not installed; cannot detect faces.")
-            return []
-    if det is None:
-        return []
+            raise _DetectorUnavailable("ultralytics is not installed (pip install ultralytics), so faces were not "
+                                       "detected") from None
+        load_error = None
+        for key in ("ultralytics_bbox", "ultralytics", "yolo"):
+            try:
+                abs_path = folder_paths.get_full_path(key, model_name)
+            except Exception:
+                abs_path = None
+            if not abs_path:
+                continue
+            try:
+                det = YOLO(abs_path)
+                break
+            except Exception as exc:  # noqa: BLE001 - reported below
+                load_error = f"could not load {model_name}: {exc}"
+        if det is None:
+            raise _DetectorUnavailable(load_error or f"{model_name} was not found in models/ultralytics/bbox")
+        _DETECTOR_CACHE[cache_key] = det
     H, W = image_np.shape[:2]
     img_u8 = (image_np * 255.0).clip(0, 255).astype(np.uint8)
     try:
         results = det.predict(img_u8, conf=float(conf_threshold), verbose=False)
     except Exception as exc:
-        logger.warning("[MECFaceFixer] YOLO predict failed: %s", exc)
-        return []
+        raise _DetectorUnavailable(f"{model_name} failed on this frame: {exc}") from exc
     boxes: List[Tuple[int, int, int, int, float]] = []
     for r in results:
         b = getattr(r, "boxes", None)
@@ -272,14 +281,26 @@ class MECFaceFixer:
 
     # ---- detection -------------------------------------------------
     def _detect(self, frame_np: np.ndarray, face_model: str, conf: float, max_faces: int,
-                fallback_mask: Optional[np.ndarray]) -> List[Tuple[int, int, int, int, float]]:
-        boxes = _detect_faces_yolo(frame_np, face_model, conf, max_faces)
+                fallback_mask: Optional[np.ndarray], notes: Optional[dict] = None
+                ) -> List[Tuple[int, int, int, int, float]]:
+        """Detector boxes, else the mask's box. ``notes`` (when given) gets 'source' (detector / mask / none) and,
+        when the detector could not run, 'reason'."""
+        notes = notes if notes is not None else {}
+        try:
+            boxes = _detect_faces_yolo(frame_np, face_model, conf, max_faces)
+        except _DetectorUnavailable as exc:
+            logger.warning("[MECFaceFixer] %s", exc)
+            notes["reason"] = str(exc)
+            boxes = []
         if boxes:
+            notes["source"] = "detector"
             return boxes
         if fallback_mask is not None:
             ys, xs = np.where(fallback_mask > 0.5)
             if ys.size > 0 and xs.size > 0:
+                notes["source"] = "mask"
                 return [(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()), 1.0)]
+        notes["source"] = "none"
         return []
 
     # ---- per-face sampler -----------------------------------------
@@ -399,7 +420,10 @@ class MECFaceFixer:
                 fb_mask = None
                 if mask_np_full is not None:
                     fb_mask = mask_np_full[fi if mask_np_full.shape[0] == B else 0]
-                boxes = self._detect(frame, face_model, float(confidence), int(max_faces), fb_mask)
+                notes: dict = {}
+                boxes = self._detect(frame, face_model, float(confidence), int(max_faces), fb_mask, notes)
+                if notes.get("reason"):
+                    info.setdefault("detection", notes["reason"])
                 # Region sizes for [ASC-SIZE] / [DSC-SIZE].
                 region_sizes = [(x1 - x0) * (y1 - y0) for (x0, y0, x1, y1, _s) in boxes]
                 # skip="[SKIP]": the parser's default turns a [SKIP] face into an empty prompt, i.e. the base
@@ -496,7 +520,7 @@ class MECFaceFixer:
                     })
 
                 out_b[fi] = torch.from_numpy(np.clip(composite, 0.0, 1.0).astype(np.float32))
-                info["frames"].append({"frame": fi, "faces": frame_faces})
+                info["frames"].append({"frame": fi, "faces": frame_faces, "source": notes.get("source", "none")})
 
             return (out_b, face_mask_acc, json.dumps(info))
         finally:

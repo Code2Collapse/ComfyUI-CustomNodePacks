@@ -36,7 +36,8 @@ class LocateAnythingGroundingMEC:
         "into masks."
     )
 
-    _model_cache: Dict[str, Tuple[Any, Any, Any]] = {}
+    # A22 L9.136: keyed by (model_path, device) and holding ONE entry (a 3B model); released by the memory guard
+    _model_cache: Dict[Tuple[str, str], Tuple[Any, Any, Any]] = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -52,6 +53,8 @@ class LocateAnythingGroundingMEC:
                 "device": (["cuda", "cpu"], {"default": "cuda"}),
                 "confidence_threshold": ("FLOAT", {
                     "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Has no effect: LocateAnything-3B returns boxes without scores, so there is nothing "
+                               "to threshold. Kept so saved workflows load unchanged.",
                 }),
                 # L7.97 (owner 2026-10-12): appended last; off = never download
                 "allow_download": ("BOOLEAN", {
@@ -77,8 +80,10 @@ class LocateAnythingGroundingMEC:
 
     @classmethod
     def _load_model(cls, model_path: str, device: str):
-        if model_path in cls._model_cache:
-            return cls._model_cache[model_path]
+        key = (str(model_path), str(device))
+        if key in cls._model_cache:
+            return cls._model_cache[key]
+        cls._model_cache.clear()          # another path / device: drop the old copy before loading the new one
         from transformers import AutoModel, AutoTokenizer, AutoProcessor
 
         # L7.97: an installed copy anywhere ComfyUI keeps models, else models/LLM/<name> (with permission), else a
@@ -94,7 +99,7 @@ class LocateAnythingGroundingMEC:
         model = AutoModel.from_pretrained(
             folder, torch_dtype=torch.bfloat16, trust_remote_code=True,
         ).to(device).eval()
-        cls._model_cache[model_path] = (model, tokenizer, processor)
+        cls._model_cache[key] = (model, tokenizer, processor)
         return model, tokenizer, processor
 
     def run(
@@ -242,6 +247,18 @@ class LocateAnythingGroundingMEC:
         )
 
         return (flat_bboxes, annotated_t, raw_combined)
+
+
+def _release_locate_anything() -> None:
+    LocateAnythingGroundingMEC._model_cache.clear()
+
+
+try:
+    from ._c2c_memguard import register as _c2c_mem_register
+    _c2c_mem_register("cnp.locate_anything", _release_locate_anything,
+                      lambda: bool(LocateAnythingGroundingMEC._model_cache))
+except Exception:  # noqa: BLE001 - the guard is optional
+    pass
 
 
 class LocateAnythingToSAMMEC:

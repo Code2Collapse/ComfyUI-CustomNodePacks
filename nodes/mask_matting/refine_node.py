@@ -434,6 +434,27 @@ def _feather(m: torch.Tensor, sigma: float) -> torch.Tensor:
 
 
 # ── The node ─────────────────────────────────────────────────────────
+def _apply_overrides(text, cfg: dict) -> list:
+    """Layer advanced_overrides_json onto cfg; return the keys it does not know (they are ignored and listed in the
+    info output, so an old save still runs). A22 L9.136: broken JSON used to be logged and dropped silently."""
+    import json as _json
+    if not text or not str(text).strip():
+        return []
+    try:
+        user = _json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"MaskRefineMEC: advanced_overrides_json is not valid JSON ({exc}). Write an object such "
+                         'as {"gf_radius": 12}, or leave it empty.') from exc
+    if not isinstance(user, dict):
+        raise ValueError("MaskRefineMEC: advanced_overrides_json must be a JSON object such as {\"gf_radius\": 12}, "
+                         f"not a {type(user).__name__}.")
+    ignored = sorted(k for k in user if k not in cfg)
+    cfg.update({k: v for k, v in user.items() if k in cfg})
+    if ignored:
+        log.warning("[MaskRefineMEC] advanced_overrides_json: unknown keys ignored: %s", ", ".join(ignored))
+    return ignored
+
+
 class MaskRefineMEC:
     """Single training-free mask refinement node — all SOTA primitives."""
 
@@ -793,14 +814,7 @@ class MaskRefineMEC:
         # New power-user stage defaults (presets can override per-key below)
         for _k, _v in self._NEW_STAGE_DEFAULTS.items():
             cfg.setdefault(_k, _v)
-        if advanced_overrides_json and advanced_overrides_json.strip():
-            try:
-                import json as _json
-                user = _json.loads(advanced_overrides_json)
-                if isinstance(user, dict):
-                    cfg.update({k: v for k, v in user.items() if k in cfg})
-            except Exception as e:
-                log.warning("[MaskRefineMEC] bad advanced_overrides_json: %s", e)
+        overrides_ignored = _apply_overrides(advanced_overrides_json, cfg)
 
         # Subject-aware edge-lock: force-enable edge-pinning stages and
         # overlay subject-specific numerics on top of the preset.
@@ -1089,6 +1103,8 @@ class MaskRefineMEC:
             except Exception as _e:  # pragma: no cover - defensive
                 info_payload["integrity_error"] = str(_e)
 
+        if overrides_ignored:
+            info_payload["overrides_ignored"] = overrides_ignored
         info = _json.dumps(info_payload, indent=2)
 
         return (out_t, alpha, preview, info)

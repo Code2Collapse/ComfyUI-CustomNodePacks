@@ -1547,6 +1547,17 @@ an old file). If the key store is unavailable the key stays in the box and a war
 - **Save Video (C2C)** Folder Version naming: on a server reachable from other machines (`--listen`) the subfolder
   must stay inside the C2C media roots (a `../` or absolute subfolder used to write anywhere). Local servers are
   unchanged.
+- **ProPainter (MEC)** stitch and stitch_refine now take the stitcher output of **Inpaint Crop Pro**. That input
+  was typed `STITCH_DATA`, which no node produces, so these modes could never be wired. Per-frame crop positions
+  are kept. A clip whose crop size changes from frame to frame is refused with a message.
+- **Face Fixer (MEC)**: when face detection cannot run (ultralytics missing, model not found, a model error), it
+  still falls back to the mask's box, and `info_json` now says why (`detection`). Each frame also records where its
+  faces came from (`source`: detector / mask / none). Before, the image could come back untouched with no word.
+- **Locate Anything Grounding (MEC)**: switching `device` loads the model on that device (the cached copy stayed
+  on the old one), only one copy is kept, and ComfyUI's memory release frees it. `confidence_threshold` has no
+  effect (the model returns no scores); its tooltip now says so.
+- **Mask Refine (MEC)**: broken `advanced_overrides_json` stops with a message (it was ignored silently); unknown
+  keys still run and are listed in `info` (`overrides_ignored`).
 
 ---
 
