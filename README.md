@@ -869,6 +869,8 @@ preview on the server. The preview has a keyframe every 12 frames, so seeking an
   F full screen.
 - The player works the same in server path mode (crop included) and in Load Images Path (C2C) (no crop), in both
   renderers, and inside subgraphs.
+- When ComfyUI is reachable from other machines (`--listen`), Load Images Path (C2C) reads only folders inside the
+  C2C media roots, the same rule as Load Video's server path mode (add more folders with `C2C_MEDIA_ROOTS`).
 
 #### Load Video (C2C): outputs are decoded only when something reads them
 
@@ -1508,6 +1510,18 @@ Tracks every parameter change across ComfyUI runs in a local SQLite database. Qu
 
 The in-editor side (right-click a node > Parameter History; Alt + hover a widget) records every change in both
 renderers without taking over the widget's value, so a saved workflow shows its own values in Nodes 2.0.
+
+Secrets are never recorded: widgets named like a key, password, passphrase, credential or token, and any value that
+looks like a provider key (sk-, hf_, gh*_, xox*-, AIza...), are left out by the editor and again by the server. A
+database written by an older version is cleaned once on the next start.
+
+#### Nano Banana (C2C): where the Gemini key lives
+
+The node reads `GEMINI_API_KEY` from the C2C key store (Settings > C2C AI, kept in the operating system's credential
+store) or from the `GEMINI_API_KEY` / `GOOGLE_API_KEY` environment variables. Leave the `api_key` box empty. A key
+pasted into it, or found in a workflow saved by an older version, is moved into the key store and the box is
+cleared, so the key is not saved in the workflow or in the image metadata (save the workflow again to remove it from
+an old file). If the key store is unavailable the key stays in the box and a warning says it will be saved.
 
 ---
 

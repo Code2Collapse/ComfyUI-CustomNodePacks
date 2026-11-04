@@ -1374,6 +1374,10 @@ class LoadImagesPathC2C:
         prompt=None,
         unique_id=None,
     ):
+        # A22 L9.136 / D0.35: a server reachable from other machines reads only inside the media roots.
+        blocked = ROOTS.check_run_path(os.path.abspath(strip_path(directory or "")))
+        if blocked:
+            raise PermissionError(f"Load Images Path (C2C): {blocked}")
         return execute_images_load(
             node_name="Load Images Path (C2C)",
             directory=directory,
@@ -1390,7 +1394,11 @@ class LoadImagesPathC2C:
 
     @classmethod
     def VALIDATE_INPUTS(cls, directory):
-        return validate_images_directory(directory)
+        ok = validate_images_directory(directory)
+        if ok is not True:
+            return ok
+        blocked = ROOTS.check_run_path(os.path.abspath(strip_path(directory or "")))
+        return f"Load Images Path (C2C): {blocked}" if blocked else True
 
 
 class VideoInfoC2C:

@@ -65,11 +65,20 @@ function _getMem(node) {
   return _memoryStore.get(id);
 }
 
+// A22 L9.135: secrets never leave the browser into param_history.db (the server filters too).
+const _SECRET_NAME = /api[_ -]?key|apikey|secret|passw(?:or)?d|passphrase|credential|private[_ -]?key|(?:^|_)token$/i;
+const _SECRET_VALUE = /\b(?:sk-(?:ant-)?[A-Za-z0-9_\-]{20,}|hf_[A-Za-z0-9]{20,}|gh[opsu]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_\-]{35})/;
+
+function _isSecret(w) {
+  if (w.type === "password" || _SECRET_NAME.test(w.name)) return true;
+  return typeof w.value === "string" && _SECRET_VALUE.test(w.value);
+}
+
 function _captureValues(node) {
   const v = {};
   if (node.widgets) {
     for (const w of node.widgets)
-      if (w.name && w.type !== "canvas" && !w.name.startsWith("_"))
+      if (w.name && w.type !== "canvas" && !w.name.startsWith("_") && !_isSecret(w))
         v[w.name] = w.value;
   }
   return v;

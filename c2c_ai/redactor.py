@@ -43,6 +43,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("KEY",   re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"), "<KEY>"),
     ("KEY",   re.compile(r"\bgh[opsu]_[A-Za-z0-9]{20,}\b"), "<KEY>"),
     ("KEY",   re.compile(r"\bxoxb-[A-Za-z0-9-]{20,}\b"), "<KEY>"),
+    ("KEY",   re.compile(r"\bAIza[0-9A-Za-z_\-]{35}"), "<KEY>"),  # Google AI Studio / Gemini
     ("UUID",  re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<UUID>"),
     ("IP",    re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<IP>"),
     ("HASH",  re.compile(r"\b[0-9a-fA-F]{32,}\b"), "<HASH>"),

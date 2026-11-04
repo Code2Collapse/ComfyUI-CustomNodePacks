@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime
 
@@ -31,6 +32,52 @@ logger = logging.getLogger("MEC")
 
 # ── Config ────────────────────────────────────────────────────────────
 MAX_RUNS = 30  # auto-prune: keep only this many distinct runs
+
+# A22 L9.135: secrets never reach param_history.db. A widget whose NAME looks like a secret is dropped, and a string
+# value that looks like a provider key (whatever its widget is called) is dropped too.
+_SECRET_NAME = re.compile(r"api[_ -]?key|apikey|secret|passw(?:or)?d|passphrase|credential|private[_ -]?key|"
+                          r"(?:^|_)token$", re.IGNORECASE)
+_SECRET_VALUE = re.compile(r"\b(?:sk-(?:ant-)?[A-Za-z0-9_\-]{20,}|hf_[A-Za-z0-9]{20,}|gh[opsu]_[A-Za-z0-9]{20,}|"
+                           r"xox[abp]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_\-]{35})")
+_SCRUBBED_DB = False
+
+
+def _strip_secrets(delta):
+    """Return ``delta`` without secret-looking entries (see _SECRET_NAME / _SECRET_VALUE)."""
+    if not isinstance(delta, dict):
+        return {}
+    out = {}
+    for k, v in delta.items():
+        if _SECRET_NAME.search(str(k)):
+            continue
+        if isinstance(v, str) and _SECRET_VALUE.search(v):
+            continue
+        out[k] = v
+    return out
+
+
+def _scrub_existing(conn):
+    """Once per process: remove secret-looking entries that older versions may have stored."""
+    global _SCRUBBED_DB
+    if _SCRUBBED_DB:
+        return
+    _SCRUBBED_DB = True
+    try:
+        changed = []
+        for row_id, dj in conn.execute("SELECT id, delta_json FROM param_diffs").fetchall():
+            try:
+                d = json.loads(dj)
+            except Exception:
+                continue
+            clean = _strip_secrets(d)
+            if clean != d:
+                changed.append((json.dumps(clean), row_id))
+        if changed:
+            conn.executemany("UPDATE param_diffs SET delta_json = ? WHERE id = ?", changed)
+            conn.commit()
+            logger.info("[MEC] param_history: removed secret-looking values from %d stored row(s)", len(changed))
+    except Exception as e:
+        logger.warning(f"[MEC] param_history scrub error: {e}")
 
 # ── DB path lives next to this file ──────────────────────────────────
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "param_history.db")
@@ -62,6 +109,7 @@ def _get_db():
         ON param_diffs(node_class)
     """)
     conn.commit()
+    _scrub_existing(conn)
     return conn
 
 
@@ -103,7 +151,7 @@ def _store_snapshot(data: dict):
             title = info.get("title", "")
             cls = info.get("class", "")
             # v2: accept "delta" field; fall back to "values" for backward compat
-            delta = info.get("delta", info.get("values", {}))
+            delta = _strip_secrets(info.get("delta", info.get("values", {})))
             if not delta:
                 continue  # skip nodes with no changes from defaults
             rows.append((ts, run_id, str(node_id), title, cls, json.dumps(delta)))

@@ -14,8 +14,10 @@ structured JSON brief, character-consistency, product shot). Reference
 images are ComfyUI IMAGE inputs; batches are flattened in order (capped at
 the API's 14-image limit).
 
-The API key comes from the ``api_key`` widget or the ``GEMINI_API_KEY`` /
-``GOOGLE_API_KEY`` environment variables. Errors are translated to plain
+The API key comes from the C2C key store (``GEMINI_API_KEY``, Settings > C2C AI), the ``GEMINI_API_KEY`` /
+``GOOGLE_API_KEY`` environment variables, or - legacy - the ``api_key`` widget. A key typed into the widget is
+moved to the key store by the front end and cleared, so it is not saved in workflows or image metadata
+(A22 L9.135). Errors are translated to plain
 English — no raw tracebacks.
 """
 from __future__ import annotations
@@ -177,14 +179,27 @@ def _collect_refs(*imgs: Optional[torch.Tensor]) -> List[torch.Tensor]:
 # Friendly error translation
 # ──────────────────────────────────────────────────────────────────────
 
+def _resolve_key(widget_value: str = "") -> str:
+    """Widget value (legacy saves) -> C2C key store (keychain, then env of the same name) -> GOOGLE_API_KEY."""
+    key = (widget_value or "").strip()
+    if key:
+        return key
+    try:
+        from ..c2c_ai import keychain as _kc  # optional: keyring may be missing
+        key = (_kc.get(_kc.KEY_GEMINI) or "").strip()
+    except Exception:
+        key = ""
+    return key or os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
+
+
 def _humanise_http(status: int, body: str) -> str:
     try:
         msg = json.loads(body).get("error", {}).get("message", "")[:300]
     except Exception:
         msg = body[:200]
     if status in (401, 403):
-        return ("Google rejected the API key. Check the `api_key` widget or the "
-                "GEMINI_API_KEY environment variable (create a key at "
+        return ("Google rejected the API key. Check GEMINI_API_KEY in the C2C key store "
+                "(Settings > C2C AI) or the environment (create a key at "
                 "aistudio.google.com). Detail: " + msg)
     if status == 404:
         return ("This model is not available for your key/region. Try "
@@ -214,7 +229,7 @@ class NanoBananaC2C:
         "edit, multi-image compose, style transfer. Five prompting styles "
         "(raw / cinematic / structured JSON / character-consistency / product "
         "shot). Wire up to 4 IMAGE inputs as references (batches flatten, max "
-        "14). Needs a Google AI Studio key in `api_key` or GEMINI_API_KEY."
+        "14). Needs a Google AI Studio key: GEMINI_API_KEY in the C2C key store or the environment."
     )
 
     @classmethod
@@ -253,8 +268,10 @@ class NanoBananaC2C:
             },
             "optional": {
                 "api_key": ("STRING", {"default": "", "tooltip":
-                            "Google AI Studio key. Empty = use GEMINI_API_KEY / "
-                            "GOOGLE_API_KEY environment variable."}),
+                            "Leave empty: the key is read from the C2C key store (GEMINI_API_KEY) "
+                            "or the GEMINI_API_KEY / GOOGLE_API_KEY environment variable. A key "
+                            "pasted here is moved into the key store and cleared, so it is never "
+                            "saved in the workflow or in image metadata."}),
                 "system_instruction": ("STRING", {"multiline": True, "default": "", "tooltip":
                                        "Optional system-level art direction applied to every "
                                        "generation (brand style, banned elements, palette rules)."}),
@@ -312,12 +329,12 @@ class NanoBananaC2C:
                  api_key="", system_instruction="", image_1=None,
                  image_2=None, image_3=None, image_4=None):
 
-        key = (api_key or "").strip() or os.environ.get("GEMINI_API_KEY", "") \
-            or os.environ.get("GOOGLE_API_KEY", "")
+        key = _resolve_key(api_key)
         if not key:
             raise ValueError(
-                "No Gemini API key. Paste one into the `api_key` widget or set "
-                "the GEMINI_API_KEY environment variable (keys: aistudio.google.com).")
+                "No Gemini API key. Paste one into the `api_key` widget (it is moved to the "
+                "C2C key store), add GEMINI_API_KEY under Settings > C2C AI, or set the "
+                "GEMINI_API_KEY environment variable (keys: aistudio.google.com).")
 
         refs = _collect_refs(image_1, image_2, image_3, image_4)
         if mode == "edit_image" and not refs:
