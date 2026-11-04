@@ -141,6 +141,21 @@ export function traceLoads(app, node, inputName = "images", kind = "IMAGE") {
 }
 
 /** What Save follows for a `follow_load` value: the pick when it is still upstream, else the automatic choice. */
+/**
+ * The Load Video a node's video_info wire comes from (any of its outputs), or null - the same first rule the server
+ * applies at run time (save_naming.followed_load). Owner bug 2026-11-04: with video_info wired straight from the Load
+ * the panel still said "No Load Video upstream" (it followed only the frames wire through a decoder).
+ */
+export function loadFromVideoInfo(app, node) {
+    const root = app.rootGraph ?? app.graph;
+    const parents = parentsOf(root);
+    const graph = node.graph ?? root;
+    const i = (node.inputs || []).findIndex((x) => x.name === "video_info");
+    if (i < 0) return null;
+    const o = origin(graph, node, i, parents);
+    return o && LOADER_TYPES.has(o.node.type) ? describe(o, parents) : null;
+}
+
 export function followed(trace, follow) {
     const want = String(follow ?? "auto").trim();
     if (want && want !== "auto") {

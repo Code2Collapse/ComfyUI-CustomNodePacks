@@ -473,11 +473,17 @@ app.registerExtension({
             if (!raw) return "";
             const judged = sourceFromValue(String(raw), true);
             let v = judged ? judged.filename : String(raw).trim();
+            // Owner bug 2026-11-04: the judgement already removes an explicit frame token (####, %04d, [..]) or names
+            // a frame-only file after its folder. Stripping again cut the shot number: SC_67_SH_2130.####.png ->
+            // "SC_67_SH". A numeric frame (shot.1001.png) is left by the judgement, so it is stripped here, once.
+            const rawBase = String(raw).trim().replace(/\s*\[(input|output|temp)\]$/i, "")
+                .replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
+            const alreadyStripped = !!judged && judged.filename !== rawBase;
             const slash = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
             if (slash >= 0 && slash < v.length - 1) v = v.slice(slash + 1);
             const { stem, ext } = splitFilename(v);
             let s = stem || v;
-            if (ext && SEQ_STRIP_EXT_RE.test(ext)) {
+            if (ext && SEQ_STRIP_EXT_RE.test(ext) && !alreadyStripped) {
                 s = s.replace(SEQ_STRIP_FRAME_RE, "");
             }
             return s;

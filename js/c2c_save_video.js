@@ -32,7 +32,7 @@ import {
 } from "./c2c_video_player_ui.js";
 import { attachPlayer, holdPlayerWidth, playerButton } from "./c2c_video_player.js";
 import { attachABView, WIPE_SHAPES } from "./_c2c_ab_view.js";
-import { followed, nodeExecId, traceLoads } from "./_c2c_load_trace.js";
+import { followed, loadFromVideoInfo, nodeExecId, traceLoads } from "./_c2c_load_trace.js";
 import { getRuntime } from "./_c2c_runtime.js";
 
 const NODE = "SaveVideoC2C";
@@ -533,6 +533,14 @@ function mountSaveWidget(node) {
     function refreshLink() {
         try {
             trace = traceLoads(app, node, framesInput(), framesInput() === "latent" ? "LATENT" : "IMAGE");
+            // a wired video_info names the Load first, as the server does at run time (save_naming.followed_load)
+            const vi = loadFromVideoInfo(app, node);
+            if (vi) {
+                trace.primary = vi;
+                if (!trace.candidates.some((c) => c.id === vi.id)) trace.candidates.unshift(vi);
+                trace.ambiguous = trace.candidates.length > 1;
+                trace.why = "";
+            }
         } catch (_e) {
             trace = { primary: null, candidates: [], ambiguous: false, why: "" };
         }

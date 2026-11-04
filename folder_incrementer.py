@@ -308,6 +308,10 @@ _RES_DIR_RE = re.compile(r"^(\d{3,5}x\d{3,5}|\d{3,4}[pk]|[1-8]k)$", re.IGNORECAS
 _DRIVE_RE = re.compile(r"^[A-Za-z]:$")
 _ANNOTATION_RE = re.compile(r"\s*\[(input|output|temp)\]$", re.IGNORECASE)
 _FRAME_SYNTAX_END_RE = re.compile(r"[._-]?(?:" + _FRAME_SYNTAX + r")$", re.IGNORECASE)
+#: Owner bug 2026-11-04: SC_67_SH_2130.####.png was named "SC_67_SH". The judgement removed ".####" and the stem
+#: step then removed "_2130" as a second "frame number". Server-side callers that strip again ask for this mark
+#: (keep_frame_mark=True), so exactly ONE frame token is removed. The shared JS/Python contract is unchanged.
+_SEQ_MARK = ".####"
 _ABS_PATH_RE = re.compile(r"^([A-Za-z]:[\\/]|\\\\|/|~[\\/])")
 
 
@@ -333,11 +337,13 @@ def _looks_like_path(v) -> bool:
     return bool(_KNOWN_EXT_RE.search(s)) and "  " not in s
 
 
-def _source_from_value(value, folder_hint: bool = False):
+def _source_from_value(value, folder_hint: bool = False, keep_frame_mark: bool = False):
     """Judge one widget value. Returns ``(filename, kind)`` or ``None``.
 
     kind: video | image | audio | file | sequence (numbered frames) | folder.
-    A folder yields its name with no extension."""
+    A folder yields its name with no extension. keep_frame_mark: a sequence whose frame token was explicit (####,
+    %04d, [1001-1100]) or was the whole file name keeps ".####" in its name, for callers that strip one frame token
+    afterwards (the default output is the shared JS/Python contract)."""
     if not isinstance(value, str) or len(value) > 4096:
         return None
     s = value.strip()
@@ -354,9 +360,10 @@ def _source_from_value(value, folder_hint: bool = False):
     m = _KNOWN_EXT_RE.search(base)
     ext = m.group(0) if m else ""
 
+    mark = _SEQ_MARK if keep_frame_mark and ext and _SEQ_EXT_RE.match(ext) else ""
     if re.search(r"[*?]", base) or re.search(r"\{[^}]*\}", base):
         d = _meaningful_dir(parents)
-        return (d + ext, "sequence") if d else None
+        return (d + mark + ext, "sequence") if d else None
 
     if ext:
         stem = base[: -len(ext)]
@@ -364,9 +371,9 @@ def _source_from_value(value, folder_hint: bool = False):
             bare = _FRAME_SYNTAX_END_RE.sub("", stem)
             if not bare or bare.isdigit():
                 d = _meaningful_dir(parents)
-                return (d + ext, "sequence") if d else None
+                return (d + mark + ext, "sequence") if d else None
             numbered = bare != stem or bool(re.search(r"[._-]\d{2,8}$", stem))
-            return (bare + ext, "sequence" if numbered else "image")
+            return ((bare + mark if bare != stem else bare) + ext, "sequence" if numbered else "image")
         low = ext[1:].lower()
         kind = ("video" if low in _VIDEO_EXTS else "audio" if low in _AUDIO_EXTS
                 else "image" if low in _IMAGE_EXTS else "file")
@@ -378,25 +385,25 @@ def _source_from_value(value, folder_hint: bool = False):
     return None
 
 
-def _source_from_inputs(inputs):
+def _source_from_inputs(inputs, keep_frame_mark: bool = False):
     """The source a prompt node reads, from its ``inputs`` dict (widget values;
     links are lists and are ignored). Same priority as the front-end: file
     widgets, then folder widgets, then any value that is a path."""
     if not isinstance(inputs, dict):
         return None
     for name in _FILE_WIDGETS:
-        r = _source_from_value(inputs.get(name), False)
+        r = _source_from_value(inputs.get(name), False, keep_frame_mark)
         if r:
             return r
     for name in _FOLDER_WIDGETS:
-        r = _source_from_value(inputs.get(name), True)
+        r = _source_from_value(inputs.get(name), True, keep_frame_mark)
         if r:
             return r
     for name, v in inputs.items():
         if name in _SKIP_WIDGETS or name in _FILE_WIDGETS or name in _FOLDER_WIDGETS:
             continue
         if _looks_like_path(v):
-            r = _source_from_value(v, False)
+            r = _source_from_value(v, False, keep_frame_mark)
             if r:
                 return r
     return None
@@ -438,7 +445,7 @@ def _detect_source_from_prompt(prompt, unique_id, choice: str = "auto") -> str:
         n = prompt.get(nid)
         if not isinstance(n, dict):
             continue
-        r = _source_from_inputs(n.get("inputs"))
+        r = _source_from_inputs(n.get("inputs"), keep_frame_mark=True)
         if r:
             found.append(r)
             continue       # a source ends its branch; sibling branches still drain
@@ -453,7 +460,7 @@ def _detect_source_from_prompt(prompt, unique_id, choice: str = "auto") -> str:
             title = str((n.get("_meta") or {}).get("title") or "")
             if not (_LOADER_WORD_RE.search(ct) or _LOADER_WORD_RE.search(title)):
                 continue
-            r = _source_from_inputs(n.get("inputs"))
+            r = _source_from_inputs(n.get("inputs"), keep_frame_mark=True)
             if r:
                 found.append(r)
     if not found:
@@ -483,7 +490,7 @@ def _resolve_stem_and_ext(
     # bare frame, generic folders skipped) - the same rules the front-end
     # applies to a loader's value. A plain filename skips this untouched.
     if re.search(r"[\\/*?]|\[(input|output|temp)\]$", raw, re.IGNORECASE):
-        judged = _source_from_value(raw, folder_hint=True)
+        judged = _source_from_value(raw, folder_hint=True, keep_frame_mark=True)
         if judged:
             raw = judged[0]
     basename = Path(raw.replace("\\", "/")).name
