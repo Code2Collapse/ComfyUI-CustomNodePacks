@@ -565,7 +565,10 @@ class VideoStabilizerMEC:
                     padding_rgb=padding_rgb, frame_rate=frame_rate,
                 )
             out_frames = _stable_result_to_image(result, frames)
-            out_masks = _masks_list_to_tensor(result.masks, B, H, W)
+            # A22 L9.136: size the padding masks from the OUTPUT frames (a framing mode may change the size), as
+            # _restore_motion does
+            out_masks = _masks_list_to_tensor(result.masks, out_frames.shape[0], out_frames.shape[1],
+                                              out_frames.shape[2])
         finally:
             _check_interrupt()
 

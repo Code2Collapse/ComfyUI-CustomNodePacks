@@ -286,6 +286,10 @@ class MECFaceFixer:
     def _sample_face(self, model, positive, negative, vae, face_crop: torch.Tensor,
                      denoise: float, steps: int, cfg: float, sampler_name: str,
                      scheduler: str, seed: int) -> torch.Tensor:
+        if float(denoise) <= 0.0:
+            # A22 L9.136: denoise 0 = leave the face as it is (the full sigma schedule used to run: a full
+            # regeneration of every face)
+            return face_crop[:, :, :, :3]
         import comfy.sample
         import comfy.samplers
         # VAE-encode crop, run sampler, VAE-decode.

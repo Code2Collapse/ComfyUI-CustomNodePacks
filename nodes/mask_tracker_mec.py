@@ -455,10 +455,8 @@ class MaskTrackerMEC:
     # ── motion ───────────────────────────────────────────────────────
     def _mode_motion(self, video, *args):
         if video is None:
-            return (_empty_mask_like(None, None),
-                    _empty_image_like(None), 0.0,
-                    json.dumps({"error": "motion mode requires video"}),
-                    "motion")
+            # A22 L9.136: missing inputs stop the run (an all-black mask used to flow downstream as a result)
+            raise ValueError("Mask Tracker (MEC): motion mode needs the video input connected.")
         impl = MotionMaskTrackerMEC()
         motion_mask, intensity, info = impl.execute(video, *args)
         return (motion_mask, video, float(intensity),
@@ -470,10 +468,7 @@ class MaskTrackerMEC:
                         flow_threshold, fade_start, fade_end,
                         bidirectional, sam_model, points_json):
         if video is None or mask is None:
-            return (_empty_mask_like(video, mask),
-                    _empty_image_like(video), 0.0,
-                    json.dumps({"error": "propagate requires video + mask"}),
-                    "propagate")
+            raise ValueError("Mask Tracker (MEC): propagate mode needs both the video and the mask inputs connected.")
         impl = MaskPropagateVideo()
         masks, preview = impl.propagate(
             images=video, mask=mask, source_frame=int(source_frame),
@@ -491,10 +486,7 @@ class MaskTrackerMEC:
     def _mode_anchor(self, mask, anchor_frames, total_frames, easing,
                      sdf_iterations, flow_refinement, video):
         if mask is None:
-            return (_empty_mask_like(video, None),
-                    _empty_image_like(video), 0.0,
-                    json.dumps({"error": "anchor mode requires mask stack"}),
-                    "anchor")
+            raise ValueError("Mask Tracker (MEC): anchor mode needs the mask input (the anchor mask stack).")
         impl = TemporalAnchorMEC()
         full_masks, confidence_list, info = impl.execute(
             anchor_masks=mask, anchor_frames=str(anchor_frames),
@@ -521,10 +513,7 @@ class MaskTrackerMEC:
                 binarize_threshold=float(binarize_threshold),
             )
         except ValueError as exc:
-            return (_empty_mask_like(video, mask),
-                    _empty_image_like(video), 0.0,
-                    json.dumps({"error": str(exc)}),
-                    f"consistency_check:{metric}")
+            raise ValueError(f"Mask Tracker (MEC) consistency_check ({metric}): {exc}") from exc
         return (mask_out if mask_out is not None
                 else _empty_mask_like(video, mask),
                 img_out if img_out is not None

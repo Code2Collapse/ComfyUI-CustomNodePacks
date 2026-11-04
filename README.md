@@ -1532,12 +1532,34 @@ an old file). If the key store is unavailable the key stays in the box and a war
   the backend's error. It used to hand ControlNet an all-black map. Passes left on `off` still output black.
 - **Tile Plan / Tile Split / Tile Merge / Identity Lock** cache again: an unchanged re-queue no longer re-runs them
   (and the model between them) or logs an IS_CHANGED warning every time.
+- **SAM Model Loader (MEC)** refuses a checkpoint that does not fit the SAM 2.1 architecture (a SAM 3 file used to
+  load into it with random weights and give garbage masks), and says when the `sam2` package is missing. The
+  model-free fallback (labelled approximate) still applies unless `C2C_MODEL_FALLBACK=off`.
+- **SAM Mask Generator (MEC)** stops with the reason when SAM cannot run (no fitting predictor, a prediction error)
+  or when GroundingDINO fails on a text prompt; it used to return an empty mask or drop the text silently. With
+  the model-free stand-in the text is still only noted (that stand-in cannot read text).
+- **Face Fixer (MEC)** with denoise 0 leaves the faces as they are (it used to regenerate them completely).
+- **ProPainter (MEC)** temporal mode: colour match "off" really is off (it ran Reinhard).
+- **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
+- **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
+- **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
+  the union of every frame's boxes).
+- **Save Video (C2C)** Folder Version naming: on a server reachable from other machines (`--listen`) the subfolder
+  must stay inside the C2C media roots (a `../` or absolute subfolder used to write anywhere). Local servers are
+  unchanged.
 
 ---
 
 ### FolderIncrementer
 
 Filesystem-aware auto-versioning for output files.
+
+Fixed 2026-11-04: a shot whose name ends in a number lost that number when it came from an image sequence.
+`SC_67_SH_2130 (2)/SC_67_SH_2130.####.png` was saved as `SC_67_SH/<date>/v003/SC_67_SH.mov`, because the frame token
+was removed twice (`.####`, then `_2130` as if it were a frame number). Exactly one frame token is removed now:
+`SC_67_SH_2130/<date>/v001/SC_67_SH_2130.mov`. A numbered frame file (`SC_67_SH_2130.1001.png`) still loses only its
+frame number. This applies to Save Video (C2C)'s built-in incrementer, the Folder Version Incrementer and its
+on-node preview.
 
 | Node | Description |
 |------|-------------|

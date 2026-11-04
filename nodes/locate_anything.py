@@ -205,6 +205,7 @@ class LocateAnythingGroundingMEC:
                     "x2": x2 / 1000 * W,
                     "y2": y2 / 1000 * H,
                     "label": prompt,
+                    "frame": b,          # A22 L9.136: which frame the box was found in
                 })
 
             annotated = img_np.copy()
@@ -309,7 +310,14 @@ class LocateAnythingToSAMMEC:
                 iy2 = min(H, int(round(y2)))
 
                 if ix2 > ix1 and iy2 > iy1:
-                    mask[:, iy1:iy2, ix1:ix2] = 1.0
+                    # A22 L9.136: a box paints only the frame it was found in (it used to paint every frame, so
+                    # each frame's mask was the union of all frames' boxes). Boxes without "frame" (older
+                    # producers, a single image) keep the old every-frame behaviour.
+                    f = box.get("frame")
+                    if f is None:
+                        mask[:, iy1:iy2, ix1:ix2] = 1.0
+                    elif 0 <= int(f) < B:
+                        mask[int(f), iy1:iy2, ix1:ix2] = 1.0
 
             return (mask,)
 

@@ -44,8 +44,12 @@ PAR_PRESETS: Dict[str, float] = {
 def _resize(img: torch.Tensor, w: int, h: int, filt: str) -> torch.Tensor:
     x = img.permute(0, 3, 1, 2)
     kw = {} if filt in ("nearest", "area") else {"align_corners": False}
-    x = F.interpolate(x, size=(h, w), mode=filt, **kw)
-    return x.permute(0, 2, 3, 1).clamp(0, 1)
+    out = F.interpolate(x, size=(h, w), mode=filt, **kw)
+    if filt == "bicubic":
+        # bicubic rings past its inputs: keep it inside the input's own range. A22 L9.136: a 0..1 clamp on every
+        # filter cut scene-linear EXR highlights (and negatives) on the PAR round trip.
+        out = out.clamp(float(x.amin()), float(x.amax()))
+    return out.permute(0, 2, 3, 1)
 
 
 def _resolve_par(preset: str, pixel_aspect: float) -> float:

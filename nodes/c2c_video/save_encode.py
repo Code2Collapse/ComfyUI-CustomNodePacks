@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from . import media_roots as ROOTS
 from .budget import bytes_per_frame, frames_that_fit
 from .save_formats import FormatSpec, SaveVideoError
 from .save_ocio import transform_chunk
@@ -369,6 +370,11 @@ def resolve_output_path(
             )
         stem = os.path.basename(prefix) or "video"
         rel_sub = sub
+        # A22 L9.136 / D0.35: on a server reachable from other machines a run writes only inside the media roots
+        # (a free subfolder such as "../../x" or an absolute path used to land anywhere); a local server is as before.
+        blocked = ROOTS.check_run_path(os.path.abspath(os.path.join(out_dir, rel_sub)))
+        if blocked:
+            raise SaveVideoError(f"Save Video (C2C): {blocked}")
         if spec.sequence:
             rel_dir = os.path.join(rel_sub, stem).replace("\\", "/")
             full_dir = os.path.join(out_dir, rel_dir)

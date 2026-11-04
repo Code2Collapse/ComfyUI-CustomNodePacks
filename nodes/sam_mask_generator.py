@@ -245,10 +245,13 @@ class SAMMaskGeneratorMEC:
         model_dtype = model_info["dtype"]
 
         # ── Text prompt → bbox via GroundingDINO ───────────────────────
+        # A22 L9.136: a GroundingDINO failure stops the run with the reason (the text prompt used to be dropped
+        # silently). The model-free stand-in cannot read text anyway (L7.98), so there it is still only logged.
+        strict_text = not (isinstance(model_info, dict) and model_info.get("model_free"))
         if text_prompt and text_prompt.strip() and grounding_model != "none":
             text_bbox = self._text_to_bbox(
                 image, text_prompt.strip(), grounding_model,
-                text_threshold, text_box_threshold, target_device,
+                text_threshold, text_box_threshold, target_device, strict=strict_text,
             )
             if text_bbox is not None:
                 # Text-derived bbox supplements existing bbox_json
@@ -260,7 +263,7 @@ class SAMMaskGeneratorMEC:
         if negative_text_prompt and negative_text_prompt.strip() and grounding_model != "none":
             neg_bbox = self._text_to_bbox(
                 image, negative_text_prompt.strip(), grounding_model,
-                text_threshold, text_box_threshold, target_device,
+                text_threshold, text_box_threshold, target_device, strict=strict_text,
             )
             if neg_bbox is not None:
                 # Sample negative points from detected negative region
@@ -389,8 +392,9 @@ class SAMMaskGeneratorMEC:
         predictor = get_sam_predictor(model, model_type, img_np)
 
         if predictor is None:
-            empty = torch.zeros(1, H, W, dtype=torch.float32)
-            return (empty, empty, [0, 0, W, H], 0.0, "No compatible predictor found")
+            # A22 L9.136: an empty mask here flowed into inpainting as if SAM had found nothing
+            raise RuntimeError(f"SAM Mask Generator (MEC): no predictor fits this model ({model_type!r}); load it "
+                               "with SAM Model Loader (MEC) (SAM 2.1) or use ComfyUI core's SAM 3 nodes.")
 
         # ── Use existing mask as starting logits if provided ───────────
         current_mask = None
@@ -443,12 +447,12 @@ class SAMMaskGeneratorMEC:
                     box=iter_box,
                     multimask_output=multimask_output,
                 )
-            except Exception:
+            except Exception as exc:
+                # A22 L9.136: the first pass failing used to return an all-zero mask (_fallback_predict). Later
+                # refinement passes keep the mask of the pass before.
                 if masks_np is None:
-                    masks_np, scores = self._fallback_predict(
-                        model, img_np, iter_coords, iter_labels,
-                        iter_box, multimask_output
-                    )
+                    raise RuntimeError(f"SAM Mask Generator (MEC): SAM prediction failed: {type(exc).__name__}: "
+                                       f"{exc}") from exc
                 break
 
             if masks_np is None:
@@ -543,7 +547,7 @@ class SAMMaskGeneratorMEC:
 
     @staticmethod
     def _text_to_bbox(image, text_prompt, grounding_model, text_threshold,
-                      box_threshold, device):
+                      box_threshold, device, strict=False):
         """Run GroundingDINO to convert text prompt to bounding box.
 
         Returns np.ndarray [x1, y1, x2, y2] or None.
@@ -551,6 +555,9 @@ class SAMMaskGeneratorMEC:
         try:
             gdino_loaded = get_or_load_model(grounding_model, precision="fp32", device=device)
         except Exception as e:
+            if strict:
+                raise RuntimeError(f"SAM Mask Generator (MEC): the text prompt needs GroundingDINO "
+                                   f"({grounding_model}), which failed to load: {e}") from e
             import logging
             logging.getLogger("MEC").warning("[MEC] GroundingDINO load failed: %s", e)
             return None
@@ -591,6 +598,9 @@ class SAMMaskGeneratorMEC:
             return np.array([x1, y1, x2, y2], dtype=np.float32)
 
         except Exception as e:
+            if strict:
+                raise RuntimeError(f"SAM Mask Generator (MEC): GroundingDINO failed on the text prompt "
+                                   f"{text_prompt!r}: {type(e).__name__}: {e}") from e
             import logging
             logging.getLogger("MEC").warning("[MEC] GroundingDINO predict error: %s", e)
             return None

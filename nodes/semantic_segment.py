@@ -207,13 +207,9 @@ class SemanticSegmentMEC:
                 target_indices.add(idx)
 
         if not target_indices:
-            logger.warning(
-                "[MEC] SemanticSegment: no matching classes for '%s'. "
-                "Available: %s",
-                classes_csv,
-                ", ".join(all_classes[1:]),
-            )
-            return (torch.zeros(B, H, W), json.dumps({"error": "no matching classes"}))
+            # A22 L9.136: a typo returned an all-zero mask (and ignored invert); say which classes exist instead
+            raise ValueError(f"Semantic Segment (MEC): no class matches {classes_csv!r}. Available: "
+                             f"{', '.join(all_classes[1:])}.")
 
         masks = []
 

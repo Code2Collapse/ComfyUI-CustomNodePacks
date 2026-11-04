@@ -275,7 +275,8 @@ class ProPainterMEC:
             if images is None or masks is None:
                 raise ValueError("[ProPainterMEC] mode='temporal' requires 'images' and 'masks'.")
             node = _get_temporal_cls()()
-            cm_t = "reinhard" if cm == "off" else (
+            # A22 L9.136: "off" means no colour match (it was mapped to reinhard, so "off" still ran one)
+            cm_t = "none" if cm == "off" else (
                 "lab_transfer" if cm == "lab" else cm)
             if cm_t not in ("none", "reinhard", "lab_transfer"):
                 cm_t = "reinhard"

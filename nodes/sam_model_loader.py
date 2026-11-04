@@ -543,38 +543,41 @@ class SAMModelLoaderMEC:
         # ── Step 2: Build architecture + load weights ──────────────────
         try:
             from sam2.build_sam import build_sam2
+        except ImportError as exc:
+            # A22 L9.136: a raw state dict used to be returned here; every SAM node downstream then produced an empty
+            # mask. Stop in words instead (the loader's caller applies the model-free policy, L7.98).
+            raise RuntimeError(
+                "SAM Model Loader (MEC) needs the sam2 package for SAM 2.1 checkpoints. Install it with: "
+                "pip install git+https://github.com/facebookresearch/sam2.git") from exc
 
-            model = build_sam2(
-                config_file=config_name,
-                ckpt_path=None,      # architecture only
-                device="cpu",
-            )
+        model = build_sam2(
+            config_file=config_name,
+            ckpt_path=None,      # architecture only
+            device="cpu",
+        )
 
-            # Inject weights (strict=False tolerates minor key mismatches
-            # between different SAM2 revisions / fp16 conversions)
-            missing, unexpected = model.load_state_dict(state_dict, strict=False)
-            if missing:
-                logger.debug(f"[MEC] SAM2 missing keys: {len(missing)}")
-            if unexpected:
-                logger.debug(f"[MEC] SAM2 unexpected keys: {len(unexpected)}")
+        # strict=False tolerates minor key mismatches between SAM2 revisions / fp16 conversions - but a checkpoint
+        # that does not fit at all (a SAM 3 file built on the SAM 2.1-large config) would leave random weights and
+        # give garbage masks with no error (A22 L9.136), so a large mismatch is refused.
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        n_model = max(1, len(model.state_dict()))
+        n_ckpt = max(1, len(state_dict))
+        if len(missing) > 0.05 * n_model or len(unexpected) > 0.05 * n_ckpt:
+            raise RuntimeError(
+                f"SAM Model Loader (MEC): {model_name} does not fit the SAM 2.1 architecture it is built on "
+                f"({config_name}): {len(missing)} of {n_model} weights missing, {len(unexpected)} of {n_ckpt} "
+                "checkpoint weights unused. SAM 3 checkpoints need ComfyUI core's SAM 3 nodes; for SAM 2.1 pick the "
+                "matching size (tiny / small / base+ / large).")
+        if missing:
+            logger.debug(f"[MEC] SAM2 missing keys: {len(missing)}")
+        if unexpected:
+            logger.debug(f"[MEC] SAM2 unexpected keys: {len(unexpected)}")
 
-            model = model.to(torch_dtype)
-            if not offload:
-                model = model.to(device)
-            model.eval()
-            return model, "build_sam2"
-
-        except ImportError:
-            logger.error(
-                "[MEC] sam2 package not found. Install with:\n"
-                "  pip install git+https://github.com/facebookresearch/sam2.git"
-            )
-        except Exception as e:
-            logger.warning(f"[MEC] build_sam2 failed: {e}")
-
-        # ── Fallback: return state_dict wrapper ────────────────────────
-        logger.warning("[MEC] Returning raw state_dict — SAM2 inference may fail")
-        return {"state_dict": state_dict, "dtype": torch_dtype, "device": device}, "state_dict_only"
+        model = model.to(torch_dtype)
+        if not offload:
+            model = model.to(device)
+        model.eval()
+        return model, "build_sam2"
 
     # ── State dict loader (safetensors / pt / pth) ────────────────────
     @staticmethod
