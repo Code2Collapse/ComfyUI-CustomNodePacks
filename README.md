@@ -1558,6 +1558,22 @@ an old file). If the key store is unavailable the key stays in the box and a war
   effect (the model returns no scores); its tooltip now says so.
 - **Mask Refine (MEC)**: broken `advanced_overrides_json` stops with a message (it was ignored silently); unknown
   keys still run and are listed in `info` (`overrides_ignored`).
+- **SAM Multi-Mask Picker (MEC)** stops with the reason when SAM cannot run (no predictor, a prediction error,
+  out of memory on the CPU retry too); it returned an empty mask. Its mask thumbnails now refresh whenever the
+  masks change.
+- **SAM Mask Generator (MEC)**: `existing_mask` is used from the first pass (at the default one refinement pass it
+  did nothing), and `score_threshold` really discards: when no mask reaches it the mask is empty and the info says
+  the best score.
+- SAM nodes and Semantic Segment no longer wrap HDR values above 1.0 when they convert the frame for the model.
+- **Mask Placement (MEC)**: `feather_px` applies when the placement has no feather of its own (a fixed 6 px was
+  used), and a missing opencv is reported in words.
+- **Mask Tools (C2C)** edge_spread with no mask wired outputs an empty mask instead of nothing.
+- **Inpaint Crop Pro** `mask prepare` without an image stops with a message when `stitcher` or `cropped_image` is
+  wired (the next node crashed); the mask-only use is unchanged.
+- **Mask Failure Explainer (MEC)**: `ring_width`, `blur_threshold` and `brightness_threshold` now change the
+  analysis (they were ignored).
+- **Video Frame Player (C2C)** shows the right frames when two clips of the same size share black borders (it
+  could show the previous clip).
 
 ---
 

@@ -226,7 +226,7 @@ class SemanticSegmentMEC:
 
         for i in _PB.track(range(B), B, "SemanticSeg"):
             _IC.check()
-            img_np = (image[i].cpu().numpy() * 255).astype(np.uint8)
+            img_np = (np.clip(image[i].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)   # A22 L9.136: no HDR wrap
             pil_img = PILImage.fromarray(img_np[:, :, :3])
             if (inf_h, inf_w) != (H, W):
                 pil_img = pil_img.resize((inf_w, inf_h), PILImage.BILINEAR)
@@ -308,7 +308,7 @@ class SemanticSegmentMEC:
             raise ValueError(f"{exc} Without the model only 'skin' can be found (by colour); "
                              f"'{classes_csv}' needs the model.")
         B, H, W, _C = image.shape
-        masks = [torch.from_numpy(_classic.skin_mask((image[i, ..., :3].cpu().numpy() * 255).astype(np.uint8)))
+        masks = [torch.from_numpy(_classic.skin_mask((np.clip(image[i, ..., :3].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)))
                  for i in range(B)]
         result = torch.stack(masks).clamp(0.0, 1.0)
         if invert:

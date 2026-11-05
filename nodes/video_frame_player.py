@@ -181,6 +181,19 @@ def _apply_crop_bhwc(image: torch.Tensor, cx: float, cy: float, cw: float, ch: f
 #  Node
 # ----------------------------------------------------------------------
 
+
+def _preview_batch_id(frames, prefix: str) -> str:
+    """Content key of a clip's preview thumbnails. A22 L9.136: it hashed the top-left 8x8 pixels of three frames,
+    so two letterboxed clips of one size (black corners) shared a key and the player showed the old clip. Now a
+    strided grid (about 32 x 32 samples) of EVERY frame - cheap, and any visible change moves the key."""
+    import hashlib as _hl
+    f = frames.detach()
+    H, W = int(f.shape[1]), int(f.shape[2])
+    sy, sx = max(1, H // 32), max(1, W // 32)
+    grid = f[:, sy // 2::sy, sx // 2::sx, :].float().clamp(-8.0, 8.0)
+    q = (grid * 1024.0).round().to(torch.int32).cpu().numpy()
+    return _hl.sha256(prefix.encode() + q.tobytes()).hexdigest()[:12]
+
 class VideoFramePlayerMEC:
     """Video frame player + drag-crop + integrated resize.
 
@@ -447,16 +460,7 @@ class VideoFramePlayerMEC:
         # Format: PNG = lossless (production default), JPEG = fast.
         fmt = "png" if str(preview_format).lower() == "png" else "jpeg"
         ext = "png" if fmt == "png" else "jpg"
-        digest_src = (
-            f"{B}x{H}x{W}x{C}_{preview_width}_{fmt}_{preview_quality}_"
-        ).encode()
-        for sample_idx in {0, B // 2, B - 1}:
-            try:
-                sample = (frames[sample_idx, :8, :8, :].detach().cpu().numpy() * 255).astype(np.uint8)
-                digest_src += sample.tobytes()
-            except Exception:
-                pass
-        batch_id = hashlib.sha256(digest_src).hexdigest()[:12]
+        batch_id = _preview_batch_id(frames, f"{B}x{H}x{W}x{C}_{preview_width}_{fmt}_{preview_quality}_")
 
         temp_dir = folder_paths.get_temp_directory()
         previews = []

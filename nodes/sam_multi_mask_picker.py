@@ -193,7 +193,7 @@ class SamMultiMaskPickerMEC:
         B, H, W, C = image.shape
 
         # Convert first image to numpy uint8 for SAM
-        img_np = (image[0].cpu().numpy() * 255).astype(np.uint8)
+        img_np = (np.clip(image[0].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)   # A22 L9.136: no HDR wrap
 
         # Parse prompts
         points_list = parse_points_json(points_json)
@@ -259,7 +259,9 @@ class SamMultiMaskPickerMEC:
             with torch.no_grad():
                 predictor = get_sam_predictor(model, model_type, img_np)
                 if predictor is None:
-                    return self._empty_result(H, W, "No compatible SAM predictor found")
+                    # A22 L9.136: these returned an EMPTY mask (it flowed into inpaint with no error)
+                    raise RuntimeError(f"SAM Multi-Mask Picker (MEC): no predictor fits this model ({model_type!r}); "
+                                       "load it with SAM Model Loader (MEC) or pick a SAM 1 / SAM 2 model.")
 
                 try:
                     masks_np, scores_np, _ = sam_predict(
@@ -270,9 +272,11 @@ class SamMultiMaskPickerMEC:
                         box=box_np,
                         multimask_output=True,
                     )
+                except torch.cuda.OutOfMemoryError:
+                    raise
                 except Exception as e:
-                    logger.warning("[MEC] SAM predict failed: %s", e)
-                    return self._empty_result(H, W, f"SAM predict error: {e}")
+                    raise RuntimeError(f"SAM Multi-Mask Picker (MEC): SAM prediction failed: "
+                                       f"{type(e).__name__}: {e}") from e
 
         except torch.cuda.OutOfMemoryError:
             logger.warning("[MEC] OOM during SAM inference, retrying on CPU")
@@ -305,7 +309,8 @@ class SamMultiMaskPickerMEC:
                 with torch.no_grad():
                     predictor = get_sam_predictor(model, model_type, img_np)
                     if predictor is None:
-                        return self._empty_result(H, W, "No predictor after OOM fallback")
+                        raise RuntimeError("SAM Multi-Mask Picker (MEC): out of GPU memory, and no predictor fits "
+                                           "the model on the CPU either.")
 
                     masks_np, scores_np, _ = sam_predict(
                         predictor,
@@ -316,8 +321,8 @@ class SamMultiMaskPickerMEC:
                         multimask_output=True,
                     )
             except Exception as e:
-                logger.error("[MEC] CPU fallback also failed: %s", e)
-                return self._empty_result(H, W, f"CPU fallback failed: {e}")
+                raise RuntimeError(f"SAM Multi-Mask Picker (MEC): out of GPU memory, and the CPU retry failed too: "
+                                   f"{type(e).__name__}: {e}") from e
 
         finally:
             if loaded_here and model is not None:
@@ -386,12 +391,12 @@ class SamMultiMaskPickerMEC:
             try:
                 temp_dir = folder_paths.get_temp_directory()
                 os.makedirs(temp_dir, exist_ok=True)
-                # Stable hash of the inputs so reusing the same prompts hits the
-                # browser cache instead of re-uploading three PNGs every run.
+                # Stable name per mask CONTENT, so an unchanged result hits the browser cache. A22 L9.136: it was
+                # keyed on the first 16 KB of the image + the prompts, so different masks could reuse a cached name.
+                _m = np.asarray(masks_np)
                 key_blob = (
-                    img_np.tobytes()[:16384]
-                    + str(points_list).encode()
-                    + str(box_np.tolist() if box_np is not None else None).encode()
+                    str(_m.shape).encode()
+                    + np.packbits((np.clip(_m, 0.0, 1.0) * 255.0).astype(np.uint8) > 127).tobytes()
                     + model_name.encode()
                 )
                 digest = hashlib.sha256(key_blob).hexdigest()[:12]

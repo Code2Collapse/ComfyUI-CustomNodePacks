@@ -623,6 +623,8 @@ class MaskToolsMEC:
             return m, None, rep
         if key == "edge_spread":
             img, rep = _engine(key)().execute(self._need(image, "an image", mode), mask=mask, **a)
+            if mask is None:            # A22 L9.136: None went out as the MASK and crashed what was wired to it
+                mask = torch.zeros(img.shape[:3], dtype=torch.float32, device=img.device)
             return mask, img, rep
         if key == "combine":
             (m,) = _engine(key)().combine(self._need(mask, "a mask", mode), self._need(mask_b, "mask_b", mode), **a)

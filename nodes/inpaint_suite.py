@@ -1108,6 +1108,18 @@ def _with_crop_sections(spec):
 #                                  mask=0 -> regenerate)
 # ══════════════════════════════════════════════════════════════════════
 
+def _linked_outputs(prompt, unique_id) -> set:
+    """Output indices of node `unique_id` that another node in the API prompt reads (empty when unknown)."""
+    if not isinstance(prompt, dict) or unique_id is None:
+        return set()
+    uid, out = str(unique_id), set()
+    for node in prompt.values():
+        for v in ((node or {}).get("inputs") or {}).values():
+            if isinstance(v, (list, tuple)) and len(v) == 2 and str(v[0]) == uid and isinstance(v[1], int):
+                out.add(v[1])
+    return out
+
+
 class InpaintCropProMEC:
     """lquesada-style crop + Wan 2.2 Animate-aware extras."""
 
@@ -1275,7 +1287,7 @@ class InpaintCropProMEC:
                                ("mask",)),
             },
             # L7.99 slice 2: which node ran, so the live preview finds this run's masks (no widget)
-            "hidden": {"unique_id": "UNIQUE_ID"},
+            "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT"},
         })
 
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK", "MASK", "STRING", "IMAGE")
@@ -1312,8 +1324,8 @@ class InpaintCropProMEC:
                      fill_masked_area="none",
                      mask=None, optional_context_mask=None,
                      roto_quality: bool = False, preview_frame: int = 0, unique_id=None,
-                     crop_mode: str = "pro", **mode_values):
-        args = {k: v for k, v in locals().items() if k not in ("self", "mode_values")}
+                     crop_mode: str = "pro", prompt=None, **mode_values):
+        args = {k: v for k, v in locals().items() if k not in ("self", "mode_values", "prompt")}
         unknown = set(mode_values) - set(_SMART_CROP_KEYS) - set(_PREPARE_KEYS)
         if unknown:
             raise TypeError(f"inpaint_crop() got unexpected keyword arguments: {sorted(unknown)}")
@@ -1327,7 +1339,7 @@ class InpaintCropProMEC:
         if crop_mode == "mask prepare":
             with torch.no_grad():
                 return self._prepare_crop(image, mask, mv, downscale_algorithm, upscale_algorithm, preview_frame,
-                                          unique_id, live_settings)
+                                          unique_id, live_settings, prompt=prompt)
         if crop_mode != "pro":
             raise ValueError(f"Inpaint Crop Pro: unknown crop_mode {crop_mode!r} (use one of {CROP_MODES}).")
         if image is None:
@@ -1402,7 +1414,7 @@ class InpaintCropProMEC:
 
     # ── L7.65 P08: crop_mode "mask prepare" (the former Inpaint Mask Prepare) ─────────────────────────────────────
     def _prepare_crop(self, image, mask, mv, downscale_algorithm, upscale_algorithm, preview_frame, unique_id,
-                      live_settings):
+                      live_settings, prompt=None):
         if mask is None:
             raise ValueError("Inpaint Crop Pro: connect a mask (crop_mode 'mask prepare').")
         pv = _unprefix(mv, _PREPARE_KEYS, "prepare_")
@@ -1410,6 +1422,12 @@ class InpaintCropProMEC:
         inpaint_mask, stitch_blend_mask, debug_preview, info = InpaintMaskPrepareMEC().prepare_mask(
             mask, reference_image=image, **pv)
         if image is None:                                    # masks only: nothing to crop, nothing to stitch
+            # A22 L9.136: a wired stitcher / cropped_image got None and the node after it crashed far from here
+            wired = _linked_outputs(prompt, unique_id) & {0, 1}
+            if wired:
+                names = " and ".join(("stitcher", "cropped_image")[i] for i in sorted(wired))
+                raise ValueError(f"Inpaint Crop Pro (mask prepare): {names} needs the image input. Connect the "
+                                 "image, or use only the mask outputs.")
             return {"ui": {}, "result": (None, None, inpaint_mask, stitch_blend_mask, info, debug_preview)}
         B, H, W = int(image.shape[0]), int(image.shape[1]), int(image.shape[2])
         Bm = int(stitch_blend_mask.shape[0])

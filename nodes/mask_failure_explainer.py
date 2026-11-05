@@ -141,9 +141,9 @@ def _get_mask_edge_ring(mask: torch.Tensor, ring_width: int = 5) -> torch.Tensor
     return ring
 
 
-def _compute_boundary_contrast(image: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def _compute_boundary_contrast(image: torch.Tensor, mask: torch.Tensor, ring_width: int = 5) -> torch.Tensor:
     """Std of image pixels at mask edge ring, per frame. Returns (B,)."""
-    ring = _get_mask_edge_ring(mask)  # (B,H,W)
+    ring = _get_mask_edge_ring(mask, ring_width=ring_width)  # (B,H,W)
     luma = _compute_luminance(image)  # (B,H,W)
     B = image.shape[0]
     results = []
@@ -157,12 +157,13 @@ def _compute_boundary_contrast(image: torch.Tensor, mask: torch.Tensor) -> torch
     return torch.tensor(results, device=_get_device(image), dtype=image.dtype)
 
 
-def _compute_boundary_color_confusion(image: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def _compute_boundary_color_confusion(image: torch.Tensor, mask: torch.Tensor,
+                                      ring_width: int = 5) -> torch.Tensor:
     """Mean color distance between inside and outside mask at boundary. Returns (B,).
 
     At the mask boundary ring, compare mean color on the mask side vs bg side.
     """
-    ring = _get_mask_edge_ring(mask)  # (B,H,W)
+    ring = _get_mask_edge_ring(mask, ring_width=ring_width)  # (B,H,W)
     binary = (mask > 0.5).float()
     B = image.shape[0]
     results = []
@@ -250,6 +251,9 @@ def _build_problem_heatmap(
     boundary_contrast: torch.Tensor,
     color_confusion: torch.Tensor,
     bg_complexity: torch.Tensor,
+    ring_width: int = 5,
+    dark_t: float = 0.15,
+    blur_t: float = 50.0,
 ) -> torch.Tensor:
     """Build a (B,H,W) heatmap highlighting problematic regions.
 
@@ -264,7 +268,7 @@ def _build_problem_heatmap(
     heatmap = torch.zeros(B, H, W, device=device, dtype=image.dtype)
 
     luma = _compute_luminance(image)  # (B,H,W)
-    ring = _get_mask_edge_ring(mask)  # (B,H,W)
+    ring = _get_mask_edge_ring(mask, ring_width=ring_width)  # (B,H,W)
     bg_mask = (mask <= 0.5).float()
 
     for i in _PB.track(range(B), B, "MaskFailure"):
@@ -272,7 +276,7 @@ def _build_problem_heatmap(
         frame_heat = torch.zeros(H, W, device=device, dtype=image.dtype)
 
         # Dark regions contribute where brightness is low
-        if brightness[i].item() < 0.15:
+        if brightness[i].item() < dark_t:
             dark_map = (1.0 - luma[i]).clamp(0.0, 1.0)
             frame_heat = frame_heat + dark_map * 0.3
 
@@ -292,7 +296,7 @@ def _build_problem_heatmap(
             frame_heat = frame_heat + edges * bg_mask[i] * 0.3
 
         # If blur is bad, add a uniform low-level heat (blur is global)
-        if blur[i].item() < 50.0:
+        if blur[i].item() < blur_t:
             frame_heat = frame_heat + 0.15
 
         # Ensure some signal even if no issues detected (baseline from mask edge)
@@ -576,6 +580,8 @@ def _compute_severity(
     color_confusion: torch.Tensor,
     bg_complexity: torch.Tensor,
     mq: dict | None = None,
+    dark_t: float = 0.15,
+    blur_t: float = 50.0,
 ) -> float:
     """Compute a 0-100 severity score (mean across batch).
 
@@ -592,9 +598,9 @@ def _compute_severity(
 
     score = 0.0
     # Dark scene penalty (only if dark)
-    score += _SEV_W_DARK     * max(0.0, 1.0 - min(b / 0.15, 1.0))
+    score += _SEV_W_DARK     * max(0.0, 1.0 - min(b / max(dark_t, 1e-6), 1.0))
     # Blur penalty
-    score += _SEV_W_BLUR     * max(0.0, 1.0 - min(bl / 50.0, 1.0))
+    score += _SEV_W_BLUR     * max(0.0, 1.0 - min(bl / max(blur_t, 1e-6), 1.0))
     # Low boundary contrast penalty
     score += _SEV_W_CONTRAST * max(0.0, 1.0 - min(bc / 0.05, 1.0))
     # Color confusion penalty
@@ -659,6 +665,8 @@ def _build_explanation(
     severity: float,
     B: int, H: int, W: int,
     mq: dict | None = None,
+    dark_t: float = 0.15,
+    blur_t: float = 50.0,
 ) -> str:
     """Build a detailed, per-frame explanation string with actionable advice."""
     lines = []
@@ -680,15 +688,15 @@ def _build_explanation(
         bg = bg_complexity[i].item()
 
         lines.append(f"--- {frame_prefix} ---")
-        lines.append(f"  Brightness:         {b:.4f}" + (" âš  DARK SCENE" if b < _THRESHOLD_DARK else " ✓"))
-        lines.append(f"  Blur score:         {bl:.2f}" + (" âš  BLURRY" if bl < _THRESHOLD_BLUR else " ✓"))
+        lines.append(f"  Brightness:         {b:.4f}" + (" âš  DARK SCENE" if b < dark_t else " ✓"))
+        lines.append(f"  Blur score:         {bl:.2f}" + (" âš  BLURRY" if bl < blur_t else " ✓"))
         lines.append(f"  Boundary contrast:  {bc:.4f}" + (" âš  LOW CONTRAST" if bc < _THRESHOLD_CONTRAST else " ✓"))
         lines.append(f"  Color confusion:    {cc:.4f}" + (" âš  COLORS TOO SIMILAR" if cc < _THRESHOLD_COLOR else " ✓"))
         lines.append(f"  BG complexity:      {bg:.4f}" + (" âš  BUSY BACKGROUND" if bg > _THRESHOLD_BG else " ✓"))
 
-        if b < _THRESHOLD_DARK:
+        if b < dark_t:
             frame_issues.append("dark_scene")
-        if bl < _THRESHOLD_BLUR:
+        if bl < blur_t:
             frame_issues.append("blurry")
         if bc < _THRESHOLD_CONTRAST:
             frame_issues.append("low_boundary_contrast")
@@ -750,6 +758,8 @@ def _suggest_method(
     color_confusion: torch.Tensor,
     bg_complexity: torch.Tensor,
     mq: dict | None = None,
+    dark_t: float = 0.15,
+    blur_t: float = 50.0,
 ) -> str:
     """Suggest the best masking method based on which conditions triggered."""
     # Average across batch
@@ -789,8 +799,8 @@ def _suggest_method(
         if trunc > _THR_TRUNCATION:
             suggestions.append("Crop/pad input before masking (subject is cut off by frame border)")
 
-    has_dark = b < _THRESHOLD_DARK
-    has_blur = bl < _THRESHOLD_BLUR
+    has_dark = b < dark_t
+    has_blur = bl < blur_t
     has_low_contrast = bc < _THRESHOLD_CONTRAST
     has_color_confusion = cc < _THRESHOLD_COLOR
     has_busy_bg = bg > _THRESHOLD_BG
@@ -956,8 +966,10 @@ class MaskFailureExplainerMEC:
             # ── Run all 5 analysis metrics ────────────────────────────
             brightness = _compute_brightness(image_a)                          # (B,)
             blur = _compute_blur_score(image_a)                                # (B,)
-            boundary_contrast = _compute_boundary_contrast(image_a, mask_a)    # (B,)
-            color_confusion = _compute_boundary_color_confusion(image_a, mask_a) # (B,)
+            # A22 L9.136: ring_width / blur_threshold / brightness_threshold reach the metrics (they changed nothing)
+            rw, dark_t, blur_t = int(ring_width), float(brightness_threshold), float(blur_threshold)
+            boundary_contrast = _compute_boundary_contrast(image_a, mask_a, ring_width=rw)    # (B,)
+            color_confusion = _compute_boundary_color_confusion(image_a, mask_a, ring_width=rw) # (B,)
             bg_complexity = _compute_bg_complexity(image_a, mask_a)             # (B,)
 
             # ── Mask-centric quality metrics (v2) ─────────────────────
@@ -966,19 +978,20 @@ class MaskFailureExplainerMEC:
             # ── Severity score ────────────────────────────────────────
             severity = _compute_severity(
                 brightness, blur, boundary_contrast, color_confusion, bg_complexity,
-                mq=mq,
+                mq=mq, dark_t=dark_t, blur_t=blur_t,
             )
 
             # ── Explanation string ────────────────────────────────────
             explanation = _build_explanation(
                 brightness, blur, boundary_contrast, color_confusion,
-                bg_complexity, severity, B, H, W, mq=mq,
+                bg_complexity, severity, B, H, W, mq=mq, dark_t=dark_t, blur_t=blur_t,
             )
 
             # ── Problem regions heatmap ───────────────────────────────
             heatmap = _build_problem_heatmap(
                 image_a, mask_a, brightness, blur,
                 boundary_contrast, color_confusion, bg_complexity,
+                ring_width=rw, dark_t=dark_t, blur_t=blur_t,
             )
             # Upsample heatmap to match the original image size if we downsampled.
             if heatmap.shape[-2:] != (H, W):
@@ -990,7 +1003,7 @@ class MaskFailureExplainerMEC:
             # ── Suggested method ──────────────────────────────────────
             method = _suggest_method(
                 brightness, blur, boundary_contrast, color_confusion, bg_complexity,
-                mq=mq,
+                mq=mq, dark_t=dark_t, blur_t=blur_t,
             )
 
             return (explanation, heatmap, severity, method)

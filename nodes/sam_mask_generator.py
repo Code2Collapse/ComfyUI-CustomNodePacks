@@ -361,7 +361,7 @@ class SAMMaskGeneratorMEC:
 
         # Convert image: (B, H, W, C) float [0,1] → numpy uint8
         img_tensor = image[0]  # first image in batch
-        img_np = (img_tensor.cpu().numpy() * 255).astype(np.uint8)
+        img_np = (np.clip(img_tensor.cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)   # A22 L9.136: no HDR wrap
         H, W = img_np.shape[:2]
 
         # Parse points (shared utility)
@@ -416,16 +416,17 @@ class SAMMaskGeneratorMEC:
             iter_labels = point_labels
             iter_box = box_np
 
-            # Augment prompts from previous iteration (shared utility)
-            if iteration > 0 and current_mask is not None:
+            # Augment prompts from the previous pass - or, on the first pass, from existing_mask (A22 L9.136: it
+            # was only read from pass 2, so at the default refine_iterations=1 it did nothing)
+            if current_mask is not None:
                 iter_coords, iter_labels, iter_box = augment_prompts_from_mask(
                     current_mask, point_coords, point_labels, box_np,
                     H, W, auto_negative=auto_negative_points,
                 )
 
-            # Prepare mask input (logits from previous pass)
+            # Prepare mask input (logits from the previous pass / existing_mask)
             mask_input = None
-            if iteration > 0 and current_mask is not None:
+            if current_mask is not None:
                 mask_input = mask_to_sam_logits(current_mask)
 
             # Run SAM
@@ -488,9 +489,13 @@ class SAMMaskGeneratorMEC:
         if score_threshold > 0:
             valid = [i for i, s in enumerate(scores_list) if s >= score_threshold]
             if not valid:
-                idx = 0
-            else:
-                idx = valid[0]
+                # A22 L9.136: "discard masks below this score" - the below-threshold mask 0 came back anyway
+                empty = torch.zeros(1, H, W, dtype=torch.float32)
+                best = max(scores_list) if scores_list else 0.0
+                return (empty, all_masks_t, [0, 0, W, H], float(best),
+                        f"No mask reached score_threshold {score_threshold:g} (best score {best:.3f}); "
+                        "lower score_threshold or add prompts.")
+            idx = valid[0]
         else:
             idx = min(mask_index, len(scores_list) - 1)
 
@@ -563,7 +568,7 @@ class SAMMaskGeneratorMEC:
             return None
 
         gdino_model = gdino_loaded["model"]
-        img_np = (image[0].cpu().numpy() * 255).astype(np.uint8)
+        img_np = (np.clip(image[0].cpu().numpy(), 0.0, 1.0) * 255).astype(np.uint8)   # A22 L9.136: no HDR wrap
         H, W = img_np.shape[:2]
 
         try:

@@ -60,14 +60,14 @@ def _to_np_mask(m) -> np.ndarray:
     return np.clip(arr.astype(np.float32), 0.0, 1.0)
 
 
-def _parse_placement(blob: str, W: int, H: int) -> Tuple[np.ndarray, float]:
+def _parse_placement(blob: str, W: int, H: int, default_feather: float = 6.0) -> Tuple[np.ndarray, float]:
     """placement_json -> (4,2) corner array (TL,TR,BR,BL pixel coords) + feather px.
 
     Empty/invalid json -> a centered quad at 40% of the frame so the node
     produces a sensible result before the editor has ever written anything.
     """
     corners = None
-    feather = 6.0
+    feather = float(default_feather)   # A22 L9.136: feather_px when the JSON has none (it was a fixed 6)
     if blob and blob.strip():
         try:
             data = json.loads(blob)
@@ -221,12 +221,14 @@ class MaskPlacementMEC:
                 source_mask=None, source_image=None, ref_image=None, sam_model=None, allow_download=False):
         from ._download_policy import allow_downloads
         with allow_downloads(allow_download):
-            return self._execute_impl(images, prompt, grounding_model, track_mode, anchor_frame, placement_json,
-                                      feather_px, source_mask, source_image, ref_image, sam_model)
+            return self._execute_guarded(images, prompt, grounding_model, track_mode, anchor_frame, placement_json,
+                                         feather_px, source_mask, source_image, ref_image, sam_model)
 
-    def _execute_impl(self, images, prompt, grounding_model, track_mode, anchor_frame,
-                      placement_json, feather_px,
-                      source_mask=None, source_image=None, ref_image=None, sam_model=None):
+    def _execute_guarded(self, images, prompt, grounding_model, track_mode, anchor_frame,
+                         placement_json, feather_px,
+                         source_mask=None, source_image=None, ref_image=None, sam_model=None):
+        # A22 L9.136: this was a second _execute_impl, so the later definition replaced it and the cv2 check and
+        # no_grad never ran (without cv2: an AttributeError on None).
         if not _CV2_OK:
             raise RuntimeError("MaskPlacementMEC needs opencv-python (cv2) installed.")
         with torch.no_grad():
@@ -259,7 +261,7 @@ class MaskPlacementMEC:
         rgb_crop = rgb_src[sy1:sy2, sx1:sx2] if rgb_src is not None else None
         sh, sw = alpha_crop.shape
 
-        corners, feather = _parse_placement(placement_json, W, H)
+        corners, feather = _parse_placement(placement_json, W, H, float(feather_px))
         if feather <= 0:
             feather = float(feather_px)
 
