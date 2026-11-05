@@ -34,6 +34,20 @@ from pathlib import Path
 log = logging.getLogger("c2c_ai.api")
 
 
+def _security():
+    """nodes/magnific/security.py (stdlib only): the pack's local-UI guard."""
+    try:
+        from ..nodes.magnific import security  # custom_nodes.<pack>.c2c_ai -> <pack>.nodes.magnific
+        return security
+    except (ImportError, ValueError):            # tests: c2c_ai imported top-level
+        import importlib.util
+        here = Path(__file__).resolve().parents[1] / "nodes" / "magnific" / "security.py"
+        spec = importlib.util.spec_from_file_location("_c2c_magnific_security", here)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+
 def register_routes(server) -> None:
     try:
         from aiohttp import web
@@ -57,6 +71,17 @@ def register_routes(server) -> None:
     def _err(key: str, msg: str, code: int = 400):
         return web.json_response(
             {"success": False, "error": key, "message": msg}, status=code)
+
+    # A22 L9.139: the key routes change or reveal the user's API keys, and import_txt reads a server path. They
+    # answered ANY client (on --listen, any machine on the network). Same guard as the Magnific account routes:
+    # loopback peer + loopback Host + no cross-site Origin / Sec-Fetch-Site.
+    _local_ui = _security().is_local_ui_origin
+
+    def _refuse_remote(req):
+        if _local_ui(req.headers, req.remote):
+            return None
+        return _err("LOCAL_UI_ONLY", "API keys can be managed only from the ComfyUI page on this machine "
+                                     "(http://127.0.0.1 or localhost).", code=403)
 
     # Track D.1 — translate a raw error string through the deterministic
     # rule pack and return the strict-JSON shape /c2c/doctor/explain
@@ -348,10 +373,16 @@ def register_routes(server) -> None:
     # ------------------------------------------------------------- keys
     @routes.get("/c2c/ai/keys/list")
     async def _keys_list(_req):
+        refused = _refuse_remote(_req)
+        if refused is not None:
+            return refused
         return _ok({"keys": kc.list_set_keys()})
 
     @routes.post("/c2c/ai/keys/set")
     async def _keys_set(req):
+        refused = _refuse_remote(req)
+        if refused is not None:
+            return refused
         body = await req.json()
         name = body.get("name") or ""
         value = body.get("value") or ""
@@ -367,6 +398,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/keys/delete")
     async def _keys_delete(req):
+        refused = _refuse_remote(req)
+        if refused is not None:
+            return refused
         body = await req.json()
         name = body.get("name") or ""
         ok = kc.delete(name)
@@ -374,6 +408,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/keys/import_txt")
     async def _keys_import_txt(req):
+        refused = _refuse_remote(req)
+        if refused is not None:
+            return refused
         body = await req.json()
         path = body.get("path") or ""
         if not path or not os.path.isfile(path):

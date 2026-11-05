@@ -1523,6 +1523,13 @@ pasted into it, or found in a workflow saved by an older version, is moved into 
 cleared, so the key is not saved in the workflow or in the image metadata (save the workflow again to remove it from
 an old file). If the key store is unavailable the key stays in the box and a warning says it will be saved.
 
+#### AI keys can be managed only from this machine (2026-11-05)
+
+Setting, deleting, importing or listing the C2C AI keys (`/c2c/ai/keys/...`) now answers only the ComfyUI page
+opened on this machine (127.0.0.1 or localhost), the same rule as the Magnific account routes. Before, on a server
+started with `--listen`, any machine on the network could overwrite or delete your keys, and the import route
+read any file path. Through an SSH tunnel the page still counts as local.
+
 #### Plain errors instead of silent fallbacks (2026-11-04)
 
 - **VAE Merge (MEC)** stops with the reason when a merge cannot be built (unreadable input, weights that do not fit,
