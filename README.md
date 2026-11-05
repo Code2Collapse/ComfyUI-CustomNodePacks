@@ -1531,6 +1531,11 @@ an old file). If the key store is unavailable the key stays in the box and a war
   folder (a typo could create up to 999,999 folders). Smaller values create every folder, as before.
 - **C2C Vault**: a damaged or truncated vault shows "the vault payload is damaged or incomplete" instead of a raw
   decoding error.
+- **C2C Farm Submit**: the same workflow on the same backend, profile and project reuses the job that is already
+  running or finished, instead of uploading and paying for it again (ComfyUI can drop the node's cache between
+  runs). The new `force_resubmit` input (off by default) always sends a new job.
+- **Folder Incrementer**: in an API run with no source widget filled, re-queuing now moves to the next version
+  when the shot's folder (found from the workflow) got a new one; it could keep returning the old version.
 
 #### AI keys can be managed only from this machine (2026-11-05)
 

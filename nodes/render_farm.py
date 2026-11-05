@@ -79,6 +79,14 @@ class C2C_Submit:
                                "immediately and track it in the C2C Farm dashboard."}),
                 "timeout_minutes": ("INT", {"default": 120, "min": 1, "max": 1440}),
             },
+            "optional": {
+                # A22 L9.135, appended: an identical submission reuses the earlier job (no second paid render)
+                "force_resubmit": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Off: the same workflow on the same backend / profile / project reuses the job "
+                               "already running or finished (no second upload or paid render). On: always "
+                               "spool a new job."}),
+            },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
@@ -89,7 +97,7 @@ class C2C_Submit:
     DESCRIPTION = "Dispatch a full workflow JSON to a remote ComfyUI render-farm backend."
 
     def submit(self, prompt_json, backend, compute_profile, priority, project_name,
-               wait_for_completion, timeout_minutes, unique_id=None):
+               wait_for_completion, timeout_minutes, unique_id=None, force_resubmit=False):
         from ..renderfarm import courier, preflight
         from ..renderfarm.backends import get_adapter
         from ..renderfarm.spooler.queue_manager import Job, get_queue_manager
@@ -116,6 +124,21 @@ class C2C_Submit:
                 "C2C Farm: prompt_json is not a workflow. Export with 'Save (API Format)' "
                 "and paste/pipe the JSON object here.")
 
+        qm = get_queue_manager()
+        fp = Job.fingerprint_of(prompt, backend, compute_profile, project_name, user["name"])
+        reused = None if force_resubmit else qm.find_reusable(fp)
+        if reused is not None:
+            # A22 L9.135: the same work again (core dropped the node's cache) - no second upload, no second paid job
+            _progress_event(unique_id, 0.15, f"same job as {reused.job_id}: reusing it")
+            job = reused
+            info = {"job_id": job.job_id, "backend": backend, "user": user["name"],
+                    "compute_profile": compute_profile, "priority": int(priority), "uploaded_media": 0,
+                    "reused": True}
+            if not wait_for_completion:
+                return (job.job_id, "\n".join(job.result_paths),
+                        json.dumps({**info, "status": job.status}, indent=2))
+            return self._wait(job, info, backend, timeout_minutes, unique_id)
+
         adapter = get_adapter(backend)
         _progress_event(unique_id, 0.05, "pre-flight node check")
         preflight.validate_backend_nodes(prompt, adapter, backend)  # fatality preventer
@@ -125,8 +148,7 @@ class C2C_Submit:
 
         job = Job(prompt_json=prompt, backend_name=backend, user=user["name"],
                   project_name=project_name, priority=int(priority),
-                  compute_profile=compute_profile)
-        qm = get_queue_manager()
+                  compute_profile=compute_profile, fingerprint=fp)
         qm.submit(job)
         info = {"job_id": job.job_id, "backend": backend, "user": user["name"],
                 "compute_profile": compute_profile, "priority": int(priority),
@@ -135,7 +157,10 @@ class C2C_Submit:
         if not wait_for_completion:
             _progress_event(unique_id, 1.0, f"spooled {job.job_id}")
             return (job.job_id, "", json.dumps({**info, "status": "spooled"}, indent=2))
+        return self._wait(job, info, backend, timeout_minutes, unique_id)
 
+    @staticmethod
+    def _wait(job, info, backend, timeout_minutes, unique_id):
         deadline = time.time() + timeout_minutes * 60
         while not job.done.wait(timeout=2.0):
             if time.time() > deadline:

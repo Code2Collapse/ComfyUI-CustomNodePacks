@@ -43,6 +43,16 @@ class Job:
     progress: float | None = None   # 0..1 while running, None when unknown
     result_paths: list = field(default_factory=list)
     done: threading.Event = field(default_factory=threading.Event, repr=False)
+    fingerprint: str = ""           # A22 L9.135: same work = same fingerprint (reuse instead of a second paid job)
+
+    @staticmethod
+    def fingerprint_of(prompt_json, backend_name, compute_profile, project_name, user) -> str:
+        """Content key of a submission: the prompt (key order ignored) + where and as whom it runs."""
+        import hashlib
+        import json as _json
+        blob = _json.dumps({"p": prompt_json, "b": backend_name, "c": compute_profile, "j": project_name,
+                            "u": user}, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()
 
     def sort_key(self):
         return (-int(self.priority), self.submitted_at, self.seq)
@@ -139,6 +149,20 @@ class QueueManager:
         log.info("spooled job %s (user=%s prio=%s backend=%s)",
                  job.job_id, job.user, job.priority, job.backend_name)
         return job
+
+    def find_reusable(self, fingerprint: str) -> Job | None:
+        """A live (queued / running) or COMPLETED job with this fingerprint, newest first; failed / cancelled jobs
+        are never reused (A22 L9.135: a re-queue spooled - and billed - the same remote job again)."""
+        if not fingerprint:
+            return None
+        with self._lock:
+            for j in list(self._active.values()) + list(self._pending):
+                if j.fingerprint == fingerprint:
+                    return j
+            for j in self._history:
+                if j.fingerprint == fingerprint and j.status == "complete":
+                    return j
+        return None
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:

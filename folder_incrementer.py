@@ -672,6 +672,21 @@ def _files_fingerprint(date_dir) -> str:
     return "|".join(parts)
 
 
+def _today_versions_fingerprint(base_dir, today_date, prefix, padding) -> str:
+    """Today's version folders of every first-level folder of base_dir (no recursion)."""
+    parts = []
+    try:
+        with os.scandir(base_dir) as it:
+            for e in it:
+                if e.is_dir():
+                    day = Path(e.path) / today_date
+                    if day.is_dir():
+                        parts.append(e.name + ":" + dir_version_fingerprint(day, prefix, padding))
+    except OSError:
+        return "none"
+    return "|".join(sorted(parts))
+
+
 class FolderIncrementer:
     """
     Automatic dynamic file output management node.
@@ -941,6 +956,11 @@ class FolderIncrementer:
             folder_name = _sanitize_folder_name(_format_source_name(raw_stem, name_format), fallback=label or "output")
         else:
             folder_name = _sanitize_folder_name(label, fallback="default")
+            if (not source_filename and str(kwargs.get("source_choice", "auto")).lower() != "custom"):
+                # A22 L9.135: the name will come from the prompt scan at run time, which IS_CHANGED cannot do (core
+                # hands it PROMPT = {}). Fingerprint today's versions under every first-level folder of the output
+                # root (one listing, no walk), so a new version in the scanned shot's folder changes the key.
+                h.update(_today_versions_fingerprint(base_dir, today_date, prefix, padding).encode())
         # `folder` suffix_mode versions in a SEPARATE top folder — fingerprint
         # that one so the cache key tracks the right v### counter.
         suffix = str(kwargs.get("suffix", "") or "").strip()
