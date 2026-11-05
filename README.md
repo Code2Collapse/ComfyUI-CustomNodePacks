@@ -1523,6 +1523,15 @@ pasted into it, or found in a workflow saved by an older version, is moved into 
 cleared, so the key is not saved in the workflow or in the image metadata (save the workflow again to remove it from
 an old file). If the key store is unavailable the key stays in the box and a warning says it will be saved.
 
+#### Fixed 2026-11-05
+
+- **Nano Banana (C2C)**: when one call of a batch fails, the images already generated (and billed) are returned,
+  and `info` says which call failed (`partial`). It used to return nothing. A failure on the first call still stops.
+- **Folder Version Control / Folder Incrementer Set**: `set` with a value above 999 creates only that version's
+  folder (a typo could create up to 999,999 folders). Smaller values create every folder, as before.
+- **C2C Vault**: a damaged or truncated vault shows "the vault payload is damaged or incomplete" instead of a raw
+  decoding error.
+
 #### AI keys can be managed only from this machine (2026-11-05)
 
 Setting, deleting, importing or listing the C2C AI keys (`/c2c/ai/keys/...`) now answers only the ComfyUI page

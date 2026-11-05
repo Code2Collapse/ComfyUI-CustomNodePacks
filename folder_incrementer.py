@@ -1299,6 +1299,17 @@ class FolderIncrementerReset:
         return (f"'{safe_label}/{today_date}': {current} version(s) exist – next will be v{str(next_ver).zfill(3)}", current)
 
 
+_MAX_SET_FOLDERS = 999
+
+
+def _versions_to_create(value) -> range:
+    """Version folders a 'set' creates. A22 L9.135: value can be up to 999999 and created that many folders (a typo
+    made ~1M directories). Up to 999 every folder is made, as before; above, only the highest one (the next version
+    is the highest + 1 either way)."""
+    v = int(value)
+    return range(1, v + 1) if v <= _MAX_SET_FOLDERS else range(v, v + 1)
+
+
 class FolderIncrementerSet:
     # DEPRECATED: merged into FolderVersionControl, which does both jobs
     # behind one `action` combo. Kept registered so saved workflows still
@@ -1369,7 +1380,7 @@ class FolderIncrementerSet:
         today_date = datetime.now().strftime(fmt)
         safe_label = _sanitize_folder_name(label, fallback="default")
         folder = base_dir / safe_label / today_date
-        for i in range(1, value + 1):
+        for i in _versions_to_create(value):
             ver_dir = folder / f"{prefix}{str(i).zfill(padding)}"
             ver_dir.mkdir(parents=True, exist_ok=True)
         next_ver = value + 1
@@ -1564,7 +1575,7 @@ class FolderVersionControl:
         where = f"'{safe_label}/{today_date}'"
 
         if action == "set":
-            for i in range(1, int(value) + 1):
+            for i in _versions_to_create(value):
                 (scan_dir / f"{prefix}{str(i).zfill(padding)}").mkdir(
                     parents=True, exist_ok=True)
             nxt = int(value) + 1

@@ -325,7 +325,10 @@ def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
 
     from .vault_crypto import MAGIC, NONCE_LEN, _unpack_header
 
-    blob = base64.b64decode(payload.encode("ascii"), validate=True)
+    try:
+        blob = base64.b64decode(payload.encode("ascii"), validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:      # A22 L9.135: a raw binascii error reached the UI
+        raise VaultError("The vault payload is damaged or incomplete - copy the vault node again.") from exc
     if not blob.startswith(MAGIC):
         raise VaultError("Not a C2C vault payload.")
     # _unpack_header returns (header, vault_id, salt, iterations, boundary_hash, header_len, mode): unpacking six

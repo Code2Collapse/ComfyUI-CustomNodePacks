@@ -389,48 +389,58 @@ class NanoBananaC2C:
         pbar = ProgressBar(int(batch_count))
         t0 = time.perf_counter()
 
+        partial = ""
         for b in range(int(batch_count)):
-            body = json.dumps(payload).encode()
-            req = urllib.request.Request(
-                url, data=body, method="POST",
-                headers={"Content-Type": "application/json",
-                         "x-goog-api-key": key})
             try:
-                with urllib.request.urlopen(req, timeout=420) as resp:
-                    data = json.loads(resp.read().decode())
-            except urllib.error.HTTPError as e:
-                raise RuntimeError(_humanise_http(e.code, e.read().decode(errors="replace"))) from None
-            except urllib.error.URLError as e:
-                raise RuntimeError("Could not reach the Gemini API (network/DNS/"
-                                   f"firewall): {getattr(e, 'reason', e)}") from None
+                body = json.dumps(payload).encode()
+                req = urllib.request.Request(
+                    url, data=body, method="POST",
+                    headers={"Content-Type": "application/json",
+                             "x-goog-api-key": key})
+                try:
+                    with urllib.request.urlopen(req, timeout=420) as resp:
+                        data = json.loads(resp.read().decode())
+                except urllib.error.HTTPError as e:
+                    raise RuntimeError(_humanise_http(e.code, e.read().decode(errors="replace"))) from None
+                except urllib.error.URLError as e:
+                    raise RuntimeError("Could not reach the Gemini API (network/DNS/"
+                                       f"firewall): {getattr(e, 'reason', e)}") from None
 
-            fb = data.get("promptFeedback") or {}
-            if fb.get("blockReason"):
-                raise RuntimeError("Gemini blocked this prompt (%s). Rephrase the "
-                                   "request or remove restricted content."
-                                   % fb["blockReason"])
-            usage = data.get("usageMetadata", usage)
+                fb = data.get("promptFeedback") or {}
+                if fb.get("blockReason"):
+                    raise RuntimeError("Gemini blocked this prompt (%s). Rephrase the "
+                                       "request or remove restricted content."
+                                       % fb["blockReason"])
+                usage = data.get("usageMetadata", usage)
 
-            cands = data.get("candidates") or []
-            if not cands:
-                raise RuntimeError("Gemini returned no result for this prompt. "
-                                   "Try rephrasing or a different model.")
-            fin = str(cands[0].get("finishReason", ""))
-            got_img = False
-            for part in (cands[0].get("content") or {}).get("parts", []):
-                inline = part.get("inlineData") or part.get("inline_data")
-                if inline and inline.get("data"):
-                    out_imgs.append(_png_b64_to_tensor(inline["data"]))
-                    got_img = True
-                elif part.get("text"):
-                    texts.append(part["text"])
-            if not got_img:
-                if fin in ("SAFETY", "IMAGE_SAFETY", "PROHIBITED_CONTENT", "RECITATION"):
-                    raise RuntimeError("Gemini refused to render this image "
-                                       f"({fin}). Adjust the prompt/references.")
-                raise RuntimeError("Gemini answered with text only — no image. "
-                                   "Response: " + (" ".join(texts)[:200] or fin or "empty"))
-            pbar.update_absolute(b + 1)
+                cands = data.get("candidates") or []
+                if not cands:
+                    raise RuntimeError("Gemini returned no result for this prompt. "
+                                       "Try rephrasing or a different model.")
+                fin = str(cands[0].get("finishReason", ""))
+                got_img = False
+                for part in (cands[0].get("content") or {}).get("parts", []):
+                    inline = part.get("inlineData") or part.get("inline_data")
+                    if inline and inline.get("data"):
+                        out_imgs.append(_png_b64_to_tensor(inline["data"]))
+                        got_img = True
+                    elif part.get("text"):
+                        texts.append(part["text"])
+                if not got_img:
+                    if fin in ("SAFETY", "IMAGE_SAFETY", "PROHIBITED_CONTENT", "RECITATION"):
+                        raise RuntimeError("Gemini refused to render this image "
+                                           f"({fin}). Adjust the prompt/references.")
+                    raise RuntimeError("Gemini answered with text only — no image. "
+                                       "Response: " + (" ".join(texts)[:200] or fin or "empty"))
+                pbar.update_absolute(b + 1)
+
+            except Exception as exc:  # noqa: BLE001
+                # A22 L9.135: a failure on call k threw away the k-1 images already generated (and billed)
+                if not out_imgs:
+                    raise
+                partial = f"stopped after {len(out_imgs)} image(s): call {b + 1} failed - {exc}"
+                log.warning("[NanoBanana] %s", partial)
+                break
 
         # Stack (resize any stragglers to the first image's size).
         h0, w0 = out_imgs[0].shape[0], out_imgs[0].shape[1]
@@ -450,6 +460,7 @@ class NanoBananaC2C:
             "reference_images": len(refs), "images_out": batch.shape[0],
             "size": f"{w0}x{h0}", "latency_s": round(time.perf_counter() - t0, 2),
             "tokens": usage.get("totalTokenCount"),
+            **({"partial": partial} if partial else {}),
         })
         log.info("[NanoBanana] %s", info)
         return (batch, "\n".join(texts).strip(), info)

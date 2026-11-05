@@ -348,5 +348,8 @@ def unseal_with_password(payload: str, password: str, *, vault_id: str | None = 
 
 def payload_mode(payload: str) -> int:
     """MODE_LOCKED or MODE_SEALED, readable without any key."""
-    blob = base64.b64decode(payload.encode("ascii"), validate=True)
+    try:
+        blob = base64.b64decode(payload.encode("ascii"), validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:      # A22 L9.135: a raw binascii error reached the UI
+        raise VaultError("The vault payload is damaged or incomplete - copy the vault node again.") from exc
     return _unpack_header(blob)[6]
