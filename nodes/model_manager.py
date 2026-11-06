@@ -933,25 +933,19 @@ def _load_sec(path: str, reg: dict, dtype: torch.dtype, device: str):
     """Load SeC model (MLLM + SAM2 grounding encoder).
 
     Supports single-file safetensors (fp8/fp16/bf16/fp32) and sharded
-    directory models.  Uses the SeC inference package from third_party.
+    directory models.  Uses the SeC inference engine committed in the pack
+    (nodes/sec_engine, ported from Comfyui-SecNodes - L7.90; it used to load from
+    the gitignored third_party/ clone, so it failed on every fresh install).
     """
-    # Import SeC components — look in third_party first, then installed package
-    _sec_pkg = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "third_party", "Comfyui-SecNodes",
-    )
-    import sys
-    if _sec_pkg not in sys.path and os.path.isdir(_sec_pkg):
-        sys.path.insert(0, _sec_pkg)
-
     try:
-        from inference.configuration_sec import SeCConfig
-        from inference.modeling_sec import SeCModel
-    except ImportError:
+        from .sec_engine.configuration_sec import SeCConfig
+        from .sec_engine.modeling_sec import SeCModel
+    except ImportError as e:
         raise RuntimeError(
-            "SeC inference package not found.  Ensure third_party/Comfyui-SecNodes "
-            "is present or install the sec inference package."
-        )
+            f"The SeC engine could not be imported ({type(e).__name__}: {e}). "
+            "It needs transformers, accelerate, timm and einops; install the missing package "
+            "into ComfyUI's Python and restart."
+        ) from e
     try:
         from transformers import AutoTokenizer
     except ImportError:
@@ -994,11 +988,9 @@ def _load_sec(path: str, reg: dict, dtype: torch.dtype, device: str):
     elif "bf16" in path_lower:
         precision_str = "bf16"
 
-    # Config path — use the third_party package config
-    config_path = os.path.join(_sec_pkg, "model_config", "SeC-4B")
-    if not os.path.isdir(config_path):
-        # Fallback: use the model directory itself if sharded
-        config_path = path if is_directory else os.path.dirname(path)
+    # Config + tokenizer: the SeC-4B files shipped with the engine, as the reference wrapper does
+    # (the old path model_config/SeC-4B never existed, so single-file models had no config at all).
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sec_engine", "model_config")
 
     # Map precision to torch dtype
     dtype_map = {
@@ -1069,7 +1061,7 @@ def _load_sec(path: str, reg: dict, dtype: torch.dtype, device: str):
         model = SeCModel.from_pretrained(path, **load_kwargs).eval()
 
     # Set up tokenizer and prepare for generation
-    tokenizer = AutoTokenizer.from_pretrained(config_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(config_path)  # Qwen2 tokenizer: no remote code needed
     model.preparing_for_generation(tokenizer=tokenizer, torch_dtype=torch_dtype)
 
     # Store metadata for potential reload

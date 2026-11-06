@@ -147,3 +147,14 @@ Vendored third-party packages (under third_party/):
       Source:   ComfyUI-WanNodeExperiments, nodes/wan_director/features/_local_vae_hdr.py
       License:  Apache-2.0 (permissive -> this pack, attribution kept in the file header)
       Usage:    used by C2CVAEQualityDecode's spatial tiling (ledger L7.39).
+
+  * SeC inference engine (nodes/sec_engine/)
+      Authors:  9nate-drake (Comfyui-SecNodes); OpenIXCLab (SeC); OpenGVLab
+                (InternVL); the InternLM team; Meta Platforms (SAM 2)
+      Source:   https://github.com/9nate-drake/Comfyui-SecNodes (commit
+                af39e6260bc414873fbb2dc8df355904d1609754, inference/ + model_config/)
+      License:  Apache-2.0 (Comfyui-SecNodes, SeC, InternLM, SAM 2) and MIT
+                (InternVL files); every file keeps its original notice under a
+                "PORTED FROM" header. Copy: THIRD_PARTY_LICENSES/Comfyui-SecNodes-LICENSE.txt
+      Usage:    the "SeC + MatAnyone2" engine of Mask Ops loads SeC-4B through it
+                (L7.90). Changes are listed in nodes/sec_engine/README_PORT.md.

@@ -317,6 +317,10 @@ Run SAM inference and view **all 3 candidate masks** side-by-side with IoU score
 
 One-node dispatcher for **SAM 2.1, SAM 3, SeC, VideoMaMa** with automatic image vs. video detection.
 
+> **SeC models currently run on SAM 3 + text prompt.** The SeC reasoning model is not wired into this node yet
+> (ledger L9.152); the ComfyUI log says so (the `info` output does not yet). VideoMaMa is non-commercial (CC BY-NC 4.0) and is
+> not bundled (L9.151).
+
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `model_name` | — | Model selector |
@@ -360,7 +364,9 @@ Mask + Matting outputs.
 
 #### SeC + MatAnyone2 (a backend of Mask + Matting)
 
-End-to-end pipeline: **SeC MLLM segmentation → MatAnyone2 temporal alpha matting**. Since L7.65 P05 this is Mask +
+End-to-end pipeline: **segmentation → MatAnyone2 temporal alpha matting**. A SeC model choice currently segments with
+SAM 3 + text prompt: the SeC engine ships in the pack (`nodes/sec_engine`, L7.90) but is not wired into this backend
+yet (L9.152). Since L7.65 P05 this is Mask +
 Matting (`MaskOpsMEC`) with `backend` = `SeC + MatAnyone2`; saved SeC + MatAnyone2 Pipeline nodes migrate into it
 when a workflow loads, with the same results.
 

@@ -153,6 +153,13 @@ that, and the claim predates this file.
 - **ComfyUI-Video-Stabilizer** by nomadoor and contributors (MIT) - the stabiliser engine (Lucas-Kanade and DIS
   optical-flow backends) is in `nodes/video_stabilizer/` with its own `LICENSE`, used by the Video Stabilizer nodes.
   <https://github.com/nomadoor/ComfyUI-Video-Stabilizer>
+- **Comfyui-SecNodes** by 9nate-drake (Apache-2.0), with **SeC** by OpenIXCLab (Apache-2.0), **InternVL** by OpenGVLab
+  (MIT), **InternLM** (Apache-2.0) and **SAM 2** by Meta (Apache-2.0) - the SeC inference engine and the SeC-4B
+  config / tokenizer files are in `nodes/sec_engine/`, used by Mask Ops' "SeC + MatAnyone2" engine (L7.90).
+  <https://github.com/9nate-drake/Comfyui-SecNodes>. Two files in it carry older upstream code:
+  `flash_attention.py` from **flash-attention** by Tri Dao / Dao-AILab (BSD-3-Clause,
+  <https://github.com/Dao-AILab/flash-attention>; used only when the optional flash_attn package is installed) and
+  `sam2/utils/amg.py` from **Segment Anything** by Meta (Apache-2.0, <https://github.com/facebookresearch/segment-anything>).
 
 ### QR Code generator — Project Nayuki
 <https://github.com/nayuki/QR-Code-generator> · **MIT**, Copyright (c) Project Nayuki
