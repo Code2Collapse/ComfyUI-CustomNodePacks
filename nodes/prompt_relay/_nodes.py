@@ -309,7 +309,10 @@ class PromptRelayEncodeC2C:
     CATEGORY = _CATEGORY
     DESCRIPTION = (
         "Unified Prompt Relay encoder (native / smart / kijai). Dynamic "
-        "sockets via the JS extension."
+        "sockets via the JS extension. kijai backend: the segment masks are "
+        "patched INTO the loaded Kijai model (his sampler gives no per-run hook), "
+        "so they stay after you delete this node - run 'Prompt Relay Restore "
+        "(Kijai)' on the model, or reload it, to remove them."
     )
 
     def execute(self, backend, global_prompt, epsilon,

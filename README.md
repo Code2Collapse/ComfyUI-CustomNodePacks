@@ -1534,6 +1534,9 @@ an old file). If the key store is unavailable the key stays in the box and a war
 - **C2C Farm Submit**: the same workflow on the same backend, profile and project reuses the job that is already
   running or finished, instead of uploading and paying for it again (ComfyUI can drop the node's cache between
   runs). The new `force_resubmit` input (off by default) always sends a new job.
+- **Prompt Relay (kijai backend)**: the masks are patched into the loaded Kijai model, because his sampler offers no
+  per-run hook (checked against WanVideoWrapper nodes_sampler.py). Deleting the node therefore does not remove
+  them; run **Prompt Relay Restore (Kijai)** on the model or reload it. The node now says so.
 - **Folder Incrementer**: in an API run with no source widget filled, re-queuing now moves to the next version
   when the shot's folder (found from the workflow) got a new one; it could keep returning the old version.
 
