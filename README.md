@@ -1560,6 +1560,13 @@ read any file path. Through an SSH tunnel the page still counts as local.
   out-of-memory case it changed that input VAE in place.
 - **Control AOV (C2C)** stops when a pass you selected (depth, pose, normal, SAM matte) produces nothing, and names
   the backend's error. It used to hand ControlNet an all-black map. Passes left on `off` still output black.
+- **Control AOV (C2C)** has a new last input, `allow_download` (off by default; saved workflows keep their values).
+  Without it no backend downloads anything: an installed copy (a models folder or the Hugging Face cache) is used, or
+  the info output says what is missing. Before, Depth Anything / DepthCrafter / NormalCrafter / DVD fetched weights
+  (several GB, DVD's are non-commercial) on first use without asking. Depth-Pro now runs through transformers' own
+  model when Apple's package is not installed, and is returned as inverse depth (near = bright) like the other depth
+  backends; Depth Anything 3 and DVD say how to install them instead of pointing at a `third_party` folder that a
+  normal install never has.
 - **Tile Plan / Tile Split / Tile Merge / Identity Lock** cache again: an unchanged re-queue no longer re-runs them
   (and the model between them) or logs an IS_CHANGED warning every time.
 - **SAM Model Loader (MEC)** refuses a checkpoint that does not fit the SAM 2.1 architecture (a SAM 3 file used to

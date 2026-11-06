@@ -450,6 +450,11 @@ class ControlAOVC2C:
                 "normal": ("IMAGE", {"tooltip": "Your own normal map (NormalCrafter...). Wins over normal_model."}),
                 "id_matte": ("IMAGE", {"tooltip": "Your own ID / segmentation matte (SAM, cryptomatte). Wins over "
                                                   "id_matte_model."}),
+                # L9.153 (owner D7.91): appended last, default off - saved workflows keep their values.
+                "allow_download": ("BOOLEAN", {"default": False,
+                                "tooltip": "Let the model backends download missing weights from Hugging Face (some are "
+                                           "many GB). Off: only installed copies are used (a models folder or the "
+                                           "Hugging Face cache) and the info output says what is missing."}),
             },
         }
 
@@ -480,7 +485,17 @@ class ControlAOVC2C:
         best = max(cands, key=lambda t: t.shape[1] * t.shape[2])
         return best.shape[1], best.shape[2]
 
-    def forge(self, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",
+    def forge(self, *args, allow_download=False, **kwargs):
+        """L9.153: the model backends may download only with allow_download (owner D7.91)."""
+        try:
+            from ._download_policy import allow_downloads
+        except Exception:  # noqa: BLE001 - standalone import: nothing may download
+            import contextlib
+            allow_downloads = lambda flag: contextlib.nullcontext()  # noqa: E731
+        with allow_downloads(bool(allow_download)):
+            return self._forge(*args, **kwargs)
+
+    def _forge(self, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",
               depth_custom_ckpt="", pose_model="off", pose_ckpt="(auto)", id_matte_model="off", edge_model="internal_canny",
               run_canny=True, canny_low=100, canny_high=200, canny_aperture=3, depth_invert=False,
               preproc_resolution=512, run_motion=False, depth=None, canny=None, pose=None,

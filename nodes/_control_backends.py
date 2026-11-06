@@ -9,14 +9,18 @@ instead of depending on other ComfyUI node packs. Every backend is:
     package updates.
   - CACHED: each model loads once and is reused.
 
-Sources (cloned into ../third_party by request, or via transformers/HF):
+Sources (transformers / installed packages first; a third_party clone is a dev-box convenience - git ignores it):
   - DepthAnything V1/V2 + Midas/DPT : transformers `pipeline("depth-estimation")` (faithful, stable API).
-  - DepthAnything V3                : third_party/Depth-Anything-3 (depth_anything_3.api.DepthAnything3).
-  - Depth-Pro                       : third_party/ml-depth-pro (depth_pro.create_model_and_transforms / model.infer).
+  - DepthAnything V3                : the installed `depth_anything_3` package (pip install
+                                      git+https://github.com/ByteDance-Seed/Depth-Anything-3, Apache-2.0), or a clone.
+  - Depth-Pro                       : transformers DepthProForDepthEstimation ("apple/DepthPro-hf"); an installed
+                                      `depth_pro` package / ml-depth-pro clone is used first when present.
   - DepthCrafter (video depth)      : third_party/DepthCrafter (DepthCrafterPipeline, in-memory [b,c,h,w]).
   - NormalCrafter (video normals)   : third_party/NormalCrafter (NormalCrafterPipeline).
 
 Tensors in/out are ComfyUI IMAGE convention: [B,H,W,3] float32 0..1.
+DOWNLOADS (owner D7.91, L9.153): a Hugging Face repo id is fetched only inside the node's allow_download; otherwise
+an installed copy (a local folder, or the Hugging Face cache) is used, or the backend says what is missing.
 NOTE: the repo-based runners (DA3/DepthPro/DepthCrafter/NormalCrafter) are written
 faithfully to each repo's documented API but are pending a live GPU verification.
 """
@@ -40,6 +44,40 @@ if _NODES_DIR not in sys.path:
 # DA3 / depth-pro are too large to ship in-repo → third_party clone only.
 _IN_REPO = {"DepthCrafter": "depthcrafter", "NormalCrafter": "normalcrafter"}
 _CACHE = {}
+
+try:  # the pack's consent switch (L7.97); outside the package nothing may download
+    from ._download_policy import downloads_allowed as _dl_allowed, hf_cached_snapshot as _hf_cached
+except Exception:  # noqa: BLE001
+    def _dl_allowed():
+        return False
+
+    def _hf_cached(repo_id):
+        return None
+
+
+def _hub_source(repo, what):
+    """(source, why): a local folder as is; a repo id when downloading is allowed; else its Hugging Face cache copy.
+    (None, why) when the model is not installed and downloading is off - never a silent multi-GB fetch (L9.153)."""
+    r = (repo or "").strip()
+    if not r:
+        return None, f"{what}: no model given"
+    if os.path.isdir(r):
+        return r, ""
+    if _dl_allowed():
+        return r, ""
+    snap = _hf_cached(r)
+    if snap:
+        return snap, ""
+    return None, (f"{what}: {r} is not installed and downloading is off - tick allow_download on the node (it then "
+                  f"goes to the Hugging Face cache), or download it there yourself.")
+
+
+def _have_module(name):
+    try:
+        import importlib.util
+        return importlib.util.find_spec(name) is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ----------------------------------------------------------------- helpers
@@ -133,9 +171,12 @@ def run_hf_depth(image_bhwc, version, size, custom_model=""):
     key = "hf_depth::" + model_id
     try:
         if key not in _CACHE:
+            src, why = _hub_source(model_id, "hf_depth")
+            if src is None:
+                return None, why
             from transformers import pipeline
             dev = 0 if torch.cuda.is_available() else -1
-            _CACHE[key] = pipeline("depth-estimation", model=model_id, device=dev)
+            _CACHE[key] = pipeline("depth-estimation", model=src, device=dev)
         pipe = _CACHE[key]
         frames = []
         for pil in _to_pil_list(image_bhwc):
@@ -159,14 +200,19 @@ def run_da3(image_bhwc, size="large", custom_model=""):
     image_bhwc = _bhwc(image_bhwc)
     if image_bhwc is None:
         return None, "da3: no image"
-    if not _ensure_path(os.path.join("Depth-Anything-3", "src")) and not _ensure_path("Depth-Anything-3"):
-        return None, "da3: third_party/Depth-Anything-3 missing"
+    if not _have_module("depth_anything_3") and not _ensure_path(os.path.join("Depth-Anything-3", "src")) \
+            and not _ensure_path("Depth-Anything-3"):
+        return None, ("da3: Depth Anything 3 is not installed - pip install "
+                      "git+https://github.com/ByteDance-Seed/Depth-Anything-3 (Apache-2.0) into ComfyUI's Python")
     model_id = custom_model.strip() or _DA3_MODELS.get(size, _DA3_MODELS["large"])
     key = "da3::" + model_id
     try:
         if key not in _CACHE:
+            src, why = _hub_source(model_id, "da3")
+            if src is None:
+                return None, why
             from depth_anything_3.api import DepthAnything3
-            m = DepthAnything3.from_pretrained(model_id)
+            m = DepthAnything3.from_pretrained(src)
             if torch.cuda.is_available():
                 try: m = m.to("cuda")
                 except Exception: pass
@@ -184,33 +230,70 @@ def run_da3(image_bhwc, size="large", custom_model=""):
         return None, f"da3 err [{model_id}]: {type(e).__name__}: {e}"
 
 
-# ----------------------------------------------------------------- Depth-Pro (repo)
-def run_depth_pro(image_bhwc):
+# ----------------------------------------------------------------- Depth-Pro
+_DEPTH_PRO_HF = "apple/DepthPro-hf"
+
+
+def _inverse_depth(depth):
+    """Metric depth (near = small) -> inverse depth (near = large), the convention of every other depth backend here
+    and of depth ControlNets. L9.153: Depth-Pro returned raw metric depth, i.e. a reversed map."""
+    d = depth.detach().cpu().float() if torch.is_tensor(depth) else torch.as_tensor(np.asarray(depth), dtype=torch.float32)
+    return 1.0 / d.clamp_min(1e-3)
+
+
+def run_depth_pro(image_bhwc, custom_model=""):
+    """Apple Depth Pro. An installed `depth_pro` package (or ml-depth-pro clone) with its local checkpoint is used
+    when present; otherwise transformers' own DepthProForDepthEstimation (no Apple code is copied into this pack)."""
     image_bhwc = _bhwc(image_bhwc)
     if image_bhwc is None:
         return None, "depth_pro: no image"
-    if not _ensure_path(os.path.join("ml-depth-pro", "src")) and not _ensure_path("ml-depth-pro"):
-        return None, "depth_pro: third_party/ml-depth-pro missing"
+    use_repo = not custom_model.strip() and (_have_module("depth_pro")
+                                             or _ensure_path(os.path.join("ml-depth-pro", "src"))
+                                             or _ensure_path("ml-depth-pro"))
     try:
-        if "depth_pro" not in _CACHE:
-            import depth_pro
-            model, transform = depth_pro.create_model_and_transforms()
-            model.eval()
+        if use_repo:
+            if "depth_pro" not in _CACHE:
+                import depth_pro
+                model, transform = depth_pro.create_model_and_transforms()
+                model.eval()
+                if torch.cuda.is_available():
+                    try: model = model.to("cuda")
+                    except Exception: pass
+                _CACHE["depth_pro"] = (model, transform)
+            model, transform = _CACHE["depth_pro"]
+            frames = []
+            for pil in _to_pil_list(image_bhwc):
+                img = transform(pil)
+                if torch.cuda.is_available():
+                    try: img = img.to("cuda")
+                    except Exception: pass
+                pred = model.infer(img)
+                depth = pred["depth"] if isinstance(pred, dict) else pred
+                frames.append(_gray_to_bhwc3(_inverse_depth(depth).numpy()))
+            return torch.cat(frames, 0), "depth_pro ok [depth_pro package]"
+        repo = custom_model.strip() or _DEPTH_PRO_HF
+        key = "depth_pro_hf::" + repo
+        if key not in _CACHE:
+            src, why = _hub_source(repo, "depth_pro")
+            if src is None:
+                return None, why
+            from transformers import AutoImageProcessor, DepthProForDepthEstimation
+            proc = AutoImageProcessor.from_pretrained(src)
+            model = DepthProForDepthEstimation.from_pretrained(src).eval()
             if torch.cuda.is_available():
                 try: model = model.to("cuda")
                 except Exception: pass
-            _CACHE["depth_pro"] = (model, transform)
-        model, transform = _CACHE["depth_pro"]
+            _CACHE[key] = (model, proc)
+        model, proc = _CACHE[key]
+        dev = next(model.parameters()).device
         frames = []
         for pil in _to_pil_list(image_bhwc):
-            img = transform(pil)
-            if torch.cuda.is_available():
-                try: img = img.to("cuda")
-                except Exception: pass
-            pred = model.infer(img)
-            depth = pred["depth"] if isinstance(pred, dict) else pred
-            frames.append(_gray_to_bhwc3(depth.detach().cpu().numpy()))
-        return torch.cat(frames, 0), "depth_pro ok"
+            inputs = proc(images=pil, return_tensors="pt").to(dev)
+            with torch.no_grad():
+                out = model(**inputs)
+            post = proc.post_process_depth_estimation(out, target_sizes=[(pil.height, pil.width)])[0]
+            frames.append(_gray_to_bhwc3(_inverse_depth(post["predicted_depth"]).numpy()))
+        return torch.cat(frames, 0), f"depth_pro ok [{repo}]"
     except Exception as e:
         return None, f"depth_pro err: {type(e).__name__}: {e}"
 
@@ -225,12 +308,16 @@ def run_depthcrafter(image_bhwc, num_inference_steps=5, guidance_scale=1.0,
         return None, "depthcrafter: third_party/DepthCrafter missing"
     try:
         if "depthcrafter" not in _CACHE:
+            unet_src, why = _hub_source(unet_path, "depthcrafter")
+            base_src, why2 = _hub_source(base, "depthcrafter")
+            if unet_src is None or base_src is None:
+                return None, why or why2
             from depthcrafter.depth_crafter_ppl import DepthCrafterPipeline
             from diffusers import UNetSpatioTemporalConditionModel
             unet = UNetSpatioTemporalConditionModel.from_pretrained(
-                unet_path, low_cpu_mem_usage=True, torch_dtype=torch.float16)
+                unet_src, low_cpu_mem_usage=True, torch_dtype=torch.float16)
             pipe = DepthCrafterPipeline.from_pretrained(
-                base, unet=unet, torch_dtype=torch.float16, variant="fp16")
+                base_src, unet=unet, torch_dtype=torch.float16, variant="fp16")
             if torch.cuda.is_available():
                 pipe = pipe.to("cuda")
             _CACHE["depthcrafter"] = pipe
@@ -264,10 +351,10 @@ def run_dvd(image_bhwc, window_size=81, overlap=21, height=480, width=640, ckpt_
     image_bhwc = _bhwc(image_bhwc)
     if image_bhwc is None:
         return None, "dvd: no image"
-    dvd_root = os.path.join(_THIRD_PARTY, "DVD")
+    dvd_root = (os.environ.get("C2C_DVD_DIR") or "").strip() or os.path.join(_THIRD_PARTY, "DVD")
     if not os.path.isdir(dvd_root):
-        return None, ("dvd: third_party/DVD missing — clone EnVision-Research/DVD into "
-                      "ComfyUI-CustomNodePacks/third_party/DVD (too large to ship in-repo; sync to Linux).")
+        return None, ("dvd: the DVD code is not installed - clone https://github.com/EnVision-Research/DVD "
+                      "(Apache-2.0) and set C2C_DVD_DIR to it, or clone it into ComfyUI-CustomNodePacks/third_party/DVD.")
     # Resolve the checkpoint dir (must contain model_config.yaml + model.safetensors).
     cands = [c for c in [
         (ckpt_dir or "").strip(),
@@ -280,9 +367,12 @@ def run_dvd(image_bhwc, window_size=81, overlap=21, height=480, width=640, ckpt_
                 and os.path.isfile(os.path.join(c, "model_config.yaml")))
     ckpt = next((c for c in cands if _has_ckpt(c)), None)
     if ckpt is None:
-        # AUTO-DOWNLOAD the DVD checkpoint from HF (CC BY-NC 4.0 — non-commercial
-        # use only). One-time, ~GBs. Lands in ComfyUI/models/DVD (or repo ckpt/).
+        # DOWNLOAD the DVD checkpoint from HF only with the node's allow_download (owner D7.91; it used to start
+        # silently). CC BY-NC 4.0 - non-commercial use only. One-time, ~GBs. Lands in ComfyUI/models/DVD.
         dest = _comfy_models_dir("DVD") or os.path.join(dvd_root, "ckpt")
+        if not _dl_allowed():
+            return None, (f"dvd: weights not installed and downloading is off - tick allow_download, or place "
+                          f"FayeHongfeiZhang/DVD (model_config.yaml + model.safetensors; CC BY-NC 4.0) in {dest}.")
         try:
             from huggingface_hub import snapshot_download
             os.makedirs(dest, exist_ok=True)
@@ -354,6 +444,11 @@ def run_normalcrafter(image_bhwc, unet_path="Yanrui95/NormalCrafter",
         return None, "normalcrafter: third_party/NormalCrafter missing"
     try:
         if "normalcrafter" not in _CACHE:
+            unet_src, why = _hub_source(unet_path, "normalcrafter")
+            base_src, why2 = _hub_source(base, "normalcrafter")
+            if unet_src is None or base_src is None:
+                return None, why or why2
+            unet_path, base = unet_src, base_src
             from normalcrafter.normal_crafter_ppl import NormalCrafterPipeline
             from normalcrafter.unet import DiffusersUNetSpatioTemporalConditionModelNormalCrafter
             from diffusers import AutoencoderKLTemporalDecoder
