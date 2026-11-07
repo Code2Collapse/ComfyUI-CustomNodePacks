@@ -1560,6 +1560,8 @@ read any file path. Through an SSH tunnel the page still counts as local.
   out-of-memory case it changed that input VAE in place.
 - **Control AOV (C2C)** stops when a pass you selected (depth, pose, normal, SAM matte) produces nothing, and names
   the backend's error. It used to hand ControlNet an all-black map. Passes left on `off` still output black.
+- **Mask + Matting `auto` / `auto_best` pick only backends that can run here** (2026-11-07). On a clip they used to pick
+  SeC, which is never installed, and then silently fell back to the approximate GrabCut path even with SAM 3 available.
 - **Node explanations never call a paid service on hover** (2026-11-07). The explainer's `auto` setting uses a local
   GGUF model if one is installed, else the built-in text; your cloud key is used only when you pick `api`.
 - **Image Mask Editor**: pressing Enter on a focused button (for example Cancel) no longer saves and overwrites the mask;

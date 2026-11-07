@@ -458,6 +458,17 @@ def _plate_like(plate, img_bhwc):
     return bg.contiguous()
 
 
+
+def _ready_segmenters() -> set:
+    """Segmenter keys whose backend can run here (STATUS == "ready"). Auto routing must pick from these only
+    (L9.156): a registered-but-missing backend (SeC, VideoMaMa, Cutie / XMem without their packages) used to win the
+    clip route and fall through to the approximate GrabCut path."""
+    try:
+        from .segmenters import list_keys
+        return set(list_keys(installed_only=True))
+    except Exception:  # noqa: BLE001
+        return {k for k, c in all_segmenters().items() if getattr(c, "STATUS", "ready") == "ready"}
+
 class MaskOpsMEC:
     """Unified segmenter + matter + refine + diagnose node.
 
@@ -1152,7 +1163,7 @@ class MaskOpsMEC:
             if seg_key == "auto_best":
                 _cascade_mode = True
                 _auto_routed = True
-                _avail0 = set(all_segmenters().keys())
+                _avail0 = _ready_segmenters()
                 # Primary: SAM3, or SeC when this is a clip. SAM2.1 is gone -
                 # SAM3 supersedes it on every axis this pack uses, including the
                 # text prompts SAM2 never had.
@@ -1185,7 +1196,7 @@ class MaskOpsMEC:
                 except Exception:
                     _stats = {"boundary_ambig": 0.0, "speckle_score": 0.0,
                               "blur_score": 0.0, "lowlight_score": 0.0}
-                _avail = set(all_segmenters().keys())
+                _avail = _ready_segmenters()
                 _has_text = bool(text_prompt and text_prompt.strip())
                 _B = int(image.shape[0]) if hasattr(image, "shape") else 1
                 if _has_text and "sam3" in _avail:
@@ -1213,7 +1224,7 @@ class MaskOpsMEC:
                     )
                 else:
                     # General best: prefer sam3.1, then sam3, then first ready.
-                    for _pref in ("sam3.1", "sam3", "rmbg2", "birefnet"):
+                    for _pref in ("sam3.1", "sam3", "rmbg", "birefnet"):
                         if _pref in _avail:
                             seg_key = _pref
                             _auto_route_reasons.append(f"default→{_pref}")
@@ -1229,10 +1240,10 @@ class MaskOpsMEC:
             if mat_key == "auto":
                 _auto_routed = True
                 _avail_m = set(all_matters().keys())
-                # If we used a salient segmenter (birefnet/rmbg2) the alpha
+                # If we used a salient segmenter (birefnet/rmbg) the alpha
                 # is already a soft matte → "none". Otherwise ViTMatte wins
                 # for hair/fur/cloth; matanyone for video; bgmattingv2 last.
-                if seg_key in ("birefnet", "rmbg2"):
+                if seg_key in ("birefnet", "rmbg"):  # L9.156: the key is rmbg (rmbg2 never matched)
                     mat_key = "none"
                     _auto_route_reasons.append("salient_seg→matter=none")
                 else:
@@ -1506,7 +1517,7 @@ class MaskOpsMEC:
                     if (text_prompt and text_prompt.strip()
                             and B == 1 and not pos_pts and not neg_pts
                             and bbox_used is None):
-                        _avail_la = set(all_segmenters().keys())
+                        _avail_la = _ready_segmenters()
                         m_la, s_la, tr_la = _la_sam_text_grounding(
                             seg_image, text_prompt, _avail_la,
                             device=device, precision=precision,
@@ -1557,7 +1568,7 @@ class MaskOpsMEC:
                     # an appearance and so survives the occlusion that usually
                     # caused the low score in the first place.
                     if _cascade_mode:
-                        _avail_c = set(all_segmenters().keys())
+                        _avail_c = _ready_segmenters()
                         def _run_alt(alt_key: str) -> tuple:
                             alt_cls = get_segmenter_cls(alt_key)
                             if alt_cls is None or alt_cls.STATUS != "ready":
