@@ -185,13 +185,14 @@ export function openEditor(opts) {
         const t = e.target;
         const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""));
         if (typing) return;
-        if (mod && e.key === "z" && !e.shiftKey && opts.onUndo) {
+        // e.code, not e.key: Shift makes the key "Z" (redo never matched) and Caps Lock broke undo (L9.164)
+        if (mod && e.code === "KeyZ" && !e.shiftKey && opts.onUndo) {
             e.preventDefault();
             e.stopPropagation();
             opts.onUndo();
             return;
         }
-        if (mod && (e.key === "y" || (e.key === "z" && e.shiftKey)) && opts.onRedo) {
+        if (mod && (e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey)) && opts.onRedo) {
             e.preventDefault();
             e.stopPropagation();
             opts.onRedo();

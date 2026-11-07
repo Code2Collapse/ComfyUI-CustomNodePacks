@@ -32,6 +32,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { findNodeAnywhere, revealNode } from "./_subgraph_walk.js";
+import { asOneUndoAsync } from "./_c2c_undo.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
@@ -515,7 +516,13 @@ async function runLint() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workflow: wf }),
     });
-    _lastLint = { ts: Date.now(), report: j };
+    // L9.164: the route answers {success, data: {summary, findings, stats}} (workflow_doctor.py routes); V3 read
+    // `findings` at the top level, so every graph showed "All clear" and the status stayed green. Unwrap once here so
+    // every reader (_doctorStatus, renderLint, counts) sees the report itself.
+    const rep = (j && j.success !== false && j.data && typeof j.data === "object")
+        ? { ...j.data, success: true, rules_ran: j.data.stats?.rules_ran ?? j.data.stats?.rules ?? "" }
+        : j;
+    _lastLint = { ts: Date.now(), report: rep };
     _broadcastStatus();
     if (_panelRefs && _panelRefs.active === "lint") refreshActive();
     if (_panelRefs) updateCounts();
@@ -544,21 +551,28 @@ function _focusNode(nid) {
 }
 
 async function _applyFix(fix) {
-    if (!fix || !fix.node_id) return;
+    if (!fix || fix.node_id == null) return;
     const n = findNodeAnywhere(fix.node_id)?.node;
     if (!n) return;
+    const set = (w, v) => {
+        w.value = v;
+        try { w.callback?.(v, app.canvas, n); } catch (exc) { console.error("[c2c-doctor] widget callback", exc); }
+    };
     try {
-        if (fix.kind === "set_widget" && fix.widget) {
-            const w = (n.widgets || []).find((w) => w.name === fix.widget);
-            if (w) { w.value = fix.value; w.callback && w.callback(w.value); }
-        } else if (fix.kind === "set_widget_many" && Array.isArray(fix.changes)) {
-            for (const ch of fix.changes) {
-                const w = (n.widgets || []).find((w) => w.name === ch.widget);
-                if (w) { w.value = ch.value; w.callback && w.callback(w.value); }
+        // L9.164: one undo step, like the v2 Doctor (an applied fix could not be undone)
+        await asOneUndoAsync(`doctor: ${fix.label || fix.kind}`, () => {
+            if (fix.kind === "set_widget" && fix.widget) {
+                const w = (n.widgets || []).find((w) => w.name === fix.widget);
+                if (w) set(w, fix.value);
+            } else if (fix.kind === "set_widget_many" && Array.isArray(fix.changes)) {
+                for (const ch of fix.changes) {
+                    const w = (n.widgets || []).find((w) => w.name === ch.widget);
+                    if (w) set(w, ch.value);
+                }
+            } else if (fix.kind === "set_mode") {
+                n.mode = fix.value;
             }
-        } else if (fix.kind === "set_mode") {
-            n.mode = fix.value;
-        }
+        });
         app.graph.setDirtyCanvas(true, true);
     } catch (exc) {
         // eslint-disable-next-line no-console
@@ -598,7 +612,10 @@ async function renderLint(body) {
         html += `<div style="margin: 6px 0 8px;"><b>${esc(sevName[sev])}</b> <span class="c2c-doc-pill pill-${sevPill[sev]}">${arr.length}</span></div>`;
         for (const f of arr) {
             const nid = f.node_id != null ? f.node_id : (f.nodeId != null ? f.nodeId : null);
-            const rule = f.rule || f.code || "rule";
+            // L9.164: the server sends id / title / fix (workflow_doctor.py _finding); f.rule / f.fixes never existed,
+            // so every chip read "rule" and no Apply-fix button appeared. Subgraph ids are strings ("12:5").
+            const rule = f.id || f.rule || f.code || "rule";
+            const fixes = Array.isArray(f.fixes) ? f.fixes : (f.fix ? [f.fix] : []);
             html += `<div class="c2c-doc-finding">
               <div class="fhead">
                 <span class="c2c-doc-pill pill-${sevPill[sev]}">${esc(rule)}</span>
@@ -606,21 +623,21 @@ async function renderLint(body) {
                 ${nid != null ? `<button class="c2c-doc-iconbtn" data-jump="${esc(nid)}" title="Focus node">Node #${esc(nid)}</button>` : ""}
               </div>
               ${f.detail ? `<div class="fbody">${esc(f.detail)}</div>` : ""}
-              ${Array.isArray(f.fixes) && f.fixes.length ? `<div class="ffix">${
-                  f.fixes.map((fx, i) =>
+              ${fixes.length ? `<div class="ffix">${
+                  fixes.map((fx, i) =>
                       `<button class="c2c-doc-iconbtn" data-fix="${i}" data-rule="${esc(rule)}">${esc(fx.label || ("Apply fix " + (i+1)))}</button>`
                   ).join("")
               }</div>` : ""}
             </div>`;
             // attach fixes via dataset workaround below
-            f._fixes = f.fixes || [];
+            f._fixes = fixes;
         }
     }
     html += `</div>`;
     body.innerHTML = html;
     // wire up jump + autofix
     body.querySelectorAll("[data-jump]").forEach((b) => {
-        b.addEventListener("click", () => _focusNode(Number(b.dataset.jump)));
+        b.addEventListener("click", () => _focusNode(b.dataset.jump));
     });
     body.querySelectorAll("[data-fix]").forEach((b) => {
         b.addEventListener("click", async () => {
@@ -774,7 +791,7 @@ async function renderPerf(body) {
           </table>
         </div>`;
     body.querySelectorAll("[data-jump]").forEach((b) => {
-        b.addEventListener("click", () => _focusNode(Number(b.dataset.jump)));
+        b.addEventListener("click", () => _focusNode(b.dataset.jump));
     });
 }
 
@@ -1401,8 +1418,9 @@ function _hookOmniBar() {
             // Keep dot color in sync with current Doctor severity.
             const _sync = () => {
                 const s = _doctorStatus();
-                dot.style.background = s.errors > 0 ? "var(--c2c-red)"
-                                     : s.warnings > 0 ? "var(--c2c-warn)"
+                // L9.164: _doctorStatus() returns error / warning (singular); the dot stayed green with errors
+                dot.style.background = s.error > 0 ? "var(--c2c-red)"
+                                     : s.warning > 0 ? "var(--c2c-warn)"
                                      : "var(--c2c-okSoft)";
             };
             document.addEventListener("c2c:doctor-status", _sync);

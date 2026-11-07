@@ -285,9 +285,11 @@ function _toggle() {
         _view = _active ? "step" : "home";
         _renderBody();
         if (_view === "home" && !_templates.length) _fetchTemplates().then(() => _renderBody());
+        if (_active) _startHighlightLoop();
     } else {
         p.classList.remove("visible");
         _clearListeners();
+        _stopHighlightLoop();      // L9.164: the loop used to keep repainting the canvas after the panel closed
     }
 }
 
@@ -612,7 +614,7 @@ function _drawHighlight() {
     if (!canvas || !canvas.ctx) return;
     const step = _active.steps[_active.idx];
     if (!step) return;
-    const targets = _stepNodeMatches(step);
+    const targets = _cachedTargets(step);
     if (!targets.length) return;
     const ctx = canvas.ctx;
     ctx.save();
@@ -629,18 +631,34 @@ function _drawHighlight() {
     ctx.restore();
 }
 
+// L9.164 (A24 UI audit): the highlight used to force a full canvas redraw on EVERY animation frame and walk every
+// node (subgraphs included) on each draw - 60 graph walks + repaints a second while a wizard step was shown, and it
+// kept running after the panel closed. Now: the target list is cached (refreshed at most once a second), the pulse
+// redraws twice a second, and the loop stops when the panel closes, the wizard ends, or the tab is hidden.
+const _PULSE_MS = 500;
+let _targetCache = { step: null, at: 0, nodes: [] };
+
+function _cachedTargets(step) {
+    const now = performance.now();
+    if (_targetCache.step !== step || now - _targetCache.at > 1000) {
+        _targetCache = { step, at: now, nodes: _stepNodeMatches(step) };
+    }
+    return _targetCache.nodes;
+}
+
 function _startHighlightLoop() {
     _stopHighlightLoop();
     const tick = () => {
-        if (!_active) return;
-        app.canvas?.setDirty?.(true, true);
-        _rafTok = requestAnimationFrame(tick);
+        if (!_active || !_open) { _rafTok = null; return; }
+        if (!document.hidden) app.canvas?.setDirty?.(true, true);
+        _rafTok = setTimeout(tick, _PULSE_MS);
     };
-    _rafTok = requestAnimationFrame(tick);
+    _rafTok = setTimeout(tick, 0);
 }
 
 function _stopHighlightLoop() {
-    if (_rafTok) { cancelAnimationFrame(_rafTok); _rafTok = null; }
+    if (_rafTok) { clearTimeout(_rafTok); _rafTok = null; }
+    _targetCache = { step: null, at: 0, nodes: [] };
 }
 
 function _ensureDrawPatch() {

@@ -28,6 +28,12 @@ const HOTKEY_TEXT =
     "Copy/paste/clear/apply-to-all edit the active layer; export shows the merged stack\n" +
     "Ctrl+Z / Ctrl+Y undo / redo (per frame, shared 128 MB budget) · Enter save · Esc cancel shape / close";
 
+function _buttonFocused(e) {
+    const t = e.target;
+    if (!t || !t.tagName) return false;
+    return t.tagName === "BUTTON" || t.tagName === "A" || t.getAttribute?.("role") === "button";
+}
+
 function _formControlFocused(e) {
     const t = e.target;
     if (!t) return false;
@@ -633,8 +639,13 @@ export function openModal(node, editorId, onSaved) {
     function onKey(e) {
         if (!node.graph) { closeModal(); return; }
         if (_formControlFocused(e)) return;
-        if (e.ctrlKey && e.key === "z" && !e.shiftKey) { e.preventDefault(); ed.undoOp(); return; }
-        if ((e.ctrlKey && e.shiftKey && e.key === "Z") || (e.ctrlKey && e.key === "y")) {
+        // L9.164: Enter / Space on a focused button belong to that button (Tab to Cancel + Enter used to SAVE and
+        // overwrite the stored mask; Space could never press a button).
+        if ((e.key === "Enter" || e.key === " ") && _buttonFocused(e)) return;
+        // e.code: Shift turns e.key into "Z" (redo never matched) and Caps Lock broke undo; Cmd on macOS (L9.164)
+        const mod = e.ctrlKey || e.metaKey;
+        if (mod && e.code === "KeyZ" && !e.shiftKey) { e.preventDefault(); ed.undoOp(); return; }
+        if ((mod && e.shiftKey && e.code === "KeyZ") || (mod && e.code === "KeyY")) {
             e.preventDefault(); ed.redoOp(); return;
         }
         if (e.key === "Enter" && ed.candidatePreviewActive()) {

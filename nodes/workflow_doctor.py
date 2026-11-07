@@ -58,7 +58,8 @@ RULES: List[Dict[str, str]] = [
      "description": "An empty prompt usually produces poor results — even an empty negative should be intentional."},
     {"id": "disabled_node",        "severity": "info",
      "title": "Node is muted/bypassed",
-     "description": "LiteGraph mode == 4 means the node is muted; downstream nodes may receive null."},
+     "description": "LiteGraph mode 4 means the node is bypassed (its inputs pass straight through); mode 2 means "
+                    "muted (it does not run). Downstream nodes may receive something other than they expect."},
     {"id": "duplicate_seed",       "severity": "warning",
      "title": "Multiple KSamplers share the same seed",
      "description": "Two or more samplers using the same fixed seed will produce identical noise — usually unintended."},
@@ -337,7 +338,7 @@ def analyze(workflow: Dict[str, Any]) -> Dict[str, Any]:
         if n.get("mode") == 4:
             findings.append(_finding(
                 "disabled_node", node_id=nid, node_type=ntype,
-                detail=f"Node {ntype} (id {nid}) is muted (mode=4).",
+                detail=f"Node {ntype} (id {nid}) is bypassed (mode 4).",
                 fix_hint="Right-click the node and unmute if you want it to run.",
                 fix={"kind": "set_mode", "node_id": nid, "value": 0,
                      "label": f"Unmute {ntype} #{nid}"}))

@@ -515,6 +515,11 @@ def explain_node(class_name: str, backend: str = "auto",
     """
     Return an explanation dict for the given node class.
     backend: "auto" | "api" | "gguf" | "off"
+
+    L9.164 (A24 audit; owner A17 cost rule): "auto" never calls a paid cloud model. It runs on a mouse HOVER, and it
+    used to try every stored provider key first, so a user with a key paid (and sent graph metadata out) per hover.
+    auto = the local GGUF model when one is installed, else the built-in text. The cloud runs only for "api", which
+    the user picks on purpose.
     """
     # Cache check
     cache_key = f"{class_name}::{backend}::{quant}"
@@ -531,7 +536,7 @@ def explain_node(class_name: str, backend: str = "auto",
 
     result: Optional[dict] = None
 
-    if backend in ("auto", "api"):
+    if backend == "api":                                  # explicit opt-in only (L9.164)
         result = _try_cloud(ctx)
 
     if result is None and backend in ("auto", "gguf"):

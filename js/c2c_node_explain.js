@@ -1663,7 +1663,7 @@ app.registerExtension({
         {
             id:      "mec.node_explain.backend",
             name:    "Node Explain: LLM backend",
-            tooltip: "Which backend to use for 'What does this node do?' hover tooltips.",
+            tooltip: "Which backend to use for 'What does this node do?' hover tooltips. auto = a local GGUF model if one is installed, else the built-in text (never a paid service). api = your cloud provider key: every hover is a paid request. gguf = local model only. off = built-in text only.",
             type:    "combo",
             options: ["auto", "api", "gguf", "off"],
             defaultValue: "auto",
