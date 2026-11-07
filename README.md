@@ -1560,6 +1560,12 @@ read any file path. Through an SSH tunnel the page still counts as local.
   out-of-memory case it changed that input VAE in place.
 - **Control AOV (C2C)** stops when a pass you selected (depth, pose, normal, SAM matte) produces nothing, and names
   the backend's error. It used to hand ControlNet an all-black map. Passes left on `off` still output black.
+- **Node explanations never call a paid service on hover** (2026-11-07). The explainer's `auto` setting uses a local
+  GGUF model if one is installed, else the built-in text; your cloud key is used only when you pick `api`.
+- **Image Mask Editor**: pressing Enter on a focused button (for example Cancel) no longer saves and overwrites the mask;
+  Ctrl+Shift+Z redo and Caps Lock undo work in every C2C editor (2026-11-07).
+- **Workflow Doctor (panel)** shows its findings again - it showed "All clear" for every graph - with working Apply-fix
+  buttons that can be undone; the workflow wizard no longer keeps the canvas repainting after you close it (2026-11-07).
 - **Control AOV (C2C)** has a new last input, `allow_download` (off by default; saved workflows keep their values).
   Without it no backend downloads anything: an installed copy (a models folder or the Hugging Face cache) is used, or
   the info output says what is missing. Before, Depth Anything / DepthCrafter / NormalCrafter / DVD fetched weights
