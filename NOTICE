@@ -51,8 +51,8 @@ Vendored third-party packages (under third_party/):
                 (nodes/wan_director/director_node.py, when backend="kijai").
 
   * WhatDreamsCost-ComfyUI (LTX Director — behavioural inspiration only)
-      Source:   https://github.com/WhatDreamsCost/ComfyUI
-      License:  GPL-3.0 (verified May 2026 — see upstream LICENSE).
+      Source:   https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI
+      License:  GPL-3.0 (GitHub, re-checked 2026-11-07; the old link WhatDreamsCost/ComfyUI no longer exists).
       Usage:    Our `js/wan_director_timeline.js` is a CLEAN-ROOM
                 reimplementation. No source code from the upstream file
                 `js/ltx_director.js` was copied, ported, or transformed
@@ -117,9 +117,9 @@ Vendored third-party packages (under third_party/):
   * ComfyUI-KJNodes
       Author:   Kijai
       Source:   https://github.com/kijai/ComfyUI-KJNodes
-      License:  Apache-2.0 (subject to upstream LICENSE in vendored copy).
-      Usage:    Vendored copy under third_party/ComfyUI-KJNodes (see its
-                own LICENSE/NOTICE files).
+      License:  GPL-3.0 (GitHub, checked 2026-11-07; this entry said Apache-2.0, which was wrong).
+      Usage:    NOT shipped: a reference clone exists only in the gitignored third_party/ folder of the
+                development checkout, and no KJNodes code is part of this pack.
 
   * Prompt Relay (refined port)
       Author:   Gordon Chen & contributors
@@ -158,3 +158,21 @@ Vendored third-party packages (under third_party/):
                 "PORTED FROM" header. Copy: THIRD_PARTY_LICENSES/Comfyui-SecNodes-LICENSE.txt
       Usage:    the "SeC + MatAnyone2" engine of Mask Ops loads SeC-4B through it
                 (L7.90). Changes are listed in nodes/sec_engine/README_PORT.md.
+
+  * Fuse.js (js/_fuse.mjs)
+      Author:   Kiro Risk
+      Source:   https://github.com/krisk/Fuse (v7.0.0)
+      License:  Apache-2.0
+      Usage:    fuzzy search in the C2C menus / pickers. Attribution added 2026-11-07 (A24 licence audit R11).
+
+  * NormalCrafter (nodes/normalcrafter/)
+      Author:   Binyr
+      Source:   https://github.com/Binyr/NormalCrafter
+      License:  MIT
+      Usage:    video normal estimation backend of Control AOV. Attribution added 2026-11-07 (A24 audit R11).
+
+  * ComfyUI-Pixaroma (part of js/c2c_ui/nodes2.js; also in every pack that ships c2c_ui)
+      Author:   pixaroma
+      Source:   https://github.com/pixaroma/ComfyUI-Pixaroma
+      License:  MIT (js/c2c_ui/LICENSE-PIXAROMA.txt)
+      Usage:    Nodes 2.0 renderer detection / resize helpers. NOTICE line added 2026-11-07 (A24 audit).

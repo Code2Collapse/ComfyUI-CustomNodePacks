@@ -136,15 +136,12 @@ Read while building, no code taken:
 
 ## Upstream projects whose licence could not be verified
 
-Both of these declare `license = {file = "LICENSE"}` in `pyproject.toml` while
-shipping no such file in the clone. Their licence is therefore **unknown**, not
-permissive by default, and nothing from either has been ported:
+Checked with the GitHub API on 2026-11-07: both are **GPL-3.0**. Nothing from either is ported into this
+Apache-2.0 pack (WhatDreamsCost: behaviour-only clean-room reimplementation with written permission; KJNodes: not
+shipped at all), and `NOTICE` now says so (it called KJNodes Apache-2.0, which was wrong).
 
-- **ComfyUI-KJNodes** — kijai
-- **WhatDreamsCost-ComfyUI**
-
-`NOTICE` currently describes KJNodes as Apache-2.0. Nothing on disk supports
-that, and the claim predates this file.
+- **ComfyUI-KJNodes** — kijai (<https://github.com/kijai/ComfyUI-KJNodes>, GPL-3.0)
+- **WhatDreamsCost-ComfyUI** (<https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI>, GPL-3.0)
 
 ---
 

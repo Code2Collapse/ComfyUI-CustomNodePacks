@@ -1,5 +1,7 @@
 # PORTED FROM: ComfyUI-NKD-Basic-Tools by Nekodificador (MIT)
-# https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools
+# https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools @ 613fd3c (2026-09-20, the latest upstream commit
+# when this was ported, MIT). Upstream moved to GPL-3.0 on 2026-10-29: never re-sync from a later revision
+# into this Apache-2.0 pack (A24 licence audit R8).
 """MEC Frequency separation and film grain nodes — torch-native, batch-correct."""
 from __future__ import annotations
 

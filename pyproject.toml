@@ -6,9 +6,9 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10"
 readme = "README.md"
 authors = [{ name = "Code2Collapse" }]
+# torch / torchvision come with ComfyUI and are NOT listed: an installer resolving them could replace the
+# CUDA build ComfyUI runs on (A24 dependency audit, 2026-11-07).
 dependencies = [
-    "torch>=2.0",
-    "torchvision",
     "numpy>=1.24",
     "opencv-python>=4.8",
     "pillow>=10.0",

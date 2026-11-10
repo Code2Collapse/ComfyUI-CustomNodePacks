@@ -1,5 +1,7 @@
 # PORTED FROM: ComfyUI-NKD-Basic-Tools by Nekodificador (MIT)
-# https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools
+# https://github.com/Nekodificador/ComfyUI-NKD-Basic-Tools @ 613fd3c (2026-09-20, the latest upstream commit
+# when this was ported, MIT). Upstream moved to GPL-3.0 on 2026-10-29: never re-sync from a later revision
+# into this Apache-2.0 pack (A24 licence audit R8).
 #
 # Sources: nkd_frequency.py, nkd_film_grain.py, helpers.py (_luminance,
 # _srgb_to_linear, _linear_to_srgb, _resize_mask, _film_grain and _GRAIN_*).

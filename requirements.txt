@@ -10,8 +10,8 @@ scipy>=1.10.0
 # ── NukeNodeMax suite ────────────────────────────────────────────────
 # P0/P1/P2 ProPainter bridge — install manually (not on PyPI):
 #   pip install git+https://github.com/sczhou/ProPainter.git
-# RAFT + RFC + Inpaint weights are auto-downloaded by propainter_bridge.py
-# from the v0.1.0 GitHub release on first use.
+# propainter_bridge.py never downloads: place its RAFT / RFC / Inpaint weights yourself (S-Lab licence,
+# non-commercial) - see the ProPainter nodes' messages for the folder.
 
 # SAM2/2.1 model support (install from GitHub if pip install SAM-2 fails)
 # pip install git+https://github.com/facebookresearch/sam2.git
@@ -51,6 +51,8 @@ regex>=2023.0.0
 # C2C Vault: AES-GCM for the password-locked subgraph node.
 # PBKDF2 comes from stdlib hashlib; only the AEAD needs this.
 cryptography>=41.0
+# C2C AI (Workflow Doctor AI, node explainer 'api' backend, cloud LLM routes): the provider backends use httpx.
+httpx>=0.27
 
 # Load / Save Video colour management (L9.53 / L9.58 - owner 2026-10-26: "we need latest OCIO"): OpenColorIO 2.6 has
 # the built-in ACES 1.3 / 2.x studio + cg configs (nothing to download) and the colour interop IDs the nodes read and
