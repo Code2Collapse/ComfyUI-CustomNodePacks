@@ -22,6 +22,22 @@ except Exception as _exc:  # noqa: BLE001
     log.warning("C2C Farm dashboard routes not registered: %s", _exc)
 
 
+def _cancel_requested() -> bool:
+    """ComfyUI's Cancel / Interrupt flag (False outside ComfyUI)."""
+    try:
+        import comfy.model_management as mm
+        return bool(mm.processing_interrupted())
+    except Exception:  # noqa: BLE001 - no ComfyUI (tests, tools)
+        return False
+
+
+def _raise_interrupted() -> None:
+    """Raise ComfyUI's own interrupt exception (clears the flag, ends the prompt as 'cancelled', not as an error)."""
+    import comfy.model_management as mm
+    mm.throw_exception_if_processing_interrupted()
+    raise RuntimeError("C2C Farm: cancelled")                 # the flag was cleared in between: still stop
+
+
 def _backend_choices() -> list[str]:
     try:
         from ..renderfarm.user_config import list_backends
@@ -157,12 +173,22 @@ class C2C_Submit:
         if not wait_for_completion:
             _progress_event(unique_id, 1.0, f"spooled {job.job_id}")
             return (job.job_id, "", json.dumps({**info, "status": "spooled"}, indent=2))
-        return self._wait(job, info, backend, timeout_minutes, unique_id)
+        return self._wait(job, info, backend, timeout_minutes, unique_id, cancel=qm.cancel)
 
     @staticmethod
-    def _wait(job, info, backend, timeout_minutes, unique_id):
+    def _wait(job, info, backend, timeout_minutes, unique_id, cancel=None):
         deadline = time.time() + timeout_minutes * 60
         while not job.done.wait(timeout=2.0):
+            if _cancel_requested():
+                # L9.190: Cancel in ComfyUI stops the wait. A job THIS run submitted is cancelled on the farm too
+                # (it may be billed cloud time); a reused job belongs to an earlier submission and keeps running.
+                if not info.get("reused") and cancel is not None:
+                    remote_ok = cancel(job.job_id)
+                    log.info("C2C Farm: job %s cancelled by the user (farm cancel %s)", job.job_id,
+                             "confirmed" if remote_ok else "NOT confirmed - check the C2C Farm dashboard")
+                else:
+                    log.info("C2C Farm: stopped waiting for reused job %s (it keeps running)", job.job_id)
+                _raise_interrupted()
             if time.time() > deadline:
                 raise RuntimeError(
                     f"C2C Farm: job {job.job_id} exceeded timeout_minutes={timeout_minutes} "
