@@ -1279,6 +1279,12 @@ class MaskOpsMEC:
         if _use_onyx:
             seg_key = "sam3.1"
             mat_cls = None
+            if mat_key == "auto":
+                # L9.156: ONYX is a trimap pipeline - auto = the best trimap matter here (it raised "Unknown matter
+                # 'auto'" before): ViTMatte when it is registered, else the model-free guided filter
+                mat_key = "vitmatte" if get_matter_cls("vitmatte") is not None else "guided_filter"
+                _auto_routed = True
+                _auto_route_reasons.append(f"onyx: matter auto→{mat_key}")
             if mat_key not in ("none", ""):
                 mat_cls = get_matter_cls(mat_key)
                 if mat_cls is None:
