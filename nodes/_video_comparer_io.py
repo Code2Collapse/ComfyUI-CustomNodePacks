@@ -268,8 +268,18 @@ def decode_media(path: str, max_frames: int = 0) -> dict:
     }
 
 
+# L9.196 (A25 audit P2): INPUT_TYPES runs on every /object_info, and this walked the WHOLE input folder each time (an
+# input folder with EXR sequences = tens of thousands of entries per refresh; folder walks in request paths froze the
+# server for 20-60 s before, memory ui-perf-audit). Now: cached for a few seconds per (root, subfolders), at most
+# MAX_DEPTH folders deep and MAX_ENTRIES files, hidden folders skipped.
+LIST_TTL_S = 15.0
+MAX_DEPTH = 3
+MAX_ENTRIES = 5000
+_LIST_CACHE: dict = {}
+
+
 def list_input_media(subfolders: bool = True) -> list[str]:
-    """Enumerate everything in ComfyUI's input dir that we can decode."""
+    """Enumerate what in ComfyUI's input dir we can decode (bounded and briefly cached - see above)."""
     try:
         import folder_paths  # type: ignore
         root = folder_paths.get_input_directory()
@@ -277,18 +287,28 @@ def list_input_media(subfolders: bool = True) -> list[str]:
         return []
     if not os.path.isdir(root):
         return []
+    import time
+    key = (os.path.abspath(root), bool(subfolders))
+    hit = _LIST_CACHE.get(key)
+    if hit is not None and time.monotonic() - hit[0] < LIST_TTL_S:
+        return list(hit[1])
     out: list[str] = []
     all_exts = _IMG_EXTS | _HDR_EXTS | _VID_EXTS | _AUD_EXTS
-    for dp, _dn, fn in os.walk(root):
+    base_depth = os.path.abspath(root).rstrip(os.sep).count(os.sep)
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if not d.startswith(".")]
+        if os.path.abspath(dp).rstrip(os.sep).count(os.sep) - base_depth >= MAX_DEPTH:
+            dn[:] = []
         for n in fn:
-            ext = os.path.splitext(n)[1].lower()
-            if ext in all_exts:
-                rel = os.path.relpath(os.path.join(dp, n), root).replace("\\", "/")
-                out.append(rel)
-        if not subfolders:
+            if os.path.splitext(n)[1].lower() in all_exts:
+                out.append(os.path.relpath(os.path.join(dp, n), root).replace("\\", "/"))
+                if len(out) >= MAX_ENTRIES:
+                    break
+        if not subfolders or len(out) >= MAX_ENTRIES:
             break
     out.sort()
-    return out
+    _LIST_CACHE[key] = (time.monotonic(), out)
+    return list(out)
 
 
 # ── previews of tensor inputs for the in-browser comparer (A9, L2.26) ─────────────────────────────────
