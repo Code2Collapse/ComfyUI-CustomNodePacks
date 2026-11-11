@@ -154,8 +154,9 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
          "url":  "https://huggingface.co/1038lab/sam3/resolve/main/sam3.pt"},
     ],
     "sec": [
-        {"name": "SeC-4B.safetensors",
-         "url":  "https://huggingface.co/OpenIXCLab/SeC-4B/resolve/main/model.safetensors"},
+        # L9.152 / L9.192: SeC-4B is a sharded Transformers repo (this single file was a 404); the segmenter loads the
+        # whole model through model_manager "sec_4b" (installed copy, or a download with auto_download)
+        {"name": "SeC-4B.safetensors", "url": "", "repo": "OpenIXCLab/SeC-4B"},
     ],
     "vitmatte": [
         # L9.192: ViTMatte loads only as a whole Transformers folder (config + preprocessor + weights), never from one
