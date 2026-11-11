@@ -204,17 +204,25 @@ if (!(app.extensions || []).some((e) => e?.name === "C2C.LiteMode")) app.registe
                 const evalTier = TIER;
                 const probedTier = rt.tierAfterProbe(entry);
                 rt.refreshTierCache();
+                const willSwitch = _readStoredMode() === MODE_AUTO && probedTier !== evalTier && probedTier === "lite";
+                const liteNotice = () => {
+                    if (willSwitch) {
+                        _offerReload(
+                            "C2C Performance mode",
+                            "C2C: switched to Lite on next reload because this browser is rendering without the GPU.",
+                            { ask: false },
+                        );
+                    }
+                };
+                // L4.10: ONE message at load. On software GL the GPU-status toast already says what happens to
+                // Lite (worded from liteState), so the Lite notice only shows when that toast did not.
                 if (entry.software) {
+                    const liteState = willSwitch ? "next-reload" : (evalTier === "lite" ? "active" : "off");
                     import("./c2c_gpu_status.js")
-                        .then((m) => m.onSoftwareProbeResult(entry))
-                        .catch(() => {});
-                }
-                if (_readStoredMode() === MODE_AUTO && probedTier !== evalTier && probedTier === "lite") {
-                    _offerReload(
-                        "C2C Performance mode",
-                        "C2C: switched to Lite on next reload because this browser is rendering without the GPU.",
-                        { ask: false },
-                    );
+                        .then((m) => { if (m.onSoftwareProbeResult(entry, { lite: liteState }) !== true) liteNotice(); })
+                        .catch(liteNotice);
+                } else {
+                    liteNotice();
                 }
             } catch (_) {}
         };

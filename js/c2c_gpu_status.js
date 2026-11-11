@@ -164,29 +164,37 @@ export function openGpuStatusDialog() {
     }
 }
 
-/** Called from _c2c_lite.js after idle GPU probe when software === true. */
-export function onSoftwareProbeResult(entry) {
-    if (!entry || entry.software !== true) return;
-    if (_toastShownThisPage) return;
-    _toastShownThisPage = true;
+const _LITE_TEXT = {
+    "next-reload": "C2C switches to Lite on the next reload. ",
+    active: "C2C runs in Lite. ",
+    off: "",
+};
+
+/** Called from _c2c_lite.js after the idle GPU probe when software === true. `lite` = what happens to C2C's Lite
+ *  mode ("next-reload" | "active" | "off"), so this one toast also covers the Lite notice (L4.10).
+ *  Returns true when the toast was shown. */
+export function onSoftwareProbeResult(entry, { lite = "active" } = {}) {
+    if (!entry || entry.software !== true) return false;
+    if (_toastShownThisPage) return false;
 
     const renderer = String(entry.renderer || "(unknown)");
-    _markToastSeen(renderer);
-
     try {
         const t = app.extensionManager?.toast;
-        if (t?.add) {
-            t.add({
-                severity: "warn",
-                summary: "GPU rendering issue",
-                detail: `Your browser is drawing ComfyUI without the GPU (${renderer}). `
-                       + "C2C switched to Lite. See how to fix — open "
-                       + '"C2C: GPU & performance status" from the command palette.',
-                life: 12000,
-            });
-        }
+        if (!t?.add) return false;
+        t.add({
+            severity: "warn",
+            summary: "GPU rendering issue",
+            detail: `Your browser is drawing ComfyUI without the GPU (${renderer}). `
+                   + (_LITE_TEXT[lite] ?? _LITE_TEXT.active)
+                   + 'See how to fix — open "C2C: GPU & performance status" from the command palette.',
+            life: 12000,
+        });
+        _toastShownThisPage = true;
+        _markToastSeen(renderer);
+        return true;
     } catch (e) {
         __c2cReport("c2c_gpu_status:toast", e);
+        return false;
     }
 }
 
