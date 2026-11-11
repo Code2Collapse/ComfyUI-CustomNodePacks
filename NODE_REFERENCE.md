@@ -3664,7 +3664,7 @@ Saved workflows with the eight former nodes (Mask From Color, Luminance Keyer, M
 
 **Shown in the menu as:** Mask Placement — Prompt/Ref → Place → Track
 
-Universal mask placement: source an alpha (wire a mask, or give a text prompt + SAM model and it segments the object for you), place it with a draggable 4-corner perspective quad, and propagate across the video. Slice 1 ships static propagation; object tracking (Cutie) and landmark-locked follow are staged next.
+Universal mask placement: source an alpha (wire a mask, or give a text prompt + SAM model and it segments the object for you), place it with a draggable 4-corner perspective quad, and propagate across the video. track_mode landmark_lock follows wired landmarks (POSE_KEYPOINT, e.g. Face Landmarks (Facepoints) or DWPose) frame by frame; object tracking (Cutie) is not built yet and falls back to static, saying so.
 
 
 **Required inputs**
@@ -3674,7 +3674,7 @@ Universal mask placement: source an alpha (wire a mask, or give a text prompt + 
 | `images` | `IMAGE` |  | Video frames or a single still (B,H,W,3). |
 | `prompt` | `STRING` | default `""` | What to cut out, e.g. 'dog', 'car', 'mouth'. Needs sam_model (+ a GroundingDINO model) wired. Ignored when source_mask is wired. |
 | `grounding_model` | choice: `none`, `groundingdino_swint_ogc`, `groundingdino_swinb_cogcoor` | default `"groundingdino_swinb_cogcoor"` | GroundingDINO model for text->box grounding (same list as SAM Mask Generator). |
-| `track_mode` | choice: `static`, `object_track`, `landmark_lock`, `auto` | default `"static"` | How the placement follows the video. Slice 1: 'static' is live; 'object_track' (Cutie) and 'landmark_lock' fall back to static for now and say so in `info`. |
+| `track_mode` | choice: `static`, `object_track`, `landmark_lock`, `auto` | default `"static"` | How the placement follows the video. static: same place every frame. landmark_lock: follows the wired `landmarks` (face or body points nearest the quad). auto: landmark_lock when landmarks are wired, else static. object_track (Cutie) is not built yet: static, and `info` says so. |
 | `anchor_frame` | `INT` | default `0`, range 0…99999 | The frame the quad was placed on (and segmented from, when using prompt without ref_image). |
 | `placement_json` | `STRING` | default `""`, multiline | Editor-owned: {"corners":[[x,y]x4 TL,TR,BR,BL], "feather":px} in anchor-frame pixel coords. Empty = centered 60%-size quad. |
 | `feather_px` | `INT` | default `6`, range 0…128 | Edge feather (Gaussian, px) applied to the placed alpha. placement_json's feather wins when present. |
@@ -3687,6 +3687,8 @@ Universal mask placement: source an alpha (wire a mask, or give a text prompt + 
 | `source_image` | `IMAGE` |  | RGB that source_mask cuts out of (for the placed_rgb output). When absent, the mask is placed without pixels. |
 | `ref_image` | `IMAGE` |  | Segment the prompt from THIS image instead of the video's anchor frame (e.g. a photo of the dog you want). |
 | `sam_model` | `SAM_MODEL` |  | From SAM Model Loader — needed only for prompt-based segmentation. |
+| `allow_download` | `BOOLEAN` | default `False` | Download the grounding model for a text prompt if it is not installed. Off: an installed copy is used wherever it is. |
+| `landmarks` | `POSE_KEYPOINT` |  | Per-frame landmarks (OpenPose JSON) for track_mode landmark_lock / auto, e.g. from Face Landmarks (Facepoints) or a DWPose estimator. One entry per frame, pixel coordinates. |
 
 **Outputs**
 

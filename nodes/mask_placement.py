@@ -15,7 +15,10 @@ Build slices (design doc: MASK_PLACEMENT_NODE_DESIGN.md at workspace root):
       landmark_lock fall back to static with a clear note in `info`.
   Slice 2: Cutie (MIT, third_party/Cutie -> nodes_extras port) object
       tracking driving a per-frame quad update.
-  Slice 3: landmark-locked barycentric binding for face/body attachments.
+  Slice 3 (L9.39 row 7, 2026-11-12): landmark_lock - the placement follows a POSE_KEYPOINT stream (OpenPose
+      JSON, e.g. Face Landmarks (Facepoints) or DWPose): per frame an affine fitted to the landmarks nearest the
+      quad (local follow), a similarity when few are near; frames without enough shared landmarks hold the last
+      transform and say so in `info`.
 
 Apache-2.0, C2C/MEC.
 """
@@ -90,6 +93,81 @@ def _parse_placement(blob: str, W: int, H: int, default_feather: float = 6.0) ->
     return corners, max(0.0, feather)
 
 
+LOCK_MIN_POINTS = 3            # an affine needs 3 shared points; fewer -> hold the last transform
+LOCK_NEAR_POINTS = 24          # the landmarks nearest the quad that drive a local (affine) fit
+LOCK_MIN_CONF = 0.3
+
+
+def _frame_points(entry, person_hint: Optional[np.ndarray]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """One POSE_KEYPOINT frame -> (points [N,2], confidence [N]) of ONE person: the one whose landmark centroid is
+    nearest `person_hint` (or the first). Face points when the person has them, else body points."""
+    people = (entry or {}).get("people") or [] if isinstance(entry, dict) else []
+    best, best_d = None, None
+    for person in people:
+        for key in ("face_keypoints_2d", "pose_keypoints_2d"):
+            flat = person.get(key) or []
+            if len(flat) >= 9:
+                a = np.asarray(flat, np.float64).reshape(-1, 3)
+                ok = a[:, 2] > LOCK_MIN_CONF
+                if ok.sum() >= LOCK_MIN_POINTS:
+                    c = a[ok, :2].mean(0)
+                    d = 0.0 if person_hint is None else float(np.linalg.norm(c - person_hint))
+                    if best is None or d < best_d:
+                        best, best_d = a, d
+                    break
+    if best is None:
+        return None, None
+    return best[:, :2], best[:, 2]
+
+
+def landmark_transforms(frames, anchor: int, quad: np.ndarray) -> Tuple[List[np.ndarray], List[str]]:
+    """Per frame a 3x3 matrix taking anchor-frame pixels to that frame's pixels, and a status per frame:
+    'anchor', 'locked (affine, n pts)', 'locked (similarity, n pts)' or 'held (...)'."""
+    n = len(frames)
+    anchor = min(max(int(anchor), 0), n - 1)
+    centre = np.asarray(quad, np.float64).mean(0)
+    a_pts, a_conf = _frame_points(frames[anchor], centre)
+    eye = np.eye(3)
+    if a_pts is None:
+        return [eye] * n, ["held (no landmarks on the anchor frame)"] * n
+    radius = float(np.linalg.norm(np.asarray(quad, np.float64) - centre, axis=1).max())
+    mats: List[np.ndarray] = [eye] * n
+    status: List[str] = [""] * n
+    mats[anchor], status[anchor] = eye, "anchor"
+
+    def fit(t: int, prev: np.ndarray, hint: np.ndarray) -> Tuple[np.ndarray, str, np.ndarray]:
+        pts, conf = _frame_points(frames[t], hint)
+        if pts is None or len(pts) != len(a_pts):
+            return prev, "held (no matching landmarks)", hint
+        both = (conf > LOCK_MIN_CONF) & (a_conf > LOCK_MIN_CONF)
+        idx = np.nonzero(both)[0]
+        if len(idx) < LOCK_MIN_POINTS:
+            return prev, f"held ({len(idx)} shared landmarks)", hint
+        d = np.linalg.norm(a_pts[idx] - centre, axis=1)
+        near = idx[np.argsort(d)[:LOCK_NEAR_POINTS]]
+        src, dst = a_pts[near].astype(np.float32), pts[near].astype(np.float32)
+        local = len(near) >= 6 and float(np.sort(d)[min(len(d), LOCK_NEAR_POINTS) - 1]) <= 3.0 * max(radius, 1.0)
+        if local:
+            m, _ = cv2.estimateAffine2D(src, dst, method=cv2.LMEDS)
+            kind = "affine"
+        else:
+            m, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.LMEDS)
+            kind = "similarity"
+        if m is None:
+            return prev, "held (fit failed)", hint
+        mat = np.vstack([m, [0.0, 0.0, 1.0]])
+        return mat, f"locked ({kind}, {len(near)} pts)", pts[both].mean(0)
+
+    for direction in (1, -1):                         # walk out from the anchor both ways, holding on failures
+        prev, hint = eye, a_pts[a_conf > LOCK_MIN_CONF].mean(0)
+        t = anchor + direction
+        while 0 <= t < n:
+            prev, status[t], hint = fit(t, prev, hint)
+            mats[t] = prev
+            t += direction
+    return mats, status
+
+
 def _tight_bbox(alpha: np.ndarray, thresh: float = 0.02) -> Optional[Tuple[int, int, int, int]]:
     ys, xs = np.where(alpha > thresh)
     if len(ys) == 0:
@@ -102,8 +180,8 @@ class MaskPlacementMEC:
         "Universal mask placement: source an alpha (wire a mask, or give a text "
         "prompt + SAM model and it segments the object for you), place it with a "
         "draggable 4-corner perspective quad, and propagate across the video. "
-        "Slice 1 ships static propagation; object tracking (Cutie) and "
-        "landmark-locked follow are staged next."
+        "track_mode landmark_lock follows wired landmarks (POSE_KEYPOINT, e.g. Face Landmarks (Facepoints) or "
+        "DWPose) frame by frame; object tracking (Cutie) is not built yet and falls back to static, saying so."
     )
 
     @classmethod
@@ -125,9 +203,10 @@ class MaskPlacementMEC:
                 "grounding_model": (gdino_models, {"default": gdino_models[-1] if len(gdino_models) > 1 else "none",
                     "tooltip": "GroundingDINO model for text->box grounding (same list as SAM Mask Generator)."}),
                 "track_mode": (["static", "object_track", "landmark_lock", "auto"], {"default": "static",
-                    "tooltip": "How the placement follows the video. Slice 1: 'static' is live; "
-                               "'object_track' (Cutie) and 'landmark_lock' fall back to static for now "
-                               "and say so in `info`."}),
+                    "tooltip": "How the placement follows the video. static: same place every frame. "
+                               "landmark_lock: follows the wired `landmarks` (face or body points nearest the "
+                               "quad). auto: landmark_lock when landmarks are wired, else static. object_track "
+                               "(Cutie) is not built yet: static, and `info` says so."}),
                 "anchor_frame": ("INT", {"default": 0, "min": 0, "max": 99999,
                     "tooltip": "The frame the quad was placed on (and segmented from, when using prompt "
                                "without ref_image)."}),
@@ -152,6 +231,11 @@ class MaskPlacementMEC:
                     "default": False,
                     "tooltip": "Download the grounding model for a text prompt if it is not installed. Off: an installed copy is used wherever it is.",
                 }),
+                # L9.39 row 7: appended last (a socket, not a widget: saved widget values keep their slots)
+                "landmarks": ("POSE_KEYPOINT", {"tooltip": "Per-frame landmarks (OpenPose JSON) for track_mode "
+                                                           "landmark_lock / auto, e.g. from Face Landmarks "
+                                                           "(Facepoints) or a DWPose estimator. One entry per "
+                                                           "frame, pixel coordinates."}),
             },
         }
 
@@ -218,15 +302,16 @@ class MaskPlacementMEC:
     # ── main ─────────────────────────────────────────────────────────
     def execute(self, images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px,
-                source_mask=None, source_image=None, ref_image=None, sam_model=None, allow_download=False):
+                source_mask=None, source_image=None, ref_image=None, sam_model=None, allow_download=False,
+                landmarks=None):
         from ._download_policy import allow_downloads
         with allow_downloads(allow_download):
             return self._execute_guarded(images, prompt, grounding_model, track_mode, anchor_frame, placement_json,
-                                         feather_px, source_mask, source_image, ref_image, sam_model)
+                                         feather_px, source_mask, source_image, ref_image, sam_model, landmarks)
 
     def _execute_guarded(self, images, prompt, grounding_model, track_mode, anchor_frame,
                          placement_json, feather_px,
-                         source_mask=None, source_image=None, ref_image=None, sam_model=None):
+                         source_mask=None, source_image=None, ref_image=None, sam_model=None, landmarks=None):
         # A22 L9.136: this was a second _execute_impl, so the later definition replaced it and the cv2 check and
         # no_grad never ran (without cv2: an AttributeError on None).
         if not _CV2_OK:
@@ -235,12 +320,12 @@ class MaskPlacementMEC:
             return self._execute_impl(
                 images, prompt, grounding_model, track_mode, anchor_frame,
                 placement_json, feather_px, source_mask, source_image,
-                ref_image, sam_model,
+                ref_image, sam_model, landmarks,
             )
 
     def _execute_impl(self, images, prompt, grounding_model, track_mode, anchor_frame,
                       placement_json, feather_px,
-                      source_mask, source_image, ref_image, sam_model):
+                      source_mask, source_image, ref_image, sam_model, landmarks=None):
         images_np = _to_np_image(images)
         B, H, W = images_np.shape[0], images_np.shape[1], images_np.shape[2]
 
@@ -289,26 +374,58 @@ class MaskPlacementMEC:
         requested = str(track_mode)
         effective = "static"
         note = ""
-        if requested in ("object_track", "landmark_lock", "auto") and B > 1:
-            note = (f"track_mode='{requested}' is not built yet (Slice 2/3) — "
-                    "placement propagated statically to all frames.")
+        frame_status: List[str] = []
+        lm = list(landmarks) if isinstance(landmarks, (list, tuple)) else ([landmarks] if landmarks else [])
+        if requested in ("landmark_lock", "auto") and B > 1 and lm:
+            if len(lm) < B:                        # a short stream holds its last frame (a still's landmarks too)
+                lm = lm + [lm[-1]] * (B - len(lm))
+            mats, frame_status = landmark_transforms(lm[:B], int(anchor_frame), corners)
+            effective = "landmark_lock"
+            held = sum(s.startswith("held") for s in frame_status)
+            if held:
+                note = f"{held} of {B} frame(s) held the last placement (not enough shared landmarks)."
+        elif requested == "landmark_lock" and B > 1:
+            note = "track_mode='landmark_lock' needs the `landmarks` input wired - placement propagated statically."
+        elif requested == "object_track" and B > 1:
+            note = ("track_mode='object_track' (Cutie) is not built yet - placement propagated statically to all "
+                    "frames. Wire landmarks and use landmark_lock to follow a face or body.")
+        if note:
             log.info("MaskPlacementMEC: %s", note)
 
-        # Slice 1: same placement on every frame.
-        masks = np.repeat(warped_alpha[None], B, axis=0)
-        placed = np.repeat(warped_rgb[None], B, axis=0)
+        if effective == "landmark_lock":
+            src_rect3 = np.asarray([[0, 0], [sw, 0], [sw, sh], [0, sh]], dtype=np.float32)
+            masks = np.empty((B, H, W), np.float32)
+            placed = np.empty((B, H, W, 3), np.float32)
+            quads = []
+            for i in range(B):
+                Ht = mats[i] @ Hm
+                a = cv2.warpPerspective(alpha_crop.astype(np.float32), Ht, (W, H), flags=cv2.INTER_LINEAR,
+                                        borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+                if feather > 0.5:
+                    k = max(1, int(round(feather)) * 2 + 1)
+                    a = cv2.GaussianBlur(a, (k, k), feather * 0.5)
+                masks[i] = np.clip(a, 0.0, 1.0)
+                placed[i] = (cv2.warpPerspective(rgb_crop.astype(np.float32), Ht, (W, H), flags=cv2.INTER_LINEAR,
+                                                 borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+                             if rgb_crop is not None else 0.0)
+                quads.append(cv2.perspectiveTransform(src_rect3[None], Ht)[0])
+        else:
+            # same placement on every frame
+            masks = np.repeat(warped_alpha[None], B, axis=0)
+            placed = np.repeat(warped_rgb[None], B, axis=0)
+            quads = [corners] * B
 
         # Overlay preview: original frames + green tint + quad outline.
         overlay = images_np.copy()
         tint = np.zeros_like(overlay[0])
         tint[..., 1] = 1.0
-        a3 = warped_alpha[..., None] * 0.45
-        quad_i = corners.astype(np.int32).reshape(-1, 1, 2)
         for i in range(B):
+            a3 = masks[i][..., None] * 0.45
+            quad_i = np.asarray(quads[i]).astype(np.int32).reshape(-1, 1, 2)
             overlay[i] = overlay[i] * (1.0 - a3) + tint * a3
             frame_u8 = (overlay[i] * 255).astype(np.uint8)
             cv2.polylines(frame_u8, [quad_i], True, (60, 180, 255), 2, cv2.LINE_AA)
-            for cx, cy in corners:
+            for cx, cy in np.asarray(quads[i]):
                 cv2.circle(frame_u8, (int(cx), int(cy)), 5, (60, 180, 255), -1, cv2.LINE_AA)
             overlay[i] = frame_u8.astype(np.float32) / 255.0
 
@@ -323,6 +440,7 @@ class MaskPlacementMEC:
             "frames": int(B),
             "track_mode_requested": requested,
             "track_mode_effective": effective,
+            "frame_status": frame_status,
             "note": note,
         })
 
