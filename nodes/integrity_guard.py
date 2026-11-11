@@ -24,7 +24,7 @@ nodes (or globally if pip).
 
 The latest report is also in the Diagnostics sidebar's Integrity tab (the
 Integrity Status node that printed it was removed in L7.65). An HTTP endpoint
-`/nukenodemax/reinstall?package=NAME` runs `uv pip install --reinstall`
+`/nukenodemax/reinstall?package=NAME` repairs ONE installed package (pinned, no deps; see reinstall_plan)
 (or `pip install --force-reinstall` as fallback), guarded behind a confirm
 flag.
 """
@@ -816,6 +816,37 @@ def install_missing(
 
 
 # =====================================================================
+_BARE_DIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def reinstall_plan(package: str, uv_bin: Optional[str] = None) -> Tuple[Optional[List[str]], Optional[str]]:
+    """(command, None) to REPAIR one installed distribution, or (None, why) when refused.
+
+    The /nukenodemax/reinstall route used to pass any client-supplied name - version specifiers included - to
+    `pip install --force-reinstall` / `uv pip install --reinstall`: a request could install any package from PyPI
+    (running its install code) or force `torch==<old>`, and both commands also reinstall every dependency at its
+    LATEST version (a silent torch / numpy overwrite). Now (L5.01 review): a bare name only, never a CRITICAL
+    package, it must already be installed, and the reinstall is pinned to the installed version without
+    dependencies.
+    """
+    name = (package or "").strip()
+    if not _BARE_DIST_RE.match(name):
+        return None, "package must be a bare distribution name (no version, extras, URL or path)"
+    _ok, why = _heal_validate_packages([name])
+    if why:
+        return None, why
+    try:
+        from importlib import metadata
+        version = metadata.version(name)
+    except Exception:
+        return None, f"{name} is not installed; reinstall only repairs an installed package"
+    pinned = f"{name}=={version}"
+    if uv_bin:
+        return [uv_bin, "pip", "install", "--python", sys.executable, "--no-deps",
+                "--reinstall-package", name, pinned], None
+    return [sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", pinned], None
+
+
 # Server endpoint /nukenodemax/reinstall
 # =====================================================================
 def register_routes(server) -> None:
@@ -847,18 +878,9 @@ def register_routes(server) -> None:
                 "ok": False,
                 "error": "destructive action: pass confirm=yes to proceed",
             }, status=400)
-        # Restrict package name to a safe charset to defend against shell-injection.
-        import re
-        if not re.match(r"^[A-Za-z0-9._\-\[\]=<>!~+]+$", package):
-            return web.json_response({"ok": False, "error": "invalid package name"},
-                                      status=400)
-        if _UV_BIN:
-            install_cmd = [_UV_BIN, "pip", "install",
-                           "--python", sys.executable,
-                           "--reinstall", package]
-        else:
-            install_cmd = [sys.executable, "-m", "pip", "install",
-                           "--force-reinstall", package]
+        install_cmd, why = reinstall_plan(str(package), _UV_BIN)
+        if install_cmd is None:
+            return web.json_response({"ok": False, "error": why}, status=400)
         result = _run(install_cmd, timeout=600)
         # Rescan after the change — force, bypass cache, run immediately.
         start_background_scan(force=True, delay=0.0)
