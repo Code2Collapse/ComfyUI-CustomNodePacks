@@ -567,7 +567,9 @@ class MaskOpsMEC:
                     "default": _segmenter_choices()[0],
                     "tooltip": "Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. "
                                "sam3 / sam3.1 run on ComfyUI's own SAM 3 (ComfyUI 0.39+; C2C_SAM_CORE=0 turns that off). "
-                               "NON-COMMERCIAL weights: rmbg (briaai RMBG-1.4 / 2.0, Bria licences).",
+                               "NON-COMMERCIAL weights: rmbg (briaai RMBG-1.4 / 2.0, Bria licences); locate_anything "
+                               "(NVIDIA License, academic / non-profit research only - auto / auto_best also use it for "
+                               "text prompts when it is installed; info.text_grounding says when).",
                 }),
                 "matter": (_matter_choices(), {
                     "default": "vitmatte" if "vitmatte" in [k for k in list_matter_keys()] else "none",
@@ -1546,7 +1548,8 @@ class MaskOpsMEC:
                             mask_t = m_la
                             score = s_la
                             _la_done = True
-                            _text_grounding = dict(tr_la or {}, replaced=seg_key)
+                            _text_grounding = dict(tr_la or {}, replaced=seg_key,
+                                                   licence="LocateAnything-3B: NVIDIA License, non-commercial")
                             if tr_la:
                                 _cascade_trail.append(tr_la)
                                 _auto_route_reasons.append(

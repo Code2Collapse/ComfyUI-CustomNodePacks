@@ -84,7 +84,8 @@ class LocateAnythingGroundingMEC:
         "the left', 'red car', 'coffee cup' - and get back bounding boxes. "
         "Open-vocabulary, so it is not limited to a fixed class list the way a "
         "detector is. Feed the boxes to Locate Anything To SAM to turn them "
-        "into masks."
+        "into masks. LICENCE: LocateAnything-3B is under the NVIDIA License for NON-COMMERCIAL use (academic and "
+        "non-profit research only; checked 2026-11-11)."
     )
 
     # A22 L9.136: keyed by (model_path, device) and holding ONE entry (a 3B model); released by the memory guard
@@ -110,7 +111,7 @@ class LocateAnythingGroundingMEC:
                 # L7.97 (owner 2026-10-12): appended last; off = never download
                 "allow_download": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Download LocateAnything-3B (about 7 GB) into models/LLM/LocateAnything-3B if it is not installed. Off: an installed copy is used (a local folder in model_path, models/*/LocateAnything-3B, or the Hugging Face cache); without one the node names the folder to put it in. There is no model-free way to read a text prompt.",
+                    "tooltip": "Download LocateAnything-3B (about 7 GB) into models/LLM/LocateAnything-3B if it is not installed. Off: an installed copy is used (a local folder in model_path, models/*/LocateAnything-3B, or the Hugging Face cache); without one the node names the folder to put it in. There is no model-free way to read a text prompt. LICENCE: NVIDIA License, NON-COMMERCIAL (academic / non-profit research only).",
                 }),
             },
         }
