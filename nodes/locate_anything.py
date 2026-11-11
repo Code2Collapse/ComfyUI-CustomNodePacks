@@ -10,6 +10,7 @@ rectangle masks that downstream SAM nodes can consume as box prompts.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,6 +24,56 @@ logger = logging.getLogger("MEC.LocateAnything")
 #: models/<this>/LocateAnything-3B: where a download goes and where an installed copy is looked for first (other
 #: packs' models/*/LocateAnything-3B and the Hugging Face cache are found too). LLM = the folder VLM packs share.
 LOCATE_ANYTHING_MODEL_DIR = "LLM"
+
+# L9.188 (P0 security): LocateAnything-3B ships its own Python (trust_remote_code), so loading a model RUNS that
+# repo's code. model_path is a free string a shared workflow sets, so it could name any Hugging Face repo or folder.
+# Only the official repo, or a folder inside a ComfyUI models folder (where an install lives), may load; anything else
+# needs the machine owner's explicit opt-in in this environment variable (comma-separated repo ids / folders).
+TRUSTED_REMOTE_CODE_REPOS = frozenset({"nvidia/locateanything-3b"})
+TRUST_ENV = "C2C_TRUSTED_REMOTE_CODE"
+
+
+def _model_roots() -> list[str]:
+    roots = []
+    try:
+        import folder_paths  # ComfyUI
+        roots.append(folder_paths.models_dir)
+        for paths, _exts in folder_paths.folder_names_and_paths.values():
+            roots.extend(paths)
+    except Exception:  # noqa: BLE001 - outside ComfyUI (tests): the pack's own models folder only
+        pass
+    from .model_manager import _MODELS_DIR
+    roots.append(_MODELS_DIR)
+    return [os.path.realpath(r) for r in roots if r]
+
+
+def _inside(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.normcase(path), os.path.normcase(root)]) == os.path.normcase(root)
+    except ValueError:                                  # another drive on Windows
+        return False
+
+
+def check_remote_code_source(model_path: str) -> None:
+    """Raise PermissionError unless model_path is safe to load with trust_remote_code (see TRUSTED_REMOTE_CODE_REPOS)."""
+    p = str(model_path or "").strip()
+    extra = {s.strip() for s in os.environ.get(TRUST_ENV, "").split(",") if s.strip()}
+    if os.path.isdir(p):
+        real = os.path.realpath(p)
+        if any(_inside(real, r) for r in _model_roots()):
+            return
+        if any(os.path.isdir(e) and os.path.normcase(os.path.realpath(e)) == os.path.normcase(real) for e in extra):
+            return
+        raise PermissionError(
+            f"Locate Anything: model_path {p!r} is a folder outside ComfyUI's models folders. This model runs its own "
+            "Python code when it loads, so only an install inside a models folder (e.g. models/LLM/LocateAnything-3B) "
+            f"is loaded. If you trust this folder, add it to the {TRUST_ENV} environment variable and restart.")
+    if p.lower() in TRUSTED_REMOTE_CODE_REPOS or p.lower() in {e.lower() for e in extra}:
+        return
+    raise PermissionError(
+        f"Locate Anything: model_path {p!r} is not the official nvidia/LocateAnything-3B. This model runs its own "
+        "Python code when it loads, and a workflow can set this field, so other repos are refused. If you trust "
+        f"{p!r}, add it to the {TRUST_ENV} environment variable and restart.")
 
 
 class LocateAnythingGroundingMEC:
@@ -83,6 +134,7 @@ class LocateAnythingGroundingMEC:
         key = (str(model_path), str(device))
         if key in cls._model_cache:
             return cls._model_cache[key]
+        check_remote_code_source(model_path)   # L9.188: before any download, import or remote code
         cls._model_cache.clear()          # another path / device: drop the old copy before loading the new one
         from transformers import AutoModel, AutoTokenizer, AutoProcessor
 
