@@ -629,11 +629,16 @@ def _feather_weights(h: int, w: int, overlap: int) -> torch.Tensor:
     return (wy * wx).clamp(min=1e-6)
 
 
-def _matte_crop(matter, frame_u8, tri_u8, crop_h: int, crop_w: int) -> torch.Tensor:
-    """Run matter on a crop; returns alpha (crop_h, crop_w)."""
+def _matte_crop(matter, frame_u8, tri_u8, crop_h: int, crop_w: int, coarse_crop=None) -> torch.Tensor:
+    """Run matter on a crop; returns alpha (crop_h, crop_w).
+
+    L9.156: the coarse mask of the crop goes with the trimap. It used to be all zeros: trimap matters (ViTMatte, the
+    guided filter) never read it when a trimap is given, but RVM / salient clip their alpha to it, MatAnyone seeds from
+    it and BGMattingV2 builds its plate from it - so under ONYX they produced an empty edge band."""
     img_t = torch.from_numpy(frame_u8).float().div(255.0).unsqueeze(0)
     tri_t = torch.from_numpy(tri_u8).float().div(255.0).unsqueeze(0)
-    out = matter.matte(img_t, torch.zeros_like(tri_t), trimap=tri_t)
+    coarse_t = (coarse_crop.float().unsqueeze(0) if coarse_crop is not None else torch.zeros_like(tri_t))
+    out = matter.matte(img_t, coarse_t, trimap=tri_t)
     alpha = out["alpha"][0]
     if alpha.shape[-2:] != (crop_h, crop_w):
         import torch.nn.functional as F
@@ -664,6 +669,7 @@ def refine_frame_tiled(
     frame_u8 = (frame_hwc.cpu().numpy() * 255).astype(np.uint8)
     tri_crop = (trimap_hw[y0:y1, x0:x1].numpy() * 255).astype(np.uint8)
     frame_crop = frame_u8[y0:y1, x0:x1]
+    coarse_crop = coarse_hw[y0:y1, x0:x1].detach().float().cpu()
     alpha_crop = torch.zeros((crop_h, crop_w), dtype=torch.float32)
     weight_crop = torch.zeros((crop_h, crop_w), dtype=torch.float32)
     tile = max(64, int(matte_tile))
@@ -681,7 +687,8 @@ def refine_frame_tiled(
             if not has_unknown:
                 continue
             sub_frame = frame_crop[ty0:ty1, tx0:tx1]
-            sub_alpha = _matte_crop(matter, sub_frame, sub_tri, ty1 - ty0, tx1 - tx0)
+            sub_alpha = _matte_crop(matter, sub_frame, sub_tri, ty1 - ty0, tx1 - tx0,
+                                    coarse_crop=coarse_crop[ty0:ty1, tx0:tx1])
             w = _feather_weights(ty1 - ty0, tx1 - tx0, tile_overlap)
             alpha_crop[ty0:ty1, tx0:tx1] += sub_alpha * w
             weight_crop[ty0:ty1, tx0:tx1] += w
