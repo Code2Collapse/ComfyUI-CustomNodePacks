@@ -12,14 +12,32 @@ A growing collection of custom nodes:
 
 print("[MEC] Loading MaskEditControl node pack …")
 
+
+def _c2c_try_import(mod: str, *names: str):
+    """L9.196: one module that fails to import must cost only its own nodes, not the whole pack (memory
+    customnodepacks-import-cascade). Returns the module (no names) or a tuple of the names; on failure None for each,
+    logged and recorded in the C2C failure registry (its UI lists it)."""
+    import importlib
+    try:
+        m = importlib.import_module(mod, __name__)
+        return m if not names else tuple(getattr(m, n) for n in names)
+    except Exception as exc:  # noqa: BLE001 - reported, the rest of the pack loads
+        import logging
+        logging.getLogger("MEC").error("[C2C] %s failed to import (%s: %s); its nodes are not registered, the rest "
+                                       "of the pack is.", mod, type(exc).__name__, exc)
+        try:
+            from .nodes._c2c_registry import record_failure
+            record_failure(mod.lstrip("."), exc, hint=f"{mod} failed to import; its nodes are missing.", group="nodes")
+        except Exception:  # noqa: BLE001
+            pass
+        return None if not names else tuple(None for _ in names)
+
 # ── FolderIncrementer nodes ────────────────────────────────────────────
-from .folder_incrementer import (
-    NODE_CLASS_MAPPINGS as _FOLDER_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _FOLDER_DISPLAY,
-)
+_FOLDER_MAPPINGS, _FOLDER_DISPLAY = (m or {} for m in _c2c_try_import(
+    ".folder_incrementer", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"))
 
 # ── Model Manager (shared cache / download) ───────────────────────────
-from .nodes import model_manager as _model_manager  # noqa: F401
+_model_manager = _c2c_try_import(".nodes.model_manager")  # noqa: F841
 
 # ── Live-preview guard: force sampling previews on even if launched with
 #    --preview-method none (Latent2RGB fallback, cannot fail). Best-effort. ──
@@ -48,37 +66,31 @@ except Exception:  # never block the pack on a memory hook
 # No legacy NODE_CLASS_MAPPINGS entries are registered.
 # L7.65 P01: Mask Edit and Spline Mask are not registered either - their drawing modes are Image Mask Editor modes,
 # transform is Mask Tools', bbox_smooth / track are Mask Track's (rows in nodes/_legacy_replacements.json).
-from .nodes.mask_tracker_mec import MaskTrackerMEC
-from .nodes.parameter_memory import ParameterHistoryMEC
+MaskTrackerMEC, = _c2c_try_import(".nodes.mask_tracker_mec", "MaskTrackerMEC")
+ParameterHistoryMEC, = _c2c_try_import(".nodes.parameter_memory", "ParameterHistoryMEC")
 # SAM + ViTMatte, SeC + MatAnyone2 and Background Remover are backends of MaskOps (nodes/mask_matting, L7.65 P05).
 # Inpaint Paste Back, Inpaint Mask Prepare, Smart Image Crop / Stitch and Context Inpainter are modes of these two
 # (L7.65 P08); saved workflows migrate on load (nodes/_legacy_replacements.json).
-from .nodes.inpaint_suite import (
-    InpaintCropProMEC,
-    InpaintStitchProMEC,
-)
+InpaintCropProMEC, InpaintStitchProMEC = _c2c_try_import(".nodes.inpaint_suite", "InpaintCropProMEC",
+                                                         "InpaintStitchProMEC")
 # VideoComparerC2C (renamed from VideoComparerMEC) replaces the deprecated
 # ImageComparerMEC. The old image_comparer.py is retained on disk as an
 # importable helper (ImageComparerMEC class), but only VideoComparerC2C is
 # registered — with "VideoComparerMEC" kept as a back-compat alias key so
 # saved workflows still load.
-from .nodes.video_comparer import VideoComparerC2C
-from .nodes.video_frame_player import VideoFramePlayerMEC
+VideoComparerC2C, = _c2c_try_import(".nodes.video_comparer", "VideoComparerC2C")
+VideoFramePlayerMEC, = _c2c_try_import(".nodes.video_frame_player", "VideoFramePlayerMEC")
 # Video Mask Editor: the Image Mask Editor's "video" mode since L7.65 P01; its keyframe store and routes stay here
-from .nodes.video_mask_editor import (
-    register_routes as _register_vme_routes,
-)
-from .nodes.vae_merge import VAEMergeMEC
-from .nodes.model_metadata_extractor import ModelMetadataExtractorMEC
-from .nodes.mask_failure_explainer import MaskFailureExplainerMEC
+_register_vme_routes, = _c2c_try_import(".nodes.video_mask_editor", "register_routes")
+VAEMergeMEC, = _c2c_try_import(".nodes.vae_merge", "VAEMergeMEC")
+ModelMetadataExtractorMEC, = _c2c_try_import(".nodes.model_metadata_extractor", "ModelMetadataExtractorMEC")
+MaskFailureExplainerMEC, = _c2c_try_import(".nodes.mask_failure_explainer", "MaskFailureExplainerMEC")
 
 # MEC Paint Suite registers nothing now: Context Inpainter is Inpaint Stitch Pro's 'context blend' (L7.65 P08), the
 # Advanced Paint Canvas is the Image Mask Editor's paint mode, colour layer (L7.65 P01).
 # Face Fixer (auto YOLO11 detection + per-face KSampler + smart blend)
-from .nodes.mec_face_fixer import (
-    NODE_CLASS_MAPPINGS as _FACE_FIXER_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _FACE_FIXER_DISPLAY,
-)
+_FACE_FIXER_MAPPINGS, _FACE_FIXER_DISPLAY = (m or {} for m in _c2c_try_import(
+    ".nodes.mec_face_fixer", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"))
 # Face/Pose Delta Editor: moved to ComfyUI-WanAnimatePreprocessV2 (L7.65 P21, owner 2026-10-31), same node id, now also
 # reading / writing that pack's POSEDATA; its editor script moved with it. C2C_LEGACY_FACE_POSE_DELTA=1 registers it here
 # again for an install without WanAnimatePreprocessV2 (the node, not the editor).
@@ -569,11 +581,9 @@ except Exception as _exc:  # pragma: no cover
 # ── ProPainter unified dispatcher (absorbs Temporal/Remove/Stitch/StitchRefine/FlowRefine) ──
 # Helper source files are kept on disk as importable Python classes; only
 # ProPainterMEC is registered here.
-from .nodes.propainter_unified import ProPainterMEC
-from .nodes.video_stabilizer_mec import (
-    NODE_CLASS_MAPPINGS as _STABILIZER_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _STABILIZER_DISPLAY,
-)
+ProPainterMEC, = _c2c_try_import(".nodes.propainter_unified", "ProPainterMEC")
+_STABILIZER_MAPPINGS, _STABILIZER_DISPLAY = (m or {} for m in _c2c_try_import(
+    ".nodes.video_stabilizer_mec", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"))
 # NOTE: The following node families now live EXCLUSIVELY in
 # ComfyUI-NukeMaxNodes (May 2026 migration) to avoid duplicate functionality
 # and divergent type semantics. The MEC copies have been moved to _deprecated/.
@@ -584,11 +594,9 @@ from .nodes.video_stabilizer_mec import (
 #   - Tcl/Nk   (TclSerialize/Parse -> NukeMax_NkScriptSerialize / Parse)
 # FlowRefineMEC (post-flow inpainting prep) is kept here because it is part of
 # the ProPainter pipeline, not a generic Nuke flow utility.
-from .nodes.insight import install as _install_insight_hook
-from .nodes.integrity_guard import (
-    register_routes as _register_integrity_routes,
-    start_background_scan as _start_integrity_scan,
-)
+_install_insight_hook, = _c2c_try_import(".nodes.insight", "install")
+_register_integrity_routes, _start_integrity_scan = _c2c_try_import(".nodes.integrity_guard", "register_routes",
+                                                                    "start_background_scan")
 
 _NUKEMAX_MAPPINGS = {
     "ProPainterMEC": ProPainterMEC,
@@ -601,10 +609,8 @@ _NUKEMAX_DISPLAY = {
 # (color_science, exr_io, render_pass, plate_tools, geometry_nodes,
 #  metadata_nodes, exr_metadata_reader, universal_reroute)
 # Model analysis stays here:
-from .nodes.model_analysis import (
-    NODE_CLASS_MAPPINGS as _MA_MAPPINGS,
-    NODE_DISPLAY_NAME_MAPPINGS as _MA_DISPLAY,
-)
+_MA_MAPPINGS, _MA_DISPLAY = (m or {} for m in _c2c_try_import(
+    ".nodes.model_analysis", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"))
 # Legacy mask refinement suite (DenseCRF / Guided / Thin / QualityScore / Trimap)
 # is fully replaced by the single ``MaskRefineMEC`` node registered via
 # ``mask_matting`` package — no separate registration here.
@@ -827,8 +833,10 @@ _C2C_FAMILIES = [
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 for _label, _maps, _disp in _C2C_FAMILIES:
-    NODE_CLASS_MAPPINGS.update(_maps)
-    NODE_DISPLAY_NAME_MAPPINGS.update(_disp)
+    # L9.196: a class whose module failed to import is None - left out, with its display name
+    _ok = {k: v for k, v in _maps.items() if v is not None}
+    NODE_CLASS_MAPPINGS.update(_ok)
+    NODE_DISPLAY_NAME_MAPPINGS.update({k: v for k, v in _disp.items() if k in _ok or k not in _maps})
 
 C2C_LOAD_SUMMARY = {
     "pack": "ComfyUI-CustomNodePacks",
@@ -931,7 +939,8 @@ except Exception:
 # ── Register server routes for Video Mask Editor ─────────────────────
 try:
     import server as _comfy_server_vme
-    _register_vme_routes(_comfy_server_vme.PromptServer.instance)
+    if _register_vme_routes is not None:
+        _register_vme_routes(_comfy_server_vme.PromptServer.instance)
 except Exception:
     pass  # Server not available
 
@@ -961,9 +970,10 @@ try:
         _c2c_reg_register_routes(_ps)
     except Exception as _re:
         print(f"[C2C] registry routes deferred: {_re}")
-    _register_integrity_routes(_ps)
-    _start_integrity_scan()
-    _install_insight_hook()
+    for _hook, _args in ((_register_integrity_routes, (_ps,)), (_start_integrity_scan, ()),
+                         (_install_insight_hook, ())):
+        if _hook is not None:                    # L9.196: a module that failed to import is skipped, not fatal
+            _hook(*_args)
     try:
         from .nodes.mec_diagnostics_api import (
             register_routes as _register_mec_diag_routes,
