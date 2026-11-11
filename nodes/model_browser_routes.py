@@ -226,15 +226,26 @@ async def _local_search(q: str, model_type: str, page: int) -> dict:
 
 # ── ComfyUI dest dirs ─────────────────────────────────────────────────────────
 
+_NOT_MODEL_KEYS = {"custom_nodes"}      # registered in folder_paths but not a place for model files
+
+
 def _get_comfyui_model_dirs() -> list[str]:
-    """Return relative paths that ComfyUI uses for model storage."""
+    """The download destinations: every folder_paths model folder, relative to the ComfyUI root when inside it,
+    else absolute - exactly what resolve_dest_dir accepts (the old parents[1] arithmetic turned an extra_model_paths
+    folder into a wrong relative path)."""
     try:
         import folder_paths
+        base = _comfy_base().resolve()
         dirs = []
         for key, paths in folder_paths.folder_names_and_paths.items():
+            if key in _NOT_MODEL_KEYS:
+                continue
             for p in paths[0]:
-                rel = str(Path(p).relative_to(Path(p).parents[1]))
-                dirs.append(rel)
+                ap = Path(p).resolve()
+                try:
+                    dirs.append(ap.relative_to(base).as_posix())
+                except ValueError:
+                    dirs.append(ap.as_posix())
         return sorted(set(dirs)) if dirs else _default_dirs()
     except Exception:
         return _default_dirs()
@@ -254,63 +265,119 @@ def _default_dirs() -> list[str]:
 
 # ── Download ─────────────────────────────────────────────────────────────────
 
-async def _download_model(source: str, model_id: str, file_id: str, dest_dir: str) -> dict:
-    """
-    Queue a background download of a model file.
-    For Civitai: file_id is the numeric file id in modelVersions.files.
-    For HuggingFace: file_id is the rfilename (e.g. model.safetensors).
-    """
-    import aiohttp
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+_SAFE_NAME_RE = re.compile(r"^[\w][\w .()+-]*\.[A-Za-z0-9]{1,12}$")
 
-    # Resolve absolute dest path
+
+class DownloadRefused(ValueError):
+    """A download request that would write outside the model folders, or with an id that is not an id."""
+
+
+def _model_roots() -> list[Path]:
+    """Every folder ComfyUI stores models in (folder_paths), plus models_dir: a download may only land inside one."""
+    roots: list[Path] = []
     try:
         import folder_paths
-        comfy_base = Path(folder_paths.models_dir).parent
+        roots.append(Path(folder_paths.models_dir).resolve())
+        for paths in folder_paths.folder_names_and_paths.values():
+            for p in paths[0]:
+                roots.append(Path(p).resolve())
     except Exception:
-        comfy_base = Path(__file__).parents[3]  # ComfyUI root
+        pass
+    return roots
 
-    abs_dest = comfy_base / dest_dir
-    abs_dest.mkdir(parents=True, exist_ok=True)
 
+def _comfy_base() -> Path:
+    try:
+        import folder_paths
+        return Path(folder_paths.models_dir).parent
+    except Exception:
+        return Path(__file__).parents[3]  # ComfyUI root
+
+
+def resolve_dest_dir(dest_dir: str, roots: list[Path] | None = None, base: Path | None = None) -> Path:
+    """The absolute folder for a download, refused unless it is inside one of ComfyUI's model folders (L5.01: the
+    request body used to be joined to the ComfyUI root unchecked - '../..' or an absolute path wrote anywhere)."""
+    roots = _model_roots() if roots is None else roots
+    base = _comfy_base() if base is None else base
+    raw = str(dest_dir or "").strip()
+    if not raw or "\x00" in raw:
+        raise DownloadRefused("destDir is empty")
+    cand = Path(raw)
+    abs_dest = (cand if cand.is_absolute() else base / cand).resolve()
+    for r in roots:
+        if abs_dest == r or r in abs_dest.parents:
+            return abs_dest
+    raise DownloadRefused(f"destDir '{raw}' is not inside a ComfyUI model folder; pick one from /c2c/models/dest_dirs")
+
+
+def download_plan(source: str, model_id: str, file_id: str) -> tuple[str, dict, str]:
+    """(url, headers, file name) for a model file. Secrets go in headers only - never in the URL, the response or
+    the log (the Civitai token used to ride in ?token= and was returned to the browser)."""
+    hdrs = {"User-Agent": _BROWSER_UA}
     if source == "civitai":
-        api_key = os.environ.get("CIVITAI_API_KEY", "")
-        url = f"https://civitai.com/api/download/models/{file_id}"
-        if api_key:
-            url += f"?token={api_key}"
-        fname = f"{model_id}_{file_id}.safetensors"
-    elif source == "huggingface":
-        url = f"https://huggingface.co/{model_id}/resolve/main/{file_id}"
-        fname = file_id.rsplit("/", 1)[-1]
-    else:
-        raise ValueError(f"Unknown source: {source}")
+        if not str(file_id).isdigit():
+            raise DownloadRefused("Civitai fileId must be the numeric file id")
+        if not re.fullmatch(r"[\w-]{1,64}", str(model_id)):
+            raise DownloadRefused("Civitai modelId must be an id")
+        key = os.environ.get("CIVITAI_API_KEY", "").strip()
+        if key:
+            hdrs["Authorization"] = f"Bearer {key}"
+        return f"https://civitai.com/api/download/models/{file_id}", hdrs, f"{model_id}_{file_id}.safetensors"
+    if source == "huggingface":
+        if not _HF_REPO_RE.fullmatch(str(model_id)):
+            raise DownloadRefused("Hugging Face modelId must be 'owner/repo'")
+        parts = str(file_id).split("/")
+        if not file_id or any(x in ("", ".", "..") for x in parts):
+            raise DownloadRefused("Hugging Face fileId must be a file path inside the repo")
+        name = parts[-1]
+        if not _SAFE_NAME_RE.fullmatch(name):
+            raise DownloadRefused(f"file name '{name}' is not a plain model file name")
+        tok = os.environ.get("HF_TOKEN", "").strip()
+        if tok:
+            hdrs["Authorization"] = f"Bearer {tok}"
+        url = f"https://huggingface.co/{model_id}/resolve/main/" + "/".join(urllib.parse.quote(x) for x in parts)
+        return url, hdrs, name
+    raise DownloadRefused(f"Unknown source: {source}")
 
-    dest_file = abs_dest / fname
 
-    # Fire-and-forget background download task
-    async def _download_task():
+async def _fetch_to(url: str, hdrs: dict, dest_file: Path) -> bool:
+    """Stream to '<file>.part' and rename only when complete; a failed or partial download leaves nothing."""
+    import aiohttp
+
+    part = dest_file.with_name(dest_file.name + ".part")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=3600)) as r:
+                if r.status != 200:
+                    log.error("Download failed %s: %s", url, _friendly_http_error(r.status, url))
+                    return False
+                with open(part, "wb") as fh:
+                    async for chunk in r.content.iter_chunked(65536):
+                        fh.write(chunk)
+        os.replace(part, dest_file)
+        log.info("Model downloaded: %s", dest_file)
+        return True
+    except Exception as exc:
+        log.error("Download error for %s: %s", url, exc)
+        return False
+    finally:
         try:
-            # Same browser UA + auth as _http_get — a bare aiohttp UA gets
-            # Cloudflare-blocked on Civitai, and gated HF files need the token.
-            hdrs = {"User-Agent": _BROWSER_UA}
-            if source == "huggingface":
-                tok = os.environ.get("HF_TOKEN", "").strip()
-                if tok:
-                    hdrs["Authorization"] = f"Bearer {tok}"
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(url, headers=hdrs,
-                                    timeout=aiohttp.ClientTimeout(total=3600)) as r:
-                    if r.status != 200:
-                        log.error("Download failed %s → %s", url, _friendly_http_error(r.status, url))
-                        return
-                    with open(dest_file, "wb") as fh:
-                        async for chunk in r.content.iter_chunked(65536):
-                            fh.write(chunk)
-            log.info("Model downloaded: %s", dest_file)
-        except Exception as exc:
-            log.error("Download error for %s: %s", url, exc)
+            if part.exists():
+                part.unlink()
+        except OSError:
+            pass
 
-    asyncio.create_task(_download_task())
-    return {"status": "queued", "dest": str(dest_file), "url": url}
+
+async def _download_model(source: str, model_id: str, file_id: str, dest_dir: str) -> dict:
+    """Queue a background download of a model file (Civitai: numeric file id; Hugging Face: path in the repo).
+    Raises DownloadRefused for a destination outside the model folders or a malformed id."""
+    abs_dest = resolve_dest_dir(dest_dir)
+    url, hdrs, fname = download_plan(source, model_id, file_id)
+    abs_dest.mkdir(parents=True, exist_ok=True)
+    dest_file = abs_dest / fname
+    asyncio.create_task(_fetch_to(url, hdrs, dest_file))
+    return {"status": "queued", "dest": str(dest_file)}
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -360,6 +427,8 @@ def register_routes(server) -> None:
                 return web.json_response({"error": "modelId and fileId required"}, status=400)
             result = await _download_model(source, model_id, file_id, dest_dir)
             return web.json_response(result)
+        except DownloadRefused as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             log.error("Model download error: %s", exc, exc_info=True)
             return web.json_response({"error": str(exc)}, status=500)
