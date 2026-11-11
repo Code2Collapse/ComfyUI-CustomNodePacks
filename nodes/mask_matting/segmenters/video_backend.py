@@ -336,14 +336,36 @@ class XMemSegmenter(BaseSegmenter):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# SeC (OpenIXCLab/SeC) — Segment Concept
+# SeC (OpenIXCLab/SeC) — Segment Concept, on the engine this pack ships (nodes/sec_engine)
+# PORTED FROM: https://github.com/9nate-drake/Comfyui-SecNodes nodes.py SeCVideoSegmentation.segment_video
+#              @ af39e6260bc414873fbb2dc8df355904d1609754 (Apache-2.0, same licence as this pack)
+# L9.152: this backend imported sec.build.build_sec_predictor, which no SeC release has, so it was always
+# "missing-deps". It now runs the SeC engine the SeC + MatAnyone node already uses (model_manager "sec_4b").
 # ──────────────────────────────────────────────────────────────────────
 def _have_sec() -> bool:
+    """The engine's own dependencies (nodes/sec_engine needs transformers, timm and einops)."""
     try:
         import importlib.util as _iu
-        return _iu.find_spec("sec") is not None or _iu.find_spec("SeC") is not None
+        return all(_iu.find_spec(m) is not None for m in ("transformers", "timm", "einops"))
     except Exception:
         return False
+
+
+def _sec_weights_present() -> bool:
+    """SeC-4B installed somewhere ComfyUI keeps models (never downloads). Auto routing sends clips to a "ready" SeC, so
+    without its weights it must not claim ready: the clip would fall to the model-free segmenter while SAM 3 is here."""
+    try:
+        from ..._download_policy import allow_downloads
+        from ...model_manager import get_model_path
+        with allow_downloads(False):
+            return bool(get_model_path("sec_4b"))
+    except Exception:  # noqa: BLE001 - not installed (ModelNotDownloaded) or no model manager
+        return False
+
+
+def _sec_points(points) -> Optional[np.ndarray]:
+    pts = [(float(p[0]), float(p[1])) for p in (points or [])]
+    return np.asarray(pts, dtype=np.float32) if pts else None
 
 
 @register
@@ -351,94 +373,101 @@ class SeCSegmenter(BaseSegmenter):
     KEY = "sec"
     #: Widgets this backend reads; the node shows only these.
     PARAMS = (
-        "text_prompt", "positive_points", "negative_points", "bbox", "frame_annotation",
-        "object_id", "memory_size", "max_frames", "start_frame",
-        "end_frame", "tracking_direction", "individual_objects",
+        "positive_points", "negative_points", "bbox", "frame_annotation",
+        "max_frames", "tracking_direction",
     )
     #: Needs the whole clip, not a frame - it tracks over time.
     NEEDS_VIDEO = True
     DISPLAY = "SeC (Segment Concept, video)"
     MODELS_KEY = "sec"
     SUPPORTS_MODES = {"video", "bbox", "points", "auto"}
-    STATUS = "ready" if _have_sec() else "missing-deps"
+    # ready = the engine's packages AND the SeC-4B weights (checked once at start-up; restart after installing them)
+    STATUS = "ready" if (_have_sec() and _sec_weights_present()) else "missing-deps"
+    MLLM_MEMORY = 12                       # upstream default (mllm_memory_size)
 
     def load(self) -> None:
         if self._model is not None:
             return
-        if not self.is_available():
-            raise RuntimeError(
-                "SeC not installed. Clone https://github.com/OpenIXCLab/SeC and "
-                "add it to PYTHONPATH (or `pip install -e .` if a setup.py is present)."
-            )
-        # SeC ships its own builder; try the documented public entry points.
-        try:
-            from sec.build import build_sec_predictor          # type: ignore
-        except Exception:
-            from SeC.build import build_sec_predictor          # type: ignore
-        ckpt = resolve_backend_weight(self.MODELS_KEY, self.model_name)
-        if ckpt is None or not os.path.isfile(ckpt):
-            raise FileNotFoundError(
-                f"SeC checkpoint '{self.model_name}' not under "
-                f"{backend_first_root(self.MODELS_KEY)}."
-            )
-        self._predictor = build_sec_predictor(ckpt_path=ckpt, device=self.device)
-        self._model = self._predictor
+        if not _have_sec():
+            raise RuntimeError("SeC needs transformers, timm and einops in ComfyUI's Python; install them and restart.")
+        from ...model_manager import get_or_load_model
+        self._model = get_or_load_model("sec_4b", precision=self.precision, device=self.device)
 
     @torch.no_grad()
     def segment(self, image_bhwc, **kw):
+        import shutil
+        import tempfile
+
+        from PIL import Image
+        img = to_bhwc(image_bhwc)
+        B, H, W, _ = img.shape
+        pos, neg = _sec_points(kw.get("positive_points")), _sec_points(kw.get("negative_points"))
+        bbox = kw.get("bbox")
+        box = np.asarray(bbox, dtype=np.float32).reshape(-1)[:4] if bbox is not None else None
+        if pos is None and neg is None and box is None:
+            raise ValueError("SeC tracks from a point, box or mask on one frame; it cannot start from text alone. "
+                             "Add a point or a box (or use SAM 3 for a text prompt).")
+        ref = max(0, min(B - 1, int(kw.get("frame_annotation", 0))))
+        direction = str(kw.get("tracking_direction", "forward"))
+        max_frames = int(kw.get("max_frames", 0) or 0) or B
+        points = labels = None
+        if pos is not None or neg is not None:
+            parts = [p for p in (pos, neg) if p is not None]
+            points = np.concatenate(parts, 0)
+            labels = np.concatenate(([np.ones(len(pos), np.int32)] if pos is not None else [])
+                                    + ([np.zeros(len(neg), np.int32)] if neg is not None else []))
+        self.load()
+        model = self._model
+        enc = model.grounding_encoder
+        tmp = tempfile.mkdtemp(prefix="c2c_sec_")
         try:
-            self.load()
-            img = to_bhwc(image_bhwc)
-            B, H, W, _ = img.shape
-            ref = int(kw.get("frame_annotation", 0))
-            mem_size = int(kw.get("memory_size", 8))
-            direction = str(kw.get("tracking_direction", "forward"))
+            for i in range(B):                              # the engine reads a folder of numbered JPEGs
+                arr = (img[i, ..., :3].clamp(0, 1) * 255).byte().cpu().numpy()
+                Image.fromarray(arr, mode="RGB").save(os.path.join(tmp, f"{i}.jpg"), quality=95)
+            state = enc.init_state(video_path=tmp, offload_video_to_cpu=False,
+                                   offload_state_to_cpu=str(self.device) == "cpu")
 
-            seed = _seed_mask_from_prompt(
-                H, W,
-                bbox=kw.get("bbox"),
-                positive_points=kw.get("positive_points"),
-                device=torch.device(self.device),
-            )
+            def _prompt():
+                enc.reset_state(state)
+                init = None
+                if box is not None and points is not None:    # upstream: the box first, then refine with points
+                    _, _, logits = enc.add_new_points_or_box(inference_state=state, frame_idx=ref, obj_id=1,
+                                                             points=None, labels=None, box=box)
+                    init = (logits[0] > 0.0).cpu().numpy()
+                if points is not None or box is not None:
+                    _, _, logits = enc.add_new_points_or_box(
+                        inference_state=state, frame_idx=ref, obj_id=1, points=points, labels=labels,
+                        box=None if (box is not None and points is not None) else box)
+                    init = (logits[0] > 0.0).cpu().numpy()
+                return init
 
-            # SeC public API has two flavours; support both.
-            pred = self._predictor
-            if hasattr(pred, "init_state") and hasattr(pred, "propagate_in_video"):
-                state = pred.init_state(images=img.permute(0, 3, 1, 2)
-                                         .to(self.device),
-                                         memory_size=mem_size)
-                pred.add_new_mask(state, frame_idx=ref, obj_id=1,
-                                  mask=seed.to(self.device))
-                out: Dict[int, torch.Tensor] = {}
-                for fi, ids, probs in pred.propagate_in_video(state,
-                                                              direction=direction):
-                    if probs.ndim == 3 and probs.shape[0] >= 1:
-                        out[int(fi)] = probs[0].detach().cpu()
-            elif hasattr(pred, "step"):
-                order = _propagate_indices(B, ref, direction)
-                out = {}
-                ref_passed = False
-                for k in interruptible_range(len(order), label="sec"):
-                    t = order[k]
-                    frame = img[t].permute(2, 0, 1).to(self.device)
-                    if t == ref and not ref_passed:
-                        prob = pred.step(frame, mask=seed.to(self.device))
-                        ref_passed = True
-                    else:
-                        prob = pred.step(frame)
-                    out[t] = (prob if prob.ndim == 2 else prob[0]).float().detach().cpu()
+            out = torch.zeros(B, H, W)
+            done = torch.zeros(B, dtype=torch.bool)
+
+            def _run(reverse: bool, init) -> None:
+                for fi, _ids, logits in model.propagate_in_video(state, start_frame_idx=ref,
+                                                                  max_frame_num_to_track=max_frames, reverse=reverse,
+                                                                  init_mask=init, mllm_memory_size=self.MLLM_MEMORY):
+                    fi = int(fi)
+                    if done[fi] and reverse:                 # bidirectional: keep the forward result (upstream)
+                        continue
+                    m = (logits[0] > 0.0).float().cpu()
+                    m = m[0] if m.ndim == 3 else m
+                    if tuple(m.shape) != (H, W):
+                        m = (F.interpolate(m[None, None], size=(H, W), mode="bilinear",
+                                           align_corners=False)[0, 0] > 0.5).float()
+                    out[fi], done[fi] = m, True
+
+            if direction in ("bidirectional", "both"):
+                _run(False, _prompt())
+                _run(True, _prompt())
             else:
-                raise RuntimeError(
-                    "Loaded SeC predictor exposes neither `init_state`/`propagate_in_video` "
-                    "nor `step()`. The installed SeC fork is unsupported."
-                )
-            return _pack_output(out, B, H, W, score=0.80,
-                                info={"backend": "sec",
-                                      "ref_frame": ref,
-                                      "memory_size": mem_size,
-                                      "direction": direction,
-                                      "frames": B})
+                _run(direction == "backward", _prompt())
+            return _pack_output({i: out[i] for i in range(B)}, B, H, W, score=1.0 if float(out.sum()) > 0 else 0.0,
+                                info={"backend": "sec", "engine": "nodes/sec_engine", "ref_frame": ref,
+                                      "direction": direction, "frames": B, "tracked_frames": int(done.sum())})
         finally:
+            shutil.rmtree(tmp, ignore_errors=True)
             free_vram(unload_models=False)
 
 
