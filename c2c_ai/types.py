@@ -30,8 +30,8 @@ class Capability(str, Enum):
     CHAT = "chat"
     STREAMING = "streaming"
     JSON_MODE = "json_mode"
-    TOOL_USE = "tool_use"
-    VISION = "vision"
+    TOOL_USE = "tool_use"    # what the MODEL can do; the C2C spine itself sends text only (see messages_from_json)
+    VISION = "vision"        # idem: no image ever travels through Message (A22 audit CNP row 16, L9.39)
 
 
 class Sensitivity(str, Enum):
@@ -46,6 +46,37 @@ class Sensitivity(str, Enum):
 class Message:
     role: str  # "system" | "user" | "assistant"
     content: str
+
+
+class TextOnlyError(ValueError):
+    """A request asked the spine for something it cannot carry (images, tool calls); the message says what."""
+
+    code = "TEXT_ONLY"
+
+
+_ROLES = ("system", "user", "assistant")
+
+
+def messages_from_json(raw, *, require_vision: bool = False) -> list:
+    """Messages from a route body, refused LOUDLY when they need more than text.
+
+    The backends advertise the model's vision / tool-use capabilities, but Message carries text only: an image part
+    used to be passed on (and dropped or str()-ed by the backend) while the caller believed the model saw it.
+    """
+    if require_vision:
+        raise TextOnlyError("require_vision: the C2C AI spine sends text only - images are not sent to any backend. "
+                            "Describe the image in text, or use a vision node that calls the model directly.")
+    out = []
+    for i, m in enumerate(raw or []):
+        if not isinstance(m, dict) or m.get("role") not in _ROLES:
+            raise TextOnlyError(f"message {i}: needs a role of {', '.join(_ROLES)}")
+        content = m.get("content")
+        if not isinstance(content, str):
+            kind = type(content).__name__
+            raise TextOnlyError(f"message {i}: content must be text (got {kind}); image / tool parts are not sent "
+                                "by the C2C AI spine")
+        out.append(Message(role=m["role"], content=content))
+    return out
 
 
 @dataclass

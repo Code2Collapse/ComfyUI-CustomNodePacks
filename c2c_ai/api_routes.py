@@ -60,7 +60,7 @@ def register_routes(server) -> None:
     from . import policy as policy_mod
     from .cost_meter import get_meter
     from .router import get_router
-    from .types import Message, Policy, Sensitivity, Capability
+    from .types import Message, Policy, Sensitivity, Capability, TextOnlyError, messages_from_json  # noqa: F401
     from .backends.openai_compat import detect_local_servers
 
     routes = server.routes
@@ -161,7 +161,10 @@ def register_routes(server) -> None:
         msgs_raw = body.get("messages") or []
         if not msgs_raw:
             return _err("EMPTY_MESSAGES", "messages array is required")
-        msgs = [Message(role=m["role"], content=m["content"]) for m in msgs_raw]
+        try:
+            msgs = messages_from_json(msgs_raw, require_vision=bool(body.get("require_vision")))
+        except TextOnlyError as exc:
+            return _err(exc.code, str(exc))
 
         kwargs = {}
         if "sensitivity" in body:
@@ -172,8 +175,6 @@ def register_routes(server) -> None:
             kwargs["max_tokens"] = int(body["max_tokens"])
         if "temperature" in body:
             kwargs["temperature"] = float(body["temperature"])
-        if body.get("require_vision"):
-            kwargs["required"] = {Capability.CHAT, Capability.VISION}
 
         loop = asyncio.get_event_loop()
         try:
@@ -200,7 +201,10 @@ def register_routes(server) -> None:
         msgs_raw = body.get("messages") or []
         if not msgs_raw:
             return _err("EMPTY_MESSAGES", "messages array is required")
-        msgs = [Message(role=m["role"], content=m["content"]) for m in msgs_raw]
+        try:
+            msgs = messages_from_json(msgs_raw, require_vision=bool(body.get("require_vision")))
+        except TextOnlyError as exc:
+            return _err(exc.code, str(exc))
 
         kwargs = {}
         if "sensitivity" in body:
