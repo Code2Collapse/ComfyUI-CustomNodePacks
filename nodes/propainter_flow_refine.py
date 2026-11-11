@@ -119,14 +119,15 @@ def _rgb_to_gray(x_b3hw: torch.Tensor) -> torch.Tensor:
 # Public functional API (importable by the node and by tests)
 # =====================================================================
 def compute_flow(frame_a: torch.Tensor, frame_b: torch.Tensor,
-                 iters: int = 20, consistency_thr: float = 1.5
-                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                 iters: int = 20, consistency_thr: float = 1.5, return_bwd: bool = False):
     """
     frame_a / frame_b: (B, H, W, C) Comfy IMAGE.
     Returns:
-        flow_bhw2     (B, H, W, 2)  pixel-unit U/V
-        warped_bhwc   (B, H, W, C)  a warped toward b
+        flow_bhw2     (B, H, W, 2)  pixel-unit U/V, FORWARD flow a -> b: a(x) ~ b(x + flow(x))
+        warped_bhwc   (B, H, W, C)  b sampled at x + flow: b pulled onto a's pixel grid (~ a)
         consistency   (B, H, W)     1.0 where fwd/bwd agree
+        bwd_bhw2      (B, H, W, 2)  only with return_bwd: flow b -> a, b(x) ~ a(x + bwd(x)) - the flow that moves
+                                    a's content to where b has it (L9.196)
     """
     dev = get_device()
     a = frame_a.to(dev)
@@ -168,6 +169,8 @@ def compute_flow(frame_a: torch.Tensor, frame_b: torch.Tensor,
     consistency = (diff < consistency_thr).to(fwd.dtype)
 
     flow_bhw2 = fwd.permute(0, 2, 3, 1).contiguous()
+    if return_bwd:
+        return flow_bhw2.cpu(), warped_bhwc.cpu(), consistency.cpu(), bwd.permute(0, 2, 3, 1).contiguous().cpu()
     return flow_bhw2.cpu(), warped_bhwc.cpu(), consistency.cpu()
 
 

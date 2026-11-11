@@ -69,10 +69,13 @@ class OpticalFlowMEC:
 
     def revector(self, frame_a, frame_b, iters, consistency_thr,
                  mask=None, scale=1.0):
-        flow_bhw2, warped, consistency = compute_flow(
-            frame_a, frame_b, iters=iters, consistency_thr=consistency_thr,
+        flow_bhw2, warped, consistency, bwd_bhw2 = compute_flow(
+            frame_a, frame_b, iters=iters, consistency_thr=consistency_thr, return_bwd=True,
         )
-        flow_bchw = flow_bhw2.permute(0, 3, 1, 2).contiguous() * float(scale)
+        # L9.196: re-vectoring a TOWARD b samples a at x + flow(b -> a); it used the forward flow (a -> b), which
+        # moved a's content against the motion (measured: the result was further from b than a itself). The flow
+        # output below stays the forward flow, as before.
+        flow_bchw = bwd_bhw2.permute(0, 3, 1, 2).contiguous() * float(scale)
 
         a = frame_a.cpu()
         a_chw = a.permute(0, 3, 1, 2).contiguous()
