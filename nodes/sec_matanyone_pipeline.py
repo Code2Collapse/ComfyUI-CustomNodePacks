@@ -267,7 +267,8 @@ class SeCMatAnyonePipelineMEC:
             coarse_masks, score, seg_info = seg_node.segment(
                 image=image,
                 model_name=segmentation_model,
-                points_json=points_json,
+                # L9.156: positive / negative coords used to reach only the model-free fallback
+                points_json=self._merged_points_json(points_json, positive_coords, negative_coords),
                 bbox_json=bbox_json,
                 multimask=True,
                 mask_index=0,
@@ -393,6 +394,20 @@ class SeCMatAnyonePipelineMEC:
         return (rgb, alpha_mask, coarse_masks, preview, info)
 
     # ── model-free stand-ins (L7.97) ──────────────────────────────────
+
+    @staticmethod
+    def _merged_points_json(points_json, positive_coords, negative_coords) -> str:
+        """points_json plus the positive / negative coords as one MEC list [{"x","y","label"}] (label 1 / 0). Unchanged
+        when there are no coords, so runs that only use points_json send exactly what they always sent."""
+        if not (str(positive_coords or "").strip() or str(negative_coords or "").strip()):
+            return points_json
+        from .mask_matting.utils import parse_points
+        pos, neg = parse_points(points_json or "")
+        for raw, is_pos in ((positive_coords, True), (negative_coords, False)):
+            a, b = parse_points(raw or "")
+            (pos if is_pos else neg).extend(a + b)
+        return json.dumps([{"x": float(x), "y": float(y), "label": 1} for x, y in pos]
+                          + [{"x": float(x), "y": float(y), "label": 0} for x, y in neg])
 
     @staticmethod
     def _model_free_segment(image, points_json, positive_coords, negative_coords, bbox_json, bbox, text_prompt):
