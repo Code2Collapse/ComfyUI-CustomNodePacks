@@ -793,6 +793,13 @@ app.registerExtension({
         { id: SETTING_FIRSTRUN, name: "C2C ▸ AI ▸ First-run completed",
           type: "hidden", defaultValue: false },
     ],
+    // L9.15: the wizard is one command away (ComfyUI's command list / the C2C palette) instead of popping up
+    commands: [{
+        id: "C2C.AI.SetupWizard",
+        label: "C2C AI: set up providers",
+        icon: "pi pi-sparkles",
+        function: () => runFirstRunWizard().catch(console.error),
+    }],
     async setup() {
         // Moved OUT of the sidebar into OmniPill's "AI Assist" section.
         try {
@@ -816,8 +823,27 @@ app.registerExtension({
             const cfg = await apiGet("/c2c/ai/config");
             const completed = app.ui?.settings?.getSettingValue(SETTING_FIRSTRUN, false);
             if (!completed && !cfg.first_run_completed) {
-                // small delay to let UI settle
-                setTimeout(() => runFirstRunWizard().catch(console.error), 1500);
+                // L9.15 (owner): the wizard used to open as a full-screen modal 1.5 s after EVERY fresh load until
+                // dismissed, covering the canvas and the node under the cursor. Now: one non-blocking toast per
+                // browser profile; the wizard runs from the command "C2C AI: set up providers" (or AI settings ->
+                // Re-run wizard).
+                let shown = false;
+                try { shown = localStorage.getItem("c2c.ai.setupHintShown") === "1"; } catch { /* private mode */ }
+                if (!shown) {
+                    try { localStorage.setItem("c2c.ai.setupHintShown", "1"); } catch { /* best effort */ }
+                    setTimeout(() => {
+                        try {
+                            app.extensionManager?.toast?.add?.({
+                                severity: "info",
+                                summary: "C2C AI is not set up",
+                                detail: "To use the AI features, add a provider or a local model: run the command "
+                                    + "\"C2C AI: set up providers\" (Ctrl+K in the C2C palette, or ComfyUI's "
+                                    + "command list).",
+                                life: 9000,
+                            });
+                        } catch { /* no toast service: stay quiet */ }
+                    }, 1500);
+                }
             }
         } catch (exc) {
             console.warn("[c2c.ai.settings] firstrun check failed:", exc);

@@ -470,7 +470,9 @@ function _applyGeom(el) {
     if (typeof g.bottom === "number") s.setProperty("--c2c-insp-bottom", g.bottom + "px");
     if (typeof g.w === "number") s.setProperty("--c2c-insp-w", Math.max(220, g.w) + "px");
     if (typeof g.h === "number") s.setProperty("--c2c-insp-h", Math.max(160, g.h) + "px");
-    el.dataset.collapsed = g.collapsed ? "1" : "0";
+    // L9.15: a fresh profile starts collapsed (just the header bar) - the expanded dock covered the right of the canvas
+    // on every first load; once the user expands or collapses it, that choice is kept
+    el.dataset.collapsed = (g.collapsed ?? true) ? "1" : "0";
 }
 function _disablePanelMode(el) {
     if (!el.classList.contains("c2c-ne-panel-mode")) return;
