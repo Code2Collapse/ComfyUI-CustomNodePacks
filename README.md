@@ -1067,6 +1067,10 @@ see CREDITS.md.
 
   An EXR with no colour metadata is read as the OCIO config's `scene_linear` role (Nuke's working space). An
   untagged movie or image is read as display and not converted. Pick a space to override.
+  *Since 2026-11-10 (L9.177):* this works with **any** OCIO config. Before, the spaces were looked up only by their
+  ASWF interop IDs, which only OCIO 2.5's v4 built-in configs carry. With the *studio / cg ACES 1.3* built-in choice,
+  an older built-in, Nuke's `nuke-default` or an ACES 1.x `$OCIO`, a Rec.709 MOV from Nuke read "Colour: unknown".
+  Now the space is also found by the names it has in those configs, or by OpenColorIO's own numeric match.
 - **Working space** (`working_space`): *sRGB display* by default. A Rec.709 / sRGB source stays exactly as it is.
   A log, linear or wide-gamut source goes through the config's tone-mapped view (ACES 2.0 SDR in the built-in
   config, what Nuke's viewer shows), so the frames stay in 0-1 for the models. *preserve source* converts nothing.
