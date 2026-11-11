@@ -191,3 +191,13 @@ class InSPyReNetSegmenter(_SalientBase):
     MODELS_KEY = "inspyrenet"
     _DEFAULT_REPO = "plemeri/InSPyReNet_SwinB"
     _INPUT_SIZE = 1024
+    # L9.193 (checked 2026-11-11): plemeri/InSPyReNet_SwinB does not exist on Hugging Face (401) and no Transformers-
+    # format InSPyReNet is published, so this loader can never succeed. It used to say "ready" and failed at load;
+    # now it is listed as not available (auto routing skips it) and says why. A port onto transparent-background
+    # (MIT, the maintained InSPyReNet runtime) is ledger L9.193.
+    STATUS = "missing-deps"
+    UNAVAILABLE = ("InSPyReNet is not available: its Hugging Face source (plemeri/InSPyReNet_SwinB) no longer exists "
+                   "and no Transformers-format InSPyReNet is published. Use BiRefNet or RMBG-2.0 for salient masks.")
+
+    def load(self) -> None:
+        raise RuntimeError(self.UNAVAILABLE)
