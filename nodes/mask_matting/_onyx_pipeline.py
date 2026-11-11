@@ -34,6 +34,8 @@ class KeyframeSpec:
     box: Optional[Tuple[int, int, int, int]] = None
     text: Optional[str] = None
     mask_source: Optional[Literal["input"]] = None
+    # L9.156: a region to keep OUT of the object (the legacy neg_bbox; scene JSON "neg_box"); applied to the seed mask
+    neg_box: Optional[Tuple[int, int, int, int]] = None
 
 
 @dataclass
@@ -120,6 +122,11 @@ def _parse_keyframe(raw: dict, *, B: int, H: int, W: int, obj_id: int) -> Keyfra
             if not isinstance(p, (list, tuple)) or len(p) < 2:
                 raise ValueError(f"Object {obj_id}: negative points must be [[x,y],...].")
             kf.points_neg.append((float(p[0]), float(p[1])))
+    nb = raw.get("neg_box")
+    if nb is not None:
+        if not isinstance(nb, (list, tuple)) or len(nb) != 4:
+            raise ValueError(f"Object {obj_id}: neg_box must be [x0,y0,x1,y1] in pixels.")
+        kf.neg_box = tuple(int(round(float(v))) for v in nb)
     box = raw.get("box")
     if box is not None:
         if not isinstance(box, (list, tuple)) or len(box) != 4:
@@ -220,6 +227,7 @@ def legacy_to_scene(
     neg_a, neg_b = parse_points(legacy.negative_coords or "")
     neg_pts = neg_a + neg_b
     bbox = parse_bbox(legacy.pos_bbox) or parse_bbox(legacy.normal_bbox)
+    neg_box = parse_bbox(legacy.neg_bbox)                  # L9.156: it used to be dropped here
     text = (legacy.text_prompt or "").strip() or None
     frame = _clamp_frame(legacy.frame_annotation, B)
     kf = KeyframeSpec(frame=frame)
@@ -227,6 +235,8 @@ def legacy_to_scene(
     kf.points_neg = [(float(x), float(y)) for x, y in neg_pts]
     if bbox is not None:
         kf.box = bbox
+    if neg_box is not None:
+        kf.neg_box = tuple(int(round(float(v))) for v in neg_box)
     if text:
         kf.text = text
     if external_mask is not None:
@@ -427,6 +437,20 @@ def seed_all_objects(
             items.append((obj.id, kf))
     items.sort(key=lambda t: (t[1].frame, t[0]))
     for obj_id, kf in items:
+        if kf.neg_box is not None and hasattr(model, "add_mask") and kf.mask_source != "input":
+            # L9.156: the seed mask with the negative box subtracted (segment_union's neg_bbox), given to a tracker
+            # that takes masks (core SAM 3); a points-only tracker has no counterpart for a negative box
+            mask_hw, _score = seg_one_fn(
+                img_bhwc[kf.frame].cpu().numpy(),
+                [(float(x), float(y)) for x, y in kf.points_pos], [(float(x), float(y)) for x, y in kf.points_neg],
+                kf.box, kf.neg_box, kf.text or "",
+            )
+            if int(np.sum(np.asarray(mask_hw) > 0.5)) < 1:
+                raise ValueError(f"Object {obj_id}: nothing is left on frame {kf.frame} outside the negative box.")
+            model.add_mask(state, frame_idx=int(kf.frame), mask=mask_hw, obj_id=int(obj_id))
+            calls.append({"obj_id": obj_id, "frame": int(kf.frame), "kind": "prompts-neg_box→mask", "n_points": 0,
+                          "labels": []})
+            continue
         if kf.text:
             pos = [(float(x), float(y)) for x, y in kf.points_pos]
             neg = [(float(x), float(y)) for x, y in kf.points_neg]
@@ -1014,7 +1038,8 @@ def run_onyx_pipeline(
 def _scene_key(scene: SceneSpec) -> List[Any]:
     """Everything of a scene the tracker reads, as plain data (a stage-cache key part)."""
     return [
-        [o.id, o.enabled, o.opacity, [[kf.frame, kf.points_pos, kf.points_neg, kf.box, kf.text, kf.mask_source]
+        [o.id, o.enabled, o.opacity, [[kf.frame, kf.points_pos, kf.points_neg, kf.box, kf.text, kf.mask_source,
+                                       kf.neg_box]
                                       for kf in o.keyframes]]
         for o in scene.objects
     ] + [[scene.tracking.direction, scene.tracking.start_frame, scene.tracking.max_frames]]
