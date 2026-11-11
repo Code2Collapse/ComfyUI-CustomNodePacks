@@ -562,11 +562,13 @@ class MaskOpsMEC:
                 "segmenter": (_segmenter_choices(), {
                     "default": _segmenter_choices()[0],
                     "tooltip": "Coarse-mask backend. Entries tagged [missing-deps] need an optional pip install to activate. "
-                               "sam3 / sam3.1 run on ComfyUI's own SAM 3 (ComfyUI 0.39+; C2C_SAM_CORE=0 turns that off).",
+                               "sam3 / sam3.1 run on ComfyUI's own SAM 3 (ComfyUI 0.39+; C2C_SAM_CORE=0 turns that off). "
+                               "NON-COMMERCIAL weights: rmbg (briaai RMBG-1.4 / 2.0, Bria licences).",
                 }),
                 "matter": (_matter_choices(), {
                     "default": "vitmatte" if "vitmatte" in [k for k in list_matter_keys()] else "none",
-                    "tooltip": "Optional alpha refinement. 'none' returns the segmenter mask as alpha.",
+                    "tooltip": "Optional alpha refinement. 'none' returns the segmenter mask as alpha. vitmatte is "
+                               "Apache-2.0; matanyone (MatAnyone / MatAnyone2 weights) is S-Lab License 1.0 (NON-COMMERCIAL).",
                 }),
                 "model": (_all_weight_files(), {
                     "default": "(auto)",

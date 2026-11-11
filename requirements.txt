@@ -62,3 +62,5 @@ opencolorio>=2.6.0
 # only after this machine's GPU matched the exact CPU and was measured faster. Without it the exact CPU path runs.
 moderngl>=5.10
 # Image sequences (EXR / DPX / PNG / TIFF read + write) use OpenImageIO: pip install OpenImageIO
+# Not listed on purpose: mediapy, decord - used only by the upstream DepthCrafter / NormalCrafter command-line
+# helpers (nodes/*crafter/utils.py, depthcrafter/inference.py), which no node imports.

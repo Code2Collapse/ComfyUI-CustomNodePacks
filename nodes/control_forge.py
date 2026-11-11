@@ -388,13 +388,17 @@ class ControlAOVC2C:
                                            "midas (transformers), da3 (Depth-Anything-3), depth_pro, depthcrafter (video), "
                                            "dvd (DVD — deterministic Wan-2.1 VIDEO depth, EnVision-Research; needs the "
                                            "DVD ckpt in models/DVD/, CC BY-NC). The depth_anything_* options delegate to "
-                                           "comfyui_controlnet_aux. 'off' = wire an external depth map."}),
+                                           "comfyui_controlnet_aux. 'off' = wire an external depth map. "
+                                           "NON-COMMERCIAL weights: dvd (CC BY-NC), depth_pro (apple/DepthPro-hf, Apple "
+                                           "research licence); see depth_size for Depth-Anything."}),
                 "normal_model": (list(_NORMAL_MODELS), {"default": "off",
                                 "tooltip": "Normal backend (vendored): sobel_from_depth (no model) or normalcrafter (video). "
                                            "'off' = wire an external normal map."}),
                 "depth_size": (list(_DEPTH_SIZES), {"default": "small",
                                "tooltip": "DepthAnything backbone: small=ViT-S (fastest, test default) → giant=ViT-G "
-                                          "(best). v1 has no giant (falls back to large). Ignored by metric/zoe."}),
+                                          "(best). v1 has no giant (falls back to large). Ignored by metric/zoe. Licences: "
+                                          "Depth-Anything-V2 small = Apache-2.0; V2 base / large and DA3 large / giant "
+                                          "(DA3NESTED-GIANT-LARGE) = CC BY-NC 4.0, NON-COMMERCIAL."}),
                 "depth_custom_ckpt": _ckpt_field(_depth_ckpt_options(), "depth"),
                 "pose_model": (["off", "vitpose"] + list(_POSE_MAP.keys()), {"default": "off",
                                "tooltip": "Pose backend. vitpose = WanV2 ViTPose chain (uses models/detection/*.onnx). "

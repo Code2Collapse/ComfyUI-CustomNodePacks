@@ -1,3 +1,6 @@
+# C2C note (L9.163, 2026-11-11): upstream command-line helper, NOT imported by any node (the nodes run the *_ppl.py
+# pipeline). It needs mediapy + decord, which this pack deliberately does not install; only the upstream CLI
+# (inference.py) would. Kept unchanged for provenance.
 import logging
 import tempfile
 from typing import List, Optional, Tuple, Union

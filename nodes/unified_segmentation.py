@@ -124,7 +124,7 @@ MODEL_REGISTRY: dict[str, dict] = {
     # ── SAM 3 ────────────────────────────────────────────────────────
     "sam3": {
         "family": "sam3",
-        "repo_id": "apozz/sam3-safetensors",
+        "repo_id": "1038lab/sam3",   # L9.163 R10: same file (identical 1465-tensor header, checked 2026-11-11), carries the SAM licence tag; apozz had none. Official facebook/sam3 is gated.
         "filename": "sam3.safetensors",
         "config": None,  # SAM3 uses SAM2 large architecture
         "model_dir": "sam3",
