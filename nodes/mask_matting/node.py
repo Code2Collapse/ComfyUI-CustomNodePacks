@@ -1133,6 +1133,9 @@ class MaskOpsMEC:
         matter_model = _normalize_legacy_choice("weight", matter_model)
         seg_key = _strip_badge(segmenter)
         mat_key = _strip_badge(matter)
+        # L9.156: the segmenter the USER chose, before auto routing rewrites seg_key
+        _user_seg = seg_key
+        _text_grounding: Dict[str, Any] = {}
         _use_onyx = str(pipeline).strip().lower() == "onyx"
         # L7.114: viewer-driven runs only - the stage cache and the detection model the viewer used
         _cache = _viewer.get("cache") if _viewer else None
@@ -1519,8 +1522,11 @@ class MaskOpsMEC:
 
                     # Text-only / text-primary: LocateAnything → SAM bbox refine
                     # runs first (no training). Beats raw SAM text mode on open-vocab.
+                    # L9.156: only when the user asked for automatic choice (or for LocateAnything itself) - an
+                    # explicitly chosen segmenter (sam3, classic, ...) is what runs, not a 3B detector in front of it.
                     _la_done = False
                     if (text_prompt and text_prompt.strip()
+                            and _user_seg in ("auto", "auto_best", "locate_anything")
                             and B == 1 and not pos_pts and not neg_pts
                             and bbox_used is None):
                         _avail_la = _ready_segmenters()
@@ -1534,6 +1540,7 @@ class MaskOpsMEC:
                             mask_t = m_la
                             score = s_la
                             _la_done = True
+                            _text_grounding = dict(tr_la or {}, replaced=seg_key)
                             if tr_la:
                                 _cascade_trail.append(tr_la)
                                 _auto_route_reasons.append(
@@ -2111,6 +2118,8 @@ class MaskOpsMEC:
                 "pipeline": "onyx" if _use_onyx else "cascade (legacy)",
                 "segmenter": seg_key,
                 "matter": mat_key,
+                # L9.156: when text grounding produced the mask, say so (segmenter names what was routed to)
+                **({"text_grounding": _text_grounding} if _text_grounding else {}),
                 "auto_route": {
                     "applied": bool(_auto_routed),
                     "reasons": _auto_route_reasons,
