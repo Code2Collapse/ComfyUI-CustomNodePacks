@@ -46,6 +46,9 @@ function injectStyle() {
     font: 13px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
     color: var(--c2c-fg); backdrop-filter: blur(14px);
     padding: 10px 10px 8px;
+    /* L9.194: hidden until opened. This line was lost on 2026-10-05 (73ede6d), so Escape removed .is-open but the
+       palette stayed on screen ("not closing when I press Escape"). */
+    display: none;
 }
 html.c2c-lite #${ROOT_ID} {
     backdrop-filter: none !important;
@@ -307,6 +310,7 @@ function openSettingsTo(id) {
 // ── Palette UI ────────────────────────────────────────────────────────
 let _root = null, _input = null, _list = null, _backdrop = null;
 let _items = [], _sel = 0;
+let _returnFocus = null;    // L9.194: where focus was before the palette opened
 
 function ensureRoot() {
     if (_root) return;
@@ -337,6 +341,8 @@ function ensureRoot() {
 
 function open() {
     ensureRoot();
+    const ae = document.activeElement;
+    _returnFocus = ae && ae !== document.body && !_root.contains(ae) ? ae : null;
     _root.classList.add("is-open");
     _backdrop.classList.add("is-open");
     _input.value = "";
@@ -347,6 +353,16 @@ function open() {
 function close() {
     _root?.classList.remove("is-open");
     _backdrop?.classList.remove("is-open");
+    // L9.194 (owner 2026-11-11 "palette not closing on Escape"): focus used to stay in the now-hidden search input, so
+    // the next Ctrl+K took the "focused inside the palette -> toggle closed" branch (it opened only every other time)
+    // and keys went to an invisible field. Give focus back to where it was, else to the canvas.
+    if (_root && _root.contains(document.activeElement)) document.activeElement.blur();
+    const back = _returnFocus;
+    _returnFocus = null;
+    try {
+        if (back && back.isConnected && typeof back.focus === "function") back.focus({ preventScroll: true });
+        else app.canvas?.canvas?.focus?.({ preventScroll: true });
+    } catch { /* focus is best effort */ }
 }
 
 function gather(q) {
@@ -482,8 +498,9 @@ function onGlobalKey(ev) {
     // Don't hijack inside form fields (but DO hijack when our own input
     // is already focused — toggle close).
     const ae = document.activeElement;
-    if (ae && _root && _root.contains(ae)) {
+    if (isOpen()) {                                   // L9.194: toggle only while it is really open
         ev.preventDefault();
+        ev.stopPropagation();
         close();
         return;
     }
@@ -510,7 +527,13 @@ app.registerExtension({
         category: ["c2c", "Overlays", "Command Palette"],
     }],
     async setup() {
-        window.addEventListener("keydown", onGlobalKey, true);
         console.log("[C2C.CommandPalette] Ctrl+K palette armed.");
     },
 });
+
+// L9.194: registered when this module loads, not in setup(): window capture listeners run in registration order, so
+// an extension that registered first and swallowed Escape / Ctrl+K left the palette stuck open. Once only.
+if (!globalThis.__c2cCmdPalKeys) {
+    globalThis.__c2cCmdPalKeys = true;
+    window.addEventListener("keydown", onGlobalKey, true);
+}
