@@ -1,7 +1,7 @@
 # C2C / MEC Custom Node Packs — Node Reference
 
 <!-- C2C:NODE-COUNTS:BEGIN -->
-**ComfyUI-CustomNodePacks** registers **102** nodes across these families:
+**ComfyUI-CustomNodePacks** registers **103** nodes across these families:
 
 | Family | Nodes |
 |--------|------:|
@@ -34,6 +34,7 @@
 | AsymFlow sampler | 1 |
 | HDR Color Science | 1 |
 | LocateAnything | 2 |
+| Facepoints | 1 |
 | Nano Banana | 1 |
 | Control AOV | 1 |
 | Restored VFX | 3 |
@@ -41,7 +42,7 @@
 
 Startup log line to verify the pack loaded:
 
-`[C2C] CustomNodePacks: 102 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
+`[C2C] CustomNodePacks: 103 nodes loaded (Vault 6, Folder Incrementer 5, Render farm 3, C2C Distributed 2, Fluid Shots/Audio 3, C2C video 3, MaskEditControl 9, Image Mask Editor 1, Model analysis 1, Face Fixer 1, Mask + Matting 5, Layer Effects 1, Mask toolkit 1, Frequency / Grain 3, Tiled refinement 4, Magnific 15, AV Handles 1, Save Video 1, SAM Multi-Mask Picker 1, SAM Loader/Generator 2, Mask Placement 1, Semantic Segment 1, NukeNodeMax 1, Video Stabilizer 4, C2C helpers 8, Prompt Relay 3, AsymFlow sampler 1, HDR Color Science 1, LocateAnything 2, Facepoints 1, Nano Banana 1, Control AOV 1, Restored VFX 3, Legacy (deprecated) 7) - 0 failed`
 <!-- C2C:NODE-COUNTS:END -->
 
 
@@ -72,6 +73,8 @@ mirror; treat the live node schema as authoritative until they are regenerated.
 - **C2C/Distributed** (2)
   - [C2C GPU Inventory](#c2cgpuinventory)
   - [C2C Multi-GPU Split](#c2csequenceparallel)
+- **C2C/Face** (1)
+  - [Face Landmarks (Facepoints, 620 + 68/98)](#facepointslandmarksc2c)
 - **C2C/Frequency** (3)
   - [Film Grain (MEC)](#filmgrainmec)
   - [Frequency Combine (MEC)](#frequencycombinemec)
@@ -436,6 +439,50 @@ Splits every model call over the GPUs of this machine. Any model: the call's bat
 |---|---|---|---|
 | 0 | `model` | `MODEL` | — |
 | 1 | `plan` | `STRING` | — |
+
+
+---
+
+## C2C/Face
+
+
+### FacepointsLandmarksC2C
+
+**Shown in the menu as:** Face Landmarks (Facepoints, 620 + 68/98)
+
+Dense face landmarks for any model: 620 points on Google's GNM Head mesh, each with its own error estimate, plus the standard 68-point (iBUG) and 98-point (WFLW) sets and both pupils, from myned-ai/facepoints. Outputs OpenPose POSE_KEYPOINT (face = 68 + 2 pupils, pixels), a white-dot control image, an overlay, a face mask and JSON with every set. Video: the box follows the face's own points frame to frame. Weights are CC BY-NC 4.0 (non-commercial use only) and are downloaded only with allow_download, into models/facepoints.
+
+
+**Required inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `image` | `IMAGE` |  | One image or a video (frames). Any size. |
+| `face_finder` | choice: `yunet (finds faces)`, `whole image (already a face crop)` | default `"yunet (finds faces)"` | How the face box is found. yunet: OpenCV's face finder (MIT, 0.2 MB, downloaded with allow_download). whole image: the image is already a face crop. yolo: an installed Ultralytics face model (models/ultralytics/bbox). A wired face_mask overrides this. |
+| `max_faces` | `INT` | default `1`, range 1…16 | Faces per frame, left to right. |
+| `passes` | `INT` | default `3`, range 1…5 | Network passes per face. Each pass re-frames the box on the previous points (the model's own procedure; 3 = the released default). |
+| `track_video` | `BOOLEAN` | default `True` | Video: start each frame's box from the face's points in the previous frame (steadier, and the finder only looks for new faces). Off: every frame is found on its own. |
+| `landmark_set` | choice: `68 + iris (OpenPose face)`, `98 (WFLW)`, `620 dense (GNM Head)` | default `"68 + iris (OpenPose face)"` | The points drawn into landmark_image. pose_keypoint is always OpenPose's 68 + 2 pupils. |
+| `point_size` | `INT` | default `3`, range 1…16 | Dot radius in pixels for landmark_image and overlay. |
+| `allow_download` | `BOOLEAN` | default `False` | Allow downloading myned-ai/facepoints (416 MB, CC BY-NC 4.0 = non-commercial use only) and YuNet (0.2 MB, MIT) into models/facepoints when they are missing. |
+
+**Optional inputs**
+
+| Parameter | Type | Constraints | What it does |
+|---|---|---|---|
+| `face_mask` | `MASK` |  | A mask over the face (per frame, or one for all): its box is used instead of the face finder. One face. |
+| `finder_confidence` | `FLOAT` | default `0.6`, range 0.05…0.99, step 0.01 | Minimum score for yunet / yolo faces. |
+| `confident_pct` | `FLOAT` | default `2.5`, range 0.1…10.0, step 0.1 | A point counts as sure when its calibrated error estimate is below this % of the face size (2.5 = a little above a typical good point); its confidence c is 0.5 exactly there. Unsure points are drawn faint in overlay. |
+
+**Outputs**
+
+| # | Name | Type | What it is |
+|---|---|---|---|
+| 0 | `pose_keypoint` | `POSE_KEYPOINT` | OpenPose JSON per frame; face_keypoints_2d = 68 iBUG points + 2 pupils (70 x [x, y, c], pixels). |
+| 1 | `landmark_image` | `IMAGE` | The chosen landmark set as white dots on black (control image). |
+| 2 | `overlay` | `IMAGE` | The input with the points drawn (620: coloured by kind, faint where unsure). |
+| 3 | `face_mask` | `MASK` | Filled hull of the face points. |
+| 4 | `landmarks_json` | `STRING` | Every set per frame and face: 620 points with std, 68, 98, iris, box, confidence. |
 
 
 ---

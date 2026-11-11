@@ -563,6 +563,20 @@ except Exception as _exc:  # pragma: no cover
     )
     _LOCATE_MAPPINGS, _LOCATE_DISPLAY = {}, {}
 
+# Facepoints face landmarks (myned-ai/facepoints: 620 GNM points + 68/98 sets; L9.199)
+try:
+    from .nodes.facepoints_landmarks import (
+        NODE_CLASS_MAPPINGS as _FACEPOINTS_MAPPINGS,
+        NODE_DISPLAY_NAME_MAPPINGS as _FACEPOINTS_DISPLAY,
+    )
+except Exception as _exc:  # pragma: no cover
+    _c2c_rec_fail(
+        "Facepoints", _exc,
+        hint="Face landmark node; needs timm + safetensors + opencv and the myned-ai/facepoints weights.",
+        group="nodes",
+    )
+    _FACEPOINTS_MAPPINGS, _FACEPOINTS_DISPLAY = {}, {}
+
 # Nano Banana (Google Gemini image API: gemini-3-pro-image + 2.5-flash-image)
 try:
     from .nodes.nano_banana import (
@@ -823,6 +837,7 @@ _C2C_FAMILIES = [
     ("AsymFlow sampler", _ASYMFLOW_MAPPINGS, _ASYMFLOW_DISPLAY),
     ("HDR Color Science", _HDR_MAPPINGS, _HDR_DISPLAY),
     ("LocateAnything", _LOCATE_MAPPINGS, _LOCATE_DISPLAY),
+    ("Facepoints", _FACEPOINTS_MAPPINGS, _FACEPOINTS_DISPLAY),
     ("Nano Banana", _NANOBANANA_MAPPINGS, _NANOBANANA_DISPLAY),
     ("Control AOV", _CONTROLFORGE_MAPPINGS, _CONTROLFORGE_DISPLAY),
     ("Clipboard TCL", _TCL_MAPPINGS, _TCL_DISPLAY),

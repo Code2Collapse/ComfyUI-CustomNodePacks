@@ -159,6 +159,20 @@ Vendored third-party packages (under third_party/):
       Usage:    the "SeC + MatAnyone2" engine of Mask Ops loads SeC-4B through it
                 (L7.90). Changes are listed in nodes/sec_engine/README_PORT.md.
 
+  * Facepoints (nodes/facepoints_engine/)
+      Author:   Myned AI (opensource@myned.ai)
+      Source:   https://huggingface.co/myned-ai/facepoints (commit 6d51ab48af940aca03819840c856984222002e3d,
+                model.py + detect.py)
+      License:  code Apache-2.0 (THIRD_PARTY_LICENSES/facepoints-LICENSE.txt). The model WEIGHTS are CC BY-NC 4.0
+                (non-commercial) and are NOT included: the node downloads them only when its allow_download is on.
+      Usage:    Face Landmarks (Facepoints) node, L9.199. Changes: faces batched, ComfyUI device, debug log.
+
+  * YuNet face finder (downloaded at run time, not included)
+      Author:   Shiqi Yu and the OpenCV Zoo contributors
+      Source:   https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+      License:  MIT
+      Usage:    default face finder of the Face Landmarks (Facepoints) node.
+
   * Fuse.js (js/_fuse.mjs)
       Author:   Kiro Risk
       Source:   https://github.com/krisk/Fuse (v7.0.0)
