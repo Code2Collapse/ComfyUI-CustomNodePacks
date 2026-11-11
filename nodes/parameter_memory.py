@@ -322,6 +322,17 @@ class ParameterHistoryMEC:
         "when, and what the previous values were. Supports run-to-run diffs."
     )
 
+    @classmethod
+    def IS_CHANGED(cls, mode="all_history", last_n_runs=5, node_class_filter="", run_a=0, run_b=0, **_kw):
+        """L9.196: the report reads a database the front end keeps writing; without this a re-queue showed the cached,
+        stale report. The database's mtime and size are the fingerprint (no read, O(1))."""
+        try:
+            st = os.stat(_DB_PATH)
+            db = f"{st.st_mtime_ns}:{st.st_size}"
+        except OSError:
+            db = "missing"
+        return f"{db}|{mode}|{last_n_runs}|{node_class_filter}|{run_a}|{run_b}"
+
     def query(self, mode, last_n_runs, node_class_filter="", run_a=0, run_b=0):
         if mode == "last_run_diff":
             return self._diff_mode(run_a, run_b)
@@ -399,17 +410,6 @@ class ParameterHistoryMEC:
             lines.append(f"  Run #{r['run_id']} ({r['ts']})")
             lines.append(f"    {params}")
         return ("\n".join(lines),)
-
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        h = hashlib.md5()
-        for k, v in sorted(kwargs.items()):
-            h.update(k.encode())
-            if isinstance(v, str):
-                h.update(v.encode())
-            else:
-                h.update(str(v).encode())
-        return h.hexdigest()
 
 
 # ══════════════════════════════════════════════════════════════════════

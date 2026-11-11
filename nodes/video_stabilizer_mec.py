@@ -587,6 +587,8 @@ class VideoStabilizerMEC:
 # Each emits a one-time warning then delegates to VideoStabilizerMEC.
 # =====================================================================
 class _DeprecatedStabilizerBase:
+    # L9.196: ComfyUI marks these deprecated (badge, kept out of search) - saved workflows still load and run
+    DEPRECATED = True
     _WARNED: set = set()
 
     @classmethod

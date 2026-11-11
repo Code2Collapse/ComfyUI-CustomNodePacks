@@ -326,17 +326,25 @@ class FilmGrainMEC:
         mask=None,
     ):
         with torch.no_grad():
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # L9.196: ComfyUI's own device (honours --cpu / the chosen GPU) instead of a hard-coded "cuda"; only an
+            # out-of-memory retries on the CPU - and says so - any other error is raised (it used to be retried
+            # silently, hiding real bugs)
+            try:
+                import comfy.model_management as mm
+                device = mm.get_torch_device()
+            except Exception:  # noqa: BLE001 - outside ComfyUI
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             try:
                 out, notes = film_grain(
                     image, float(amount), float(size), float(roughness), float(color),
                     int(seed), bool(animate), mask=mask, device=device,
                 )
-            except (RuntimeError, torch.cuda.OutOfMemoryError):
+            except torch.cuda.OutOfMemoryError:
                 out, notes = film_grain(
                     image, float(amount), float(size), float(roughness), float(color),
                     int(seed), bool(animate), mask=mask, device=torch.device("cpu"),
                 )
+                notes = list(notes or []) + [f"out of GPU memory on {device}: computed on the CPU instead"]
             rep = build_report("Film Grain (MEC)", image.shape[0], notes)
             return out.clone(), rep
 

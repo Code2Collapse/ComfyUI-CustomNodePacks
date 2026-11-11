@@ -181,11 +181,15 @@ class ConditionalSwitchMEC:
     def INPUT_TYPES(cls):
         return {"required": {
             "condition":   ("BOOLEAN", {"default": True}),
-            "value_true":  (ANY,),
-            "value_false": (ANY,),
+            # L9.196: lazy - only the chosen branch is evaluated (both upstream branches always ran before)
+            "value_true":  (ANY, {"lazy": True}),
+            "value_false": (ANY, {"lazy": True}),
         }}
 
-    def pick(self, condition, value_true, value_false):
+    def check_lazy_status(self, condition, value_true=None, value_false=None):
+        return ["value_true"] if bool(condition) else ["value_false"]
+
+    def pick(self, condition, value_true=None, value_false=None):
         return (value_true if bool(condition) else value_false,)
 
 
