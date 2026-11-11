@@ -270,6 +270,25 @@ _lock = threading.Lock()
 _current: Dict[str, Any] = {}
 
 
+def track_clip(core, frames_bhwc: torch.Tensor, seed_hw: torch.Tensor, seed_frame: int) -> torch.Tensor:
+    """L9.156: a clip's mask [B, H, W] tracked from one segmented frame - forward to the end and backward to frame 0 -
+    instead of the same pixel prompts applied to every frame (which loses a subject the moment it moves)."""
+    B, H, W = int(frames_bhwc.shape[0]), int(frames_bhwc.shape[1]), int(frames_bhwc.shape[2])
+    k = max(0, min(B - 1, int(seed_frame)))
+    init = (seed_hw.float() > 0.5).float().unsqueeze(0)
+    out = torch.zeros(B, H, W)
+    out[k] = init[0]
+    if k < B - 1:
+        fwd = core.track(frames_bhwc[k:], init)
+        for j in range(1, B - k):
+            out[k + j] = fwd.frame(j)[0]
+    if k > 0:
+        bwd = core.track(frames_bhwc[:k + 1].flip(0), init)
+        for j in range(1, k + 1):
+            out[k - j] = bwd.frame(j)[0]
+    return out
+
+
 def release() -> None:
     with _lock:
         h = _current.pop("handle", None)

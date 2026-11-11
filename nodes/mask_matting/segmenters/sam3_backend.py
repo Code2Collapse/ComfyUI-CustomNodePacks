@@ -135,6 +135,10 @@ class SAM3Segmenter(BaseSegmenter):
         try:
             self.load()
             B = image_bhwc.shape[0]
+            tracked = self._track_clip_core(image_bhwc, positive_points, negative_points, bbox, neg_bbox,
+                                            text_prompt, frame_annotation)
+            if tracked is not None:
+                return tracked
             pos = positive_points or []
             neg = negative_points or []
             outs = []
@@ -148,6 +152,24 @@ class SAM3Segmenter(BaseSegmenter):
         except Exception:
             free_vram()
             raise
+
+    def _track_clip_core(self, image_bhwc, positive_points, negative_points, bbox, neg_bbox, text_prompt,
+                         frame_annotation):
+        """L9.156: a clip on ComfyUI's own SAM 3 is segmented on its annotated frame and TRACKED from there (it used to
+        apply the same pixel prompts to every frame). None = not applicable (one frame, the library path, or an empty
+        seed - then the per-frame path runs as before)."""
+        B = int(image_bhwc.shape[0])
+        if self._core is None or B < 2:
+            return None
+        k = max(0, min(B - 1, int(frame_annotation or 0)))
+        m, s = self._seg_one(image_bhwc[k].cpu().numpy(), positive_points or [], negative_points or [],
+                             bbox, neg_bbox, text_prompt)
+        seed = torch.from_numpy(np.asarray(m, dtype=np.float32))
+        if float(seed.sum()) <= 0:
+            return None
+        mask_t = _core_sam3.track_clip(self._core, image_bhwc, seed, k)
+        return {"mask": mask_t.float(), "score": float(s),
+                "info": {"backend": self.KEY, "tracked": True, "seed_frame": k}}
 
     def unload(self) -> None:
         if self._core is not None:
