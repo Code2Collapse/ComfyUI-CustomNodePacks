@@ -876,7 +876,8 @@ def run_onyx_pipeline(
                 img_bhwc, cached_track["coarse"], B=B, matter_key=matter_key, matter_model=matter_model,
                 matter_cls=matter_cls, device=device, precision=precision, attention=attention, offload=offload,
                 auto_download=auto_download, band_scale=band_scale, matte_tile=matte_tile,
-                temporal_stabilise=temporal_stabilise, post_refine=post_refine, matter_instance=matter_instance)
+                temporal_stabilise=temporal_stabilise, post_refine=post_refine, matter_instance=matter_instance,
+                external_trimap=external_trimap)
             pipeline_info.update(edge_info)
             stage_cache.put(edge_key, {"coarse": cached_track["coarse"], "obj_scores": cached_track["obj_scores"],
                                        "trimaps": trimaps, "alpha_o": alpha_o,
@@ -956,7 +957,8 @@ def run_onyx_pipeline(
         img_bhwc, coarse, B=B, matter_key=matter_key, matter_model=matter_model, matter_cls=matter_cls,
         device=device, precision=precision, attention=attention, offload=offload, auto_download=auto_download,
         band_scale=band_scale, matte_tile=matte_tile, temporal_stabilise=temporal_stabilise,
-        post_refine=post_refine, matter_instance=matter_instance)
+        post_refine=post_refine, matter_instance=matter_instance,
+                external_trimap=external_trimap)
     pipeline_info.update(edge_info)
     if stage_cache is not None:
         pipeline_info["stage_cache"] = {"track": "ran", "edge": "ran"}
@@ -977,11 +979,15 @@ def _scene_key(scene: SceneSpec) -> List[Any]:
 
 
 def _onyx_edge(img_bhwc, coarse, *, B, matter_key, matter_model, matter_cls, device, precision, attention, offload,
-               auto_download, band_scale, matte_tile, temporal_stabilise, post_refine, matter_instance):
+               auto_download, band_scale, matte_tile, temporal_stabilise, post_refine, matter_instance,
+               external_trimap=None):
     """The edge stage: per-object trimaps, the matter (tiled), temporal stabilising. Returns (alpha_o, trimaps,
     info); info carries the model-free matter note when the chosen matter is not installed."""
     info: Dict[str, Any] = {}
     trimaps = trimap_resaware(coarse, band_scale)
+    if external_trimap is not None:
+        trimaps = _apply_external_trimap(trimaps, external_trimap, B)
+        info["trimap_source"] = "external_trimap"
 
     mat_key = (matter_key or "none").split("  [")[0].strip()
     if matter_instance is not None:
@@ -1030,6 +1036,24 @@ def _onyx_edge(img_bhwc, coarse, *, B, matter_key, matter_model, matter_cls, dev
 
     alpha_o = stabilise_alpha_unknown(alpha_o, trimaps, enabled=bool(temporal_stabilise))
     return alpha_o, trimaps, info
+
+
+def _apply_external_trimap(trimaps_obhw: torch.Tensor, external, B: int) -> torch.Tensor:
+    """L9.156: the user's trimap drives the matter (it used to replace only the trimap OUTPUT, so it changed nothing in
+    the alpha). One object: that trimap. Several: each object gets it inside its own support (its own foreground or
+    unknown band), so one object's matte never spreads over another's."""
+    ext = to_mask(external).float().clamp(0, 1)
+    if ext.shape[0] == 1 and B > 1:
+        ext = ext.expand(B, -1, -1)
+    O, Bt, H, W = trimaps_obhw.shape
+    if ext.shape[0] != Bt or tuple(ext.shape[-2:]) != (H, W):
+        raise ValueError(f"external_trimap is {tuple(ext.shape)}; it must be {Bt} (or 1) frames of {H} x {W} - the "
+                         "image's size.")
+    ext = ext.to(trimaps_obhw.device, trimaps_obhw.dtype)
+    if O == 1:
+        return ext.unsqueeze(0).clone()
+    support = trimaps_obhw > 0.01
+    return torch.where(support, ext.unsqueeze(0).expand(O, -1, -1, -1), torch.zeros_like(trimaps_obhw))
 
 
 def _onyx_finish(img_bhwc, scene, coarse, obj_scores, trimaps, alpha_o, band_scale, external_trimap,
