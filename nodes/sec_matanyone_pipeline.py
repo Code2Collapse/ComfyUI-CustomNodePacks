@@ -291,6 +291,7 @@ class SeCMatAnyonePipelineMEC:
         if actual_backend == "auto":
             actual_backend = "matanyone2" if is_video else "vitmatte_small"
 
+        self._matting_failed = []
         if actual_backend == "matanyone2":
             try:
                 alpha_mask = self._run_matanyone2(
@@ -382,6 +383,11 @@ class SeCMatAnyonePipelineMEC:
                 f"{part}: " + (model_status(fallback_why=model_free[part].get("why", "")) if part in model_free
                                 else "loaded") for part in ("segmentation", "matting")),
             **({"approximate": True, "model_free": model_free} if model_free else {}),
+            # L9.156: frames where the matter failed and the coarse mask was used instead
+            **({"matting_failed_frames": [i for i, _ in self._matting_failed],
+                "matting_note": f"MatAnyone2 failed on {len(self._matting_failed)} of {B} frames; those frames carry "
+                                f"the coarse mask (first error: {self._matting_failed[0][1]})"}
+               if getattr(self, "_matting_failed", None) else {}),
         }, indent=2)
 
         return (rgb, alpha_mask, coarse_masks, preview, info)
@@ -422,6 +428,7 @@ class SeCMatAnyonePipelineMEC:
         core = loaded["core"] if isinstance(loaded, dict) else loaded
 
         alphas = []
+        failed: list = []
 
         first_img = image[0].permute(2, 0, 1).to(device)
         first_mask = mask[0].unsqueeze(0).to(device)
@@ -458,7 +465,13 @@ class SeCMatAnyonePipelineMEC:
             except Exception as exc:
                 logger.warning("[MEC] MatAnyone2 frame %d: %s", i, exc)
                 alphas.append(mask[i].cpu())
+                failed.append((i, f"{type(exc).__name__}: {str(exc)[:160]}"))
 
+        # L9.156: a frame MatAnyone2 could not matte carries the COARSE mask - say so; if no frame was matted, this is
+        # not a MatAnyone2 result at all: raise, so the caller's visible ViTMatte fallback runs instead
+        self._matting_failed = failed
+        if failed and len(failed) == B:
+            raise RuntimeError(f"MatAnyone2 failed on every frame ({failed[0][1]})")
         return torch.stack(alphas)
 
     # ── ViTMatte matting ──────────────────────────────────────────────
