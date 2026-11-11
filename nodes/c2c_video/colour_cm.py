@@ -115,12 +115,42 @@ def working_choices() -> list[str]:
     return [WORK_DEFAULT, WORK_PRESERVE] + SO.colorspace_choices()
 
 
-def resolve(cfg, name_or_id: str | None) -> str | None:
-    """A colour-space name, alias or interop ID -> the config's name. ASWF rule: the full ID, then without its
-    leftmost namespace; the built-in config namespaces its own IDs ("ocio:arrilogc3_awg3_scene")."""
-    if cfg is None or not name_or_id:
-        return None
-    s = str(name_or_id).strip()
+# L9.177 (owner 2026-11-10: "a Rec.709 MOV from Nuke is not detected"): only the OCIO 2.5 v4 built-in configs carry
+# ASWF interop IDs. Every other config - our own "studio / cg ACES 1.3" built-in choices, the OCIO 2.1-2.4 built-ins,
+# Nuke's nuke-default, ACES 1.x studio configs - found NONE of the movie-tag spaces, so auto said "unknown" for every
+# file (measured: docs/evidence/L9.177). The same spaces under the names / aliases those configs use, most specific
+# first (each checked against the built-in configs of OCIO 2.5.2; the bare Nuke names are nuke-default's).
+_ID_NAMES: dict[str, tuple[str, ...]] = {
+    "g24_rec709_display": ("Rec.1886 Rec.709 - Display", "rec1886_rec709_display", "Gamma 2.4 Encoded Rec.709",
+                           "Gamma 2.4 Rec.709 - Texture", "g24_rec709", "rec709_display", "Utility - Rec.709 - Display",
+                           "Gamma2.4", "BT1886", "rec709"),
+    "g24_rec709_scene": ("Gamma 2.4 Encoded Rec.709", "Gamma 2.4 Rec.709 - Texture", "g24_rec709", "rec709_display",
+                         "Utility - Rec.709 - Display", "Gamma2.4"),
+    "itu709_rec709_scene": ("Camera Rec.709", "camera_rec709", "Utility - Rec.709 - Camera", "rec709"),
+    "srgb_rec709_display": ("sRGB - Display", "srgb_display", "sRGB Encoded Rec.709 (sRGB)", "sRGB - Texture",
+                            "srgb_texture", "Utility - sRGB - Texture", "sRGB", "srgb"),
+    "srgb_rec709_scene": ("sRGB Encoded Rec.709 (sRGB)", "srgb_encoded_rec709_srgb", "sRGB - Texture", "srgb_texture",
+                          "Utility - sRGB - Texture", "sRGB", "srgb"),
+    "g22_rec709_display": ("Gamma 2.2 Rec.709 - Display", "Gamma 2.2 Encoded Rec.709", "Gamma 2.2 Rec.709 - Texture",
+                           "g22_rec709", "Gamma2.2"),
+    "g22_rec709_scene": ("Gamma 2.2 Encoded Rec.709", "Gamma 2.2 Rec.709 - Texture", "g22_rec709", "Gamma2.2"),
+    "lin_rec709_scene": ("Linear Rec.709 (sRGB)", "lin_rec709", "lin_srgb", "Utility - Linear - Rec.709",
+                         "Utility - Linear - sRGB", "linear"),
+    "lin_rec2020_scene": ("Linear Rec.2020", "lin_rec2020", "Utility - Linear - Rec.2020"),
+    "lin_p3d65_scene": ("Linear P3-D65", "lin_p3d65", "Utility - Linear - P3-D65"),
+    "lin_ap1_scene": ("ACEScg", "lin_ap1", "ACES - ACEScg"),
+    "lin_ap0_scene": ("ACES2065-1", "aces2065_1", "lin_ap0", "ACES - ACES2065-1"),
+    "pq_rec2020_display": ("Rec.2100-PQ - Display", "rec2100_pq_display"),
+    "hlg_rec2020_display": ("Rec.2100-HLG - Display", "rec2100_hlg_display"),
+    "srgb_p3d65_display": ("Display P3 - Display", "displayp3_display", "sRGB Encoded P3-D65", "srgb_p3d65",
+                           "sRGB Encoded P3-D65 - Texture"),
+    "pq_p3d65_display": ("ST2084-P3-D65 - Display", "st2084_p3d65_display"),
+}
+_RESOLVED: dict = {}                 # (id(cfg), cache id, key) -> name or None: lookups run on every load
+_REFERENCE = []                      # [the latest built-in config] for OCIO's numeric identification
+
+
+def _direct(cfg, s: str) -> str | None:
     tries = [s]
     if ":" in s:
         tries.append(s.split(":", 1)[1])
@@ -131,6 +161,51 @@ def resolve(cfg, name_or_id: str | None) -> str | None:
         if cs is not None:
             return cs.getName()
     return None
+
+
+def _identify(cfg, iid: str) -> str | None:
+    """OCIO's own numeric match (Config.IdentifyBuiltinColorSpace, OCIO 2.3+): the space of ``cfg`` whose transform
+    equals the built-in config's space for ``iid``. Needs the interchange roles every ACES / ASWF config has; a config
+    without them (nuke-default) raises, and the name table above is all there is."""
+    try:
+        import PyOpenColorIO as ocio  # type: ignore[import-not-found]
+        if not _REFERENCE:
+            _REFERENCE.append(ocio.Config.CreateFromFile("ocio://studio-config-latest"))
+        ref = _REFERENCE[0]
+        if ref is cfg:
+            return None
+        ref_name = _direct(ref, iid) or next((n for n in (_direct(ref, c) for c in _ID_NAMES.get(iid, ())) if n),
+                                             None)
+        if not ref_name:
+            return None
+        found = ocio.Config.IdentifyBuiltinColorSpace(cfg, ref, ref_name)
+        return found or None
+    except Exception:  # noqa: BLE001 - no interchange roles / an old OCIO: not identifiable numerically
+        return None
+
+
+def resolve(cfg, name_or_id: str | None) -> str | None:
+    """A colour-space name, alias or interop ID -> the config's name. ASWF rule: the full ID, then without its
+    leftmost namespace; the built-in config namespaces its own IDs ("ocio:arrilogc3_awg3_scene"). A config without
+    interop IDs (L9.177): the names that space has in the ASWF / ACES 1.x / Nuke configs, then OCIO's numeric match."""
+    if cfg is None or not name_or_id:
+        return None
+    s = str(name_or_id).strip()
+    found = _direct(cfg, s)
+    if found:
+        return found
+    iid = s.split(":", 1)[1] if ":" in s else s
+    if iid not in _ID_NAMES:
+        return None
+    try:
+        cache_id = cfg.getCacheID()          # a reloaded config may reuse a freed object's id()
+    except Exception:  # noqa: BLE001
+        cache_id = ""
+    key = (id(cfg), cache_id, iid)
+    if key not in _RESOLVED:
+        hit = next((n for n in (_direct(cfg, c) for c in _ID_NAMES[iid]) if n), None)
+        _RESOLVED[key] = hit or _identify(cfg, iid)
+    return _RESOLVED[key]
 
 
 def interop_id(cfg, name: str | None) -> str | None:
@@ -156,8 +231,13 @@ def is_data(cfg, name: str | None) -> bool:
 
 
 def keeps(cfg, name: str | None) -> bool:
-    """Already Rec.709 / sRGB: the owner's working default leaves it as it is."""
-    return (interop_id(cfg, name) or "") in _KEEP_IDS
+    """Already Rec.709 / sRGB: the owner's working default leaves it as it is. By interop ID, or (a config without
+    IDs, L9.177) by being the space one of those IDs resolves to in this config."""
+    if not name:
+        return False
+    if (interop_id(cfg, name) or "") in _KEEP_IDS:
+        return True
+    return any(resolve(cfg, k) == name for k in _KEEP_IDS)
 
 
 # ---- detection ---------------------------------------------------------------------------------------------------
