@@ -222,6 +222,10 @@ def _resolve_model_choice(choice: str, expected_key: str,
                 return avail[0]
             # else fall through to download under expected_key (best-effort)
             preset_key = expected_key
+        # L9.192: a whole-folder (Transformers repo) preset is fetched by its backend, with the same consent
+        from .utils import preset_repo
+        if preset_repo(expected_key, name):
+            return name
         # already on disk?
         avail = list_backend_files(expected_key)
         if name in avail:

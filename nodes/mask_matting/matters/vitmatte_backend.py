@@ -181,7 +181,9 @@ class ViTMatteMatter(BaseMatter):
             )
 
         candidates: list[str] = []
-        path = resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None
+        from ..utils import preset_repo
+        repo = preset_repo(self.MODELS_KEY, self.model_name) if self.model_name else None
+        path = None if repo else (resolve_backend_weight(self.MODELS_KEY, self.model_name) if self.model_name else None)
         if path and os.path.isdir(path):
             candidates.append(path)
         elif path and os.path.isfile(path):
@@ -200,10 +202,14 @@ class ViTMatteMatter(BaseMatter):
             pass
 
         src: Optional[str] = None
-        for c in candidates:
+        for c in ([] if repo else candidates):               # L9.192: a named preset is THAT model, never "any folder"
             if _is_hf_model_dir(c):
                 src = c
                 break
+        if src is None and repo:
+            from ...model_manager import resolve_transformers_repo
+            src = resolve_transformers_repo(repo, "vitmatte", widget="auto_download")
+            logger.info("[ViTMatte] loading preset %s from %s", repo, src)
 
         if src is None:
             src = self.model_name or "hustvl/vitmatte-small-composition-1k"

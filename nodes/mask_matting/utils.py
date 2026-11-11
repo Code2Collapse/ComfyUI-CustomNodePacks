@@ -158,10 +158,11 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
          "url":  "https://huggingface.co/OpenIXCLab/SeC-4B/resolve/main/model.safetensors"},
     ],
     "vitmatte": [
-        {"name": "vitmatte-small-composition-1k.safetensors",
-         "url":  "https://huggingface.co/hustvl/vitmatte-small-composition-1k/resolve/main/model.safetensors"},
-        {"name": "vitmatte-base-composition-1k.safetensors",
-         "url":  "https://huggingface.co/hustvl/vitmatte-base-composition-1k/resolve/main/model.safetensors"},
+        # L9.192: ViTMatte loads only as a whole Transformers folder (config + preprocessor + weights), never from one
+        # file - a lone file made the backend silently fall back to the small model (base chose small). These name
+        # their repo: the backend loads it through resolve_transformers_repo (MaskOps' auto_download consent).
+        {"name": "vitmatte-small-composition-1k.safetensors", "url": "", "repo": "hustvl/vitmatte-small-composition-1k"},
+        {"name": "vitmatte-base-composition-1k.safetensors", "url": "", "repo": "hustvl/vitmatte-base-composition-1k"},
     ],
     "rvm": [
         {"name": "rvm_mobilenetv3.pth",
@@ -212,8 +213,16 @@ def get_preset_url(key: str, name: str) -> Optional[str]:
     return None
 
 
+def preset_repo(key: str, name: str) -> Optional[str]:
+    """The Transformers repo a whole-folder preset stands for (L9.192), else None."""
+    base = os.path.basename(str(name or "")).split("] ", 1)[-1]
+    return next((p.get("repo") for p in _PRESETS.get(key, []) if p.get("name") == base and p.get("repo")), None)
+
+
 def download_preset(key: str, name: str, *, force: bool = False) -> str:
     """Download preset ``name`` for backend ``key`` into its models folder."""
+    if preset_repo(key, name):                     # L9.192: the backend fetches the whole repo, with the same consent
+        return backend_first_root(key)
     url = get_preset_url(key, name)
     if not url:
         why = next((p.get("unavailable") for p in _PRESETS.get(key, []) if p.get("name") == name), None)
