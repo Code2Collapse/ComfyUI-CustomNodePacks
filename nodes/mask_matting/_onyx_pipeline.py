@@ -532,6 +532,11 @@ def propagate_objects(
     direction = scene.tracking.direction
     max_f = scene.tracking.max_frames
 
+    # L9.156: with direction "both" the two passes are kept apart and merged per frame by the nearer keyframe (the
+    # backward pass used to overwrite every frame the forward pass had tracked, wherever the keyframes were)
+    target = coarse
+    seen = torch.zeros((O, B), dtype=torch.bool)
+
     def _ingest(frame_idx: int, outputs: dict) -> None:
         obj_ids = _output_id_list(outputs.get("out_obj_ids"))
         masks = outputs.get("out_binary_masks")
@@ -551,7 +556,8 @@ def propagate_objects(
                 import torch.nn.functional as F
                 m = (F.interpolate(m[None, None], size=(H, W), mode="bilinear",
                                    align_corners=False)[0, 0] > 0.5).float()
-            coarse[oi, frame_idx] = m
+            target[oi, frame_idx] = m
+            seen[oi, frame_idx] = True
             sc = _output_prob_at(probs, j)
             if sc is not None:
                 scores[oid] = max(scores.get(oid, 0.0), sc)
@@ -566,6 +572,10 @@ def propagate_objects(
         ):
             _ingest(int(fi), outputs if isinstance(outputs, dict) else {})
 
+    seen_fwd = seen.clone()
+    if direction == "both":
+        target = torch.zeros_like(coarse)
+        seen.zero_()
     if direction in ("backward", "both"):
         mb = _max_track_backward(start_bwd, max_f)
         for fi, outputs in model.propagate_in_video(
@@ -575,8 +585,33 @@ def propagate_objects(
             reverse=True,
         ):
             _ingest(int(fi), outputs if isinstance(outputs, dict) else {})
+    if direction == "both":
+        coarse = merge_bidirectional(coarse, seen_fwd, target, seen, enabled)
 
     return coarse, scores
+
+
+def merge_bidirectional(fwd: torch.Tensor, seen_f: torch.Tensor, bwd: torch.Tensor, seen_b: torch.Tensor,
+                        objects: Sequence[ObjectSpec]) -> torch.Tensor:
+    """Per object and frame: the pass whose nearest conditioning keyframe is closer (forward: the latest keyframe at or
+    before the frame; backward: the earliest at or after it); a frame only one pass reached keeps that pass."""
+    O, B = seen_f.shape
+    out = fwd.clone()
+    for o in range(O):
+        kfs = sorted({int(kf.frame) for kf in objects[o].keyframes}) or [0]
+        for b in range(B):
+            if not seen_b[o, b]:
+                continue
+            if not seen_f[o, b]:
+                out[o, b] = bwd[o, b]
+                continue
+            before = [k for k in kfs if k <= b]
+            after = [k for k in kfs if k >= b]
+            d_f = b - before[-1] if before else B + 1
+            d_b = after[0] - b if after else B + 1
+            if d_b < d_f:
+                out[o, b] = bwd[o, b]
+    return out
 
 
 def trimap_resaware(coarse_obhw: torch.Tensor, band_scale: float) -> torch.Tensor:
