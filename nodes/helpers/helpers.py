@@ -299,7 +299,9 @@ class AspectPresetMEC:
             "preset":   ([*cls.PRESETS.keys(), cls.CUSTOM], {"default": "16:9 landscape"}),
             "base":     ("INT", {"default": 1024, "min": 64, "max": 8192,
                 "tooltip": "Long edge target (ignored for Wan presets and Custom)."}),
-            "multiple": ("INT", {"default": 64, "min": 1, "max": 256}),
+            "multiple": ("INT", {"default": 64, "min": 1, "max": 256,
+                "tooltip": "Snap width and height to this multiple. Wan presets ignore it: their native sizes "
+                           "(832x480, 1280x720) are already what Wan needs (multiples of 16)."}),
         }, "optional": {
             # appended after the original three so saved Aspect Preset values keep their positions
             "width":     ("INT", {"default": 1024, "min": 8, "max": 16384, "tooltip": "Custom: width before snapping."}),
@@ -320,7 +322,9 @@ class AspectPresetMEC:
         else:
             w_r, h_r = self.PRESETS[preset]
             if preset.startswith("Wan"):
-                w, h = int(w_r), int(h_r)
+                # L9.189: returned exactly. Snapping them to the default multiple of 64 gave 832x448 / 1280x704,
+                # not the native sizes the description promises (Wan needs multiples of 16, which these are).
+                return (int(w_r), int(h_r))
             else:
                 long_edge = base
                 if w_r >= h_r:

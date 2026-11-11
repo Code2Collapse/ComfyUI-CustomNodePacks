@@ -77,7 +77,7 @@ assert w3 == 1024 and h3 == 576
 w, h = n9.pick("16:9 landscape", 1024, 64)
 assert w == 1024 and h == 576, (w, h)
 w, h = n9.pick("Wan 480p land", 0, 64)
-assert w == 832 and h == 448, (w, h)  # 480 -> 448 after snap-down
+assert w == 832 and h == 480, (w, h)  # L9.189: Wan presets are native, never snapped
 w, h = n9.pick("1:1 square", 1024, 64)
 assert w == 1024 and h == 1024
 print("OK Size")
