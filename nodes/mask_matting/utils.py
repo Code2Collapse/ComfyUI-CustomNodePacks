@@ -134,14 +134,21 @@ _quiet_progress_bars()
 _PRESETS: Dict[str, List[Dict[str, str]]] = {
     "sam3": [
         {"name": "sam3.safetensors",
-         "url":  "https://huggingface.co/facebook/sam3/resolve/main/sam3.safetensors"},
+         # L9.192: facebook/sam3 is gated and has no sam3.safetensors (401). 1038lab/sam3 serves the identical file
+         # (same 1465-tensor header as the registry's former source, checked 2026-11-11) with the SAM licence tag.
+         "url":  "https://huggingface.co/1038lab/sam3/resolve/main/sam3.safetensors"},
     ],
     "sam3.1": [
         # Comfy-Org reupload (extra-dependency-free re-implementation, single-file).
         {"name": "sam3.1_multiplex_fp16.safetensors",
          "url":  "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors"},
-        {"name": "sam3.1_multiplex_fp32.safetensors",
-         "url":  "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex.safetensors"},
+        # L9.192: no public fp32 SAM 3.1 safetensors exists (Comfy-Org/sam3.1 ships fp16 only - this URL was a 404;
+        # facebook/sam3.1 is gated, .pt only). Kept so saved workflows that chose it still load; a file you place
+        # yourself under this name still works.
+        {"name": "sam3.1_multiplex_fp32.safetensors", "url": "",
+         "unavailable": "There is no public fp32 SAM 3.1 .safetensors to download (Comfy-Org/sam3.1 ships fp16 only). "
+                        "Pick '[preset:sam3.1] sam3.1_multiplex_fp16.safetensors', or put your own fp32 file in the "
+                        "sam3.1 models folder under this name."},
         # 1038lab reupload — same architecture, native key format. Used by comfyui-sam3.
         {"name": "sam3.pt",
          "url":  "https://huggingface.co/1038lab/sam3/resolve/main/sam3.pt"},
@@ -176,7 +183,8 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
     ],
     "birefnet": [
         {"name": "BiRefNet-general-epoch_244.pth",
-         "url":  "https://huggingface.co/ZhengPeng7/BiRefNet/resolve/main/BiRefNet-general-epoch_244.pth"},
+         # L9.192: the HF repo has model.safetensors only (this .pth was a 404); the original release has it (MIT)
+         "url":  "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-general-epoch_244.pth"},
     ],
     "rmbg": [
         {"name": "RMBG-2.0.safetensors",
@@ -208,7 +216,8 @@ def download_preset(key: str, name: str, *, force: bool = False) -> str:
     """Download preset ``name`` for backend ``key`` into its models folder."""
     url = get_preset_url(key, name)
     if not url:
-        raise ValueError(f"No preset '{name}' registered for backend '{key}'.")
+        why = next((p.get("unavailable") for p in _PRESETS.get(key, []) if p.get("name") == name), None)
+        raise ValueError(why or f"No preset '{name}' registered for backend '{key}'.")
     dst_dir = backend_first_root(key)
     os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, name)
