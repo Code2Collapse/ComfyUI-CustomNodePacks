@@ -213,6 +213,20 @@ def get_preset_url(key: str, name: str) -> Optional[str]:
     return None
 
 
+def _is_access_denied(exc: BaseException) -> bool:
+    """A gated / private / vanished Hugging Face repo (L9.192): 401 / 403 / GatedRepoError / RepositoryNotFound."""
+    name = type(exc).__name__
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return name in ("GatedRepoError", "RepositoryNotFoundError") or code in (401, 403)
+
+
+def _gated_message(repo: str, name: str) -> str:
+    return (f"{name}: Hugging Face refused the download from {repo} (gated, private or removed). For a gated model "
+            f"(e.g. briaai/RMBG-2.0), open https://huggingface.co/{repo}, accept its licence, then log in on this "
+            f"computer (`huggingface-cli login`) and run again - or download the file yourself into the backend's "
+            f"models folder.")
+
+
 def preset_repo(key: str, name: str) -> Optional[str]:
     """The Transformers repo a whole-folder preset stands for (L9.192), else None."""
     base = os.path.basename(str(name or "")).split("] ", 1)[-1]
@@ -247,9 +261,19 @@ def download_preset(key: str, name: str, *, force: bool = False) -> str:
                 shutil.copy2(cached, dst)
                 return dst
             except Exception as e:
+                if _is_access_denied(e):
+                    raise PermissionError(_gated_message(repo, name)) from e
                 logger.warning("[MaskMatting] hf_hub_download failed (%s); falling back to urllib", e)
+        import urllib.error
         import urllib.request
-        with urllib.request.urlopen(url) as resp, open(tmp, "wb") as f:
+        try:
+            resp_ctx = urllib.request.urlopen(url)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and "huggingface.co" in url:
+                raise PermissionError(_gated_message(url.split("huggingface.co/", 1)[1].split("/resolve/")[0],
+                                                     name)) from e
+            raise RuntimeError(f"Downloading preset {key}/{name} failed: HTTP {e.code} for {url}") from e
+        with resp_ctx as resp, open(tmp, "wb") as f:
             while True:
                 chunk = resp.read(1 << 20)
                 if not chunk:
