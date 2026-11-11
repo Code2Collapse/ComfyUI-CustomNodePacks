@@ -183,13 +183,13 @@ _PRESETS: Dict[str, List[Dict[str, str]]] = {
          "url":  "https://huggingface.co/PeiqingYang/MatAnyone/resolve/main/model.safetensors"},
     ],
     "birefnet": [
-        {"name": "BiRefNet-general-epoch_244.pth",
-         # L9.192: the HF repo has model.safetensors only (this .pth was a 404); the original release has it (MIT)
-         "url":  "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/BiRefNet-general-epoch_244.pth"},
+        # L9.192: the salient backend loads the whole Transformers repo (AutoModelForImageSegmentation), never a lone
+        # .pth - the single-file download (first a 404, then 400 MB never read) is replaced by the repo itself.
+        {"name": "BiRefNet-general-epoch_244.pth", "url": "", "repo": "ZhengPeng7/BiRefNet"},
     ],
     "rmbg": [
-        {"name": "RMBG-2.0.safetensors",
-         "url":  "https://huggingface.co/briaai/RMBG-2.0/resolve/main/model.safetensors"},
+        # L9.192: same as BiRefNet - the backend loads the repo (gated: accept the licence + huggingface-cli login)
+        {"name": "RMBG-2.0.safetensors", "url": "", "repo": "briaai/RMBG-2.0"},
     ],
     "grounding-dino": [
         {"name": "groundingdino_swint_ogc.pth",
