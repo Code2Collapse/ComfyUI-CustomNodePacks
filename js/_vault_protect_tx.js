@@ -108,8 +108,20 @@ export function absSource(root, graph, l, graphPath, depth = 0) {
     const outerPath = graphPath.split(":").slice(0, -1).join(":");
     return outer ? absSource(root, holder.graph, outer, outerPath, depth + 1) : null;
   }
-  const origin = graph.getNodeById?.(l.origin_id) ?? nodesOf(graph).find((x) => String(x.id) === String(l.origin_id));
-  const rs = relSource(origin, l.origin_slot);
+  let origin = graph.getNodeById?.(l.origin_id) ?? nodesOf(graph).find((x) => String(x.id) === String(l.origin_id));
+  let slot = l.origin_slot;
+  // virtual nodes (Reroute, Set/Get-style nodes) are resolved through by graphToPrompt: follow them the same way
+  if (origin?.isVirtualNode && !isSub(origin)) {
+    const rv = origin.resolveVirtualOutput?.(slot);
+    if (rv?.node) {
+      origin = rv.node;
+      slot = rv.slot ?? 0;
+    } else {
+      const up = origin.getInputLink?.(0);
+      return up ? absSource(root, graph, up, graphPath, depth + 1) : null;
+    }
+  }
+  const rs = relSource(origin, slot);
   return rs ? { id: `${base}${rs.id}`, slot: rs.slot } : null;
 }
 
