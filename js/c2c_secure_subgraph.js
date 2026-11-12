@@ -8,6 +8,8 @@
 // locked form, copying the open subgraph is refused, and a queue encrypts a snapshot of the current edit first.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { ProtectError, absSource, captureBoundary, execIdOf, outerWires, relSource, runTransaction, verifyConversion,
+  verifyVaultWiring } from "./_vault_protect_tx.js";
 
 const VAULT_TYPES = new Set(["C2C_SecureSubgraph", "C2C_SecureSubgraphOutput"]);
 const LEGACY_TYPES = new Set(["C2C_VaultLocked", "C2C_VaultSealed"]);
@@ -258,15 +260,13 @@ function applyInterface(node) {
 }
 
 // ── API form from the frontend's own graphToPrompt (exact widget / primitive / nested-subgraph conversion) ──
+// A26 L9.203: the subgraph node's exact execution path (the frontend's own algorithm, see _vault_protect_tx.js) -
+// never "a key whose last two segments look right", which matched the wrong instance of a shared definition.
 function execPrefix(output, sg) {
-  const innerIds = new Set((sg.subgraph?.nodes || sg.subgraph?._nodes || []).map((n) => String(n.id)));
-  for (const key of Object.keys(output)) {
-    const parts = key.split(":");
-    if (parts.length >= 2 && innerIds.has(parts.at(-1)) && parts.at(-2) === String(sg.id)) {
-      return parts.slice(0, -1).join(":") + ":";
-    }
-  }
-  return null;
+  const id = execIdOf(sg, app.rootGraph ?? app.graph);
+  if (!id) return null;
+  const prefix = `${id}:`;
+  return Object.keys(output).some((k) => k.startsWith(prefix)) ? prefix : null;
 }
 
 function promotedOf(sg) {
@@ -276,6 +276,9 @@ function promotedOf(sg) {
   inputs.forEach((inp, i) => {
     const w = sg.widgets?.find((x) => x.name === inp.name);
     if (!w) return;
+    // A26 L9.203: a promoted widget input that an OUTER wire feeds is data, not a control - treating it as a control
+    // left that inner input without a source ("vault input undefined"; the old flow sealed it unwired)
+    if (sg.inputs?.[i]?.link != null) return;
     const targets = [];
     for (const lid of inp.linkIds || []) {
       const l = linkOf(sg.subgraph, lid);
@@ -319,29 +322,22 @@ async function buildApi(sg, extraParams = []) {
       if (id && nodes[id] && name) nodes[id].inputs[name] = { vault_in: i };
     }
   });
-  // ... and any remaining link that leaves the subgraph (nested subgraphs) by its resolved source
-  const srcKey = (v) => `${v[0]}#${v[1]}`;
+  // ... and any remaining link that leaves the subgraph (nested subgraphs): matched by the EXACT resolved execution
+  // source of each vault input's outer wire (A26 L9.203 - it used to compare only the last segment of the id)
+  const root = app.rootGraph ?? app.graph;
+  const sgPath = prefix.slice(0, -1);
+  const graphPath = sgPath.split(":").slice(0, -1).join(":");
   const bySource = new Map();
-  for (const n of Object.values(nodes)) for (const [name, v] of Object.entries(n.inputs)) {
-    if (Array.isArray(v) && v.length === 2 && typeof v[0] === "string" && !nodes[v[0]] && !v[0].startsWith(prefix)) {
-      bySource.set(srcKey(v), null);
-    }
-  }
-  if (bySource.size) {
-    // map resolved outer sources to vault inputs via direct cases recorded above
-    for (const [i] of outerSrc) {
-      for (const n of Object.values(nodes)) for (const v of Object.values(n.inputs)) {
-        if (v && typeof v === "object" && !Array.isArray(v) && v.vault_in === i) { /* already direct */ }
-      }
-    }
+  for (const [i, l] of outerSrc) {
+    const src = absSource(root, graph, l, graphPath);
+    if (src) bySource.set(`${src.id}#${src.slot}`, i);
   }
   for (const n of Object.values(nodes)) for (const [name, v] of Object.entries(n.inputs)) {
     if (Array.isArray(v) && v.length === 2 && typeof v[0] === "string") {
       if (v[0].startsWith(prefix)) n.inputs[name] = [v[0].slice(prefix.length), v[1]];
       else if (!nodes[v[0]]) {
-        const i = [...outerSrc.entries()].findIndex(([, l]) => String(l.origin_id) === v[0].split(":").at(-1)
-          && l.origin_slot === v[1]);
-        if (i >= 0) n.inputs[name] = { vault_in: [...outerSrc.keys()][i] };
+        const i = bySource.get(`${v[0]}#${v[1]}`);
+        if (i != null) n.inputs[name] = { vault_in: i };
         else throw new Error("A node inside reads from outside the selection through a path the vault cannot " +
           "follow. Include that source in the selection, or wire it to a subgraph input.");
       }
@@ -352,12 +348,11 @@ async function buildApi(sg, extraParams = []) {
     let r = null;
     try { r = sg.resolveSubgraphOutputLink?.(j); } catch (_) { /* below */ }
     const node = r?.outputNode ?? r?.node ?? null;
-    const slot = r?.link?.origin_slot ?? r?.slot ?? r?.outputSlot ?? 0;
-    let id = node ? String(node.id) : null;
-    if (id && !nodes[id]) {                     // an inner subgraph node: its resolved exec id is deeper
-      const deeper = Object.keys(nodes).find((k) => k.split(":")[0] === id);
-      id = deeper ?? id;
-    }
+    const innerSlot = r?.link?.origin_slot ?? r?.slot ?? r?.outputSlot ?? 0;
+    // an inner subgraph node resolves to its exact inner source (A26: no "first key starting with that id")
+    const rs = node ? relSource(node, innerSlot) : null;
+    const id = rs ? rs.id : null;
+    const slot = rs ? rs.slot : innerSlot;
     if (!id || !nodes[id]) {
       const lnk = sub?.outputNode?.slots?.[j]?.getLinks?.()?.[0];
       if (lnk && nodes[String(lnk.origin_id)]) return { name: o.label || o.name, type: String(o.type || "*"),
@@ -409,6 +404,102 @@ function exportUi(sg) {
 }
 
 // ── creating a vault from a subgraph node ───────────────────────────────────────────────────────────────────
+const MAX_VAULT_OUTPUTS = 256;                     // nodes/secure_subgraph.py MAX_OUTPUTS
+
+/** VAULT_PAYLOAD_VALIDATION (A26 L9.203): the extracted graph is complete and consistent before anything is sealed. */
+function validateBuilt(built) {
+  const fail = (m) => { throw new ProtectError("VAULT_PAYLOAD_VALIDATION", m); };
+  const { nodes, inputs, outputs, promoted } = built.api;
+  if (!Object.keys(nodes).length) fail("This subgraph has no nodes that run (nothing to protect).");
+  if (outputs.length > MAX_VAULT_OUTPUTS) fail(`A vault can have at most ${MAX_VAULT_OUTPUTS} outputs (this has ${outputs.length}).`);
+  const outCount = (id) => (nodeDefOf(nodes[id]?.class_type)?.output || []).length;
+  for (const [id, n] of Object.entries(nodes)) {
+    if (!nodeDefOf(n.class_type)) fail(`Node ${id} is a "${n.class_type}", which this ComfyUI does not have.`);
+    for (const [name, v] of Object.entries(n.inputs || {})) {
+      if (Array.isArray(v) && v.length === 2 && typeof v[0] === "string") {
+        if (!nodes[v[0]]) fail(`Input "${name}" of node ${id} reads from node ${v[0]}, which is not inside.`);
+        if (!(Number.isInteger(v[1]) && v[1] >= 0 && v[1] < outCount(v[0]))) fail(`Input "${name}" of node ${id} reads output ${v[1]} of node ${v[0]}, which does not exist.`);
+      } else if (v && typeof v === "object" && "vault_in" in v) {
+        if (!(Number.isInteger(v.vault_in) && v.vault_in >= 0 && v.vault_in < inputs.length)) fail(`Input "${name}" of node ${id} names vault input ${v.vault_in}, which does not exist.`);
+      }
+    }
+  }
+  outputs.forEach((o, j) => {
+    if (!nodes[o.node] || !(o.slot >= 0 && o.slot < outCount(o.node))) fail(`Vault output ${j} ("${o.name}") does not point at an existing output inside.`);
+  });
+  for (const p of promoted || []) if (!nodes[p.node]) fail(`The control "${p.key}" targets node ${p.node}, which is not inside.`);
+}
+
+/**
+ * "Protect selection" / "Protect this subgraph" as ONE transaction (A26 L9.203): stages per _vault_protect_tx.js
+ * STAGES; any failure restores the exact original graph (never a leftover ordinary subgraph) and names the stage.
+ */
+async function protectTransaction(nodes, opts) {
+  const graph = nodes[0].graph;
+  const single = nodes.length === 1 && isSubgraphNode(nodes[0]);
+  let sg = single ? nodes[0] : null, manifest = null, built = null, res = null, vault = null, before = null, wires = null;
+  await runTransaction(app, [
+    ["SELECTION_VALIDATION", () => {
+      if (nodes.some((n) => n.graph !== graph)) throw new ProtectError("SELECTION_VALIDATION", "Select nodes from one graph.");
+      if (nodes.some((n) => VAULT_TYPES.has(n.type) || LEGACY_TYPES.has(n.type))) {
+        throw new ProtectError("SELECTION_VALIDATION", "The selection contains a vault; protect the nodes around it separately.");
+      }
+    }],
+    ["BOUNDARY_CAPTURE", () => { manifest = single ? null : captureBoundary(graph, nodes); }],
+    ["NATIVE_SUBGRAPH_CONVERSION", () => {
+      if (!single) sg = graph.convertToSubgraph(new Set(nodes))?.node ?? null;
+      if (!sg) throw new ProtectError("NATIVE_SUBGRAPH_CONVERSION", "The selection could not be turned into a subgraph.");
+    }],
+    ["SUBGRAPH_INTERFACE_VALIDATION", () => {
+      if (manifest) verifyConversion(graph, sg, manifest);
+      if ((sg.outputs || []).length > MAX_VAULT_OUTPUTS) {
+        throw new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `A vault can have at most ${MAX_VAULT_OUTPUTS} outputs.`);
+      }
+    }],
+    ["INNER_GRAPH_EXTRACTION", async () => { built = await buildApi(sg); }],
+    ["VAULT_PAYLOAD_VALIDATION", () => validateBuilt(built)],
+    ["ENCRYPTION_AND_SEALING", async () => {
+      const r = await post("/c2c_vault/sg/protect", { password: opts.password, profile: opts.profile,
+        recipients: opts.recipients, editors: opts.editors, interface: built.interface, api: built.api, ui: exportUi(sg),
+        outputs_node: built.outputsNode, client_id: api.clientId });
+      if (!r.ok) throw new ProtectError("ENCRYPTION_AND_SEALING", r.data?.error || `Locking failed (${r.status}).`);
+      res = r.data;
+    }],
+    ["VAULT_NODE_INSERTION", () => {
+      before = outerWires(graph, sg);
+      const type = built.outputsNode ? "C2C_SecureSubgraphOutput" : "C2C_SecureSubgraph";
+      vault = LiteGraph.createNode(type);
+      if (!vault) throw new ProtectError("VAULT_NODE_INSERTION", `${type} is not registered (is the pack loaded?).`);
+      vault.properties = { ...(vault.properties || {}), c2c_vault: { interface: built.interface, profile: res.profile,
+        node_count: res.node_count, title: sg.title, vault_id: res.vault_id, outputs_node: !!built.outputsNode,
+        input_map: built.inputMap || null } };
+      vault.widgets.find((w) => w.name === "vault_id").value = res.vault_id;
+      vault.widgets.find((w) => w.name === "vault_payload").value = res.payload;
+      // a FRESH id: Nodes 2.0 keys a node's view by id and kept showing the subgraph's view ("New Subgraph",
+      // "Enter subgraph") on the vault; nothing outside refers to this subgraph node's id (A26 L9.203)
+      wires = captureWires(graph, sg);
+      vault.pos = [...sg.pos];
+      graph.remove(sg);
+      graph.add(vault);
+      applyInterface(vault);
+      // the frontend names every converted subgraph "New Subgraph": a vault made from one is called "C2C Vault"
+      const t = sg.title && sg.title !== "New Subgraph" ? sg.title : "C2C Vault";
+      vault.title = t;
+      vault.properties.c2c_vault.title = t;
+    }],
+    ["EXTERNAL_WIRE_RESTORATION", () => restoreWires(graph, wires, vault, (i) => vaultSlotOf(vault, built.inputMap, i))],
+    ["FINAL_GRAPH_VALIDATION", () => {
+      const kept = new Set(built.inputMap || []);
+      const promotedIdx = new Set((sg.inputs || []).map((_, i) => i).filter((i) => !kept.has(i)));
+      verifyVaultWiring(graph, vault, before, (i) => vaultSlotOf(vault, built.inputMap, i), promotedIdx);
+      removeDefinitionIfUnused(sg);
+    }],
+  ]);
+  if (opts.profile === "locked") RUN_UNLOCKED.add(res.vault_id);
+  graph.setDirtyCanvas?.(true, true);
+  return vault;
+}
+
 async function protectSubgraphNode(sg, opts) {
   const built = await buildApi(sg);
   const ui = exportUi(sg);
@@ -1000,20 +1091,26 @@ function wiresFromParentInputs(graph, nodes) {
   return out;
 }
 
-/** ... and put each back on the new subgraph node's input that feeds the same inner socket (else: same type, in order). */
+/** ... and put each back on the ONE subgraph input that feeds the same inner socket. A26 L9.203: the old fallback
+ *  ("first unlinked input of the same type, in order") could swap two INT inputs; an unplaceable wire now throws. */
 function reconnectParentInputs(graph, sg, wires) {
   const io = graph.inputNode;
   const sub = sg?.subgraph;
   if (!io || !sub) return;
-  const taken = new Set();
   for (const w of wires) {
-    let idx = (sub.inputs || []).findIndex((si, i) => !taken.has(i) && (si.linkIds || []).some((lid) => {
-      const L = linkOf(sub, lid);
-      return L && String(L.target_id) === w.node && L.target_slot === w.input;
-    }));
-    if (idx < 0) idx = (sg.inputs || []).findIndex((s, i) => !taken.has(i) && s.link == null && s.type === w.type);
-    if (idx < 0 || !sg.inputs[idx] || sg.inputs[idx].link != null) continue;
-    taken.add(idx);
+    const hits = [];
+    (sub.inputs || []).forEach((si, i) => {
+      if ((si.linkIds || []).some((lid) => {
+        const L = linkOf(sub, lid);
+        return L && String(L.target_id) === w.node && L.target_slot === w.input;
+      })) hits.push(i);
+    });
+    if (hits.length !== 1) {
+      throw new Error(`A wire from the surrounding subgraph into node ${w.node} cannot be restored unambiguously ` +
+        `(${hits.length} matching inputs).`);
+    }
+    const idx = hits[0];
+    if (sg.inputs[idx]?.link != null) continue;                 // the frontend kept it
     io.slots?.[w.slot]?.connect(sg.inputs[idx], sg);
   }
 }
@@ -1023,17 +1120,21 @@ async function lockSelection(canvas, profileHint) {
   if (!nodes.length) return;
   const opts = await profileDialog({ title: "Protect as C2C Vault", defaultProfile: profileHint });
   if (!opts) return;
-  const graph = nodes[0].graph;
-  let sg;
+  await protectWithFeedback(nodes, opts);
+}
+
+async function protectWithFeedback(nodes, opts) {
   try {
-    const single = nodes.length === 1 && isSubgraphNode(nodes[0]);
-    const ioWires = single ? [] : wiresFromParentInputs(graph, nodes);
-    sg = single ? nodes[0] : graph.convertToSubgraph(new Set(nodes)).node;
-    if (ioWires.length) reconnectParentInputs(graph, sg, ioWires);
-    await protectSubgraphNode(sg, opts);
+    await protectTransaction(nodes, opts);
     toast("Locked. Double-click the vault to open it (password + authenticator).");
+    return true;
   } catch (e) {
-    toast(`${e.message}${sg && !isSubgraphNode(nodes[0]) ? " The selection is now a normal subgraph (nothing lost)." : ""}`, true);
+    // never a success message for a half-done protect: the original graph is back
+    LOG("protect failed", e?.stage, e?.message);
+    const why = String(e?.message || e).trim();
+    toast(`Not protected - failed at ${String(e?.stage || "an unknown stage").replace(/_/g, " ").toLowerCase()}: ` +
+      `${why}${/[.!?]$/.test(why) ? "" : "."} Your nodes are back exactly as they were.`, true);
+    return false;
   }
 }
 
@@ -1367,7 +1468,7 @@ app.registerExtension({
       return [null,
         { content: "🔒 Protect this subgraph as C2C Vault…", callback: async () => {
           const opts = await profileDialog({ title: "Protect as C2C Vault", defaultProfile: "sealed_installs" });
-          if (opts) await protectSubgraphNode(node, opts).catch((e) => toast(e.message, true));
+          if (opts) await protectWithFeedback([node], opts);
         } }];
     }
     return [];
@@ -1375,6 +1476,8 @@ app.registerExtension({
 });
 
 // the old vault front end (js/c2c_vault.js) routes its command-palette Lock / Seal and "Seal whole workflow" here
-globalThis.__c2cVaultNative = { lockSelection: (profile) => lockSelection(app.canvas, profile) };
+globalThis.__c2cVaultNative = { lockSelection: (profile) => lockSelection(app.canvas, profile),
+  // browser tests (A26 L9.203): protect given nodes without the dialog
+  protectNodes: (nodes, opts) => protectWithFeedback(nodes, opts), protectTransaction };
 
 export { buildApi, exportUi, scrub, OPEN };
