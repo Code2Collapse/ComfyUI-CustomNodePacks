@@ -134,7 +134,7 @@ class Router:
                policy_override: Policy | None = None) -> Backend:
         """Pick the best backend or raise."""
         eff_policy = policy_mod.resolve(feature, policy_override)
-        candidates = self._filter(required, eff_policy)
+        candidates = self._filter(required, eff_policy, feature=feature)
         if not candidates:
             # Track D.1 — graceful fallback to the deterministic rule pack
             # for explanation features. Only kicks in when the requested
@@ -167,8 +167,11 @@ class Router:
                 and required.issubset(b.info.capabilities)
                 and b.health.ok]
 
-    def _filter(self, required: set[Capability], pol: Policy) -> list[Backend]:
+    def _filter(self, required: set[Capability], pol: Policy, feature: str | None = None) -> list[Backend]:
         backends = [b for b in self.all_backends() if b.info.enabled]
+        # feature scope (L6.01 S5): a backend limited to some features never serves the others
+        backends = [b for b in backends
+                    if getattr(b.info, "features", None) is None or feature in b.info.features]
         # capability filter
         backends = [b for b in backends if required.issubset(b.info.capabilities)]
         # Bucket by tier
@@ -298,7 +301,7 @@ class Router:
             ok, reason = self._meter.can_spend(est_cost)
             if not ok:
                 # Try local fallback
-                fallback = self._filter(req.required, Policy.LOCAL_ONLY)
+                fallback = self._filter(req.required, Policy.LOCAL_ONLY, feature=req.feature)
                 fallback = [b for b in fallback if b.health.ok]
                 if fallback:
                     log.warning("cost cap blocked %s: %s — falling back to %s",
@@ -335,7 +338,7 @@ class Router:
             # (redaction, SENSITIVE refusal, cost cap) as a first choice
             try:
                 pol = policy_mod.resolve(feature, req.policy_override)
-                alts = [b for b in self._filter(req.required, pol)
+                alts = [b for b in self._filter(req.required, pol, feature=feature)
                         if b is not backend and b.health.ok]
                 if alts:
                     backend, req, redacted_flag = self._gate(alts[0], original or req)

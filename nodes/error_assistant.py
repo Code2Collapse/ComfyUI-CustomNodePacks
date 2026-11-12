@@ -519,6 +519,16 @@ def save_settings(new: Dict[str, Any]) -> None:
         cur.update(_mode_to_flags(cur.get("mode", "auto")))
     with open(p, "w", encoding="utf-8") as f:
         json.dump(cur, f, indent=2)
+    # L6.01 S5: the AI spine serves these tiers too - re-register its diag.* backends now, not at the next restart
+    try:
+        try:
+            from ..c2c_ai.diag_bridge import apply_current  # type: ignore
+        except Exception:
+            import importlib
+            apply_current = importlib.import_module("c2c_ai.diag_bridge").apply_current
+        apply_current()
+    except Exception as exc:  # noqa: BLE001
+        log.info("[error_assistant] AI spine not updated: %s", exc)
 
 
 # =====================================================================

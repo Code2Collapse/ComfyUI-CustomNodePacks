@@ -102,7 +102,27 @@ def get(name: str) -> str | None:
     env_v = os.environ.get(name)
     if env_v:
         return env_v
+    # L6.01 S5: keys typed into the Diagnostics sidebar live in nodes/secrets_store (encrypted file); one lookup
+    # serves both settings screens.
+    prov = _SECRETS_STORE_NAMES.get(name)
+    if prov:
+        try:
+            try:
+                from ..nodes import secrets_store  # type: ignore
+            except Exception:
+                import importlib
+                secrets_store = importlib.import_module("nodes.secrets_store")
+            v = secrets_store.get_key(prov)
+            if v:
+                return v
+        except Exception as exc:  # noqa: BLE001
+            log.debug("keychain: secrets_store lookup for %s failed: %s", name, exc)
     return None
+
+
+# keychain name -> provider id used by the Diagnostics sidebar's secrets_store
+_SECRETS_STORE_NAMES = {"OPENAI_API_KEY": "openai", "ANTHROPIC_API_KEY": "anthropic", "GEMINI_API_KEY": "gemini",
+                        "OPENROUTER_API_KEY": "openrouter", "GROQ_API_KEY": "groq", "DEEPSEEK_API_KEY": "deepseek"}
 
 
 def set_(name: str, value: str) -> None:

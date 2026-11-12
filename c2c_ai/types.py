@@ -92,6 +92,8 @@ class BackendInfo:
     cost_per_1k_input: float = 0.0         # USD; 0 for local
     cost_per_1k_output: float = 0.0
     enabled: bool = True
+    # L6.01 S5: None = serves every feature; a set = only these features (e.g. the Diagnostics-sidebar backends)
+    features: frozenset | None = None
 
     def supports(self, cap: Capability) -> bool:
         return cap in self.capabilities

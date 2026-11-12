@@ -415,6 +415,14 @@ def bootstrap() -> None:
             registered += 1
         except Exception as exc:
             log.error("failed to register %s: %s", entry, exc)
+    # L6.01 S5: the Diagnostics sidebar's Tier 2 / Tier 3 models, scoped to the features they served
+    try:
+        from .diag_bridge import apply_current
+        bridged = apply_current()
+        if bridged:
+            log.info("c2c_ai: Diagnostics backends bridged: %s", ", ".join(bridged))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("c2c_ai: Diagnostics bridge failed: %s", exc)
     router.start_periodic_probe(interval_s=60.0)
     if registered:
         log.info("c2c_ai bootstrap done: %d backends registered", registered)
