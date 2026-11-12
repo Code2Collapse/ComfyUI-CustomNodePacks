@@ -414,8 +414,12 @@ _BOOTSTRAP_PATTERNS: List[Pattern] = [
 
 
 def match_pattern(exc_type: str, msg: str) -> Optional[Pattern]:
+    # Callers pass type(exc).__name__ ("OutOfMemoryError") while packs may list dotted names
+    # ("torch.cuda.OutOfMemoryError"); compare the last part. A real CUDA OOM never matched before (L6.07).
+    short = (exc_type or "").rsplit(".", 1)[-1]
     for p in _get_patterns():
-        if p.exc_types and exc_type not in p.exc_types and "Exception" not in p.exc_types:
+        if p.exc_types and "Exception" not in p.exc_types and \
+                short not in {t.rsplit(".", 1)[-1] for t in p.exc_types}:
             continue
         if p.message_re.search(msg):
             return p

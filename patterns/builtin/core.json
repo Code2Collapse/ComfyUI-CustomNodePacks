@@ -1498,6 +1498,191 @@
         "Re-read the widget min/max in the node's tooltip.",
         "If it's a string field, check for trailing whitespace or wrong separator."
       ]
+    },
+    {
+      "id": "ram_oom",
+      "category": "memory",
+      "priority": 11,
+      "confidence": 0.95,
+      "exc_types": [
+        "RuntimeError",
+        "MemoryError"
+      ],
+      "regex": "DefaultCPUAllocator: not enough memory|Unable to allocate [\\d.]+ ?[KMGT]i?B|not enough memory: you tried to allocate",
+      "cause": "Your computer ran out of system RAM (not GPU memory) while running this node.",
+      "fixes": [
+        "Lower the resolution, the batch size or the number of video frames.",
+        "Close other programs that use a lot of memory, or add swap / page-file space.",
+        "Start ComfyUI with --lowvram so models are moved off memory between steps."
+      ]
+    },
+    {
+      "id": "cuda_no_kernel_image",
+      "category": "cuda",
+      "priority": 14,
+      "confidence": 0.95,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "no kernel image is available for execution on the device",
+      "cause": "The installed PyTorch was not built for this graphics card's generation.",
+      "fixes": [
+        "Install a PyTorch build that supports your GPU (newer cards need the newest CUDA builds).",
+        "Check the card with `nvidia-smi` and pick the matching wheel on pytorch.org."
+      ]
+    },
+    {
+      "id": "cuda_driver_too_old",
+      "category": "cuda",
+      "priority": 14,
+      "confidence": 0.95,
+      "exc_types": [
+        "RuntimeError",
+        "AssertionError"
+      ],
+      "regex": "NVIDIA driver on your system is too old|CUDA driver version is insufficient",
+      "cause": "The NVIDIA driver is older than the CUDA version PyTorch needs.",
+      "fixes": [
+        "Update the NVIDIA driver from nvidia.com, then restart the computer.",
+        "Or install a PyTorch build made for an older CUDA version."
+      ]
+    },
+    {
+      "id": "torch_without_cuda",
+      "category": "cuda",
+      "priority": 14,
+      "confidence": 0.95,
+      "exc_types": [
+        "AssertionError",
+        "RuntimeError"
+      ],
+      "regex": "Torch not compiled with CUDA enabled",
+      "cause": "The installed PyTorch is the CPU-only build, so it cannot use the graphics card.",
+      "fixes": [
+        "Reinstall PyTorch with CUDA (pick the CUDA build on pytorch.org) in ComfyUI's own Python.",
+        "Or start ComfyUI with --cpu to run without the GPU (much slower)."
+      ]
+    },
+    {
+      "id": "onnxruntime_cuda_load_failed",
+      "category": "onnx",
+      "priority": 13,
+      "confidence": 0.9,
+      "exc_types": [
+        "RuntimeError",
+        "Exception"
+      ],
+      "regex": "CUDA wasn't able to be loaded|CUDAExecutionProvider.*(?:not available|failed)|LoadLibrary failed with error 126.*onnxruntime_providers_cuda",
+      "cause": "onnxruntime could not load its CUDA libraries (the CUDA / cuDNN versions do not match its build).",
+      "fixes": [
+        "Install the onnxruntime-gpu build that matches your CUDA and cuDNN versions.",
+        "Or let the node run on CPU: it is slower but works without the CUDA libraries."
+      ]
+    },
+    {
+      "id": "autograd_nan",
+      "category": "numeric",
+      "priority": 16,
+      "confidence": 0.85,
+      "exc_types": [
+        "RuntimeError"
+      ],
+      "regex": "returned nan values in its \\d+(?:st|nd|rd|th) output",
+      "cause": "A calculation produced NaN (not-a-number) values - usually from half precision overflowing.",
+      "fixes": [
+        "Run the model / VAE in fp32 (or bf16 instead of fp16).",
+        "Lower the CFG or the learning rate / strength that feeds this step."
+      ]
+    },
+    {
+      "id": "value_not_in_list",
+      "category": "workflow",
+      "priority": 20,
+      "confidence": 0.95,
+      "exc_types": [
+        "ValueError",
+        "Exception"
+      ],
+      "regex": "Value not in list:\\s*\\w+",
+      "cause": "A dropdown on this node names a file or option this ComfyUI does not have (missing, renamed or in another folder) - common when opening someone else's workflow.",
+      "fixes": [
+        "Pick an available entry in that dropdown, or put the named file into the matching models folder.",
+        "Press R (Refresh) after adding files so ComfyUI lists them."
+      ]
+    },
+    {
+      "id": "onnxruntime_providers_required",
+      "category": "onnx",
+      "priority": 13,
+      "confidence": 0.9,
+      "exc_types": [
+        "ValueError"
+      ],
+      "regex": "required to explicitly set the providers parameter when instantiating InferenceSession",
+      "cause": "This onnxruntime version needs the node to name its execution providers (CPU / CUDA) and the node does not.",
+      "fixes": [
+        "Update the custom node that loads this ONNX model.",
+        "Or install the onnxruntime version that node was written for."
+      ]
+    },
+    {
+      "id": "nan_values",
+      "category": "numeric",
+      "priority": 17,
+      "confidence": 0.8,
+      "exc_types": [
+        "ValueError",
+        "RuntimeError"
+      ],
+      "regex": "\\bNaN values?\\b|contains NaN|nan values",
+      "cause": "The image or tensor contains NaN (not-a-number) values - usually half precision overflowing in the model or the VAE.",
+      "fixes": [
+        "Decode with the fp32 VAE (or run the model in bf16 / fp32 instead of fp16).",
+        "Lower the CFG / strength feeding this step."
+      ]
+    },
+    {
+      "id": "h3_accelerator_conflict",
+      "category": "minimax_h3",
+      "priority": 8,
+      "confidence": 0.99,
+      "exc_types": [
+        "ValueError"
+      ],
+      "regex": "MiniMax H3: .*(?:cannot run together|cannot combine|cannot both be active|cannot run)",
+      "cause": "Two MiniMax H3 speed-ups that cannot share one model are connected at the same time.",
+      "fixes": [
+        "Keep one acceleration path: remove or bypass the other cache / binding node named in the message."
+      ]
+    },
+    {
+      "id": "h3_split_sigmas",
+      "category": "minimax_h3",
+      "priority": 8,
+      "confidence": 0.99,
+      "exc_types": [
+        "ValueError"
+      ],
+      "regex": "SplitSigmas is illegal on H3|one half of a split schedule",
+      "cause": "MiniMax H3 got half of a split sigma schedule; split schedules desynchronise H3's video and audio.",
+      "fixes": [
+        "Remove SplitSigmas and feed the full schedule into H3 Legal Scheduler.",
+        "Use the sampler's denoise / start-step settings instead of splitting the sigmas."
+      ]
+    },
+    {
+      "id": "h3_sigma_range",
+      "category": "minimax_h3",
+      "priority": 8,
+      "confidence": 0.95,
+      "exc_types": [
+        "ValueError"
+      ],
+      "regex": "sigmas must (?:stay in \\[0, 1\\]|be strictly decreasing|be finite|be 1-D)",
+      "cause": "The sigma schedule fed to MiniMax H3 is not a flow schedule (H3 needs values from 1 down to 0).",
+      "fixes": [
+        "Build the schedule with H3's own scheduler node (or a flow scheduler), not an SD/EDM scheduler whose sigmas go above 1."
+      ]
     }
   ]
 }

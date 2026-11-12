@@ -117,8 +117,11 @@ def diagnose(payload: Dict[str, Any]) -> Dict[str, Any]:
         if pat is not None:
             return {"ok": True, "provider": "pattern",
                     "cause": getattr(pat, "cause", None) or getattr(pat, "explanation", str(pat))[:200],
-                    "fix": getattr(pat, "fix", None) or getattr(pat, "suggestion", "") or
-                           "See the suggested action in the error panel.",
+                    # Patterns carry a `fixes` list; the old lookup of a `fix` attribute never found it, so the
+                    # card always said "See the suggested action in the error panel." (L6.07)
+                    "fix": (" ".join(str(f) for f in (getattr(pat, "fixes", None) or [])[:2])
+                            or getattr(pat, "fix", None) or getattr(pat, "suggestion", "")
+                            or "See the suggested action in the error panel."),
                     "apply": None}
     except Exception:
         pass
@@ -203,6 +206,32 @@ def _cloud_offer(prompt: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def build_report(payload: Dict[str, Any], result: Dict[str, Any]) -> str:
+    """A plain-text report the user can paste into an issue or a chat (L6.07 "copy report"). Redacted with the AI
+    spine's redactor (keys, paths, e-mail addresses); without the redactor the traceback and settings are left out."""
+    head = [f"Node: {payload.get('node_type') or '?'} (id {payload.get('node_id') or '?'})",
+            f"Error: {payload.get('exc_type') or 'Error'}: {str(payload.get('message') or '').strip()[:600]}",
+            f"Cause: {result.get('cause') or ''}",
+            f"Fix: {result.get('fix') or ''}",
+            f"Diagnosed by: {result.get('provider') or 'rules'}"]
+    extra = []
+    widgets = payload.get("widgets") or {}
+    if widgets:
+        extra.append("Settings: " + ", ".join(f"{k}={v}" for k, v in list(widgets.items())[:30])[:800])
+    tb = "\n".join(str(payload.get("traceback") or "").splitlines()[-6:])
+    if tb:
+        extra.append("Traceback (last lines):\n" + tb)
+    try:
+        try:
+            from ..c2c_ai import redactor  # type: ignore
+        except Exception:
+            import importlib
+            redactor = importlib.import_module("c2c_ai.redactor")
+        return redactor.redact_text("\n".join(head + extra)).text
+    except Exception:  # noqa: BLE001
+        return "\n".join(head)
+
+
 def register_routes(server: Any) -> None:
     from aiohttp import web
 
@@ -216,11 +245,11 @@ def register_routes(server: Any) -> None:
         loop = asyncio.get_event_loop()
         try:
             result = await loop.run_in_executor(None, diagnose, body)
-            return web.json_response(result)
         except Exception as exc:  # noqa: BLE001
             log.warning("[ai_diagnose] failed: %s", exc)
-            return web.json_response(
-                {"ok": True, "provider": "rules",
-                 **_fallback(str(body.get("exc_type")), str(body.get("message")))})
+            result = {"ok": True, "provider": "rules",
+                      **_fallback(str(body.get("exc_type")), str(body.get("message")))}
+        result["report"] = build_report(body, result)
+        return web.json_response(result)
 
     log.info("[MEC] ai_diagnose route registered: POST /c2c/ai/diagnose")

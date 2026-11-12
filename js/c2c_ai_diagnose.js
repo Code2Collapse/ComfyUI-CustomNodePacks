@@ -34,6 +34,21 @@ function gatherContext(nodeId) {
     return { node: n, ctx: { widgets, upstream } };
 }
 
+// L6.07: the last diagnoses, kept in THIS browser only (localStorage); never sent anywhere
+const HISTORY_KEY = "c2c.diagnose.history";
+function _history() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch (_) { return []; }
+}
+function _remember(node, diag) {
+    try {
+        const h = _history();
+        h.unshift({ at: new Date().toISOString(), node: node ? (node.title || node.type) : "Workflow",
+                    cause: diag.cause || "", fix: diag.fix || "", provider: diag.provider || "rules",
+                    report: diag.report || "" });
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, 20)));
+    } catch (_) { /* storage full or blocked: history is a convenience */ }
+}
+
 function showCard(node, diag, body) {
     document.getElementById("__c2c_diag_card")?.remove();
     const card = document.createElement("div");
@@ -71,6 +86,10 @@ function showCard(node, diag, body) {
         <div style="display:flex;gap:8px;">${applyBtn}
             ${node ? `<button data-goto style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
                 background:transparent;color:inherit;cursor:pointer;">Show node</button>` : ""}
+            ${diag.report ? `<button data-copy style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
+                background:transparent;color:inherit;cursor:pointer;" title="Copies the error, cause and fix with keys and file paths removed">Copy report</button>` : ""}
+            <button data-history style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
+                background:transparent;color:inherit;cursor:pointer;">History</button>
         </div>
     `;
     // model text goes in as TEXT, never as HTML (L6.01 S2)
@@ -103,6 +122,34 @@ function showCard(node, diag, body) {
         };
     }
     document.body.appendChild(card);
+    if (!diag.consent) _remember(node, diag);
+    card.querySelector("[data-copy]")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;            // currentTarget is null again after the await
+        try { await navigator.clipboard.writeText(diag.report); btn.textContent = "Copied"; }
+        catch (_) { btn.textContent = "Copy failed"; }
+    });
+    card.querySelector("[data-history]").addEventListener("click", (e) => {
+        let box = card.querySelector("[data-history-list]");
+        if (box) { box.remove(); return; }
+        box = document.createElement("div");
+        box.dataset.historyList = "1";
+        box.style.cssText = "margin-top:10px;max-height:200px;overflow:auto;border-top:1px solid var(--c2c-surface1);" +
+                            "padding-top:8px;display:flex;flex-direction:column;gap:6px;";
+        const items = _history();
+        if (!items.length) box.textContent = "No earlier diagnoses on this browser.";
+        for (const it of items) {
+            const row = document.createElement("div");
+            row.style.cssText = "font-size:11.5px;";
+            const t = document.createElement("div");
+            t.style.cssText = "color:var(--c2c-sub);";
+            t.textContent = `${new Date(it.at).toLocaleString()} · ${it.node} · via ${it.provider}`;
+            const c = document.createElement("div");
+            c.textContent = it.cause;
+            row.append(t, c);
+            box.appendChild(row);
+        }
+        card.appendChild(box);
+    });
     card.querySelector("[data-x]").onclick = () => card.remove();
     card.querySelector("[data-goto]")?.addEventListener("click", () => {
         try {
