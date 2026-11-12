@@ -703,7 +703,7 @@ async function _renderSettings(body) {
                     <div style="margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <button class="mec-diag-btn" data-action="llm-scan" type="button" style="font-size:11px;padding:3px 10px;">Scan installed</button>
                         <button class="mec-diag-btn primary" data-action="llm-download" type="button" style="font-size:11px;padding:3px 10px;display:none;">⇩ Download selected</button>
-                        <span data-llm-scan-info style="font-size:10.5px;opacity:0.7;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>
+                        <span data-llm-scan-info style="font-size:10.5px;opacity:0.7;flex:1 1 160px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
                     </div>
                     <div data-llm-dl-progress style="display:none;margin-top:6px;font-size:10.5px;line-height:1.5;background:var(--c2c-panelDeep5);border:1px solid var(--c2c-panelDeep6);border-radius:3px;padding:5px 8px;">
                         <div data-llm-dl-label style="opacity:0.85;"></div>
@@ -925,7 +925,12 @@ async function _renderSettings(body) {
         _installedSet = installedSet;
         _rebuildLocalModelSelect(installedSet);
         const primaryDir = dirs.find(d => /llm/i.test(d)) || dirs[0] || "ComfyUI/models/llm/";
-        llmScanInfo.innerHTML = `${installed.length} installed · target dir <code style="font-size:10px;">${primaryDir}</code>`;
+        // L4.16: built with text nodes (the dir is a server path, not markup); full text on hover when the row is narrow
+        const dirCode = document.createElement("code");
+        dirCode.style.fontSize = "10px";
+        dirCode.textContent = primaryDir;
+        llmScanInfo.replaceChildren(`${installed.length} installed · target dir `, dirCode);
+        llmScanInfo.title = `${installed.length} installed · target dir ${primaryDir}`;
         if (typeof _updateDownloadButton === "function") _updateDownloadButton();
     }
 
