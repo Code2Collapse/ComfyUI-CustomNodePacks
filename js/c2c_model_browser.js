@@ -24,8 +24,54 @@ let _slot = null;
 
 /* ─── backend API calls ─── */
 
+/* ─── Civitai filters (L5.03): only sent for the Civitai source ─── */
+const _filters = { sort: "", period: "", base: "", tag: "", user: "", nsfw: false, favorites: false };
+let _optionsLoaded = false;
+
+function _filterQuery() {
+  if (_currentSource !== "civitai") return "";
+  const p = new URLSearchParams();
+  for (const k of ["sort", "period", "base", "tag", "user"]) if (_filters[k]) p.set(k, _filters[k]);
+  if (_filters.nsfw) p.set("nsfw", "1");
+  if (_filters.favorites) p.set("favorites", "1");
+  const q = p.toString();
+  return q ? "&" + q : "";
+}
+
+async function _loadCivitaiOptions() {
+  if (_optionsLoaded) return;
+  try {
+    const r = await api.fetchApi("/c2c/models/civitai_options");
+    if (!r.ok) return;
+    const o = await r.json();
+    const fill = (id, values, first) => {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      sel.innerHTML = `<option value="">${first}</option>` + values.map(v => `<option>${_esc(v)}</option>`).join("");
+    };
+    fill("c2c-mb-f-sort", o.sorts || [], "Sort: Most Downloaded");
+    fill("c2c-mb-f-period", o.periods || [], "Period: all time");
+    fill("c2c-mb-f-base", o.base_models || [], "Any base model");
+    const fav = document.getElementById("c2c-mb-f-fav");
+    if (fav && !o.favorites_available) {
+      fav.disabled = true;
+      fav.parentElement.title = "Favorites needs your Civitai API key (CIVITAI_API_KEY)";
+      fav.parentElement.style.opacity = "0.5";
+    }
+    _optionsLoaded = true;
+  } catch (_) { /* offline: the filters stay at their defaults */ }
+}
+
+function _syncFilterBar() {
+  const bar = document.getElementById("c2c-mb-filters");
+  if (!bar) return;
+  const on = _currentSource === "civitai";
+  bar.style.display = on ? "flex" : "none";
+  if (on) _loadCivitaiOptions();
+}
+
 async function _searchModels(source, query, type, page) {
-  const resp = await api.fetchApi(`/c2c/models/search?source=${source}&q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}&page=${page}`);
+  const resp = await api.fetchApi(`/c2c/models/search?source=${source}&q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}&page=${page}${_filterQuery()}`);
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();
 }
@@ -205,6 +251,16 @@ function _buildPanel() {
       <button id="c2c-mb-close"
         style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);padding:0 4px;">×</button>
     </div>
+    <div id="c2c-mb-filters" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 16px;
+                border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;">
+      <select id="c2c-mb-f-sort" data-f="sort" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:3px 6px;color:inherit;font-size:11px;"><option value="">Sort: Most Downloaded</option></select>
+      <select id="c2c-mb-f-period" data-f="period" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:3px 6px;color:inherit;font-size:11px;"><option value="">Period: all time</option></select>
+      <select id="c2c-mb-f-base" data-f="base" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:3px 6px;color:inherit;font-size:11px;max-width:150px;"><option value="">Any base model</option></select>
+      <input id="c2c-mb-f-tag" data-f="tag" placeholder="Tag" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:3px 6px;color:inherit;font-size:11px;width:90px;">
+      <input id="c2c-mb-f-user" data-f="user" placeholder="Creator" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:3px 6px;color:inherit;font-size:11px;width:100px;">
+      <label style="display:flex;align-items:center;gap:3px;cursor:pointer;"><input id="c2c-mb-f-nsfw" data-f="nsfw" type="checkbox">NSFW</label>
+      <label style="display:flex;align-items:center;gap:3px;cursor:pointer;"><input id="c2c-mb-f-fav" data-f="favorites" type="checkbox">Favorites</label>
+    </div>
     <div id="c2c-mb-results" style="overflow-y:auto;flex:1;padding:10px 14px;"></div>
     <div id="c2c-mb-downloads" style="display:none;max-height:190px;overflow-y:auto;padding:8px 16px;
                 border-top:1px solid rgba(255,255,255,.08);"></div>
@@ -225,6 +281,15 @@ function _buildPanel() {
   _panel = overlay;
 
   // source tabs
+  for (const el of panel.querySelectorAll("#c2c-mb-filters [data-f]")) {
+    const ev = el.tagName === "INPUT" && el.type === "text" ? "input" : "change";
+    el.addEventListener(ev, () => {
+      _filters[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value.trim();
+      _page = 1;
+      clearTimeout(_debounceTimer);
+      _debounceTimer = setTimeout(_doSearch, ev === "input" ? SEARCH_DEBOUNCE_MS : 0);
+    });
+  }
   const tabsEl = panel.querySelector("#c2c-mb-source-tabs");
   const _labels = { local: "Local", civitai: "Civitai", huggingface: "HuggingFace" };
   for (const src of SOURCES) {
@@ -241,6 +306,7 @@ function _buildPanel() {
       _currentSource = src;
       _page = 1;
       _updateTabStyles();
+      _syncFilterBar();
       _doSearch();
     });
     tabsEl.appendChild(tab);
@@ -323,6 +389,15 @@ async function _doSearch() {
   }
 }
 
+// L5.03: the folder a model of this type belongs in (a LoRA went to the alphabetically first folder, "datasets").
+const _TYPE_DIRS = { checkpoint: "checkpoints", lora: "loras", locon: "loras", dora: "loras", vae: "vae",
+  controlnet: "controlnet", textualinversion: "embeddings", upscaler: "upscale_models", motionmodule: "animatediff_models" };
+function _defaultDest(type, destDirs) {
+  const want = _TYPE_DIRS[String(type || "").toLowerCase()] || _TYPE_DIRS[String(document.querySelector("#c2c-mb-type")?.value || "").toLowerCase()];
+  if (!want) return destDirs.find(d => /(^|\/)checkpoints$/.test(d)) || destDirs[0];
+  return destDirs.find(d => d === `models/${want}`) || destDirs.find(d => d.split("/").pop() === want) || destDirs[0];
+}
+
 function _buildCard(item, destDirs) {
   const card = document.createElement("div");
   card.style.cssText = `
@@ -373,7 +448,7 @@ function _buildCard(item, destDirs) {
                 padding:4px 10px;border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;">✓ On disk</span>`
         : `<select data-dest style="background:var(--c2c-overlay-hover);border:1px solid var(--c2c-border);
               border-radius:4px;padding:2px 5px;color:inherit;font-size:10px;max-width:140px;">
-          ${destDirs.map(d => `<option>${_esc(d)}</option>`).join("")}
+          ${destDirs.map(d => `<option${d === _defaultDest(type, destDirs) ? " selected" : ""}>${_esc(d)}</option>`).join("")}
         </select>
         <button data-dl
           style="padding:4px 12px;background:var(--c2c-okBg2);border:1px solid var(--c2c-okMute);
@@ -429,6 +504,7 @@ function _open() {
   _buildPanel();
   _panel.style.display = "flex";
   _isOpen = true;
+  _syncFilterBar();
   document.querySelector("#c2c-mb-search")?.focus();
   if (!document.querySelector("#c2c-mb-results")?.children.length) _doSearch();
   _pollDownloads();

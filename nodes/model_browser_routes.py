@@ -138,32 +138,100 @@ async def _http_get(url: str, headers: dict | None = None) -> Any:
 # on browse (page 2 returns page-1 items). So ALL Civitai paging is cursor-based:
 # page 1 sends no cursor, and each response's metadata.nextCursor is remembered so
 # the panel's Next button reaches page N sequentially.
-_civitai_cursors: dict[tuple, str] = {}   # (q, type, page) -> cursor that REACHES that page
+_civitai_cursors: dict[tuple, str] = {}   # (q, type, filters, page) -> cursor that REACHES that page
+
+# L5.03: the filters of GET /api/v1/models, as developer.civitai.com/site/reference/models documents them (checked
+# 2026-11-12). Any other sort / period value is a 400 there, so they are checked here first.
+CIVITAI_SORTS = ("Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected",
+                 "Most Images", "Newest", "Oldest")
+CIVITAI_PERIODS = ("AllTime", "Year", "Month", "Week", "Day")
 
 
-async def _civitai_search(q: str, model_type: str, page: int) -> dict:
+class SearchRefused(ValueError):
+    """A filter value Civitai would reject, or one that needs a token the user has not set."""
+
+
+def civitai_filters(raw: dict) -> dict:
+    """Validated Civitai filters from a request's query: sort, period, baseModels (list), tag, username, nsfw,
+    favorites. Unknown values are refused with the allowed list instead of a 400 from Civitai."""
+    f: dict[str, Any] = {}
+    sort = (raw.get("sort") or "").strip()
+    if sort:
+        if sort not in CIVITAI_SORTS:
+            raise SearchRefused(f"sort must be one of: {', '.join(CIVITAI_SORTS)}")
+        f["sort"] = sort
+    period = (raw.get("period") or "").strip()
+    if period:
+        if period not in CIVITAI_PERIODS:
+            raise SearchRefused(f"period must be one of: {', '.join(CIVITAI_PERIODS)}")
+        f["period"] = period
+    bases = [b.strip() for b in str(raw.get("base") or "").split(",") if b.strip()]
+    if bases:
+        f["baseModels"] = bases
+    for key, out in (("tag", "tag"), ("user", "username")):
+        v = (raw.get(key) or "").strip()
+        if v:
+            f[out] = v[:100]
+    if str(raw.get("nsfw") or "").lower() in ("1", "true", "yes"):
+        f["nsfw"] = "true"
+    if str(raw.get("favorites") or "").lower() in ("1", "true", "yes"):
+        if not os.environ.get("CIVITAI_API_KEY", "").strip():
+            raise SearchRefused("Favorites needs your Civitai API key: set CIVITAI_API_KEY and restart ComfyUI.")
+        f["favorites"] = "true"
+    return f
+
+
+def _filters_key(f: dict) -> tuple:
+    return tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in f.items()))
+
+
+async def _civitai_search(q: str, model_type: str, page: int, filters: dict | None = None) -> dict:
+    filters = filters or {}
     params: dict[str, Any] = {
         "limit": 20,
         "sort": "Most Downloaded",
+        "primaryFileOnly": "true",     # the file a "Download" button means; others stay on the detail view
     }
+    params.update(filters)
     if q:
         params["query"] = q
+    fk = _filters_key(filters)
     if page > 1:
-        cur = _civitai_cursors.get((q, model_type, page))
+        cur = _civitai_cursors.get((q, model_type, fk, page))
         if cur:
             params["cursor"] = cur
         # Cold jump to page N without a recorded cursor falls back to page 1
         # results — the UI only pages sequentially, so this stays consistent.
+        # (Never `page` with `query`: Civitai returns 400 for that pair.)
     if model_type:
         params["types"] = model_type
-    qs = urllib.parse.urlencode(params, doseq=True)
+    qs = urllib.parse.urlencode(params, doseq=True)   # baseModels repeats: baseModels=SDXL%201.0&baseModels=...
     url = f"{_CIVITAI_BASE}/models?{qs}"
     data = await _http_get(url)
     items = data.get("items", [])
     meta = data.get("metadata", {}) or {}
     if meta.get("nextCursor"):
-        _civitai_cursors[(q, model_type, page + 1)] = str(meta["nextCursor"])
-    return {"items": items, "total": meta.get("totalItems", len(items))}
+        _civitai_cursors[(q, model_type, fk, page + 1)] = str(meta["nextCursor"])
+    return {"items": items, "total": meta.get("totalItems", len(items)), "has_next": bool(meta.get("nextCursor"))}
+
+
+_ENUMS_CACHE: dict[str, Any] = {}
+
+
+async def civitai_base_models() -> list:
+    """Civitai's BaseModel values (GET /api/v1/enums), cached for a day; a short fallback list when offline."""
+    hit = _ENUMS_CACHE.get("base")
+    if hit and _now() - hit[0] < 86400:
+        return hit[1]
+    try:
+        data = await _http_get(f"{_CIVITAI_BASE}/enums")
+        values = list((data or {}).get("BaseModel") or [])
+        if values:
+            _ENUMS_CACHE["base"] = (_now(), values)
+            return values
+    except Exception as exc:  # noqa: BLE001 - the filter still works with the fallback list
+        log.info("Civitai enums unavailable: %s", exc)
+    return ["SD 1.5", "SDXL 1.0", "Pony", "Illustrious", "Flux.1 D", "Flux.1 S", "SD 3.5", "Wan Video", "Other"]
 
 
 # ── HuggingFace search ────────────────────────────────────────────────────────
@@ -416,11 +484,15 @@ def register_routes(server) -> None:
         q      = request.rel_url.query.get("q", "").strip()
         mtype  = request.rel_url.query.get("type", "").strip()
         try:
+            filters = civitai_filters(dict(request.rel_url.query)) if source == "civitai" else {}
+        except SearchRefused as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
             page = int(request.rel_url.query.get("page", "1"))
         except ValueError:
             page = 1
 
-        cache_key = (source, q, mtype, page)
+        cache_key = (source, q, mtype, page, _filters_key(filters))
         cached = _cache_get(cache_key)
         if cached is not None:
             return web.json_response(cached, headers={"X-C2C-Cache": "hit"})
@@ -429,7 +501,7 @@ def register_routes(server) -> None:
             if source == "local":
                 result = await _local_search(q, mtype, page)
             elif source == "civitai":
-                result = await _civitai_search(q, mtype, page)
+                result = await _civitai_search(q, mtype, page, filters)
             elif source == "huggingface":
                 result = await _hf_search(q, mtype, page)
             else:
@@ -475,6 +547,12 @@ def register_routes(server) -> None:
         ok = fn(job_id)
         return web.json_response({"ok": ok, **({} if ok else {"error": f"cannot {action} job {job_id} now"})},
                                  status=200 if ok else 409)
+
+    @server.routes.get("/c2c/models/civitai_options")
+    async def civitai_options(_request: web.Request) -> web.Response:
+        return web.json_response({"sorts": list(CIVITAI_SORTS), "periods": list(CIVITAI_PERIODS),
+                                  "base_models": await civitai_base_models(),
+                                  "favorites_available": bool(os.environ.get("CIVITAI_API_KEY", "").strip())})
 
     @server.routes.get("/c2c/models/dest_dirs")
     async def model_dest_dirs(_request: web.Request) -> web.Response:
