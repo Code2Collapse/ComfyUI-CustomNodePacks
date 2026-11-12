@@ -2024,8 +2024,9 @@ widgets runners may set (with their limits) and the outputs they get, pick who c
 subgraphs can be published too. Ids and labels you give are public; the nodes behind them are not.
 
 Status: preview. Tested against a real (CPU) ComfyUI with a browser: publishing from the Studio, running, progress,
-cancelling and downloading, and the runner being refused everywhere else. The HTTPS deployment guide comes next; the
-Vault's `owner_hosted` option stays off until it is done.
+cancelling and downloading, and the runner being refused everywhere else. Setting it up on a server (HTTPS proxy,
+firewall, service, backups): [docs/APP_GATEWAY_DEPLOY.md](docs/APP_GATEWAY_DEPLOY.md). Finished runs and their
+outputs are deleted after 72 hours by default. The Vault's `owner_hosted` option is not switched on yet.
 
 ## Automation: schedules, watch folders, webhooks
 

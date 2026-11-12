@@ -41,7 +41,8 @@ DEFAULTS = {"data_dir": None, "bind": "127.0.0.1", "port": 8390, "public_origin"
             "session_idle_s": 12 * 3600, "max_upload_mb": 50, "max_active_total": 32, "max_active_per_user": 4,
             "max_output_mb": 512, "scrypt_n": 2 ** 15, "trust_forwarded_for": False, "studio_proxy": True,
             "poll_s": 2.0, "queue_wait_s": 3600, "sse_heartbeat_s": 15.0, "download_ttl_s": 600,
-            "login_limit_per_user": 10, "login_limit_per_ip": 30, "login_window_s": 900}
+            "login_limit_per_user": 10, "login_limit_per_ip": 30, "login_window_s": 900,
+            "retention_h": 72, "worker_input_dir": None}
 
 
 def _nf():
@@ -65,7 +66,8 @@ class Gateway:
         self.worker = worker or Worker(self.cfg["worker_url"], headers=self.cfg["worker_headers"])
         self.jobs = JobManager(self.store, self.worker, poll_s=self.cfg["poll_s"], queue_wait_s=self.cfg["queue_wait_s"],
                                max_active_per_user=self.cfg["max_active_per_user"],
-                               max_active_total=self.cfg["max_active_total"], max_output_mb=self.cfg["max_output_mb"])
+                               max_active_total=self.cfg["max_active_total"], max_output_mb=self.cfg["max_output_mb"],
+                               retention_h=self.cfg["retention_h"], worker_input_dir=self.cfg["worker_input_dir"])
 
     # ── app factory ─────────────────────────────────────────────────────────────────────────────────────────
     def make_app(self) -> web.Application:

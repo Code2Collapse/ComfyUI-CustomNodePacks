@@ -54,6 +54,9 @@ def main(argv=None) -> int:
         warnings.append(f"bind {cfg['bind']}: the gateway is meant to sit behind a TLS reverse proxy on loopback.")
     if not cfg.get("public_origin"):
         warnings.append("public_origin is not set: Origin checks fall back to the request Host header.")
+    po = cfg.get("public_origin") or ""
+    if po and not po.startswith("https://") and "127.0.0.1" not in po and "localhost" not in po:
+        warnings.append(f"public_origin {po} is not https: put the gateway behind a TLS reverse proxy.")
     if not cfg["secure_cookies"]:
         warnings.append("secure_cookies is false: only acceptable for local testing without TLS.")
     w = cfg["worker_url"]

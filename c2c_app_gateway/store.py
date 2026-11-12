@@ -256,6 +256,16 @@ class Store:
         with self._lock, open(self.root / "audit.jsonl", "a", encoding="utf-8") as f:
             f.write(line)
 
+    def rotate_audit(self, max_mb: float = 20.0, keep: int = 10) -> None:
+        """Rename audit.jsonl to audit-<time>.jsonl once it passes ``max_mb``; keep the newest ``keep`` old files."""
+        p = self.root / "audit.jsonl"
+        with self._lock:
+            if not p.exists() or p.stat().st_size < max_mb * 1024 * 1024:
+                return
+            os.replace(p, self.root / f"audit-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}.jsonl")
+            for old in sorted(self.root.glob("audit-*.jsonl"))[:-keep]:
+                old.unlink()
+
     def read_audit(self, limit: int = 200) -> list[dict]:
         p = self.root / "audit.jsonl"
         if not p.exists():

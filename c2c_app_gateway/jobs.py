@@ -10,7 +10,9 @@ import asyncio
 import logging
 import re
 import secrets
+import shutil
 import time
+from pathlib import Path
 
 from . import manifest as M
 from .store import Store
@@ -43,8 +45,12 @@ def _category(exc_type: str, message: str) -> str:
 
 class JobManager:
     def __init__(self, store: Store, worker: Worker, *, poll_s: float = 2.0, queue_wait_s: float = 3600.0,
-                 max_active_per_user: int = 4, max_active_total: int = 32, max_output_mb: int = 512):
+                 max_active_per_user: int = 4, max_active_total: int = 32, max_output_mb: int = 512,
+                 retention_h: float = 72.0, worker_input_dir: str | None = None):
         self.store, self.worker = store, worker
+        self.retention_s = float(retention_h) * 3600.0                   # finished jobs + outputs kept this long
+        self.worker_input_dir = Path(worker_input_dir) if worker_input_dir else None
+        self._last_sweep = 0.0
         self.poll_s, self.queue_wait_s = float(poll_s), float(queue_wait_s)
         self.max_active_per_user, self.max_active_total = int(max_active_per_user), int(max_active_total)
         self.max_output_bytes = int(max_output_mb) * 1024 * 1024
@@ -61,6 +67,7 @@ class JobManager:
     # ── lifecycle ───────────────────────────────────────────────────────────────────────────────────────────
     def start(self) -> None:
         for j in self.store.list_jobs():
+            j.pop("_settling", None)                                      # saved mid-settle before a restart
             self._jobs[j["job_id"]] = j
             pid = (j.get("_private") or {}).get("prompt_id")
             if pid:
@@ -140,6 +147,7 @@ class JobManager:
             for iid, v in resolved.items():
                 if isinstance(v, dict) and "upload" in v:
                     uploaded[iid] = await self.worker.upload_image(v["upload"], f"c2cgw_{job_id}_{iid}.{v['ext']}")
+            job["_private"]["uploads"] = sorted(uploaded.values())
             prompt = M.build_prompt(private, resolved, uploaded)
             pid = await self.worker.submit(prompt)
         except WorkerError as exc:
@@ -240,6 +248,7 @@ class JobManager:
         if state == "succeeded":
             job["progress"] = 1.0
         self._live.pop(job["job_id"], None)
+        self._remove_uploads(job)
         self._publish(job)
         self.store.audit("job_end", actor=job["user"], app=job["app_id"], release=job["release"], job=job["job_id"],
                          state=state, error=job["error"])
@@ -286,9 +295,54 @@ class JobManager:
         finally:
             job.pop("_settling", None)
 
+    # ── retention: uploads on the worker, finished jobs and their outputs ──────────────────────────────────
+    def _remove_uploads(self, job: dict) -> None:
+        """Delete this job's runner uploads from the worker's input folder (only when the gateway shares that disk:
+        ``worker_input_dir``). ComfyUI has no delete route, so a remote worker keeps them (deployment guide)."""
+        if not self.worker_input_dir:
+            return
+        base = (self.worker_input_dir / "c2c_gateway").resolve()
+        for name in job["_private"].get("uploads") or ():
+            leaf = name.split("/", 1)[-1]
+            if not re.fullmatch(r"c2cgw_[A-Za-z0-9_-]+\.(png|jpg|webp)", leaf):
+                continue
+            p = (base / leaf).resolve()
+            if p.parent == base:
+                try:
+                    p.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:                                    # file in use: the next sweep retries
+                    log.debug("upload cleanup: %s", exc)
+
+    def sweep(self, now: float | None = None) -> int:
+        """Forget finished jobs older than the retention: their outputs, record and signed links go with them."""
+        now = time.time() if now is None else now
+        gone = 0
+        for job in list(self._jobs.values()):
+            if job["state"] in TERMINAL and job.get("finished") and now - job["finished"] > self.retention_s:
+                shutil.rmtree(self.store.root / "outputs" / job["job_id"], ignore_errors=True)
+                try:
+                    self.store.job_path(job["job_id"]).unlink()
+                except FileNotFoundError:
+                    pass
+                self._jobs.pop(job["job_id"], None)
+                pid = job["_private"].get("prompt_id")
+                if pid:
+                    self._by_pid.pop(pid, None)
+                self._remove_uploads(job)
+                gone += 1
+        if gone:
+            self.store.audit("jobs_expired", count=gone)
+        self.store.rotate_audit()
+        return gone
+
     # ── poll: completion fallback, timeouts, lost prompts ───────────────────────────────────────────────────
     async def poll_once(self) -> None:
         now = time.time()
+        if now - self._last_sweep > 600:
+            self._last_sweep = now
+            self.sweep(now)
         for job in list(self.active()):
             pid = job["_private"].get("prompt_id")
             if not pid:
