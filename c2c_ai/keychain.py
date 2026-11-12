@@ -59,6 +59,7 @@ KEY_PERPLEXITY = "PERPLEXITY_API_KEY"
 # Aliases users may have stored under alternate canonical names
 KEY_DASHSCOPE = "DASHSCOPE_API_KEY"  # Alibaba's name for Qwen
 KEY_GOOGLE = "GOOGLE_API_KEY"        # Alternate Gemini name
+KEY_CUSTOM_OPENAI = "CUSTOM_OPENAI_API_KEY"   # L6.04: the user's own hosted OpenAI-compatible endpoint
 
 ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_ANTHROPIC,
@@ -78,6 +79,7 @@ ALL_KNOWN_KEYS: tuple[str, ...] = (
     KEY_PERPLEXITY,
     KEY_DASHSCOPE,
     KEY_GOOGLE,
+    KEY_CUSTOM_OPENAI,
 )
 
 

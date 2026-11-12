@@ -35,6 +35,7 @@ from .backends import (
     AzureOpenAIBackend,
     LlamaCppBackend,
 )
+from .keychain import ALL_KNOWN_KEYS, KEY_CUSTOM_OPENAI
 from .router import get_router
 
 log = logging.getLogger("c2c_ai.bootstrap")
@@ -69,6 +70,51 @@ def save_config(cfg: dict) -> None:
 
 def first_run_completed() -> bool:
     return bool(load_config().get("first_run_completed"))
+
+
+def is_loopback_url(url: str) -> bool:
+    """True only for this machine (localhost, 127.x, ::1). A LAN or internet host is another machine: requests to it
+    leave this computer, so the router must treat it as CLOUD (redaction, consent, cost cap) - L6.04."""
+    import ipaddress
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(url).hostname or "").strip("[]").lower()
+    except ValueError:
+        return False
+    if host in ("localhost",) or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _openai_compatible(entry: dict, *, default_id: str, default_name: str, hosted: bool):
+    """A user-configured OpenAI-compatible server. `hosted` = the D7 Tier Cloud kind (key, cost card)."""
+    from .types import BackendInfo, Capability, Tier
+    base_url = str(entry.get("base_url") or "").strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        raise ValueError("an OpenAI-compatible backend needs base_url starting with http:// or https://")
+    api_path = "" if base_url.endswith("/v1") else "/v1"
+    tier = Tier.LOCAL if is_loopback_url(base_url) else Tier.CLOUD
+    if tier == Tier.CLOUD and not hosted:
+        log.warning("config: %s points at %s - another machine, so it is treated as CLOUD (redaction and consent "
+                    "apply)", entry.get("id", default_id), base_url)
+    key_name = entry.get("api_key_name") or (KEY_CUSTOM_OPENAI if hosted else None)
+    if key_name and key_name not in ALL_KNOWN_KEYS:
+        raise ValueError(f"api_key_name {key_name!r} is not a known key name")
+    caps = {Capability.CHAT, Capability.STREAMING, Capability.JSON_MODE}
+    if entry.get("vision"):
+        caps.add(Capability.VISION)
+    info = BackendInfo(
+        id=entry.get("id", default_id), tier=tier,
+        display_name=entry.get("display_name", default_name),
+        model=entry.get("model", "auto"), capabilities=caps,
+        max_context=int(entry.get("max_context", 32_768)),
+        cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.0)),
+        cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0)),
+    )
+    return OpenAICompatBackend(info, base_url=base_url, api_key_name=key_name, api_path=api_path)
 
 
 def build_backend(entry: dict):
@@ -139,13 +185,13 @@ def build_backend(entry: dict):
             cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.001)),
         )
     elif kind == "local":
-        b = OpenAICompatBackend.local(
-            backend_id=entry.get("id", "local.custom"),
-            display_name=entry.get("display_name", "Local server"),
-            base_url=entry["base_url"],
-            model=entry.get("model", "auto"),
-            max_context=int(entry.get("max_context", 32_768)),
-        )
+        # L6.04: a "local" server on another machine is CLOUD for the router (it used to be trusted as local:
+        # no redaction, no consent, served by the automatic error features)
+        b = _openai_compatible(entry, default_id="local.custom", default_name="Local server", hosted=False)
+    elif kind == "openai_compatible":
+        # L6.04 / D7 Tier Cloud: your own hosted OpenAI-compatible endpoint (vLLM, TGI, a provider not listed here)
+        b = _openai_compatible(entry, default_id="cloud.custom", default_name="OpenAI-compatible endpoint",
+                               hosted=True)
     elif kind == "gemini":
         b = GeminiBackend.build(
             backend_id=entry.get("id", "cloud.gemini"),

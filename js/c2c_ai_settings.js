@@ -101,6 +101,46 @@ function modal({ title, body, buttons }) {
     });
 }
 
+// L6.04 (D7 Tier Cloud): the user's own hosted OpenAI-compatible endpoint. The key goes to the OS credential store
+// (CUSTOM_OPENAI_API_KEY) through the local-only key route; the config only names it.
+async function addEndpointDialog() {
+    const form = document.createElement("div");
+    form.style.cssText = "display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;";
+    const field = (label, id, type, placeholder) => {
+        const l = document.createElement("label");
+        l.textContent = label;
+        l.htmlFor = id;
+        const i = document.createElement("input");
+        i.id = id; i.type = type; i.placeholder = placeholder; i.autocomplete = "off";
+        i.style.cssText = "background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);" +
+                          "border-radius:4px;padding:5px 7px;font-size:12px;min-width:0;";
+        form.append(l, i);
+        return i;
+    };
+    const url = field("Base URL", "c2c-ep-url", "url", "https://my-server.example.com/v1");
+    const model = field("Model id", "c2c-ep-model", "text", "as the server names it");
+    const key = field("API key", "c2c-ep-key", "password", "optional - stored in your OS credential store");
+    const name = field("Name", "c2c-ep-name", "text", "shown in the backend list");
+    const note = document.createElement("p");
+    note.style.cssText = "grid-column:1/3;color:var(--c2c-sub);font-size:11px;margin:4px 0 0;";
+    note.textContent = "Requests to a server on another machine count as online: text is redacted first, and " +
+                       "automatic error explanations ask before sending.";
+    form.appendChild(note);
+    const ok = await modal({ title: "Add an OpenAI-compatible endpoint", body: form,
+                             buttons: [{ label: "Cancel", value: false }, { label: "Add", value: true, primary: true }] });
+    if (!ok) return false;
+    const base = url.value.trim().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^\s]+$/i.test(base)) { await c2cAlert("The base URL must start with http:// or https://"); return false; }
+    if (key.value.trim()) await apiPost("/c2c/ai/keys/set", { name: "CUSTOM_OPENAI_API_KEY", value: key.value.trim() });
+    const cfg = await apiGet("/c2c/ai/config");
+    cfg.backends = (cfg.backends || []).filter(b => b.id !== "cloud.custom");
+    cfg.backends.push({ kind: "openai_compatible", id: "cloud.custom", base_url: base,
+                        model: model.value.trim() || "auto", display_name: name.value.trim() || base,
+                        enabled: true });
+    await apiPost("/c2c/ai/config", cfg);
+    return true;
+}
+
 function preBlock(text) {
     const pre = document.createElement("pre");
     pre.textContent = text;
@@ -280,7 +320,7 @@ a backend below just upgrades it from rule-based to plain-English AI replies.</p
     const startCfg = { version:1, backends:[], first_run_completed:true };
     if (haveKeys.keys?.includes("ANTHROPIC_API_KEY")) {
         startCfg.backends.push({ kind:"anthropic", id:"cloud.anthropic",
-            model:"claude-3-5-sonnet-latest", enabled:true });
+            model:"claude-sonnet-5-5", enabled:true });
     }
     if (haveKeys.keys?.includes("OPENAI_API_KEY")) {
         startCfg.backends.push({ kind:"openai", id:"cloud.openai",
@@ -296,7 +336,7 @@ a backend below just upgrades it from rule-based to plain-English AI replies.</p
     }
     if (haveKeys.keys?.includes("GEMINI_API_KEY")) {
         startCfg.backends.push({ kind:"gemini", id:"cloud.gemini",
-            model:"gemini-1.5-flash-latest", enabled:true });
+            model:"gemini-3.6-flash", enabled:true });
     }
     if (haveKeys.keys?.includes("COHERE_API_KEY")) {
         startCfg.backends.push({ kind:"cohere", id:"cloud.cohere",
@@ -401,7 +441,7 @@ function buildSettingsView(root) {
 
         const btnRow = document.createElement("div");
         btnRow.style.cssText = "margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;";
-        ["Refresh probes", "Re-run wizard"].forEach(label => {
+        ["Refresh probes", "Re-run wizard", "Add endpoint…"].forEach(label => {
             const b = document.createElement("button");
             b.textContent = label;
             b.style.cssText =
@@ -409,6 +449,10 @@ function buildSettingsView(root) {
                  border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px;`;
             b.onclick = async () => {
                 if (label === "Refresh probes") { await apiPost("/c2c/ai/probe"); refresh(); }
+                else if (label === "Add endpoint…") {
+                    try { if (await addEndpointDialog()) refresh(); }
+                    catch (exc) { c2cAlert(`Could not add the endpoint: ${exc.message || exc}`); }
+                }
                 else { await runFirstRunWizard(); refresh(); }
             };
             btnRow.appendChild(b);
