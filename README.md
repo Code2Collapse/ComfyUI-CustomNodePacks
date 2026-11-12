@@ -2000,6 +2000,28 @@ An input set by a widget (a dropdown, a number, a toggle) never counts as unconn
 
 Design: [docs/design/workflow_issues_button.md](docs/design/workflow_issues_button.md).
 
+## C2C App Gateway (preview): let others run a workflow without seeing it
+
+A vault protects a workflow on your own machine. To let **other people** run a workflow while only you can open it,
+run it on a server you control and put the **C2C App Gateway** in front of it. People sign in to the gateway, see a
+simple app page (the inputs and outputs you chose), upload files, change the settings you allowed, follow the
+progress, cancel, and download the results. They never reach ComfyUI itself: no editor, no workflow file, no node
+graph, no queue or history.
+
+- It is a separate service: `python -m c2c_app_gateway serve --config gateway.json`. ComfyUI listens only on a private
+  address (for example `--listen 127.0.0.1`), and only the gateway is reachable from outside, behind your HTTPS proxy.
+- Roles: **owner** (everything, including the editor at `/studio/`), **publisher** (publishes their own apps),
+  **runner** (runs the apps shared with them). Add the first owner with
+  `python -m c2c_app_gateway add-user --config gateway.json --name you --role owner` (it asks for the password).
+- Each published version is kept unchanged, and you can roll back to an older one. The workflow is stored encrypted
+  on the gateway; the app page is built from a separate list of public inputs and outputs.
+- What it does not do: it does not hide the workflow from someone with administrator access to the server. Hiding
+  ComfyUI's panels (App Mode) is not protection; the gateway does not rely on it.
+
+Status: preview. The core service and its access tests are done (tested against a simulated ComfyUI). A run against
+a real ComfyUI, the in-ComfyUI **Publish as App** dialog and the HTTPS deployment guide come next. The Vault's
+`owner_hosted` option stays off until they are done.
+
 ## Automation: schedules, watch folders, webhooks
 
 Two panels run workflows without you pressing Run. Open them from the OmniBar (**⏰ Schedule**, **👁 Watch**) or from
