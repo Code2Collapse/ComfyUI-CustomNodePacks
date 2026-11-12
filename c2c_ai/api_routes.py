@@ -168,6 +168,8 @@ def register_routes(server) -> None:
             return _err(exc.code, str(exc))
 
         kwargs = {}
+        if body.get("require_vision"):     # L6.01 S6: ask for a vision backend
+            kwargs["required"] = {Capability.CHAT, Capability.VISION}
         if "sensitivity" in body:
             kwargs["sensitivity"] = Sensitivity(body["sensitivity"])
         if "policy_override" in body and body["policy_override"]:
@@ -216,6 +218,8 @@ def register_routes(server) -> None:
         except TextOnlyError as exc:
             return _err(exc.code, str(exc))
         kwargs = {}
+        if body.get("require_vision"):     # L6.01 S6: ask for a vision backend
+            kwargs["required"] = {Capability.CHAT, Capability.VISION}
         if "sensitivity" in body:
             kwargs["sensitivity"] = Sensitivity(body["sensitivity"])
         if body.get("policy_override"):
@@ -238,6 +242,8 @@ def register_routes(server) -> None:
             return _err(exc.code, str(exc))
 
         kwargs = {}
+        if body.get("require_vision"):     # L6.01 S6: ask for a vision backend
+            kwargs["required"] = {Capability.CHAT, Capability.VISION}
         if "sensitivity" in body:
             kwargs["sensitivity"] = Sensitivity(body["sensitivity"])
         if "policy_override" in body and body["policy_override"]:

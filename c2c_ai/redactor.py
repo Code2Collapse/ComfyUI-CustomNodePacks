@@ -87,7 +87,7 @@ def redact_messages(messages: list[Message], sensitivity: Sensitivity) -> tuple[
         r = redact_text(m.content)
         if r.any_redacted:
             any_changed = True
-        out.append(Message(role=m.role, content=r.text))
+        out.append(Message(role=m.role, content=r.text, images=getattr(m, "images", ())))   # images: never dropped
     return out, any_changed
 
 

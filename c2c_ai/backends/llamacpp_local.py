@@ -32,7 +32,7 @@ import logging
 import time
 from typing import Generator
 
-from .base import Backend, check_cancel, now_ms, req_timeout
+from .base import Backend, check_cancel, now_ms, refuse_images, req_timeout
 from ..types import (
     AskRequest,
     AskResponse,
@@ -150,6 +150,7 @@ class LlamaCppBackend(Backend):
 
     @staticmethod
     def _to_messages(req: AskRequest) -> list[dict]:
+        refuse_images(req, "The local GGUF model")
         return [{"role": m.role, "content": m.content} for m in req.messages]
 
     # ---- API -------------------------------------------------------------

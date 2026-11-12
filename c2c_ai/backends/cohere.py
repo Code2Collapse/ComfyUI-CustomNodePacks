@@ -17,7 +17,7 @@ from typing import Generator
 
 import httpx
 
-from .base import Backend, check_cancel, now_ms, req_timeout
+from .base import Backend, check_cancel, now_ms, refuse_images, req_timeout
 from ..keychain import get as kc_get, KEY_COHERE
 from ..types import (
     AskRequest,
@@ -61,6 +61,7 @@ class CohereBackend(Backend):
                 "Content-Type": "application/json"}
 
     def _body(self, req: AskRequest, stream: bool = False) -> dict:
+        refuse_images(req, "Cohere Command")
         msgs = [{"role": m.role, "content": m.content} for m in req.messages]
         return {
             "model": self.info.model,

@@ -247,6 +247,13 @@ def _split_system(messages: list) -> tuple[str | None, list[dict]]:
     for m in messages:
         if m.role == "system":
             system_parts.append(m.content)
+        elif getattr(m, "images", ()):
+            # Anthropic Messages API image blocks (base64), then the text
+            parts = [{"type": "image", "source": {"type": "base64", "media_type": im.mime, "data": im.b64()}}
+                     for im in m.images]
+            if m.content:
+                parts.append({"type": "text", "text": m.content})
+            msg_list.append({"role": m.role, "content": parts})
         else:
             msg_list.append({"role": m.role, "content": m.content})
     return ("\n\n".join(system_parts) if system_parts else None), msg_list

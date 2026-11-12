@@ -77,6 +77,27 @@ def now_ms() -> float:
     return time.monotonic() * 1000.0
 
 
+def openai_messages(req: AskRequest) -> list[dict]:
+    """OpenAI chat format; a message with images becomes content parts (text + image_url data URLs)."""
+    out = []
+    for m in req.messages:
+        imgs = getattr(m, "images", ())
+        if imgs:
+            parts = ([{"type": "text", "text": m.content}] if m.content else []) + \
+                    [{"type": "image_url", "image_url": {"url": im.data_url()}} for im in imgs]
+            out.append({"role": m.role, "content": parts})
+        else:
+            out.append({"role": m.role, "content": m.content})
+    return out
+
+
+def refuse_images(req: AskRequest, who: str) -> None:
+    """Text-only backends call this first: an image is refused in words, never silently dropped (L9.39)."""
+    if any(getattr(m, "images", ()) for m in req.messages):
+        from ..types import TextOnlyError
+        raise TextOnlyError(f"{who} cannot see images; choose a vision model (OpenAI-compatible, Anthropic or Gemini)")
+
+
 def req_timeout(req: AskRequest, default: float) -> float:
     """The request's own deadline (L6.01 S1) or the backend's default."""
     t = getattr(req, "timeout_s", None)

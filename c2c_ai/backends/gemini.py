@@ -68,8 +68,10 @@ class GeminiBackend(Backend):
                 system_parts.append(m.content)
             else:
                 role = "user" if m.role == "user" else "model"
-                contents.append({"role": role,
-                                 "parts": [{"text": m.content}]})
+                parts = [{"text": m.content}] if m.content else []
+                parts += [{"inlineData": {"mimeType": im.mime, "data": im.b64()}}
+                          for im in getattr(m, "images", ())]
+                contents.append({"role": role, "parts": parts})
         body: dict = {
             "contents": contents,
             "generationConfig": {

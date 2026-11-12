@@ -42,7 +42,7 @@ from ..types import (
     HealthState,
     Tier,
 )
-from .base import Backend, check_cancel, now_ms, req_timeout
+from .base import Backend, check_cancel, now_ms, refuse_images, req_timeout
 
 
 # Importing the rule-pack lazily inside methods so importing this module never
@@ -76,6 +76,7 @@ class RulePackBackend(Backend):
 
     # -------------------------------------------------------------- ask
     def ask(self, req: AskRequest) -> AskResponse:
+        refuse_images(req, "The offline rule pack")
         t0 = now_ms()
         raw, exc_type = self._extract(req)
         # Lazy import — the rule pack lives in nodes/ which depends on

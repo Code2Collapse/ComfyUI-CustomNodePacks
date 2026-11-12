@@ -15,7 +15,7 @@ from typing import Generator, Iterable
 
 import httpx
 
-from .base import Backend, check_cancel, now_ms, req_timeout
+from .base import Backend, check_cancel, now_ms, openai_messages, req_timeout
 from ..keychain import get as kc_get
 from ..types import (
     AskRequest,
@@ -291,7 +291,7 @@ class OpenAICompatBackend(Backend):
         url = f"{self.base_url}{self.api_path}/chat/completions"
         body: dict = {
             "model": self.info.model,
-            "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+            "messages": openai_messages(req),
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,
         }
@@ -369,7 +369,7 @@ class OpenAICompatBackend(Backend):
         url = f"{self.base_url}{self.api_path}/chat/completions"
         body: dict = {
             "model": self.info.model,
-            "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+            "messages": openai_messages(req),
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,
             "stream": True,

@@ -246,6 +246,7 @@ class Router:
             return {"backend_id": None, "leaves_machine": False, "error": str(exc)}
         info = backend.info
         chars = sum(len(m.content) for m in sent.messages)
+        imgs = [im for m in sent.messages for im in getattr(m, "images", ())]
         est_in = max(1, chars // 4)
         est_cost = (est_in / 1000.0) * info.cost_per_1k_input + (req.max_tokens / 1000.0) * info.cost_per_1k_output
         counts: dict = {}
@@ -257,16 +258,20 @@ class Router:
                 "tier": info.tier.value, "leaves_machine": info.tier == Tier.CLOUD,
                 "messages": [{"role": m.role, "content": m.content} for m in sent.messages],
                 "redacted": redacted, "redaction_counts": counts, "chars": chars,
+                "images": len(imgs), "image_bytes": sum(len(im.data) for im in imgs),   # images cannot be redacted
                 "est_input_tokens": est_in, "est_output_tokens_max": req.max_tokens,
                 "est_cost_usd_max": round(est_cost, 6)}
 
     # ----------------------------------------------------------- internals
     def _build_req(self, feature: str, messages: list[Message], **kw) -> AskRequest:
+        required = set(kw.get("required") or {Capability.CHAT})
+        if any(getattr(m, "images", ()) for m in messages):
+            required.add(Capability.VISION)                 # L6.01 S6: only a vision backend may get images
         return AskRequest(
             feature=feature,
             messages=messages,
             sensitivity=kw.get("sensitivity", Sensitivity.NORMAL),
-            required=kw.get("required") or {Capability.CHAT},
+            required=required,
             max_tokens=kw.get("max_tokens", 1024),
             temperature=kw.get("temperature", 0.4),
             policy_override=kw.get("policy_override"),
