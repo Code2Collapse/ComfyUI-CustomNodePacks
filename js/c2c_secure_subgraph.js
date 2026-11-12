@@ -42,7 +42,9 @@ const PROFILES = [
   { id: "owner_hosted", title: "Sealed — owner-hosted (coming)", tag: "Planned", disabled: true,
     run: "Recipients send inputs to YOUR server and get outputs back.", edit: "Only you.",
     net: "Recipients need your server online.", where: "On your server's GPU.",
-    custody: "Graph and key never leave your server.", security: "Strongest: recipients never receive the graph.",
+    custody: "Graph and key never leave your server.", security: "Strongest: recipients never receive the graph. " +
+      "Available today for whole workflows: run the C2C App Gateway and use 📤 Publish as C2C App " +
+      "(docs/APP_GATEWAY_DEPLOY.md).",
     risk: "" },
 ];
 
