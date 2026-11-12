@@ -2018,9 +2018,14 @@ graph, no queue or history.
 - What it does not do: it does not hide the workflow from someone with administrator access to the server. Hiding
   ComfyUI's panels (App Mode) is not protection; the gateway does not rely on it.
 
-Status: preview. The core service and its access tests are done (tested against a simulated ComfyUI). A run against
-a real ComfyUI, the in-ComfyUI **Publish as App** dialog and the HTTPS deployment guide come next. The Vault's
-`owner_hosted` option stays off until they are done.
+**Publish an app:** open ComfyUI through the gateway at `/studio/` (signed in as owner or publisher), build the
+workflow, then right-click the canvas and choose **📤 Publish as C2C App…** (also in the command palette). Tick the
+widgets runners may set (with their limits) and the outputs they get, pick who can run it, and publish. Widgets inside
+subgraphs can be published too. Ids and labels you give are public; the nodes behind them are not.
+
+Status: preview. Tested against a real (CPU) ComfyUI with a browser: publishing from the Studio, running, progress,
+cancelling and downloading, and the runner being refused everywhere else. The HTTPS deployment guide comes next; the
+Vault's `owner_hosted` option stays off until it is done.
 
 ## Automation: schedules, watch folders, webhooks
 
