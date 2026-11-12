@@ -389,6 +389,174 @@ async function _doSearch() {
   }
 }
 
+/* ─── Civitai detail view (L5.04). The description arrives SANITISED by the server (nodes/civitai_detail.py
+       allow-list: no scripts, attributes or non-http links); everything else is built with DOM APIs. ─── */
+
+function _el(tag, css, text) {
+  const e = document.createElement(tag);
+  if (css) e.style.cssText = css;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+const _BTN = "font-size:11px;padding:2px 9px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);" +
+  "border-radius:4px;cursor:pointer;color:inherit;";
+
+async function _copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+  catch (_) { btn.textContent = "Copy failed"; }
+  setTimeout(() => { btn.textContent = "Copy"; }, 1200);
+}
+
+async function _getJson(url) {
+  const r = await api.fetchApi(url);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+function _renderVersion(box, model, v, destDirs) {
+  box.innerHTML = "";
+  const meta = _el("div", "display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;margin:6px 0;");
+  if (v.base_model) meta.append(_el("span", "background:rgba(255,255,255,.08);padding:1px 6px;border-radius:3px;", v.base_model));
+  if (v.downloads) meta.append(_el("span", "color:var(--c2c-gray450);", `⬇ ${_fmtNum(v.downloads)}`));
+  if (v.early_access) {
+    const b = _el("span", "background:var(--c2c-warnBg, rgba(250,179,135,.15));color:var(--c2c-warnSoft, #fab387);" +
+      "padding:1px 6px;border-radius:3px;font-weight:600;", v.early_access);
+    b.title = "Downloads open when early access ends (on civitai.com you can buy access). The browser never works around it.";
+    meta.append(b);
+  }
+  box.append(meta);
+  if (v.trained_words?.length) {
+    const tw = _el("div", "display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:4px 0 8px;font-size:11px;");
+    tw.append(_el("span", "color:var(--c2c-gray450);", "Trigger words:"));
+    for (const w of v.trained_words) {
+      const chip = _el("span", "background:rgba(255,255,255,.07);padding:1px 6px;border-radius:3px;font-family:monospace;", w);
+      tw.append(chip);
+    }
+    const all = _el("button", _BTN, "Copy");
+    all.dataset.copyWords = "1";
+    all.title = "Copy all trigger words";
+    all.addEventListener("click", () => _copy(v.trained_words.join(", "), all));
+    tw.append(all);
+    box.append(tw);
+  }
+  // files
+  const table = _el("div", "display:grid;grid-template-columns:1fr auto auto auto auto;gap:4px 10px;align-items:center;" +
+    "font-size:11px;margin:6px 0;");
+  for (const h of ["File", "Size", "Format", "Hash", ""]) table.append(_el("span", "color:var(--c2c-gray450);font-weight:600;", h));
+  const dest = _el("select", "background:var(--c2c-overlay-hover);border:1px solid var(--c2c-border);border-radius:4px;" +
+    "padding:2px 5px;color:inherit;font-size:10px;max-width:160px;");
+  const def = _defaultDest(model.type, destDirs);
+  for (const d of destDirs) { const o = _el("option", null, d); if (d === def) o.selected = true; dest.append(o); }
+  for (const f of v.files || []) {
+    const name = _el("span", "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;", (f.primary ? "★ " : "") + f.name);
+    name.title = [f.name, f.type, f.scan?.pickle && `pickle scan: ${f.scan.pickle}`, f.scan?.virus && `virus scan: ${f.scan.virus}`]
+      .filter(Boolean).join("\n");
+    const size = _el("span", null, f.size_kb ? _fmtBytes(f.size_kb * 1024) : "");
+    const fmt = _el("span", null, [f.format, f.precision, f.pruned].filter(Boolean).join(" · "));
+    const hash = _el("span", "font-family:monospace;", f.sha256 ? f.sha256.slice(0, 10) + "…" : "—");
+    if (f.sha256) hash.title = `SHA-256 ${f.sha256}`;
+    const dl = _el("button", _BTN + "background:var(--c2c-okBg2);border-color:var(--c2c-okMute);color:var(--c2c-okSoft2);", "⬇");
+    dl.dataset.fileId = String(f.id);
+    if (!f.downloadable) {
+      dl.disabled = true; dl.style.opacity = "0.4"; dl.style.cursor = "not-allowed";
+      dl.title = v.early_access ? `${v.early_access}: not downloadable yet` : "Not downloadable";
+    } else {
+      dl.title = `Download into the folder chosen below${f.sha256 ? " (SHA-256 checked)" : ""}`;
+      dl.addEventListener("click", async () => {
+        dl.disabled = true; dl.textContent = "⏳";
+        try {
+          await _downloadModel("civitai", String(model.id), String(f.id), dest.value, f.sha256 || "");
+          dl.textContent = "✓";
+          _pollDownloads();
+        } catch (err) {
+          dl.textContent = "✗"; dl.title = err.message; dl.disabled = false;
+        }
+      });
+    }
+    table.append(name, size, fmt, hash, dl);
+  }
+  box.append(table);
+  const destRow = _el("div", "display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:8px;");
+  destRow.append(_el("span", "color:var(--c2c-gray450);", "Save into:"), dest);
+  box.append(destRow);
+  if (v.images?.length) {
+    const grid = _el("div", "display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;");
+    for (const im of v.images) {
+      const a = _el("a");
+      a.href = im.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      const img = _el("img", "width:110px;height:110px;object-fit:cover;border-radius:4px;background:var(--c2c-neutral920);");
+      img.loading = "lazy"; img.src = im.url; img.alt = "example image";
+      a.append(img); grid.append(a);
+    }
+    box.append(grid);
+  }
+  if (v.description) {
+    const d = _el("div", "font-size:12px;line-height:1.5;color:var(--c2c-gray300);margin-top:6px;");
+    d.innerHTML = v.description;                       // sanitised server-side (allow-list)
+    box.append(d);
+  }
+}
+
+async function _openDetail(modelId) {
+  const results = document.getElementById("c2c-mb-results");
+  if (!results) return;
+  const scroll = results.scrollTop;
+  const saved = [...results.childNodes];
+  const restore = () => { results.replaceChildren(...saved); results.scrollTop = scroll; };
+  results.innerHTML = `<div style="text-align:center;padding:30px;color:var(--c2c-gray500);">Loading model…</div>`;
+  const nsfw = _filters.nsfw ? "?nsfw=1" : "";
+  let model, destDirs;
+  try {
+    [model, destDirs] = await Promise.all([_getJson(`/c2c/models/civitai/model/${modelId}${nsfw}`),
+                                           _listDestDirs().then(d => d.dirs || [])]);
+  } catch (err) {
+    results.innerHTML = "";
+    const back = _el("button", _BTN, "◀ Back");
+    back.addEventListener("click", restore);
+    results.append(back, _el("div", "color:var(--c2c-dangerSoft);padding:20px;", err.message));
+    return;
+  }
+  results.innerHTML = "";
+  const wrap = _el("div", "padding:2px 2px 10px;");
+  wrap.id = "c2c-mb-detail";
+  const top = _el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
+  const back = _el("button", _BTN, "◀ Back");
+  back.addEventListener("click", restore);
+  top.append(back, _el("span", "font-weight:600;font-size:14px;", model.name));
+  if (model.type) top.append(_el("span", "font-size:11px;background:rgba(255,255,255,.08);padding:1px 6px;border-radius:3px;", model.type));
+  const sub = [model.creator && `by ${model.creator}`, model.stats?.downloadCount && `⬇ ${_fmtNum(model.stats.downloadCount)}`,
+               model.stats?.rating && `⭐ ${Number(model.stats.rating).toFixed(1)}`].filter(Boolean).join("  ·  ");
+  wrap.append(top, _el("div", "font-size:11px;color:var(--c2c-gray450);margin:4px 0;", sub));
+  if (model.tags?.length) wrap.append(_el("div", "font-size:10px;color:var(--c2c-gray500);margin-bottom:6px;", model.tags.join(" · ")));
+  const vsel = _el("select", "background:var(--c2c-overlay-hover);border:1px solid var(--c2c-border);border-radius:4px;" +
+    "padding:2px 6px;color:inherit;font-size:11px;");
+  vsel.id = "c2c-mb-version";
+  for (const v of model.versions || []) {
+    const o = _el("option", null, `${v.name}${v.base_model ? " · " + v.base_model : ""}${v.early_access ? " · early access" : ""}`);
+    o.value = String(v.id); vsel.append(o);
+  }
+  const vrow = _el("div", "display:flex;gap:6px;align-items:center;font-size:11px;");
+  vrow.append(_el("span", "color:var(--c2c-gray450);", "Version:"), vsel);
+  const vbox = _el("div");
+  wrap.append(vrow, vbox);
+  if (model.first_version) _renderVersion(vbox, model, model.first_version, destDirs);
+  vsel.addEventListener("change", async () => {
+    vbox.innerHTML = `<div style="color:var(--c2c-gray500);padding:10px;">Loading version…</div>`;
+    try { _renderVersion(vbox, model, await _getJson(`/c2c/models/civitai/version/${vsel.value}${nsfw}`), destDirs); }
+    catch (err) { vbox.replaceChildren(_el("div", "color:var(--c2c-dangerSoft);padding:10px;", err.message)); }
+  });
+  if (model.description) {
+    const d = _el("div", "font-size:12px;line-height:1.5;color:var(--c2c-gray300);margin-top:10px;border-top:1px solid " +
+      "rgba(255,255,255,.08);padding-top:8px;");
+    d.innerHTML = model.description;                   // sanitised server-side (allow-list)
+    wrap.append(d);
+  }
+  results.append(wrap);
+  results.scrollTop = 0;
+}
+
 // L5.03: the folder a model of this type belongs in (a LoRA went to the alphabetically first folder, "datasets").
 const _TYPE_DIRS = { checkpoint: "checkpoints", lora: "loras", locon: "loras", dora: "loras", vae: "vae",
   controlnet: "controlnet", textualinversion: "embeddings", upscaler: "upscale_models", motionmodule: "animatediff_models" };
@@ -423,7 +591,9 @@ function _buildCard(item, destDirs) {
     ${thumb ? `<img src="${thumb}" style="width:70px;height:70px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--c2c-neutral990);">` : `<div style="width:70px;height:70px;background:var(--c2c-neutral920);border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;">📦</div>`}
     <div style="flex:1;min-width:0;">
       <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-        ${_esc(name)}</div>
+        ${item._source === "civitai" || (_currentSource === "civitai" && item._source !== "local")
+          ? `<a href="#" data-detail style="color:inherit;text-decoration:underline dotted;" title="Versions, files, trigger words, images">${_esc(name)}</a>`
+          : _esc(name)}</div>
       <div style="font-size:11px;color:var(--c2c-gray400);margin-top:2px;">
         ${type ? `<span style="background:rgba(255,255,255,.08);padding:1px 5px;border-radius:3px;">${_esc(type)}</span> ` : ""}
         ${downloads ? `⬇ ${_fmtNum(downloads)} ` : ""}
@@ -459,6 +629,7 @@ function _buildCard(item, destDirs) {
     </div>
   `;
 
+  card.querySelector("[data-detail]")?.addEventListener("click", (e) => { e.preventDefault(); _openDetail(modelId); });
   if (item._source !== "local") {
     card.querySelector("[data-dl]").addEventListener("click", async (e) => {
       const btn     = e.currentTarget;

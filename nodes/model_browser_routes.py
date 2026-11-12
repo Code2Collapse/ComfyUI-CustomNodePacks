@@ -548,6 +548,31 @@ def register_routes(server) -> None:
         return web.json_response({"ok": ok, **({} if ok else {"error": f"cannot {action} job {job_id} now"})},
                                  status=200 if ok else 409)
 
+    @server.routes.get("/c2c/models/civitai/model/{model_id}")
+    async def civitai_model(request: web.Request) -> web.Response:
+        """L5.04 detail view: the model, its versions and the first version's files / words / images."""
+        from .civitai_detail import model_detail
+        mid = request.match_info["model_id"]
+        if not mid.isdigit():
+            return web.json_response({"error": "model id must be a number"}, status=400)
+        nsfw = request.rel_url.query.get("nsfw", "") in ("1", "true")
+        try:
+            return web.json_response(model_detail(await _http_get(f"{_CIVITAI_BASE}/models/{mid}"), nsfw))
+        except Exception as exc:  # noqa: BLE001 - shown in the panel
+            return web.json_response({"error": str(exc)}, status=502)
+
+    @server.routes.get("/c2c/models/civitai/version/{version_id}")
+    async def civitai_version(request: web.Request) -> web.Response:
+        from .civitai_detail import version_detail
+        vid = request.match_info["version_id"]
+        if not vid.isdigit():
+            return web.json_response({"error": "version id must be a number"}, status=400)
+        nsfw = request.rel_url.query.get("nsfw", "") in ("1", "true")
+        try:
+            return web.json_response(version_detail(await _http_get(f"{_CIVITAI_BASE}/model-versions/{vid}"), nsfw))
+        except Exception as exc:  # noqa: BLE001
+            return web.json_response({"error": str(exc)}, status=502)
+
     @server.routes.get("/c2c/models/civitai_options")
     async def civitai_options(_request: web.Request) -> web.Response:
         return web.json_response({"sorts": list(CIVITAI_SORTS), "periods": list(CIVITAI_PERIODS),
