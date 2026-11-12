@@ -4,10 +4,9 @@ Uses ``httpx`` directly against the official REST API rather than the SDK so
 we have one consistent retry / timeout / streaming story across all
 backends. Authentication header is ``x-api-key`` per Anthropic spec.
 
-Model is configurable at registration. Recommended defaults:
-    cheap   → claude-3-5-haiku-latest
-    smart   → claude-3-5-sonnet-latest
-    smartest→ claude-3-opus-latest  (or claude-4-x when GA)
+Model is configurable at registration; the settings picker lists the account's models live (GET /v1/models).
+Current models (platform.claude.com, checked 2026-11-12): claude-haiku-5-5 (fast), claude-sonnet-5-5,
+claude-opus-5-5, claude-fable-5-2. The Claude 3.x ids this file used to recommend are retired.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ from ..types import (
 log = logging.getLogger("c2c_ai.anthropic")
 
 ENDPOINT = "https://api.anthropic.com/v1/messages"
+MODELS_ENDPOINT = "https://api.anthropic.com/v1/models"
 API_VERSION = "2023-06-01"
 
 
@@ -41,7 +41,7 @@ class AnthropicBackend(Backend):
     @classmethod
     def build(cls,
               backend_id: str = "cloud.anthropic",
-              model: str = "claude-3-5-sonnet-latest",
+              model: str = "claude-sonnet-5-5",
               display_name: str = "Claude (Anthropic)",
               cost_per_1k_input: float = 0.003,
               cost_per_1k_output: float = 0.015,
@@ -222,22 +222,28 @@ class AnthropicBackend(Backend):
     # the same key as ask(); the curated list below is the user-visible
     # default. The configured ``info.model`` is always pinned to position 0
     # so the active selection survives any list refresh.
-    KNOWN_MODELS: tuple[str, ...] = (
-        "claude-3-5-haiku-latest",
-        "claude-3-5-sonnet-latest",
-        "claude-3-opus-latest",
-        "claude-3-haiku-20240307",
-        "claude-3-sonnet-20240229",
+    KNOWN_MODELS: tuple[str, ...] = (       # offline fallback only; the live list wins
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-opus-5-5",
+        "claude-fable-5-2",
     )
 
     def list_models(self, timeout: float = 5.0) -> list[str]:
-        out: list[str] = []
-        if self.info.model:
-            out.append(self.info.model)
-        for m in self.KNOWN_MODELS:
-            if m not in out:
-                out.append(m)
-        return out
+        """Live: GET https://api.anthropic.com/v1/models (data[].id, newest first, limit up to 1000). Falls back to
+        the configured model + KNOWN_MODELS without a key or on any error."""
+        live: list[str] = []
+        key = kc_get(KEY_ANTHROPIC)
+        if key:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    r = client.get(MODELS_ENDPOINT, params={"limit": 1000},
+                                   headers={"x-api-key": key, "anthropic-version": API_VERSION})
+                if r.status_code == 200:
+                    live = [str(m.get("id")) for m in (r.json().get("data") or []) if m.get("id")]
+            except Exception as exc:  # noqa: BLE001
+                log.info("anthropic list_models failed: %s", type(exc).__name__)
+        return _merge_models(self.info.model, live, self.KNOWN_MODELS)
 
 
 def _split_system(messages: list) -> tuple[str | None, list[dict]]:
@@ -257,3 +263,12 @@ def _split_system(messages: list) -> tuple[str | None, list[dict]]:
         else:
             msg_list.append({"role": m.role, "content": m.content})
     return ("\n\n".join(system_parts) if system_parts else None), msg_list
+
+
+def _merge_models(configured: str, live: list, known: tuple) -> list:
+    """Configured model first (never dropped), then the live list, else the curated fallback."""
+    out = [configured] if configured else []
+    for m in (live or known):
+        if m and m not in out:
+            out.append(m)
+    return out

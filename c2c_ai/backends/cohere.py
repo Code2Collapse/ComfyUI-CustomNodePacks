@@ -31,6 +31,7 @@ from ..types import (
 log = logging.getLogger("c2c_ai.cohere")
 
 ENDPOINT = "https://api.cohere.com/v2/chat"
+MODELS_ENDPOINT = "https://api.cohere.com/v1/models"
 
 
 class CohereBackend(Backend):
@@ -199,22 +200,31 @@ class CohereBackend(Backend):
         return self.health
 
     # ---------------------------------------------------------- list_models
-    # Curated current Cohere Chat-v2 model identifiers, ordered cheap→smart.
-    # Cohere's ``GET /v1/models`` does work with the same Bearer token but is
-    # rate-limited; the curated list below is the user-visible default.
+    # Offline fallback (docs.cohere.com/docs/models, checked 2026-11-12: the command-r / command-r-plus aliases were
+    # deprecated Sept 15, 2025). The picker normally shows the live list.
     KNOWN_MODELS: tuple[str, ...] = (
+        "command-a-03-2025",
         "command-r-08-2024",
         "command-r-plus-08-2024",
         "command-r7b-12-2024",
-        "command-r",
-        "command-r-plus",
     )
 
     def list_models(self, timeout: float = 5.0) -> list[str]:
-        out: list[str] = []
-        if self.info.model:
-            out.append(self.info.model)
-        for m in self.KNOWN_MODELS:
+        """Live: GET https://api.cohere.com/v1/models?endpoint=chat (models[].name). Fallback without a key / on error."""
+        live: list[str] = []
+        key = kc_get(KEY_COHERE)
+        if key:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    r = client.get(MODELS_ENDPOINT, params={"endpoint": "chat", "page_size": 1000},
+                                   headers=self._headers(key))
+                if r.status_code == 200:
+                    live = [str(m.get("name")) for m in (r.json().get("models") or [])
+                            if m.get("name") and not m.get("is_deprecated")]
+            except Exception as exc:  # noqa: BLE001
+                log.info("cohere list_models failed: %s", type(exc).__name__)
+        out = [self.info.model] if self.info.model else []
+        for m in (live or self.KNOWN_MODELS):
             if m not in out:
                 out.append(m)
         return out

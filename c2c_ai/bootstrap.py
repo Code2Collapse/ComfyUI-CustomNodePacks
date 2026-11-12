@@ -8,7 +8,7 @@ Schema::
     {
       "version": 1,
       "backends": [
-        {"kind": "anthropic", "id": "cloud.anthropic", "model": "claude-3-5-sonnet-latest", "enabled": true},
+        {"kind": "anthropic", "id": "cloud.anthropic", "model": "claude-sonnet-5-5", "enabled": true},
         {"kind": "openai",    "id": "cloud.openai",    "model": "gpt-4o-mini", "enabled": true},
         {"kind": "qwen",      "id": "cloud.qwen",      "model": "qwen-max-latest", "enabled": false},
         {"kind": "openrouter","id": "cloud.openrouter","model": "anthropic/claude-3.5-sonnet", "enabled": false},
@@ -76,7 +76,7 @@ def build_backend(entry: dict):
     if kind == "anthropic":
         b = AnthropicBackend.build(
             backend_id=entry.get("id", "cloud.anthropic"),
-            model=entry.get("model", "claude-3-5-sonnet-latest"),
+            model=entry.get("model", "claude-sonnet-5-5"),
             display_name=entry.get("display_name", "Claude (Anthropic)"),
             cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.003)),
             cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.015)),
@@ -149,7 +149,7 @@ def build_backend(entry: dict):
     elif kind == "gemini":
         b = GeminiBackend.build(
             backend_id=entry.get("id", "cloud.gemini"),
-            model=entry.get("model", "gemini-1.5-flash-latest"),
+            model=entry.get("model", "gemini-3.6-flash"),
             display_name=entry.get("display_name", "Gemini (Google)"),
             cost_per_1k_input=float(entry.get("cost_per_1k_input", 0.000075)),
             cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0003)),
@@ -233,14 +233,14 @@ def _auto_discover_backends() -> list[dict]:
     # Cloud backends gated by env keys
     if os.environ.get("ANTHROPIC_API_KEY"):
         out.append({"kind": "anthropic", "id": "cloud.anthropic",
-                    "model": "claude-3-5-sonnet-latest", "enabled": True,
+                    "model": "claude-sonnet-5-5", "enabled": True,
                     "_auto": True})
     if os.environ.get("OPENAI_API_KEY"):
         out.append({"kind": "openai", "id": "cloud.openai",
                     "model": "gpt-4o-mini", "enabled": True, "_auto": True})
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
         out.append({"kind": "gemini", "id": "cloud.gemini",
-                    "model": "gemini-1.5-flash-latest", "enabled": True,
+                    "model": "gemini-3.6-flash", "enabled": True,
                     "_auto": True})
     if os.environ.get("COHERE_API_KEY"):
         out.append({"kind": "cohere", "id": "cloud.cohere",

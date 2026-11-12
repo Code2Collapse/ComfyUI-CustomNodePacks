@@ -193,7 +193,7 @@ def _anthropic(model: str, prompt: str, max_tokens: int,
     if not key:
         return None
     body = {
-        "model": model or "claude-3-5-haiku-latest",
+        "model": model or "claude-haiku-5-5",
         "max_tokens": int(max_tokens),
         "system": system if system is not None else SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
@@ -218,15 +218,15 @@ def _gemini(model: str, prompt: str, max_tokens: int,
     key = _get_key("gemini")
     if not key:
         return None
-    model = model or "gemini-1.5-flash-latest"
+    model = model or "gemini-3.6-flash"
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{model}:generateContent?key={key}")
+           f"{model}:generateContent")
     body = {
         "system_instruction": {"parts": [{"text": system if system is not None else SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": int(max_tokens)},
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "x-goog-api-key": key}   # key in a header, never in the URL
     j = _http_post(url, headers, body)
     if not j:
         return None

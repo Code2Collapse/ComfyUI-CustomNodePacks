@@ -345,8 +345,8 @@ def _try_cloud(ctx: dict) -> Optional[dict]:
             continue
         model_map = {
             "openai": "gpt-4o-mini",
-            "anthropic": "claude-haiku-20240307",
-            "gemini": "gemini-1.5-flash",
+            "anthropic": "claude-haiku-5-5",
+            "gemini": "gemini-3.5-flash-lite",
             "openrouter": "meta-llama/llama-3.1-8b-instruct:free",
             "groq": "llama-3.1-8b-instant",
             "deepseek": "deepseek-chat",

@@ -468,7 +468,8 @@ function buildSettingsView(root) {
                 return; // leave static label in place; backend may be unreachable
             }
             const models = Array.isArray(res?.models) ? res.models : [];
-            if (models.length <= 1) return; // nothing to pick from — keep label
+            // L6.03: always a picker - with "Other model id…" so a model the list does not show (new, private,
+            // fine-tuned, or a server that does not list its models) can be typed in
             const sel = document.createElement("select");
             sel.dataset.id = id;
             sel.className = "c2c-model-select";
@@ -487,8 +488,18 @@ function buildSettingsView(root) {
                 if (m === current) opt.selected = true;
                 sel.appendChild(opt);
             }
+            const other = document.createElement("option");
+            other.value = "__c2c_other__";
+            other.textContent = "Other model id…";
+            sel.appendChild(other);
             sel.addEventListener("change", async (e) => {
-                const next = e.target.value;
+                let next = e.target.value;
+                if (next === "__c2c_other__") {
+                    const typed = window.prompt("Model id exactly as the provider names it (e.g. claude-sonnet-5-5):",
+                                                current);
+                    next = (typed || "").trim();
+                    if (!next || next === current) { e.target.value = current; return; }
+                }
                 if (!next || next === current) return;
                 e.target.disabled = true;
                 try {

@@ -2,13 +2,11 @@
 
 Uses Generative Language REST API (v1beta) directly via httpx — no SDK.
 Auth is via the ``GEMINI_API_KEY`` in the keychain (also accepted as
-``GOOGLE_API_KEY`` by the txt parser). Key is passed as a ``?key=...``
-query param per Google convention.
+``GOOGLE_API_KEY`` by the txt parser). The key travels in the ``x-goog-api-key`` header (documented by Google), never
+in the URL: httpx error messages carry the URL, so a ``?key=`` ended up in logs and error text (L6.03).
 
-Recommended models:
-    cheap   → gemini-1.5-flash-latest
-    smart   → gemini-1.5-pro-latest
-    smartest→ gemini-2.0-pro-exp  (when GA)
+Models: the settings picker lists them live (GET v1beta/models). Stable at aistudio.google.com/docs/models on
+2026-11-12: gemini-3.6-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite; Gemini 1.5 / 2.0 are gone.
 """
 
 from __future__ import annotations
@@ -41,7 +39,7 @@ class GeminiBackend(Backend):
     @classmethod
     def build(cls,
               backend_id: str = "cloud.gemini",
-              model: str = "gemini-1.5-flash-latest",
+              model: str = "gemini-3.6-flash",
               display_name: str = "Gemini (Google)",
               cost_per_1k_input: float = 0.000075,
               cost_per_1k_output: float = 0.0003,
@@ -91,11 +89,11 @@ class GeminiBackend(Backend):
         if not key:
             raise RuntimeError("GEMINI_API_KEY not in keychain — "
                                "open Settings → C2C → AI Backends")
-        url = f"{BASE}/{self.info.model}:generateContent?key={key}"
+        url = f"{BASE}/{self.info.model}:generateContent"
         t0 = now_ms()
         check_cancel(req)
         with httpx.Client(timeout=req_timeout(req, 60.0)) as client:
-            r = client.post(url, json=self._build_body(req))
+            r = client.post(url, json=self._build_body(req), headers={"x-goog-api-key": key})
         latency = now_ms() - t0
         if r.status_code != 200:
             raise RuntimeError(f"Gemini API {r.status_code}: {r.text[:400]}")
@@ -129,7 +127,7 @@ class GeminiBackend(Backend):
         if not key:
             raise RuntimeError("GEMINI_API_KEY not in keychain")
         url = (f"{BASE}/{self.info.model}:streamGenerateContent"
-               f"?alt=sse&key={key}")
+               "?alt=sse")
         t0 = now_ms()
         text_buf: list[str] = []
         in_tok = 0
@@ -137,7 +135,7 @@ class GeminiBackend(Backend):
         check_cancel(req)
         with httpx.Client(timeout=req_timeout(req, 120.0)) as client:
             with client.stream("POST", url, json=self._build_body(req),
-                               headers={"accept": "text/event-stream"}) as r:
+                               headers={"accept": "text/event-stream", "x-goog-api-key": key}) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"Gemini stream {r.status_code}: "
                                        f"{r.read()[:400]!r}")
@@ -187,7 +185,7 @@ class GeminiBackend(Backend):
                 last_error="no API key in keychain",
                 last_probe_at=time.time())
             return self.health
-        url = f"{BASE}/{self.info.model}:generateContent?key={key}"
+        url = f"{BASE}/{self.info.model}:generateContent"
         body = {
             "contents": [{"role": "user", "parts": [{"text": "."}]}],
             "generationConfig": {"maxOutputTokens": 1},
@@ -195,7 +193,7 @@ class GeminiBackend(Backend):
         t0 = now_ms()
         try:
             with httpx.Client(timeout=timeout) as client:
-                r = client.post(url, json=body)
+                r = client.post(url, json=body, headers={"x-goog-api-key": key})
             rtt = now_ms() - t0
             ok = r.status_code == 200
             err = None if ok else f"HTTP {r.status_code}: {r.text[:120]}"
@@ -208,25 +206,37 @@ class GeminiBackend(Backend):
         return self.health
 
     # ---------------------------------------------------------- list_models
-    # Curated current Gemini model identifiers, ordered cheap→smart.
-    # Google's Generative Language API does expose ``/v1beta/models?key=...``
-    # but the response includes hundreds of embedding / fine-tune variants
-    # that aren't useful as chat targets; the curated list below is the set
-    # surfaced to users. Configured ``info.model`` is always pinned at
-    # position 0 so the active selection survives a list refresh.
+    # Offline fallback (stable models on aistudio.google.com/docs/models, checked 2026-11-12; Gemini 1.5 / 2.0 are
+    # gone). The picker normally shows the live list.
     KNOWN_MODELS: tuple[str, ...] = (
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-8b-latest",
-        "gemini-1.5-pro-latest",
-        "gemini-2.0-flash-exp",
-        "gemini-2.0-flash-thinking-exp",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     )
 
     def list_models(self, timeout: float = 5.0) -> list[str]:
-        out: list[str] = []
-        if self.info.model:
-            out.append(self.info.model)
-        for m in self.KNOWN_MODELS:
-            if m not in out:
-                out.append(m)
-        return out
+        """Live: GET v1beta/models (models[].name = "models/<id>"), only models whose supportedGenerationMethods
+        include generateContent (the list also holds embedding / TTS models). Key in the x-goog-api-key header."""
+        live: list[str] = []
+        key = kc_get(KEY_GEMINI)
+        if key:
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    r = client.get(BASE, params={"pageSize": 1000}, headers={"x-goog-api-key": key})
+                if r.status_code == 200:
+                    for m in r.json().get("models") or []:
+                        name = str(m.get("name") or "")
+                        if name and "generateContent" in (m.get("supportedGenerationMethods") or []):
+                            live.append(name.split("/", 1)[1] if name.startswith("models/") else name)
+            except Exception as exc:  # noqa: BLE001
+                log.info("gemini list_models failed: %s", type(exc).__name__)
+        return _merge_models(self.info.model, live, self.KNOWN_MODELS)
+
+
+def _merge_models(configured: str, live: list, known: tuple) -> list:
+    """Configured model first (never dropped), then the live list, else the curated fallback."""
+    out = [configured] if configured else []
+    for m in (live or known):
+        if m and m not in out:
+            out.append(m)
+    return out
