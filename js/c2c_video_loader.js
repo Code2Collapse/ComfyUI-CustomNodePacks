@@ -416,6 +416,14 @@ function mountLoaderWidget(node, cfg) {
             player?.destroy();
             crop?.destroy();
             uninstallFloor();
+            // L4.04: in Nodes 2.0 the frontend keeps a deleted node's component (and so this node and its closures)
+            // alive - measured +1755 DOM nodes per add/delete of this node with C2C OFF, fe 1.53.10 and 1.57.0. Drop
+            // every reference to our subtree so that retained shell holds nothing of ours.
+            player = null;
+            crop = null;
+            try { if (ui.video) { ui.video.removeAttribute("src"); ui.video.load(); } } catch (_e) { /* ignore */ }
+            try { ui.root.replaceChildren(); } catch (_e) { /* ignore */ }
+            for (const k of Object.keys(ui)) if (k !== "root") ui[k] = null;
         }, 2000);
         return origRemoved?.apply(this, args);
     };
