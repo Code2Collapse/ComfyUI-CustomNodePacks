@@ -359,6 +359,82 @@ function _renderPanel() {
         row.appendChild(chip);
     }
     _panel.appendChild(row);
+    _panel.style.flexWrap = "wrap";                 // L4.06: the Browser section takes its own line
+    _panel.appendChild(_browserSection());
+}
+
+// ── L4.06 Perf HUD: browser-side numbers in the panel, measured ONLY while it is open (no idle cost) ───────────
+let _fpsRaf = 0, _fpsFrames = 0, _fpsT0 = 0, _fps = null;
+
+function _fpsStart() {
+    if (_fpsRaf) return;
+    _fpsFrames = 0; _fpsT0 = performance.now(); _fps = null;
+    const step = (t) => {
+        _fpsFrames++;
+        if (t - _fpsT0 >= 1000) {
+            _fps = Math.round(_fpsFrames * 1000 / (t - _fpsT0));
+            _fpsFrames = 0; _fpsT0 = t;
+            _refreshBrowserSection();
+        }
+        _fpsRaf = (_isPanelOpen() && !document.hidden) ? requestAnimationFrame(step) : 0;
+    };
+    _fpsRaf = requestAnimationFrame(step);
+}
+
+function _fpsStop() {
+    if (_fpsRaf) cancelAnimationFrame(_fpsRaf);
+    _fpsRaf = 0; _fps = null;
+}
+
+function _browserStats() {
+    const m = performance?.memory;
+    const mem = window.__C2C_MEM__;
+    const gl = globalThis.__C2C_BROWSER_GUARD__?.live;
+    return {
+        heap: m ? `${Math.round(m.usedJSHeapSize / 1048576)} / ${Math.round(m.jsHeapSizeLimit / 1048576)} MB` : "n/a",
+        canvases: document.getElementsByTagName("canvas").length,
+        webgl: gl ? gl.size : "n/a",
+        blobs: mem?.blobs ? mem.blobs.size : "n/a",
+        fps: _fps == null ? "measuring..." : `${_fps} fps`,
+    };
+}
+
+function _browserSection() {
+    const b = _browserStats();
+    const sec = document.createElement("div");
+    sec.className = "c2c-sp-browser";
+    sec.style.cssText = "display:grid;grid-template-columns:max-content max-content;justify-content:start;gap:2px 16px;padding:6px 8px 2px;font-size:11px;" +
+        "border-top:1px solid var(--c2c-surface1, #45475a);margin-top:4px;flex:1 0 100%;box-sizing:border-box";
+    const rows = [["JS heap", b.heap], ["Canvases", b.canvases], ["WebGL contexts (tracked)", b.webgl],
+                  ["Preview blob URLs (tracked)", b.blobs], ["Frame rate", b.fps]];
+    for (const [k, v] of rows) {
+        const a = document.createElement("span"); a.textContent = k; a.style.opacity = "0.75";
+        const c = document.createElement("span"); c.textContent = String(v); c.style.textAlign = "right";
+        sec.append(a, c);
+    }
+    const acts = document.createElement("div");
+    acts.style.cssText = "grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:4px;margin-top:4px";
+    for (const [label, cmd, tip] of [
+        ["Free browser memory", "c2c.memGuard.freeNow", "Flush C2C caches and recycle preview blob URLs in this tab"],
+        ["Unload models", "Comfy.Memory.UnloadModels", "ComfyUI's own command: unload models from VRAM"],
+        ["Unload models + cache", "Comfy.Memory.UnloadModelsAndExecutionCache",
+         "ComfyUI's own command: unload models and clear the execution cache"]]) {
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.textContent = label; btn.title = tip; btn.dataset.cmd = cmd;
+        btn.className = "c2c-sp-chip";
+        btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            try { app.extensionManager?.command?.execute?.(cmd); } catch { /* */ }
+        });
+        acts.appendChild(btn);
+    }
+    sec.appendChild(acts);
+    return sec;
+}
+
+function _refreshBrowserSection() {
+    const old = _panel?.querySelector(".c2c-sp-browser");
+    if (old) old.replaceWith(_browserSection());
 }
 
 function _positionPanel() {
@@ -381,6 +457,7 @@ function _openPanel() {
     _panel.setAttribute("data-c2c-stats-pill-open", "1");
     _positionPanel();
     if (_pill) _pill.setAttribute("aria-expanded", "true");
+    _fpsStart();
     if (!_outsideHandler) {
         _outsideHandler = (ev) => {
             if (!_panel) return;
@@ -405,6 +482,7 @@ function _closePanel() {
     _panel.style.display = "none";
     _panel.removeAttribute("data-c2c-stats-pill-open");
     if (_pill) _pill.setAttribute("aria-expanded", "false");
+    _fpsStop();
     if (_outsideHandler) {
         document.removeEventListener("mousedown", _outsideHandler, true);
         _outsideHandler = null;
