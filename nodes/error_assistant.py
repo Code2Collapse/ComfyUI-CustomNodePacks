@@ -679,8 +679,12 @@ def explain(exc: BaseException,
             node_class: Optional[str] = None,
             inputs_summary: Optional[str] = None,
             traceback_tail: Optional[str] = None,
-            mode: Optional[str] = None) -> Dict[str, Any]:
-    """Return a structured explanation. Never raises."""
+            mode: Optional[str] = None,
+            allow_cloud: bool = True) -> Dict[str, Any]:
+    """Return a structured explanation. Never raises.
+
+    `allow_cloud=False` (L6.01 S3): callers that run by themselves on every error (the error panel) keep the
+    explanation on this machine; the user's explicit "Ask AI" is where an online model gets asked."""
     exc_type = type(exc).__name__
     msg = str(exc) or repr(exc)
     settings = load_settings()
@@ -742,7 +746,7 @@ def explain(exc: BaseException,
     prompt = _build_prompt(exc_type, msg, node_class, inputs_summary, traceback_tail)
 
     # --- Tier 3 (cloud) preferred if mode allows ---
-    if mode in ("auto", "cloud_only"):
+    if mode in ("auto", "cloud_only") and allow_cloud:
         try:
             from . import secrets_store  # type: ignore
             has_key = secrets_store.has_key_for(settings.get("cloud_provider", "openai"))

@@ -205,7 +205,8 @@ def translate_message(message: str,
                       mode: Optional[str] = None,
                       locale: Optional[str] = None,
                       workflow: Optional[Dict[str, Any]] = None,
-                      node_id: Optional[Any] = None) -> Dict[str, Any]:
+                      node_id: Optional[Any] = None,
+                      allow_cloud: bool = True) -> Dict[str, Any]:
     """Convert plain toast text → structured explanation via error_assistant.
 
     If ``locale`` is provided and a matching overlay exists at
@@ -241,6 +242,7 @@ def translate_message(message: str,
         node_class=node_class,
         traceback_tail=traceback_tail,
         mode=mode,
+        allow_cloud=allow_cloud,
     )
     # Node-specific phrasing: refine the cause/headline for Tier-1 matches
     # that we can localise to a specific unconnected input.
@@ -573,10 +575,12 @@ def register_routes(server: Any) -> None:
                 locale = al.split(",")[0].strip().split(";")[0].strip()
 
         try:
+            # L6.01 S3: the panel calls this route by itself on every failed run, so the explanation stays on this
+            # machine unless the request says otherwise ("Ask AI" is the user's way to an online model).
             result = translate_message(message, node_class=node_class,
                                        traceback_tail=traceback_tail, mode=mode,
                                        locale=locale, workflow=workflow,
-                                       node_id=node_id)
+                                       node_id=node_id, allow_cloud=bool(body.get("allow_cloud")))
         except Exception as e:
             log.exception("[error_translator] translate failed: %s", e)
             return web.json_response(
