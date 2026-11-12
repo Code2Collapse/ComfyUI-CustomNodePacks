@@ -37,6 +37,8 @@ from .types import Message, Sensitivity
 _PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("PATH",  re.compile(r"[A-Za-z]:\\(?:[^\\\s\"'<>|*?:]+\\)+[^\\\s\"'<>|*?:]+"), "<PATH>"),
     ("PATH",  re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+(?:/[^\s\"'<>|*?:]+)*"), "<PATH>"),
+    # L6.01 S2: Windows paths written with forward slashes (ComfyUI, Python and our own logs print D:/x/y.py)
+    ("PATH",  re.compile(r"\b[A-Za-z]:/(?:[^/\s\"'<>|*?:]+/)+[^/\s\"'<>|*?:]+"), "<PATH>"),
     ("EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "<EMAIL>"),
     # API keys — common prefixes across providers
     ("KEY",   re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{20,}\b"), "<KEY>"),

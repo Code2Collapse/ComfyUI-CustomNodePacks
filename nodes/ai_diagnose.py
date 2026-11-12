@@ -141,7 +141,10 @@ def diagnose(payload: Dict[str, Any]) -> Dict[str, Any]:
         f"Error: {exc_type}: {message[:500]}\n"
         f"Traceback tail:\n{tb_tail[:600]}\n\nJSON:"
     )
-    text, provider = _complete(prompt, system=_DIAG_SYSTEM, feature="error_assistant")
+    # L6.01 S2: diagnosis runs by itself on every failed run, so it stays on this machine unless the user said yes
+    # to the cloud for THIS error (the card's button re-posts with consent_cloud after showing what will be sent).
+    consent = bool(payload.get("consent_cloud"))
+    text, provider = _complete(prompt, system=_DIAG_SYSTEM, feature="error_assistant", allow_cloud=consent)
     if text:
         # accept the last JSON object that has a "cause" key
         obj = None
@@ -157,7 +160,47 @@ def diagnose(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "cause": str(obj.get("cause") or "")[:300],
                     "fix": str(obj.get("fix") or "")[:300],
                     "apply": _validate_apply(node_type, obj.get("apply"))}
-    return {"ok": True, "provider": "rules", **_fallback(exc_type, message)}
+    out = {"ok": True, "provider": "rules", **_fallback(exc_type, message)}
+    if not consent:
+        offer = _cloud_offer(prompt)
+        if offer:
+            out["consent"] = offer
+    return out
+
+
+def _cloud_offer(prompt: str) -> Optional[Dict[str, Any]]:
+    """When only a cloud model could answer: who it is and EXACTLY what would be sent (redacted), so the card can
+    ask first. None when no cloud model is configured."""
+    try:
+        try:
+            from ..c2c_ai.router import get_router  # type: ignore
+            from ..c2c_ai.types import Message  # type: ignore
+        except Exception:
+            import importlib
+            get_router = importlib.import_module("c2c_ai.router").get_router
+            Message = importlib.import_module("c2c_ai.types").Message
+        pv = get_router().preview("error_assistant", [Message(role="system", content=_DIAG_SYSTEM),
+                                                       Message(role="user", content=prompt)], max_tokens=1600)
+    except Exception as exc:  # noqa: BLE001
+        log.info("[ai_diagnose] no cloud preview: %s", exc)
+        pv = None
+    if pv and pv.get("leaves_machine"):
+        user = "\n\n".join(m["content"] for m in pv["messages"] if m["role"] == "user")
+        return {"backend": pv.get("display_name") or pv["backend_id"], "model": pv.get("model"), "text": user,
+                "chars": pv.get("chars"), "redacted": pv.get("redacted"),
+                "redaction_counts": pv.get("redaction_counts"), "est_cost_usd_max": pv.get("est_cost_usd_max")}
+    try:  # the legacy Tier 3 cloud setting (Diagnostics sidebar) when the router has no cloud model
+        from . import error_assistant as ea
+        st = ea.load_settings()
+        if st.get("tier3_enabled"):
+            from .ai_workflow_builder import _redact_for_cloud
+            text = _redact_for_cloud(prompt)
+            return {"backend": f"{st.get('cloud_provider', 'cloud')} (Diagnostics Tier 3)",
+                    "model": st.get("cloud_model"), "text": text, "chars": len(text), "redacted": text != prompt,
+                    "redaction_counts": {}, "est_cost_usd_max": None}
+    except Exception as exc:  # noqa: BLE001
+        log.info("[ai_diagnose] legacy tier 3 check failed: %s", exc)
+    return None
 
 
 def register_routes(server: Any) -> None:

@@ -203,6 +203,27 @@ def register_routes(server) -> None:
             "redacted": resp.redacted,
         })
 
+    # ----------------------------------------------------- estimate (L6.01 S2)
+    @routes.post("/c2c/ai/estimate")
+    async def _estimate(req):
+        """What /c2c/ai/ask would send, to whom, and roughly what it costs - nothing is sent."""
+        body = await req.json()
+        msgs_raw = body.get("messages") or []
+        if not msgs_raw:
+            return _err("EMPTY_MESSAGES", "messages array is required")
+        try:
+            msgs = messages_from_json(msgs_raw, require_vision=bool(body.get("require_vision")))
+        except TextOnlyError as exc:
+            return _err(exc.code, str(exc))
+        kwargs = {}
+        if "sensitivity" in body:
+            kwargs["sensitivity"] = Sensitivity(body["sensitivity"])
+        if body.get("policy_override"):
+            kwargs["policy_override"] = Policy(body["policy_override"])
+        if "max_tokens" in body:
+            kwargs["max_tokens"] = int(body["max_tokens"])
+        return _ok(get_router().preview(body.get("feature") or "anonymous", msgs, **kwargs))
+
     # ----------------------------------------------------------- stream (SSE)
     @routes.post("/c2c/ai/stream")
     async def _stream(req):

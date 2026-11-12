@@ -34,7 +34,7 @@ function gatherContext(nodeId) {
     return { node: n, ctx: { widgets, upstream } };
 }
 
-function showCard(node, diag) {
+function showCard(node, diag, body) {
     document.getElementById("__c2c_diag_card")?.remove();
     const card = document.createElement("div");
     card.id = "__c2c_diag_card";
@@ -57,13 +57,51 @@ function showCard(node, diag) {
             <span style="margin-left:auto;color:var(--c2c-overlay1);font-size:10.5px;">via ${diag.provider}</span>
             <button data-x style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;">✕</button>
         </div>
-        <div style="margin-bottom:4px;">${diag.cause || ""}</div>
-        <div style="color:var(--c2c-sub);margin-bottom:${diag.apply ? "10px" : "0"};">${diag.fix || ""}</div>
+        <div data-cause style="margin-bottom:4px;"></div>
+        <div data-fix style="color:var(--c2c-sub);margin-bottom:${diag.apply || diag.consent ? "10px" : "0"};"></div>
+        ${diag.consent ? `<div data-consent style="margin-bottom:10px;padding:8px;border:1px solid var(--c2c-surface1);
+                border-radius:6px;">
+            <div data-consent-line style="margin-bottom:6px;"></div>
+            <details><summary style="cursor:pointer;color:var(--c2c-sub);">What will be sent</summary>
+                <pre data-consent-text style="max-height:180px;overflow:auto;white-space:pre-wrap;margin:6px 0 0;
+                     font:11px ui-monospace,monospace;"></pre></details>
+            <button data-ask-cloud style="margin-top:8px;padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
+                background:transparent;color:inherit;cursor:pointer;"></button>
+        </div>` : ""}
         <div style="display:flex;gap:8px;">${applyBtn}
             ${node ? `<button data-goto style="padding:5px 12px;border-radius:6px;border:1px solid var(--c2c-surface1);
                 background:transparent;color:inherit;cursor:pointer;">Show node</button>` : ""}
         </div>
     `;
+    // model text goes in as TEXT, never as HTML (L6.01 S2)
+    card.querySelector("[data-cause]").textContent = diag.cause || "";
+    card.querySelector("[data-fix]").textContent = diag.fix || "";
+    if (diag.consent) {
+        const c = diag.consent;
+        const bits = [`${c.chars ?? (c.text || "").length} characters`];
+        if (c.redacted) bits.push("keys, paths and e-mail addresses removed");
+        if (c.est_cost_usd_max != null) bits.push(`at most $${Number(c.est_cost_usd_max).toFixed(4)}`);
+        card.querySelector("[data-consent-line]").textContent =
+            `No model on this computer answered. ${c.backend}${c.model ? ` (${c.model})` : ""} can - ` +
+            `it is an online service, so this error's details would leave your computer (${bits.join(", ")}).`;
+        card.querySelector("[data-consent-text]").textContent = c.text || "";
+        const ask = card.querySelector("[data-ask-cloud]");
+        ask.textContent = `Ask ${c.backend}`;
+        ask.onclick = async () => {
+            ask.disabled = true;
+            ask.textContent = "Asking…";
+            try {
+                const r = await (await fetch("/c2c/ai/diagnose", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ...body, consent_cloud: true }),
+                })).json();
+                if (r?.ok) showCard(node, { ...r, consent: null }, body);
+            } catch (e) {
+                ask.disabled = false;
+                ask.textContent = `Ask ${c.backend} (failed - try again)`;
+            }
+        };
+    }
     document.body.appendChild(card);
     card.querySelector("[data-x]").onclick = () => card.remove();
     card.querySelector("[data-goto]")?.addEventListener("click", () => {
@@ -112,7 +150,7 @@ async function runDiagnosis(detail) {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
         })).json();
-        if (r?.ok) showCard(node, r);
+        if (r?.ok) showCard(node, r, body);
     } catch (e) {
         console.warn("[C2C diagnose] failed", e);
     }

@@ -297,7 +297,8 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return best
 
 
-def _complete_router(prompt: str, system: Optional[str], feature: str) -> Tuple[Optional[str], str]:
+def _complete_router(prompt: str, system: Optional[str], feature: str,
+                     local_only: bool = False) -> Tuple[Optional[str], str]:
     """Ask the C2C AI router: the models configured in Settings > C2C > AI.
 
     Only real models count. The built-in offline rule pack answers every request but cannot write a JSON
@@ -305,13 +306,13 @@ def _complete_router(prompt: str, system: Optional[str], feature: str) -> Tuple[
     """
     try:
         from ..c2c_ai.router import get_router  # type: ignore
-        from ..c2c_ai.types import Message, Tier  # type: ignore
+        from ..c2c_ai.types import Message, Policy, Tier  # type: ignore
     except Exception:
         try:
             import importlib
             get_router = importlib.import_module("c2c_ai.router").get_router
             types_mod = importlib.import_module("c2c_ai.types")
-            Message, Tier = types_mod.Message, types_mod.Tier
+            Message, Policy, Tier = types_mod.Message, types_mod.Policy, types_mod.Tier
         except Exception:
             return None, "none"
     try:
@@ -321,7 +322,8 @@ def _complete_router(prompt: str, system: Optional[str], feature: str) -> Tuple[
         if not models:
             return None, "none"
         msgs = ([Message(role="system", content=system)] if system else []) + [Message(role="user", content=prompt)]
-        resp = router.ask(feature, msgs, max_tokens=1600, temperature=0.2)
+        extra = {"policy_override": Policy.LOCAL_ONLY} if local_only else {}
+        resp = router.ask(feature, msgs, max_tokens=1600, temperature=0.2, **extra)
     except Exception as exc:  # noqa: BLE001 - fall back to the legacy tiers
         log.warning("[ai] C2C AI router failed for %s: %s", feature, exc)
         return None, "none"
@@ -332,7 +334,7 @@ def _complete_router(prompt: str, system: Optional[str], feature: str) -> Tuple[
 
 
 def _complete(prompt: str, system: Optional[str] = None,
-              feature: str = "workflow_builder") -> Tuple[Optional[str], str]:
+              feature: str = "workflow_builder", allow_cloud: bool = True) -> Tuple[Optional[str], str]:
     """The C2C AI router first, then the legacy Error Assistant tier2 (local) / tier3 (cloud). Returns
     (text, provider).
 
@@ -351,7 +353,9 @@ def _complete(prompt: str, system: Optional[str] = None,
         import importlib
         ea = importlib.import_module("nodes.error_assistant", package=__package__)
         local_llm = importlib.import_module("nodes.local_llm", package=__package__)
-    txt, provider = _complete_router(prompt, system, feature)
+    # L6.01 S2: allow_cloud=False keeps everything on this machine (router LOCAL_ONLY, no legacy cloud tier) -
+    # automatic features ask the user before anything leaves it.
+    txt, provider = _complete_router(prompt, system, feature, local_only=not allow_cloud)
     if txt:
         return local_llm._strip_reasoning(txt), provider
     settings = ea.load_settings()
@@ -363,11 +367,25 @@ def _complete(prompt: str, system: Optional[str] = None,
         txt = ea._explain_local(prompt, settings)
         if txt:
             return local_llm._strip_reasoning(txt), "local"
-    if settings.get("tier3_enabled"):
-        txt = ea._explain_cloud(prompt, settings)
+    red = _redact_for_cloud(prompt) if settings.get("tier3_enabled") and allow_cloud else ""
+    if red:
+        txt = ea._explain_cloud(red, settings)
         if txt:
             return local_llm._strip_reasoning(txt), "cloud"
     return None, "none"
+
+
+def _redact_for_cloud(text: str) -> str:
+    """The spine's redactor (keys, paths, e-mails, IPs...) for the legacy cloud tier, which can bypass the router."""
+    try:
+        try:
+            from ..c2c_ai import redactor  # type: ignore
+        except Exception:
+            import importlib
+            redactor = importlib.import_module("c2c_ai.redactor")
+        return redactor.redact_text(text).text
+    except Exception:  # noqa: BLE001 - the redactor ships with the pack; if it is broken, send nothing
+        return ""
 
 
 # Deterministic fallback so the feature works with zero AI backends.

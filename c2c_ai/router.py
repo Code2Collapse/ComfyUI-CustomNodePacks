@@ -231,6 +231,32 @@ class Router:
             ))
         return resp
 
+    def preview(self, feature: str, messages: list[Message], **kw) -> dict:
+        """L6.01 S2: what `ask` WOULD do, without sending anything or spending: the backend, whether the text leaves
+        this machine, the exact (redacted) messages, and a token / cost estimate. Use it to show the user what will
+        be sent before any API / Cloud call. Never raises: a refusal comes back as {"error": ...}."""
+        req = self._build_req(feature, messages, **kw)
+        try:
+            backend = self.select(req.feature, req.required, req.policy_override)
+            backend, sent, redacted = self._gate(backend, req)
+        except Exception as exc:  # noqa: BLE001 - "no backend", SENSITIVE refusal, cost cap
+            return {"backend_id": None, "leaves_machine": False, "error": str(exc)}
+        info = backend.info
+        chars = sum(len(m.content) for m in sent.messages)
+        est_in = max(1, chars // 4)
+        est_cost = (est_in / 1000.0) * info.cost_per_1k_input + (req.max_tokens / 1000.0) * info.cost_per_1k_output
+        counts: dict = {}
+        if redacted:
+            for m in req.messages:
+                for k, v in redactor.redact_text(m.content).counts.items():
+                    counts[k] = counts.get(k, 0) + v
+        return {"backend_id": info.id, "display_name": info.display_name, "model": info.model,
+                "tier": info.tier.value, "leaves_machine": info.tier == Tier.CLOUD,
+                "messages": [{"role": m.role, "content": m.content} for m in sent.messages],
+                "redacted": redacted, "redaction_counts": counts, "chars": chars,
+                "est_input_tokens": est_in, "est_output_tokens_max": req.max_tokens,
+                "est_cost_usd_max": round(est_cost, 6)}
+
     # ----------------------------------------------------------- internals
     def _build_req(self, feature: str, messages: list[Message], **kw) -> AskRequest:
         return AskRequest(
