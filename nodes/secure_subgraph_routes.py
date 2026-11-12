@@ -82,6 +82,12 @@ def _validate_api(api: dict, interface: dict) -> None:
     for out in api.get("outputs") or []:
         if "node" in out and str(out["node"]) not in api["nodes"]:
             raise VaultError(f"Vault output {out.get('name')!r} reads an unknown node.")
+    # A26 L9.204: the full check (registry classes, link slots and types, outputs <= MAX_OUTPUTS, controls)
+    from . import secure_subgraph as SS
+    try:
+        SS.validate_api(api, n_in, detailed=True)
+    except SS.InvalidVault as exc:
+        raise VaultError(str(exc)) from None
 
 
 def protect(body: dict) -> dict:

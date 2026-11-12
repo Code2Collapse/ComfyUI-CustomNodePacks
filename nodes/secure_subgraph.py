@@ -195,6 +195,120 @@ def _is_link(v) -> bool:
     return isinstance(v, (list, tuple)) and len(v) == 2 and isinstance(v[0], str) and isinstance(v[1], int)
 
 
+class InvalidVault(ValueError):
+    """The private graph of a vault is not complete / consistent (A26 L9.204)."""
+
+
+def _out_types(cls):
+    try:
+        rt = getattr(cls, "RETURN_TYPES", None)
+        return tuple(rt) if rt is not None else None
+    except TypeError:
+        return None
+
+
+def _in_type(cls, name: str):
+    try:
+        spec = cls.INPUT_TYPES()
+    except Exception:  # noqa: BLE001
+        return None
+    for sec in ("required", "optional"):
+        sect = spec.get(sec) if isinstance(spec, dict) else None
+        if isinstance(sect, dict) and name in sect:
+            t = sect[name]
+            t0 = t[0] if isinstance(t, (list, tuple)) and t else t
+            return t0 if isinstance(t0, str) else None
+    return None
+
+
+def _concrete(t) -> bool:
+    """A plain socket type both sides can be compared on. V3 internal types (COMFY_MATCHTYPE_V3, COMFY_AUTOGROW_V3,
+    COMFY_DYNAMICCOMBO_V3, ...) are decided at run time and are never "concrete" here (measured: a MatchType output
+    feeding an IMAGE input is valid)."""
+    return (isinstance(t, str) and bool(t) and t != "*" and "," not in t and t.upper() == t
+            and not t.startswith("COMFY_"))
+
+
+def validate_api(api: dict, n_in: int, *, detailed: bool = True, classes: bool = True) -> None:
+    """A26 L9.204: refuse an incomplete or inconsistent private graph BEFORE anything is sealed or expanded (it used
+    to be expanded as is: a link to a node that is not inside went through as a raw [id, slot] - naming a node of the
+    OUTER prompt - and a bad output failed half-way through the run). `detailed=False` gives messages that name no
+    inner id, class or input (they reach the client at run time); `classes=False` skips the registry checks."""
+    def fail(specific: str, generic: str):
+        raise InvalidVault(specific if detailed else generic)
+
+    nodes_ = api.get("nodes") if isinstance(api, dict) else None
+    if not isinstance(nodes_, dict) or not nodes_:
+        fail("Nothing to protect: the selection has no nodes that run.", "its inside is empty")
+    registry = {}
+    if classes:
+        try:
+            import nodes as _n
+            registry = _n.NODE_CLASS_MAPPINGS
+        except Exception:  # noqa: BLE001
+            registry = {}
+    for nid, node in nodes_.items():
+        if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not node["class_type"]:
+            fail(f"Malformed inner node {nid!r}.", "an inner node is malformed")
+        cls = registry.get(node["class_type"]) if classes else None
+        if classes and cls is None:
+            fail(f"Inner node {nid!r} is a {node['class_type']!r}, which this ComfyUI does not have.",
+                 "an inner node type is not installed")
+        for name, v in (node.get("inputs") or {}).items():
+            if isinstance(v, dict) and "vault_in" in v:
+                vi = v["vault_in"]
+                if not (isinstance(vi, int) and 0 <= vi < n_in):
+                    fail(f"Inner input {name!r} reads vault input {vi}, which does not exist.",
+                         "an inner input reads a vault input that does not exist")
+            elif isinstance(v, (list, tuple)) and len(v) == 2 and isinstance(v[0], str):
+                src_id, slot = v
+                if src_id not in nodes_:
+                    fail(f"Inner link to unknown node {src_id!r}.", "an inner link points at a node that is not inside")
+                if not (isinstance(slot, int) and slot >= 0):
+                    fail(f"Inner link into {name!r} names output {slot!r}.", "an inner link names an invalid output")
+                src_cls = registry.get(nodes_[src_id].get("class_type")) if classes else None
+                outs = _out_types(src_cls) if src_cls is not None else None
+                if outs is not None and slot >= len(outs):
+                    fail(f"Inner link into {name!r} reads output {slot} of node {src_id!r}, which has {len(outs)}.",
+                         "an inner link reads an output that does not exist")
+                if outs is not None and cls is not None:
+                    want = _in_type(cls, name)
+                    have = outs[slot]
+                    if _concrete(want) and _concrete(have) and want != have:
+                        fail(f"Inner input {name!r} of node {nid!r} takes {want} but is wired to a {have} output.",
+                             "an inner link connects incompatible types")
+    outputs = api.get("outputs") or []
+    if not isinstance(outputs, list):
+        fail("The vault outputs are malformed.", "its outputs are malformed")
+    if len(outputs) > MAX_OUTPUTS:
+        fail(f"A vault can have at most {MAX_OUTPUTS} outputs (this has {len(outputs)}).", "it has too many outputs")
+    for j, out in enumerate(outputs):
+        if not isinstance(out, dict):
+            fail(f"Vault output {j} is malformed.", "an output is malformed")
+        if "input" in out:
+            if not (isinstance(out["input"], int) and 0 <= out["input"] < n_in):
+                fail(f"Vault output {j} passes on input {out['input']!r}, which does not exist.",
+                     "an output passes on an input that does not exist")
+            continue
+        src = str(out.get("node"))
+        if src not in nodes_:
+            fail(f"Vault output {out.get('name')!r} reads an unknown node.", "an output reads a node that is not inside")
+        slot = out.get("slot")
+        src_cls = registry.get(nodes_[src].get("class_type")) if classes else None
+        outs = _out_types(src_cls) if src_cls is not None else None
+        if not (isinstance(slot, int) and slot >= 0) or (outs is not None and slot >= len(outs)):
+            fail(f"Vault output {out.get('name')!r} reads output {slot!r} of node {src!r}, which does not exist.",
+                 "an output reads an inner output that does not exist")
+    keys = set()
+    for p in api.get("promoted") or []:
+        if not isinstance(p, dict) or str(p.get("node")) not in nodes_:
+            fail("A promoted control targets a node that is not inside.", "a control targets a node that is not inside")
+        k = (str(p.get("key")), str(p.get("node")), str(p.get("input")))
+        if k in keys:
+            fail(f"The control {p.get('key')!r} is listed twice for the same input.", "a control is listed twice")
+        keys.add(k)
+
+
 def build_expansion(api: dict, my_inputs: dict, params: dict, prefix: str, display_id: str) -> tuple[dict, list]:
     """-> (graph for core's expansion, result list). `my_inputs` = the vault's own prompt inputs (upstream links or
     literal values per `in_<i>`), `params` = evaluated promoted-control values per key."""
@@ -267,6 +381,11 @@ class C2C_SecureSubgraph:
         missing = missing_classes(api)
         if missing:
             raise RuntimeError(missing_message(_note_missing(vault_id, missing, plain.get("packs") or [])))
+        try:                                                   # A26 L9.204: never expand a broken inside
+            validate_api(api, len(api.get("inputs") or []), detailed=False)
+        except InvalidVault as exc:
+            raise RuntimeError(f"This C2C Vault cannot run: {exc}. Open it and save it again, or ask its author "
+                               "for a fresh copy.") from None
         me = dynprompt.get_node(unique_id) if dynprompt is not None else {}
         my_inputs = dict((me or {}).get("inputs") or {})
         params = {k[len(PARAM_PREFIX):]: v for k, v in kw.items() if k.startswith(PARAM_PREFIX)}
