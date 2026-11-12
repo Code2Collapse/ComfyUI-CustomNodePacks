@@ -185,6 +185,11 @@ function resolveRef(id, name) {
 }
 
 // ── Widget hook ───────────────────────────────────────────────────────
+// L4.14: the widgets that hold an expression right now (widget -> node). reevalAll used to walk every node of the
+// graph and its subgraphs every 250 ms even when no widget had an expression (measured: most of C2C's idle cost on
+// a 191-node graph, plus the garbage it made); now it visits only these, and nothing when there are none.
+const ACTIVE = new Map();
+
 function hookWidget(node, w) {
     if (!w || w._c2c_expr_hooked) return;
     if (w.type !== "number" && w.type !== "INT" && w.type !== "FLOAT" && w.type !== "slider") return;
@@ -195,6 +200,7 @@ function hookWidget(node, w) {
             try {
                 const out = evaluate(v, resolveRef);
                 w._expr = v;
+                ACTIVE.set(w, node);
                 w.value = out;
                 // refresh DOM widget element if any (modern widget API)
                 if (w.element && "value" in w.element) w.element.value = out;
@@ -207,6 +213,7 @@ function hookWidget(node, w) {
         } else {
             // user overwrote literal — drop the expr binding.
             w._expr = undefined;
+            ACTIVE.delete(w);
         }
         if (typeof origCb === "function") return origCb.call(this, v, ...rest);
     };
@@ -219,21 +226,23 @@ function rebindAll() {
 }
 
 function reevalAll() {
-    const all = [];
-    forAllNodes((n) => { all.push(n); });      // subgraphs included (L2.47)
-    for (const node of all) {
-        for (const w of node.widgets || []) {
-            if (!w._expr) continue;
-            try {
-                const v = evaluate(w._expr, resolveRef);
-                if (v !== w.value) {
-                    w.value = v;
-                    if (w.element && "value" in w.element) w.element.value = v;
-                }
-            } catch { /* ignore until source becomes valid */ }
+    if (ACTIVE.size === 0) return;
+    for (const [w, node] of ACTIVE) {          // subgraph nodes too: refs resolve through findNodeAnywhere (L2.47)
+        if (!w._expr || !node.graph || !(node.widgets || []).includes(w)) {   // cleared, or node / widget removed
+            ACTIVE.delete(w);
+            continue;
         }
+        try {
+            const v = evaluate(w._expr, resolveRef);
+            if (v !== w.value) {
+                w.value = v;
+                if (w.element && "value" in w.element) w.element.value = v;
+            }
+        } catch { /* ignore until source becomes valid */ }
     }
 }
+
+export const _c2cExprTest = { ACTIVE, reevalAll, hookWidget };   // L4.14 unit test hook
 
 app.registerExtension({
     name: "C2C.ExpressionFields",
@@ -264,7 +273,7 @@ app.registerExtension({
         }, "expr:reeval");
         rt.onGraphChange(reeval);
         rt.every("expr.reeval", 250, () => {
-            if (!document.hidden) reeval();
+            if (ACTIVE.size && !document.hidden) reeval();
         }, { ambient: false });
         console.log("[C2C.ExpressionFields] ready (type =expr in any numeric widget).");
     },

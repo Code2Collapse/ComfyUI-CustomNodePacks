@@ -551,8 +551,16 @@ const _arm = () => {
             app.api.addEventListener("graphChanged", _schedule);
         }
     } catch (_) {}
-    // Safety-net poll: cheap (object_info cached; scan is O(nodes)).
-    getRuntime().every("wizard.scan", 5000, () => _schedule(), { ambient: true });
+    // Safety-net poll (graphChanged does not fire on load, fe 1.53): L4.14 - a scan is O(nodes), so the poll only
+    // rescans when an O(1) graph signature moved (LiteGraph's change counter + last node / link ids).
+    let _lastSig = "";
+    getRuntime().every("wizard.scan", 5000, () => {
+        const g = app?.graph;
+        const sig = g ? `${g._version ?? ""}|${g.last_node_id ?? ""}|${g.last_link_id ?? ""}|${g._nodes?.length ?? 0}` : "";
+        if (sig === _lastSig) return;
+        _lastSig = sig;
+        _schedule();
+    }, { ambient: true });
     // Layout: a few bounding rectangles, never a graph walk, and only while the button is up. Not "ambient": the
     // runtime pauses ambient timers in Lite mode and during runs, and the button must leave the console then too.
     getRuntime().every("issues.layout", 600, () => {
