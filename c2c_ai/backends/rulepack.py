@@ -42,7 +42,7 @@ from ..types import (
     HealthState,
     Tier,
 )
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 
 
 # Importing the rule-pack lazily inside methods so importing this module never
@@ -107,6 +107,7 @@ class RulePackBackend(Backend):
         resp = self.ask(req)
         if resp.text:
             for line in resp.text.splitlines(keepends=True):
+                check_cancel(req)
                 yield line
         return resp
 

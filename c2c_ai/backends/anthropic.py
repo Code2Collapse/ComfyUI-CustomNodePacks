@@ -19,7 +19,7 @@ from typing import Generator
 
 import httpx
 
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 from ..keychain import get as kc_get, KEY_ANTHROPIC
 from ..types import (
     AskRequest,
@@ -83,7 +83,8 @@ class AnthropicBackend(Backend):
         }
 
         t0 = now_ms()
-        with httpx.Client(timeout=60.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 60.0)) as client:
             r = client.post(ENDPOINT, headers=headers, json=body)
         latency = now_ms() - t0
 
@@ -137,11 +138,13 @@ class AnthropicBackend(Backend):
         text_buf: list[str] = []
         in_tok = 0
         out_tok = 0
-        with httpx.Client(timeout=120.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 120.0)) as client:
             with client.stream("POST", ENDPOINT, headers=headers, json=body) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"Anthropic stream {r.status_code}: {r.read()[:400]!r}")
                 for line in r.iter_lines():
+                    check_cancel(req)
                     if not line or not line.startswith("data: "):
                         continue
                     payload = line[6:].strip()

@@ -45,7 +45,7 @@ from ..types import (
     HealthState,
     Tier,
 )
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 
 log = logging.getLogger("c2c_ai.borrowed")
 
@@ -210,6 +210,7 @@ class BorrowedEncoderBackend(Backend):
 
     # -------------------------------------------------------------- ask
     def ask(self, req: AskRequest) -> AskResponse:
+        check_cancel(req)
         t0 = now_ms()
         empty = AskResponse(
             text="", backend_id=self.info.id, model=self.info.model,

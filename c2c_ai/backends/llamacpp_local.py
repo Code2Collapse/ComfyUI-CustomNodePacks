@@ -32,7 +32,7 @@ import logging
 import time
 from typing import Generator
 
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 from ..types import (
     AskRequest,
     AskResponse,
@@ -155,6 +155,7 @@ class LlamaCppBackend(Backend):
     # ---- API -------------------------------------------------------------
 
     def ask(self, req: AskRequest) -> AskResponse:
+        check_cancel(req)
         llm = self._ensure_loaded()
         t0 = now_ms()
         result = llm.create_chat_completion(
@@ -182,6 +183,7 @@ class LlamaCppBackend(Backend):
         )
 
     def stream(self, req: AskRequest) -> Generator[str, None, AskResponse]:
+        check_cancel(req)
         llm = self._ensure_loaded()
         t0 = now_ms()
         text_buf: list[str] = []
@@ -194,6 +196,7 @@ class LlamaCppBackend(Backend):
             stream=True,
         )
         for chunk in it:
+            check_cancel(req)
             try:
                 delta = chunk["choices"][0].get("delta") or {}
                 piece = delta.get("content") or ""

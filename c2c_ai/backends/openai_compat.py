@@ -15,7 +15,7 @@ from typing import Generator, Iterable
 
 import httpx
 
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 from ..keychain import get as kc_get
 from ..types import (
     AskRequest,
@@ -303,7 +303,8 @@ class OpenAICompatBackend(Backend):
         r: "httpx.Response | None" = None
         for attempt in range(self._MAX_RETRIES + 1):
             try:
-                with httpx.Client(timeout=120.0) as client:
+                check_cancel(req)
+                with httpx.Client(timeout=req_timeout(req, 120.0)) as client:
                     r = client.post(url, headers=self._headers(), json=body)
             except httpx.RequestError as exc:
                 last_exc = exc
@@ -377,11 +378,13 @@ class OpenAICompatBackend(Backend):
         text_buf: list[str] = []
         in_tok = 0
         out_tok = 0
-        with httpx.Client(timeout=180.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 180.0)) as client:
             with client.stream("POST", url, headers=self._headers(), json=body) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"{self.info.id} stream {r.status_code}: {r.read()[:400]!r}")
                 for line in r.iter_lines():
+                    check_cancel(req)
                     if not line or not line.startswith("data: "):
                         continue
                     payload = line[6:].strip()

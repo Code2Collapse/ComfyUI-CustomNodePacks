@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 log = logging.getLogger("c2c_ai.api")
@@ -60,7 +61,7 @@ def register_routes(server) -> None:
     from . import policy as policy_mod
     from .cost_meter import get_meter
     from .router import get_router
-    from .types import Message, Policy, Sensitivity, Capability, TextOnlyError, messages_from_json  # noqa: F401
+    from .types import Message, Policy, Sensitivity, Capability, TextOnlyError, messages_from_json, Cancelled  # noqa: F401
     from .backends.openai_compat import detect_local_servers
 
     routes = server.routes
@@ -173,6 +174,10 @@ def register_routes(server) -> None:
             kwargs["policy_override"] = Policy(body["policy_override"])
         if "max_tokens" in body:
             kwargs["max_tokens"] = int(body["max_tokens"])
+        if body.get("timeout_s"):            # L6.01 S1: per-request deadline (seconds)
+            kwargs["timeout_s"] = max(1.0, min(600.0, float(body["timeout_s"])))
+        cancel = threading.Event()           # set when the browser goes away
+        kwargs["cancel"] = cancel
         if "temperature" in body:
             kwargs["temperature"] = float(body["temperature"])
 
@@ -180,6 +185,11 @@ def register_routes(server) -> None:
         try:
             resp = await loop.run_in_executor(
                 None, lambda: get_router().ask(feature, msgs, **kwargs))
+        except asyncio.CancelledError:
+            cancel.set()                     # the client disconnected: stop before / between chunks
+            raise
+        except Cancelled as exc:
+            return _err("CANCELLED", str(exc), code=499)
         except Exception as exc:
             return _err("DISPATCH_FAILED", str(exc), code=500)
         return _ok({
@@ -213,6 +223,10 @@ def register_routes(server) -> None:
             kwargs["policy_override"] = Policy(body["policy_override"])
         if "max_tokens" in body:
             kwargs["max_tokens"] = int(body["max_tokens"])
+        if body.get("timeout_s"):            # L6.01 S1: per-request deadline (seconds)
+            kwargs["timeout_s"] = max(1.0, min(600.0, float(body["timeout_s"])))
+        cancel = threading.Event()           # set when the browser goes away
+        kwargs["cancel"] = cancel
 
         resp = web.StreamResponse(status=200, reason="OK",
                                   headers={"Content-Type": "text/event-stream",
@@ -234,17 +248,21 @@ def register_routes(server) -> None:
                 loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
 
         loop.run_in_executor(None, worker)
-        while True:
-            item = await queue.get()
-            if item is SENTINEL:
-                break
-            if isinstance(item, dict) and "__error__" in item:
-                await resp.write(("event: error\ndata: " +
-                                  json.dumps(item) + "\n\n").encode("utf-8"))
-                break
-            await resp.write(("data: " + json.dumps({"chunk": item}) + "\n\n").encode("utf-8"))
-        await resp.write(b"event: done\ndata: {}\n\n")
-        await resp.write_eof()
+        try:
+            while True:
+                item = await queue.get()
+                if item is SENTINEL:
+                    break
+                if isinstance(item, dict) and "__error__" in item:
+                    await resp.write(("event: error\ndata: " +
+                                      json.dumps(item) + "\n\n").encode("utf-8"))
+                    break
+                await resp.write(("data: " + json.dumps({"chunk": item}) + "\n\n").encode("utf-8"))
+            await resp.write(b"event: done\ndata: {}\n\n")
+            await resp.write_eof()
+        except (asyncio.CancelledError, ConnectionResetError):
+            cancel.set()                     # L6.01 S1: the browser left - stop the backend stream too
+            raise
         return resp
 
     # ----------------------------------------------------- B2: doctor explain

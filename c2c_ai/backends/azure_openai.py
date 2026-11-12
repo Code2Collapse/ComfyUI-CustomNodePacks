@@ -33,7 +33,7 @@ from typing import Generator
 
 import httpx
 
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 from ..keychain import get as kc_get, KEY_AZURE_OPENAI
 from ..types import (
     AskRequest,
@@ -111,7 +111,8 @@ class AzureOpenAIBackend(Backend):
             raise RuntimeError("AZURE_OPENAI_API_KEY not in keychain — "
                                "open Settings → C2C → AI Backends")
         t0 = now_ms()
-        with httpx.Client(timeout=60.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 60.0)) as client:
             r = client.post(self._url(), headers=self._headers(key),
                             json=self._body(req))
         latency = now_ms() - t0
@@ -147,7 +148,8 @@ class AzureOpenAIBackend(Backend):
         text_buf: list[str] = []
         in_tok = 0
         out_tok = 0
-        with httpx.Client(timeout=120.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 120.0)) as client:
             with client.stream("POST", self._url(),
                                headers=self._headers(key),
                                json=self._body(req, stream=True)) as r:
@@ -155,6 +157,7 @@ class AzureOpenAIBackend(Backend):
                     raise RuntimeError(f"Azure stream {r.status_code}: "
                                        f"{r.read()[:400]!r}")
                 for line in r.iter_lines():
+                    check_cancel(req)
                     if not line or not line.startswith("data: "):
                         continue
                     payload = line[6:].strip()

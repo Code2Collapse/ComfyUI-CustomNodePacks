@@ -20,7 +20,7 @@ from typing import Generator
 
 import httpx
 
-from .base import Backend, now_ms
+from .base import Backend, check_cancel, now_ms, req_timeout
 from ..keychain import get as kc_get, KEY_GEMINI
 from ..types import (
     AskRequest,
@@ -91,7 +91,8 @@ class GeminiBackend(Backend):
                                "open Settings → C2C → AI Backends")
         url = f"{BASE}/{self.info.model}:generateContent?key={key}"
         t0 = now_ms()
-        with httpx.Client(timeout=60.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 60.0)) as client:
             r = client.post(url, json=self._build_body(req))
         latency = now_ms() - t0
         if r.status_code != 200:
@@ -131,13 +132,15 @@ class GeminiBackend(Backend):
         text_buf: list[str] = []
         in_tok = 0
         out_tok = 0
-        with httpx.Client(timeout=120.0) as client:
+        check_cancel(req)
+        with httpx.Client(timeout=req_timeout(req, 120.0)) as client:
             with client.stream("POST", url, json=self._build_body(req),
                                headers={"accept": "text/event-stream"}) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"Gemini stream {r.status_code}: "
                                        f"{r.read()[:400]!r}")
                 for line in r.iter_lines():
+                    check_cancel(req)
                     if not line or not line.startswith("data: "):
                         continue
                     payload = line[6:].strip()

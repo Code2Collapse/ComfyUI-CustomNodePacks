@@ -119,6 +119,14 @@ class AskRequest:
     temperature: float = 0.4
     policy_override: Policy | None = None
     json_schema: dict[str, Any] | None = None          # backends that support JSON mode honor this
+    # L6.01 S1: one deadline per request (None = the backend's own default) and a cancel flag. A set() event stops a
+    # stream at the next chunk and is checked before a request is sent; the caller then gets `Cancelled`.
+    timeout_s: float | None = None
+    cancel: Any = None                                 # threading.Event (or anything with is_set())
+
+
+class Cancelled(RuntimeError):
+    """The caller cancelled the request (AskRequest.cancel was set). The router never falls back after this."""
 
 
 @dataclass

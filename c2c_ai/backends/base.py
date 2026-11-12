@@ -75,3 +75,17 @@ class Backend(abc.ABC):
 
 def now_ms() -> float:
     return time.monotonic() * 1000.0
+
+
+def req_timeout(req: AskRequest, default: float) -> float:
+    """The request's own deadline (L6.01 S1) or the backend's default."""
+    t = getattr(req, "timeout_s", None)
+    return float(t) if t and t > 0 else float(default)
+
+
+def check_cancel(req: AskRequest) -> None:
+    """Raise Cancelled when the caller has set AskRequest.cancel (call before sending and once per stream chunk)."""
+    ev = getattr(req, "cancel", None)
+    if ev is not None and ev.is_set():
+        from ..types import Cancelled
+        raise Cancelled(f"request for '{req.feature}' was cancelled")

@@ -33,6 +33,7 @@ from .types import (
     AskRequest,
     AskResponse,
     BackendInfo,
+    Cancelled,
     Capability,
     Message,
     Policy,
@@ -197,7 +198,7 @@ class Router:
     def ask(self, feature: str, messages: list[Message], **kw) -> AskResponse:
         req = self._build_req(feature, messages, **kw)
         backend, redacted_req, redacted_flag = self._prepare(req)
-        return self._dispatch(backend, redacted_req, redacted_flag, feature)
+        return self._dispatch(backend, redacted_req, redacted_flag, feature, original=req)
 
     def stream(self, feature: str, messages: list[Message], **kw) -> Generator[str, None, AskResponse]:
         req = self._build_req(feature, messages, **kw)
@@ -241,10 +242,18 @@ class Router:
             temperature=kw.get("temperature", 0.4),
             policy_override=kw.get("policy_override"),
             json_schema=kw.get("json_schema"),
+            timeout_s=kw.get("timeout_s"),
+            cancel=kw.get("cancel"),
         )
 
     def _prepare(self, req: AskRequest) -> tuple[Backend, AskRequest, bool]:
         backend = self.select(req.feature, req.required, req.policy_override)
+        return self._gate(backend, req)
+
+    def _gate(self, backend: Backend, req: AskRequest) -> tuple[Backend, AskRequest, bool]:
+        """Redaction + SENSITIVE refusal + cost cap for the backend that will actually receive `req` (the ORIGINAL,
+        un-redacted request). L6.01: a fallback goes through here too - before, a local backend failing over to a
+        cloud one sent the un-redacted prompt with no cost check."""
         redacted_flag = False
         redacted_msgs = req.messages
 
@@ -283,25 +292,32 @@ class Router:
             temperature=req.temperature,
             policy_override=req.policy_override,
             json_schema=req.json_schema,
+            timeout_s=req.timeout_s,
+            cancel=req.cancel,
         )
         return backend, new_req, redacted_flag
 
     def _dispatch(self, backend: Backend, req: AskRequest,
-                  redacted_flag: bool, feature: str) -> AskResponse:
+                  redacted_flag: bool, feature: str, original: AskRequest | None = None) -> AskResponse:
         try:
             resp = backend.ask(req)
+        except Cancelled:
+            raise                       # the caller stopped it: never retry it elsewhere
         except Exception as exc:
             log.warning("backend %s failed: %s — trying next", backend.info.id, exc)
-            # one-shot fallback to any other healthy backend matching the policy
+            # one-shot fallback to any other healthy backend matching the policy, through the same gate
+            # (redaction, SENSITIVE refusal, cost cap) as a first choice
             try:
                 pol = policy_mod.resolve(feature, req.policy_override)
                 alts = [b for b in self._filter(req.required, pol)
                         if b is not backend and b.health.ok]
                 if alts:
-                    backend = alts[0]
+                    backend, req, redacted_flag = self._gate(alts[0], original or req)
                     resp = backend.ask(req)
                 else:
                     raise
+            except Cancelled:
+                raise
             except Exception:
                 raise exc
 
