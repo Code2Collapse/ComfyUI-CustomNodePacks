@@ -1,0 +1,379 @@
+{
+ "schema": 1,
+ "about": "Curated GGUF models for the C2C Diagnostics Tier 2 (llama.cpp) assistant. Every repo / file / size / sha256 was read from the Hugging Face API (tools/c2c_llm_catalog_verify.py); re-run it after edits.",
+ "verified": "2026-11-12",
+ "default": "qwen3-4b-instruct-q4_k_m",
+ "models": [
+  {
+   "id": "qwen3-0.6b-instruct-q8_0",
+   "repo": "Qwen/Qwen3-0.6B-GGUF",
+   "file": "Qwen3-0.6B-Q8_0.gguf",
+   "size": 639446688,
+   "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 0.6B — fastest (Q8_0)"
+  },
+  {
+   "id": "qwen3-1.7b-instruct-q8_0",
+   "repo": "Qwen/Qwen3-1.7B-GGUF",
+   "file": "Qwen3-1.7B-Q8_0.gguf",
+   "size": 1834426016,
+   "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 1.7B — balanced (Q8_0)"
+  },
+  {
+   "id": "qwen3-4b-instruct-q4_k_m",
+   "repo": "Qwen/Qwen3-4B-GGUF",
+   "file": "Qwen3-4B-Q4_K_M.gguf",
+   "size": 2497280256,
+   "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 4B — recommended default"
+  },
+  {
+   "id": "qwen3-8b-instruct-q4_k_m",
+   "repo": "Qwen/Qwen3-8B-GGUF",
+   "file": "Qwen3-8B-Q4_K_M.gguf",
+   "size": 5027783488,
+   "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 8B"
+  },
+  {
+   "id": "qwen3-14b-instruct-q4_k_m",
+   "repo": "Qwen/Qwen3-14B-GGUF",
+   "file": "Qwen3-14B-Q4_K_M.gguf",
+   "size": 9001752960,
+   "sha256": "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 14B"
+  },
+  {
+   "id": "qwen2.5-0.5b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-0.5B-Instruct-GGUF",
+   "file": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+   "size": 397808192,
+   "sha256": "6eb923e7d26e9cea28811e1a8e852009b21242fb157b26149d3b188f3a8c8653",
+   "group": "Qwen 2.5 / Coder",
+   "use": "chat",
+   "note": "Qwen2.5 0.5B — micro"
+  },
+  {
+   "id": "qwen2.5-1.5b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
+   "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+   "size": 986048768,
+   "sha256": "1adf0b11065d8ad2e8123ea110d1ec956dab4ab038eab665614adba04b6c3370",
+   "group": "Qwen 2.5 / Coder",
+   "use": "chat",
+   "note": "Qwen2.5 1.5B"
+  },
+  {
+   "id": "qwen2.5-3b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+   "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+   "size": 1929903264,
+   "sha256": "9c9f56a391a3abbd5b89d0245bf6106081bcc3173119d4229235dd9d23253f94",
+   "group": "Qwen 2.5 / Coder",
+   "use": "chat",
+   "note": "Qwen2.5 3B"
+  },
+  {
+   "id": "qwen2.5-7b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+   "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+   "size": 4683074240,
+   "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+   "group": "Qwen 2.5 / Coder",
+   "use": "chat",
+   "note": "Qwen2.5 7B"
+  },
+  {
+   "id": "qwen2.5-coder-1.5b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF",
+   "file": "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf",
+   "size": 986048800,
+   "sha256": "f530705d447660a4336c329981af164b471b60b974b1d808d57e8ec9fe23b239",
+   "group": "Qwen 2.5 / Coder",
+   "use": "code",
+   "note": "Qwen2.5-Coder 1.5B — code errors"
+  },
+  {
+   "id": "qwen2.5-coder-7b-instruct-q4_k_m",
+   "repo": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+   "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+   "size": 4683074336,
+   "sha256": "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6",
+   "group": "Qwen 2.5 / Coder",
+   "use": "code",
+   "note": "Qwen2.5-Coder 7B — code errors"
+  },
+  {
+   "id": "gemma-3-1b-it-q4_k_m",
+   "repo": "lmstudio-community/gemma-3-1b-it-GGUF",
+   "file": "gemma-3-1b-it-Q4_K_M.gguf",
+   "size": 806058240,
+   "sha256": "8d78d9d059a7605c401c105e169e0b08e9f0edc603ceb842f1c4bbb834296d17",
+   "group": "Google Gemma 3",
+   "use": "chat",
+   "note": "Gemma 3 1B — fast"
+  },
+  {
+   "id": "gemma-3-4b-it-q4_k_m",
+   "repo": "lmstudio-community/gemma-3-4b-it-GGUF",
+   "file": "gemma-3-4b-it-Q4_K_M.gguf",
+   "size": 2489757856,
+   "sha256": "be49949e48422e4547b00af14179a193d3777eea7fbbd7d6e1b0861304628a01",
+   "group": "Google Gemma 3",
+   "use": "chat",
+   "note": "Gemma 3 4B"
+  },
+  {
+   "id": "gemma-3-12b-it-q4_k_m",
+   "repo": "lmstudio-community/gemma-3-12b-it-GGUF",
+   "file": "gemma-3-12b-it-Q4_K_M.gguf",
+   "size": 7300574976,
+   "sha256": "9610e3e07375303f6cd89086b496bcc1ab581177f52042eff536475a29283ba2",
+   "group": "Google Gemma 3",
+   "use": "chat",
+   "note": "Gemma 3 12B"
+  },
+  {
+   "id": "phi-3.5-mini-instruct-q4_k_m",
+   "repo": "bartowski/Phi-3.5-mini-instruct-GGUF",
+   "file": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+   "size": 2393232672,
+   "sha256": "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
+   "group": "Microsoft Phi",
+   "use": "chat",
+   "note": "Phi-3.5-Mini 3.8B"
+  },
+  {
+   "id": "llama-3.2-1b-instruct-q4_k_m",
+   "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+   "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+   "size": 807694464,
+   "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+   "group": "Meta Llama 3.2",
+   "use": "chat",
+   "note": "Llama 3.2 1B"
+  },
+  {
+   "id": "llama-3.2-3b-instruct-q4_k_m",
+   "repo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+   "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+   "size": 2019377696,
+   "sha256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+   "group": "Meta Llama 3.2",
+   "use": "chat",
+   "note": "Llama 3.2 3B"
+  },
+  {
+   "id": "granite-3.3-2b-instruct-q4_k_m",
+   "repo": "ibm-granite/granite-3.3-2b-instruct-GGUF",
+   "file": "granite-3.3-2b-instruct-Q4_K_M.gguf",
+   "size": 1545303328,
+   "sha256": "ac71e9e32c0bea919b409c5918f69ca74339854b0319c5065e4e9fb6d95c4852",
+   "group": "IBM Granite 3.x",
+   "use": "chat",
+   "note": "Granite 3.3 2B — RAG/tools"
+  },
+  {
+   "id": "granite-3.3-8b-instruct-q4_k_m",
+   "repo": "ibm-granite/granite-3.3-8b-instruct-GGUF",
+   "file": "granite-3.3-8b-instruct-Q4_K_M.gguf",
+   "size": 4942873344,
+   "sha256": "77bcee066a76dcdd10d0d123c87e32c8ec2c74e31b6ffd87ebee49c9ac215dca",
+   "group": "IBM Granite 3.x",
+   "use": "chat",
+   "note": "Granite 3.3 8B — RAG/tools"
+  },
+  {
+   "id": "deepseek-r1-distill-qwen-1.5b-q4_k_m",
+   "repo": "bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF",
+   "file": "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+   "size": 1117320800,
+   "sha256": "1741e5b2d062b07acf048bf0d2c514dadf2a48f94e2b4aa0cfe069af3838ee2f",
+   "group": "DeepSeek-R1 (reasoning)",
+   "use": "reasoning",
+   "note": "DeepSeek-R1 1.5B — CoT"
+  },
+  {
+   "id": "deepseek-r1-distill-qwen-7b-q4_k_m",
+   "repo": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+   "file": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+   "size": 4683073504,
+   "sha256": "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+   "group": "DeepSeek-R1 (reasoning)",
+   "use": "reasoning",
+   "note": "DeepSeek-R1 7B"
+  },
+  {
+   "id": "deepseek-r1-distill-llama-8b-q4_k_m",
+   "repo": "bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF",
+   "file": "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
+   "size": 4920736608,
+   "sha256": "87bcba20b4846d8dadf753d3ff48f9285d131fc95e3e0e7e934d4f20bc896f5d",
+   "group": "DeepSeek-R1 (reasoning)",
+   "use": "reasoning",
+   "note": "DeepSeek-R1 Llama 8B"
+  },
+  {
+   "id": "deepseek-r1-distill-qwen-14b-q4_k_m",
+   "repo": "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
+   "file": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
+   "size": 8988110240,
+   "sha256": "0b319bd0572f2730bfe11cc751defe82045fad5085b4e60591ac2cd2d9633181",
+   "group": "DeepSeek-R1 (reasoning)",
+   "use": "reasoning",
+   "note": "DeepSeek-R1 14B"
+  },
+  {
+   "id": "smollm2-360m-instruct-q8_0",
+   "repo": "HuggingFaceTB/SmolLM2-360M-Instruct-GGUF",
+   "file": "smollm2-360m-instruct-q8_0.gguf",
+   "size": 386404992,
+   "sha256": "48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201",
+   "group": "HuggingFace SmolLM2",
+   "use": "chat",
+   "note": "SmolLM2 360M — tiny (Q8_0)"
+  },
+  {
+   "id": "smollm2-1.7b-instruct-q4_k_m",
+   "repo": "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF",
+   "file": "smollm2-1.7b-instruct-q4_k_m.gguf",
+   "size": 1055609536,
+   "sha256": "decd2598bc2c8ed08c19adc3c8fdd461ee19ed5708679d1c54ef54a5a30d4f33",
+   "group": "HuggingFace SmolLM2",
+   "use": "chat",
+   "note": "SmolLM2 1.7B"
+  },
+  {
+   "id": "mistral-nemo-instruct-2407-q4_k_m",
+   "repo": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+   "file": "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
+   "size": 7477208192,
+   "sha256": "7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46",
+   "group": "Mistral",
+   "use": "chat",
+   "note": "Mistral Nemo 12B — 128k ctx"
+  },
+  {
+   "id": "hermes-3-llama-3.2-3b-q4_k_m",
+   "repo": "bartowski/Hermes-3-Llama-3.2-3B-GGUF",
+   "file": "Hermes-3-Llama-3.2-3B-Q4_K_M.gguf",
+   "size": 2019374176,
+   "sha256": "2e220a14ba4328fee38cf36c2c068261560f999fadb5725ce5c6d977cb5126b5",
+   "group": "Hermes-3",
+   "use": "chat",
+   "note": "Hermes-3 3B — tool use"
+  },
+  {
+   "id": "hermes-3-llama-3.1-8b-q4_k_m",
+   "repo": "bartowski/Hermes-3-Llama-3.1-8B-GGUF",
+   "file": "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf",
+   "size": 4920734624,
+   "sha256": "44b5c529dffaf34657a4c44a7919e5958b4270fbd365eed3b87d3444b45a378a",
+   "group": "Hermes-3",
+   "use": "chat",
+   "note": "Hermes-3 8B — agentic"
+  },
+  {
+   "id": "yi-1.5-6b-chat-q4_k_m",
+   "repo": "bartowski/Yi-1.5-6B-Chat-GGUF",
+   "file": "Yi-1.5-6B-Chat-Q4_K_M.gguf",
+   "size": 3673968736,
+   "sha256": "9187794e1be34335df42a2f82e80c9b4ca7131c0f634aa976e7d70c834afd69f",
+   "group": "Yi / InternLM",
+   "use": "chat",
+   "note": "Yi-1.5 6B — bilingual"
+  },
+  {
+   "id": "yi-1.5-9b-chat-q4_k_m",
+   "repo": "bartowski/Yi-1.5-9B-Chat-GGUF",
+   "file": "Yi-1.5-9B-Chat-Q4_K_M.gguf",
+   "size": 5328957952,
+   "sha256": "9bfda34f9343785f9cfb040dd63a215d0ca8781cb38d5b8825c12e6e1d8230f9",
+   "group": "Yi / InternLM",
+   "use": "chat",
+   "note": "Yi-1.5 9B"
+  },
+  {
+   "id": "internlm2.5-1.8b-chat-q4_k_m",
+   "repo": "bartowski/internlm2_5-1_8b-chat-GGUF",
+   "file": "internlm2_5-1_8b-chat-Q4_K_M.gguf",
+   "size": 1172364448,
+   "sha256": "15f14579dc843a04afd3d0b50a2663f03bfd674ffc43b2688e8c4f03c5aafef8",
+   "group": "Yi / InternLM",
+   "use": "chat",
+   "note": "InternLM2.5 1.8B"
+  },
+  {
+   "id": "internlm2.5-7b-chat-q4_k_m",
+   "repo": "bartowski/internlm2_5-7b-chat-GGUF",
+   "file": "internlm2_5-7b-chat-Q4_K_M.gguf",
+   "size": 4712768640,
+   "sha256": "97b4f99b2e342831e0f9220f64f2f056f8836cc4b17c018fcabcdd292d2a6076",
+   "group": "Yi / InternLM",
+   "use": "chat",
+   "note": "InternLM2.5 7B"
+  },
+  {
+   "id": "codegemma-7b-instruct-q4_k_m",
+   "repo": "bartowski/codegemma-1.1-7b-it-GGUF",
+   "file": "codegemma-1.1-7b-it-Q4_K_M.gguf",
+   "size": 5329759744,
+   "sha256": "3ef2ef8f041a0d93ffed4f2d261ce3940e8e33ab9c4ab28343012593ff78cc49",
+   "group": "Coding Specialized",
+   "use": "code",
+   "note": "CodeGemma 7B"
+  },
+  {
+   "id": "llava-1.6-mistral-7b-q4_k_m",
+   "repo": "cjpais/llava-1.6-mistral-7b-gguf",
+   "file": "llava-v1.6-mistral-7b.Q4_K_M.gguf",
+   "size": 4368439552,
+   "sha256": "4bd1bc95c4db74f8140ee520e76d1f83e063d3fde9c3723eaa4a4776785a7aa6",
+   "group": "Vision",
+   "use": "vision",
+   "note": "LLaVA-1.6 7B — vision (needs mmproj)",
+   "needs": "a matching mmproj file for images (text works without it)"
+  },
+  {
+   "id": "tinyllama-1.1b-chat-q4_k_m",
+   "repo": "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+   "file": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+   "size": 668788096,
+   "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+   "group": "Legacy / Misc",
+   "use": "legacy",
+   "note": "TinyLlama (legacy)"
+  },
+  {
+   "id": "stablelm-zephyr-3b-q4_k_m",
+   "repo": "TheBloke/stablelm-zephyr-3b-GGUF",
+   "file": "stablelm-zephyr-3b.Q4_K_M.gguf",
+   "size": 1708595648,
+   "sha256": "74b2613b6e89d904a2ea38d56d233e4d2ca2fe663844b2e7aa90e769d359061b",
+   "group": "Legacy / Misc",
+   "use": "chat",
+   "note": "StableLM-Zephyr 3B"
+  },
+  {
+   "id": "neural-chat-7b-v3.3-q4_k_m",
+   "repo": "TheBloke/neural-chat-7B-v3-3-GGUF",
+   "file": "neural-chat-7b-v3-3.Q4_K_M.gguf",
+   "size": 4368438976,
+   "sha256": "facd1e8f6a8cc19c02f7ad09eb261d821616b0f128d0edb2ba3f8a1415514168",
+   "group": "Legacy / Misc",
+   "use": "chat",
+   "note": "Intel Neural-Chat 7B"
+  }
+ ]
+}

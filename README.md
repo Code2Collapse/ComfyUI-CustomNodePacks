@@ -205,7 +205,11 @@ folder you pick (only folders ComfyUI knows; anything else is refused). Download
 and time left, and can be paused, resumed (they continue where they stopped) or cancelled. A finished file is checked
 against the SHA-256 the site publishes and removed if it does not match. When a version lists several files, the
 `.safetensors` one is preferred. The GGUF models you download from the C2C Diagnostics sidebar (llama.cpp) use the same
-queue, so they also resume, are hash-checked and appear in this list.
+queue, so they also resume, are hash-checked and appear in this list. That GGUF list is `data/llm_catalog.json`: 37
+models whose repository, file, size and SHA-256 were read from the Hugging Face API
+(`tools/c2c_llm_catalog_verify.py` in the workspace re-checks them). Each entry shows its download size and the memory
+it needs, and ★ marks the largest general model that fits the memory free right now. Free GPU memory only counts
+when your llama-cpp-python build can use the GPU.
 
 - `CIVITAI_API_KEY`, `HF_TOKEN`: your tokens for restricted or gated files. They are sent as a header, never in a URL
   or a log.

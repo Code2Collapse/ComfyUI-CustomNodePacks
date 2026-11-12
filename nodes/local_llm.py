@@ -87,6 +87,23 @@ def _resolve_model_path(model_id: str) -> Optional[str]:
         return None
     if os.path.isabs(model_id) and os.path.exists(model_id):
         return model_id
+    try:  # L6.05: a catalog id names a real file ("qwen3-0.6b-instruct-q8_0" -> "Qwen3-0.6B-Q8_0.gguf")
+        try:
+            from . import llm_catalog as _cat
+        except ImportError:
+            from nodes import llm_catalog as _cat  # type: ignore
+        entry = _cat.by_id(model_id)
+    except Exception:  # noqa: BLE001 - the catalog is a hint, never a reason to fail
+        entry = None
+    if entry and entry.get("file"):
+        exact = entry["file"].lower()
+        for d in _candidate_dirs():
+            try:
+                for fn in os.listdir(d):
+                    if fn.lower() == exact:
+                        return os.path.join(d, fn)
+            except Exception:
+                continue
     target = model_id.lower()
     for d in _candidate_dirs():
         try:

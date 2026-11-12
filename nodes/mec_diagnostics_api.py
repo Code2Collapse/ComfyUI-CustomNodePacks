@@ -506,6 +506,15 @@ def register_routes(server) -> None:
     # -----------------------------------------------------------------
     # Tier 2 — llama.cpp GGUF model scanner
     # -----------------------------------------------------------------
+    @routes.get("/mec/diagnostics/local_llm/catalog")
+    async def _llm_catalog(_req):  # noqa: ARG001
+        """L6.05: the verified GGUF catalog (data/llm_catalog.json) + a model recommended for the memory free now."""
+        try:
+            from . import llm_catalog
+        except ImportError:
+            from nodes import llm_catalog  # type: ignore
+        return web.json_response(_envelope_ok(llm_catalog.public()))
+
     @routes.get("/mec/diagnostics/local_llm/scan")
     async def _llm_scan(_req):  # noqa: ARG001
         ll = _import_local_llm()
@@ -640,7 +649,12 @@ def register_routes(server) -> None:
             url, hdrs, _name = download_plan("huggingface", repo, fname)
         except DownloadRefused as exc:
             return web.json_response(_envelope_err("bad_request", str(exc)), status=400)
-        sha = await _hf_lfs_sha256(repo, fname)
+        try:  # L6.05: the catalog carries the verified SHA-256; ask Hugging Face only for files outside it
+            from . import llm_catalog as _cat
+        except ImportError:
+            from nodes import llm_catalog as _cat  # type: ignore
+        known = _cat.by_repo_file(repo, fname)
+        sha = (known or {}).get("sha256") or await _hf_lfs_sha256(repo, fname)
         mgr = get_manager()
         mgr.on_done = _record_finished
         job = mgr.add(url, _Path(dest_path), hdrs, sha256=sha, label=f"{repo} / {fname}",

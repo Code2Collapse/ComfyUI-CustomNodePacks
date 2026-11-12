@@ -402,108 +402,32 @@ async function _renderPatterns(body) {
 //  Free-typing is allowed everywhere; these are quick-pick suggestions.
 // =====================================================================
 
-// GGUF stubs for llama-cpp-python (Tier 2 fallback backend). Each row has
-// approximate VRAM at Q4_K_M plus a one-line "best for" hint. The user can
-// drop a GGUF file in ComfyUI/models/llm/ and pick it from this list.
-// Curated GGUF model catalog. Each entry maps to a REAL, downloadable HuggingFace
-// repo + filename. Selecting an entry that is not installed reveals a Download
-// button which POSTs to /mec/diagnostics/local_llm/download.
-//
-// Verified May 2026 against https://huggingface.co/<repo>/blob/main/<file>.
-// Entries dropped if the upstream GGUF does not actually exist (no aspirational
-// names like qwen3.6, qwen3.5, gemma-4, granite-4.1, lfm2.5, smollm3, etc.).
-const _LOCAL_MODEL_SUGGESTIONS = [
-    // Qwen 3 (official Qwen GGUFs) — note: small variants only ship Q8_0 upstream.
-    { id: "qwen3-0.6b-instruct-q8_0",              ram: "~700 MB",  note: "Qwen3 0.6B — fastest (Q8_0)",
-      repo: "Qwen/Qwen3-0.6B-GGUF",                  file: "Qwen3-0.6B-Q8_0.gguf" },
-    { id: "qwen3-1.7b-instruct-q8_0",              ram: "~1.8 GB",  note: "Qwen3 1.7B — balanced (Q8_0)",
-      repo: "Qwen/Qwen3-1.7B-GGUF",                  file: "Qwen3-1.7B-Q8_0.gguf" },
-    { id: "qwen3-4b-instruct-q4_k_m",              ram: "~2.5 GB",  note: "Qwen3 4B — recommended default",
-      repo: "Qwen/Qwen3-4B-GGUF",                    file: "Qwen3-4B-Q4_K_M.gguf" },
-    { id: "qwen3-8b-instruct-q4_k_m",              ram: "~5.0 GB",  note: "Qwen3 8B",
-      repo: "Qwen/Qwen3-8B-GGUF",                    file: "Qwen3-8B-Q4_K_M.gguf" },
-    { id: "qwen3-14b-instruct-q4_k_m",             ram: "~8.5 GB",  note: "Qwen3 14B",
-      repo: "Qwen/Qwen3-14B-GGUF",                   file: "Qwen3-14B-Q4_K_M.gguf" },
-    // Qwen 2.5 (bartowski Q4_K_M)
-    { id: "qwen2.5-0.5b-instruct-q4_k_m",          ram: "~400 MB",  note: "Qwen2.5 0.5B — micro",
-      repo: "bartowski/Qwen2.5-0.5B-Instruct-GGUF",  file: "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf" },
-    { id: "qwen2.5-1.5b-instruct-q4_k_m",          ram: "~1.0 GB",  note: "Qwen2.5 1.5B",
-      repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF",  file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" },
-    { id: "qwen2.5-3b-instruct-q4_k_m",            ram: "~2.0 GB",  note: "Qwen2.5 3B",
-      repo: "bartowski/Qwen2.5-3B-Instruct-GGUF",    file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf" },
-    { id: "qwen2.5-7b-instruct-q4_k_m",            ram: "~4.5 GB",  note: "Qwen2.5 7B",
-      repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",    file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf" },
-    // Qwen 2.5 Coder
-    { id: "qwen2.5-coder-1.5b-instruct-q4_k_m",    ram: "~1.0 GB",  note: "Qwen2.5-Coder 1.5B — code errors",
-      repo: "bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF", file: "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf" },
-    { id: "qwen2.5-coder-7b-instruct-q4_k_m",      ram: "~4.5 GB",  note: "Qwen2.5-Coder 7B — code errors",
-      repo: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",   file: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" },
-    // Google Gemma 3
-    { id: "gemma-3-1b-it-q4_k_m",                  ram: "~750 MB",  note: "Gemma 3 1B — fast",
-      repo: "lmstudio-community/gemma-3-1b-it-GGUF", file: "gemma-3-1b-it-Q4_K_M.gguf" },
-    { id: "gemma-3-4b-it-q4_k_m",                  ram: "~2.5 GB",  note: "Gemma 3 4B",
-      repo: "lmstudio-community/gemma-3-4b-it-GGUF", file: "gemma-3-4b-it-Q4_K_M.gguf" },
-    { id: "gemma-3-12b-it-q4_k_m",                 ram: "~7.0 GB",  note: "Gemma 3 12B",
-      repo: "lmstudio-community/gemma-3-12b-it-GGUF",file: "gemma-3-12b-it-Q4_K_M.gguf" },
-    // Microsoft Phi
-    { id: "phi-3.5-mini-instruct-q4_k_m",          ram: "~2.3 GB",  note: "Phi-3.5-Mini 3.8B",
-      repo: "bartowski/Phi-3.5-mini-instruct-GGUF",  file: "Phi-3.5-mini-instruct-Q4_K_M.gguf" },
-    // Meta Llama 3.2
-    { id: "llama-3.2-1b-instruct-q4_k_m",          ram: "~770 MB",  note: "Llama 3.2 1B",
-      repo: "bartowski/Llama-3.2-1B-Instruct-GGUF",  file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf" },
-    { id: "llama-3.2-3b-instruct-q4_k_m",          ram: "~2.0 GB",  note: "Llama 3.2 3B",
-      repo: "bartowski/Llama-3.2-3B-Instruct-GGUF",  file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf" },
-    // IBM Granite 3.x (4.x not yet on HF as GGUF)
-    { id: "granite-3.3-2b-instruct-q4_k_m",        ram: "~1.4 GB",  note: "Granite 3.3 2B — RAG/tools",
-      repo: "ibm-granite/granite-3.3-2b-instruct-GGUF", file: "granite-3.3-2b-instruct-Q4_K_M.gguf" },
-    { id: "granite-3.3-8b-instruct-q4_k_m",        ram: "~5.0 GB",  note: "Granite 3.3 8B — RAG/tools",
-      repo: "ibm-granite/granite-3.3-8b-instruct-GGUF", file: "granite-3.3-8b-instruct-Q4_K_M.gguf" },
-    // DeepSeek-R1 distills
-    { id: "deepseek-r1-distill-qwen-1.5b-q4_k_m",  ram: "~1.0 GB",  note: "DeepSeek-R1 1.5B — CoT",
-      repo: "bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF", file: "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf" },
-    { id: "deepseek-r1-distill-qwen-7b-q4_k_m",    ram: "~4.5 GB",  note: "DeepSeek-R1 7B",
-      repo: "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",   file: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf" },
-    { id: "deepseek-r1-distill-llama-8b-q4_k_m",   ram: "~5.0 GB",  note: "DeepSeek-R1 Llama 8B",
-      repo: "bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF",  file: "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf" },
-    { id: "deepseek-r1-distill-qwen-14b-q4_k_m",   ram: "~8.5 GB",  note: "DeepSeek-R1 14B",
-      repo: "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",  file: "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf" },
-    // HuggingFace SmolLM2 (360M only ships Q8_0 upstream)
-    { id: "smollm2-360m-instruct-q8_0",            ram: "~400 MB",  note: "SmolLM2 360M — tiny (Q8_0)",
-      repo: "HuggingFaceTB/SmolLM2-360M-Instruct-GGUF", file: "smollm2-360m-instruct-q8_0.gguf" },
-    { id: "smollm2-1.7b-instruct-q4_k_m",          ram: "~1.1 GB",  note: "SmolLM2 1.7B",
-      repo: "HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF", file: "smollm2-1.7b-instruct-q4_k_m.gguf" },
-    // Mistral Nemo
-    { id: "mistral-nemo-instruct-2407-q4_k_m",     ram: "~7.5 GB",  note: "Mistral Nemo 12B — 128k ctx",
-      repo: "bartowski/Mistral-Nemo-Instruct-2407-GGUF", file: "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf" },
-    // Hermes-3 (NousResearch)
-    { id: "hermes-3-llama-3.2-3b-q4_k_m",          ram: "~2.0 GB",  note: "Hermes-3 3B — tool use",
-      repo: "bartowski/Hermes-3-Llama-3.2-3B-GGUF",  file: "Hermes-3-Llama-3.2-3B-Q4_K_M.gguf" },
-    { id: "hermes-3-llama-3.1-8b-q4_k_m",          ram: "~5.0 GB",  note: "Hermes-3 8B — agentic",
-      repo: "bartowski/Hermes-3-Llama-3.1-8B-GGUF",  file: "Hermes-3-Llama-3.1-8B-Q4_K_M.gguf" },
-    // Yi-1.5
-    { id: "yi-1.5-6b-chat-q4_k_m",                 ram: "~3.8 GB",  note: "Yi-1.5 6B — bilingual",
-      repo: "bartowski/Yi-1.5-6B-Chat-GGUF",         file: "Yi-1.5-6B-Chat-Q4_K_M.gguf" },
-    { id: "yi-1.5-9b-chat-q4_k_m",                 ram: "~5.5 GB",  note: "Yi-1.5 9B",
-      repo: "bartowski/Yi-1.5-9B-Chat-GGUF",         file: "Yi-1.5-9B-Chat-Q4_K_M.gguf" },
-    // InternLM 2.5
-    { id: "internlm2.5-1.8b-chat-q4_k_m",          ram: "~1.2 GB",  note: "InternLM2.5 1.8B",
-      repo: "bartowski/internlm2_5-1_8b-chat-GGUF",  file: "internlm2_5-1_8b-chat-Q4_K_M.gguf" },
-    { id: "internlm2.5-7b-chat-q4_k_m",            ram: "~4.5 GB",  note: "InternLM2.5 7B",
-      repo: "bartowski/internlm2_5-7b-chat-GGUF",    file: "internlm2_5-7b-chat-Q4_K_M.gguf" },
-    // Coding specialised
-    { id: "codegemma-7b-instruct-q4_k_m",          ram: "~4.5 GB",  note: "CodeGemma 7B",
-      repo: "bartowski/codegemma-1.1-7b-it-GGUF",    file: "codegemma-1.1-7b-it-Q4_K_M.gguf" },
-    // Vision-language
-    { id: "llava-1.6-mistral-7b-q4_k_m",           ram: "~5.5 GB",  note: "LLaVA-1.6 7B — vision (needs mmproj)",
-      repo: "cjpais/llava-1.6-mistral-7b-gguf",      file: "llava-v1.6-mistral-7b.Q4_K_M.gguf" },
-    // Legacy / misc (verified)
-    { id: "tinyllama-1.1b-chat-q4_k_m",            ram: "~700 MB",  note: "TinyLlama (legacy)",
-      repo: "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", file: "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" },
-    { id: "stablelm-zephyr-3b-q4_k_m",             ram: "~2.0 GB",  note: "StableLM-Zephyr 3B",
-      repo: "TheBloke/stablelm-zephyr-3b-GGUF",      file: "stablelm-zephyr-3b.Q4_K_M.gguf" },
-    { id: "neural-chat-7b-v3.3-q4_k_m",            ram: "~4.5 GB",  note: "Intel Neural-Chat 7B",
-      repo: "TheBloke/neural-chat-7B-v3-3-GGUF",     file: "neural-chat-7b-v3-3.Q4_K_M.gguf" },
-];
+// GGUF catalog for the Tier 2 (llama.cpp) backend. L6.05: the list is data, ComfyUI-CustomNodePacks/data/llm_catalog.json,
+// served with a memory-based recommendation by /mec/diagnostics/local_llm/catalog. Every repo / file / size / sha256 in
+// it was read from the Hugging Face API (tools/c2c_llm_catalog_verify.py), so the sizes shown are the real ones.
+let _LOCAL_MODEL_SUGGESTIONS = [];
+let _LLM_RECOMMENDED = null;          // {id, fits, budget, reason}
+let _llmCatalogLoad = null;
+function _loadLlmCatalog() {
+    if (!_llmCatalogLoad) {
+        _llmCatalogLoad = _api("/mec/diagnostics/local_llm/catalog").then((r) => {
+            if (r.success && Array.isArray(r.data?.models)) {
+                _LOCAL_MODEL_SUGGESTIONS = r.data.models;
+                _LLM_RECOMMENDED = r.data.recommended || null;
+            } else {
+                _llmCatalogLoad = null;                 // retry on the next scan
+            }
+        });
+    }
+    return _llmCatalogLoad;
+}
+function _catalogInstalled(m, installedSet) {
+    // The scan reports real file names; catalog ids are not file names ("qwen3-0.6b-instruct-q8_0" is
+    // "Qwen3-0.6B-Q8_0.gguf"), so match on the catalog's file, case-insensitively, as well as on the id.
+    if (!installedSet || !m) return false;
+    const lower = new Set([...installedSet].map((f) => String(f).toLowerCase()));
+    return lower.has(String(m.file || "").toLowerCase()) || lower.has(m.id + ".gguf") || lower.has(m.id);
+}
 
 // Ollama model suggestions are NOT hardcoded — they are populated live
 // from the running daemon's /api/tags endpoint (via
@@ -705,6 +629,7 @@ async function _renderSettings(body) {
                         <button class="mec-diag-btn primary" data-action="llm-download" type="button" style="font-size:11px;padding:3px 10px;display:none;">⇩ Download selected</button>
                         <span data-llm-scan-info style="font-size:10.5px;opacity:0.7;flex:1 1 160px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
                     </div>
+                    <div data-llm-recommend style="display:none;margin-top:5px;font-size:10.5px;opacity:0.85;line-height:1.45;"></div>
                     <div data-llm-dl-progress style="display:none;margin-top:6px;font-size:10.5px;line-height:1.5;background:var(--c2c-panelDeep5);border:1px solid var(--c2c-panelDeep6);border-radius:3px;padding:5px 8px;">
                         <div data-llm-dl-label style="opacity:0.85;"></div>
                         <div style="background:var(--c2c-panelDeep7);height:6px;border-radius:3px;overflow:hidden;margin-top:3px;">
@@ -714,7 +639,7 @@ async function _renderSettings(body) {
                     </div>
                     <div class="mec-diag-meta" style="font-size:10.5px;opacity:0.7;margin-top:6px;line-height:1.6;">
                         <div style="background:var(--c2c-panelDeep8);border-left:2px solid var(--c2c-blueDim);padding:4px 8px;margin-bottom:6px;border-radius:3px;">
-                            <b style="color:var(--c2c-accentSoft);">No Ollama needed.</b> Select any catalog entry and click <b>Download</b> — files land in your ComfyUI <code>models/llm/</code> folder. Smallest picks: <code>smollm2-135m</code> (~120 MB RAM), <code>qwen3-0.6b</code> (~450 MB).
+                            <b style="color:var(--c2c-accentSoft);">No Ollama needed.</b> Select any catalog entry and click <b>Download</b> — files land in your ComfyUI <code>models/llm/</code> folder. Each entry shows its download size and the memory it needs; ★ marks the largest model that fits the memory free now. Smallest: <code>smollm2-360m</code>, <code>qwen2.5-0.5b</code>.
                         </div>
                         Install runtime: <code>pip install llama-cpp-python</code> · Windows / no compiler: <code>pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu</code> (CPU) or <code>/cu124</code> (CUDA 12.4)<br/>
                         Catalog repos: <a href="https://huggingface.co/bartowski" target="_blank" style="color:var(--c2c-accentSoft);">bartowski</a> · <a href="https://huggingface.co/lmstudio-community" target="_blank" style="color:var(--c2c-accentSoft);">lmstudio-community</a> · <a href="https://huggingface.co/Qwen" target="_blank" style="color:var(--c2c-accentSoft);">Qwen</a> · <a href="https://huggingface.co/HuggingFaceTB" target="_blank" style="color:var(--c2c-accentSoft);">HuggingFaceTB</a> · <a href="https://huggingface.co/ibm-granite" target="_blank" style="color:var(--c2c-accentSoft);">ibm-granite</a>
@@ -862,6 +787,7 @@ async function _renderSettings(body) {
 
     const localModelSel = llamaPane.querySelector('[data-k="local_model"]');
     const llmScanInfo   = llamaPane.querySelector("[data-llm-scan-info]");
+    const llmRecInfo    = llamaPane.querySelector("[data-llm-recommend]");
 
     function _rebuildLocalModelSelect(installedSet) {
         // Group catalog into buckets in declared order.
@@ -882,8 +808,9 @@ async function _renderSettings(body) {
                 const stem = fn.replace(/\.gguf$/i, "");
                 const opt = document.createElement("option");
                 opt.value = stem;
-                const meta = _LOCAL_MODEL_SUGGESTIONS.find(m => m.id === stem);
-                opt.textContent = meta ? `✓ ${stem}  (${meta.ram})` : `✓ ${stem}`;
+                const meta = _LOCAL_MODEL_SUGGESTIONS.find(m => String(m.file || "").toLowerCase() === fn.toLowerCase()
+                                                             || m.id === stem);
+                opt.textContent = meta ? `✓ ${stem}  (needs ${meta.ram})` : `✓ ${stem}`;
                 og.appendChild(opt);
             }
             localModelSel.appendChild(og);
@@ -895,10 +822,11 @@ async function _renderSettings(body) {
             const og = document.createElement("optgroup");
             og.label = label;
             for (const m of models) {
-                const isInst = installedSet && (installedSet.has(m.id + ".gguf") || installedSet.has(m.id));
+                const isInst = _catalogInstalled(m, installedSet);
                 const opt = document.createElement("option");
                 opt.value = m.id;
-                opt.textContent = `${m.id}  (${m.ram})  — ${m.note}`;
+                const star = _LLM_RECOMMENDED?.fits && _LLM_RECOMMENDED.id === m.id ? "★ " : "";
+                opt.textContent = `${isInst ? "✓ " : ""}${star}${m.id}  (${m.size_label}, needs ${m.ram})  — ${m.note}`;
                 if (isInst) opt.style.fontWeight = "700";
                 og.appendChild(opt);
             }
@@ -911,6 +839,7 @@ async function _renderSettings(body) {
 
     async function _scanLocalModels() {
         llmScanInfo.textContent = "scanning…";
+        await _loadLlmCatalog();
         const r = await _api("/mec/diagnostics/local_llm/scan");
         if (!r.success) {
             llmScanInfo.textContent = "scan failed: " + (r.message || r.error);
@@ -931,6 +860,14 @@ async function _renderSettings(body) {
         dirCode.textContent = primaryDir;
         llmScanInfo.replaceChildren(`${installed.length} installed · target dir `, dirCode);
         llmScanInfo.title = `${installed.length} installed · target dir ${primaryDir}`;
+        if (llmRecInfo) {
+            const rec = _LLM_RECOMMENDED;
+            llmRecInfo.textContent = rec?.id
+                ? (rec.fits ? `★ Recommended for this machine: ${rec.id} - ${rec.reason}.`
+                            : `Not enough free memory for the catalog models: ${rec.reason}.`)
+                : "";
+            llmRecInfo.style.display = rec?.id ? "" : "none";
+        }
         if (typeof _updateDownloadButton === "function") _updateDownloadButton();
     }
 
@@ -957,11 +894,11 @@ async function _renderSettings(body) {
     function _updateDownloadButton() {
         const id = localModelSel.value;
         const m = _meta(id);
-        const isInstalled = _installedSet && (_installedSet.has(id + ".gguf") || _installedSet.has(id));
+        const isInstalled = _catalogInstalled(m, _installedSet) || (_installedSet && _installedSet.has(id));
         const haveMeta = m && m.repo && m.file;
         dlBtn.style.display = (haveMeta && !isInstalled) ? "" : "none";
         if (haveMeta && !isInstalled) {
-            dlBtn.textContent = `⇩ Download ${m.ram}`;
+            dlBtn.textContent = `⇩ Download ${m.size_label}`;
             dlBtn.title = `${m.repo}/${m.file}`;
         }
     }
