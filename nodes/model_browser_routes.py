@@ -455,8 +455,43 @@ async def _hf_lfs_sha256(model_id: str, file_id: str) -> str | None:
     return None
 
 
+_META_KEYS = {"civitai_model_id": int, "civitai_version_id": int, "model_name": str, "model_type": str,
+              "version_name": str, "base_model": str, "trained_words": list, "page": str}
+
+
+def clean_meta(raw) -> dict:
+    """Sidecar metadata sent by the panel: known keys, right types, short strings (it is only written to a JSON file
+    next to the model, never executed, but it is untrusted)."""
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, typ in _META_KEYS.items():
+        v = raw.get(k)
+        if v is None:
+            continue
+        if typ is int:
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
+                continue
+        elif typ is list and isinstance(v, list):
+            out[k] = [str(x)[:200] for x in v[:50]]
+        elif typ is str and isinstance(v, str):
+            if k == "page" and not v.startswith("https://civitai.com/"):
+                continue
+            out[k] = v[:300]
+    return out
+
+
+def _record_finished(job) -> None:
+    """Download manager hook: index the finished file by SHA-256 and write its sidecar (L5.06)."""
+    from . import model_index
+    sha = job.sha256 or model_index.sha256_file(job.dest)
+    model_index.record(job.dest, sha, job.meta or None)
+
+
 async def _download_model(source: str, model_id: str, file_id: str, dest_dir: str,
-                          sha256: str | None = None) -> dict:
+                          sha256: str | None = None, meta: dict | None = None) -> dict:
     """Queue a download in the download manager (Civitai: numeric file id; Hugging Face: path in the repo).
     Raises DownloadRefused for a destination outside the model folders or a malformed id. `sha256` = the hash the
     site publishes (Civitai file hashes.SHA256); for Hugging Face it is looked up when not given."""
@@ -469,7 +504,10 @@ async def _download_model(source: str, model_id: str, file_id: str, dest_dir: st
     if not sha256 and source == "huggingface":
         sha256 = await _hf_lfs_sha256(model_id, file_id)
     abs_dest.mkdir(parents=True, exist_ok=True)
-    job = get_manager().add(url, abs_dest / fname, hdrs, sha256=sha256, label=f"{model_id} / {fname}")
+    mgr = get_manager()
+    mgr.on_done = _record_finished
+    job = mgr.add(url, abs_dest / fname, hdrs, sha256=sha256, label=f"{model_id} / {fname}",
+                  meta=clean_meta(meta) if source == "civitai" else {"hf_repo": model_id, "hf_file": file_id})
     return {"status": job.status, "job": job.id, "dest": str(job.dest), "verify": bool(job.sha256)}
 
 
@@ -522,7 +560,8 @@ def register_routes(server) -> None:
             dest_dir = body.get("destDir", "models/checkpoints")
             if not model_id or not file_id:
                 return web.json_response({"error": "modelId and fileId required"}, status=400)
-            result = await _download_model(source, model_id, file_id, dest_dir, sha256=body.get("sha256") or None)
+            result = await _download_model(source, model_id, file_id, dest_dir, sha256=body.get("sha256") or None,
+                                           meta=body.get("meta"))
             return web.json_response(result)
         except DownloadRefused as exc:
             return web.json_response({"error": str(exc)}, status=400)
@@ -572,6 +611,40 @@ def register_routes(server) -> None:
             return web.json_response(version_detail(await _http_get(f"{_CIVITAI_BASE}/model-versions/{vid}"), nsfw))
         except Exception as exc:  # noqa: BLE001
             return web.json_response({"error": str(exc)}, status=502)
+
+    @server.routes.post("/c2c/models/installed")
+    async def models_installed(request: web.Request) -> web.Response:
+        """L5.06: which of these SHA-256s are on disk (from the index; never a folder walk)."""
+        from . import model_index
+        body = await request.json()
+        shas = [s for s in (body.get("sha256") or []) if isinstance(s, str) and _SHA_RE.match(s)][:500]
+        return web.json_response({"installed": await asyncio.to_thread(model_index.installed, shas)})
+
+    @server.routes.post("/c2c/models/identify")
+    async def models_identify(request: web.Request) -> web.Response:
+        """L5.06: hash ONE local model (cached), look it up on Civitai by hash, write its sidecar."""
+        from . import model_index
+        body = await request.json()
+        folder, name = str(body.get("folder") or ""), str(body.get("name") or "")
+        try:
+            import folder_paths
+            full = folder_paths.get_full_path(folder, name) if folder not in model_index.NOT_MODEL_KEYS else None
+        except Exception:
+            full = None
+        if not full or not os.path.isfile(full):
+            return web.json_response({"error": f"{name} is not a model ComfyUI lists in {folder}"}, status=404)
+        sha = await asyncio.to_thread(model_index.cached_sha256, Path(full))
+        try:
+            v = await _http_get(f"{_CIVITAI_BASE}/model-versions/by-hash/{sha}")
+        except RuntimeError as exc:
+            if "404" in str(exc):
+                return web.json_response({"sha256": sha, "found": False,
+                                          "message": "Civitai does not know this file (not uploaded there, or "
+                                                     "changed after download)."})
+            return web.json_response({"sha256": sha, "error": str(exc)}, status=502)
+        meta = model_index.civitai_meta(v or {})
+        await asyncio.to_thread(model_index.record, Path(full), sha, meta)
+        return web.json_response({"sha256": sha, "found": True, **meta})
 
     @server.routes.get("/c2c/models/civitai_options")
     async def civitai_options(_request: web.Request) -> web.Response:

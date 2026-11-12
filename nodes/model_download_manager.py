@@ -40,6 +40,7 @@ class DownloadJob:
     headers: dict = field(repr=False)
     sha256: Optional[str] = None
     label: str = ""
+    meta: dict = field(default_factory=dict, repr=False)   # sidecar metadata (L5.06)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "queued"             # queued | running | paused | done | error | cancelled
     total: int = 0
@@ -80,15 +81,16 @@ class DownloadManager:
         self._session_factory = session_factory
         self._sleep = sleep
         self._tasks: dict[str, asyncio.Task] = {}
+        self.on_done: Optional[Callable] = None            # called in a thread with the finished job (L5.06)
 
     # ── public API (call on the server's event loop) ─────────────────────────────────────────────────────────
     def add(self, url: str, dest: Path, headers: Optional[dict] = None, sha256: Optional[str] = None,
-            label: str = "") -> DownloadJob:
+            label: str = "", meta: Optional[dict] = None) -> DownloadJob:
         for j in self.jobs.values():                     # the same file twice: hand back the live job
             if j.dest == Path(dest) and j.status in ACTIVE + ("paused",):
                 return j
         job = DownloadJob(url=url, dest=Path(dest), headers=dict(headers or {}),
-                          sha256=(sha256 or "").strip().lower() or None, label=label)
+                          sha256=(sha256 or "").strip().lower() or None, label=label, meta=dict(meta or {}))
         self.jobs[job.id] = job
         self._prune()
         self._start(job)
@@ -258,6 +260,11 @@ class DownloadManager:
             return
         job.status, job.finished, job.speed = "done", time.time(), 0.0
         log.info("Model downloaded: %s%s", job.dest, " (SHA-256 verified)" if job.verified else "")
+        if self.on_done:
+            try:
+                await asyncio.to_thread(self.on_done, job)
+            except Exception as exc:  # noqa: BLE001 - the file is in place; only the index / sidecar failed
+                log.warning("download %s: could not record it in the model index: %s", job.id, exc)
 
 
 _MANAGER: Optional[DownloadManager] = None

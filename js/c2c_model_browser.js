@@ -8,6 +8,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { attachWindowChrome } from "./_c2c_window.js";
+import { undoStep } from "./c2c_ui/kit.js";
 
 const SEARCH_DEBOUNCE_MS = 400;
 // "local" is FIRST so it's the default — it lists on-disk models and never
@@ -76,11 +77,11 @@ async function _searchModels(source, query, type, page) {
   return resp.json();
 }
 
-async function _downloadModel(source, modelId, fileId, destDir, sha256) {
+async function _downloadModel(source, modelId, fileId, destDir, sha256, meta) {
   const resp = await api.fetchApi("/c2c/models/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, modelId, fileId, destDir, ...(sha256 ? { sha256 } : {}) })
+    body: JSON.stringify({ source, modelId, fileId, destDir, ...(sha256 ? { sha256 } : {}), ...(meta ? { meta } : {}) })
   });
   if (!resp.ok) {
     let msg = await resp.text();
@@ -374,8 +375,22 @@ async function _doSearch() {
     const destDirs = destData.dirs || [];
 
     results.innerHTML = "";
+    const cards = [];
     for (const item of items) {
-      results.appendChild(_buildCard(item, destDirs));
+      const card = _buildCard(item, destDirs);
+      cards.push([item, card]);
+      results.appendChild(card);
+    }
+    if (_currentSource === "civitai") {
+      const pickFile = (it) => { const fs = it.modelVersions?.[0]?.files || [];
+        return fs.find(f => /\.safetensors$/i.test(f.name || "")) || fs[0]; };
+      _installed(cards.map(([it]) => pickFile(it)?.hashes?.SHA256)).then((inst) => {
+        for (const [it, card] of cards) {
+          const hit = inst[pickFile(it)?.hashes?.SHA256];
+          const col = card.querySelector("[data-dl]")?.parentElement;
+          if (hit && col) _installedBadge(col, hit.folder, hit.name);
+        }
+      });
     }
   } catch (err) {
     // The backend replies {"error": "<plain-English reason>"} — surface THAT,
@@ -387,6 +402,73 @@ async function _doSearch() {
     results.innerHTML = `<div style="text-align:center;padding:30px 40px;color:var(--c2c-dangerSoft);line-height:1.55;">
       ${esc}<br><small style="color:var(--c2c-gray500);">Details are in the ComfyUI console.</small></div>`;
   }
+}
+
+/* ─── installed state + Add to workflow (L5.06) ─── */
+
+// folder key -> [core loader node, its file input] (verified against ComfyUI 0.39 nodes.py / nodes_upscale_model.py)
+const _LOADERS = {
+  checkpoints: ["CheckpointLoaderSimple", "ckpt_name"], loras: ["LoraLoaderModelOnly", "lora_name"],
+  vae: ["VAELoader", "vae_name"], controlnet: ["ControlNetLoader", "control_net_name"],
+  upscale_models: ["UpscaleModelLoader", "model_name"], text_encoders: ["CLIPLoader", "clip_name"],
+  clip: ["CLIPLoader", "clip_name"], diffusion_models: ["UNETLoader", "unet_name"], unet: ["UNETLoader", "unet_name"],
+  clip_vision: ["CLIPVisionLoader", "clip_name"],
+};
+
+async function _installed(shas) {
+  const list = [...new Set(shas.filter(Boolean))];
+  if (!list.length) return {};
+  try {
+    const r = await api.fetchApi("/c2c/models/installed", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                         body: JSON.stringify({ sha256: list }) });
+    return r.ok ? (await r.json()).installed || {} : {};
+  } catch (_) { return {}; }
+}
+
+async function _addToWorkflow(folder, name) {
+  if (folder === "embeddings") {
+    const text = `embedding:${name.replace(/\.(safetensors|pt|bin)$/i, "")}`;
+    try { await navigator.clipboard.writeText(text); } catch (_) { /* */ }
+    app.extensionManager?.toast?.add({ severity: "info", summary: "Embedding", life: 3000,
+      detail: `Copied "${text}" - paste it into a prompt.` });
+    return null;
+  }
+  const map = _LOADERS[folder];
+  if (!map) {
+    app.extensionManager?.toast?.add({ severity: "warn", summary: "Add to workflow", life: 4000,
+      detail: `No core loader for the "${folder}" folder; add your loader and pick ${name}.` });
+    return null;
+  }
+  // a just-downloaded file is not in the loaders' lists until the node definitions are refreshed
+  try { await app.extensionManager?.command?.execute?.("Comfy.RefreshNodeDefinitions"); } catch (_) { /* */ }
+  const graph = app.canvas?.graph ?? app.graph;            // the subgraph being edited, if any
+  const node = LiteGraph.createNode(map[0]);
+  if (!node) return null;
+  const c = app.canvas;
+  const dpr = window.devicePixelRatio || 1;
+  node.pos = [c.canvas.width / dpr / 2 / c.ds.scale - c.ds.offset[0] - 150,
+              c.canvas.height / dpr / 2 / c.ds.scale - c.ds.offset[1] - 40];
+  undoStep(() => {
+    graph.add(node);
+    const w = node.widgets?.find(x => x.name === map[1]);
+    if (w) { w.value = name; w.callback?.(name); }
+  });
+  c.selectNode?.(node);
+  c.setDirty(true, true);
+  app.extensionManager?.toast?.add({ severity: "success", summary: "Added to the workflow", life: 2500,
+    detail: `${map[0]}: ${name}` });
+  return node;
+}
+
+function _installedBadge(where, folder, name) {
+  where.innerHTML = "";
+  const b = _el("span", "font-size:11px;background:var(--c2c-okBg);border:1px solid var(--c2c-okMute);padding:3px 9px;" +
+    "border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;", "✓ Installed");
+  b.title = `${folder} / ${name}`;
+  const add = _el("button", _BTN, "Add to workflow");
+  add.dataset.addWf = "1";
+  add.addEventListener("click", () => _addToWorkflow(folder, name));
+  where.append(b, add);
 }
 
 /* ─── Civitai detail view (L5.04). The description arrives SANITISED by the server (nodes/civitai_detail.py
@@ -467,7 +549,10 @@ function _renderVersion(box, model, v, destDirs) {
       dl.addEventListener("click", async () => {
         dl.disabled = true; dl.textContent = "⏳";
         try {
-          await _downloadModel("civitai", String(model.id), String(f.id), dest.value, f.sha256 || "");
+          await _downloadModel("civitai", String(model.id), String(f.id), dest.value, f.sha256 || "",
+            { civitai_model_id: model.id, civitai_version_id: v.id, model_name: model.name, model_type: model.type,
+              version_name: v.name, base_model: v.base_model, trained_words: v.trained_words,
+              page: `https://civitai.com/models/${model.id}?modelVersionId=${v.id}` });
           dl.textContent = "✓";
           _pollDownloads();
         } catch (err) {
@@ -478,6 +563,16 @@ function _renderVersion(box, model, v, destDirs) {
     table.append(name, size, fmt, hash, dl);
   }
   box.append(table);
+  _installed((v.files || []).map(f => f.sha256)).then((inst) => {
+    for (const f of v.files || []) {
+      const hit = f.sha256 && inst[f.sha256];
+      const btn = table.querySelector(`[data-file-id="${f.id}"]`);
+      if (!hit || !btn) continue;
+      const cell = _el("span", "display:flex;gap:4px;align-items:center;");
+      btn.replaceWith(cell);
+      _installedBadge(cell, hit.folder, hit.name);
+    }
+  });
   const destRow = _el("div", "display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:8px;");
   destRow.append(_el("span", "color:var(--c2c-gray450);", "Save into:"), dest);
   box.append(destRow);
@@ -615,7 +710,10 @@ function _buildCard(item, destDirs) {
     <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex-shrink:0;">
       ${item._source === "local"
         ? `<span style="font-size:11px;background:var(--c2c-okBg);border:1px solid var(--c2c-okMute);
-                padding:4px 10px;border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;">✓ On disk</span>`
+                padding:4px 10px;border-radius:5px;color:var(--c2c-okSoft2);font-weight:600;">✓ On disk</span>
+           <button data-add-local style="${_BTN}">Add to workflow</button>
+           <button data-identify style="${_BTN}" title="Hash the file and look it up on Civitai (writes a .civitai.json next to it)">Identify on Civitai</button>
+           <div data-ident-out style="font-size:10px;color:var(--c2c-gray450);max-width:220px;text-align:right;"></div>`
         : `<select data-dest style="background:var(--c2c-overlay-hover);border:1px solid var(--c2c-border);
               border-radius:4px;padding:2px 5px;color:inherit;font-size:10px;max-width:140px;">
           ${destDirs.map(d => `<option${d === _defaultDest(type, destDirs) ? " selected" : ""}>${_esc(d)}</option>`).join("")}
@@ -630,6 +728,24 @@ function _buildCard(item, destDirs) {
   `;
 
   card.querySelector("[data-detail]")?.addEventListener("click", (e) => { e.preventDefault(); _openDetail(modelId); });
+  card.querySelector("[data-add-local]")?.addEventListener("click", () => _addToWorkflow(item.type, item.name));
+  card.querySelector("[data-identify]")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget, out = card.querySelector("[data-ident-out]");
+    btn.disabled = true; btn.textContent = "Hashing…";
+    try {
+      const r = await api.fetchApi("/c2c/models/identify", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                          body: JSON.stringify({ folder: item.type, name: item.name }) });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      out.textContent = j.found
+        ? `${j.model_name} · ${j.version_name}${j.base_model ? " · " + j.base_model : ""}` +
+          (j.trained_words?.length ? ` · words: ${j.trained_words.join(", ")}` : "")
+        : j.message;
+      btn.textContent = j.found ? "✓ Identified" : "Not on Civitai";
+    } catch (err) {
+      out.textContent = err.message; btn.textContent = "Identify on Civitai"; btn.disabled = false;
+    }
+  });
   if (item._source !== "local") {
     card.querySelector("[data-dl]").addEventListener("click", async (e) => {
       const btn     = e.currentTarget;
@@ -642,7 +758,9 @@ function _buildCard(item, destDirs) {
       btn.textContent = "⏳";
       btn.disabled = true;
       try {
-        const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir, sha256);
+        const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir, sha256,
+          _currentSource === "civitai" ? { civitai_model_id: Number(modelId), civitai_version_id: Number(versionId) || undefined,
+                                          model_name: name, model_type: type } : undefined);
         btn.textContent = "✓ Queued";
         btn.title = res.verify ? "Will be checked against the published SHA-256" : "No published hash: not verified";
         btn.style.background = "var(--c2c-okBg)";
