@@ -34,3 +34,4 @@ export {
 export { lineChart, niceTicks, nearestIndex, seriesToCSV } from "./chart.js";
 export { mountPanel } from "./node_panel.js";
 export { openEditor } from "./editor.js";
+export { collapsible, modeToggle, loadingState, errorState, toast, undoStep, pointerDrag, hotkeyOverlay } from "./kit.js";
