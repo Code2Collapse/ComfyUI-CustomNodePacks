@@ -54,12 +54,18 @@ def _try_router(provider: str, model: str, prompt: str, max_tokens: int,
           which signals the caller to use the legacy direct-HTTP dispatch.
     """
     try:
-        from .. import c2c_ai  # type: ignore
-        from ..c2c_ai import router as router_mod  # type: ignore
-        from ..c2c_ai.types import (  # type: ignore
-            AskRequest, Capability, Message, Sensitivity,
-        )
-        from ..c2c_ai import redactor as redactor_mod  # type: ignore
+        try:
+            from ..c2c_ai import router as router_mod  # type: ignore
+            from ..c2c_ai.types import (  # type: ignore
+                AskRequest, Capability, Message, Sensitivity,
+            )
+            from ..c2c_ai import redactor as redactor_mod  # type: ignore
+        except (ImportError, ValueError):   # pack loaded as top-level `nodes` (tests, some launchers)
+            import importlib
+            router_mod = importlib.import_module("c2c_ai.router")
+            _t = importlib.import_module("c2c_ai.types")
+            AskRequest, Capability, Message, Sensitivity = _t.AskRequest, _t.Capability, _t.Message, _t.Sensitivity
+            redactor_mod = importlib.import_module("c2c_ai.redactor")
     except Exception as e:
         log.debug("[cloud_llm] router path unavailable: %s", e)
         return _ROUTER_MISS
@@ -70,18 +76,21 @@ def _try_router(provider: str, model: str, prompt: str, max_tokens: int,
         log.debug("[cloud_llm] get_router failed: %s", e)
         return _ROUTER_MISS
 
-    backend_id = f"cloud.{(provider or '').strip().lower()}"
-    backend = router.get(backend_id)
+    # L6.01 S4: the Diagnostics sidebar's own cloud choice is registered as diag.cloud.<provider> (diag_bridge)
+    p = (provider or "").strip().lower()
+    backend = backend_id = info = None
+    for bid in (f"diag.cloud.{p}", f"cloud.{p}"):
+        cand = router.get(bid)
+        cinfo = getattr(cand, "info", None)
+        if cand is None or cinfo is None or not getattr(cinfo, "enabled", True):
+            continue
+        health = getattr(cand, "health", None)
+        if health is not None and getattr(health, "ok", True) is False:
+            log.debug("[cloud_llm] router backend %s is unhealthy", bid)
+            continue
+        backend, backend_id, info = cand, bid, cinfo
+        break
     if backend is None:
-        return _ROUTER_MISS
-
-    info = getattr(backend, "info", None)
-    if info is None or not getattr(info, "enabled", True):
-        return _ROUTER_MISS
-    health = getattr(backend, "health", None)
-    if health is not None and getattr(health, "ok", True) is False:
-        log.debug("[cloud_llm] router backend %s is unhealthy; using legacy",
-                  backend_id)
         return _ROUTER_MISS
 
     msgs = [
@@ -452,13 +461,33 @@ def generate(provider: str, model: str, prompt: str,
         # spine == None → backend matched but call failed; try legacy as a
         # fallback so the caller still gets a response if the keys/URL work.
 
-    # 2) Legacy direct-HTTP dispatch.
+    # 2) Legacy direct-HTTP dispatch - with the spine's redaction (L6.01 S4: this path used to send the prompt as
+    # it came, keys / paths / e-mail addresses included, whenever the spine had no backend or its call failed).
     fn = _DISPATCH.get((provider or "").strip().lower())
     if fn is None:
         log.warning("[cloud_llm] unknown provider %r", provider)
         return None
+    prompt_r = _redact(prompt)
+    system_r = _redact(system) if system is not None else None
+    if prompt_r is None or (system is not None and system_r is None):
+        log.warning("[cloud_llm] redactor unavailable - nothing sent to %s", provider)
+        return None
     import inspect
     sig = inspect.signature(fn)
     accepted = {k: v for k, v in extra_kwargs.items() if k in sig.parameters}
-    return fn(model, prompt, max_tokens, system, **accepted)
+    return fn(model, prompt_r, max_tokens, system_r, **accepted)
+
+
+def _redact(text: str) -> Optional[str]:
+    """The spine's redactor, or None when it cannot be loaded (the caller then sends nothing)."""
+    try:
+        try:
+            from ..c2c_ai import redactor  # type: ignore
+        except Exception:
+            import importlib
+            redactor = importlib.import_module("c2c_ai.redactor")
+        return redactor.redact_text(text or "").text
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[cloud_llm] redactor failed: %s", exc)
+        return None
 
