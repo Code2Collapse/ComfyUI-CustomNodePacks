@@ -30,14 +30,118 @@ async function _searchModels(source, query, type, page) {
   return resp.json();
 }
 
-async function _downloadModel(source, modelId, fileId, destDir) {
+async function _downloadModel(source, modelId, fileId, destDir, sha256) {
   const resp = await api.fetchApi("/c2c/models/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, modelId, fileId, destDir })
+    body: JSON.stringify({ source, modelId, fileId, destDir, ...(sha256 ? { sha256 } : {}) })
   });
-  if (!resp.ok) throw new Error(await resp.text());
+  if (!resp.ok) {
+    let msg = await resp.text();
+    try { msg = JSON.parse(msg).error || msg; } catch (_) { /* plain text */ }
+    throw new Error(msg);
+  }
   return resp.json();
+}
+
+/* ─── downloads (L5.05): polled only while the browser is open and a job is queued or running ─── */
+
+let _dlTimer = null;
+
+function _fmtBytes(n) {
+  if (!n) return "0 MB";
+  return n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : `${(n / (1 << 20)).toFixed(1)} MB`;
+}
+
+function _fmtEta(s) {
+  if (s == null) return "";
+  if (s < 60) return `${s}s left`;
+  if (s < 3600) return `${Math.round(s / 60)} min left`;
+  return `${(s / 3600).toFixed(1)} h left`;
+}
+
+async function _dlAction(id, action) {
+  try { await api.fetchApi(`/c2c/models/downloads/${id}/${action}`, { method: "POST" }); } catch (_) { /* next poll shows it */ }
+  _pollDownloads();
+}
+
+function _renderDownloads(jobs) {
+  const box = document.getElementById("c2c-mb-downloads");
+  if (!box) return;
+  box.style.display = jobs.length ? "block" : "none";
+  box.innerHTML = "";
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;margin-bottom:4px;";
+  head.textContent = `Downloads (${jobs.length})`;
+  if (jobs.some(j => ["done", "error", "cancelled"].includes(j.status))) {
+    const clr = document.createElement("button");
+    clr.textContent = "Clear finished";
+    clr.style.cssText = "margin-left:auto;font-size:11px;padding:1px 8px;background:rgba(255,255,255,.07);" +
+      "border:1px solid rgba(255,255,255,.12);border-radius:4px;cursor:pointer;color:inherit;";
+    clr.addEventListener("click", () => _dlAction("all", "clear"));
+    head.appendChild(clr);
+  }
+  box.appendChild(head);
+  for (const j of jobs) {
+    const row = document.createElement("div");
+    row.dataset.job = j.id;
+    row.style.cssText = "display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:5px 0;" +
+      "border-top:1px solid rgba(255,255,255,.06);font-size:11px;";
+    const name = document.createElement("div");
+    name.textContent = j.label;
+    name.title = j.dest;
+    name.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    const acts = document.createElement("div");
+    acts.style.cssText = "display:flex;gap:4px;justify-content:flex-end;";
+    const btn = (label, action) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.dataset.action = action;
+      b.style.cssText = "font-size:10px;padding:0 7px;background:rgba(255,255,255,.07);" +
+        "border:1px solid rgba(255,255,255,.12);border-radius:4px;cursor:pointer;color:inherit;";
+      b.addEventListener("click", () => _dlAction(j.id, action));
+      acts.appendChild(b);
+    };
+    if (j.status === "running" || j.status === "queued") { btn("Pause", "pause"); btn("Cancel", "cancel"); }
+    else if (j.status === "paused") { btn("Resume", "resume"); btn("Cancel", "cancel"); }
+    else if (j.status === "error") { btn("Retry", "resume"); }
+    const bar = document.createElement("div");
+    bar.style.cssText = "grid-column:1 / -1;height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;";
+    const fill = document.createElement("div");
+    const pct = j.progress != null ? Math.round(j.progress * 100) : (j.status === "done" ? 100 : 0);
+    const tone = j.status === "error" ? "var(--c2c-dangerSoft)" : j.status === "done" ? "var(--c2c-okSoft2)"
+      : "var(--c2c-accentLink, #89b4fa)";
+    fill.style.cssText = `height:100%;width:${pct}%;background:${tone};`;
+    bar.appendChild(fill);
+    const info = document.createElement("div");
+    info.style.cssText = "grid-column:1 / -1;color:var(--c2c-gray450);";
+    const size = j.total ? `${_fmtBytes(j.done)} / ${_fmtBytes(j.total)}` : _fmtBytes(j.done);
+    const parts = {
+      queued: ["Queued"],
+      running: [size, j.speed ? `${_fmtBytes(j.speed)}/s` : "", _fmtEta(j.eta_s)],
+      paused: ["Paused", size],
+      done: ["Done", _fmtBytes(j.total), j.verified ? "SHA-256 verified" : "not verified (no published hash)"],
+      cancelled: ["Cancelled"],
+      error: [j.error || "Failed"],
+    }[j.status] || [j.status];
+    info.textContent = parts.filter(Boolean).join("  ·  ");
+    if (j.status === "error") info.style.color = "var(--c2c-dangerSoft)";
+    row.append(name, acts, bar, info);
+    box.appendChild(row);
+  }
+}
+
+async function _pollDownloads() {
+  if (_dlTimer) { clearTimeout(_dlTimer); _dlTimer = null; }
+  if (!_isOpen) return;
+  let jobs = [];
+  try {
+    const r = await api.fetchApi("/c2c/models/downloads");
+    if (r.ok) jobs = (await r.json()).jobs || [];
+  } catch (_) { /* server busy: try again on the next tick */ }
+  _renderDownloads(jobs);
+  if (_isOpen && jobs.some(j => j.status === "queued" || j.status === "running")) {
+    _dlTimer = setTimeout(_pollDownloads, 1000);
+  }
 }
 
 async function _listDestDirs() {
@@ -102,6 +206,8 @@ function _buildPanel() {
         style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--c2c-gray300);padding:0 4px;">×</button>
     </div>
     <div id="c2c-mb-results" style="overflow-y:auto;flex:1;padding:10px 14px;"></div>
+    <div id="c2c-mb-downloads" style="display:none;max-height:190px;overflow-y:auto;padding:8px 16px;
+                border-top:1px solid rgba(255,255,255,.08);"></div>
     <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;
                 border-top:1px solid rgba(255,255,255,.08);">
       <button id="c2c-mb-prev"
@@ -283,14 +389,18 @@ function _buildCard(item, destDirs) {
       const btn     = e.currentTarget;
       const destSel = card.querySelector("[data-dest]");
       const destDir = destSel?.value || "models/checkpoints";
-      const firstFile = files[0];
-      const fileId = firstFile?.id || firstFile?.rfilename || "";
+      // L5.05: prefer a .safetensors file (no pickled code) when the version lists several
+      const pick = files.find(f => /\.safetensors$/i.test(f.name || f.rfilename || "")) || files[0];
+      const fileId = pick?.id || pick?.rfilename || "";
+      const sha256 = pick?.hashes?.SHA256 || pick?.hashes?.sha256 || "";
       btn.textContent = "⏳";
       btn.disabled = true;
       try {
-        const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir);
+        const res = await _downloadModel(_currentSource, String(modelId), String(fileId), destDir, sha256);
         btn.textContent = "✓ Queued";
+        btn.title = res.verify ? "Will be checked against the published SHA-256" : "No published hash: not verified";
         btn.style.background = "var(--c2c-okBg)";
+        _pollDownloads();
       } catch (err) {
         btn.textContent = "✗ Error";
         btn.style.background = "var(--c2c-dangerBg)";
@@ -321,11 +431,13 @@ function _open() {
   _isOpen = true;
   document.querySelector("#c2c-mb-search")?.focus();
   if (!document.querySelector("#c2c-mb-results")?.children.length) _doSearch();
+  _pollDownloads();
 }
 
 function _close() {
   if (_panel) _panel.style.display = "none";
   _isOpen = false;
+  if (_dlTimer) { clearTimeout(_dlTimer); _dlTimer = null; }   // downloads keep running on the server
 }
 
 /* ─── keyboard ─── */

@@ -2,7 +2,9 @@
 Model Browser backend routes — P2.1
 Routes:
   GET  /c2c/models/search?source=civitai|huggingface&q=...&type=...&page=N
-  POST /c2c/models/download   {"source","modelId","fileId","destDir"}
+  POST /c2c/models/download   {"source","modelId","fileId","destDir","sha256"?} -> a download job
+  GET  /c2c/models/downloads  (jobs: progress, speed, ETA, status)
+  POST /c2c/models/downloads/<id>/pause|resume|cancel   (and /<any>/clear: drop finished jobs)
   GET  /c2c/models/dest_dirs
 """
 from __future__ import annotations
@@ -341,43 +343,39 @@ def download_plan(source: str, model_id: str, file_id: str) -> tuple[str, dict, 
     raise DownloadRefused(f"Unknown source: {source}")
 
 
-async def _fetch_to(url: str, hdrs: dict, dest_file: Path) -> bool:
-    """Stream to '<file>.part' and rename only when complete; a failed or partial download leaves nothing."""
-    import aiohttp
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
-    part = dest_file.with_name(dest_file.name + ".part")
+
+async def _hf_lfs_sha256(model_id: str, file_id: str) -> str | None:
+    """The SHA-256 Hugging Face publishes for an LFS file (tree listing), or None. Best effort, never fatal."""
     try:
-        async with aiohttp.ClientSession() as sess:
-            async with sess.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=3600)) as r:
-                if r.status != 200:
-                    log.error("Download failed %s: %s", url, _friendly_http_error(r.status, url))
-                    return False
-                with open(part, "wb") as fh:
-                    async for chunk in r.content.iter_chunked(65536):
-                        fh.write(chunk)
-        os.replace(part, dest_file)
-        log.info("Model downloaded: %s", dest_file)
-        return True
-    except Exception as exc:
-        log.error("Download error for %s: %s", url, exc)
-        return False
-    finally:
-        try:
-            if part.exists():
-                part.unlink()
-        except OSError:
-            pass
+        folder = file_id.rsplit("/", 1)[0] if "/" in file_id else ""
+        url = f"{_HF_API_BASE}/models/{model_id}/tree/main" + (f"/{urllib.parse.quote(folder)}" if folder else "")
+        for e in await asyncio.wait_for(_http_get(url), timeout=15) or []:
+            if isinstance(e, dict) and e.get("path") == file_id:
+                oid = (e.get("lfs") or {}).get("oid") or (e.get("lfs") or {}).get("sha256")
+                return oid if oid and _SHA_RE.match(oid) else None
+    except Exception as exc:  # noqa: BLE001 - verification is a bonus, the download still runs
+        log.info("no published SHA-256 for %s/%s: %s", model_id, file_id, exc)
+    return None
 
 
-async def _download_model(source: str, model_id: str, file_id: str, dest_dir: str) -> dict:
-    """Queue a background download of a model file (Civitai: numeric file id; Hugging Face: path in the repo).
-    Raises DownloadRefused for a destination outside the model folders or a malformed id."""
+async def _download_model(source: str, model_id: str, file_id: str, dest_dir: str,
+                          sha256: str | None = None) -> dict:
+    """Queue a download in the download manager (Civitai: numeric file id; Hugging Face: path in the repo).
+    Raises DownloadRefused for a destination outside the model folders or a malformed id. `sha256` = the hash the
+    site publishes (Civitai file hashes.SHA256); for Hugging Face it is looked up when not given."""
+    from .model_download_manager import get_manager
+
     abs_dest = resolve_dest_dir(dest_dir)
     url, hdrs, fname = download_plan(source, model_id, file_id)
+    if sha256 and not _SHA_RE.match(str(sha256)):
+        raise DownloadRefused("sha256 must be 64 hex characters")
+    if not sha256 and source == "huggingface":
+        sha256 = await _hf_lfs_sha256(model_id, file_id)
     abs_dest.mkdir(parents=True, exist_ok=True)
-    dest_file = abs_dest / fname
-    asyncio.create_task(_fetch_to(url, hdrs, dest_file))
-    return {"status": "queued", "dest": str(dest_file)}
+    job = get_manager().add(url, abs_dest / fname, hdrs, sha256=sha256, label=f"{model_id} / {fname}")
+    return {"status": job.status, "job": job.id, "dest": str(job.dest), "verify": bool(job.sha256)}
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -425,13 +423,31 @@ def register_routes(server) -> None:
             dest_dir = body.get("destDir", "models/checkpoints")
             if not model_id or not file_id:
                 return web.json_response({"error": "modelId and fileId required"}, status=400)
-            result = await _download_model(source, model_id, file_id, dest_dir)
+            result = await _download_model(source, model_id, file_id, dest_dir, sha256=body.get("sha256") or None)
             return web.json_response(result)
         except DownloadRefused as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             log.error("Model download error: %s", exc, exc_info=True)
             return web.json_response({"error": str(exc)}, status=500)
+
+    @server.routes.get("/c2c/models/downloads")
+    async def model_downloads(_request: web.Request) -> web.Response:
+        from .model_download_manager import get_manager
+        return web.json_response({"jobs": get_manager().list()})
+
+    @server.routes.post("/c2c/models/downloads/{job_id}/{action}")
+    async def model_download_action(request: web.Request) -> web.Response:
+        from .model_download_manager import get_manager
+        mgr, job_id, action = get_manager(), request.match_info["job_id"], request.match_info["action"]
+        if action == "clear":
+            return web.json_response({"ok": True, "cleared": mgr.clear_finished()})
+        fn = {"pause": mgr.pause, "resume": mgr.resume, "cancel": mgr.cancel}.get(action)
+        if fn is None:
+            return web.json_response({"error": f"unknown action {action!r}"}, status=400)
+        ok = fn(job_id)
+        return web.json_response({"ok": ok, **({} if ok else {"error": f"cannot {action} job {job_id} now"})},
+                                 status=200 if ok else 409)
 
     @server.routes.get("/c2c/models/dest_dirs")
     async def model_dest_dirs(_request: web.Request) -> web.Response:
