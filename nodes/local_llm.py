@@ -296,17 +296,26 @@ class Backend:
 
 def get_or_load(model_id: Optional[str] = None,
                 n_threads: int = 0) -> Optional[Backend]:
-    """Lazily build a singleton llama.cpp backend. Returns None if unavailable."""
+    """Lazily build a singleton llama.cpp backend. Returns None if unavailable.
+
+    The loaded model follows the selection: when `model_id` now resolves to a different file, the old model is
+    released and the new one loaded (it used to stay loaded until ComfyUI restarted, whatever was picked later)."""
     global _BACKEND
     with _LOCK:
-        if _BACKEND is not None:
+        path = _resolve_any_model(model_id)
+        if _BACKEND is not None and (not path or os.path.normcase(os.path.abspath(path))
+                                     == os.path.normcase(os.path.abspath(_BACKEND.model_path))):
             return _BACKEND
+        if _BACKEND is not None:
+            log.info("[local_llm] model selection changed: releasing %s for %s", _BACKEND.model_path, path)
+            _BACKEND = None
+            import gc
+            gc.collect()
         try:
             from llama_cpp import Llama  # type: ignore
         except Exception as e:
             log.info("[local_llm] llama-cpp-python not installed: %s", e)
             return None
-        path = _resolve_any_model(model_id)
         if not path:
             log.info("[local_llm] no GGUF found (looked for %r, %r, any) in %s — "
                      "use the 'Download local AI model' button in C2C AI settings.",

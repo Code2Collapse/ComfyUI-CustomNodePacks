@@ -614,11 +614,12 @@ def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
             log.info("[error_assistant] local_llm unavailable: %s", e)
             return None
     with _TIER_LOCK:
-        if _local_backend is None:
-            _local_backend = local_llm.get_or_load(
-                model_id=settings.get("local_model"),
-                n_threads=settings.get("local_threads") or 0,
-            )
+        # local_llm keeps ONE loaded model and swaps it when the selection changes; asking it every time is cheap
+        # (a folder listing). This used to keep the first model loaded until ComfyUI restarted.
+        _local_backend = local_llm.get_or_load(
+            model_id=settings.get("local_model"),
+            n_threads=settings.get("local_threads") or 0,
+        )
         if _local_backend is None:
             return None
     try:
