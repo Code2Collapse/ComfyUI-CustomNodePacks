@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C2C App</title>
+<link rel="stylesheet" href="/static/runner.css">
+<script src="/static/runner.js" defer></script>
+</head>
+<body data-page="app">
+<header class="bar"><a class="brand" href="/">C2C Apps</a><span id="who" class="who"></span>
+  <button id="logout" class="ghost" hidden>Sign out</button></header>
+<main class="wrap">
+  <section class="card">
+    <h1 id="app-name">Loading…</h1>
+    <p id="app-desc" class="muted"></p>
+    <p class="muted small" id="app-release"></p>
+    <form id="run-form" hidden>
+      <div id="fields" class="fields"></div>
+      <button id="run" type="submit">Run</button>
+      <p id="run-error" class="error" role="alert"></p>
+    </form>
+  </section>
+  <section id="job" class="card" hidden>
+    <div class="row"><h2>Run</h2><span id="job-state" class="pill"></span></div>
+    <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="meter"><div id="meter-fill"></div></div>
+    <p id="job-msg" class="muted"></p>
+    <button id="cancel" class="ghost" type="button">Cancel run</button>
+    <div id="outputs" class="outputs"></div>
+  </section>
+</main>
+</body>
+</html>

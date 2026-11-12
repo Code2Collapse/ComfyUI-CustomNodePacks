@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C2C Apps</title>
+<link rel="stylesheet" href="/static/runner.css">
+<script src="/static/runner.js" defer></script>
+</head>
+<body data-page="index">
+<header class="bar"><span class="brand">C2C Apps</span><span id="who" class="who"></span>
+  <button id="logout" class="ghost" hidden>Sign out</button></header>
+<main class="wrap">
+  <section id="login" class="card" hidden>
+    <h1>Sign in</h1>
+    <form id="login-form">
+      <label for="user">User name</label><input id="user" name="user" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+  <section id="apps" hidden>
+    <h1>Your apps</h1>
+    <ul id="app-list" class="apps"></ul>
+    <p id="no-apps" class="muted" hidden>No apps have been shared with you yet.</p>
+  </section>
+</main>
+</body>
+</html>
