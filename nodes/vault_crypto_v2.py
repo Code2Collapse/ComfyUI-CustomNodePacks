@@ -26,6 +26,17 @@ from .vault_crypto import VaultError
 
 MAGIC2 = b"C2CVLT2"
 VERSION = 2
+# A26 L9.205 - the shipped format, stated explicitly (the A18 design text called the A18 vault "C2CVLT3"; no such
+# envelope was ever written: A18 vaults are C2CVLT2 envelopes whose ENCRYPTED plaintext carries the A18 content).
+PLAIN_FORMAT = 2            # the plaintext's "format" field (envelope v2)
+CONTENT_SCHEMA = 1          # the plaintext's "schema" field: 1 = A18 {api, ui, interface, editors, profile, packs}
+FORMAT = {"magic": "C2CVLT2", "version": VERSION, "aead": "AES-256-GCM (96-bit nonce, 128-bit tag)",
+          "kdf": "Argon2id (id 1; memory / iterations / lanes in the header, bounded)",
+          "password_wrap": "AES-256-GCM of the data key under the Argon2id key",
+          "install_wrap": "X25519 + HKDF-SHA256 + AES-256-GCM per installation",
+          "portable_wrap": "HKDF-SHA256 of a public constant (obfuscation only)",
+          "aad": "the whole header (version, mode, vault id, KDF, salt, boundary + interface hashes)",
+          "plaintext": {"format": PLAIN_FORMAT, "schema": CONTENT_SCHEMA}}
 MODE_LOCKED = 0
 MODE_SEALED_INSTALLS = 1
 MODE_SEALED_PORTABLE = 2
@@ -132,6 +143,9 @@ def parse(payload: str) -> dict:
     try:
         i = len(MAGIC2)
         version, mode = struct.unpack_from("!BB", blob, i); i += 2
+        if version > VERSION:
+            raise VaultError(f"This vault was made by a newer C2C (vault format {version}); update "
+                             "ComfyUI-CustomNodePacks to open it.")
         if version != VERSION:
             raise VaultError(f"Unsupported vault format version {version}.")
         if mode not in MODES:
@@ -185,7 +199,7 @@ def info(payload: str) -> dict:
     """What anyone may read without a key: mode, vault id, KDF, the installs it was sealed for."""
     p = parse(payload)
     return {"version": VERSION, "mode": p["mode"], "vault_id": p["vault_id"], "kdf": p["kdf"],
-            "installs": [kid.hex() for kid, *_ in p["installs"]]}
+            "installs": [kid.hex() for kid, *_ in p["installs"]], "format": FORMAT}
 
 
 # ── encrypting ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -262,7 +276,8 @@ def lock_with(plain: dict, k: dict, *, vault_id: str, mode: int, iface: dict, re
     bhash = bytes.fromhex(boundary_hash(ex["boundary_in"], ex["boundary_out"]))
     # the installs' PUBLIC keys ride inside the ciphertext: a re-seal after an edit wraps for the same installs,
     # and the list of who may run it is not readable from the file
-    inner = dict(plain, format=2, recipients=[base64.b64encode(k).decode("ascii") for k in (recipients or [])]
+    inner = dict(plain, format=PLAIN_FORMAT, schema=_schema_of(plain),
+                 recipients=[base64.b64encode(k).decode("ascii") for k in (recipients or [])]
                  if mode == MODE_SEALED_INSTALLS else [])
     return _encrypt(inner, mode=mode, vault_id=vault_id, kdf=kdf, salt=salt, kek=kek,
                     recipients=recipients, bhash=bhash, ihash=canonical_hash(interface_struct(iface)))
@@ -283,13 +298,31 @@ def relock(old_payload: str, kek: bytes, plain: dict, *, iface: dict, recipients
     ex = _check_plain(plain)
     mode = old["mode"] if mode is None else mode
     bhash = bytes.fromhex(boundary_hash(ex["boundary_in"], ex["boundary_out"]))
-    inner = dict(plain, format=2, recipients=[base64.b64encode(k).decode("ascii") for k in (recipients or [])]
+    inner = dict(plain, format=PLAIN_FORMAT, schema=_schema_of(plain),
+                 recipients=[base64.b64encode(k).decode("ascii") for k in (recipients or [])]
                  if mode == MODE_SEALED_INSTALLS else [])
     return _encrypt(inner, mode=mode, vault_id=old["vault_id"], kdf=old["kdf"], salt=old["salt"],
                     kek=kek, recipients=recipients, bhash=bhash, ihash=canonical_hash(interface_struct(iface)))
 
 
 # ── decrypting ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _schema_of(plain: dict) -> int:
+    """1 for A18 content ({api, ui, ...}), 0 for the A17 locked-subgraph layout ({exec, layout})."""
+    return CONTENT_SCHEMA if isinstance(plain.get("api"), dict) else 0
+
+
+def check_plain_versions(out: dict) -> None:
+    """A plaintext written by a NEWER build is refused in words, never half-read (A26 L9.205). Plaintexts from before
+    the explicit schema field (no "schema") are A17 / A18 content and stay readable."""
+    fmt = out.get("format") if out.get("format") is not None else PLAIN_FORMAT
+    sch = out.get("schema") if out.get("schema") is not None else 0      # absent / null = pre-L9.205 content
+    if not isinstance(fmt, int) or not isinstance(sch, int) or fmt < 1 or sch < 0:
+        raise VaultError("Vault opened but its contents carry a malformed format / schema number.")
+    if fmt > PLAIN_FORMAT or sch > CONTENT_SCHEMA:
+        raise VaultError(f"This vault was made by a newer C2C (contents format {fmt}, schema {sch}); update "
+                         "ComfyUI-CustomNodePacks to open it.")
+
 
 def _decrypt_body(p: dict, dek: bytes) -> dict:
     try:
@@ -300,6 +333,7 @@ def _decrypt_body(p: dict, dek: bytes) -> dict:
         out = json.loads(data.decode("utf-8"))
     except Exception as exc:
         raise VaultError("Vault opened but its contents are not valid JSON.") from exc
+    check_plain_versions(out)
     _check_plain(out)
     return out
 

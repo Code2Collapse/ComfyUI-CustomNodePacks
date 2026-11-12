@@ -51,13 +51,22 @@ prompts convert exactly as for any subgraph), the server re-encrypts under the s
 replaces the subgraph node. While open, every serialization (save, autosave, export, clipboard, queue,
 `EXTRA_PNGINFO`) writes the vault in its last locked form.
 
-### Payload (envelope v3, `C2CVLT3`)
+### Payload (envelope `C2CVLT2`, version 2 - what ships)
 
-Same construction as v2 (random data key; AES-256-GCM; Argon2id password wrap; X25519 per-install wraps; the header
-is the AAD of every operation), plus: `profile`, `editors` (install public keys allowed to open for editing, the
-creator's by default), `outputs_nodes` flag. Plaintext = `{"ui": <subgraph definition + nested definitions>,
-"api": {"nodes": {...}, "inputs": [...], "outputs": [...], "promoted": [...]}, "interface": {...}}`. v1 / v2 payloads
-of old Locked / Sealed nodes stay readable; their `api` is derived from the old flattened format.
+A18 vaults are written in the **v2 envelope** (`nodes/vault_crypto_v2.py`, `FORMAT`): magic `C2CVLT2`, version 2,
+mode (locked / sealed for installations / sealed portable), vault id, Argon2id parameters (bounded), salt, boundary
+and interface hashes; a random data key encrypts the body with AES-256-GCM; the data key is wrapped under the
+Argon2id password key (AES-256-GCM), per installation (X25519 + HKDF-SHA256 + AES-256-GCM) or, portable only, under
+a public constant (obfuscation). The whole header is the associated data of every AES-GCM operation. `parse()`
+checks every field before any key is derived; an envelope with a higher version is refused with "made by a newer
+C2C - update".
+
+The A18 additions live in the ENCRYPTED plaintext: `{"format": 2, "schema": 1, "api": {"nodes", "inputs",
+"outputs", "promoted"}, "ui": <subgraph definition + nested definitions>, "interface": {...}, "exec": <boundary
+manifest>, "profile", "editors" (install public keys allowed to open for editing), "packs", "recipients"}`.
+`schema` 1 = this A18 content, 0 = the A17 locked-subgraph layout (`exec` + `layout`); plaintexts written before the
+field existed carry no `schema` and stay readable; a higher `format` or `schema` is refused in words. v1 (`C2CVLT1`)
+payloads of old Locked / Sealed nodes stay readable; their `api` is derived from the old flattened format.
 
 ### Security profiles (per vault, chosen when locking)
 
@@ -249,3 +258,10 @@ The Error Assistant explains the vault's run errors (patterns `vault_missing_cus
 
 - every guardrail refusal, including `..` as a folder name;
 - removal of a half-cloned folder despite git's read-only object files on Windows.
+
+## Format history
+
+- The first A18 draft of this document described an "envelope v3, `C2CVLT3`" for A18 vaults. It was never
+  implemented: A18 shipped on the existing `C2CVLT2` envelope with the A18 content inside the encrypted plaintext.
+  Reconciled 2026-11-12 (owner directive A26, ledger L9.205): the text above describes what the code writes, the
+  plaintext carries an explicit `format` / `schema`, and no migration is needed because no `C2CVLT3` payload exists.
