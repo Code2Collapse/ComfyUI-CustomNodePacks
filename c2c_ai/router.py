@@ -167,6 +167,17 @@ class Router:
                 and required.issubset(b.info.capabilities)
                 and b.health.ok]
 
+    def set_fallback_order(self, ids) -> None:
+        """L6.06: the user's backend order, used inside each tier (unlisted backends keep their usual order)."""
+        self._fallback_order = [str(i) for i in (ids or [])]
+
+    def _ordered(self, backends: list[Backend]) -> list[Backend]:
+        order = getattr(self, "_fallback_order", None) or []
+        if not order:
+            return backends
+        rank = {bid: i for i, bid in enumerate(order)}
+        return sorted(backends, key=lambda b: rank.get(b.info.id, len(rank)))   # stable for the unlisted
+
     def _filter(self, required: set[Capability], pol: Policy, feature: str | None = None) -> list[Backend]:
         backends = [b for b in self.all_backends() if b.info.enabled]
         # feature scope (L6.01 S5): a backend limited to some features never serves the others
@@ -175,8 +186,8 @@ class Router:
         # capability filter
         backends = [b for b in backends if required.issubset(b.info.capabilities)]
         # Bucket by tier
-        cloud = [b for b in backends if b.info.tier == Tier.CLOUD]
-        local = [b for b in backends if b.info.tier == Tier.LOCAL]
+        cloud = self._ordered([b for b in backends if b.info.tier == Tier.CLOUD])
+        local = self._ordered([b for b in backends if b.info.tier == Tier.LOCAL])
         deterministic = [b for b in backends if b.info.tier == Tier.DETERMINISTIC]
         if pol == Policy.DETERMINISTIC_ONLY:
             return deterministic
@@ -193,8 +204,8 @@ class Router:
         # as a no-LLM-available fallback inside select(), so that AUTO doesn't
         # silently route every chat call to the rule pack just because it's
         # the cheapest backend.
-        local_sorted = sorted(local, key=lambda b: b.info.cost_per_1k_input)
-        cloud_sorted = sorted(cloud, key=lambda b: b.info.cost_per_1k_input)
+        local_sorted = self._ordered(sorted(local, key=lambda b: b.info.cost_per_1k_input))
+        cloud_sorted = self._ordered(sorted(cloud, key=lambda b: b.info.cost_per_1k_input))
         return local_sorted + cloud_sorted
 
     # ================================================================ ask
@@ -400,6 +411,8 @@ class Router:
                     }
                     for e in policy_mod.listing()
                 ],
+                "global_policy": (policy_mod.get_global().value if policy_mod.get_global() else None),
+                "fallback_order": list(getattr(self, "_fallback_order", None) or []),
                 "cost": self._meter.snapshot(),
             }
 

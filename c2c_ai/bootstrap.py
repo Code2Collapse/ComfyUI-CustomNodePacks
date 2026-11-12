@@ -390,6 +390,8 @@ def reapply_backends(router, cfg: dict) -> None:
             router.register(build_backend(entry))
         except Exception as exc:
             log.warning("config: skipping %s: %s", entry, exc)
+    if hasattr(router, "set_fallback_order"):                         # L6.06
+        router.set_fallback_order(cfg.get("fallback_order") or [])
 
 
 def bootstrap() -> None:
@@ -469,6 +471,8 @@ def bootstrap() -> None:
             log.info("c2c_ai: Diagnostics backends bridged: %s", ", ".join(bridged))
     except Exception as exc:  # noqa: BLE001
         log.warning("c2c_ai: Diagnostics bridge failed: %s", exc)
+    if hasattr(router, "set_fallback_order"):                         # L6.06
+        router.set_fallback_order(cfg.get("fallback_order") or [])
     router.start_periodic_probe(interval_s=60.0)
     if registered:
         log.info("c2c_ai bootstrap done: %d backends registered", registered)

@@ -433,10 +433,48 @@ function buildSettingsView(root) {
                    <input type="checkbox" data-id="${b.id}" class="c2c-en" ${b.enabled?"checked":""}></td>
                  <td style="padding:4px;border-bottom:1px solid var(--c2c-border)">
                    <button data-id="${b.id}" class="c2c-test" style="background:var(--c2c-bg2);color:var(--c2c-fg);
-                     border:1px solid var(--c2c-border);border-radius:3px;padding:2px 8px;cursor:pointer;font-size:10px">test</button></td>`;
+                     border:1px solid var(--c2c-border);border-radius:3px;padding:2px 8px;cursor:pointer;font-size:10px">test</button>
+                   <button data-id="${b.id}" data-move="-1" class="c2c-move" title="Try this backend earlier"
+                     style="background:none;border:none;color:var(--c2c-sub);cursor:pointer;font-size:11px;padding:0 2px">▲</button><button
+                     data-id="${b.id}" data-move="1" class="c2c-move" title="Try this backend later"
+                     style="background:none;border:none;color:var(--c2c-sub);cursor:pointer;font-size:11px;padding:0 2px">▼</button></td>`;
             tbody.appendChild(tr);
         });
         tbl.appendChild(tbody);
+        // L6.06: per-tier health at a glance + the order backends are tried in (within a tier)
+        const tiers = {};
+        for (const b of st.backends || []) {
+            const t = tiers[b.tier] || (tiers[b.tier] = { ok: 0, n: 0 });
+            if (b.enabled) { t.n += 1; if (b.health?.ok) t.ok += 1; }
+        }
+        const tierLine = document.createElement("div");
+        tierLine.className = "c2c-tier-health";
+        tierLine.style.cssText = "margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;font-size:10.5px;";
+        for (const [tier, label] of [["local", "On this computer"], ["cloud", "Online"], ["deterministic", "Offline rules"]]) {
+            const t = tiers[tier];
+            if (!t) continue;
+            const chip = document.createElement("span");
+            const good = t.n > 0 && t.ok === t.n, none = t.ok === 0;
+            chip.style.cssText = `padding:2px 8px;border-radius:10px;border:1px solid var(--c2c-border);` +
+                `color:${good ? "var(--c2c-green)" : none ? "var(--c2c-red)" : "var(--c2c-yellow)"};`;
+            chip.textContent = `${label}: ${t.ok}/${t.n} healthy`;
+            tierLine.appendChild(chip);
+        }
+        sec1.appendChild(tierLine);
+        tbody.querySelectorAll("button.c2c-move").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const ids = (st.backends || []).map(b => b.id);
+                const cfgNow = await apiGet("/c2c/ai/config");
+                const order = (cfgNow.fallback_order || []).filter(x => ids.includes(x));
+                for (const x of ids) if (!order.includes(x)) order.push(x);
+                const i = order.indexOf(btn.dataset.id), j = i + Number(btn.dataset.move);
+                if (i < 0 || j < 0 || j >= order.length) return;
+                [order[i], order[j]] = [order[j], order[i]];
+                cfgNow.fallback_order = order;
+                await apiPost("/c2c/ai/config", cfgNow);
+                refresh();
+            });
+        });
         sec1.appendChild(tbl);
 
         const btnRow = document.createElement("div");
@@ -567,6 +605,30 @@ function buildSettingsView(root) {
         // ----- Routing section
         const sec2 = document.createElement("section");
         sec2.innerHTML = `<h4 style="color:var(--c2c-blue);margin:14px 0 6px;font-size:12px;">Per-feature routing</h4>`;
+        // L6.06: one preferred tier for every feature; a per-feature choice below still wins, and features that
+        // must stay local (or rule-only) keep that whatever is picked here
+        const gRow = document.createElement("div");
+        gRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;flex-wrap:wrap;";
+        const gLabel = document.createElement("label");
+        gLabel.htmlFor = "c2c-global-policy";
+        gLabel.textContent = "Preferred for all features:";
+        const gSel = document.createElement("select");
+        gSel.id = "c2c-global-policy";
+        gSel.style.cssText = "background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);" +
+                             "border-radius:3px;font-size:11px;padding:2px 4px;";
+        for (const [v, t] of [["", "each feature's default"], ["prefer_local", "this computer first"],
+                              ["local_only", "this computer only (nothing goes online)"], ["auto", "cheapest"],
+                              ["prefer_cloud", "online first"], ["cloud_only", "online only"]]) {
+            const o = document.createElement("option");
+            o.value = v; o.textContent = t; o.selected = (st.global_policy || "") === v;
+            gSel.appendChild(o);
+        }
+        gSel.addEventListener("change", async () => {
+            await apiPost("/c2c/ai/policy", { global: gSel.value || null });
+            refresh();
+        });
+        gRow.append(gLabel, gSel);
+        sec2.appendChild(gRow);
         const policyTbl = document.createElement("table");
         policyTbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
         (st.policies || []).forEach(p => {

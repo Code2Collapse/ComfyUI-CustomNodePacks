@@ -561,7 +561,16 @@ def register_routes(server) -> None:
     @routes.post("/c2c/ai/policy")
     async def _policy_set(req):
         body = await req.json()
+        if "global" in body:                 # L6.06: preferred tier for every feature
+            g = body.get("global")
+            try:
+                policy_mod.set_global(Policy(g) if g else None)
+            except ValueError:
+                return _err("BAD_POLICY", f"unknown policy: {g!r}")
+            return _ok({"global": g})
         feat = body.get("feature") or ""
+        if feat == policy_mod.GLOBAL_KEY:
+            return _err("MISSING_FEATURE", "use {\"global\": ...} for the preferred tier")
         pol = body.get("policy")
         if not feat:
             return _err("MISSING_FEATURE", "feature is required")

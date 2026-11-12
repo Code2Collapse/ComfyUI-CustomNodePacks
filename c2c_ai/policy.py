@@ -56,6 +56,11 @@ def register_default(feature: str, policy: Policy) -> None:
 
 # ---------- user overrides ---------------------------------------------------
 
+GLOBAL_KEY = "__global__"          # L6.06: the user's preferred tier for every feature, stored beside the overrides
+# Defaults a global preference never loosens (numeric / rule-pack-only features)
+_STRICT = (Policy.LOCAL_ONLY, Policy.DETERMINISTIC_ONLY)
+
+
 def _load_overrides() -> dict[str, Policy]:
     if not _POLICY_FILE.is_file():
         return {}
@@ -82,13 +87,27 @@ def _save_overrides(overrides: dict[str, Policy]) -> None:
 _OVERRIDES: dict[str, Policy] = _load_overrides()
 
 
+def get_global() -> Policy | None:
+    return _OVERRIDES.get(GLOBAL_KEY)
+
+
+def set_global(policy: Policy | None) -> None:
+    """The preferred tier for every feature (None clears it). `local_only` = nothing goes to an online model."""
+    set_override(GLOBAL_KEY, policy)
+
+
 def resolve(feature: str, explicit: Policy | None = None) -> Policy:
-    """Return the effective policy: explicit > user override > registered default > AUTO."""
+    """Effective policy: explicit > per-feature override > global preference > registered default > AUTO.
+    The global preference never loosens a strict default (LOCAL_ONLY, DETERMINISTIC_ONLY)."""
     if explicit is not None:
         return explicit
-    if feature in _OVERRIDES:
+    if feature in _OVERRIDES and feature != GLOBAL_KEY:
         return _OVERRIDES[feature]
-    return _DEFAULTS.get(feature, Policy.AUTO)
+    default = _DEFAULTS.get(feature, Policy.AUTO)
+    g = _OVERRIDES.get(GLOBAL_KEY)
+    if g is not None and default not in _STRICT:
+        return g
+    return default
 
 
 def set_override(feature: str, policy: Policy | None) -> None:
@@ -102,7 +121,7 @@ def set_override(feature: str, policy: Policy | None) -> None:
 
 
 def all_known_features() -> list[str]:
-    return sorted(set(_DEFAULTS.keys()) | set(_OVERRIDES.keys()))
+    return sorted((set(_DEFAULTS.keys()) | set(_OVERRIDES.keys())) - {GLOBAL_KEY})
 
 
 @dataclass(frozen=True)
@@ -122,6 +141,6 @@ def listing() -> list[PolicyEntry]:
             feature=f,
             default=default,
             override=override,
-            effective=override or default,
+            effective=resolve(f),
         ))
     return out
