@@ -198,6 +198,20 @@ Each of these nodes reports a `model_status` line in its `info` output (SAM Mode
 
 A saved SAM Model Loader choice `[download] ...` no longer downloads by itself: tick `allow_download`.
 
+#### Model Browser downloads (Ctrl+Alt+M)
+
+The Model Browser searches the models already on disk, Civitai and Hugging Face, and downloads into a ComfyUI model
+folder you pick (only folders ComfyUI knows; anything else is refused). Downloads run as a queue with progress, speed
+and time left, and can be paused, resumed (they continue where they stopped) or cancelled. A finished file is checked
+against the SHA-256 the site publishes and removed if it does not match. When a version lists several files, the
+`.safetensors` one is preferred.
+
+- `CIVITAI_API_KEY`, `HF_TOKEN`: your tokens for restricted or gated files. They are sent as a header, never in a URL
+  or a log.
+- `C2C_CIVITAI_API_BASE`, `C2C_CIVITAI_DOWNLOAD_BASE`, `C2C_HF_API_BASE`, `C2C_HF_BASE`: a mirror or proxy instead
+  of the public sites (defaults: civitai.com and huggingface.co).
+
+
 ### 5. Restart ComfyUI
 
 Look for `[MEC] Loaded 44 MaskEditControl nodes.` in the console to confirm.

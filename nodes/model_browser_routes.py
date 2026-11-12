@@ -20,8 +20,15 @@ from typing import Any
 
 log = logging.getLogger("C2C.ModelBrowser")
 
-_CIVITAI_BASE = "https://civitai.com/api/v1"
-_HF_API_BASE  = "https://huggingface.co/api"
+# L5.02: overridable (a mirror or a corporate proxy); the defaults are the public endpoints, verified live earlier.
+_CIVITAI_BASE = os.environ.get("C2C_CIVITAI_API_BASE", "https://civitai.com/api/v1").rstrip("/")
+_CIVITAI_DL_BASE = os.environ.get("C2C_CIVITAI_DOWNLOAD_BASE", "https://civitai.com/api/download").rstrip("/")
+_HF_API_BASE  = os.environ.get("C2C_HF_API_BASE", "https://huggingface.co/api").rstrip("/")
+_HF_BASE = os.environ.get("C2C_HF_BASE", "https://huggingface.co").rstrip("/")
+_SEARCH_RETRIES = 2                       # search is interactive: 3 tries in all, short waits
+_SEARCH_BACKOFF_S = (1.0, 3.0)
+_SEARCH_MAX_WAIT_S = 8.0
+_sleep = asyncio.sleep                    # tests replace it
 
 # Local-source type → folder_paths key fragments. Lets the type filter
 # narrow LOCAL browsing (e.g. "Checkpoint" -> only the checkpoints dir).
@@ -81,29 +88,47 @@ def _friendly_http_error(status: int, url: str) -> str:
     return f"HTTP {status} from {host}"
 
 
-async def _http_get(url: str, headers: dict | None = None) -> Any:
-    import aiohttp
-    hdrs = {"User-Agent": _BROWSER_UA, "Accept": "application/json"}
+def _auth_header(url: str) -> dict:
+    """The user's token for the site this URL belongs to (the configured base counts as that site)."""
     host = urllib.parse.urlparse(url).netloc
-    if "civitai" in host:
+    if "civitai" in host or url.startswith((_CIVITAI_BASE, _CIVITAI_DL_BASE)):
         key = os.environ.get("CIVITAI_API_KEY", "").strip()
-        if key:
-            hdrs["Authorization"] = f"Bearer {key}"
-    elif "huggingface" in host:
+        return {"Authorization": f"Bearer {key}"} if key else {}
+    if "huggingface" in host or url.startswith((_HF_API_BASE, _HF_BASE)):
         tok = os.environ.get("HF_TOKEN", "").strip()
-        if tok:
-            hdrs["Authorization"] = f"Bearer {tok}"
+        return {"Authorization": f"Bearer {tok}"} if tok else {}
+    return {}
+
+
+async def _http_get(url: str, headers: dict | None = None) -> Any:
+    """GET JSON. 429 / 5xx / network errors retry twice with a short backoff (Retry-After honoured, capped): a
+    search must stay interactive. Other failures raise with a plain-English message."""
+    import aiohttp
+    hdrs = {"User-Agent": _BROWSER_UA, "Accept": "application/json", **_auth_header(url)}
     if headers:
         hdrs.update(headers)
-    async with aiohttp.ClientSession() as sess:
-        async with sess.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status != 200:
-                raise RuntimeError(_friendly_http_error(r.status, url))
-            try:
-                return await r.json(content_type=None)
-            except Exception:
-                # Cloudflare human-check pages return HTML with a 200 on some paths
-                raise RuntimeError(_friendly_http_error(403, url))
+    last = ""
+    for attempt in range(_SEARCH_RETRIES + 1):
+        wait = None
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    if r.status == 200:
+                        try:
+                            return await r.json(content_type=None)
+                        except Exception:
+                            # Cloudflare human-check pages return HTML with a 200 on some paths
+                            raise RuntimeError(_friendly_http_error(403, url)) from None
+                    if r.status != 429 and r.status < 500:
+                        raise RuntimeError(_friendly_http_error(r.status, url))
+                    last = _friendly_http_error(r.status, url)
+                    ra = r.headers.get("Retry-After", "")
+                    wait = float(ra) if ra.isdigit() else None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            last = f"{type(exc).__name__} reaching {urllib.parse.urlparse(url).netloc}"
+        if attempt < _SEARCH_RETRIES:
+            await _sleep(min(wait if wait is not None else _SEARCH_BACKOFF_S[attempt], _SEARCH_MAX_WAIT_S))
+    raise RuntimeError(last + " (tried 3 times)")
 
 
 # ── Civitai search ────────────────────────────────────────────────────────────
@@ -197,6 +222,8 @@ async def _local_search(q: str, model_type: str, page: int) -> dict:
     q_lower = q.lower() if q else ""
     items: list[dict] = []
     for key, _paths in folder_paths.folder_names_and_paths.items():
+        if key in _NOT_MODEL_KEYS:                      # e.g. custom_nodes: not models (L5.02 live check)
+            continue
         # Type filter: narrow folders by the type→folder map (loose match).
         if model_type:
             frags = _TYPE_TO_FOLDER.get(model_type.lower(), [model_type.lower()])
@@ -325,7 +352,7 @@ def download_plan(source: str, model_id: str, file_id: str) -> tuple[str, dict, 
         key = os.environ.get("CIVITAI_API_KEY", "").strip()
         if key:
             hdrs["Authorization"] = f"Bearer {key}"
-        return f"https://civitai.com/api/download/models/{file_id}", hdrs, f"{model_id}_{file_id}.safetensors"
+        return f"{_CIVITAI_DL_BASE}/models/{file_id}", hdrs, f"{model_id}_{file_id}.safetensors"
     if source == "huggingface":
         if not _HF_REPO_RE.fullmatch(str(model_id)):
             raise DownloadRefused("Hugging Face modelId must be 'owner/repo'")
@@ -338,7 +365,7 @@ def download_plan(source: str, model_id: str, file_id: str) -> tuple[str, dict, 
         tok = os.environ.get("HF_TOKEN", "").strip()
         if tok:
             hdrs["Authorization"] = f"Bearer {tok}"
-        url = f"https://huggingface.co/{model_id}/resolve/main/" + "/".join(urllib.parse.quote(x) for x in parts)
+        url = f"{_HF_BASE}/{model_id}/resolve/main/" + "/".join(urllib.parse.quote(x) for x in parts)
         return url, hdrs, name
     raise DownloadRefused(f"Unknown source: {source}")
 
