@@ -595,83 +595,6 @@ def register_routes(server) -> None:
         os.makedirs(fallback, exist_ok=True)
         return fallback
 
-    def _do_download(job_id: str, repo: str, fname: str, dest_dir: str):
-        import urllib.request
-        import urllib.error
-        rec = _DOWNLOAD_JOBS[job_id]
-        dest_path = os.path.join(dest_dir, fname)
-        rec["dest_path"] = dest_path
-        # If file already exists and is non-empty, mark done.
-        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-            with _DOWNLOAD_LOCK:
-                rec["status"] = "exists"
-                rec["bytes_done"] = os.path.getsize(dest_path)
-                rec["total"] = rec["bytes_done"]
-                rec["finished_ts"] = time.time()
-            return
-        # Prefer huggingface_hub when present (handles mirrors, retries).
-        try:
-            from huggingface_hub import hf_hub_download  # type: ignore
-            tmp = hf_hub_download(
-                repo_id=repo,
-                filename=fname,
-                local_dir=dest_dir,
-                local_dir_use_symlinks=False,
-            )
-            # hf_hub_download returns path. Move to canonical location if needed.
-            if os.path.abspath(tmp) != os.path.abspath(dest_path):
-                try:
-                    os.replace(tmp, dest_path)
-                except Exception:
-                    dest_path = tmp
-                    rec["dest_path"] = dest_path
-            sz = os.path.getsize(dest_path)
-            with _DOWNLOAD_LOCK:
-                rec["bytes_done"] = sz
-                rec["total"] = sz
-                rec["status"] = "done"
-                rec["finished_ts"] = time.time()
-            return
-        except ImportError:
-            pass
-        except Exception as e:
-            # Fall through to urllib if HF lib path fails for any reason.
-            log.warning("[mec_diagnostics] hf_hub_download failed (%s); fallback to urllib", e)
-        # urllib fallback (streamed)
-        url = f"https://huggingface.co/{repo}/resolve/main/{fname}"
-        tmp_path = dest_path + ".part"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "MEC-Diagnostics/1.0"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                total = int(resp.headers.get("Content-Length", "0") or "0")
-                with _DOWNLOAD_LOCK:
-                    rec["total"] = total
-                with open(tmp_path, "wb") as f:
-                    chunk = 1024 * 256
-                    while True:
-                        buf = resp.read(chunk)
-                        if not buf:
-                            break
-                        f.write(buf)
-                        with _DOWNLOAD_LOCK:
-                            rec["bytes_done"] += len(buf)
-                            if rec.get("cancel"):
-                                raise RuntimeError("cancelled")
-            os.replace(tmp_path, dest_path)
-            with _DOWNLOAD_LOCK:
-                rec["status"] = "done"
-                rec["finished_ts"] = time.time()
-        except Exception as e:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-            with _DOWNLOAD_LOCK:
-                rec["status"] = "error"
-                rec["error"] = f"{type(e).__name__}: {e}"
-                rec["finished_ts"] = time.time()
-
     @routes.post("/mec/diagnostics/local_llm/download")
     async def _llm_download(req):
         import uuid
@@ -697,36 +620,33 @@ def register_routes(server) -> None:
                 "bad_filename", "Filename must be a bare name with no path components."),
                 status=400)
         dest_dir = _llm_dest_dir()
-        job_id = uuid.uuid4().hex[:12]
-        rec = {
-            "job_id": job_id,
-            "id": cid,
-            "repo": repo,
-            "file": fname,
-            "dest_dir": dest_dir,
-            "dest_path": os.path.join(dest_dir, fname),
-            "bytes_done": 0,
-            "total": 0,
-            "status": "running",
-            "error": "",
-            "started_ts": time.time(),
-            "finished_ts": 0.0,
-            "cancel": False,
-        }
-        with _DOWNLOAD_LOCK:
-            _DOWNLOAD_JOBS[job_id] = rec
-        th = threading.Thread(
-            target=_do_download,
-            args=(job_id, repo, fname, dest_dir),
-            daemon=True,
-            name=f"mec-dl-{job_id}",
-        )
-        th.start()
-        return web.json_response(_envelope_ok({
-            "job_id": job_id,
-            "dest_dir": dest_dir,
-            "dest_path": rec["dest_path"],
-        }))
+        dest_path = os.path.join(dest_dir, fname)
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            job_id = uuid.uuid4().hex[:12]
+            size = os.path.getsize(dest_path)
+            with _DOWNLOAD_LOCK:
+                _DOWNLOAD_JOBS[job_id] = {"job_id": job_id, "id": cid, "repo": repo, "file": fname,
+                                          "dest_dir": dest_dir, "dest_path": dest_path, "bytes_done": size,
+                                          "total": size, "status": "exists", "error": "",
+                                          "started_ts": time.time(), "finished_ts": time.time()}
+            return web.json_response(_envelope_ok({"job_id": job_id, "dest_dir": dest_dir, "dest_path": dest_path}))
+        # L5.08: the shared download manager (Range resume, retries, LFS SHA-256 check, appears in the Model
+        # Browser's downloads list too). The old thread here had no resume or hash, and its huggingface_hub path
+        # reported no progress and ignored Cancel.
+        from pathlib import Path as _Path
+        from .model_browser_routes import DownloadRefused, _hf_lfs_sha256, _record_finished, download_plan
+        from .model_download_manager import get_manager
+        try:
+            url, hdrs, _name = download_plan("huggingface", repo, fname)
+        except DownloadRefused as exc:
+            return web.json_response(_envelope_err("bad_request", str(exc)), status=400)
+        sha = await _hf_lfs_sha256(repo, fname)
+        mgr = get_manager()
+        mgr.on_done = _record_finished
+        job = mgr.add(url, _Path(dest_path), hdrs, sha256=sha, label=f"{repo} / {fname}",
+                      meta=None)   # no sidecar next to a GGUF; the index still records it
+        return web.json_response(_envelope_ok({"job_id": job.id, "dest_dir": dest_dir, "dest_path": dest_path,
+                                               "verify": bool(job.sha256)}))
 
     @routes.get("/mec/diagnostics/local_llm/download_progress")
     async def _llm_download_progress(req):
@@ -736,10 +656,18 @@ def register_routes(server) -> None:
                 "missing_job_id", "job_id query param required"), status=400)
         with _DOWNLOAD_LOCK:
             rec = _DOWNLOAD_JOBS.get(job_id)
-            if rec is None:
-                return web.json_response(_envelope_err(
-                    "unknown_job", "no such job_id"), status=404)
-            out = {k: v for k, v in rec.items() if k != "cancel"}
+            out = {k: v for k, v in rec.items() if k != "cancel"} if rec else None
+        if out is None:
+            from .model_download_manager import get_manager
+            job = get_manager().jobs.get(job_id)
+            if job is None:
+                return web.json_response(_envelope_err("unknown_job", "no such job_id"), status=404)
+            pub = job.public()
+            status = {"queued": "running", "running": "running", "paused": "running", "done": "done",
+                      "error": "error", "cancelled": "error"}.get(pub["status"], pub["status"])
+            out = {"job_id": job.id, "dest_path": pub["dest"], "bytes_done": pub["done"], "total": pub["total"],
+                   "status": status, "error": pub["error"] or ("cancelled" if pub["status"] == "cancelled" else ""),
+                   "verified": pub["verified"], "speed": pub["speed"], "eta_s": pub["eta_s"]}
         # Add percent.
         total = out.get("total") or 0
         done = out.get("bytes_done") or 0
@@ -753,13 +681,14 @@ def register_routes(server) -> None:
         except Exception as e:
             return web.json_response(_envelope_err("bad_json", str(e)), status=400)
         job_id = (payload.get("job_id") or "").strip()
+        from .model_download_manager import get_manager
+        mgr = get_manager()
+        if job_id in mgr.jobs:
+            return web.json_response(_envelope_ok({"job_id": job_id, "cancelling": mgr.cancel(job_id)}))
         with _DOWNLOAD_LOCK:
-            rec = _DOWNLOAD_JOBS.get(job_id)
-            if rec is None:
-                return web.json_response(_envelope_err(
-                    "unknown_job", "no such job_id"), status=404)
-            rec["cancel"] = True
-        return web.json_response(_envelope_ok({"job_id": job_id, "cancelling": True}))
+            if job_id not in _DOWNLOAD_JOBS:
+                return web.json_response(_envelope_err("unknown_job", "no such job_id"), status=404)
+        return web.json_response(_envelope_ok({"job_id": job_id, "cancelling": False}))   # 'exists': nothing to stop
 
     # -----------------------------------------------------------------
     # Tier 2 — HuggingFace GGUF discovery (live search + file listing)

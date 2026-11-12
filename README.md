@@ -204,7 +204,8 @@ The Model Browser searches the models already on disk, Civitai and Hugging Face,
 folder you pick (only folders ComfyUI knows; anything else is refused). Downloads run as a queue with progress, speed
 and time left, and can be paused, resumed (they continue where they stopped) or cancelled. A finished file is checked
 against the SHA-256 the site publishes and removed if it does not match. When a version lists several files, the
-`.safetensors` one is preferred.
+`.safetensors` one is preferred. The GGUF models you download from the C2C Diagnostics sidebar (llama.cpp) use the same
+queue, so they also resume, are hash-checked and appear in this list.
 
 - `CIVITAI_API_KEY`, `HF_TOKEN`: your tokens for restricted or gated files. They are sent as a header, never in a URL
   or a log.

@@ -109,7 +109,7 @@ def locate(path: Path) -> Optional[dict]:
         return None
     path = Path(path).resolve()
     best = None
-    for key, paths in folder_paths.folder_names_and_paths.items():
+    for key, paths in (getattr(folder_paths, "folder_names_and_paths", None) or {}).items():
         if key in NOT_MODEL_KEYS:
             continue
         for root in paths[0]:
