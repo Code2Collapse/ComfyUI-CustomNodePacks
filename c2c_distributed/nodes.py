@@ -24,6 +24,12 @@ class C2CGPUInventory:
             "probe_backends": ("BOOLEAN", {"default": True, "tooltip": "Really create a NCCL / gloo process group in "
                                            "a subprocess to see whether it works (a few seconds, cached until "
                                            "ComfyUI restarts). Off: report only what the hardware says."}),
+        }, "optional": {
+            "qualify": ("BOOLEAN", {"default": False, "tooltip": "Run the real qualification: one process per "
+                                    "physical GPU, all-reduce / all-gather / reduce-scatter checked, latency and "
+                                    "bandwidth, a hung rank detected within the timeout, the worker mechanism on "
+                                    "every GPU. Tens of seconds. Result: MULTI_GPU_VERIFIED only for two or more "
+                                    "distinct GPUs that passed; otherwise SINGLE_GPU_ONLY / FAILED."}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -36,12 +42,14 @@ class C2CGPUInventory:
                    "whether NCCL / gloo really work here, and which multi-GPU modes this box can run.")
 
     @classmethod
-    def IS_CHANGED(cls, probe_backends):
-        return f"{probe_backends}"
+    def IS_CHANGED(cls, probe_backends=True, **kwargs):
+        return f"{probe_backends}|{kwargs.get('qualify', False)}"
 
-    def run(self, probe_backends):
+    def run(self, probe_backends, qualify=False, **_ignored):
         _refuse_if_off()
         rep = inv.inventory(probe_backends=bool(probe_backends))
+        if qualify:
+            rep["qualification"] = inv.qualify()
         text = inv.summary(rep)
         return {"ui": {"text": [text]}, "result": (text, json.dumps(rep, indent=1, default=str))}
 
