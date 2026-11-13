@@ -55,8 +55,25 @@ def arch_info(major: int, minor: int) -> dict:
     }
 
 
-def kernel_support(major: int, minor: int, arch_list: List[str]) -> Tuple[str, str]:
-    """Does this torch build carry kernels for the GPU? -> (status, detail)."""
+def ptx_targets(gencode_flags: str) -> List[str]:
+    """PTX embedded in the build: `-gencode compute=compute_90,code=compute_90` entries (A27 GPU-005).
+    torch.cuda.get_arch_list() lists cubins only, so PTX has to be read from get_gencode_flags()."""
+    import re
+    return sorted({f"compute_{m}" for m in re.findall(r"code=compute_(\d+)\b", gencode_flags or "")},
+                  key=lambda a: int(a[8:]))
+
+
+def _cc(major: int, minor: int) -> int:
+    return major * 10 + minor
+
+
+def kernel_support(major: int, minor: int, arch_list: List[str], gencode_flags: Optional[str] = None,
+                   cuda: Optional[str] = None) -> Tuple[str, str]:
+    """Does this torch build carry kernels for the GPU? -> (status, detail).
+
+    Rules (NVIDIA CUDA compatibility guide): a cubin for sm_XY runs on sm_XZ with Z >= Y (same major); arch-specific
+    cubins (sm_90a, sm_100a) run only on that exact architecture; PTX for compute_XY can be JIT-compiled for any
+    later architecture. This is BUILD COVERAGE, not proof that the kernels run (kernel_smoke is the proof)."""
     want = f"sm_{major}{minor}"
     if want in arch_list:
         return "native", f"{want} cubins in this torch build"
@@ -64,11 +81,139 @@ def kernel_support(major: int, minor: int, arch_list: List[str]) -> Tuple[str, s
                   and a[len(f'sm_{major}'):].isdigit() and int(a[len(f'sm_{major}'):]) <= minor)
     if same:
         return "compatible", f"runs the {same[-1]} cubins (same major, binary compatible)"
-    ptx = sorted(a for a in arch_list if a.startswith("compute_") and a[8:].isdigit()
-                 and int(a[8:]) <= major * 10 + minor)
+    ptx = [a for a in arch_list if a.startswith("compute_") and a[8:].isdigit()] + ptx_targets(gencode_flags or "")
+    ptx = sorted({a for a in ptx if int(a[8:]) <= _cc(major, minor)}, key=lambda a: int(a[8:]))
     if ptx:
         return "ptx-jit", f"JIT from {ptx[-1]} PTX (slow first run, then cached)"
-    return "unsupported", f"this torch build has no kernels for {want} (has {', '.join(arch_list) or 'none'})"
+    why = f"this torch build has no kernels for {want} (cubins: {', '.join(arch_list) or 'none'}; " \
+          f"PTX: {', '.join(ptx_targets(gencode_flags or '')) or 'none'})"
+    try:
+        cuda_major = int(str(cuda).split(".")[0]) if cuda else None
+    except ValueError:
+        cuda_major = None
+    if major == 7 and minor < 5 and cuda_major is not None and cuda_major >= 13:
+        why += f"; CUDA {cuda} dropped Volta (sm_70 / sm_72): install a torch build for CUDA 12.x (e.g. cu126 / cu128)"
+    return "unsupported", why
+
+
+# A27 1.2: the GPU families the owner named, with their compute capability.
+FAMILIES = (("Volta", "V100", 7, 0), ("Turing", "T4, RTX 20", 7, 5), ("Ampere", "A100, A800", 8, 0),
+            ("Ada", "L40, L40S", 8, 9), ("Hopper", "H100, H200, GH200", 9, 0), ("Blackwell", "B200, GB200", 10, 0),
+            ("Blackwell Ultra", "B300, GB300", 10, 3))
+
+
+def build_coverage(arch_list: List[str], gencode_flags: str, cuda: Optional[str]) -> List[dict]:
+    """For each A27 family: would THIS torch build have kernels for it? Labelled BUILD_COVERAGE_ONLY - a build that
+    lists an architecture still has to be run on it (driver, extensions, collectives) before anything is claimed."""
+    rows = []
+    for fam, parts, ma, mi in FAMILIES:
+        status, detail = kernel_support(ma, mi, arch_list, gencode_flags, cuda)
+        rows.append({"family": fam, "examples": parts, "compute_capability": f"{ma}.{mi}", "kernels": status,
+                     "detail": detail, "label": "BUILD_COVERAGE_ONLY"})
+    return rows
+
+
+def kernel_smoke(index: int) -> dict:
+    """Stage 2 of the qualification (A27 GPU-006): really launch fp16 / bf16 GEMM and scaled-dot-product attention on
+    the device and compare with a float64 CPU reference. Catches 'no kernel image is available for execution'."""
+    import torch
+    import torch.nn.functional as F
+    d = torch.device("cuda", index)
+    g = torch.Generator().manual_seed(1234 + index)
+    a, b = torch.randn(256, 256, generator=g), torch.randn(256, 256, generator=g)
+    q, k, v = (torch.randn(1, 4, 128, 64, generator=g) for _ in range(3))
+    ref_mm = (a.double() @ b.double())
+    ref_at = F.scaled_dot_product_attention(q.double(), k.double(), v.double())
+    out: Dict[str, object] = {}
+    major, _ = torch.cuda.get_device_capability(index)
+    for name, dt in (("fp16", torch.float16), ("bf16", torch.bfloat16)):
+        if dt is torch.bfloat16 and major < 8:
+            out[name] = "not supported by this architecture (bf16 needs cc >= 8.0)"
+            continue
+        tol = 2e-2 if dt is torch.float16 else 8e-2      # relative to the reference's scale
+        try:
+            mm = (a.to(d, dt) @ b.to(d, dt)).double().cpu()
+            at = F.scaled_dot_product_attention(q.to(d, dt), k.to(d, dt), v.to(d, dt)).double().cpu()
+            torch.cuda.synchronize(d)
+            e_mm = float((mm - ref_mm).abs().max() / ref_mm.abs().max())
+            e_at = float((at - ref_at).abs().max() / ref_at.abs().max())
+            out[name] = {"gemm_rel_err": round(e_mm, 6), "sdpa_rel_err": round(e_at, 6),
+                         "ok": e_mm < tol and e_at < tol}
+        except Exception as exc:  # noqa: BLE001 - "no kernel image", OOM, driver error: all reported
+            out[name] = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    out["ok"] = all(v.get("ok") for v in out.values() if isinstance(v, dict))
+    return out
+
+
+def driver_cuda() -> Optional[str]:
+    """Highest CUDA version the installed driver supports (NVML), e.g. '13.4'."""
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        try:
+            v = int(pynvml.nvmlSystemGetCudaDriverVersion())
+        finally:
+            pynvml.nvmlShutdown()
+        return f"{v // 1000}.{(v % 1000) // 10}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def nccl_version() -> Optional[str]:
+    """NCCL bundled with this torch build, or None (Windows wheels have none)."""
+    import warnings
+    try:
+        import torch
+        import torch.cuda.nccl as nccl
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if not torch.distributed.is_available() or not torch.distributed.is_nccl_available():
+                return None
+            v = nccl.version()
+        return ".".join(str(x) for x in v) if isinstance(v, tuple) else str(v)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_EXTENSIONS = ("triton", "xformers", "flash_attn", "flash_attn_interface", "sageattention", "comfy_kitchen")
+
+
+def extensions() -> Dict[str, Optional[str]]:
+    """Optional GPU extensions: version when importable, None when absent. Import only - not proof they run."""
+    import importlib
+    import importlib.util
+    out: Dict[str, Optional[str]] = {}
+    for name in _EXTENSIONS:
+        if importlib.util.find_spec(name) is None:
+            out[name] = None
+            continue
+        try:
+            mod = importlib.import_module(name)
+            out[name] = str(getattr(mod, "__version__", "installed"))
+        except Exception as exc:  # noqa: BLE001 - installed but broken is worth knowing
+            out[name] = f"import failed: {type(exc).__name__}"
+    return out
+
+
+def torch_stack() -> dict:
+    """Driver / CUDA / torch / cuDNN / NCCL / SASS / PTX / extensions (A27 1.2)."""
+    import torch
+    cuda_ok = torch.cuda.is_available()
+    gencode = torch.cuda.get_gencode_flags() if cuda_ok else ""
+    drv = driver_cuda()
+    rep = {"version": torch.__version__, "cuda": torch.version.cuda,
+           "cudnn": torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else None,
+           "nccl": nccl_version(), "driver": _driver_version(), "driver_cuda": drv,
+           "arch_list": list(torch.cuda.get_arch_list()) if cuda_ok else [],
+           "ptx": ptx_targets(gencode), "extensions": extensions()}
+    try:
+        if drv and torch.version.cuda and tuple(map(int, drv.split("."))) < tuple(map(int, torch.version.cuda.split(".")[:2])):
+            rep["warning"] = (f"the driver supports CUDA {drv} but torch was built for CUDA {torch.version.cuda}: "
+                              f"update the NVIDIA driver")
+    except ValueError:
+        pass
+    rep["family_coverage"] = build_coverage(rep["arch_list"], gencode, torch.version.cuda) if cuda_ok else []
+    return rep
 
 
 def host_info() -> dict:
@@ -145,14 +290,15 @@ def gpus() -> List[dict]:
     if not torch.cuda.is_available():
         return []
     arch_list = list(torch.cuda.get_arch_list())
+    gencode = torch.cuda.get_gencode_flags()
     nvml = _nvml_details()
     out = []
     for i in range(torch.cuda.device_count()):
         p = torch.cuda.get_device_properties(i)
         g = {"index": i, "name": p.name, "memory_gb": round(p.total_memory / 2 ** 30, 2),
-             "multiprocessors": p.multi_processor_count}
+             "multiprocessors": p.multi_processor_count, "uuid": str(getattr(p, "uuid", "")) or None}
         g.update(arch_info(p.major, p.minor))
-        g["kernels"], g["kernels_detail"] = kernel_support(p.major, p.minor, arch_list)
+        g["kernels"], g["kernels_detail"] = kernel_support(p.major, p.minor, arch_list, gencode, torch.version.cuda)
         try:                                # torch exposes the PCI location as integers
             bus = "{:04x}:{:02x}:{:02x}.0".format(int(p.pci_domain_id), int(p.pci_bus_id), int(p.pci_device_id))
         except Exception:  # noqa: BLE001 - older torch
@@ -244,22 +390,35 @@ def modes(gpu_list: List[dict], nccl: dict, comfy: dict, p2p: List[List[bool]]) 
     multi = n >= 2
     any_p2p = any(p2p[i][j] for i in range(n) for j in range(n) if i != j) if multi else False
     nccl_ok = bool(nccl.get("usable"))
+    # A27 1.3: four separate capabilities - "a27_mode" 1 jobs, 2 tiles / pieces of one job, 3 sequence / attention,
+    # 4 model-weight sharding. Only mode 4 lowers the weight memory per GPU; 1-3 keep a full model copy per GPU.
     rows = [
-        {"mode": "data parallel (whole jobs per GPU / per machine)", "can_run": True,
-         "how": "C2C Farm backends (renderfarm/) or one ComfyUI per GPU; any OS"},
-        {"mode": "CFG / batch split (one box)", "can_run": multi and comfy.get("core_multigpu", False),
+        {"mode": "data parallel (whole jobs per GPU / per machine)", "a27_mode": 1, "can_run": True,
+         "how": "C2C Farm backends (renderfarm/) or one ComfyUI per GPU; any OS. Each job needs the whole model "
+                "on its GPU (no VRAM pooling)"},
+        {"mode": "CFG / batch split (one box)", "a27_mode": 2, "can_run": multi and comfy.get("core_multigpu", False),
          "how": "C2C Multi-GPU Split node, any model: cond / uncond, image batches and tiles over all GPUs "
-                "(core's 'MultiGPU CFG Split' uses at most one GPU per cond)"
+                "(core's 'MultiGPU CFG Split' uses at most one GPU per cond); full model copy per GPU"
          if comfy.get("core_multigpu") else "needs ComfyUI core with comfy/multigpu.py (0.39+)",
          "why_not": None if multi else "one GPU"},
-        {"mode": "sequence parallel, one box (Ulysses / Ring / USP)", "can_run": multi,
+        {"mode": "tiles / windows of one job across GPUs", "a27_mode": 2, "can_run": multi,
+         "how": "tiles that reach the model as a batch go through C2C Multi-GPU Split; the C2C tile service "
+                "(c2c_distributed.tasks / tiles) runs one worker per GPU. MiniMax H3 Tiled Diffusion's dispatch "
+                "interface is exact against serial, but its multi-GPU replica provider is not built yet",
+         "why_not": None if multi else "one GPU"},
+        {"mode": "sequence parallel, one box (Ulysses / Ring / USP)", "a27_mode": 3, "can_run": multi,
          "how": "C2C Multi-GPU Split node, Wan / MiniMax H3: threads, one model copy per GPU, tensors exchanged "
                 "GPU-to-GPU" + ("" if any_p2p or not multi else " - NOTE: no P2P between these GPUs, exchanges go "
                                                                     "through host memory (slower)"),
          "why_not": None if multi else "one GPU"},
-        {"mode": "sequence parallel / FSDP across processes or machines", "can_run": multi and nccl_ok,
-         "how": "torch.distributed with NCCL (Linux)",
+        {"mode": "sequence parallel across processes / machines (NCCL)", "a27_mode": 3,
+         "can_run": multi and nccl_ok,
+         "how": "torch.distributed with NCCL (Linux): one process per GPU",
          "why_not": None if nccl_ok else (nccl.get("error") or "NCCL is not available in this torch build")},
+        {"mode": "model-weight sharding (tensor parallel / FSDP2)", "a27_mode": 4, "can_run": False,
+         "how": "c2c_distributed.tp: column / row tensor-parallel layers (milestone 1)",
+         "why_not": "only the tensor-parallel building blocks exist (exact over gloo processes, SIMULATED); no node "
+                    "shards a ComfyUI model yet, FSDP2 is not built, and no model larger than one GPU has been run"},
     ]
     return rows
 
@@ -269,8 +428,7 @@ def inventory(probe_backends: bool = True) -> dict:
     gl = gpus()
     rep = {
         "host": host_info(),
-        "torch": {"version": torch.__version__, "cuda": torch.version.cuda,
-                  "arch_list": list(torch.cuda.get_arch_list()) if torch.cuda.is_available() else []},
+        "torch": torch_stack(),
         "gpus": gl,
         "p2p": p2p_matrix(len(gl)) if gl else [],
         "comfy": comfy_devices(),
@@ -483,13 +641,18 @@ def qualify(timeout_s: float = 15.0) -> dict:
            "devices": devs, "distinct_physical_devices": distinct,
            "p2p": p2p_matrix(len(devs)) if devs else [], "topology": topology(),
            "backends": {"nccl": bool(nccl.get("usable")), "gloo": bool(gloo.get("usable"))},
-           "worker_mechanism": worker_mechanism(devs) if devs else {"ok": False, "per_device": {}}}
+           "worker_mechanism": worker_mechanism(devs) if devs else {"ok": False, "per_device": {}},
+           # A27 GPU-006: stage 2 - real fp16 / bf16 GEMM + attention kernels on every device
+           "kernel_smoke": {d["index"]: kernel_smoke(d["index"]) for d in devs}}
+    rep["versions"]["nccl"] = nccl_version()
+    rep["versions"]["driver_cuda"] = driver_cuda()
+    smoke_ok = bool(devs) and all(s.get("ok") for s in rep["kernel_smoke"].values())
     if distinct >= 2:
         backend = "nccl" if rep["backends"]["nccl"] else "gloo"
         run = run_ranks(distinct, backend, "cuda", timeout_s)
         seen = {r.get("uuid") for r in run["ranks"] if r.get("uuid")}
         rep["multi_rank"] = {**run, **_assess(run), "distinct_uuids_seen": len(seen)}
-        ok = rep["multi_rank"]["passed"] and len(seen) == distinct and rep["worker_mechanism"]["ok"]
+        ok = rep["multi_rank"]["passed"] and len(seen) == distinct and rep["worker_mechanism"]["ok"] and smoke_ok
         rep["status"] = "MULTI_GPU_VERIFIED" if ok else "FAILED"
     else:
         run = run_ranks(2, "gloo", "cpu", timeout_s)                  # the harness itself, on CPU ranks
@@ -504,7 +667,8 @@ def qualify(timeout_s: float = 15.0) -> dict:
         "MULTI_GPU_VERIFIED": "collectives passed between distinct physical GPUs on this machine",
         "SINGLE_GPU_ONLY": "one physical GPU: nothing multi-GPU can be verified here" + harness,
         "NO_GPU": "no CUDA GPU" + harness,
-        "FAILED": "several GPUs, but a collective, the timeout check or the worker mechanism failed"}[rep["status"]]
+        "FAILED": "several GPUs, but a collective, the timeout check, the kernel smoke test or the worker mechanism "
+                  "failed"}[rep["status"]]
     return rep
 
 
@@ -513,7 +677,20 @@ def summary(rep: dict) -> str:
     h = rep["host"]
     lines.append(f"Host: {h['os']} {h['machine']}" + (f" - {h['superchip_host']}" if h.get("superchip_host") else ""))
     t = rep["torch"]
-    lines.append(f"torch {t['version']} (CUDA {t['cuda']}), kernels: {', '.join(t['arch_list']) or 'none'}")
+    lines.append(f"torch {t['version']} (CUDA {t['cuda']}), kernels: {', '.join(t['arch_list']) or 'none'}"
+                 + (f"; PTX: {', '.join(t['ptx'])}" if t.get("ptx") else "; no PTX (new architectures need a "
+                                                                          "matching cubin)" if t.get("arch_list") else ""))
+    if t.get("driver") or t.get("cudnn") or t.get("nccl"):
+        lines.append(f"driver {t.get('driver') or '?'} (supports CUDA {t.get('driver_cuda') or '?'}), cuDNN "
+                     f"{t.get('cudnn') or 'none'}, NCCL {t.get('nccl') or 'none in this build'}")
+    if t.get("warning"):
+        lines.append("WARNING: " + t["warning"])
+    ext = t.get("extensions") or {}
+    if ext:
+        lines.append("extensions (import only): " + ", ".join(f"{k} {v}" if v else f"{k} -" for k, v in ext.items()))
+    if t.get("family_coverage"):
+        lines.append("this torch build per GPU family (build coverage only, not proof): "
+                     + "; ".join(f"{r['family']} {r['compute_capability']} {r['kernels']}" for r in t["family_coverage"]))
     if not rep["gpus"]:
         lines.append("No CUDA GPU visible.")
     for g in rep["gpus"]:
@@ -539,6 +716,10 @@ def summary(rep: dict) -> str:
     q = rep.get("qualification")
     if q:
         lines.append(f"Qualification: {q['status']} - {q['status_meaning']}")
+        for idx, s in (q.get("kernel_smoke") or {}).items():
+            parts = [f"{k} {'ok' if v.get('ok') else 'FAILED'}" if isinstance(v, dict) else f"{k} {v}"
+                     for k, v in s.items() if k != "ok"]
+            lines.append(f"  GPU {idx} kernels (GEMM + attention vs float64): " + ", ".join(parts))
         mr = q.get("multi_rank") or q.get("harness_selftest")
         if mr:
             lab = mr.get("label", "real devices")

@@ -320,6 +320,22 @@ def foreign_patches(to: dict) -> List[str]:
     return bad
 
 
+def existing_block_patches(to: dict) -> List[str]:
+    """Block-level patches already on the model when the Split node is applied (A27 GPU-002). apply() used to
+    overwrite patches_replace["dit"] entries silently - e.g. core's MiniMax H3 Fun ControlNet registers its
+    control injection there (comfy_extras/nodes_minimax_h3.py MiniMaxH3FunControlPatch.register, core 0.39)."""
+    found = []
+    dit = (to.get("patches_replace") or {}).get("dit") or {}
+    others = sorted(str(k) for k, fn in dit.items() if fn is not block_patch)
+    if others:
+        names = sorted({type(fn).__name__ for fn in dit.values() if fn is not block_patch})
+        found.append(f"{len(others)} block replace(s) by {', '.join(names)}")
+    for kind in ("double_block", "single_block", "attn1_patch", "attn1_output_patch"):
+        if (to.get("patches") or {}).get(kind):
+            found.append(f"patch '{kind}'")
+    return found
+
+
 _PER_CHUNK_KEYS = ("cond_or_uncond", "uuids")          # transformer_options lists with one entry per cond chunk
 
 
@@ -379,8 +395,9 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
     batch = ad.batch(args, kwargs) if ad.batch_split else 1
     bdeg, seq = _layout(world, batch, tokens, ad, state.min_tokens_per_gpu)
     if bdeg * seq < 2:
+        # A27 GPU-007: a call that falls back to one GPU while several are set up is a WARNING, not silent
         state.note(f"batch {batch}: does not split over {world} GPUs, ran on one GPU" if not ad.sequence else
-                   f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU")
+                   f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU", warn=True)
         return executor(*args, **kwargs)
     used = bdeg * seq
     plan = plan_sequence_parallel(seq, heads=ad.heads(dm) if ad.sequence else None, tokens=tokens, prefer=state.prefer,
@@ -445,13 +462,43 @@ def diffusion_model_wrapper(executor, *args, **kwargs):
 
     use_pool = pool is not None and len(set(devices)) == used and all(d in pool.devices for d in devices[1:])
     submit = (lambda r, job: pool.submit(devices[r], job)) if use_pool else None
+    results = None
     try:
         results = run_ranks(used, rank_fn, devices=devices, submit=submit, timeout=state.timeout)
     finally:
         if use_pool:
-            for r in range(1, used):
-                pool.get_result(devices[r])     # drain the pool's (None, None) acknowledgements
+            stuck = drain_pool(pool, devices[1:used])
+            if stuck:
+                msg = (f"C2C Multi-GPU Split: the worker thread on {', '.join(str(d) for d in stuck)} did not come "
+                       f"back (a rank is stuck in a GPU call); that GPU stays busy until ComfyUI restarts")
+                if results is not None:     # only when nothing else is already being raised
+                    raise RuntimeError(msg)
+                log.error(msg)
     return results[0]
+
+
+DRAIN_TIMEOUT_S = 30.0
+
+
+def drain_pool(pool, devices, timeout: float = DRAIN_TIMEOUT_S) -> list:
+    """Collect the pool's (None, None) acknowledgement for each rank job, with a bound (A27 GPU-003).
+
+    core's MultiGPUThreadPool.get_result has no timeout: after a rank hung, an unbounded drain blocked the sampler
+    for ever. run_ranks has already waited for every rank, so a missing acknowledgement here means a stuck rank.
+    Returns the devices whose job did not come back."""
+    import queue as _queue
+    stuck = []
+    queues = getattr(pool, "_result_queues", None)
+    for d in devices:
+        q = queues.get(d) if isinstance(queues, dict) else None
+        if q is None:                       # an unknown pool type: its own blocking call, as before
+            pool.get_result(d)
+            continue
+        try:
+            q.get(timeout=timeout)
+        except _queue.Empty:
+            stuck.append(d)
+    return stuck
 
 
 def _tensor_leaves(out) -> List[torch.Tensor]:
@@ -474,7 +521,7 @@ def calc_cond_batch_wrapper(executor, model, conds, x_in, timestep, model_option
     to = model_options.get("transformer_options") or {}
     state = to.get(STATE_KEY)
     clones = model_options.get("multigpu_clones")
-    if state is None:
+    if state is None or not state.enabled():    # A27 GPU-004: switched off = core's own CFG split stays intact
         return executor(model, conds, x_in, timestep, model_options)
     if clones:
         ranks = list(clones.items())
@@ -524,11 +571,11 @@ class UspState:
         from . import enabled
         return enabled()
 
-    def note(self, msg: str):
+    def note(self, msg: str, warn: bool = False):
         if not self.last or self.last[-1] != msg:
             self.last.append(msg)
             del self.last[:-20]
-            log.info("C2C Multi-GPU Split: %s", msg)
+            (log.warning if warn else log.info)("C2C Multi-GPU Split: %s", msg)
 
 
 LIMITS = (
@@ -617,6 +664,14 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
             report.append(f"plan: batch items over up to {n} GPUs (the largest divisor of {n} that divides the batch)")
         report = layout_report(m, ad, n, sim, bool(sim_copies)) + report
     to = m.model_options.setdefault("transformer_options", {})
+    if ad.sequence:
+        clash = existing_block_patches(to)
+        if clash:
+            raise ValueError(
+                "C2C Multi-GPU Split: this model already carries block patches from other nodes ("
+                + "; ".join(clash) + "). The token split replaces every transformer block, so those nodes "
+                "(e.g. a MiniMax H3 / Wan ControlNet patch, a block cache) would silently stop working. Remove "
+                "C2C Multi-GPU Split for this model, or remove those nodes.")
     prev = to.get("optimized_attention_override")
     if prev is attention_override:
         prev = getattr(to.get(STATE_KEY), "prev_override", None)

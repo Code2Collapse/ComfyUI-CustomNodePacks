@@ -103,12 +103,14 @@ model memory; never use it for speed.
 |---|---|
 | Model class without a sequence adapter (VACE, Wan Animate, S2V, Flux, SDXL, ...) | batch split only (cond / uncond, image batches, tiles); the node's report says so. ControlNet residuals are cut with the batch |
 | Another node patches the transformer blocks or sets an attention override after this one | refused at run time, naming the patch ("put C2C Multi-GPU Split last") - never a silently wrong picture |
+| A node patched the transformer blocks BEFORE this one (core's MiniMax H3 Fun ControlNet, a block cache) | refused when the node runs (A27 GPU-002). Until 2026-11-13 the token split silently REPLACED those patches, so the ControlNet stopped working without a word |
 | ControlNet / control conditioning | refused at run time (not supported yet) |
 | A user attention override set BEFORE the node (e.g. Sage attention) | kept: it computes the local attention on every rank |
 | Heads not divisible by the Ulysses degree | planner picks Ulysses x Ring that divides, or Ring only, and says so |
-| Too few tokens per GPU | that call runs on one GPU; the node's log says so |
+| Too few tokens per GPU | that call runs on one GPU; logged as a WARNING with the reason (A27 GPU-007) |
 | A rank raises (OOM, interrupt) | every other rank is released from its collective; the run fails with that rank's error; rank 0's own exception keeps its type (ComfyUI's interrupt still works) |
-| A rank stalls | the collective times out after 600 s and names the rank |
+| A rank stalls | the collective times out after 600 s and names the rank; the worker-pool drain is bounded too (A27 GPU-003: it used to wait for ever on a stuck GPU thread) |
+| `C2C_DISTRIBUTED=off` while core's MultiGPU clones exist | core's own CFG split runs untouched (A27 GPU-004) |
 | Loader without a reload factory (some custom loaders, GGUF) | refused: core's multi-GPU clones need it ("use a core loader") |
 | Core's `MultiGPU CFG Split` also in the chain | this node takes the clones; its own batch split does the cond / uncond part per call |
 | Batch does not divide the GPU count (3 items, 2 GPUs) | tokens are split instead |
@@ -136,8 +138,47 @@ model memory; never use it for speed.
 | 0 | C2C GPU Inventory | done |
 | 1 | Comm, exact Ulysses / Ring / USP attention, planner | done |
 | 2a | C2C Multi-GPU Split, one box, Wan + MiniMax H3 | done; speed to measure on >= 2 GPUs |
-| 2b | Multi-process / multi-node over NCCL (`TorchComm`), FSDP2 weight sharding | Linux + NCCL box needed |
+| 2b | Multi-process ranks over NCCL / gloo (`procrun.ProcessRanks`, A27 GPU-008) | runtime + self-test done: exact USP across processes, failure detection < 0.5 s, no orphans (gloo CPU ranks in WSL = SIMULATED); NCCL on GPUs CODE_COMPLETE_HARDWARE_UNVERIFIED |
+| 2b' | ComfyUI model in worker processes (raylight's actor model, GPU-009); FSDP2 weight sharding (L9.216 M2 / M3) | design / >= 2-GPU Linux box needed |
 | 2c | Batch (CFG) split x sequence parallel | done (Wan) |
 | 2d | ControlNet; more adapters (VACE, Animate, Flux, LTX); H3 cond / uncond on separate GPU groups (H3 calls run batch 1) | to do |
 | 3 | Data-parallel fan-out to Farm backends, collector | to do |
 | 4 | Tile work-stealing upscale / refine | to do |
+
+## A27 (2026-11-13): repair audit, four modes, GPU families, multi-process path
+
+Audit against upstream raylight and the fixes: `MASTER_TASK_REGISTER.md` section 4 (workspace).
+
+**Four separate modes.** The Inventory's `modes` rows carry `a27_mode`:
+
+| Mode | What it is | VRAM per GPU |
+|---|---|---|
+| 1 | Independent jobs on different GPUs | full model per GPU |
+| 2 | Independent pieces of one job: CFG / batch items, tiles / windows | full model per GPU |
+| 3 | Sequence / attention parallelism: Ulysses / Ring / USP | full model per GPU |
+| 4 | Model-weight sharding: tensor parallel / FSDP2 | the only mode that lowers weight memory per GPU |
+
+Mode 4 has building blocks only; no node shards a ComfyUI model. Modes 1–3 are never VRAM pooling.
+
+**GPU families.**
+- The Inventory reads PTX from `torch.cuda.get_gencode_flags()`. `get_arch_list()` lists cubins only, so the earlier
+  PTX check could never fire.
+- It shows build coverage for V100 7.0 / T4 7.5 / A100 8.0 / L40S 8.9 / H100 9.0 / B200 10.0 / B300 10.3, labelled
+  BUILD_COVERAGE_ONLY.
+- It warns that CUDA 13 builds dropped Volta.
+- It reports the GPU UUID, driver and driver-CUDA, cuDNN, NCCL and the optional extensions (import only).
+- qualify adds a kernel smoke test: fp16 / bf16 GEMM and attention on every GPU against float64. A GPU that cannot
+  run them makes the result FAILED.
+
+Measured on the owner's RTX 4060 Laptop, torch 2.9.0+cu130:
+- no PTX in this build;
+- Volta unsupported; Ada and B300 run same-major cubins;
+- fp16 / bf16 kernels pass;
+- SINGLE_GPU_ONLY (`docs/evidence/A27/gpu/` in the workspace).
+
+**Multi-process path** (`c2c_distributed/procrun.py`):
+- One process per rank, NCCL on CUDA ranks, gloo on CPU ranks; Ray is not needed.
+- Commands travel through a file store, so idle workers never hit a collective timeout.
+- Any failure tears the group down and names the root-cause rank.
+- Self-test: `python -m c2c_distributed.procrun --world 4` (Linux / WSL).
+- On Windows, torch cannot form a multi-process group: the runtime refuses at start and leaves no process behind.

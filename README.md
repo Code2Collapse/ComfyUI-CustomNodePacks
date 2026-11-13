@@ -2104,6 +2104,23 @@ Split** with this node: it splits the batch itself, over all GPUs instead of one
 `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one GPU (or
 CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 
+**2026-11-13 repairs (A27).**
+- The split now refuses a model that already carries block patches from other nodes, such as core's MiniMax H3 Fun
+  ControlNet or a block cache. Before, it silently replaced them, so the ControlNet stopped working.
+- A stuck GPU thread can no longer hang the sampler.
+- With `C2C_DISTRIBUTED=off`, core's own CFG split stays intact.
+- A call that falls back to one GPU is logged as a warning.
+- **C2C GPU Inventory** additionally reports:
+  - PTX, read from the real build flags;
+  - build coverage for V100 / T4 / A100 / L40S / H100 / B200 / B300;
+  - driver, CUDA, cuDNN and NCCL versions;
+  - GPU UUIDs and optional extensions;
+  - the four multi-GPU modes, listed separately (jobs, pieces of one job, sequence parallel, weight sharding: only
+    the last one lowers memory per GPU, and no node does it yet).
+- **qualify** also runs fp16 / bf16 kernels on every GPU.
+- The multi-process (Linux / NCCL) rank runtime has a self-test: `python -m c2c_distributed.procrun --world 2`. It
+  is verified on CPU ranks only; GPUs are not verified yet.
+
 ## VRAM Management
 
 All nodes are designed to work on **low-end GPUs** (4–6 GB VRAM):
