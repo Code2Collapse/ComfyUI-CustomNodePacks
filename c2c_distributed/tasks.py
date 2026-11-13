@@ -150,6 +150,7 @@ class _Worker:
         self.id, self.device, self.vram_total, self.slots = wid, device, int(vram_total), int(slots)
         self.reserved, self.busy = 0, 0
         self.leases, self.completed, self.failed = 0, 0, 0              # lifetime counters (diagnostics)
+        self.busy_s = 0.0                                               # executor time (benchmarks: idle = wall - busy)
         self.alive, self.killed, self.stop, self.stuck = True, False, False, False
         self.last_beat = time.monotonic()
         self.inbox: collections.deque = collections.deque()
@@ -340,6 +341,7 @@ class TileService:
                                        "vram_total": w.vram_total, "reserved": w.reserved,
                                        "resident": list(w.resident), "loads": dict(w.loads),
                                        "leases": w.leases, "completed": w.completed, "failed": w.failed,
+                                       "busy_s": round(w.busy_s, 6),
                                        "last_beat_age_s": round(time.monotonic() - w.last_beat, 3),
                                        "log": list(w.log)[-20:]} for w in self.workers.values()},
                     "pending": len(self._pending), "running": len(self._running),
@@ -477,6 +479,7 @@ class TileService:
             return                                              # a crashed worker reports nothing
         notify = None
         with self._cond:
+            w.busy_s += dur
             w.stuck = False                                     # the thread is back: it can take work again
             j = self._jobs.get(t.job_id)
             current = self._running.get(t.task_id)
