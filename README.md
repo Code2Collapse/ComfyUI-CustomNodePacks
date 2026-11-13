@@ -2073,6 +2073,13 @@ Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measureme
   It shows the P2P and NVLink links between the GPUs and spots Grace / aarch64 hosts. It also checks whether NCCL and
   gloo really work here: it creates a process group in a subprocess rather than trusting the OS name. Last, it lists
   which multi-GPU modes this machine can run.
+  - **qualify** (off by default) runs the real test: one process per physical GPU, checked all-reduce /
+    all-gather / reduce-scatter, latency and bandwidth, a hung GPU detected within the timeout, and the split's
+    workers on every GPU.
+  - It answers **MULTI_GPU_VERIFIED** only for two or more distinct GPUs that passed; otherwise SINGLE_GPU_ONLY,
+    NO_GPU or FAILED.
+  - On Windows, torch has no NCCL and its gloo cannot connect processes, so the multi-process part runs on Linux
+    (or WSL).
 - **C2C Multi-GPU Split** splits each model call over the GPUs of one machine, on Windows and Linux (no NCCL
   needed). Each GPU holds a full copy of the model, made by ComfyUI's own multi-GPU loader. Put it last in the model
   chain. With one GPU the model passes through unchanged.
@@ -2082,6 +2089,14 @@ Two nodes under **🐺 C2C › 🧰 Core › Distributed** (design and measureme
     exchanged between the GPUs (Ulysses all-to-all, Ring, or both). The result is the same as on one GPU:
     bit-identical for Ulysses at 2 and 4 GPUs, and within the precision's own rounding otherwise.
   - **Speed-up has not been measured yet** (that needs a machine with two or more GPUs).
+  - **Limits:**
+    - every GPU holds the whole model, so this does not pool memory: a model too big for one GPU does not fit here
+      either (that is model sharding, a separate project);
+    - ControlNet and self-attention masks are refused on the token-split path;
+    - other models are batch-split only.
+
+    The node's **plan** output lists the mode, devices, memory per GPU and how data moves between GPUs before
+    sampling starts.
 
 With Wan or MiniMax H3, the batch items go to GPU groups first (no exchange needed) and each group splits the
 tokens: on 8 GPUs with CFG that is cond and uncond on 4 GPUs each. You do not need ComfyUI's own **MultiGPU CFG

@@ -80,9 +80,13 @@ class C2CSequenceParallel:
     DESCRIPTION = ("Splits every model call over the GPUs of this machine. Any model: the call's batch items (cond "
                    "and uncond, an image batch, Tile Split's tiles) go to different GPUs, with no exchange at all. "
                    "Wan 2.1 / 2.2 and MiniMax H3 also split the tokens of one item (Ulysses all-to-all / Ring, exact). "
-                   "One model copy per GPU, made by ComfyUI's own multi-GPU clones. Works on Windows and Linux; with "
-                   "one GPU the model passes through unchanged. Put it last in the model chain (after LoRA / attention "
-                   "nodes). Replaces core's 'MultiGPU CFG Split' for this model.")
+                   "One FULL model copy per GPU, made by ComfyUI's own multi-GPU clones: weight memory is not pooled "
+                   "(this is not model sharding / FSDP). Works on Windows and Linux; with one GPU the model passes "
+                   "through unchanged. Put it last in the model chain (after LoRA / attention nodes). Replaces core's "
+                   "'MultiGPU CFG Split' for this model.\n\nLimits: speed-up on real multi-GPU hardware is not "
+                   "measured yet; ControlNet and self-attention masks are refused on the token-split path; other "
+                   "models are batch-split only. The 'plan' output lists the mode, devices, memory per GPU and the "
+                   "communication path before sampling starts.")
 
     def run(self, model, gpus, strategy, min_tokens_per_gpu, fast_link_gpus=0):
         _refuse_if_off()

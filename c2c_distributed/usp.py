@@ -531,6 +531,44 @@ class UspState:
             log.info("C2C Multi-GPU Split: %s", msg)
 
 
+LIMITS = (
+    "full model replicas: every GPU holds a complete copy; model-weight VRAM is NOT pooled (this is not FSDP / "
+    "model sharding - a model that does not fit on one GPU does not fit here either)",
+    "physical multi-GPU speed-up has not been measured on real multi-GPU hardware yet",
+    "C2C_DISTRIBUTED_SIMULATE runs ranks on one device to test correctness; it says nothing about speed",
+    "ControlNet / control conditioning is refused on the sequence-parallel path",
+    "an attention mask passed to self-attention on the sequence-parallel path stops the run with an error",
+    "models without an adapter (anything but Wan 2.1 / 2.2 and MiniMax H3) are batch-split only, never "
+    "sequence-parallel",
+)
+
+
+def layout_report(m, ad, n: int, sim: int, simulating: bool) -> list:
+    """What the user is about to run, before it runs (A26 4.1 / 4.7): mode, workers, devices, memory, backend."""
+    try:
+        size = float(m.model_size())
+    except Exception:  # noqa: BLE001
+        size = 0.0
+    copies = [m] + list(m.get_additional_models_with_key("multigpu"))
+    devices = [str(getattr(c, "load_device", "?")) for c in copies]
+    if simulating:
+        mode, devices = "SIMULATION (correctness only)", [str(m.load_device)] * sim
+    elif n < 2:
+        mode = "single GPU (no split)"
+    elif ad.sequence:
+        mode = "sequence parallel (Ulysses / Ring / USP) with full model replicas"
+    else:
+        mode = "batch split with full model replicas"
+    workers = sim if simulating else n
+    gb = size / 2 ** 30
+    lines = [f"mode: {mode}", f"workers: {workers}; devices: {', '.join(devices)}",
+             (f"model memory: {gb:.2f} GB per worker, {gb * workers:.2f} GB in total (full copies, not pooled)"
+              if size else "model memory: unknown (the loader did not report a size); each worker holds a full copy"),
+             "communication: threads in this process; tensors move between GPUs with device copies (peer-to-peer "
+             "where the GPUs allow it, otherwise through host memory) - no NCCL / torch.distributed process group"]
+    return lines + ["limits:"] + [f"  - {x}" for x in LIMITS]
+
+
 def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 1024, fast_domain: int = 0,
           make_clones: bool = True):
     """MODEL -> MODEL with sequence parallelism set up. Returns (model, report lines)."""
@@ -577,6 +615,7 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
                           + "".join(f"; {x}" for x in p.notes) + "; with CFG or a batch, items go to GPU groups first")
         elif n >= 2:
             report.append(f"plan: batch items over up to {n} GPUs (the largest divisor of {n} that divides the batch)")
+        report = layout_report(m, ad, n, sim, bool(sim_copies)) + report
     to = m.model_options.setdefault("transformer_options", {})
     prev = to.get("optimized_attention_override")
     if prev is attention_override:
