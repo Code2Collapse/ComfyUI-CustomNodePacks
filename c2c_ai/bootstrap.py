@@ -227,6 +227,16 @@ def build_backend(entry: dict):
             cost_per_1k_output=float(entry.get("cost_per_1k_output", 0.0006)),
             max_context=int(entry.get("max_context", 128_000)),
         )
+    elif kind == "core_text_encoder":
+        # L6.02 S2: a .safetensors text encoder ComfyUI itself can chat with (te_scan verdict), via core's
+        # CLIP.tokenize / generate / decode - the same path as core's TextGenerate node.
+        from .backends.core_text_encoder import CoreTextEncoderBackend
+        b = CoreTextEncoderBackend.build(
+            backend_id=entry.get("id", "local.core_te"),
+            model_file=entry.get("model_file", ""),
+            display_name=entry.get("display_name", "ComfyUI text encoder"),
+            keep_loaded_min=float(entry.get("keep_loaded_min", 5)),
+        )
     elif kind == "text_encoder_local":
         # B1: local GGUF via llama-cpp-python, loaded from ComfyUI's
         # text_encoders/ folder via folder_paths (per user mandate).

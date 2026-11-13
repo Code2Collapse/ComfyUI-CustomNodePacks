@@ -712,7 +712,7 @@ function buildSettingsView(root) {
             const items = te.items || [];
             const haveLib = !!te.llamacpp_available;
             const counts = te.counts || {};
-            const chatItems = items.filter(it => it.chat_capable);
+            const chatItems = items.filter(it => it.chat_capable || it.core_chat);
 
             // Status line: lib availability + breakdown.
             statusEl.innerHTML =
@@ -760,7 +760,7 @@ function buildSettingsView(root) {
                         it.kind === "encoder"  ? (it.core_chat ? "[encoder · ComfyUI can chat]" : "[encoder]")
                                                : "[other]";
                     o.textContent = `${badge} ${it.name}${mb}`;
-                    if (!it.chat_capable) {
+                    if (!it.chat_capable && !it.core_chat) {
                         o.disabled = true;
                         // L6.02: the header scan says what this encoder is and whether ComfyUI's own text
                         // generation can chat with it (chatting through it arrives with the next slice)
@@ -790,25 +790,43 @@ function buildSettingsView(root) {
                     `background:var(--c2c-bg2);color:var(--c2c-fg);
                      border:1px solid var(--c2c-border);border-radius:3px;
                      padding:2px 10px;cursor:pointer;font-size:11px;`;
-                const disabledReason = !haveLib
-                    ? "llama-cpp-python must be installed first"
-                    : chatItems.length === 0
-                        ? "No GGUF files found — only GGUF can be loaded in-process"
-                        : "";
+                const disabledReason = chatItems.length === 0
+                    ? "No model here can chat: a GGUF file (llama.cpp) or a text encoder ComfyUI can chat with is needed"
+                    : "";
                 apply.disabled = !!disabledReason;
                 apply.title = disabledReason;
+                const flash = (msg) => {
+                    apply.textContent = msg;
+                    setTimeout(() => { apply.textContent = existing ? "Update" : "Add as backend"; }, 1800);
+                };
                 apply.onclick = async () => {
                     // Guard: only allow chat-capable models through.
                     const picked = items.find(it => it.name === sel.value);
-                    if (!picked || !picked.chat_capable) {
-                        apply.textContent = "GGUF only";
-                        setTimeout(() => {
-                            apply.textContent = existing ? "Update" : "Add as backend";
-                        }, 1500);
+                    if (!picked || (!picked.chat_capable && !picked.core_chat)) {
+                        flash("Cannot chat with this file");
                         return;
                     }
                     const newCfg = await apiGet("/c2c/ai/config");
                     newCfg.backends = newCfg.backends || [];
+                    if (picked.core_chat) {
+                        // L6.02 S2: ComfyUI's own text generation on a .safetensors encoder (no llama.cpp needed)
+                        let ce = newCfg.backends.find(e => e.kind === "core_text_encoder");
+                        if (ce) {
+                            ce.model_file = picked.name;
+                            ce.enabled = true;
+                        } else {
+                            newCfg.backends.push({ kind: "core_text_encoder", id: "local.core_te",
+                                                   display_name: "ComfyUI text encoder", model_file: picked.name,
+                                                   keep_loaded_min: 5, enabled: true });
+                        }
+                        await apiPost("/c2c/ai/config", newCfg);
+                        refresh();
+                        return;
+                    }
+                    if (!haveLib) {
+                        flash("Install llama-cpp-python first");
+                        return;
+                    }
                     let entry = newCfg.backends.find(
                         e => e.kind === "text_encoder_local",
                     );
