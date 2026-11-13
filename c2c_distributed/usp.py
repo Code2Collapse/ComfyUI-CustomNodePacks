@@ -625,6 +625,8 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
         state.sim = sim_copies
     state.batch_only = not ad.sequence
     to[STATE_KEY] = state
+    # documented marker other packs read (A26 4.5): one parallel layout per model call
+    to["parallel_layout"] = "sequence" if ad.sequence else "batch"
     if ad.sequence:
         to["optimized_attention_override"] = attention_override
         for i in range(len(dm.blocks)):

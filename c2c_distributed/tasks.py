@@ -94,10 +94,16 @@ class TaskResult:
 
 
 def tensor_checksum(t) -> str:
+    """sha256 over shape, dtype and bytes; a tuple / list of tensors (or None) is hashed part by part."""
     import torch
-    x = t.detach().to("cpu").contiguous()
-    h = hashlib.sha256(f"{tuple(x.shape)}|{x.dtype}".encode())
-    h.update(x.flatten().view(torch.uint8).numpy().tobytes())
+    h = hashlib.sha256()
+    for x in (t if isinstance(t, (tuple, list)) else (t,)):
+        if x is None:
+            h.update(b"None|")
+            continue
+        x = x.detach().to("cpu").contiguous()
+        h.update(f"{tuple(x.shape)}|{x.dtype}|".encode())
+        h.update(x.flatten().view(torch.uint8).numpy().tobytes())
     return h.hexdigest()
 
 
@@ -487,8 +493,9 @@ class TileService:
                 if not stale:
                     self._requeue(e, err, exclude=len(self.workers) > 1)
             else:
+                first = out[0] if isinstance(out, (tuple, list)) else out
                 res = TaskResult(t.task_id, t.job_id, t.order, out, t.spatial_bounds, t.temporal_bounds,
-                                 t.halo_bounds, tuple(out.shape), str(out.dtype).replace("torch.", ""),
+                                 t.halo_bounds, tuple(first.shape), str(first.dtype).replace("torch.", ""),
                                  t.colour_space, t.alpha_semantics, dur, w.id, str(w.device), e.attempt + 1,
                                  tensor_checksum(out), qc)
                 prev = j.results.get(t.task_id)
@@ -518,6 +525,14 @@ class TileService:
     @staticmethod
     def _qc(t: TaskManifest, out) -> dict:
         import torch
+        if isinstance(out, (tuple, list)):                      # several outputs (e.g. video + audio of one tile)
+            parts = [x for x in out if x is not None]
+            if not parts or not all(isinstance(x, torch.Tensor) for x in parts):
+                raise TaskQCError("the executor must return tensors")
+            if any(x.is_floating_point() and not bool(torch.isfinite(x).all()) for x in parts):
+                raise TaskQCError("non-finite values in the output")
+            return {"shape_ok": t.expected_output_shape is None, "dtype_ok": True, "finite": True,
+                    "parts": len(out)}
         if not isinstance(out, torch.Tensor):
             raise TaskQCError("the executor must return a tensor")
         if t.expected_output_shape is not None and tuple(out.shape) != tuple(t.expected_output_shape):
