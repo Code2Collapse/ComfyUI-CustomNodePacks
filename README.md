@@ -2120,6 +2120,10 @@ CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 - **qualify** also runs fp16 / bf16 kernels on every GPU.
 - The multi-process (Linux / NCCL) rank runtime has a self-test: `python -m c2c_distributed.procrun --world 2`. It
   is verified on CPU ranks only; GPUs are not verified yet.
+- **C2C Multi-GPU Split** has a new optional input, **rank_backend**, at the end. The default, `threads`, matches every
+  saved workflow. `processes (Linux, NCCL)` runs one worker process per GPU, each loading its own copy of Wan or
+  MiniMax H3 from the same files with the same LoRA patches. Results match one process (checked on CPU test ranks),
+  but this is not yet verified on real GPUs.
 
 ## VRAM Management
 

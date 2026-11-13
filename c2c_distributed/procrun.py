@@ -106,8 +106,16 @@ os._exit(0)
 
 # ── shared by the parent and the workers ───────────────────────────────────────────────────────────────────────
 
+def _forget_subgroups() -> None:
+    """comm.TorchComm caches sub-groups per process; they die with their process group (found 2026-11-13: a
+    second ProcessRanks in the same process reused sub-groups of the destroyed group -> 'not registered')."""
+    from .comm import TorchComm
+    TorchComm._groups.clear()
+
+
 def _init(rank: int, world: int, root: str, backend: str, kind: str, timeout_s: float) -> None:
     import torch.distributed as dist
+    _forget_subgroups()
     if kind == "cuda":
         torch.cuda.set_device(rank)
     dist.init_process_group(backend, init_method="file:///" + os.path.join(root, "rdzv").replace(os.sep, "/"),
@@ -235,8 +243,13 @@ class ProcessRanks:
                 raise RankFailure(f"rank {rank} gave no answer within {self.timeout_s:.0f} s (stalled)")
 
     # ---- work ----------------------------------------------------------------------------------------------------
-    def run(self, fn: Callable, payload: Any = None, timeout_s: Optional[float] = None) -> list:
-        """fn(comm, payload) on every rank at once -> [result of rank 0, rank 1, ...]."""
+    def run(self, fn: Callable, payload: Any = None, timeout_s: Optional[float] = None,
+            rank0: Optional[Callable] = None) -> list:
+        """fn(comm, payload) on every rank at once -> [result of rank 0, rank 1, ...].
+
+        ``rank0(comm)``, when given, runs on rank 0 instead of ``fn`` - for work only this process can do (ComfyUI's
+        own executor with its wrappers). Rank 0's own exception keeps its type (ComfyUI's interrupt) unless a worker
+        failed first; the group is torn down either way."""
         if self.closed or self.broken:
             raise RankFailure(f"this rank group is not usable ({self.broken or 'closed'}); start a new one")
         if self._cmds is None:
@@ -247,9 +260,11 @@ class ProcessRanks:
         results: list = [None] * self.world
         try:
             try:
-                results[0] = fn(comm(), payload)
+                results[0] = rank0(comm()) if rank0 is not None else fn(comm(), payload)
             except BaseException as exc:
                 cause = self._worker_error(seq)     # usually rank 0 only saw a peer leave: name the real cause
+                if cause is None and rank0 is not None:
+                    raise                           # rank 0's own failure, type kept
                 raise RankFailure(cause or f"rank 0 failed: {type(exc).__name__}: {exc}") from exc
             deadline = time.monotonic() + float(timeout_s or self.timeout_s)
             for r in range(1, self.world):
@@ -307,6 +322,7 @@ class ProcessRanks:
                 dist.destroy_process_group()
         except Exception:  # noqa: BLE001
             pass
+        _forget_subgroups()
 
     def close(self) -> None:
         if self.closed:

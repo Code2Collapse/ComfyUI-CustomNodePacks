@@ -378,10 +378,54 @@ def _layout(world: int, batch: int, tokens, adapter: Adapter, min_tokens: int) -
     return bdeg, seq
 
 
+def _process_call(executor, args, kwargs, to: dict, pos, state: "UspState"):
+    """A27 GPU-009: the same model call on worker PROCESSES (procmodel / procrun), torch.distributed in between."""
+    from . import procmodel
+    dm = executor.class_obj
+    ad = adapter_for(dm)
+    if ad is None:
+        raise RuntimeError(f"C2C Multi-GPU Split (processes): {type(dm).__name__} has no sequence adapter")
+    bad = foreign_patches(to)
+    if bad:
+        raise RuntimeError("C2C Multi-GPU Split cannot run with: " + "; ".join(bad)
+                           + ". Put C2C Multi-GPU Split last in the model chain, or remove the conflicting node.")
+    later = [w for w in list(getattr(executor, "wrappers", []) or [])[int(getattr(executor, "idx", 0)) + 1:]]
+    if later:
+        raise RuntimeError(f"C2C Multi-GPU Split (processes): {len(later)} other model wrapper(s) come after this "
+                           f"node and would run on the first GPU only - use rank_backend 'threads' or remove them")
+    g = state.group
+    world = g.world
+    tokens = ad.tokens_estimate(dm, args, kwargs)
+    if tokens is not None and not worth_splitting(tokens, world, state.min_tokens_per_gpu):
+        state.note(f"{tokens} tokens: below {state.min_tokens_per_gpu} per GPU, ran on one GPU", warn=True)
+        return executor(*args, **kwargs)
+    plan = plan_sequence_parallel(world, heads=ad.heads(dm), tokens=tokens, prefer=state.prefer,
+                                  fast_domain=state.fast_domain or None, min_tokens_per_rank=0)
+    cpu = torch.device("cpu")
+    payload = {"key": g.rec["key"], "method": getattr(executor.original, "__name__", "_forward"), "pos": pos,
+               "args": [None if i == pos else _move(a, cpu) for i, a in enumerate(args)],
+               "kwargs": {k: _move(v, cpu) for k, v in kwargs.items() if k != "transformer_options"},
+               "options": procmodel.call_options(to), "plan": (plan.ulysses, plan.ring)}
+    pr = g.ensure()
+
+    def rank0(comm):
+        _tls.ctx = RankCtx(comm=comm, mesh=A.Mesh.build(comm, plan.ulysses, plan.ring), adapter=ad,
+                           n_blocks=len(dm.blocks), prev_override=None)
+        try:
+            return executor(*args, **kwargs)
+        finally:
+            _tls.ctx = None
+    state.note(f"{plan.mode}: Ulysses {plan.ulysses} x Ring {plan.ring} over {world} processes ({g.reason})"
+               + (f", {tokens} tokens" if tokens else ""))
+    return pr.run(procmodel.rank_call, payload, rank0=rank0)[0]
+
+
 def diffusion_model_wrapper(executor, *args, **kwargs):
     to, pos = _find_options(args, kwargs)
-    ranks = (to or {}).get(RANKS_KEY)
     state = (to or {}).get(STATE_KEY)
+    if state is not None and getattr(state, "backend", "threads") == "processes" and state.enabled():
+        return _process_call(executor, args, kwargs, to, pos, state)
+    ranks = (to or {}).get(RANKS_KEY)
     if not to or state is None or not ranks or len(ranks) < 2 or not state.enabled():
         return executor(*args, **kwargs)
     dm = executor.class_obj
@@ -558,12 +602,15 @@ class UspState:
         self.last: List[str] = []
         self.sim: list = []                 # simulated rank copies (ModelPatchers on the main device)
         self.batch_only = False             # model without a sequence adapter: batch split only
+        self.backend = "threads"            # "processes": procmodel worker group (A27 GPU-009)
+        self.group = None                   # procmodel.ModelGroup, shared by copies
 
     def __deepcopy__(self, memo):
         n = UspState(self.prefer, self.min_tokens_per_gpu, self.fast_domain, self.prev_override, self.timeout)
         n.last = self.last                  # shared log, so the node can read what the runs did
         n.sim = self.sim
         n.batch_only = self.batch_only
+        n.backend, n.group = self.backend, self.group
         return n
 
     @staticmethod
@@ -614,6 +661,69 @@ def layout_report(m, ad, n: int, sim: int, simulating: bool) -> list:
              "communication: threads in this process; tensors move between GPUs with device copies (peer-to-peer "
              "where the GPUs allow it, otherwise through host memory) - no NCCL / torch.distributed process group"]
     return lines + ["limits:"] + [f"  - {x}" for x in LIMITS]
+
+
+PROCESS_LIMITS = (
+    "one PROCESS per GPU, each loading its own full model copy from the loader's reload recipe; weight memory is "
+    "NOT pooled (not FSDP / model sharding)",
+    "Wan 2.1 / 2.2 and MiniMax H3 only (token split); other models stay on the thread path",
+    "refused: hook patches, object patches on the diffusion model, other model wrappers or patches after this "
+    "node, an attention override set before it, options that cannot be sent to another process",
+    "the call's tensors travel through a file store each step (correct, not the fastest transport)",
+    "verified with gloo on CPU ranks only (SIMULATED); NCCL on real GPUs is not verified yet",
+)
+
+
+def apply_processes(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 1024,
+                    fast_domain: int = 0, backend: Optional[str] = None, device_kind: Optional[str] = None):
+    """MODEL -> MODEL whose calls run on worker processes (A27 GPU-009). Returns (model, report lines, state)."""
+    from . import procmodel
+    dm = model.model.diffusion_model
+    ad = adapter_for(dm)
+    if ad is None:
+        raise ValueError(f"C2C Multi-GPU Split (processes): {type(dm).__name__} has no token-split adapter "
+                         f"({'; '.join(supported_models())}); use rank_backend 'threads' for a batch split")
+    m = model.clone()
+    to = m.model_options.setdefault("transformer_options", {})
+    clash = existing_block_patches(to)
+    if clash:
+        raise ValueError("C2C Multi-GPU Split: this model already carries block patches from other nodes ("
+                         + "; ".join(clash) + "); they would silently stop working. Remove one of them.")
+    prev = to.get("optimized_attention_override")
+    if prev is not None and prev is not attention_override:
+        raise ValueError("C2C Multi-GPU Split (processes): an attention override was set before this node (e.g. "
+                         "Sage attention); it cannot be sent to other processes - use rank_backend 'threads'")
+    try:
+        rec = procmodel.recipe_of(m)
+    except procmodel.NotDistributable as exc:
+        raise ValueError(f"C2C Multi-GPU Split (processes): {exc}") from exc
+    sim = simulate_ranks()
+    if sim >= 2 and device_kind is None:
+        world, device_kind, backend = sim, "cpu", backend or "gloo"
+    else:
+        visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        world = visible if int(gpus) <= 0 else min(int(gpus), visible)
+    report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}", "rank backend: processes"]
+    state = UspState(prefer, min_tokens_per_gpu, fast_domain, None)
+    state.backend = "processes"
+    if world >= 2:
+        from . import procrun
+        state.group = procmodel.group_for(rec, world, backend, device_kind, timeout_s=state.timeout)
+        report.append(f"workers: {world} ranks, {procrun.choose(world, backend, device_kind)[2]}; the worker "
+                      f"processes start and load the model at the first model call")
+        p = plan_sequence_parallel(world, heads=ad.heads(dm), prefer=prefer, fast_domain=fast_domain or None)
+        report.append(f"plan: {p.mode} (Ulysses {p.ulysses} x Ring {p.ring})" + "".join(f"; {x}" for x in p.notes))
+        to[STATE_KEY] = state
+        to["parallel_layout"] = "sequence"
+        to["optimized_attention_override"] = attention_override
+        for i in range(len(dm.blocks)):
+            m.set_model_patch_replace(block_patch, "dit", "double_block", i)
+        m.remove_wrappers_with_key("diffusion_model", WRAPPER_KEY)
+        m.add_wrapper_with_key("diffusion_model", WRAPPER_KEY, diffusion_model_wrapper)
+    else:
+        report.append(f"GPUs: {world} visible - nothing to split, the model runs as before")
+    report += ["limits:"] + [f"  - {x}" for x in PROCESS_LIMITS]
+    return m, report, state
 
 
 def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 1024, fast_domain: int = 0,

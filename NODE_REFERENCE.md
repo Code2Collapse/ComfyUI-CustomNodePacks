@@ -432,6 +432,7 @@ Splits every model call over the GPUs of this machine. Any model: the call's bat
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `fast_link_gpus` | `INT` | default `0`, range 0…64 | How many GPUs share fast links (NVLink domain). 0 = all of them. Ulysses stays inside this many GPUs. |
+| `rank_backend` | choice: `threads`, `processes (Linux, NCCL)` | default `"threads"` | threads: every GPU is driven by a thread of this ComfyUI process (Windows and Linux, no NCCL; any model). processes: one worker process per GPU with its own model copy, talking through NCCL (Linux server GPUs; Wan and MiniMax H3 only). Verified on CPU test ranks only so far - not yet on real GPUs. |
 
 **Outputs**
 

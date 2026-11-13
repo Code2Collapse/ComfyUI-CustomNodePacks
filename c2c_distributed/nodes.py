@@ -8,6 +8,7 @@ from . import inventory as inv
 from . import usp
 
 CATEGORY = "C2C/Distributed"
+RANK_BACKENDS = ("threads", "processes (Linux, NCCL)")
 
 
 def _refuse_if_off():
@@ -71,6 +72,12 @@ class C2CSequenceParallel:
         }, "optional": {
             "fast_link_gpus": ("INT", {"default": 0, "min": 0, "max": 64, "tooltip": "How many GPUs share fast "
                                "links (NVLink domain). 0 = all of them. Ulysses stays inside this many GPUs."}),
+            # A27 GPU-009 (appended; default = the behaviour of every saved workflow)
+            "rank_backend": (list(RANK_BACKENDS), {"default": RANK_BACKENDS[0], "tooltip": "threads: every GPU "
+                             "is driven by a thread of this ComfyUI process (Windows and Linux, no NCCL; any "
+                             "model). processes: one worker process per GPU with its own model copy, talking "
+                             "through NCCL (Linux server GPUs; Wan and MiniMax H3 only). Verified on CPU test "
+                             "ranks only so far - not yet on real GPUs."}),
         }}
 
     RETURN_TYPES = ("MODEL", "STRING")
@@ -88,10 +95,14 @@ class C2CSequenceParallel:
                    "models are batch-split only. The 'plan' output lists the mode, devices, memory per GPU and the "
                    "communication path before sampling starts.")
 
-    def run(self, model, gpus, strategy, min_tokens_per_gpu, fast_link_gpus=0):
+    def run(self, model, gpus, strategy, min_tokens_per_gpu, fast_link_gpus=0, rank_backend=None):
         _refuse_if_off()
-        m, report, _state = usp.apply(model, gpus=gpus, prefer=strategy, min_tokens_per_gpu=min_tokens_per_gpu,
-                                      fast_domain=fast_link_gpus)
+        if rank_backend == RANK_BACKENDS[1]:
+            m, report, _state = usp.apply_processes(model, gpus=gpus, prefer=strategy,
+                                                    min_tokens_per_gpu=min_tokens_per_gpu, fast_domain=fast_link_gpus)
+        else:
+            m, report, _state = usp.apply(model, gpus=gpus, prefer=strategy, min_tokens_per_gpu=min_tokens_per_gpu,
+                                          fast_domain=fast_link_gpus)
         text = "\n".join(report)
         return {"ui": {"text": [text]}, "result": (m, text)}
 

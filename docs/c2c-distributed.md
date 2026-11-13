@@ -182,3 +182,34 @@ Measured on the owner's RTX 4060 Laptop, torch 2.9.0+cu130:
 - Any failure tears the group down and names the root-cause rank.
 - Self-test: `python -m c2c_distributed.procrun --world 4` (Linux / WSL).
 - On Windows, torch cannot form a multi-process group: the runtime refuses at start and leaves no process behind.
+
+**Model on worker processes** (`rank_backend = processes (Linux, NCCL)` on C2C Multi-GPU Split; `procmodel.py`,
+GPU-009). This is raylight's one-actor-per-GPU model, built on ComfyUI's own mechanisms:
+- **Recipe.** Each worker rebuilds the model from core's reload recipe (`cached_patcher_init`, the same factory core
+  uses for its multi-GPU clones) plus the weight patches (LoRA), and loads it on its GPU.
+- **Each call.** Every model call is sent to the workers: the call tensors plus the plain-data transformer_options.
+  The token split and attention exchange then run over torch.distributed.
+- **Refused, never dropped silently:**
+  - hook patches;
+  - object patches on the diffusion model;
+  - options that cannot be pickled;
+  - other wrappers or patches after the node;
+  - an attention override set before it;
+  - models without a token-split adapter.
+
+Measured (SIMULATED: gloo CPU ranks, separate processes in WSL, core 0.39 sampler):
+
+| Model | Ranks | Max |diff| vs one process | Magnitude |
+|---|---|---|---|
+| tiny Wan, CFG 4, 4 weight patches | 2 (Ulysses) | 1.6e-5 | 13 |
+| tiny Wan, CFG 4, 4 weight patches | 3 (Ring) | 1.7e-5 | 13 |
+| tiny H3, video | 2 / 3 | 3.3e-6 / 4.3e-6 | 5.3 |
+| tiny H3, audio | 2 / 3 | 2.4e-6 / 2.9e-6 | 5.5 |
+
+The weight patches move the output by 9.7, so a worker without them would fail the check. A second sampling run
+reuses the loaded workers.
+
+NCCL on real GPUs: CODE_COMPLETE_HARDWARE_UNVERIFIED.
+
+Also fixed: `TorchComm`'s sub-group cache outlived its process group, so a second group in the same process failed
+with "not registered".
