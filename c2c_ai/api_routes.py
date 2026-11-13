@@ -514,14 +514,25 @@ def register_routes(server) -> None:
             kind = ("gguf"  if ext in CHAT_EXTS
                     else "encoder" if ext in ENC_EXTS
                     else "other")
-            items.append({
+            item = {
                 "name": name,
                 "path": abs_p,
                 "size_bytes": size,
                 "ext": ext,
                 "kind": kind,
                 "chat_capable": kind == "gguf",
-            })
+            }
+            if ext == ".safetensors" and abs_p:
+                # L6.02: can ComfyUI's own TextGenerate chat with this encoder? Header only (names + shapes),
+                # cached by (path, size, mtime); runs when the settings panel asks, never in a hot path.
+                try:
+                    from . import te_scan
+                    c = te_scan.classify_cached(abs_p)
+                    item.update({"family": c["family"], "params_b": c["params_b"], "vision": c["vision"],
+                                 "core_chat": bool(c["can_chat"]), "core_why": c["why"]})
+                except Exception as exc:  # noqa: BLE001 - the listing must still work
+                    item.update({"core_chat": False, "core_why": f"could not check this file: {exc}"})
+            items.append(item)
         # Stable order: chat-capable first, then encoders, then other; name asc.
         items.sort(key=lambda it: (0 if it["kind"] == "gguf"
                                    else 1 if it["kind"] == "encoder"
@@ -544,6 +555,7 @@ def register_routes(server) -> None:
                 "chat_capable": sum(1 for it in items if it["chat_capable"]),
                 "encoder": sum(1 for it in items if it["kind"] == "encoder"),
                 "other": sum(1 for it in items if it["kind"] == "other"),
+                "core_chat": sum(1 for it in items if it.get("core_chat")),
             },
         })
 

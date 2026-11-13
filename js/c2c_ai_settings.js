@@ -757,14 +757,20 @@ function buildSettingsView(root) {
                         : "";
                     const badge =
                         it.kind === "gguf"     ? "[GGUF]"    :
-                        it.kind === "encoder"  ? "[encoder]" : "[other]";
+                        it.kind === "encoder"  ? (it.core_chat ? "[encoder · ComfyUI can chat]" : "[encoder]")
+                                               : "[other]";
                     o.textContent = `${badge} ${it.name}${mb}`;
                     if (!it.chat_capable) {
                         o.disabled = true;
-                        o.title = it.kind === "encoder"
-                            ? "Diffusion text-encoder (T5/CLIP). Used by image " +
-                              "pipelines — not loadable as an in-process chat LLM."
-                            : "Not a recognised model file.";
+                        // L6.02: the header scan says what this encoder is and whether ComfyUI's own text
+                        // generation can chat with it (chatting through it arrives with the next slice)
+                        o.title = it.core_why
+                            ? `${it.family ? it.family + " · " : ""}${it.params_b ? it.params_b + " B params · " : ""}` +
+                              `${it.vision ? "vision · " : ""}${it.core_why}`
+                            : it.kind === "encoder"
+                                ? "Diffusion text-encoder (T5/CLIP). Used by image " +
+                                  "pipelines — not loadable as an in-process chat LLM."
+                                : "Not a recognised model file.";
                     }
                     if (existing && existing.model_file === it.name) {
                         o.selected = true;
