@@ -181,6 +181,17 @@ async function _fetchPresets() {
     return [];
 }
 
+// L9.21: the index is read lazily (library opened, or before a save that
+// rewrites it), never on page load: a user who never saved a preset has no
+// index.json, and a load-time read printed a 404 on every fresh load.
+let _loadedOnce = null;
+function _ensureLoaded() {
+    if (!_loadedOnce) {
+        _loadedOnce = _fetchPresets().then((p) => { _state.presets = p; });
+    }
+    return _loadedOnce;
+}
+
 async function _saveIndex(presets) {
     await _storeUserData(USERDATA_INDEX, { presets, updated: Date.now() });
 }
@@ -189,6 +200,7 @@ async function _refreshGallery() {
     _state.busy = true;
     _renderGallery();
     _state.presets = await _fetchPresets();
+    _loadedOnce = Promise.resolve();
     _state.busy = false;
     _renderGallery();
 }
@@ -379,6 +391,7 @@ async function _exportAll() {
 }
 
 async function _importJson(text) {
+    await _ensureLoaded();
     let obj;
     try { obj = JSON.parse(text); }
     catch (e) { c2cAlert("Invalid JSON."); return; }
@@ -498,6 +511,7 @@ async function _savePreset() {
     try {
         const id = `preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const presetData = { id, name, subgraph, thumbnail, tags, created: Date.now() / 1000, node_count: subgraph.nodes.length };
+        await _ensureLoaded();  // never rewrite the index from an unread list
         const stored = await _storeUserData(`${USERDATA_DIR}/${id}.json`, presetData);
         if (!stored) { c2cAlert("Save failed: could not write userdata"); return; }
         _state.presets.push({ id, name, tags, node_count: subgraph.nodes.length, created: presetData.created, has_thumb: !!thumbnail });
@@ -610,7 +624,6 @@ app.registerExtension({
         })();
         const b = document.getElementById(BTN_ID);
         if (b) b.style.display = enabled ? "flex" : "none";
-        _fetchPresets().then(p => { _state.presets = p; }).catch(() => {});
         console.log("[C2C.GroupPresets] userdata-backed loaded.");
     },
 });

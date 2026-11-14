@@ -783,12 +783,19 @@ app.registerExtension({
                     "white-space: nowrap",
                     "overflow: hidden",
                     "text-overflow: ellipsis",
-                    "min-height: 16px",
+                    "line-height: 14px",
+                    "box-sizing: border-box",
                 ].join(";");
                 el.title = "Source filename detected from upstream loader";
                 el.textContent = "📄 (no source connected)";
+                // L7.95: one line = 14 px text + 2x2 padding + 2x1 border = 20 px box. Without a fixed row the
+                // frontend's DOM-widget default (min 50 px, plus any spare node height) made the box ~30 px taller
+                // than its line. Row = box + the default 10 px DOM-widget margin above and below.
+                const ROW_H = 20 + 2 * 10;
                 const w = node.addDOMWidget("source_status", "div", el, {
                     serialize: false,
+                    getMinHeight: () => ROW_H,
+                    getMaxHeight: () => ROW_H,
                     getValue: () => el.textContent,
                     setValue: (v) => { el.textContent = v; },
                 });

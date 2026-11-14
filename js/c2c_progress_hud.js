@@ -12,7 +12,10 @@
 //   This extension hooks every node's draw pipeline and renders:
 //     • a smooth animated bar across the node header
 //     • a centred label  "  42 / 100 · 42% · ETA 00:18 · 4.2/s  "
-//     • a node-title prefix while running ("⏳ 42% ")
+//   The node TITLE is never written (L9.20 / L9.118): a title prefix leaked
+//   into saved workflows, queued prompts (_meta.title) and marked every run
+//   as a workflow change. Titles saved by older builds with the leaked
+//   "⏳ NN% │ " prefix are repaired once on workflow load.
 //
 //   ETA is computed from a per-node rolling-window average of step time
 //   (last 8 progress events). Rate (items/sec) is the inverse. Both are
@@ -26,12 +29,12 @@
 // ────────
 //   mec.progress_hud.enabled    — master toggle (default true)
 //   mec.progress_hud.eta        — show ETA + rate (default true)
-//   mec.progress_hud.title_pct  — prefix node title with " ⏳ NN% "
-//                                 while executing (default true)
+//   (mec.progress_hud.title_pct was removed with the title prefix; a stored
+//    value is ignored.)
 //
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { findNodeAnywhere } from "./_subgraph_walk.js";
+import { findNodeAnywhere, forAllNodes } from "./_subgraph_walk.js";
 import { C, onThemeChange } from "./_c2c_theme.js";
 import { getRuntime } from "./_c2c_runtime.js";
 // Lite mode: this is an AMBIENT extension (no node depends on it), so in lite
@@ -46,7 +49,6 @@ function _requestFgRedraw() {
 const SETTINGS = {
     enabled: true,
     eta: true,
-    title_pct: true,
 };
 
 // Canvas 2D fillStyle cannot parse `var(--x)` — it silently keeps the
@@ -81,8 +83,6 @@ const PROGRESS_BY_NODE = new WeakMap();
 // }
 const PROGRESS = new Map();
 let EXEC_NODE = null;
-// node_id -> original title (so we can restore it cleanly)
-const ORIG_TITLES = new Map();
 
 const SAMPLE_WINDOW = 16;
 
@@ -158,35 +158,26 @@ function _fmt_rate(r) {
     return `${(60 * r).toFixed(1)}/min`;
 }
 
-// Title prefix management.
-function _apply_title_prefix(node, pct) {
-    if (!SETTINGS.title_pct) return;
-    if (!ORIG_TITLES.has(node.id)) ORIG_TITLES.set(node.id, node.title);
-    const orig = ORIG_TITLES.get(node.id);
-    const tag  = `\u23F3 ${pct.toFixed(0)}% \u2502 `;
-    if (!node.title.startsWith(tag.slice(0, 2))) {
-        node.title = tag + orig;
-    } else {
-        node.title = tag + orig;
-    }
+// Older builds wrote "⏳ NN% │ " into node.title while a node ran; a save or
+// autosave mid-run persisted it. Strip exactly that prefix (repeated, if a
+// title was prefixed twice) and nothing else.
+const LEAKED_TITLE_PREFIX = /^(?:⏳ \d{1,3}% │ )+/;
+function _repairLeakedTitles() {
+    try {
+        forAllNodes((node) => {
+            const t = node?.title;
+            if (typeof t === "string" && LEAKED_TITLE_PREFIX.test(t)) {
+                node.title = t.replace(LEAKED_TITLE_PREFIX, "");
+            }
+        });
+    } catch (_) { /* never block a workflow load */ }
 }
 
-function _clear_title_prefix(node_id) {
+function _clear_progress(node_id) {
     const resolved = findNodeAnywhere(node_id);
-    if (!resolved) { ORIG_TITLES.delete(node_id); return; }
-    if (ORIG_TITLES.has(node_id)) {
-        resolved.node.title = ORIG_TITLES.get(node_id);
-        ORIG_TITLES.delete(node_id);
-    }
-    // Also clear any wrapper-chain entries that may have been mirrored.
-    for (const wrapper of resolved.wrapperChain) {
-        if (PROGRESS_BY_NODE.has(wrapper)) PROGRESS_BY_NODE.delete(wrapper);
-    }
+    if (!resolved) return;
+    for (const wrapper of resolved.wrapperChain) PROGRESS_BY_NODE.delete(wrapper);
     if (resolved.node) PROGRESS_BY_NODE.delete(resolved.node);
-}
-
-function _clear_all_title_prefixes() {
-    for (const id of Array.from(ORIG_TITLES.keys())) _clear_title_prefix(id);
 }
 
 // ── Socket wiring ────────────────────────────────────────────────────
@@ -205,9 +196,10 @@ api.addEventListener("executing", (ev) => {
     const id = d?.node ?? d;
     EXEC_NODE = (id == null || id === "") ? null : String(id);
     if (EXEC_NODE === null) {
-        // Workflow finished — clear overlays + title prefixes.
+        // Workflow finished — clear overlays: drop each node's (and its
+        // subgraph wrappers') PROGRESS_BY_NODE entry so no stale bar stays drawn.
+        for (const id of PROGRESS.keys()) _clear_progress(id);
         PROGRESS.clear();
-        _clear_all_title_prefixes();
         _requestFgRedraw();
     }
 });
@@ -217,14 +209,14 @@ api.addEventListener("executed", (ev) => {
     const id = String(d?.node ?? "");
     if (id) {
         PROGRESS.delete(id);
-        _clear_title_prefix(id);
+        _clear_progress(id);
     }
     _requestFgRedraw();
 });
 
 api.addEventListener("execution_error", () => {
+    for (const id of PROGRESS.keys()) _clear_progress(id);
     PROGRESS.clear();
-    _clear_all_title_prefixes();
     _requestFgRedraw();
 });
 
@@ -280,7 +272,10 @@ app.registerExtension({
             name: "Progress HUD — enable per-node overlay",
             type: "boolean",
             defaultValue: true,
-            onChange: (v) => { SETTINGS.enabled = !!v; if (!v) PROGRESS.clear(); },
+            onChange: (v) => {
+                SETTINGS.enabled = !!v;
+                if (!v) { for (const id of PROGRESS.keys()) _clear_progress(id); PROGRESS.clear(); }
+            },
         },
         {
             id: "mec.progress_hud.eta",
@@ -289,17 +284,10 @@ app.registerExtension({
             defaultValue: true,
             onChange: (v) => { SETTINGS.eta = !!v; },
         },
-        {
-            id: "mec.progress_hud.title_pct",
-            name: "Progress HUD — prefix node title with % while running",
-            type: "boolean",
-            defaultValue: true,
-            onChange: (v) => {
-                SETTINGS.title_pct = !!v;
-                if (!v) _clear_all_title_prefixes();
-            },
-        },
     ],
+
+    // Repair titles saved by older builds with the leaked progress prefix.
+    afterConfigureGraph() { _repairLeakedTitles(); },
 
     async beforeRegisterNodeDef(nodeType /*, nodeData, app */) {
         const origDrawFg = nodeType.prototype.onDrawForeground;
@@ -316,7 +304,6 @@ app.registerExtension({
             if (pct >= 100) return;
 
             _ensure_anim();
-            _apply_title_prefix(this, pct);
 
             // ── Animated bar across the title bar (above core green fill) ──
             const W = this.size[0];
