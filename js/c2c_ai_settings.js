@@ -850,6 +850,56 @@ function buildSettingsView(root) {
                 ctrlEl.appendChild(apply);
             }
 
+            // L6.02 S4: Hugging Face model folders under models/LLM (transformers, local files only)
+            const hf = te.hf_folders || [];
+            if (hf.length) {
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;";
+                const hsel = document.createElement("select");
+                hsel.style.cssText =
+                    `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                     border-radius:3px;font-size:11px;padding:2px 4px;max-width:340px;`;
+                const current = (cfg.backends || []).find(e => e.kind === "hf_local");
+                hf.forEach(f => {
+                    const o = document.createElement("option");
+                    o.value = f.name;
+                    o.textContent = `[folder${f.can_chat ? " · can chat" : ""}] ${f.name}` +
+                        (f.params_b ? ` (~${f.params_b} B)` : "") + (f.size_gb ? ` ${f.size_gb} GB` : "");
+                    o.disabled = !f.can_chat;
+                    o.title = f.why || "";
+                    if (current && current.model_dir === f.name) o.selected = true;
+                    hsel.appendChild(o);
+                });
+                const firstOk = hf.find(f => f.can_chat);
+                if (!current && firstOk) hsel.value = firstOk.name;
+                const hbtn = document.createElement("button");
+                hbtn.textContent = current ? "Update folder" : "Add folder as backend";
+                hbtn.style.cssText =
+                    `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                     border-radius:3px;padding:2px 10px;cursor:pointer;font-size:11px;`;
+                hbtn.disabled = !firstOk;
+                hbtn.title = firstOk ? "Runs on the CPU with transformers; nothing is downloaded"
+                                     : "No folder here holds a chat model";
+                hbtn.onclick = async () => {
+                    const picked = hf.find(f => f.name === hsel.value);
+                    if (!picked || !picked.can_chat) return;
+                    const newCfg = await apiGet("/c2c/ai/config");
+                    newCfg.backends = newCfg.backends || [];
+                    let e = newCfg.backends.find(x => x.kind === "hf_local");
+                    if (e) { e.model_dir = picked.name; e.enabled = true; }
+                    else newCfg.backends.push({ kind: "hf_local", id: "local.hf", display_name: "Local model folder",
+                                                model_dir: picked.name, device: "cpu", keep_loaded_min: 5,
+                                                enabled: true });
+                    await apiPost("/c2c/ai/config", newCfg);
+                    refresh();
+                };
+                const lab = document.createElement("span");
+                lab.style.cssText = "color:var(--c2c-sub);font-size:11px;";
+                lab.textContent = "Model folders (models/LLM):";
+                row.append(lab, hsel, hbtn);
+                sec4.appendChild(row);
+            }
+
             const rescan = document.createElement("button");
             rescan.textContent = "Rescan";
             rescan.style.cssText =

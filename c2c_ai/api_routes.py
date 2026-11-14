@@ -546,16 +546,25 @@ def register_routes(server) -> None:
             llamacpp_available = importlib.util.find_spec("llama_cpp") is not None
         except Exception:
             llamacpp_available = False
+        # L6.02 S4: Hugging Face model folders under models/LLM (config.json only, never the weights)
+        try:
+            from . import hf_scan
+            hf_folders = hf_scan.list_folders()
+        except Exception as exc:  # noqa: BLE001 - the listing must still work
+            hf_folders = []
+            log.warning("c2c_ai: LLM folder scan failed: %s", exc)
         return _ok({
             "items": items,
             "roots": roots,
             "llamacpp_available": llamacpp_available,
+            "hf_folders": hf_folders,
             "counts": {
                 "total": len(items),
                 "chat_capable": sum(1 for it in items if it["chat_capable"]),
                 "encoder": sum(1 for it in items if it["kind"] == "encoder"),
                 "other": sum(1 for it in items if it["kind"] == "other"),
                 "core_chat": sum(1 for it in items if it.get("core_chat")),
+                "hf_chat": sum(1 for f in hf_folders if f.get("can_chat")),
             },
         })
 

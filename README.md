@@ -1916,6 +1916,34 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 
 ---
 
+## Face Landmarks: look, strength, size, screening, mask and smoothing
+
+**Face Landmarks (Facepoints, 620 + 68/98)** has 42 optional controls. They are advanced inputs: in Nodes 2.0 click
+**Show advanced inputs** on the node; the classic renderer of frontend 1.53 shows them all. With every control at its
+default, the output is exactly what it was before (tested bit for bit). The name prefix gives the group:
+
+- **appearance_**: landmark-image dot and background colours; overlay colours per 620-point kind (`lmk`, `skin`, `lid`,
+  `teeth_u`, `teeth_l`, `iris`) and for the 68 and 98 sets; one colour for the whole overlay. Colours are `#RRGGBB`
+  and take effect with `appearance_scheme = custom`. They never change the pose numbers.
+- **strength_**: overlay opacity (real alpha), landmark-image dot intensity, how strongly unsure points are drawn,
+  the confidence below which a point counts as unsure, and a multiplier for the confidence values in pose_keypoint.
+  The coordinates are never touched.
+- **resolution_**:
+  - processing size: find and crop the face on a smaller frame; points are still reported in source pixels;
+  - output size: presets or custom, aspect kept or stretched. Images, mask, pose, JSON and boxes all follow, so
+    everything stays aligned.
+- **screening_**: minimum face confidence (separate from the face finder's own `finder_confidence`), minimum point
+  confidence (pose c = 0, x / y kept), how unsure points are drawn (dim, fade, hide or keep), and rejected faces in
+  the JSON for diagnosis. The JSON always keeps every point.
+- **mask_**: grow, shrink, feather, edge softness, threshold, hull smoothing, and a preview on the overlay. The MASK
+  stays 0..1.
+- **temporal_**: landmark smoothing for video. It adapts: still points stay steady, real motion is followed at once,
+  and points the model is unsure of move less. It also offers a lag limit, a scene-cut restart, a restart after a
+  lost face, and a stable face order by identity. Raw points stay in the JSON. This is separate from `track_video`.
+
+Measured with the real model on CPU: mean landmark jitter 1.47 → 0.29 px on a shaky clip (strength 0.8); output
+resize aligned within 0.07 px. Evidence: `docs/evidence/A27/face/` (workspace).
+
 ## C2C Vault: lock or seal part of a workflow
 
 A vault is a **protected subgraph**. Outside it is one node with the subgraph's inputs, outputs and promoted

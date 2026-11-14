@@ -90,6 +90,33 @@ def split_thinking(text: str) -> str:
     return text.strip()
 
 
+def chat_with_clip(clip, req: AskRequest, backend_id: str, model: str, vision: bool = False) -> AskResponse:
+    """One answer through a ComfyUI CLIP object's own chat surface: tokenize -> generate -> decode (core's
+    TextGenerate path). Shared by CoreTextEncoderBackend (its own copy) and the borrowed backend (a loaded one)."""
+    check_cancel(req)
+    images = [im for m in req.messages for im in (getattr(m, "images", None) or [])]
+    if images and not vision:
+        raise ValueError(f"{model} has no vision weights: send text only, or choose a vision encoder")
+    system, prompt = build_prompt(req)
+    image = _image_tensor(images[0]) if images else None
+    t0 = now_ms()
+    kw = {"min_length": 1, "system_prompt": system}
+    if image is not None:
+        kw["image"] = image
+    tokens = clip.tokenize(prompt, **kw)
+    check_cancel(req)                                       # the last point before the uninterruptible generate
+    temp = float(req.temperature or 0.0)
+    ids = clip.generate(tokens, do_sample=temp > 0, max_length=int(req.max_tokens), temperature=max(temp, 1e-5),
+                        top_k=50, top_p=0.95, min_p=0.0, repetition_penalty=1.0, seed=None)
+    text = split_thinking(clip.decode(ids))
+    try:
+        n_out = len(ids)
+    except Exception:  # noqa: BLE001
+        n_out = 0
+    return AskResponse(text=text, backend_id=backend_id, model=model, input_tokens=int(_count_tokens(tokens)),
+                       output_tokens=int(n_out), cost_usd=0.0, latency_ms=now_ms() - t0)
+
+
 class CoreTextEncoderBackend(Backend):
     def __init__(self, info: BackendInfo, *, model_file: str, path: str, vision: bool, keep_loaded_min: float = 5.0,
                  loader=None):
@@ -167,27 +194,10 @@ class CoreTextEncoderBackend(Backend):
         images = [im for m in req.messages for im in (getattr(m, "images", None) or [])]
         if images and not self._vision:
             raise ValueError(f"{self.info.model} has no vision weights: send text only, or choose a vision encoder")
-        system, prompt = build_prompt(req)
         clip = self._ensure()
-        image = _image_tensor(images[0]) if images else None
-        t0 = now_ms()
-        kw = {"min_length": 1, "system_prompt": system}
-        if image is not None:
-            kw["image"] = image
-        tokens = clip.tokenize(prompt, **kw)
-        check_cancel(req)                                       # the last point before the uninterruptible generate
-        temp = float(req.temperature or 0.0)
-        ids = clip.generate(tokens, do_sample=temp > 0, max_length=int(req.max_tokens), temperature=max(temp, 1e-5),
-                            top_k=50, top_p=0.95, min_p=0.0, repetition_penalty=1.0, seed=None)
-        text = split_thinking(clip.decode(ids))
+        out = chat_with_clip(clip, req, self.info.id, self.info.model, vision=self._vision)
         self._arm_unload()
-        n_in = _count_tokens(tokens)
-        try:
-            n_out = len(ids)
-        except Exception:  # noqa: BLE001
-            n_out = 0
-        return AskResponse(text=text, backend_id=self.info.id, model=self.info.model, input_tokens=int(n_in),
-                           output_tokens=int(n_out), cost_usd=0.0, latency_ms=now_ms() - t0)
+        return out
 
     def probe(self, timeout: float = 5.0) -> HealthState:
         from .. import te_scan

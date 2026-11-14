@@ -237,6 +237,16 @@ def build_backend(entry: dict):
             display_name=entry.get("display_name", "ComfyUI text encoder"),
             keep_loaded_min=float(entry.get("keep_loaded_min", 5)),
         )
+    elif kind == "hf_local":
+        # L6.02 S4: a Hugging Face model folder under models/LLM, through transformers (local files only).
+        from .backends.hf_local import HFLocalBackend
+        b = HFLocalBackend.build(
+            backend_id=entry.get("id", "local.hf"),
+            model_dir=entry.get("model_dir", ""),
+            display_name=entry.get("display_name", "Local model folder"),
+            device=entry.get("device", "cpu"),
+            keep_loaded_min=float(entry.get("keep_loaded_min", 5)),
+        )
     elif kind == "text_encoder_local":
         # B1: local GGUF via llama-cpp-python, loaded from ComfyUI's
         # text_encoders/ folder via folder_paths (per user mandate).

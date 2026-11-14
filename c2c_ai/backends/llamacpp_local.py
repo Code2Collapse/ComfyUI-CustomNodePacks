@@ -29,6 +29,7 @@ Config entry::
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Generator
 
@@ -222,11 +223,22 @@ class LlamaCppBackend(Backend):
         )
 
     def probe(self, timeout: float = 5.0) -> HealthState:
+        """Health without loading the model (2026-11-13): the periodic probe starts at import, and loading the GGUF
+        here put a multi-GB model into RAM at every ComfyUI start, used or not (and, measured, a CNP + WNE import
+        in one process ended while that native load ran). A loaded model gets a tokenize round-trip; an unloaded
+        one is healthy when llama-cpp-python is installed and the file is a GGUF. ask() loads it on first use."""
         t0 = now_ms()
         try:
-            self._ensure_loaded()
-            # Cheap sanity round-trip: tokenize a tiny string.
-            self._llm.tokenize(b"hi")
+            if self._llm is not None:
+                self._llm.tokenize(b"hi")
+            else:
+                import importlib.util
+                if importlib.util.find_spec("llama_cpp") is None:
+                    raise RuntimeError("llama-cpp-python is not installed")
+                path = _resolve_model_path(self._model_file)
+                with open(path, "rb") as fh:
+                    if fh.read(4) != b"GGUF":
+                        raise RuntimeError(f"{os.path.basename(path)} is not a GGUF file")
             self.health.ok = True
             self.health.last_error = None
         except Exception as exc:
