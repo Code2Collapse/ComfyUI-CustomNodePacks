@@ -51,7 +51,8 @@ def _channel(image: torch.Tensor, src: str) -> torch.Tensor:
 
 
 class ShuffleMEC:
-    DESCRIPTION = "Nuke-style 4-channel shuffle in a single node."
+    DESCRIPTION = ("Nuke-style 4-channel shuffle in a single node: the picture leaves as RGB (IMAGE, 3 channels), "
+                   "the shuffled alpha on the MASK output.")
     CATEGORY = "MaskEditControl/Channels"
     FUNCTION = "shuffle"
     RETURN_TYPES = ("IMAGE", "MASK")
@@ -80,7 +81,9 @@ class ShuffleMEC:
         rgb = torch.cat((r, g, b), dim=-1)
         if premultiply_output:
             rgb = rgb * a
-        out = torch.cat((rgb, a), dim=-1).clamp(0.0, 1.0)
+        # L7.79: an IMAGE socket carries [B,H,W,3]. The shuffled alpha leaves on the MASK output ("alpha") only;
+        # until 2026-11 it was also appended as a 4th image channel, which RGB consumers mis-read.
+        out = rgb.clamp(0.0, 1.0)
         return (out, a.squeeze(-1))
 
 

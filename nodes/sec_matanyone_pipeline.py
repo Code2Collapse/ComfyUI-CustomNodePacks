@@ -76,7 +76,7 @@ class SeCMatAnyonePipelineMEC:
                     "default": seg_models[0],
                     "tooltip": (
                         "Segmentation model for coarse masks.\n"
-                        "SeC: best for video with text prompts.\n"
+                        "SeC: tracks one object through video from a point or box on frame 0 (text alone is not enough).\n"
                         "SAM2/3: best for point/bbox prompts."
                     ),
                 }),
@@ -261,22 +261,29 @@ class SeCMatAnyonePipelineMEC:
         # a smaller kwarg surface — call it with only the supported keys.
         from .mask_matting import _classic
         model_free: dict = {}
-        from .unified_segmentation import UnifiedSegmentation
-        seg_node = UnifiedSegmentation()
         try:
-            coarse_masks, score, seg_info = seg_node.segment(
-                image=image,
-                model_name=segmentation_model,
-                # L9.156: positive / negative coords used to reach only the model-free fallback
-                points_json=self._merged_points_json(points_json, positive_coords, negative_coords),
-                bbox_json=bbox_json,
-                multimask=True,
-                mask_index=0,
-                precision=precision,
-                bbox=bbox,
-                text_prompt=text_prompt,
-                existing_mask=None,
-            )
+            if self._is_sec_model(segmentation_model):
+                # L7.117: the list offers model_manager's "sec_4b" (official sharded OpenIXCLab/SeC-4B, or a
+                # single-file copy - model_manager resolves both). unified_segmentation's registry knows only
+                # single-file sec_4b_<dtype> names, so this choice always raised "Unknown model 'sec_4b'". Run it on
+                # the engine this pack ships, through the same segmenter Segment & Matte uses (one registry).
+                coarse_masks, score = self._sec_segment(image, segmentation_model, points_json, positive_coords,
+                                                        negative_coords, bbox_json, bbox, precision, device)
+            else:
+                from .unified_segmentation import UnifiedSegmentation
+                coarse_masks, score, seg_info = UnifiedSegmentation().segment(
+                    image=image,
+                    model_name=segmentation_model,
+                    # L9.156: positive / negative coords used to reach only the model-free fallback
+                    points_json=self._merged_points_json(points_json, positive_coords, negative_coords),
+                    bbox_json=bbox_json,
+                    multimask=True,
+                    mask_index=0,
+                    precision=precision,
+                    bbox=bbox,
+                    text_prompt=text_prompt,
+                    existing_mask=None,
+                )
         except Exception as exc:
             # L7.97: the segmentation model is not installed (and may not be downloaded) -> model-free, labelled
             if not (_classic.fallback_allowed() and _classic.is_missing_model_error(exc)):
@@ -394,6 +401,30 @@ class SeCMatAnyonePipelineMEC:
         return (rgb, alpha_mask, coarse_masks, preview, info)
 
     # ── model-free stand-ins (L7.97) ──────────────────────────────────
+
+    @staticmethod
+    def _is_sec_model(name) -> bool:
+        """A SeC choice from model_manager's registry (e.g. "sec_4b"), which unified_segmentation cannot load."""
+        return (MODEL_REGISTRY.get(str(name).replace("[download] ", ""), {}) or {}).get("family") == "sec"
+
+    @staticmethod
+    def _sec_segment(image, model_name, points_json, positive_coords, negative_coords, bbox_json, bbox, precision,
+                     device):
+        """L7.117: SeC on nodes/sec_engine via the Segment & Matte SeC backend (model_manager "sec_4b"). SeC tracks
+        from a point or a box on frame 0; it cannot start from text alone (the backend says so)."""
+        from .mask_matting.segmenters.video_backend import SeCSegmenter
+        from .mask_matting.utils import parse_points
+        from .utils import parse_bbox_input
+        pos, neg = parse_points(points_json or "")
+        for raw, is_pos in ((positive_coords, True), (negative_coords, False)):
+            a, b = parse_points(raw or "")
+            (pos if is_pos else neg).extend(a + b)
+        box = parse_bbox_input(bbox_json, bbox)
+        box = tuple(float(v) for v in np.asarray(box).reshape(-1)[:4]) if box is not None else None
+        seg = SeCSegmenter(model_name=str(model_name).replace("[download] ", ""), device=device, precision=precision)
+        out = seg.segment(image, positive_points=pos or None, negative_points=neg or None, bbox=box,
+                          frame_annotation=0, tracking_direction="forward")
+        return out["mask"].float().clamp(0, 1), float(out["score"])
 
     @staticmethod
     def _merged_points_json(points_json, positive_coords, negative_coords) -> str:

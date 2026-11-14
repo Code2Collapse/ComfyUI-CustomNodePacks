@@ -57,7 +57,10 @@ def _try_oiio_load(path: str) -> tuple[np.ndarray, dict]:
         # Read as float32 regardless of the file's half/float storage — no
         # clipping, so HDR values above 1.0 survive. Clamping on load is what
         # destroys speculars and emissives before you ever see them.
-        pixels = inp.read_image(format="float32")
+        # L9.105: the TypeDesc goes POSITIONALLY. OIIO 3.1 ignores read_image(format=...) and returns the native type
+        # (measured on 3.1.16: a 16-bit file came back as uint16 6682 instead of 0.102), so integer channels arrived
+        # unscaled after the float32 cast below.
+        pixels = inp.read_image(0, 0, 0, spec.nchannels, oiio.FLOAT)
         if pixels is None:
             raise RuntimeError(f"OpenImageIO read failed for {path!r}: {inp.geterror()}")
         arr = np.asarray(pixels, dtype=np.float32)

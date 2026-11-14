@@ -3,6 +3,10 @@ folder catalog. Mirrors editor-plugins/src/api/{magnific,services/*}.ts so both
 integrations speak the exact same tool contracts.
 """
 
+import hashlib
+import json
+import logging
+import os
 import re
 import threading
 import time
@@ -329,6 +333,108 @@ def library_video_references(entries: List[dict]) -> List[dict]:
 
 
 # ---------------------------------------------------------------------------
+# L9.191 (owner A17): the paid-request gate. Every tool below is billed per call by Magnific.
+#
+# 1. Count gate: Generate Image makes one paid generation per image. Counts above IMAGE_BATCH_FREE need the node's
+#    confirm_task_count set to the same number (the same rule and wording as ComfyUI-OmniScale's cost_gate); a refused
+#    run sends nothing (checked before any upload or paid call).
+# 2. Session dedupe: core re-executes a node with UNCHANGED inputs once its cache entry is dropped (a different prompt
+#    ran in between, or RAM ran short - D0.40), which re-billed the same request. An identical paid request (same tool,
+#    same arguments) that already succeeded in this ComfyUI session returns the earlier creation instead of paying
+#    again; uploads of identical bytes reuse their creation id for UPLOAD_REUSE_SECONDS so an upscale of the same
+#    picture is an identical request too. C2C_MAGNIFIC_DEDUPE=0 turns the dedupe off.
+# No price is shown: the pack has no published per-task price, so none is invented (OmniScale says the same).
+# Tests never send a live paid request: they replace client() with a recording fake.
+
+PAID_TOOLS = frozenset({
+    "images_generate", "images_upscale", "video_generate", "video_upscale", "audio_music_generate", "audio_tts",
+    "images_skin_enhancer", "images_remove_background", "images_retouch", "stock_download",
+})
+IMAGE_BATCH_FREE = 4
+PAID_REUSE_SECONDS = 6 * 3600
+UPLOAD_REUSE_SECONDS = 30 * 60
+_REUSE_MAX = 256
+_paid_lock = threading.Lock()
+_paid_done: "dict[str, tuple[float, dict]]" = {}
+_upload_done: "dict[str, tuple[float, str]]" = {}
+_log = logging.getLogger("MEC")
+
+
+def _dedupe_on() -> bool:
+    return os.environ.get("C2C_MAGNIFIC_DEDUPE", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _remember(store: dict, key: str, value) -> None:
+    store[key] = (time.time(), value)
+    while len(store) > _REUSE_MAX:
+        store.pop(next(iter(store)))
+
+
+def _recall(store: dict, key: str, ttl: float):
+    hit = store.get(key)
+    if hit is None:
+        return None
+    if time.time() - hit[0] > ttl:
+        store.pop(key, None)
+        return None
+    return hit[1]
+
+
+def paid_request_key(tool: str, arguments: dict) -> str:
+    canon = json.dumps({"tool": tool, "arguments": arguments}, sort_keys=True, default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def check_task_count(node: str, tasks: int, confirm_task_count: int) -> None:
+    """Refuse (nothing sent) a request of more than IMAGE_BATCH_FREE paid tasks unless the user typed that count."""
+    tasks = int(tasks)
+    if tasks > IMAGE_BATCH_FREE and int(confirm_task_count or 0) != tasks:
+        raise McpError(
+            f"Not submitted: {node} makes one paid generation per image and count is {tasks}. Set "
+            f"confirm_task_count to {tasks} to submit it (counts of up to {IMAGE_BATCH_FREE} run without it). "
+            "Cost estimate: not available - no per-task price is published to this pack. Nothing was sent."
+        )
+
+
+def paid_structured(tool: str, arguments: dict) -> dict:
+    """client().structured() for a billed tool, with the session dedupe above."""
+    if tool not in PAID_TOOLS:
+        raise McpError(f"{tool} is not a known paid tool")
+    key = paid_request_key(tool, arguments) if _dedupe_on() else ""
+    if key:
+        with _paid_lock:
+            hit = _recall(_paid_done, key, PAID_REUSE_SECONDS)
+        if hit is not None:
+            _log.info("[MEC] Magnific %s: the identical paid request already ran this session - reused, not paid "
+                      "again.", tool)
+            return json.loads(json.dumps(hit))
+    structured = client().structured(tool, arguments)
+    if key and structured:
+        with _paid_lock:
+            _remember(_paid_done, key, json.loads(json.dumps(structured, default=str)))
+    return structured
+
+
+def forget_paid_creations(identifiers: List[str]) -> None:
+    """A creation that failed (or timed out) must not be handed out again: drop every remembered request that
+    returned one of these identifiers, so the next run asks (and pays) for a fresh one."""
+    wanted = {str(i) for i in identifiers or []}
+    if not wanted:
+        return
+    with _paid_lock:
+        for key, (_at, structured) in list(_paid_done.items()):
+            if {str(r.get("identifier")) for r in extract_creation_refs(structured)} & wanted:
+                _paid_done.pop(key, None)
+
+
+def clear_paid_reuse() -> None:
+    """Sign-out / sign-in: creations and uploads belong to an account, never reuse them across accounts."""
+    with _paid_lock:
+        _paid_done.clear()
+        _upload_done.clear()
+
+
+# ---------------------------------------------------------------------------
 # Upload pipeline: local bytes → creation identifier.
 
 
@@ -341,6 +447,12 @@ def upload_media(data: bytes, mime_type: str = "image/png") -> str:
             f"Image is {len(data) / (1024 * 1024):.1f}MB — Magnific accepts at most "
             f"{config.MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB per upload"
         )
+    upload_key = hashlib.sha256(mime_type.encode("utf-8") + b"\0" + data).hexdigest() if _dedupe_on() else ""
+    if upload_key:
+        with _paid_lock:
+            known = _recall(_upload_done, upload_key, UPLOAD_REUSE_SECONDS)
+        if known:
+            return known       # L9.191: same bytes -> same creation id, so a re-run is an identical paid request
     mcp = client()
     request = mcp.structured("creations_request_upload", {"mimeType": mime_type})
     uploads = request.get("uploads")
@@ -373,6 +485,9 @@ def upload_media(data: bytes, mime_type: str = "image/png") -> str:
     identifier = finalize.get("identifier")
     if not identifier:
         raise McpError("Upload finalize returned no creation identifier")
+    if upload_key:
+        with _paid_lock:
+            _remember(_upload_done, upload_key, identifier)
     return identifier
 
 
@@ -407,8 +522,10 @@ def wait_for_creations(identifiers: List[str]) -> List[dict]:
             failed = [entry for entry in ordered if _is_failed(str(entry.get("status", "")))]
             if failed:
                 reason = failed[0].get("failureReason") or failed[0].get("status")
+                forget_paid_creations([entry.get("identifier") for entry in failed])     # L9.191: retry pays anew
                 raise McpError(f"Generation failed: {reason}")
             return ordered
+    forget_paid_creations(identifiers)
     raise McpError("Timed out waiting for the generation to finish")
 
 
@@ -484,7 +601,7 @@ def generate_image(
     seed: Optional[int] = None,
 ) -> List[dict]:
     args = generate_args(prompt, mode, count, aspect_ratio, references, folder_reference, resolution, seed)
-    refs = extract_creation_refs(client().structured("images_generate", args))
+    refs = extract_creation_refs(paid_structured("images_generate", args))
     if not refs:
         raise McpError("images_generate returned no creations")
     return refs
@@ -545,7 +662,7 @@ def upscale_args(creation_identifier: Optional[str], folder_reference: Optional[
 
 def upscale_image(creation_identifier: str, folder_reference: Optional[str], options: dict) -> dict:
     args = upscale_args(creation_identifier, folder_reference, options)
-    refs = extract_creation_refs(client().structured("images_upscale", args))
+    refs = extract_creation_refs(paid_structured("images_upscale", args))
     if not refs:
         raise McpError("images_upscale returned no creation")
     return refs[0]
@@ -623,7 +740,7 @@ def generate_video_args(
 
 
 def generate_video(args: dict) -> List[dict]:
-    structured = client().structured("video_generate", args)
+    structured = paid_structured("video_generate", args)
     refs = extract_creation_refs(structured)
     if not refs:
         raise McpError("video_generate returned no creations")
@@ -660,7 +777,7 @@ def upscale_video_args(creation_identifier: Optional[str], mode: str, options: d
 
 
 def upscale_video(args: dict) -> dict:
-    return _single_creation(client().structured("video_upscale", args), "video_upscale")
+    return _single_creation(paid_structured("video_upscale", args), "video_upscale")
 
 
 MUSIC_MODELS = [
@@ -718,7 +835,7 @@ def music_args(
 
 
 def generate_music(args: dict) -> dict:
-    return _single_creation(client().structured("audio_music_generate", args), "audio_music_generate")
+    return _single_creation(paid_structured("audio_music_generate", args), "audio_music_generate")
 
 
 def tts_args(text: str, voice_id: int, speed: float, folder_reference: Optional[str] = None) -> dict:
@@ -731,7 +848,7 @@ def tts_args(text: str, voice_id: int, speed: float, folder_reference: Optional[
 
 
 def generate_tts(args: dict) -> dict:
-    return _single_creation(client().structured("audio_tts", args), "audio_tts")
+    return _single_creation(paid_structured("audio_tts", args), "audio_tts")
 
 
 def skin_enhance(creation_identifier: str, folder_reference: Optional[str], options: dict) -> dict:
@@ -744,14 +861,14 @@ def skin_enhance(creation_identifier: str, folder_reference: Optional[str], opti
             args[key] = options[key]
     if folder_reference:
         args["folderReference"] = folder_reference
-    return _single_creation(client().structured("images_skin_enhancer", args), "images_skin_enhancer")
+    return _single_creation(paid_structured("images_skin_enhancer", args), "images_skin_enhancer")
 
 
 def remove_background(creation_identifier: str, folder_reference: Optional[str]) -> dict:
     args: dict = {"creationIdentifier": creation_identifier}
     if folder_reference:
         args["folderReference"] = folder_reference
-    return _single_creation(client().structured("images_remove_background", args), "images_remove_background")
+    return _single_creation(paid_structured("images_remove_background", args), "images_remove_background")
 
 
 def retouch(
@@ -771,7 +888,7 @@ def retouch(
         args["prompt"] = prompt
     if folder_reference:
         args["folderReference"] = folder_reference
-    return _single_creation(client().structured("images_retouch", args), "images_retouch")
+    return _single_creation(paid_structured("images_retouch", args), "images_retouch")
 
 
 def stock_search(query: str, filters: dict, page: int = 1, per_page: int = 20) -> dict:
@@ -792,7 +909,7 @@ def stock_download(item_id: int, item_type: Optional[str], folder_reference: Opt
         # Stock tools take snake_case folder_reference (UUID), unlike the
         # camelCase folderReference of the images_* tools.
         args["folder_reference"] = folder_reference
-    return client().structured("stock_download", args)
+    return paid_structured("stock_download", args)
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +1024,7 @@ def clear_catalog_caches() -> None:
     with _library_lock:
         for cache in _library_caches.values():
             cache.update(at=0.0, choices=[])
+    clear_paid_reuse()      # L9.191: remembered paid creations / uploads belong to the signed-in account
 
 
 def folder_reference_for(label: str) -> Optional[str]:

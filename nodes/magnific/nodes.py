@@ -298,6 +298,10 @@ class MagnificGenerateImage:
                     {"default": "auto", "tooltip": "auto = model default; narrows to the selected model."},
                 ),
                 "library_references": (LIBRARY_REFS_TYPE, {"tooltip": LIBRARY_TOOLTIP}),
+                # L9.191 (owner A17): appended last so saved workflows keep their widget layout
+                "confirm_task_count": ("INT", {"default": 0, "min": 0, "max": 8, "tooltip": (
+                    "Every image is a separate paid generation. Counts of up to 4 run as they are; for a bigger "
+                    "count type the same number here to submit it.")}),
             },
         }
 
@@ -321,10 +325,13 @@ class MagnificGenerateImage:
         reference_image_2=None,
         reference_image_3=None,
         reference_image_4=None,
+        confirm_task_count: int = 0,
     ):
         update_check.assert_not_blocked()
         if not prompt.strip():
             raise McpError("Prompt is empty")
+        # L9.191 (A17): a count above the free limit needs the typed confirmation; refused before anything is sent
+        api.check_task_count("Generate Image", count, confirm_task_count)
         # Checked before the reference upload so a rejected combination costs
         # nothing.
         library = _checked_library_refs(
