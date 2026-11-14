@@ -118,7 +118,9 @@ def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None) -
             except VaultError:
                 raise VaultError("This vault is not authorized on this ComfyUI installation. Send its author your "
                                  "installation code (C2C menu > Vault > My installation code).") from None
-        key = (RUN_SESSIONS.get(client_id, vault_id) if client_id else None) or vault_node.SESSIONS.get(vault_id)
+        # L9.148: only THIS tab's key. The old fallback to the global legacy store (vault_node.SESSIONS, filled by
+        # the legacy /c2c_vault/unlock route) let any client run a locked vault after one legacy unlock anywhere.
+        key = RUN_SESSIONS.get(client_id, vault_id) if client_id else None
         if key is None:
             raise VaultError("This vault needs its password to run. Click the vault and enter it (asked once per "
                              "browser tab).")
@@ -126,7 +128,7 @@ def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None) -
     # v1 (the first vault format)
     if vault_crypto.payload_mode(payload) != 0:
         return vault_crypto.unseal_for_run(payload, vault_id=vault_id)
-    key = (RUN_SESSIONS.get(client_id, vault_id) if client_id else None) or vault_node.SESSIONS.get(vault_id)
+    key = RUN_SESSIONS.get(client_id, vault_id) if client_id else None          # per tab only (L9.148)
     if key is None:
         raise VaultError("This vault needs its password to run. Click the vault and enter it (asked once per browser "
                          "tab).")
