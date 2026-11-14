@@ -23,7 +23,14 @@ CODECS = {
     "h264": ("libx264", "mp4", "yuv420p", "yuv420p10le", True),
     "prores": ("prores_ks", "mov", "yuv422p10le", "yuv422p10le", True),
     "ffv1": ("ffv1", "matroska", "yuv444p", "yuv444p10le", False),
+    # L9.104 (Rev 3 19.8): HEVC (tagged hvc1 so Apple players open it), DNxHR HQ (8-bit) / HQX (10-bit) 4:2:2,
+    # ProRes 4444 with a real alpha channel (write RGBA frames; RGB frames get an opaque alpha)
+    "hevc": ("libx265", "mp4", "yuv420p", "yuv420p10le", True),
+    "dnxhr": ("dnxhd", "mov", "yuv422p", "yuv422p10le", True),
+    "prores4444": ("prores_ks", "mov", "yuva444p10le", "yuva444p10le", True),
 }
+ALPHA_CODECS = ("prores4444",)
+ALWAYS_10BIT = ("prores", "prores4444")
 EXTENSIONS = {"mp4": ".mp4", "mov": ".mov", "matroska": ".mkv"}
 
 
@@ -36,7 +43,8 @@ def _frac(fps) -> Fraction:
 
 
 class StreamWriter:
-    """Open once, ``write`` frames in any number of calls ([N, H, W, 3] float 0..1, torch or numpy), ``close``."""
+    """Open once, ``write`` frames in any number of calls ([N, H, W, 3] float 0..1, torch or numpy; [N, H, W, 4]
+    RGBA for codecs with alpha - ``ALPHA_CODECS``), ``close``."""
 
     def __init__(self, path: str, fps, width: int, height: int, *, codec: str = "h264", quality: int = 85,
                  ten_bit: bool = False, audio_rate: int = 0, audio_channels: int = 0):
@@ -52,7 +60,8 @@ class StreamWriter:
                               f"codec ffv1")
         self.path, self.codec, self.width, self.height = path, codec, int(width), int(height)
         self.fps = _frac(fps)
-        self.ten_bit = bool(ten_bit) or codec == "prores"
+        self.ten_bit = bool(ten_bit) or codec in ALWAYS_10BIT
+        self.alpha = codec in ALPHA_CODECS
         self.pix_fmt = pix10 if self.ten_bit else pix8
         self.frames = 0
         self._av = av
@@ -67,6 +76,14 @@ class StreamWriter:
             self._stream.options = {"crf": str(round(51 - q * 0.41)), "preset": "medium"}
         elif codec == "prores":
             self._stream.options = {"profile": "3"}                  # 422 HQ
+        elif codec == "prores4444":
+            self._stream.options = {"profile": "4", "alpha_bits": "16"}   # 4444 with 16-bit alpha
+        elif codec == "hevc":
+            self._stream.options = {"crf": str(round(51 - q * 0.41)), "preset": "medium",
+                                    "x265-params": "log-level=error"}
+            self._stream.codec_context.codec_tag = "hvc1"
+        elif codec == "dnxhr":
+            self._stream.options = {"profile": "dnxhr_hqx" if self.ten_bit else "dnxhr_hq"}
         self._astream = None
         self.audio_rate, self.audio_channels, self.audio_samples = int(audio_rate or 0), int(audio_channels or 0), 0
         if self.audio_rate > 0 and self.audio_channels > 0:
@@ -90,11 +107,16 @@ class StreamWriter:
             self.close()
 
     def _frame(self, rgb: np.ndarray):
-        x = np.clip(np.asarray(rgb, dtype=np.float32)[..., :3], 0.0, 1.0)
-        if self.ten_bit:
-            q, src = np.rint(x * 65535.0).astype(np.uint16), "rgb48le"
+        a = np.asarray(rgb, dtype=np.float32)
+        if self.alpha:                                           # RGBA in; RGB gets an opaque alpha
+            if a.shape[-1] < 4:
+                a = np.concatenate([a[..., :3], np.ones(a.shape[:-1] + (1,), np.float32)], -1)
+            x = np.clip(a[..., :4], 0.0, 1.0)
+            q, src = np.rint(x * 65535.0).astype(np.uint16), "rgba64le"
+        elif self.ten_bit:
+            q, src = np.rint(np.clip(a[..., :3], 0.0, 1.0) * 65535.0).astype(np.uint16), "rgb48le"
         else:
-            q, src = np.rint(x * 255.0).astype(np.uint8), "rgb24"
+            q, src = np.rint(np.clip(a[..., :3], 0.0, 1.0) * 255.0).astype(np.uint8), "rgb24"
         frame = self._av.VideoFrame.from_ndarray(np.ascontiguousarray(q), format=src)
         return frame.reformat(format=self.pix_fmt, dst_colorspace=_BT709, dst_color_range=_RANGE_TV,
                               interpolation=_SWS_FLAGS)
