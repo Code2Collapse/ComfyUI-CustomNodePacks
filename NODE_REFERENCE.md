@@ -453,6 +453,10 @@ Splits every model call over the GPUs of this machine. Any model: the call's bat
 
 Dense face landmarks for any model: 620 points on Google's GNM Head mesh, each with its own error estimate, plus the standard 68-point (iBUG) and 98-point (WFLW) sets and both pupils, from myned-ai/facepoints. Outputs OpenPose POSE_KEYPOINT (face = 68 + 2 pupils, pixels), a white-dot control image, an overlay, a face mask and JSON with every set. Video: the box follows the face's own points frame to frame. Weights are CC BY-NC 4.0 (non-commercial use only) and are downloaded only with allow_download, into models/facepoints.
 
+Advanced controls (show advanced inputs): appearance_ (colours), strength_ (opacity, intensity, pose confidence), resolution_ (processing and output size; everything stays aligned), screening_ (face / point confidence, how unsure points are drawn, rejected faces in JSON), mask_ (grow, shrink, feather, softness, threshold, hull smoothing, preview), temporal_ (landmark smoothing, scene cuts, stable face order). The defaults give the original output.
+
+**Source:** `ComfyUI-CustomNodePacks/nodes/facepoints_landmarks.py`  
+**Provenance:** none named (no PORTED FROM header, no CREDITS / NOTICE section names this file)
 
 **Required inputs**
 
@@ -474,16 +478,58 @@ Dense face landmarks for any model: 620 points on Google's GNM Head mesh, each w
 | `face_mask` | `MASK` |  | A mask over the face (per frame, or one for all): its box is used instead of the face finder. One face. |
 | `finder_confidence` | `FLOAT` | default `0.6`, range 0.05…0.99, step 0.01 | Minimum score for yunet / yolo faces. |
 | `confident_pct` | `FLOAT` | default `2.5`, range 0.1…10.0, step 0.1 | A point counts as sure when its calibrated error estimate is below this % of the face size (2.5 = a little above a typical good point); its confidence c is 0.5 exactly there. Unsure points are drawn faint in overlay. |
+| `appearance_scheme` | choice: `model card (default)`, `custom` | default `"model card (default)"` | Appearance. model card: the original colours (white dots on black; 620 points coloured by kind). custom: the colours below. Colours change the images only, never the POSE_KEYPOINT numbers. |
+| `appearance_landmark_colour` | `STRING` | default `"#FFFFFF"` | Appearance (custom): dot colour in landmark_image, #RRGGBB. |
+| `appearance_background_colour` | `STRING` | default `"#000000"` | Appearance (custom): landmark_image background, #RRGGBB. |
+| `appearance_overlay_colour` | `STRING` | default `""` | Appearance (custom): one colour for every dot in overlay, #RRGGBB. Empty = the per-set / per-kind colours below. |
+| `appearance_colour_lmk` | `STRING` | default `"#1E88E5"` | Appearance (custom): overlay colour of the 620-point kind 'lmk', #RRGGBB. |
+| `appearance_colour_skin` | `STRING` | default `"#FF8C00"` | Appearance (custom): overlay colour of the 620-point kind 'skin', #RRGGBB. |
+| `appearance_colour_lid` | `STRING` | default `"#00C850"` | Appearance (custom): overlay colour of the 620-point kind 'lid', #RRGGBB. |
+| `appearance_colour_teeth_u` | `STRING` | default `"#E63296"` | Appearance (custom): overlay colour of the 620-point kind 'teeth_u', #RRGGBB. |
+| `appearance_colour_teeth_l` | `STRING` | default `"#E63296"` | Appearance (custom): overlay colour of the 620-point kind 'teeth_l', #RRGGBB. |
+| `appearance_colour_iris` | `STRING` | default `"#FFD700"` | Appearance (custom): overlay colour of the 620-point kind 'iris', #RRGGBB. |
+| `appearance_colour_68` | `STRING` | default `"#E63C3C"` | Appearance (custom): overlay colour of the 68 + iris set, #RRGGBB. |
+| `appearance_colour_98` | `STRING` | default `"#E63C3C"` | Appearance (custom): overlay colour of the 98 set, #RRGGBB. |
+| `appearance_kinds_on_landmark_image` | `BOOLEAN` | default `False` | Appearance (custom): landmark_image uses the overlay's per-set / per-kind colours instead of one dot colour. |
+| `strength_overlay_opacity` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Strength: how opaque the overlay's dots are over the image (real alpha blending). 1 = solid. |
+| `strength_dot_intensity` | `FLOAT` | default `1.0`, range 0.0…1.0, step 0.01 | Strength: landmark_image dot brightness, blended toward the background (a weaker control image). 1 = full colour. |
+| `strength_low_confidence_opacity` | `FLOAT` | default `0.45`, range 0.0…1.0, step 0.01 | Strength: how strong an unsure point is drawn - its colour factor in 'dim' mode, its opacity in 'fade' mode. |
+| `strength_render_threshold` | `FLOAT` | default `0.5`, range 0.0…1.0, step 0.01 | Strength: a point whose confidence is below this is drawn as unsure (see screening_low_confidence_points). Drawing only. |
+| `strength_pose_confidence_scale` | `FLOAT` | default `1.0`, range 0.0…4.0, step 0.01 | Strength: multiplies the confidence values in pose_keypoint (clamped to 0..1). Coordinates are unchanged. |
+| `resolution_processing` | choice: `source`, `512`, `768`, `1024`, `1536`, `2048`, `custom` | default `"source"` | Resolution: size the faces are FOUND and cropped at. source = the input; a number = the longer side at most that (downscale only, aspect kept). The network itself always sees the checkpoint's own input size. Points come back in source pixels. |
+| `resolution_processing_max` | `INT` | default `1024`, range 64…16384, step 8 | Resolution: the longer side for resolution_processing = custom. |
+| `resolution_output` | choice: `original`, `512 x 512`, `768 x 768`, `1024 x 1024`, `1280 x 720`, `720 x 1280`, `1920 x 1080`, `1080 x 1920`, … (+1) | default `"original"` | Resolution: size of landmark_image, overlay, face_mask - and the coordinates in pose_keypoint and JSON follow it, so everything stays aligned. original = the input size. |
+| `resolution_output_width` | `INT` | default `1024`, range 16…16384, step 8 | Resolution: width for resolution_output = custom. |
+| `resolution_output_height` | `INT` | default `1024`, range 16…16384, step 8 | Resolution: height for resolution_output = custom. |
+| `resolution_keep_aspect` | `BOOLEAN` | default `True` | Resolution: fit inside the output size keeping the aspect ratio (the output is the fitted size). Off: stretch to exactly that size. |
+| `screening_face_confidence_min` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Screening: faces whose overall landmark confidence is below this are left out of the images and pose_keypoint (the face finder's own threshold is finder_confidence). |
+| `screening_point_confidence_min` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Screening: pose_keypoint points below this confidence get c = 0 (consumers skip them); their x, y stay. JSON always keeps every point and lists the screened ones. |
+| `screening_low_confidence_points` | choice: `dim (default)`, `fade`, `hide`, `keep` | default `"dim (default)"` | Screening: how unsure 620-set points (below strength_render_threshold) are DRAWN - dim (the original look, overlay only), fade (transparent), hide, or keep (like sure points). fade / hide apply to landmark_image too. Data is never removed by this. |
+| `screening_keep_rejected_faces` | `BOOLEAN` | default `False` | Screening: list rejected faces (no face in the box, below the face confidence) in the JSON with the reason, for diagnosis. They never enter the images or pose. |
+| `mask_grow` | `INT` | default `0`, range 0…512 | Face mask: expand (dilate) by this many px. |
+| `mask_shrink` | `INT` | default `0`, range 0…512 | Face mask: contract (erode) by this many px (after mask_grow). |
+| `mask_feather` | `FLOAT` | default `0.0`, range 0.0…256.0, step 0.5 | Face mask: Gaussian blur, sigma in px (soft on both sides of the edge). |
+| `mask_edge_softness` | `FLOAT` | default `0.0`, range 0.0…256.0, step 0.5 | Face mask: fade in from the edge over this many px (the outer edge stays put). |
+| `mask_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Face mask: > 0 makes the mask hard at this level (applied last). 0 = off. |
+| `mask_hull_smoothing` | `INT` | default `0`, range 0…6 | Face mask: rounds the hull outline (corner-cutting passes). 0 = the original hull. |
+| `mask_preview` | choice: `off`, `tint overlay`, `outline on overlay` | default `"off"` | Face mask: show the mask on the overlay image (tint or outline). The MASK output is not changed by this. |
+| `temporal_smoothing` | `BOOLEAN` | default `False` | Temporal: smooth landmark trajectories over a video (adaptive: still points steady, real motion followed). Independent of track_video. Raw points stay in the JSON. |
+| `temporal_strength` | `FLOAT` | default `0.5`, range 0.0…0.99, step 0.01 | Temporal: smoothing of still points. 0 = none; higher = steadier. |
+| `temporal_confidence_aware` | `BOOLEAN` | default `True` | Temporal: points the model is less sure of than before move less toward their new position. |
+| `temporal_max_offset` | `FLOAT` | default `0.0`, range 0.0…512.0, step 0.5 | Temporal: the most (px) smoothing may hold a point away from its detected position in a frame. 0 = no limit. |
+| `temporal_scene_cut` | `FLOAT` | default `0.25`, range 0.0…1.0, step 0.01 | Temporal: a frame that differs from the previous one by more than this (mean absolute difference, 0..1) is a scene cut: smoothing and identities restart. 0 = off. |
+| `temporal_reset_on_loss` | `BOOLEAN` | default `True` | Temporal: when a face is not found in a frame, its smoothing restarts when it comes back. |
+| `temporal_stable_order` | `BOOLEAN` | default `False` | Temporal: keep each face's position in pose_keypoint / JSON by identity across frames (matched by position). Off: left to right in every frame (the original order). |
 
 **Outputs**
 
 | # | Name | Type | What it is |
 |---|---|---|---|
-| 0 | `pose_keypoint` | `POSE_KEYPOINT` | OpenPose JSON per frame; face_keypoints_2d = 68 iBUG points + 2 pupils (70 x [x, y, c], pixels). |
-| 1 | `landmark_image` | `IMAGE` | The chosen landmark set as white dots on black (control image). |
-| 2 | `overlay` | `IMAGE` | The input with the points drawn (620: coloured by kind, faint where unsure). |
-| 3 | `face_mask` | `MASK` | Filled hull of the face points. |
-| 4 | `landmarks_json` | `STRING` | Every set per frame and face: 620 points with std, 68, 98, iris, box, confidence. |
+| 0 | `pose_keypoint` | `POSE_KEYPOINT` | OpenPose JSON per frame; face_keypoints_2d = 68 iBUG points + 2 pupils (70 x [x, y, c], pixels of the output size). strength_pose_confidence_scale / screening_point_confidence_min change c only. |
+| 1 | `landmark_image` | `IMAGE` | The chosen landmark set as dots (white on black by default) - a control image. |
+| 2 | `overlay` | `IMAGE` | The input with the points drawn (620: coloured by kind, unsure points dim / faded / hidden). |
+| 3 | `face_mask` | `MASK` | Filled hull of the face points, 0..1 (grow / shrink / feather / softness / threshold when set). |
+| 4 | `landmarks_json` | `STRING` | Every set per frame and face: 620 points with std, 68, 98, iris, box, confidence; raw points when smoothed; screened points and rejected faces when asked. |
 
 
 ---
