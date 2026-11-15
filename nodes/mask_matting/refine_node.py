@@ -434,7 +434,7 @@ def _feather(m: torch.Tensor, sigma: float) -> torch.Tensor:
 
 
 # ── The node ─────────────────────────────────────────────────────────
-def _apply_overrides(text, cfg: dict) -> list:
+def _apply_overrides(text, cfg: dict, quiet: bool = False) -> list:
     """Layer advanced_overrides_json onto cfg; return the keys it does not know (they are ignored and listed in the
     info output, so an old save still runs). A22 L9.136: broken JSON used to be logged and dropped silently."""
     import json as _json
@@ -450,7 +450,7 @@ def _apply_overrides(text, cfg: dict) -> list:
                          f"not a {type(user).__name__}.")
     ignored = sorted(k for k in user if k not in cfg)
     cfg.update({k: v for k, v in user.items() if k in cfg})
-    if ignored:
+    if ignored and not quiet:
         log.warning("[MaskRefineMEC] advanced_overrides_json: unknown keys ignored: %s", ", ".join(ignored))
     return ignored
 
@@ -823,6 +823,12 @@ class MaskRefineMEC:
             prof = self._SUBJECT_PROFILES.get(subject_class,
                                               self._SUBJECT_PROFILES["general"])
             cfg.update(prof["cfg"])
+            # L9.261 (CNP-NODES-1 audit P1): the profile used to overwrite the chosen preset AND the user's JSON, so
+            # 'preset' did nothing at the defaults. The profile still sits on the balanced base (balanced output is
+            # unchanged); a preset's own differing values win over it, and the user's JSON wins over everything.
+            _bal = self._PRESETS["balanced"]
+            cfg.update({k: v for k, v in self._PRESETS.get(preset, _bal).items() if _bal.get(k) != v})
+            _apply_overrides(advanced_overrides_json, cfg, quiet=True)
             for flag, val in prof["force"].items():
                 # force-enable stages
                 if flag == "enable_hole_fill":
