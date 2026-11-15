@@ -1945,6 +1945,9 @@ default, the output is exactly what it was before (tested bit for bit). The name
 - **temporal_**: landmark smoothing for video. It adapts: still points stay steady, real motion is followed at once,
   and points the model is unsure of move less. It also offers a lag limit, a scene-cut restart, a restart after a
   lost face, and a stable face order by identity. Raw points stay in the JSON. This is separate from `track_video`.
+  With smoothing or stable order on, a scene cut also drops the previous shot's tracking box, so the new shot's
+  faces are searched for afresh. A `mask_face_index` past the number of faces leaves the mask empty and says so in
+  the JSON.
 
 Measured with the real model on CPU: mean landmark jitter 1.47 → 0.29 px on a shaky clip (strength 0.8); output
 resize aligned within 0.07 px. Evidence: `docs/evidence/A27/face/` (workspace).

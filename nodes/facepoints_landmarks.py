@@ -544,6 +544,7 @@ class FacepointsLandmarksC2C:
         tracks: List = []
         next_ident = 0
         prev_bgr = None
+        index_missing: List[int] = []
         smoothing = bool(c["temporal_smoothing"])
         shaped_mask = _mask_shaped(c)
         with allow_downloads(allow_download):
@@ -566,6 +567,12 @@ class FacepointsLandmarksC2C:
                         starts = [square_box(*mb[:4])] if mb else []
                         slots = []
                     else:
+                        # L9.252 F1: on a scene cut the old shot's boxes must not seed this frame's search. Checked
+                        # only where cuts are detected at all (smoothing / stable order), so defaults are unchanged.
+                        thr_cut = float(c["temporal_scene_cut"])
+                        if (slots and (smoothing or c["temporal_stable_order"]) and thr_cut > 0
+                                and prev_bgr is not None and FC.frame_change(prev_bgr, bgr) > thr_cut):
+                            slots = []
                         live = [s for s in slots if s is not None] if (track_video and i > 0) else []
                         starts = [box_of_points(s["points"][mesh]) for s in live]
                         if len(starts) < int(max_faces):
@@ -658,8 +665,11 @@ class FacepointsLandmarksC2C:
                             if pal["kinds_on_lm"]:
                                 col = pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])
                             FC.draw_points(lm, lm_pts, col, r, lm_alpha)
-                    for k in FC.mask_face_selection([gg["face_size_px"] for gg in outs], c["mask_faces"],
-                                                    int(c["mask_face_index"])):
+                    picked = FC.mask_face_selection([gg["face_size_px"] for gg in outs], c["mask_faces"],
+                                                    int(c["mask_face_index"]))
+                    if c["mask_faces"] == "face index" and outs and not picked:
+                        index_missing.append(i)          # L9.252 F3: said in the JSON, never a silent empty mask
+                    for k in picked:
                         FC.fill_hull(fm, outs[k]["points"][mesh], int(c["mask_hull_smoothing"]))
                     if shaped_mask:
                         mask_f = FC.shape_mask(fm, int(c["mask_grow"]), int(c["mask_shrink"]),
@@ -715,9 +725,15 @@ class FacepointsLandmarksC2C:
                 "image_size": [int(Wo), int(Ho)], "classes_620": det.config["classes"],
                 "std_note": f"points_620 third value = the model's std in px; x{STD_CALIBRATION} calibrates it",
                 "frames": js_frames}
+        notes = []
         if c["strength_connection_lines"] > 0 and landmark_set == SETS[2]:
-            info["notes"] = ["connection lines are drawn for the 68 and 98 sets; the 620 dense points have no "
-                             "published contour order, so none were drawn"]
+            notes.append("connection lines are drawn for the 68 and 98 sets; the 620 dense points have no "
+                         "published contour order, so none were drawn")
+        if index_missing:
+            notes.append(f"mask_face_index {int(c['mask_face_index'])} is past the number of faces in "
+                         f"{len(index_missing)} frame(s) (first: {index_missing[0]}); face_mask is empty there")
+        if notes:
+            info["notes"] = notes
         if changed:                                     # only then, so the default JSON stays byte-identical
             info["controls"] = {k: c[k] for k in changed}
             info["source_size"] = [int(W), int(H)]
