@@ -171,6 +171,38 @@ class Store:
         with self._lock:
             _write_json(self._app_dir(app["app_id"]) / "app.json", app)
 
+    def update_acl(self, app_id: str, add, remove) -> list[str]:
+        """Apply an ACL change to the CURRENT app record under the lock (read-modify-write in one step, no await in
+        between) and return the new ACL. A revoke sent at the same time as an add is never undone."""
+        add, remove = [str(x) for x in (add or [])], {str(x) for x in (remove or [])}
+        with self._lock:
+            app = self.get_app(app_id)
+            if not app:
+                raise StoreError("No such app.")
+            acl = [x for x in app["acl"] if x not in remove]
+            acl += [x for x in dict.fromkeys(add) if x not in acl]
+            app["acl"] = acl
+            self.save_app(app)
+        return acl
+
+    def set_current_release(self, app_id: str, n) -> int | None:
+        """Point the app at release ``n`` under the lock, re-reading the app first (a release published meanwhile
+        is kept). Returns the previous current release."""
+        with self._lock:
+            app = self.get_app(app_id)
+            if not app:
+                raise StoreError("No such app.")
+            if isinstance(n, bool) or n not in app["releases"]:
+                raise StoreError("No such release.")
+            prev, app["current"] = app["current"], n
+            self.save_app(app)
+        return prev
+
+    def name_hash(self, name: str) -> str:
+        """Short keyed hash of a typed user name for the audit log: the owner can match it against a known name
+        (same key), but a mistyped password typed into the name field is never written in clear."""
+        return hmac.new(self.subkey("audit-name"), str(name).encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
     def list_apps(self) -> list[dict]:
         base = self.root / "apps"
         if not base.is_dir():

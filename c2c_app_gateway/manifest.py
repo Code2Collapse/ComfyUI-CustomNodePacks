@@ -148,9 +148,13 @@ def validate_manifest(m: dict, app_id: str) -> dict:
     return out
 
 
-def validate_private(private: dict, manifest: dict) -> dict:
+def validate_private(private: dict, manifest: dict, *, allowed_class_types=None) -> dict:
     """Check a private release against its manifest: every public input bound to real node inputs, every output to
-    a node in the prompt, nothing bound that the manifest does not declare."""
+    a node in the prompt, nothing bound that the manifest does not declare.
+
+    ``allowed_class_types`` (a set of ComfyUI node type names, or None) is the owner's allow-list for releases that a
+    non-owner publishes: every node of the prompt must use one of these types. None means no check (owner releases).
+    An empty set refuses every graph."""
     if not isinstance(private, dict):
         raise ManifestError("The private release must be a JSON object.")
     prompt = private.get("prompt")
@@ -160,6 +164,13 @@ def validate_private(private: dict, manifest: dict) -> dict:
         if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) \
                 or not isinstance(node.get("inputs"), dict):
             raise ManifestError(f"Prompt node {nid} is not an API-format node.")
+    if allowed_class_types is not None:
+        allowed = set(allowed_class_types)
+        for nid in sorted(prompt, key=str):
+            ct = prompt[nid]["class_type"]
+            if ct not in allowed:
+                raise ManifestError(f"Node type '{ct}' (node {nid}) is not on the owner's allow-list for publisher "
+                                    "releases. Ask the owner to add it or to publish this app.")
     bindings, outs = private.get("bindings") or {}, private.get("outputs") or {}
     in_ids = {x["id"]: x for x in manifest["inputs"]}
     out_ids = {x["id"]: x for x in manifest["outputs"]}

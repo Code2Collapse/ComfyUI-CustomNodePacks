@@ -42,7 +42,10 @@ DEFAULTS = {"data_dir": None, "bind": "127.0.0.1", "port": 8390, "public_origin"
             "max_output_mb": 512, "scrypt_n": 2 ** 15, "trust_forwarded_for": False, "studio_proxy": True,
             "poll_s": 2.0, "queue_wait_s": 3600, "sse_heartbeat_s": 15.0, "download_ttl_s": 600,
             "login_limit_per_user": 10, "login_limit_per_ip": 30, "login_window_s": 900,
-            "retention_h": 72, "worker_input_dir": None}
+            "retention_h": 72, "worker_input_dir": None,
+            # A1 (L9.250): only the owner publishes releases unless the owner turns this on; a non-owner release must
+            # then use node types from the owner's allow-list only (an empty list refuses every graph).
+            "publishers_enabled": False, "publisher_allowed_class_types": []}
 
 
 def _nf():
@@ -266,13 +269,13 @@ class Gateway:
         ip, w = self._ip(request), self.cfg["login_window_s"]
         if not self.limits.hit(f"login-ip:{ip}", self.cfg["login_limit_per_ip"], w, record=False) or \
                 not self.limits.hit(f"login-user:{name}", self.cfg["login_limit_per_user"], w, record=False):
-            self.store.audit("login_limited", actor=name, ip=ip)
+            self.store.audit("login_limited", actor_hash=self.store.name_hash(name), ip=ip)
             return _bad("Too many sign-in attempts. Wait a few minutes.", 429, "rate_limited")
         u = await asyncio.get_running_loop().run_in_executor(None, self.store.verify_password, name, pw)
         if not u:
             self.limits.hit(f"login-ip:{ip}", 10 ** 9, w)
             self.limits.hit(f"login-user:{name}", 10 ** 9, w)
-            self.store.audit("login_failed", actor=name, ip=ip)
+            self.store.audit("login_failed", actor_hash=self.store.name_hash(name), ip=ip)  # A5: never the typed name
             return web.json_response({"error": "bad_credentials", "message": "Wrong user name or password."},
                                      status=401)
         self.limits.clear(f"login-user:{name}")
@@ -474,7 +477,9 @@ class Gateway:
         job_id, name, user = v
         u = self.store.get_user(user)
         job = self.jobs.get(job_id)
-        if not u or u["disabled"] or not job or job["user"] != user or name not in {o["name"] for o in job["outputs"]}:
+        if not u or u["disabled"] or not job or name not in {o["name"] for o in job["outputs"]}:
+            return _nf()
+        if job["user"] != user and u["role"] != "owner":                  # A4: the owner may fetch any user's outputs
             return _nf()
         ident = {"user": user, "role": u["role"], "scopes": ROLE_SCOPES[u["role"]], "apps": None}
         if not self._runnable(ident, job["app_id"]):                     # ACL re-checked at download time
@@ -550,10 +555,16 @@ class Gateway:
         app = self._admin_app(ident, request.match_info["app_id"])
         if not app:
             return _nf()
+        allowed = None
+        if ident["role"] != "owner":
+            if not self.cfg["publishers_enabled"]:
+                return _bad("Publishing by non-owner accounts is turned off on this gateway. Ask the owner to publish "
+                            "this app, or to set publishers_enabled in the gateway config.", 403, "not_allowed")
+            allowed = set(self.cfg["publisher_allowed_class_types"] or ())
         b = await request.json()
         try:
             man = M.validate_manifest(b.get("manifest"), app["app_id"])
-            priv = M.validate_private(b.get("private"), man)
+            priv = M.validate_private(b.get("private"), man, allowed_class_types=allowed)
             n = self.store.write_release(app["app_id"], man, priv)
         except (M.ManifestError, StoreError) as exc:
             return _bad(str(exc))
@@ -582,11 +593,11 @@ class Gateway:
         app = self._admin_app(ident, request.match_info["app_id"])
         if not app:
             return _nf()
-        n = (await request.json()).get("release")
-        if n not in app["releases"]:
-            return _bad("No such release.")
-        prev, app["current"] = app["current"], n
-        self.store.save_app(app)
+        n = (await request.json()).get("release")                       # body first; the app is re-read under lock
+        try:
+            prev = self.store.set_current_release(app["app_id"], n)
+        except StoreError as exc:
+            return _bad(str(exc))
         self.store.audit("rollback", actor=ident["user"], app=app["app_id"], release=n, previous=prev)
         return web.json_response({"app_id": app["app_id"], "current": n})
 
@@ -602,10 +613,10 @@ class Gateway:
         for n in add:
             if not self.store.get_user(str(n)):
                 return _bad(f"No such user: {n}.")
-        acl = [x for x in app["acl"] if x not in remove]
-        acl += [x for x in add if x not in acl]
-        app["acl"] = acl
-        self.store.save_app(app)
+        try:                                                             # read-modify-write under the store lock
+            acl = self.store.update_acl(app["app_id"], add, remove)
+        except StoreError:
+            return _nf()
         self.store.audit("acl", actor=ident["user"], app=app["app_id"], added=add or None, removed=remove or None)
         if remove:
             self.store.audit("revoke", actor=ident["user"], app=app["app_id"], target=remove)

@@ -62,6 +62,10 @@ def main(argv=None) -> int:
     w = cfg["worker_url"]
     if not any(h in w for h in ("127.0.0.1", "[::1]", "localhost")):
         warnings.append(f"worker_url {w}: make sure the worker is reachable ONLY from the gateway (private network).")
+    if cfg.get("publishers_enabled"):
+        n = len(cfg.get("publisher_allowed_class_types") or [])
+        warnings.append(f"publishers_enabled is true: non-owner publishers may send graphs to the worker, limited to "
+                        f"{n} allowed node type(s) (publisher_allowed_class_types).")
     for x in warnings:
         print("WARNING:", x, file=sys.stderr)
     if a.cmd == "check":
