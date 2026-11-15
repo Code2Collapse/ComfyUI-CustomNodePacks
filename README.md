@@ -210,6 +210,9 @@ models whose repository, file, size and SHA-256 were read from the Hugging Face 
 (`tools/c2c_llm_catalog_verify.py` in the workspace re-checks them). Each entry shows its download size and the memory
 it needs, and ★ marks the largest general model that fits the memory free right now. Free GPU memory only counts
 when your llama-cpp-python build can use the GPU.
+The catalog also lists three small Hugging Face model folders (Qwen3 0.6B / 1.7B, Qwen2.5 1.5B Instruct) for the
+local transformers backend. A folder is downloaded only when you ask (`/c2c/ai/hf_catalog/download`, from this
+machine only) into `models/LLM/<name>`, every file checked; it appears under that name only once all files pass.
 
 - `CIVITAI_API_KEY`, `HF_TOKEN`: your tokens for restricted or gated files. They are sent as a header, never in a URL
   or a log.
@@ -2049,6 +2052,9 @@ graph, no queue or history.
 - Roles: **owner** (everything, including the editor at `/studio/`), **publisher** (publishes their own apps),
   **runner** (runs the apps shared with them). Add the first owner with
   `python -m c2c_app_gateway add-user --config gateway.json --name you --role owner` (it asks for the password).
+- Publishing by non-owners is **off by default** (`publishers_enabled`). When you turn it on, every node type in a
+  publisher's release must be on your `publisher_allowed_class_types` list; owner releases are not limited. Failed
+  sign-ins are logged with a hash of the typed name, never the name itself.
 - Each published version is kept unchanged, and you can roll back to an older one. The workflow is stored encrypted
   on the gateway; the app page is built from a separate list of public inputs and outputs.
 - What it does not do: it does not hide the workflow from someone with administrator access to the server. Hiding
