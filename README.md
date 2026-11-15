@@ -2146,6 +2146,12 @@ Split** with this node: it splits the batch itself, over all GPUs instead of one
 `C2C_DISTRIBUTED=off` switches the nodes off. `C2C_DISTRIBUTED_SIMULATE=2` runs two ranks on the one GPU (or
 CPU) you have, to check a setup before renting GPUs. It is slower, never faster.
 
+**2026-11-15.** A GPU whose architecture this PyTorch build has no kernels for is refused before the run, with the
+wheel to install (cu126 / cu128), instead of failing mid-run. The worker processes' model copies are released by
+ComfyUI's **Unload models** (and its out-of-memory path); `C2C_DISTRIBUTED_IDLE_UNLOAD_S=<seconds>` also releases them
+when idle. The inventory now records which attention backends really ran and, on cc 8.9+, an FP8 check. Multi-GPU
+behaviour and speed are still not measured on real hardware.
+
 **2026-11-13 repairs (A27).**
 - The split now refuses a model that already carries block patches from other nodes, such as core's MiniMax H3 Fun
   ControlNet or a block cache. Before, it silently replaced them, so the ControlNet stopped working.
