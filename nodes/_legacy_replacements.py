@@ -120,6 +120,10 @@ def migrate_api_prompt(prompt: Any, registered: Any = None) -> int:
             row = pick_case(rows[node["class_type"]], node.get("inputs"))
             if registered is not None and row["new_node_id"] not in registered:
                 continue
+            # the front end migrates only types that are really gone (js/_c2c_migrate_core.js isRegistered); an old
+            # id that is still registered (a deprecated alias, a kill-switch node turned back on) runs as itself
+            if registered is not None and node["class_type"] in registered:
+                continue
             targets[str(nid)] = row
     if not targets:
         return 0
