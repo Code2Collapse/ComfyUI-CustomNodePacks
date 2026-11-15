@@ -650,7 +650,8 @@ All outputs are clamped to `[0, 1]`.
 
 Two nodes: **Inpaint Crop Pro** crops, **Inpaint Stitch Pro** puts the result back. Since L7.65 P08 they also do
 what five other nodes did (Smart Image Crop, Inpaint Mask Prepare, Smart Image Stitch, Inpaint Paste Back, Context
-Inpainter); saved workflows with those nodes load migrated, links and values kept (docs/MIGRATION.md).
+Inpainter); saved workflows with those nodes load migrated, links and values kept (docs/MIGRATION.md). API prompts
+follow the same rule as the front end: only ids that are no longer registered are rewritten.
 
 #### Inpaint Crop Pro
 
