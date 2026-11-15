@@ -375,5 +375,189 @@
    "use": "chat",
    "note": "Intel Neural-Chat 7B"
   }
+ ],
+ "hf_folders_about": "Hugging Face Transformers model folders (format hf_folder) for the AI spine's hf_local backend (models/LLM/<name>, AutoModelForCausalLM, local_files_only). Pinned to a commit; every file's size, and the SHA-256 of LFS files or the git blob SHA-1 of the others, read from the Hugging Face API (/api/models/<repo>/revision/main and /api/models/<repo>/tree/<revision>?recursive=1) on 2026-11-14. Qwen2.5-VL is left out: transformers maps qwen2_5_vl only to AutoModelForImageTextToText, not AutoModelForCausalLM.",
+ "hf_folders": [
+  {
+   "id": "qwen3-0.6b-hf",
+   "format": "hf_folder",
+   "repo": "Qwen/Qwen3-0.6B",
+   "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+   "name": "Qwen3-0.6B",
+   "architecture": "Qwen3ForCausalLM",
+   "model_type": "qwen3",
+   "dtype": "bfloat16",
+   "license": "apache-2.0",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 0.6B (bf16 Transformers folder) - fastest; thinking + non-thinking chat",
+   "size": 1519193708,
+   "files": [
+    {
+     "path": "LICENSE",
+     "size": 11343,
+     "git_oid": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+     "path": "config.json",
+     "size": 726,
+     "git_oid": "f5c3703b78ae2a478ae15b247e9f855e0ce2107b"
+    },
+    {
+     "path": "generation_config.json",
+     "size": 239,
+     "git_oid": "20a8a9156fc8c3f25295ca067f61fdf120d517c5"
+    },
+    {
+     "path": "merges.txt",
+     "size": 1671853,
+     "git_oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+    },
+    {
+     "path": "model.safetensors",
+     "size": 1503300328,
+     "sha256": "f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b"
+    },
+    {
+     "path": "tokenizer.json",
+     "size": 11422654,
+     "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "size": 9732,
+     "git_oid": "417d038a63fa3de29cfde265caedae14d1a58d92"
+    },
+    {
+     "path": "vocab.json",
+     "size": 2776833,
+     "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+   ]
+  },
+  {
+   "id": "qwen3-1.7b-hf",
+   "format": "hf_folder",
+   "repo": "Qwen/Qwen3-1.7B",
+   "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
+   "name": "Qwen3-1.7B",
+   "architecture": "Qwen3ForCausalLM",
+   "model_type": "qwen3",
+   "dtype": "bfloat16",
+   "license": "apache-2.0",
+   "group": "Qwen 3",
+   "use": "chat",
+   "note": "Qwen3 1.7B (bf16 Transformers folder) - balanced",
+   "size": 4079434577,
+   "files": [
+    {
+     "path": "LICENSE",
+     "size": 11343,
+     "git_oid": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+     "path": "config.json",
+     "size": 726,
+     "git_oid": "044a86ecf7cb32238f3fae4184e55d354787edec"
+    },
+    {
+     "path": "generation_config.json",
+     "size": 239,
+     "git_oid": "20a8a9156fc8c3f25295ca067f61fdf120d517c5"
+    },
+    {
+     "path": "merges.txt",
+     "size": 1671853,
+     "git_oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+    },
+    {
+     "path": "model-00001-of-00002.safetensors",
+     "size": 3441185608,
+     "sha256": "169ad53ec313c3a34b06c0809216e4fc072cce444a5d4ff2b59690d064130ed5"
+    },
+    {
+     "path": "model-00002-of-00002.safetensors",
+     "size": 622329984,
+     "sha256": "912becff8d60672aa8628ef08c05898d9adf17c2ad4ae3caf99b065622fdeff9"
+    },
+    {
+     "path": "model.safetensors.index.json",
+     "size": 25605,
+     "git_oid": "986d7db875b47d21f68530f6baac038f1b297b39"
+    },
+    {
+     "path": "tokenizer.json",
+     "size": 11422654,
+     "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "size": 9732,
+     "git_oid": "417d038a63fa3de29cfde265caedae14d1a58d92"
+    },
+    {
+     "path": "vocab.json",
+     "size": 2776833,
+     "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+   ]
+  },
+  {
+   "id": "qwen2.5-1.5b-instruct-hf",
+   "format": "hf_folder",
+   "repo": "Qwen/Qwen2.5-1.5B-Instruct",
+   "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+   "name": "Qwen2.5-1.5B-Instruct",
+   "architecture": "Qwen2ForCausalLM",
+   "model_type": "qwen2",
+   "dtype": "bfloat16",
+   "license": "apache-2.0",
+   "group": "Qwen 2.5 / Coder",
+   "use": "chat",
+   "note": "Qwen2.5 1.5B Instruct (bf16 Transformers folder)",
+   "size": 3098967011,
+   "files": [
+    {
+     "path": "LICENSE",
+     "size": 11343,
+     "git_oid": "6634c8cc3133b3848ec74b9f275acaaa1ea618ab"
+    },
+    {
+     "path": "config.json",
+     "size": 660,
+     "git_oid": "f81ead14ab072d65a07817f83a3ee0e5a1890d10"
+    },
+    {
+     "path": "generation_config.json",
+     "size": 242,
+     "git_oid": "dfc11073787daf1b0f9c0f1499487ab5f4c93738"
+    },
+    {
+     "path": "merges.txt",
+     "size": 1671839,
+     "git_oid": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0"
+    },
+    {
+     "path": "model.safetensors",
+     "size": 3087467144,
+     "sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+    },
+    {
+     "path": "tokenizer.json",
+     "size": 7031645,
+     "git_oid": "443909a61d429dff23010e5bddd28ff530edda00"
+    },
+    {
+     "path": "tokenizer_config.json",
+     "size": 7305,
+     "git_oid": "07bfe0640cb5a0037f9322287fbfc682806cf672"
+    },
+    {
+     "path": "vocab.json",
+     "size": 2776833,
+     "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569"
+    }
+   ]
+  }
  ]
 }

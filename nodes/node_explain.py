@@ -333,35 +333,88 @@ def _parse_llm_json(raw: str) -> Optional[dict]:
 # LLM backends
 # ═══════════════════════════════════════════════════════════════════════════
 
+_CLOUD_MODELS = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-haiku-5-5",
+    "gemini": "gemini-3.5-flash-lite",
+    "openrouter": "meta-llama/llama-3.1-8b-instruct:free",
+    "groq": "llama-3.1-8b-instant",
+    "deepseek": "deepseek-chat",
+}
+# stored key -> AI spine backend kind (bootstrap.build_backend). azure_openai needs an endpoint and custom a base URL,
+# which a key alone does not give: those two stay on cloud_llm's direct path.
+_SPINE_KINDS = {"openai": "openai", "anthropic": "anthropic", "gemini": "gemini", "openrouter": "openrouter",
+                "groq": "groq", "deepseek": "deepseek", "cohere": "cohere"}
+_SPINE_BACKENDS: Dict[tuple, Any] = {}
+
+
+def _c2c(name: str):
+    import importlib
+    try:
+        return importlib.import_module(f"..c2c_ai.{name}", package=__package__)
+    except Exception:
+        return importlib.import_module(f"c2c_ai.{name}")
+
+
+def _spine_backend(provider: str, model: str):
+    """An unregistered AI spine backend for this provider + model (kept for reuse), or None."""
+    kind = _SPINE_KINDS.get(provider)
+    if kind is None:
+        return None
+    key = (provider, model)
+    if key not in _SPINE_BACKENDS:
+        entry = {"kind": kind, "id": f"explain.cloud.{provider}"}
+        if model:
+            entry["model"] = model
+        b = _c2c("bootstrap").build_backend(entry)
+        b.info.id = entry["id"]
+        _SPINE_BACKENDS[key] = b
+    return _SPINE_BACKENDS[key]
+
+
 def _try_cloud(ctx: dict) -> Optional[dict]:
-    """Try cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter / Groq / DeepSeek)."""
+    """Try cloud LLM (OpenAI / Anthropic / Gemini / OpenRouter / Groq / DeepSeek / Cohere / Azure / custom).
+
+    L6.10: each provider with a stored key is asked through the AI spine (Router.ask_backend: redaction, SENSITIVE
+    refusal, daily cost cap, usage record). A refusal by that gate stops here; a provider the spine cannot build, or
+    a failed spine call, uses cloud_llm's direct dispatch (redacted) as before."""
     try:
         from . import secrets_store, cloud_llm  # type: ignore
     except Exception:
         return None
 
+    prompt = _build_prompt(ctx)
     for provider in secrets_store.PROVIDERS:
         if not secrets_store.has_key_for(provider):
             continue
-        model_map = {
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-haiku-5-5",
-            "gemini": "gemini-3.5-flash-lite",
-            "openrouter": "meta-llama/llama-3.1-8b-instruct:free",
-            "groq": "llama-3.1-8b-instant",
-            "deepseek": "deepseek-chat",
-        }
-        model = model_map.get(provider, "")
-        prompt = _build_prompt(ctx)
+        model = _CLOUD_MODELS.get(provider, "")
+        raw = None
         try:
-            raw = cloud_llm.generate(
-                provider, model, prompt,
-                max_tokens=500,
-                system=_EXPLAIN_SYSTEM,
-            )
-        except Exception as e:
-            log.debug("[node_explain] cloud %s failed: %s", provider, e)
-            continue
+            backend = _spine_backend(provider, model)
+        except Exception as e:  # noqa: BLE001
+            log.debug("[node_explain] no spine backend for %s: %s", provider, e)
+            backend = None
+        if backend is not None:
+            try:
+                types_mod = _c2c("types")
+                msgs = [types_mod.Message(role="system", content=_EXPLAIN_SYSTEM),
+                        types_mod.Message(role="user", content=prompt)]
+                resp = _c2c("router").get_router().ask_backend(backend, "node_explainer", msgs,
+                                                              max_tokens=500, temperature=0.2)
+                raw = (getattr(resp, "text", "") or "").strip()
+            except Exception as e:
+                if type(e).__name__ == "GateRefused":
+                    log.warning("[node_explain] cloud refused by the AI spine: %s", e)
+                    return None
+                log.debug("[node_explain] cloud %s failed on the AI spine: %s", provider, e)
+                raw = None
+                backend = None
+        if backend is None:
+            try:
+                raw = cloud_llm.generate_direct(provider, model, prompt, max_tokens=500, system=_EXPLAIN_SYSTEM)
+            except Exception as e:
+                log.debug("[node_explain] cloud %s failed: %s", provider, e)
+                continue
         if not raw:
             continue
         parsed = _parse_llm_json(raw)

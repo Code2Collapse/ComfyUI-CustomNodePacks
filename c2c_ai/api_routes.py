@@ -21,6 +21,10 @@
     GET  /c2c/ai/prompts                → list registered prompt templates (name, version, sha256, vars)
     POST /c2c/ai/prompts/render         → render one             {"name","vars":{...}}
     GET  /c2c/ai/prompts/verify         → run golden-hash regression on every template
+    GET  /c2c/ai/hf_catalog             → L6.09 HF model folders (catalog + installed + progress)
+    POST /c2c/ai/hf_catalog/download    → start ONE folder download (explicit action, local UI only) {"id"}
+    GET  /c2c/ai/hf_catalog/progress    → ?id=  download state
+    POST /c2c/ai/hf_catalog/stop        → pause it (parts kept; download again to resume)  {"id"}
 """
 
 from __future__ import annotations
@@ -668,6 +672,66 @@ def register_routes(server) -> None:
     # ---------------------------------------------------------- prompts
     # Versioned Jinja2 system-prompt library (no inline prompt strings in JS).
     from . import prompts as prompt_lib
+
+    # ------------------------------------------------- L6.09 HF model folders (explicit download only)
+    def _llm_catalog():
+        try:
+            from ..nodes import llm_catalog as cat  # type: ignore[import-not-found]
+        except (ImportError, ValueError):
+            import importlib
+            cat = importlib.import_module("nodes.llm_catalog")
+        return cat
+
+    @routes.get("/c2c/ai/hf_catalog")
+    async def hf_catalog_list(_req):
+        cat = _llm_catalog()
+        try:
+            root = cat.hf_llm_root()
+        except Exception:  # noqa: BLE001 - outside ComfyUI: nothing is installed
+            root = None
+        models = []
+        for e in cat.hf_folders():
+            installed = bool(root is not None and (Path(root) / e["name"] / "config.json").is_file())
+            models.append(dict(e, installed=installed, progress=cat.hf_folder_progress(e["id"])))
+        return _ok({"models": models, "root": str(root) if root is not None else None})
+
+    @routes.post("/c2c/ai/hf_catalog/download")
+    async def hf_catalog_download(req):
+        refused = _refuse_remote(req)          # a multi-GB download only from the ComfyUI page on this machine
+        if refused is not None:
+            return refused
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        cat = _llm_catalog()
+        mid = str((body or {}).get("id") or "").strip()
+        if not mid or cat.hf_folder_by_id(mid) is None:
+            return _err("unknown_model", f"{mid!r} is not a model folder in the catalog", 404)
+        try:
+            return _ok(cat.start_hf_folder_download(mid))
+        except Exception as exc:  # noqa: BLE001
+            return _err("download_failed", str(exc), 500)
+
+    @routes.get("/c2c/ai/hf_catalog/progress")
+    async def hf_catalog_progress(req):
+        mid = (req.query.get("id") or "").strip()
+        st = _llm_catalog().hf_folder_progress(mid) if mid else None
+        if st is None:
+            return _err("unknown_job", f"no download for {mid!r}", 404)
+        return _ok(st)
+
+    @routes.post("/c2c/ai/hf_catalog/stop")
+    async def hf_catalog_stop(req):
+        refused = _refuse_remote(req)
+        if refused is not None:
+            return refused
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        mid = str((body or {}).get("id") or "").strip()
+        return _ok({"id": mid, "stopped": bool(_llm_catalog().stop_hf_folder_download(mid))})
 
     @routes.get("/c2c/ai/prompts")
     async def _prompts_list(_req):

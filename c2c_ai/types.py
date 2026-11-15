@@ -184,6 +184,11 @@ class AskRequest:
     cancel: Any = None                                 # threading.Event (or anything with is_set())
 
 
+class GateRefused(RuntimeError):
+    """The router's gate refused a request on purpose (L6.10): a SENSITIVE text for a cloud backend, or the daily
+    cost cap with no local fallback. Callers must not retry it on another path that skips the gate."""
+
+
 class Cancelled(RuntimeError):
     """The caller cancelled the request (AskRequest.cancel was set). The router never falls back after this."""
 

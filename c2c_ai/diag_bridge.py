@@ -26,6 +26,12 @@ KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemi
              "openrouter": "OPENROUTER_API_KEY", "groq": "GROQ_API_KEY", "deepseek": "DEEPSEEK_API_KEY"}
 
 
+def ollama_url(st: dict) -> str:
+    """The sidebar's Ollama address as a URL (it accepts 'host:port' without a scheme, like ollama_llm did)."""
+    u = (st.get("ollama_url") or "").strip().rstrip("/") or "http://localhost:11434"
+    return u if u.startswith(("http://", "https://")) else "http://" + u
+
+
 def entries_from_settings(st: dict, resolve_gguf: Optional[Callable[[str], Optional[str]]] = None,
                           has_key: Optional[Callable[[str], bool]] = None) -> list[dict]:
     """Spine backend entries (bootstrap.build_backend format) for the enabled Diagnostics tiers. Pure. The cloud
@@ -35,13 +41,17 @@ def entries_from_settings(st: dict, resolve_gguf: Optional[Callable[[str], Optio
     if st.get("tier2_enabled"):
         if (st.get("tier2_backend") or "llamacpp").strip().lower() == "ollama":
             out.append({"kind": "local", "id": PREFIX + "local.ollama", "display_name": "Ollama (Diagnostics)",
-                        "base_url": (st.get("ollama_url") or "http://localhost:11434").rstrip("/"),
+                        "base_url": ollama_url(st),
                         "model": st.get("ollama_model") or "qwen3:4b"})
         else:
             path = resolve_gguf(st.get("local_model") or "") if resolve_gguf else None
             if path:
-                out.append({"kind": "text_encoder_local", "id": PREFIX + "local.llamacpp",
-                            "display_name": "Local GGUF (Diagnostics)", "model_file": path, "n_gpu_layers": 0})
+                e = {"kind": "text_encoder_local", "id": PREFIX + "local.llamacpp",
+                     "display_name": "Local GGUF (Diagnostics)", "model_file": path, "n_gpu_layers": 0}
+                threads = int(st.get("local_threads") or 0)
+                if threads > 0:
+                    e["n_threads"] = threads
+                out.append(e)
     if st.get("tier3_enabled"):
         prov = (st.get("cloud_provider") or "").strip().lower()
         kind = CLOUD_KINDS.get(prov)
@@ -78,23 +88,82 @@ def _has_key(prov: str) -> bool:
         return False
 
 
+def _build(entry: dict):
+    """A spine backend for one Diagnostics entry, carrying the entry's own id. L6.10: build_backend ignores
+    entry['id'] for the OpenAI-compatible kinds (openai / groq / deepseek / openrouter ...), so the Diagnostics backend
+    used to be registered as cloud.<provider> - replacing the user's own backend and scoping it to two features."""
+    from . import bootstrap
+    b = bootstrap.build_backend(entry)
+    b.info.id = entry["id"]
+    b.info.features = FEATURES
+    b.diag_entry = dict(entry)
+    return b
+
+
+# L6.10: a Diagnostics selection the router does not carry (the caller's settings differ from the bridged ones, or the
+# tier is switched off in the saved settings). One per tier; replacing it releases the previous model.
+_SPARE: dict = {}
+
+
 def apply(router, settings: dict, resolve_gguf: Optional[Callable[[str], Optional[str]]] = None,
           has_key: Optional[Callable[[str], bool]] = None) -> list[str]:
     """Replace the router's diag.* backends with the ones the settings describe. Returns the registered ids."""
-    from .bootstrap import build_backend
     for b in list(router.all_backends()):
         if b.info.id.startswith(PREFIX):
             router.unregister(b.info.id)
+    _SPARE.clear()
     ids = []
     for entry in entries_from_settings(settings, resolve_gguf or _resolve_gguf, has_key or _has_key):
         try:
-            b = build_backend(entry)
-            b.info.features = FEATURES
+            b = _build(entry)
             router.register(b)
             ids.append(b.info.id)
         except Exception as exc:  # noqa: BLE001 - one bad tier must not stop the others
             log.warning("[diag_bridge] %s not registered: %s", entry.get("id"), exc)
     return ids
+
+
+def backend_for(tier: str, settings: dict, router=None,
+                resolve_gguf: Optional[Callable[[str], Optional[str]]] = None,
+                has_key: Optional[Callable[[str], bool]] = None):
+    """The spine backend that serves the Diagnostics `tier` ("local" = Tier 2, "cloud" = Tier 3) for `settings`, or
+    None (no GGUF found, no key, provider without a spine backend, build failed). The router's registered diag.*
+    backend is reused when it describes the same choice (one copy of a local model in RAM); otherwise a spare is
+    built for this selection and kept, unregistered, until the selection changes."""
+    if tier not in ("local", "cloud"):
+        raise ValueError(f"tier must be 'local' or 'cloud', not {tier!r}")
+    st = dict(settings or {}, tier2_enabled=(tier == "local"), tier3_enabled=(tier == "cloud"))
+    entries = entries_from_settings(st, resolve_gguf or _resolve_gguf, has_key or _has_key)
+    if not entries:
+        return None
+    entry = entries[0]
+    if router is None:
+        from .router import get_router
+        router = get_router()
+    b = router.get(entry["id"])
+    if b is not None and getattr(b, "diag_entry", None) == entry:
+        _SPARE.pop(tier, None)
+        return b
+    spare = _SPARE.get(tier)
+    if spare is not None and getattr(spare, "diag_entry", None) == entry:
+        return spare
+    _SPARE.pop(tier, None)
+    try:
+        b = _build(entry)
+    except Exception as exc:  # noqa: BLE001 - reported as "this tier is unavailable"
+        log.warning("[diag_bridge] %s unavailable: %s", entry.get("id"), exc)
+        return None
+    _SPARE[tier] = b
+    return b
+
+
+def leaves_machine(settings: dict) -> bool:
+    """True when the Diagnostics Tier 2 is an Ollama server on another machine: for the router that is a cloud
+    (redaction, consent - L6.04 / D0.44), so the automatic error features must not ask it."""
+    if (settings.get("tier2_backend") or "llamacpp").strip().lower() != "ollama":
+        return False
+    from .bootstrap import is_loopback_url
+    return not is_loopback_url(ollama_url(settings))
 
 
 def apply_current() -> list[str]:

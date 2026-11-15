@@ -257,6 +257,7 @@ def build_backend(entry: dict):
             n_ctx=int(entry.get("n_ctx", 8192)),
             n_gpu_layers=int(entry.get("n_gpu_layers", -1)),
             chat_format=entry.get("chat_format") or None,
+            n_threads=int(entry.get("n_threads") or 0),
         )
     else:
         raise ValueError(f"unknown backend kind: {kind!r}")

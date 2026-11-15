@@ -539,8 +539,17 @@ def save_settings(new: Dict[str, Any]) -> None:
 # Tier 2 / Tier 3 (lazy backends)
 # =====================================================================
 _TIER_LOCK = threading.Lock()
-_local_backend = None  # llama.cpp instance
-_cloud_backends: Dict[str, Any] = {}
+# L6.10: Tier 2 / Tier 3 run on the AI spine (c2c_ai.diag_bridge.backend_for + Router.ask_backend). This name is kept
+# only because older code and tests set it; nothing reads it any more.
+_local_backend = None
+
+# The personas the Tier 2 backends always used (llama.cpp / Ollama), byte-for-byte
+_LLAMACPP_PERSONA = ("You explain Python tracebacks for ComfyUI users. "
+                     "Be concise. Always answer with two sections "
+                     "labelled exactly CAUSE: and FIXES: (bulleted).")
+_OLLAMA_PERSONA = ("You explain Python tracebacks for ComfyUI users. Be concise. "
+                   "Always answer with two sections labelled exactly CAUSE: and FIXES: "
+                   "(bulleted, 2-4 fixes).")
 
 
 def _build_prompt(exc_type: str, msg: str, node_class: Optional[str],
@@ -578,97 +587,110 @@ def _record_tier_failure(key: str, exc: BaseException, *, hint: str | None = Non
         log.debug("[error_assistant] failure not recorded (registry missing): %s/%s", key, exc)
 
 
-def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
-    """Run the user-selected local model. Backend = "llamacpp" or "ollama".
-    Returns text or None if backend unavailable."""
-    backend = (settings.get("tier2_backend") or "llamacpp").strip().lower()
-    if backend == "ollama":
-        try:
-            from . import ollama_llm  # type: ignore
-        except Exception:
-            try:
-                import importlib
-                ollama_llm = importlib.import_module(
-                    "nodes.ollama_llm", package=__package__)
-            except Exception as e:
-                log.info("[error_assistant] ollama_llm unavailable: %s", e)
-                return None
-        try:
-            return ollama_llm.generate(
-                model=settings.get("ollama_model") or "qwen3:4b",
-                prompt=prompt,
-                url=settings.get("ollama_url"),
-                max_tokens=settings.get("max_tokens", 512),
-            )
-        except Exception as e:
-            _record_tier_failure("tier2.ollama", e,
-                                 hint="Is the ollama server running on the configured URL?")
-            log.warning("[error_assistant] ollama gen failed: %s", e)
-            return None
-    # Default: llama-cpp-python with a local GGUF file.
-    global _local_backend
+def _c2c(name: str):
+    """A c2c_ai module (the AI spine), however the pack was imported."""
+    try:
+        import importlib
+        return importlib.import_module(f"..c2c_ai.{name}", package=__package__)
+    except Exception:
+        import importlib
+        return importlib.import_module(f"c2c_ai.{name}")
+
+
+def _local_llm_module():
     try:
         from . import local_llm  # type: ignore
+        return local_llm
     except Exception:
-        # Lazy lookup of sibling module
-        local_llm = None
-        try:
-            import importlib
-            local_llm = importlib.import_module("nodes.local_llm",
-                                                package=__package__)
-        except Exception:
-            try:
-                from . import local_llm  # type: ignore
-            except Exception:
-                pass
-    if local_llm is None:
-        try:
-            from . import local_llm  # type: ignore
-        except Exception as e:
-            log.info("[error_assistant] local_llm unavailable: %s", e)
-            return None
-    with _TIER_LOCK:
-        # local_llm keeps ONE loaded model and swaps it when the selection changes; asking it every time is cheap
-        # (a folder listing). This used to keep the first model loaded until ComfyUI restarted.
-        _local_backend = local_llm.get_or_load(
-            model_id=settings.get("local_model"),
-            n_threads=settings.get("local_threads") or 0,
-        )
-        if _local_backend is None:
-            return None
+        import importlib
+        return importlib.import_module("nodes.local_llm")
+
+
+def _ask_spine(backend, prompt: str, system: str, max_tokens) -> str:
+    types_mod = _c2c("types")
+    msgs = [types_mod.Message(role="system", content=system), types_mod.Message(role="user", content=prompt)]
+    resp = _c2c("router").get_router().ask_backend(backend, "error_assistant", msgs,
+                                                  max_tokens=int(max_tokens or 512), temperature=0.2)
+    return (getattr(resp, "text", "") or "").strip()
+
+
+def _explain_local(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
+    """Run the user-selected local model (Diagnostics Tier 2: "llamacpp" GGUF or "ollama"). Returns text or None.
+
+    L6.10: through the AI spine - the Diagnostics model is the router's diag.local.* backend (or, for a selection
+    the router does not carry yet, one built for it), asked via Router.ask_backend. One copy of the model in RAM, the
+    spine's timeout / usage record / <think> stripping, and an Ollama server on another machine is redacted."""
+    backend_kind = (settings.get("tier2_backend") or "llamacpp").strip().lower()
+    key = "tier2.ollama" if backend_kind == "ollama" else "tier2.llamacpp"
+    hint = ("Is the ollama server running on the configured URL?" if backend_kind == "ollama"
+            else "Check the GGUF path / llama-cpp-python install.")
     try:
-        return _local_backend.generate(prompt,
-                                       max_tokens=settings.get("max_tokens", 512),
-                                       system=settings.get("system_prompt"))
+        backend = _c2c("diag_bridge").backend_for("local", settings)
+    except Exception as e:  # noqa: BLE001
+        log.info("[error_assistant] AI spine unavailable for Tier 2: %s", e)
+        return None
+    if backend is None:
+        log.info("[error_assistant] no Tier 2 model available (backend=%s)", backend_kind)
+        return None
+    sys_msg = settings.get("system_prompt")
+    if backend_kind == "ollama":
+        sys_msg = sys_msg or _OLLAMA_PERSONA
+    elif sys_msg is None:
+        sys_msg = _LLAMACPP_PERSONA
+    try:
+        text = _ask_spine(backend, prompt, sys_msg, settings.get("max_tokens", 512))
     except Exception as e:
-        _record_tier_failure("tier2.llamacpp", e,
-                             hint="Check the GGUF path / llama-cpp-python install.")
+        _record_tier_failure(key, e, hint=hint)
         log.warning("[error_assistant] local model gen failed: %s", e)
         return None
+    try:
+        text = _local_llm_module()._strip_reasoning(text)
+    except Exception:  # noqa: BLE001 - the router already removed <think> blocks
+        pass
+    return text or None
 
 
 def _explain_cloud(prompt: str, settings: Dict[str, Any]) -> Optional[str]:
-    """Call the user-selected cloud LLM. API key fetched from encrypted store.
-    Returns text or None if no key / backend missing."""
+    """Call the user-selected cloud LLM (Diagnostics Tier 3). Returns text or None if no key / backend missing.
+
+    L6.10: through the AI spine (diag.cloud.<provider>, Router.ask_backend: redaction, SENSITIVE refusal, daily cost
+    cap). A refusal by that gate ends here. The legacy direct dispatch (cloud_llm.generate_direct, redacted) stays
+    only as the fallback when the spine has no backend for the provider or its call failed."""
+    provider = settings.get("cloud_provider", "openai")
+    model = settings.get("cloud_model", "gpt-4o-mini")
+    max_tokens = settings.get("max_tokens", 512)
     try:
         from . import cloud_llm  # type: ignore
     except Exception:
         try:
             import importlib
-            cloud_llm = importlib.import_module("nodes.cloud_llm",
-                                                package=__package__)
+            cloud_llm = importlib.import_module("nodes.cloud_llm", package=__package__)
         except Exception as e:
             log.info("[error_assistant] cloud_llm unavailable: %s", e)
-            return None
+            cloud_llm = None
+    system = getattr(cloud_llm, "SYSTEM_PROMPT", None) or (
+        "You explain Python tracebacks for ComfyUI users. Be concise. Always answer with two sections labelled "
+        "exactly CAUSE: and FIXES: (bulleted, 2-4 fixes).")
+    backend = None
     try:
-        return cloud_llm.generate(
-            provider=settings.get("cloud_provider", "openai"),
-            model=settings.get("cloud_model", "gpt-4o-mini"),
-            prompt=prompt,
-            max_tokens=settings.get("max_tokens", 512),
-        )
+        backend = _c2c("diag_bridge").backend_for("cloud", settings)
+    except Exception as e:  # noqa: BLE001
+        log.info("[error_assistant] AI spine unavailable for Tier 3: %s", e)
+    if backend is not None:
+        try:
+            return _ask_spine(backend, prompt, system, max_tokens) or None
+        except Exception as e:
+            if type(e).__name__ == "GateRefused":   # the spine's gate (cost cap / SENSITIVE) refused
+                log.warning("[error_assistant] cloud tier refused by the AI spine: %s", e)
+                return None
+            _record_tier_failure(f"tier3.{provider}", e,
+                                 hint="Check the API key in the Settings panel and network connectivity.")
+            log.warning("[error_assistant] cloud gen failed on the AI spine: %s", e)
+    if cloud_llm is None:
+        return None
+    try:
+        return cloud_llm.generate_direct(provider, model, prompt, max_tokens=max_tokens)
     except Exception as e:
-        provider = settings.get("cloud_provider", "openai")
         _record_tier_failure(f"tier3.{provider}", e,
                              hint="Check the API key in the Settings panel and network connectivity.")
         log.warning("[error_assistant] cloud gen failed: %s", e)
@@ -764,7 +786,14 @@ def explain(exc: BaseException,
                                           model=settings.get("cloud_model"))
 
     # --- Tier 2 (local) ---
-    if mode in ("auto", "local_only"):
+    # L6.10 / D0.44: an Ollama server on another machine is a cloud; the automatic panel (allow_cloud=False) skips it
+    t2_remote = False
+    if not allow_cloud:
+        try:
+            t2_remote = bool(_c2c("diag_bridge").leaves_machine(settings))
+        except Exception:  # noqa: BLE001 - unknown = treat a non-loopback address as remote
+            t2_remote = (settings.get("tier2_backend") or "").lower() == "ollama"
+    if mode in ("auto", "local_only") and not t2_remote:
         text = _explain_local(prompt, settings)
         if text:
             backend = (settings.get("tier2_backend") or "llamacpp").lower()

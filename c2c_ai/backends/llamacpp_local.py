@@ -82,13 +82,15 @@ class LlamaCppBackend(Backend):
                  n_ctx: int = 8192,
                  n_gpu_layers: int = -1,
                  chat_format: str | None = None,
-                 verbose: bool = False) -> None:
+                 verbose: bool = False,
+                 n_threads: int = 0) -> None:
         super().__init__(info)
         self._model_file = model_file
         self._n_ctx = int(n_ctx)
         self._n_gpu_layers = int(n_gpu_layers)
         self._chat_format = chat_format
         self._verbose = bool(verbose)
+        self._n_threads = max(0, int(n_threads or 0))      # 0 = llama.cpp's default
         self._llm = None
         self._resolved_path: str | None = None
 
@@ -99,7 +101,8 @@ class LlamaCppBackend(Backend):
               display_name: str = "Local GGUF (llama.cpp)",
               n_ctx: int = 8192,
               n_gpu_layers: int = -1,
-              chat_format: str | None = None) -> "LlamaCppBackend":
+              chat_format: str | None = None,
+              n_threads: int = 0) -> "LlamaCppBackend":
         if not model_file:
             raise ValueError("LlamaCppBackend requires model_file (a GGUF filename "
                              "under models/text_encoders/ or an absolute path)")
@@ -120,7 +123,8 @@ class LlamaCppBackend(Backend):
                    model_file=model_file,
                    n_ctx=n_ctx,
                    n_gpu_layers=n_gpu_layers,
-                   chat_format=chat_format)
+                   chat_format=chat_format,
+                   n_threads=n_threads)
 
     # ---- internal --------------------------------------------------------
 
@@ -144,6 +148,8 @@ class LlamaCppBackend(Backend):
         )
         if self._chat_format:
             kwargs["chat_format"] = self._chat_format
+        if self._n_threads:
+            kwargs["n_threads"] = self._n_threads
         log.info("c2c_ai.llamacpp: loading %s (n_ctx=%d, n_gpu_layers=%d)",
                  self._resolved_path, self._n_ctx, self._n_gpu_layers)
         self._llm = Llama(**kwargs)

@@ -16,8 +16,8 @@ is_available(url=None) -> bool
 list_models(url=None) -> list[str]
     Returns the names of models installed locally in Ollama. [] on failure.
 
-generate(model, prompt, *, url=None, max_tokens=512, system=None) -> str | None
-    Synchronous chat call. Returns text or None.
+Chat generation is not here any more (L6.10): the Diagnostics Tier 2 Ollama choice is the AI spine's
+diag.local.ollama backend (c2c_ai.diag_bridge -> the OpenAI-compatible backend), asked through the router.
 """
 from __future__ import annotations
 
@@ -31,13 +31,6 @@ import urllib.request
 log = logging.getLogger("MEC.ollama_llm")
 
 DEFAULT_URL = "http://localhost:11434"
-
-_SYSTEM_PROMPT = (
-    "You explain Python tracebacks for ComfyUI users. Be concise. "
-    "Always answer with two sections labelled exactly CAUSE: and FIXES: "
-    "(bulleted, 2-4 fixes)."
-)
-
 
 def _http(url: str, *, method: str = "GET", body: Optional[dict] = None,
           timeout: float = 60.0) -> Optional[dict]:
@@ -89,35 +82,3 @@ def list_models(url: Optional[str] = None) -> List[str]:
         if name:
             out.append(str(name))
     return out
-
-
-def generate(model: str, prompt: str, *,
-             url: Optional[str] = None,
-             max_tokens: int = 512,
-             system: Optional[str] = None) -> Optional[str]:
-    if not model:
-        log.warning("[ollama] no model specified")
-        return None
-    u = _normalize_url(url)
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system or _SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": int(max_tokens),
-        },
-    }
-    j = _http(f"{u}/api/chat", method="POST", body=body, timeout=120.0)
-    if not isinstance(j, dict):
-        return None
-    msg = j.get("message")
-    if isinstance(msg, dict) and msg.get("content"):
-        return msg["content"].strip()
-    # /api/generate fallback shape
-    if j.get("response"):
-        return str(j["response"]).strip()
-    return None

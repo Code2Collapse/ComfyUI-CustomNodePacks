@@ -35,6 +35,7 @@ from .types import (
     BackendInfo,
     Cancelled,
     Capability,
+    GateRefused,
     Message,
     Policy,
     Sensitivity,
@@ -304,7 +305,7 @@ class Router:
 
         if backend.info.tier == Tier.CLOUD:
             if req.sensitivity == Sensitivity.SENSITIVE:
-                raise RuntimeError(
+                raise GateRefused(
                     "feature marked SENSITIVE refuses cloud backend without explicit user opt-in. "
                     "Either select a local backend or pass sensitivity=NORMAL after confirming."
                 )
@@ -326,7 +327,7 @@ class Router:
                     redacted_msgs = req.messages
                     redacted_flag = False
                 else:
-                    raise RuntimeError(f"daily cost cap reached and no local fallback: {reason}")
+                    raise GateRefused(f"daily cost cap reached and no local fallback: {reason}")
 
         new_req = AskRequest(
             feature=req.feature,
@@ -366,9 +367,11 @@ class Router:
             except Exception:
                 raise exc
 
-        # Centralised post-processing: strip Qwen3/DeepSeek-R1 <think> blocks
-        # from *every* backend response so individual backends don't need to
-        # remember to do it themselves. Safe on non-thinking models.
+        return self._finish(backend, resp, redacted_flag, feature)
+
+    def _finish(self, backend: Backend, resp: AskResponse, redacted_flag: bool, feature: str) -> AskResponse:
+        """Post-processing shared by every dispatch: strip Qwen3/DeepSeek-R1 <think> blocks from *every* backend
+        response (safe on non-thinking models), mark redaction, record usage."""
         try:
             from .utils import strip_think as _strip_think
             if resp.text:
@@ -383,6 +386,30 @@ class Router:
             latency_ms=resp.latency_ms,
         ))
         return resp
+
+    def ask_backend(self, backend: Backend | str, feature: str, messages: list[Message], *,
+                    ignore_scope: bool = False, **kw) -> AskResponse:
+        """L6.10: ask ONE given backend (the user's own pick, e.g. the Diagnostics sidebar's model) through the same
+        gate as ask(): redaction for a cloud backend, the SENSITIVE refusal and the cost cap (GateRefused), then the
+        same post-processing and usage record. No fallback to another backend: a failure propagates, so the caller
+        decides. `backend` may be unregistered (a model picked for one call). `ignore_scope=True` only for legacy
+        callers that always used a backend regardless of its feature scope (cloud_llm)."""
+        b = self.get(backend) if isinstance(backend, str) else backend
+        if b is None:
+            raise RuntimeError(f"no backend {backend!r} is registered")
+        if not b.info.enabled:
+            raise RuntimeError(f"backend {b.info.id} is disabled")
+        scope = getattr(b.info, "features", None)
+        if not ignore_scope and scope is not None and feature not in scope:
+            raise RuntimeError(f"backend {b.info.id} does not serve feature {feature!r}")
+        req = self._build_req(feature, messages, **kw)
+        gated, sent, redacted_flag = self._gate(b, req)
+        if gated is not b:
+            # the cost cap would answer from another (local) backend; the caller asked for this one and labels the
+            # answer with it, so refuse and let the caller choose its own next tier
+            raise GateRefused(f"daily cost cap reached for {b.info.id}")
+        resp = b.ask(sent)
+        return self._finish(b, resp, redacted_flag, feature)
 
     # =============================================================== status
     def status(self) -> dict:
