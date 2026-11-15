@@ -264,6 +264,7 @@ def draw(canvas: np.ndarray, pts: np.ndarray, colour, radius: int, conf: Optiona
 # Name prefixes are the groups: appearance_ / strength_ / resolution_ / screening_ / mask_ / temporal_.
 SCHEMES = ("model card (default)", "custom")
 LOW_CONF = ("dim (default)", "fade", "hide", "keep")
+MASK_FACES_CHOICES = ("all faces", "largest face", "face index")   # = facepoints_controls.MASK_FACES
 DEFAULT_HEX = {"lmk": "#1E88E5", "skin": "#FF8C00", "lid": "#00C850", "teeth_u": "#E63296", "teeth_l": "#E63296",
                "iris": "#FFD700"}        # = CLASS_BGR as RGB hex
 DEFAULT_SET_HEX = "#E63C3C"              # the 68 / 98 overlay colour (BGR 60, 60, 230)
@@ -384,6 +385,17 @@ def _controls_spec() -> dict:
     c["temporal_stable_order"] = ("BOOLEAN", _adv({"default": False, "tooltip": "Temporal: keep each face's "
                                   "position in pose_keypoint / JSON by identity across frames (matched by "
                                   "position). Off: left to right in every frame (the original order)."}))
+    # work order 2026-11-14 (Face Landmarks): connection-line strength and mask face selection, appended
+    c["strength_connection_lines"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                                      "tooltip": "Strength: draw the face contours (jaw, brows, nose, eyes, lips) as "
+                                                 "lines between the points - 0 = off. For the 68 and 98 sets (the "
+                                                 "620 dense points have no contour order). Drawing only."}))
+    c["appearance_line_width"] = ("INT", _adv({"default": 1, "min": 1, "max": 16, "tooltip": "Appearance: "
+                                  "connection line width in px (output pixels)."}))
+    c["mask_faces"] = (list(MASK_FACES_CHOICES), _adv({"default": MASK_FACES_CHOICES[0], "tooltip": "Face mask: "
+                       "which faces fill face_mask - all, the largest, or one by its position in pose_keypoint."}))
+    c["mask_face_index"] = ("INT", _adv({"default": 0, "min": 0, "max": 15, "tooltip": "Face mask: the face for "
+                            "mask_faces = face index (0 = first in pose_keypoint)."}))
     return c
 
 
@@ -613,6 +625,9 @@ class FacepointsLandmarksC2C:
                     opacity = float(c["strength_overlay_opacity"])
                     rthr = float(c["strength_render_threshold"])
                     low_op = float(c["strength_low_confidence_opacity"])
+                    line_k, line_w = float(c["strength_connection_lines"]), int(c["appearance_line_width"])
+                    line_runs = (FC.LINES_68 if landmark_set == SETS[0] else FC.LINES_98 if landmark_set == SETS[1]
+                                 else ())
                     outs = []
                     for f in shown:
                         g = f if O.identity else {**f, "points": O.points(f["points"]), "300w": O.points(f["300w"]),
@@ -626,6 +641,10 @@ class FacepointsLandmarksC2C:
                         people.append({"pose_keypoints_2d": [], "face_keypoints_2d": face70,
                                        "hand_left_keypoints_2d": [], "hand_right_keypoints_2d": []})
                         lm_pts = _set_points(g, landmark_set)
+                        if line_k > 0 and line_runs:
+                            FC.draw_lines(lm, lm_pts, line_runs, lm_col if not pal["kinds_on_lm"] else (
+                                pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])),
+                                line_w, line_k)
                         lm_alpha = None
                         if landmark_set == SETS[2] and low_mode in ("fade", "hide"):
                             lm_alpha, _ = FC.point_alpha(f["conf620"], len(lm_pts), rthr, low_mode, low_op)
@@ -639,7 +658,9 @@ class FacepointsLandmarksC2C:
                             if pal["kinds_on_lm"]:
                                 col = pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])
                             FC.draw_points(lm, lm_pts, col, r, lm_alpha)
-                        FC.fill_hull(fm, g["points"][mesh], int(c["mask_hull_smoothing"]))
+                    for k in FC.mask_face_selection([gg["face_size_px"] for gg in outs], c["mask_faces"],
+                                                    int(c["mask_face_index"])):
+                        FC.fill_hull(fm, outs[k]["points"][mesh], int(c["mask_hull_smoothing"]))
                     if shaped_mask:
                         mask_f = FC.shape_mask(fm, int(c["mask_grow"]), int(c["mask_shrink"]),
                                                float(c["mask_feather"]), float(c["mask_edge_softness"]),
@@ -659,6 +680,9 @@ class FacepointsLandmarksC2C:
                                                alpha[sel], factor[sel])
                         else:
                             col = pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])
+                            if line_k > 0 and line_runs:
+                                FC.draw_lines(ov, _set_points(g, landmark_set), line_runs, col, line_w,
+                                              line_k * opacity)
                             FC.draw_points(ov, _set_points(g, landmark_set), col, r, opacity)
                         js_faces.append(_face_json(f, g, O))
                     pose.append({"people": people, "canvas_width": int(Wo), "canvas_height": int(Ho)})
@@ -691,6 +715,9 @@ class FacepointsLandmarksC2C:
                 "image_size": [int(Wo), int(Ho)], "classes_620": det.config["classes"],
                 "std_note": f"points_620 third value = the model's std in px; x{STD_CALIBRATION} calibrates it",
                 "frames": js_frames}
+        if c["strength_connection_lines"] > 0 and landmark_set == SETS[2]:
+            info["notes"] = ["connection lines are drawn for the 68 and 98 sets; the 620 dense points have no "
+                             "published contour order, so none were drawn"]
         if changed:                                     # only then, so the default JSON stays byte-identical
             info["controls"] = {k: c[k] for k in changed}
             info["source_size"] = [int(W), int(H)]

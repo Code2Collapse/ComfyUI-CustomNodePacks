@@ -520,6 +520,10 @@ Advanced controls (show advanced inputs): appearance_ (colours), strength_ (opac
 | `temporal_scene_cut` | `FLOAT` | default `0.25`, range 0.0…1.0, step 0.01 | Temporal: a frame that differs from the previous one by more than this (mean absolute difference, 0..1) is a scene cut: smoothing and identities restart. 0 = off. |
 | `temporal_reset_on_loss` | `BOOLEAN` | default `True` | Temporal: when a face is not found in a frame, its smoothing restarts when it comes back. |
 | `temporal_stable_order` | `BOOLEAN` | default `False` | Temporal: keep each face's position in pose_keypoint / JSON by identity across frames (matched by position). Off: left to right in every frame (the original order). |
+| `strength_connection_lines` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Strength: draw the face contours (jaw, brows, nose, eyes, lips) as lines between the points - 0 = off. For the 68 and 98 sets (the 620 dense points have no contour order). Drawing only. |
+| `appearance_line_width` | `INT` | default `1`, range 1…16 | Appearance: connection line width in px (output pixels). |
+| `mask_faces` | choice: `all faces`, `largest face`, `face index` | default `"all faces"` | Face mask: which faces fill face_mask - all, the largest, or one by its position in pose_keypoint. |
+| `mask_face_index` | `INT` | default `0`, range 0…15 | Face mask: the face for mask_faces = face index (0 = first in pose_keypoint). |
 
 **Outputs**
 

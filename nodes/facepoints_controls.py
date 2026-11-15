@@ -346,3 +346,43 @@ def match_faces(tracks: List[FaceTrack], centres: List[np.ndarray], sizes: List[
             out[fi] = ti
             used.add(ti)
     return out
+
+
+# ── connection lines (pose / contour strength, work order 2026-11-14 Face Landmarks) ──────────────────────────────
+# The published point orders of the two standard sets (iBUG 300-W 68 and WFLW 98): (first, last, closed) runs.
+LINES_68 = ((0, 16, False), (17, 21, False), (22, 26, False), (27, 30, False), (31, 35, False), (36, 41, True),
+            (42, 47, True), (48, 59, True), (60, 67, True))
+LINES_98 = ((0, 32, False), (33, 41, True), (42, 50, True), (51, 54, False), (55, 59, False), (60, 67, True),
+            (68, 75, True), (76, 87, True), (88, 95, True))
+MASK_FACES = ("all faces", "largest face", "face index")
+
+
+def draw_lines(canvas: np.ndarray, pts: np.ndarray, runs, colour, width: int, alpha: float) -> None:
+    """Anti-aliased polylines along the set's contours; alpha < 1 is blended over the canvas (real transparency)."""
+    import cv2
+    if alpha <= 0:
+        return
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    target = canvas if alpha >= 1 else canvas.copy()
+    for a, b, closed in runs:
+        if b >= len(pts):
+            continue
+        seg = pts[a:b + 1]
+        if not np.isfinite(seg).all():
+            continue
+        cv2.polylines(target, [np.round(seg * 16).astype(np.int32)], bool(closed), colour, int(width),
+                      lineType=cv2.LINE_AA, shift=4)
+    if alpha < 1:
+        cv2.addWeighted(target, float(alpha), canvas, 1.0 - float(alpha), 0.0, dst=canvas)
+
+
+def mask_face_selection(sizes: List[float], mode: str, index: int) -> List[int]:
+    """Which faces (by position in the output order) fill the face mask."""
+    if mode not in MASK_FACES:
+        raise ValueError(f"mask_faces must be one of {', '.join(MASK_FACES)}; got {mode!r}")
+    n = len(sizes)
+    if n == 0 or mode == MASK_FACES[0]:
+        return list(range(n))
+    if mode == MASK_FACES[1]:
+        return [int(np.argmax(sizes))]
+    return [int(index)] if 0 <= int(index) < n else []
