@@ -83,16 +83,19 @@ class SAMMaskGeneratorMEC:
                 }),
                 "text_threshold": ("FLOAT", {
                     "default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "GroundingDINO box confidence threshold.",
+                    "tooltip": "GroundingDINO text threshold: how strongly a word of the prompt must match a found box "
+                               "for that word to label it.",
                 }),
                 "text_box_threshold": ("FLOAT", {
                     "default": 0.3, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "GroundingDINO text-box association threshold.",
+                    "tooltip": "GroundingDINO box threshold: the minimum confidence for a found box to be kept.",
                 }),
                 "multimask_output": ("BOOLEAN", {"default": True,
                                                    "tooltip": "Return 3 candidate masks (SAM default) vs 1"}),
                 "mask_index": ("INT", {"default": 0, "min": 0, "max": 2,
-                                        "tooltip": "Which mask to return when multimask=True (0=best score)"}),
+                                        "tooltip": "Which of the 3 candidates to return when multimask=True, in the model's own "
+                                                   "order (0 = first, NOT necessarily the best score: see the score "
+                                                   "output; score_threshold keeps the first candidate above it)"}),
                 "score_threshold": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                                "tooltip": "Discard masks below this confidence score"}),
                 "apply_bbox_crop": ("BOOLEAN", {"default": False,

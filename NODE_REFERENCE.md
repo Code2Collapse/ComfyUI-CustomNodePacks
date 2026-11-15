@@ -2203,10 +2203,10 @@ Generate masks using SAM with point + bounding box prompts, iterative refinement
 | `text_prompt` | `STRING` | default `""` | Text description of target object (e.g. 'person', 'dog', 'car'). Requires a GroundingDINO model. Converts text to bounding box, then feeds to SAM for precise mask generation. |
 | `negative_text_prompt` | `STRING` | default `""` | Text description of objects to EXCLUDE (e.g. 'background', 'wall'). Uses GroundingDINO to detect these regions, then generates negative points from them to suppress unwanted areas in the mask. |
 | `grounding_model` | choice: `none`, `groundingdino_swint_ogc`, `groundingdino_swinb_cogcoor` | default `"none"` | GroundingDINO model for text-to-bbox grounding. Set to 'none' to disable text prompting. |
-| `text_threshold` | `FLOAT` | default `0.25`, range 0.0…1.0, step 0.01 | GroundingDINO box confidence threshold. |
-| `text_box_threshold` | `FLOAT` | default `0.3`, range 0.0…1.0, step 0.01 | GroundingDINO text-box association threshold. |
+| `text_threshold` | `FLOAT` | default `0.25`, range 0.0…1.0, step 0.01 | GroundingDINO text threshold: how strongly a word of the prompt must match a found box for that word to label it. |
+| `text_box_threshold` | `FLOAT` | default `0.3`, range 0.0…1.0, step 0.01 | GroundingDINO box threshold: the minimum confidence for a found box to be kept. |
 | `multimask_output` | `BOOLEAN` | default `True` | Return 3 candidate masks (SAM default) vs 1 |
-| `mask_index` | `INT` | default `0`, range 0…2 | Which mask to return when multimask=True (0=best score) |
+| `mask_index` | `INT` | default `0`, range 0…2 | Which of the 3 candidates to return when multimask=True, in the model's own order (0 = first, NOT necessarily the best score: see the score output; score_threshold keeps the first candidate above it) |
 | `score_threshold` | `FLOAT` | default `0.0`, range 0.0…1.0, step 0.01 | Discard masks below this confidence score |
 | `apply_bbox_crop` | `BOOLEAN` | default `False` | Crop output to bbox region |
 | `refine_iterations` | `INT` | default `1`, range 1…5, step 1 | Iterative refinement passes.  Each pass feeds the previous mask back into SAM with augmented prompts.  2-3 significantly improves accuracy. |
