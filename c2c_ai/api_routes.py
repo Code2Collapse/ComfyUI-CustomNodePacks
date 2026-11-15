@@ -35,18 +35,25 @@ from pathlib import Path
 log = logging.getLogger("c2c_ai.api")
 
 
+_SECURITY = None
+
+
 def _security():
-    """nodes/magnific/security.py (stdlib only): the pack's local-UI guard."""
-    try:
-        from ..nodes.magnific import security  # custom_nodes.<pack>.c2c_ai -> <pack>.nodes.magnific
-        return security
-    except (ImportError, ValueError):            # tests: c2c_ai imported top-level
+    """nodes/magnific/security.py (stdlib only): the pack's local-UI guard, loaded BY FILE.
+
+    Never ``from ..nodes.magnific import security``: that runs nodes/magnific/__init__.py, which imports the 15
+    Magnific nodes and mounts /magnific/* - even when the pack hands Magnific to OmniScale, so both packs mounted
+    the same routes (CNP-INV 2026-11-14). Only the stateless ``is_local_ui_origin`` is used here, so a private copy
+    is safe (UI_TOKEN stays with the Magnific package)."""
+    global _SECURITY
+    if _SECURITY is None:
         import importlib.util
         here = Path(__file__).resolve().parents[1] / "nodes" / "magnific" / "security.py"
         spec = importlib.util.spec_from_file_location("_c2c_magnific_security", here)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod
+        _SECURITY = mod
+    return _SECURITY
 
 
 def register_routes(server) -> None:
