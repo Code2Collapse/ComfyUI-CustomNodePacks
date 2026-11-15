@@ -22,6 +22,11 @@ Design
   that dies or stops answering is detected (exit code or missing result within ``timeout_s``). After ANY failure the
   group is treated as corrupted: every worker is killed, the group is destroyed, and the object refuses further
   work. A new ``ProcessRanks`` is the recovery.
+* Devices (L9.251): CUDA ranks follow ComfyUI's device list - rank 0 is ComfyUI's main device and is bound without
+  ``torch.cuda.set_device`` (ComfyUI's current device is never changed); ranks 1.. get the other devices.
+  Worker stderr goes to ``rank<r>.stderr.log`` in the group's root (no pipe that can fill up and block a worker).
+* Interrupt (L9.251): when rank 0 raises (ComfyUI's interrupt) after every worker already finished the call, the
+  group is kept; when rank 0 leaves mid-forward the workers sit in an abandoned collective, so the group is torn down.
 * Cleanup: ``close()`` sends "stop", waits, kills stragglers, destroys the process group and deletes the temp
   directory. It also runs at interpreter exit and through ``with``. Workers exit on their own when the parent
   process disappears, so no worker is ever orphaned.
@@ -53,6 +58,7 @@ _WORKER = r"""
 import datetime, os, pickle, sys, time, traceback
 rank, world, root, backend, kind, timeout_s, parent, pkg_parent = (int(sys.argv[1]), int(sys.argv[2]), sys.argv[3],
     sys.argv[4], sys.argv[5], float(sys.argv[6]), int(sys.argv[7]), sys.argv[8])
+dev_index = int(sys.argv[9]) if len(sys.argv) > 9 and int(sys.argv[9]) >= 0 else None
 sys.path.insert(0, pkg_parent)
 import torch, torch.distributed as dist
 from c2c_distributed import procrun
@@ -66,7 +72,7 @@ def alive(pid):
     except Exception:
         return True
 try:
-    procrun._init(rank, world, root, backend, kind, timeout_s)
+    procrun._init(rank, world, root, backend, kind, timeout_s, dev_index)
     cmds.set(f"ready/{rank}", b"1")
 except Exception as exc:
     cmds.set(f"ready/{rank}", pickle.dumps(("err", f"{type(exc).__name__}: {exc}")))
@@ -113,13 +119,28 @@ def _forget_subgroups() -> None:
     TorchComm._groups.clear()
 
 
-def _init(rank: int, world: int, root: str, backend: str, kind: str, timeout_s: float) -> None:
+_DEVICE: Optional[torch.device] = None      # this process's rank device, set by _init
+
+
+def _init(rank: int, world: int, root: str, backend: str, kind: str, timeout_s: float,
+          device_index: Optional[int] = None, set_current: bool = True) -> None:
+    """Join the process group. L9.251: the CUDA device comes from ``device_index`` (mapped from ComfyUI's device list
+    by rank_devices); ``set_current=False`` (rank 0 = the ComfyUI process) never changes ComfyUI's current device -
+    the device is bound with init_process_group(device_id=...) instead of torch.cuda.set_device."""
+    global _DEVICE
     import torch.distributed as dist
     _forget_subgroups()
+    kw = {}
+    _DEVICE = None
     if kind == "cuda":
-        torch.cuda.set_device(rank)
+        idx = rank if device_index is None else int(device_index)
+        _DEVICE = torch.device("cuda", idx)
+        if set_current:
+            torch.cuda.set_device(idx)
+        if backend == "nccl":
+            kw["device_id"] = _DEVICE
     dist.init_process_group(backend, init_method="file:///" + os.path.join(root, "rdzv").replace(os.sep, "/"),
-                            rank=rank, world_size=world, timeout=datetime.timedelta(seconds=timeout_s))
+                            rank=rank, world_size=world, timeout=datetime.timedelta(seconds=timeout_s), **kw)
 
 
 def comm():
@@ -128,8 +149,10 @@ def comm():
 
 
 def device() -> torch.device:
-    """This rank's device (cuda:rank for CUDA ranks, else cpu)."""
+    """This rank's device (the mapped CUDA device for CUDA ranks, else cpu)."""
     import torch.distributed as dist
+    if _DEVICE is not None:
+        return _DEVICE
     if dist.get_backend() == "nccl":
         return torch.device("cuda", torch.cuda.current_device())
     return torch.device("cpu")
@@ -154,12 +177,49 @@ def _resolve(ref: str) -> Callable:
     return obj
 
 
+def comfy_cuda_devices() -> List[int]:
+    """CUDA indices ComfyUI uses, its main device first (L9.251). ComfyUI's own device list when it is importable and
+    lists CUDA devices; otherwise every device torch sees. Indices are in this process's CUDA_VISIBLE_DEVICES space,
+    which the worker processes inherit (main.py's --default-device reorders that variable before CUDA starts)."""
+    if not torch.cuda.is_available():
+        return []
+    order: List[int] = []
+    main = None
+    try:
+        import comfy.model_management as mm
+        order = [d.index if d.index is not None else 0 for d in mm.get_all_torch_devices(exclude_current=False)
+                 if getattr(d, "type", None) == "cuda"]
+        md = mm.get_torch_device()
+        if getattr(md, "type", None) == "cuda":
+            main = md.index if md.index is not None else torch.cuda.current_device()
+    except Exception:  # noqa: BLE001 - no ComfyUI here (self-test, tests): torch's view
+        order = []
+    if not order:
+        order = list(range(torch.cuda.device_count()))
+        main = torch.cuda.current_device() if main is None else main
+    if main in order:
+        order.remove(main)
+        order.insert(0, main)
+    return order
+
+
+def rank_devices(world: int) -> List[int]:
+    """CUDA index per rank: rank 0 = ComfyUI's main device (the model rank 0 runs is already there), ranks 1.. =
+    ComfyUI's other devices, so no worker ever lands on the main GPU (L9.251)."""
+    devs = comfy_cuda_devices()
+    if len(devs) < world:
+        raise RuntimeError(f"{world} CUDA ranks need {world} GPUs in ComfyUI's device list; {len(devs)} there")
+    return devs[:world]
+
+
 def choose(world: int, backend: Optional[str] = None, device_kind: Optional[str] = None):
-    """(backend, device kind, reason) - NCCL on CUDA ranks when possible, else gloo on CPU."""
+    """(backend, device kind, reason) - NCCL on CUDA ranks when possible, else gloo on CPU.
+    L9.251: CUDA ranks are mapped from ComfyUI's device list and pass the kernel capability gate here, before any
+    worker starts."""
     import torch.distributed as dist
     if not dist.is_available():
         raise RuntimeError("this torch build has no torch.distributed")
-    ngpu = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    ngpu = len(comfy_cuda_devices())
     if device_kind is None:
         device_kind = "cuda" if ngpu >= world and dist.is_nccl_available() and backend in (None, "nccl") else "cpu"
     if device_kind == "cuda" and ngpu < world:
@@ -169,6 +229,10 @@ def choose(world: int, backend: Optional[str] = None, device_kind: Optional[str]
     if backend == "nccl" and not dist.is_nccl_available():
         raise RuntimeError("NCCL is not in this torch build (Windows wheels have none): use backend='gloo' on Linux "
                            "for CPU ranks, or the thread path (C2C Multi-GPU Split)")
+    if device_kind == "cuda":
+        from .inventory import require_kernels
+        require_kernels([torch.device("cuda", i) for i in rank_devices(world)],
+                        "C2C Multi-GPU Split (processes)")
     reason = f"{backend} on {device_kind} ranks" + ("" if device_kind == "cuda" else
                                                      " (CPU ranks: correctness only - SIMULATED, not a GPU result)")
     return backend, device_kind, reason
@@ -176,6 +240,14 @@ def choose(world: int, backend: Optional[str] = None, device_kind: Optional[str]
 
 class RankFailure(RuntimeError):
     """A rank failed, died or stalled; the group was torn down."""
+
+
+class _Kept(BaseException):
+    """Internal: rank 0 raised after every worker finished - the group stays usable, the original is re-raised."""
+
+    def __init__(self, original: BaseException):
+        super().__init__(str(original))
+        self.original = original
 
 
 class ProcessRanks:
@@ -190,8 +262,11 @@ class ProcessRanks:
             raise RuntimeError("torch.distributed is already initialised in this process; one ProcessRanks at a time")
         self.world, self.timeout_s, self.init_timeout_s = int(world), float(timeout_s), float(init_timeout_s)
         self.backend, self.device_kind, self.reason = choose(self.world, backend, device_kind)
+        self.devices: List[Optional[int]] = (rank_devices(self.world) if self.device_kind == "cuda"
+                                             else [None] * self.world)
         self.root = tempfile.mkdtemp(prefix="c2c_procrun_")
         self.procs: List[subprocess.Popen] = []
+        self._logs: list = []                       # worker stderr files (L9.251: never a PIPE nobody reads)
         self.seq = 0
         self.broken: Optional[str] = None
         self.closed = False
@@ -205,12 +280,18 @@ class ProcessRanks:
         env = dict(os.environ)
         env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")    # NCCL: a hung collective raises after the timeout
         for r in range(1, self.world):
+            # L9.251: stderr goes to a file in the group's root. A PIPE was read only at exit: more than one pipe
+            # buffer of log output (64 KiB on Linux) blocked the worker and looked like a stall.
+            log = open(self.stderr_path(r), "wb")
+            self._logs.append(log)
+            dev = self.devices[r]
             self.procs.append(subprocess.Popen(
                 [sys.executable, "-c", _WORKER, str(r), str(self.world), self.root, self.backend, self.device_kind,
-                 str(self.timeout_s), str(os.getpid()), _PKG_PARENT],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=tempfile.gettempdir(), env=env))
+                 str(self.timeout_s), str(os.getpid()), _PKG_PARENT, str(-1 if dev is None else dev)],
+                stdout=subprocess.DEVNULL, stderr=log, cwd=tempfile.gettempdir(), env=env))
         try:
-            _init(0, self.world, self.root, self.backend, self.device_kind, self.timeout_s)
+            _init(0, self.world, self.root, self.backend, self.device_kind, self.timeout_s, self.devices[0],
+                  set_current=False)          # the ComfyUI process keeps its own current device
             deadline = time.monotonic() + self.init_timeout_s
             for r in range(1, self.world):
                 self._wait_key(f"ready/{r}", r, deadline)
@@ -221,6 +302,27 @@ class ProcessRanks:
             self._teardown(f"start failed: {exc}")
             raise RankFailure(f"the {self.reason} group did not start: {exc}") from exc
         return self
+
+    def stderr_path(self, rank: int) -> str:
+        return os.path.join(self.root, f"rank{rank}.stderr.log")
+
+    def stderr_tail(self, rank: int, limit: int = 600) -> str:
+        """The last ``limit`` bytes a worker wrote to stderr ('' when none / gone)."""
+        try:
+            with open(self.stderr_path(rank), "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - limit))
+                return fh.read().decode(errors="replace").strip()
+        except OSError:
+            return ""
+
+    def _close_logs(self) -> None:
+        for fh in self._logs:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._logs = []
 
     def __enter__(self):
         return self.start()
@@ -237,7 +339,7 @@ class ProcessRanks:
                 pass
             p = self.procs[rank - 1]
             if p.poll() is not None:
-                err = (p.stderr.read() if p.stderr else b"").decode(errors="replace")[-600:]
+                err = self.stderr_tail(rank)
                 raise RankFailure(f"rank {rank} exited with code {p.returncode}" + (f": {err}" if err else ""))
             if time.monotonic() > deadline:
                 raise RankFailure(f"rank {rank} gave no answer within {self.timeout_s:.0f} s (stalled)")
@@ -264,6 +366,10 @@ class ProcessRanks:
             except BaseException as exc:
                 cause = self._worker_error(seq)     # usually rank 0 only saw a peer leave: name the real cause
                 if cause is None and rank0 is not None:
+                    if self._workers_finished(seq):
+                        # L9.251: every worker delivered its result, so no collective is left half-done and the
+                        # group is consistent: keep it (no model reload on the next run) and re-raise as is.
+                        raise _Kept(exc) from exc
                     raise                           # rank 0's own failure, type kept
                 raise RankFailure(cause or f"rank 0 failed: {type(exc).__name__}: {exc}") from exc
             deadline = time.monotonic() + float(timeout_s or self.timeout_s)
@@ -273,10 +379,33 @@ class ProcessRanks:
                 if out[0] != "ok":
                     raise RankFailure(f"rank {r} failed: {out[1]}\n{out[2] if len(out) > 2 else ''}")
                 results[r] = out[1]
+        except _Kept as kept:
+            raise kept.original from None
         except BaseException as exc:
             self._teardown(str(exc).splitlines()[0][:300])
             raise
         return results
+
+    def _workers_finished(self, seq: int, grace_s: float = 2.0) -> bool:
+        """Did every worker deliver an OK result for run ``seq`` (within ``grace_s``)? Only then is it safe to keep
+        the group after rank 0 stopped early (e.g. ComfyUI's interrupt). If rank 0 left mid-forward - comfy.ops
+        checks the interrupt in every layer - the workers are blocked inside a collective that rank 0 abandoned;
+        neither NCCL nor gloo can resume a half-done collective, so that group IS torn down (documented, L9.251)."""
+        end = time.monotonic() + grace_s
+        for r in range(1, self.world):
+            key = f"res/{seq}/{r}"
+            while True:
+                try:
+                    if self._cmds.check([key]):
+                        if pickle.loads(self._cmds.get(key))[0] != "ok":
+                            return False
+                        break
+                except Exception:  # noqa: BLE001
+                    return False
+                if time.monotonic() > end or self.procs[r - 1].poll() is not None:
+                    return False
+                time.sleep(0.05)
+        return True
 
     _KNOCK_ON = ("Connection closed", "Connection reset", "Timed out", "timed out", "gloo/transport", "NCCL error",
                  "ProcessGroupNCCL", "Broken pipe")
@@ -313,6 +442,7 @@ class ProcessRanks:
                 p.wait(10)
             except Exception:  # noqa: BLE001
                 pass
+        self._close_logs()
         self._destroy()
 
     def _destroy(self) -> None:
@@ -339,6 +469,7 @@ class ProcessRanks:
             except subprocess.TimeoutExpired:
                 p.kill()
                 p.wait(10)
+        self._close_logs()
         self._destroy()
         shutil.rmtree(self.root, ignore_errors=True)
         try:

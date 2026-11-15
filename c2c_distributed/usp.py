@@ -406,8 +406,6 @@ def _process_call(executor, args, kwargs, to: dict, pos, state: "UspState"):
                "args": [None if i == pos else _move(a, cpu) for i, a in enumerate(args)],
                "kwargs": {k: _move(v, cpu) for k, v in kwargs.items() if k != "transformer_options"},
                "options": procmodel.call_options(to), "plan": (plan.ulysses, plan.ring)}
-    pr = g.ensure()
-
     def rank0(comm):
         _tls.ctx = RankCtx(comm=comm, mesh=A.Mesh.build(comm, plan.ulysses, plan.ring), adapter=ad,
                            n_blocks=len(dm.blocks), prev_override=None)
@@ -417,7 +415,9 @@ def _process_call(executor, args, kwargs, to: dict, pos, state: "UspState"):
             _tls.ctx = None
     state.note(f"{plan.mode}: Ulysses {plan.ulysses} x Ring {plan.ring} over {world} processes ({g.reason})"
                + (f", {tokens} tokens" if tokens else ""))
-    return pr.run(procmodel.rank_call, payload, rank0=rank0)[0]
+    with g.using():                         # L9.251: the idle release never closes a group mid-call
+        pr = g.ensure()
+        return pr.run(procmodel.rank_call, payload, rank0=rank0)[0]
 
 
 def diffusion_model_wrapper(executor, *args, **kwargs):
@@ -701,15 +701,21 @@ def apply_processes(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_g
     if sim >= 2 and device_kind is None:
         world, device_kind, backend = sim, "cpu", backend or "gloo"
     else:
-        visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        from . import procrun
+        # L9.251: count the GPUs ComfyUI itself uses (its device list), not every device torch can see
+        visible = len(procrun.comfy_cuda_devices())
         world = visible if int(gpus) <= 0 else min(int(gpus), visible)
     report = [f"model: {type(dm).__name__} ({ad.name}), heads {ad.heads(dm)}", "rank backend: processes"]
     state = UspState(prefer, min_tokens_per_gpu, fast_domain, None)
     state.backend = "processes"
     if world >= 2:
         from . import procrun
+        try:            # choose() runs the capability gate on the rank devices BEFORE any worker exists
+            reason = procrun.choose(world, backend, device_kind)[2]
+        except RuntimeError as exc:
+            raise ValueError(f"C2C Multi-GPU Split (processes): {exc}") from exc
         state.group = procmodel.group_for(rec, world, backend, device_kind, timeout_s=state.timeout)
-        report.append(f"workers: {world} ranks, {procrun.choose(world, backend, device_kind)[2]}; the worker "
+        report.append(f"workers: {world} ranks, {reason}; the worker "
                       f"processes start and load the model at the first model call")
         p = plan_sequence_parallel(world, heads=ad.heads(dm), prefer=prefer, fast_domain=fast_domain or None)
         report.append(f"plan: {p.mode} (Ulysses {p.ulysses} x Ring {p.ring})" + "".join(f"; {x}" for x in p.notes))
@@ -751,6 +757,12 @@ def apply(model, gpus: int = 0, prefer: str = "auto", min_tokens_per_gpu: int = 
                 raise ValueError(f"C2C Multi-GPU Split needs one model copy per GPU and this loader cannot make "
                                  f"them: {exc}") from exc
         n = 1 + len(m.get_additional_models_with_key("multigpu"))
+        if n >= 2:
+            # L9.251 capability gate: a GPU without kernels in this torch build is refused here, in words, instead
+            # of failing mid-run with a raw "no kernel image" CUDA error
+            from .inventory import require_kernels
+            require_kernels([getattr(c, "load_device", None) for c in [m] + list(
+                m.get_additional_models_with_key("multigpu"))])
         sim = simulate_ranks()
         sim_copies = []
         if n < 2 and sim >= 2:

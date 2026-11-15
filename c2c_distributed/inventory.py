@@ -93,13 +93,25 @@ def kernel_support(major: int, minor: int, arch_list: List[str], gencode_flags: 
         cuda_major = None
     if major == 7 and minor < 5 and cuda_major is not None and cuda_major >= 13:
         why += f"; CUDA {cuda} dropped Volta (sm_70 / sm_72): install a torch build for CUDA 12.x (e.g. cu126 / cu128)"
+    elif major in (10, 12) and _cuda_tuple(cuda) is not None and _cuda_tuple(cuda) < (12, 8):
+        why += (f"; Blackwell (sm_{major}x) needs a torch build for CUDA 12.8 or newer: install e.g. the cu128 "
+                f"wheel (this one is for CUDA {cuda})")
     return "unsupported", why
+
+
+def _cuda_tuple(cuda: Optional[str]) -> Optional[Tuple[int, int]]:
+    try:
+        parts = str(cuda).split(".")
+        return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return None
 
 
 # A27 1.2: the GPU families the owner named, with their compute capability.
 FAMILIES = (("Volta", "V100", 7, 0), ("Turing", "T4, RTX 20", 7, 5), ("Ampere", "A100, A800", 8, 0),
             ("Ada", "L40, L40S", 8, 9), ("Hopper", "H100, H200, GH200", 9, 0), ("Blackwell", "B200, GB200", 10, 0),
-            ("Blackwell Ultra", "B300, GB300", 10, 3))
+            ("Blackwell Ultra", "B300, GB300", 10, 3), ("Blackwell RTX", "RTX 50, RTX PRO 6000 Blackwell", 12, 0),
+            ("Blackwell GB10", "GB10 (DGX Spark)", 12, 1))
 
 
 def build_coverage(arch_list: List[str], gencode_flags: str, cuda: Optional[str]) -> List[dict]:
@@ -132,17 +144,132 @@ def kernel_smoke(index: int) -> dict:
             continue
         tol = 2e-2 if dt is torch.float16 else 8e-2      # relative to the reference's scale
         try:
+            qd, kd, vd = q.to(d, dt), k.to(d, dt), v.to(d, dt)
             mm = (a.to(d, dt) @ b.to(d, dt)).double().cpu()
-            at = F.scaled_dot_product_attention(q.to(d, dt), k.to(d, dt), v.to(d, dt)).double().cpu()
+            at = F.scaled_dot_product_attention(qd, kd, vd).double().cpu()
             torch.cuda.synchronize(d)
             e_mm = float((mm - ref_mm).abs().max() / ref_mm.abs().max())
             e_at = float((at - ref_at).abs().max() / ref_at.abs().max())
-            out[name] = {"gemm_rel_err": round(e_mm, 6), "sdpa_rel_err": round(e_at, 6),
-                         "ok": e_mm < tol and e_at < tol}
+            per = sdpa_backends(qd, kd, vd, ref_at, tol)       # L9.251: which attention kernels really ran
+            out[name] = {"gemm_rel_err": round(e_mm, 6), "sdpa_rel_err": round(e_at, 6), "sdpa_backends": per,
+                         "sdpa_ran": sorted(n for n, r in per.items() if r.get("ran")),
+                         "ok": e_mm < tol and e_at < tol and all(r.get("ok") for r in per.values() if r.get("ran"))}
         except Exception as exc:  # noqa: BLE001 - "no kernel image", OOM, driver error: all reported
             out[name] = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    out["fp8"] = fp8_smoke(index)                           # a string when skipped (cc < 8.9)
     out["ok"] = all(v.get("ok") for v in out.values() if isinstance(v, dict))
     return out
+
+
+SDPA_BACKENDS = ("FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN_ATTENTION", "MATH")
+
+
+def sdpa_backends(q, k, v, ref, tol: float) -> Dict[str, dict]:
+    """Scaled-dot-product attention once PER PINNED BACKEND (torch.nn.attention.sdpa_kernel), so a silent fallback to
+    the math kernel can no longer pass for flash / memory-efficient / cuDNN attention (L9.251).
+
+    Per backend: {"ran": True, "rel_err", "ok"} or {"ran": False, "why"} when this build / device / dtype has no such
+    kernel (not available = information, not a failure). Works on any device, CPU included."""
+    import warnings
+
+    import torch
+    import torch.nn.functional as F
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+    except Exception as exc:  # noqa: BLE001 - torch older than 2.3
+        return {"_": {"ran": False, "why": f"torch.nn.attention.sdpa_kernel is not available ({type(exc).__name__})"}}
+    out: Dict[str, dict] = {}
+    for name in SDPA_BACKENDS:
+        be = getattr(SDPBackend, name, None)
+        if be is None:
+            out[name] = {"ran": False, "why": "not in this torch build"}
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")             # "flash attention was not compiled ..." and similar
+                with sdpa_kernel(be):
+                    at = F.scaled_dot_product_attention(q, k, v)
+            if at.device.type == "cuda":
+                torch.cuda.synchronize(at.device)
+            err = float((at.double().cpu() - ref).abs().max() / ref.abs().max())
+            out[name] = {"ran": True, "rel_err": round(err, 6), "ok": err < tol}
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "No available kernel" in msg:                # sdpa_kernel's own refusal: no such kernel here
+                out[name] = {"ran": False, "why": msg.splitlines()[0][:160]}
+            else:                                           # the kernel exists and FAILED (e.g. no kernel image)
+                out[name] = {"ran": True, "ok": False, "error": f"RuntimeError: {msg[:200]}"}
+    return out
+
+
+def fp8_smoke(index: int) -> object:
+    """torch._scaled_mm (FP8 e4m3 GEMM) against a float64 reference of the same quantised inputs. Only on cc >= 8.9
+    (FP8 tensor cores); below that it returns a 'skipped' string, never a failure (L9.251)."""
+    import torch
+    major, minor = torch.cuda.get_device_capability(index)
+    if (major, minor) < (8, 9):
+        return f"skipped: FP8 tensor cores need cc >= 8.9 (this GPU is {major}.{minor})"
+    if not hasattr(torch, "_scaled_mm") or not hasattr(torch, "float8_e4m3fn"):
+        return "skipped: this torch build has no torch._scaled_mm / float8_e4m3fn"
+    d = torch.device("cuda", index)
+    g = torch.Generator().manual_seed(4321 + index)
+    a8 = torch.randn(64, 128, generator=g).to(torch.float8_e4m3fn)
+    b8 = torch.randn(64, 128, generator=g).to(torch.float8_e4m3fn)      # passed as b8.t(): column-major, as required
+    ref = a8.double() @ b8.double().t()
+    try:
+        one = torch.ones((), device=d, dtype=torch.float32)
+        res = torch._scaled_mm(a8.to(d), b8.to(d).t(), scale_a=one, scale_b=one, out_dtype=torch.bfloat16)
+        res = res[0] if isinstance(res, tuple) else res                   # older torch returned (out, amax)
+        torch.cuda.synchronize(d)
+        err = float((res.double().cpu() - ref).abs().max() / ref.abs().max())
+        return {"scaled_mm_rel_err": round(err, 6), "ok": err < 2e-2}
+    except Exception as exc:  # noqa: BLE001 - reported, like the other kernels
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
+# ── L9.251: capability gate - refuse a device without kernels BEFORE a run, not mid-run with a raw CUDA error ─────
+
+def unsupported_devices(devices) -> List[str]:
+    """Plain-English problems for the CUDA devices in ``devices`` whose kernels this torch build lacks ([] = fine).
+    CPU devices pass; ROCm builds are not judged (their arch list names gfx targets, not sm_XY); a device whose
+    capability cannot be read is not judged either (the run then reports its own error)."""
+    import torch
+    if getattr(torch.version, "hip", None):
+        return []
+    try:
+        arch_list = list(torch.cuda.get_arch_list())
+        gencode = torch.cuda.get_gencode_flags()
+    except Exception:  # noqa: BLE001 - no CUDA in this build: nothing to judge
+        return []
+    seen, out = set(), []
+    for dev in devices:
+        try:
+            d = torch.device(dev)
+        except (TypeError, RuntimeError, ValueError):
+            continue
+        if d.type != "cuda":
+            continue
+        try:
+            idx = d.index if d.index is not None else torch.cuda.current_device()
+            if idx in seen:
+                continue
+            seen.add(idx)
+            major, minor = torch.cuda.get_device_capability(idx)
+            name = torch.cuda.get_device_name(idx)
+        except Exception:  # noqa: BLE001
+            continue
+        status, detail = kernel_support(major, minor, arch_list, gencode, torch.version.cuda)
+        if status == "unsupported":
+            out.append(f"cuda:{idx} ({name}, compute capability {major}.{minor}): {detail}")
+    return out
+
+
+def require_kernels(devices, what: str = "C2C Multi-GPU Split") -> None:
+    """Raise ValueError (the node shows it) when any chosen CUDA device has no kernels in this torch build."""
+    bad = unsupported_devices(devices)
+    if bad:
+        raise ValueError(f"{what} cannot use these GPUs - " + "; ".join(bad) + ". Install a PyTorch build with "
+                         "kernels for them, or leave them out (the gpus input, or CUDA_VISIBLE_DEVICES).")
 
 
 def driver_cuda() -> Optional[str]:
@@ -396,7 +523,10 @@ def modes(gpu_list: List[dict], nccl: dict, comfy: dict, p2p: List[List[bool]]) 
         {"mode": "data parallel (whole jobs per GPU / per machine)", "a27_mode": 1, "can_run": True,
          "how": "C2C Farm backends (renderfarm/) or one ComfyUI per GPU; any OS. Each job needs the whole model "
                 "on its GPU (no VRAM pooling)"},
-        {"mode": "CFG / batch split (one box)", "a27_mode": 2, "can_run": multi and comfy.get("core_multigpu", False),
+        # L9.251: CFG / batch split is DATA parallelism inside one call (whole items per GPU), not mode 2 (tiles /
+        # windows = overlapping regions of one item recombined)
+        {"mode": "CFG / batch split (one box)", "a27_mode": 1, "parallelism": "data (whole items per GPU)",
+         "can_run": multi and comfy.get("core_multigpu", False),
          "how": "C2C Multi-GPU Split node, any model: cond / uncond, image batches and tiles over all GPUs "
                 "(core's 'MultiGPU CFG Split' uses at most one GPU per cond); full model copy per GPU"
          if comfy.get("core_multigpu") else "needs ComfyUI core with comfy/multigpu.py (0.39+)",
@@ -720,6 +850,9 @@ def summary(rep: dict) -> str:
             parts = [f"{k} {'ok' if v.get('ok') else 'FAILED'}" if isinstance(v, dict) else f"{k} {v}"
                      for k, v in s.items() if k != "ok"]
             lines.append(f"  GPU {idx} kernels (GEMM + attention vs float64): " + ", ".join(parts))
+            ran = sorted({b for k, v in s.items() if isinstance(v, dict) for b in v.get("sdpa_ran", [])})
+            if ran:
+                lines.append(f"  GPU {idx} attention backends that really ran (pinned): {', '.join(ran)}")
         mr = q.get("multi_rank") or q.get("harness_selftest")
         if mr:
             lab = mr.get("label", "real devices")

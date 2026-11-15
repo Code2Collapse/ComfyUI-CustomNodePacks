@@ -29,12 +29,18 @@ CODE_COMPLETE_HARDWARE_UNVERIFIED.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import logging
 import os
 import pickle
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+
+log = logging.getLogger("c2c_distributed")
 
 _SKIP_OPTIONS = ("wrappers", "callbacks", "patches", "patches_replace", "optimized_attention_override",
                  "c2c_usp", "c2c_usp_ranks", "c2c_usp_pool", "c2c_tile_dispatch")
@@ -199,6 +205,20 @@ class ModelGroup:
         self.pr = None
         self.info: List[dict] = []
         self.starts = 0
+        self.busy = 0                       # model calls in flight (the idle timer never closes a busy group)
+        self.last_used = time.monotonic()
+
+    @contextlib.contextmanager
+    def using(self):
+        """Mark the group busy for one model call (L9.251 idle release)."""
+        with _LOCK:
+            self.busy += 1
+        try:
+            yield
+        finally:
+            with _LOCK:
+                self.busy -= 1
+                self.last_used = time.monotonic()
 
     def ensure(self):
         from . import procrun
@@ -209,6 +229,9 @@ class ModelGroup:
         self.pr = procrun.ProcessRanks(self.world, self.backend, self.device_kind, timeout_s=self.timeout_s).start()
         self.starts += 1
         self.info = self.pr.run(rank_load, self.rec)
+        self.last_used = time.monotonic()
+        install_unload_hook()               # the workers now hold model copies: ComfyUI's unload must reach them
+        _start_idle_watch()
         return self.pr
 
     @property
@@ -238,6 +261,92 @@ def group_for(rec: dict, world: int, backend=None, device_kind=None, timeout_s: 
 
 
 def close_all() -> None:
+    """Stop every worker group: their processes exit and the model copies they hold are freed."""
     for g in list(_GROUPS.values()):
         g.close()
     _GROUPS.clear()
+
+
+# ── L9.251: release the worker model copies ─────────────────────────────────────────────────────────────────────
+# Each worker process holds a full model copy on its GPU, invisible to ComfyUI's model management. Two releases:
+# 1. ComfyUI's "Unload models" / "Free model and node cache" (POST /free -> main.py prompt_worker) and its OOM handler
+#    (execution.py) both call comfy.model_management.unload_all_models() - verified in core 0.39.0. Both call it as a
+#    module attribute, so wrapping that attribute reaches them. Installed lazily, when a group first loads a model;
+#    importing this module patches nothing. free_memory() is NOT hooked: core calls it on every model load.
+# 2. Optional idle release: environment C2C_DISTRIBUTED_IDLE_UNLOAD_S=<seconds> closes groups idle that long
+#    (default 0 = off, like ComfyUI, which also keeps models loaded). A busy group is never closed.
+
+_LOCK = threading.RLock()
+_HOOK_FLAG = "_c2c_procmodel_unload_hook"
+
+
+def install_unload_hook() -> bool:
+    """Wrap comfy.model_management.unload_all_models so it also calls close_all(). Idempotent; False without core."""
+    try:
+        import comfy.model_management as mm
+    except Exception:  # noqa: BLE001 - no ComfyUI core in this process (self-test)
+        return False
+    cur = getattr(mm, "unload_all_models", None)
+    if cur is None:
+        return False
+    if getattr(cur, _HOOK_FLAG, False):
+        return True
+
+    def unload_all_models(*args, **kwargs):
+        try:
+            if _GROUPS:
+                log.info("C2C Multi-GPU Split: ComfyUI unloads models - stopping the worker processes and their "
+                         "model copies")
+            close_all()
+        except Exception as exc:  # noqa: BLE001 - never break core's unload
+            log.warning("C2C Multi-GPU Split: could not stop the worker processes: %s", exc)
+        return cur(*args, **kwargs)
+    setattr(unload_all_models, _HOOK_FLAG, True)
+    unload_all_models.__wrapped__ = cur
+    mm.unload_all_models = unload_all_models
+    return True
+
+
+def idle_unload_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("C2C_DISTRIBUTED_IDLE_UNLOAD_S", "0") or 0))
+    except ValueError:
+        return 0.0
+
+
+def close_idle(now: Optional[float] = None, idle_s: Optional[float] = None) -> List[str]:
+    """Close groups idle for at least ``idle_s`` seconds (default: the environment setting). Returns their keys."""
+    idle_s = idle_unload_seconds() if idle_s is None else float(idle_s)
+    if idle_s <= 0:
+        return []
+    now = time.monotonic() if now is None else now
+    closed = []
+    with _LOCK:
+        for key, g in list(_GROUPS.items()):
+            if g.pr is not None and g.busy == 0 and now - g.last_used >= idle_s:
+                g.close()
+                closed.append(key)
+    if closed:
+        log.info("C2C Multi-GPU Split: worker processes idle for %.0f s were stopped (model copies freed)", idle_s)
+    return closed
+
+
+_WATCH: Optional[threading.Thread] = None
+
+
+def _start_idle_watch() -> None:
+    global _WATCH
+    if idle_unload_seconds() <= 0 or (_WATCH is not None and _WATCH.is_alive()):
+        return
+
+    def loop():
+        while _GROUPS:
+            time.sleep(max(1.0, min(30.0, idle_unload_seconds() / 4 or 30.0)))
+            try:
+                close_idle()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("C2C Multi-GPU Split: idle release failed: %s", exc)
+            if not any(g.pr is not None for g in _GROUPS.values()):
+                return
+    _WATCH = threading.Thread(target=loop, name="c2c-procmodel-idle", daemon=True)
+    _WATCH.start()

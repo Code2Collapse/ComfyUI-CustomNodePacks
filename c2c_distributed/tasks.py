@@ -89,8 +89,16 @@ class TaskResult:
     worker_id: str
     device: str
     attempt: int
-    checksum: str
+    _checksum: Optional[str]
     qc: dict
+
+    @property
+    def checksum(self) -> str:
+        """sha256 of the output, computed on first use (L9.251). The service needs it only when a duplicate result
+        arrives; hashing every tile meant a GPU->CPU copy + sync per tile per diffusion step."""
+        if self._checksum is None:
+            self._checksum = tensor_checksum(self.output)
+        return self._checksum
 
 
 def tensor_checksum(t) -> str:
@@ -500,7 +508,7 @@ class TileService:
                 res = TaskResult(t.task_id, t.job_id, t.order, out, t.spatial_bounds, t.temporal_bounds,
                                  t.halo_bounds, tuple(first.shape), str(first.dtype).replace("torch.", ""),
                                  t.colour_space, t.alpha_semantics, dur, w.id, str(w.device), e.attempt + 1,
-                                 tensor_checksum(out), qc)
+                                 None, qc)          # checksum: lazy, only a duplicate arrival computes it
                 prev = j.results.get(t.task_id)
                 if prev is None:
                     j.results[t.task_id] = res
