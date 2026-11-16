@@ -900,6 +900,77 @@ function buildSettingsView(root) {
                 sec4.appendChild(row);
             }
 
+            // L6.09: catalog model folders (pinned, hash-checked) downloaded on an explicit click into models/LLM
+            try {
+                const cat = await apiGet("/c2c/ai/hf_catalog");
+                const todo = (cat.models || []).filter(m => !m.installed);
+                if (todo.length) {
+                    const drow = document.createElement("div");
+                    drow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;";
+                    const dlab = document.createElement("span");
+                    dlab.style.cssText = "color:var(--c2c-sub);font-size:11px;";
+                    dlab.textContent = "Download a model folder:";
+                    const dsel = document.createElement("select");
+                    dsel.style.cssText =
+                        `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                         border-radius:3px;font-size:11px;padding:2px 4px;max-width:300px;`;
+                    const gb = (m) => ((m.size || (m.files || []).reduce((a, f) => a + (f.size || 0), 0)) / 1e9).toFixed(2);
+                    todo.forEach(m => {
+                        const o = document.createElement("option");
+                        o.value = m.id;
+                        o.textContent = `${m.name} (${gb(m)} GB)`;
+                        o.title = `${m.repo} @ ${String(m.revision || "").slice(0, 12)} - ${m.license || ""}`;
+                        dsel.appendChild(o);
+                    });
+                    const btnCss = `background:var(--c2c-bg2);color:var(--c2c-fg);border:1px solid var(--c2c-border);
+                                    border-radius:3px;padding:2px 10px;cursor:pointer;font-size:11px;`;
+                    const dbtn = document.createElement("button");
+                    dbtn.textContent = "⇩ Download";
+                    dbtn.style.cssText = btnCss;
+                    dbtn.title = "Downloads the pinned files into models/LLM and checks every one; nothing else runs";
+                    const sbtn = document.createElement("button");
+                    sbtn.textContent = "Stop";
+                    sbtn.style.cssText = btnCss;
+                    sbtn.style.display = "none";
+                    const dstat = document.createElement("span");
+                    dstat.style.cssText = "color:var(--c2c-sub);font-size:11px;";
+                    let hfPoll = null;
+                    const done = (text) => { hfPoll?.cancel(); hfPoll = null; dstat.textContent = text;
+                                             dbtn.disabled = false; sbtn.style.display = "none"; };
+                    const poll = (id) => {
+                        hfPoll?.cancel();
+                        hfPoll = getRuntime().every("ai.hf.dl", 1200, async () => {
+                            try {
+                                const s = await apiGet(`/c2c/ai/hf_catalog/progress?id=${encodeURIComponent(id)}`);
+                                if (s.status === "done" || s.status === "exists") {
+                                    done("✓ installed - choose it above"); refresh();
+                                }
+                                else if (s.status === "error") done("✗ " + (s.error || "download failed"));
+                                else if (s.status === "paused" || s.status === "cancelled") {
+                                    done("stopped - Download again to resume");
+                                }
+                                else {
+                                    const pct = s.bytes_total ? Math.round(100 * s.bytes_done / s.bytes_total) : 0;
+                                    dstat.textContent = `downloading ${s.files_done}/${s.files_total} files, ${pct}%`;
+                                }
+                            } catch (_) { /* next tick */ }
+                        }, { ambient: false });
+                    };
+                    dbtn.onclick = async () => {
+                        dbtn.disabled = true;
+                        sbtn.style.display = "";
+                        dstat.textContent = "starting…";
+                        try { await apiPost("/c2c/ai/hf_catalog/download", { id: dsel.value }); poll(dsel.value); }
+                        catch (e) { done("✗ " + (e && e.message || "request failed")); }
+                    };
+                    sbtn.onclick = async () => {
+                        try { await apiPost("/c2c/ai/hf_catalog/stop", { id: dsel.value }); } catch (_) { /* shown */ }
+                    };
+                    drow.append(dlab, dsel, dbtn, sbtn, dstat);
+                    sec4.appendChild(drow);
+                }
+            } catch (_) { /* catalog route unavailable: no download row */ }
+
             const rescan = document.createElement("button");
             rescan.textContent = "Rescan";
             rescan.style.cssText =
