@@ -251,6 +251,7 @@ class SAMMaskGeneratorMEC:
         # A22 L9.136: a GroundingDINO failure stops the run with the reason (the text prompt used to be dropped
         # silently). The model-free stand-in cannot read text anyway (L7.98), so there it is still only logged.
         strict_text = not (isinstance(model_info, dict) and model_info.get("model_free"))
+        text_bbox = None
         if text_prompt and text_prompt.strip() and grounding_model != "none":
             text_bbox = self._text_to_bbox(
                 image, text_prompt.strip(), grounding_model,
@@ -305,6 +306,13 @@ class SAMMaskGeneratorMEC:
             from .mask_matting._classic import TEXT_NEEDS_MODEL
             raise ValueError(TEXT_NEEDS_MODEL if (text_prompt and text_prompt.strip()) else
                              "No SAM model is installed, and the model-free stand-in needs a point, a box or a mask.")
+        # L9.262 (CNP-NODES-1 audit): a text prompt that found nothing used to continue silently with no prompt
+        if (strict_text and not has_prompt and text_bbox is None and text_prompt and text_prompt.strip()
+                and grounding_model != "none"):
+            raise ValueError(
+                f"SAM Mask Generator: GroundingDINO found nothing for '{text_prompt.strip()}' (box threshold "
+                f"{float(text_box_threshold):g}, text threshold {float(text_threshold):g}). Lower text_box_threshold, "
+                "change the words, or add a point or box.")
 
         # ── Move model to GPU if offloaded ─────────────────────────────
         if offload and hasattr(model, "to"):
