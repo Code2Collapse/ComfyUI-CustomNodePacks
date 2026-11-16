@@ -328,7 +328,7 @@ class ProPainterStitchRefineMEC:
                 subvideo_length=subvideo_length,
                 use_half=use_half,
                 blend_boundary=False,
-                color_match_mode=color_match_mode if color_match_mode != "off" else "reinhard",
+                color_match_mode=color_match_mode if color_match_mode != "off" else "none",   # L9.261: off = no match
             )
             # When color_match is off, snap unmasked region back exactly.
             if color_match_mode == "off":
@@ -551,7 +551,7 @@ class ProPainterStitchMEC:
                 subvideo_length=subvideo_length,
                 use_half=use_half,
                 blend_boundary=False,
-                color_match_mode=color_match_mode if color_match_mode != "off" else "reinhard",
+                color_match_mode=color_match_mode if color_match_mode != "off" else "none",   # L9.261: off = no match
             )
             if color_match_mode == "off":
                 m4 = repaint_mask.unsqueeze(-1)
@@ -675,7 +675,7 @@ class ProPainterRemoveMEC:
                 subvideo_length=preset["subvideo_length"],
                 use_half=use_half,
                 blend_boundary=False,
-                color_match_mode=color_match_mode if color_match_mode != "off" else "reinhard",
+                color_match_mode=color_match_mode if color_match_mode != "off" else "none",   # L9.261: off = no match
             )
             if color_match_mode == "off":
                 m4 = m.unsqueeze(-1)
