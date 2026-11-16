@@ -214,8 +214,8 @@ models whose repository, file, size and SHA-256 were read from the Hugging Face 
 it needs, and ★ marks the largest general model that fits the memory free right now. Free GPU memory only counts
 when your llama-cpp-python build can use the GPU.
 The catalog also lists three small Hugging Face model folders (Qwen3 0.6B / 1.7B, Qwen2.5 1.5B Instruct) for the
-local transformers backend. A folder is downloaded only when you ask (`/c2c/ai/hf_catalog/download`, from this
-machine only) into `models/LLM/<name>`, every file checked; it appears under that name only once all files pass.
+local transformers backend. A folder is downloaded only when you ask (C2C AI Backends panel > Download a model
+folder, from this machine only) into `models/LLM/<name>`, every file checked; it appears under that name only once all files pass.
 
 - `CIVITAI_API_KEY`, `HF_TOKEN`: your tokens for restricted or gated files. They are sent as a header, never in a URL
   or a log.
