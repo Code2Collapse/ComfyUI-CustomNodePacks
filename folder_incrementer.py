@@ -1605,9 +1605,14 @@ class FolderVersionControl:
             for i in _versions_to_create(value):
                 (scan_dir / f"{prefix}{str(i).zfill(padding)}").mkdir(
                     parents=True, exist_ok=True)
-            nxt = int(value) + 1
+            # L9.264 (CNP-NODES-2 audit): with higher versions already on disk the next run is the scanned max + 1,
+            # not value + 1 - report what will really happen
+            nxt = max(int(value) + 1, _scan_next_version(scan_dir, prefix, padding))
             status = (f"Reserved {prefix}001-{prefix}{str(value).zfill(padding)} "
                       f"for {where}. Next = {prefix}{str(nxt).zfill(padding)}.")
+            if nxt > int(value) + 1:
+                status += (f" (higher versions already exist, up to {prefix}{str(nxt - 1).zfill(padding)}; they were "
+                           "left as they are)")
             return (status, int(value), nxt)
 
         nxt = _scan_next_version(scan_dir, prefix, padding)
