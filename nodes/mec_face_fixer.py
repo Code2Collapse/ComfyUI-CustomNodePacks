@@ -522,6 +522,13 @@ class MECFaceFixer:
                 out_b[fi] = torch.from_numpy(np.clip(composite, 0.0, 1.0).astype(np.float32))
                 info["frames"].append({"frame": fi, "faces": frame_faces, "source": notes.get("source", "none")})
 
+            if info["frames"] and all(f.get("source") == "none" for f in info["frames"]):
+                # L9.264 (CNP-NODES-2 audit): with no detector result and no mask the picture came back untouched
+                # and nothing said why
+                info["warning"] = ("no face was fixed: " + ("face_model is 'none' and no mask is connected - pick a "
+                                   "face detector or connect a face mask" if face_model == "none" else
+                                   "the detector found no face and no mask is connected"))
+                logger.warning("[MECFaceFixer] %s", info["warning"])
             return (out_b, face_mask_acc, json.dumps(info))
         finally:
             try:
