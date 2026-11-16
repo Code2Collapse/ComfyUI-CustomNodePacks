@@ -1619,6 +1619,8 @@ read any file path. Through an SSH tunnel the page still counts as local.
   profile used to overwrite them); `balanced` gives exactly the same result as before (2026-11-16).
 - **SAM Mask Generator (MEC)**: the two GroundingDINO threshold tooltips were swapped; `mask_index` is the model's
   own candidate order, not "best score" (2026-11-16).
+- **Mask + Matting (MEC)**: a `holdout_mask` / `core_mask` of another size is resized to the matte and named in
+  `info` (it was ignored silently) (2026-11-16).
 - **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
 - **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
 - **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
