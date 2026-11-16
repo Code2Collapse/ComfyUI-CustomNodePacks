@@ -50,6 +50,11 @@ logger = logging.getLogger("MEC")
 
 def _get_device() -> str:
     """Detect the best available device without hardcoding 'cuda'."""
+    try:                                           # L9.262 (CNP-NODES-1 audit): ComfyUI's device first (--cpu, the chosen GPU); torch's own guess only outside ComfyUI
+        import comfy.model_management as _mm
+        return str(_mm.get_torch_device())
+    except Exception:  # noqa: BLE001
+        pass
     if torch.cuda.is_available():
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():

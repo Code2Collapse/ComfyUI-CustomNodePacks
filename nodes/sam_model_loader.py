@@ -299,7 +299,11 @@ class SAMModelLoaderMEC:
         }
         torch_dtype = dtype_map.get(dtype, torch.float16)
         if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            try:                                   # L9.262 (CNP-NODES-1 audit): ComfyUI's device first (--cpu, the chosen GPU); torch's own guess only outside ComfyUI
+                import comfy.model_management as _mm
+                device = str(_mm.get_torch_device())
+            except Exception:  # noqa: BLE001
+                device = "cuda" if torch.cuda.is_available() else "cpu"
 
         clean_name = model_name.replace("[download] ", "")
         detected_type = self._detect_type(clean_name) if model_type == "auto" else model_type

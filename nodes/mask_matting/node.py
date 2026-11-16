@@ -1312,7 +1312,11 @@ class MaskOpsMEC:
                 if mat_cls is None:
                     raise ValueError(f"Unknown matter '{mat_key}'.")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        try:                                       # L9.262 (CNP-NODES-1 audit): ComfyUI's device first (--cpu, the chosen GPU); torch's own guess only outside ComfyUI
+            import comfy.model_management as _mm
+            device = str(_mm.get_torch_device())
+        except Exception:  # noqa: BLE001
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         # L7.97: auto_download (default off) is this node's "Allow Download" - for the presets it always was, and now
         # for the backends' own Hugging Face / torch.hub loads too, which used to fetch weights regardless.
         from .._download_policy import allow_downloads

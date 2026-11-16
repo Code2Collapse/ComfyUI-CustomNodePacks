@@ -173,7 +173,14 @@ class SemanticSegmentMEC:
     ):
         B, H, W, C = image.shape
         # MANUAL bug-fix (Apr 2026): full device autodetect (cuda > mps > cpu).
-        if torch.cuda.is_available():
+        try:                                       # L9.262 (CNP-NODES-1 audit): ComfyUI's device first (--cpu, the chosen GPU); torch's own guess only outside ComfyUI
+            import comfy.model_management as _mm
+            device = str(_mm.get_torch_device())
+        except Exception:  # noqa: BLE001
+            device = None
+        if device is not None:
+            pass
+        elif torch.cuda.is_available():
             device = "cuda"
         elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
             device = "mps"
