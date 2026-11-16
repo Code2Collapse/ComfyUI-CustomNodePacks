@@ -1558,6 +1558,10 @@ pasted into it, or found in a workflow saved by an older version, is moved into 
 cleared, so the key is not saved in the workflow or in the image metadata (save the workflow again to remove it from
 an old file). If the key store is unavailable the key stays in the box and a warning says it will be saved.
 
+Every run is billed by Google. When ComfyUI runs the node again with exactly the same request (same model, prompt,
+settings, reference images, seed and batch count), the images from the earlier run this session are returned and
+`info` says `reused` - nothing is paid twice. `C2C_NANO_BANANA_DEDUPE=0` turns this off (2026-11-16).
+
 #### Fixed 2026-11-05
 
 - **Nano Banana (C2C)**: when one call of a batch fails, the images already generated (and billed) are returned,
