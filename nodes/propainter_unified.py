@@ -5,7 +5,7 @@ ProPainterMEC — unified ProPainter node.
 Absorbs the five legacy ProPainter nodes into one mode-switched node:
 
     mode = "temporal"      -> ProPainterTemporalMEC      (video inpaint inside InpaintCrop/Stitch flow)
-    mode = "remove"        -> ProPainterRemoveMEC        (model-free object/wire/plate removal)
+    mode = "remove"        -> ProPainterRemoveMEC        (object/wire/plate removal - needs ProPainter; no model-free fallback yet, L7.92)
     mode = "stitch"        -> ProPainterStitchMEC        (flow-aware composite of inpainted crop)
     mode = "stitch_refine" -> ProPainterStitchRefineMEC  (seam ring refinement of already-stitched output)
     mode = "flow"          -> FlowRefineMEC              (RAFT optical flow viz / warp / consistency)
