@@ -1631,6 +1631,8 @@ read any file path. Through an SSH tunnel the page still counts as local.
   v-prediction models) (2026-11-16).
 - **Fluid Shot Encoder**: stops with a message when OpenCV is missing (it returned the clip unchanged) and when a
   clip would grow past 4x its frames (+16) (2026-11-16).
+- **Folder Version Control**: `set` reports the version the next run will really make when higher versions already
+  exist (2026-11-16).
 - **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
 - **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
 - **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
