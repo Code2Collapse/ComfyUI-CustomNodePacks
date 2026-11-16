@@ -1123,6 +1123,14 @@ class MaskOpsMEC:
                 band_scale=1.0, matte_tile=1024, temporal_stabilise=True,
                 matte_overlap=64, matte_tile_batch=4, split_masks=True, background_plate=None, _viewer=None):
         _plate_note = _multi_note = ""          # L9.39: what info says about the plate / per-object matting
+        _mask_notes: list = []                  # L9.261: holdout / core masks resized to the matte (never dropped)
+
+        def _fit_mask(m, hw, what):
+            if tuple(m.shape[-2:]) == tuple(hw):
+                return m
+            _mask_notes.append(f"{what} was {m.shape[-1]}x{m.shape[-2]}, resized to the matte's {hw[1]}x{hw[0]}")
+            return torch.nn.functional.interpolate(m.float().unsqueeze(1), size=tuple(hw), mode="bilinear",
+                                                   align_corners=False).squeeze(1).clamp(0, 1)
         # Merge slot inputs (positive_coords/negative_coords) with the legacy
         # widget inputs (pos_points/neg_points). Slot wins if both supplied.
         pos_points = positive_coords or pos_points or ""
@@ -2009,13 +2017,13 @@ class MaskOpsMEC:
                         alpha_t = lm
             # 2. Holdout / core overrides (garbage matte semantics).
             if holdout_mask is not None:
-                hm = to_mask(holdout_mask)
+                hm = _fit_mask(to_mask(holdout_mask), alpha_t.shape[-2:], "holdout_mask")
                 if hm.shape[-2:] == alpha_t.shape[-2:]:
                     if hm.shape[0] != alpha_t.shape[0] and hm.shape[0] == 1:
                         hm = hm.expand_as(alpha_t)
                     alpha_t = (alpha_t * (1.0 - hm.to(alpha_t.device))).clamp(0, 1)
             if core_mask is not None:
-                cm = to_mask(core_mask)
+                cm = _fit_mask(to_mask(core_mask), alpha_t.shape[-2:], "core_mask")
                 if cm.shape[-2:] == alpha_t.shape[-2:]:
                     if cm.shape[0] != alpha_t.shape[0] and cm.shape[0] == 1:
                         cm = cm.expand_as(alpha_t)
@@ -2024,6 +2032,9 @@ class MaskOpsMEC:
                 n_planes = object_alphas_out.shape[0]
                 if holdout_mask is not None:
                     hm = to_mask(holdout_mask)
+                    if hm.shape[-2:] != object_alphas_out.shape[-2:]:
+                        hm = torch.nn.functional.interpolate(hm.float().unsqueeze(1), size=tuple(
+                            object_alphas_out.shape[-2:]), mode="bilinear", align_corners=False).squeeze(1).clamp(0, 1)
                     if hm.shape[-2:] == object_alphas_out.shape[-2:]:
                         if hm.shape[0] == 1:
                             hm = hm.expand(n_planes, *hm.shape[-2:])
@@ -2036,6 +2047,9 @@ class MaskOpsMEC:
                         ).clamp(0, 1)
                 if core_mask is not None:
                     cm = to_mask(core_mask)
+                    if cm.shape[-2:] != object_alphas_out.shape[-2:]:
+                        cm = torch.nn.functional.interpolate(cm.float().unsqueeze(1), size=tuple(
+                            object_alphas_out.shape[-2:]), mode="bilinear", align_corners=False).squeeze(1).clamp(0, 1)
                     if cm.shape[-2:] == object_alphas_out.shape[-2:]:
                         if cm.shape[0] == 1:
                             cm = cm.expand(n_planes, *cm.shape[-2:])
@@ -2181,6 +2195,8 @@ class MaskOpsMEC:
                 info_obj["background_plate"] = _plate_note
             if _multi_note:
                 info_obj["multi_object"] = _multi_note
+            if _mask_notes:
+                info_obj["mask_inputs"] = _mask_notes
             if _model_free:
                 info_obj["approximate"] = True
                 info_obj["model_free"] = _model_free

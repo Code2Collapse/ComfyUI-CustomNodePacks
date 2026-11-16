@@ -271,17 +271,25 @@ def finish(res: EngineResult, image: torch.Tensor, backend: str, kw: Dict[str, A
     frames = image[:B]
     alpha = alpha0
 
-    # holdout / core overrides - the same rules as segment + matte (only a mask of the same size counts; one frame
-    # covers the batch)
+    # holdout / core overrides - the same rules as segment + matte (a mask of another size is resized to the matte
+    # and named in info - L9.261, it used to be ignored silently; one frame covers the batch)
     holdout_mask, core_mask = kw.get("holdout_mask"), kw.get("core_mask")
+    mask_notes = []
+
+    def _fit(m, what):
+        if tuple(m.shape[-2:]) == tuple(alpha.shape[-2:]):
+            return m
+        mask_notes.append(f"{what} was {m.shape[-1]}x{m.shape[-2]}, resized to the matte's {W}x{H}")
+        return torch.nn.functional.interpolate(m.float().unsqueeze(1), size=(H, W), mode="bilinear",
+                                               align_corners=False).squeeze(1).clamp(0, 1)
     if holdout_mask is not None:
-        hm = to_mask(holdout_mask)
+        hm = _fit(to_mask(holdout_mask), "holdout_mask")
         if hm.shape[-2:] == alpha.shape[-2:]:
             if hm.shape[0] != alpha.shape[0] and hm.shape[0] == 1:
                 hm = hm.expand_as(alpha)
             alpha = (alpha * (1.0 - hm.to(alpha.device))).clamp(0, 1)
     if core_mask is not None:
-        cm = to_mask(core_mask)
+        cm = _fit(to_mask(core_mask), "core_mask")
         if cm.shape[-2:] == alpha.shape[-2:]:
             if cm.shape[0] != alpha.shape[0] and cm.shape[0] == 1:
                 cm = cm.expand_as(alpha)
@@ -367,6 +375,7 @@ def finish(res: EngineResult, image: torch.Tensor, backend: str, kw: Dict[str, A
                       "lightwrap_strength": lw_strength, "holdout": holdout_mask is not None,
                       "core": core_mask is not None},
         "trimap": trimap_src,
+        **({"mask_inputs": mask_notes} if mask_notes else {}),
         "bbox_format": "x,y,w,h" if res.bbox_xywh else "x0,y0,x1,y1",
         "split_masks": split,
         "score": score_src,
