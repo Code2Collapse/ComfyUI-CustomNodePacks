@@ -46,6 +46,47 @@ export function linkOf(graph, id) {
   return (L instanceof Map ? L.get(id) : L?.[id]) ?? null;
 }
 
+// ── native link reroutes (L9.249 V3) ─────────────────────────────────────────────────────────────────────────
+// Frontend 1.53.10 (verified in its bundle): a link carries `parentId` = the reroute nearest its target; each reroute
+// in `graph.reroutes` (a Map) carries its own `parentId` up the chain; `node.connect(slot, target, targetSlot,
+// afterRerouteId)` and `SubgraphInput/SubgraphOutput.connect(slot, node, afterRerouteId)` take that id;
+// `graph.setReroute({id, parentId, pos})` re-creates one under its old id. Legacy "Reroute" NODES are handled by
+// absSource (virtual nodes), not here.
+
+/** The parent reroute id of a link (null when it has none). */
+export const parentOf = (l) => (l?.parentId ?? null);
+
+/** The reroute chain behind `parentId`, target side first: [{id, parentId, pos}], [] for none, null when a parent
+ *  id names a reroute the graph does not have (or the chain loops). */
+export function rerouteChain(graph, parentId) {
+  const out = [];
+  const seen = new Set();
+  let id = parentId ?? null;
+  while (id != null) {
+    if (seen.has(id) || seen.size > 256) return null;
+    seen.add(id);
+    const r = graph?.reroutes?.get?.(id);
+    if (!r) return null;
+    const pos = r.pos ?? r.position;
+    out.push({ id: r.id, parentId: r.parentId ?? null, pos: pos ? [pos[0], pos[1]] : [0, 0] });
+    id = r.parentId ?? null;
+  }
+  return out;
+}
+
+/** Make every reroute of `chain` exist again (root side first) under its old id and parent. False when one cannot
+ *  be made (no setReroute on this frontend, or it refused). */
+export function ensureReroutes(graph, chain) {
+  if (!chain?.length) return true;
+  for (const r of [...chain].reverse()) {
+    if (graph?.reroutes?.get?.(r.id)) continue;
+    if (typeof graph?.setReroute !== "function") return false;
+    try { graph.setReroute({ id: r.id, parentId: r.parentId ?? undefined, pos: [...r.pos] }); } catch (_) { return false; }
+    if (!graph.reroutes?.get?.(r.id)) return false;
+  }
+  return true;
+}
+
 // ── execution paths (mirrors frontend 1.53.10 getExecutionIdByNode) ─────────────────────────────────────────────
 function pathToGraph(target, from) {
   for (const n of nodesOf(from)) {
@@ -135,8 +176,18 @@ export function snapshot(app) {
 
 export async function restore(app, snap) {
   const wf = app.extensionManager?.workflow?.activeWorkflow ?? null;
-  await app.loadGraphData(JSON.parse(JSON.stringify(snap.state)), false, false, wf,
-    { checkForRerouteMigration: false, silentAssetErrors: true });
+  // L9.249 V1: exactly like the frontend's own undo (ChangeTracker.updateState, 1.53.10) the tracker is told a state
+  // is being restored: without it loadGraphData's beforeLoadNewGraph -> deactivate() -> captureCanvasState() records
+  // the HALF-CONVERTED graph as an undo step, and afterLoadNewGraph -> reset() overwrites the workflow's initial state.
+  const ct = wf?.changeTracker ?? null;
+  const had = ct ? ct._restoringState : undefined;
+  if (ct) ct._restoringState = true;
+  try {
+    await app.loadGraphData(JSON.parse(JSON.stringify(snap.state)), false, false, wf,
+      { checkForRerouteMigration: false, silentAssetErrors: true });
+  } finally {
+    if (ct) ct._restoringState = had ?? false;
+  }
   if (snap.inside) {                                           // back into the subgraph the user was editing
     const root = app.rootGraph ?? app.graph;
     const sub = root.subgraphs?.get?.(snap.inside);
@@ -156,7 +207,8 @@ export function captureBoundary(graph, nodes) {
       if (!l) return;
       const rec = { target_id: String(n.id), target_input: i, target_name: inp.name, type: String(inp.type ?? l.type ?? "*"),
         widget: inp.widget?.name ?? null, origin_id: String(l.origin_id), origin_slot: l.origin_slot,
-        origin_is_io: io.in != null && String(l.origin_id) === String(io.in) };
+        origin_is_io: io.in != null && String(l.origin_id) === String(io.in),
+        parent: parentOf(l), chain: rerouteChain(graph, parentOf(l)) };
       if (sel.has(String(l.origin_id))) internal.push(rec); else entering.push(rec);
     });
     (n.outputs || []).forEach((out, j) => (out?.links || []).forEach((lid) => {
@@ -164,7 +216,8 @@ export function captureBoundary(graph, nodes) {
       if (!l || sel.has(String(l.target_id))) return;
       leaving.push({ origin_id: String(n.id), origin_slot: j, origin_name: out.name, type: String(out.type ?? l.type ?? "*"),
         target_id: String(l.target_id), target_input: l.target_slot,
-        target_is_io: io.out != null && String(l.target_id) === String(io.out) });
+        target_is_io: io.out != null && String(l.target_id) === String(io.out),
+        parent: parentOf(l), chain: rerouteChain(graph, parentOf(l)) });
     }));
   }
   // nested subgraph nodes: how many of their definition's output links resolve now (frontend 1.53.10 loses them when
@@ -341,19 +394,83 @@ export function verifyConversion(graph, sg, manifest) {
     throw new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `The wire from "${rec.origin_name}" (node ${rec.origin_id}) ` +
       "did not survive the conversion and cannot be restored unambiguously; nothing was changed.");
   }
+  verifyBoundaryReroutes(graph, sg, manifest, { entering: inMap, leaving: outMap });
   return { entering: inMap, leaving: outMap };
+}
+
+const REROUTE_LOST = "passes through reroute dots that could not be kept on the new wire. Remove those reroutes (or " +
+  "protect without them) and try again; nothing was changed.";
+
+/**
+ * L9.249 V3: every boundary wire that ran through native link reroutes still runs through the SAME reroute chain
+ * outside the new subgraph. A wire whose reroutes were dropped is re-made on its exact socket with its old parent
+ * reroute (the reroutes re-created under their old ids if the conversion removed them); a wire that cannot carry
+ * its chain any more (two wires from one output through different reroutes share ONE subgraph input) aborts.
+ * Records whose chain was already broken before the protect (chain null) are not judged.
+ */
+export function verifyBoundaryReroutes(graph, sg, manifest, maps) {
+  const byK = new Map();
+  manifest.entering.forEach((rec, idx) => {
+    if (rec.chain === null || rec.chain === undefined) return;
+    const k = maps.entering[idx];
+    if (!byK.has(k)) byK.set(k, []);
+    byK.get(k).push(rec);
+  });
+  for (const [k, recs] of byK) {
+    const want = new Set(recs.map((r) => r.parent ?? null));
+    if (want.size > 1) {
+      throw new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `The wires from node ${recs[0].origin_id} into the ` +
+        `selection go through different reroute dots but become ONE vault input; that wire ${REROUTE_LOST}`);
+    }
+    const w = [...want][0];
+    const rec = recs[0];
+    if (parentOf(linkOf(graph, sg.inputs?.[k]?.link)) === w) continue;
+    if (!ensureReroutes(graph, rec.chain)) {
+      throw new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `The wire into "${rec.target_name}" (node ` +
+        `${rec.target_id}) ${REROUTE_LOST}`);
+    }
+    inGraph(graph, () => {
+      if (rec.origin_is_io) graph.inputNode?.slots?.[rec.origin_slot]?.connect(sg.inputs[k], sg, w ?? undefined);
+      else (graph.getNodeById?.(rec.origin_id))?.connect(rec.origin_slot, sg, k, w ?? undefined);
+    });
+    const again = linkOf(graph, sg.inputs?.[k]?.link);
+    if (!again || String(again.origin_id) !== rec.origin_id || again.origin_slot !== rec.origin_slot || parentOf(again) !== w) {
+      throw new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `The wire into "${rec.target_name}" (node ` +
+        `${rec.target_id}) ${REROUTE_LOST}`);
+    }
+  }
+  const leavingLink = (j, rec) => (sg.outputs?.[j]?.links || []).map((lid) => linkOf(graph, lid))
+    .find((L) => L && String(L.target_id) === rec.target_id && L.target_slot === rec.target_input) ?? null;
+  manifest.leaving.forEach((rec, idx) => {
+    if (rec.chain === null || rec.chain === undefined) return;
+    const j = maps.leaving[idx];
+    const w = rec.parent ?? null;
+    if (parentOf(leavingLink(j, rec)) === w) return;
+    const fail = () => new ProtectError("SUBGRAPH_INTERFACE_VALIDATION", `The wire from "${rec.origin_name}" (node ` +
+      `${rec.origin_id}) ${REROUTE_LOST}`);
+    if (!ensureReroutes(graph, rec.chain)) throw fail();
+    inGraph(graph, () => {
+      if (rec.target_is_io) graph.outputNode?.slots?.[rec.target_input]?.connect(sg.outputs[j], sg, w ?? undefined);
+      else {
+        const target = graph.getNodeById?.(rec.target_id);
+        if (target) sg.connect(j, target, rec.target_input, w ?? undefined);
+      }
+    });
+    const again = leavingLink(j, rec);
+    if (!again || parentOf(again) !== w) throw fail();
+  });
 }
 
 /** The sockets of `node` as {origin|target, slot} lists, for comparing a subgraph node with its vault. */
 export function outerWires(graph, node) {
   const ins = (node.inputs || []).map((inp, i) => {
     const l = linkOf(graph, inp?.link);
-    return l ? { i, origin: String(l.origin_id), slot: l.origin_slot } : null;
+    return l ? { i, origin: String(l.origin_id), slot: l.origin_slot, parent: parentOf(l) } : null;
   }).filter(Boolean);
   const outs = [];
   (node.outputs || []).forEach((o, j) => (o?.links || []).forEach((lid) => {
     const l = linkOf(graph, lid);
-    if (l) outs.push({ j, target: String(l.target_id), slot: l.target_slot });
+    if (l) outs.push({ j, target: String(l.target_id), slot: l.target_slot, parent: parentOf(l) });
   }));
   return { ins, outs };
 }
@@ -365,7 +482,8 @@ export function outerWires(graph, node) {
  */
 export function verifyVaultWiring(graph, vault, before, vaultSlotOf, promotedIdx = new Set()) {
   const after = outerWires(graph, vault);
-  const key = (w) => `${w.i ?? w.j}|${w.origin ?? w.target}|${w.slot}`;
+  // the parent reroute is part of a wire's identity (L9.249 V3): a vault wire that lost its reroutes is a difference
+  const key = (w) => `${w.i ?? w.j}|${w.origin ?? w.target}|${w.slot}|${w.parent ?? ""}`;
   const expectIns = before.ins.filter((w) => !promotedIdx.has(w.i)).map((w) => ({ ...w, i: vaultSlotOf(w.i) }));
   const want = new Set([...expectIns.map(key), ...before.outs.map(key)]);
   const have = new Set([...after.ins.map(key), ...after.outs.map(key)]);
@@ -373,7 +491,7 @@ export function verifyVaultWiring(graph, vault, before, vaultSlotOf, promotedIdx
   const extra = [...have].filter((k) => !want.has(k));
   if (expectIns.some((w) => w.i < 0) || missing.length || extra.length) {
     throw new ProtectError("FINAL_GRAPH_VALIDATION", `The vault's wires differ from the subgraph's (missing ` +
-      `${missing.length}, unexpected ${extra.length}); the original graph was restored.`);
+      `${missing.length}, unexpected ${extra.length}; a wire's reroute dots count); the original graph was restored.`);
   }
 }
 
@@ -381,24 +499,123 @@ export function verifyVaultWiring(graph, vault, before, vaultSlotOf, promotedIdx
  * Run `steps` (in STAGES order) with the graph snapshotted first; any throw restores the snapshot and rethrows a
  * ProtectError naming the stage. `ctx.stage` is updated as stages start so errors from helpers are attributed.
  */
+// L9.249 V2: one protect at a time per page (a double menu click, or a second protect while the first awaits the
+// server). Module-level: every caller of runTransaction shares it.
+let IN_FLIGHT = false;
+export const BUSY_MESSAGE = "Another Protect is still running. Wait for it to finish, then try again.";
+export function protectInFlight() { return IN_FLIGHT; }
+
+/**
+ * L9.249 V1: the active workflow's ChangeTracker (frontend 1.53.10, verified in its bundle: undoQueue / redoQueue /
+ * activeState / initialState / changeCount / _restoringState, captureCanvasState(), updateModified(), undo(), redo(),
+ * static MAX_HISTORY). One protect = exactly ONE undo step (pre-protect graph -> graph with the vault); a rollback
+ * leaves the undo history, the redo history and the initial (saved) state exactly as they were; Undo / Redo keys are
+ * paused while the transaction runs (an undo in the middle would load another graph under it).
+ *
+ * Measured live on 1.53.10 (2026-11-15): the beforeChange / afterChange counter alone is NOT enough - frontend calls
+ * inside the conversion / node removal are unbalanced and let captureCanvasState() record the half-converted graph.
+ * So the tracker's own "not recording" flag (_restoringState, which its undo sets around loadGraphData) is held for
+ * the whole transaction, and the step is written here, not left to a capture.
+ */
+export function trackerGuard(app, { settleMs = 300 } = {}) {
+  const ct = app?.extensionManager?.workflow?.activeWorkflow?.changeTracker ?? null;
+  if (!ct || typeof ct.beforeChange !== "function" || !Array.isArray(ct.undoQueue)) {
+    return { begin() {}, commit() {}, async rollback() {}, tracker: null };
+  }
+  const paused = async () => { console.info("[C2C Vault] Undo / Redo wait until Protect has finished."); };
+  const own = (k) => (Object.prototype.hasOwnProperty.call(ct, k) ? ct[k] : null);
+  const now = (a) => { const r = a.rootGraph ?? a.graph; return JSON.parse(JSON.stringify(r.serialize())); };
+  let saved = null;
+  const release = () => {
+    for (const k of ["undo", "redo"]) { if (saved.own[k]) ct[k] = saved.own[k]; else delete ct[k]; }
+    ct._restoringState = saved.restoring;
+    ct.changeCount = saved.count;                       // whatever unbalanced calls did in between
+  };
+  return {
+    tracker: ct,
+    begin() {
+      // edits made just before Protect become their own undo step, so the protect step holds only the protect
+      try { (ct.captureCanvasState ?? ct.checkState)?.call(ct); } catch (_) { /* nothing pending */ }
+      saved = { undo: [...ct.undoQueue], redo: Array.isArray(ct.redoQueue) ? [...ct.redoQueue] : null,
+        pre: ct.activeState, initial: ct.initialState, count: ct.changeCount ?? 0, restoring: ct._restoringState ?? false,
+        own: { undo: own("undo"), redo: own("redo") } };
+      ct.beforeChange();
+      ct._restoringState = true;
+      ct.undo = paused;
+      ct.redo = paused;
+    },
+    commit(a = app) {
+      const after = now(a);
+      ct.undoQueue.length = 0;
+      ct.undoQueue.push(...saved.undo, saved.pre);
+      const max = ct.constructor?.MAX_HISTORY;
+      while (Number.isInteger(max) && ct.undoQueue.length > max) ct.undoQueue.shift();
+      ct.activeState = after;
+      if (Array.isArray(ct.redoQueue)) ct.redoQueue.length = 0;
+      release();
+      try { ct.updateModified?.(saved.pre); } catch (_) { /* the modified dot only */ }
+    },
+    async rollback(a = app) {
+      // the restored graph IS the pre-protect graph. Extensions finish their own load work a while later (measured
+      // 2026-11-15: node bookmarks write extra.c2c from a 50 ms timer and a 250 ms debounced graph-change hook after
+      // loadGraphData), so wait - still not recording - until the graph stops changing (>= 300 ms, at most ~1 s),
+      // then take it as the current state without a step.
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      let cur = null;
+      try {
+        await wait(settleMs);
+        cur = JSON.stringify(now(a));
+        for (let i = 0; i < 7; i++) {
+          await wait(Math.max(1, settleMs / 3));
+          const next = JSON.stringify(now(a));
+          if (next === cur) break;
+          cur = next;
+        }
+      } catch (_) { cur = null; }
+      ct.activeState = cur ? JSON.parse(cur) : saved.pre;
+      ct.undoQueue.length = 0;
+      ct.undoQueue.push(...saved.undo);
+      if (Array.isArray(ct.redoQueue) && saved.redo) { ct.redoQueue.length = 0; ct.redoQueue.push(...saved.redo); }
+      ct.initialState = saved.initial;
+      release();
+    },
+  };
+}
+
 export async function runTransaction(app, steps) {
-  const ctx = { stage: "GRAPH_SNAPSHOT" };
-  const snap = snapshot(app);
+  if (IN_FLIGHT) {
+    const e = new ProtectError("SELECTION_VALIDATION", BUSY_MESSAGE);
+    e.busy = true;
+    throw e;
+  }
+  IN_FLIGHT = true;
+  const tg = trackerGuard(app);
   try {
-    for (const [stage, fn] of steps) {
-      ctx.stage = stage;
-      await fn(ctx);
-    }
-    ctx.stage = "COMMIT";
-    return ctx;
-  } catch (e) {
-    const stage = e?.stage || ctx.stage;
+    const ctx = { stage: "GRAPH_SNAPSHOT" };
+    const snap = snapshot(app);
+    tg.begin();
     try {
-      await restore(app, snap);
-    } catch (re) {
-      throw new ProtectError(stage, `${e?.message || e} - and restoring the original graph FAILED (${re?.message || re}); ` +
-        "use Undo or reload the workflow.");
+      for (const [stage, fn] of steps) {
+        ctx.stage = stage;
+        await fn(ctx);
+      }
+      ctx.stage = "COMMIT";
+      tg.commit(app);
+      return ctx;
+    } catch (e) {
+      const stage = e?.stage || ctx.stage;
+      try {
+        await restore(app, snap);
+      } catch (re) {
+        // the graph could not be put back: record what is there as ONE step, so Undo returns to the original
+        try { tg.commit(app); } catch (_) { /* the graph error below is the one to report */ }
+        throw new ProtectError(stage, `${e?.message || e} - and restoring the original graph FAILED (${re?.message || re}); ` +
+          "use Undo or reload the workflow.");
+      }
+      await tg.rollback(app);
+      throw e instanceof ProtectError ? e : new ProtectError(stage, String(e?.message || e));
     }
-    throw e instanceof ProtectError ? e : new ProtectError(stage, String(e?.message || e));
+  } finally {
+    IN_FLIGHT = false;
   }
 }

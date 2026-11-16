@@ -1,6 +1,7 @@
 """Routes of the protected-subgraph vault (A18, docs/VAULT_DESIGN_A18.md).
 
   POST /c2c_vault/sg/protect     selection / subgraph -> encrypted vault (password, profile, recipients, editors)
+  POST /c2c_vault/sg/protect/abort  L9.249: a protect failed after sealing - drop the run key it stored for that tab
   POST /c2c_vault/sg/unlock_run  Locked profile: password once per browser tab (key kept in memory for that tab)
   POST /c2c_vault/sg/forget_run  the tab closed: drop its run keys
   POST /c2c_vault/sg/open        password + second factor + editor check -> the inner graph for native editing
@@ -36,6 +37,12 @@ ACCESS_IDLE_SECONDS = 15 * 60          # an access session (L9.48) only lives wh
 LABEL_MAX = 60
 _lock = threading.Lock()
 _EDITS: dict[str, dict] = {}
+# L9.249 V6: vaults this server just sealed, vault_id -> (client_id, time). A protect that fails in the browser AFTER
+# sealing (node insertion, wiring, final check) restores the graph; /protect/abort then drops the run key protect()
+# stored - only for the tab that made the vault, and only shortly after.
+PENDING_SECONDS = 15 * 60
+PENDING_MAX = 256
+_PENDING: dict[str, tuple] = {}
 
 
 def _hash(payload: str) -> str:
@@ -117,8 +124,36 @@ def protect(body: dict) -> dict:
                            recipients=recipients)
     if profile == "locked" and body.get("client_id"):
         SS.RUN_SESSIONS.put(str(body["client_id"]), vault_id, kek)   # the creator can run it right away
+        _note_pending(vault_id, str(body["client_id"]))
     return {"vault_id": vault_id, "payload": payload, "profile": profile,
             "outputs_node": bool(body.get("outputs_node")), "node_count": len(api["nodes"])}
+
+
+def _note_pending(vault_id: str, client_id: str) -> None:
+    now = time.time()
+    with _lock:
+        for v in [v for v, (_c, at) in _PENDING.items() if now - at > PENDING_SECONDS]:
+            _PENDING.pop(v, None)
+        while len(_PENDING) >= PENDING_MAX:
+            _PENDING.pop(next(iter(_PENDING)), None)               # oldest first (insertion order)
+        _PENDING[vault_id] = (client_id, now)
+
+
+def protect_abort(body: dict) -> dict:
+    """L9.249 V6: the browser could not finish the protect it sealed (the graph went back to the original nodes).
+    Drop the run key protect() stored for that vault - only when this server sealed it for the SAME tab within
+    PENDING_SECONDS. Anything else is a no-op answer (dropped false), never an error: the graph is already restored."""
+    from . import secure_subgraph as SS
+
+    vault_id, client_id = str(body.get("vault_id") or ""), str(body.get("client_id") or "")
+    with _lock:
+        rec = _PENDING.get(vault_id)
+        ok = bool(rec and client_id and rec[0] == client_id and time.time() - rec[1] <= PENDING_SECONDS)
+        if ok:
+            _PENDING.pop(vault_id, None)
+    if ok:
+        SS.RUN_SESSIONS.drop_vault(vault_id)                     # a brand-new vault: only this tab ever had its key
+    return {"ok": True, "dropped": ok}
 
 
 def _iface(interface: dict) -> dict:
@@ -458,6 +493,7 @@ def register_routes(server) -> None:
         return handler
 
     routes.post("/c2c_vault/sg/protect")(wrap(protect, 400))
+    routes.post("/c2c_vault/sg/protect/abort")(wrap(protect_abort))
     routes.post("/c2c_vault/sg/unlock_run")(wrap(unlock_run))
     routes.post("/c2c_vault/sg/forget_run")(wrap(forget_run))
     routes.post("/c2c_vault/sg/open")(wrap(open_for_edit))
