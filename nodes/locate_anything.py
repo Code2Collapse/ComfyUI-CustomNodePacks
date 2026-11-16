@@ -205,7 +205,18 @@ class LocateAnythingGroundingMEC:
 
         model, tokenizer, processor = self._load_model(model_path, device)
 
+        # L9.262 (CNP-NODES-1 audit): one 3B generation per frame ran with no way to stop it and no progress
+        try:
+            import comfy.model_management as _mm
+            import comfy.utils as _cu
+            _check = getattr(_mm, "throw_exception_if_processing_interrupted", None)
+            _pbar = _cu.ProgressBar(B) if hasattr(_cu, "ProgressBar") else None
+        except Exception:  # noqa: BLE001 - outside ComfyUI (tests): no interrupt / progress
+            _check, _pbar = None, None
+
         for b in range(B):
+            if _check is not None:
+                _check()
             img_np = (image[b].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
             pil_img = Image.fromarray(img_np, "RGB")
             W, H = pil_img.size
@@ -287,6 +298,8 @@ class LocateAnythingGroundingMEC:
             all_bboxes.append(bboxes)
             all_annotated.append(annotated)
             all_raw.append(answer_str)
+            if _pbar is not None:
+                _pbar.update_absolute(b + 1, B)
 
         flat_bboxes = [box for frame_boxes in all_bboxes for box in frame_boxes]
 
