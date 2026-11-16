@@ -147,6 +147,15 @@ class AsymFlowSamplerPatch:
                 "comfy.model_sampling is unavailable; AsymFlowSamplerPatch "
                 "requires a ComfyUI runtime."
             )
+        # L9.264 (CNP-NODES-2 audit): the signal-shift schedule is for FLOW models (CONST prediction: Flux, SD3, Wan,
+        # H3 ...). On an EPS / v-prediction model it silently produced wrong output; refuse instead.
+        existing0 = getattr(getattr(model, "model", None), "model_sampling", None)
+        flow_types = tuple(t for t in (getattr(_ms, "CONST", None), getattr(_ms, "COSMOS_RFLOW", None)) if t)
+        if existing0 is not None and flow_types and not isinstance(existing0, flow_types):
+            raise ValueError(
+                "AsymFlow Sampler Patch only works with flow models (Flux, SD3, Wan, H3 and other rectified-flow "
+                f"models). This model predicts with {type(existing0).__name__}, which this schedule would get wrong. "
+                "Remove the node for this model.")
         asym_cls = _make_asymflow_sampling_cls()
 
         patched = model.clone()
