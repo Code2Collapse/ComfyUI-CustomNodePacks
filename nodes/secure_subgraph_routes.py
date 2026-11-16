@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import struct
 import threading
 import time
 from typing import Any, Optional
@@ -36,6 +37,7 @@ EDIT_IDLE_SECONDS = 6 * 3600           # an edit session also ends when the user
 ACCESS_IDLE_SECONDS = 15 * 60          # an access session (L9.48) only lives while its dialog is open
 LABEL_MAX = 60
 _lock = threading.Lock()
+_KDF_GATE = threading.Semaphore(1)     # L9.263: unlock_run derives one password key at a time (RAM; see unlock_run)
 _EDITS: dict[str, dict] = {}
 # L9.249 V6: vaults this server just sealed, vault_id -> (client_id, time). A protect that fails in the browser AFTER
 # sealing (node insertion, wiring, final check) restores the graph; /protect/abort then drops the run key protect()
@@ -167,19 +169,45 @@ def unlock_run(body: dict) -> dict:
     from . import secure_subgraph as SS
     from . import vault_crypto, vault_crypto_v2 as v2
 
+    from .vault_node import SESSIONS as GUESSES
+
     payload, vault_id = str(body.get("payload") or ""), str(body.get("vault_id") or "")
     client_id = str(body.get("client_id") or "")
     if not client_id:
         raise VaultError("No browser tab id - reload the page.")
-    if v2.is_v2(payload):
-        _plain, kek, _p = v2.open_with_password(payload, str(body.get("password") or ""), vault_id=vault_id)
-    else:
-        from .vault_crypto import _unpack_header, derive_key
-        blob = base64.b64decode(payload.encode("ascii"), validate=True)
-        hdr = _unpack_header(blob)
-        kek = derive_key(str(body.get("password") or ""), hdr[2], hdr[3])
-        from .vault_node import _unlock_with_key
-        _unlock_with_key(payload, kek, vault_id)              # proves the password before keeping the key
+    # L9.263: the same failed-attempt lockout as the legacy unlock (per vault id: the guesser already has the file,
+    # so capping guesses against one blob is what matters). PermissionError -> 429 in wrap().
+    wait = GUESSES.locked_out(vault_id)
+    if wait > 0:
+        raise PermissionError(f"Too many failed attempts. Try again in {int(wait // 60) + 1} minute(s).")
+    try:
+        # one KDF at a time: each Argon2id takes its header's memory (128 MiB now, up to 1 GiB allowed), so parallel
+        # guesses could exhaust RAM. NOTE (measured 2026-11-16, docs/evidence/L9.263): cryptography 48's Argon2id
+        # holds the GIL for the whole derivation, so even in the executor the event loop only gets the switch
+        # interval between KDFs while guesses queue up; a GIL-free KDF (e.g. argon2-cffi) needs an owner decision.
+        with _KDF_GATE:
+            if v2.is_v2(payload):
+                _plain, kek, _p = v2.open_with_password(payload, str(body.get("password") or ""), vault_id=vault_id)
+            else:
+                from .vault_crypto import _unpack_header, derive_key
+                try:
+                    blob = base64.b64decode(payload.encode("ascii"), validate=True)
+                    hdr = _unpack_header(blob)
+                except (ValueError, UnicodeEncodeError, IndexError, struct.error):   # binascii.Error: a ValueError
+                    err = VaultError("This vault's data is damaged (it is not a vault payload). Reload the workflow, "
+                                     "or ask its author for a fresh copy.")
+                    err.status = 400                          # a bad request, not a refused password (was a 500)
+                    raise err from None
+                except VaultError as err:                     # "Not a C2C vault payload." - a bad request too
+                    err.status = 400
+                    raise
+                kek = derive_key(str(body.get("password") or ""), hdr[2], hdr[3])
+                from .vault_node import _unlock_with_key
+                _unlock_with_key(payload, kek, vault_id)      # proves the password before keeping the key
+    except VaultError:
+        GUESSES.note_failure(vault_id)
+        raise
+    GUESSES.clear_failures(vault_id)
     SS.RUN_SESSIONS.put(client_id, vault_id, kek)
     return {"ok": True}
 
@@ -476,25 +504,30 @@ def register_routes(server) -> None:
 
     routes = server.routes
 
-    def wrap(fn, status_on_error=403):
+    def wrap(fn, status_on_error=403, offload=False):
         async def handler(request):
             try:
                 body = await request.json() if request.method == "POST" else {}
             except Exception:  # noqa: BLE001
                 body = {}
             try:
-                out = fn(body)
+                if offload:                                   # L9.263: the password KDF runs off the event loop
+                    import asyncio
+                    out = await asyncio.get_running_loop().run_in_executor(None, fn, body)
+                else:
+                    out = fn(body)
                 status = 200 if out.get("ok", True) else 403
                 return web.json_response({"ok": True, **out} if "ok" not in out else out, status=status)
             except VaultError as exc:
-                return web.json_response({"ok": False, "error": str(exc)}, status=status_on_error)
+                return web.json_response({"ok": False, "error": str(exc)},
+                                         status=getattr(exc, "status", None) or status_on_error)
             except PermissionError as exc:
                 return web.json_response({"ok": False, "error": str(exc)}, status=429)
         return handler
 
     routes.post("/c2c_vault/sg/protect")(wrap(protect, 400))
     routes.post("/c2c_vault/sg/protect/abort")(wrap(protect_abort))
-    routes.post("/c2c_vault/sg/unlock_run")(wrap(unlock_run))
+    routes.post("/c2c_vault/sg/unlock_run")(wrap(unlock_run, offload=True))
     routes.post("/c2c_vault/sg/forget_run")(wrap(forget_run))
     routes.post("/c2c_vault/sg/open")(wrap(open_for_edit))
     routes.post("/c2c_vault/sg/commit")(wrap(commit, 409))

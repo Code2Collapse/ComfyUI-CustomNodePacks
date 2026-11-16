@@ -97,6 +97,17 @@ def _current_client_id() -> Optional[str]:
         return None
 
 
+def needs_tab_key(payload: str) -> bool:
+    """Does running this payload need a browser tab's key (the Locked profile, v2 or v1)? Unreadable -> True."""
+    from . import vault_crypto, vault_crypto_v2 as v2
+    try:
+        if v2.is_v2(payload):
+            return v2.parse(payload)["mode"] == v2.MODE_LOCKED
+        return vault_crypto.payload_mode(payload) == vault_crypto.MODE_LOCKED
+    except Exception:  # noqa: BLE001 - the run itself reports a damaged payload
+        return True
+
+
 def open_for_run(payload: str, vault_id: str, client_id: Optional[str] = None) -> dict:
     """Decrypt for execution with whatever this install / tab is allowed to use. Raises VaultError with what is
     missing, never with anything from inside the vault."""

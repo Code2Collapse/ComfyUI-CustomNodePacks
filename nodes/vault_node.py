@@ -108,6 +108,11 @@ class _SessionStore:
             else:
                 self._keys.pop(vault_id, None)
 
+    def clear_failures(self, vault_id: str) -> None:
+        """A correct password ends the count (as put() does for the legacy unlock)."""
+        with self._lock:
+            self._fails.pop(vault_id, None)
+
     def note_failure(self, vault_id: str) -> None:
         with self._lock:
             count, _ = self._fails.get(vault_id, (0, 0.0))
@@ -127,6 +132,34 @@ class _SessionStore:
 
 
 SESSIONS = _SessionStore()
+
+
+# -- L9.263: a RUN uses only the key of the browser tab whose prompt is running ---------------------------------
+# SESSIONS above is global (any client): it still drives the legacy routes' lockout and the node's status display,
+# but it never opens a vault for execution any more. Before (measured 2026-11-16, docs/evidence/L9.263): after one
+# legacy /lock or /unlock by ANY tab, any client could POST a prompt with this node + the payload and run it.
+def _tab_put(client_id, vault_id: str, key: bytes) -> None:
+    """Keep `key` for this browser tab only (secure_subgraph.RUN_SESSIONS: dropped when the tab closes)."""
+    if client_id:
+        from . import secure_subgraph as SS
+        SS.RUN_SESSIONS.put(str(client_id), str(vault_id), key)
+
+
+def _tab_key(vault_id: str):
+    """The key the tab whose prompt is running holds for this vault, or None (no tab = no key)."""
+    from . import secure_subgraph as SS
+    client_id = SS._current_client_id()
+    return SS.RUN_SESSIONS.get(client_id, str(vault_id)) if client_id else None
+
+
+def locked_fingerprint():
+    """HELD BACK (owner question Q17, not called): IS_CHANGED of a vault that needs a per-tab key: a value that never equals a cached one, so the key check runs
+    on every queue. Core 0.39 trusts an `is_changed` value POSTED inside the prompt (execution.py IsChangedCache),
+    and /history shows every stored one to any client - so any stable fingerprint (even one naming the client or a
+    server token) can be copied by another tab to reach the cached outputs (measured, docs/evidence/L9.263). NaN is
+    the one value no posted copy can equal. Only the vault node re-runs (decrypt + re-expand); the nodes inside a
+    native vault keep their own cache."""
+    return float("nan")
 
 
 def _vault_input_types() -> dict[str, Any]:
@@ -217,6 +250,8 @@ class C2C_VaultLocked:
             return digest
         # The session state is part of the cache key: after "Lock session" the next queue checks the password
         # again instead of serving the cached result (which made Lock session look like it did nothing).
+        # L9.263 #4 (another tab reaching cached outputs) needs an owner decision - locked_fingerprint() below is
+        # the measured fix, held back because NaN disables caching downstream (owner question Q17).
         state = "open" if SESSIONS.get(str(kwargs.get("vault_id") or "")) is not None else "locked"
         return f"{digest}:{state}"
 
@@ -224,13 +259,13 @@ class C2C_VaultLocked:
         if not (vault_payload or "").strip():
             raise RuntimeError("C2C Vault: no payload. Lock a selection first.")
 
-        key = SESSIONS.get(vault_id)
+        key = _tab_key(vault_id)                        # L9.263: this tab's unlock only, never another client's
         if key is None:
             # Deliberately says nothing about the contents. Before unlock the node
             # must not hint at what is inside, how many nodes, or what they need.
             raise RuntimeError(
                 "Vault locked. Type the password in the vault node's password field and press Enter "
-                "(or click Unlock), then queue again. The unlock lasts for this ComfyUI session."
+                "(or click Unlock), then queue again. The unlock lasts while this browser tab stays open."
             )
 
         interface = _parse_interface(vault_interface)
@@ -350,8 +385,9 @@ def _unlock_with_key(payload: str, key: bytes, vault_id: str) -> dict[str, Any]:
 
 
 
-def _open_session(vault_id: str, payload: str, password: str) -> None:
-    """Hold the key derived from `password` for this vault (the store never holds the password itself)."""
+def _open_session(vault_id: str, payload: str, password: str, client_id=None) -> None:
+    """Hold the key derived from `password` for this vault (the store never holds the password itself); a RUN needs
+    it for the tab `client_id` (L9.263)."""
     import base64
 
     from .vault_crypto import _unpack_header, derive_key
@@ -359,10 +395,13 @@ def _open_session(vault_id: str, payload: str, password: str) -> None:
     if v2.is_v2(payload):
         _plain, kek, _p = v2.open_with_password(payload, password, vault_id=vault_id)
         SESSIONS.put(vault_id, kek)
+        _tab_put(client_id, vault_id, kek)
         return
     blob = base64.b64decode(payload.encode("ascii"), validate=True)
     hdr = _unpack_header(blob)   # 7 fields; Unlock failed with ValueError while it unpacked 6 (L2.24)
-    SESSIONS.put(vault_id, derive_key(password, hdr[2], hdr[3]))
+    key = derive_key(password, hdr[2], hdr[3])
+    SESSIONS.put(vault_id, key)
+    _tab_put(client_id, vault_id, key)
 
 def vault_store_name() -> str:
     from . import vault_store
@@ -486,7 +525,7 @@ class _EditSessions:
         return {"edit_token": token, "exec": plain["exec"], "layout": plain.get("layout"), "mode": session["mode"],
                 "legacy": session["legacy"], "recipients": [vault_keys.public_text(k) for k in recips]}
 
-    def commit(self, token: str, ex: dict, layout, iface: dict, recipients, new_password=None) -> str:
+    def commit(self, token: str, ex: dict, layout, iface: dict, recipients, new_password=None, client_id=None) -> str:
         with self._lock:
             self._sweep()
             session = self._active.get(token)
@@ -510,6 +549,7 @@ class _EditSessions:
             self._active.pop(token, None)
         if mode == v2.MODE_LOCKED:
             SESSIONS.put(session["vault_id"], k["kek"])                # the editor may run it right away
+            _tab_put(client_id, session["vault_id"], k["kek"])        # ... in the tab that edited it (L9.263)
         return payload
 
     def cancel(self, token: str) -> None:
@@ -592,11 +632,12 @@ def register_routes(server) -> None:
                 status=429,
             )
         try:
+            client_id = body.get("client_id")                     # L9.263: the run key belongs to this tab
             if v2.is_v2(payload):
-                _open_session(vault_id, payload, password)        # derives, decrypts, stores the KEK
+                _open_session(vault_id, payload, password, client_id)  # derives, decrypts, stores the KEK
             else:
                 unlock_subgraph(payload, password, vault_id=vault_id)
-                _open_session(vault_id, payload, password)
+                _open_session(vault_id, payload, password, client_id)
         except VaultError as exc:
             SESSIONS.note_failure(vault_id)
             return web.json_response({"ok": False, "error": str(exc)}, status=403)
@@ -613,6 +654,7 @@ def register_routes(server) -> None:
         session_open = False
         if mode == v2.MODE_LOCKED:
             SESSIONS.put(str(body.get("vault_id") or ""), kek)
+            _tab_put(body.get("client_id"), str(body.get("vault_id") or ""), kek)     # L9.263: the creator's tab
             session_open = True
         return web.json_response({"ok": True, "payload": payload, "session_open": session_open, "format": 2})
 
@@ -707,7 +749,7 @@ def register_routes(server) -> None:
         try:
             payload = EDITS.commit(str(body.get("edit_token") or ""), body.get("exec") or {}, body.get("layout"),
                                    body.get("interface") or {}, body.get("recipients"),
-                                   new_password=body.get("new_password") or None)
+                                   new_password=body.get("new_password") or None, client_id=body.get("client_id"))
         except (VaultError, PermissionError) as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
         return web.json_response({"ok": True, "payload": payload})
@@ -764,12 +806,21 @@ def register_routes(server) -> None:
     async def _status(request):
         """Is this vault's session open? Lets the node show the real state after a restart or an expiry (A9)."""
         body = await request.json()
-        return web.json_response({"ok": True, "open": SESSIONS.get(str(body.get("vault_id") or "")) is not None})
+        vid, cid = str(body.get("vault_id") or ""), body.get("client_id")
+        if cid:                                                   # L9.263: open = this tab can run it
+            from . import secure_subgraph as SS
+            return web.json_response({"ok": True, "open": SS.RUN_SESSIONS.get(str(cid), vid) is not None})
+        return web.json_response({"ok": True, "open": SESSIONS.get(vid) is not None})
 
     @routes.post("/c2c_vault/lock_session")
     async def _lock_session(request):
         body = await request.json()
         SESSIONS.drop(str(body.get("vault_id")) if body.get("vault_id") else None)
+        from . import secure_subgraph as SS                       # L9.263: and the per-tab run keys
+        if body.get("vault_id"):
+            SS.RUN_SESSIONS.drop_vault(str(body.get("vault_id")))
+        elif body.get("client_id"):
+            SS.RUN_SESSIONS.drop_client(str(body.get("client_id")))
         return web.json_response({"ok": True})
 
     @routes.post("/c2c_vault/workflow/lock")
@@ -791,7 +842,7 @@ def register_routes(server) -> None:
         except VaultError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
         try:
-            _open_session(vault_id, payload, password)
+            _open_session(vault_id, payload, password, body.get("client_id"))
         except Exception as exc:
             log.warning("[C2C Vault] could not open workflow session after lock: %s", exc)
         return web.json_response({"ok": True, "file": _workflow_file(vault_id, payload)})
@@ -820,7 +871,7 @@ def register_routes(server) -> None:
             SESSIONS.note_failure(vault_id)
             return web.json_response({"ok": False, "error": str(exc)}, status=403)
 
-        _open_session(vault_id, payload, password)
+        _open_session(vault_id, payload, password, body.get("client_id"))
         return web.json_response({"ok": True, "workflow": workflow})
 
     @routes.post("/c2c_vault/workflow/relock")

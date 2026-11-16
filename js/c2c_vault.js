@@ -93,10 +93,14 @@ function widget(node, name) {
 }
 
 async function post(route, body) {
+  // L9.263: a legacy vault's run key belongs to THIS tab (the server runs a Locked vault only for the tab that
+  // unlocked / locked / edited it), so every vault call names the tab
+  const withTab = body && typeof body === "object" && !("client_id" in body) ? { ...body, client_id: api.clientId }
+    : body;
   const r = await api.fetchApi(route, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withTab),
   });
   let data = {};
   try { data = await r.json(); } catch (_) { /* keep {} */ }
