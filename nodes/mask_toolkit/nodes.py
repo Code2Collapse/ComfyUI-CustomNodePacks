@@ -645,7 +645,6 @@ class MaskToolsMEC:
                 if ref.shape[0] < img.shape[0]:
                     # L9.262 (CNP-NODES-1 audit): a plate shorter than the clip (but not 1 frame) crashed with a raw
                     # shape error; its last frame now holds for the rest, and the report says so
-                    import torch
                     idx = torch.clamp(torch.arange(img.shape[0]), max=ref.shape[0] - 1)
                     if ref.shape[0] > 1:
                         notes.append(f"the plate has {ref.shape[0]} frames for {img.shape[0]}: its last frame was "
