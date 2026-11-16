@@ -30,6 +30,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 _MAX_INSERTS_PER_PAIR = 16   # safety cap so one cut can't explode the batch
+_MAX_OUT_FACTOR = 4          # L9.264: the whole clip may grow to at most 4x its frames (+16), or RAM runs out
 _FLOW_PROC_LONG_SIDE = 384   # downscale for Farneback speed; magnitudes rescaled
 
 
@@ -110,6 +111,13 @@ class FluidShotEncoderMEC:
                   "src_of_output": [float(i) for i in range(int(B))]}
             return (images, tm)
 
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            # L9.264 (CNP-NODES-2 audit): every pair's flow failed silently and the clip came back unchanged
+            raise RuntimeError("Fluid Shot Encoder needs OpenCV (opencv-python) for optical flow, and it is not "
+                               "installed in ComfyUI's Python. Install opencv-python and run again.") from None
+        max_out = _MAX_OUT_FACTOR * B + 16
         H, W = int(images.shape[1]), int(images.shape[2])
         scale = min(1.0, _FLOW_PROC_LONG_SIDE / float(max(H, W)))
         rescale = 1.0 / scale if scale > 0 else 1.0
@@ -135,6 +143,10 @@ class FluidShotEncoderMEC:
                 logger.warning("FluidShotEncoder: flow failed on pair %d (%s); "
                                "passing through.", i, exc)
 
+            if n_insert > 0 and len(out_frames) + n_insert + (B - 1 - i) > max_out:
+                raise RuntimeError(
+                    f"Fluid Shot Encoder would make more than {max_out} frames from {B} (pair {i}: {n_insert} "
+                    f"in-betweens). Raise max_px_per_frame (now {max_px:g}) or split the clip at the fast cut.")
             if n_insert > 0:
                 a_u8 = (a_t.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
                 b_u8 = (b_t.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
