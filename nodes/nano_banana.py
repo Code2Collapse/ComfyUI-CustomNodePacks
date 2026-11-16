@@ -48,6 +48,27 @@ log = logging.getLogger("C2C.NanoBanana")
 
 _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
+# L9.263 (CNP-NODES-2 audit P1, owner A17): every generateContent call is billed. ComfyUI re-runs a node with
+# UNCHANGED inputs once its cache entry is dropped (another prompt ran, or RAM ran short - D0.40), which re-billed
+# the same request. An identical request (model, prompt, settings, reference images, seed, batch count, API key)
+# that already succeeded in this ComfyUI session returns the earlier images instead of paying again.
+# C2C_NANO_BANANA_DEDUPE=0 turns this off. Partial results (a call failed part-way) are never reused.
+_REUSE_SECONDS = 6 * 3600
+_REUSE_MAX = 8
+_reuse: "dict[str, tuple[float, tuple]]" = {}
+
+
+def _dedupe_on() -> bool:
+    return os.environ.get("C2C_NANO_BANANA_DEDUPE", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _request_key(key: str, **parts) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    h.update(hashlib.sha256(key.encode("utf-8")).digest())            # the account, never the key itself
+    h.update(json.dumps(parts, sort_keys=True, default=str).encode("utf-8"))
+    return h.hexdigest()
+
 _MODELS = [
     "gemini-3-pro-image-preview",
     "gemini-2.5-flash-image",
@@ -337,6 +358,20 @@ class NanoBananaC2C:
                 "GEMINI_API_KEY environment variable (keys: aistudio.google.com).")
 
         refs = _collect_refs(image_1, image_2, image_3, image_4)
+        rkey = ""
+        if _dedupe_on():
+            import hashlib
+            rkey = _request_key(key, prompt=prompt, model=model, mode=mode, style=prompt_style, ar=aspect_ratio,
+                                res=resolution, t=float(temperature), n=int(batch_count), seed=int(seed),
+                                enh=bool(enhance_prompt), mod=response_modalities, sys=system_instruction,
+                                refs=[hashlib.sha256(r.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
+                                      + str(tuple(r.shape)) for r in refs])
+            hit = _reuse.get(rkey)
+            if hit is not None and time.time() - hit[0] <= _REUSE_SECONDS:
+                b8, txt, info = hit[1]
+                log.info("[NanoBanana] the identical paid request already ran this session - reused, not paid again")
+                info = json.dumps({**json.loads(info), "reused": True})
+                return (b8.float() / 255.0, txt, info)
         if mode == "edit_image" and not refs:
             raise ValueError("edit_image mode needs at least one reference image "
                              "wired into image_1.")
@@ -463,6 +498,11 @@ class NanoBananaC2C:
             **({"partial": partial} if partial else {}),
         })
         log.info("[NanoBanana] %s", info)
+        if rkey and not partial:
+            _reuse[rkey] = (time.time(), ((batch.clamp(0, 1) * 255.0).round().to(torch.uint8).cpu(),
+                                          "\n".join(texts).strip(), info))
+            while len(_reuse) > _REUSE_MAX:
+                _reuse.pop(next(iter(_reuse)))
         return (batch, "\n".join(texts).strip(), info)
 
 
