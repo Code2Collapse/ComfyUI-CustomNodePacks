@@ -1995,6 +1995,8 @@ This works on the root graph and inside subgraphs.
 Protect is one step in the undo history (Ctrl+Z gives back the original nodes); if any stage fails, the graph and
 the undo history are exactly as before. Link reroutes on the vault's wires are kept. A second Protect while one is
 running is refused.
+A Locked vault runs only with a key unlocked in the same browser tab (this applies to old vault nodes too); five
+wrong passwords lock that vault for five minutes.
 
 | Profile | Runs | Opens for editing |
 |---|---|---|
