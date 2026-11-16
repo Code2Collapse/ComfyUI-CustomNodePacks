@@ -347,6 +347,12 @@ def _mode_audio_spectro(a_wav: Optional[np.ndarray], b_wav: Optional[np.ndarray]
             return np.zeros((256, 512, 3), dtype=np.float32)
         try:
             import librosa  # type: ignore
+        except ImportError:
+            # L9.262 (CNP-NODES-1 audit): the scope came back silently black without librosa
+            raise RuntimeError("Video Comparer: the audio spectrogram needs the 'librosa' package, which is not "
+                               "installed in ComfyUI's Python. Install it (pip install librosa) or pick another "
+                               "mode.") from None
+        try:
             S = librosa.stft(wav, n_fft=n_fft, hop_length=n_fft // 4)
             mag = np.abs(S)
             mag_db = librosa.amplitude_to_db(mag, ref=np.max)
@@ -367,8 +373,10 @@ def _mode_audio_loudness(a_wav: Optional[np.ndarray], b_wav: Optional[np.ndarray
     canvas[out_h - 1, :, :] = 0.3
     try:
         import pyloudnorm as pyln  # type: ignore
-    except Exception:
-        return canvas
+    except ImportError:
+        # L9.262 (CNP-NODES-1 audit): the loudness graph came back silently empty without pyloudnorm
+        raise RuntimeError("Video Comparer: the loudness graph needs the 'pyloudnorm' package, which is not installed "
+                           "in ComfyUI's Python. Install it (pip install pyloudnorm) or pick another mode.") from None
     for wav, sr, col in ((a_wav, sr_a, (1.0, 0.4, 0.2)), (b_wav, sr_b, (0.2, 0.5, 1.0))):
         if wav is None or wav.size < sr * 0.4 or sr <= 0:
             continue
