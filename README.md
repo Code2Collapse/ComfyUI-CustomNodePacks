@@ -1642,6 +1642,10 @@ read any file path. Through an SSH tunnel the page still counts as local.
   its weights, which made it depend on the picture). Results with brightness 0 are unchanged (2026-11-16).
 - **Control AOV (C2C)**: a requested edge or motion pass that produced nothing (e.g. OpenCV missing) stops the run
   with the reason, like the other passes (2026-11-16).
+- **Mask Tools (C2C)** `key: difference`: a clean plate with fewer frames than the clip holds its last frame (it
+  crashed); the report says so (2026-11-16).
+- **SAM Mask Generator (MEC)**: a text prompt that GroundingDINO finds nothing for, with no point / box / mask, stops
+  with the words and thresholds to change (it ran on with no prompt) (2026-11-16).
 - **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
 - **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
 - **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
