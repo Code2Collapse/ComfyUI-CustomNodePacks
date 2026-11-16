@@ -3488,7 +3488,7 @@ VAE decode with optional fp32 (<=0.17 dB measured gain), spatial-only tiling for
 | Parameter | Type | Constraints | What it does |
 |---|---|---|---|
 | `clamp_output` | `BOOLEAN` | default `True` | Core clamps decoder output to 0..1. Off keeps out-of-range values (4.6x / 5.3x more accurate there on Flux/Wan, measured M2). For HDR/EXR chains. |
-| `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, with the same picture). off: never tile. manual: tile at tile_size. Video is tiled in space only — splitting a video VAE in time costs ~21 dB. |
+| `tile_mode` | choice: `auto`, `off`, `manual` | default `"auto"` | auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, with the same picture); a tile_size above 0 is used as given. off: never tile. manual: tile at tile_size. Video is tiled in space only — splitting a video VAE in time costs ~21 dB. |
 | `samples` | `LATENT` |  | The latent to decode (with vae). Leave empty to clean `image`. |
 | `vae` | `VAE` |  | — |
 | `image` | `IMAGE` |  | An already-decoded picture to clean instead of decoding a latent. |

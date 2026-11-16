@@ -69,7 +69,8 @@ class C2CVAEQualityDecode:
                     "default": "auto",
                     "tooltip": "auto: tile only when the untiled decode would not fit the GPU (measured on an 8 GB "
                                "card: a 2K Wan decode took 502 s untiled, spilling into system RAM, and 37 s tiled, "
-                               "with the same picture). off: never tile. manual: tile at tile_size. Video is tiled "
+                               "with the same picture); a tile_size above 0 is used as given. off: never tile. manual: tile at "
+                               "tile_size. Video is tiled "
                                "in space only - splitting a video VAE in time costs ~21 dB.",
                 }),
                 # sockets were required before L7.65; optional now so an already-decoded image can be cleaned
@@ -224,7 +225,9 @@ class C2CVAEQualityDecode:
             latent = samples["samples"]
             if tile_mode == "off":
                 tile_size = 0
-            elif tile_mode != "manual":                       # "auto", and anything unknown
+            elif tile_mode != "manual" and int(tile_size) <= 0:   # "auto" (and anything unknown) with no size set
+                # L9.263: a tile_size above 0 is the user's (saves from before tile_mode existed set it and now get
+                # "auto" for the appended widget) - it is used as given instead of being replaced
                 tile_size = self._auto_tile_px(vae, latent, bool(force_fp32))
             self._last_tile_px = tile_size
 
