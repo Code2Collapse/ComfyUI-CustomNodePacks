@@ -445,7 +445,8 @@ class VAEMergeMEC:
                 "beta": ("FLOAT", {"default": 0.70, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Secondary blend weight (used by add_difference / 3-VAE modes)."}),
                 "brightness": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Post-merge brightness shift on decoder.conv_out."}),
+                    "tooltip": "Post-merge brightness: an offset added to decoder.conv_out's bias (0.1 x this value in "
+                               "the decoder's output units)."}),
                 "contrast": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Post-merge contrast gain on decoder.conv_out."}),
                 "use_blocks": ("BOOLEAN", {"default": False,
@@ -743,7 +744,11 @@ class VAEMergeMEC:
                 for key, t in merged.items():
                     if "decoder.conv_out" in key and t.dtype.is_floating_point:
                         t32 = t.to(torch.float32)
-                        t32 = (t32 + float(brightness) * 0.1) * (1.0 + float(contrast))
+                        # L9.264 (CNP-NODES-2 audit): y = W x + b. Brightness is an OFFSET, so it goes on the bias
+                        # only (added to the weights it became a content-dependent shift); contrast scales both.
+                        if key.endswith("bias"):
+                            t32 = t32 + float(brightness) * 0.1
+                        t32 = t32 * (1.0 + float(contrast))
                         t32 = t32.clamp(-10.0, 10.0)
                         merged[key] = t32.to(t.dtype)
                         applied += 1

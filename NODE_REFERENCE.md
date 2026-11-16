@@ -2701,7 +2701,7 @@ Merge 2 or 3 VAEs with 13 strategies (weighted_sum, sigmoid, geometric, slerp, d
 | `merge_mode` | choice: `weighted_sum`, `add_difference`, `tensor_sum`, `triple_sum`, `slerp`, `sigmoid`, `geometric`, `max_abs`, … (+5) | default `"weighted_sum"` | Blend strategy. add_difference / triple_sum / smooth_add_diff need vae_c. sigmoid + geometric mimic TechnoByte/meh behaviour. distribution_xover keeps A unless B has higher detail energy. dare_ties = sparse delta + sign election. |
 | `alpha` | `FLOAT` | default `0.3`, range 0.0…1.0, step 0.01 | Primary blend weight. weighted_sum: 0=A, 1=B. |
 | `beta` | `FLOAT` | default `0.7`, range 0.0…1.0, step 0.01 | Secondary blend weight (used by add_difference / 3-VAE modes). |
-| `brightness` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.01 | Post-merge brightness shift on decoder.conv_out. |
+| `brightness` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.01 | Post-merge brightness: an offset added to decoder.conv_out's bias (0.1 x this value in the decoder's output units). |
 | `contrast` | `FLOAT` | default `0.0`, range -1.0…1.0, step 0.01 | Post-merge contrast gain on decoder.conv_out. |
 | `use_blocks` | `BOOLEAN` | default `False` | Enable per-block sliders. When False all keys use 'alpha'. |
 | `auto_alpha` | `BOOLEAN` | default `False` | Data-driven block weights. When True, computes per-block cosine similarity between A and B; dissimilar blocks bias toward A. Overrides the manual block sliders. |
