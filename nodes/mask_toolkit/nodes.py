@@ -642,7 +642,17 @@ class MaskToolsMEC:
                                     align_corners=False).permute(0, 2, 3, 1)
                 notes.append(f"plate resized to {img.shape[2]}x{img.shape[1]}")
             if ref.shape[0] != img.shape[0]:
-                ref = ref[:1].expand(img.shape[0], *ref.shape[1:]) if ref.shape[0] == 1 else ref[: img.shape[0]]
+                if ref.shape[0] < img.shape[0]:
+                    # L9.262 (CNP-NODES-1 audit): a plate shorter than the clip (but not 1 frame) crashed with a raw
+                    # shape error; its last frame now holds for the rest, and the report says so
+                    import torch
+                    idx = torch.clamp(torch.arange(img.shape[0]), max=ref.shape[0] - 1)
+                    if ref.shape[0] > 1:
+                        notes.append(f"the plate has {ref.shape[0]} frames for {img.shape[0]}: its last frame was "
+                                     "held for the rest")
+                    ref = ref[idx]
+                else:
+                    ref = ref[: img.shape[0]]
             dist = ((img[..., :3] - ref[..., :3]) ** 2).sum(-1).sqrt() / (3 ** 0.5)
             tol, soft = float(a["tolerance"]), max(float(a["softness"]), 1e-6)
             m = ((dist - tol) / soft).clamp(0.0, 1.0)
