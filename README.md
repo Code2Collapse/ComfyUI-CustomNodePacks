@@ -1974,6 +1974,9 @@ ordinary JSON.
 You can also right-click a subgraph node and choose **Protect this subgraph as C2C Vault**. The dialog shows what each
 choice means (who can run it, who can open it, where it runs, where the key lives) and asks for the vault password.
 This works on the root graph and inside subgraphs.
+Protect is one step in the undo history (Ctrl+Z gives back the original nodes); if any stage fails, the graph and
+the undo history are exactly as before. Link reroutes on the vault's wires are kept. A second Protect while one is
+running is refused.
 
 | Profile | Runs | Opens for editing |
 |---|---|---|
