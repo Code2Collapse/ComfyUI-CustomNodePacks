@@ -1613,7 +1613,12 @@ read any file path. Through an SSH tunnel the page still counts as local.
   or when GroundingDINO fails on a text prompt; it used to return an empty mask or drop the text silently. With
   the model-free stand-in the text is still only noted (that stand-in cannot read text).
 - **Face Fixer (MEC)** with denoise 0 leaves the faces as they are (it used to regenerate them completely).
-- **ProPainter (MEC)** temporal mode: colour match "off" really is off (it ran Reinhard).
+- **ProPainter (MEC)**: colour match "off" really is off in temporal, remove and stitch modes (they ran Reinhard
+  on the fill; remove / stitch fixed 2026-11-16).
+- **Mask Refiner (MEC)**: `preset` and `advanced_overrides_json` take effect with auto edge lock on (the subject
+  profile used to overwrite them); `balanced` gives exactly the same result as before (2026-11-16).
+- **SAM Mask Generator (MEC)**: the two GroundingDINO threshold tooltips were swapped; `mask_index` is the model's
+  own candidate order, not "best score" (2026-11-16).
 - **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
 - **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
 - **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
