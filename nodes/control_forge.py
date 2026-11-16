@@ -606,6 +606,12 @@ class ControlAOVC2C:
                                                            and depth_t is None else "") + ")")
             if id_matte is None and id_matte_model == "sam_auto" and id_t is None:
                 failed.append("id_matte (sam_auto)")
+            # L9.264 (CNP-NODES-2 audit): edge and motion were missing here - without OpenCV they became black maps
+            if canny is None and edge_model != "off" and canny_t is None and (edge_model != "internal_canny"
+                                                                            or run_canny):
+                failed.append(f"edge ({edge_model}" + ("" if _HAVE_CV2 else ", needs opencv-python") + ")")
+            if run_motion and not _HAVE_CV2 and image.shape[0] > 1:
+                failed.append("motion (needs opencv-python)")
             if failed:
                 why = " ".join(n for n in notes if n) or ("the in-pack backends did not load (see the console)"
                                                           if _cb is None else "no detail")
