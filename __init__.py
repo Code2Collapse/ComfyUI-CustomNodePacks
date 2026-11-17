@@ -1006,6 +1006,12 @@ try:
     except Exception as _il:
         print(f"[MEC] inpaint crop live preview deferred: {_il}")
     try:
+        # A28: per-node-type status for the layout engine's c2c_show_if_status (js/_c2c_node_layout.js)
+        from .nodes._node_status import register_routes as _register_node_status_routes
+        _register_node_status_routes(_ps)
+    except Exception as _ns:
+        print(f"[C2C] node status route deferred: {_ns}")
+    try:
         from .nodes.node_explain import register_routes as _register_node_explain_routes
         _register_node_explain_routes(_ps)
         print("[MEC] node_explain routes registered.")

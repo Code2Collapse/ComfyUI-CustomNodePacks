@@ -270,132 +270,135 @@ DEFAULT_HEX = {"lmk": "#1E88E5", "skin": "#FF8C00", "lid": "#00C850", "teeth_u":
 DEFAULT_SET_HEX = "#E63C3C"              # the 68 / 98 overlay colour (BGR 60, 60, 230)
 
 
-def _adv(spec: dict) -> dict:
-    spec["advanced"] = True
-    return spec
+# A28 (ORDERS 29): the appended controls live in the node's collapsible sections (js/_c2c_node_layout.js), one per
+# name prefix, closed by default. They carry no core "advanced" flag: Nodes 2.0 would fold them a second time.
+CONTROL_SECTIONS = {"appearance": "Appearance", "strength": "Strength", "resolution": "Resolution",
+                    "screening": "Screening", "mask": "Mask", "temporal": "Temporal"}
 
 
 def _controls_spec() -> dict:
     from .facepoints_controls import MASK_PREVIEWS, OUTPUT_SIZES, PROCESSING_SIZES
     c = {}
     # Appearance
-    c["appearance_scheme"] = (list(SCHEMES), _adv({"default": SCHEMES[0], "tooltip": "Appearance. model card: the "
+    c["appearance_scheme"] = (list(SCHEMES), ({"default": SCHEMES[0], "tooltip": "Appearance. model card: the "
                               "original colours (white dots on black; 620 points coloured by kind). custom: the "
                               "colours below. Colours change the images only, never the POSE_KEYPOINT numbers."}))
-    c["appearance_landmark_colour"] = ("STRING", _adv({"default": "#FFFFFF", "tooltip": "Appearance (custom): dot "
+    c["appearance_landmark_colour"] = ("STRING", ({"default": "#FFFFFF", "tooltip": "Appearance (custom): dot "
                                        "colour in landmark_image, #RRGGBB."}))
-    c["appearance_background_colour"] = ("STRING", _adv({"default": "#000000", "tooltip": "Appearance (custom): "
+    c["appearance_background_colour"] = ("STRING", ({"default": "#000000", "tooltip": "Appearance (custom): "
                                          "landmark_image background, #RRGGBB."}))
-    c["appearance_overlay_colour"] = ("STRING", _adv({"default": "", "tooltip": "Appearance (custom): one colour "
+    c["appearance_overlay_colour"] = ("STRING", ({"default": "", "tooltip": "Appearance (custom): one colour "
                                       "for every dot in overlay, #RRGGBB. Empty = the per-set / per-kind colours "
                                       "below."}))
     for k in ("lmk", "skin", "lid", "teeth_u", "teeth_l", "iris"):
-        c[f"appearance_colour_{k}"] = ("STRING", _adv({"default": DEFAULT_HEX[k], "tooltip": f"Appearance (custom): "
+        c[f"appearance_colour_{k}"] = ("STRING", ({"default": DEFAULT_HEX[k], "tooltip": f"Appearance (custom): "
                                        f"overlay colour of the 620-point kind '{k}', #RRGGBB."}))
-    c["appearance_colour_68"] = ("STRING", _adv({"default": DEFAULT_SET_HEX, "tooltip": "Appearance (custom): "
+    c["appearance_colour_68"] = ("STRING", ({"default": DEFAULT_SET_HEX, "tooltip": "Appearance (custom): "
                                  "overlay colour of the 68 + iris set, #RRGGBB."}))
-    c["appearance_colour_98"] = ("STRING", _adv({"default": DEFAULT_SET_HEX, "tooltip": "Appearance (custom): "
+    c["appearance_colour_98"] = ("STRING", ({"default": DEFAULT_SET_HEX, "tooltip": "Appearance (custom): "
                                  "overlay colour of the 98 set, #RRGGBB."}))
-    c["appearance_kinds_on_landmark_image"] = ("BOOLEAN", _adv({"default": False, "tooltip": "Appearance (custom): "
+    c["appearance_kinds_on_landmark_image"] = ("BOOLEAN", ({"default": False, "tooltip": "Appearance (custom): "
                                                "landmark_image uses the overlay's per-set / per-kind colours "
                                                "instead of one dot colour."}))
     # Strength
-    c["strength_overlay_opacity"] = ("FLOAT", _adv({"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["strength_overlay_opacity"] = ("FLOAT", ({"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                      "tooltip": "Strength: how opaque the overlay's dots are over the image (real "
                                                 "alpha blending). 1 = solid."}))
-    c["strength_dot_intensity"] = ("FLOAT", _adv({"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["strength_dot_intensity"] = ("FLOAT", ({"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                    "tooltip": "Strength: landmark_image dot brightness, blended toward the "
                                               "background (a weaker control image). 1 = full colour."}))
-    c["strength_low_confidence_opacity"] = ("FLOAT", _adv({"default": 0.45, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["strength_low_confidence_opacity"] = ("FLOAT", ({"default": 0.45, "min": 0.0, "max": 1.0, "step": 0.01,
                                             "tooltip": "Strength: how strong an unsure point is drawn - its colour "
                                                        "factor in 'dim' mode, its opacity in 'fade' mode."}))
-    c["strength_render_threshold"] = ("FLOAT", _adv({"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["strength_render_threshold"] = ("FLOAT", ({"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01,
                                       "tooltip": "Strength: a point whose confidence is below this is drawn as "
                                                  "unsure (see screening_low_confidence_points). Drawing only."}))
-    c["strength_pose_confidence_scale"] = ("FLOAT", _adv({"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.01,
+    c["strength_pose_confidence_scale"] = ("FLOAT", ({"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.01,
                                            "tooltip": "Strength: multiplies the confidence values in "
                                                       "pose_keypoint (clamped to 0..1). Coordinates are unchanged."}))
     # Resolution
-    c["resolution_processing"] = (list(PROCESSING_SIZES), _adv({"default": "source", "tooltip": "Resolution: "
+    c["resolution_processing"] = (list(PROCESSING_SIZES), ({"default": "source", "tooltip": "Resolution: "
                                   "size the faces are FOUND and cropped at. source = the input; a number = the "
                                   "longer side at most that (downscale only, aspect kept). The network itself "
                                   "always sees the checkpoint's own input size. Points come back in source "
                                   "pixels."}))
-    c["resolution_processing_max"] = ("INT", _adv({"default": 1024, "min": 64, "max": 16384, "step": 8,
+    c["resolution_processing_max"] = ("INT", ({"default": 1024, "min": 64, "max": 16384, "step": 8,
                                       "tooltip": "Resolution: the longer side for resolution_processing = custom."}))
-    c["resolution_output"] = (list(OUTPUT_SIZES), _adv({"default": "original", "tooltip": "Resolution: size of "
+    c["resolution_output"] = (list(OUTPUT_SIZES), ({"default": "original", "tooltip": "Resolution: size of "
                               "landmark_image, overlay, face_mask - and the coordinates in pose_keypoint and JSON "
                               "follow it, so everything stays aligned. original = the input size."}))
-    c["resolution_output_width"] = ("INT", _adv({"default": 1024, "min": 16, "max": 16384, "step": 8,
+    c["resolution_output_width"] = ("INT", ({"default": 1024, "min": 16, "max": 16384, "step": 8,
                                     "tooltip": "Resolution: width for resolution_output = custom."}))
-    c["resolution_output_height"] = ("INT", _adv({"default": 1024, "min": 16, "max": 16384, "step": 8,
+    c["resolution_output_height"] = ("INT", ({"default": 1024, "min": 16, "max": 16384, "step": 8,
                                      "tooltip": "Resolution: height for resolution_output = custom."}))
-    c["resolution_keep_aspect"] = ("BOOLEAN", _adv({"default": True, "tooltip": "Resolution: fit inside the "
+    c["resolution_keep_aspect"] = ("BOOLEAN", ({"default": True, "tooltip": "Resolution: fit inside the "
                                    "output size keeping the aspect ratio (the output is the fitted size). Off: "
                                    "stretch to exactly that size."}))
     # Confidence / screening
-    c["screening_face_confidence_min"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["screening_face_confidence_min"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                           "tooltip": "Screening: faces whose overall landmark confidence is below "
                                                      "this are left out of the images and pose_keypoint (the face "
                                                      "finder's own threshold is finder_confidence)."}))
-    c["screening_point_confidence_min"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["screening_point_confidence_min"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                            "tooltip": "Screening: pose_keypoint points below this confidence get "
                                                       "c = 0 (consumers skip them); their x, y stay. JSON always "
                                                       "keeps every point and lists the screened ones."}))
-    c["screening_low_confidence_points"] = (list(LOW_CONF), _adv({"default": LOW_CONF[0], "tooltip": "Screening: "
+    c["screening_low_confidence_points"] = (list(LOW_CONF), ({"default": LOW_CONF[0], "tooltip": "Screening: "
                                             "how unsure 620-set points (below strength_render_threshold) are DRAWN "
                                             "- dim (the original look, overlay only), fade (transparent), hide, or "
                                             "keep (like sure points). fade / hide apply to landmark_image too. Data "
                                             "is never removed by this."}))
-    c["screening_keep_rejected_faces"] = ("BOOLEAN", _adv({"default": False, "tooltip": "Screening: list rejected "
+    c["screening_keep_rejected_faces"] = ("BOOLEAN", ({"default": False, "tooltip": "Screening: list rejected "
                                           "faces (no face in the box, below the face confidence) in the JSON with "
                                           "the reason, for diagnosis. They never enter the images or pose."}))
     # Face mask
-    c["mask_grow"] = ("INT", _adv({"default": 0, "min": 0, "max": 512, "tooltip": "Face mask: expand (dilate) by "
+    c["mask_grow"] = ("INT", ({"default": 0, "min": 0, "max": 512, "tooltip": "Face mask: expand (dilate) by "
                       "this many px."}))
-    c["mask_shrink"] = ("INT", _adv({"default": 0, "min": 0, "max": 512, "tooltip": "Face mask: contract (erode) "
+    c["mask_shrink"] = ("INT", ({"default": 0, "min": 0, "max": 512, "tooltip": "Face mask: contract (erode) "
                         "by this many px (after mask_grow)."}))
-    c["mask_feather"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 256.0, "step": 0.5, "tooltip": "Face "
+    c["mask_feather"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 256.0, "step": 0.5, "tooltip": "Face "
                          "mask: Gaussian blur, sigma in px (soft on both sides of the edge)."}))
-    c["mask_edge_softness"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 256.0, "step": 0.5, "tooltip":
+    c["mask_edge_softness"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 256.0, "step": 0.5, "tooltip":
                                "Face mask: fade in from the edge over this many px (the outer edge stays put)."}))
-    c["mask_threshold"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Face "
+    c["mask_threshold"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Face "
                            "mask: > 0 makes the mask hard at this level (applied last). 0 = off."}))
-    c["mask_hull_smoothing"] = ("INT", _adv({"default": 0, "min": 0, "max": 6, "tooltip": "Face mask: rounds the "
+    c["mask_hull_smoothing"] = ("INT", ({"default": 0, "min": 0, "max": 6, "tooltip": "Face mask: rounds the "
                                 "hull outline (corner-cutting passes). 0 = the original hull."}))
-    c["mask_preview"] = (list(MASK_PREVIEWS), _adv({"default": "off", "tooltip": "Face mask: show the mask on the "
+    c["mask_preview"] = (list(MASK_PREVIEWS), ({"default": "off", "tooltip": "Face mask: show the mask on the "
                          "overlay image (tint or outline). The MASK output is not changed by this."}))
     # Temporal stabilisation
-    c["temporal_smoothing"] = ("BOOLEAN", _adv({"default": False, "tooltip": "Temporal: smooth landmark "
+    c["temporal_smoothing"] = ("BOOLEAN", ({"default": False, "tooltip": "Temporal: smooth landmark "
                                "trajectories over a video (adaptive: still points steady, real motion followed). "
                                "Independent of track_video. Raw points stay in the JSON."}))
-    c["temporal_strength"] = ("FLOAT", _adv({"default": 0.5, "min": 0.0, "max": 0.99, "step": 0.01, "tooltip":
+    c["temporal_strength"] = ("FLOAT", ({"default": 0.5, "min": 0.0, "max": 0.99, "step": 0.01, "tooltip":
                               "Temporal: smoothing of still points. 0 = none; higher = steadier."}))
-    c["temporal_confidence_aware"] = ("BOOLEAN", _adv({"default": True, "tooltip": "Temporal: points the model is "
+    c["temporal_confidence_aware"] = ("BOOLEAN", ({"default": True, "tooltip": "Temporal: points the model is "
                                       "less sure of than before move less toward their new position."}))
-    c["temporal_max_offset"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 512.0, "step": 0.5, "tooltip":
+    c["temporal_max_offset"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 512.0, "step": 0.5, "tooltip":
                                 "Temporal: the most (px) smoothing may hold a point away from its detected "
                                 "position in a frame. 0 = no limit."}))
-    c["temporal_scene_cut"] = ("FLOAT", _adv({"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip":
+    c["temporal_scene_cut"] = ("FLOAT", ({"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip":
                                "Temporal: a frame that differs from the previous one by more than this (mean "
                                "absolute difference, 0..1) is a scene cut: smoothing and identities restart. 0 = "
                                "off."}))
-    c["temporal_reset_on_loss"] = ("BOOLEAN", _adv({"default": True, "tooltip": "Temporal: when a face is not "
+    c["temporal_reset_on_loss"] = ("BOOLEAN", ({"default": True, "tooltip": "Temporal: when a face is not "
                                    "found in a frame, its smoothing restarts when it comes back."}))
-    c["temporal_stable_order"] = ("BOOLEAN", _adv({"default": False, "tooltip": "Temporal: keep each face's "
+    c["temporal_stable_order"] = ("BOOLEAN", ({"default": False, "tooltip": "Temporal: keep each face's "
                                   "position in pose_keypoint / JSON by identity across frames (matched by "
                                   "position). Off: left to right in every frame (the original order)."}))
     # work order 2026-11-14 (Face Landmarks): connection-line strength and mask face selection, appended
-    c["strength_connection_lines"] = ("FLOAT", _adv({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
+    c["strength_connection_lines"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01,
                                       "tooltip": "Strength: draw the face contours (jaw, brows, nose, eyes, lips) as "
                                                  "lines between the points - 0 = off. For the 68 and 98 sets (the "
                                                  "620 dense points have no contour order). Drawing only."}))
-    c["appearance_line_width"] = ("INT", _adv({"default": 1, "min": 1, "max": 16, "tooltip": "Appearance: "
+    c["appearance_line_width"] = ("INT", ({"default": 1, "min": 1, "max": 16, "tooltip": "Appearance: "
                                   "connection line width in px (output pixels)."}))
-    c["mask_faces"] = (list(MASK_FACES_CHOICES), _adv({"default": MASK_FACES_CHOICES[0], "tooltip": "Face mask: "
+    c["mask_faces"] = (list(MASK_FACES_CHOICES), ({"default": MASK_FACES_CHOICES[0], "tooltip": "Face mask: "
                        "which faces fill face_mask - all, the largest, or one by its position in pose_keypoint."}))
-    c["mask_face_index"] = ("INT", _adv({"default": 0, "min": 0, "max": 15, "tooltip": "Face mask: the face for "
+    c["mask_face_index"] = ("INT", ({"default": 0, "min": 0, "max": 15, "tooltip": "Face mask: the face for "
                             "mask_faces = face index (0 = first in pose_keypoint)."}))
+    for name, spec in c.items():
+        spec[1]["c2c_section"] = CONTROL_SECTIONS[name.split("_")[0]]
     return c
 
 
@@ -420,7 +423,7 @@ class FacepointsLandmarksC2C:
         "Outputs OpenPose POSE_KEYPOINT (face = 68 + 2 pupils, pixels), a white-dot control image, an overlay, a face "
         "mask and JSON with every set. Video: the box follows the face's own points frame to frame. Weights are "
         "CC BY-NC 4.0 (non-commercial use only) and are downloaded only with allow_download, into models/facepoints."
-        "\n\nAdvanced controls (show advanced inputs): appearance_ (colours), strength_ (opacity, intensity, pose "
+        "\n\nAdvanced controls (the node's collapsible sections):appearance_ (colours), strength_ (opacity, intensity, pose "
         "confidence), resolution_ (processing and output size; everything stays aligned), screening_ (face / point "
         "confidence, how unsure points are drawn, rejected faces in JSON), mask_ (grow, shrink, feather, softness, "
         "threshold, hull smoothing, preview), temporal_ (landmark smoothing, scene cuts, stable face order). The "
@@ -440,7 +443,7 @@ class FacepointsLandmarksC2C:
                                                    "exactly there. Unsure points are drawn faint in overlay."}),
         }
         optional.update(_controls_spec())                 # A27 FACE-001, appended after the original inputs
-        return {
+        return _with_layout({
             "required": {
                 "image": ("IMAGE", {"tooltip": "One image or a video (frames). Any size."}),
                 "face_finder": ([FINDER_YUNET, FINDER_WHOLE] + _yolo_models(), {
@@ -468,7 +471,7 @@ class FacepointsLandmarksC2C:
                                                           "into models/facepoints when they are missing."}),
             },
             "optional": optional,
-        }
+        })
 
     RETURN_TYPES = ("POSE_KEYPOINT", "IMAGE", "IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("pose_keypoint", "landmark_image", "overlay", "face_mask", "landmarks_json")
@@ -741,6 +744,45 @@ class FacepointsLandmarksC2C:
             info["output_scale"] = [O.sx, O.sy]
             info["coordinates"] = "output pixels (image_size); source pixels = output / output_scale"
         return (pose, lm_t, ov_t, mk_t, json.dumps(info))
+
+
+def _with_layout(spec: dict) -> dict:
+    """A28 (ORDERS 29, docs/audit/A28/README.md section 5): which controls show when, read by js/_c2c_node_layout.js.
+    Display only - every input keeps its name, order, type and default, is saved and reaches run() as before."""
+    finders = [FINDER_YUNET] + [n for n in spec["required"]["face_finder"][0] if n.startswith(FINDER_YOLO)]
+    layout = {
+        "face_finder": {"c2c_hide_if_linked": ["face_mask"]},
+        "max_faces": {"c2c_hide_if_linked": ["face_mask"], "c2c_show_if": {"face_finder": finders}},
+        "finder_confidence": {"c2c_hide_if_linked": ["face_mask"], "c2c_show_if": {"face_finder": finders}},
+        "passes": {"c2c_section": "Tracking"},
+        "track_video": {"c2c_section": "Tracking", "c2c_hide_if_linked": ["face_mask"]},
+        "confident_pct": {"c2c_section": "Confidence"},
+        "landmark_set": {"c2c_section": "Output"},
+        "point_size": {"c2c_section": "Output"},
+        # shown only while the weights are missing (GET /c2c/node_status, layout_status below); consent stays the
+        # user's tick, and run() still goes through _download_policy.allow_downloads
+        "allow_download": {"c2c_section": "Model setup", "c2c_show_if_status": "model_missing"},
+    }
+    for group in ("required", "optional"):
+        for name, s in spec[group].items():
+            if name in layout:
+                s[1].update(layout[name])
+    return spec
+
+
+def layout_status() -> dict:
+    """The model status the front end needs for allow_download (A28 c2c_show_if_status). It only LOOKS, with the same
+    resolvers run() uses (find_release, the YuNet file in models/facepoints): never downloads, never loads."""
+    release = find_release() is not None
+    yunet = any(os.path.isfile(os.path.join(d, YUNET_FILE)) for d in _folders())
+    return {"model_missing": not (release and yunet), "release_installed": release, "yunet_installed": yunet}
+
+
+try:                                                       # A28: the layout engine's status route
+    from ._node_status import register_status
+    register_status("FacepointsLandmarksC2C", layout_status)
+except Exception:  # pragma: no cover - imported outside the pack (tests load the file directly)
+    pass
 
 
 def _screen_pose(face70: List[float], scale: float, pmin: float) -> List[int]:
