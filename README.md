@@ -1651,6 +1651,17 @@ read any file path. Through an SSH tunnel the page still counts as local.
 - **LocateAnything Grounding**: can be stopped between frames and shows progress (2026-11-16).
 - **Mask + Matting, SAM Model Loader (auto), SAM Multi-Mask Picker, Semantic Segment**: run on ComfyUI's device
   (`--cpu`, the chosen GPU) instead of any GPU torch can see (2026-11-16).
+- **Mask Track (MEC)**: new `allow_download` switch (last input, off by default, shown only for stabilize +
+  raft_flow). Without it, raft_flow no longer downloads torchvision's RAFT-small weights; when they are missing the
+  mask passes through and the `warning` output says why (2026-11-17).
+- **SAM Mask Generator (MEC)**: with several boxes in `bboxes_json`, `info` is JSON and names the points / box / crop
+  settings that are not used (each box is segmented on its own) (2026-11-17).
+- **Image Mask Editor (C2C)**: recording the input frames for the editor is faster: an unchanged re-run skips the
+  full content hash (measured 2.0 s -> 0.007 s for 120 frames of 1344x768) and frames are encoded in parallel (13.8 s
+  -> 5.3 s first time) (2026-11-17).
+- **Face Landmarks (C2C)**: only the controls that matter are shown, in collapsible sections (Tracking, Confidence,
+  Output, Model setup and the appearance groups), and the node resizes to fit in both renderers and inside subgraphs
+  (default node 1434 px / 55 controls -> 272 px / 3). Saved workflows keep every value (2026-11-17).
 - **PAR Desqueeze / Resqueeze** keep scene-linear EXR values above 1.0 and below 0 (they were clamped to 0-1).
 - **Video Stabilizer (MEC)**: the padding mask has the size of the stabilised frames when the framing changes it.
 - **LocateAnything to SAM (MEC)**: on a batch, each box marks only the frame it was found in (each frame used to get
