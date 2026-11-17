@@ -71,6 +71,17 @@ def _load_raft(device: str):
             f"upgrade torchvision (>=0.13) to use raft_flow mode: {exc}"
         )
     weights = Raft_Small_Weights.DEFAULT
+    # L9.262 (CNP-NODES-1 audit): the weights were fetched from the internet without the node's download consent
+    import os
+    import torch
+    cached = os.path.join(torch.hub.get_dir(), "checkpoints", os.path.basename(str(weights.url)))
+    if not os.path.isfile(cached):
+        from .._download_policy import downloads_allowed
+        if not downloads_allowed():
+            raise RuntimeError(
+                "Mask Track (stabilize, raft_flow) needs torchvision's RAFT-small weights (about 4 MB), which are not "
+                f"on this machine ({cached}). Turn on allow_download on the node to fetch them once, or pick the "
+                "gaussian mode.")
     model = raft_small(weights=weights, progress=False).to(device).eval()
     _RAFT_MODEL = (model, weights.transforms())
     _RAFT_DEV = device
@@ -322,6 +333,7 @@ class MaskTemporalMEC:
 
         dev = device if (device == "cpu" or torch.cuda.is_available()) else "cpu"
 
+        raft_note = ""
         if temporal_mode == "none" or B <= 1:
             out = m
         elif temporal_mode == "gaussian":
@@ -350,6 +362,8 @@ class MaskTemporalMEC:
                 log.warning("[MaskTemporal] raft_flow failed (%s) — passthrough.", exc)
                 _release_raft()
                 out = m
+                # L9.262: say it on the node, not only in the log (e.g. the RAFT weights need allow_download)
+                raft_note = f"[raft_flow] not applied, mask passed through unchanged: {exc}"
         else:
             out = m
 
@@ -363,6 +377,8 @@ class MaskTemporalMEC:
                 f"frames flagged: {flagged_str}{extra}"
             )
             log.warning(warning)
+        if raft_note:
+            warning = f"{raft_note}\n{warning}" if warning else raft_note
 
         # Release RAFT after the call if we loaded it (resource discipline).
         if temporal_mode == "raft_flow":

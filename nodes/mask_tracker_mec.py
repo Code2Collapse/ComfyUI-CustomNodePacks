@@ -258,6 +258,11 @@ class MaskTrackerMEC:
                     "default": "median_then_exponential", "tooltip": "[bbox_smooth] smoothing strategy."}),
                 "bbox_alpha": ("FLOAT", {"default": 0.3, "min": 0.05, "max": 1.0, "step": 0.05,
                     "tooltip": "[bbox_smooth] exponential factor."}),
+                # L9.262: appended LAST so saved values keep their positions; the pack's download consent (L7.97)
+                "allow_download": ("BOOLEAN", {"default": False,
+                    "tooltip": "[stabilize, raft_flow] let the node download torchvision's RAFT-small weights (about "
+                               "4 MB) if they are not on this machine yet. Off: an existing copy is used; none = a "
+                               "plain message."}),
             },
         }
 
@@ -402,10 +407,12 @@ class MaskTrackerMEC:
         if video is None or mask is None:
             raise ValueError("Mask Track (stabilize): connect the video (IMAGE) and the mask.")
         from .mask_matting.temporal_node import MaskTemporalMEC
-        out, integrity, warning = MaskTemporalMEC().run(
-            video, mask, a.get("stabilize_temporal_mode", "none"), a.get("stabilize_blend", 0.5),
-            a.get("stabilize_sigma", 1.0), a.get("stabilize_device", "cuda"), a.get("stabilize_drop_threshold", 0.40),
-            a.get("stabilize_jump_threshold", 0.15))
+        from ._download_policy import allow_downloads
+        with allow_downloads(bool(a.get("allow_download", False))):
+            out, integrity, warning = MaskTemporalMEC().run(
+                video, mask, a.get("stabilize_temporal_mode", "none"), a.get("stabilize_blend", 0.5),
+                a.get("stabilize_sigma", 1.0), a.get("stabilize_device", "cuda"),
+                a.get("stabilize_drop_threshold", 0.40), a.get("stabilize_jump_threshold", 0.15))
         return (out, video, 0.0, integrity, f"stabilize:{a.get('stabilize_temporal_mode', 'none')}", warning)
 
     def _execute_impl(self, mode,

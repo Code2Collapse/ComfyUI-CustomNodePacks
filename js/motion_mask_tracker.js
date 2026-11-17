@@ -45,6 +45,8 @@ const SPLINE_TRACK = ["spline_closed", "spline_samples_per_segment", "spline_tra
 // the keyframes are drawn in the tracker canvas (js/spline_mask_tracker.js) and stored here: never a text box
 const SPLINE_DATA = ["spline_data"];
 const BBOX_SMOOTH = ["bbox_json", "bbox_radius", "bbox_method", "bbox_alpha"];
+// L9.262: download consent for the RAFT-small weights, read only by stabilize + raft_flow
+const RAFT_SETUP = ["allow_download"];
 
 // `get.node` / `get.shown` (set by applyVisibility): a widget in a closed section (L7.81, classic canvas) folds too,
 // and what the mode wants shown in a section feeds the node's "More" bar
@@ -104,6 +106,7 @@ function applyVisibility(node) {
         _setGroup(get, STABILIZE, false);
         _setGroup(get, SPLINE_TRACK, false);
         _setGroup(get, BBOX_SMOOTH, false);
+        _setGroup(get, RAFT_SETUP, false);
     } else {
         // leaving motion: hide every motion + detection widget
         _setGroup(get, MOTION_ALWAYS, false);
@@ -114,6 +117,8 @@ function applyVisibility(node) {
         _setGroup(get, STABILIZE,   mode === "stabilize");
         _setGroup(get, SPLINE_TRACK, mode === "spline_track");
         _setGroup(get, BBOX_SMOOTH, mode === "bbox_smooth");
+        _setGroup(get, RAFT_SETUP, mode === "stabilize"
+            && String(get("stabilize_temporal_mode")?.value ?? "none") === "raft_flow");
     }
     updateSectionBar(node, [...get.shown], () => applyVisibility(node));
     _resize(node);
@@ -139,6 +144,7 @@ app.registerExtension({
             const r = onNodeCreated?.apply(this, arguments);
             hookWidget(this, "detection_mode");
             hookWidget(this, "mode"); // unified-node mode flips
+            hookWidget(this, "stabilize_temporal_mode"); // L9.262: allow_download only for raft_flow
             setTimeout(() => applyVisibility(this), 0);
             return r;
         };

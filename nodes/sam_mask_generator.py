@@ -9,6 +9,7 @@ import torch
 import numpy as np
 import json
 import gc
+import logging
 
 from ._is_changed_util import hash_args_and_kwargs
 from ._mask_edge_refine import refine_edges, parse_bboxes, parse_spline, EDGE_MODES
@@ -320,7 +321,20 @@ class SAMMaskGeneratorMEC:
 
         try:
             if len(boxes) >= 2:
-                union_mask, best_all, det, best_score = None, None, None, 0.0
+                # L9.262 (CNP-NODES-1 audit): each box runs on its own, so these prompts are not used - say so
+                ignored = []
+                if points_json and parse_points_json(points_json):
+                    ignored.append("points_json")
+                if bbox_json and bbox_json.strip():
+                    ignored.append("bbox_json")
+                if bbox is not None:
+                    ignored.append("bbox")
+                if apply_bbox_crop:
+                    ignored.append("apply_bbox_crop")
+                if ignored:
+                    logging.getLogger("MEC").warning("SAM Mask Generator: %d boxes in bboxes_json - %s not used (each box is "
+                                   "segmented on its own and the masks are joined).", len(boxes), ", ".join(ignored))
+                union_mask, best_all, det, best_score, first_info = None, None, None, 0.0, None
                 for bx in boxes:
                     r = self._run_inference(
                         model, model_type, model_info, image, "",
@@ -332,7 +346,7 @@ class SAMMaskGeneratorMEC:
                     )
                     union_mask = r[0] if union_mask is None else torch.maximum(union_mask, r[0])
                     if best_all is None:
-                        best_all = r[1]
+                        best_all, first_info = r[1], r[4]
                     if float(r[3]) > best_score:
                         best_score, det = float(r[3]), r[2]
                 # Recompute bbox over the union
@@ -342,9 +356,19 @@ class SAMMaskGeneratorMEC:
                         y0, y1 = int(nz[:, 0].min()), int(nz[:, 0].max())
                         x0, x1 = int(nz[:, 1].min()), int(nz[:, 1].max())
                         det = [x0, y0, x1 - x0 + 1, y1 - y0 + 1]
+                try:
+                    info_d = json.loads(first_info) if first_info else {}
+                except (TypeError, ValueError):
+                    info_d = {}
+                info_d.update({"union_of_boxes": len(boxes), "best_score": best_score,
+                               "detected_bbox": det or [0, 0, int(image.shape[2]), int(image.shape[1])]})
+                if ignored:
+                    info_d["ignored_inputs"] = ignored
+                    info_d["note"] = ("bboxes_json has several boxes: each is segmented on its own and the masks are "
+                                      "joined, so " + ", ".join(ignored) + " were not used.")
                 result = (union_mask, best_all if best_all is not None else union_mask,
                           det or [0, 0, int(image.shape[2]), int(image.shape[1])],
-                          best_score, f"Union of {len(boxes)} boxes")
+                          best_score, json.dumps(info_d, indent=2))
             else:
                 result = self._run_inference(
                     model, model_type, model_info, image, points_json, bbox_json, bbox,
