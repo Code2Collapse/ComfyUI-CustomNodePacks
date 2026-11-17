@@ -28,6 +28,20 @@ from ._patches import (
     patch_kijai,
     patch_native,
 )
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 log = logging.getLogger("C2C.PromptRelay")
 
@@ -379,6 +393,12 @@ class PromptRelayRestoreKijaiC2C:
 # ────────────────────────────────────────────────────────────────────────
 # Advanced Options bundle — unchanged
 # ────────────────────────────────────────────────────────────────────────
+# A28 (docs/audit/A28/PARAM_CNP_B.md, PromptRelayAdvancedOptionsC2C): the LTX audio-stream controls sit in a
+# section. Display only.
+_RELAY_OPTIONS_LAYOUT = {k: {"c2c_section": "Audio stream"}
+                         for k in ("audio_epsilon", "audio_strength", "audio_window_scale")}
+
+
 class PromptRelayAdvancedOptionsC2C:
     @classmethod
     def INPUT_TYPES(cls):
@@ -391,7 +411,7 @@ class PromptRelayAdvancedOptionsC2C:
             "Scales the flat anchor zone (default L/2 - 2 frames). <1 starts "
             "falloff sooner; >1 widens the rigid zone."
         )
-        return {
+        return with_layout({
             "required": {
                 "video_strength":    ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.05, "tooltip": tt_strength}),
                 "video_window_scale":("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0,  "step": 0.05, "tooltip": tt_window}),
@@ -400,7 +420,7 @@ class PromptRelayAdvancedOptionsC2C:
                 "audio_strength":    ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.05, "tooltip": tt_strength}),
                 "audio_window_scale":("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0,  "step": 0.05, "tooltip": tt_window}),
             }
-        }
+        }, _RELAY_OPTIONS_LAYOUT)
 
     RETURN_TYPES = ("RELAY_OPTIONS",)
     RETURN_NAMES = ("relay_options",)

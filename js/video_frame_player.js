@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
-import { vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { relayoutNode } from "./_c2c_node_layout.js";
 import { api } from "../../scripts/api.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 import { C } from './_c2c_theme.js';
@@ -168,8 +169,8 @@ app.registerExtension({
             // view dominates ~80% of node height. Click again to expose.
             const advBtn = document.createElement("button");
             advBtn.type = "button";
-            advBtn.textContent = "Advanced ▾";
-            advBtn.title = "Show / hide all parameter widgets (frame_start, crop_x, etc.)";
+            advBtn.textContent = "Settings ▾";
+            advBtn.title = "Open / close every settings section (range, crop, resize, preview); the More bar opens one";
             advBtn.style.cssText =
                 "border:1px solid var(--c2c-panelBgAlt);background:var(--c2c-panelDeep);color:var(--c2c-fg);" +
                 "border-radius:4px;padding:3px 12px;font:600 11px sans-serif;cursor:pointer;outline:none;";
@@ -587,106 +588,58 @@ app.registerExtension({
             };
             node._stopPlay = stopPlay;
 
-            node.addDOMWidget("video_player_view", "VFPLAYER", el, { serialize: false });
-            node.setSize([520, 720]);
-
-            let _lockedW = 520, _lockedH = 720;
-            const _origCompute = node.computeSize;
-            node.computeSize = function () {
-                if (_lockedW > 0 && _lockedH > 0) return [_lockedW, _lockedH];
-                return _origCompute?.apply(this, arguments) ?? [520, 720];
+            // A28 (ORDERS 29): the player's height follows the node's width (the clip's aspect once frames arrive, a
+            // 520 x 720 shape before) - no locked node size. Which parameter rows show is declared in
+            // nodes/video_frame_player.py and applied by js/_c2c_node_layout.js (sections Range / Player / Crop /
+            // Resize / Preview under a "More" bar; the toolbar owns loop_mode and crop_locked), so the node grows
+            // only by the rows a user opens, and shrinks back.
+            const playerHeight = (w) => {
+                const width = Math.max(200, w || node.size?.[0] || 520);
+                if (S.width > 0 && S.height > 0) {
+                    // +48 = breathing room; +36 = HTML toolbar bar (as before, now per width)
+                    return Math.round((width - 32) * (S.height / S.width) + TL_H + STATUS_H + 48 + 36);
+                }
+                return Math.round(width * 720 / 520);
             };
-            node._lockSize = (w, h) => { _lockedW = w; _lockedH = h; };
-
-            // ── Advanced (collapsible) widget panel ────────────────────
-            // By default we hide every native widget row (frame_index,
-            // output_mode, crop_*, target_*, preview_*, etc.) so the
-            // player canvas + toolbar own the entire node body. The
-            // "Advanced ▾" button in the toolbar toggles them back.
-            //
-            // We hide via the ComfyUI-blessed pattern:
-            //   widget.type      = "hidden"   (skips event hit-testing)
-            //   widget.computeSize = () => [0, -4]   (skips layout slot)
-            //   (the -4 cancels LiteGraph's default 4px row spacer)
-            //
-            // The DOM widget (`video_player_view`) is left visible.
-            node._advancedOpen = false;
-            const _hiddenStash = new Map(); // widget -> { type, computeSize, draw }
-            const _applyAdvanced = (open) => {
-                const widgets = node.widgets || [];
-                for (const w of widgets) {
-                    if (!w || w.name === "video_player_view") continue;
-                    if (open) {
-                        const s = _hiddenStash.get(w);
-                        if (s) {
-                            w.type = s.type;
-                            w.computeSize = s.computeSize;
-                            w.draw = s.draw;
-                            w.hidden = false;
-                            _hiddenStash.delete(w);
-                        }
-                    } else {
-                        if (!_hiddenStash.has(w)) {
-                            _hiddenStash.set(w, {
-                                type: w.type,
-                                computeSize: w.computeSize,
-                                draw: w.draw,
-                            });
-                        }
-                        w.type = "hidden";
-                        w.hidden = true;
-                        w.computeSize = () => [0, -4];
-                        // Some ComfyUI widget classes (slider, combo) ignore
-                        // type === "hidden" and still paint. Stub their draw
-                        // method to a no-op so they truly disappear.
-                        w.draw = () => {};
-                    }
-                }
-                vueSyncNodeWidgets(node);
-                node._advancedOpen = open;
-                if (node._advBtn) {
-                    node._advBtn.textContent = open ? "Advanced ▴" : "Advanced ▾";
-                    node._advBtn.style.background = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
-                    node._advBtn.style.borderColor = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
-                    node._advBtn.style.color = open ? "var(--c2c-white)" : "var(--c2c-fg)";
-                }
-                // Adjust locked size so node shrinks/grows accordingly.
-                if (open) {
-                    // Let LiteGraph compute the real height needed for all
-                    // 23 widget rows + DOM widget.
-                    _lockedW = 0; _lockedH = 0;
-                    const sz = _origCompute?.apply(node) ?? [520, 1200];
-                    node.setSize([Math.max(520, sz[0]), Math.max(1200, sz[1])]);
-                    _lockedW = node.size[0]; _lockedH = node.size[1];
-                } else {
-                    _lockedW = 520; _lockedH = 720;
-                    node.setSize([_lockedW, _lockedH]);
-                }
+            const pw = node.addDOMWidget("video_player_view", "VFPLAYER", el, { serialize: false });
+            pw.serialize = false;
+            // LiteGraph's computeSize asks at the node's MINIMUM content width, core's arrange at the real one: a
+            // width-derived height must use the node's width, or the two disagree and core grows the node (A28)
+            pw.computeSize = (w) => [w, playerHeight(Math.max(w || 0, node.size?.[0] || 0))];
+            node.setSize([Math.max(node.size?.[0] || 0, 520), node.size?.[1] || 720]);
+            node._fitPlayer = () => {
+                if (vueNodesActive()) { vueSyncNodeWidgets(node); vueFitNodeHeight(node); return; }
+                const min = node.computeSize();
+                node.setSize([Math.max(node.size[0], min[0]), node.computeSize()[1]]);
                 node.setDirtyCanvas?.(true, true);
-                app.graph?.setDirtyCanvas(true, true);
             };
-            node._toggleAdvanced = () => _applyAdvanced(!node._advancedOpen);
-            // Defer initial collapse: poll briefly until we've seen the
-            // widget count stabilise, because LiteGraph adds INPUT_TYPES
-            // widgets asynchronously across versions and a slider added
-            // after our first hide pass would slip through.
-            let _lastCount = (node.widgets || []).length;
-            let _stableTicks = 0;
-            const _initCollapse = () => {
-                const cur = (node.widgets || []).length;
-                if (cur === _lastCount) {
-                    _stableTicks++;
-                } else {
-                    _lastCount = cur;
-                    _stableTicks = 0;
+            node._lockSize = () => node._fitPlayer();          // kept for callers; there is no lock any more
+
+            // the toolbar's "More" button opens / closes every section at once (the bar's chips open one)
+            const sectionNames = () => {
+                const t = LiteGraph.registered_node_types?.[node.type]?.nodeData?.input || {};
+                const out = new Set();
+                for (const g of [t.required, t.optional]) {
+                    for (const spec of Object.values(g || {})) if (spec?.[1]?.c2c_section) out.add(spec[1].c2c_section);
                 }
-                if (_stableTicks >= 3) {
-                    _applyAdvanced(false);
-                } else {
-                    requestAnimationFrame(_initCollapse);
-                }
+                return [...out];
             };
-            requestAnimationFrame(_initCollapse);
+            const paintAdv = () => {
+                if (!node._advBtn) return;
+                const open = (node.properties?.c2c_sections_open || []).length > 0;
+                node._advBtn.textContent = open ? "Settings ▴" : "Settings ▾";
+                node._advBtn.style.background = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelDeep)";
+                node._advBtn.style.borderColor = open ? "var(--c2c-accentVivid)" : "var(--c2c-panelBgAlt)";
+                node._advBtn.style.color = open ? "var(--c2c-white)" : "var(--c2c-fg)";
+            };
+            node._toggleAdvanced = () => {
+                const open = (node.properties?.c2c_sections_open || []).length > 0;
+                node.properties = node.properties || {};
+                node.properties.c2c_sections_open = open ? [] : sectionNames();
+                relayoutNode(node);
+                paintAdv();
+            };
+            requestAnimationFrame(paintAdv);
 
             // Re-render whenever a crop-related widget changes from the panel
             const watch = ["crop_enabled", "crop_locked", "aspect_ratio",
@@ -756,13 +709,9 @@ app.registerExtension({
             const onLoad = () => {
                 if (++loaded >= frames.length) {
                     if (S.width > 0 && S.height > 0) {
-                        const w = Math.max(node.size[0], 360);
-                        const aspect = S.height / S.width;
-                        const previewArea = (w - 32) * aspect;
-                        // +48 = breathing room; +36 = HTML toolbar bar.
-                        const h = Math.round(previewArea + TL_H + STATUS_H + 48 + 36);
-                        node._lockSize?.(w, h);
-                        node.setSize([w, h]);
+                        // the player widget's computeSize turns the width into the clip-aspect height
+                        node.setSize([Math.max(node.size[0], 360), node.size[1]]);
+                        node._fitPlayer?.();                     // A28: the height follows the clip's aspect
                     }
                     node._render();
                     app.graph.setDirtyCanvas(true);

@@ -536,3 +536,20 @@ def _fingerprint(settings: dict, images, latent) -> str:
 
 NODE_CLASS_MAPPINGS = {"SaveVideoC2C": SaveVideoC2C}
 NODE_DISPLAY_NAME_MAPPINGS = {"SaveVideoC2C": "Save Video (C2C)"}
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "SaveVideoC2C"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# Section names only: js/c2c_save_video.js stays this node's one visibility owner (its rules come from the served
+# encoder matrix) and asks js/_c2c_sections.js which of the controls it shows sit in a closed section.
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(SaveVideoC2C, sections(
+        Colour=["colorspace_in", "colorspace_out", "color_primaries", "color_transfer", "color_range"],
+        Output=["naming", "subfolder", "save_output", "save_metadata", "write_mode"],
+        Handles=["handles_trim", "trim_frames", "trim_side"],
+        Encoder=["encoder_preset", "gop", "bitrate_kbps", "channels", "png_compression"],
+        Review=["review_copy", "burn_in", "burn_in_template", "burn_in_artist"]))

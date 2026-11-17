@@ -43,6 +43,20 @@ from ._ops import (
     step_value,
     subtract_masks,
 )
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 _CATEGORY = "MEC/LayerEffects"
 
@@ -745,6 +759,20 @@ def _engine_spec(cls) -> dict:
     return {**(spec.get("required") or {}), **(spec.get("optional") or {})}
 
 
+def _layer_effects_layout() -> dict:
+    """A28 (docs/audit/A28/PARAM_CNP_B.md, LayerEffectsMEC): each effect's controls show while its switch is on (was
+    the c2c_mode_widgets.js rule); order and dissolve_seed sit in the "Order" section, dissolve_seed only while a
+    switched-on effect blends with "dissolve" (the only reader of the seed). Display only."""
+    layout = {"order": {"c2c_section": "Order"},
+              "dissolve_seed": {"c2c_section": "Order", "c2c_show_if_any": [
+                  {key: [True], f"{key}_blend_mode": ["dissolve"]}
+                  for key, _engine, params in _EFFECTS if "blend_mode" in params]}}
+    for key, _engine, params in _EFFECTS:
+        for p in params:
+            layout[effect_widget_name(key, p)] = {"c2c_show_if": {key: [True]}}
+    return layout
+
+
 class LayerEffectsMEC:
     """Layer Effects: drop shadow, outer glow, gradient map, gradient overlay, colour overlay, inner glow, inner
     shadow and stroke on one layer, each switched on separately, applied in the order you set."""
@@ -775,13 +803,13 @@ class LayerEffectsMEC:
                 tip = opts.get("tooltip", "")
                 opts["tooltip"] = f"{label}: {tip}" if tip else label
                 required[effect_widget_name(key, p)] = (s[0], opts)
-        return {
+        return with_layout({
             "required": required,
             "optional": {
                 "background_image": ("IMAGE", {"tooltip": "Plate to composite onto; empty = transparent canvas."}),
                 "layer_mask": ("MASK", {"tooltip": "Optional matte; overrides the layer's alpha when connected."}),
             },
-        }
+        }, _layer_effects_layout())
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING")
     RETURN_NAMES = ("image", "effect_mask", "report")

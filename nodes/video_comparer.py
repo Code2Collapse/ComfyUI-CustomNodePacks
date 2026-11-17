@@ -766,3 +766,32 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VideoComparerC2C": "Video Comparer — Wipe/Diff/Scopes/Audio",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "VideoComparerC2C"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# Each mode's settings from its _mode_* signature; file_a..d are read whenever their image socket is NOT wired
+# (every mode, _resolve_source :412-438; C / D by the browser player only).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _VC_IMAGES = ["image_a", "image_b", "image_c", "image_d"]
+    declare_layout(VideoComparerC2C, merge(sections(Labels=["label_a", "label_b", "label_c", "label_d"],
+                                                    Player=["preview_fps", "metrics"]), {
+        "bit_depth": {"c2c_show_if": {"mode": ["bit_depth_crush"]}},
+        "wipe_position": {"c2c_show_if": {"mode": ["wipe"]}},
+        "onion_alpha": {"c2c_show_if": {"mode": ["onion"]}},
+        "diff_gain": {"c2c_show_if": {"mode": ["diff", "per_channel", "false_color", "bit_depth_crush"]}},
+        "diff_gamma": {"c2c_show_if": {"mode": ["diff"]}},
+        "diff_threshold": {"c2c_show_if": {"mode": ["diff"]}},
+        "diff_mode": {"c2c_show_if": {"mode": ["diff"]}},
+        "false_color_lut": {"c2c_show_if": {"mode": ["false_color", "bit_depth_crush"]}},
+        "scope_intensity": {"c2c_show_if": {"mode": ["waveform_scope", "parade_scope", "vectorscope"]}},
+        "file_a": {"c2c_hide_if_linked": ["image_a"]},
+        "file_b": {"c2c_hide_if_linked": ["image_b"]},
+        "file_c": {"c2c_hide_if_linked": ["image_c"]},
+        "file_d": {"c2c_hide_if_linked": ["image_d"]},
+        "preview_fps": {"c2c_show_if_linked": _VC_IMAGES},
+    }))

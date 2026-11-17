@@ -652,8 +652,10 @@ class VideoStabilizerFlowMEC(_DeprecatedStabilizerBase):
                 "smooth":         ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "keep_fov":       ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "padding_color":  ("STRING", {"default": "127, 127, 127"}),
-                "raft_iters":     ("INT", {"default": 12, "min": 4, "max": 32}),
-                "use_half":       ("BOOLEAN", {"default": True}),
+                # A28 DEAD (docs/audit/A28/PARAM_CNP_B.md): this shim forces method="dense_flow", and _RaftFlow is
+                # built only for raft_flow, so these two are never read. Hidden (c2c_hidden), still saved and passed.
+                "raft_iters":     ("INT", {"default": 12, "min": 4, "max": 32, "c2c_hidden": True}),
+                "use_half":       ("BOOLEAN", {"default": True, "c2c_hidden": True}),
             },
         }
 
@@ -724,3 +726,24 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VideoStabilizerFlowMEC":    "Video Stabilizer — Dense Flow (deprecated)",
     "VideoStabilizerAutoMEC":    "Video Stabilizer — Auto (deprecated)",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "VideoStabilizerMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# Manual settings only for preset manual, RAFT settings only for raft_flow; with motion_meta wired (restoring
+# the camera motion) only padding_color is read (:484-485). VideoStabilizerMEC only (the deprecated shims below
+# keep their own specs).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _VS_LINK = ["motion_meta"]
+    _VS = {n: {"c2c_hide_if_linked": _VS_LINK} for n in ("method", "preset", "frame_rate")}
+    for _n in ("framing_mode", "transform_mode", "camera_lock", "strength", "smooth", "keep_fov"):
+        _VS[_n] = {"c2c_show_if": {"preset": ["manual"]}, "c2c_hide_if_linked": _VS_LINK}
+    for _n in ("raft_iters", "use_half"):
+        _VS[_n] = {"c2c_section": "RAFT", "c2c_show_if": {"method": ["raft_flow"]}, "c2c_hide_if_linked": _VS_LINK}
+    _VS["allow_download"] = {"c2c_section": "Model setup", "c2c_show_if": {"method": ["raft_flow"]},
+                             "c2c_hide_if_linked": _VS_LINK}
+    declare_layout(VideoStabilizerMEC, _VS)

@@ -1,6 +1,6 @@
 ﻿import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { sourceFromWidgets, sourceFromValue, kindRank, KNOWN_EXT_RE as SOURCE_EXT_RE } from "./_fi_source_name.js";
 
 /**
@@ -563,16 +563,7 @@ app.registerExtension({
             writeSourceWidgets(raw);
         }
 
-        function hideExtensionWidget() {
-            const extWidget = node.widgets?.find(w => w.name === "source_extension");
-            if (!extWidget) return;
-            extWidget.hidden = true;
-            extWidget.type = "hidden";
-            if (extWidget.computeSize) {
-                extWidget.computeSize = () => [0, -4];
-            }
-            vueSyncNodeWidgets(node);
-        }
+        // source_extension is hidden by the A28 layout engine (c2c_hidden in folder_incrementer.py), its one owner.
 
         // ── Extract filename honouring source_choice ─────────────────
         //    Tries the named trigger inputs first (in priority order
@@ -801,6 +792,15 @@ app.registerExtension({
                 });
                 w._el = el;
                 node._fiStatusWidget = w;
+                // A28: the line arrives after the node's first layout - grow the height to hold it (classic: keep the
+                // user's width; Nodes 2.0: fit to the rows), or it overlapped the widgets below (measured,
+                // docs/evidence/A28/cnp_b_layout_live.json, classic 00_default: 556 px drawn vs 600 px needed).
+                queueMicrotask(() => {
+                    if (vueNodesActive()) { vueSyncNodeWidgets(node); vueFitNodeHeight(node); return; }
+                    const cs = node.computeSize?.();
+                    if (cs) node.setSize?.([Math.max(node.size?.[0] ?? 0, cs[0]), cs[1]]);
+                    node.setDirtyCanvas?.(true, true);
+                });
                 return w;
             }
             return null;
@@ -1023,10 +1023,9 @@ app.registerExtension({
         }
 
         // Initial sync + periodic retry (graph may not be fully loaded yet)
-        hideExtensionWidget();
         normalizeSourceFilename();
-        setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 500);
-        setTimeout(() => { hideExtensionWidget(); normalizeSourceFilename(); syncSourceFilename(); }, 2000);
+        setTimeout(() => { normalizeSourceFilename(); syncSourceFilename(); }, 500);
+        setTimeout(() => { normalizeSourceFilename(); syncSourceFilename(); }, 2000);
 
         // Changes elsewhere in the graph (another loader's file, a new
         // Set/Get pair) arrive through the page-wide `graphChanged` listener

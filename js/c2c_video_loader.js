@@ -7,6 +7,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { measureRootContent, installResizeFloor } from "./c2c_ui/index.js";
 import { setHidden } from "./_widget_visibility.js";
+import { relayoutNode } from "./_c2c_node_layout.js";
 import {
     MARGIN,
     DEFAULT_ASPECT,
@@ -220,13 +221,10 @@ function mountLoaderWidget(node, cfg) {
         ui.root.insertBefore(bar.el, ui.root.firstChild);
     }
 
-    // Crop tool (Load Video / Load Video Path): drawn over the preview, writes the four crop widgets, which it hides.
+    // Crop tool (Load Video): drawn over the preview, writes the four crop widgets. A28: they sit in the node's "Crop"
+    // section (js/_c2c_node_layout.js, the node's one visibility owner) for typing exact fractions.
     let crop = null;
     if (player && ui.viewport && node.widgets?.some((w) => w.name === "crop_x")) {
-        for (const name of CROP_WIDGETS) {
-            const w = node.widgets.find((x) => x.name === name);
-            if (w) setHidden(w, true);
-        }
         crop = attachCrop(ui.viewport, ui.timeline, {
             makeButton: playerButton,
             onCommit: (r) => {
@@ -367,7 +365,9 @@ function mountLoaderWidget(node, cfg) {
         margin: MARGIN,
         getMinHeight: () => getReserved(nodeWidth()),
     });
-    widgetRef.computeSize = (w) => [w, getReserved(w)];
+    // A28: LiteGraph's computeSize passes the node's MINIMUM content width, core's arrange the real one; a
+    // width-derived height measured at the smaller width left the node ~120 px taller than computeSize (measured)
+    widgetRef.computeSize = (w) => [w, getReserved(Math.max(w || 0, nodeWidth()))];
     if (player) holdPlayerWidth(node, player);          // the transport on ONE line (L9.52)
     if (cfg.hideCorePreview) muteCorePreviewSize(node);
     tagDomWidget(widgetRef);       // Nodes 2.0 inside a new subgraph shows a stale copy; _vue_dom_rebind swaps ours in
@@ -777,12 +777,13 @@ const CS_AUTO = "auto (detect)";
 
 function setupColour(node, fresh) {
     const csW = node.widgets?.find((w) => w.name === "colorspace_in");
-    const wsW = node.widgets?.find((w) => w.name === "working_space");
     if (!csW) return;
     const sync = () => {
         // a value this list does not hold (a shifted older workflow) means what the loader always did
         if (!csW.options?.values?.includes(csW.value)) csW.value = CS_OFF;
-        if (wsW) setHidden(wsW, csW.value === CS_OFF);
+        // A28: working_space shows only with colour on - declared in Python, applied by js/_c2c_node_layout.js;
+        // a value set here without a widget callback needs that engine to look again
+        relayoutNode(node);
     };
     const prev = csW.callback;
     csW.callback = function (...a) {

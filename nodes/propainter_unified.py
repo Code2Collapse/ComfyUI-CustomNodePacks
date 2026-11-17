@@ -438,3 +438,32 @@ NODE_CLASS_MAPPINGS = {"ProPainterMEC": ProPainterMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ProPainterMEC": "ProPainter — Temporal / Remove / Stitch / Refine / Flow",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "ProPainterMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# Each mode shows only what it reads (propainter_unified.py:339-436).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _PP_NOT_FLOW = ["temporal", "remove", "stitch", "stitch_refine"]
+    _PP_WINDOWED = ["temporal", "stitch", "stitch_refine"]
+    declare_layout(ProPainterMEC, {
+        "use_half": {"c2c_show_if": {"mode": _PP_NOT_FLOW}},
+        "color_match_mode": {"c2c_show_if": {"mode": _PP_NOT_FLOW}},
+        "raft_iter": {"c2c_section": "Flow", "c2c_show_if": {"mode": ["temporal", "stitch", "stitch_refine", "flow"]}},
+        "neighbor_stride": {"c2c_section": "Windowing", "c2c_show_if": {"mode": _PP_WINDOWED}},
+        "ref_stride": {"c2c_section": "Windowing", "c2c_show_if": {"mode": _PP_WINDOWED}},
+        "subvideo_length": {"c2c_section": "Windowing", "c2c_show_if": {"mode": _PP_WINDOWED}},
+        "raft_chunk": {"c2c_section": "Windowing", "c2c_show_if": {"mode": ["temporal"]}},
+        "blend_boundary": {"c2c_show_if": {"mode": ["temporal"]}},
+        "remove_quality": {"c2c_show_if": {"mode": ["remove"]}},
+        "remove_dilate_pixels": {"c2c_show_if": {"mode": ["remove"]}},
+        "boundary_band_pixels": {"c2c_show_if": {"mode": ["stitch"]}},
+        "preserve_inpaint_center": {"c2c_show_if": {"mode": ["stitch"]}},
+        "upscale_method": {"c2c_show_if": {"mode": ["stitch"]}},
+        "ring_pixels": {"c2c_show_if": {"mode": ["stitch_refine"]}},
+        "flow_consistency_thr": {"c2c_show_if": {"mode": ["flow"]}},
+    })

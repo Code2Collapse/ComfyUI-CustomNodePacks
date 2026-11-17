@@ -16,6 +16,62 @@ from . import metadata as creation_metadata
 from .auth import NotSignedInError
 from .mcp import McpError
 
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
+
+# A28 (docs/audit/A28/PARAM_CNP_B.md, Magnific): which controls show when. Display only - every input keeps its name,
+# order, type and default and is still sent as before. The per-family slider rules follow the code comments and
+# tooltips (UpscaleImage: "the server ignores the family that doesn't match"; SkinEnhancer "Faithful / Flexible
+# version only"); they are NOT VERIFIED against the Magnific API.
+_REFS = ["reference_image", "reference_image_2", "reference_image_3", "reference_image_4"]
+_MAG_GENERATE_IMAGE = {
+    "reference_type": {"c2c_show_if_linked": _REFS},
+    "confirm_task_count": {"c2c_show_if": {"count": {"gt": 4}}},   # api.check_task_count: up to 4 run as they are
+}
+_MAG_UPSCALE_IMAGE = {
+    "prompt": {"c2c_section": "Prompt"},
+    **{k: {"c2c_show_if": {"precision": ["creative"]}} for k in ("creativity", "hdr", "resemblance", "fractality")},
+    **{k: {"c2c_show_if": {"precision": ["precision"]}} for k in ("sharpness", "grain", "ultra_detail")},
+}
+_MAG_STOCK_SEARCH = {
+    **{k: {"c2c_section": "Filters"} for k in ("content_type", "license", "orientation", "ai_generated")},
+    "result_index": {"c2c_show_if": {"selection": ["index"]}},
+    **{k: {"c2c_show_if": {"selection": ["random"]}} for k in ("range_from", "range_to", "seed")},
+}
+_MAG_UPSCALE_VIDEO = {
+    "target_resolution": {"c2c_show_if": {"mode": ["magnific", "magnific_precision"]}},
+    "fps_boost": {"c2c_show_if": {"mode": ["magnific", "magnific_precision"]}},
+    "upscale_factor": {"c2c_show_if": {"mode": ["topaz"]}},
+    "preset": {"c2c_show_if": {"mode": ["magnific"]}},
+    **{k: {"c2c_show_if": {"mode": ["magnific"], "preset": ["custom"]}}
+       for k in ("creativity", "sharpen", "smart_grain", "flavor", "premium_quality", "turbo")},
+    "strength": {"c2c_show_if": {"mode": ["magnific_precision"]}},
+}
+# duration is sent for every model except the fixed-30 s ones (api.music_args: MUSIC_FIXED_DURATION), by label or slug
+_MAG_GENERATE_MUSIC = {
+    "duration_seconds": {"c2c_show_if": {"model": {"not": sorted(
+        {*api.MUSIC_FIXED_DURATION, *(api.music_model_label(m) for m in api.MUSIC_FIXED_DURATION)})}}},
+    "seed": {"c2c_section": "Re-run"},
+}
+_MAG_SKIN = {
+    "skin_detail": {"c2c_show_if": {"version": ["faithful"]}},
+    "optimized_for": {"c2c_show_if": {"version": ["flexible"]}},
+}
+_MAG_RETOUCH = {"prompt": {"c2c_show_if": {"mode": ["replace"]}}}
+_MAG_PICKER_SELECTED = {"selected": {"c2c_hidden": True}}       # machine field: set by a thumbnail click
+
 # Filed with the rest of this pack rather than as a top-level vendor menu.
 # The node IDs are deliberately NOT renamed, so a workflow saved against the
 # vendor's own pack still resolves here - which also means that installing
@@ -258,7 +314,7 @@ class MagnificGenerateImage:
             resolutions = sorted({r for m in catalog for r in m["resolutions"]})
         except Exception:
             models = ["auto"]  # 'auto' always works; the catalog loads on the next refresh
-        return {
+        return with_layout({
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": (models, {"default": "auto"}),
@@ -303,7 +359,7 @@ class MagnificGenerateImage:
                     "Every image is a separate paid generation. Counts of up to 4 run as they are; for a bigger "
                     "count type the same number here to submit it.")}),
             },
-        }
+        }, _MAG_GENERATE_IMAGE)
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("images", "creation_identifiers", "metadata")
@@ -368,7 +424,7 @@ class MagnificGenerateImage:
 class MagnificUpscaleImage:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "image": ("IMAGE",),
                 "scale": (["2x", "4x", "8x", "16x"], {"default": "2x"}),
@@ -393,7 +449,7 @@ class MagnificUpscaleImage:
                 "grain": ("INT", {"default": 0, "min": 0, "max": 100}),
                 "ultra_detail": ("INT", {"default": 0, "min": 0, "max": 100}),
             },
-        }
+        }, _MAG_UPSCALE_IMAGE)
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
@@ -461,7 +517,7 @@ class MagnificStockSearch:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "query": ("STRING", {"default": ""}),
                 "content_type": (STOCK_CONTENT_TYPES, {"default": "photo"}),
@@ -489,7 +545,7 @@ class MagnificStockSearch:
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": "Optional: also save the stock item to this Magnific project/folder."}),
             },
-        }
+        }, _MAG_STOCK_SEARCH)
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
@@ -715,7 +771,7 @@ class MagnificGenerateVideo:
 class MagnificUpscaleVideo:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "video": ("VIDEO",),
                 "mode": (["magnific", "magnific_precision", "topaz"], {"default": "magnific"}),
@@ -739,7 +795,7 @@ class MagnificUpscaleVideo:
                 "turbo": ("BOOLEAN", {"default": False}),
                 "strength": ("INT", {"default": 50, "min": 0, "max": 100, "tooltip": "Precision mode only."}),
             },
-        }
+        }, _MAG_UPSCALE_VIDEO)
 
     RETURN_TYPES = ("VIDEO", "STRING", "STRING")
     RETURN_NAMES = ("video", "creation_identifier", "metadata")
@@ -810,7 +866,7 @@ class MagnificGenerateMusic:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": (cls._models(), {"default": api.music_model_label("google-lyria")}),
@@ -832,7 +888,7 @@ class MagnificGenerateMusic:
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
             },
-        }
+        }, _MAG_GENERATE_MUSIC)
 
     RETURN_TYPES = ("AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("audio", "creation_identifier", "metadata")
@@ -897,7 +953,7 @@ class MagnificVoiceover:
 class MagnificSkinEnhancer:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "image": ("IMAGE",),
                 "version": (["faithful", "creative", "flexible"], {"default": "faithful"}),
@@ -912,7 +968,7 @@ class MagnificSkinEnhancer:
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
             },
-        }
+        }, _MAG_SKIN)
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
@@ -968,7 +1024,7 @@ class MagnificRetouch:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "image": ("IMAGE",),
                 "mask": ("MASK", {"tooltip": "1.0/white = area to change. Must be the same pixel size as the image."}),
@@ -978,7 +1034,7 @@ class MagnificRetouch:
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": FOLDER_TOOLTIP}),
             },
-        }
+        }, _MAG_RETOUCH)
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("image", "creation_identifier", "metadata")
@@ -1043,7 +1099,7 @@ class MagnificStockPicker:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "query": ("STRING", {"default": ""}),
                 "content_type": (STOCK_CONTENT_TYPES, {"default": "photo"}),
@@ -1055,7 +1111,7 @@ class MagnificStockPicker:
             "optional": {
                 "folder": (FOLDER_TYPE, {"tooltip": "Optional: also save the stock item to this Magnific project/folder."}),
             },
-        }
+        }, _MAG_PICKER_SELECTED)
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "info")
@@ -1097,7 +1153,7 @@ class MagnificCreationPicker:
             "STRING",
             {"default": "", "tooltip": "Set by clicking a thumbnail in the grid."},
         )
-        return base
+        return with_layout(base, _MAG_PICKER_SELECTED)
 
     RETURN_TYPES = ("IMAGE", "VIDEO", "AUDIO", "STRING", "STRING")
     RETURN_NAMES = ("image", "video", "audio", "creation_identifier", "metadata")

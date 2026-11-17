@@ -16,6 +16,20 @@ import re
 from typing import Any
 
 import torch
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 logger = logging.getLogger("MEC.ModelAnalysis")
 
@@ -112,6 +126,14 @@ def _compare(vae_a, vae_b, include_per_tensor: bool = False) -> tuple[str, float
     )
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, VAEBlockInspectorMEC): each mode's own control only. Display only. Replaces the
+# c2c_mode_widgets.js rule (one visibility owner per node).
+_INSPECT_LAYOUT = {
+    "anomaly_threshold": {"c2c_show_if": {"mode": ["inspect"]}},
+    "include_per_tensor": {"c2c_show_if": {"mode": ["compare"]}},
+}
+
+
 class VAEBlockInspectorMEC:
     """VAE Inspect: per-block parameter statistics of one VAE, or how similar two VAEs are."""
 
@@ -119,7 +141,7 @@ class VAEBlockInspectorMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {"vae": ("VAE", {"tooltip": "VAE to inspect (compare mode: the first VAE)."})},
             "optional": {
                 # Phase 3b v2 - Feature A: anomaly scoring vs reference dist.
@@ -139,7 +161,7 @@ class VAEBlockInspectorMEC:
                                        "tooltip": "Compare: include per-tensor cosine entries in the JSON report "
                                                   "(verbose)."}),
             },
-        }
+        }, _INSPECT_LAYOUT)
 
     RETURN_TYPES = ("STRING", "STRING", "FLOAT", "FLOAT", "STRING")
     RETURN_NAMES = ("report_json", "outlier_tensor_names", "anomaly_score", "global_cosine", "most_divergent_blocks")

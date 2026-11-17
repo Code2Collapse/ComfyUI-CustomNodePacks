@@ -55,6 +55,20 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 from ._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 logger = logging.getLogger("MEC.VAEMerge")
 
@@ -409,6 +423,25 @@ class VAEMergeError(RuntimeError):
     """A merge failure explained in plain words (A22 L9.135)."""
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, VAEMergeMEC). Display only. beta is DEAD (the merge math never reads it:
+# _merge_two / _merge_three take alpha only) - hidden, still saved and still in the recipe. alpha shows for the modes
+# that read it. The block sliders show while use_blocks is on and auto_alpha is off (was js/vae_merge.js).
+_BLOCKS = ("block_conv_in", "block_conv_out", "block_norm_out", "block_0", "block_1", "block_2", "block_3", "block_mid")
+_ALPHA_MODES = [m for m in MERGE_MODES if m not in ("tensor_sum", "max_abs", "triple_sum")]
+_VAE_MERGE_LAYOUT = {
+    "alpha": {"c2c_show_if": {"merge_mode": _ALPHA_MODES}},
+    "beta": {"c2c_hidden": True},
+    "brightness": {"c2c_section": "Post-merge"},
+    "contrast": {"c2c_section": "Post-merge"},
+    "use_blocks": {"c2c_section": "Blocks"},
+    "auto_alpha": {"c2c_section": "Blocks"},
+    **{b: {"c2c_section": "Blocks", "c2c_show_if": {"use_blocks": [True], "auto_alpha": [False]}} for b in _BLOCKS},
+    "device": {"c2c_section": "Compute"},
+    "dry_run": {"c2c_section": "Compute"},
+    "recipe_in": {"c2c_section": "Recipe"},
+}
+
+
 class VAEMergeMEC:
     """
     (C2C) VAE Merge — combine 2 or 3 VAE checkpoints with TechnoByte-style
@@ -428,7 +461,7 @@ class VAEMergeMEC:
     @classmethod
     def INPUT_TYPES(cls):
         block_default = {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}
-        return {
+        return with_layout({
             "required": {
                 "vae_a": ("VAE", {"tooltip": "Primary VAE (acts as base; deep-copied clone is returned)."}),
                 "vae_b": ("VAE", {"tooltip": "Secondary VAE blended into vae_a."}),
@@ -488,7 +521,7 @@ class VAEMergeMEC:
                         "widget value above so the exact merge is reproduced."
                     )}),
             },
-        }
+        }, _VAE_MERGE_LAYOUT)
 
     RETURN_TYPES = ("VAE", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("vae", "info", "recipe_json", "probe_report")

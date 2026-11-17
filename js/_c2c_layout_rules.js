@@ -15,6 +15,7 @@ const num = (v) => (typeof v === "number" ? v : typeof v === "boolean" ? Number(
  *   {"not": ["a"]}       none of
  *   {"gt": n} {"gte": n} {"lt": n} {"lte": n}   numeric
  *   {"truthy": true}     truthy (false: falsy)
+ *   {"re": "pattern"}    the value as text matches the pattern (case-insensitive; a bad pattern never matches)
  *   scalar               equal (as strings)
  * Several operators in one object must all hold. An unknown operator never matches (fail closed, so a typo hides
  * instead of silently showing).
@@ -37,6 +38,11 @@ export function matchValue(value, cond) {
         } else if (op === "truthy") {
             const t = !(value === false || value === 0 || value === "" || value == null || value === "false");
             if (t !== Boolean(arg)) return false;
+        } else if (op === "re") {
+            // A28 CNP part A: a case-insensitive pattern on the value as text (Load Video: the source's extension)
+            let re;
+            try { re = new RegExp(String(arg), "i"); } catch (_e) { return false; }
+            if (!re.test(value == null ? "" : String(value))) return false;
         } else {
             return false;
         }

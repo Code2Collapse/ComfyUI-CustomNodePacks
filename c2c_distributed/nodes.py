@@ -6,6 +6,20 @@ import json
 from . import enabled, kill_switch_reason
 from . import inventory as inv
 from . import usp
+try:                                                       # A28 layout declarations (display only)
+    from ..nodes._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', 'nodes', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 CATEGORY = "C2C/Distributed"
 RANK_BACKENDS = ("threads", "processes (Linux, NCCL)")
@@ -55,12 +69,16 @@ class C2CGPUInventory:
         return {"ui": {"text": [text]}, "result": (text, json.dumps(rep, indent=1, default=str))}
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, C2CSequenceParallel): the token-split tuning sits in a section. Display only.
+_SP_LAYOUT = {k: {"c2c_section": "Token split"} for k in ("min_tokens_per_gpu", "fast_link_gpus", "rank_backend")}
+
+
 class C2CSequenceParallel:
     """Split every model call over several GPUs: batch items for any model, tokens for Wan / MiniMax H3."""
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
+        return with_layout({"required": {
             "model": ("MODEL",),
             "gpus": ("INT", {"default": 0, "min": 0, "max": 64, "tooltip": "How many GPUs to use; 0 = all that "
                              "ComfyUI sees. Each GPU holds a full copy of the model."}),
@@ -78,7 +96,7 @@ class C2CSequenceParallel:
                              "model). processes: one worker process per GPU with its own model copy, talking "
                              "through NCCL (Linux server GPUs; Wan and MiniMax H3 only). Verified on CPU test "
                              "ranks only so far - not yet on real GPUs."}),
-        }}
+        }}, _SP_LAYOUT)
 
     RETURN_TYPES = ("MODEL", "STRING")
     RETURN_NAMES = ("model", "plan")

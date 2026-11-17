@@ -460,3 +460,20 @@ class SamMultiMaskPickerMEC:
             "ui": {"mask_thumbs": [], "scores": [scores_str], "selected_index": [0]},
             "result": (empty_single, empty_batch, 0, scores_str, info),
         }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "SamMultiMaskPickerMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# model_name / precision / allow_download load a model only while sam_model is not wired (:223-236); the
+# picker tiles write selected_index.
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(SamMultiMaskPickerMEC, {
+        "model_name": {"c2c_hide_if_linked": ["sam_model"]},
+        "precision": {"c2c_hide_if_linked": ["sam_model"]},
+        "selected_index": {"c2c_hidden": True},
+        "allow_download": {"c2c_section": "Model setup", "c2c_hide_if_linked": ["sam_model"]},
+    })

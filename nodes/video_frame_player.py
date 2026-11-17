@@ -601,3 +601,30 @@ class VideoFramePlayerMEC:
                 int(W), int(H), float(duration_sec), video_info_json,
             ),
         }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "VideoFramePlayerMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# The player toolbar owns loop_mode / crop_locked; crop details only with crop on; JPEG quality only for JPEG.
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(VideoFramePlayerMEC, merge(
+        sections(Range=["frame_start", "frame_end", "frame_stride"], Player=["playback_fps"],
+                 Crop=["crop_enabled", "aspect_ratio", "custom_aspect_w", "custom_aspect_h", "crop_x", "crop_y",
+                       "crop_w", "crop_h"],
+                 Resize=["resize_method", "target_width", "target_height", "upscale_factor"],
+                 Preview=["preview_width", "preview_format", "preview_quality"]),
+        {"loop_mode": {"c2c_hidden": True},
+         "crop_locked": {"c2c_hidden": True},
+         "aspect_ratio": {"c2c_show_if": {"crop_enabled": [True]}},
+         "custom_aspect_w": {"c2c_show_if": {"crop_enabled": [True], "aspect_ratio": ["custom"]}},
+         "custom_aspect_h": {"c2c_show_if": {"crop_enabled": [True], "aspect_ratio": ["custom"]}},
+         "crop_x": {"c2c_show_if": {"crop_enabled": [True]}},
+         "crop_y": {"c2c_show_if": {"crop_enabled": [True]}},
+         "crop_w": {"c2c_show_if": {"crop_enabled": [True]}},
+         "crop_h": {"c2c_show_if": {"crop_enabled": [True]}},
+         "preview_quality": {"c2c_show_if": {"preview_format": ["jpeg"]}}},
+    ))

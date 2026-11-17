@@ -23,6 +23,7 @@ import { wdEnsureProxy } from './_wan_director_ui.js';
 import { ensureC2CKit } from "./_c2c_ui_kit.js";
 import { createComparePlayer } from "./_c2c_compare_player.js";
 import { holdPlayerWidth } from "./c2c_video_player.js";
+import { setWidgetVisible } from "./_widget_visibility.js";
 
 // Registered under both "VideoComparerC2C" (new) and "VideoComparerMEC"
 // (legacy alias) so old saved workflows load with the new widget.
@@ -213,6 +214,13 @@ function makeUploadButton(node, slot, label, onUploaded) {
         inp.click();
     });
     btn.serialize = false;
+    // A28: the button belongs to its file widget - js/_c2c_node_layout.js shows / hides a widget's linkedWidgets with
+    // it (file_a hides while image_a is wired), so the upload button never outlives the field it fills
+    const fw = getW(node, widgetName);
+    if (fw) {
+        fw.linkedWidgets = [...(fw.linkedWidgets || []), btn];
+        if (fw.__mec_hidden) setWidgetVisible(btn, false);
+    }
     return btn;
 }
 

@@ -111,3 +111,13 @@ class OpticalFlowMEC:
 
 NODE_CLASS_MAPPINGS = {"OpticalFlowMEC": OpticalFlowMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {"OpticalFlowMEC": "Optical Flow Re-Vector (MEC)"}
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "OpticalFlowMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(OpticalFlowMEC, sections(Flow=["iters", "consistency_thr"]))

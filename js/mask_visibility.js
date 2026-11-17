@@ -25,6 +25,11 @@ import { setWidgetVisible, vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets 
 import { sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 
 const NODE_ID = "MaskOpsMEC";
+// A28 (ORDERS 29): this file stays MaskOps' one visibility owner (its rules come from the installed backends, served
+// by nodes/mask_matting/_visibility.py); the declarative layout engine (js/_c2c_node_layout.js) must leave it alone
+// now that its sectioned inputs no longer carry core's "advanced" flag.
+globalThis.__c2cVisibilityOwners = globalThis.__c2cVisibilityOwners || new Set();
+globalThis.__c2cVisibilityOwners.add(NODE_ID);
 const ROUTE = "/c2c/mask/visibility";
 
 let SPEC = null;
@@ -62,7 +67,9 @@ function toggleAllows(node, name, spec) {
     if (rule === undefined) return true;
     if (Array.isArray(rule)) {
         // ["post_refine", "none"] -> visible while post_refine is NOT "none"
-        return String(valueOf(node, rule[0])) !== String(rule[1]);
+        // ["post_refine", ["none", "guided"]] -> visible while it is none of them (A28)
+        const off = Array.isArray(rule[1]) ? rule[1].map(String) : [String(rule[1])];
+        return !off.includes(String(valueOf(node, rule[0])));
     }
     const v = valueOf(node, rule);
     return !(v === false || v === 0 || v === undefined);
@@ -195,11 +202,10 @@ function apply(node) {
     if (vueNodesActive()) {
         vueFitNodeHeight(node);
     } else {
+        // A28: fit the height to the content (folded rows take no space - growing only left dead rows under the
+        // node); the user's width is kept unless the content needs more
         const size = node.computeSize();
-        // Only ever GROW to the computed height: shrinking a node the user has
-        // deliberately made taller is its own annoyance.
-        node.setSize([Math.max(node.size[0], size[0]),
-                      Math.max(node.size[1], size[1])]);
+        node.setSize([Math.max(node.size[0], size[0]), size[1]]);
     }
     node.setDirtyCanvas(true, true);
 }

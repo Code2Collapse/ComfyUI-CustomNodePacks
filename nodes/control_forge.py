@@ -34,6 +34,20 @@ import torch
 import torch.nn.functional as F
 
 from ._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 # Real LayerStyle (MIT) resize/scale/aspect code, vendored — gives ControlAOV the
 # same width/height/scale/aspect/fit power as the dedicated resize nodes.
@@ -348,6 +362,57 @@ def _motion_pass(image_bhwc):
     return torch.stack(frames, 0).clamp(0, 1)
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, ControlAOVC2C): which controls show when. Display only. Replaces
+# js/control_aov_conditional.js (one visibility owner per node). A wired pass wins over its selector (_forge: depth_t is
+# None and ...), so a selector and its sub-options hide while that pass's socket is linked.
+# depth_size / depth_custom_ckpt are read by the vendored DepthAnything family AND by the delegated depth_anything_v2 /
+# _v1 (_DEPTH_CKPT[...].get(depth_size), custom ckpt overrides it); the metric / zoe / depth_pro / depthcrafter / dvd
+# backends read neither (the old JS hid depth_size for depth_anything_v2/_v1 although they read it, and showed the
+# custom ckpt for metric / zoe, which ignore it).
+_CAOV_SIZE_MODELS = ["da_v2", "da_v1", "midas", "da3"] + list(_DEPTH_CKPT)
+_CAOV_RESIZE_ON = {"resize": ["width/height", "scale"]}
+_CONTROL_AOV_LAYOUT = {
+    "preview_layout": {"c2c_section": "Output"},
+    "depth_model": {"c2c_hide_if_linked": ["depth"]},
+    "normal_model": {"c2c_hide_if_linked": ["normal"]},
+    "depth_size": {"c2c_section": "Depth", "c2c_show_if": {"depth_model": _CAOV_SIZE_MODELS},
+                   "c2c_hide_if_linked": ["depth"]},
+    "depth_custom_ckpt": {"c2c_section": "Depth", "c2c_show_if": {"depth_model": _CAOV_SIZE_MODELS},
+                          "c2c_hide_if_linked": ["depth"]},
+    "pose_model": {"c2c_hide_if_linked": ["pose"]},
+    "pose_ckpt": {"c2c_section": "Pose", "c2c_show_if": {"pose_model": ["vitpose"]}, "c2c_hide_if_linked": ["pose"]},
+    "id_matte_model": {"c2c_hide_if_linked": ["id_matte"]},
+    "edge_model": {"c2c_hide_if_linked": ["canny"]},
+    "run_canny": {"c2c_section": "Edges", "c2c_show_if": {"edge_model": ["internal_canny"]},
+                  "c2c_hide_if_linked": ["canny"]},
+    "canny_low": {"c2c_section": "Edges", "c2c_show_if": {"edge_model": ["internal_canny", "canny"]},
+                  "c2c_hide_if_linked": ["canny"]},
+    "canny_high": {"c2c_section": "Edges", "c2c_show_if": {"edge_model": ["internal_canny", "canny"]},
+                   "c2c_hide_if_linked": ["canny"]},
+    "canny_aperture": {"c2c_section": "Edges", "c2c_show_if": {"edge_model": ["internal_canny"]},
+                       "c2c_hide_if_linked": ["canny"]},
+    # "model on OR socket linked" mixes a widget and a socket in one OR: no rule key expresses it yet (engine gap,
+    # reported). They live in their sections, shown whenever the section is open.
+    "depth_invert": {"c2c_section": "Depth"},
+    "depth_weight": {"c2c_section": "Weights"},
+    "canny_weight": {"c2c_section": "Weights"},
+    "pose_weight": {"c2c_section": "Weights"},
+    "normal_weight": {"c2c_section": "Weights"},
+    "preproc_resolution": {"c2c_section": "Preprocess"},
+    "match_to": {"c2c_section": "Output size"},
+    "resize": {"c2c_section": "Output size"},
+    "width": {"c2c_section": "Output size", "c2c_show_if": {"resize": ["width/height"]}},
+    "height": {"c2c_section": "Output size", "c2c_show_if": {"resize": ["width/height"]}},
+    "scale": {"c2c_section": "Output size", "c2c_show_if": {"resize": ["scale"]}},
+    "divisible_by": {"c2c_section": "Output size", "c2c_show_if": _CAOV_RESIZE_ON},
+    "fit": {"c2c_section": "Output size", "c2c_show_if": _CAOV_RESIZE_ON},
+    "resize_filter": {"c2c_section": "Output size", "c2c_show_if": _CAOV_RESIZE_ON},
+    "pad_color": {"c2c_section": "Output size", "c2c_show_if": {**_CAOV_RESIZE_ON, "fit": ["pad"]}},
+    # no model-status provider for this node yet: section only, never hidden (the download policy stays in force)
+    "allow_download": {"c2c_section": "Model setup"},
+}
+
+
 # ----------------------------------------------------------------- the node
 class ControlAOVC2C:
     CATEGORY = "C2C/Control"
@@ -372,7 +437,7 @@ class ControlAOVC2C:
     @classmethod
     def INPUT_TYPES(cls):
         wf = lambda d: ("FLOAT", {"default": d, "min": 0.0, "max": 2.0, "step": 0.05})
-        return {
+        return with_layout({
             "required": {
                 "blend_mode": (_BLEND_MODES, {"default": "screen",
                                "tooltip": "How the 'blended' overlay combines passes. screen = least-destructive; "
@@ -460,7 +525,7 @@ class ControlAOVC2C:
                                            "many GB). Off: only installed copies are used (a models folder or the "
                                            "Hugging Face cache) and the info output says what is missing."}),
             },
-        }
+        }, _CONTROL_AOV_LAYOUT)
 
     @classmethod
     def IS_CHANGED(cls, blend_mode, preview_layout="horizontal_3", image=None, depth_model="off", normal_model="off", depth_size="small",

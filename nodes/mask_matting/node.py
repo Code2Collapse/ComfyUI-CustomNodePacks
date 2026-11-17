@@ -423,19 +423,26 @@ def _la_sam_text_grounding(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# L7.81: advanced controls the current backend always reads. Each is flagged core's own "advanced" (Nodes 2.0 folds
-# them behind its "Show advanced inputs" button and the properties panel lists them as ADVANCED INPUTS) and carries a
-# "c2c_section" name, which the classic canvas - where core hides nothing - uses for the node's "More" bar
-# (js/_c2c_sections.js). Feature groups gated by their own switch (luma key, diagnostics, advanced trimap, robust
-# propagation, despill / post-refine strengths) are not here: switching one on already says "show me".
+# L7.81 / A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "MaskOpsMEC"): advanced controls carry a "c2c_section" name,
+# folded behind the node's "More" bar in BOTH renderers (js/_c2c_sections.js, asked by js/mask_visibility.js, the
+# node's one visibility owner). They no longer carry core's "advanced" flag: Nodes 2.0 would fold them a second time
+# behind its own "Show advanced inputs" (README section 3). A switch-gated group (luma key, advanced trimap,
+# diagnostics, robust propagation, auto quality) sits in its section AND still needs its switch on.
 _SECTIONS = {
     **dict.fromkeys(("individual_objects", "tracking_direction", "frame_annotation", "object_id", "max_frames_to_track",
-                     "memory_size", "start_frame", "end_frame", "temporal_stabilise"), "Video"),
-    **dict.fromkeys(("tta_flip", "multiscale"), "Accuracy"),
-    **dict.fromkeys(("lightwrap_strength", "lightwrap_radius", "edge_band_radius", "premultiply"), "Output"),
-    **dict.fromkeys(("trimap_dilate", "trimap_erode"), "Trimap"),
+                     "memory_size", "start_frame", "end_frame", "temporal_stabilise", "robust_propagation",
+                     "robust_confidence_threshold", "robust_reanchor_method", "robust_blend_alpha"), "Video"),
+    **dict.fromkeys(("tta_flip", "multiscale", "auto_disambiguate", "quality_mode"), "Accuracy"),
+    **dict.fromkeys(("lightwrap_strength", "lightwrap_radius", "edge_band_radius", "premultiply", "split_masks"),
+                    "Output"),
+    **dict.fromkeys(("trimap_dilate", "trimap_erode", "trimap_inner_scale", "trimap_outer_scale", "trimap_smooth",
+                     "trimap_threshold"), "Trimap"),
+    **dict.fromkeys(("luma_mode", "luma_low", "luma_high", "luma_gamma", "luma_falloff", "luma_invert", "luma_mix"),
+                    "Luma key"),
+    **dict.fromkeys(("diag_ring_width", "diag_blur_threshold", "diag_brightness_threshold"), "Diagnostics"),
     **dict.fromkeys(("precision", "attention", "offload", "matte_tile", "matte_overlap", "matte_tile_batch",
-                     "band_scale", "auto_download", "seed"), "Performance"),
+                     "band_scale", "seed"), "Performance"),
+    "auto_download": "Model setup",
 }
 
 
@@ -445,7 +452,7 @@ def _with_sections(spec):
             section = _SECTIONS.get(name)
             if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
                 s[1]["c2c_section"] = section
-                s[1]["advanced"] = True
+                s[1].pop("advanced", None)
     return spec
 
 

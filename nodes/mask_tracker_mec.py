@@ -71,8 +71,8 @@ class MaskTrackerMEC:
     # "spline_track" (card P07) and "bbox_smooth" (owner 2026-10-27, D7.65c) are the former Spline Mask "track" and
     # Mask Edit "bbox_smooth" modes (L7.65 P01), by the same engines (spline_mask_tracker.py, bbox_nodes.py)
     MODES = ["motion", "propagate", "anchor", "consistency_check", "stabilize", "spline_track", "bbox_smooth"]
-    # L7.81: the per-method detection parameters (shown by detection_mode) sit in a "Detection" section - classic
-    # "More" bar / Nodes 2.0 advanced inputs - so motion mode shows a handful of controls by default
+    # L7.81: the per-method detection parameters (shown by detection_mode) sit in a "Detection" section (the "More"
+    # bar of js/_c2c_node_layout.js in both renderers; A28: no core "advanced" flag, Nodes 2.0 would fold it twice)
     _DETECTION = ("pixel_diff_enabled", "pixel_diff_threshold", "flow_enabled", "flow_threshold", "flow_algorithm",
                   "bg_sub_enabled", "bg_model_frames", "bg_sub_threshold", "hist_enabled", "hist_grid_size",
                   "hist_threshold", "combine_method")
@@ -83,7 +83,6 @@ class MaskTrackerMEC:
         for name in cls._DETECTION:
             opts = spec["required"][name][1]
             opts["c2c_section"] = "Detection"
-            opts["advanced"] = True
         return spec
 
     @classmethod
@@ -534,3 +533,56 @@ NODE_CLASS_MAPPINGS = {"MaskTrackerMEC": MaskTrackerMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskTrackerMEC": "Mask Tracker — Motion/Propagate/Anchor/Consistency",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "MaskTrackerMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# Each mode shows the group its dispatch reads (_execute_impl); the per-method switches only in detection_mode
+# combined (motion_mask_tracker.py:566-569); allow_download only for stabilize + raft_flow (:410-411, L9.262).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _MT_MOTION = {"mode": ["motion"]}
+    _MT_DET = {"mode": ["motion"], "detection_mode": ["combined"]}
+
+    def _mt_det(method):
+        return {"c2c_section": "Detection", "c2c_show_if": {"mode": ["motion"], "detection_mode": ["combined", method]}}
+
+    _MT = {
+        "camera_compensation": {"c2c_show_if": _MT_MOTION},
+        "stabilization_method": {"c2c_show_if": {"mode": ["motion"], "camera_compensation": {"truthy": True}}},
+        "detection_mode": {"c2c_show_if": _MT_MOTION},
+        "pixel_diff_threshold": _mt_det("pixel_diff"),
+        "flow_threshold": _mt_det("optical_flow"),
+        "flow_algorithm": _mt_det("optical_flow"),
+        "bg_model_frames": _mt_det("background_sub"),
+        "bg_sub_threshold": _mt_det("background_sub"),
+        "hist_grid_size": _mt_det("histogram_diff"),
+        "hist_threshold": _mt_det("histogram_diff"),
+        "grow_pixels": {"c2c_show_if": _MT_MOTION},
+        "min_region_size": {"c2c_show_if": _MT_MOTION},
+        "temporal_smooth": {"c2c_show_if": _MT_MOTION},
+        "prop_flow_threshold": {"c2c_show_if": {"mode": ["propagate"], "propagate_mode": ["optical_flow", "sam2_video"]}},
+        "fade_start": {"c2c_show_if": {"mode": ["propagate"], "propagate_mode": ["fade", "scale_linear"]}},
+        "fade_end": {"c2c_show_if": {"mode": ["propagate"], "propagate_mode": ["fade", "scale_linear"]}},
+        "bidirectional": {"c2c_show_if": {"mode": ["propagate"], "propagate_mode": ["optical_flow", "sam2_video"]}},
+        "points_json": {"c2c_show_if": {"mode": ["propagate"], "propagate_mode": ["sam2_video"]}},
+        "spline_data": {"c2c_hidden": True},
+        "allow_download": {"c2c_section": "Model setup",
+                           "c2c_show_if": {"mode": ["stabilize"], "stabilize_temporal_mode": ["raft_flow"]}},
+    }
+    for _n in ("pixel_diff_enabled", "flow_enabled", "bg_sub_enabled", "hist_enabled", "combine_method"):
+        _MT[_n] = {"c2c_section": "Detection", "c2c_show_if": _MT_DET}
+    for _mode, _names in (("propagate", ("source_frame", "propagate_mode")),
+                          ("anchor", ("anchor_frames", "total_frames", "easing", "sdf_iterations", "flow_refinement")),
+                          ("consistency_check", ("metric", "binarize_threshold")),
+                          ("stabilize", ("stabilize_temporal_mode", "stabilize_blend", "stabilize_sigma",
+                                         "stabilize_device", "stabilize_drop_threshold", "stabilize_jump_threshold")),
+                          ("spline_track", ("spline_closed", "spline_samples_per_segment", "spline_tracking_weight",
+                                            "spline_klt_window", "spline_feather_radius", "spline_stroke_width")),
+                          ("bbox_smooth", ("bbox_json", "bbox_radius", "bbox_method", "bbox_alpha"))):
+        for _n in _names:
+            _MT[_n] = {"c2c_show_if": {"mode": [_mode]}}
+    declare_layout(MaskTrackerMEC, _MT)

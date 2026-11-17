@@ -47,6 +47,20 @@ from .mec_paint_suite import (
     _to_mask,
     MECContextInpainter,
 )
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 logger = logging.getLogger("MEC.FaceFixer")
 
@@ -164,25 +178,27 @@ def _round_to_multiple(n: int, m: int = 8) -> int:
 # ══════════════════════════════════════════════════════════════════════
 #  MECFaceFixer node
 # ══════════════════════════════════════════════════════════════════════
-# L7.65 P12 (ORDERS 11.4: at most 10 visible controls): the tuning inputs are flagged core's "advanced" (Nodes 2.0 folds
-# them behind "Show advanced inputs") and named a "c2c_section" for the classic canvas's "More" bar (js/_c2c_sections.js,
-# owned by js/c2c_mode_widgets.js). Order and defaults are unchanged, so saved workflows load as before.
-_FACE_FIXER_SECTIONS = {
-    **dict.fromkeys(("confidence", "max_faces", "crop_padding", "crop_resolution"), "Detection"),
-    **dict.fromkeys(("blend_softness", "mask_dilate", "color_match", "lightness_rescue", "differential_diffusion"),
-                    "Blend"),
-    **dict.fromkeys(("face_positive_prompt", "face_negative_prompt"), "Face prompts"),
+# L7.65 P12 (ORDERS 11.4: at most 10 visible controls): the tuning inputs sit in sections. A28 (ORDERS 29,
+# docs/audit/A28/PARAM_CNP_B.md): the one layout engine (js/_c2c_node_layout.js) owns them in BOTH renderers, so core's
+# "advanced" flag is no longer set (Nodes 2.0 would fold them twice) and js/c2c_mode_widgets.js no longer manages the
+# node. Order and defaults are unchanged, so saved workflows load as before.
+#   confidence / max_faces: only read by the YOLO detector (_detect_faces_yolo returns [] for face_model "none").
+#   face_negative_prompt: only encoded with clip (_cond_for); face_positive_prompt stays shown without clip because its
+#   [SKIP] token still leaves a face untouched there (the audit's show-if-clip-linked would hide a control that is read).
+_FACE_FIXER_LAYOUT = {
+    "confidence": {"c2c_section": "Detection", "c2c_show_if": {"face_model": {"not": ["none"]}}},
+    "max_faces": {"c2c_section": "Detection", "c2c_show_if": {"face_model": {"not": ["none"]}}},
+    "crop_padding": {"c2c_section": "Detection"},
+    "crop_resolution": {"c2c_section": "Detection"},
+    **{k: {"c2c_section": "Blend"} for k in ("blend_softness", "mask_dilate", "color_match", "lightness_rescue",
+                                             "differential_diffusion")},
+    "face_positive_prompt": {"c2c_section": "Face prompts"},
+    "face_negative_prompt": {"c2c_section": "Face prompts", "c2c_show_if_linked": ["clip"]},
 }
 
 
 def _with_sections(spec):
-    for group in ("required", "optional"):
-        for name, s in (spec.get(group) or {}).items():
-            section = _FACE_FIXER_SECTIONS.get(name)
-            if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
-                s[1]["c2c_section"] = section
-                s[1]["advanced"] = True
-    return spec
+    return with_layout(spec, _FACE_FIXER_LAYOUT)
 
 
 class MECFaceFixer:

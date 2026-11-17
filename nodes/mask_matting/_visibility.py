@@ -163,7 +163,8 @@ TOGGLES: Dict[str, Any] = {
     "auto_disambiguate": "auto_quality",
 
     "refine_radius": ("post_refine", "none"),
-    "refine_iterations": ("post_refine", "none"),
+    # CRF only (node.py:1987): the guided filter has no iterations (A28, PARAM_CNP_A.md MaskOps note)
+    "refine_iterations": ("post_refine", ["none", "guided"]),
 
     # The widget's off-value is "off", not "none" — gating on the wrong
     # string kept these on screen permanently, which looked like the rule
@@ -354,14 +355,15 @@ def tiling_visible(name: str, matter: str, values: Dict[str, Any]) -> bool:
 def toggle_allows(name: str, values: Dict[str, Any]) -> bool:
     """Is this widget's feature switch currently on?
 
-    `(widget, value)` means "visible while that widget is NOT this value";
+    `(widget, value)` means "visible while that widget is NOT this value" (a list of values: none of them, A28);
     a bare name means "visible while that widget is truthy".
     """
     rule = TOGGLES.get(name)
     if rule is None:
         return True
     if isinstance(rule, tuple):
-        return str(values.get(rule[0])) != str(rule[1])
+        off = rule[1] if isinstance(rule[1], (list, tuple)) else [rule[1]]
+        return str(values.get(rule[0])) not in [str(x) for x in off]
     v = values.get(rule)
     return not (v is False or v == 0 or v is None or v == "")
 

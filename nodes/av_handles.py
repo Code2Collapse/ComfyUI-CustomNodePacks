@@ -726,3 +726,25 @@ class AVHandlesMEC:
 
 NODE_CLASS_MAPPINGS = {"AVHandlesMEC": AVHandlesMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {"AVHandlesMEC": "AV Handles — Add / Trim"}
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "AVHandlesMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# fit: target + grid; add: count + padding (+ grid for model preset); trim: amount (+ count when manual).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _AVH_CUSTOM = ["custom (step / plus)"]
+    declare_layout(AVHandlesMEC, merge(sections(Advanced=["manual_fps", "memo_key"]), {
+        "handle_frames": {"c2c_show_if_any": [{"mode": ["add"]}, {"mode": ["trim"], "trim_amount": ["manual"]}]},
+        "trim_amount": {"c2c_show_if": {"mode": ["trim"]}},
+        "target_frames": {"c2c_show_if": {"mode": ["fit"]}},
+        "model": {"c2c_show_if_any": [{"mode": ["fit"]}, {"mode": ["add"], "padding_mode": ["model preset"]}]},
+        "custom_step": {"c2c_show_if_any": [{"mode": ["fit"], "model": _AVH_CUSTOM},
+                                            {"mode": ["add"], "padding_mode": ["model preset"], "model": _AVH_CUSTOM}]},
+        "custom_plus": {"c2c_show_if_any": [{"mode": ["fit"], "model": _AVH_CUSTOM},
+                                            {"mode": ["add"], "padding_mode": ["model preset"], "model": _AVH_CUSTOM}]},
+        "padding_mode": {"c2c_show_if": {"mode": ["add"]}},
+    }))

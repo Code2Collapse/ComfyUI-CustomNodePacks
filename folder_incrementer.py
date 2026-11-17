@@ -6,6 +6,21 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+try:                                                       # A28 layout declarations (display only)
+    from .nodes._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), 'nodes', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
+
 try:
     from .nodes._is_changed_util import dir_version_fingerprint, hash_kwargs
 except ImportError:  # standalone / test import
@@ -692,6 +707,40 @@ def _today_versions_fingerprint(base_dir, today_date, prefix, padding, files=Fal
     return "|".join(sorted(parts))
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, FolderIncrementer): the source / date layout's controls show only in that
+# layout, the pipeline layout's only in show / shot / task (they are never read by the other branch:
+# increment() returns early via _show_shot_task). Replaces the c2c_mode_widgets.js rule (one owner per node).
+_FI_SRC = {"c2c_show_if": {"layout": [LAYOUT_CHOICES[0]]}}
+_FI_SST = {"c2c_show_if": {"layout": [LAYOUT_CHOICES[1]]}}
+_FI_LAYOUT = {
+    "prefix": {**_FI_SRC, "c2c_section": "Versioning"},
+    "padding": {"c2c_section": "Versioning"},
+    "suffix": _FI_SRC,
+    "suffix_mode": _FI_SRC,
+    "label": _FI_SRC,
+    "date_format": {**_FI_SRC, "c2c_section": "Naming"},
+    "path_style": {"c2c_section": "Output paths"},
+    "source_choice": _FI_SRC,
+    "name_format": {**_FI_SRC, "c2c_section": "Source naming"},
+    "numbered_still_mode": {**_FI_SRC, "c2c_section": "Source naming"},
+    "source_filename": _FI_SRC,
+    "source_extension": {"c2c_hidden": True},             # machine field the JS fills (was hidden by folder_incrementer.js)
+    "source_path": _FI_SRC,
+    "custom_name": {"c2c_show_if": {"layout": [LAYOUT_CHOICES[0]], "source_choice": ["custom"]}},
+    "base_path": {"c2c_section": "Output paths"},
+    "folder_name_override": {**_FI_SRC, "c2c_section": "Naming"},
+    "version_group": {**_FI_SRC, "c2c_section": "Versioning"},
+    "reserve_version": {"c2c_section": "Versioning"},
+    "show": _FI_SST, "shot": _FI_SST, "task": _FI_SST,
+    "min_version": {**_FI_SST, "c2c_section": "Versioning"},
+    "max_retries": {**_FI_SST, "c2c_section": "Versioning"},
+    "write_manifest": {**_FI_SST, "c2c_section": "Versioning"},
+    "versioning": _FI_SRC,
+    "version_in_filename": {"c2c_show_if": {"layout": [LAYOUT_CHOICES[0]], "versioning": ["folder"]}},
+    "output_name": _FI_SRC,
+}
+
+
 class FolderIncrementer:
     """
     Automatic dynamic file output management node.
@@ -720,7 +769,7 @@ class FolderIncrementer:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "prefix": ("STRING", {"default": "v",
                     "tooltip": "Prefix before the version number (e.g. 'v' → v001)"}),
@@ -888,7 +937,7 @@ class FolderIncrementer:
             # (API submit, or a loader the UI did not recognise) can still
             # find the source by reading every upstream loader's values.
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
-        }
+        }, _FI_LAYOUT)
 
     RETURN_TYPES  = ("STRING", "INT", "STRING", "STRING", "STRING", "STRING",
                      "STRING", "STRING", "STRING", "STRING", "STRING", "STRING")
@@ -1255,6 +1304,15 @@ class FolderIncrementer:
                 "", "", "", "", path_out, info)
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, the folder helpers): the folder-location controls sit in a section. Display only.
+_FOLDER_SECTION = {"c2c_section": "Folder"}
+_FI_RESET_LAYOUT = {"date_format": _FOLDER_SECTION, "base_path": _FOLDER_SECTION}
+_FI_SET_LAYOUT = {k: _FOLDER_SECTION for k in ("prefix", "padding", "base_path", "date_format")}
+_FV_VARIANT_LAYOUT = {"prefix": {"c2c_section": "Naming"}, "extension": {"c2c_section": "Naming"}}
+_FV_CONTROL_LAYOUT = {"value": {"c2c_show_if": {"action": ["set"]}},       # read only by the set branch
+                      **{k: _FOLDER_SECTION for k in ("prefix", "padding", "base_path", "date_format")}}
+
+
 class FolderIncrementerReset:
     # DEPRECATED: merged into FolderVersionControl, which does both jobs
     # behind one `action` combo. Kept registered so saved workflows still
@@ -1272,7 +1330,7 @@ class FolderIncrementerReset:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "label": ("STRING", {"default": "default",
                     "tooltip": "Folder name to inspect"}),
@@ -1286,7 +1344,7 @@ class FolderIncrementerReset:
                 "base_path": ("STRING", {"default": "",
                     "tooltip": "Override base directory.  Leave empty → ComfyUI output dir."}),
             },
-        }
+        }, _FI_RESET_LAYOUT)
 
     DESCRIPTION = "Report the current version state for a label/date folder. Scans <base>/<label>/<MM-DD-YYYY>/ and returns how many vNNN folders already exist plus the highest version number. To truly 'reset' a label, delete its date subfolder from disk."
     RETURN_TYPES  = ("STRING", "INT")
@@ -1354,7 +1412,7 @@ class FolderIncrementerSet:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "label": ("STRING", {"default": "default",
                     "tooltip": "Folder name under the output directory"}),
@@ -1371,7 +1429,7 @@ class FolderIncrementerSet:
                     "tooltip": "Date format (must match what FolderIncrementer uses)",
                 }),
             },
-        }
+        }, _FI_SET_LAYOUT)
 
     DESCRIPTION = "Reserve version slots by creating empty placeholder directories under <base>/<label>/<MM-DD-YYYY>/. Creates v001 ... v{value} so the next FolderIncrementer run will produce v{value+1}. Useful for skipping ahead or reserving a known version range."
     RETURN_TYPES  = ("STRING", "INT")
@@ -1437,7 +1495,7 @@ class FolderVersionVariant:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "filename_prefix": ("STRING", {"default": "", "forceInput": True,
                     "tooltip": "Connect the Folder Version Incrementer's "
@@ -1475,7 +1533,7 @@ class FolderVersionVariant:
                     "e.g. '.mov'. Most save nodes take `filename_prefix` and "
                     "add their own."}),
             },
-        }
+        }, _FV_VARIANT_LAYOUT)
 
     DESCRIPTION = (
         "Give one output its own prefix or suffix while keeping the version "
@@ -1530,7 +1588,7 @@ class FolderVersionControl:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "action": (cls.ACTIONS, {"default": "check", "tooltip":
                     "check -> report how many versions exist and what comes "
@@ -1557,7 +1615,7 @@ class FolderVersionControl:
                 "date_format": (DATE_FORMAT_CHOICES, {"default": "MM-DD-YYYY",
                     "tooltip": "Must match the incrementer's."}),
             },
-        }
+        }, _FV_CONTROL_LAYOUT)
 
     DESCRIPTION = (
         "Check or set the version counter for a label/date folder. 'check' "

@@ -9,6 +9,20 @@ from typing import Any
 import torch
 
 from .._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 log = logging.getLogger("C2C.helpers")
 
@@ -24,6 +38,39 @@ ANY = _AnyType("*")
 
 
 # ─────────────────────────── 1. Batch Range ──────────────────────────────
+
+# A28 (docs/audit/A28/PARAM_CNP_B.md, Helpers): which controls show when. Display only - every input keeps its name,
+# order, type and default and reaches the node's function as before. Replaces the c2c_mode_widgets.js rules for
+# Image Batch Slice and Size (one visibility owner per node).
+_SLICE_LAYOUT = {
+    "start": {"c2c_show_if": {"mode": ["range"]}},
+    "end": {"c2c_show_if": {"mode": ["range"]}},
+    "step": {"c2c_show_if": {"mode": ["range"]}},
+    "split_index": {"c2c_show_if": {"mode": ["split at index"]}},
+    "split_ratio": {"c2c_show_if": {"mode": ["split at ratio"]}},
+    "frame_index": {"c2c_show_if": {"mode": ["frame at index"]}},
+}
+
+
+def _aspect_layout(cls) -> dict:
+    """Size: base = the ratio presets only; multiple / direction = ratio presets + Custom (the Wan presets return
+    their native size before snapping, pick()); width / height = Custom only."""
+    ratio = [k for k in cls.PRESETS if not k.startswith("Wan")]
+    return {
+        "base": {"c2c_show_if": {"preset": ratio}},
+        "multiple": {"c2c_show_if": {"preset": ratio + [cls.CUSTOM]}},
+        "direction": {"c2c_show_if": {"preset": ratio + [cls.CUSTOM]}},
+        "width": {"c2c_show_if": {"preset": [cls.CUSTOM]}},
+        "height": {"c2c_show_if": {"preset": [cls.CUSTOM]}},
+    }
+
+
+_PROBE_LAYOUT = {
+    "threshold": {"c2c_show_if_linked": ["mask"]},          # read only for a mask (_mask_coverage)
+    "fail_on_corrupt": {"c2c_show_if_linked": ["latent"]},  # read only for a latent (inspect_latent)
+}
+
+
 class ImageBatchSliceMEC:
     """Batch Range (L7.65 P23): a [start:end:step] range, a split point, or one frame. Image Batch Split and Video
     Frame Extractor were merged in; their saved workflows migrate here (mode + values + outputs)."""
@@ -50,7 +97,7 @@ class ImageBatchSliceMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
+        return with_layout({"required": {
             "images": ("IMAGE",),
             "start":  ("INT", {"default": 0,    "min": -100000, "max": 100000,
                                "tooltip": "Range mode: first frame. Negative counts from the end."}),
@@ -69,7 +116,7 @@ class ImageBatchSliceMEC:
                                       "tooltip": "'split at ratio': this fraction of the batch goes to 'images'."}),
             "frame_index": ("INT",   {"default": 0, "min": 0, "max": 999999,
                                       "tooltip": "'frame at index': 0-based, clamped to the last frame."}),
-        }}
+        }}, _SLICE_LAYOUT)
 
     def slice(self, images, start, end, step, mode="range", split_index=1, split_ratio=0.5, frame_index=0):
         if not isinstance(images, torch.Tensor) or images.ndim != 4:
@@ -299,7 +346,7 @@ class AspectPresetMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
+        return with_layout({"required": {
             "preset":   ([*cls.PRESETS.keys(), cls.CUSTOM], {"default": "16:9 landscape"}),
             "base":     ("INT", {"default": 1024, "min": 64, "max": 8192,
                 "tooltip": "Long edge target (ignored for Wan presets and Custom)."}),
@@ -312,7 +359,7 @@ class AspectPresetMEC:
             "height":    ("INT", {"default": 1024, "min": 8, "max": 16384, "tooltip": "Custom: height before snapping."}),
             "direction": (["down", "nearest", "up"], {"default": "down",
                           "tooltip": "Snap to the multiple below, the nearest one, or the one above."}),
-        }}
+        }}, _aspect_layout(cls))
 
     def pick(self, preset, base, multiple, width=1024, height=1024, direction="down"):
         m = max(1, int(multiple))
@@ -408,7 +455,7 @@ class ImageStatsProbeMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {}, "optional": {
+        return with_layout({"required": {}, "optional": {
             "images":    ("IMAGE",),
             "mask":      ("MASK",),
             "latent":    ("LATENT", {"tooltip": "ComfyUI LATENT dict (must contain 'samples')."}),
@@ -416,7 +463,7 @@ class ImageStatsProbeMEC:
                                     "tooltip": "Mask: a pixel counts as covered above this value."}),
             "fail_on_corrupt": ("BOOLEAN", {"default": False,
                                             "tooltip": "Latent: stop the run when it holds NaN or Inf."}),
-        }}
+        }}, _PROBE_LAYOUT)
 
     def probe(self, images=None, mask=None, latent=None, threshold=0.5, fail_on_corrupt=False):
         if images is None and mask is None and latent is None:

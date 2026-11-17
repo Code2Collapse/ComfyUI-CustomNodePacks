@@ -11,7 +11,7 @@
 // callback to call applyBackend(node).
 
 import { app } from "../../scripts/app.js";
-import { setWidgetVisible } from "./_widget_visibility.js";
+import { setWidgetVisible, vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { reportFailure as __c2cReport } from "./_c2c_report.js";
 
 const NODE_NAME = "PromptRelayEncodeC2C";
@@ -104,7 +104,22 @@ function applyBackend(node) {
             setWidgetVisible(widget, keep);
         }
     }
-    node.setSize?.(node.computeSize?.() || node.size);
+    fitNode(node);
+}
+
+// A28 (ORDERS 29): this file stays the node's one visibility owner (it also hides sockets and outputs, which the
+// declarative engine does not). Resize after every change: classic keeps the user's width (>= the computed minimum)
+// and takes the content height; Nodes 2.0 re-syncs the widget rows and fits the height to them (it grows a node by
+// itself but never shrinks it). Before: setSize(computeSize()) threw the user's width away, and Nodes 2.0 kept the
+// old height (measured, docs/evidence/A28/cnp_b_*).
+function fitNode(node) {
+    if (vueNodesActive()) {
+        vueSyncNodeWidgets(node);
+        vueFitNodeHeight(node);
+    } else {
+        const sz = node.computeSize?.();
+        if (sz) node.setSize?.([Math.max(node.size?.[0] ?? 0, sz[0]), sz[1]]);
+    }
     node.setDirtyCanvas?.(true, true);
 }
 

@@ -1,64 +1,20 @@
-// AVHandlesMEC: show only the widgets the chosen mode uses, repair workflows saved with the old widget layout,
-// and show the run report on the node (A9: "not calculating frames, not adding or trimming at all, no control").
+// AVHandlesMEC: repair workflows saved with the old widget layout, and show the run report on the node (A9: "not
+// calculating frames, not adding or trimming at all, no control").
 //
-//   fit  — target_frames, model (+ custom_step / custom_plus for the custom grid), side, manual_fps, memo_key
+// WHICH widgets show (A28, ORDERS 29) is declared next to the inputs in nodes/av_handles.py and applied by
+// js/_c2c_node_layout.js, the node's one visibility owner:
+//   fit  — target_frames, model (+ custom_step / custom_plus for the custom grid), side, More: manual_fps, memo_key
 //   add  — handle_frames, padding_mode (+ model, and custom_step / custom_plus for the custom grid, when
-//          padding_mode is "model preset" - L2.55), side, manual_fps, memo_key
-//   trim — trim_amount (+ handle_frames when manual), side, manual_fps, memo_key
+//          padding_mode is "model preset" - L2.55), side
+//   trim — trim_amount (+ handle_frames when manual), side
 import { app } from "../../scripts/app.js";
-import { setHidden, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { relayoutNode } from "./_c2c_node_layout.js";
 
 const NODE = "AVHandlesMEC";
-const CUSTOM = "custom (step / plus)";
-const USE_MODEL = "model preset";
-const ALWAYS = new Set(["mode", "side", "manual_fps", "memo_key"]);
 
 // Saved before 2026-09-22 (commit 4aad79d added target_frames, model, custom_step, custom_plus in the middle):
 // ComfyUI restores widget values by POSITION, so those saves loaded the old side into target_frames, and so on.
 const LEGACY_ORDER = ["mode", "handle_frames", "trim_amount", "side", "padding_mode", "manual_fps", "memo_key"];
-
-function shown(node, name) {
-    const get = (n) => node.widgets?.find((w) => w.name === n)?.value;
-    const mode = get("mode");
-    if (ALWAYS.has(name)) return true;
-    if (mode === "fit") {
-        if (name === "target_frames" || name === "model") return true;
-        if (name === "custom_step" || name === "custom_plus") return get("model") === CUSTOM;
-        return false;
-    }
-    if (mode === "add") {
-        if (name === "handle_frames" || name === "padding_mode") return true;
-        if (get("padding_mode") !== USE_MODEL) return false;
-        if (name === "model") return true;
-        return (name === "custom_step" || name === "custom_plus") && get("model") === CUSTOM;
-    }
-    if (mode === "trim") return name === "trim_amount" || (name === "handle_frames" && get("trim_amount") === "manual");
-    return true;
-}
-
-function applyVisibility(node) {
-    for (const w of node.widgets || []) {
-        if (!w?.name || w.name === "avh_report") continue;
-        if (w.type === "button" || w.options?.serialize === false) continue;
-        setHidden(w, !shown(node, w.name));
-    }
-    vueSyncNodeWidgets(node);
-    const sz = node.computeSize?.();
-    if (sz) node.setSize([Math.max(node.size[0], sz[0]), sz[1]]);
-    node.setDirtyCanvas?.(true, true);
-}
-
-function hook(node, name) {
-    const w = node.widgets?.find((x) => x.name === name);
-    if (!w || w.__avhHooked) return;
-    w.__avhHooked = true;
-    const orig = w.callback;
-    w.callback = function (v, ...rest) {
-        const r = orig?.call(this, v, ...rest);
-        applyVisibility(node);
-        return r;
-    };
-}
 
 function repairLegacyValues(node, info) {
     const v = info?.widgets_values;
@@ -105,9 +61,7 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
-            for (const name of ["mode", "model", "trim_amount", "padding_mode"]) hook(this, name);
             ensureReport(this);
-            setTimeout(() => applyVisibility(this), 0);
             return r;
         };
         const onConfigure = nodeType.prototype.onConfigure;
@@ -122,7 +76,7 @@ app.registerExtension({
                     this.__avhReport.textContent = this.properties.avh_report;
                     paintReport(this.__avhReport);
                 }
-                applyVisibility(this);
+                relayoutNode(this);                         // the repair set values without callbacks
             }, 0);
             return r;
         };

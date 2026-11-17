@@ -478,3 +478,20 @@ class MaskPlacementMEC:
 
 NODE_CLASS_MAPPINGS = {"MaskPlacementMEC": MaskPlacementMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {"MaskPlacementMEC": "Mask Placement — Prompt/Ref → Place → Track"}
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "MaskPlacementMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# The prompt path (prompt, grounding_model, allow_download) is skipped while source_mask is wired (:257-268);
+# the quad editor writes placement_json. track_mode still accepts object_track (old saves validate).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(MaskPlacementMEC, {
+        "prompt": {"c2c_hide_if_linked": ["source_mask"]},
+        "grounding_model": {"c2c_hide_if_linked": ["source_mask"]},
+        "placement_json": {"c2c_hidden": True},
+        "allow_download": {"c2c_section": "Model setup", "c2c_hide_if_linked": ["source_mask"]},
+    })

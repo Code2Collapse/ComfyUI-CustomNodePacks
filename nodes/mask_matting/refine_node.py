@@ -1118,3 +1118,24 @@ class MaskRefineMEC:
 
 NODE_CLASS_MAPPINGS = {"MaskRefineMEC": MaskRefineMEC}
 NODE_DISPLAY_NAME_MAPPINGS = {"MaskRefineMEC": "Mask Refiner"}
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "MaskRefineMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+try:
+    from .._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(MaskRefineMEC, merge(
+        sections(Stages=["enable_hole_fill", "morph_op", "enable_thin_recover", "enable_joint_bilateral",
+                         "enable_guided_filter", "enable_dense_crf", "enable_edge_snap"],
+                 Finish=["cascade_passes", "feather_sigma", "gamma", "threshold"],
+                 Power_stages=["enable_domain_transform", "enable_color_decontaminate", "enable_unsharp_alpha",
+                               "enable_anti_alias", "enable_chroma_lock", "enable_speck_removal",
+                               "enable_temporal_smooth", "advanced_overrides_json"],
+                 Integrity=["enable_integrity_check", "integrity_drop_threshold", "integrity_jump_threshold"]),
+        {"subject_class": {"c2c_show_if": {"auto_edge_lock": [True]}},          # read only with the lock (:822-823)
+         "integrity_drop_threshold": {"c2c_show_if": {"enable_integrity_check": [True]}},
+         "integrity_jump_threshold": {"c2c_show_if": {"enable_integrity_check": [True]}}},
+    ))

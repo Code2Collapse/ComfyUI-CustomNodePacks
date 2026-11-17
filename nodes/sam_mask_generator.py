@@ -672,3 +672,33 @@ class SAMMaskGeneratorMEC:
                     break
                 points.append([x1 + w * ox, y1 + h * oy])
         return points[:num_points]
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "SAMMaskGeneratorMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# The text prompt and its tuning do nothing with grounding_model 'none' (:255, :267); the points / box editor
+# writes the four JSON prompts (never a text row).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _SAMG_TEXT = {"grounding_model": {"not": ["none"]}}
+    declare_layout(SAMMaskGeneratorMEC, {
+        "points_json": {"c2c_hidden": True},
+        "bbox_json": {"c2c_hidden": True},
+        "bboxes_json": {"c2c_hidden": True},
+        "spline_json": {"c2c_hidden": True},
+        "text_prompt": {"c2c_show_if": _SAMG_TEXT},
+        "negative_text_prompt": {"c2c_section": "Text", "c2c_show_if": _SAMG_TEXT},
+        "text_threshold": {"c2c_section": "Text", "c2c_show_if": _SAMG_TEXT},
+        "text_box_threshold": {"c2c_section": "Text", "c2c_show_if": _SAMG_TEXT},
+        "multimask_output": {"c2c_section": "Candidates"},
+        "mask_index": {"c2c_section": "Candidates", "c2c_show_if": {"multimask_output": [True]}},
+        "score_threshold": {"c2c_section": "Candidates", "c2c_show_if": {"multimask_output": [True]}},
+        "apply_bbox_crop": {"c2c_section": "Refine"},
+        "refine_iterations": {"c2c_section": "Refine"},
+        "auto_negative_points": {"c2c_section": "Refine"},
+        "edge_radius": {"c2c_show_if": {"edge_refine": {"not": ["none"]}}},
+        "allow_download": {"c2c_section": "Model setup", "c2c_show_if": _SAMG_TEXT},
+    })

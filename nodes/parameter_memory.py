@@ -27,6 +27,20 @@ import os
 import re
 import sqlite3
 from datetime import datetime
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 logger = logging.getLogger("MEC")
 
@@ -271,6 +285,16 @@ def _diff_runs(run_a: int, run_b: int) -> list[dict]:
 #  ComfyUI Node: Parameter History Viewer
 # ══════════════════════════════════════════════════════════════════════
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, ParameterHistoryMEC): each mode's own inputs (query(): diff mode reads run_a /
+# run_b only, the history modes last_n_runs). Display only.
+_HISTORY_LAYOUT = {
+    "last_n_runs": {"c2c_show_if": {"mode": ["all_history", "node_class_filter"]}},
+    "node_class_filter": {"c2c_show_if": {"mode": ["node_class_filter"]}},
+    "run_a": {"c2c_show_if": {"mode": ["last_run_diff"]}},
+    "run_b": {"c2c_show_if": {"mode": ["last_run_diff"]}},
+}
+
+
 class ParameterHistoryMEC:
     """View and query the parameter history database.
 
@@ -280,7 +304,7 @@ class ParameterHistoryMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "mode": (["all_history", "last_run_diff", "node_class_filter"], {
                     "default": "all_history",
@@ -309,7 +333,7 @@ class ParameterHistoryMEC:
                     "tooltip": "Second run number for diff mode (0 = auto-detect last two)",
                 }),
             },
-        }
+        }, _HISTORY_LAYOUT)
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("history_report",)

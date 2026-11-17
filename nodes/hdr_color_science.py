@@ -12,8 +12,46 @@ import logging
 import torch
 
 from ._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 log = logging.getLogger("MEC.HDRColor")
+
+
+
+# A28 (docs/audit/A28/PARAM_CNP_B.md, C2CVAEQualityDecode): which controls show when. Display only. Replaces the
+# c2c_mode_widgets.js rule (one visibility owner per node). With `image` wired the decode is skipped, so the decode
+# controls hide then. tile_size also shows in "auto" while it is above 0: _decode uses a positive size as given there
+# (L9.263, saves from before tile_mode) - the old rule hid it although it was read.
+_NOT_IMAGE = {"c2c_hide_if_linked": ["image"]}
+_CLEAN_ON = {"clean": [True]}
+_VQD_LAYOUT = {
+    "force_fp32": {"c2c_section": "Decode", **_NOT_IMAGE},
+    "tile_size": {"c2c_section": "Decode", **_NOT_IMAGE, "c2c_show_if_any": [
+        {"tile_mode": ["manual"]}, {"tile_mode": ["auto"], "tile_size": {"gt": 0}}]},
+    "exposure": {"c2c_show_if": {"apply_aces": [True]}},
+    "clamp_output": {"c2c_section": "Decode", **_NOT_IMAGE},
+    "tile_mode": {"c2c_section": "Decode", **_NOT_IMAGE},
+    "balance_mode": {"c2c_section": "Clean", "c2c_show_if": _CLEAN_ON},
+    "balance_strength": {"c2c_section": "Clean", "c2c_show_if": {**_CLEAN_ON, "balance_mode": {"not": ["off"]}}},
+    "saturation": {"c2c_section": "Clean", "c2c_show_if": _CLEAN_ON},
+    "contrast_restore": {"c2c_section": "Clean", "c2c_show_if": _CLEAN_ON},
+    "chroma_cleanup": {"c2c_section": "Clean", "c2c_show_if": _CLEAN_ON},
+    "restore_unchanged": {"c2c_section": "Clean", "c2c_show_if": _CLEAN_ON},
+    "restore_radius": {"c2c_section": "Clean", "c2c_show_if": {**_CLEAN_ON, "restore_unchanged": {"gt": 0}}},
+}
 
 
 class C2CVAEQualityDecode:
@@ -36,7 +74,7 @@ class C2CVAEQualityDecode:
             o["tooltip"] = "Clean (when clean is on): " + o.get("tooltip", "")
             return (t, o)
 
-        return {
+        return with_layout({
             "required": {
                 "force_fp32": ("BOOLEAN", {
                     "default": True,
@@ -85,7 +123,7 @@ class C2CVAEQualityDecode:
                 **{k: _clean_tip(k, v) for k, v in clean_req.items() if k != "image"},
                 **{k: _clean_tip(k, v) for k, v in clean_opt.items()},
             },
-        }
+        }, _VQD_LAYOUT)
 
     RETURN_TYPES = ("IMAGE", "STRING", "FLOAT", "FLOAT")
     RETURN_NAMES = ("IMAGE", "report", "cast_strength", "saturation")

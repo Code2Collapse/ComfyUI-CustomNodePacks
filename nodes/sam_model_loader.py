@@ -627,3 +627,15 @@ class SAMModelLoaderMEC:
                 f"If this is a .safetensors file, ensure 'safetensors' package is installed.\n"
                 f"For SAM2/2.1 models, install: pip install git+https://github.com/facebookresearch/sam2.git"
             )
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "SAMModelLoaderMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# allow_download sits in Model setup (no model-status provider here, so status never hides it).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    declare_layout(SAMModelLoaderMEC, sections(Model_setup=["model_type", "allow_download"],
+                                               Performance=["device", "offload_to_cpu", "dtype"]))

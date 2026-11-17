@@ -1442,3 +1442,48 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImagesPathC2C": "Load Images Path (C2C)",
     "VideoInfoC2C": "Video Info (C2C)",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "LoadVideoC2C"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# location picks the combo or the typed path; the image / EXR-only controls follow the chosen name's extension
+# (the same test the loader uses: no extension or a non-movie one = images); handles / colour / custom size
+# show what their switch enables; the rest sits in sections.
+try:
+    from .._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    import re as _re
+    _LV_VID = "|".join(_re.escape(e) for e in VIDEO_EXTENSIONS)
+    _LV_EXR = {"re": r"\.exr[\\/]*\s*$"}
+    _LV_IMG = {"re": r"^(?!\s*$)(?!.*\.(" + _LV_VID + r")[\\/]*\s*$)"}
+
+    def _lv_by_source(cond):
+        return {"c2c_show_if_any": [{"location": ["input folder"], "video": cond},
+                                    {"location": ["server path"], "path": cond}]}
+
+    _LV_HANDLES_ON = {"handles": {"not": ["off"]}}
+    declare_layout(LoadVideoC2C, merge(
+        sections(Crop=["crop_x", "crop_y", "crop_w", "crop_h"],
+                 Decode=["decoder", "seconds_cap", "audio_when_missing"],
+                 Size=["divisible_by"],
+                 Colour=["colorspace_in", "working_space"],
+                 Output_naming=["name_prefix", "name_suffix"],
+                 Frames=["source_mode", "frame_range", "reverse", "frame_offset", "edge_policy"]),
+        {"video": {"c2c_show_if": {"location": ["input folder"]}},
+         "path": {"c2c_show_if": {"location": ["server path"]}},
+         "custom_width": {"c2c_show_if": {"resolution": ["custom"]}},
+         "custom_height": {"c2c_show_if": {"resolution": ["custom"]}},
+         "handle_frames": {"c2c_show_if": {"handles": ["add"]}},
+         "handle_target": {"c2c_show_if": {"handles": ["fit"]}},
+         "handle_side": {"c2c_show_if": _LV_HANDLES_ON},
+         "handle_grid": {"c2c_show_if": _LV_HANDLES_ON},
+         "extra_handles": {"c2c_show_if": _LV_HANDLES_ON},
+         "handle_custom_step": {"c2c_show_if": {**_LV_HANDLES_ON, "handle_grid": ["custom (step / plus)"]}},
+         "handle_custom_plus": {"c2c_show_if": {**_LV_HANDLES_ON, "handle_grid": ["custom (step / plus)"]}},
+         "working_space": {"c2c_show_if": {"colorspace_in": {"not": ["off (as before)"]}}},
+         "sequence_fps": _lv_by_source(_LV_IMG),
+         "missing_frames": _lv_by_source(_LV_IMG),
+         "exr_layer": _lv_by_source(_LV_EXR)},
+    ))

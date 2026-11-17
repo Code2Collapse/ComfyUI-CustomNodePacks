@@ -9,6 +9,20 @@ import torch
 
 from .._is_changed_util import hash_args_and_kwargs
 from ._ops import build_report, film_grain, frequency_combine, frequency_separate
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 _CATEGORY = "MEC/Frequency"
 
@@ -110,10 +124,16 @@ def _preview_ui(image, hf, lf, mode, method, radius, detail, linear):
         return {}
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, Frequency): edge_threshold is the eps of the edge-aware filters only
+# (_ops.low_frequency_nchw: Guided / Rolling Guidance); mask_feather only acts on a wired mask. Display only.
+_SEPARATE_LAYOUT = {"edge_threshold": {"c2c_show_if": {"method": ["Guided", "Rolling Guidance"]}}}
+_COMBINE_LAYOUT = {"mask_feather": {"c2c_show_if_linked": ["mask"]}}
+
+
 class FrequencySeparateMEC:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "image": ("IMAGE", {
                     "tooltip": (
@@ -149,7 +169,7 @@ class FrequencySeparateMEC:
             "optional": {
                 "mask": ("MASK", {"tooltip": _MASK_SEP_TOOLTIP}),
             },
-        }
+        }, _SEPARATE_LAYOUT)
 
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("high_frequency", "low_frequency", "high_frequency_masked", "report")
@@ -188,7 +208,7 @@ class FrequencySeparateMEC:
 class FrequencyCombineMEC:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "high_frequency": ("IMAGE", {
                     "tooltip": "Detail layer from Frequency Separate (mode/linear must match).",
@@ -216,7 +236,7 @@ class FrequencyCombineMEC:
                     "tooltip": _FEATHER_TOOLTIP,
                 }),
             },
-        }
+        }, _COMBINE_LAYOUT)
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("image", "report")

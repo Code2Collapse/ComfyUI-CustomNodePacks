@@ -26,6 +26,20 @@ import torch
 import torch.nn.functional as F
 
 from ._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 # Common industry PARs. "custom" uses the pixel_aspect float widget.
 PAR_PRESETS: Dict[str, float] = {
@@ -60,6 +74,11 @@ def _resolve_par(preset: str, pixel_aspect: float) -> float:
     return par
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, PARDesqueezeMEC): pixel_aspect is read only for the "custom" preset
+# (_resolve_par: preset value 0). Display only.
+_DESQUEEZE_LAYOUT = {"pixel_aspect": {"c2c_show_if": {"par_preset": ["custom"]}}}
+
+
 class PARDesqueezeMEC:
     DESCRIPTION = ("Convert an anamorphic plate to SQUARE pixels before AI processing "
                    "(Nuke: 4448x3840 @ PAR 1.7266 → 7680x3840 at 2:1). Wire par_info "
@@ -75,7 +94,7 @@ class PARDesqueezeMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
+        return with_layout({"required": {
             "image": ("IMAGE", {}),
             "par_preset": (tuple(PAR_PRESETS.keys()),
                            {"default": "ARRI 4448x3840→2:1 (1.7266)"}),
@@ -86,7 +105,7 @@ class PARDesqueezeMEC:
                        "tooltip": "stretch_width keeps every scanline (recommended); "
                                   "squash_height keeps the pixel count low."}),
             "filter": (("bicubic", "bilinear", "nearest", "area"), {"default": "bicubic"}),
-        }}
+        }}, _DESQUEEZE_LAYOUT)
 
     def execute(self, image: torch.Tensor, par_preset: str, pixel_aspect: float,
                 method: str, filter: str) -> Tuple[torch.Tensor, str]:

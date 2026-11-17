@@ -1050,10 +1050,10 @@ def _fit_mask_hw(m: torch.Tensor, H: int, W: int) -> torch.Tensor:
     return F.interpolate(m.float()[None, None], size=(H, W), mode="nearest")[0, 0]
 
 
-# L7.99 slice 3 (ORDERS 11.4: at most 10 visible controls): the rarely used inputs are flagged core's "advanced" (Nodes
-# 2.0 folds them behind "Show advanced inputs") and named a "c2c_section" for the classic canvas's "More" bar
-# (js/_c2c_sections.js). Inputs a switch reveals (pre-resize sizes, outpaint factors, target size, video_stable_*) are
-# not here: js/c2c_mode_widgets.js shows them when their switch is on. Order and defaults are unchanged.
+# L7.99 slice 3 (ORDERS 11.4: at most 10 visible controls): the rarely used inputs are named a "c2c_section" for the
+# node's "More" bar (js/_c2c_node_layout.js, both renderers; A28: no core "advanced" flag, Nodes 2.0 would fold them
+# twice). Inputs a switch reveals (pre-resize sizes, outpaint factors, target size, video_stable_*) are not here: the
+# A28 rules at the end of this file show them when their switch is on. Order and defaults are unchanged.
 _CROP_SECTIONS = {
     **dict.fromkeys(("mask_fill_holes", "mask_invert", "mask_hipass_filter", "wan_mask_polarity"), "Mask"),
     **dict.fromkeys(("output_resize_to_target_size", "output_padding", "wan_align_multiple", "auto_context_factor",
@@ -1086,7 +1086,6 @@ def _with_crop_sections(spec):
             section = _CROP_SECTIONS.get(name)
             if section and isinstance(s, tuple) and len(s) > 1 and isinstance(s[1], dict):
                 s[1]["c2c_section"] = section
-                s[1]["advanced"] = True
     return spec
 
 
@@ -3012,3 +3011,73 @@ class InpaintPasteBackMEC:
 
 # InpaintCompositeMEC removed 2026-05-18 — use InpaintStitchProMEC (stitch_mode
 # "blend" or "paste back", L7.65 P08).
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "InpaintCropProMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# crop_mode shows its own group; a switch shows what it enables; output_target_* are read by the resize AND
+# by auto_context_factor (:1562, :1815-1823); the resize filters are also recorded in mask prepare (:1439).
+try:
+    from ._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    _ICP_SOCKETS = {"image", "mask", "optional_context_mask"}
+    _ICP_ALWAYS = {"crop_mode", "preview_frame"}
+
+    def _icp_layout(spec):
+        out = {}
+        for group in ("required", "optional"):
+            for name in (spec.get(group) or {}):
+                if name in _ICP_SOCKETS or name in _ICP_ALWAYS:
+                    continue
+                mode = ("smart aspect" if name.startswith("smart_") else "mask prepare"
+                        if name.startswith("prepare_") else "pro")
+                out[name] = {"c2c_show_if": {"crop_mode": [mode]}}
+        pro = {"crop_mode": ["pro"]}
+        for n in ("downscale_algorithm", "upscale_algorithm"):
+            out[n] = {"c2c_show_if": {"crop_mode": ["pro", "mask prepare"]}}
+        for n in ("preresize_mode", "preresize_min_width", "preresize_min_height", "preresize_max_width",
+                  "preresize_max_height"):
+            out[n] = {"c2c_show_if": {**pro, "preresize": [True]}}
+        for n in ("extend_up_factor", "extend_down_factor", "extend_left_factor", "extend_right_factor"):
+            out[n] = {"c2c_show_if": {**pro, "extend_for_outpainting": [True]}}
+        for n in ("output_target_width", "output_target_height"):
+            out[n] = {"c2c_show_if_any": [{**pro, "output_resize_to_target_size": {"truthy": True}},
+                                          {**pro, "auto_context_factor": {"truthy": True}}]}
+        for n in ("video_stable_temporal_sigma", "video_stable_dilate_px", "video_stable_blur_sigma"):
+            out[n] = {"c2c_show_if": {**pro, "stitch_blend_mode": ["video_stable"]}}
+        smart = {"crop_mode": ["smart aspect"]}
+        out["smart_min_resolution"] = {"c2c_show_if": {**smart, "smart_resolution_mode": {"not": ["Manual"]}}}
+        for n in ("smart_manual_width", "smart_manual_height"):
+            out[n] = {"c2c_show_if": {**smart, "smart_resolution_mode": ["Manual"]}}
+        out["smart_max_resolution"] = {"c2c_show_if_any": [
+            {**smart, "smart_resolution_mode": {"not": ["Manual"]}},
+            {**smart, "smart_no_mask_mode": ["Resize Full Image"]}]}
+        prep = {"crop_mode": ["mask prepare"]}
+        out["prepare_min_region_area"] = {"c2c_show_if": {**prep, "prepare_remove_small_regions": [True]}}
+        out["prepare_temporal_sigma"] = {"c2c_show_if": {**prep, "prepare_temporal_smooth": [True]}}
+        return out
+
+    _ISP_SOCKETS = {"stitcher", "inpainted_image", "original_image", "mask"}
+
+    def _isp_layout(spec):
+        out = {}
+        for group in ("required", "optional"):
+            for name in (spec.get(group) or {}):
+                if name in _ISP_SOCKETS or name == "stitch_mode":
+                    continue
+                mode = ("paste back" if name.startswith("paste_") else "smart" if name.startswith("smart_")
+                        else "context blend" if name.startswith("context_") else "blend")
+                out[name] = {"c2c_show_if": {"stitch_mode": [mode]}}
+        for n in ("stitch_temporal_sigma", "stitch_dilate_px", "roto_quality_override"):
+            out[n]["c2c_section"] = "Blend"
+        out["paste_feather_radius"] = {"c2c_show_if": {"stitch_mode": ["paste back"], "paste_feather_edges": [True]}}
+        out["smart_feather_pixels"] = {"c2c_show_if": {"stitch_mode": ["smart"],
+                                                       "smart_blend_mode": {"not": ["Hard Paste"]}}}
+        out["smart_color_match_amount"] = {"c2c_show_if": {"stitch_mode": ["smart"],
+                                                           "smart_enable_color_match": [True]}}
+        return out
+
+    declare_layout(InpaintCropProMEC, _icp_layout)
+    declare_layout(InpaintStitchProMEC, _isp_layout)

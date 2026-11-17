@@ -494,13 +494,16 @@ function installEditor(node) {
     // The canvas now authors points_json / bbox_json directly (see save()), so the
     // raw JSON textareas are redundant clutter — collapse them. The input sockets
     // remain, so wiring points/bbox from another node still works.
-    hideWidget(node.widgets?.find(w => w.name === "points_json"));
-    hideWidget(node.widgets?.find(w => w.name === "bbox_json"));
-    // Same for the multi-prompt-family carriers on SAMMaskGeneratorMEC —
-    // bboxes_json (plural) and spline_json are JSON state fed by the editor
-    // or by upstream connections, never hand-typed.
-    hideWidget(node.widgets?.find(w => w.name === "bboxes_json"));
-    hideWidget(node.widgets?.find(w => w.name === "spline_json"));
+    // A28: on SAMMaskGeneratorMEC these four are hidden by js/_c2c_node_layout.js (c2c_hidden in
+    // nodes/sam_mask_generator.py) - one visibility owner per node - so this editor leaves them alone there.
+    if (node.comfyClass !== "SAMMaskGeneratorMEC") {
+        hideWidget(node.widgets?.find(w => w.name === "points_json"));
+        hideWidget(node.widgets?.find(w => w.name === "bbox_json"));
+        // Same for the multi-prompt-family carriers - bboxes_json (plural) and spline_json are JSON state fed by
+        // the editor or by upstream connections, never hand-typed.
+        hideWidget(node.widgets?.find(w => w.name === "bboxes_json"));
+        hideWidget(node.widgets?.find(w => w.name === "spline_json"));
+    }
 
     const syncDims = () => {
         const w = findWidget(node, "width", PTS);

@@ -46,6 +46,20 @@ from ._identity import (
     drift_map,
     identity_lock,
 )
+try:                                                       # A28 layout declarations (display only)
+    from .._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '..', '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 CATEGORY = "C2C/Tiling"
 
@@ -74,6 +88,14 @@ def _fingerprint(*tensors, **widgets) -> str:
     return h.hexdigest()
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, Tiling): each plan mode's own sizes; the lock's tuning in a section.
+# Display only.
+_PLAN_LAYOUT = {"tile_size": {"c2c_show_if": {"mode": ["tile size"]}},
+                "rows": {"c2c_show_if": {"mode": ["tile count"]}},
+                "cols": {"c2c_show_if": {"mode": ["tile count"]}}}
+_LOCK_LAYOUT = {"corrections": {"c2c_section": "Lock"}, "want_drift_map": {"c2c_section": "Lock"}}
+
+
 class TilePlanMEC:
     """Work out the tiles once, for the whole clip."""
 
@@ -81,7 +103,7 @@ class TilePlanMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "image": ("IMAGE", {"tooltip": "Any frame at the size you will "
                                                "be tiling. Only its dimensions "
@@ -108,7 +130,7 @@ class TilePlanMEC:
                                "so there is no seam and no brightness dip. "
                                "'none' is for checking where the tiles are."}),
             }
-        }
+        }, _PLAN_LAYOUT)
 
     RETURN_TYPES = ("TILE_PLAN", "STRING")
     RETURN_NAMES = ("tile_plan", "info")
@@ -282,7 +304,7 @@ class IdentityLockMEC:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "original": ("IMAGE", {
                     "tooltip": "The plate, at the SAME size as the refined "
@@ -319,7 +341,7 @@ class IdentityLockMEC:
                                "Bright means it moved. Use it to find what the "
                                "drift number is telling you about."}),
             },
-        }
+        }, _LOCK_LAYOUT)
 
     RETURN_TYPES = ("IMAGE", "MASK", "FLOAT", "STRING")
     RETURN_NAMES = ("image", "drift_map", "drift", "info")

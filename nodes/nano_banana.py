@@ -36,6 +36,20 @@ import numpy as np
 import torch
 
 from ._is_changed_util import hash_args_and_kwargs
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 try:
     from comfy.utils import ProgressBar  # type: ignore
@@ -237,6 +251,17 @@ def _humanise_http(status: int, body: str) -> str:
     return f"Gemini API error HTTP {status}: {msg}"
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, NanoBananaC2C): resolution is sent only for the gemini-3 models
+# (generate: model.startswith("gemini-3")); the generation tuning and the key field sit in sections (the key script,
+# js/c2c_nano_banana_key.js, still moves a typed key into the key store). Display only.
+_NANO_LAYOUT = {
+    "resolution": {"c2c_show_if": {"model": [m for m in _MODELS if m.startswith("gemini-3")]}},
+    **{k: {"c2c_section": "Generation"} for k in ("prompt_style", "enhance_prompt", "response_modalities",
+                                                  "temperature", "seed", "system_instruction")},
+    "api_key": {"c2c_section": "API key"},
+}
+
+
 class NanoBananaC2C:
     """All Nano Banana / Gemini image models in one production node."""
 
@@ -255,7 +280,7 @@ class NanoBananaC2C:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": "", "tooltip":
                            "What to generate / how to edit. With prompt_style="
@@ -301,7 +326,7 @@ class NanoBananaC2C:
                 "image_3": ("IMAGE", {}),
                 "image_4": ("IMAGE", {"tooltip": "For style_transfer the LAST image is the style."}),
             },
-        }
+        }, _NANO_LAYOUT)
 
     # ── caching: stable content hash (never NaN) ────────────────────
     @classmethod

@@ -11,6 +11,7 @@
 """MEC Mask toolkit nodes — torch-native, batch-correct."""
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from .._is_changed_util import hash_args_and_kwargs
@@ -475,6 +476,70 @@ _NEW_MODE_PARAMS = {
     },
 }
 _MODE_KEY = {label: key for label, key, _p in MASK_TOOL_MODES}
+GROW_UNITS = ("px", "% of the matte size")
+
+
+def _grow_extra_inputs() -> dict:
+    """L9.281 (owner 2026-11-17): grow / shrink at any angle, in px or % of the matte, with a soft fall-off, and
+    optionally along a face's tilt (POSE_KEYPOINT from Face Landmarks). Defaults = the old grow, bit for bit."""
+    return {
+        "grow_angle": ("FLOAT", {"default": 0.0, "min": -360.0, "max": 360.0, "step": 1.0,
+                                 "tooltip": "grow / shrink: turn the up / down / left / right axes by this many "
+                                            "degrees (counter-clockwise); 0 = the picture's axes."}),
+        "grow_units": (list(GROW_UNITS), {"default": GROW_UNITS[0],
+                                          "tooltip": "grow / shrink: left / right / up / down in pixels, or in % of "
+                                                     "the matte's own width (left / right) and height (up / down)."}),
+        "grow_falloff": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 4096.0, "step": 1.0,
+                                   "tooltip": "grow / shrink: soft fall-off of the grown band, same units (0 = hard "
+                                              "edge)."}),
+        "grow_follow_face": ("BOOLEAN", {"default": True,
+                                         "tooltip": "grow / shrink: with face_pose connected, turn the axes with each "
+                                                    "frame's head tilt (added to grow_angle)."}),
+        "face_pose": ("POSE_KEYPOINT", {"tooltip": "grow / shrink: Face Landmarks' pose_keypoint - the axes follow "
+                                                   "the head's tilt per frame (first face)."}),
+    }
+
+
+def _pose_angle(pose, i: int):
+    """Head tilt (degrees, counter-clockwise) of the first face in frame i of an OpenPose face list, or None."""
+    try:
+        frames = pose if isinstance(pose, list) else [pose]
+        fr = frames[min(i, len(frames) - 1)]
+        k = np.asarray(fr["people"][0]["face_keypoints_2d"], np.float64).reshape(-1, 3)[:68, :2]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+    if not np.isfinite(k).all() or (k == 0).all():
+        return None
+    from ..facepoints_controls import face_frame
+    return face_frame(k).angle_deg
+
+
+def _directional_ext(m, a: dict, extra: dict):
+    """The extended grow: per frame, rotated axes, units, fall-off (nodes/_mask_directional.py)."""
+    import torch
+    from .._mask_directional import extend
+    out, notes = [], []
+    pose = extra.get("face_pose")
+    for i in range(m.shape[0]):
+        f = m[i].detach().float().cpu().numpy()
+        sx = sy = 1.0
+        if extra["grow_units"] == GROW_UNITS[1]:
+            ys, xs = np.nonzero(f > 0.5)
+            if len(xs):
+                sx, sy = (xs.max() - xs.min() + 1) / 100.0, (ys.max() - ys.min() + 1) / 100.0
+            else:
+                sx = sy = 0.0
+        ang = float(extra["grow_angle"])
+        if pose is not None and extra["grow_follow_face"]:
+            pa = _pose_angle(pose, i)
+            if pa is None:
+                notes.append(f"frame {i}: no face in face_pose - picture axes used")
+            else:
+                ang += pa
+        g = extend(f, up=a["up"] * sy, down=a["down"] * sy, left=a["left"] * sx, right=a["right"] * sx,
+                   angle_deg=ang, falloff_px=float(extra["grow_falloff"]) * (sy if sx == sy else (sx + sy) / 2))
+        out.append(torch.from_numpy(g))
+    return torch.stack(out).to(m.device), notes[:8]
 # controls most keys never touch: in a section, so a mode shows at most 10 controls (ORDERS 11.4)
 _ADVANCED = {("luma_key", "channel"), ("luma_key", "low_soft"), ("luma_key", "high_soft"), ("luma_key", "invert_key")}
 
@@ -542,9 +607,8 @@ class MaskToolsMEC:
                 opts = dict(s[1]) if len(s) > 1 else {}
                 if key == "grain" and p == "seed":
                     opts["control_after_generate"] = True
-                if (key, p) in _ADVANCED:                  # L7.81: classic "More" bar / Nodes 2.0 advanced inputs
+                if (key, p) in _ADVANCED:                  # L7.81 / A28: the "More" bar, both renderers
                     opts["c2c_section"] = "Advanced"
-                    opts["advanced"] = True
                 tip = opts.get("tooltip", "")
                 opts["tooltip"] = f"{label}: {tip}" if tip else label
                 target[mask_tool_widget(key, p)] = (s[0], opts)
@@ -559,6 +623,7 @@ class MaskToolsMEC:
                 "plate": ("IMAGE", {"tooltip": "key: difference - the clean plate (same shot, without the subject)."}),
                 "size_as": ("IMAGE", {"tooltip": "gradient: take the size from this image."}),
                 **appended,
+                **_grow_extra_inputs(),          # L9.281: appended LAST so saved widget positions never shift
             },
         }
 
@@ -601,6 +666,8 @@ class MaskToolsMEC:
                 w = mask_tool_widget(key, p)
                 if p not in args and w in optional:
                     args[p] = optional[w][1].get("default")
+        # L9.281: the grow extras (appended inputs) reach _run through the instance, its signature stays
+        self._grow_extra = {k: kw.get(k, v[1].get("default")) for k, v in _grow_extra_inputs().items()}
         with torch.no_grad():
             out_mask, out_image, report = self._run(key, mode, args, image, mask, mask_b, plate, size_as)
         if out_image is None and out_mask is not None:
@@ -679,7 +746,17 @@ class MaskToolsMEC:
             return clone_output(g), None, build_report("Mask Tools: grade", m.shape[0], [], coverage=float(g.mean()))
         if key == "grow":
             notes = []
-            g = _directional(m.float(), a["left"], a["right"], a["up"], a["down"])
+            extra = getattr(self, "_grow_extra", None) or {k: v[1].get("default")
+                                                           for k, v in _grow_extra_inputs().items()}
+            if extra["grow_units"] not in GROW_UNITS:
+                raise ValueError(f"Mask Tools: grow_units must be one of {', '.join(GROW_UNITS)}")
+            if (float(extra["grow_angle"]) % 360.0 == 0.0 and extra["grow_units"] == GROW_UNITS[0]
+                    and float(extra["grow_falloff"]) == 0.0
+                    and (extra["face_pose"] is None or not extra["grow_follow_face"])):
+                g = _directional(m.float(), a["left"], a["right"], a["up"], a["down"])    # the old grow, exactly
+            else:
+                g, n2 = _directional_ext(m.float(), a, extra)
+                notes += n2
             if int(a["feather"]) > 0:
                 from ..layer_effects._ops import blur_mask
                 g = blur_mask(g, int(a["feather"]), notes)
@@ -695,3 +772,37 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskToolsMEC": "Mask Tools (C2C)",
 }
+
+
+# A28 (ORDERS 29, docs/audit/A28/PARAM_CNP_A.md "MaskToolsMEC"): which controls show when, read by js/_c2c_node_layout.js.
+# Display only: every input keeps its name, order, type and default, is saved and reaches the node's function as before.
+# A mode's controls carry its key as a prefix (MASK_TOOL_MODES); the luma presets set low / high themselves
+# (custom only); a gradient takes its size from size_as when that is wired (_ops.py:323-329).
+try:
+    from .._layout_decl import declare_layout, merge, sections
+except ImportError:  # pragma: no cover - loaded outside the pack
+    declare_layout = None
+if declare_layout is not None:
+    def _mask_tools_layout(spec):
+        keys = [(label, key) for label, key, _p in MASK_TOOL_MODES]
+        out = {}
+        for group in ("required", "optional"):
+            for name in (spec.get(group) or {}):
+                hit = next((lab for lab, k in keys if name == k or name.startswith(k + "_")), None)
+                if hit is None:
+                    continue
+                out[name] = {"c2c_show_if": {"mode": [hit]}}
+                s = spec[group][name]
+                if len(s) > 1 and isinstance(s[1], dict) and s[1].get("c2c_section"):
+                    out[name]["c2c_section"] = s[1]["c2c_section"]
+        for n in ("luma_key_low", "luma_key_high"):
+            out[n] = {"c2c_show_if": {"mode": ["key: luma"], "luma_key_mode": ["custom"]}}
+        for n in ("gradient_width", "gradient_height"):
+            out.setdefault(n, {})["c2c_hide_if_linked"] = ["size_as"]
+        # L9.281 directional grow (grow_angle / grow_units / grow_falloff / grow_follow_face get the grow / shrink
+        # rule from their prefix above, no section, like the other grow controls): following the face's tilt only
+        # means something with face_pose wired
+        if "grow_follow_face" in out:
+            out["grow_follow_face"]["c2c_show_if_linked"] = ["face_pose"]
+        return out
+    declare_layout(MaskToolsMEC, _mask_tools_layout)

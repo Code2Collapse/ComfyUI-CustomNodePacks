@@ -1690,6 +1690,12 @@ read any file path. Through an SSH tunnel the page still counts as local.
 - **Mask Placement (MEC)**: `feather_px` applies when the placement has no feather of its own (a fixed 6 px was
   used), and a missing opencv is reported in words.
 - **Mask Tools (C2C)** edge_spread with no mask wired outputs an empty mask instead of nothing.
+- **Mask Tools (C2C)** `grow / shrink` extends a matte in any direction: `grow_angle` turns the up / down / left /
+  right axes, `grow_units` takes pixels or % of the matte's own size, `grow_falloff` gives the grown band a soft edge,
+  and with Face Landmarks' `pose_keypoint` wired into `face_pose` the axes follow each frame's head tilt
+  (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
+- **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
+  too dark) (2026-11-17).
 - **Inpaint Crop Pro** `mask prepare` without an image stops with a message when `stitcher` or `cropped_image` is
   wired (the next node crashed); the mask-only use is unchanged.
 - **Mask Failure Explainer (MEC)**: `ring_width`, `blur_threshold` and `brightness_threshold` now change the
@@ -2024,6 +2030,23 @@ per class), the summary has each output's size, value range and lit pixels, and 
 face ("the face finder found no face" - try `face_finder = whole image` for a face crop or a lower
 `finder_confidence` - or "every face was rejected: ..."). On a large frame with a small face the landmark image is
 mostly black even when correct; `lit_fraction` shows it. Evidence: `docs/evidence/FACE_GNM/` (workspace).
+
+**Which part of the head the mask covers (`mask_part`, Mask section).** `whole face (default)` is the mask as
+before. Features: eyes, one eye (image left / right), eyelids, brows, nose, lips, inner mouth / teeth. Areas: around
+the mouth, cheeks, chin + jaw. Estimated (no landmark covers them; they follow the head's tilt and, with
+`mask_head_refine = image edges`, are fitted to the picture): forehead, ears, hair, head + hair. `custom list` joins
+several, e.g. `eyes, lips` in `mask_parts_custom`. `mask_invert` gives everything except the chosen parts.
+`mask_extend_up / down / left / right` (% of the face height, negative shrinks) extend the mask along the head's own
+axes (`mask_extend_follow_tilt`), with an optional soft fall-off. All defaults give the old mask exactly.
+
+**Low light, colour casts, motion blur (`screening_robust_detection`).** `auto` (default): a frame where no face is
+found is analysed (brightness, colour cast, sharpness) and retried on enhanced copies (light lift with CLAHE, light
+lift after denoise, colour balance, luma only, deblur, a 1.5x look), then with the face box of a nearby frame. The
+copies are only shown to the detector; every output keeps the original footage. Frames that already work are not
+touched. Measured on the real model: a very dark frame (x0.06), a dark noisy frame, a heavily blurred frame and a
+dark motion-blurred frame went from no face to a face; nothing that was found was lost. `always` detects every frame
+on the enhanced copy; `off` is the old behaviour. Each frame's `diagnostics.robust` says what was tried and what
+worked.
 
 ## C2C Vault: lock or seal part of a workflow
 

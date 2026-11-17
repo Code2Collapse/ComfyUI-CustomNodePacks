@@ -10,6 +10,20 @@ from __future__ import annotations
 import json
 import logging
 import time
+try:                                                       # A28 layout declarations (display only)
+    from ._c2c_layout import with_layout
+except ImportError:  # loaded as a plain file (tests): the same module by path, never an absolute import
+    try:
+        import importlib.util as _c2c_ilu
+        import os as _c2c_os
+        _c2c_spec = _c2c_ilu.spec_from_file_location("c2c_layout_by_path", _c2c_os.path.join(
+            _c2c_os.path.dirname(_c2c_os.path.abspath(__file__)), '_c2c_layout.py'))
+        _c2c_mod = _c2c_ilu.module_from_spec(_c2c_spec)
+        _c2c_spec.loader.exec_module(_c2c_mod)
+        with_layout = _c2c_mod.with_layout
+    except Exception:  # pragma: no cover - layout keys are display only: never take the node down
+        def with_layout(spec, layout):
+            return spec
 
 log = logging.getLogger("C2C.Farm.nodes")
 
@@ -68,12 +82,22 @@ def _progress_event(node_id, pct, label):
         pass
 
 
+# A28 (docs/audit/A28/PARAM_CNP_B.md, C2C_Submit): the job bookkeeping sits in a "Farm" section; timeout_minutes is
+# read only while waiting (_wait). Display only.
+_SUBMIT_LAYOUT = {
+    "priority": {"c2c_section": "Farm"},
+    "project_name": {"c2c_section": "Farm"},
+    "force_resubmit": {"c2c_section": "Farm"},
+    "timeout_minutes": {"c2c_show_if": {"wait_for_completion": [True]}},
+}
+
+
 class C2C_Submit:
     """Spool a full workflow JSON to a remote ComfyUI backend."""
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return with_layout({
             "required": {
                 "prompt_json": ("STRING", {
                     "multiline": True, "default": "",
@@ -104,7 +128,7 @@ class C2C_Submit:
                                "spool a new job."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
-        }
+        }, _SUBMIT_LAYOUT)
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("job_id", "result_paths", "info")

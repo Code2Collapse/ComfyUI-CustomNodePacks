@@ -20,7 +20,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { measureRootContent, installResizeFloor } from "./c2c_ui/index.js";
-import { setHidden, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { setHidden, vueFitNodeHeight, vueSyncNodeWidgets } from "./_widget_visibility.js";
+import { sectionOf, sectionOpen, updateSectionBar } from "./_c2c_sections.js";
 import {
     MARGIN,
     DEFAULT_ASPECT,
@@ -70,6 +71,12 @@ function loadMatrix() {
 }
 
 const W = (node, name) => node.widgets?.find((w) => w.name === name);
+
+// A28 (ORDERS 29): this file stays Save Video's one visibility owner (its rules follow the served encoder matrix);
+// the declarative layout engine (js/_c2c_node_layout.js) leaves it alone. The sections are only NAMED in Python
+// (nodes/save_video.py): this file asks js/_c2c_sections.js which of the controls it shows sit in a closed one.
+globalThis.__c2cVisibilityOwners = globalThis.__c2cVisibilityOwners || new Set();
+globalThis.__c2cVisibilityOwners.add("SaveVideoC2C");
 const val = (node, name, d) => W(node, name)?.value ?? d;
 const baseLabel = (label) => String(label || "").replace(/\s+\[unavailable\]$/, "").trim();
 
@@ -268,6 +275,9 @@ function setLabel(w, text) {
 }
 
 function applyVisibility(node, info) {
+    // A28: start every sectioned control from shown; the rules below hide what the format does not use, and the
+    // closed sections fold the rest at the end
+    for (const w of node.widgets || []) if (sectionOf(node, w.name) !== null) setHidden(w, false);
     setHidden(W(node, "follow_load"), true);             // L9.55: the Load ▾ picker writes it
     // L9.57: the burn-in settings only with a review copy; the template and artist only for a custom burn-in
     const review = !!val(node, "review_copy", false), customBurn = val(node, "burn_in", "standard") === "custom";
@@ -319,9 +329,20 @@ function applyVisibility(node, info) {
     setHidden(W(node, "trim_frames"), !manual);
     setHidden(W(node, "trim_side"), !manual);
     for (const n of ALWAYS_HIDDEN) setHidden(W(node, n), true);
+    // A28: what the rules show inside a section feeds the "More" bar; a closed section folds it
+    const shown = [];
+    for (const w of node.widgets || []) {
+        if (sectionOf(node, w.name) === null || w.__mec_hidden) continue;
+        shown.push(w.name);
+        if (!sectionOpen(node, w.name)) setHidden(w, true);
+    }
+    updateSectionBar(node, shown, () => {
+        if (node._c2cSave?.refreshFormat) node._c2cSave.refreshFormat(); else applyVisibility(node, info);
+    });
     vueSyncNodeWidgets(node);
     const sz = node.computeSize?.();
     if (sz) node.setSize([Math.max(node.size[0], sz[0]), sz[1]]);
+    vueFitNodeHeight(node);                              // A28: Nodes 2.0 fits to its content (never refitted before)
     node.setDirtyCanvas?.(true, true);
 }
 
