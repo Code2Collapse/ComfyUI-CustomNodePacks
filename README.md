@@ -1970,9 +1970,9 @@ Install SeC: `cd ComfyUI/custom_nodes && git clone https://github.com/9nate-drak
 
 ## Face Landmarks: look, strength, size, screening, mask and smoothing
 
-**Face Landmarks (Facepoints, 620 + 68/98)** has 46 optional controls. They are advanced inputs: in Nodes 2.0 click
-**Show advanced inputs** on the node; the classic renderer of frontend 1.53 shows them all. With every control at its
-default, the output is exactly what it was before (tested bit for bit). The name prefix gives the group:
+**Face Landmarks (Facepoints, 620 + 68/98)** has 46 optional controls, in collapsible sections on the node (open a
+section with its chip; both renderers). With every control at its default, the images are exactly what they were
+before (tested bit for bit). The name prefix gives the group:
 
 - **appearance_**: landmark-image dot and background colours; overlay colours per 620-point kind (`lmk`, `skin`, `lid`,
   `teeth_u`, `teeth_l`, `iris`) and for the 68 and 98 sets; one colour for the whole overlay. Colours are `#RRGGBB`
@@ -2002,6 +2002,28 @@ default, the output is exactly what it was before (tested bit for bit). The name
 
 Measured with the real model on CPU: mean landmark jitter 1.47 → 0.29 px on a shaky clip (strength 0.8); output
 resize aligned within 0.07 px. Evidence: `docs/evidence/A27/face/` (workspace).
+
+**620-point colours (GNM classes).** The model's 620 points come in six classes, read by name from the model's
+`config.json`. Default overlay colours (visualisation only; editable with `appearance_scheme = custom`):
+
+| class | colour | points |
+|---|---|---|
+| lmk | `#1E88E5` blue | 416 |
+| skin | `#FF8C00` orange | 150 |
+| lid | `#00C850` green | 36 |
+| teeth_u | `#E63296` magenta | 7 |
+| teeth_l | `#FF4DA6` pink | 9 |
+| iris | `#FFD700` yellow | 2 |
+
+Colours are written as RGB `#RRGGBB`; the node converts to OpenCV's BGR once for drawing and back to RGB once for
+the IMAGE outputs. A class the node does not know is drawn grey and named in the JSON notes.
+
+**When an output is black.** `landmark_image` is black wherever no face was accepted. `landmarks_json` now says why:
+each frame has `diagnostics` (face boxes found, faces inferred / accepted / rejected with the reason, points drawn
+per class), the summary has each output's size, value range and lit pixels, and a note names the frames without a
+face ("the face finder found no face" - try `face_finder = whole image` for a face crop or a lower
+`finder_confidence` - or "every face was rejected: ..."). On a large frame with a small face the landmark image is
+mostly black even when correct; `lit_fraction` shows it. Evidence: `docs/evidence/FACE_GNM/` (workspace).
 
 ## C2C Vault: lock or seal part of a workflow
 

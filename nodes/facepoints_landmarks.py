@@ -50,8 +50,18 @@ FINDER_YUNET = "yunet (finds faces)"
 FINDER_WHOLE = "whole image (already a face crop)"
 FINDER_YOLO = "yolo: "
 SETS = ("68 + iris (OpenPose face)", "98 (WFLW)", "620 dense (GNM Head)")
+# Colour contract (one boundary, never crossed twice):
+#   controls are RGB hex "#RRGGBB" -> facepoints_controls.parse_hex -> (r, g, b) -> rgb_to_bgr -> (b, g, r)
+#   -> OpenCV draws on BGR canvases (the frame is converted RGB -> BGR once, on the way in) -> the finished canvases
+#   are converted BGR -> RGB once (run(): lm[:, :, ::-1], ov[:, :, ::-1]) -> IMAGE tensors in RGB 0..1.
+# Visualisation defaults per GNM class (not model-required colours), high contrast on dark and light footage:
+#   lmk #1E88E5 blue, skin #FF8C00 orange, lid #00C850 green, teeth_u #E63296 magenta, teeth_l #FF4DA6 pink,
+#   iris #FFD700 yellow. Stored here as BGR (OpenCV order).
 CLASS_BGR = {"lmk": (229, 136, 30), "skin": (0, 140, 255), "lid": (80, 200, 0), "teeth_u": (150, 50, 230),
-             "teeth_l": (150, 50, 230), "iris": (0, 215, 255)}   # BGR, as the model card's figure
+             "teeth_l": (166, 77, 255), "iris": (0, 215, 255)}
+# The published GNM release (myned-ai/facepoints config.json "classes", checked 2026-11-17 on the installed copy).
+GNM_CLASS_COUNTS = {"lmk": 416, "skin": 150, "lid": 36, "teeth_u": 7, "teeth_l": 9, "iris": 2}
+UNKNOWN_CLASS_BGR = (189, 189, 189)      # #BDBDBD: a class this node does not know is drawn grey and named in notes
 
 if folder_paths is not None:
     try:
@@ -258,6 +268,38 @@ def draw(canvas: np.ndarray, pts: np.ndarray, colour, radius: int, conf: Optiona
         cv2.circle(canvas, (int(round(x)), int(round(y))), int(radius), c, -1, lineType=cv2.LINE_AA)
 
 
+def _image_stats(t: torch.Tensor) -> dict:
+    """Size, value range and lit pixels of an output (IMAGE [B,H,W,3] or MASK [B,H,W]); 'lit' = brighter than 2 %."""
+    t = t.detach().float().cpu()
+    lit = (t.amax(-1) if t.ndim == 4 else t) > 0.02
+    return {"shape": list(t.shape), "min": round(float(t.min()), 4) if t.numel() else None,
+            "max": round(float(t.max()), 4) if t.numel() else None, "lit_pixels": int(lit.sum()),
+            "lit_fraction": round(float(lit.float().mean()), 6) if t.numel() else 0.0}
+
+
+def class_plan(classes: np.ndarray, kinds: dict) -> Tuple[List[Tuple[str, np.ndarray, tuple]], List[str]]:
+    """The 620-point drawing plan by class NAME (never by index range): [(class, point mask, BGR colour)] in the
+    palette's order, then any class the palette does not know (drawn UNKNOWN_CLASS_BGR). Returns (plan, warnings);
+    a warning names unknown classes and per-class counts that differ from the published GNM release."""
+    names = [str(v) for v in np.asarray(classes).tolist()]
+    present = list(dict.fromkeys(names))
+    plan, warn = [], []
+    for k in list(kinds) + [k for k in present if k not in kinds]:
+        sel = np.asarray(classes) == k
+        if not sel.any():
+            continue
+        plan.append((k, sel, kinds.get(k, UNKNOWN_CLASS_BGR)))
+    unknown = [k for k in present if k not in kinds]
+    if unknown:
+        warn.append(f"the model has point classes this node has no colour for: {', '.join(unknown)} - drawn grey "
+                    f"(#BDBDBD)")
+    counts = {k: names.count(k) for k in present}
+    if counts != GNM_CLASS_COUNTS:
+        warn.append(f"the model's point classes differ from the published GNM release: {counts} (expected "
+                    f"{GNM_CLASS_COUNTS}); colours follow the class names")
+    return plan, warn
+
+
 # ── node ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A27 FACE-001: appended controls. Every default reproduces the earlier output exactly (tests compare bit for bit).
@@ -265,7 +307,7 @@ def draw(canvas: np.ndarray, pts: np.ndarray, colour, radius: int, conf: Optiona
 SCHEMES = ("model card (default)", "custom")
 LOW_CONF = ("dim (default)", "fade", "hide", "keep")
 MASK_FACES_CHOICES = ("all faces", "largest face", "face index")   # = facepoints_controls.MASK_FACES
-DEFAULT_HEX = {"lmk": "#1E88E5", "skin": "#FF8C00", "lid": "#00C850", "teeth_u": "#E63296", "teeth_l": "#E63296",
+DEFAULT_HEX = {"lmk": "#1E88E5", "skin": "#FF8C00", "lid": "#00C850", "teeth_u": "#E63296", "teeth_l": "#FF4DA6",
                "iris": "#FFD700"}        # = CLASS_BGR as RGB hex
 DEFAULT_SET_HEX = "#E63C3C"              # the 68 / 98 overlay colour (BGR 60, 60, 230)
 
@@ -556,6 +598,10 @@ class FacepointsLandmarksC2C:
             try:
                 classes = det.cls
                 mesh = det.mesh
+                plan620, class_warn = class_plan(classes, pal["kinds"])
+                for w_ in class_warn:
+                    LOG.warning("Face Landmarks: %s", w_)
+                no_face_frames: List[int] = []
                 slots: List[Optional[dict]] = []        # tracked faces, PROCESSING px (left-to-right order kept)
                 for i in range(frames):
                     mm.throw_exception_if_processing_interrupted()
@@ -563,6 +609,8 @@ class FacepointsLandmarksC2C:
                     bgr = np.ascontiguousarray(rgb[:, :, ::-1])
                     work = FC.resize_image(bgr, P)
                     starts: List[tuple] = []
+                    finder_boxes, tracked = None, 0
+                    box_source = "face_mask" if face_mask is not None else "finder"
                     if face_mask is not None:
                         mb = mask_box(face_mask, i)
                         if mb and not P.identity:
@@ -578,8 +626,11 @@ class FacepointsLandmarksC2C:
                             slots = []
                         live = [s for s in slots if s is not None] if (track_video and i > 0) else []
                         starts = [box_of_points(s["points"][mesh]) for s in live]
+                        tracked = len(starts)
                         if len(starts) < int(max_faces):
-                            for fb in find_faces(work, face_finder, finder_confidence):
+                            fbs = find_faces(work, face_finder, finder_confidence)
+                            finder_boxes = len(fbs)
+                            for fb in fbs:
                                 cx, cy = fb[0] + fb[2] / 2, fb[1] + fb[3] / 2
                                 if any(b[0] <= cx <= b[0] + b[2] and b[1] <= cy <= b[1] + b[2] for b in starts):
                                     continue        # already tracked
@@ -659,8 +710,7 @@ class FacepointsLandmarksC2C:
                         if landmark_set == SETS[2] and low_mode in ("fade", "hide"):
                             lm_alpha, _ = FC.point_alpha(f["conf620"], len(lm_pts), rthr, low_mode, low_op)
                         if pal["kinds_on_lm"] and landmark_set == SETS[2]:
-                            for kk, col in pal["kinds"].items():
-                                sel = classes == kk
+                            for kk, sel, col in plan620:
                                 FC.draw_points(lm, lm_pts[sel], pal["overlay"] or col, r,
                                                None if lm_alpha is None else lm_alpha[sel])
                         else:
@@ -683,15 +733,27 @@ class FacepointsLandmarksC2C:
                     if c["mask_preview"] != "off":
                         FC.preview_mask(ov, mask_f if mask_f is not None else fm.astype(np.float32) / 255.0,
                                         c["mask_preview"])
+                    drawn_per_class: Dict[str, int] = {}
+                    finite_in_frame = 0
                     for f, g in zip(shown, outs):
+                        gp = np.asarray(g["points"], np.float64)
+                        inside = (np.isfinite(gp).all(1) & (gp[:, 0] >= 0) & (gp[:, 0] < Wo) & (gp[:, 1] >= 0)
+                                  & (gp[:, 1] < Ho))
+                        finite_in_frame += int(inside.sum())
                         if landmark_set == SETS[2]:
                             alpha, factor = FC.point_alpha(f["conf620"], len(g["points"]), rthr, low_mode, low_op,
                                                            opacity)
-                            for kk, col in pal["kinds"].items():
-                                sel = classes == kk
+                            for kk, sel, col in plan620:
                                 FC.draw_points(ov, g["points"][sel], pal["overlay"] or col, max(1, r - 1),
                                                alpha[sel], factor[sel])
+                                drawn_per_class[kk] = drawn_per_class.get(kk, 0) + int(
+                                    (inside[sel] & (np.asarray(alpha)[sel] > 0)).sum())
                         else:
+                            sp = np.asarray(_set_points(g, landmark_set), np.float64)
+                            key = "68+iris" if landmark_set == SETS[0] else "98"
+                            drawn_per_class[key] = drawn_per_class.get(key, 0) + int(
+                                (np.isfinite(sp).all(1) & (sp[:, 0] >= 0) & (sp[:, 0] < Wo) & (sp[:, 1] >= 0)
+                                 & (sp[:, 1] < Ho)).sum()) if opacity > 0 else 0
                             col = pal["overlay"] or (pal["set98"] if landmark_set == SETS[1] else pal["set68"])
                             if line_k > 0 and line_runs:
                                 FC.draw_lines(ov, _set_points(g, landmark_set), line_runs, col, line_w,
@@ -700,6 +762,13 @@ class FacepointsLandmarksC2C:
                         js_faces.append(_face_json(f, g, O))
                     pose.append({"people": people, "canvas_width": int(Wo), "canvas_height": int(Ho)})
                     frame = {"faces": js_faces}
+                    if not shown:
+                        no_face_frames.append(i)
+                    frame["diagnostics"] = {
+                        "box_source": box_source, "tracked_boxes": int(tracked),
+                        "finder_boxes": finder_boxes, "faces_inferred": len(found), "faces_accepted": len(shown),
+                        "faces_rejected": len(rejected), "rejected_reasons": [why for _f, why in rejected],
+                        "points_finite_in_frame": int(finite_in_frame), "points_drawn_on_overlay": drawn_per_class}
                     if c["screening_keep_rejected_faces"]:
                         frame["rejected_faces"] = [
                             {"reason": why, "box": [round(float(v), 2) for v in O.box(f["box"])],
@@ -735,6 +804,21 @@ class FacepointsLandmarksC2C:
         if index_missing:
             notes.append(f"mask_face_index {int(c['mask_face_index'])} is past the number of faces in "
                          f"{len(index_missing)} frame(s) (first: {index_missing[0]}); face_mask is empty there")
+        # an all-black landmark_image is only expected where no face was accepted: say so, never silently
+        diag = {"outputs": {name: _image_stats(t) for name, t in
+                            (("landmark_image", lm_t), ("overlay", ov_t), ("face_mask", mk_t))},
+                "frames_without_face": len(no_face_frames), "class_warnings": class_warn}
+        if no_face_frames:
+            first = js_frames[no_face_frames[0]]["diagnostics"]
+            why = ("the face finder found no face" if first["faces_inferred"] == 0
+                   else "every face was rejected: " + "; ".join(sorted(set(first["rejected_reasons"]))))
+            notes.append(f"no face in {len(no_face_frames)} of {frames} frame(s) (first: {no_face_frames[0]}: {why}); "
+                         "landmark_image is black there and overlay shows no points. Try face_finder = whole image "
+                         "for a face crop, lower finder_confidence, or a larger processing resolution.")
+            LOG.warning("Face Landmarks: %s", notes[-1])
+        if any("no colour for" in w_ for w_ in class_warn):
+            notes.append(next(w_ for w_ in class_warn if "no colour for" in w_))
+        info["diagnostics"] = diag
         if notes:
             info["notes"] = notes
         if changed:                                     # only then, so the default JSON stays byte-identical
