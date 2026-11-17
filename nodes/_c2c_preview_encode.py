@@ -42,8 +42,10 @@ def target_size(w: int, h: int, long_edge: Optional[int]) -> Tuple[int, int]:
 
 
 def preview_frames(t, indices: Optional[Sequence[int]] = None, long_edge: Optional[int] = 960,
-                   transfer: str = "srgb", rolloff: bool = False) -> Tuple[Optional[List[np.ndarray]], str]:
-    """-> ([uint8 HxWx3 or HxWx4 per frame], "") or (None, reason)."""
+                   transfer: str = "srgb", rolloff: bool = False,
+                   size: Optional[Tuple[int, int]] = None) -> Tuple[Optional[List[np.ndarray]], str]:
+    """-> ([uint8 HxWx3 or HxWx4 per frame], "") or (None, reason). size = exact (w, h), overriding long_edge (an
+    encoder that needs even sides)."""
     try:
         import torch
         import torch.nn.functional as F
@@ -56,7 +58,7 @@ def preview_frames(t, indices: Optional[Sequence[int]] = None, long_edge: Option
             return None, f"cannot preview a tensor of shape {tuple(t.shape)}"
         b, h, w, c = x.shape
         idx = list(range(b)) if indices is None else [int(i) for i in indices if 0 <= int(i) < b]
-        tw, th = target_size(w, h, long_edge)
+        tw, th = (int(size[0]), int(size[1])) if size else target_size(w, h, long_edge)
         out: List[np.ndarray] = []
         for s in range(0, len(idx), CHUNK):
             sel = idx[s:s + CHUNK]

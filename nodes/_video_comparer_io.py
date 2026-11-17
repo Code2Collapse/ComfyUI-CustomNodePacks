@@ -336,13 +336,25 @@ def _even_scale(w: int, h: int, max_long: int) -> tuple[int, int]:
 
 
 def _to_uint8_frames(images: torch.Tensor, max_frames: int, max_long: int) -> np.ndarray:
-    """[N,H,W,3] float 0-1 -> uint8, capped and downscaled with area filtering."""
-    x = images[:max_frames, ..., :3].detach().float().cpu().clamp(0, 1)
-    n, h, w, _ = x.shape
+    """[N,H,W,3] float 0-1 -> uint8, capped and downscaled with area filtering.
+
+    L9.282: through the shared chunked encoder (nodes/_c2c_preview_encode.py): a few frames at a time, downscaled on
+    the tensor's device before anything is copied (the whole-slice clamp copy cost +4.1 GB for 120 x 1080p)."""
+    try:
+        from ._c2c_preview_encode import preview_frames
+    except ImportError:  # loaded top-level (tests)
+        from _c2c_preview_encode import preview_frames
+    n = min(int(images.shape[0]), int(max_frames))
+    h, w = int(images.shape[1]), int(images.shape[2])
     nw, nh = _even_scale(w, h, max_long)
-    if (nw, nh) != (w, h):
-        x = torch.nn.functional.interpolate(x.permute(0, 3, 1, 2), size=(nh, nw), mode="area").permute(0, 2, 3, 1)
-    return (x * 255.0 + 0.5).to(torch.uint8).numpy()
+    out = np.empty((n, nh, nw, 3), np.uint8)                  # filled a few frames at a time: one copy, not two
+    for s0 in range(0, n, 8):
+        frames, why = preview_frames(images[s0:min(n, s0 + 8), ..., :3], size=(nw, nh))
+        if frames is None:
+            raise RuntimeError(why)
+        for k, f in enumerate(frames):
+            out[s0 + k] = f
+    return out
 
 
 def save_preview_media(images: Optional[torch.Tensor], tag: str, fps: float = 24.0) -> Optional[dict]:
