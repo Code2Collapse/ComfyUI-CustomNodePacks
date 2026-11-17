@@ -430,6 +430,13 @@ def register_routes(server) -> None:
 
     @routes.get("/mec/diagnostics/error_assistant/secrets")
     async def _ea_get_secret(req):
+        try:                                     # L9.287: API keys - local ComfyUI page only
+            from ._local_ui_guard import refuse_remote
+        except ImportError:
+            from _local_ui_guard import refuse_remote
+        refused = refuse_remote(req, "API keys")
+        if refused is not None:
+            return refused
         ss = _import_secrets()
         if ss is None:
             return web.json_response(_envelope_err(
@@ -453,6 +460,13 @@ def register_routes(server) -> None:
 
     @routes.post("/mec/diagnostics/error_assistant/secrets")
     async def _ea_set_secret(req):
+        try:                                     # L9.287: API keys - local ComfyUI page only
+            from ._local_ui_guard import refuse_remote
+        except ImportError:
+            from _local_ui_guard import refuse_remote
+        refused = refuse_remote(req, "API keys")
+        if refused is not None:
+            return refused
         try:
             payload = await req.json()
         except Exception as e:

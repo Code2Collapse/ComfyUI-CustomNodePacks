@@ -89,8 +89,14 @@ def register_routes(server) -> None:
     # loopback peer + loopback Host + no cross-site Origin / Sec-Fetch-Site.
     _local_ui = _security().is_local_ui_origin
 
+    def _peer(req):
+        """The socket's real peer (not request.remote, which a forwarded-header middleware could rewrite)."""
+        t = getattr(req, "transport", None)
+        pn = t.get_extra_info("peername") if t else None
+        return pn[0] if isinstance(pn, (tuple, list)) and pn else req.remote
+
     def _refuse_remote(req):
-        if _local_ui(req.headers, req.remote):
+        if _local_ui(req.headers, _peer(req)):
             return None
         return _err("LOCAL_UI_ONLY", "API keys can be managed only from the ComfyUI page on this machine "
                                      "(http://127.0.0.1 or localhost).", code=403)
@@ -154,6 +160,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/cost/cap")
     async def _cost_cap(req):
+        refused = _refuse_remote(req)          # L9.286: local ComfyUI page only (see _refuse_remote)
+        if refused is not None:
+            return refused
         body = await req.json()
         usd = float(body.get("usd", 1.0))
         get_meter().set_daily_cap(usd)
@@ -592,6 +601,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/policy")
     async def _policy_set(req):
+        refused = _refuse_remote(req)          # L9.286: local ComfyUI page only (see _refuse_remote)
+        if refused is not None:
+            return refused
         body = await req.json()
         if "global" in body:                 # L6.06: preferred tier for every feature
             g = body.get("global")
@@ -615,10 +627,16 @@ def register_routes(server) -> None:
     # ---------------------------------------------------------- config
     @routes.get("/c2c/ai/config")
     async def _config_get(_req):
+        refused = _refuse_remote(_req)         # L9.286: the backend config (hosts, key names) stays local
+        if refused is not None:
+            return refused
         return _ok(bs.load_config())
 
     @routes.post("/c2c/ai/config")
     async def _config_set(req):
+        refused = _refuse_remote(req)          # L9.286: local ComfyUI page only (see _refuse_remote)
+        if refused is not None:
+            return refused
         body = await req.json()
         if not isinstance(body, dict):
             return _err("BAD_BODY", "body must be a JSON object")
@@ -631,6 +649,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/ai/backends/test")
     async def _backend_test(req):
+        refused = _refuse_remote(req)          # L9.286: local ComfyUI page only (see _refuse_remote)
+        if refused is not None:
+            return refused
         body = await req.json()
         bid = body.get("id") or ""
         backend = get_router().get(bid)

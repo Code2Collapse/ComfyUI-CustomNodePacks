@@ -425,6 +425,12 @@ def register_routes(server) -> None:
         return
 
     routes = server.routes
+    # L9.287 (L3 audit P1): these routes list, set and delete stored secrets (incl. the Vault's install key and second
+    # factor) and answered ANY client - on --listen, any machine on the network. Local ComfyUI page only now.
+    try:
+        from ._local_ui_guard import refuse_remote
+    except ImportError:  # loaded top-level (tests)
+        from _local_ui_guard import refuse_remote
 
     @routes.get("/c2c/secrets/backend")
     async def _backend(_request):
@@ -432,10 +438,16 @@ def register_routes(server) -> None:
 
     @routes.get("/c2c/secrets/scopes")
     async def _scopes(_request):
+        refused = refuse_remote(_request, "Stored secrets")
+        if refused is not None:
+            return refused
         return web.json_response({"scopes": scopes()})
 
     @routes.get("/c2c/secrets/list")
     async def _list(request):
+        refused = refuse_remote(request, "Stored secrets")
+        if refused is not None:
+            return refused
         scope = request.query.get("scope", "").strip()
         if not scope:
             return web.json_response({"error": "scope required"}, status=400)
@@ -446,6 +458,9 @@ def register_routes(server) -> None:
 
     @routes.get("/c2c/secrets/has")
     async def _has(request):
+        refused = refuse_remote(request, "Stored secrets")
+        if refused is not None:
+            return refused
         scope = request.query.get("scope", "").strip()
         name = request.query.get("name", "").strip()
         try:
@@ -455,6 +470,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/secrets/set")
     async def _set(request):
+        refused = refuse_remote(request, "Stored secrets")
+        if refused is not None:
+            return refused
         try:
             body = await request.json()
         except Exception:
@@ -470,6 +488,9 @@ def register_routes(server) -> None:
 
     @routes.post("/c2c/secrets/delete")
     async def _del(request):
+        refused = refuse_remote(request, "Stored secrets")
+        if refused is not None:
+            return refused
         try:
             body = await request.json()
         except Exception:
