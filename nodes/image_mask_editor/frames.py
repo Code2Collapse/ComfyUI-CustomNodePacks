@@ -42,7 +42,7 @@ def _temp_editor_dir(eid: str) -> Path:
 def _frame_rgb_u8(image: torch.Tensor, i: int) -> np.ndarray:
     """One frame as contiguous uint8 RGB; peak memory is one frame."""
     frame = image[i].detach().to("cpu", torch.float32).numpy()   # no copy for CPU float32; numpy has no bf16
-    rgb = np.clip(frame[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+    rgb = np.clip(frame[:, :, :3] * 255.0 + 0.5, 0, 255).astype(np.uint8)    # round, not truncate (L9.282: -0.5 LSB)
     return np.ascontiguousarray(rgb)
 
 
