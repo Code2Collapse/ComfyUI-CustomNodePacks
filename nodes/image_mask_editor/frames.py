@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import weakref
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, Tuple
@@ -26,8 +27,10 @@ _CACHE_MAX = 64
 _FRAME_PNG = re.compile(r"^(\d{5})\.png$")
 _FRAME_THUMB = re.compile(r"^t_(\d{5})\.jpg$")
 
-# editor_id -> (fingerprint_hex, B, W, H)
-_FINGERPRINT_CACHE: OrderedDict[str, Tuple[str, int, int, int]] = OrderedDict()
+# editor_id -> (fingerprint_hex, B, W, H, quick_key)
+_FINGERPRINT_CACHE: OrderedDict[str, tuple] = OrderedDict()
+# L9.277: parallel PNG/JPEG encoding (Pillow releases the GIL while encoding); each worker holds one frame
+_WRITE_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 1))
 
 
 def _temp_editor_dir(eid: str) -> Path:
@@ -51,8 +54,25 @@ def _fingerprint_stream(image: torch.Tensor, b: int, h: int, w: int) -> str:
     return digest.hexdigest()
 
 
-def _cache_touch(eid: str, fp: str, b: int, h: int, w: int) -> None:
-    _FINGERPRINT_CACHE[eid] = (fp, b, h, w)
+def _quick_key(image: torch.Tensor) -> tuple:
+    """L9.277: the identity of the batch, exact and cheap: a weak reference to the very same tensor object plus torch's
+    in-place version counter and the shape. While that object is alive no other tensor can be it, so an unchanged
+    re-run (ComfyUI hands the cached upstream output again) skips hashing every pixel (measured 2.0 s for 120 frames
+    of 1344x768); a new tensor or an in-place edit falls back to the full hash."""
+    try:
+        ref = weakref.ref(image)
+    except TypeError:                                         # not weak-referenceable: always hash
+        return ()
+    return (ref, int(getattr(image, "_version", 0)), tuple(image.shape))
+
+
+def _same_batch(qk: tuple, image: torch.Tensor) -> bool:
+    return (len(qk) == 3 and qk[0]() is image and qk[1] == int(getattr(image, "_version", 0))
+            and qk[2] == tuple(image.shape))
+
+
+def _cache_touch(eid: str, fp: str, b: int, h: int, w: int, qk: tuple = ()) -> None:
+    _FINGERPRINT_CACHE[eid] = (fp, b, h, w, qk)
     _FINGERPRINT_CACHE.move_to_end(eid)
     while len(_FINGERPRINT_CACHE) > _CACHE_MAX:
         _FINGERPRINT_CACHE.popitem(last=False)
@@ -151,23 +171,39 @@ def record_input_frames(
             )
             return None, notes
 
-        fp = _fingerprint_stream(image, B, H, W)
         ed_dir = _temp_editor_dir(eid)
-
+        qk = _quick_key(image)
         cached = _FINGERPRINT_CACHE.get(eid)
+        if cached and len(cached) > 4 and _same_batch(cached[4], image) and _files_complete(ed_dir, B):
+            fp = cached[0]                                    # same tensor, untouched: no full hash needed
+            _cache_touch(eid, fp, B, H, W, qk)
+            _delete_from_index(ed_dir, B)
+            return _payload(eid, fp, B, W, H), notes
+
+        fp = _fingerprint_stream(image, B, H, W)
         if cached and cached[0] == fp and _files_complete(ed_dir, B):
-            _cache_touch(eid, fp, B, H, W)
+            _cache_touch(eid, fp, B, H, W, qk)
             _delete_from_index(ed_dir, B)
             return _payload(eid, fp, B, W, H), notes
 
         ed_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(B):
+
+        def _write(i: int) -> None:
             rgb = _frame_rgb_u8(image, i)
             _write_png_atomic(rgb, ed_dir / f"{i:05d}.png")
             _write_thumb_atomic(rgb, ed_dir / f"t_{i:05d}.jpg")
 
+        if _WRITE_WORKERS > 1 and B > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=_WRITE_WORKERS) as pool:
+                for _ in pool.map(_write, range(B)):         # re-raises the first write error
+                    pass
+        else:
+            for i in range(B):
+                _write(i)
+
         _delete_from_index(ed_dir, B)
-        _cache_touch(eid, fp, B, H, W)
+        _cache_touch(eid, fp, B, H, W, qk)
         return _payload(eid, fp, B, W, H), notes
 
     except Exception as exc:  # noqa: BLE001 — must never break mask output
