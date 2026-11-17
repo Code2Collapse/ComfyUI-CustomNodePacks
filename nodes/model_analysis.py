@@ -173,6 +173,7 @@ class VAEBlockInspectorMEC:
         # MANUAL bug-fix (Apr 2026): track per-tensor stats too so we can
         # flag outliers (NaN/Inf, or whose abs_mean is >5x the median).
         per_tensor_abs_mean: dict[str, float] = {}
+        cohort_val: dict[str, tuple] = {}
         outliers: list[dict] = []
         for k, v in sd.items():
             blk = _block_of(k)
@@ -191,26 +192,35 @@ class VAEBlockInspectorMEC:
                 continue
             t_abs_mean = float(t.abs().mean().item())
             per_tensor_abs_mean[k] = t_abs_mean
+            # L9.264 (CNP-NODES-2 #18): compare like with like - a tensor's cohort is its name ending and rank, and a
+            # weight's magnitude is scaled by sqrt(fan-in) so wide and narrow layers compare (measured on core's SD
+            # VAE layout with torch's init: the model-wide median flagged 60 healthy tensors, 52 of them norm layers,
+            # score 0.242 - a real x40 conv weight was buried among them; per cohort: 0 flagged, and that one found)
+            src = v if v.ndim >= 2 else sd.get(k.rsplit(".", 1)[0] + ".weight")   # a bias: its layer's weight
+            fan_in = int(torch.tensor(src.shape[1:]).prod().item()) if src is not None and src.ndim >= 2 else 1
+            cohort_val[k] = (f"{k.rsplit('.', 1)[-1]}/{v.ndim}d", t_abs_mean * (fan_in ** 0.5))
             stat = agg.setdefault(blk, {"sum": 0.0, "sumsq": 0.0, "abssum": 0.0, "count": 0})
             stat["sum"] += float(t.sum().item())
             stat["sumsq"] += float((t * t).sum().item())
             stat["abssum"] += float(t.abs().sum().item())
             stat["count"] += int(n)
-        # Magnitude outliers: tensors whose abs_mean is >Nx the median
-        # across the model. Cheap heuristic, surfaces corrupted layers.
-        if per_tensor_abs_mean:
-            vals = sorted(per_tensor_abs_mean.values())
-            median = vals[len(vals) // 2] if vals else 0.0
-            threshold = median * float(anomaly_threshold)
-            for k, am in per_tensor_abs_mean.items():
-                if median > 0 and am > threshold:
-                    outliers.append({
-                        "name": k,
-                        "block": _block_of(k),
-                        "reason": "high_abs_mean",
-                        "abs_mean": am,
-                        "median": median,
-                    })
+        # Magnitude outliers: tensors whose (fan-in scaled) abs_mean is >Nx the median of their own cohort (same name
+        # ending and rank). Cohorts of fewer than 4 tensors have no meaningful median and are not judged.
+        cohorts: dict[str, list] = {}
+        for k, (kind, val) in cohort_val.items():
+            cohorts.setdefault(kind, []).append(val)
+        medians = {kind: sorted(vs)[len(vs) // 2] for kind, vs in cohorts.items() if len(vs) >= 4}
+        for k, (kind, val) in cohort_val.items():
+            median = medians.get(kind, 0.0)
+            if median > 0 and val > median * float(anomaly_threshold):
+                outliers.append({
+                    "name": k,
+                    "block": _block_of(k),
+                    "reason": "high_abs_mean",
+                    "abs_mean": per_tensor_abs_mean[k],
+                    "cohort": kind,
+                    "ratio_to_cohort_median": round(val / median, 3),
+                })
         out = {}
         for blk, s in agg.items():
             n = max(s["count"], 1)
