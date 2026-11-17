@@ -463,29 +463,39 @@ class VideoFramePlayerMEC:
         batch_id = _preview_batch_id(frames, f"{B}x{H}x{W}x{C}_{preview_width}_{fmt}_{preview_quality}_")
 
         temp_dir = folder_paths.get_temp_directory()
-        previews = []
         thumb_h = max(1, int(round(H * preview_width / max(W, 1))))
-        for i in _PB.track(range(B), B, "FramePlayer: previews"):
-            _IC.check()
-            name = f"vfp_{batch_id}_{i:05d}.{ext}"
-            path = os.path.join(temp_dir, name)
-            if not os.path.exists(path):
-                # Detach + clamp + uint8 conversion. We deliberately do NOT
-                # apply gamma; ComfyUI IMAGE tensors are sRGB-encoded by
-                # convention, so a direct uint8 cast IS the correct sRGB
-                # round-trip for the browser.
-                arr = (frames[i].detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+        names = [f"vfp_{batch_id}_{i:05d}.{ext}" for i in range(B)]
+        previews = [{"filename": n, "subfolder": "", "type": "temp"} for n in names]
+        todo = [i for i in range(B) if not os.path.exists(os.path.join(temp_dir, names[i]))]
+        if todo:
+            # L9.282: the shared chunked encoder (area downscale on the tensor's device, a few frames at a time,
+            # rounded - the old cast truncated, half a code value too dark) + parallel encoding (Pillow releases
+            # the GIL). Colour only: an RGBA batch made the JPEG save raise.
+            try:
+                from ._c2c_preview_encode import preview_frames
+            except ImportError:  # loaded top-level (tests)
+                from _c2c_preview_encode import preview_frames
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _save(i, arr):
+                path = os.path.join(temp_dir, names[i])
+                tmp = path + ".part"
                 pil = Image.fromarray(arr)
-                if pil.size[0] != preview_width:
-                    # BICUBIC preserves edge sharpness better than BILINEAR;
-                    # PIL Lanczos is too slow for per-frame previews.
-                    pil = pil.resize((preview_width, thumb_h), Image.BICUBIC)
                 if fmt == "png":
-                    pil.save(path, "PNG", optimize=False, compress_level=1)
+                    pil.save(tmp, "PNG", optimize=False, compress_level=1)
                 else:
-                    pil.save(path, "JPEG", quality=int(preview_quality),
-                             optimize=False, subsampling=0)  # 4:4:4 = no chroma loss
-            previews.append({"filename": name, "subfolder": "", "type": "temp"})
+                    pil.save(tmp, "JPEG", quality=int(preview_quality), optimize=False, subsampling=0)
+                os.replace(tmp, path)
+
+            starts = list(range(0, len(todo), 8))
+            with ThreadPoolExecutor(max_workers=max(1, min(4, (os.cpu_count() or 2) - 1))) as pool:
+                for s0 in _PB.track(starts, len(starts), "FramePlayer: previews"):
+                    _IC.check()
+                    chunk = todo[s0:s0 + 8]
+                    arrs, why = preview_frames(frames[..., :3], indices=chunk, size=(int(preview_width), thumb_h))
+                    if arrs is None:
+                        raise RuntimeError(f"Frame Player: {why}")
+                    list(pool.map(lambda ia: _save(*ia), zip(chunk, arrs)))
 
         # backward-compat output: untouched current frame
         out_frame = frames[idx:idx + 1].clone()
