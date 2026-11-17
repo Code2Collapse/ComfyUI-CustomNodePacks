@@ -1,6 +1,7 @@
 /**
  * ImageMaskEditorC2C — native-resolution mask editor node UI.
  */
+import { installPreviewRestore } from "./c2c_preview_restore.js";
 import { app } from "../../scripts/app.js";
 import { resolveEditorSource } from "./image_mask_editor/source.js";
 import { fetchState } from "./image_mask_editor/api.js";
@@ -354,6 +355,7 @@ if (!(app.extensions || []).some((e) => e?.name === EXT_NAME)) {
                 this._imeThumb?.refresh();
                 return r;
             };
+            installPreviewRestore(nodeType, { type: nodeData?.name });   // L9.282 P1.4: preview back after a tab switch
             const origConfigure = nodeType.prototype.onConfigure;
             nodeType.prototype.onConfigure = function (info) {
                 const r = origConfigure?.apply(this, arguments);

@@ -50,10 +50,22 @@ export function replayLastOutput(node, output) {
  * For a node type that draws its own preview: remember what it showed, replay the stored output after a tab switch /
  * reload, and (hideCore) stop core's duplicate image preview under it. Call from beforeRegisterNodeDef.
  */
-export function installPreviewRestore(nodeType, { hideCore = true } = {}) {
+const _types = new Set();
+let _extRegistered = false;
+
+export function installPreviewRestore(nodeType, { hideCore = true, type = null } = {}) {
     const proto = nodeType.prototype;
     if (proto.__c2cPreviewRestore) return;
     proto.__c2cPreviewRestore = true;
+    const t = type ?? nodeType.comfyClass ?? nodeType.type;
+    if (t) _types.add(t);
+    if (!_extRegistered) {                              // one history hook for every adopted type
+        const a = appRef();
+        if (a?.registerExtension) {
+            _extRegistered = true;
+            a.registerExtension(previewRestoreExtension(_types));
+        }
+    }
     const onExecuted = proto.onExecuted;
     proto.onExecuted = function (out) {
         this.__c2cShownSig = signature(out);            // a live result: remember it so the replay does not repeat it
@@ -78,7 +90,7 @@ export function installPreviewRestore(nodeType, { hideCore = true } = {}) {
 
 /** One extension hook for every adopted type: queue-history loads (keys are execution ids). */
 export function previewRestoreExtension(types) {
-    const want = new Set(types);
+    const want = types instanceof Set ? types : new Set(types);     // a live Set: types adopted later count too
     return {
         name: "C2C.PreviewRestore",
         onNodeOutputsUpdated(outputs) {

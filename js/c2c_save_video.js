@@ -17,6 +17,7 @@
  * Nothing polls: the matrix is fetched once, the next path on naming changes, the player works only while playing.
  */
 
+import { installPreviewRestore } from "./c2c_preview_restore.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { measureRootContent, installResizeFloor } from "./c2c_ui/index.js";
@@ -875,6 +876,7 @@ if (!globalThis.__c2cSaveVideoExt) {
                 this._c2cSaveShowResult?.(message?.c2c_save_video?.[0]);
                 return r;
             };
+            installPreviewRestore(nodeType, { type: nodeData?.name });   // L9.282 P1.4: preview back after a tab switch
         },
     });
 }

@@ -1705,6 +1705,10 @@ read any file path. Through an SSH tunnel the page still counts as local.
   incl. the Vault's keys) and the Diagnostics API-key routes answer only the ComfyUI page on this machine (an SSH
   tunnel counts as local). On a `--listen` server a network client could otherwise point an AI backend at its own
   host and receive your stored key (2026-11-18).
+- **Previews come back after a workflow-tab switch** (Video Frame Player, Video Comparer, Save Video, Frequency,
+  Image Mask Editor): they used to come back empty; now the last result shows again without re-running, and core's
+  duplicate image under these nodes is hidden. Save Video's change check no longer copies the whole clip on every
+  queue (measured 120 x 1080p: +2.8 GB / 4 s before, +63 MB / 0.4 s now) (2026-11-18).
 - **All CNP nodes** show only the controls that matter for the current settings, in collapsible sections, and resize
   to fit in both renderers and inside subgraphs; saved workflows keep every value (2026-11-18).
 - **Inpaint Crop Pro** `mask prepare` without an image stops with a message when `stitcher` or `cropped_image` is

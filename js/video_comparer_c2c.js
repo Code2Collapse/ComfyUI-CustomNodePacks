@@ -16,6 +16,7 @@
 // Drag the canvas horizontally to scrub the wipe / onion. For videos use the
 // frame_index slider OR ←/→ arrow keys on the canvas to scrub.
 
+import { installPreviewRestore } from "./c2c_preview_restore.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { C } from './_c2c_theme.js';
@@ -779,6 +780,7 @@ app.registerExtension({
                 this.setDirtyCanvas?.(true, true);
             })();
         };
+        installPreviewRestore(nodeType, { type: nodeData?.name });   // L9.282 P1.4: preview back after a tab switch
 
         const _removed = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {

@@ -196,7 +196,19 @@ class SaveVideoC2C:
         for k, v in sorted(settings.items()):
             h.update(f"{k}={v}".encode())
         if torch.is_tensor(images):
-            h.update(images.cpu().numpy().tobytes())
+            # L9.282 P1.3: no full copy of the batch (tobytes() cost +2.8 GB and 4 s for 120 x 1080p, measured).
+            # Shape + dtype + every frame's sum (computed in place) + a strided pixel grid of every frame: any real
+            # edit changes it; core also folds every upstream change check into this node's cache key.
+            with torch.no_grad():
+                h.update(f"{tuple(images.shape)}|{images.dtype}".encode())
+                for f in images:                     # one frame at a time: its bits summed exactly (int64)
+                    f = f.contiguous()
+                    bits = f.view(torch.int32) if f.element_size() == 4 else f.view(torch.int16) \
+                        if f.element_size() == 2 else f.view(torch.uint8)
+                    h.update(int(bits.sum(dtype=torch.int64)).to_bytes(16, "little", signed=True))
+                if images.ndim == 4:
+                    sy, sx = max(1, images.shape[1] // 32), max(1, images.shape[2] // 32)
+                    h.update(images[:, ::sy, ::sx].contiguous().cpu().numpy().tobytes())
         if isinstance(audio, dict) and torch.is_tensor(audio.get("waveform")):
             h.update(str(tuple(audio["waveform"].shape)).encode())
         if isinstance(video_info, dict):

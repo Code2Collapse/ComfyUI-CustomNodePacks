@@ -7,6 +7,7 @@
  * as the node's Gaussian method), the detail divided or subtracted the way the node encodes it - labelled as such,
  * until the next run brings the exact result of the chosen method (Guided, Rolling Guidance, Median) back.
  */
+import { installPreviewRestore } from "./c2c_preview_restore.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
@@ -216,6 +217,7 @@ if (!globalThis.__c2cFrequencyPreviewExt) {
                 }
                 return r;
             };
+            installPreviewRestore(nodeType, { type: nodeData?.name });   // L9.282 P1.4: preview back after a tab switch
         },
     });
 }

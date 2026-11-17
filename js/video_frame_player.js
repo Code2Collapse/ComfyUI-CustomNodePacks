@@ -1,3 +1,4 @@
+import { installPreviewRestore } from "./c2c_preview_restore.js";
 import { app } from "../../scripts/app.js";
 import { vueFitNodeHeight, vueNodesActive, vueSyncNodeWidgets } from "./_widget_visibility.js";
 import { relayoutNode } from "./_c2c_node_layout.js";
@@ -725,6 +726,7 @@ app.registerExtension({
                 S.images[i] = im;
             }
         };
+        installPreviewRestore(nodeType, { type: nodeData?.name });   // L9.282 P1.4: preview back after a tab switch
 
         nodeType.prototype._render = function () {
             const S = this._S;
