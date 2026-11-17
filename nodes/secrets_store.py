@@ -186,17 +186,37 @@ def _decrypt(blob: bytes) -> bytes:
 
 
 # ── Public API ────────────────────────────────────────────────────────
-def _load() -> dict:
+def _load_checked() -> tuple:
+    """(keys, readable). readable=False: a store exists but cannot be decrypted (the key derives from the host name,
+    OS and CPU: a renamed host or a copy to another machine)."""
     p = _store_path()
     if not os.path.exists(p):
-        return {}
+        return {}, True
     try:
         with open(p, "rb") as f:
             blob = f.read()
-        return json.loads(_decrypt(blob).decode("utf-8"))
+        return json.loads(_decrypt(blob).decode("utf-8")), True
     except Exception as e:
         log.warning("[secrets] could not decrypt store: %s", e)
-        return {}
+        return {}, False
+
+
+def _load() -> dict:
+    return _load_checked()[0]
+
+
+def _load_for_write() -> dict:
+    """L9.289 (L3 audit P2): an unreadable store used to be overwritten by the next save, losing every key silently.
+    It is now moved aside (secrets.enc.unreadable-<time>; readable again on the machine that wrote it) first."""
+    d, readable = _load_checked()
+    if not readable:
+        import time as _time
+        p = _store_path()
+        aside = f"{p}.unreadable-{_time.strftime('%Y%m%d-%H%M%S')}"
+        os.replace(p, aside)
+        log.warning("[secrets] the stored keys could not be read on this machine (host name / OS changed?); the old "
+                    "store was kept as %s and a new one is started", aside)
+    return d
 
 
 def _save(d: dict) -> None:
@@ -217,7 +237,7 @@ def set_key(provider: str, api_key: str) -> None:
         raise ValueError(f"unknown provider: {provider}")
     if not api_key or not isinstance(api_key, str):
         raise ValueError("api_key must be a non-empty string")
-    d = _load()
+    d = _load_for_write()
     d[provider] = api_key.strip()
     _save(d)
 
@@ -235,6 +255,6 @@ def list_providers() -> list:
 
 
 def delete_key(provider: str) -> None:
-    d = _load()
+    d = _load_for_write()
     d.pop(provider, None)
     _save(d)
