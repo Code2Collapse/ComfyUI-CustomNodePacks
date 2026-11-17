@@ -1696,6 +1696,17 @@ read any file path. Through an SSH tunnel the page still counts as local.
   (`grow_follow_face`). At the defaults the result is exactly the old grow (2026-11-17).
 - **Image Mask Editor (C2C)** previews round to the nearest code value instead of truncating (they were half a level
   too dark) (2026-11-17).
+- **C2C Bypass Manager** (new tool, not a node): right-click a node -> "Every <type>" -> bypass / mute / set to normal
+  every node of that type, including inside subgraphs; the canvas menu does it by name pattern and restores
+  everything; Ctrl+Alt+Shift+B / M / N do it for the selected node's type; the "Bypass" chip in the C2C bar opens a
+  list of every node type with a one-click normal / bypassed / muted button and named sets saved with the workflow.
+  One undo step per action; pinned nodes are never changed. Setting: C2C > Canvas > Bypass Manager (2026-11-18).
+- **Security:** the C2C AI configuration, policy, spend cap and backend test, the stored secrets (`/c2c/secrets/*`,
+  incl. the Vault's keys) and the Diagnostics API-key routes answer only the ComfyUI page on this machine (an SSH
+  tunnel counts as local). On a `--listen` server a network client could otherwise point an AI backend at its own
+  host and receive your stored key (2026-11-18).
+- **All CNP nodes** show only the controls that matter for the current settings, in collapsible sections, and resize
+  to fit in both renderers and inside subgraphs; saved workflows keep every value (2026-11-18).
 - **Inpaint Crop Pro** `mask prepare` without an image stops with a message when `stitcher` or `cropped_image` is
   wired (the next node crashed); the mask-only use is unchanged.
 - **Mask Failure Explainer (MEC)**: `ring_width`, `blur_threshold` and `brightness_threshold` now change the
