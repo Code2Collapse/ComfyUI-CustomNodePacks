@@ -386,3 +386,279 @@ def mask_face_selection(sizes: List[float], mode: str, index: int) -> List[int]:
     if mode == MASK_FACES[1]:
         return [int(np.argmax(sizes))]
     return [int(index)] if 0 <= int(index) < n else []
+
+
+# ── head parts for face_mask (L9.279, owner 2026-11-17; design docs/research/FACE_PARTS_ROBUST_design.md) ────────────
+# 68 set (iBUG 300-W): jaw 0-16, brows 17-21 / 22-26, nose 27-35, eyes 36-41 / 42-47, outer lips 48-59, inner 60-67.
+
+PART_DEFAULT = "whole face (default)"
+PART_CUSTOM = "custom list"
+PARTS_FEATURES = ("eyes", "eye (image left)", "eye (image right)", "eyelids", "brows", "nose", "lips",
+                  "inner mouth / teeth")
+PARTS_AREAS = ("around the mouth", "cheeks", "chin + jaw")
+PARTS_ESTIMATED = ("forehead (estimated)", "ears (estimated)", "hair (estimated)", "head + hair (estimated)")
+MASK_PARTS = (PART_DEFAULT,) + PARTS_FEATURES + PARTS_AREAS + PARTS_ESTIMATED + (PART_CUSTOM,)
+HEAD_REFINE = ("image edges (GrabCut)", "off")
+
+
+@dataclass
+class FaceFrame:
+    """A face's own axes (image px): up = chin -> brow middle, right = perpendicular; H = that distance, W = jaw width.
+    angle_deg = counter-clockwise tilt of up from the image's up (the _mask_directional convention)."""
+    centre: np.ndarray
+    up: np.ndarray
+    right: np.ndarray
+    H: float
+    W: float
+    angle_deg: float
+
+
+def face_frame(p68: np.ndarray) -> FaceFrame:
+    p = np.asarray(p68, np.float64)
+    brow = p[17:27].mean(0)
+    chin = p[8]
+    v = brow - chin
+    H = float(np.hypot(*v)) or 1.0
+    up = v / H
+    right = np.array([-up[1], up[0]])
+    if np.dot(right, p[16] - p[0]) < 0:
+        right = -right
+    W = float(np.hypot(*(p[16] - p[0]))) or H
+    angle = float(np.degrees(np.arctan2(-up[0], -up[1])))
+    return FaceFrame((brow + chin) / 2.0, up, right, H, W, angle)
+
+
+def _poly(mask: np.ndarray, pts, smoothing: int = 0) -> None:
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    if len(pts) < 3 or not np.isfinite(pts).all():
+        return
+    fill_hull(mask, pts, smoothing)
+
+
+def _grown(pts, k: float, about=None) -> np.ndarray:
+    pts = np.asarray(pts, np.float64)
+    c = pts.mean(0) if about is None else np.asarray(about, np.float64)
+    return c + (pts - c) * float(k)
+
+
+def _ellipse(fr: FaceFrame, centre, ax_right: float, ax_up: float, n: int = 48) -> np.ndarray:
+    t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    return (np.asarray(centre)[None] + np.cos(t)[:, None] * ax_right * fr.right[None]
+            + np.sin(t)[:, None] * ax_up * fr.up[None])
+
+
+def part_mask(part: str, shape, p68: np.ndarray, pts620: np.ndarray, classes: np.ndarray, mesh: np.ndarray,
+              smoothing: int = 0) -> np.ndarray:
+    """uint8 mask (0 / 255) of one named part for one face, image px. 'whole face' is the mesh hull."""
+    m = np.zeros(shape, np.uint8)
+    p = np.asarray(p68, np.float64)
+    fr = face_frame(p)
+    cls = np.asarray(classes)
+    pts = np.asarray(pts620, np.float64)
+    if part in ("whole face", PART_DEFAULT):
+        _poly(m, pts[mesh], smoothing)
+    elif part in ("eyes", "eye (image left)", "eye (image right)"):
+        eyes = sorted([p[36:42], p[42:48]], key=lambda e: float(e[:, 0].mean()))      # image-left first
+        pick = eyes if part == "eyes" else [eyes[0] if "left" in part else eyes[1]]
+        for e in pick:
+            _poly(m, _grown(e, 1.6), smoothing)
+    elif part == "eyelids":
+        lid = pts[cls == "lid"]
+        for e in (p[36:42], p[42:48]):
+            near = lid[np.linalg.norm(lid - e.mean(0), axis=1) < 0.25 * fr.W] if len(lid) else lid
+            _poly(m, np.concatenate([_grown(e, 1.35), near]) if len(near) else _grown(e, 1.5), smoothing)
+    elif part == "brows":
+        for b in (p[17:22], p[22:27]):
+            _poly(m, np.concatenate([b + fr.up * 0.06 * fr.H, b - fr.up * 0.06 * fr.H]), smoothing)
+    elif part == "nose":
+        _poly(m, _grown(p[27:36], 1.15), smoothing)
+    elif part == "lips":
+        _poly(m, p[48:60], smoothing)
+    elif part == "inner mouth / teeth":
+        teeth = pts[np.isin(cls, ("teeth_u", "teeth_l"))]
+        _poly(m, np.concatenate([p[60:68], teeth]) if len(teeth) else p[60:68], smoothing)
+    elif part == "around the mouth":
+        lips = p[48:60]
+        _poly(m, np.concatenate([lips, lips + fr.up * 0.12 * fr.H, lips - fr.up * 0.12 * fr.H,
+                                 _grown(lips, 1.25)]), smoothing)
+    elif part == "cheeks":
+        _poly(m, np.stack([p[1], p[2], p[3], p[4], p[5], p[48], p[31], p[40], p[41], p[36]]), smoothing)
+        _poly(m, np.stack([p[15], p[14], p[13], p[12], p[11], p[54], p[35], p[47], p[46], p[45]]), smoothing)
+    elif part == "chin + jaw":
+        _poly(m, np.concatenate([p[4:13], p[55:60]]), smoothing)
+    elif part == "forehead (estimated)":
+        b = p[17:27]
+        _poly(m, np.concatenate([b, b + fr.up * 0.55 * fr.H]), smoothing)
+    elif part == "ears (estimated)":
+        for side, sgn in ((p[0:4], -1.0), (p[13:17], 1.0)):
+            _poly(m, np.concatenate([side, side + fr.right * sgn * 0.18 * fr.W]), smoothing)
+    elif part in ("head + hair (estimated)", "hair (estimated)"):
+        brow = p[17:27].mean(0)
+        top = brow + fr.up * 0.95 * fr.H
+        centre = (top + brow) / 2.0
+        head = np.zeros(shape, np.uint8)
+        _poly(head, np.concatenate([_ellipse(fr, centre, 0.62 * fr.W * 1.15, 0.475 * fr.H + 0.2 * fr.H),
+                                    pts[mesh], p[0:17]]), smoothing)
+        if part == "head + hair (estimated)":
+            m = head
+        else:
+            face = np.zeros(shape, np.uint8)
+            _poly(face, pts[mesh], smoothing)
+            _poly(face, np.concatenate([p[17:27], p[17:27] + fr.up * 0.12 * fr.H]), smoothing)  # brows stay face
+            m = np.where(face > 0, 0, head).astype(np.uint8) & above_eyes(shape, p)
+    else:
+        raise ValueError(f"mask_part: unknown part {part!r}; one of {', '.join(MASK_PARTS)}")
+    return m
+
+
+def above_eyes(shape, p68: np.ndarray, below: float = 0.15) -> np.ndarray:
+    """uint8 0 / 255: the side of the face's eye line where the hair grows (along the head's own up), reaching
+    `below` x face height under the eye line so sideburns are kept. Hair never comes from the jaw or the neck."""
+    p = np.asarray(p68, np.float64)
+    fr = face_frame(p)
+    eye = p[36:48].mean(0)
+    h, w = shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    d = (xx - eye[0]) * fr.up[0] + (yy - eye[1]) * fr.up[1]
+    return (d > -below * fr.H).astype(np.uint8) * 255
+
+
+def parse_parts(part: str, custom: str) -> List[str]:
+    """The selected parts; custom list = comma separated names (case and spaces ignored), each one checked."""
+    if part != PART_CUSTOM:
+        return [part]
+    names = {n.lower(): n for n in MASK_PARTS if n not in (PART_DEFAULT, PART_CUSTOM)}
+    names["whole face"] = "whole face"
+    out = []
+    for raw in str(custom or "").split(","):
+        k = raw.strip().lower()
+        if not k:
+            continue
+        if k not in names:
+            raise ValueError(f"mask_parts_custom: '{raw.strip()}' is not a part; use names from mask_part, e.g. "
+                             "'eyes, lips, hair (estimated)'")
+        out.append(names[k])
+    if not out:
+        raise ValueError("mask_parts_custom is empty: list the parts, e.g. 'eyes, lips'")
+    return out
+
+
+def refine_head(image_bgr: np.ndarray, estimate_u8: np.ndarray, sure_u8: np.ndarray, iterations: int = 3) -> np.ndarray:
+    """Fit an estimated head / hair region to the picture with GrabCut: sure foreground = the face, probable
+    foreground = the estimate, probable background = a band around it, background beyond. Runs on a crop scaled to
+    <= 256 px, so it is cheap. Returns uint8 0 / 255 (the estimate itself when GrabCut cannot run)."""
+    import cv2
+    ys, xs = np.nonzero(estimate_u8)
+    if len(xs) < 16:
+        return estimate_u8
+    h, w = estimate_u8.shape
+    cx0, cx1, cy0, cy1 = xs.min(), xs.max(), ys.min(), ys.max()
+    pw, ph = int(0.4 * (cx1 - cx0 + 1)), int(0.4 * (cy1 - cy0 + 1))
+    x0, x1, y0, y1 = max(0, cx0 - pw), min(w, cx1 + pw + 1), max(0, cy0 - ph), min(h, cy1 + ph + 1)
+    crop = image_bgr[y0:y1, x0:x1]
+    s = min(1.0, 256.0 / max(crop.shape[:2]))
+    size = (max(8, int(crop.shape[1] * s)), max(8, int(crop.shape[0] * s)))
+    small = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
+    est = cv2.resize(estimate_u8[y0:y1, x0:x1], size, interpolation=cv2.INTER_NEAREST)
+    sure = cv2.resize(sure_u8[y0:y1, x0:x1], size, interpolation=cv2.INTER_NEAREST)
+    gc = np.full(est.shape, cv2.GC_BGD, np.uint8)
+    k = max(3, int(0.08 * max(size)) | 1)
+    band = cv2.dilate(est, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    gc[band > 0] = cv2.GC_PR_BGD
+    gc[est > 0] = cv2.GC_PR_FGD
+    gc[sure > 0] = cv2.GC_FGD
+    if not (gc == cv2.GC_BGD).any() or not (gc == cv2.GC_FGD).any():
+        return estimate_u8
+    try:
+        cv2.grabCut(np.ascontiguousarray(small), gc, None, np.zeros((1, 65), np.float64),
+                    np.zeros((1, 65), np.float64), int(iterations), cv2.GC_INIT_WITH_MASK)
+    except cv2.error:
+        return estimate_u8
+    fg = np.isin(gc, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8) * 255
+    out = np.zeros_like(estimate_u8)
+    out[y0:y1, x0:x1] = cv2.resize(fg, (x1 - x0, y1 - y0), interpolation=cv2.INTER_NEAREST)
+    return out
+
+
+# ── robust detection (L9.280, owner 2026-11-17): analysis + a DETECTION-ONLY enhancement ladder ──────────────────────
+# The enhanced copies are only shown to the face finder and the landmark model; every output keeps the original frame.
+
+ROBUST_MODES = ("auto (when a frame finds no face)", "off", "always")
+
+
+def analyse_frame(bgr: np.ndarray) -> Dict[str, float]:
+    """Luma median / 5th / 95th percentile (0..1), colour cast (largest channel-mean ratio - 1) and sharpness
+    (variance of the Laplacian of the luma at <= 512 px)."""
+    import cv2
+    small = bgr if max(bgr.shape[:2]) <= 512 else cv2.resize(
+        bgr, (int(bgr.shape[1] * 512 / max(bgr.shape[:2])), int(bgr.shape[0] * 512 / max(bgr.shape[:2]))),
+        interpolation=cv2.INTER_AREA)
+    luma = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    means = small.reshape(-1, 3).mean(0) + 1e-3
+    return {"luma_median": round(float(np.median(luma)), 4), "luma_p05": round(float(np.percentile(luma, 5)), 4),
+            "luma_p95": round(float(np.percentile(luma, 95)), 4),
+            "colour_cast": round(float(means.max() / means.min() - 1.0), 4),
+            "sharpness": round(float(cv2.Laplacian((luma * 255).astype(np.uint8), cv2.CV_32F).var()), 2)}
+
+
+def _lift_light(bgr: np.ndarray, a: Dict[str, float]) -> np.ndarray:
+    """Exposure + gamma toward a median luma of ~0.42, then CLAHE on L (Lab): faces in the dark get contrast back."""
+    import cv2
+    x = bgr.astype(np.float32) / 255.0
+    lo, hi = a["luma_p05"], max(a["luma_p95"], a["luma_p05"] + 1e-3)
+    x = np.clip((x - lo) / (hi - lo), 0.0, 1.0)                                    # stretch the used range
+    med = float(np.clip((a["luma_median"] - lo) / (hi - lo), 1e-3, 0.999))
+    g = float(np.clip(np.log(0.42) / np.log(med), 0.25, 1.6))
+    x = np.power(x, g)
+    lab = cv2.cvtColor((x * 255).astype(np.uint8), cv2.COLOR_BGR2LAB)
+    lab[..., 0] = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(lab[..., 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def _neutral_colour(bgr: np.ndarray) -> np.ndarray:
+    """Grey-world white balance (each channel scaled to the common mean)."""
+    x = bgr.astype(np.float32)
+    m = x.reshape(-1, 3).mean(0) + 1e-3
+    return np.clip(x * (m.mean() / m), 0, 255).astype(np.uint8)
+
+
+def _luma_only(bgr: np.ndarray) -> np.ndarray:
+    import cv2
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return cv2.merge([g, g, g])
+
+
+def _sharpen(bgr: np.ndarray, a: Dict[str, float]) -> np.ndarray:
+    """Unsharp mask, stronger the blurrier the frame (sharpness = Laplacian variance; ~100+ is a sharp frame)."""
+    import cv2
+    amount = float(np.clip(1.8 - a["sharpness"] / 80.0, 0.5, 1.8))
+    sigma = float(np.clip(3.0 - a["sharpness"] / 60.0, 1.0, 3.0))
+    blur = cv2.GaussianBlur(bgr, (0, 0), sigma)
+    return cv2.addWeighted(bgr, 1.0 + amount, blur, -amount, 0)
+
+
+def enhancement_ladder(bgr: np.ndarray, a: Optional[Dict[str, float]] = None) -> List[Tuple[str, np.ndarray]]:
+    """[(name, enhanced BGR copy)] in the order to try, chosen from the analysis: low light, colour cast, blur, and
+    every problem at once. Cheap (OpenCV, one frame)."""
+    a = a or analyse_frame(bgr)
+    dark = a["luma_median"] < 0.3 or a["luma_p95"] < 0.55
+    cast = a["colour_cast"] > 0.25
+    blurry = a["sharpness"] < 60.0
+    import cv2
+    rungs: List[Tuple[str, np.ndarray]] = []
+    lit = _lift_light(bgr, a)
+    rungs.append(("light", lit))
+    if dark:                                 # lifting dark footage lifts its sensor noise: smooth first, then lift
+        quiet = cv2.bilateralFilter(cv2.GaussianBlur(bgr, (0, 0), 1.2), 7, 40, 7)
+        rungs.append(("light + denoise", _lift_light(quiet, analyse_frame(quiet))))
+    if cast:
+        rungs.append(("colour", _neutral_colour(lit)))
+    rungs.append(("luma only", _luma_only(lit)))
+    if blurry:
+        rungs.append(("deblur", _sharpen(lit, a)))
+    both = _sharpen(_neutral_colour(lit), a) if (cast or blurry) else lit
+    if cast and blurry:
+        rungs.append(("light + colour + deblur", both))
+    if not dark and not cast and not blurry:
+        rungs.append(("contrast", _sharpen(lit, {**a, "sharpness": 60.0})))
+    return rungs

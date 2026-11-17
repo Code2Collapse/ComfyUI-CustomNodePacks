@@ -439,6 +439,43 @@ def _controls_spec() -> dict:
                        "which faces fill face_mask - all, the largest, or one by its position in pose_keypoint."}))
     c["mask_face_index"] = ("INT", ({"default": 0, "min": 0, "max": 15, "tooltip": "Face mask: the face for "
                             "mask_faces = face index (0 = first in pose_keypoint)."}))
+    # L9.279 (owner 2026-11-17): which part of the head face_mask covers, invert, and a directional extend that
+    # follows the head's tilt. Appended last; the defaults give today's mask exactly.
+    from .facepoints_controls import MASK_PARTS, HEAD_REFINE
+    c["mask_part"] = (list(MASK_PARTS), ({"default": MASK_PARTS[0], "tooltip": "Face mask: which part of the head "
+                      "face_mask covers. Features (eyes, lids, brows, nose, lips, inner mouth) and areas (around the "
+                      "mouth, cheeks, chin + jaw) come from the landmarks; forehead, ears, hair and head + hair are "
+                      "ESTIMATED (no landmark covers them) and fitted to the picture by mask_head_refine. custom "
+                      "list: several parts joined, typed in mask_parts_custom."}))
+    c["mask_parts_custom"] = ("STRING", ({"default": "", "tooltip": "Face mask (mask_part = custom list): parts "
+                              "joined into one mask, comma separated, e.g. 'eyes, lips' or 'head + hair (estimated), "
+                              "whole face'.", "c2c_show_if": {"mask_part": ["custom list"]}}))
+    c["mask_invert"] = ("BOOLEAN", ({"default": False, "tooltip": "Face mask: everything EXCEPT the chosen parts "
+                        "(applied after grow / shrink / feather)."}))
+    c["mask_head_refine"] = (list(HEAD_REFINE), ({"default": HEAD_REFINE[0], "tooltip": "Face mask (estimated "
+                             "parts): image edges = fit the estimated forehead / ears / hair / head to the picture "
+                             "(GrabCut on a small crop, cheap); off = the geometric estimate only."}))
+    for side in ("up", "down", "left", "right"):
+        c[f"mask_extend_{side}"] = ("FLOAT", ({"default": 0.0, "min": -100.0, "max": 300.0, "step": 1.0,
+                                    "tooltip": f"Face mask: extend the mask {side} by this % of the face height "
+                                               "(chin to brows); negative shrinks that side. 'up' is the head's up "
+                                               "when mask_extend_follow_tilt is on."}))
+    from .facepoints_controls import PARTS_ESTIMATED
+    c["mask_head_refine"][1]["c2c_show_if"] = {"mask_part": list(PARTS_ESTIMATED) + ["custom list"]}
+    _extending = [{f"mask_extend_{d}": {"truthy": True}} for d in ("up", "down", "left", "right")]
+    c["mask_extend_follow_tilt"] = ("BOOLEAN", ({"default": True, "c2c_show_if_any": _extending,
+                                    "tooltip": "Face mask: extend along the head's "
+                                    "own axes (a tilted head is extended along its tilt); off = the picture's axes."}))
+    c["mask_extend_falloff"] = ("FLOAT", ({"default": 0.0, "min": 0.0, "max": 300.0, "step": 1.0,
+                                "c2c_show_if_any": _extending, "tooltip":
+                                "Face mask: soft fall-off of the extended band, % of the face height (0 = hard)."}))
+    from .facepoints_controls import ROBUST_MODES
+    c["screening_robust_detection"] = (list(ROBUST_MODES), ({"default": ROBUST_MODES[0], "tooltip": "Screening: "
+                                       "low light, colour casts and motion blur. auto: a frame where no face is "
+                                       "found is analysed and retried on enhanced copies (light, colour, deblur, a "
+                                       "1.5x look) and then with a nearby frame's face box; always: every frame is "
+                                       "detected on the enhanced copy; off: as before. The copies are only shown to "
+                                       "the detector - every output keeps the original footage."}))
     for name, spec in c.items():
         spec[1]["c2c_section"] = CONTROL_SECTIONS[name.split("_")[0]]
     return c
@@ -541,6 +578,12 @@ class FacepointsLandmarksC2C:
             allowed = LOW_CONF if k.startswith("screening") else SCHEMES
             if d[k] not in allowed:
                 raise ValueError(f"{k}: unknown value {d[k]!r} (one of {', '.join(allowed)})")
+        from .facepoints_controls import MASK_PARTS, HEAD_REFINE
+        from .facepoints_controls import ROBUST_MODES
+        for k, allowed in (("mask_part", MASK_PARTS), ("mask_head_refine", HEAD_REFINE),
+                           ("screening_robust_detection", ROBUST_MODES)):
+            if d[k] not in allowed:
+                raise ValueError(f"{k}: unknown value {d[k]!r} (one of {', '.join(allowed)})")
         return d
 
     @staticmethod
@@ -592,6 +635,12 @@ class FacepointsLandmarksC2C:
         index_missing: List[int] = []
         smoothing = bool(c["temporal_smoothing"])
         shaped_mask = _mask_shaped(c)
+        from . import _mask_directional as MD
+        parts = FC.parse_parts(c["mask_part"], c["mask_parts_custom"])
+        extend_any = any(float(c[f"mask_extend_{s}"]) for s in ("up", "down", "left", "right"))
+        parts_mode = parts != [FC.PART_DEFAULT] or extend_any
+        robust_mode = c["screening_robust_detection"]
+        robust_frames: List[int] = []
         with allow_downloads(allow_download):
             det = _detector(device)
             status = model_status()
@@ -637,22 +686,78 @@ class FacepointsLandmarksC2C:
                                 starts.append(square_box(*fb[:4]))
                                 if len(starts) >= int(max_faces):
                                     break
-                    found = det.detect_many([work] * len(starts), starts, int(passes)) if starts else []
-                    kept, rejected = [], []
-                    for f in found:
-                        if not P.identity:                      # back to source pixels
-                            f = {**f, "proc_points": f["points"], "points": back.points(f["points"]),
-                                 "std": back.length(f["std"]), "300w": back.points(f["300w"]),
-                                 "wflw": back.points(f["wflw"]), "box": back.box(f["box"])}
-                        side = face_size(f["points"][mesh])
-                        f["face_size_px"] = side
-                        med = float(np.median(f["std"][mesh])) * STD_CALIBRATION
-                        f["median_std_px"] = med
-                        f["iris"] = np.asarray(f["points"])[classes == "iris"]
-                        if med > LOST_FACTOR * float(confident_pct) / 100.0 * side:
-                            rejected.append((f, "no face in the box (error estimate too large)"))
-                            continue                    # no face in this box (the card: "threshold it")
-                        kept.append(f)
+                    def _evaluate(found_):
+                        kept_, rejected_ = [], []
+                        for f in found_:
+                            if not P.identity:                  # back to source pixels
+                                f = {**f, "proc_points": f["points"], "points": back.points(f["points"]),
+                                     "std": back.length(f["std"]), "300w": back.points(f["300w"]),
+                                     "wflw": back.points(f["wflw"]), "box": back.box(f["box"])}
+                            side = face_size(f["points"][mesh])
+                            f["face_size_px"] = side
+                            med = float(np.median(f["std"][mesh])) * STD_CALIBRATION
+                            f["median_std_px"] = med
+                            f["iris"] = np.asarray(f["points"])[classes == "iris"]
+                            if med > LOST_FACTOR * float(confident_pct) / 100.0 * side:
+                                rejected_.append((f, "no face in the box (error estimate too large)"))
+                                continue                # no face in this box (the card: "threshold it")
+                            kept_.append(f)
+                        return kept_, rejected_
+
+                    def _boxes(w_):
+                        out_ = []
+                        for fb in find_faces(w_, face_finder, finder_confidence):
+                            out_.append(square_box(*fb[:4]))
+                            if len(out_) >= int(max_faces):
+                                break
+                        return out_
+
+                    robust = {"rung": None}
+                    det_in = work
+                    if robust_mode == FC.ROBUST_MODES[2] and face_mask is None:     # always: detect on the copy
+                        analysis = FC.analyse_frame(work)
+                        name_, det_in = FC.enhancement_ladder(work, analysis)[-1]
+                        robust = {"rung": f"always: {name_}", "analysis": analysis}
+                        if not tracked:
+                            starts = _boxes(det_in) or starts
+                    found = det.detect_many([det_in] * len(starts), starts, int(passes)) if starts else []
+                    kept, rejected = _evaluate(found)
+                    if not kept and robust_mode == FC.ROBUST_MODES[0] and face_mask is None:
+                        # L9.280: nothing found - analyse the frame and retry on enhanced DETECTION copies, then with
+                        # the box of a nearby frame. Outputs keep the original footage.
+                        analysis = FC.analyse_frame(work)
+                        robust = {"rung": None, "analysis": analysis, "tried": []}
+                        ladder = FC.enhancement_ladder(work, analysis)
+                        for name_, w_e in ladder:
+                            robust["tried"].append(name_)
+                            st = _boxes(w_e)
+                            if not st and face_finder != FINDER_WHOLE:         # small faces: a 1.5x look
+                                import cv2
+                                up = cv2.resize(w_e, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+                                st = [(b[0] / 1.5, b[1] / 1.5, b[2] / 1.5) for b in _boxes(up)]
+                                name_ = f"{name_} + 1.5x" if st else name_
+                            if not st:
+                                continue
+                            k_, r_ = _evaluate(det.detect_many([w_e] * len(st), st, int(passes)))
+                            robust["rejected"] = robust.get("rejected", 0) + len(r_)
+                            if k_:
+                                kept, robust["rung"], starts = k_, name_, st
+                                break
+                        if not kept and face_finder != FINDER_WHOLE:
+                            for j in [i + d for d in (1, -1, 2, -2, 3, 4, 6, 8) if 0 <= i + d < frames]:
+                                rgb_j = (img[j, :, :, :3].clamp(0, 1) * 255.0).round().to(torch.uint8).cpu().numpy()
+                                w_j = FC.resize_image(np.ascontiguousarray(rgb_j[:, :, ::-1]), P)
+                                st = _boxes(w_j) or _boxes(ladder[0][1] if j == i else
+                                                           FC.enhancement_ladder(w_j)[0][1])
+                                if not st:
+                                    continue
+                                w_use = ladder[-1][1]
+                                k_, r_ = _evaluate(det.detect_many([w_use] * len(st), st, int(passes)))
+                                if k_:
+                                    kept, robust["rung"], starts = k_, f"box from frame {j}", st
+                                    break
+                        if kept:
+                            robust_frames.append(i)
                     kept.sort(key=lambda f: float(np.mean(f["points"][:, 0])))
                     # tracking uses the processing-space points (independent of screening and smoothing)
                     slots = [({**f, "points": f["proc_points"]} if "proc_points" in f else f) for f in kept]
@@ -722,14 +827,53 @@ class FacepointsLandmarksC2C:
                                                     int(c["mask_face_index"]))
                     if c["mask_faces"] == "face index" and outs and not picked:
                         index_missing.append(i)          # L9.252 F3: said in the JSON, never a silent empty mask
-                    for k in picked:
-                        FC.fill_hull(fm, outs[k]["points"][mesh], int(c["mask_hull_smoothing"]))
+                    if not parts_mode:
+                        for k in picked:
+                            FC.fill_hull(fm, outs[k]["points"][mesh], int(c["mask_hull_smoothing"]))
+                    else:                                # L9.279: head parts, refine, directional extend
+                        acc = np.zeros((Ho, Wo), np.float32)
+                        for k in picked:
+                            g = outs[k]
+                            sm = int(c["mask_hull_smoothing"])
+                            one = np.zeros((Ho, Wo), np.uint8)
+                            for part in parts:
+                                pm = FC.part_mask(part, (Ho, Wo), g["300w"], g["points"], classes, mesh, sm)
+                                if part in FC.PARTS_ESTIMATED and c["mask_head_refine"] == FC.HEAD_REFINE[0]:
+                                    sure = FC.part_mask("whole face", (Ho, Wo), g["300w"], g["points"], classes,
+                                                        mesh, sm)
+                                    if part in ("hair (estimated)", "head + hair (estimated)"):
+                                        # the head may follow the picture past the estimate (long hair, volume)
+                                        head = pm if part.startswith("head") else FC.part_mask(
+                                            "head + hair (estimated)", (Ho, Wo), g["300w"], g["points"], classes,
+                                            mesh, sm)
+                                        fit = FC.refine_head(ov, head, sure)
+                                        pm = fit if part.startswith("head") else (np.where(
+                                            sure > 0, 0, fit).astype(np.uint8) & FC.above_eyes((Ho, Wo), g["300w"]))
+                                    else:                # forehead / ears: the picture can only trim the estimate
+                                        pm = FC.refine_head(ov, np.maximum(pm, sure), sure) & pm
+                                one = np.maximum(one, pm)
+                            fr = FC.face_frame(g["300w"])
+                            if extend_any:
+                                Hf = fr.H / 100.0
+                                ext = MD.extend(one, up=c["mask_extend_up"] * Hf, down=c["mask_extend_down"] * Hf,
+                                                left=c["mask_extend_left"] * Hf, right=c["mask_extend_right"] * Hf,
+                                                angle_deg=fr.angle_deg if c["mask_extend_follow_tilt"] else 0.0,
+                                                falloff_px=c["mask_extend_falloff"] * Hf)
+                            else:
+                                ext = one.astype(np.float32) / 255.0
+                            acc = np.maximum(acc, ext)
+                        fm = np.round(acc * 255.0).astype(np.uint8)
                     if shaped_mask:
                         mask_f = FC.shape_mask(fm, int(c["mask_grow"]), int(c["mask_shrink"]),
                                                float(c["mask_feather"]), float(c["mask_edge_softness"]),
                                                float(c["mask_threshold"]))
                     else:
                         mask_f = None
+                    if c["mask_invert"]:
+                        if mask_f is not None:
+                            mask_f = (1.0 - mask_f).astype(np.float32)
+                        else:
+                            fm = (255 - fm).astype(np.uint8)
                     if c["mask_preview"] != "off":
                         FC.preview_mask(ov, mask_f if mask_f is not None else fm.astype(np.float32) / 255.0,
                                         c["mask_preview"])
@@ -769,6 +913,8 @@ class FacepointsLandmarksC2C:
                         "finder_boxes": finder_boxes, "faces_inferred": len(found), "faces_accepted": len(shown),
                         "faces_rejected": len(rejected), "rejected_reasons": [why for _f, why in rejected],
                         "points_finite_in_frame": int(finite_in_frame), "points_drawn_on_overlay": drawn_per_class}
+                    if len(robust) > 1 or robust["rung"]:
+                        frame["diagnostics"]["robust"] = robust
                     if c["screening_keep_rejected_faces"]:
                         frame["rejected_faces"] = [
                             {"reason": why, "box": [round(float(v), 2) for v in O.box(f["box"])],
@@ -807,7 +953,12 @@ class FacepointsLandmarksC2C:
         # an all-black landmark_image is only expected where no face was accepted: say so, never silently
         diag = {"outputs": {name: _image_stats(t) for name, t in
                             (("landmark_image", lm_t), ("overlay", ov_t), ("face_mask", mk_t))},
-                "frames_without_face": len(no_face_frames), "class_warnings": class_warn}
+                "frames_without_face": len(no_face_frames), "class_warnings": class_warn,
+                "frames_found_by_enhanced_detection": len(robust_frames)}
+        if robust_frames:
+            notes.append(f"enhanced detection found the face in {len(robust_frames)} frame(s) (first: "
+                         f"{robust_frames[0]}) that plain detection missed (low light / colour / blur); see each "
+                         "frame's diagnostics.robust. Outputs show the original footage.")
         if no_face_frames:
             first = js_frames[no_face_frames[0]]["diagnostics"]
             why = ("the face finder found no face" if first["faces_inferred"] == 0
