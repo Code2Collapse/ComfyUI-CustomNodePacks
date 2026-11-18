@@ -1674,6 +1674,9 @@ read any file path. Through an SSH tunnel the page still counts as local.
 - SAM nodes and Semantic Segment no longer wrap HDR values above 1.0 when they convert the frame for the model.
 - **Mask Placement (MEC)**: `feather_px` applies when the placement has no feather of its own (a fixed 6 px was
   used), and a missing opencv is reported in words.
+- **Mask Placement (MEC)** fix (2026-11-19): a new node no longer writes a placeholder quad sized for a 512 x 512
+  frame before its first run (on any other frame size the matte landed off-frame); an untouched node now gets the
+  centred quad of the real frame, and the first drag stores real frame pixels. A placement already saved is kept.
 - **Mask Placement (MEC)** `track_mode = object_track` (2026-11-18) follows the picture inside the quad from frame
   to frame (feature tracking + a perspective transform per frame, no model); frames with too little detail keep the
   last placement and `info` says which. How-to: [docs/mask-placement.md](docs/mask-placement.md).

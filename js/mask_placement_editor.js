@@ -401,7 +401,10 @@ function installEditor(node) {
     };
 
     load();
-    commit();
+    // L9.18: no commit here. With an empty placement the default quad is built for a 512 x 512 placeholder frame
+    // (the real size arrives with the first run); writing it made the backend place the matte off-frame on any other
+    // size (a 160 x 120 clip got corners 102..410). Empty stays empty -> the backend centres the quad on the real
+    // frame; the first real edit commits in real frame pixels.
     node._mpEditor = { load, render, commit };
     setTimeout(render, 50);
 }
